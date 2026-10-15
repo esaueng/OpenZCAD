@@ -61,6 +61,7 @@ import {
   MAX_DOCUMENT_VERSION_ADVANCE,
   documentVersionCanAdvance,
   MAX_PROJECT_CHECKPOINTS,
+  MAX_CHECKPOINT_REASON_LENGTH,
   THUMBNAIL_CONTENT_TYPE,
   nowIso,
   isProjectCheckpoint,
@@ -119,6 +120,8 @@ import {
 import {
   adoptProjectDocument,
   reidentifyProjectDocument,
+  appendRevision,
+  createCheckpoint,
   createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
@@ -1794,6 +1797,144 @@ export class D1R2PersistenceService implements PersistenceService {
     return document;
   }
 
+  /** Stores a room-minted immutable save point; it never rewrites the account head. */
+  async storeCollaborationCheckpoint(
+    userId: UserId,
+    document: ProjectDocument,
+    beforeCommit?: () => Promise<void>
+  ): Promise<void> {
+    if (!this.env.DB) {
+      throw new ProjectObjectStorageError(
+        'Durable checkpoint storage is unavailable.'
+      );
+    }
+    const access = await this.requireProjectEdit(userId, document.projectId);
+    const saved = withoutDerivedProjection(normalizeDocument(document));
+    const revision = saved.revisions.at(-1);
+    const checkpoint = saved.checkpoints.at(-1);
+    if (
+      saved.ownerUserId !== access.ownerUserId ||
+      !revision ||
+      checkpoint?.revisionId !== revision.revisionId ||
+      checkpoint.documentVersion !== saved.version ||
+      checkpoint.reason !== revision.reason
+    ) {
+      throw new ProjectNotFoundError(saved.projectId);
+    }
+    this.assertDocumentCanBeStored(saved);
+    await this.refreshAccountQuota(access.ownerUserId);
+    const documentJson = JSON.stringify(saved);
+    const documentBytes = persistedDocumentBytes(saved);
+    const write = this.projectStorageBucket()
+      ? await this.putProjectStorageObjects(saved)
+      : null;
+    const storedJson = write
+      ? projectObjectEnvelope(saved, write.objectId)
+      : documentJson;
+    try {
+      await beforeCommit?.();
+      const insert = this.env.DB.prepare(
+        `INSERT INTO revisions
+           (id, project_id, reason, document_json, document_object_id,
+            document_bytes, created_at, author_user_id)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?
+         FROM projects p
+         LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ?
+         LEFT JOIN user_settings owner_settings ON owner_settings.user_id = p.user_id
+         WHERE p.id = ? AND p.user_id = ? AND p.status != 'deleted'
+           AND (p.user_id = ? OR (
+             pm.role = 'editor' AND COALESCE(
+               CASE WHEN json_valid(owner_settings.settings_json)
+                 THEN json_extract(owner_settings.settings_json, '$.collaboration.enabled')
+               END, 1
+             ) = 1
+           ))`
+      ).bind(
+        revision.revisionId,
+        saved.projectId,
+        revision.reason,
+        storedJson,
+        write?.objectId ?? null,
+        documentBytes,
+        revision.createdAt,
+        userId,
+        userId,
+        saved.projectId,
+        access.ownerUserId,
+        userId
+      );
+      const results = write
+        ? await this.env.DB.batch([
+            this.documentObjectInsert(saved.projectId, write, 'pending'),
+            insert,
+            this.env.DB.prepare(
+              `UPDATE project_document_objects SET state = 'committed'
+               WHERE id = ? AND EXISTS (
+                 SELECT 1 FROM revisions
+                 WHERE id = ? AND project_id = ? AND document_object_id = ?
+               )`
+            ).bind(
+              write.objectId,
+              revision.revisionId,
+              saved.projectId,
+              write.objectId
+            ),
+            ...this.projectAssetStatements(saved.projectId, write, true)
+          ])
+        : await this.env.DB.batch([insert]);
+      if (results[write ? 1 : 0]?.meta?.changes !== 1) {
+        throw new ProjectNotFoundError(saved.projectId);
+      }
+    } catch (error) {
+      // D1 may commit a batch whose acknowledgement was lost. Verify the
+      // immutable row before cleaning any bytes or reporting a failed save.
+      let stored: {
+        document_json: string;
+        document_object_id: string | null;
+        author_user_id: string | null;
+      } | null;
+      try {
+        stored = await this.env.DB.prepare(
+          `SELECT document_json, document_object_id, author_user_id FROM revisions
+           WHERE id = ? AND project_id = ?`
+        )
+          .bind(revision.revisionId, saved.projectId)
+          .first<typeof stored>();
+      } catch {
+        throw new ProjectObjectStorageError(
+          'Checkpoint save outcome could not be verified.'
+        );
+      }
+      if (
+        stored?.document_json === storedJson &&
+        stored.document_object_id === (write?.objectId ?? null) &&
+        stored.author_user_id === userId
+      ) {
+        if (write)
+          await this.loadProjectObject(saved.projectId, write.objectId);
+      } else {
+        if (write) {
+          const result = await this.reconcileProjectStorageWrite(
+            saved.projectId,
+            access.ownerUserId,
+            write
+          );
+          if (result.state === 'unknown') {
+            throw new ProjectObjectStorageError(
+              'Checkpoint save outcome could not be verified.'
+            );
+          }
+        }
+        throw revisionSaveError(
+          error,
+          await this.ownerEntitlements(access.ownerUserId)
+        );
+      }
+    }
+    await this.pruneRevisions(saved.projectId);
+    await this.pruneUnreferencedProjectObjects(saved.projectId);
+  }
+
   /**
    * Drops a project's oldest revisions once it holds more than
    * {@link MAX_PROJECT_REVISIONS}.
@@ -3344,7 +3485,8 @@ export class D1R2PersistenceService implements PersistenceService {
 
   private projectAssetStatements(
     projectId: string,
-    write: ProjectStorageWrite
+    write: ProjectStorageWrite,
+    revision = false
   ): D1PreparedStatement[] {
     return write.prepared.assets.map((asset) =>
       this.env
@@ -3354,8 +3496,8 @@ export class D1R2PersistenceService implements PersistenceService {
               stored_bytes, content_encoding, created_at)
            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
            WHERE EXISTS (
-             SELECT 1 FROM projects
-             WHERE id = ? AND document_object_id = ?
+             SELECT 1 FROM ${revision ? 'revisions' : 'projects'}
+             WHERE ${revision ? 'project_id' : 'id'} = ? AND document_object_id = ?
            )`
         )
         .bind(
@@ -5811,6 +5953,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       document?: ProjectDocument;
       leaseId?: string;
       conflictResolution?: 'keep-local';
+      checkpointReason?: string;
     };
     try {
       payload = JSON.parse(body) as typeof payload;
@@ -5822,7 +5965,10 @@ export class ProjectCollaborationRoom extends DurableObject {
       typeof payload.clientId !== 'string' ||
       !payload.clientId ||
       payload.clientId.length > 256 ||
-      !payload.document
+      !payload.document ||
+      (payload.checkpointReason !== undefined &&
+        (typeof payload.checkpointReason !== 'string' ||
+          payload.checkpointReason.length > MAX_CHECKPOINT_REASON_LENGTH))
     ) {
       return new Response('Invalid collaboration snapshot.', { status: 400 });
     }
@@ -5838,6 +5984,7 @@ export class ProjectCollaborationRoom extends DurableObject {
           document: ProjectDocument;
           leaseId?: string;
           conflictResolution?: 'keep-local';
+          checkpointReason?: string;
         }
       )
     );
@@ -5854,6 +6001,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       document: ProjectDocument;
       leaseId?: string;
       conflictResolution?: 'keep-local';
+      checkpointReason?: string;
     }
   ): Promise<Response> {
     if (this.erasing)
@@ -5913,6 +6061,89 @@ export class ProjectCollaborationRoom extends DurableObject {
         { type: 'conflict', document: resolution.document },
         { status: 409 }
       );
+    }
+    if (payload.checkpointReason !== undefined) {
+      // A save point names the clicked model, not a newer graph produced by
+      // a concurrent merge. History bookkeeping may be retained from the room.
+      const model = (value: ProjectDocument) => ({
+        ...value,
+        derived: null,
+        version: 0,
+        revisions: [],
+        checkpoints: []
+      });
+      if (!sameJson(model(resolution.document), model(document))) {
+        return Response.json(
+          {
+            type: 'conflict',
+            document: this.latestDocument ?? resolution.document
+          },
+          { status: 409 }
+        );
+      }
+      const checkpoint = createCheckpoint(
+        appendRevision(
+          withoutDerivedProjection(resolution.document),
+          payload.checkpointReason
+        ),
+        payload.checkpointReason
+      );
+      const oversize =
+        checkClientDocument(checkpoint) ?? checkPersistedSize(checkpoint);
+      if (oversize) return rejectionResponse(oversize);
+      let denied: Response | null = null;
+      const recheckAuthor = async () => {
+        if (
+          this.erasing ||
+          !(await this.membershipStillAllowsAuthoring({ userId, role, email }))
+        ) {
+          denied = rejectionResponse({
+            code: 'permission-denied',
+            message: 'Project membership no longer allows editing.'
+          });
+        } else if (this.leaseEnforced(email)) {
+          await this.expireEditLease();
+          if (
+            !this.matchesActiveLease(userId, payload.clientId, payload.leaseId)
+          ) {
+            denied = rejectionResponse({
+              code: 'lease-required',
+              message: 'A matching active project edit lease is required.'
+            });
+          }
+        }
+        if (denied) throw new Error('Checkpoint authorization changed.');
+      };
+      try {
+        await new D1R2PersistenceService(
+          this.roomEnv
+        ).storeCollaborationCheckpoint(userId, checkpoint, recheckAuthor);
+        await recheckAuthor();
+        await this.commitDocument(checkpoint);
+      } catch (error) {
+        if (denied) return denied;
+        if (error instanceof ProjectNotFoundError) {
+          return rejectionResponse({
+            code: 'permission-denied',
+            message: 'Project membership no longer allows editing.'
+          });
+        }
+        return rejectionResponse({
+          code: 'internal',
+          message:
+            'The named checkpoint could not be stored. Your current room document is unchanged.'
+        });
+      }
+      await this.broadcast({
+        type: 'document',
+        clientId: payload.clientId,
+        document: checkpoint
+      });
+      return Response.json({
+        type: 'ack',
+        version: checkpoint.version,
+        document: checkpoint
+      });
     }
     if (resolution.kind === 'accept') {
       const oversize = checkPersistedSize(resolution.document);
@@ -6106,7 +6337,9 @@ function rejectionResponse(rejection: CollaborationRejection): Response {
             ? 409
             : rejection.code === 'document-invalid'
               ? 400
-              : 413
+              : rejection.code === 'internal'
+                ? 500
+                : 413
     }
   );
 }
