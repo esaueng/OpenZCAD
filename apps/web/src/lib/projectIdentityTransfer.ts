@@ -7,6 +7,7 @@
  */
 import type { CommandManager } from '@openzcad/command-system';
 import {
+  localizeImportedSourceArtifacts,
   reidentifyProjectDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
@@ -19,6 +20,7 @@ import {
   type UserId
 } from '@openzcad/shared';
 import {
+  applyAccountSourceArchives,
   archiveAccountImportSources,
   sourceUploadMessage
 } from './accountImportSources';
@@ -98,7 +100,9 @@ function withAccountIdentity(
   ownerUserId: UserId
 ): ProjectDocument {
   return withAccountOwner(
-    reidentifyProjectDocument(document, projectId),
+    localizeImportedSourceArtifacts(
+      reidentifyProjectDocument(document, projectId)
+    ),
     ownerUserId
   );
 }
@@ -109,7 +113,12 @@ export function latestTransferredProjectDocument(
   live: ProjectDocument
 ): ProjectDocument {
   if (live.version <= transferred.version) return transferred;
-  const moved = reidentifyProjectDocument(live, transferred.projectId);
+  const moved = applyAccountSourceArchives(
+    localizeImportedSourceArtifacts(
+      reidentifyProjectDocument(live, transferred.projectId)
+    ),
+    transferred
+  );
   return {
     ...moved,
     ownerUserId: transferred.ownerUserId,
@@ -188,9 +197,8 @@ export function rekeyLocalProject(
       // durable later edit must win over an older network snapshot as well.
       const latest =
         stored && stored.version > source.version ? stored : source;
-      const reidentified = reidentifyProjectDocument(
-        latest,
-        toProjectId(targetProjectId)
+      const reidentified = localizeImportedSourceArtifacts(
+        reidentifyProjectDocument(latest, toProjectId(targetProjectId))
       );
       const moved = {
         ...reidentified,
@@ -204,14 +212,25 @@ export function rekeyLocalProject(
             }
           : {})
       };
+      // A completed upload changes only the source's account location. An
+      // interrupted adoption can already have that acknowledged target cache.
+      const comparableTarget = target
+        ? localizeImportedSourceArtifacts(target)
+        : undefined;
       if (
         target &&
-        !projectMatchesInterruptedAdoption(moved, target) &&
-        !projectPreservesLocalWork(moved, target)
+        comparableTarget &&
+        !projectMatchesInterruptedAdoption(moved, comparableTarget) &&
+        !projectPreservesLocalWork(moved, comparableTarget)
       ) {
         throw new LocalProjectIdentityConflictError(moved, target);
       }
-      const durable = target ? withMatchingLocalDerived(target, moved) : moved;
+      const durable = target
+        ? withMatchingLocalDerived(
+            target,
+            applyAccountSourceArchives(moved, target)
+          )
+        : moved;
       store(STORE_NAME).put(durable);
       if (preserveSource) {
         const retained = {
@@ -311,9 +330,11 @@ export function rekeyLocalProject(
         store(CHECKPOINT_STORE_NAME).put({
           ...checkpoint,
           projectId: targetProjectId,
-          document: reidentifyProjectDocument(
-            checkpoint.document,
-            toProjectId(targetProjectId)
+          document: localizeImportedSourceArtifacts(
+            reidentifyProjectDocument(
+              checkpoint.document,
+              toProjectId(targetProjectId)
+            )
           )
         });
       }
@@ -395,7 +416,10 @@ async function transferAdoptedProjectIdentity(
         : artifact
     )
   );
-  return withAccountIdentity(local, remote.projectId, remote.ownerUserId);
+  return applyAccountSourceArchives(
+    withAccountIdentity(local, remote.projectId, remote.ownerUserId),
+    remote
+  );
 }
 
 export type AdoptLocalProjectResult =

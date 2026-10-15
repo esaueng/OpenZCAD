@@ -6,6 +6,7 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   createProjectDocument,
   adoptProjectDocument,
+  createCheckpoint,
   reidentifyProjectDocument
 } from '@openzcad/document-core';
 import { toProjectId, toUserId } from '@openzcad/shared';
@@ -42,6 +43,8 @@ import {
   LOCAL_PROJECT_DATABASE_NAME,
   LOCAL_PROJECT_DATABASE_VERSION
 } from './localProjectSchema';
+import { listLocalOnlyImportSources } from './importArchival';
+import { archiveAccountImportSources } from './accountImportSources';
 
 function renamed() {
   const manager = new CommandManager(
@@ -104,6 +107,155 @@ afterEach(() => {
 });
 
 describe('account identity transfer', () => {
+  it('localizes cached account sources in a newer durable transfer and its stored save states', async () => {
+    const step = await putSourceBlobIfAbsent(new Uint8Array([1, 2, 3]));
+    const mesh = await putSourceBlobIfAbsent(new Uint8Array([4, 5, 6]));
+    const manager = new CommandManager(
+      createProjectDocument('Cached account imports', toUserId('account-a'))
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'STEP',
+        sourceName: 'part.step',
+        artifactId: 'artifact_account_a_step',
+        stepSourceRef: step.ref
+      })
+    );
+    manager.execute(
+      commandFactories.importMesh({
+        name: 'Mesh',
+        sourceName: 'part.stl',
+        artifactId: 'artifact_account_a_mesh',
+        triangleCount: 1,
+        meshPayloadRef: mesh.ref
+      })
+    );
+    manager.execute(
+      commandFactories.deleteFeature({
+        featureId: manager.document.featureOrder.at(-1)!
+      })
+    );
+    manager.document = createCheckpoint(
+      manager.document,
+      'With cached imports'
+    );
+    const snapshot = manager.document;
+    await saveLocalProject(snapshot);
+    manager.execute(
+      commandFactories.renameNode({
+        nodeId: manager.document.rootNodeId,
+        name: 'Edited before identity transfer'
+      })
+    );
+    await saveLocalProject(manager.document);
+    const moved = await rekeyLocalProject(
+      {
+        ...snapshot,
+        ownerUserId: toUserId('account-b'),
+        editHistory: {
+          ...snapshot.editHistory!,
+          actorUserId: toUserId('account-b')
+        }
+      },
+      'account-b-imports',
+      { retainSource: true }
+    );
+    expect(moved.name).toBe('Edited before identity transfer');
+    expect(listLocalOnlyImportSources(moved)).toHaveLength(2);
+    expect(await loadLocalProject(snapshot.projectId)).toEqual(
+      manager.document
+    );
+    const checkpoint = await loadLocalSaveState(
+      moved.projectId,
+      snapshot.checkpoints.at(-1)!.checkpointId
+    );
+    expect(listLocalOnlyImportSources(checkpoint!)).toHaveLength(2);
+    expect(await loadSourceBlob(step.ref.checksumSha256)).toEqual(
+      new Uint8Array([1, 2, 3])
+    );
+    expect(await loadSourceBlob(mesh.ref.checksumSha256)).toEqual(
+      new Uint8Array([4, 5, 6])
+    );
+  });
+
+  it.each([false, true])(
+    'recovers an interrupted imported adoption and preserves buffered edits (already archived: %s)',
+    async (alreadyArchived) => {
+      const manager = new CommandManager(
+        createProjectDocument('Cached imports', toUserId('account-a'))
+      );
+      manager.execute(
+        commandFactories.importMesh({
+          name: 'Mesh',
+          sourceName: 'part.stl',
+          artifactId: 'artifact_account_a_mesh',
+          triangleCount: 1,
+          meshPayloadRef: {
+            marker: 'openzcad-source-ref',
+            version: 1,
+            hashAlgorithm: 'sha256',
+            checksumSha256: 'a'.repeat(64),
+            logicalBytes: 4
+          }
+        })
+      );
+      const initialAdoption = adoptProjectDocument(
+        reidentifyProjectDocument(
+          manager.document,
+          toProjectId('account-b-imports')
+        ),
+        toUserId('account-b')
+      );
+      const adopted = alreadyArchived
+        ? (
+            await archiveAccountImportSources(initialAdoption, {
+              loadSourceBytes: async () => new Uint8Array([1, 2, 3, 4]),
+              archive: async () => 'artifact_account_b_mesh'
+            })
+          ).document
+        : initialAdoption;
+      await saveLocalProject(manager.document);
+      await saveLocalProject(adopted);
+      const moved = await rekeyLocalProject(
+        {
+          ...manager.document,
+          ownerUserId: adopted.ownerUserId,
+          editHistory: {
+            ...manager.document.editHistory!,
+            actorUserId: adopted.ownerUserId
+          }
+        },
+        adopted.projectId,
+        { retainSource: true }
+      );
+      expect(moved.checkpoints).toEqual(adopted.checkpoints);
+      expect(listLocalOnlyImportSources(moved)).toHaveLength(
+        alreadyArchived ? 0 : 1
+      );
+      manager.execute(
+        commandFactories.renameNode({
+          nodeId: manager.document.rootNodeId,
+          name: 'Buffered rename'
+        })
+      );
+      const transferred = latestTransferredProjectDocument(
+        moved,
+        manager.document
+      );
+      expect(transferred.name).toBe('Buffered rename');
+      expect(transferred.ownerUserId).toBe('account-b');
+      expect(listLocalOnlyImportSources(transferred)).toHaveLength(
+        alreadyArchived ? 0 : 1
+      );
+      const undo = new CommandManager(transferred);
+      undo.undo();
+      expect(undo.document.name).toBe('Cached imports');
+      expect(listLocalOnlyImportSources(undo.document)).toHaveLength(
+        alreadyArchived ? 0 : 1
+      );
+    }
+  );
+
   it('preserves undo/redo endpoints, model IDs, history clocks and source references', () => {
     const original = renamed().document;
     const moved = reidentifyProjectDocument(
