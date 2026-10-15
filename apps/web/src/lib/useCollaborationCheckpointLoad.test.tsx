@@ -1,160 +1,38 @@
-import 'fake-indexeddb/auto';
-import { IDBFactory } from 'fake-indexeddb';
-import { act, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  addPrimitiveFeature,
-  createProjectDocument
-} from '@openzcad/document-core';
-import {
-  toUserId,
-  type CollaborationServerMessage,
-  type ProjectDocument
-} from '@openzcad/shared';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createProjectDocument } from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
 import {
   loadLocalProject,
   loadLocalSaveState,
   saveLocalProject
 } from './localProjectStore';
 import * as localStore from './localProjectStore';
-import { useCollaboration } from './useCollaboration';
+import { setup, box, rejectedSave } from './collaborationCheckpointTestHarness';
 import { preserveFailedCheckpoint } from './collaborationCheckpointFallback';
 import { STALE_CHUNK_MESSAGE } from './staleChunk';
 
-const chunkError = new Error('Checkpoint action chunk unavailable.');
-
-class Socket extends EventTarget {
-  static readonly OPEN = 1;
-  static instances: Socket[] = [];
-  readyState = 0;
-  readonly sent: Array<{ type: string; document?: ProjectDocument }> = [];
-  constructor(_url: string) {
-    super();
-    Socket.instances.push(this);
-  }
-  send(raw: string) {
-    this.sent.push(JSON.parse(raw) as (typeof this.sent)[number]);
-  }
-  close() {
-    this.readyState = 3;
-    this.dispatchEvent(new Event('close'));
-  }
-  receive(frame: CollaborationServerMessage) {
-    this.dispatchEvent(
-      new MessageEvent('message', { data: JSON.stringify(frame) })
-    );
-  }
-}
-
-beforeEach(() => {
-  vi.doMock('./collaborationCheckpoint', () => {
-    throw chunkError;
-  });
-  globalThis.indexedDB = new IDBFactory();
-  sessionStorage.clear();
-  localStorage.clear();
-  Socket.instances = [];
-  vi.stubGlobal('WebSocket', Socket);
-  vi.stubGlobal('fetch', vi.fn());
-});
-afterEach(() => {
-  vi.useRealTimers();
-  vi.doUnmock('./collaborationCheckpoint');
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-});
-
-function setup(document: ProjectDocument) {
-  let live = document;
-  let current = true;
-  let userId = toUserId('member');
-  let enabled = true;
-  const apply = vi.fn((next: ProjectDocument) => {
-    live = next;
-  });
-  const hook = renderHook(
-    (props: {
-      document: ProjectDocument;
-      userId: typeof userId;
-      enabled: boolean;
-    }) =>
-      useCollaboration({
-        ...props,
-        session: {
-          userId: props.userId,
-          displayName: 'Member',
-          mode: 'development'
-        },
-        onRemoteDocument: vi.fn(),
-        onConflict: vi.fn()
-      }),
-    { initialProps: { document, userId, enabled } }
-  );
-  const socket = Socket.instances[0]!;
-  act(() => {
-    socket.readyState = Socket.OPEN;
-    socket.dispatchEvent(new Event('open'));
-    socket.receive({
-      type: 'state',
-      members: [],
-      document,
-      role: 'editor',
-      lease: null
-    });
-    socket.receive({
-      type: 'lease-granted',
-      lease: {
-        projectId: document.projectId,
-        leaseId: 'checkpoint_lease',
-        clientId: sessionStorage.getItem('openzcad-collaboration-client')!,
-        userId,
-        expiresAt: Date.now() + 60_000
-      }
-    });
-  });
-  const rerender = () => hook.rerender({ document: live, userId, enabled });
+// Leave the rejected module mocked for this file's entire lifetime. A held
+// module that later succeeds belongs in its own isolated test environment.
+const { chunkError, failCheckpointLoad } = vi.hoisted(() => {
+  const chunkError = new Error('Checkpoint action chunk unavailable.');
   return {
-    ...hook,
-    socket,
-    apply,
-    options: {
-      isCurrent: () => current,
-      readDocument: () => live,
-      applyDocument: apply
-    },
-    read: () => live,
-    edit(next: ProjectDocument) {
-      live = next;
-      rerender();
-    },
-    depart(kind: 'navigation' | 'account' | 'disabled' | 'project') {
-      if (kind === 'navigation') current = false;
-      if (kind === 'account') userId = toUserId('other-member');
-      if (kind === 'disabled') enabled = false;
-      if (kind === 'project')
-        live = createProjectDocument('New workspace', toUserId('owner'));
-      rerender();
-    }
+    chunkError,
+    failCheckpointLoad: vi.fn(() => {
+      throw chunkError;
+    })
   };
-}
+});
+vi.mock('./collaborationCheckpoint', () => failCheckpointLoad());
+beforeEach(() => {
+  failCheckpointLoad.mockClear();
+});
 
-function box(document: ProjectDocument, name: string) {
-  return addPrimitiveFeature(document, {
-    name,
-    primitiveKind: 'box',
-    dimensions: { width: 2, depth: 2, height: 2 }
-  });
-}
-
-async function rejectedSave(
-  operation: Promise<ProjectDocument>
-): Promise<Error> {
-  let result: unknown;
-  await act(async () => {
-    result = await operation.catch((error: unknown) => error);
-  });
-  expect(result).toBeInstanceOf(Error);
-  return result as Error;
+function originalCause(error: Error): unknown {
+  let cause: unknown = error;
+  while (cause instanceof Error && cause.cause !== undefined) {
+    cause = cause.cause;
+  }
+  return cause;
 }
 
 describe('named saves when the checkpoint action cannot load', () => {
@@ -188,138 +66,6 @@ describe('named saves when the checkpoint action cannot load', () => {
     hook.unmount();
   });
 
-  it('uses the named-save deadline for a held import and never starts its late action', async () => {
-    const clicked = createProjectDocument('Held action', toUserId('owner'));
-    const later = box(clicked, 'Buffered box');
-    const action = vi.fn(async () => clicked);
-    let resolve!: (module: {
-      saveCollaborationCheckpoint: typeof action;
-    }) => void;
-    const pending = new Promise<{ saveCollaborationCheckpoint: typeof action }>(
-      (done) => {
-        resolve = done;
-      }
-    );
-    const loading = vi.fn(() => pending);
-    vi.doMock('./collaborationCheckpoint', loading);
-    const hook = setup(clicked);
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    let outcome = 'pending';
-    const saving = hook.result.current.saveCheckpoint(
-      clicked,
-      'Deadline milestone',
-      hook.options
-    );
-    const settled = saving.then(
-      () => {
-        outcome = 'resolved';
-      },
-      () => {
-        outcome = 'rejected';
-      }
-    );
-    hook.edit(later);
-    try {
-      await vi.waitFor(() => expect(loading).toHaveBeenCalledOnce());
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(14_000);
-      });
-      expect(outcome).toBe('pending');
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1_000);
-        // IndexedDB completes its real task queue after the deadline fires.
-        await vi.waitFor(() => expect(outcome).toBe('rejected'));
-      });
-      expect(outcome).toBe('rejected');
-      const error = await rejectedSave(saving);
-      expect(error.message).toContain(
-        'The room did not confirm the named save. Please retry.'
-      );
-      expect(error.message).toContain(
-        'The named save is stored on this device.'
-      );
-      const local = hook.read().checkpoints.at(-1)!;
-      expect(local.reason).toBe('Deadline milestone');
-      expect(
-        (await loadLocalSaveState(clicked.projectId, local.checkpointId))?.nodes
-      ).toEqual(clicked.nodes);
-      expect(hook.read().nodes).toEqual(later.nodes);
-      expect(
-        hook.socket.sent.filter((frame) => frame.type === 'document').at(-1)
-          ?.document?.nodes
-      ).toEqual(later.nodes);
-    } finally {
-      resolve({ saveCollaborationCheckpoint: action });
-      await act(async () => {
-        await vi.dynamicImportSettled();
-        await settled;
-      });
-      hook.unmount();
-    }
-    expect(action).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-    expect(
-      await localStore.listLocalSaveStateIds(clicked.projectId)
-    ).toHaveProperty('size', 1);
-  });
-
-  it('cancels a held import promptly on a room change and never starts its late action', async () => {
-    const clicked = createProjectDocument(
-      'Departing held action',
-      toUserId('owner')
-    );
-    const action = vi.fn(async () => clicked);
-    let resolve!: (module: {
-      saveCollaborationCheckpoint: typeof action;
-    }) => void;
-    vi.doMock(
-      './collaborationCheckpoint',
-      () =>
-        new Promise((done) => {
-          resolve = done;
-        })
-    );
-    const hook = setup(clicked);
-    let outcome = 'pending';
-    const saving = hook.result.current.saveCheckpoint(
-      clicked,
-      'Cancelled milestone',
-      hook.options
-    );
-    const settled = saving.then(
-      () => {
-        outcome = 'resolved';
-      },
-      () => {
-        outcome = 'rejected';
-      }
-    );
-    await waitFor(() => expect(resolve).toBeDefined());
-    hook.depart('project');
-    const next = hook.read();
-    try {
-      await waitFor(() => expect(outcome).toBe('rejected'), { timeout: 1_000 });
-      const error = await rejectedSave(saving);
-      expect(error.message).toContain(
-        'The named save is stored on this device.'
-      );
-      expect(hook.apply).not.toHaveBeenCalled();
-      expect(hook.read()).toBe(next);
-      expect(
-        await localStore.listLocalSaveStateIds(clicked.projectId)
-      ).toHaveProperty('size', 1);
-    } finally {
-      resolve({ saveCollaborationCheckpoint: action });
-      await act(async () => {
-        await vi.dynamicImportSettled();
-        await settled;
-      });
-      hook.unmount();
-    }
-    expect(action).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
   it('durably names the clicked snapshot while retaining buffered edits and the newer stored project head', async () => {
     const clicked = box(
       createProjectDocument('Offline named save', toUserId('owner')),
@@ -335,9 +81,10 @@ describe('named saves when the checkpoint action cannot load', () => {
     );
     hook.edit(later);
     const error = await rejectedSave(saving);
-    // Vitest wraps a rejected module factory; preserve that primary rejection
-    // and its original chunk error, rather than replacing it with storage.
-    expect((error.cause as Error).cause).toBe(chunkError);
+    expect(failCheckpointLoad).toHaveBeenCalledOnce();
+    // Vitest may wrap a rejected module factory. Its original cause must
+    // survive regardless of that framework-owned wrapper's presence.
+    expect(originalCause(error)).toBe(chunkError);
     expect(error.message).toContain((error.cause as Error).message);
     expect(error.message).toContain('The named save is stored on this device.');
     const local = hook.read().checkpoints.at(-1)!;
@@ -378,6 +125,7 @@ describe('named saves when the checkpoint action cannot load', () => {
       hook.depart(departure);
       const next = hook.read();
       const error = await rejectedSave(saving);
+      expect(failCheckpointLoad).toHaveBeenCalledOnce();
       expect(error.message).toContain(
         'The named save is stored on this device.'
       );
@@ -405,7 +153,8 @@ describe('named saves when the checkpoint action cannot load', () => {
     const error = await rejectedSave(
       hook.result.current.saveCheckpoint(clicked, 'Not stored', hook.options)
     );
-    expect((error.cause as Error).cause).toBe(chunkError);
+    expect(failCheckpointLoad).toHaveBeenCalledOnce();
+    expect(originalCause(error)).toBe(chunkError);
     expect(error.message).toContain((error.cause as Error).message);
     expect(error.message).toContain(
       'The named save could not be stored on this device.'
