@@ -1959,7 +1959,11 @@ export class InMemoryPersistenceService implements PersistenceService {
     artifactId: string,
     originalKind?: 'stl-import' | 'mesh-import'
   ): Promise<{ deleted: boolean }> {
-    await this.requireProjectEdit(userId, projectId);
+    const access = await this.requireProjectEdit(userId, projectId);
+    // Originals are stored files, and finalized records do not identify the
+    // uploader. Only the owner may remove them, including cancellation cleanup.
+    if (originalKind && access.role !== 'owner')
+      throw new ProjectNotFoundError(projectId);
     if (
       (
         await this.loadCopiedImportArchives(userId, toProjectId(projectId))
