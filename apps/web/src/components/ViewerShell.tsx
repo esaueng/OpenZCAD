@@ -130,7 +130,6 @@ interface ViewerShellProps {
   autoFrame?: AutoFrameRequest | null;
   viewRequest: { view: ViewTarget; nonce: number } | null;
   normalToFaceRequest: NormalToFaceRequest | null;
-  rotateRequest: { direction: 'cw' | 'ccw'; nonce: number } | null;
   units: string;
   editableBodyIds: string[];
   movePreview: MovePreview | null;
@@ -308,7 +307,6 @@ interface ViewerShellProps {
   measuring?: boolean;
   onMeasure?(next: boolean): void;
   onView(view: ViewTarget): void;
-  onRotateView(direction: 'cw' | 'ccw'): void;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
   sectionRange: { min: number; max: number } | null;
@@ -342,7 +340,6 @@ export function ViewerShell({
   autoFrame = null,
   viewRequest,
   normalToFaceRequest,
-  rotateRequest,
   units,
   editableBodyIds,
   movePreview,
@@ -432,7 +429,6 @@ export function ViewerShell({
   measuring = false,
   onMeasure,
   onView,
-  onRotateView,
   onCycleDisplayMode,
   onToggleProjection,
   sectionRange,
@@ -551,7 +547,6 @@ export function ViewerShell({
         autoFrame={autoFrame}
         viewRequest={viewRequest}
         normalToFaceRequest={normalToFaceRequest}
-        rotateRequest={rotateRequest}
         units={units}
         editableBodyIds={editableBodyIds}
         movePreview={movePreview}
@@ -663,7 +658,6 @@ export function ViewerShell({
             <OrientationWidget
               orientationRef={orientationRef}
               onSelectView={onView}
-              onRotateView={onRotateView}
               onDragStart={() => orientationDragRef.current?.begin()}
               onDrag={(deltaX, deltaY) =>
                 orientationDragRef.current?.move(deltaX, deltaY)
