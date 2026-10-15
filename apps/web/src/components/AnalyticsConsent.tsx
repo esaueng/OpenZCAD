@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { isAnalyticsEnabled, setAnalyticsEnabled } from '../lib/analytics';
+import { hasAnalyticsConsent, setAnalyticsEnabled } from '../lib/analytics';
 export function AnalyticsConsent() {
-  const [enabled, setEnabled] = useState(isAnalyticsEnabled);
+  const [enabled, setEnabled] = useState(hasAnalyticsConsent);
   const [error, setError] = useState('');
   useEffect(() => {
-    const update = () => setEnabled(isAnalyticsEnabled());
+    const update = () => setEnabled(hasAnalyticsConsent());
     window.addEventListener('glimpse-consent-changed', update);
     return () => window.removeEventListener('glimpse-consent-changed', update);
   }, []);
@@ -16,7 +16,7 @@ export function AnalyticsConsent() {
           checked={enabled}
           onChange={(event) => {
             const saved = setAnalyticsEnabled(event.currentTarget.checked);
-            setEnabled(isAnalyticsEnabled());
+            setEnabled(hasAnalyticsConsent());
             setError(
               saved
                 ? ''
@@ -29,8 +29,9 @@ export function AnalyticsConsent() {
       <p>
         Allow Glimpse to count feature use, workflow steps, exports, and coarse
         timings. No model contents, geometry, filenames, project names, or
-        identity. Off by default. Withdraw here to stop collection immediately;
-        existing anonymous totals cannot be attributed or removed.
+        identity. Off by default. DNT and GPC suppress sending while preserving
+        this choice. Withdraw here to stop collection immediately; existing
+        anonymous totals cannot be attributed or removed.
       </p>
       <p>
         Basic server counters measure API activity and reliability. Local

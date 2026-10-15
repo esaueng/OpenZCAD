@@ -21,8 +21,15 @@ function stopPending(): void {
   for (const controller of pending) controller.abort();
   pending.clear();
 }
-export function isAnalyticsEnabled(): boolean {
+export function hasAnalyticsConsent(): boolean {
   if (withdrawn || typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(CONSENT_KEY) === 'granted-v1';
+  } catch {
+    return false;
+  }
+}
+export function isAnalyticsEnabled(): boolean {
   if (
     typeof navigator !== 'undefined' &&
     (navigator.doNotTrack === '1' ||
@@ -30,11 +37,7 @@ export function isAnalyticsEnabled(): boolean {
         .globalPrivacyControl)
   )
     return false;
-  try {
-    return window.localStorage.getItem(CONSENT_KEY) === 'granted-v1';
-  } catch {
-    return false;
-  }
+  return hasAnalyticsConsent();
 }
 export function setAnalyticsEnabled(enabled: boolean): boolean {
   if (typeof window === 'undefined') return false;
@@ -50,6 +53,8 @@ export function setAnalyticsEnabled(enabled: boolean): boolean {
     return true;
   } catch {
     // Withdrawal always takes effect in this page, even if persistence fails.
+    withdrawn = true;
+    stopPending();
     window.dispatchEvent(new Event('glimpse-consent-changed'));
     return false;
   }
