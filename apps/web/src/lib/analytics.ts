@@ -1,3 +1,6 @@
+import { cloudFunctionsAreEnabled, cloudRequestSignal } from './cloudMode';
+import { isDesktopApp } from './desktopBridge';
+
 // Glimpse optional analytics: app-scoped consent preference, never a visitor ID.
 const CONSENT_KEY = 'openzcad.glimpse.consent.v1';
 const EVENTS = [
@@ -30,6 +33,7 @@ export function hasAnalyticsConsent(): boolean {
   }
 }
 export function isAnalyticsEnabled(): boolean {
+  if (isDesktopApp() || !cloudFunctionsAreEnabled()) return false;
   if (
     typeof navigator !== 'undefined' &&
     (navigator.doNotTrack === '1' ||
@@ -90,7 +94,7 @@ export function trackUsage(event: UsageEvent, elapsedMs?: number): void {
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ event, bucket }),
-      signal: controller.signal
+      signal: cloudRequestSignal(controller.signal)
     })
       .catch(() => undefined)
       .finally(() => pending.delete(controller));
