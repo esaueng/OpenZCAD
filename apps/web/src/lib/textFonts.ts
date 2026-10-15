@@ -40,7 +40,19 @@ async function fontLibrary(): Promise<FontLibrary> {
   // it cannot move anything into a separate chunk (rollup says so, loudly).
   // `setTextFontProvider` comes from the provider module, which has no
   // opentype dependency and is free to stay in the entry bundle.
-  libraryPromise ??= import('@openzcad/geometry/text-loader')
+  // Expire the import itself so retries can use a fresh URL. Constructing the
+  // provider after the race keeps a late original import from replacing it.
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  libraryPromise ??= Promise.race([
+    import('@openzcad/geometry/text-loader'),
+    new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(
+        () => reject(new Error('Font parser load timed out.')),
+        FONT_PRELOAD_BUDGET_MS
+      );
+    })
+  ])
+    .finally(() => clearTimeout(timeout))
     .then(({ FontLibrary, fetchFontDataSource }) => {
       const created = new FontLibrary(
         fetchFontDataSource(fetch, FONT_PRELOAD_BUDGET_MS)

@@ -150,4 +150,67 @@ describe('text font loading', () => {
       vi.resetModules();
     }
   });
+
+  it.each(['resolve', 'reject'] as const)(
+    'retries a stalled parser import and ignores its late %s',
+    async (lateOutcome) => {
+      vi.useFakeTimers();
+      vi.resetModules();
+      let release!: (value: unknown) => void;
+      let reject!: (error: Error) => void;
+      const held = new Promise((resolve, fail) => {
+        release = resolve;
+        reject = fail;
+      });
+      const created = vi.fn();
+      const module = {
+        FontLibrary: class {
+          constructor() {
+            created();
+          }
+          peek() {
+            return undefined;
+          }
+        },
+        fetchFontDataSource: () => async () => new Uint8Array()
+      };
+      vi.doMock('@openzcad/geometry/text-loader', () => held);
+      try {
+        const fresh = await import('./textFonts');
+        let failure: unknown;
+        void fresh.installTextFontProvider().catch((error: unknown) => {
+          failure = error;
+        });
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as Error).message).toMatch(/timed out/i);
+        expect(created).not.toHaveBeenCalled();
+
+        // Production retries use a fresh query URL. Release the mock module
+        // map here while retaining this textFonts instance and its memo.
+        vi.doUnmock('@openzcad/geometry/text-loader');
+        vi.resetModules();
+        const fetchedBefore = fetched.filter(
+          (file) => file === 'lora-regular.ttf'
+        ).length;
+        await fresh.loadTextFont('lora', 'regular');
+        expect(
+          fetched.filter((file) => file === 'lora-regular.ttf')
+        ).toHaveLength(fetchedBefore + 1);
+        if (lateOutcome === 'resolve') release(module);
+        else reject(new Error('The old parser request failed late.'));
+        await vi.advanceTimersByTimeAsync(0);
+        await fresh.loadTextFont('lora', 'regular');
+        expect(created).not.toHaveBeenCalled();
+        expect(
+          fetched.filter((file) => file === 'lora-regular.ttf')
+        ).toHaveLength(fetchedBefore + 1);
+      } finally {
+        release(module);
+        vi.useRealTimers();
+        vi.doUnmock('@openzcad/geometry/text-loader');
+        vi.resetModules();
+      }
+    }
+  );
 });
