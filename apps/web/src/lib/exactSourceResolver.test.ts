@@ -26,6 +26,7 @@ import {
   SOURCE_DOWNLOAD_IDLE_MS
 } from './exactSourceResolver';
 import { archiveAccountImportSources } from './accountImportSources';
+import { readSharedSourceBytes } from './sharedSourceDownload';
 import {
   listLocalOnlyImportSources,
   meshPayloadArchive
@@ -82,8 +83,9 @@ describe('anonymous shared STEP source preload', () => {
     await preloadSharedImportSources(document, 'share_token', fetcher);
     expect(fetcher).toHaveBeenCalledWith(
       '/api/share/share_token/sources/artifact_source',
-      { credentials: 'omit' }
+      { credentials: 'omit', signal: fetcher.mock.calls[0]?.[1]?.signal }
     );
+    expect(fetcher.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
     expect(await loadSourceBlob(checksumSha256)).toEqual(source);
     await preloadSharedImportSources(document, 'share_token', fetcher);
     expect(fetcher).toHaveBeenCalledTimes(1);
@@ -267,10 +269,225 @@ describe('anonymous shared mesh payload preload', () => {
     await preloadSharedImportSources(document, 'share_token', fetcher);
     expect(fetcher).toHaveBeenCalledWith(
       '/api/share/share_token/sources/artifact_payload',
-      { credentials: 'omit' }
+      { credentials: 'omit', signal: fetcher.mock.calls[0]?.[1]?.signal }
     );
+    expect(fetcher.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
     expect(await loadSourceBlob(checksumSha256)).toEqual(payload);
   });
+});
+
+describe('anonymous shared source download budget', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each(['headers', 'body'] as const)(
+    'rejects stalled %s even when the transport ignores abort, without caching late bytes',
+    async (stage) => {
+      const { document, source, checksumSha256 } =
+        await sharedImport('artifact_source');
+      let canceled = false;
+      const cancel = vi.fn(() => {
+        canceled = true;
+      });
+      let finishBody: (() => void) | undefined;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          if (stage === 'body') controller.enqueue(source.slice(0, 4));
+          finishBody = () => {
+            if (canceled) return;
+            controller.enqueue(stage === 'body' ? source.slice(4) : source);
+            controller.close();
+          };
+        },
+        cancel
+      });
+      let releaseHeaders: (() => void) | undefined;
+      const fetcher = vi.fn<typeof fetch>(() =>
+        stage === 'headers'
+          ? new Promise<Response>((resolve) => {
+              releaseHeaders = () => resolve(new Response(body));
+            })
+          : Promise.resolve(new Response(body))
+      );
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      let outcome = 'pending';
+      const pending = preloadSharedImportSources(
+        document,
+        'share_token',
+        fetcher
+      ).then(
+        () => {
+          outcome = 'resolved';
+        },
+        () => {
+          outcome = 'rejected';
+        }
+      );
+      try {
+        await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+        await vi.advanceTimersByTimeAsync(SOURCE_DOWNLOAD_IDLE_MS + 1);
+        expect(outcome).toBe('rejected');
+        expect(fetcher.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+        expect(await loadSourceBlob(checksumSha256)).toBeNull();
+        // A fetch that ignores abort can still resolve after the open failed.
+        releaseHeaders?.();
+        await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+        expect(body.locked).toBe(false);
+        expect(await loadSourceBlob(checksumSha256)).toBeNull();
+        await preloadSharedImportSources(
+          document,
+          'share_token',
+          vi.fn<typeof fetch>().mockResolvedValue(new Response(source))
+        );
+        expect(await loadSourceBlob(checksumSha256)).toEqual(source);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        releaseHeaders?.();
+        finishBody?.();
+        await pending;
+      }
+    }
+  );
+
+  it('allows a shared source to take longer than one idle interval while headers and chunks progress', async () => {
+    const { document, source, checksumSha256 } =
+      await sharedImport('artifact_source');
+    let resolveHeaders: ((response: Response) => void) | undefined;
+    let push: ((chunk: Uint8Array | null) => void) | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        push = (chunk) =>
+          chunk ? controller.enqueue(chunk) : controller.close();
+      }
+    });
+    const fetcher = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveHeaders = resolve;
+        })
+    );
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const pending = preloadSharedImportSources(
+      document,
+      'share_token',
+      fetcher
+    );
+    await vi.waitFor(() => expect(resolveHeaders).toBeDefined());
+    await vi.advanceTimersByTimeAsync(SOURCE_DOWNLOAD_IDLE_MS - 1_000);
+    resolveHeaders!(new Response(body));
+    await vi.advanceTimersByTimeAsync(SOURCE_DOWNLOAD_IDLE_MS - 1_000);
+    push!(source.slice(0, 4));
+    expect(await loadSourceBlob(checksumSha256)).toBeNull();
+    await vi.advanceTimersByTimeAsync(SOURCE_DOWNLOAD_IDLE_MS - 1_000);
+    push!(source.slice(4));
+    push!(null);
+    await pending;
+    expect(fetcher.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+    expect(await loadSourceBlob(checksumSha256)).toEqual(source);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not count an empty body chunk as download progress', async () => {
+    const { document, checksumSha256 } = await sharedImport('artifact_source');
+    let push: (() => void) | undefined;
+    const cancel = vi.fn();
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            push = () => controller.enqueue(new Uint8Array());
+          },
+          cancel
+        })
+      )
+    );
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let outcome = 'pending';
+    const pending = preloadSharedImportSources(
+      document,
+      'share_token',
+      fetcher
+    ).catch(() => {
+      outcome = 'rejected';
+    });
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(SOURCE_DOWNLOAD_IDLE_MS - 1_000);
+    push!();
+    await vi.advanceTimersByTimeAsync(1_001);
+    expect(outcome).toBe('rejected');
+    await pending;
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(await loadSourceBlob(checksumSha256)).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['declared-size', 'logical-size', 'checksum'] as const)(
+    'keeps a shared source with invalid %s out of the cache',
+    async (failure) => {
+      const { document, source, checksumSha256 } =
+        await sharedImport('artifact_source');
+      const cancel = vi.fn();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            failure === 'logical-size'
+              ? source.slice(1)
+              : failure === 'checksum'
+                ? new Uint8Array(source.byteLength)
+                : source
+          );
+          controller.close();
+        },
+        cancel
+      });
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(body, {
+          headers:
+            failure === 'declared-size'
+              ? { 'content-length': String(128 * 1024 * 1024 + 1) }
+              : {}
+        })
+      );
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      await expect(
+        preloadSharedImportSources(document, 'share_token', fetcher)
+      ).rejects.toThrow('failed its integrity check');
+      expect(await loadSourceBlob(checksumSha256)).toBeNull();
+      expect(vi.getTimerCount()).toBe(0);
+      if (failure === 'declared-size') expect(cancel).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(['declared', 'streamed'] as const)(
+    'cancels a body that exceeds the %s ceiling without trusting its header',
+    async (mode) => {
+      const cancel = vi.fn();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.enqueue(new Uint8Array([4, 5, 6]));
+        },
+        cancel
+      });
+      const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(body, {
+          headers: { 'content-length': mode === 'declared' ? '6' : '1' }
+        })
+      );
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      await expect(
+        readSharedSourceBytes(
+          '/source',
+          'source.step',
+          fetcher,
+          5,
+          SOURCE_DOWNLOAD_IDLE_MS
+        )
+      ).resolves.toBeNull();
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(body.locked).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    }
+  );
 });
 
 describe('reference source download budget', () => {
