@@ -18,10 +18,12 @@ import {
   loadSourceBlob,
   putSourceBlob,
   saveImportedProject,
-  saveLocalProject
+  saveLocalProject,
+  saveLocalSaveStates
 } from './localProjectStore';
 import { importProjectCopy, parseProjectBackup } from './projectBackup';
 import { createProjectBackup } from './projectBackupTransfer';
+import { rekeyLocalProject } from './projectIdentityTransfer';
 
 beforeEach(() => {
   globalThis.indexedDB = new IDBFactory();
@@ -135,11 +137,35 @@ it('moves a failed member save and its exclusive mesh source to a fresh device w
   expect(again.sources).toEqual(copy.sources);
 });
 
+it('exports retained private checkpoints after the project moves to a new account identity', async () => {
+  const source = createProjectDocument(
+    'Account transfer',
+    toUserId('device-owner')
+  );
+  await saveLocalProject(source);
+  const point = createSavedRevision(source, 'Before account transfer');
+  await saveLocalSaveStates([point]);
+  const moved = await rekeyLocalProject(
+    { ...source, ownerUserId: toUserId('account-owner') },
+    'proj_account_transfer_backup'
+  );
+  const backup = await parseProjectBackup(
+    await createProjectBackup(moved, false)
+  );
+  const retained = backup.saveStates!.find((state) => state.deviceOnly)!;
+  expect(retained.document.ownerUserId).toBe('device-owner');
+  expect(retained.document.projectId).toBe(moved.projectId);
+  expect(retained.checkpointId).toBe(point.checkpoints.at(-1)!.checkpointId);
+  const copy = importProjectCopy(backup, toUserId('import-owner'));
+  expect(
+    copy.saveStates!.find((state) => state.deviceOnly)!.document.ownerUserId
+  ).toBe('import-owner');
+});
+
 it.each([
   'missing marker',
   'invalid marker',
   'foreign project',
-  'foreign owner',
   'wrong checkpoint',
   'wrong version',
   'wrong revision',
@@ -157,7 +183,6 @@ it.each([
   if (fault === 'invalid marker') state.deviceOnly = 'true';
   if (fault === 'foreign project')
     saved.projectId = 'proj_foreign' as typeof saved.projectId;
-  if (fault === 'foreign owner') saved.ownerUserId = toUserId('other-owner');
   if (fault === 'wrong checkpoint') state.checkpointId = 'checkpoint_other';
   if (fault === 'wrong version') saved.version += 1;
   if (fault === 'wrong revision')

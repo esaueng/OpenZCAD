@@ -291,13 +291,14 @@ export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
     const checkpoint = state.deviceOnly
       ? state.document.checkpoints.at(-1)
       : canonical;
+    // Account transfers retain the captured owner in historical snapshots.
+    // Import assigns every snapshot to the new project's owner below.
     if (
       (state.deviceOnly !== undefined && state.deviceOnly !== true) ||
       !checkpoint ||
       checkpoint.checkpointId !== state.checkpointId ||
       (state.deviceOnly === true &&
         (canonical !== undefined ||
-          state.document.ownerUserId !== parsed.document.ownerUserId ||
           state.document.revisions.at(-1)?.revisionId !==
             checkpoint.revisionId)) ||
       checkpoints.has(checkpoint.checkpointId) ||
