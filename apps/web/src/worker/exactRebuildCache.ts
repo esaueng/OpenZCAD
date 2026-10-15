@@ -7,6 +7,12 @@ export interface ExactRebuildCacheOptions<T> {
   maxInFlight: number;
   clone?: (value: T) => T;
   sizeOf?: (value: T) => number;
+  /**
+   * Whether a loaded value may be retained under its content key. A result
+   * shaped by this device's moment (a font or source still on its way) is
+   * handed to its callers but must not answer later requests.
+   */
+  cacheable?: (value: T) => boolean;
 }
 
 interface CacheEntry<T> {
@@ -171,7 +177,7 @@ export class ExactRebuildCache<T> {
 
     const work = load().then((value) => {
       const internal = this.clone(value);
-      if (!this.terminatedError) {
+      if (!this.terminatedError && (this.options.cacheable?.(value) ?? true)) {
         this.store(key, internal);
       }
       return internal;

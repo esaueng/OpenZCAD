@@ -17,13 +17,23 @@ import { sharedImportSourceUrl } from './projectShareClient';
 const MAX_ARTIFACT_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 
 /**
+ * How long a source download may make no progress — no response, no body
+ * chunk — before the rebuild treats the source as unavailable. A stalled
+ * socket used to hold the serialized geometry queue, every later edit and
+ * export behind it, until the host's fifteen-minute watchdog. Idle time, not
+ * total time: a large file on a slow but live connection still completes.
+ */
+export const SOURCE_DOWNLOAD_IDLE_MS = 30_000;
+
+/**
  * Buffers a response body with a hard byte ceiling, returning null when the
  * body exceeds it. The content-length check is advisory only — a missing or
  * understated header must not let the body grow past the cap while reading.
  */
 async function readResponseBytes(
   response: Response,
-  maxBytes: number
+  maxBytes: number,
+  onChunk?: () => void
 ): Promise<Uint8Array<ArrayBuffer> | null> {
   const declared = Number(response.headers.get('content-length') ?? '');
   if (Number.isFinite(declared) && declared > maxBytes) {
@@ -43,6 +53,7 @@ async function readResponseBytes(
       if (done) {
         break;
       }
+      onChunk?.();
       totalBytes += value.byteLength;
       if (totalBytes > maxBytes) {
         overflow = true;
@@ -122,6 +133,89 @@ export async function preloadSharedImportSources(
 }
 
 /**
+ * One download per source, shared by every rebuild that asks for it. An edit
+ * that superseded a rebuild mid-download used to leave that transfer running
+ * while the next rebuild started another, each able to buffer up to the
+ * import budget. A superseding rebuild now joins the running transfer, and
+ * one that no rebuild has wanted for the idle budget is aborted.
+ */
+interface SourceDownload {
+  bytes: Promise<Uint8Array | null>;
+  abort(): void;
+  /** Callers waiting on it whose rebuilds have not been superseded. */
+  wanted: number;
+  unwanted?: ReturnType<typeof setTimeout>;
+}
+let downloads: Map<string, SourceDownload> | undefined;
+
+function startDownload(key: string, artifactId: ArtifactId): SourceDownload {
+  const controller = new AbortController();
+  const forget = () => {
+    if (downloads?.get(key) === download) downloads.delete(key);
+  };
+  let idle: ReturnType<typeof setTimeout> | undefined;
+  const progressed = () => {
+    clearTimeout(idle);
+    idle = setTimeout(() => controller.abort(), SOURCE_DOWNLOAD_IDLE_MS);
+  };
+  progressed();
+  // An abandoned transfer is never joined while it winds down.
+  controller.signal.addEventListener('abort', forget);
+  const download: SourceDownload = {
+    wanted: 0,
+    abort: () => controller.abort(),
+    bytes: (async () => {
+      const response = await fetch(
+        `/api/artifacts/${encodeURIComponent(artifactId)}/download`,
+        { signal: controller.signal }
+      );
+      progressed();
+      return response.ok
+        ? readResponseBytes(response, MAX_ARTIFACT_DOWNLOAD_BYTES, progressed)
+        : null;
+    })()
+      // Stalled, abandoned (aborted) or failed: reported as unavailable.
+      .catch(() => null)
+      .then(async (bytes) => {
+        clearTimeout(idle);
+        clearTimeout(download.unwanted);
+        if (!bytes || (await sha256Hex(bytes)) !== key) return null;
+        await putSourceBlob(bytes);
+        return bytes;
+      })
+      .finally(forget)
+  };
+  return download;
+}
+
+function joinDownload(
+  key: string,
+  artifactId: ArtifactId,
+  signal?: AbortSignal
+): Promise<Uint8Array | null> {
+  downloads ??= new Map();
+  let download = downloads.get(key);
+  if (!download) {
+    download = startDownload(key, artifactId);
+    downloads.set(key, download);
+  }
+  const joined = download;
+  clearTimeout(joined.unwanted);
+  joined.wanted += 1;
+  // A caller with no signal wants the bytes for good. A superseded one lets
+  // go; the rebuild that superseded it normally joins within moments.
+  const release = () => {
+    joined.wanted -= 1;
+    if (joined.wanted === 0) {
+      joined.unwanted = setTimeout(joined.abort, SOURCE_DOWNLOAD_IDLE_MS);
+    }
+  };
+  if (signal?.aborted) release();
+  else signal?.addEventListener('abort', release, { once: true });
+  return joined.bytes;
+}
+
+/**
  * Resolves reference-form exact imports in any browser geometry worker.
  *
  * Local bytes win. The archive is other people's data as often as our own —
@@ -132,28 +226,28 @@ export async function preloadSharedImportSources(
  */
 export async function resolveExactSourceBytes(
   ref: ImportedSourceReference,
-  context: { artifactId: ArtifactId; sourceName: string }
+  context: { artifactId: ArtifactId; sourceName: string; signal?: AbortSignal }
 ): Promise<Uint8Array> {
   const local = await loadSourceBlob(ref.checksumSha256);
   if (local) {
     return local;
   }
-  if (!context.artifactId.startsWith('artifact_local_')) {
-    const response = await fetch(
-      `/api/artifacts/${encodeURIComponent(context.artifactId)}/download`
-    );
-    if (response.ok) {
-      const bytes = await readResponseBytes(
-        response,
-        MAX_ARTIFACT_DOWNLOAD_BYTES
+  // A device-only source missing here can never arrive; a cloud copy can.
+  const permanent = context.artifactId.startsWith('artifact_local_');
+  const bytes = permanent
+    ? null
+    : await joinDownload(
+        ref.checksumSha256,
+        context.artifactId,
+        context.signal
       );
-      if (bytes && (await sha256Hex(bytes)) === ref.checksumSha256) {
-        await putSourceBlob(bytes);
-        return bytes;
-      }
-    }
+  if (bytes) {
+    return bytes;
   }
-  throw new Error(
-    `Import source for "${context.sourceName}" is not in local storage and could not be fetched.`
+  throw Object.assign(
+    new Error(
+      `Import source for "${context.sourceName}" is not in local storage and could not be fetched.`
+    ),
+    { permanent }
   );
 }
