@@ -184,6 +184,9 @@ function oversizedDocument(base: ProjectDocument) {
 describe('durable room checkpoints', () => {
   it.each([
     ['before action loads', 'success'],
+    ['before debounce', 'success'],
+    ['before debounce', 'lost response'],
+    ['before debounce', 'buffered changes'],
     ['while draining', 'success'],
     ['while draining', 'lost response'],
     ['while draining', 'buffered changes'],
@@ -309,15 +312,27 @@ describe('durable room checkpoints', () => {
         }
       );
       vi.stubGlobal('fetch', fetch);
-      const hook = setup(clicked, base, !rejected);
+      const hook =
+        timing === 'before debounce'
+          ? setup(base, base, !rejected)
+          : setup(clicked, base, !rejected);
+      if (timing === 'before debounce') hook.edit(clicked);
       const saving = hook.result.current
         .saveCheckpoint(clicked, 'Clicked model', hook.options)
         .catch((error: unknown) => error);
-      if (timing === 'while draining')
+      if (timing === 'while draining' || timing === 'before debounce')
         await act(async () => {
           await vi.dynamicImportSettled();
         });
       expect(fetch).not.toHaveBeenCalled();
+      if (timing === 'before debounce') {
+        const writes = hook.socket.sent.filter(
+          (frame) => frame.type === 'document'
+        );
+        expect(writes).toHaveLength(1);
+        expect(writes[0]?.document?.nodes).toEqual(clicked.nodes);
+        expect(writes[0]?.document?.version).toBe(clicked.version);
+      }
       act(() => {
         hook.socket.receive({
           type: 'ack',
@@ -1395,6 +1410,149 @@ describe('durable room checkpoints', () => {
     expect(hook.result.current.roomVersion).toBe(document.version);
     hook.unmount();
   });
+
+  it('keeps later edits behind the flushed clicked write and refuses their stale ACK without checkpoint publication', async () => {
+    const base = createProjectDocument(
+      'Immediate named save',
+      toUserId('owner')
+    );
+    const clicked = addPrimitiveFeature(base, {
+      name: 'Clicked box',
+      primitiveKind: 'box',
+      dimensions: { width: 10, depth: 10, height: 10 }
+    });
+    const later = addPrimitiveFeature(clicked, {
+      name: 'Buffered cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 2, height: 10 }
+    });
+    vi.stubGlobal('fetch', vi.fn());
+    const hook = setup(base);
+    vi.useFakeTimers();
+    hook.edit(clicked);
+    const saving = hook.result.current
+      .saveCheckpoint(clicked, 'Clicked model', hook.options)
+      .catch((error: unknown) => error);
+    hook.edit(later);
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(501);
+    });
+    const writes = hook.socket.sent.filter(
+      (frame) => frame.type === 'document'
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.document?.nodes).toEqual(clicked.nodes);
+    expect(fetch).not.toHaveBeenCalled();
+    vi.useRealTimers();
+    act(() => {
+      hook.socket.receive({
+        type: 'ack',
+        version: clicked.version,
+        document: clicked
+      });
+    });
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await saving;
+    });
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toContain('Newer local edits');
+    expect(hook.read().nodes).toEqual(later.nodes);
+    expect(hook.read().editHistory).toEqual(later.editHistory);
+    expect(hook.apply).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(hook.result.current.status).toBe('conflict');
+    hook.unmount();
+  });
+
+  it('refuses to name a newer clicked model after an older pending edit is acknowledged', async () => {
+    const base = createProjectDocument('Older pending edit', toUserId('owner'));
+    const pending = addPrimitiveFeature(base, {
+      name: 'Pending box',
+      primitiveKind: 'box',
+      dimensions: { width: 10, depth: 10, height: 10 }
+    });
+    const clicked = addPrimitiveFeature(pending, {
+      name: 'Clicked cylinder',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 2, height: 10 }
+    });
+    vi.stubGlobal('fetch', vi.fn());
+    const hook = setup(pending, base);
+    hook.edit(clicked);
+    const saving = hook.result.current
+      .saveCheckpoint(clicked, 'Newer clicked model', hook.options)
+      .catch((error: unknown) => error);
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    const writes = hook.socket.sent.filter(
+      (frame) => frame.type === 'document'
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.document?.nodes).toEqual(pending.nodes);
+    act(() => {
+      hook.socket.receive({
+        type: 'ack',
+        version: pending.version,
+        document: pending
+      });
+    });
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await saving;
+    });
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toContain('Newer local edits');
+    expect(hook.read().nodes).toEqual(clicked.nodes);
+    expect(hook.read().editHistory).toEqual(clicked.editHistory);
+    expect(hook.apply).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    const local = (
+      await localStore.listLocalSaveStateCheckpoints(clicked.projectId)
+    ).find((point) => point.reason === 'Newer clicked model')!;
+    expect(
+      (await loadLocalSaveState(clicked.projectId, local.checkpointId))?.nodes
+    ).toEqual(clicked.nodes);
+    hook.unmount();
+  });
+
+  it.each(['expired lease', 'stale manager'] as const)(
+    'does not flush a debounced clicked edit with %s',
+    async (refusal) => {
+      const base = createProjectDocument('Guarded flush', toUserId('owner'));
+      const clicked = addPrimitiveFeature(base, {
+        name: 'Clicked box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, depth: 10, height: 10 }
+      });
+      vi.stubGlobal('fetch', vi.fn());
+      const hook = setup(base);
+      if (refusal === 'expired lease') {
+        vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
+      } else hook.leave();
+      hook.edit(clicked);
+      let outcome: unknown;
+      const saving = hook.result.current
+        .saveCheckpoint(clicked, 'Clicked model', hook.options)
+        .catch((error: unknown) => error);
+      await act(async () => {
+        outcome = await saving;
+      });
+      expect(outcome).toBeInstanceOf(Error);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(
+        hook.socket.sent.filter((frame) => frame.type === 'document')
+      ).toHaveLength(0);
+      expect(hook.read()).toBe(clicked);
+      expect(hook.apply).not.toHaveBeenCalled();
+      hook.unmount();
+    }
+  );
 
   it('drains the pending ACK, names the clicked model and publishes buffered edits above the checkpoint ACK', async () => {
     const base = createProjectDocument('Clicked checkpoint', toUserId('owner'));

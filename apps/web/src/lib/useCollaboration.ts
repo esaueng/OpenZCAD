@@ -146,7 +146,9 @@ export function useCollaboration({
     resolve(): void;
     reject(error: Error): void;
   } | null>(null);
-  const sendCurrentDocumentRef = useRef<(() => void) | null>(null);
+  const sendCurrentDocumentRef = useRef<
+    ((document?: ProjectDocument) => void) | null
+  >(null);
   const checkpointRef = useRef<AbortController | null>(null);
   const checkpointEchoRef = useRef<
     ((document: ProjectDocument) => void) | null
@@ -379,9 +381,9 @@ export function useCollaboration({
 
     const sendDocument = (
       socket: WebSocket,
-      type: 'hello' | 'document'
+      type: 'hello' | 'document',
+      current = documentRef.current
     ): boolean => {
-      const current = documentRef.current;
       if (!isCurrentRoom() || !current || current.projectId !== projectId) {
         return false;
       }
@@ -403,6 +405,7 @@ export function useCollaboration({
         readUnresolvedConflict(projectId, 'room') ||
         roleRef.current === 'viewer' ||
         !leaseIdRef.current ||
+        (leaseRef.current?.expiresAt ?? 0) <= Date.now() ||
         pendingDocument ||
         (lastSentVersionRef.current === current.version &&
           baseVersionRef.current === current.version)
@@ -485,10 +488,10 @@ export function useCollaboration({
       return true;
     };
 
-    sendCurrentDocumentRef.current = () => {
+    sendCurrentDocumentRef.current = (current) => {
       const socket = socketRef.current;
       if (isCurrentRoom() && socket?.readyState === WebSocket.OPEN) {
-        sendDocument(socket, 'document');
+        sendDocument(socket, 'document', current);
       }
     };
 
@@ -968,6 +971,10 @@ export function useCollaboration({
       const controller = new AbortController();
       const epoch = roomEpochRef.current;
       const socket = socketRef.current;
+      const captured = collaborationDocument(snapshot);
+      // Flush the clicked edit before the barrier blocks its debounce timer.
+      // Later edits stay buffered while this exact ordinary write is drained.
+      if (options.isCurrent()) sendCurrentDocumentRef.current?.(captured);
       // Reserve the outgoing barrier before the dynamic import or ACK drain.
       checkpointRef.current = controller;
       checkpointEchoRef.current = null;
@@ -981,7 +988,6 @@ export function useCollaboration({
         if (isCurrent() && options.isCurrent())
           options.applyDocument(acknowledged);
       };
-      const captured = collaborationDocument(snapshot);
       // Loading the optional room action shares the save's deadline and room
       // cancellation. Its late resolution must not publish after local fallback.
       const timer = startCheckpointDeadline(controller);
