@@ -1,14 +1,20 @@
-import { documentNodesWithHistory } from '@openzcad/shared';
+import {
+  documentNodesWithHistory,
+  importedSourceReferenceOf
+} from '@openzcad/shared';
 import type { ProjectDocument } from '@openzcad/shared';
 
-/** Every source checksum the document's imports need in order to rebuild. */
+/**
+ * Every source checksum the document's imports need in order to rebuild:
+ * STEP sources and mesh payloads, in the model and in undo/redo history.
+ */
 export function importSourceChecksums(document: ProjectDocument): Set<string> {
   const checksums = new Set<string>();
   for (const node of documentNodesWithHistory(document)) {
-    if (node.kind !== 'feature' || node.data.featureKind !== 'imported-step') {
+    if (node.kind !== 'feature') {
       continue;
     }
-    const checksum = node.data.stepSourceRef?.checksumSha256;
+    const checksum = importedSourceReferenceOf(node.data)?.checksumSha256;
     if (checksum !== undefined) {
       checksums.add(checksum);
     }
