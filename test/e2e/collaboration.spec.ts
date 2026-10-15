@@ -726,6 +726,51 @@ for (const status of [404, 503]) {
   });
 }
 
+for (const status of [404, 503]) {
+  test(`clears a failed share URL when opening a normal project after ${status}`, async ({
+    page
+  }) => {
+    await stubAnonymousApi(page);
+    await page.goto('/');
+    await page
+      .getByLabel('Project name')
+      .fill('Local project after failed link');
+    await page
+      .getByRole('button', { name: 'Create project', exact: true })
+      .click();
+    await expect(
+      page.getByRole('button', { name: 'Rename project' })
+    ).toBeVisible();
+    await page.getByTitle('Back to projects').click();
+    await expect(page.getByRole('tab', { name: 'Parts 1' })).toBeVisible();
+    await page.route('**/api/share/*', (route) =>
+      route.fulfill({ status, json: { error: 'Unavailable share' } })
+    );
+    await page.evaluate(() => {
+      window.location.hash = `share=${'f'.repeat(43)}`;
+    });
+    await expect(
+      page
+        .getByRole('status')
+        .filter({
+          hasText:
+            status === 404
+              ? 'This share link is no longer available'
+              : 'Unavailable share'
+        })
+    ).toBeVisible();
+    await page
+      .locator('.start-tile-open', {
+        hasText: 'Local project after failed link'
+      })
+      .click();
+    await expect(page.locator('.breadcrumb')).toContainText(
+      'Local project after failed link'
+    );
+    expect(new URL(page.url()).hash).toBe('');
+  });
+}
+
 test('keeps revoked-link guidance visible after delayed startup completes', async ({
   page
 }) => {
