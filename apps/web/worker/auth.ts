@@ -19,6 +19,9 @@ const LOGIN_EMAIL_RATE_LIMIT = 10;
 const LOGIN_IP_RATE_LIMIT = 10;
 // Once an email collects this many wrong codes within the failure window,
 // each of its codes allows one try instead of LOGIN_CODE_MAX_ATTEMPTS.
+// A challenge's expiry bounds its latest possible failure. Count from that
+// bound so late guesses cannot age out early; this conservatively retains
+// failures for at most one extra code lifetime, without requiring a migration.
 const LOGIN_EMAIL_FAILURE_LIMIT = 20;
 const LOGIN_FAILURE_WINDOW_SECONDS = 24 * 60 * 60;
 const DEFAULT_SESSION_DAYS = 30;
@@ -638,7 +641,7 @@ export async function startEmailLogin(
            WHEN (SELECT COALESCE(SUM(recent.attempts), 0)
                  FROM auth_email_challenges AS recent
                  WHERE recent.email = auth_email_challenges.email
-                   AND recent.created_at >= ?) >= ? THEN 1
+                   AND recent.expires_at >= ?) >= ? THEN 1
            ELSE ?
          END
        ORDER BY created_at DESC, rowid DESC
@@ -739,7 +742,7 @@ export async function verifyEmailLogin(
        (SELECT COALESCE(SUM(recent.attempts), 0)
         FROM auth_email_challenges AS recent
         WHERE recent.email = auth_email_challenges.email
-          AND recent.created_at >= ?) AS recent_failures
+          AND recent.expires_at >= ?) AS recent_failures
      FROM auth_email_challenges
      WHERE id = ?`
   )
