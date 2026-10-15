@@ -412,7 +412,7 @@ test('text placed on a face engraves exactly, and a re-entry edit rebuilds it', 
   await page.mouse.up();
   await extrude.getByRole('button', { name: 'Create', exact: true }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
-    /Extruded region by -[\d.]+ mm \(cut\)\./,
+    /Extruded region by -[\d.]+ mm, cut into the body\./,
     { timeout: 60_000 }
   );
   await expectBodyCount(page, 1);
