@@ -1021,7 +1021,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         if (transient) scheduleEnvironmentRetry();
       }
     }
-    post(stateFor('ready', request, { stale: false }));
+    post(stateFor('ready', request, { stale: transient }));
   } catch (error) {
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
       return;

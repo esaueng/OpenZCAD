@@ -738,6 +738,15 @@ describe('geometry worker rebuild coordination', () => {
 
     const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
+    const liveReadyStaleness = (scope: FakeWorkerScope) =>
+      scope.postMessage.mock.calls.flatMap(([message]) =>
+        message.type === 'state' &&
+        message.phase === 'ready' &&
+        !message.requestId
+          ? [message.stale]
+          : []
+      );
+
     afterEach(() => {
       for (const scope of liveWorkers.splice(0))
         post(scope, { type: 'cancel' });
@@ -758,6 +767,7 @@ describe('geometry worker rebuild coordination', () => {
       );
       expect(projections[0]).toMatchObject({ transient: true });
       expect(projections[1]).not.toHaveProperty('transient');
+      expect(liveReadyStaleness(live.scope)).toEqual([true, false]);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(live.syncDocument).toHaveBeenCalledTimes(2);
     });
@@ -771,6 +781,7 @@ describe('geometry worker rebuild coordination', () => {
       expect(live.syncDocument).toHaveBeenCalledTimes(4);
       await vi.advanceTimersByTimeAsync(60 * 60_000);
       expect(live.syncDocument).toHaveBeenCalledTimes(4);
+      expect(liveReadyStaleness(live.scope)).toEqual([true, true, true, true]);
     });
 
     it('does not poll a permanent missing source', async () => {
@@ -779,6 +790,7 @@ describe('geometry worker rebuild coordination', () => {
       await live.finish();
       await vi.advanceTimersByTimeAsync(60 * 60_000);
       expect(live.syncDocument).toHaveBeenCalledOnce();
+      expect(liveReadyStaleness(live.scope)).toEqual([false]);
     });
 
     it('cancels pending retries and ignores late recovery after the project closes', async () => {
