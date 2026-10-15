@@ -22,6 +22,40 @@ export function importSourceChecksums(document: ProjectDocument): Set<string> {
   return checksums;
 }
 
+/** Preserve rebuild bytes before a local copy drops cloud artifact identities. */
+export async function cacheCopySources(
+  document: ProjectDocument,
+  load: (checksum: string) => Promise<Uint8Array | null>,
+  hash: (bytes: Uint8Array<ArrayBuffer>) => Promise<string>
+): Promise<void> {
+  const seen = new Set<string>();
+  for (const node of documentNodesWithHistory(document)) {
+    if (
+      node.kind !== 'feature' ||
+      (node.data.featureKind !== 'imported-mesh' &&
+        node.data.featureKind !== 'imported-step')
+    )
+      continue;
+    const ref = importedSourceReferenceOf(node.data);
+    if (!ref) continue;
+    const key = `${node.data.featureKind}:${ref.checksumSha256}:${ref.logicalBytes}`;
+    if (seen.has(key)) continue;
+    let bytes = await load(ref.checksumSha256);
+    if (!bytes) {
+      const { resolveExactSourceBytes } = await import('./exactSourceResolver');
+      bytes = await resolveExactSourceBytes(ref, node.data);
+    }
+    if (
+      bytes.byteLength !== ref.logicalBytes ||
+      (await hash(bytes as Uint8Array<ArrayBuffer>)) !== ref.checksumSha256
+    )
+      throw new Error(
+        `The source file for "${node.data.sourceName}" failed its integrity check. The copy was not created.`
+      );
+    seen.add(key);
+  }
+}
+
 /** A device-wide note that one import run is working with source bytes. */
 export interface SourceBlobClaim {
   checksumSha256: string;
