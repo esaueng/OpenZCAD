@@ -1,17 +1,44 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
 import {
   appendRevision,
   createCheckpoint,
-  createProjectDocument
+  createProjectDocument,
+  importStepBody
 } from '@openzcad/document-core';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import { reconcileCopiedImportSources } from '@openzcad/persistence';
+import { toArtifactId, toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
 
-function roomFixture(ackFault?: 'lost' | 'late') {
+function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
   let document = createProjectDocument(
     'Durable member checkpoint',
     toUserId('owner')
   );
+  const source = readFileSync('test/parity/corpus/b-unit-mm-cube.step');
+  const checksumSha256 = createHash('sha256').update(source).digest('hex');
+  const localSourceId = 'artifact_local_checkpoint_copy';
+  const archive = {
+    projectId: document.projectId,
+    kind: 'step-import' as const,
+    checksumSha256,
+    logicalBytes: source.length,
+    artifactId: toArtifactId('artifact_checkpoint_copy')
+  };
+  if (copiedImport)
+    document = importStepBody(document, {
+      name: 'Copied cube',
+      artifactId: localSourceId,
+      sourceName: 'cube.step',
+      stepSourceRef: {
+        marker: 'openzcad-source-ref',
+        version: 1,
+        hashAlgorithm: 'sha256',
+        checksumSha256,
+        logicalBytes: source.length
+      }
+    }).document;
   let stored: ProjectDocument | null = null;
   let checkpointRequested = false;
   let checkpointInput: ProjectDocument | null = null;
@@ -25,6 +52,11 @@ function roomFixture(ackFault?: 'lost' | 'late') {
   const ackGate = new Promise<void>((resolve) => {
     releaseAck = resolve;
   });
+  let sourceWritePending = false;
+  let releaseSourceWrite!: () => void;
+  const sourceWriteGate = new Promise<void>((resolve) => {
+    releaseSourceWrite = resolve;
+  });
   const summary = () => ({
     projectId: document.projectId,
     name: document.name,
@@ -35,6 +67,9 @@ function roomFixture(ackFault?: 'lost' | 'late') {
   return {
     release,
     releaseAck,
+    releaseSourceWrite,
+    sourceWritePending: () => sourceWritePending,
+    source: { checksumSha256, text: source.toString('utf8') },
     read: () => document,
     stored: () => stored,
     requested: () => checkpointRequested,
@@ -119,7 +154,12 @@ function roomFixture(ackFault?: 'lost' | 'late') {
           expect(input.leaseId).toBe('browser_checkpoint_lease');
           await gate;
           stored = createCheckpoint(
-            appendRevision(input.document, input.checkpointReason),
+            appendRevision(
+              copiedImport
+                ? reconcileCopiedImportSources(input.document, [archive])
+                : input.document,
+              input.checkpointReason
+            ),
             input.checkpointReason
           );
           document = stored;
@@ -153,15 +193,22 @@ function roomFixture(ackFault?: 'lost' | 'late') {
       );
       await page.exposeFunction(
         '__recordCheckpointRoomDocument',
-        (next: ProjectDocument) => {
+        async (next: ProjectDocument) => {
+          if (copiedImport && JSON.stringify(next).includes(localSourceId)) {
+            sourceWritePending = true;
+            await sourceWriteGate;
+            document = reconcileCopiedImportSources(next, [archive]);
+            return document;
+          }
           document = next;
+          return null;
         }
       );
       await page.addInitScript((initial) => {
         const browser = window as unknown as {
           __recordCheckpointRoomDocument(
             document: ProjectDocument
-          ): Promise<void>;
+          ): Promise<ProjectDocument | null>;
         };
         const Original = window.WebSocket;
         window.WebSocket = class extends Original {
@@ -216,16 +263,19 @@ function roomFixture(ackFault?: 'lost' | 'late') {
               );
             } else if (frame.type === 'document' && frame.document) {
               const submitted = frame.document;
-              void browser.__recordCheckpointRoomDocument(submitted).then(() =>
-                this.dispatchEvent(
-                  new MessageEvent('message', {
-                    data: JSON.stringify({
-                      type: 'ack',
-                      version: submitted.version
+              void browser
+                .__recordCheckpointRoomDocument(submitted)
+                .then((canonical) =>
+                  this.dispatchEvent(
+                    new MessageEvent('message', {
+                      data: JSON.stringify({
+                        type: 'ack',
+                        version: canonical?.version ?? submitted.version,
+                        ...(canonical ? { document: canonical } : {})
+                      })
                     })
-                  })
-                )
-              );
+                  )
+                );
             }
           }
         };
@@ -429,6 +479,95 @@ for (const ackFault of ['lost', 'late'] as const) {
         expect(server.read().checkpoints).toEqual(server.stored()!.checkpoints);
       }
     } finally {
+      server.release();
+      server.releaseAck();
+    }
+  });
+}
+
+for (const ackFault of [undefined, 'lost'] as const) {
+  test(`a member checkpoint accepts the drained copied-source rewrite with a ${ackFault ?? 'confirmed'} HTTP acknowledgement`, async ({
+    page
+  }) => {
+    test.setTimeout(60_000);
+    const server = roomFixture(ackFault, true);
+    await server.install(page);
+    try {
+      await page.goto('/');
+      await expect(page.getByRole('tab', { name: 'Parts 1' })).toBeVisible();
+      await page.evaluate(
+        ({ checksumSha256, text }) =>
+          new Promise<void>((resolve, reject) => {
+            const open = indexedDB.open('openzcad-v2');
+            open.onerror = () => reject(open.error);
+            open.onsuccess = () => {
+              const db = open.result;
+              const tx = db.transaction('sourceBlobs', 'readwrite');
+              tx.objectStore('sourceBlobs').put({
+                checksumSha256,
+                logicalBytes: new TextEncoder().encode(text).length,
+                body: new Blob([text]),
+                createdAt: new Date().toISOString()
+              });
+              tx.oncomplete = () => {
+                db.close();
+                resolve();
+              };
+              tx.onabort = () => {
+                db.close();
+                reject(tx.error);
+              };
+            };
+          }),
+        server.source
+      );
+      await page
+        .locator('.start-tile-open', { hasText: server.read().name })
+        .click();
+      await expectBodyCount(page, 1);
+      await expect(
+        page.getByRole('group', { name: 'Workspace status' })
+      ).toContainText('syncLocal source only');
+      await addPrimitive(page, /^Box \(B\)/);
+      await expectBodyCount(page, 2);
+      await expect.poll(server.sourceWritePending).toBe(true);
+      await startNamedSave(page);
+      server.releaseSourceWrite();
+      await expect.poll(server.requested).toBe(true);
+      server.release();
+      if (ackFault === 'lost') server.releaseAck();
+      await expect(page.getByRole('contentinfo')).toContainText(
+        ackFault === 'lost'
+          ? 'The named save is stored on this device.'
+          : 'Saved revision.'
+      );
+      await expect(
+        page.locator('.revision-row', { hasText: 'Clicked box' })
+      ).toHaveCount(1);
+      expect(JSON.stringify(server.stored())).not.toContain(
+        'artifact_local_checkpoint_copy'
+      );
+      expect(JSON.stringify(server.stored())).toContain(
+        'artifact_checkpoint_copy'
+      );
+      await addPrimitive(page, /^Cylinder/);
+      await expectBodyCount(page, 3);
+      await expect.poll(() => server.read().bodyOrder.length).toBe(3);
+      expect(server.read().checkpoints).toEqual(server.stored()!.checkpoints);
+      expect(server.read().revisions).toEqual([
+        ...server.stored()!.revisions,
+        expect.objectContaining({ reason: 'Add cylinder', commandCount: 3 })
+      ]);
+      expect(JSON.stringify(server.read())).not.toContain(
+        'artifact_local_checkpoint_copy'
+      );
+      expect(server.accountWrites()).toBe(0);
+      await page.keyboard.press('ControlOrMeta+z');
+      await expectBodyCount(page, 2);
+      await page.keyboard.press('ControlOrMeta+Shift+z');
+      await expectBodyCount(page, 3);
+    } finally {
+      server.releaseSourceWrite();
       server.release();
       server.releaseAck();
     }
