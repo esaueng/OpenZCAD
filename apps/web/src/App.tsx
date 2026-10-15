@@ -20,6 +20,7 @@ import type {
 } from './lib/parameterVisualPreview';
 import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
+import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
@@ -113,7 +114,6 @@ import {
   numberedFeatureName,
   repairedDirectEditOperation,
   resolveParamValue,
-  restoreFromSaveState,
   staleDirectEditFaceRepair,
   withEchoedSavePoints,
   withoutDerivedProjection,
@@ -265,6 +265,7 @@ import {
 import { localAutosaveFailedStatus } from './lib/localAutosaveFailure';
 import {
   LocalProjectAutosave,
+  sameLocalProjectContent,
   type LocalProjectAutosaveOptions
 } from './lib/localProjectAutosave';
 import {
@@ -274,6 +275,10 @@ import {
 import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
 import { shaprMigrationDraft } from './lib/shaprMigration';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
+import {
+  CheckpointSaveError,
+  failedCheckpointSaveState
+} from './lib/collaborationCheckpointFallback';
 import {
   cancelDesktopSignIn,
   isDesktopApp,
@@ -1440,12 +1445,6 @@ const E2E_SLOW_FRAME_MS =
  */
 const FRESHNESS_POLL_INTERVAL_MS = 60_000;
 /**
- * The save point a restore leaves behind for itself. Named once so the panel
- * and the handler agree on the row a user goes looking for to undo a restore
- * they have already closed the tab on.
- */
-const BEFORE_RESTORE_REASON = 'Before restore';
-/**
  * What an unnamed save is called. Ctrl+S stays a reflex and takes this; naming
  * one is its own gesture (Ctrl+Shift+S).
  */
@@ -2501,6 +2500,10 @@ export function App() {
     geometry: GeometryReadyState;
   } | null>(null);
   const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
+  const checkpointRoomRef = useRef<{
+    document: ProjectDocument;
+    isCurrent(): boolean;
+  } | null>(null);
   const saveStateRef = useRef(saveState);
   saveStateRef.current = saveState;
   const desktopMenuHandlerRef = useRef<(command: DesktopMenuCommand) => void>(
@@ -5252,7 +5255,11 @@ export function App() {
   );
   const presentedSaveState = presentedWorkspaceSaveState(
     localSaveDirty ? (localSaveFailed ? 'device-failed' : 'saving') : saveState,
-    localOnlySources.length
+    localOnlySources.length,
+    checkpointRoomRef.current?.isCurrent()
+      ? checkpointRoomRef.current.document
+      : null,
+    doc
   );
   const parameterScope = useMemo(
     () => (doc ? getParameterScope(doc) : { scope: {}, errors: [] }),
@@ -9608,7 +9615,15 @@ export function App() {
     setBusy(true);
     try {
       await flushPendingLocalSave();
-      if (session) {
+      const openDocument = managerRef.current?.document;
+      const deviceOnlySaveState = Boolean(
+        saveState &&
+        openDocument?.projectId === project.projectId &&
+        !openDocument.checkpoints.some(
+          (point) => point.checkpointId === saveState.checkpointId
+        )
+      );
+      if (session && !deviceOnlySaveState) {
         try {
           const response = await api.duplicateProject(project.projectId, {
             ...(saveState ? { revisionId: saveState.revisionId } : {})
@@ -9784,22 +9799,29 @@ export function App() {
         );
         return;
       }
-      const guarded = createCheckpoint(
-        appendRevision(current, BEFORE_RESTORE_REASON),
-        BEFORE_RESTORE_REASON
-      );
-      // Written before anything is replaced: this is the way back.
-      await saveLocalProject(guarded);
       const reason = `Restored “${checkpoint.reason}”`;
+      const restoreIsCurrent = () =>
+        managerRef.current === manager &&
+        sameLocalProjectContent(manager.document, current) &&
+        ensureCanEdit('restore a save state');
+      if (!restoreIsCurrent()) {
+        setStatus('The project changed while loading that save. Please retry.');
+        return;
+      }
+      const next = await prepareSaveStateRestore(
+        current,
+        snapshot,
+        reason,
+        sharedAccountProject,
+        session?.userId ?? current.ownerUserId
+      );
+      if (!restoreIsCurrent()) {
+        setStatus('The project changed while loading that save. Please retry.');
+        return;
+      }
       // The manager's document, not its input: only it carries the undo entry
       // that puts the restore back, and autosave persists what is shown.
-      const restored = manager.applyDocumentEdit(
-        createCheckpoint(
-          restoreFromSaveState(guarded, snapshot, reason),
-          reason
-        ),
-        reason
-      );
+      const restored = manager.applyDocumentEdit(next, reason);
       clearAutoFrame();
       // The meshes on screen belong to the document being left, and the
       // restored history has to be rebuilt from scratch to replace them.
@@ -10290,6 +10312,55 @@ export function App() {
     let accountWriteStarted = false;
     let savingDocument = savingManager.document;
     try {
+      if (sharedAccountProject) {
+        const navigation = fragmentNavigationRef.current;
+        const userId = sessionRef.current?.userId;
+        const isCurrent = () =>
+          isCurrentProject() &&
+          fragmentNavigationRef.current === navigation &&
+          sessionRef.current?.userId === userId;
+        setSaveState('saving');
+        try {
+          const saved = await collaboration.saveCheckpoint(
+            savingDocument,
+            reason,
+            {
+              isCurrent,
+              readDocument: () => savingManager.document,
+              applyDocument: showAccountEcho
+            }
+          );
+          if (isCurrent()) {
+            checkpointRoomRef.current = { document: saved, isCurrent };
+            setSaveState(
+              savingManager.document.version === saved.version
+                ? 'synced'
+                : 'syncing'
+            );
+            setStatus('Saved revision.');
+          }
+        } catch (error) {
+          if (isCurrent()) {
+            if (error instanceof CheckpointSaveError && error.roomDocument)
+              checkpointRoomRef.current = {
+                document: error.roomDocument,
+                isCurrent
+              };
+            setSaveState((current) =>
+              failedCheckpointSaveState(
+                error,
+                current,
+                localAutosave.dirty,
+                savingManager.document
+              )
+            );
+            setStatus(
+              errorMessage(error, 'The named save could not be confirmed.')
+            );
+          }
+        }
+        return;
+      }
       await projectOwnershipSettledRef.current;
       if (
         !isCurrentProject() ||
@@ -11645,6 +11716,7 @@ export function App() {
     const origin = managerRef.current;
     const activeProjectSince = snapshotActiveProject();
     const sink = createImportProgressSink();
+    let opened = false;
     sink.start({
       kind: 'restore',
       fileName: file.name,
@@ -11671,6 +11743,7 @@ export function App() {
           setSaveState('local');
           setSharingOpen(false);
           hydrateDocument(backup.document, { activeProjectSince });
+          opened = true;
           handleWorkspaceMode('build');
         }
       }
@@ -11686,8 +11759,10 @@ export function App() {
         );
       sink.finish({
         tone: 'ok',
-        message: `opened as ${backup.document.name}`,
-        landed: true
+        message: opened
+          ? `opened as ${backup.document.name}`
+          : 'saved on this device',
+        landed: opened
       });
     } catch (error) {
       const message = errorMessage(error, 'Unable to read backup.');
@@ -19700,6 +19775,9 @@ export function App() {
         />
       }
       checkpoints={doc?.checkpoints ?? []}
+      projectId={
+        navigationBusyRef.current || shareSession ? undefined : doc.projectId
+      }
       documentVersion={doc?.version ?? 0}
       restorableCheckpointIds={restorableCheckpointIds}
       onSelectFeature={handleSelectFeatureFromTree}

@@ -7,7 +7,6 @@ import {
 } from 'react';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
-  isDocumentHistory,
   type AuthSession,
   type CollaborationMember,
   type CollaborationServerMessage,
@@ -27,11 +26,26 @@ import {
   isDesktopApp
 } from './desktopBridge';
 import { cloudFunctionsAreEnabled } from './cloudMode';
+import { listLocalOnlyImportSources } from './importArchival';
 import {
   chooseProjectDocument,
   projectPreservesLocalWork,
   projectsHaveSameCanonicalContent
 } from './localProjectStore';
+import {
+  preserveFailedCheckpoint,
+  type CheckpointOptions
+} from './collaborationCheckpointFallback';
+import {
+  abortableCheckpoint,
+  startCheckpointDeadline,
+  collaborationClientId as clientId,
+  collaborationDocument,
+  reconcileCheckpointFlush,
+  parseServerMessage,
+  rejectionStatus
+} from './collaborationProtocol';
+export { parseServerMessage } from './collaborationProtocol';
 
 export type CollaborationStatus =
   | 'connecting'
@@ -71,167 +85,15 @@ export interface CollaborationClientState {
   conflict: ProjectConflict | null;
   useRemoteVersion(expectedRemoteVersion: number): boolean;
   keepLocalVersion(expectedRemoteVersion: number): Promise<void>;
+  saveCheckpoint(
+    snapshot: ProjectDocument,
+    reason: string,
+    options: CheckpointOptions
+  ): Promise<ProjectDocument>;
 }
 
 const MAX_MESSAGE_BYTES = 900_000;
-const KEEP_MINE_ACK_TIMEOUT_MS = 15_000;
 const ROOM_CHANGED_MESSAGE = 'The room changed.';
-/**
- * Inbound frames wrap a room document (bounded server-side by
- * MAX_PERSISTED_DOCUMENT_BYTES, 1.5 MB) plus presence/lease metadata. A frame
- * larger than this cannot have come from a well-behaved room and is dropped.
- */
-const MAX_INBOUND_MESSAGE_BYTES = 2_000_000;
-
-const PROJECT_ROLES: readonly ProjectAccessRole[] = [
-  'owner',
-  'editor',
-  'viewer'
-];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function isMembers(value: unknown): value is CollaborationMember[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (member) =>
-        isRecord(member) &&
-        typeof member.clientId === 'string' &&
-        typeof member.userId === 'string' &&
-        typeof member.displayName === 'string'
-    )
-  );
-}
-
-function isRoomDocument(
-  value: unknown,
-  projectId: string
-): value is ProjectDocument {
-  return (
-    isRecord(value) &&
-    value.projectId === projectId &&
-    typeof value.version === 'number' &&
-    typeof value.schemaVersion === 'number' &&
-    (value.editHistory === undefined ||
-      isDocumentHistory(value.editHistory, projectId))
-  );
-}
-
-function isLease(value: unknown, projectId: string): value is ProjectEditLease {
-  return (
-    isRecord(value) &&
-    typeof value.leaseId === 'string' &&
-    value.projectId === projectId &&
-    typeof value.expiresAt === 'number'
-  );
-}
-
-/**
- * Parses and shape-checks a frame from the room. The Durable Object is the
- * trust boundary, but a self-defending client drops oversized, malformed, or
- * foreign-project frames instead of adopting them into the local document or
- * throwing out of the message handler.
- */
-export function parseServerMessage(
-  raw: string,
-  projectId: string
-): CollaborationServerMessage | null {
-  if (raw.length > MAX_INBOUND_MESSAGE_BYTES) {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!isRecord(parsed) || typeof parsed.type !== 'string') {
-    return null;
-  }
-  const message = parsed as unknown as CollaborationServerMessage;
-  const document = parsed.document;
-  const documentOk = (required: boolean): boolean =>
-    document == null ? !required : isRoomDocument(document, projectId);
-  switch (parsed.type) {
-    case 'presence':
-      return isMembers(parsed.members) ? message : null;
-    case 'state':
-      return isMembers(parsed.members) &&
-        PROJECT_ROLES.includes(parsed.role as ProjectAccessRole) &&
-        documentOk(false)
-        ? message
-        : null;
-    case 'document':
-    case 'conflict':
-      return documentOk(true) ? message : null;
-    case 'ack':
-      return typeof parsed.version === 'number' && documentOk(false)
-        ? message
-        : null;
-    case 'lease-granted':
-      return isLease(parsed.lease, projectId) ? message : null;
-    case 'lease-denied':
-      return parsed.reason === 'held' || parsed.reason === 'read-only'
-        ? message
-        : null;
-    case 'lease-lost':
-      return parsed.reason === 'expired' ||
-        parsed.reason === 'released' ||
-        parsed.reason === 'role-changed' ||
-        parsed.reason === 'invalid'
-        ? message
-        : null;
-    case 'error':
-      return typeof parsed.message === 'string' && parsed.message.length <= 1000
-        ? message
-        : null;
-    default:
-      return null;
-  }
-}
-
-function collaborationDocument(document: ProjectDocument): ProjectDocument {
-  // Strip the derived projection BEFORE cloning: the old order cloned every
-  // mesh buffer only to throw the copies away on the next line.
-  return structuredClone({
-    ...document,
-    derived: {
-      bodyRepresentations: {},
-      exportableBodyIds: [],
-      warnings: [],
-      updatedAt: document.derived.updatedAt
-    }
-  });
-}
-
-/**
- * Maps a refusal frame to the status it should show, or null when the message
- * is not a refusal. The room kept its previous state either way, so the caller
- * adopts nothing and stays on its own document.
- */
-function rejectionStatus(
-  message: CollaborationServerMessage
-): CollaborationStatus | null {
-  if (message.type !== 'error') {
-    return null;
-  }
-  console.error(`Collaboration rejected: ${message.message}`);
-  return message.code === 'document-too-large' ? 'oversize' : 'rejected';
-}
-
-function clientId(): string {
-  const key = 'openzcad-collaboration-client';
-  const existing = sessionStorage.getItem(key);
-  if (existing) {
-    return existing;
-  }
-  const created = crypto.randomUUID();
-  sessionStorage.setItem(key, created);
-  return created;
-}
 
 export function useCollaboration({
   enabled,
@@ -286,7 +148,24 @@ export function useCollaboration({
     resolve(): void;
     reject(error: Error): void;
   } | null>(null);
-  const sendCurrentDocumentRef = useRef<(() => void) | null>(null);
+  const sendCurrentDocumentRef = useRef<
+    ((document?: ProjectDocument) => void) | null
+  >(null);
+  const checkpointRef = useRef<AbortController | null>(null);
+  const checkpointEchoRef = useRef<
+    ((document: ProjectDocument) => void) | null
+  >(null);
+  const checkpointAckRef = useRef<{
+    submitted: ProjectDocument;
+    accept(document: ProjectDocument, version?: number): ProjectDocument | null;
+  } | null>(null);
+  const checkpointDrainRef = useRef<{
+    resolve(): void;
+    reject(error: Error): void;
+  } | null>(null);
+  const drainDocumentRef = useRef<
+    ((signal: AbortSignal) => Promise<ProjectDocument | null>) | null
+  >(null);
   documentRef.current = document;
   remoteHandlerRef.current = onRemoteDocument;
   conflictHandlerRef.current = onConflict;
@@ -299,8 +178,10 @@ export function useCollaboration({
   // enabled state while the old socket is still referenced.
   useLayoutEffect(() => {
     roomEpochRef.current += 1;
+    checkpointRef.current?.abort(new Error(ROOM_CHANGED_MESSAGE));
     return () => {
       roomEpochRef.current += 1;
+      checkpointRef.current?.abort(new Error(ROOM_CHANGED_MESSAGE));
     };
   }, [displayName, enabled, projectId, userId]);
   const roomWanted = Boolean(enabled && projectId && userId && displayName);
@@ -322,6 +203,13 @@ export function useCollaboration({
     window.clearTimeout(pending.timer);
     if (error) pending.reject(error);
     else pending.resolve();
+  }, []);
+
+  const settleCheckpointDrain = useCallback((error?: Error) => {
+    const pending = checkpointDrainRef.current;
+    checkpointDrainRef.current = null;
+    if (error) pending?.reject(error);
+    else pending?.resolve();
   }, []);
 
   const reconcileMatchingRoomDocument = useCallback(
@@ -389,6 +277,25 @@ export function useCollaboration({
     let leaseRetryTimer: number | undefined;
     let reconnectAttempt = 0;
     let pendingDocument: ProjectDocument | null = null;
+    let acknowledgedDocument: ProjectDocument | null = null;
+    drainDocumentRef.current = (signal) => {
+      signal.throwIfAborted();
+      if (!pendingDocument) return Promise.resolve(acknowledgedDocument);
+      return new Promise<void>((resolve, reject) => {
+        const pending = { resolve, reject };
+        checkpointDrainRef.current = pending;
+        signal.addEventListener(
+          'abort',
+          () => {
+            if (checkpointDrainRef.current === pending)
+              settleCheckpointDrain(
+                new Error('The room did not confirm the pending edit.')
+              );
+          },
+          { once: true }
+        );
+      }).then(() => acknowledgedDocument);
+    };
     const id = clientId();
 
     const retainConflict = (
@@ -436,11 +343,25 @@ export function useCollaboration({
       const local = documentRef.current;
       serverVersionRef.current = message.version;
       setRoomVersion(message.version);
+      const checkpoint = checkpointAckRef.current;
+      const ownsFlush = checkpoint?.submitted === submitted;
+      const checkpointCurrent =
+        ownsFlush && message.document
+          ? checkpoint.accept(message.document, message.version)
+          : null;
+      if (ownsFlush && message.document && !checkpointCurrent) {
+        retainConflict(message.document, true);
+        settleCheckpointDrain(
+          new Error('The room did not confirm the clicked edit.')
+        );
+        return;
+      }
       // A merge acknowledges the submitted snapshot, not edits made while it
       // was in flight. Preserve those newer edits for explicit reconciliation.
       if (
         message.document &&
         local &&
+        !checkpointCurrent &&
         !projectPreservesLocalWork(local, submitted ?? message.document)
       ) {
         retainConflict(message.document, true);
@@ -449,10 +370,15 @@ export function useCollaboration({
             'Newer local edits still need reconciliation. Please retry.'
           )
         );
+        settleCheckpointDrain(
+          new Error('Newer local edits need reconciliation.')
+        );
         return;
       }
       lastSentVersionRef.current = message.version;
       baseVersionRef.current = message.version;
+      if (message.document) acknowledgedDocument = message.document;
+      settleCheckpointDrain();
       if (keepMinePendingRef.current) {
         settleKeepMine();
         clearUnresolvedConflict(projectId, 'room');
@@ -460,19 +386,28 @@ export function useCollaboration({
         setConflict(null);
       }
       if (conflictRef.current) return;
-      setStatus('live');
+      if (checkpointCurrent && roleRef.current === 'viewer')
+        setStatus('read-only');
+      else if (
+        !checkpointCurrent ||
+        (leaseRef.current?.expiresAt ?? 0) > Date.now()
+      )
+        setStatus('live');
       if (message.document) {
-        documentRef.current = message.document;
-        remoteHandlerRef.current(message.document, { adopted: true });
+        documentRef.current = checkpointCurrent ?? message.document;
+        if (!checkpointCurrent) {
+          if (checkpoint) checkpoint.accept(message.document);
+          else remoteHandlerRef.current(message.document, { adopted: true });
+        }
       }
       sendCurrentDocumentRef.current?.();
     };
 
     const sendDocument = (
       socket: WebSocket,
-      type: 'hello' | 'document'
+      type: 'hello' | 'document',
+      current = documentRef.current
     ): boolean => {
-      const current = documentRef.current;
       if (!isCurrentRoom() || !current || current.projectId !== projectId) {
         return false;
       }
@@ -489,10 +424,12 @@ export function useCollaboration({
         return true;
       }
       if (
+        checkpointRef.current ||
         conflictRef.current ||
         readUnresolvedConflict(projectId, 'room') ||
         roleRef.current === 'viewer' ||
         !leaseIdRef.current ||
+        (leaseRef.current?.expiresAt ?? 0) <= Date.now() ||
         pendingDocument ||
         (lastSentVersionRef.current === current.version &&
           baseVersionRef.current === current.version)
@@ -525,6 +462,11 @@ export function useCollaboration({
             if (!isCurrentRoom() || socketRef.current !== socket) return;
             if (!message) {
               pendingDocument = null;
+              settleCheckpointDrain(
+                new Error(
+                  'The room returned an unreadable response for the pending edit.'
+                )
+              );
               console.error('Collaboration returned an unreadable response.');
               return;
             }
@@ -533,6 +475,15 @@ export function useCollaboration({
               return;
             }
             pendingDocument = null;
+            settleCheckpointDrain(
+              new Error(
+                message.type === 'error'
+                  ? message.message
+                  : message.type === 'conflict'
+                    ? 'The pending edit conflicts with a newer room document.'
+                    : 'The room did not confirm the pending edit.'
+              )
+            );
             const rejected = rejectionStatus(message);
             if (rejected) {
               setStatus(rejected);
@@ -544,9 +495,14 @@ export function useCollaboration({
               retainConflict(message.document, true);
             }
           })
-          .catch(() => {
+          .catch((error: unknown) => {
             if (!isCurrentRoom() || socketRef.current !== socket) return;
             pendingDocument = null;
+            settleCheckpointDrain(
+              error instanceof Error
+                ? error
+                : new Error('The room could not confirm the pending edit.')
+            );
             setStatus('offline');
           });
         return false;
@@ -556,10 +512,10 @@ export function useCollaboration({
       return true;
     };
 
-    sendCurrentDocumentRef.current = () => {
+    sendCurrentDocumentRef.current = (current) => {
       const socket = socketRef.current;
       if (isCurrentRoom() && socket?.readyState === WebSocket.OPEN) {
-        sendDocument(socket, 'document');
+        sendDocument(socket, 'document', current);
       }
     };
 
@@ -719,6 +675,8 @@ export function useCollaboration({
           return;
         }
         if (message.type === 'lease-lost') {
+          settleCheckpointDrain(new Error('The edit lease was lost.'));
+          checkpointRef.current?.abort(new Error('The edit lease was lost.'));
           settleKeepMine(
             new Error(
               'The edit lease was lost. Please retry after it is renewed.'
@@ -750,6 +708,10 @@ export function useCollaboration({
           if (rejectsNewerSchema(message.document)) {
             return;
           }
+          // A validated own checkpoint echo confirms the clicked snapshot even
+          // when newer local work prevents adopting that snapshot as the head.
+          if (message.clientId === id)
+            checkpointEchoRef.current?.(message.document);
           const local = documentRef.current;
           serverVersionRef.current = message.document.version;
           setRoomVersion(message.document.version);
@@ -789,6 +751,9 @@ export function useCollaboration({
           return;
         }
         if (message.type === 'conflict') {
+          settleCheckpointDrain(
+            new Error('The room changed before the named save.')
+          );
           pendingDocument = null;
           if (rejectsNewerSchema(message.document)) {
             settleKeepMine(
@@ -811,6 +776,13 @@ export function useCollaboration({
         }
         const rejected = rejectionStatus(message);
         if (rejected) {
+          settleCheckpointDrain(
+            new Error(
+              message.type === 'error'
+                ? message.message
+                : 'The room rejected the edit.'
+            )
+          );
           settleKeepMine(
             new Error(
               message.type === 'error'
@@ -825,6 +797,12 @@ export function useCollaboration({
       socket.addEventListener('close', () => {
         if (!isCurrentRoom()) return;
         if (socketRef.current === socket) {
+          settleCheckpointDrain(
+            new Error('The room disconnected before confirmation.')
+          );
+          checkpointRef.current?.abort(
+            new Error('The room disconnected before confirmation.')
+          );
           settleKeepMine(
             new Error(
               'The collaboration room disconnected before confirmation. Please retry.'
@@ -874,6 +852,8 @@ export function useCollaboration({
       disposed = true;
       roomEpochRef.current += 1;
       settleKeepMine(new Error(ROOM_CHANGED_MESSAGE));
+      settleCheckpointDrain(new Error(ROOM_CHANGED_MESSAGE));
+      drainDocumentRef.current = null;
       sendCurrentDocumentRef.current = null;
       if (reconnectTimer !== undefined) {
         window.clearTimeout(reconnectTimer);
@@ -910,6 +890,7 @@ export function useCollaboration({
     projectId,
     userId,
     reconcileMatchingRoomDocument,
+    settleCheckpointDrain,
     setStatus,
     settleKeepMine
   ]);
@@ -962,173 +943,144 @@ export function useCollaboration({
   );
 
   const keepLocalVersion = useCallback(
-    async (expectedRemoteVersion: number): Promise<void> => {
-      if (keepMinePendingRef.current) {
-        throw new Error('Keep my version is already waiting for confirmation.');
-      }
-      const pending = conflictRef.current;
-      const activeLease = leaseRef.current;
-      const socket = socketRef.current;
-      const current = documentRef.current;
-      const roomEpoch = roomEpochRef.current;
-      const isCurrentRoom = () =>
-        roomEpochRef.current === roomEpoch &&
-        socketRef.current === socket &&
-        documentRef.current?.projectId === projectId;
-      if (
-        !pending ||
-        !current ||
-        pending.projectId !== projectId ||
-        pending.expectedRemoteVersion !== expectedRemoteVersion ||
-        serverVersionRef.current !== expectedRemoteVersion
-      ) {
-        throw new Error(
-          'The room version changed before Keep my version was submitted.'
-        );
-      }
-      if (roleRef.current === 'viewer') {
-        throw new Error('Viewers cannot keep a local version.');
-      }
-      if (
-        !activeLease ||
-        activeLease.projectId !== projectId ||
-        activeLease.leaseId !== leaseIdRef.current ||
-        activeLease.expiresAt <= Date.now()
-      ) {
-        throw new Error(
-          'Keep my version requires an active project edit lease.'
-        );
-      }
-      const body = {
-        type: 'document' as const,
-        clientId: clientId(),
-        baseVersion: expectedRemoteVersion,
-        document: collaborationDocument(current),
-        leaseId: activeLease.leaseId,
-        conflictResolution: 'keep-local' as const
+    (expectedRemoteVersion: number): Promise<void> => {
+      const snapshot = {
+        pending: conflictRef.current,
+        activeLease: leaseRef.current,
+        socket: socketRef.current,
+        current: documentRef.current,
+        roomEpoch: roomEpochRef.current
       };
-      const payload = JSON.stringify(body);
-      keepMinePendingRef.current = true;
-      lastSentVersionRef.current = current.version;
-      setStatus('connecting');
-
-      if (new TextEncoder().encode(payload).byteLength <= MAX_MESSAGE_BYTES) {
-        if (!socket || socket.readyState !== WebSocket.OPEN) {
-          keepMinePendingRef.current = false;
-          setStatus('conflict');
-          throw new Error('The collaboration room is offline.');
-        }
-        try {
-          await new Promise<void>((resolve, reject) => {
-            const timer = window.setTimeout(() => {
-              settleKeepMine(
-                new Error(
-                  'The room did not confirm Keep my version. Please retry.'
-                )
-              );
-              // Reconnect before retrying, so a late ack cannot acknowledge
-              // a different submission on the same socket.
-              socket.close();
-            }, KEEP_MINE_ACK_TIMEOUT_MS);
-            keepMineAckRef.current = {
-              document: current,
-              timer,
-              resolve,
-              reject
-            };
-            socket.send(payload);
-          });
-        } catch (error) {
-          if (isCurrentRoom()) {
-            settleKeepMine(
-              error instanceof Error
-                ? error
-                : new Error('Could not submit Keep my version.')
-            );
-            setStatus('conflict');
-          }
-          throw error;
-        }
-        return;
-      }
-
-      try {
-        const response = await desktopFetch(
-          `/api/projects/${encodeURIComponent(projectId)}/collaboration`,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              clientId: body.clientId,
-              baseVersion: body.baseVersion,
-              document: body.document,
-              leaseId: body.leaseId,
-              conflictResolution: body.conflictResolution
-            })
-          }
-        );
-        const message = parseServerMessage(await response.text(), projectId);
-        // The room can change while either the request or its body is read.
-        if (!isCurrentRoom() || !documentRef.current) {
-          throw new Error(ROOM_CHANGED_MESSAGE);
-        }
-        if (!message) {
-          throw new Error('The room returned an unreadable response.');
-        }
-        if (message.type === 'conflict') {
-          if (reconcileMatchingRoomDocument(message.document)) return;
-          serverVersionRef.current = message.document.version;
-          setRoomVersion(message.document.version);
-          let next: ProjectConflict;
-          try {
-            next = conflictFromDocuments(current, message.document);
-          } catch {
-            throw new Error('The room answered for a different project.');
-          }
-          conflictRef.current = next;
-          setConflict(next);
-          conflictHandlerRef.current(message.document);
-          throw new Error('The room changed before Keep my version completed.');
-        }
-        const rejected = rejectionStatus(message);
-        if (!response.ok || rejected || message.type !== 'ack') {
-          throw new Error(
-            rejected
-              ? message.type === 'error'
-                ? message.message
-                : 'The room rejected Keep my version.'
-              : 'The room did not acknowledge Keep my version.'
-          );
-        }
-        const latest = documentRef.current;
-        serverVersionRef.current = message.version;
-        setRoomVersion(message.version);
-        if (message.document && !projectPreservesLocalWork(latest, current)) {
-          const next = conflictFromDocuments(latest, message.document);
-          conflictRef.current = next;
-          setConflict(next);
-          conflictHandlerRef.current(message.document);
-          throw new Error(
-            'Newer local edits still need reconciliation. Please retry.'
-          );
-        }
-        baseVersionRef.current = message.version;
-        clearUnresolvedConflict(projectId, 'room');
-        conflictRef.current = null;
-        setConflict(null);
-        setStatus('live');
-        if (message.document) {
-          documentRef.current = message.document;
-          remoteHandlerRef.current(message.document, { adopted: true });
-        }
-      } catch (error) {
-        if (isCurrentRoom()) setStatus('conflict');
-        throw error;
-      } finally {
-        if (isCurrentRoom()) keepMinePendingRef.current = false;
-      }
+      return import('./keepLocalRoomVersion').then(({ keepLocalRoomVersion }) =>
+        keepLocalRoomVersion(expectedRemoteVersion, {
+          projectId,
+          snapshot,
+          roomEpochRef,
+          socketRef,
+          documentRef,
+          roleRef,
+          leaseIdRef,
+          serverVersionRef,
+          baseVersionRef,
+          lastSentVersionRef,
+          keepMinePendingRef,
+          keepMineAckRef,
+          conflictRef,
+          conflictHandlerRef,
+          remoteHandlerRef,
+          setConflict,
+          setRoomVersion,
+          setStatus,
+          settleKeepMine,
+          reconcileMatchingRoomDocument,
+          clientId
+        })
+      );
     },
     [projectId, reconcileMatchingRoomDocument, setStatus, settleKeepMine]
+  );
+
+  const saveCheckpoint = useCallback(
+    (
+      snapshot: ProjectDocument,
+      reason: string,
+      options: CheckpointOptions
+    ): Promise<ProjectDocument> => {
+      if (checkpointRef.current || keepMinePendingRef.current)
+        return Promise.reject(new Error('Another room save is still pending.'));
+      if (roleRef.current === 'viewer' || conflictRef.current)
+        return Promise.reject(
+          new Error('This project cannot save a room revision.')
+        );
+      const controller = new AbortController();
+      const epoch = roomEpochRef.current;
+      const socket = socketRef.current;
+      const captured = collaborationDocument(snapshot);
+      // Copied sources need an ordinary ACK's trusted aliases before naming.
+      // Plain models retain their direct HTTP save and buffered-edit merge.
+      if (
+        options.isCurrent() &&
+        listLocalOnlyImportSources(captured).length > 0
+      )
+        sendCurrentDocumentRef.current?.(captured);
+      // Reserve the outgoing barrier before the dynamic import or ACK drain.
+      checkpointRef.current = controller;
+      checkpointEchoRef.current = null;
+      const isCurrent = () =>
+        roomEpochRef.current === epoch &&
+        socketRef.current === socket &&
+        documentRef.current?.projectId === snapshot.projectId;
+      // Keep this accepted drain ACK in the manager that owns the named save.
+      // The ordinary remote-adoption path can replace it for source aliases.
+      checkpointAckRef.current = {
+        submitted: captured,
+        accept: (acknowledged, version) => {
+          if (!isCurrent() || !options.isCurrent()) return null;
+          const current =
+            version === undefined
+              ? acknowledged
+              : version === acknowledged.version
+                ? reconcileCheckpointFlush(
+                    captured,
+                    options.readDocument(),
+                    acknowledged
+                  )
+                : null;
+          if (current) options.applyDocument(current);
+          return current;
+        }
+      };
+      // Loading the optional room action shares the save's deadline and room
+      // cancellation. Its late resolution must not publish after local fallback.
+      const timer = startCheckpointDeadline(controller);
+      return abortableCheckpoint(
+        import('./collaborationCheckpoint'),
+        controller.signal
+      )
+        .then(
+          ({ saveCollaborationCheckpoint }) =>
+            saveCollaborationCheckpoint(captured, reason, options, {
+              controller,
+              isCurrent,
+              drain: (signal) =>
+                drainDocumentRef.current?.(signal) ??
+                Promise.reject(new Error('The room is offline.')),
+              lease: () =>
+                roleRef.current === 'viewer' ? null : leaseRef.current,
+              baseVersion: () => baseVersionRef.current,
+              clientId: clientId(),
+              observeEcho: (listener) => {
+                if (checkpointRef.current === controller)
+                  checkpointEchoRef.current = listener;
+              },
+              confirm: (saved, current) => {
+                documentRef.current = current;
+                lastSentVersionRef.current = saved.version;
+                baseVersionRef.current = saved.version;
+                serverVersionRef.current = saved.version;
+                setRoomVersion(saved.version);
+              }
+            }),
+          (error: unknown) =>
+            preserveFailedCheckpoint(
+              error,
+              captured,
+              reason,
+              options,
+              isCurrent
+            )
+        )
+        .finally(() => {
+          window.clearTimeout(timer);
+          if (checkpointRef.current !== controller) return;
+          checkpointRef.current = null;
+          checkpointEchoRef.current = null;
+          checkpointAckRef.current = null;
+          if (isCurrent() && options.isCurrent())
+            sendCurrentDocumentRef.current?.();
+        });
+    },
+    []
   );
 
   return {
@@ -1139,6 +1091,7 @@ export function useCollaboration({
     roomVersion,
     conflict,
     useRemoteVersion,
-    keepLocalVersion
+    keepLocalVersion,
+    saveCheckpoint
   };
 }

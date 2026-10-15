@@ -221,6 +221,9 @@ describe('HTTP collaboration response ownership', () => {
               .keepLocalVersion(remote.version)
               .catch((error: unknown) => error);
           });
+          await act(async () => {
+            await vi.dynamicImportSettled();
+          });
         }
         expect(fetch).toHaveBeenCalledTimes(1);
         onRemoteDocument.mockClear();
@@ -401,6 +404,9 @@ describe('HTTP collaboration response ownership', () => {
       act(() => {
         confirmation = result.current.keepLocalVersion(remote.version);
       });
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
       const settled = confirmation.then(
         () => null,
         (error: unknown) => error
@@ -432,6 +438,9 @@ describe('HTTP collaboration response ownership', () => {
       let newConfirmation!: Promise<void>;
       act(() => {
         newConfirmation = result.current.keepLocalVersion(remote.version);
+      });
+      await act(async () => {
+        await vi.dynamicImportSettled();
       });
       const newSettled = newConfirmation.then(
         () => null,
@@ -1275,6 +1284,9 @@ describe('useCollaboration lease ordering', () => {
       confirmation = result.current.keepLocalVersion(remote.version);
       void confirmation.then(confirmed);
     });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
 
     expect(result.current.lease).toEqual(lease);
     expect(socket.frames().at(-1)).toMatchObject({
@@ -1504,6 +1516,9 @@ describe('Keep my version confirmation failures', () => {
       act(() => {
         confirmation = result.current.keepLocalVersion(remote.version);
       });
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
       const rejected = expect(confirmation).rejects.toThrow();
       await act(async () => {
         if (failure === 'rejection')
@@ -1540,6 +1555,9 @@ describe('Keep my version confirmation failures', () => {
     act(() => {
       first = result.current.keepLocalVersion(remote.version);
     });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
     const rejected = expect(first).rejects.toThrow('Write refused');
     await act(async () => {
       socket.receive({
@@ -1552,6 +1570,9 @@ describe('Keep my version confirmation failures', () => {
     let retry!: Promise<void>;
     act(() => {
       retry = result.current.keepLocalVersion(remote.version);
+    });
+    await act(async () => {
+      await vi.dynamicImportSettled();
     });
     await expect(
       result.current.keepLocalVersion(remote.version)
@@ -1578,6 +1599,9 @@ describe('Keep my version confirmation failures', () => {
     let confirmation!: Promise<void>;
     act(() => {
       confirmation = result.current.keepLocalVersion(remote.version);
+    });
+    await act(async () => {
+      await vi.dynamicImportSettled();
     });
     const newer = addPrimitiveFeature(local, {
       name: 'New cylinder',
