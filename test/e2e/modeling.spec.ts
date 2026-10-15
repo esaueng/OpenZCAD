@@ -4214,7 +4214,14 @@ test('imports an STL mesh and measures the body the worker rebuilt', async ({
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
   await expectBodyCount(page, 0);
-  expect(meshPayloadRequests).toEqual([]);
+  // The zero count comes from the document. The ready tone requires a
+  // completed geometry sync for this project and version.
+  await expect(page.getByRole('contentinfo')).toHaveClass(/\bready\b/, {
+    timeout: 30_000
+  });
+  await page.waitForLoadState('networkidle');
+  const beforeImportRequests = meshPayloadRequests.length;
+  expect(beforeImportRequests).toBe(0);
 
   await page
     .getByLabel(/^Import FreeCAD, STEP or /)
@@ -4230,7 +4237,7 @@ test('imports an STL mesh and measures the body the worker rebuilt', async ({
     0
   );
   await expectBodyCount(page, 1);
-  expect(meshPayloadRequests.length).toBeGreaterThan(0);
+  expect(meshPayloadRequests.length).toBeGreaterThan(beforeImportRequests);
 
   // Two triangles spanning 20x20 in the XY plane. The size is what proves the
   // vertices survived the round trip with their values intact — a corrupted
