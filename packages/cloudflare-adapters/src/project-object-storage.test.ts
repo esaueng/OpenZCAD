@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
 import { persistedDocumentBytes, toUserId } from '@openzcad/shared';
@@ -106,6 +106,31 @@ async function assetLoader(
 }
 
 describe('R2 project object projection', () => {
+  it.each(['step-source', 'mesh-payload'] as const)(
+    'round-trips mixed embedded sources and externalized %s across model and history',
+    async (externalizedKind) => {
+      const original = importedDocument();
+      const externalizeAsset = vi.fn(
+        async (reference: ProjectStorageAssetReference) =>
+          reference.kind === externalizedKind
+      );
+      const prepared = await prepareProjectStorageSnapshot(original, {
+        externalizeAsset
+      });
+      expect(prepared.assets.map((asset) => asset.kind)).toEqual([
+        externalizedKind
+      ]);
+      expect(externalizeAsset).toHaveBeenCalledTimes(2);
+      expect(
+        await hydrateProjectStorageSnapshot(
+          prepared.snapshot,
+          original.projectId,
+          (reference) => assetLoader(prepared, reference)
+        )
+      ).toEqual(JSON.parse(JSON.stringify(original)));
+    }
+  );
+
   it('round-trips exact STEP text and mesh numbers while deduplicating command copies', async () => {
     const original = importedDocument();
     const prepared = await prepareProjectStorageSnapshot(original);

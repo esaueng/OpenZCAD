@@ -81,7 +81,12 @@ export type CloudProjectSyncState =
  * safe on the device, which is the one thing that is not true here.
  */
 export type WorkspaceSaveState =
-  CloudProjectSyncState | 'saving' | 'local-source' | 'device-failed';
+  | CloudProjectSyncState
+  | 'saving'
+  | 'local-source'
+  | 'device-failed'
+  | 'room-only'
+  | 'checkpoint-failed';
 
 export interface CloudProjectAutosaveStatus {
   state: CloudProjectSyncState;

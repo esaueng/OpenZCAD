@@ -6,6 +6,7 @@ import type {
   ProjectConflict
 } from '../lib/conflictRecovery';
 import { useModalFocus } from '../lib/useModalFocus';
+import { errorMessage } from '../lib/errors';
 import { canonicalProjectContentKey } from '../worker/exactRebuildCache';
 
 export interface ProjectConflictDialogProps {
@@ -79,9 +80,7 @@ export function ProjectConflictDialog({
       await onResolve(resolution);
     } catch (failure) {
       setError(
-        failure instanceof Error
-          ? failure.message
-          : 'Could not resolve the conflict. Please retry.'
+        errorMessage(failure, 'Could not resolve the conflict. Please retry.')
       );
     } finally {
       setResolving(false);
