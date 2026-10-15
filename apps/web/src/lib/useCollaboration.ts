@@ -37,6 +37,7 @@ import {
 } from './collaborationCheckpointFallback';
 import {
   abortableCheckpoint,
+  startCheckpointDeadline,
   collaborationDocument,
   parseServerMessage,
   rejectionStatus
@@ -991,13 +992,7 @@ export function useCollaboration({
       const captured = collaborationDocument(snapshot);
       // Loading the optional room action shares the save's deadline and room
       // cancellation. Its late resolution must not publish after local fallback.
-      const timer = window.setTimeout(
-        () =>
-          controller.abort(
-            new Error('The room did not confirm the named save. Please retry.')
-          ),
-        15_000
-      );
+      const timer = startCheckpointDeadline(controller);
       return abortableCheckpoint(
         import('./collaborationCheckpoint'),
         controller.signal
