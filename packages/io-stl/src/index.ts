@@ -107,7 +107,9 @@ function coordinate(token: string | null): number {
  * ASCII file whose vertices hold `nan`, `1.#QNAN`, `-1.#IND` or `inf` must
  * still reach the ASCII reader to be refused there — but never a plain word.
  */
-const SNIFFED_COORDINATE = String.raw`\s+[-+]?(?:\d|\.\d|nan|inf)\S*`;
+const COORDINATE_PREFIX = String.raw`[-+]?(?:\d|\.\d|nan|inf)`;
+const COORDINATE_LIKE = new RegExp(`^${COORDINATE_PREFIX}`, 'i');
+const SNIFFED_COORDINATE = String.raw`\s+${COORDINATE_PREFIX}\S*`;
 /** `vertex` followed by three coordinate-like tokens, in either letter case. */
 const SNIFFED_VERTEX = new RegExp(`vertex${SNIFFED_COORDINATE.repeat(3)}`, 'gi');
 
@@ -218,7 +220,10 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
         closed = completeVertices > 0;
         break;
       } else if (keyword === '') {
-        if (coordinates >= 0 && ++coordinates === 3) completeVertices += 1;
+        if (coordinates >= 0) {
+          coordinates = COORDINATE_LIKE.test(token) ? coordinates + 1 : -1;
+          if (coordinates === 3) completeVertices += 1;
+        }
       } else {
         coordinates = -1;
       }
@@ -229,8 +234,9 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
   };
   /**
    * Skips the name after `solid` or `endsolid`. Names may hold short facet
-   * prefixes. Inline geometry needs a closed body with a three-token vertex,
-   * or three such statements even if its closing marker is missing. Probe
+   * prefixes. Inline geometry needs a closed body with a vertex of three
+   * coordinate-like tokens, or three such statements even if its closing
+   * marker is missing. Probe
    * only to the next facet/solid boundary, then let the reader validate every
    * coordinate and the closure; `nan` must not turn geometry into a name. A
    * one-line file has no line end to stop at, so there the name ends at the
