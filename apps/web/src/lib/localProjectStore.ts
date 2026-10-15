@@ -124,6 +124,7 @@ export const MEASUREMENT_STORE_NAME = 'projectMeasurements';
  */
 const CHECKPOINT_STORE_NAME = LOCAL_PROJECT_CHECKPOINT_STORE;
 const CHECKPOINT_AGE_INDEX = 'byProjectDocumentVersion';
+const CHECKPOINT_METADATA_INDEX = 'byProjectCheckpointMetadata';
 /**
  * Version 7 shipped the measurement store and, crucially, taught every opened
  * connection to close on `versionchange`. Every version after it — 8's claims,
@@ -314,6 +315,23 @@ function createExpectedStores(
       'documentVersion'
     ]);
   }
+  const checkpoints = upgrade?.objectStore(CHECKPOINT_STORE_NAME);
+  if (
+    checkpoints &&
+    !checkpoints.indexNames.contains(CHECKPOINT_METADATA_INDEX)
+  ) {
+    // IndexedDB builds this projection for existing records during upgrade.
+    // A key cursor can then list history without cloning any snapshot body
+    // into JavaScript, including on the first open after the upgrade.
+    checkpoints.createIndex(CHECKPOINT_METADATA_INDEX, [
+      'projectId',
+      'documentVersion',
+      'checkpointId',
+      'revisionId',
+      'createdAt',
+      'reason'
+    ]);
+  }
 }
 
 let schemaFactory: IDBFactory | null = null;
@@ -393,7 +411,11 @@ function openDatabase(): Promise<IDBDatabase> {
     () =>
       new Promise<IDBDatabase>((resolve, reject) => {
         const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-        request.onupgradeneeded = () => createExpectedStores(request.result);
+        request.onupgradeneeded = () =>
+          createExpectedStores(
+            request.result,
+            request.transaction ?? undefined
+          );
         request.onsuccess = () => {
           const database = request.result;
           database.onversionchange = () => database.close();
@@ -1126,8 +1148,8 @@ export function listLocalSaveStateCheckpoints(
       return new Promise<ProjectCheckpoint[]>((resolve, reject) => {
         const checkpoints: ProjectCheckpoint[] = [];
         const request = store(CHECKPOINT_STORE_NAME)
-          .index(CHECKPOINT_AGE_INDEX)
-          .openCursor(checkpointKeyRange(resolved));
+          .index(CHECKPOINT_METADATA_INDEX)
+          .openKeyCursor(checkpointKeyRange(resolved));
         request.onerror = () =>
           reject(
             request.error ?? new Error('Local save states could not be read.')
@@ -1135,13 +1157,21 @@ export function listLocalSaveStateCheckpoints(
         request.onsuccess = () => {
           const cursor = request.result;
           if (!cursor) return resolve(checkpoints);
-          const {
+          const [
+            ,
+            documentVersion,
             checkpointId,
             revisionId,
-            documentVersion,
             createdAt,
             reason
-          } = cursor.value as ProjectCheckpointDocumentRecord;
+          ] = cursor.key as [
+            string,
+            number,
+            string,
+            RevisionId,
+            string,
+            string
+          ];
           checkpoints.push({
             checkpointId,
             revisionId,

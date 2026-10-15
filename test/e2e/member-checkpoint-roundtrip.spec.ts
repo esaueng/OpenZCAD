@@ -335,6 +335,97 @@ async function startNamedSave(page: Page) {
   await dialog.getByRole('button', { name: 'Save', exact: true }).click();
 }
 
+test('restoring a device-only member point syncs the model without publishing private checkpoint rows', async ({
+  page
+}) => {
+  const server = roomFixture();
+  await server.install(page);
+  await page.route(
+    `**/api/projects/${server.read().projectId}/collaboration`,
+    (route) =>
+      route.fulfill({ status: 503, json: { error: 'Checkpoint unavailable.' } })
+  );
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(server.read().name);
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await addPrimitive(page, /^Box \(B\)/);
+  await expectBodyCount(page, 1);
+  await startNamedSave(page);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'The named save is stored on this device.'
+  );
+  await addPrimitive(page, /^Cylinder/);
+  await expectBodyCount(page, 2);
+  await expect.poll(() => server.read().bodyOrder.length).toBe(2);
+  const checkpoints = server.read().checkpoints;
+  const savedRow = page.locator('.revision-row', { hasText: 'Clicked box' });
+  await savedRow.hover();
+  await savedRow.getByRole('button', { name: 'Restore Clicked box' }).click();
+  await expectBodyCount(page, 1);
+  await expect.poll(() => server.read().bodyOrder.length).toBe(1);
+  expect(server.read().checkpoints).toEqual(checkpoints);
+  expect(
+    server
+      .read()
+      .revisions.some((revision) =>
+        /Before restore|Restored|Clicked box/.test(revision.reason)
+      )
+  ).toBe(false);
+  await expect(
+    page.locator('.revision-row', { hasText: 'Before restore' })
+  ).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+z');
+  await expectBodyCount(page, 2);
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await expectBodyCount(page, 1);
+  await expect.poll(() => server.read().bodyOrder.length).toBe(1);
+  expect(server.read().checkpoints).toEqual(checkpoints);
+  expect(server.accountWrites()).toBe(0);
+});
+
+test('branches a device-only member point while the account cannot be reached', async ({
+  page
+}) => {
+  const server = roomFixture();
+  await server.install(page);
+  await page.route(
+    `**/api/projects/${server.read().projectId}/collaboration`,
+    (route) =>
+      route.fulfill({ status: 503, json: { error: 'Checkpoint unavailable.' } })
+  );
+  let remoteCopies = 0;
+  await page.route('**/api/projects/*/duplicate', (route) => {
+    remoteCopies += 1;
+    return route.abort('internetdisconnected');
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(server.read().name);
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await addPrimitive(page, /^Box \(B\)/);
+  await expectBodyCount(page, 1);
+  await startNamedSave(page);
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'The named save is stored on this device.'
+  );
+  await addPrimitive(page, /^Cylinder/);
+  await expectBodyCount(page, 2);
+  const row = page.locator('.revision-row', { hasText: 'Clicked box' });
+  await row.hover();
+  await row
+    .getByRole('button', { name: 'Branch Clicked box into a new project' })
+    .click();
+  await expect(page.getByRole('contentinfo')).toContainText('Branched');
+  expect(remoteCopies).toBe(0);
+  await expectBodyCount(page, 2);
+  await page.getByTitle('Back to projects').click();
+  const branch = page.locator('.start-tile-open', {
+    hasText: `${server.read().name} (copy)`
+  });
+  await expect(branch).toBeVisible();
+  await branch.click();
+  await expectBodyCount(page, 1);
+});
+
 for (const roomStored of [true, false]) {
   test(`a failed device checkpoint reports ${roomStored ? 'room-only storage' : 'an unconfirmed named save'} without claiming a local copy`, async ({
     page
