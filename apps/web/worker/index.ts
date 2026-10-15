@@ -1,3 +1,4 @@
+import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
 import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
 import {
   FREECAD_WORKER_PATH,
@@ -129,10 +130,11 @@ import {
   toUserId
 } from '@openzcad/shared';
 
-type Env = CloudflareEnv & {
-  ASSETS?: { fetch(request: Request): Promise<Response> };
-  PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
-};
+type Env = CloudflareEnv &
+  GlimpseEnv & {
+    ASSETS?: { fetch(request: Request): Promise<Response> };
+    PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
+  };
 
 /** Upper bound for JSON request bodies; protects against oversized payloads. */
 const MAX_JSON_BODY_BYTES = 25 * 1024 * 1024;
@@ -1639,7 +1641,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       await readJsonBody(request, MAX_PROJECT_MEASUREMENT_BYTES + 16 * 1024),
       projectId
     );
-    return json(await saveProjectMeasurements(env.DB!, projectId, userId, input));
+    return json(
+      await saveProjectMeasurements(env.DB!, projectId, userId, input)
+    );
   }
 
   if (request.method === 'DELETE' && measurementsMatch) {
@@ -1872,44 +1876,64 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   return json({ error: 'Not found' }, 404);
 }
 
+async function handleAppRequest(request: Request, env: Env): Promise<Response> {
+  if (FREECAD_WORKER_PATH.test(new URL(request.url).pathname)) {
+    if (!env.ASSETS)
+      return new Response('Asset service unavailable.', { status: 503 });
+    return serveFreecadWorkerAsset(request, env.ASSETS);
+  }
+  if (new URL(request.url).pathname === '/healthz') {
+    const headers = {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'referrer-policy': 'no-referrer',
+      'cross-origin-resource-policy': 'same-origin',
+      'content-security-policy':
+        "default-src 'none'; sandbox; frame-ancestors 'none'"
+    };
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return new Response(null, {
+        status: 405,
+        headers: { ...headers, allow: 'GET, HEAD' }
+      });
+    }
+    return new Response(
+      request.method === 'HEAD'
+        ? null
+        : JSON.stringify({ status: 'ok', service: 'openzcad' }),
+      { headers }
+    );
+  }
+
+  assertSafeRuntimeConfiguration(env);
+  const response = await dispatchApiRequest(request, env);
+  return withApiSecurityHeaders(response);
+}
+
 export default {
   async scheduled(_controller: unknown, env: Env): Promise<void> {
     assertSafeRuntimeConfiguration(env);
     await createPersistenceService(env).purgeExpiredUploadSessions();
   },
-  async fetch(request: Request, env: Env): Promise<Response> {
-    if (FREECAD_WORKER_PATH.test(new URL(request.url).pathname)) {
-      if (!env.ASSETS)
-        return new Response('Asset service unavailable.', { status: 503 });
-      return serveFreecadWorkerAsset(request, env.ASSETS);
-    }
-    if (new URL(request.url).pathname === '/healthz') {
-      const headers = {
-        'content-type': 'application/json; charset=utf-8',
-        'cache-control': 'no-store',
-        'x-content-type-options': 'nosniff',
-        'referrer-policy': 'no-referrer',
-        'cross-origin-resource-policy': 'same-origin',
-        'content-security-policy':
-          "default-src 'none'; sandbox; frame-ancestors 'none'"
-      };
-      if (request.method !== 'GET' && request.method !== 'HEAD') {
-        return new Response(null, {
-          status: 405,
-          headers: { ...headers, allow: 'GET, HEAD' }
-        });
+  async fetch(
+    request: Request,
+    env: Env,
+    ctx?: { waitUntil(promise: Promise<unknown>): void }
+  ): Promise<Response> {
+    const path = new URL(request.url).pathname;
+    if (path === '/api/glimpse/usage') return handleGlimpseUsage(request, env);
+    const started = performance.now();
+    let status = 500;
+    try {
+      const response = await handleAppRequest(request, env);
+      status = response.status;
+      return response;
+    } finally {
+      if (path.startsWith('/api/') && !path.startsWith('/api/glimpse/')) {
+        ctx?.waitUntil(countApi(env, status, performance.now() - started));
       }
-      return new Response(
-        request.method === 'HEAD'
-          ? null
-          : JSON.stringify({ status: 'ok', service: 'openzcad' }),
-        { headers }
-      );
     }
-
-    assertSafeRuntimeConfiguration(env);
-    const response = await dispatchApiRequest(request, env);
-    return withApiSecurityHeaders(response);
   }
 };
 
