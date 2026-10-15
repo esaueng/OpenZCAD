@@ -187,8 +187,7 @@ import type {
 import {
   toShaprImportId,
   toSketchConstraintId,
-  toUserId,
-  UNIT_TO_MM
+  toUserId
 } from '@openzcad/shared';
 import {
   buildConstraint,
@@ -251,10 +250,7 @@ import {
   applyAccountSourceArchives,
   sourceUploadMessage
 } from './lib/accountImportSources';
-import {
-  archiveArtifact as archiveArtifactBody,
-  type ArchiveArtifactInput
-} from './lib/archiveArtifact';
+import type { ArchiveArtifactInput } from './lib/archiveArtifact';
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
@@ -298,6 +294,7 @@ import {
 import {
   CloudProjectAutosave,
   currentVersionOf,
+  PROJECT_TOO_LARGE_FOR_ACCOUNT,
   type WorkspaceSaveState
 } from './lib/cloudProjectAutosave';
 import { applyAccountProjectRefresh } from './lib/accountProjectRefresh';
@@ -4432,12 +4429,7 @@ export function App() {
             'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
           );
         } else if (status.state === 'refused') {
-          setStatus(
-            errorMessage(
-              status.error,
-              'This document is too large for the account. It stays saved on this device.'
-            )
-          );
+          setStatus(errorMessage(status.error, PROJECT_TOO_LARGE_FOR_ACCOUNT));
         }
       },
       onSynced({ projectId, version }) {
@@ -10348,6 +10340,22 @@ export function App() {
         );
         return;
       }
+      if (sharedAccountProject) {
+        // The room publishes changed document versions, while the owner's
+        // account checkpoint endpoint deliberately refuses member writes.
+        // Commit the save point before yielding so later edits descend from it.
+        savingDocument = createCheckpoint(
+          appendRevision(savingDocument, reason),
+          reason
+        );
+        showAccountEcho(savingDocument);
+        await saveLocalProject(savingDocument);
+        if (isCurrentProject())
+          setStatus(
+            'Saved revision on this device · sharing through the room.'
+          );
+        return;
+      }
       if (
         cloudFunctionsEnabled &&
         session &&
@@ -10684,6 +10692,8 @@ export function App() {
       );
     }
     const owner = doc.projectId;
+    const { archiveArtifact: archiveArtifactBody } =
+      await import('./lib/archiveArtifact');
     return archiveArtifactBody(api, owner, input, (artifact) => {
       // The upload can outlive the project it archived for. The artifacts
       // list is keyed to the OPEN project — the effect that fills it clears
@@ -10700,6 +10710,15 @@ export function App() {
         )
       ]);
     });
+  }
+
+  function reportMeshCleanupFailure(error: unknown) {
+    if (!error) return;
+    setStatusEntry((current) => ({
+      ...current,
+      text: `${current.text} Cloud cleanup failed: ${errorMessage(error, 'Unused mesh data could not be removed.')}`,
+      at: Date.now()
+    }));
   }
 
   async function handleImportFile(file: File) {
@@ -10767,10 +10786,7 @@ export function App() {
           signal: abort.signal,
           status: { setStatus, setFeatureFormError },
           progress,
-          marks: {
-            inFlight: inFlightImportChecksums.current,
-            abandoned: abandonedImportChecksums.current
-          },
+          marks: importMarks(),
           currentDocument: () => managerRef.current?.document ?? null,
           editDisabledReason: () => editDisabledReasonRef.current,
           newId: () => crypto.randomUUID(),
@@ -10828,6 +10844,7 @@ export function App() {
       // outlive-its-project specs perform (PR #349 R-C2).
       const abort = startImportAbort();
       const progress = createImportProgressSink();
+      let meshCleanupFailure: unknown = null;
       progress.start({
         fileName: file.name,
         phases: ['reading', 'building', 'archiving']
@@ -10868,88 +10885,123 @@ export function App() {
         try {
           const parsed = parseStl(contents, file.name);
           progress.update({ phase: 'building', fraction: null });
-          const { createBodyFeatureIds } =
-            await import('@openzcad/document-core');
+          const [{ createBodyFeatureIds }, meshImport] = await Promise.all([
+            import('@openzcad/document-core'),
+            import('./lib/importedMeshPayload')
+          ]);
           const previewIds = createBodyFeatureIds();
-          const previewCommand = commandFactories.importMesh({
-            name: parsed.name,
-            artifactId: `artifact_local_${crypto.randomUUID()}`,
-            sourceName: parsed.name,
-            triangleCount: parsed.triangleCount,
-            vertices: parsed.vertices,
-            indices: parsed.indices,
-            ids: previewIds
-          });
+          // One payload for the preview and the commit, adopted into this
+          // document's units and stored under the lock: the feature names it
+          // by reference, so neither the node, its command nor its undo entry
+          // repeats the mesh.
+          const hold = await meshImport.holdMeshImport(
+            parsed,
+            doc.units,
+            importMarks()
+          );
+          let outcome:
+            Awaited<ReturnType<typeof validatedFeature.run>> | 'failed' =
+            'failed';
+          let note = '.';
           let rejection: string | null = null;
-          const outcome = await validatedFeature.run(previewCommand, {
-            featureName: parsed.name,
-            resultBodyId: previewIds.bodyId,
-            reservation,
-            cancelled: () => abort.signal.aborted,
-            signal: abort.signal,
-            validatingMessage: `Checking ${file.name} against exact geometry…`,
-            successMessage: () =>
-              `Imported ${parsed.triangleCount} triangles from ${file.name}.`,
-            // No revalidation: an import appends a feature to a project, and a
-            // project switch mid-rebuild must refuse (or cancel), not rebuild
-            // the candidate against a document it was never meant for. The
-            // hook still re-checks the project at commit, and drops a stale
-            // derived rather than blanking whatever else landed meanwhile.
-            revalidateOnDocumentMove: false,
-            // Imports own their refusal card; do not leave the diagnostic in
-            // whichever unrelated feature form happens to be open.
-            onFailure: (message) => {
-              rejection = message;
-            },
-            finalize: async () => {
-              const blockedReason = editDisabledReasonRef.current;
-              if (blockedReason) {
-                throw new Error(`Cannot import geometry: ${blockedReason}.`);
-              }
-              progress.update({ phase: 'archiving', fraction: 0 });
-              let artifactId = `artifact_local_${crypto.randomUUID()}`;
-              try {
-                artifactId = await archiveArtifact({
-                  fileName: file.name,
-                  contentType,
-                  kind: 'stl-import',
-                  body: file,
-                  metadata: { source: 'direct-upload' },
-                  signal: abort.signal
-                });
-              } catch (error) {
-                // A cancelled archive is the user withdrawing, not a storage
-                // failure: rethrow so the run ends cancelled and nothing
-                // commits, instead of landing local-only.
-                if (
-                  error instanceof Error &&
-                  (error.name === 'AbortError' || abort.signal.aborted)
-                ) {
-                  throw error;
+          let meshArchive: Awaited<
+            ReturnType<typeof meshImport.archiveImportedMesh>
+          > | null = null;
+          const discardMeshPayload = (artifactId: string) =>
+            api.discardMeshPayload(doc.projectId, artifactId);
+          try {
+            outcome = await validatedFeature.run(
+              meshImport.importedMeshCommand(
+                parsed,
+                hold.form,
+                `artifact_local_${crypto.randomUUID()}`,
+                previewIds
+              ),
+              {
+                featureName: parsed.name,
+                resultBodyId: previewIds.bodyId,
+                reservation,
+                cancelled: () => abort.signal.aborted,
+                signal: abort.signal,
+                validatingMessage: `Checking ${file.name} against exact geometry…`,
+                successMessage: () =>
+                  `Imported ${parsed.triangleCount} triangles from ${file.name}${note}`,
+                // No revalidation: an import appends a feature to a project,
+                // and a project switch mid-rebuild must refuse (or cancel), not
+                // rebuild the candidate against a document it was never meant
+                // for. The hook still re-checks the project at commit, and
+                // drops a stale derived rather than blanking whatever else
+                // landed meanwhile.
+                revalidateOnDocumentMove: false,
+                // Imports own their refusal card; do not leave the diagnostic
+                // in whichever unrelated feature form happens to be open.
+                onFailure: (message) => {
+                  rejection = message;
+                },
+                finalize: async () => {
+                  const blockedReason = editDisabledReasonRef.current;
+                  if (blockedReason) {
+                    throw new Error(
+                      `Cannot import geometry: ${blockedReason}.`
+                    );
+                  }
+                  progress.update({ phase: 'archiving', fraction: 0 });
+                  // Best-effort; a cancelled upload rethrows so the run ends
+                  // cancelled and nothing commits.
+                  const archived = (meshArchive =
+                    await meshImport.archiveImportedMesh({
+                      hold,
+                      sourceName: parsed.name,
+                      original: {
+                        fileName: file.name,
+                        contentType,
+                        kind: 'stl-import',
+                        body: file
+                      },
+                      archive: archiveArtifact,
+                      discard: discardMeshPayload,
+                      signal: abort.signal,
+                      onCleanupFailure: (error) => {
+                        meshCleanupFailure = error;
+                      }
+                    }));
+                  note = archived.note;
+                  if (abort.signal.aborted) {
+                    throw new DOMException(
+                      'The import was cancelled.',
+                      'AbortError'
+                    );
+                  }
+                  return meshImport.importedMeshCommand(
+                    parsed,
+                    hold.form,
+                    archived.artifactId,
+                    previewIds
+                  );
                 }
-                // Local-only: the mesh itself lives in the document.
               }
-              if (abort.signal.aborted) {
-                throw new DOMException(
-                  'The import was cancelled.',
-                  'AbortError'
-                );
-              }
-              return commandFactories.importMesh({
-                name: parsed.name,
-                artifactId,
-                sourceName: parsed.name,
-                triangleCount: parsed.triangleCount,
-                vertices: parsed.vertices,
-                indices: parsed.indices,
-                ids: previewIds
-              });
-            }
-          });
+            );
+          } finally {
+            meshCleanupFailure =
+              (await meshImport.cleanupUncommittedMeshArchive(
+                meshArchive,
+                outcome === 'committed',
+                discardMeshPayload
+              )) ?? meshCleanupFailure;
+            // Kept for a commit, removed for a refusal or a cancel — and
+            // never left behind by a run that threw on the way.
+            await hold.settle(
+              meshImport.meshImportRunResult(outcome, abort.signal.aborted),
+              managerRef.current?.document ?? null
+            );
+          }
           // Every terminal result settles the card before its abort handle is
           // retired. A committed mesh previously left "Archiving a copy"
           // running forever; Cancel then had no live operation to withdraw.
           if (outcome === 'committed') {
+            // Settles like any completed import, archived or not (EDGE-05): a
+            // payload that did not upload is a local-only source, which the
+            // save-state indicator and the File menu already offer to archive.
             progress.finish({
               tone: 'ok',
               message: `${parsed.triangleCount} triangles`,
@@ -10986,6 +11038,7 @@ export function App() {
         }
       } finally {
         finishImportAbort(abort);
+        reportMeshCleanupFailure(meshCleanupFailure);
       }
       return;
     }
@@ -11034,10 +11087,7 @@ export function App() {
       signal: abort.signal,
       status: { setStatus, setFeatureFormError },
       progress: createImportProgressSink(),
-      marks: {
-        inFlight: inFlightImportChecksums.current,
-        abandoned: abandonedImportChecksums.current
-      },
+      marks: importMarks(),
       currentDocument: () => managerRef.current?.document ?? null,
       editDisabledReason: () => editDisabledReasonRef.current,
       newId: () => crypto.randomUUID()
@@ -11046,14 +11096,15 @@ export function App() {
   }
 
   /**
-   * The half of a mesh import every format shares: scale the triangles into
-   * document units, archive the original upload, and commit one
-   * `imported-mesh` feature.
+   * The kernel-read formats' half of a mesh import: store the payload, archive
+   * it and the original upload, and commit one `imported-mesh` feature in
+   * document units.
    *
-   * STL and the kernel-read formats differ only in how the triangles were
-   * produced. Sharing the commit is what keeps them the same feature — a mesh
-   * body from a 3MF is indistinguishable downstream from one out of an STL,
-   * including in autosave, reopen and export.
+   * STL commits through the validated-feature run instead, but builds the
+   * same command with the same `importedMeshCommand` — that shared builder,
+   * units included, is what keeps them the same feature: a mesh body from a
+   * 3MF is indistinguishable downstream from one out of an STL, including in
+   * autosave, reopen and export.
    */
   async function commitImportedMesh(input: {
     file: File;
@@ -11079,69 +11130,86 @@ export function App() {
       // and `doc` is the same render's value throughout.
       return;
     }
-    // The triangles arrive in millimetres — a 3MF's declared unit and glTF's
-    // metres are applied by the importer, and the formats that declare none
-    // follow the STL interchange convention. The mesh exports multiply by
-    // UNIT_TO_MM on the way out, so adopting the vertices at 1/UNIT_TO_MM
-    // keeps a non-mm document's round trip at the same physical size.
-    const meshScale = 1 / UNIT_TO_MM[doc.units];
-    const vertices =
-      meshScale === 1
-        ? mesh.vertices
-        : mesh.vertices.map((value) => value * meshScale);
-
-    // Best-effort archive of the original upload; the mesh itself lives in
-    // the document, so a storage failure must not block the import.
-    let artifactId = `artifact_local_${crypto.randomUUID()}`;
-    let archived = false;
-    try {
-      artifactId = await archiveArtifact({
-        fileName: file.name,
-        contentType,
-        kind: artifactKind,
-        body: file,
-        metadata: { source: 'direct-upload' }
-      });
-      archived = true;
-    } catch {
-      // Continue with the local import.
-    }
-
-    // Between the entry check and here are two awaits, the second an
-    // upload of up to 128 MB. This path shows no busy state and no import
-    // card, so Home and the project shelf stay live throughout — and the
-    // vertices were already scaled by the units of the document that was
-    // open when the file was read, so landing them anywhere else is both
-    // the wrong project and the wrong size. The STEP path is guarded by
-    // `useValidatedFeatureCommit`; this one had nothing.
-    if (managerRef.current !== importManager) {
-      setStatus('The project changed while the import finished.');
-      return;
-    }
-    const created = executeCommand(
-      commandFactories.importMesh({
-        name: mesh.name,
-        artifactId,
-        sourceName: mesh.name,
-        triangleCount: mesh.triangleCount,
-        vertices,
-        indices: mesh.indices
-      })
+    const meshImport = await import('./lib/importedMeshPayload');
+    // The payload by reference, in the units of the document that was open
+    // when the file was read (the rebuild check ran in them too).
+    const hold = await meshImport.holdMeshImport(
+      mesh,
+      doc.units,
+      importMarks()
     );
-    if (created) {
-      // A converted file says so: the numbers in the document are not the
-      // numbers in the file, and nothing else on screen would reveal it.
-      const converted =
-        mesh.sourceUnit && mesh.sourceUnit !== 'millimeter'
-          ? `, converted from ${mesh.sourceUnit}`
-          : '';
-      setStatus(
-        `Imported ${mesh.triangleCount} triangles from ${file.name}${converted}` +
-          (archived
-            ? '.'
-            : ' (original file not archived: upload unavailable).')
+    let created = false;
+    let meshArchive: Awaited<
+      ReturnType<typeof meshImport.archiveImportedMesh>
+    > | null = null;
+    let meshCleanupFailure: unknown = null;
+    const discardMeshPayload = (artifactId: string) =>
+      api.discardMeshPayload(doc.projectId, artifactId);
+    try {
+      // Best-effort: a storage failure must not block the import.
+      const archived = (meshArchive = await meshImport.archiveImportedMesh({
+        hold,
+        sourceName: mesh.name,
+        original: {
+          fileName: file.name,
+          contentType,
+          kind: artifactKind,
+          body: file
+        },
+        archive: archiveArtifact,
+        discard: discardMeshPayload,
+        onCleanupFailure: (error) => {
+          meshCleanupFailure = error;
+        }
+      }));
+
+      // Between the entry check and here are several awaits, among them an
+      // upload of up to 128 MB. This path shows no busy state and no import
+      // card, so Home and the project shelf stay live throughout — and the
+      // import's rebuild check ran in the units of the document that was open
+      // when the file was read, which also scaled the vertices above, so
+      // landing them anywhere else is both the wrong project and the wrong
+      // size. The STEP path is guarded by `useValidatedFeatureCommit`; this
+      // one had nothing.
+      if (managerRef.current !== importManager) {
+        setStatus('The project changed while the import finished.');
+        return;
+      }
+      created = executeCommand(
+        meshImport.importedMeshCommand(mesh, hold.form, archived.artifactId)
       );
+      if (created) {
+        // A converted file says so: the numbers in the document are not the
+        // numbers in the file, and nothing else on screen would reveal it.
+        const converted =
+          mesh.sourceUnit && mesh.sourceUnit !== 'millimeter'
+            ? `, converted from ${mesh.sourceUnit}`
+            : '';
+        setStatus(
+          `Imported ${mesh.triangleCount} triangles from ${file.name}${converted}${archived.note}`
+        );
+      }
+    } finally {
+      meshCleanupFailure =
+        (await meshImport.cleanupUncommittedMeshArchive(
+          meshArchive,
+          created,
+          discardMeshPayload
+        )) ?? meshCleanupFailure;
+      await hold.settle(
+        created ? 'committed' : 'refused',
+        managerRef.current?.document ?? null
+      );
+      reportMeshCleanupFailure(meshCleanupFailure);
     }
+  }
+
+  /** This tab's notes about import source bytes, shared by every import. */
+  function importMarks() {
+    return {
+      inFlight: inFlightImportChecksums.current,
+      abandoned: abandonedImportChecksums.current
+    };
   }
 
   /**
@@ -11342,10 +11410,7 @@ export function App() {
       signal: shaprAbort.signal,
       status: { setStatus, setFeatureFormError },
       progress: createImportProgressSink(),
-      marks: {
-        inFlight: inFlightImportChecksums.current,
-        abandoned: abandonedImportChecksums.current
-      },
+      marks: importMarks(),
       currentDocument: () => managerRef.current?.document ?? null,
       editDisabledReason: () => editDisabledReasonRef.current,
       newId: () => crypto.randomUUID(),
@@ -11418,22 +11483,51 @@ export function App() {
       return;
     }
     const originatingManager = managerRef.current;
+    const cleanupFailures: string[] = [];
     setStatus(
       `Archiving ${countLabel(localOnlySources.length, 'local import source', 'local import sources')}…`
     );
     const result = await archiveLocalOnlyImportSources({
       document: doc,
+      currentDocument: () => originatingManager?.document ?? null,
       loadSourceBytes: loadSourceBlob,
       archive: (input) => archiveArtifact(input),
-      applyArtifactId: (featureId, artifactId) => {
+      discardMeshPayload: api.discardMeshPayload,
+      onCleanupFailure: (sourceName) => cleanupFailures.push(sourceName),
+      applyArtifactId: (featureId, artifactId, source) => {
         if (
           !originatingManager ||
           managerRef.current !== originatingManager ||
           !ensureCanEdit('archive import sources')
         )
           return false;
-        setDoc(originatingManager.archiveSource(featureId, artifactId));
-        return true;
+        const next = originatingManager.archiveSource(
+          featureId,
+          artifactId,
+          source
+        );
+        setDoc(next);
+        return [...documentNodesWithHistory(next)].some((node) => {
+          if (
+            node.kind !== 'feature' ||
+            !('artifactId' in node.data) ||
+            node.data.artifactId !== artifactId
+          )
+            return false;
+          const ref =
+            node.data.featureKind === 'imported-mesh'
+              ? node.data.meshPayloadRef
+              : node.data.featureKind === 'imported-step'
+                ? node.data.stepSourceRef
+                : undefined;
+          return (
+            ref?.checksumSha256 === source.checksumSha256 &&
+            ref.logicalBytes === source.logicalBytes &&
+            (node.data.featureKind === 'imported-mesh'
+              ? 'mesh-payload'
+              : 'step-source') === source.kind
+          );
+        });
       }
     });
     if (managerRef.current !== originatingManager) return result;
@@ -11448,6 +11542,11 @@ export function App() {
     }
     if (result.failed.length > 0) {
       notes.push(`upload failed for ${result.failed.join(', ')} — try again`);
+    }
+    if (cleanupFailures.length > 0) {
+      notes.push(
+        `cloud cleanup incomplete for ${cleanupFailures.join(', ')} — try again`
+      );
     }
     setStatus(
       notes.length > 0

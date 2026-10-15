@@ -414,6 +414,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload)
     }),
+  discardMeshPayload: (projectId: string, artifactId: string) =>
+    requestJson<{ deleted: boolean }>(
+      `/api/artifacts/${encodeURIComponent(artifactId)}/discard-unreferenced`,
+      { method: 'POST', body: JSON.stringify({ projectId }) }
+    ),
   listArtifacts: (projectId: string) =>
     requestJson<ListArtifactsResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/artifacts`

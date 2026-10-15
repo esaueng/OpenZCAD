@@ -1,10 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toUserId, toArtifactId } from '@openzcad/shared';
+import {
+  documentNodesWithHistory,
+  toUserId,
+  toArtifactId
+} from '@openzcad/shared';
 import {
   archiveAccountImportSources,
   applyAccountSourceArchives,
+  localizeImportedSourceArtifacts,
   sourceUploadMessage
 } from './accountImportSources';
 import { listLocalOnlyImportSources } from './importArchival';
@@ -32,6 +37,77 @@ function imported() {
 }
 
 describe('account import sources', () => {
+  it('rearchives copied STEP and mesh sources held only by undo history', async () => {
+    const manager = new CommandManager(
+      createProjectDocument('Copied imports', toUserId('visitor'))
+    );
+    const reference = (checksum: string) => ({
+      marker: 'openzcad-source-ref' as const,
+      version: 1 as const,
+      hashAlgorithm: 'sha256' as const,
+      checksumSha256: checksum.repeat(64),
+      logicalBytes: 4
+    });
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Exact source',
+        sourceName: 'part.step',
+        artifactId: 'artifact_original_step',
+        stepSourceRef: reference('a')
+      })
+    );
+    manager.execute(
+      commandFactories.importMesh({
+        name: 'Mesh source',
+        sourceName: 'part.stl',
+        artifactId: 'artifact_original_mesh',
+        triangleCount: 1,
+        meshPayloadRef: reference('b')
+      })
+    );
+    manager.undo();
+    manager.undo();
+    const source = manager.document;
+    const original = structuredClone(source);
+    const localized = localizeImportedSourceArtifacts(source);
+    expect(localized.featureOrder).toEqual([]);
+    expect(source).toEqual(original);
+    expect(JSON.stringify(localized)).not.toContain('artifact_original_');
+    expect(listLocalOnlyImportSources(localized)).toHaveLength(2);
+
+    const uploads: string[] = [];
+    const { document: archived, result } = await archiveAccountImportSources(
+      localized,
+      {
+        loadSourceBytes: async () => new Uint8Array([1, 2, 3, 4]),
+        archive: async (input) => {
+          uploads.push(input.kind);
+          return `artifact_copy_${input.kind}`;
+        }
+      }
+    );
+    expect(result.archived).toHaveLength(2);
+    expect(uploads.sort()).toEqual(['mesh-payload', 'step-import']);
+    expect(listLocalOnlyImportSources(archived)).toEqual([]);
+    const restored = new CommandManager(archived);
+    restored.redo();
+    restored.redo();
+    const artifacts = Object.values(restored.document.nodes).flatMap((node) =>
+      node.kind === 'feature' &&
+      (node.data.featureKind === 'imported-step' ||
+        node.data.featureKind === 'imported-mesh')
+        ? [node.data.artifactId]
+        : []
+    );
+    expect(artifacts.sort()).toEqual([
+      'artifact_copy_mesh-payload',
+      'artifact_copy_step-import'
+    ]);
+    expect(JSON.stringify(restored.document.commandLog)).not.toContain(
+      'artifact_original_'
+    );
+  });
+
   it('uploads current and undo sources without mutating the editor snapshot', async () => {
     const document = imported();
     const original = structuredClone(document);
@@ -127,6 +203,21 @@ it('does not relabel a replaced source as the old uploaded bytes', async () => {
   expect(
     listLocalOnlyImportSources(merged).some(
       (s) => s.checksumSha256 === 'c'.repeat(64)
+    )
+  ).toBe(true);
+  const historical = [...documentNodesWithHistory(merged)].filter(
+    (node) =>
+      node.kind === 'feature' &&
+      node.data.featureKind === 'imported-step' &&
+      node.data.stepSourceRef?.checksumSha256 === 'a'.repeat(64)
+  );
+  expect(historical.length).toBeGreaterThan(0);
+  expect(
+    historical.every(
+      (node) =>
+        node.kind === 'feature' &&
+        'artifactId' in node.data &&
+        !node.data.artifactId.startsWith('artifact_local_')
     )
   ).toBe(true);
 });

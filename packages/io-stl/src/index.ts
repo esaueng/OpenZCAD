@@ -10,8 +10,23 @@ export interface ParsedStl {
 
 const BINARY_STL_HEADER_BYTES = 84;
 const BINARY_STL_TRIANGLE_BYTES = 50;
-const ASCII_VERTEX_SOURCE =
-  'vertex\\s+([-+0-9.eE]+)\\s+([-+0-9.eE]+)\\s+([-+0-9.eE]+)';
+/** One coordinate as an ASCII STL writes it: a plain decimal, nothing else. */
+const ASCII_COORDINATE = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/;
+/**
+ * The words that open or close an ASCII STL statement. A token after a
+ * vertex's third coordinate must be one of them.
+ */
+const ASCII_KEYWORDS = new Set([
+  'solid',
+  'endsolid',
+  'facet',
+  'normal',
+  'outer',
+  'loop',
+  'vertex',
+  'endloop',
+  'endfacet'
+]);
 
 /** Guard against imports that would stall the browser tab. */
 export const MAX_IMPORT_TRIANGLES = 200_000;
@@ -70,30 +85,267 @@ function assertBinaryStlLength(
   }
 }
 
-function parseAsciiStl(text: string, fileName: string): ParsedStl {
-  const vertexPattern = new RegExp(ASCII_VERTEX_SOURCE, 'g');
-  const vertices: number[] = [];
-  for (const match of text.matchAll(vertexPattern)) {
-    const x = Number(match[1]);
-    const y = Number(match[2]);
-    const z = Number(match[3]);
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
-      throw new StlParseError('ASCII STL contains a malformed vertex.');
-    }
-    vertices.push(x, y, z);
-    // Enforce the budget while accumulating so an oversized file is rejected
-    // before its vertices are all held in memory.
-    if (vertices.length > MAX_IMPORT_TRIANGLES * 9) {
-      assertTriangleBudget(Math.ceil(vertices.length / 9));
+/** Whether a UTF-16 code unit is ASCII whitespace, which separates tokens. */
+function isSeparator(code: number): boolean {
+  return code === 0x20 || (code >= 0x09 && code <= 0x0d);
+}
+
+/** A vertex statement as read, short enough to quote in a refusal. */
+function vertexStatement(...tokens: (string | null)[]): string {
+  const statement = ['vertex', ...tokens].filter(Boolean).join(' ');
+  return `"${statement.length > 60 ? `${statement.slice(0, 60)}…` : statement}"`;
+}
+
+/** A coordinate token's value, or NaN when it is not a plain decimal. */
+function coordinate(token: string | null): number {
+  return token !== null && ASCII_COORDINATE.test(token) ? Number(token) : NaN;
+}
+
+/**
+ * A token that reads as a coordinate, well formed or not: a sign, then a
+ * digit, a decimal point, `nan` or `inf`, then anything. Broad on purpose — an
+ * ASCII file whose vertices hold `nan`, `1.#QNAN`, `-1.#IND` or `inf` must
+ * still reach the ASCII reader to be refused there — but never a plain word.
+ */
+const COORDINATE_PREFIX = String.raw`[-+]?(?:\d|\.\d|nan|inf)`;
+const COORDINATE_LIKE = new RegExp(`^${COORDINATE_PREFIX}`, 'i');
+const SNIFFED_COORDINATE = String.raw`\s+${COORDINATE_PREFIX}\S*`;
+/** `vertex` followed by three coordinate-like tokens, in either letter case. */
+const SNIFFED_VERTEX = new RegExp(`vertex${SNIFFED_COORDINATE.repeat(3)}`, 'gi');
+
+/**
+ * Whether the text holds a `vertex` statement: the keyword, in either letter
+ * case, at the start or after whitespace, followed by three coordinate-like
+ * tokens — wherever the line breaks fall. An STL's header may say
+ * `solid … vertex colors`, so the keyword alone does not identify ASCII
+ * geometry. A literal search that checks the one character
+ * before each hit: putting that alternation in the pattern made the sniff of
+ * a large whitespace-padded file several times slower.
+ */
+function hasVertexStatement(text: string): boolean {
+  for (const match of text.matchAll(SNIFFED_VERTEX)) {
+    if (match.index === 0 || isSeparator(text.charCodeAt(match.index - 1))) {
+      return true;
     }
   }
-  if (vertices.length === 0) {
+  return false;
+}
+
+/**
+ * Reads an ASCII STL by its facet structure: each `facet … endfacet` block is
+ * one triangle, and must hold exactly three `vertex` statements of three
+ * finite numbers each. Keywords match in either letter case, since exporters
+ * write both.
+ *
+ * The text is read as whitespace-separated tokens, not lines: line breaks
+ * carry no meaning in the format, so a file written on one line, or with CRLF
+ * or bare CR endings, reads the same as one statement per line.
+ *
+ * Nothing is skipped. Pairing vertex statements three at a time wherever they
+ * appear let one unreadable coordinate (`nan`, `1.#QNAN`, `-1.#IND`) shift
+ * every later vertex into a triangle the file does not contain, so a vertex
+ * this reader cannot read refuses the file, naming the facet. The facet
+ * normal is not read — exports recompute it — so an exporter's `facet normal
+ * nan nan nan` on a degenerate facet is not a refusal.
+ */
+function parseAsciiStl(text: string, fileName: string): ParsedStl {
+  const vertices: number[] = [];
+  const length = text.length;
+  let index = 0;
+  /** Where the token `next` last returned starts. */
+  let start = 0;
+  /** The next token, or null at the end of the text. */
+  const next = (): string | null => {
+    while (index < length && isSeparator(text.charCodeAt(index))) index += 1;
+    if (index >= length) return null;
+    start = index;
+    while (index < length && !isSeparator(text.charCodeAt(index))) index += 1;
+    return text.slice(start, index);
+  };
+  /** A token's keyword, lower-cased, or '' for any other token. */
+  const keywordOf = (token: string): string => {
+    // Only a letter can start a keyword, so numbers stop here.
+    const letter = token.charCodeAt(0) | 0x20;
+    if (letter < 0x61 || letter > 0x7a) return '';
+    if (ASCII_KEYWORDS.has(token)) return token;
+    const word = token.toLowerCase();
+    return ASCII_KEYWORDS.has(word) ? word : '';
+  };
+  /**
+   * The next line break at or after `index` (the text's length when there is
+   * none). Searched again only once `index` has passed the last answer, so a
+   * file of many solids is still searched once over.
+   */
+  let lineBreak = -1;
+  const nextLineBreak = (): number => {
+    if (index > lineBreak) {
+      const found = /[\r\n]/g;
+      found.lastIndex = index;
+      lineBreak = found.exec(text)?.index ?? length;
+    }
+    return lineBreak;
+  };
+  /** The keyword of the token after the current one, without consuming it. */
+  const peekKeyword = (): string => {
+    const mark = index;
+    const token = next();
+    index = mark;
+    return token === null ? '' : keywordOf(token);
+  };
+  /** Whether the whole file is one line, trailing line breaks aside. */
+  const body = text.trimEnd();
+  const oneLine = !body.includes('\n') && !body.includes('\r');
+  const inlineFacetBody =
+    /\s+(?:normal\s+\S+\s+\S+\s+\S+\s+)?outer\s+loop\s+vertex(?:\s|$)/iy;
+  const hasInlineFacetBody = (): boolean => {
+    inlineFacetBody.lastIndex = index;
+    if (!inlineFacetBody.test(text)) return false;
+    const mark = index;
+    const tokenStart = start;
+    let coordinates = -1;
+    let completeVertices = 0;
+    let closed = false;
+    for (let token = next(); token !== null; token = next()) {
+      const keyword = keywordOf(token);
+      if (
+        keyword === 'facet' ||
+        keyword === 'solid' ||
+        keyword === 'endsolid'
+      ) {
+        break;
+      }
+      if (keyword === 'vertex') {
+        coordinates = 0;
+      } else if (keyword === 'endfacet') {
+        closed = completeVertices > 0;
+        break;
+      } else if (keyword === '') {
+        if (coordinates >= 0) {
+          coordinates = COORDINATE_LIKE.test(token) ? coordinates + 1 : -1;
+          if (coordinates === 3) completeVertices += 1;
+        }
+      } else {
+        coordinates = -1;
+      }
+    }
+    index = mark;
+    start = tokenStart;
+    return closed || completeVertices >= 3;
+  };
+  /**
+   * Skips the name after `solid` or `endsolid`. Names may hold short facet
+   * prefixes. Inline geometry needs a closed body with a vertex of three
+   * coordinate-like tokens, or three such statements even if its closing
+   * marker is missing. Probe
+   * only to the next facet/solid boundary, then let the reader validate every
+   * coordinate and the closure; `nan` must not turn geometry into a name. A
+   * one-line file has no line end to stop at, so there the name ends at the
+   * first `facet` followed by `normal` or `outer`, and everything from it on
+   * is geometry — a malformed facet is refused, never read as a name. The
+   * cost is that a one-line file whose name itself says `facet normal` is
+   * refused.
+   */
+  const skipName = () => {
+    const lineEnd = oneLine ? length : nextLineBreak();
+    for (;;) {
+      const mark = index;
+      const token = next();
+      if (token === null) return;
+      if (
+        start > lineEnd ||
+        (keywordOf(token) === 'facet' &&
+          (oneLine
+            ? ['normal', 'outer'].includes(peekKeyword())
+            : hasInlineFacetBody()))
+      ) {
+        index = mark;
+        return;
+      }
+    }
+  };
+
+  let facets = 0;
+  /** Vertices read in the open facet, or -1 between facets. */
+  let facetVertices = -1;
+  /** The last token read was a vertex's third coordinate, `a b c`. */
+  let afterVertex = false;
+  let a: string | null = null;
+  let b: string | null = null;
+  let c: string | null = null;
+  for (let token = next(); token !== null; token = next()) {
+    const keyword = keywordOf(token);
+    // Exactly three coordinates: whatever follows them opens a statement.
+    if (afterVertex && keyword === '') {
+      throw new StlParseError(
+        `ASCII STL facet ${facets} has a vertex that is not three finite numbers: ${vertexStatement(a, b, c, token)}.`
+      );
+    }
+    afterVertex = false;
+    if (keyword === 'solid' || keyword === 'endsolid') {
+      if (facetVertices >= 0) {
+        throw new StlParseError(
+          `ASCII STL facet ${facets} is not closed by "endfacet".`
+        );
+      }
+      skipName();
+    } else if (keyword === 'facet') {
+      if (facetVertices >= 0) {
+        throw new StlParseError(
+          `ASCII STL facet ${facets} is not closed by "endfacet".`
+        );
+      }
+      facets += 1;
+      // Charged per facet, so an oversized file is refused before its
+      // vertices are all held in memory.
+      assertTriangleBudget(facets);
+      facetVertices = 0;
+    } else if (keyword === 'vertex') {
+      a = next();
+      b = next();
+      c = next();
+      if (facetVertices < 0) {
+        throw new StlParseError(
+          `ASCII STL has a vertex outside any facet: ${vertexStatement(a, b, c)}.`
+        );
+      }
+      const x = coordinate(a);
+      const y = coordinate(b);
+      const z = coordinate(c);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+        throw new StlParseError(
+          `ASCII STL facet ${facets} has a vertex that is not three finite numbers: ${vertexStatement(a, b, c)}.`
+        );
+      }
+      if (facetVertices === 3) {
+        throw new StlParseError(
+          `ASCII STL facet ${facets} has more than three vertices.`
+        );
+      }
+      vertices.push(x, y, z);
+      facetVertices += 1;
+      afterVertex = true;
+    } else if (keyword === 'endfacet') {
+      if (facetVertices !== 3) {
+        throw new StlParseError(
+          facetVertices < 0
+            ? 'ASCII STL has an "endfacet" with no facet open.'
+            : `ASCII STL facet ${facets} has ${facetVertices} vertices; a facet needs three.`
+        );
+      }
+      facetVertices = -1;
+    }
+    // `normal`, `outer`, `loop`, `endloop` and the normal's components carry
+    // nothing this reader needs.
+  }
+  if (facetVertices >= 0) {
+    throw new StlParseError(
+      `ASCII STL ends inside facet ${facets}; the file may be truncated.`
+    );
+  }
+  if (facets === 0) {
     throw new StlParseError('ASCII STL contains no facets.');
   }
-  if (vertices.length % 9 !== 0) {
-    throw new StlParseError('ASCII STL vertex count is not a multiple of three.');
-  }
-  const triangleCount = vertices.length / 9;
+  const triangleCount = facets;
   const indices: number[] = [];
   for (let i = 0; i < triangleCount; i++) {
     const base = i * 3;
@@ -106,13 +358,14 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
  * Parses an STL file (binary or ASCII) into raw triangle geometry. A binary
  * STL is an 80-byte header, a uint32 triangle count, then 50 bytes per
  * triangle; the "solid" prefix alone is unreliable (binary exporters may
- * emit it too), so an exact size match takes precedence.
+ * emit it too), so a complete declared binary payload takes precedence,
+ * including files with trailing padding.
  */
 export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
   if (buffer.byteLength >= BINARY_STL_HEADER_BYTES) {
     const declared = new DataView(buffer).getUint32(80, true);
     if (
-      BINARY_STL_HEADER_BYTES + declared * BINARY_STL_TRIANGLE_BYTES ===
+      BINARY_STL_HEADER_BYTES + declared * BINARY_STL_TRIANGLE_BYTES <=
       buffer.byteLength
     ) {
       return parseBinaryStl(buffer, fileName);
@@ -123,11 +376,11 @@ export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
   const head = new TextDecoder().decode(bytes.subarray(0, Math.min(bytes.length, 512)));
   if (head.trimStart().toLowerCase().startsWith('solid')) {
     const text = new TextDecoder().decode(bytes);
-    // A binary exporter's "solid" header carries no vertex statements; only
-    // commit to ASCII when the body has at least one, otherwise fall through
-    // to the tolerant binary branch.
+    // A complete binary payload was already handled, regardless of its
+    // free-form header. Sniff the remaining text in either letter case;
+    // malformed coordinate-like tokens must still reach ASCII validation.
     if (
-      new RegExp(ASCII_VERTEX_SOURCE).test(text) ||
+      hasVertexStatement(text) ||
       buffer.byteLength < BINARY_STL_HEADER_BYTES
     ) {
       return parseAsciiStl(text, fileName);
@@ -144,8 +397,9 @@ export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
 
 export interface StlExportMesh {
   name: string;
-  vertices: number[];
-  indices: number[];
+  /** Plain or typed: an imported mesh's decoded payload is a Float64Array. */
+  vertices: ArrayLike<number>;
+  indices: ArrayLike<number>;
 }
 
 export class StlWriteError extends Error {
@@ -156,7 +410,7 @@ export class StlWriteError extends Error {
 }
 
 function facetNormal(
-  vertices: number[],
+  vertices: ArrayLike<number>,
   a: number,
   b: number,
   c: number

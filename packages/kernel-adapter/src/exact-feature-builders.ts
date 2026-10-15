@@ -112,7 +112,11 @@ import {
   exactIntersectWithCancellation,
   throwIfBuildCancelled
 } from './exact-cancellation';
-import { importedMeshStl, meshBooleanUnsupportedError } from './imported-mesh';
+import {
+  importedMeshStl,
+  importedMeshTriangles,
+  meshBooleanUnsupportedError
+} from './imported-mesh';
 import {
   extrudeVolumeTolerance,
   type ExtrudeInferenceBody
@@ -210,12 +214,19 @@ function buildImportedMeshFeature(
   feature: FeatureNode,
   data: FeatureDataOf<'imported-mesh'>
 ): void {
-  const { kernel, result } = ctx;
+  const { kernel, result, importSources } = ctx;
   if (feature.bodyId) {
     // The kernel's own STL importer owns vertex welding and shell
     // orientation, so the document's triangle soup goes back through
-    // it rather than being re-derived here.
-    const solid = importMeshSolid(kernel, importedMeshStl(data));
+    // it rather than being re-derived here — embedded or referenced alike.
+    const solid = importMeshSolid(
+      kernel,
+      importedMeshStl({
+        sourceName: data.sourceName,
+        triangleCount: data.triangleCount,
+        ...importedMeshTriangles(data, importSources)
+      })
+    );
     result.meshBodies.add(feature.bodyId);
     result.shapes.set(feature.bodyId, {
       solids: [solid],

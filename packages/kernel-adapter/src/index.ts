@@ -15,6 +15,7 @@ export * from './reconstruction-measurement';
 
 export {
   importedMeshStl,
+  importedMeshTriangles,
   meshBooleanUnsupportedError,
   type ImportedMeshFeatureData
 } from './imported-mesh';

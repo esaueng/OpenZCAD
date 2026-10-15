@@ -186,7 +186,7 @@ export function TopBar({
   geometryPending = false,
   geometryFailed = false,
   localOnlySourceCount,
-  artifacts,
+  artifacts: storedArtifacts,
   session,
   accountState,
   collaborationStatus,
@@ -217,6 +217,11 @@ export function TopBar({
   onSignIn,
   onOpenSettings
 }: TopBarProps) {
+  // A mesh payload is the import's internal triangles, not a file anyone
+  // picked or would download; the original upload is listed beside it.
+  const artifacts = storedArtifacts.filter(
+    (artifact) => artifact.kind !== 'mesh-payload'
+  );
   const [editingProjectName, setEditingProjectName] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState(projectName ?? '');
   const projectNameInputRef = useRef<HTMLInputElement>(null);

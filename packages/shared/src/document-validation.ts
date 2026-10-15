@@ -3,6 +3,12 @@ export const MAX_DOCUMENT_DEPTH = 64;
 export const MAX_DOCUMENT_VALUES = 500_000;
 /** Bounds extreme offline edit counters while preserving ordinary batched edits. */
 export const MAX_DOCUMENT_VERSION_ADVANCE = 1_000_000;
+/**
+ * The refusal for a document over MAX_DOCUMENT_VALUES. The save edge answers
+ * it as a 400, and continuous sync has to tell it apart from a transient
+ * failure: no retry can ever store the same document.
+ */
+export const DOCUMENT_VALUES_REFUSAL = `Project document holds more than ${MAX_DOCUMENT_VALUES} values.`;
 
 export function documentStructureError(value: unknown): string | null {
   const pending = [{ value, depth: 1 }];
@@ -14,7 +20,7 @@ export function documentStructureError(value: unknown): string | null {
     }
     visited += 1;
     if (visited > MAX_DOCUMENT_VALUES) {
-      return `Project document holds more than ${MAX_DOCUMENT_VALUES} values.`;
+      return DOCUMENT_VALUES_REFUSAL;
     }
     const children = Array.isArray(entry.value)
       ? entry.value
@@ -22,7 +28,7 @@ export function documentStructureError(value: unknown): string | null {
         ? Object.values(entry.value)
         : [];
     if (visited + pending.length + children.length > MAX_DOCUMENT_VALUES) {
-      return `Project document holds more than ${MAX_DOCUMENT_VALUES} values.`;
+      return DOCUMENT_VALUES_REFUSAL;
     }
     for (const child of children)
       pending.push({ value: child, depth: entry.depth + 1 });

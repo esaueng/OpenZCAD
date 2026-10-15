@@ -1,6 +1,7 @@
 import { withoutDerivedProjection } from '@openzcad/document-core';
 import {
   documentNodesWithHistory,
+  importedSourceReferenceOf,
   persistedDocumentBytes,
   type ProjectDocument,
   type ProjectSummary,
@@ -40,8 +41,8 @@ export function describeProject(
   // A source can occur in several features and undo entries but is stored once.
   const sources = new Map<string, number>();
   for (const node of documentNodesWithHistory(document)) {
-    if (node.kind === 'feature' && node.data.featureKind === 'imported-step') {
-      const ref = node.data.stepSourceRef;
+    if (node.kind === 'feature') {
+      const ref = importedSourceReferenceOf(node.data);
       if (ref) sources.set(ref.checksumSha256, ref.logicalBytes);
     }
   }
