@@ -223,12 +223,41 @@ test('a newer share wins over a held restore that saves locally without opening'
     release();
     await response;
     await expect(page.locator('.breadcrumb')).toContainText(latest.name);
+    // The pill mounts with the new workspace. A quiet completion before its
+    // display threshold is intentionally invisible, so keep the worker held
+    // until this restore is visibly running before asserting its ending.
+    const restoring = page.getByRole('region', { name: 'File restore' });
+    await expect(restoring).toBeVisible();
+    await expect(restoring).toContainText('Reading the file');
     await releaseRestore(page);
     await expect(
       page.getByText('saved on this device', { exact: true })
     ).toBeVisible();
     await expect(page.locator('.breadcrumb')).toContainText(latest.name);
     expect(new URL(page.url()).hash).toBe(`#share=${token}`);
+    const deviceProjects = await page.evaluate(
+      () =>
+        new Promise<{ name: string }[]>((resolve, reject) => {
+          const open = indexedDB.open('openzcad-v2');
+          open.onerror = () => reject(open.error);
+          open.onsuccess = () => {
+            const db = open.result;
+            const tx = db.transaction('projects', 'readonly');
+            const projects = tx.objectStore('projects').getAll();
+            tx.oncomplete = () => {
+              db.close();
+              resolve(projects.result as { name: string }[]);
+            };
+            tx.onerror = () => {
+              db.close();
+              reject(tx.error);
+            };
+          };
+        })
+    );
+    expect(deviceProjects).toEqual([
+      expect.objectContaining({ name: imported.name })
+    ]);
     await page.getByTitle('Back to projects').click();
     await expect(page.getByRole('tab', { name: 'Parts 1' })).toBeVisible();
     await expect(
