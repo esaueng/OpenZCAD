@@ -7,7 +7,8 @@ import {
   appendRevision,
   createCheckpoint,
   createSavedRevision,
-  createProjectDocument
+  createProjectDocument,
+  importMeshBody
 } from '@openzcad/document-core';
 import {
   toUserId,
@@ -133,7 +134,222 @@ function checkpoint(document: ProjectDocument, reason = 'Clicked model') {
   return createCheckpoint(appendRevision(document, reason), reason);
 }
 
+function oversizedDocument(base: ProjectDocument) {
+  const triangle = [0, 0, 0, 1, 0, 0, 0, 1, 0];
+  return importMeshBody(base, {
+    name: 'Large mesh',
+    artifactId: 'artifact_pending',
+    sourceName: 'large.stl',
+    triangleCount: 30_000,
+    vertices: Array.from(
+      { length: 270_000 },
+      (_, index) => triangle[index % 9]!
+    ),
+    indices: Array.from({ length: 90_000 }, (_, index) => index)
+  }).document;
+}
+
 describe('durable room checkpoints', () => {
+  it.each([
+    'unreadable',
+    'rejection',
+    'conflict',
+    'fetch failure',
+    'body failure',
+    'unsuccessful ACK'
+  ] as const)(
+    'promptly refuses a named save when its outstanding oversized edit ends in %s',
+    async (failure) => {
+      const base = createProjectDocument(
+        'Oversized pending edit',
+        toUserId('owner')
+      );
+      const document = oversizedDocument(base);
+      let answer!: (response: Response) => void;
+      let fail!: (error: Error) => void;
+      const first = new Promise<Response>((resolve, reject) => {
+        answer = resolve;
+        fail = reject;
+      });
+      const fetch = vi
+        .fn((_request: RequestInfo | URL, _options?: RequestInit) => first)
+        .mockImplementationOnce(() => first)
+        .mockImplementation(() => new Promise<Response>(() => undefined));
+      vi.stubGlobal('fetch', fetch);
+      const hook = setup(document, base);
+      expect(fetch).toHaveBeenCalledOnce();
+      let outcome = 'pending';
+      let primary: unknown;
+      let settled!: Promise<void>;
+      act(() => {
+        settled = hook.result.current
+          .saveCheckpoint(document, 'Named after pending edit', hook.options)
+          .then(
+            () => {
+              outcome = 'resolved';
+            },
+            (error: unknown) => {
+              outcome = 'rejected';
+              primary = error;
+            }
+          );
+      });
+      try {
+        await act(async () => {
+          await vi.dynamicImportSettled();
+        });
+        expect(fetch).toHaveBeenCalledOnce();
+        await act(async () => {
+          if (failure === 'fetch failure')
+            fail(new Error('Connection interrupted.'));
+          else if (failure === 'body failure') {
+            const response = new Response('');
+            vi.spyOn(response, 'text').mockRejectedValue(
+              new Error('Response body interrupted.')
+            );
+            answer(response);
+          } else if (failure === 'unreadable')
+            answer(new Response('not a room frame'));
+          else if (failure === 'rejection')
+            answer(
+              new Response(
+                JSON.stringify({
+                  type: 'error',
+                  code: 'document-too-large',
+                  message: 'Pending edit exceeds the room limit.'
+                }),
+                { status: 413 }
+              )
+            );
+          else if (failure === 'conflict')
+            answer(
+              new Response(
+                JSON.stringify({
+                  type: 'conflict',
+                  document: {
+                    ...base,
+                    name: 'Other room branch',
+                    version: document.version + 1
+                  }
+                }),
+                { status: 409 }
+              )
+            );
+          else
+            answer(
+              new Response(
+                JSON.stringify({ type: 'ack', version: document.version }),
+                { status: 503 }
+              )
+            );
+        });
+        await waitFor(() => expect(outcome).toBe('rejected'), {
+          timeout: 1_000
+        });
+        expect(primary).toBeInstanceOf(Error);
+        expect((primary as Error).message).toContain(
+          'The named save is stored on this device.'
+        );
+        if (failure === 'fetch failure')
+          expect((primary as Error).message).toContain(
+            'Connection interrupted.'
+          );
+        if (failure === 'body failure')
+          expect((primary as Error).message).toContain(
+            'Response body interrupted.'
+          );
+        if (failure === 'rejection')
+          expect((primary as Error).message).toContain(
+            'Pending edit exceeds the room limit.'
+          );
+        expect(
+          fetch.mock.calls.some(
+            ([, options]) =>
+              (
+                JSON.parse(options!.body as string) as {
+                  checkpointReason?: string;
+                }
+              ).checkpointReason
+          )
+        ).toBe(false);
+        const local = hook.read().checkpoints.at(-1)!;
+        expect(local.reason).toBe('Named after pending edit');
+        expect(
+          await loadLocalSaveState(document.projectId, local.checkpointId)
+        ).not.toBeNull();
+      } finally {
+        hook.unmount();
+        await settled;
+      }
+    }
+  );
+
+  it('continues a named save after its outstanding oversized edit succeeds', async () => {
+    const base = createProjectDocument(
+      'Confirmed pending edit',
+      toUserId('owner')
+    );
+    const document = oversizedDocument(base);
+    const saved = checkpoint(document, 'After confirmed edit');
+    let answer!: (response: Response) => void;
+    const first = new Promise<Response>((resolve) => {
+      answer = resolve;
+    });
+    const fetch = vi
+      .fn((_request: RequestInfo | URL, _options?: RequestInit) => first)
+      .mockImplementationOnce(() => first)
+      .mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              type: 'ack',
+              version: saved.version,
+              document: saved
+            })
+          )
+      );
+    vi.stubGlobal('fetch', fetch);
+    const hook = setup(document, base);
+    let saving!: Promise<ProjectDocument>;
+    act(() => {
+      saving = hook.result.current.saveCheckpoint(
+        document,
+        'After confirmed edit',
+        hook.options
+      );
+    });
+    try {
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+      expect(fetch).toHaveBeenCalledOnce();
+      await act(async () => {
+        answer(
+          new Response(
+            JSON.stringify({ type: 'ack', version: document.version, document })
+          )
+        );
+        await saving;
+      });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      const namedRequest = JSON.parse(
+        fetch.mock.calls[1]![1]!.body as string
+      ) as { checkpointReason: string; baseVersion: number };
+      expect(namedRequest.checkpointReason).toBe('After confirmed edit');
+      expect(namedRequest.baseVersion).toBe(document.version);
+      expect(hook.read().version).toBe(saved.version);
+      expect(hook.result.current.roomVersion).toBe(saved.version);
+      expect(
+        await loadLocalSaveState(
+          document.projectId,
+          saved.checkpoints.at(-1)!.checkpointId
+        )
+      ).not.toBeNull();
+    } finally {
+      hook.unmount();
+    }
+  });
+
   it('reuses a checkpoint broadcast adopted before its HTTP acknowledgement without another room write', async () => {
     const document = createProjectDocument(
       'Early save echo',

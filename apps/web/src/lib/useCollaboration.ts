@@ -429,6 +429,11 @@ export function useCollaboration({
             if (!isCurrentRoom() || socketRef.current !== socket) return;
             if (!message) {
               pendingDocument = null;
+              settleCheckpointDrain(
+                new Error(
+                  'The room returned an unreadable response for the pending edit.'
+                )
+              );
               console.error('Collaboration returned an unreadable response.');
               return;
             }
@@ -437,6 +442,15 @@ export function useCollaboration({
               return;
             }
             pendingDocument = null;
+            settleCheckpointDrain(
+              new Error(
+                message.type === 'error'
+                  ? message.message
+                  : message.type === 'conflict'
+                    ? 'The pending edit conflicts with a newer room document.'
+                    : 'The room did not confirm the pending edit.'
+              )
+            );
             const rejected = rejectionStatus(message);
             if (rejected) {
               setStatus(rejected);
@@ -448,9 +462,14 @@ export function useCollaboration({
               retainConflict(message.document, true);
             }
           })
-          .catch(() => {
+          .catch((error: unknown) => {
             if (!isCurrentRoom() || socketRef.current !== socket) return;
             pendingDocument = null;
+            settleCheckpointDrain(
+              error instanceof Error
+                ? error
+                : new Error('The room could not confirm the pending edit.')
+            );
             setStatus('offline');
           });
         return false;
