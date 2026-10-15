@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
 import {
   appendRevision,
+  addPrimitiveFeature,
   createCheckpoint,
   createProjectDocument,
   importStepBody
@@ -381,6 +382,103 @@ test('restoring a device-only member point syncs the model without publishing pr
   await expect.poll(() => server.read().bodyOrder.length).toBe(1);
   expect(server.read().checkpoints).toEqual(checkpoints);
   expect(server.accountWrites()).toBe(0);
+});
+
+test('does not record a restore when the room changes while its saved revision loads', async ({
+  page
+}) => {
+  const server = roomFixture();
+  await server.install(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(server.read().name);
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await addPrimitive(page, /^Box \(B\)/);
+  await expectBodyCount(page, 1);
+  await startNamedSave(page);
+  await expect.poll(server.requested).toBe(true);
+  server.release();
+  await expect(page.getByRole('contentinfo')).toContainText('Saved revision.');
+  await addPrimitive(page, /^Cylinder/);
+  await expectBodyCount(page, 2);
+  await expect.poll(() => server.read().bodyOrder.length).toBe(2);
+  const saved = server.stored()!;
+  await page.evaluate(
+    ({ projectId, checkpointId }) =>
+      new Promise<void>((resolve, reject) => {
+        const request = indexedDB.open('openzcad-v2');
+        request.onerror = () =>
+          reject(request.error ?? new Error('Storage unavailable'));
+        request.onsuccess = () => {
+          const db = request.result;
+          const tx = db.transaction('projectCheckpointDocuments', 'readwrite');
+          tx.objectStore('projectCheckpointDocuments').delete([
+            projectId,
+            checkpointId
+          ]);
+          tx.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+          tx.onabort = () => {
+            db.close();
+            reject(tx.error ?? new Error('Delete failed'));
+          };
+        };
+      }),
+    {
+      projectId: saved.projectId,
+      checkpointId: saved.checkpoints.at(-1)!.checkpointId
+    }
+  );
+  let requested = false;
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/api/projects/*/revisions/*', async (route) => {
+    requested = true;
+    await pending;
+    return route.fulfill({ json: saved });
+  });
+  try {
+    const row = page.locator('.revision-row', { hasText: 'Clicked box' });
+    await row.hover();
+    await row.getByRole('button', { name: 'Restore Clicked box' }).click();
+    await expect.poll(() => requested).toBe(true);
+    const incoming = addPrimitiveFeature(server.read(), {
+      name: 'Incoming sphere',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 2 }
+    });
+    await page.evaluate((document) => {
+      const socket = (
+        window as unknown as { __checkpointRoundtripSocket: WebSocket }
+      ).__checkpointRoundtripSocket;
+      socket.dispatchEvent(
+        new MessageEvent('message', {
+          data: JSON.stringify({
+            type: 'document',
+            clientId: 'other_restore_client',
+            document
+          })
+        })
+      );
+    }, incoming);
+    await expectBodyCount(page, 3);
+    release();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'The project changed while loading that save. Please retry.'
+    );
+    await expectBodyCount(page, 3);
+    await expect(
+      page.locator('.revision-row', { hasText: 'Before restore' })
+    ).toHaveCount(0);
+    await expect(
+      page.locator('.revision-row', { hasText: 'Restored “Clicked box”' })
+    ).toHaveCount(0);
+  } finally {
+    release();
+  }
 });
 
 test('branches a device-only member point while the account cannot be reached', async ({

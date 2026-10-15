@@ -9800,6 +9800,14 @@ export function App() {
         return;
       }
       const reason = `Restored “${checkpoint.reason}”`;
+      const restoreIsCurrent = () =>
+        managerRef.current === manager &&
+        sameLocalProjectContent(manager.document, current) &&
+        ensureCanEdit('restore a save state');
+      if (!restoreIsCurrent()) {
+        setStatus('The project changed while loading that save. Please retry.');
+        return;
+      }
       const next = await prepareSaveStateRestore(
         current,
         snapshot,
@@ -9807,11 +9815,7 @@ export function App() {
         sharedAccountProject,
         session?.userId ?? current.ownerUserId
       );
-      if (
-        managerRef.current !== manager ||
-        !sameLocalProjectContent(manager.document, current) ||
-        !ensureCanEdit('restore a save state')
-      ) {
+      if (!restoreIsCurrent()) {
         setStatus('The project changed while loading that save. Please retry.');
         return;
       }
