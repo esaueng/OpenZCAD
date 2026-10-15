@@ -187,6 +187,10 @@ describe('durable room checkpoints', () => {
     ['before debounce', 'success'],
     ['before debounce', 'lost response'],
     ['before debounce', 'buffered changes'],
+    ['before debounce', 'buffered before ACK'],
+    ['before debounce', 'buffered before ACK lost response'],
+    ['before debounce history', 'success'],
+    ['before debounce history', 'lost response'],
     ['while draining', 'success'],
     ['while draining', 'lost response'],
     ['while draining', 'buffered changes'],
@@ -197,6 +201,9 @@ describe('durable room checkpoints', () => {
   ] as const)(
     'validates source aliases acknowledged %s with %s',
     async (timing, scenario) => {
+      const buffersBeforeAck =
+        scenario === 'buffered before ACK' ||
+        scenario === 'buffered before ACK lost response';
       const rejected = [
         'foreign artifact',
         'unrelated content',
@@ -223,6 +230,7 @@ describe('durable room checkpoints', () => {
           }
         })
       );
+      if (timing === 'before debounce history') manager.undo();
       const clicked = manager.document;
       const archives = [
         {
@@ -248,7 +256,7 @@ describe('durable room checkpoints', () => {
             ...reconcileCopiedImportSources(document, archives),
             version: canonical.version
           });
-          if (scenario === 'lost response') {
+          if (scenario.includes('lost response')) {
             act(() => {
               hook.socket.receive({
                 type: 'document',
@@ -257,7 +265,7 @@ describe('durable room checkpoints', () => {
                 )!,
                 document: saved
               });
-              hook.edit(saved);
+              if (!buffersBeforeAck) hook.edit(saved);
             });
             throw new Error('Checkpoint response lost.');
           }
@@ -312,20 +320,30 @@ describe('durable room checkpoints', () => {
         }
       );
       vi.stubGlobal('fetch', fetch);
-      const hook =
-        timing === 'before debounce'
-          ? setup(base, base, !rejected)
-          : setup(clicked, base, !rejected);
-      if (timing === 'before debounce') hook.edit(clicked);
+      const hook = timing.startsWith('before debounce')
+        ? setup(base, base, !rejected)
+        : setup(clicked, base, !rejected);
+      if (timing.startsWith('before debounce')) hook.edit(clicked);
       const saving = hook.result.current
         .saveCheckpoint(clicked, 'Clicked model', hook.options)
         .catch((error: unknown) => error);
-      if (timing === 'while draining' || timing === 'before debounce')
+      if (buffersBeforeAck) {
+        expectedLive = createSavedRevision(
+          addPrimitiveFeature(clicked, {
+            name: 'Buffered cylinder',
+            primitiveKind: 'cylinder',
+            dimensions: { radius: 2, height: 10 }
+          }),
+          'Buffered name'
+        );
+        hook.edit(expectedLive);
+      }
+      if (timing === 'while draining' || timing.startsWith('before debounce'))
         await act(async () => {
           await vi.dynamicImportSettled();
         });
       expect(fetch).not.toHaveBeenCalled();
-      if (timing === 'before debounce') {
+      if (timing.startsWith('before debounce')) {
         const writes = hook.socket.sent.filter(
           (frame) => frame.type === 'document'
         );
@@ -339,8 +357,10 @@ describe('durable room checkpoints', () => {
           version: canonical.version,
           document: canonical
         });
-        hook.edit(canonical);
+        hook.edit(buffersBeforeAck ? hook.read() : canonical);
       });
+      if (buffersBeforeAck)
+        expectedLive = reconcileCopiedImportSources(expectedLive!, archives);
       let outcome: unknown;
       await act(async () => {
         outcome = await saving;
@@ -354,7 +374,8 @@ describe('durable room checkpoints', () => {
         hook.unmount();
         return;
       }
-      if (scenario === 'lost response') expect(outcome).toBeInstanceOf(Error);
+      if (scenario.includes('lost response'))
+        expect(outcome).toBeInstanceOf(Error);
       else expect(outcome).not.toBeInstanceOf(Error);
       const submitted = JSON.parse(fetch.mock.calls[0]![1]!.body as string) as {
         document: ProjectDocument;
@@ -362,7 +383,7 @@ describe('durable room checkpoints', () => {
       expect(JSON.stringify(submitted.document)).not.toContain(
         'artifact_local_copied_mesh'
       );
-      if (scenario === 'buffered changes') {
+      if (scenario === 'buffered changes' || buffersBeforeAck) {
         expect(hook.read().nodes).toEqual(expectedLive!.nodes);
         expect(
           hook
@@ -1411,62 +1432,297 @@ describe('durable room checkpoints', () => {
     hook.unmount();
   });
 
-  it('keeps later edits behind the flushed clicked write and refuses their stale ACK without checkpoint publication', async () => {
-    const base = createProjectDocument(
-      'Immediate named save',
-      toUserId('owner')
-    );
-    const clicked = addPrimitiveFeature(base, {
-      name: 'Clicked box',
-      primitiveKind: 'box',
-      dimensions: { width: 10, depth: 10, height: 10 }
-    });
-    const later = addPrimitiveFeature(clicked, {
-      name: 'Buffered cylinder',
-      primitiveKind: 'cylinder',
-      dimensions: { radius: 2, height: 10 }
-    });
-    vi.stubGlobal('fetch', vi.fn());
-    const hook = setup(base);
-    vi.useFakeTimers();
-    hook.edit(clicked);
-    const saving = hook.result.current
-      .saveCheckpoint(clicked, 'Clicked model', hook.options)
-      .catch((error: unknown) => error);
-    hook.edit(later);
-    await act(async () => {
-      await vi.dynamicImportSettled();
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(501);
-    });
-    const writes = hook.socket.sent.filter(
-      (frame) => frame.type === 'document'
-    );
-    expect(writes).toHaveLength(1);
-    expect(writes[0]?.document?.nodes).toEqual(clicked.nodes);
-    expect(fetch).not.toHaveBeenCalled();
-    vi.useRealTimers();
-    act(() => {
-      hook.socket.receive({
-        type: 'ack',
-        version: clicked.version,
-        document: clicked
+  it.each([
+    'plain model',
+    'archived import',
+    'local import',
+    'local import compact ACK'
+  ] as const)(
+    'names an immediate %s while preserving edits buffered before its HTTP ACK',
+    async (kind) => {
+      const base = createProjectDocument(
+        'Plain immediate named save',
+        toUserId('owner')
+      );
+      let clicked = addPrimitiveFeature(base, {
+        name: 'Clicked box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, depth: 10, height: 10 }
       });
-    });
-    let outcome: unknown;
-    await act(async () => {
-      outcome = await saving;
-    });
-    expect(outcome).toBeInstanceOf(Error);
-    expect((outcome as Error).message).toContain('Newer local edits');
-    expect(hook.read().nodes).toEqual(later.nodes);
-    expect(hook.read().editHistory).toEqual(later.editHistory);
-    expect(hook.apply).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-    expect(hook.result.current.status).toBe('conflict');
-    hook.unmount();
-  });
+      if (kind !== 'plain model') {
+        const manager = new CommandManager(base);
+        manager.execute(
+          commandFactories.importMesh({
+            name: 'Archived mesh',
+            sourceName: 'owned.stl',
+            artifactId: kind.startsWith('local import')
+              ? 'artifact_local_unarchived_mesh'
+              : 'artifact_owned_mesh',
+            triangleCount: 1,
+            meshPayloadRef: {
+              marker: 'openzcad-source-ref',
+              version: 1,
+              hashAlgorithm: 'sha256',
+              checksumSha256: 'b'.repeat(64),
+              logicalBytes: 100
+            }
+          })
+        );
+        clicked = manager.document;
+      }
+      const later = addPrimitiveFeature(clicked, {
+        name: 'Buffered cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 2, height: 10 }
+      });
+      let answer!: (response: Response) => void;
+      const fetch = vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            answer = resolve;
+          })
+      );
+      vi.stubGlobal('fetch', fetch);
+      const hook = setup(base);
+      vi.useFakeTimers();
+      try {
+        hook.edit(clicked);
+        const saving = hook.result.current
+          .saveCheckpoint(clicked, 'Clicked model', hook.options)
+          .catch((error: unknown) => error);
+        hook.edit(later);
+        await act(async () => {
+          await vi.dynamicImportSettled();
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(501);
+        });
+        const writes = hook.socket.sent.filter(
+          (frame) => frame.type === 'document'
+        );
+        if (kind.startsWith('local import') && writes.length > 0) {
+          act(() => {
+            hook.socket.receive({
+              type: 'ack',
+              version: clicked.version,
+              ...(kind === 'local import compact ACK'
+                ? {}
+                : { document: clicked })
+            });
+          });
+          await act(async () => {
+            await vi.dynamicImportSettled();
+          });
+        } else expect(writes).toHaveLength(0);
+        expect(fetch).toHaveBeenCalledOnce();
+        vi.useRealTimers();
+        const saved = checkpoint(clicked);
+        let outcome: unknown;
+        await act(async () => {
+          answer(
+            new Response(
+              JSON.stringify({
+                type: 'ack',
+                version: saved.version,
+                document: saved
+              })
+            )
+          );
+          outcome = await saving;
+        });
+        expect(outcome).not.toBeInstanceOf(Error);
+        expect(hook.read().nodes).toEqual(later.nodes);
+        expect(hook.read().editHistory).toEqual(later.editHistory);
+        expect(hook.read().checkpoints).toEqual(saved.checkpoints);
+        expect(hook.read().version).toBeGreaterThan(saved.version);
+        const latest = hook.socket.sent
+          .filter((frame) => frame.type === 'document')
+          .at(-1)!;
+        expect(latest.baseVersion).toBe(saved.version);
+        expect(latest.document?.nodes).toEqual(later.nodes);
+        expect(
+          (
+            await loadLocalSaveState(
+              clicked.projectId,
+              saved.checkpoints.at(-1)!.checkpointId
+            )
+          )?.nodes
+        ).toEqual(clicked.nodes);
+      } finally {
+        vi.useRealTimers();
+        hook.unmount();
+      }
+    }
+  );
+
+  it.each(['owner', 'history', 'envelope'] as const)(
+    'refuses an owned source flush ACK with changed %s before issuing a checkpoint',
+    async (difference) => {
+      const base = createProjectDocument('Strict flush ACK', toUserId('owner'));
+      const manager = new CommandManager(base);
+      manager.execute(
+        commandFactories.importMesh({
+          name: 'Local mesh',
+          sourceName: 'local.stl',
+          artifactId: 'artifact_local_mesh',
+          triangleCount: 1,
+          meshPayloadRef: {
+            marker: 'openzcad-source-ref',
+            version: 1,
+            hashAlgorithm: 'sha256',
+            checksumSha256: 'c'.repeat(64),
+            logicalBytes: 100
+          }
+        })
+      );
+      const clicked = manager.document;
+      const later = createSavedRevision(
+        addPrimitiveFeature(clicked, {
+          name: 'Buffered cylinder',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 2, height: 10 }
+        }),
+        'Buffered note'
+      );
+      const canonical = {
+        ...reconcileCopiedImportSources(clicked, [
+          {
+            projectId: clicked.projectId,
+            artifactId: toArtifactId('artifact_owned_mesh'),
+            kind: 'mesh-payload',
+            checksumSha256: 'c'.repeat(64),
+            logicalBytes: 100
+          }
+        ]),
+        version: clicked.version + 1
+      };
+      let acknowledged = canonical;
+      if (difference === 'owner')
+        acknowledged = { ...canonical, ownerUserId: toUserId('other-owner') };
+      if (difference === 'history')
+        acknowledged = createSavedRevision(canonical, 'Unexpected note');
+      vi.stubGlobal('fetch', vi.fn());
+      const hook = setup(base);
+      hook.edit(clicked);
+      const saving = hook.result.current
+        .saveCheckpoint(clicked, 'Clicked model', hook.options)
+        .catch((error: unknown) => error);
+      hook.edit(later);
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+      act(() => {
+        hook.socket.receive({
+          type: 'ack',
+          version: acknowledged.version + (difference === 'envelope' ? 1 : 0),
+          document: acknowledged
+        });
+      });
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await saving;
+      });
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toContain(
+        'did not confirm the clicked edit'
+      );
+      expect(fetch).not.toHaveBeenCalled();
+      expect(hook.apply).not.toHaveBeenCalled();
+      expect(hook.read().nodes).toEqual(later.nodes);
+      expect(hook.read().editHistory).toEqual(later.editHistory);
+      expect(hook.read().checkpoints).toEqual(later.checkpoints);
+      hook.unmount();
+    }
+  );
+
+  it.each(['role-changed', 'expired'] as const)(
+    'records a late owned flush without announcing live after lease %s',
+    async (reason) => {
+      const base = createProjectDocument('Late owned flush', toUserId('owner'));
+      const manager = new CommandManager(base);
+      manager.execute(
+        commandFactories.importMesh({
+          name: 'Local mesh',
+          sourceName: 'local.stl',
+          artifactId: 'artifact_local_mesh',
+          triangleCount: 1,
+          meshPayloadRef: {
+            marker: 'openzcad-source-ref',
+            version: 1,
+            hashAlgorithm: 'sha256',
+            checksumSha256: 'c'.repeat(64),
+            logicalBytes: 100
+          }
+        })
+      );
+      const clicked = manager.document;
+      const later = addPrimitiveFeature(clicked, {
+        name: 'Buffered box',
+        primitiveKind: 'box',
+        dimensions: { width: 2, height: 2, depth: 2 }
+      });
+      const canonical = {
+        ...reconcileCopiedImportSources(clicked, [
+          {
+            projectId: clicked.projectId,
+            artifactId: toArtifactId('artifact_owned_mesh'),
+            kind: 'mesh-payload',
+            checksumSha256: 'c'.repeat(64),
+            logicalBytes: 100
+          }
+        ]),
+        version: clicked.version + 1
+      };
+      let release!: () => void;
+      const storage = vi
+        .spyOn(localStore, 'saveLocalSaveStates')
+        .mockReturnValue(
+          new Promise<void>((resolve) => {
+            release = resolve;
+          })
+        );
+      vi.stubGlobal('fetch', vi.fn());
+      const hook = setup(base);
+      hook.edit(clicked);
+      const saving = hook.result.current
+        .saveCheckpoint(clicked, 'Clicked model', hook.options)
+        .catch((error: unknown) => error);
+      hook.edit(later);
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+      act(() => {
+        hook.socket.receive({ type: 'lease-lost', reason });
+      });
+      await waitFor(() => expect(storage).toHaveBeenCalledOnce());
+      const expectedStatus =
+        reason === 'role-changed' ? 'read-only' : 'connecting';
+      expect(hook.result.current.status).toBe(expectedStatus);
+      try {
+        act(() => {
+          hook.socket.receive({
+            type: 'ack',
+            version: canonical.version,
+            document: canonical
+          });
+        });
+        expect(hook.result.current.status).toBe(expectedStatus);
+        expect(hook.result.current.lease).toBeNull();
+        expect(hook.result.current.roomVersion).toBe(canonical.version);
+        expect(hook.read().bodyOrder).toHaveLength(2);
+        expect(JSON.stringify(hook.read().nodes)).not.toContain(
+          'artifact_local_mesh'
+        );
+        expect(fetch).not.toHaveBeenCalled();
+      } finally {
+        await act(async () => {
+          release();
+          await saving;
+        });
+        hook.unmount();
+      }
+    }
+  );
 
   it('refuses to name a newer clicked model after an older pending edit is acknowledged', async () => {
     const base = createProjectDocument('Older pending edit', toUserId('owner'));
