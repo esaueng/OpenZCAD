@@ -305,17 +305,33 @@ function createExpectedStores(
     // must not deserialize documents to find out — both are key-only reads
     // over this index.
     //
-    // Ordered by document version rather than by timestamp: the version is the
-    // project's own clock and strictly increases, while `createdAt` has
-    // millisecond resolution and several saves can land inside one. Ties there
-    // are broken by the random primary key, which would let retention drop a
-    // newer save and keep an older one.
+    // Document version is the project's logical clock. Private points may
+    // share that version, so their capture time orders those ties before the
+    // random primary key. Canonical saves retain their version ordering.
     checkpoints.createIndex(CHECKPOINT_AGE_INDEX, [
       'projectId',
-      'documentVersion'
+      'documentVersion',
+      'createdAt'
     ]);
   }
   const checkpoints = upgrade?.objectStore(CHECKPOINT_STORE_NAME);
+  if (
+    checkpoints &&
+    (!checkpoints.indexNames.contains(CHECKPOINT_AGE_INDEX) ||
+      JSON.stringify(checkpoints.index(CHECKPOINT_AGE_INDEX).keyPath) !==
+        JSON.stringify(['projectId', 'documentVersion', 'createdAt']))
+  ) {
+    // Private points can name the same live model version repeatedly. Their
+    // capture time must order retention before the random primary key does.
+    if (checkpoints.indexNames.contains(CHECKPOINT_AGE_INDEX)) {
+      checkpoints.deleteIndex(CHECKPOINT_AGE_INDEX);
+    }
+    checkpoints.createIndex(CHECKPOINT_AGE_INDEX, [
+      'projectId',
+      'documentVersion',
+      'createdAt'
+    ]);
+  }
   if (
     checkpoints &&
     !checkpoints.indexNames.contains(CHECKPOINT_METADATA_INDEX)
