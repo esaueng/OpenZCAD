@@ -45,6 +45,7 @@ import {
   type BooleanLineageDemand
 } from './exact-boolean-evolution';
 import type { RemusKernel } from './remus-runtime';
+import { featureProfileUsesObjects } from './feature-profile-dependencies';
 
 /**
  * Retained checkpoints are full `Topology` arena clones (the kernel
@@ -230,30 +231,38 @@ export function featureAwaitsEnvironment(
   if (data.featureKind === 'imported-step') {
     return unresolvedSources.has(data.stepSourceRef?.checksumSha256 ?? '');
   }
-  if (!hasText) return false;
+  if (!hasText || data.featureKind === 'sketch') return false;
   const sketchIds = new Set<string>();
   collectSketchIds(data, sketchIds);
   const provider = textFontProvider();
-  return [...sketchIds].some((sketchId) =>
-    findSketch(document, sketchId as SketchId)?.objectIds.some((objectId) => {
-      const node = document.nodes[objectId];
-      if (
-        node?.kind !== 'sketch-object' ||
-        node.data.objectKind !== 'text' ||
-        node.data.construction === true
-      )
-        return false;
-      const { fontFamily, fontStyle } = node.data;
-      // An unknown family is a property of the document, not the moment.
-      return (
-        findFontFamily(fontFamily) !== undefined &&
-        !provider?.(
-          fontFamily,
-          resolveFontStyle(fontFamily, fontStyle) ?? fontStyle
+  return [...sketchIds].some((sketchId) => {
+    const sketch = findSketch(document, sketchId as SketchId);
+    if (!sketch) return false;
+    const missing = new Set<string>(
+      sketch.objectIds.filter((objectId) => {
+        const node = document.nodes[objectId];
+        if (
+          node?.kind !== 'sketch-object' ||
+          node.data.objectKind !== 'text' ||
+          node.data.construction === true
         )
-      );
-    })
-  );
+          return false;
+        const { fontFamily, fontStyle } = node.data;
+        // An unknown family is a property of the document, not the moment.
+        return (
+          findFontFamily(fontFamily) !== undefined &&
+          !provider?.(
+            fontFamily,
+            resolveFontStyle(fontFamily, fontStyle) ?? fontStyle
+          )
+        );
+      })
+    );
+    return (
+      missing.size > 0 &&
+      featureProfileUsesObjects(document, feature, sketch, missing)
+    );
+  });
 }
 
 /**

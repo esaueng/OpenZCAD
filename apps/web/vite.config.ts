@@ -337,6 +337,9 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
                   ) ||
                   id.includes(
                     '/packages/kernel-adapter/src/union-connectivity.ts'
+                  ) ||
+                  id.includes(
+                    '/packages/kernel-adapter/src/feature-profile-dependencies.ts'
                   ),
                 includeDependenciesRecursively: false
               }
@@ -424,13 +427,16 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
           // bundle, so isolate it for better caching without relying on the
           // object form supported by Rollup-only Vite releases.
           manualChunks: (id: string) => {
-            // Imported-feature and union-connectivity analysis stay behind the
-            // exact adapter's lazy boundary in the existing analysis chunk.
+            // Imported-feature, profile-dependency and union analysis stay
+            // behind the exact adapter's lazy boundary in its existing chunk.
             if (
               id.includes(
                 '/packages/kernel-adapter/src/imported-feature-query.ts'
               ) ||
-              id.includes('/packages/kernel-adapter/src/union-connectivity.ts')
+              id.includes('/packages/kernel-adapter/src/union-connectivity.ts') ||
+              id.includes(
+                '/packages/kernel-adapter/src/feature-profile-dependencies.ts'
+              )
             ) {
               return 'exact-analysis';
             }
