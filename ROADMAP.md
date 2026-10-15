@@ -3,7 +3,7 @@
 **Single source of truth for priorities, dependencies and delivery status.**
 Consolidated 2026-09-12 against OpenZCAD `main` at `28d1551f` (PR #315) and
 reconciled 2026-09-17 against `main` at `3d7fdc33` (#316–#356). Canonical
-documents use schema v16 (versioned canonical sketch bases, retaining v15
+documents use schema v17 (reference-form mesh payloads and versioned canonical sketch bases, retaining v15
 on/off parameters with body visibility bindings).
 The consumer pins Remus kernel and IO packages to `cf411cd` (Remus `main`
 after the [remus#630](https://github.com/esaueng/remus/pull/630) package
