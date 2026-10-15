@@ -12,8 +12,18 @@ const SESSION_COOKIE_NAME = '__Host-openzcad_session';
 const LOGIN_CODE_TTL_SECONDS = 10 * 60;
 const LOGIN_CODE_MAX_ATTEMPTS = 5;
 const LOGIN_RATE_WINDOW_SECONDS = 15 * 60;
-const LOGIN_EMAIL_RATE_LIMIT = 3;
+// Codes sent per window to one email at the request of one address.
+const LOGIN_REQUESTER_RATE_LIMIT = 3;
+// Codes sent per window to one email across every requester.
+const LOGIN_EMAIL_RATE_LIMIT = 10;
 const LOGIN_IP_RATE_LIMIT = 10;
+// Once an email collects this many wrong codes within the failure window,
+// each of its codes allows one try instead of LOGIN_CODE_MAX_ATTEMPTS.
+// A challenge's expiry bounds its latest possible failure. Count from that
+// bound so late guesses cannot age out early; this conservatively retains
+// failures for at most one extra code lifetime, without requiring a migration.
+const LOGIN_EMAIL_FAILURE_LIMIT = 20;
+const LOGIN_FAILURE_WINDOW_SECONDS = 24 * 60 * 60;
 const DEFAULT_SESSION_DAYS = 30;
 const TURNSTILE_ACTION = 'email-code';
 const DESKTOP_CLIENT_ID = 'openzcad-macos';
@@ -53,6 +63,8 @@ interface LoginChallengeRow {
   attempts: number;
   expires_at: number;
   consumed_at: number | null;
+  /** Wrong codes entered for this email within the failure window. */
+  recent_failures?: number;
 }
 
 interface SessionRow {
@@ -410,6 +422,22 @@ async function consumeRateLimit(
   limit: number,
   timestamp: number
 ): Promise<void> {
+  if (!(await takeRateLimit(db, bucket, limit, timestamp))) {
+    throw new AuthFlowError(
+      429,
+      'AUTH_RATE_LIMITED',
+      'Too many login attempts. Try again later.'
+    );
+  }
+}
+
+/** Counts one request against the bucket; false once it is over the limit. */
+async function takeRateLimit(
+  db: D1Database,
+  bucket: string,
+  limit: number,
+  timestamp: number
+): Promise<boolean> {
   const windowStart =
     Math.floor(timestamp / LOGIN_RATE_WINDOW_SECONDS) *
     LOGIN_RATE_WINDOW_SECONDS;
@@ -439,13 +467,7 @@ async function consumeRateLimit(
     )
     .bind(bucket, windowStart)
     .first<{ request_count: number }>();
-  if ((current?.request_count ?? limit + 1) > limit) {
-    throw new AuthFlowError(
-      429,
-      'AUTH_RATE_LIMITED',
-      'Too many login attempts. Try again later.'
-    );
-  }
+  return (current?.request_count ?? limit + 1) <= limit;
 }
 
 async function cleanExpiredAuthRows(
@@ -460,6 +482,8 @@ async function cleanExpiredAuthRows(
     ) *
       2;
   await db.batch([
+    // Spent codes stay for a failure window: their attempt counts are the
+    // email's record of recent wrong codes.
     db
       .prepare(
         `DELETE FROM auth_email_challenges
@@ -469,7 +493,7 @@ async function cleanExpiredAuthRows(
            LIMIT 100
          )`
       )
-      .bind(timestamp),
+      .bind(timestamp - LOGIN_FAILURE_WINDOW_SECONDS),
     db
       .prepare(
         `DELETE FROM auth_sessions
@@ -569,21 +593,76 @@ export async function startEmailLogin(
   const email = normalizeEmail(input.email);
   const turnstileToken =
     typeof input.turnstileToken === 'string' ? input.turnstileToken : '';
-  const challengeId = crypto.randomUUID();
-  await verifyTurnstile(request, turnstileToken, challengeId, env);
+  const attemptId = crypto.randomUUID();
+  await verifyTurnstile(request, turnstileToken, attemptId, env);
 
   const timestamp = nowSeconds();
   const connectingIp =
     request.headers.get('cf-connecting-ip')?.trim() || 'unknown';
-  const [emailBucket, ipBucket] = await Promise.all([
+  const [emailBucket, ipBucket, requesterKey] = await Promise.all([
     authEmailRateLimitBucket(email, env.AUTH_OTP_PEPPER),
-    hmac(`ip:${connectingIp}`, env.AUTH_OTP_PEPPER)
+    hmac(`ip:${connectingIp}`, env.AUTH_OTP_PEPPER),
+    hmac(`email-ip:${email}\n${connectingIp}`, env.AUTH_OTP_PEPPER)
   ]);
+  // The challenge ID carries an opaque tag of who asked for it, so a
+  // throttled repeat can hand that requester back its own pending code.
+  const requesterTag = requesterKey.slice(0, 16);
+  const challengeId = `${requesterTag}.${attemptId}`;
   await cleanExpiredAuthRows(env.DB, timestamp);
-  await Promise.all([
-    consumeRateLimit(env.DB, emailBucket, LOGIN_EMAIL_RATE_LIMIT, timestamp),
+  const [requesterAllowed] = await Promise.all([
+    takeRateLimit(
+      env.DB,
+      `${emailBucket}:ip:${requesterKey}`,
+      LOGIN_REQUESTER_RATE_LIMIT,
+      timestamp
+    ),
     consumeRateLimit(env.DB, `ip:${ipBucket}`, LOGIN_IP_RATE_LIMIT, timestamp)
   ]);
+  // A throttled request is answered like a sent code but sends nothing: a
+  // repeat gets the requester's own pending code back, and nobody is told
+  // that other people's requests used up the address's allowance. A
+  // requester past its own limit is not charged to the email's shared
+  // ceiling, and neither limit voids a pending code.
+  if (
+    !requesterAllowed ||
+    !(await takeRateLimit(
+      env.DB,
+      emailBucket,
+      LOGIN_EMAIL_RATE_LIMIT,
+      timestamp
+    ))
+  ) {
+    const pending = await env.DB.prepare(
+      `SELECT id, expires_at
+       FROM auth_email_challenges
+       WHERE email = ? AND id LIKE ?
+         AND consumed_at IS NULL AND expires_at >= ?
+         AND attempts < CASE
+           WHEN (SELECT COALESCE(SUM(recent.attempts), 0)
+                 FROM auth_email_challenges AS recent
+                 WHERE recent.email = auth_email_challenges.email
+                   AND recent.expires_at >= ?) >= ? THEN 1
+           ELSE ?
+         END
+       ORDER BY created_at DESC, rowid DESC
+       LIMIT 1`
+    )
+      .bind(
+        email,
+        `${requesterTag}.%`,
+        timestamp,
+        timestamp - LOGIN_FAILURE_WINDOW_SECONDS,
+        LOGIN_EMAIL_FAILURE_LIMIT,
+        LOGIN_CODE_MAX_ATTEMPTS
+      )
+      .first<{ id: string; expires_at: number }>();
+    return pending
+      ? {
+          challengeId: pending.id,
+          expiresInSeconds: pending.expires_at - timestamp
+        }
+      : { challengeId, expiresInSeconds: LOGIN_CODE_TTL_SECONDS };
+  }
 
   const code = generateLoginCode();
   const codeHash = await hashLoginCode(
@@ -593,18 +672,13 @@ export async function startEmailLogin(
     env.AUTH_OTP_PEPPER
   );
   const expiresAt = timestamp + LOGIN_CODE_TTL_SECONDS;
-  await env.DB.batch([
-    env.DB.prepare(
-      `UPDATE auth_email_challenges
-         SET consumed_at = ?
-         WHERE email = ? AND consumed_at IS NULL`
-    ).bind(timestamp, email),
-    env.DB.prepare(
-      `INSERT INTO auth_email_challenges
-           (id, email, code_hash, attempts, created_at, expires_at, consumed_at)
-         VALUES (?, ?, ?, 0, ?, ?, NULL)`
-    ).bind(challengeId, email, codeHash, timestamp, expiresAt)
-  ]);
+  await env.DB.prepare(
+    `INSERT INTO auth_email_challenges
+         (id, email, code_hash, attempts, created_at, expires_at, consumed_at)
+       VALUES (?, ?, ?, 0, ?, ?, NULL)`
+  )
+    .bind(challengeId, email, codeHash, timestamp, expiresAt)
+    .run();
 
   try {
     await env.EMAIL.send({
@@ -664,11 +738,15 @@ export async function verifyEmailLogin(
   const code = parseLoginCode(input.code);
   const timestamp = nowSeconds();
   const challenge = await env.DB.prepare(
-    `SELECT id, email, code_hash, attempts, expires_at, consumed_at
+    `SELECT id, email, code_hash, attempts, expires_at, consumed_at,
+       (SELECT COALESCE(SUM(recent.attempts), 0)
+        FROM auth_email_challenges AS recent
+        WHERE recent.email = auth_email_challenges.email
+          AND recent.expires_at >= ?) AS recent_failures
      FROM auth_email_challenges
      WHERE id = ?`
   )
-    .bind(challengeId)
+    .bind(timestamp - LOGIN_FAILURE_WINDOW_SECONDS, challengeId)
     .first<LoginChallengeRow>();
   if (!challenge || challenge.consumed_at !== null) {
     throw new AuthFlowError(
@@ -689,7 +767,15 @@ export async function verifyEmailLogin(
       'The login code expired. Request a new one.'
     );
   }
-  if (challenge.attempts >= LOGIN_CODE_MAX_ATTEMPTS) {
+  // Attempts only ever count wrong codes. Past the email's failure limit a
+  // code allows one try: that still lets its owner, who reads the code, sign
+  // in, while a guesser needs a fresh code, and an email to the owner, for
+  // every guess.
+  const maxAttempts =
+    (challenge.recent_failures ?? 0) >= LOGIN_EMAIL_FAILURE_LIMIT
+      ? 1
+      : LOGIN_CODE_MAX_ATTEMPTS;
+  if (challenge.attempts >= maxAttempts) {
     throw new AuthFlowError(
       429,
       'AUTH_CODE_LOCKED',
@@ -704,39 +790,23 @@ export async function verifyEmailLogin(
     env.AUTH_OTP_PEPPER
   );
   const codeMatches = constantTimeEqual(challenge.code_hash, expectedHash);
-  const decision = await env.DB.prepare(
-    `UPDATE auth_email_challenges
-     SET attempts = CASE WHEN ? = 1 THEN attempts ELSE attempts + 1 END,
-         consumed_at = CASE WHEN ? = 1 THEN ? ELSE consumed_at END
-     WHERE id = ?
-       AND consumed_at IS NULL
-       AND attempts < ?
-       AND expires_at >= ?`
-  )
-    .bind(
-      codeMatches ? 1 : 0,
-      codeMatches ? 1 : 0,
-      timestamp,
-      challengeId,
-      LOGIN_CODE_MAX_ATTEMPTS,
-      timestamp
-    )
-    .run();
   if (!codeMatches) {
+    await env.DB.prepare(
+      `UPDATE auth_email_challenges
+       SET attempts = attempts + 1
+       WHERE id = ?
+         AND consumed_at IS NULL
+         AND attempts < ?
+         AND expires_at >= ?`
+    )
+      .bind(challengeId, maxAttempts, timestamp)
+      .run();
     throw new AuthFlowError(
       400,
       'AUTH_CODE_INVALID',
       'The login code is invalid or expired.'
     );
   }
-  if (decision.meta?.changes !== 1) {
-    throw new AuthFlowError(
-      400,
-      'AUTH_CODE_INVALID',
-      'The login code is invalid or expired.'
-    );
-  }
-
   const legacyOwnerEmail = env.AUTH_LEGACY_OWNER_EMAIL?.trim().toLowerCase();
   const userId =
     legacyOwnerEmail && challenge.email === legacyOwnerEmail
@@ -748,7 +818,7 @@ export async function verifyEmailLogin(
   const tokenHash = await sha256(sessionToken);
   const maxAgeSeconds = configuredSessionDays(env) * 24 * 60 * 60;
   const expiresAt = timestamp + maxAgeSeconds;
-  await env.DB.batch([
+  const decision = await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO users (id, email, created_at)
          VALUES (?, ?, ?)
@@ -757,9 +827,40 @@ export async function verifyEmailLogin(
     env.DB.prepare(
       `INSERT INTO auth_sessions
            (token_hash, user_id, created_at, expires_at)
-         VALUES (?, ?, ?, ?)`
-    ).bind(tokenHash, userId, timestamp, expiresAt)
+         SELECT ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM auth_email_challenges
+           WHERE id = ? AND email = ? AND consumed_at IS NULL
+             AND attempts < ? AND expires_at >= ?
+         )`
+    ).bind(
+      tokenHash,
+      userId,
+      timestamp,
+      expiresAt,
+      challengeId,
+      challenge.email,
+      maxAttempts,
+      timestamp
+    ),
+    // The session claim and every sibling's consumption share one transaction.
+    // Another correct code can create no session after this batch commits.
+    env.DB.prepare(
+      `UPDATE auth_email_challenges
+         SET consumed_at = ?
+         WHERE email = ? AND consumed_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM auth_sessions WHERE token_hash = ?
+           )`
+    ).bind(timestamp, challenge.email, tokenHash)
   ]);
+  if (decision[1]?.meta?.changes !== 1) {
+    throw new AuthFlowError(
+      400,
+      'AUTH_CODE_INVALID',
+      'The login code is invalid or expired.'
+    );
+  }
   const session: AuthSession = {
     userId,
     displayName: challenge.email.split('@')[0] || challenge.email,

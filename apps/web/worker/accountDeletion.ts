@@ -268,8 +268,12 @@ function profileCleanupStatements(
   if (authRateBucket) {
     statements.push(
       db
-        .prepare(`DELETE FROM auth_rate_limits WHERE bucket = ?`)
-        .bind(authRateBucket)
+        // Requester buckets share this opaque email prefix. Erase them with
+        // the pending challenges, while keeping the shared IP limiter intact.
+        .prepare(
+          `DELETE FROM auth_rate_limits WHERE bucket = ? OR bucket GLOB ?`
+        )
+        .bind(authRateBucket, `${authRateBucket}:ip:*`)
     );
   }
   statements.push(
