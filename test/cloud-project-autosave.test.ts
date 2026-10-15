@@ -5,19 +5,29 @@ import {
   createSavedRevision
 } from '@openzcad/document-core';
 import {
+  JsonComplexityGuard,
+  MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
+  MAX_DOCUMENT_VALUES,
+  documentStructureError,
   toUserId,
   type ProjectDocument,
   type SaveProjectDocumentResponse
 } from '@openzcad/shared';
-import { ApiError } from '../apps/web/src/lib/api';
+import { api, ApiError } from '../apps/web/src/lib/api';
+import worker from '../apps/web/worker/index';
 import {
   CloudProjectAutosave,
   PROJECT_AUTOSAVE_IDLE_MS,
   PROJECT_AUTOSAVE_IDLE_RETRY_MS,
   PROJECT_AUTOSAVE_MAX_WAIT_MS,
+  PROJECT_TOO_LARGE_FOR_ACCOUNT,
   type CloudProjectAutosaveConnectivity,
   type CloudProjectAutosaveStatus
 } from '../apps/web/src/lib/cloudProjectAutosave';
+import {
+  parseSaveProjectDocumentRequest,
+  type HttpError
+} from '../apps/web/worker/validation';
 
 const owner = toUserId('user_owner');
 
@@ -335,6 +345,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -677,6 +688,493 @@ describe('cloud project autosave — refusals', () => {
     expect(attempts).toBe(1);
     expect(lastState(statuses)).toBe('refused');
     controller.dispose();
+  });
+
+  it('stops on a document over the value ceiling instead of retrying it as offline', async () => {
+    // The save edge refuses a document over MAX_DOCUMENT_VALUES — an imported
+    // mesh of ~21k triangles is enough — with a 400, not a 413. No retry can
+    // store it, and "offline" promised one would, for as long as the tab ran.
+    const document = documentAt(2);
+    let refusal: HttpError | null = null;
+    try {
+      parseSaveProjectDocumentRequest(
+        {
+          projectId: document.projectId,
+          expectedVersion: 2,
+          document: { ...document, padding: new Array(500_001).fill(0) }
+        },
+        document.projectId
+      );
+    } catch (error) {
+      refusal = error as HttpError;
+    }
+    expect(refusal?.status).toBe(400);
+    let attempts = 0;
+    const { controller, statuses } = harness({
+      respond: () => {
+        attempts += 1;
+        return Promise.reject(new ApiError(400, refusal!.message));
+      }
+    });
+    controller.openProject(document.projectId, 2);
+    controller.schedule(documentAt(3, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_RETRY_MS * 3);
+    await controller.whenIdle();
+
+    expect(attempts).toBe(1);
+    expect(lastState(statuses)).toBe('refused');
+    expect((statuses.at(-1)?.error as Error | undefined)?.message).toBe(
+      PROJECT_TOO_LARGE_FOR_ACCOUNT
+    );
+    // Refused, not dropped: the edit stays queued against an explicit retry.
+    expect(controller.hasPendingChanges).toBe(true);
+    controller.dispose();
+  });
+
+  it('resumes the same open project after reducing a value-limit refusal', async () => {
+    const document = documentAt(2);
+    const oversized = {
+      ...document,
+      version: 3,
+      padding: new Array(500_001).fill(0)
+    };
+    const attempts: number[] = [];
+    const { controller, statuses } = harness({
+      respond: async (input) => {
+        attempts.push(input.document.version);
+        try {
+          parseSaveProjectDocumentRequest(
+            { ...input, projectId: input.document.projectId },
+            input.document.projectId
+          );
+        } catch (error) {
+          throw new ApiError(
+            (error as HttpError).status,
+            (error as Error).message
+          );
+        }
+        return {
+          projectId: input.document.projectId,
+          version: input.document.version,
+          updatedAt: '2026-01-01T00:00:00.000Z'
+        };
+      }
+    });
+    controller.openProject(document.projectId, 2);
+    controller.schedule(oversized);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(lastState(statuses)).toBe('refused');
+
+    // Neither unchanged content nor another oversized edit can retry.
+    controller.schedule(oversized);
+    controller.schedule({ ...oversized, version: 4 });
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_RETRY_MS * 2);
+    expect(attempts).toEqual([3]);
+    controller.schedule(documentAt(5, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(attempts).toEqual([3, 5]);
+    expect(controller.syncedVersion).toBe(5);
+    expect(controller.hasPendingChanges).toBe(false);
+    expect(lastState(statuses)).toBe('synced');
+    controller.dispose();
+  });
+
+  it('resumes only below the byte limit reported for a document-size refusal', async () => {
+    const document = documentAt(2);
+    const oversized = { ...document, version: 3, padding: 'x'.repeat(5_000) };
+    const respond = vi
+      .fn<
+        (input: {
+          expectedVersion: number;
+          document: ProjectDocument;
+        }) => Promise<SaveProjectDocumentResponse>
+      >()
+      .mockRejectedValueOnce(
+        new ApiError(413, 'Document is too large.', 'DOCUMENT_TOO_LARGE', {
+          limitBytes: 4_000
+        })
+      )
+      .mockImplementation(async (input) => ({
+        projectId: input.document.projectId,
+        version: input.document.version,
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      }));
+    const { controller, statuses } = harness({ respond });
+    controller.openProject(document.projectId, 2);
+    controller.schedule(oversized);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    controller.schedule({ ...oversized, version: 4 });
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS * 2);
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(lastState(statuses)).toBe('refused');
+    controller.schedule(documentAt(5, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(respond.mock.calls[1]![0].expectedVersion).toBe(2);
+    expect(controller.syncedVersion).toBe(5);
+    controller.dispose();
+  });
+
+  it('keeps the reduced edit scheduled before the oversized response arrives', async () => {
+    const held = gate();
+    const document = documentAt(2);
+    const respond = vi
+      .fn<
+        (input: {
+          expectedVersion: number;
+          document: ProjectDocument;
+        }) => Promise<SaveProjectDocumentResponse>
+      >()
+      .mockImplementationOnce(async () => {
+        await held.wait;
+        throw new ApiError(
+          400,
+          'Project document holds more than 500000 values.'
+        );
+      })
+      .mockImplementation(async (input) => ({
+        projectId: input.document.projectId,
+        version: input.document.version,
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      }));
+    const { controller } = harness({ respond });
+    controller.openProject(document.projectId, 2);
+    controller.schedule({
+      ...document,
+      version: 3,
+      padding: new Array(500_001).fill(0)
+    } as ProjectDocument);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    controller.schedule(documentAt(4, document));
+    held.open();
+    await controller.whenIdle();
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(respond.mock.calls[1]![0]).toMatchObject({
+      expectedVersion: 2,
+      document: { version: 4 }
+    });
+    expect(controller.hasPendingChanges).toBe(false);
+    controller.dispose();
+  });
+
+  it.each([
+    [403, 'FORBIDDEN'],
+    [403, 'PROJECT_UPDATE_REQUIRED'],
+    [403, 'DOCUMENT_TOO_LARGE'],
+    [403, 'DOCUMENT_TOO_COMPLEX'],
+    [409, 'DOCUMENT_TOO_COMPLEX'],
+    [409, 'LEASE_REQUIRED'],
+    [413, 'PROJECT_STORAGE_QUOTA'],
+    [413, 'PROJECT_COUNT_QUOTA'],
+    [413, undefined],
+    [401, 'SESSION_EXPIRED']
+  ] as const)(
+    'does not resume a %s/%s refusal when another edit fits',
+    async (status, code) => {
+      const respond = vi.fn().mockRejectedValue(
+        new ApiError(status, 'Account write refused.', code, {
+          limitBytes: 4_000
+        })
+      );
+      const { controller } = harness({ respond });
+      const document = documentAt(2);
+      controller.openProject(document.projectId, 2);
+      controller.schedule(documentAt(3, document));
+      await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+      await controller.whenIdle();
+      controller.schedule(documentAt(4, document));
+      await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_RETRY_MS * 2);
+      await controller.whenIdle();
+      expect(respond).toHaveBeenCalledTimes(1);
+      expect(controller.hasPendingChanges).toBe(true);
+      controller.dispose();
+    }
+  );
+
+  it.each([
+    {
+      path: 'canonical document',
+      limitBytes: MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
+      contentLength: false
+    },
+    {
+      path: 'declared request length',
+      limitBytes: 25 * 1024 * 1024,
+      contentLength: true
+    },
+    {
+      path: 'streamed request bytes',
+      limitBytes: 25 * 1024 * 1024,
+      contentLength: false
+    }
+  ])(
+    'resumes after the actual Worker $path size refusal',
+    async ({ limitBytes, contentLength }) => {
+      const user = toUserId(`user_wire_${crypto.randomUUID()}`);
+      vi.stubGlobal(
+        'fetch',
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = new Request(
+            new URL(
+              typeof input === 'string'
+                ? input
+                : input instanceof URL
+                  ? input.href
+                  : input.url,
+              'https://example.com'
+            ),
+            init
+          );
+          request.headers.set('x-openzcad-development-user', user);
+          if (contentLength && typeof init?.body === 'string') {
+            request.headers.set(
+              'content-length',
+              String(new TextEncoder().encode(init.body).byteLength)
+            );
+          }
+          return worker.fetch(request, {
+            ENVIRONMENT: 'development',
+            AUTH_MODE: 'development'
+          });
+        }
+      );
+      const created = await api.createProject({ name: 'Wire size recovery' });
+      const document = created.document;
+      const errors: unknown[] = [];
+      const respond = vi.fn(
+        async (input: {
+          expectedVersion: number;
+          document: ProjectDocument;
+        }) => {
+          try {
+            return await api.saveProjectDocument({
+              ...input,
+              projectId: document.projectId
+            });
+          } catch (error) {
+            errors.push(error);
+            throw error;
+          }
+        }
+      );
+      const { controller, statuses } = harness({ respond });
+      try {
+        controller.openProject(document.projectId, document.version);
+        controller.schedule({
+          ...document,
+          version: document.version + 1,
+          padding: 'x'.repeat(limitBytes + 8_192)
+        } as ProjectDocument);
+        await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+        await controller.whenIdle();
+        expect(errors[0]).toBeInstanceOf(ApiError);
+        expect((errors[0] as ApiError).status).toBe(413);
+        expect(lastState(statuses)).toBe('refused');
+        if (limitBytes > MAX_CLOUD_PROJECT_DOCUMENT_BYTES) {
+          // A request fitting 25 MiB may still exceed the canonical 24 MiB cap.
+          controller.schedule({
+            ...document,
+            version: document.version + 2,
+            padding: 'x'.repeat(MAX_CLOUD_PROJECT_DOCUMENT_BYTES + 8_192)
+          } as ProjectDocument);
+          await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+          await controller.whenIdle();
+          expect(respond).toHaveBeenCalledTimes(1);
+        }
+        const reduced = documentAt(document.version + 3, document);
+        controller.schedule(reduced);
+        await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+        await controller.whenIdle();
+        expect(respond).toHaveBeenCalledTimes(2);
+        expect(errors[0]).toMatchObject({
+          code: 'DOCUMENT_TOO_LARGE',
+          details: { limitBytes }
+        });
+        expect(lastState(statuses)).toBe('synced');
+        expect(await api.loadProject(document.projectId)).toMatchObject({
+          version: reduced.version
+        });
+      } finally {
+        controller.dispose();
+      }
+    },
+    15_000
+  );
+
+  it.each(['separators', 'depth'] as const)(
+    'resumes after an actual Worker lexical %s refusal only when all structure limits fit',
+    async (constraint) => {
+      const user = toUserId(`user_complexity_${crypto.randomUUID()}`);
+      vi.stubGlobal(
+        'fetch',
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = new Request(
+            new URL(
+              typeof input === 'string'
+                ? input
+                : input instanceof URL
+                  ? input.href
+                  : input.url,
+              'https://example.com'
+            ),
+            init
+          );
+          request.headers.set('x-openzcad-development-user', user);
+          return worker.fetch(request, {
+            ENVIRONMENT: 'development',
+            AUTH_MODE: 'development'
+          });
+        }
+      );
+      const { document } = await api.createProject({
+        name: 'Complexity recovery'
+      });
+      const nested = (levels: number): unknown => {
+        let value: unknown = 0;
+        for (let i = 0; i < levels; i++) value = { child: value };
+        return value;
+      };
+      const fields = (count: number): Record<string, object> => {
+        const value: Record<string, object> = {};
+        for (let i = 0; i < count; i++) value[String(i)] = {};
+        return value;
+      };
+      let padding: unknown;
+      let stillComplex: unknown;
+      if (constraint === 'separators') {
+        const base = {
+          ...document,
+          version: document.version + 1,
+          padding: {}
+        };
+        const text = JSON.stringify(base);
+        // Derive the existing guard's count without duplicating its lexer.
+        let lower = 0;
+        let upper = MAX_DOCUMENT_VALUES * 2;
+        while (lower < upper) {
+          const middle = Math.floor((lower + upper) / 2);
+          try {
+            new JsonComplexityGuard(undefined, middle).consume(text);
+            upper = middle;
+          } catch {
+            lower = middle + 1;
+          }
+        }
+        // Empty-object fields add three separators each (two for the first).
+        const count = Math.floor((MAX_DOCUMENT_VALUES * 2 - lower + 1) / 3);
+        padding = fields(count);
+        stillComplex = fields(count - 1);
+        const canonical = { ...base, padding };
+        expect(documentStructureError(canonical)).toBeNull();
+        expect(() =>
+          new JsonComplexityGuard().consume(JSON.stringify(canonical))
+        ).not.toThrow();
+        // Only the complete request envelope exceeds the lexical ceiling.
+        expect(() =>
+          new JsonComplexityGuard().consume(
+            JSON.stringify({
+              projectId: document.projectId,
+              expectedVersion: document.version,
+              document: canonical
+            })
+          )
+        ).toThrow();
+      } else {
+        padding = nested(72);
+        stillComplex = nested(64);
+      }
+      const errors: unknown[] = [];
+      const respond = vi.fn(
+        async (input: {
+          expectedVersion: number;
+          document: ProjectDocument;
+        }) => {
+          try {
+            return await api.saveProjectDocument({
+              ...input,
+              projectId: document.projectId
+            });
+          } catch (error) {
+            errors.push(error);
+            throw error;
+          }
+        }
+      );
+      const { controller, statuses } = harness({ respond });
+      try {
+        controller.openProject(document.projectId, document.version);
+        controller.schedule({
+          ...document,
+          version: document.version + 1,
+          padding
+        } as ProjectDocument);
+        await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+        await controller.whenIdle();
+        expect(errors[0]).toBeInstanceOf(ApiError);
+        expect(errors[0]).toMatchObject({
+          status: 413,
+          message: 'Request JSON is too complex.',
+          code: 'DOCUMENT_TOO_COMPLEX'
+        });
+        expect((errors[0] as ApiError).details).not.toHaveProperty(
+          'limitBytes'
+        );
+        expect(lastState(statuses)).toBe('refused');
+        for (const refusedPadding of [
+          padding,
+          stillComplex,
+          new Array(MAX_DOCUMENT_VALUES + 1).fill(0)
+        ]) {
+          controller.schedule({
+            ...document,
+            version: document.version + 2,
+            padding: refusedPadding
+          } as ProjectDocument);
+          await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+          await controller.whenIdle();
+          expect(respond).toHaveBeenCalledTimes(1);
+        }
+        controller.schedule(documentAt(document.version + 3, document));
+        await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+        await controller.whenIdle();
+        expect(respond).toHaveBeenCalledTimes(2);
+        expect(lastState(statuses)).toBe('synced');
+        expect(await api.loadProject(document.projectId)).toMatchObject({
+          version: document.version + 3
+        });
+      } finally {
+        controller.dispose();
+      }
+    },
+    15_000
+  );
+
+  it('leaves generic request-complexity refusals unclassified', async () => {
+    let padding: unknown = 0;
+    for (let i = 0; i < 72; i++) padding = { child: padding };
+    const response = await worker.fetch(
+      new Request('https://example.com/api/projects', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-openzcad-development-user': toUserId(
+            `user_generic_${crypto.randomUUID()}`
+          )
+        },
+        body: JSON.stringify({ name: 'Generic complexity', padding })
+      }),
+      { ENVIRONMENT: 'development', AUTH_MODE: 'development' }
+    );
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({
+      error: 'Request JSON is too complex.'
+    });
   });
 
   it('retries a transient failure quickly, then slows down rather than spinning', async () => {
