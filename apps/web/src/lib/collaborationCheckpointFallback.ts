@@ -31,7 +31,9 @@ export async function preserveFailedCheckpoint(
     // Save only the captured state, never an older project head.
     await saveLocalSaveStates([local]);
     localSaved = true;
-    if (!confirmed && isCurrent() && options.isCurrent()) {
+    // Only server-backed points belong to the collaborative document. A local
+    // fallback remains available through the device's saved-state projection.
+    if (authoritative && !confirmed && isCurrent() && options.isCurrent()) {
       const current = options.readDocument();
       options.applyDocument(withEchoedSavePoints(current, local));
     }

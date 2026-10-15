@@ -19740,6 +19740,7 @@ export function App() {
         />
       }
       checkpoints={doc?.checkpoints ?? []}
+      projectId={doc.projectId}
       documentVersion={doc?.version ?? 0}
       restorableCheckpointIds={restorableCheckpointIds}
       onSelectFeature={handleSelectFeatureFromTree}

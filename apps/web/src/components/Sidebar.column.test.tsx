@@ -1,4 +1,6 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import 'fake-indexeddb/auto';
+import { IDBFactory } from 'fake-indexeddb';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -11,6 +13,15 @@ import {
   type ProjectCheckpoint
 } from '@openzcad/shared';
 import { defaultPanelState } from '../lib/panelState';
+import {
+  createProjectDocument,
+  createSavedRevision
+} from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
+import {
+  loadLocalSaveState,
+  saveLocalSaveStates
+} from '../lib/localProjectStore';
 import { Sidebar } from './Sidebar';
 
 function feature(
@@ -74,6 +85,81 @@ function renderSidebar(
 }
 
 describe('Sidebar', () => {
+  it('shows device-only saved states after commit and reopen without adding them to the document', async () => {
+    vi.stubGlobal('indexedDB', new IDBFactory());
+    const original = createProjectDocument(
+      'Private local state',
+      toUserId('owner')
+    );
+    const saved = createSavedRevision(original, 'Device-only milestone');
+    const point = saved.checkpoints.at(-1)!;
+    const panelState = defaultPanelState();
+    panelState.sidebarSections.revisions = true;
+    const first = renderSidebar({
+      projectId: original.projectId,
+      checkpoints: original.checkpoints,
+      documentVersion: point.documentVersion,
+      panelState
+    });
+    try {
+      expect(
+        screen.queryByText('Device-only milestone')
+      ).not.toBeInTheDocument();
+      await act(async () => {
+        await saveLocalSaveStates([saved]);
+      });
+      const restore = await screen.findByRole('button', {
+        name: 'Restore Device-only milestone'
+      });
+      expect(
+        screen.getByTitle(/Device-only milestone.*Stored on this device/)
+      ).toBeInTheDocument();
+      await userEvent.click(restore);
+      expect(first.props.onRestoreCheckpoint).toHaveBeenCalledExactlyOnceWith(
+        point
+      );
+      expect(first.props.checkpoints).toEqual(original.checkpoints);
+      expect(
+        (await loadLocalSaveState(original.projectId, point.checkpointId))
+          ?.nodes
+      ).toEqual(original.nodes);
+      first.unmount();
+      const reopened = renderSidebar(first.props);
+      try {
+        await screen.findByRole('button', {
+          name: 'Restore Device-only milestone'
+        });
+        const other = createProjectDocument('Other project', toUserId('owner'));
+        reopened.rerender(
+          <Sidebar
+            {...reopened.props}
+            projectId={other.projectId}
+            checkpoints={other.checkpoints}
+          />
+        );
+        expect(
+          screen.queryByText('Device-only milestone')
+        ).not.toBeInTheDocument();
+        await act(async () => {
+          await saveLocalSaveStates([
+            createSavedRevision(other, 'Other device state')
+          ]);
+        });
+        await screen.findByRole('button', {
+          name: 'Restore Other device state'
+        });
+        expect(
+          screen.queryByText('Device-only milestone')
+        ).not.toBeInTheDocument();
+      } finally {
+        reopened.unmount();
+      }
+    } finally {
+      first.unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps the consumed-source disclosure inside a list item', async () => {
     const panelState = defaultPanelState();
     panelState.sidebarSections.bodies = true;

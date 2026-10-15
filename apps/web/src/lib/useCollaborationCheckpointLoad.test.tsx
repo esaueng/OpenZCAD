@@ -58,7 +58,11 @@ describe('named saves when the checkpoint action cannot load', () => {
     expect(error.message).toBe(
       `${STALE_CHUNK_MESSAGE} The named save is stored on this device.`
     );
-    const checkpoint = hook.read().checkpoints.at(-1)!;
+    const checkpoint = (
+      await localStore.listLocalSaveStateCheckpoints(clicked.projectId)
+    ).find((point) => point.reason === 'Offline milestone')!;
+    expect(hook.read()).toBe(clicked);
+    expect(hook.apply).not.toHaveBeenCalled();
     expect(
       await loadLocalSaveState(clicked.projectId, checkpoint.checkpointId)
     ).not.toBeNull();
@@ -87,7 +91,10 @@ describe('named saves when the checkpoint action cannot load', () => {
     expect(originalCause(error)).toBe(chunkError);
     expect(error.message).toContain((error.cause as Error).message);
     expect(error.message).toContain('The named save is stored on this device.');
-    const local = hook.read().checkpoints.at(-1)!;
+    const local = (
+      await localStore.listLocalSaveStateCheckpoints(clicked.projectId)
+    ).find((point) => point.reason === 'Offline milestone')!;
+    expect(hook.apply).not.toHaveBeenCalled();
     expect(local.reason).toBe('Offline milestone');
     expect(local.documentVersion).toBe(clicked.version);
     const stored = await loadLocalSaveState(

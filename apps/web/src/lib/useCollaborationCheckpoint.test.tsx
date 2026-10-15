@@ -921,9 +921,9 @@ describe('durable room checkpoints', () => {
       const echoIds = new Set(
         echo.checkpoints.map((point) => point.checkpointId)
       );
-      const fallback = hook
-        .read()
-        .checkpoints.filter((point) => !echoIds.has(point.checkpointId));
+      const fallback = (
+        await localStore.listLocalSaveStateCheckpoints(document.projectId)
+      ).filter((point) => !echoIds.has(point.checkpointId));
       expect(fallback).toHaveLength(1);
       const local = fallback[0]!;
       expect(local.reason).toBe('Clicked model');
@@ -1057,7 +1057,10 @@ describe('durable room checkpoints', () => {
               ).checkpointReason
           )
         ).toBe(false);
-        const local = hook.read().checkpoints.at(-1)!;
+        const local = (
+          await localStore.listLocalSaveStateCheckpoints(document.projectId)
+        ).find((point) => point.reason === 'Named after pending edit')!;
+        expect(hook.read().checkpoints).not.toContainEqual(local);
         expect(local.reason).toBe('Named after pending edit');
         expect(
           await loadLocalSaveState(document.projectId, local.checkpointId)
@@ -1375,7 +1378,11 @@ describe('durable room checkpoints', () => {
         'Account quota exceeded. The named save is stored on this device.'
       );
     });
-    const saved = hook.read().checkpoints.at(-1)!;
+    const saved = (
+      await localStore.listLocalSaveStateCheckpoints(document.projectId)
+    ).find((point) => point.reason === 'Retried locally')!;
+    expect(hook.read()).toBe(document);
+    expect(hook.apply).not.toHaveBeenCalled();
     expect(saved.reason).toBe('Retried locally');
     expect(
       (await loadLocalSaveState(document.projectId, saved.checkpointId))?.nodes
@@ -1492,7 +1499,11 @@ describe('durable room checkpoints', () => {
         )
       ).rejects.toThrow('did not confirm a durable named revision');
     });
-    const local = hook.read().checkpoints.at(-1)!;
+    const local = (
+      await localStore.listLocalSaveStateCheckpoints(document.projectId)
+    ).find((point) => point.reason === 'Local milestone')!;
+    expect(hook.read()).toBe(document);
+    expect(hook.apply).not.toHaveBeenCalled();
     expect(local.reason).toBe('Local milestone');
     expect(
       await loadLocalSaveState(document.projectId, local.checkpointId)
