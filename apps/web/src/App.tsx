@@ -1841,8 +1841,9 @@ export function App() {
         setBusy(false);
     };
   }, []);
-  function beginProjectNavigation() {
+  function beginProjectNavigation(clearShareFragment = true) {
     cancelNavigationBusy();
+    if (clearShareFragment) clearProjectShareFragment();
     const navigation = ++fragmentNavigationRef.current;
     clearPendingProjectInvitation();
     pendingInvitationAttemptRef.current = null;
@@ -9322,7 +9323,7 @@ export function App() {
       return;
     }
     const activeProjectSince = snapshotActiveProject();
-    const isCurrent = beginProjectNavigation();
+    const isCurrent = beginProjectNavigation(false);
     const finishBusy = startNavigationBusy();
     try {
       const copy = duplicateProjectDocument(
