@@ -973,7 +973,7 @@ test('resolves a negative free-plane extrude preview', async ({ page }) => {
   await heightKeypad.getByRole('textbox').fill('-24');
   await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Extruded region by -24 mm (new-body)',
+    'Extruded region by -24 mm as a new body',
     { timeout: 20_000 }
   );
 });
@@ -1028,7 +1028,7 @@ test('infers and stores an additive extrude from exact overlap', async ({
   await heightKeypad.getByRole('textbox').fill('24');
   await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Extruded region by 24 mm (add)',
+    'Extruded region by 24 mm, added to the body',
     { timeout: 20_000 }
   );
 
@@ -4575,7 +4575,7 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
   await heightKeypad.getByRole('textbox').fill('24');
   await heightKeypad.getByRole('button', { name: 'Apply height' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Extruded region by 24 mm (new-body)',
+    'Extruded region by 24 mm as a new body',
     { timeout: 20_000 }
   );
 
