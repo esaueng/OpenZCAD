@@ -1,5 +1,8 @@
 import {
   DOCUMENT_VALUES_REFUSAL,
+  documentStructureError,
+  MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
+  persistedDocumentBytes,
   type ProjectDocument,
   type SaveProjectDocumentResponse
 } from '@openzcad/shared';
@@ -198,10 +201,11 @@ export class CloudProjectAutosave {
   #pendingSince: number | null = null;
   /**
    * Set when the account refused in a way that repeating cannot fix — a
-   * divergence or an oversize document. Cleared only by `openProject` or
-   * `adoptAccountVersion`, both of which re-establish a baseline.
+   * divergence or an oversize document. A newer document within the same size
+   * limit may resume a size refusal; other halts need an explicit new baseline.
    */
   #halted: 'conflict' | 'repair' | 'refused' | null = null;
+  #sizeRefusal: { editEpoch: number; limitBytes: number } | null = null;
   /**
    * The project whose divergence was detected by the reconciler rather than by
    * a fenced 409. `openProject` runs from an effect that can fire *after* the
@@ -317,6 +321,7 @@ export class CloudProjectAutosave {
       epoch: ++this.#projectEpoch
     };
     this.#halted = this.#conflictProjectId === projectId ? 'conflict' : null;
+    this.#sizeRefusal = null;
     this.#automaticRetries = 0;
     if (this.#halted) {
       this.#emit(this.#halted);
@@ -359,6 +364,7 @@ export class CloudProjectAutosave {
     this.#pending = null;
     this.#pendingSince = null;
     this.#halted = null;
+    this.#sizeRefusal = null;
     this.#conflictProjectId = null;
     this.#automaticRetries = 0;
   }
@@ -387,6 +393,7 @@ export class CloudProjectAutosave {
     this.#pending = null;
     this.#pendingSince = null;
     this.#halted = null;
+    this.#sizeRefusal = null;
     this.#conflictProjectId = null;
     this.#automaticRetries = 0;
     this.#emit('synced');
@@ -409,6 +416,20 @@ export class CloudProjectAutosave {
       // to adopt it is the start screen's job, not this controller's.
       this.#emit('local');
       return;
+    }
+    if (
+      this.#halted === 'refused' &&
+      this.#sizeRefusal &&
+      this.#pending.editEpoch > this.#sizeRefusal.editEpoch
+    ) {
+      const canonical = withoutDerivedProjection(document);
+      if (
+        !documentStructureError(canonical) &&
+        persistedDocumentBytes(canonical) <= this.#sizeRefusal.limitBytes
+      ) {
+        this.#halted = null;
+        this.#sizeRefusal = null;
+      }
     }
     if (this.#halted) {
       this.#emit(this.#halted);
@@ -602,6 +623,7 @@ export class CloudProjectAutosave {
 
   #handleFailure(next: PendingSave, error: unknown): SaveResult {
     const status = error instanceof ApiError ? error.status : null;
+    this.#sizeRefusal = null;
 
     // Divergence. Hand the decision up and stop writing — a retry would either
     // fail identically or, worse, succeed against a version the user never saw.
@@ -639,10 +661,34 @@ export class CloudProjectAutosave {
     if (status === 413 || status === 403 || overValueCeiling) {
       this.#requeue(next);
       this.#halted = 'refused';
+      const limit =
+        status === 413 &&
+        error instanceof ApiError &&
+        error.code === 'DOCUMENT_TOO_LARGE'
+          ? error.details?.limitBytes
+          : null;
+      const limitBytes = overValueCeiling
+        ? MAX_CLOUD_PROJECT_DOCUMENT_BYTES
+        : limit;
+      if (
+        typeof limitBytes === 'number' &&
+        Number.isSafeInteger(limitBytes) &&
+        limitBytes > 0
+      ) {
+        this.#sizeRefusal = { editEpoch: next.editEpoch, limitBytes };
+      }
       this.#emit(
         'refused',
         overValueCeiling ? new Error(PROJECT_TOO_LARGE_FOR_ACCOUNT) : error
       );
+      // A reduced edit can arrive while the oversized request is in flight.
+      if (
+        this.#sizeRefusal &&
+        this.#pending &&
+        this.#pending.editEpoch > next.editEpoch
+      ) {
+        this.schedule(this.#pending.document);
+      }
       return { state: 'halted' };
     }
 
