@@ -681,6 +681,10 @@ export function useCollaboration({
           if (rejectsNewerSchema(message.document)) {
             return;
           }
+          // A validated own checkpoint echo confirms the clicked snapshot even
+          // when newer local work prevents adopting that snapshot as the head.
+          if (message.clientId === id)
+            checkpointEchoRef.current?.(message.document);
           const local = documentRef.current;
           serverVersionRef.current = message.document.version;
           setRoomVersion(message.document.version);
@@ -711,8 +715,6 @@ export function useCollaboration({
             // rendered from reading this client as divergent.
             documentRef.current = message.document;
             baseVersionRef.current = message.document.version;
-            if (message.clientId === id)
-              checkpointEchoRef.current?.(message.document);
             remoteHandlerRef.current(message.document);
           }
           return;
