@@ -3885,7 +3885,11 @@ export class D1R2PersistenceService implements PersistenceService {
         originalKind
       );
     const expectedKind = originalKind ?? 'mesh-payload';
-    await this.requireProjectEdit(userId, projectId);
+    const access = await this.requireProjectEdit(userId, projectId);
+    // Finalized originals have no trusted uploader identity. Retain their
+    // owner-only removal policy while editors can compensate unused payloads.
+    if (originalKind && access.role !== 'owner')
+      throw new ProjectNotFoundError(projectId);
     const trustedSource = await this.env.DB.prepare(
       'SELECT 1 AS retained FROM project_copy_source_archives WHERE artifact_id = ?'
     )
@@ -4009,7 +4013,8 @@ export class D1R2PersistenceService implements PersistenceService {
           head.document_json,
           head.document_object_id,
           userId,
-          isCloudflareFeatureEnabled(this.env, 'PROJECT_SHARING_ENABLED')
+          !originalKind &&
+            isCloudflareFeatureEnabled(this.env, 'PROJECT_SHARING_ENABLED')
             ? 1
             : 0,
           userId,
