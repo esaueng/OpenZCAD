@@ -61,6 +61,103 @@ describe('useGeometryWorker', () => {
     );
   });
 
+  it('keeps completed geometry reusable after closing and reopening saved history', () => {
+    installWorker();
+    const document = createProjectDocument('Completed model', toUserId('user'));
+    const manager = { document } as CommandManager;
+    const { result } = renderHook(() =>
+      useGeometryWorker({
+        manager: () => manager,
+        onDerived: vi.fn(),
+        onError: vi.fn()
+      })
+    );
+    const worker = FakeWorker.instances[0]!;
+    act(() => {
+      result.current.sync(document);
+      worker.emit({
+        type: 'sync',
+        ok: true,
+        projectId: document.projectId,
+        version: document.version,
+        derived: document.derived
+      });
+      worker.emit({
+        type: 'state',
+        phase: 'ready',
+        projectId: document.projectId,
+        version: document.version,
+        stale: false
+      });
+    });
+    act(() => result.current.sync(null));
+    expect(worker.postMessage).toHaveBeenLastCalledWith({ type: 'cancel' });
+    const reopened = { ...document, version: document.version + 1 };
+    act(() => {
+      expect(result.current.retainReadyGeometry(reopened)).toBe(true);
+      manager.document = reopened;
+    });
+    act(() => result.current.sync(reopened));
+    expect(worker.postMessage).toHaveBeenCalledTimes(2);
+    expect(result.current.isReadyFor(reopened)).toBe(true);
+  });
+
+  it.each(['sync', 'projection-delta'] as const)(
+    'rebuilds a transient %s result after closing and reopening',
+    (messageType) => {
+      installWorker();
+      const document = createProjectDocument('Missing source', toUserId('user'));
+      const manager = { document } as CommandManager;
+      const host = {
+        manager: () => manager,
+        onDerived: vi.fn(),
+        onError: vi.fn()
+      };
+      const { result } = renderHook(() => useGeometryWorker(host));
+      const worker = FakeWorker.instances[0]!;
+      act(() => {
+        result.current.sync(document);
+        worker.emit(
+          messageType === 'sync'
+            ? {
+                type: 'sync',
+                ok: true,
+                projectId: document.projectId,
+                version: document.version,
+                transient: true,
+                derived: document.derived
+              }
+            : {
+                type: 'projection-delta',
+                projectId: document.projectId,
+                version: document.version,
+                transient: true,
+                packet: new ProjectionSender('transient-worker').encode(
+                  document.projectId,
+                  document.derived
+                )
+              }
+        );
+        worker.emit({
+          type: 'state',
+          phase: 'ready',
+          projectId: document.projectId,
+          version: document.version,
+          stale: false
+        });
+      });
+      expect(host.onDerived).toHaveBeenCalledOnce();
+      expect(result.current.retainReadyGeometry(document)).toBe(false);
+      act(() => result.current.sync(null));
+      expect(result.current.retainReadyGeometry(document)).toBe(false);
+      act(() => result.current.sync(document));
+      expect(worker.postMessage).toHaveBeenCalledTimes(3);
+      expect(worker.postMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'sync' })
+      );
+    }
+  );
+
   it('retains only a completed live result across metadata changes, without another worker sync', () => {
     installWorker();
     const document = createProjectDocument('Saved model', toUserId('user'));
