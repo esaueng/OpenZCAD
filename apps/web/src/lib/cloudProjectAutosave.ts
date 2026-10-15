@@ -1,5 +1,6 @@
 import {
   DOCUMENT_VALUES_REFUSAL,
+  documentRequestWithinComplexity,
   documentStructureError,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   persistedDocumentBytes,
@@ -205,7 +206,11 @@ export class CloudProjectAutosave {
    * limit may resume a size refusal; other halts need an explicit new baseline.
    */
   #halted: 'conflict' | 'repair' | 'refused' | null = null;
-  #sizeRefusal: { editEpoch: number; limitBytes: number } | null = null;
+  #sizeRefusal: {
+    editEpoch: number;
+    limitBytes: number;
+    complexity: boolean;
+  } | null = null;
   /**
    * The project whose divergence was detected by the reconciler rather than by
    * a fenced 409. `openProject` runs from an effect that can fire *after* the
@@ -429,7 +434,13 @@ export class CloudProjectAutosave {
           Math.min(
             this.#sizeRefusal.limitBytes,
             MAX_CLOUD_PROJECT_DOCUMENT_BYTES
-          )
+          ) &&
+        (!this.#sizeRefusal.complexity ||
+          documentRequestWithinComplexity({
+            projectId: document.projectId,
+            expectedVersion: this.#project.version,
+            document: canonical
+          }))
       ) {
         this.#halted = null;
         this.#sizeRefusal = null;
@@ -665,13 +676,17 @@ export class CloudProjectAutosave {
     if (status === 413 || status === 403 || overValueCeiling) {
       this.#requeue(next);
       this.#halted = 'refused';
+      const complexity =
+        status === 413 &&
+        error instanceof ApiError &&
+        error.code === 'DOCUMENT_TOO_COMPLEX';
       const limit =
         status === 413 &&
         error instanceof ApiError &&
         error.code === 'DOCUMENT_TOO_LARGE'
           ? error.details?.limitBytes
           : null;
-      const limitBytes = overValueCeiling
+      const limitBytes = overValueCeiling || complexity
         ? MAX_CLOUD_PROJECT_DOCUMENT_BYTES
         : limit;
       if (
@@ -679,7 +694,11 @@ export class CloudProjectAutosave {
         Number.isSafeInteger(limitBytes) &&
         limitBytes > 0
       ) {
-        this.#sizeRefusal = { editEpoch: next.editEpoch, limitBytes };
+        this.#sizeRefusal = {
+          editEpoch: next.editEpoch,
+          limitBytes,
+          complexity
+        };
       }
       this.#emit(
         'refused',

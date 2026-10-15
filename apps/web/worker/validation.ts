@@ -53,7 +53,9 @@ export class HttpError extends Error {
     readonly status: number,
     message: string,
     /** Set only for a document or document-request byte-size refusal. */
-    readonly limitBytes?: number
+    readonly limitBytes?: number,
+    /** Set only for the lexical structure limit of a document request. */
+    readonly documentComplexity = false
   ) {
     super(message);
     this.name = 'HttpError';
