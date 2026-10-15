@@ -23,7 +23,8 @@ export interface ArchiveArtifactTransport extends ArtifactUploadTransport {
   getArtifactMetadata(artifactId: string): Promise<ArtifactMetadataResponse>;
   discardMeshPayload?(
     projectId: ProjectId,
-    artifactId: string
+    artifactId: string,
+    originalKind?: 'stl-import' | 'mesh-import'
   ): Promise<{ deleted: boolean }>;
 }
 
@@ -78,6 +79,7 @@ export async function archiveArtifact(
   if (!upload.uploadUrl) {
     throw new Error('Artifact upload is unavailable.');
   }
+  let acknowledged = false;
   try {
     // Chunked above the part size, single PUT below; retries each part and
     // aborts the multipart state if the upload cannot finish.
@@ -114,6 +116,7 @@ export async function archiveArtifact(
       throw new Error('The mesh archive could not be verified.');
     }
     if (stored.artifact) {
+      acknowledged = true;
       onArtifactStored?.(stored.artifact);
     }
     return upload.artifactId;
@@ -121,12 +124,23 @@ export async function archiveArtifact(
     // The server may have finalized before a response or metadata lookup was
     // cancelled. Compensate using this upload's ID and its captured project,
     // without passing the already-aborted signal to cleanup.
-    if (input.kind === 'mesh-payload' && transport.discardMeshPayload) {
+    const originalKind =
+      !acknowledged &&
+      (input.kind === 'stl-import' || input.kind === 'mesh-import')
+        ? input.kind
+        : undefined;
+    if (
+      (input.kind === 'mesh-payload' || originalKind) &&
+      transport.discardMeshPayload
+    ) {
       try {
-        const result = await transport.discardMeshPayload(
-          projectId,
-          upload.artifactId
-        );
+        const result = originalKind
+          ? await transport.discardMeshPayload(
+              projectId,
+              upload.artifactId,
+              originalKind
+            )
+          : await transport.discardMeshPayload(projectId, upload.artifactId);
         if (!result.deleted)
           throw new Error('Cloud mesh cleanup has not completed.', {
             cause: error

@@ -1810,7 +1810,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       await persistence.discardMeshPayload(
         userId,
         payload.projectId,
-        artifactDiscardMatch[1]!
+        artifactDiscardMatch[1]!,
+        payload.kind
       )
     );
   }

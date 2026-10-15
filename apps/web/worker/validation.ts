@@ -133,9 +133,18 @@ function requireString(
 
 export function parseDiscardMeshPayloadRequest(body: unknown): {
   projectId: string;
+  kind?: 'stl-import' | 'mesh-import';
 } {
+  const record = asRecord(body, 'Request body');
+  if (
+    record.kind !== undefined &&
+    record.kind !== 'stl-import' &&
+    record.kind !== 'mesh-import'
+  )
+    throw badRequest('Original mesh cleanup kind is invalid.');
   return {
-    projectId: requireString(asRecord(body, 'Request body'), 'projectId', 200)
+    projectId: requireString(record, 'projectId', 200),
+    ...(record.kind ? { kind: record.kind } : {})
   };
 }
 
