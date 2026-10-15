@@ -22,40 +22,6 @@ export function normalizeCheckpointReason(reason: string): string {
     : normalized;
 }
 
-export function abortableCheckpoint<T>(
-  operation: Promise<T>,
-  signal: AbortSignal
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const abortReason = () => {
-      const reason: unknown = signal.reason;
-      return reason instanceof Error
-        ? reason
-        : new Error('The named save was cancelled.', { cause: reason });
-    };
-    const aborted = () => reject(abortReason());
-    if (signal.aborted) {
-      reject(abortReason());
-      return;
-    }
-    signal.addEventListener('abort', aborted, { once: true });
-    void operation.then(
-      (value) => {
-        signal.removeEventListener('abort', aborted);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener('abort', aborted);
-        reject(
-          error instanceof Error
-            ? error
-            : new Error('The named save failed.', { cause: error })
-        );
-      }
-    );
-  });
-}
-
 /** Keep the clicked named state even when the room action cannot load. */
 export async function preserveFailedCheckpoint(
   error: unknown,
