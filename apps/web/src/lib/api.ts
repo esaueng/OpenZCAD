@@ -1,3 +1,4 @@
+import { isAnalyticsEnabled, trackDetail, trackSize, durationBucket } from './analytics';
 import type {
   AccountStorageUsage,
   AccountDeletionPreview,
@@ -92,14 +93,30 @@ async function requestJson<T>(
   input: RequestInfo,
   init?: RequestInit
 ): Promise<T> {
-  const response = await desktopFetch(input, {
-    ...init,
-    credentials: 'same-origin',
-    headers: {
-      'content-type': 'application/json',
-      ...(init?.headers ?? {})
+  const collect = isAnalyticsEnabled();
+  const started = performance.now();
+  // Use only a fixed operation class; never send the URL or embedded IDs.
+  const projectCall = typeof input === 'string' && input.startsWith('/api/projects');
+  const writing = !['GET','HEAD','OPTIONS'].includes(init?.method ?? 'GET');
+  let response: Response;
+  try {
+    response = await desktopFetch(input, {
+      ...init, credentials: 'same-origin',
+      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) }
+    });
+  } catch (error) {
+    if (collect && projectCall) { trackDetail(writing ? 'error_cloud_save' : 'error_cloud_load'); trackDetail('cloud_status','network'); }
+    throw error;
+  }
+  if (collect && projectCall) {
+    if (!response.ok) {
+      trackDetail(writing ? 'error_cloud_save' : 'error_cloud_load');
+      trackDetail('cloud_status', response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden' : response.status === 409 ? 'conflict' : response.status === 413 ? 'too_large' : response.status === 429 ? 'rate_limited' : response.status >= 500 ? 'server' : 'other');
+    } else if (writing && typeof init?.body === 'string') {
+      trackSize('transfer_upload',new Blob([init.body]).size);
+      const bucket=durationBucket(performance.now()-started); if(bucket)trackDetail('save_latency',bucket);
     }
-  });
+  }
 
   if (!response.ok) {
     const text = await response.text();
