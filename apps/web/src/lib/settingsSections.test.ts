@@ -37,6 +37,16 @@ describe('find a setting', () => {
     }
   });
 
+  it('finds the optional analytics withdrawal control', () => {
+    expect(matches('analytics')).toContain('privacy');
+    expect(
+      visibleSettingsSections({
+        cloudFunctionsEnabled: false,
+        query: 'analytics'
+      }).map((s) => s.id)
+    ).toContain('privacy');
+  });
+
   it('keeps cloud-only sections out of offline searches', () => {
     for (const query of ['sign in', 'api key']) {
       const ids = visibleSettingsSections({

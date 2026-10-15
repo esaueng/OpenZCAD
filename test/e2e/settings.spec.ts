@@ -1027,3 +1027,38 @@ for (const tier of ['free', 'premium'] as const) {
     await expect(membership).toContainText('cloud file storage');
   });
 }
+
+test('optional Glimpse analytics require a new opt-in and withdraw immediately', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.route('**/api/glimpse/usage', (route) =>
+    route.fulfill({ status: 204 })
+  );
+  const requests: unknown[] = [];
+  page.on('request', (request) => {
+    if (request.url().endsWith('/api/glimpse/usage'))
+      requests.push(request.postDataJSON());
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page
+    .getByRole('button', { name: 'Privacy & data', exact: true })
+    .click();
+  const consent = page.getByRole('checkbox', {
+    name: 'Optional usage analytics',
+    exact: true
+  });
+  await expect(consent).not.toBeChecked();
+  expect(requests).toEqual([]);
+  await consent.check();
+  await expect(consent).toBeChecked();
+  await page.reload();
+  await expect(consent).toBeChecked();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]).toEqual({ event: 'workspace_opened', bucket: 'none' });
+  await consent.uncheck();
+  await page.reload();
+  await expect(consent).not.toBeChecked();
+  expect(requests).toHaveLength(1);
+});
