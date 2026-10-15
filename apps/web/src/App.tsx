@@ -324,6 +324,7 @@ import {
 } from './lib/sketch/valueResolver';
 import { countClosedProfileSketches } from './lib/sketch/profileAvailability';
 import { useDocumentFonts } from './lib/textFonts';
+import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
 import type { DirectEditFixtureOutcome } from './lib/directEditFixture';
 import {
   buildDirectEditFixture,
@@ -11940,19 +11941,17 @@ export function App() {
     });
   }
 
-  async function handleExportDiagnostics() {
+  function handleExportDiagnostics() {
     if (!doc) {
       setStatus('Open a project before exporting diagnostics.');
       return;
     }
-    const snapshot = structuredClone(doc);
     try {
-      const { createProjectDiagnosticBundle } = await import('./lib/projectDiagnostics');
-      const bundle = createProjectDiagnosticBundle(snapshot, {
+      const bundle = createProjectDiagnosticBundle(doc, {
         remusVersion: KERNEL_BUILD.packageVersion,
         remusCommit: KERNEL_BUILD.sourceCommit
       });
-      const fileName = `${exportFileStem(snapshot.name)}.openzcad-diagnostic.json`;
+      const fileName = `${exportFileStem(doc.name)}.openzcad-diagnostic.json`;
       downloadText(
         fileName,
         `${JSON.stringify(bundle, null, 2)}\n`,
@@ -19915,7 +19914,7 @@ export function App() {
           onExportStep={() => void handleExportStep()}
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onArchiveLocalSources={() => void handleArchiveLocalSources()}
-          onExportDiagnostics={() => void handleExportDiagnostics()}
+          onExportDiagnostics={handleExportDiagnostics}
           onExportInteractionLog={() => void handleExportInteractionLog()}
           onRenameProject={(name) =>
             executeCommand(
