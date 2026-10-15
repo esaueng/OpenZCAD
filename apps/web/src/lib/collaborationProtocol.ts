@@ -156,3 +156,37 @@ export function rejectionStatus(
   console.error(`Collaboration rejected: ${message.message}`);
   return message.code === 'document-too-large' ? 'oversize' : 'rejected';
 }
+
+export function abortableCheckpoint<T>(
+  operation: Promise<T>,
+  signal: AbortSignal
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abortReason = () => {
+      const reason: unknown = signal.reason;
+      return reason instanceof Error
+        ? reason
+        : new Error('The named save was cancelled.', { cause: reason });
+    };
+    const aborted = () => reject(abortReason());
+    if (signal.aborted) {
+      reject(abortReason());
+      return;
+    }
+    signal.addEventListener('abort', aborted, { once: true });
+    void operation.then(
+      (value) => {
+        signal.removeEventListener('abort', aborted);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', aborted);
+        reject(
+          error instanceof Error
+            ? error
+            : new Error('The named save failed.', { cause: error })
+        );
+      }
+    );
+  });
+}

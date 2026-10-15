@@ -1,9 +1,11 @@
 import { withEchoedSavePoints } from '@openzcad/document-core';
 import type { ProjectDocument, ProjectEditLease } from '@openzcad/shared';
 import { desktopFetch } from './desktopBridge';
-import { parseServerMessage } from './collaborationProtocol';
 import {
   abortableCheckpoint,
+  parseServerMessage
+} from './collaborationProtocol';
+import {
   normalizeCheckpointReason,
   preserveFailedCheckpoint,
   type CheckpointOptions

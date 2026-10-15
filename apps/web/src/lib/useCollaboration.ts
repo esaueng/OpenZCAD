@@ -32,11 +32,11 @@ import {
   projectsHaveSameCanonicalContent
 } from './localProjectStore';
 import {
-  abortableCheckpoint,
   preserveFailedCheckpoint,
   type CheckpointOptions
 } from './collaborationCheckpointFallback';
 import {
+  abortableCheckpoint,
   collaborationDocument,
   parseServerMessage,
   rejectionStatus
