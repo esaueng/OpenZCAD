@@ -239,7 +239,12 @@ test('a newer share wins over a held restore that saves locally without opening'
       () =>
         new Promise<{ name: string }[]>((resolve, reject) => {
           const open = indexedDB.open('openzcad-v2');
-          open.onerror = () => reject(open.error);
+          open.onerror = () =>
+            reject(
+              new Error('Project database could not open.', {
+                cause: open.error
+              })
+            );
           open.onsuccess = () => {
             const db = open.result;
             const tx = db.transaction('projects', 'readonly');
@@ -250,7 +255,7 @@ test('a newer share wins over a held restore that saves locally without opening'
             };
             tx.onerror = () => {
               db.close();
-              reject(tx.error);
+              reject(new Error('Project read failed.', { cause: tx.error }));
             };
           };
         })
