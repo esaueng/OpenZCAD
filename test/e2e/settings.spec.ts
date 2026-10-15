@@ -1062,3 +1062,70 @@ test('optional Glimpse analytics require a new opt-in and withdraw immediately',
   await expect(consent).not.toBeChecked();
   expect(requests).toHaveLength(1);
 });
+
+for (const privacySignal of ['doNotTrack', 'globalPrivacyControl'] as const) {
+  test(`analytics consent can be revoked with ${privacySignal} enabled`, async ({
+    page
+  }) => {
+    await stubApi(page);
+    await page.addInitScript((signal) => {
+      Object.defineProperty(navigator, signal, {
+        configurable: true,
+        value: signal === 'doNotTrack' ? '1' : true
+      });
+    }, privacySignal);
+    await page.goto('/');
+    await page.evaluate(() =>
+      localStorage.setItem('openzcad.glimpse.consent.v1', 'granted-v1')
+    );
+    await page.reload();
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await page
+      .getByRole('button', { name: 'Privacy & data', exact: true })
+      .click();
+    const consent = page.getByRole('checkbox', {
+      name: 'Optional usage analytics',
+      exact: true
+    });
+    await expect(consent).toBeChecked();
+    await consent.uncheck();
+    await page.reload();
+    await expect(consent).not.toBeChecked();
+    expect(
+      await page.evaluate(() =>
+        localStorage.getItem('openzcad.glimpse.consent.v1')
+      )
+    ).toBeNull();
+  });
+}
+
+test('reset settings revokes analytics consent and persists the default', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.route('**/api/glimpse/usage', (route) =>
+    route.fulfill({ status: 204 })
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page
+    .getByRole('button', { name: 'Privacy & data', exact: true })
+    .click();
+  const consent = page.getByRole('checkbox', {
+    name: 'Optional usage analytics',
+    exact: true
+  });
+  await consent.check();
+  page.once('dialog', (dialog) => dialog.accept());
+  await page
+    .getByRole('button', { name: 'Reset settings', exact: true })
+    .click();
+  await expect(consent).not.toBeChecked();
+  await page.reload();
+  await expect(consent).not.toBeChecked();
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem('openzcad.glimpse.consent.v1')
+    )
+  ).toBeNull();
+});

@@ -2151,7 +2151,13 @@ export function SettingsPage({
                   Reset settings
                 </button>
               </SettingRow>
-              <AnalyticsConsent />
+              <SettingRow
+                title="Optional usage analytics"
+                description="Choose whether this browser contributes anonymous usage counts."
+                scope="This device"
+              >
+                <AnalyticsConsent />
+              </SettingRow>
               <SettingRow
                 title="Local project data"
                 description="Local projects stay in this browser's storage. Delete them from the start screen; the cloud actions below never touch projects or settings on this device."

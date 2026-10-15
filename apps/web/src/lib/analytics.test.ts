@@ -32,6 +32,23 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe('Glimpse explicit consent', () => {
+  it.each([{ doNotTrack: '1' }, { globalPrivacyControl: true }])(
+    'keeps the stored grant revocable while privacy signals suppress sending: %j',
+    (privacySignal) => {
+      analytics.setAnalyticsEnabled(true);
+      vi.stubGlobal('navigator', privacySignal);
+      expect(analytics.hasAnalyticsConsent()).toBe(true);
+      expect(analytics.isAnalyticsEnabled()).toBe(false);
+      analytics.trackUsage('workspace_opened');
+      expect(send).not.toHaveBeenCalled();
+      analytics.setAnalyticsEnabled(false);
+      vi.stubGlobal('navigator', {});
+      expect(analytics.hasAnalyticsConsent()).toBe(false);
+      analytics.trackUsage('workspace_opened');
+      expect(store.size).toBe(0);
+      expect(send).not.toHaveBeenCalled();
+    }
+  );
   it('defaults off, including the legacy default and opt-out preferences', () => {
     store.set('opencae.analytics.optOut.v1', '0');
     expect(analytics.isAnalyticsEnabled()).toBe(false);

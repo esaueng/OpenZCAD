@@ -18,7 +18,8 @@
     "crons": ["17 * * * *"]
   },
   "ratelimits": [{"name":"GLIMPSE_USAGE_LIMITER", "namespace_id":"2026101501", "simple":{"limit":120,"period":60}}],
-  "services": [{"binding":"GLIMPSE", "service":"glimpse", "entrypoint":"OpenZCADIngest"}],
+  // Add the GLIMPSE service binding only after the collector is provisioned.
+  // See docs/glimpse.md. Disabled collection must not require that service.
   "assets": {
     "directory": "./apps/web/dist",
     "binding": "ASSETS",
