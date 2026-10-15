@@ -1856,7 +1856,7 @@ test('a shortcut still fires when a panel opened because you selected something'
   await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
 });
 
-test('view keys still work while a profile pick is waiting for a click', async ({
+test('view keys still work after returning from the Extrude distance field', async ({
   page
 }) => {
   await stubApi(page);
@@ -1866,9 +1866,8 @@ test('view keys still work while a profile pick is waiting for a click', async (
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
-  // Two profiles, so the pick genuinely waits for a click: a lone profile is
-  // selected automatically and the mode moves straight past the state under
-  // test. Both have to be drawn on bare canvas, and sketch mode floats the
+  // Two profiles keep the grouped armed selection under test. Both have to
+  // be drawn on bare canvas, and sketch mode floats the
   // palette over the right of it — offsetting from the canvas centre left the
   // second drag ending 15.6px short of the palette's left edge, so measure
   // what is bare instead.
@@ -1902,10 +1901,24 @@ test('view keys still work while a profile pick is waiting for a click', async (
   await expect(page.getByRole('contentinfo')).toContainText(
     'profiles selected · drag the arrow'
   );
+  const distance = page
+    .getByRole('region', { name: 'Extrude operation' })
+    .getByRole('textbox', { name: 'Distance', exact: true });
+  await expect(distance).toBeFocused();
 
   const displayButton = page.getByRole('button', {
     name: /^Display mode \(W\)/
   });
+  // An explicit Extrude command hands Distance the keyboard. Return it to
+  // the viewport through its real display control: Escape in this form
+  // cancels the extrusion, so it cannot preserve the armed profiles here.
+  await displayButton.click();
+  await expect(displayButton).toBeFocused();
+  await expect(distance).not.toBeFocused();
+  await expect(distance).toHaveValue('0');
+  await expect(
+    page.getByRole('form', { name: 'Extrude settings' })
+  ).toContainText('2 selected profiles');
   const displayBefore = await displayButton.getAttribute('aria-label');
   await page.keyboard.press('w');
   await expect(displayButton).not.toHaveAttribute(

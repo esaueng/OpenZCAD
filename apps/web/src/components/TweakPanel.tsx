@@ -1,7 +1,7 @@
 import { Copy, Download, SlidersHorizontal } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { ParameterNode } from '@openzcad/shared';
-import { ParameterRow } from './ParameterRows';
+import { ParameterRow, parameterTable } from './ParameterRows';
 import { Tooltip } from './Tooltip';
 import { PartsListModeProvider } from './ViewModeRail';
 
@@ -78,6 +78,7 @@ export function TweakPanel({
       : modelError
         ? 'Enter a valid parameter value before exporting'
         : (exportWithheld ?? 'The model has no body to export');
+  const table = parameterTable(parameters);
   return (
     <>
       <div className="tweak-rail" role="toolbar" aria-label="Tweak tools">
@@ -176,6 +177,7 @@ export function TweakPanel({
                       onSet={onSetParameter}
                       onViewDetails={onViewActivityLog}
                       onPreview={onPreviewParameter}
+                      table={table}
                     />
                     {parameter.description && (
                       <p className="param-description-text">
