@@ -119,7 +119,7 @@ describe('document-core', () => {
     legacy.schemaVersion = 15 as typeof legacy.schemaVersion;
     const migrated = normalizeDocument(legacy);
 
-    expect(migrated.schemaVersion).toBe(16);
+    expect(migrated.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect({ ...migrated, schemaVersion: 15 }).toEqual(legacy);
     expect(findSketch(migrated, created.sketchId)?.planeRef).toEqual({
       type: 'canonical',
@@ -148,7 +148,7 @@ describe('document-core', () => {
     ) as typeof created.document;
 
     // A v15 normalizer refuses newer schemas before it evaluates unknown fields.
-    expect(saved.schemaVersion).toBe(16);
+    expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect(saved.schemaVersion).toBeGreaterThan(15);
     const reopened = normalizeDocument(saved);
     expect(findSketch(reopened, created.sketchId)?.planeRef).toEqual({

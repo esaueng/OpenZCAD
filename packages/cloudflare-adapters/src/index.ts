@@ -1,4 +1,5 @@
 import { accountEntitlements } from './account-tiers';
+import { createHash } from 'node:crypto';
 export {
   accountEntitlements,
   accountTier,
@@ -8,6 +9,7 @@ import {
   assertDocumentTextBudget,
   documentStructureError,
   documentEnvelopeError,
+  hasValidImportedMeshSources,
   hasValidImportedStepSources,
   isDocumentHistory
 } from '@openzcad/shared';
@@ -16,6 +18,14 @@ import {
   ArtifactQuotaError,
   ArtifactStorageError,
   assertPersistableDocument,
+  copyImportedSources,
+  copiedImportArchives,
+  reconcileCopiedImportSources,
+  verifyCopiedImportArchives,
+  assertCopiedSourcesArchived,
+  importArtifactIds,
+  isMeshImportArchiveKind,
+  meshDiscardCommitGuard,
   DocumentTooLargeError,
   getInMemoryPersistence,
   ProjectAdoptionError,
@@ -38,6 +48,7 @@ import {
   type ProjectAccess,
   type ProjectMemberRole,
   type PersistenceService,
+  type CopiedImportArchive,
   type SharedProjectAssetDownload,
   type SharedProjectImportDownload,
   type SharedProjectSnapshot
@@ -349,6 +360,43 @@ interface DurableUploadPart {
   reservationToken: string;
 }
 
+export interface ProjectCopyCleanupIdentity {
+  documentDigest: string;
+  documentJsonDigest: string;
+  documentObjectId: string | null;
+}
+
+interface ProjectCopyStoredHead {
+  documentJson: string;
+  documentObjectId: string | null;
+}
+
+export interface ProjectCopyFinalizeRequest {
+  projectId: ProjectId;
+  expectedVersion: number;
+  initialIdentity: ProjectCopyCleanupIdentity;
+  archives: readonly CopiedImportArchive[];
+}
+
+/** Exact canonical identity; presentation caches never count as owner edits. */
+export async function projectCopyDocumentDigest(
+  document: ProjectDocument
+): Promise<string> {
+  const { derived: _derived, ...canonical } = withoutDerivedProjection(
+    normalizeDocument(document)
+  );
+  const json = JSON.stringify(canonical, (_key, value: unknown) =>
+    isRecord(value)
+      ? Object.fromEntries(
+          Object.keys(value)
+            .sort()
+            .map((key) => [key, value[key]])
+        )
+      : value
+  );
+  return sha256Hex(new TextEncoder().encode(json));
+}
+
 export class D1R2PersistenceService implements PersistenceService {
   constructor(private readonly env: CloudflareEnv) {}
 
@@ -370,10 +418,23 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().requireProjectEdit(userId, projectId);
     }
     const access = await this.resolveProjectAccess(userId, projectId);
-    if (access.role === 'viewer') {
+    if (
+      access.role === 'viewer' ||
+      (await this.projectCopyCleanupClaim(projectId))
+    ) {
       throw new ProjectNotFoundError(projectId);
     }
     return access;
+  }
+
+  private async projectCopyCleanupClaim(projectId: string): Promise<boolean> {
+    const row = await this.env
+      .DB!.prepare(
+        'SELECT 1 AS claimed FROM project_copy_cleanup_claims WHERE project_id = ?'
+      )
+      .bind(projectId)
+      .first<{ claimed: number }>();
+    return row?.claimed === 1;
   }
 
   private async requireRestProjectWrite(
@@ -1022,7 +1083,9 @@ export class D1R2PersistenceService implements PersistenceService {
       projectId: row.project_id,
       name: row.name,
       mode: row.mode,
-      document: sharedProjectSnapshotDocument(document)
+      document: sharedProjectSnapshotDocument(
+        await this.hydrateCopiedSourceAliases(document)
+      )
     };
   }
 
@@ -1135,7 +1198,7 @@ export class D1R2PersistenceService implements PersistenceService {
        INNER JOIN projects p ON p.id = a.project_id
        LEFT JOIN user_settings owner_settings ON owner_settings.user_id = p.user_id
        WHERE l.token_hash = ? AND l.revoked_at IS NULL
-         AND a.id = ? AND a.kind = 'step-import'
+         AND a.id = ? AND a.kind IN ('step-import', 'mesh-payload')
          AND p.status != 'deleted'
          AND COALESCE(
            CASE WHEN json_valid(owner_settings.settings_json)
@@ -1238,7 +1301,9 @@ export class D1R2PersistenceService implements PersistenceService {
           userId,
           document,
           DEFAULT_PROJECT_ORGANIZATION,
-          request.document?.projectId
+          request.document?.projectId,
+          undefined,
+          request.document
         ),
         document
       };
@@ -1318,8 +1383,9 @@ export class D1R2PersistenceService implements PersistenceService {
     // The copy is named after the project, not after the save state it starts
     // from: "Bracket (copy)" is what the user is looking for on the shelf.
     const name = request.name ?? (await this.copyNameFor(userId, head.name));
+    const source = branch?.document ?? head;
     const document = duplicateProjectDocument(
-      branch?.document ?? head,
+      source,
       name,
       userId,
       branch?.origin
@@ -1333,13 +1399,440 @@ export class D1R2PersistenceService implements PersistenceService {
     )
       .bind(request.projectId, userId)
       .first<{ sort_order: number }>();
-    return {
-      project: await this.insertProject(userId, document, {
+    const initialHead: { value?: ProjectCopyStoredHead } = {};
+    const project = await this.insertProject(
+      userId,
+      document,
+      {
         status: 'active',
         pinned: false,
         sortOrder: sortOrder?.sort_order ?? 0
-      }),
-      document
+      },
+      undefined,
+      (head) => {
+        initialHead.value = head;
+      }
+    );
+    if (!initialHead.value)
+      throw new ArtifactStorageError('The project copy could not be created.');
+    const initialIdentity: ProjectCopyCleanupIdentity = {
+      documentDigest: await projectCopyDocumentDigest(document),
+      documentJsonDigest: await sha256Hex(
+        new TextEncoder().encode(initialHead.value.documentJson)
+      ),
+      documentObjectId: initialHead.value.documentObjectId
+    };
+    let sourcesCopiedSuccessfully = false;
+    try {
+      const copied = await copyImportedSources(
+        this,
+        userId,
+        source,
+        document,
+        () => {
+          const hash = createHash('sha256');
+          return {
+            update: (bytes) => {
+              hash.update(bytes);
+            },
+            digest: () => hash.digest('hex')
+          };
+        },
+        (archive) => this.recordVerifiedCopiedImportArchive(userId, archive)
+      );
+      sourcesCopiedSuccessfully = true;
+      if (copied !== document) {
+        return await this.finalizeImportedSourceCopy(userId, {
+          projectId: document.projectId,
+          expectedVersion: document.version,
+          initialIdentity,
+          archives: copiedImportArchives(copied)
+        });
+      }
+      return { project, document: copied };
+    } catch (error) {
+      // Publication may already have journaled archives in the room, even
+      // when D1 still has its initial head. Keep those owned bytes for recovery.
+      if (sourcesCopiedSuccessfully) throw error;
+      try {
+        await this.discardUnmodifiedProjectCopy(
+          userId,
+          document,
+          initialIdentity
+        );
+      } catch (cleanupError) {
+        if (cleanupError instanceof RevisionConflictError) throw cleanupError;
+        throw new AggregateError(
+          [error, cleanupError],
+          'Project copy failed and its incomplete project could not be removed.',
+          { cause: cleanupError }
+        );
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Claim only this request's unchanged initial head before erasing its bytes.
+   * Version alone cannot identify it: source archival keeps the same version.
+   * The durable claim fences saves and restores throughout asynchronous
+   * erasure, including clients that recover the row version from the shelf.
+   * Failed erasure keeps the claim, deleted row and R2 metadata for the
+   * existing owner purge retry, rather than orphaning those objects.
+   */
+  async discardUnmodifiedProjectCopy(
+    userId: UserId,
+    document: Pick<ProjectDocument, 'projectId' | 'version'>,
+    identity: ProjectCopyCleanupIdentity,
+    afterClaim?: () => Promise<void>
+  ): Promise<void> {
+    if (this.env.PROJECT_ROOM) {
+      const response = await this.env.PROJECT_ROOM.getByName(
+        document.projectId
+      ).fetch(
+        new Request(
+          `https://project-room.internal/_internal/source-cleanup?projectId=${encodeURIComponent(document.projectId)}`,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-openzcad-internal-source-cleanup': 'v1'
+            },
+            body: JSON.stringify({
+              action: 'rollback-copy',
+              userId,
+              expectedVersion: document.version,
+              expectedDocumentDigest: identity.documentDigest,
+              expectedDocumentJsonDigest: identity.documentJsonDigest,
+              expectedDocumentObjectId: identity.documentObjectId
+            })
+          }
+        )
+      );
+      if (response.status === 409) {
+        const body = (await response.json().catch(() => null)) as {
+          currentVersion?: unknown;
+        } | null;
+        const currentVersion =
+          typeof body?.currentVersion === 'number' &&
+          Number.isSafeInteger(body.currentVersion)
+            ? body.currentVersion
+            : document.version;
+        const conflict = new RevisionConflictError(
+          document.projectId,
+          currentVersion
+        );
+        conflict.message =
+          'The new project changed before its source copy finished. Its newer edits were kept.';
+        throw conflict;
+      }
+      if (!response.ok)
+        throw new ArtifactStorageError(
+          'The incomplete project copy could not be removed.'
+        );
+      return;
+    }
+    const head = await this.env
+      .DB!.prepare(
+        'SELECT document_version, document_json, document_object_id FROM projects WHERE id = ? AND user_id = ?'
+      )
+      .bind(document.projectId, userId)
+      .first<{
+        document_version: number;
+        document_json: string;
+        document_object_id: string | null;
+      }>();
+    if (!head) return;
+    if (
+      head.document_version !== document.version ||
+      head.document_object_id !== identity.documentObjectId ||
+      (await sha256Hex(new TextEncoder().encode(head.document_json))) !==
+        identity.documentJsonDigest
+    ) {
+      const conflict = new RevisionConflictError(
+        document.projectId,
+        head.document_version
+      );
+      conflict.message =
+        'The new project changed before its source copy finished. Its newer edits were kept.';
+      throw conflict;
+    }
+    const claimedAt = nowIso();
+    const claimed = await this.env.DB!.batch([
+      this.env
+        .DB!.prepare(
+          `INSERT INTO project_copy_cleanup_claims (project_id, claimed_at)
+         SELECT id, ? FROM projects
+         WHERE id = ? AND user_id = ? AND document_version = ?
+           AND document_json = ? AND document_object_id IS ?
+           AND NOT EXISTS (
+             SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id
+           )`
+        )
+        .bind(
+          claimedAt,
+          document.projectId,
+          userId,
+          document.version,
+          head.document_json,
+          identity.documentObjectId
+        ),
+      this.env
+        .DB!.prepare(
+          `UPDATE projects SET status = 'deleted', deleted_at = ?, document_version = document_version + 1
+         WHERE id = ? AND user_id = ? AND document_version = ?
+           AND document_json = ? AND document_object_id IS ?
+           AND EXISTS (
+             SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id AND claimed_at = ?
+           )`
+        )
+        .bind(
+          claimedAt,
+          document.projectId,
+          userId,
+          document.version,
+          head.document_json,
+          identity.documentObjectId,
+          claimedAt
+        )
+    ]);
+    if (claimed[0]?.meta?.changes !== 1) {
+      const current = await this.env
+        .DB!.prepare(
+          'SELECT document_version FROM projects WHERE id = ? AND user_id = ?'
+        )
+        .bind(document.projectId, userId)
+        .first<{ document_version: number }>();
+      if (!current) return;
+      const conflict = new RevisionConflictError(
+        document.projectId,
+        current.document_version
+      );
+      conflict.message =
+        'The new project changed before its source copy finished. Its newer edits were kept.';
+      throw conflict;
+    }
+    await afterClaim?.();
+    await this.destroyProjects([document.projectId]);
+  }
+
+  private async recordVerifiedCopiedImportArchive(
+    userId: UserId,
+    archive: CopiedImportArchive
+  ): Promise<void> {
+    const recorded = await this.env
+      .DB!.prepare(
+        `INSERT INTO project_copy_source_archives
+       (project_id, kind, checksum_sha256, logical_bytes, artifact_id)
+       SELECT ?, ?, ?, ?, artifacts.id FROM artifacts JOIN projects ON projects.id = artifacts.project_id
+       WHERE artifacts.id = ? AND artifacts.project_id = ? AND projects.user_id = ?
+         AND artifacts.kind = ? AND artifacts.bytes = ?
+         AND NOT EXISTS (SELECT 1 FROM artifact_mesh_discards WHERE artifact_id = artifacts.id)
+         AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)
+       ON CONFLICT(project_id, kind, checksum_sha256, logical_bytes) DO NOTHING`
+      )
+      .bind(
+        archive.projectId,
+        archive.kind,
+        archive.checksumSha256,
+        archive.logicalBytes,
+        archive.artifactId,
+        archive.projectId,
+        userId,
+        archive.kind,
+        archive.logicalBytes
+      )
+      .run();
+    if (
+      recorded.meta?.changes !== 1 &&
+      !(await this.loadCopiedImportArchives(userId, archive.projectId)).some(
+        (entry) =>
+          entry.kind === archive.kind &&
+          entry.checksumSha256 === archive.checksumSha256 &&
+          entry.logicalBytes === archive.logicalBytes
+      )
+    )
+      throw new ArtifactStorageError(
+        'The verified copy source could not be recorded.'
+      );
+  }
+
+  async loadCopiedImportArchives(
+    userId: UserId,
+    projectId: ProjectId
+  ): Promise<CopiedImportArchive[]> {
+    await this.requireProjectRead(userId, projectId);
+    return this.storedCopiedImportArchives(projectId);
+  }
+
+  private async storedCopiedImportArchives(
+    projectId: ProjectId
+  ): Promise<CopiedImportArchive[]> {
+    const rows = await this.env
+      .DB!.prepare(
+        `SELECT source.kind, source.checksum_sha256, source.logical_bytes, source.artifact_id
+       FROM project_copy_source_archives source JOIN artifacts ON artifacts.id = source.artifact_id
+       WHERE source.project_id = ? AND artifacts.project_id = source.project_id
+         AND artifacts.kind = source.kind AND artifacts.bytes = source.logical_bytes
+         AND NOT EXISTS (SELECT 1 FROM artifact_mesh_discards WHERE artifact_id = source.artifact_id)`
+      )
+      .bind(projectId)
+      .all<{
+        kind: CopiedImportArchive['kind'];
+        checksum_sha256: string;
+        logical_bytes: number;
+        artifact_id: string;
+      }>();
+    return (rows.results ?? []).map((row) => ({
+      projectId,
+      kind: row.kind,
+      checksumSha256: row.checksum_sha256,
+      logicalBytes: row.logical_bytes,
+      artifactId: toArtifactId(row.artifact_id)
+    }));
+  }
+
+  private async hydrateCopiedSourceAliases(
+    document: ProjectDocument
+  ): Promise<ProjectDocument> {
+    return reconcileCopiedImportSources(
+      document,
+      await this.storedCopiedImportArchives(document.projectId)
+    );
+  }
+
+  async loadProjectCopyState(userId: UserId, projectId: ProjectId) {
+    const access = await this.requireProjectEdit(userId, projectId);
+    if (access.ownerUserId !== userId)
+      throw new ProjectNotFoundError(projectId);
+    const row = await this.env
+      .DB!.prepare(
+        `${PROJECT_SUMMARY_COLUMNS}, document_object_id FROM projects WHERE id = ? AND user_id = ?`
+      )
+      .bind(projectId, userId)
+      .first<ProjectRow & { document_object_id: string | null }>();
+    if (!row) throw new ProjectNotFoundError(projectId);
+    const rawDocument = row.document_object_id
+      ? await this.loadProjectObject(projectId, row.document_object_id)
+      : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+    const project = summaryFromRow(row);
+    if (!project) throw new ProjectNotFoundError(projectId);
+    return {
+      project,
+      document: await this.hydrateCopiedSourceAliases(rawDocument),
+      identity: {
+        documentDigest: await projectCopyDocumentDigest(rawDocument),
+        documentJsonDigest: await sha256Hex(
+          new TextEncoder().encode(row.document_json)
+        ),
+        documentObjectId: row.document_object_id
+      } satisfies ProjectCopyCleanupIdentity,
+      storedHead: {
+        documentJson: row.document_json,
+        documentObjectId: row.document_object_id
+      }
+    };
+  }
+
+  async finalizeImportedSourceCopy(
+    userId: UserId,
+    request: ProjectCopyFinalizeRequest,
+    selected?: {
+      document: ProjectDocument;
+      expectedHeadIdentity: ProjectCopyCleanupIdentity;
+    }
+  ): Promise<CreateProjectResponse> {
+    if (this.env.PROJECT_ROOM) {
+      const response = await this.env.PROJECT_ROOM.getByName(
+        request.projectId
+      ).fetch(
+        new Request(
+          `https://project-room.internal/_internal/source-cleanup?projectId=${encodeURIComponent(request.projectId)}`,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-openzcad-internal-source-cleanup': 'v1'
+            },
+            body: JSON.stringify({
+              action: 'complete-copy',
+              userId,
+              expectedVersion: request.expectedVersion,
+              expectedDocumentDigest: request.initialIdentity.documentDigest,
+              expectedDocumentJsonDigest:
+                request.initialIdentity.documentJsonDigest,
+              expectedDocumentObjectId:
+                request.initialIdentity.documentObjectId,
+              archives: request.archives
+            })
+          }
+        )
+      );
+      if (response.status === 409) {
+        const body = (await response.json().catch(() => null)) as {
+          currentVersion?: number;
+        } | null;
+        throw new RevisionConflictError(
+          request.projectId,
+          body?.currentVersion ?? request.expectedVersion
+        );
+      }
+      if (!response.ok)
+        throw new ArtifactStorageError(
+          'Copied sources could not be published. The project and its source bytes were kept.'
+        );
+      return response.json() as Promise<CreateProjectResponse>;
+    }
+    const state = await this.loadProjectCopyState(userId, request.projectId);
+    if (
+      selected &&
+      (state.identity.documentJsonDigest !==
+        selected.expectedHeadIdentity.documentJsonDigest ||
+        state.identity.documentObjectId !==
+          selected.expectedHeadIdentity.documentObjectId)
+    )
+      throw new RevisionConflictError(
+        request.projectId,
+        state.document.version
+      );
+    const base = selected?.document ?? state.document;
+    const verified = await verifyCopiedImportArchives(
+      this,
+      userId,
+      request.projectId,
+      request.archives,
+      [base]
+    );
+    const reconciled = reconcileCopiedImportSources(base, verified);
+    assertCopiedSourcesArchived(reconciled);
+    // Completion is a publication transition even when another device has
+    // already archived the source. Fence mirrors normalized before registration.
+    const document = {
+      ...reconciled,
+      version: Math.max(reconciled.version, state.document.version) + 1
+    };
+    const saved = await this.saveDocument(
+      userId,
+      {
+        projectId: request.projectId,
+        expectedVersion: state.document.version,
+        document
+      },
+      state.storedHead
+    );
+    return {
+      project: {
+        ...state.project,
+        name: document.name,
+        documentVersion: saved.version,
+        updatedAt: saved.updatedAt,
+        lastRevisionId: document.revisions.at(-1)?.revisionId,
+        revisionCount: document.revisions.length
+      },
+      document: {
+        ...document,
+        derived: { ...document.derived, updatedAt: saved.updatedAt }
+      }
     };
   }
 
@@ -1373,7 +1866,7 @@ export class D1R2PersistenceService implements PersistenceService {
       ? await this.loadProjectObject(projectId, row.document_object_id)
       : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
     return {
-      document,
+      document: await this.hydrateCopiedSourceAliases(document),
       origin: projectBranchPoint(head, {
         revisionId: toRevisionId(revisionId),
         reason: row.reason
@@ -1401,8 +1894,9 @@ export class D1R2PersistenceService implements PersistenceService {
       projectOrganization(current),
       request
     );
-    await this.env.DB.prepare(
-      `UPDATE projects SET status = ?, pinned = ?, sort_order = ?, deleted_at = ?, archived_at = ? WHERE id = ? AND user_id = ?`
+    const updated = await this.env.DB.prepare(
+      `UPDATE projects SET status = ?, pinned = ?, sort_order = ?, deleted_at = ?, archived_at = ? WHERE id = ? AND user_id = ?
+       AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)`
     )
       .bind(
         organization.status,
@@ -1414,6 +1908,8 @@ export class D1R2PersistenceService implements PersistenceService {
         userId
       )
       .run();
+    if (updated.meta?.changes === 0)
+      throw new ProjectNotFoundError(request.projectId);
     return { ...current, organization };
   }
 
@@ -1502,9 +1998,10 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!row) {
       return null;
     }
-    return row.document_object_id
-      ? this.loadProjectObject(projectId, row.document_object_id)
+    const document = row.document_object_id
+      ? await this.loadProjectObject(projectId, row.document_object_id)
       : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+    return this.hydrateCopiedSourceAliases(document);
   }
 
   async listRevisions(
@@ -1567,9 +2064,10 @@ export class D1R2PersistenceService implements PersistenceService {
     // Where object storage is in use, `document_json` holds the envelope
     // rather than the document, so the pointer decides — exactly as in
     // `loadProject`.
-    return row.document_object_id
-      ? this.loadProjectObject(projectId, row.document_object_id)
+    const document = row.document_object_id
+      ? await this.loadProjectObject(projectId, row.document_object_id)
       : normalizeDocument(JSON.parse(row.document_json) as ProjectDocument);
+    return this.hydrateCopiedSourceAliases(document);
   }
 
   async saveRevision(
@@ -1596,7 +2094,12 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const normalized = withoutDerivedProjection(
-      normalizeDocument(request.document)
+      normalizeDocument(
+        reconcileCopiedImportSources(
+          request.document,
+          await this.loadCopiedImportArchives(userId, request.projectId)
+        )
+      )
     );
     if (
       normalized.projectId !== request.projectId ||
@@ -1607,6 +2110,7 @@ export class D1R2PersistenceService implements PersistenceService {
     await this.refreshAccountQuota(access.ownerUserId);
     const document = createSavedRevision(normalized, request.reason);
     this.assertDocumentCanBeStored(document);
+    const discardGuard = meshDiscardCommitGuard(document);
     const documentJson = JSON.stringify(document);
     const documentBytes = persistedDocumentBytes(document);
     const latestRevision = document.revisions.at(-1);
@@ -1634,7 +2138,8 @@ export class D1R2PersistenceService implements PersistenceService {
                document_bytes = ?, updated_at = ?, name = ?,
                last_revision_id = ?, revision_count = ?
            WHERE id = ? AND user_id = ? AND document_version = ?
-             AND (user_id = ? OR status != 'deleted')`
+             AND (user_id = ? OR status != 'deleted')${discardGuard.sql}
+             AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)`
         ).bind(
           envelope,
           write.objectId,
@@ -1647,7 +2152,8 @@ export class D1R2PersistenceService implements PersistenceService {
           request.projectId,
           access.ownerUserId,
           request.expectedVersion,
-          userId
+          userId,
+          ...discardGuard.bindings
         ),
         this.env.DB.prepare(
           `UPDATE project_document_objects
@@ -1745,7 +2251,8 @@ export class D1R2PersistenceService implements PersistenceService {
     try {
       results = await this.env.DB.batch([
         this.env.DB.prepare(
-          `UPDATE projects SET document_json = ?, document_version = ?, document_bytes = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ? AND (user_id = ? OR status != 'deleted')`
+          `UPDATE projects SET document_json = ?, document_version = ?, document_bytes = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ? AND (user_id = ? OR status != 'deleted')${discardGuard.sql}
+             AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)`
         ).bind(
           documentJson,
           document.version,
@@ -1755,7 +2262,8 @@ export class D1R2PersistenceService implements PersistenceService {
           request.projectId,
           access.ownerUserId,
           request.expectedVersion,
-          userId
+          userId,
+          ...discardGuard.bindings
         ),
         this.env.DB.prepare(
           `INSERT INTO revisions (id, project_id, reason, document_json, document_bytes, created_at, author_user_id) SELECT ?, ?, ?, ?, ?, ?, ? WHERE changes() > 0`
@@ -1960,7 +2468,8 @@ export class D1R2PersistenceService implements PersistenceService {
    */
   async saveDocument(
     userId: UserId,
-    request: SaveProjectDocumentRequest
+    request: SaveProjectDocumentRequest,
+    expectedHead?: ProjectCopyStoredHead
   ): Promise<SaveProjectDocumentResponse> {
     if (!this.env.DB) {
       return getInMemoryPersistence().saveDocument(userId, request);
@@ -1982,7 +2491,12 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     const normalized = withoutDerivedProjection(
-      normalizeDocument(request.document)
+      normalizeDocument(
+        reconcileCopiedImportSources(
+          request.document,
+          await this.loadCopiedImportArchives(userId, request.projectId)
+        )
+      )
     );
     if (
       normalized.projectId !== request.projectId ||
@@ -1992,6 +2506,13 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     await this.refreshAccountQuota(access.ownerUserId);
     this.assertDocumentCanBeStored(normalized);
+    const discardGuard = meshDiscardCommitGuard(normalized);
+    const headGuard = expectedHead
+      ? ' AND document_json = ? AND document_object_id IS ?'
+      : '';
+    const headBindings = expectedHead
+      ? [expectedHead.documentJson, expectedHead.documentObjectId]
+      : [];
     const updatedAt = nowIso();
     if (this.projectStorageBucket()) {
       await this.assertProjectVersion(
@@ -2013,7 +2534,8 @@ export class D1R2PersistenceService implements PersistenceService {
                document_bytes = ?, updated_at = ?, name = ?,
                last_revision_id = ?, revision_count = ?
            WHERE id = ? AND user_id = ? AND document_version = ?
-             AND (user_id = ? OR status != 'deleted')`
+             AND (user_id = ? OR status != 'deleted')${discardGuard.sql}${headGuard}
+             AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)`
         ).bind(
           envelope,
           write.objectId,
@@ -2026,7 +2548,9 @@ export class D1R2PersistenceService implements PersistenceService {
           request.projectId,
           access.ownerUserId,
           request.expectedVersion,
-          userId
+          userId,
+          ...discardGuard.bindings,
+          ...headBindings
         ),
         this.env.DB.prepare(
           `UPDATE project_document_objects
@@ -2108,7 +2632,8 @@ export class D1R2PersistenceService implements PersistenceService {
     let result: Awaited<ReturnType<D1PreparedStatement['run']>>;
     try {
       result = await this.env.DB.prepare(
-        `UPDATE projects SET document_json = ?, document_version = ?, document_bytes = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ? AND (user_id = ? OR status != 'deleted')`
+        `UPDATE projects SET document_json = ?, document_version = ?, document_bytes = ?, updated_at = ?, name = ? WHERE id = ? AND user_id = ? AND document_version = ? AND (user_id = ? OR status != 'deleted')${discardGuard.sql}${headGuard}
+             AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)`
       )
         .bind(
           JSON.stringify(normalized),
@@ -2119,7 +2644,9 @@ export class D1R2PersistenceService implements PersistenceService {
           request.projectId,
           access.ownerUserId,
           request.expectedVersion,
-          userId
+          userId,
+          ...discardGuard.bindings,
+          ...headBindings
         )
         .run();
     } catch (error) {
@@ -2176,6 +2703,7 @@ export class D1R2PersistenceService implements PersistenceService {
          WHERE EXISTS (
            SELECT 1 FROM projects
            WHERE id = ? AND (user_id = ? OR status != 'deleted')
+             AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)
          )`
       )
         .bind(
@@ -2285,7 +2813,8 @@ export class D1R2PersistenceService implements PersistenceService {
              single_part = 1
          WHERE id = ? AND reservation_state = 'open'
            AND multipart_upload_id IS NULL AND reserved_bytes = 0
-           AND single_part = 0`
+           AND single_part = 0
+           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)`
         )
           .bind(multipart.uploadId, uploadSessionId)
           .run();
@@ -2569,7 +3098,8 @@ export class D1R2PersistenceService implements PersistenceService {
          SET reservation_state = 'uploading', multipart_upload_id = ?,
              completion_started_at = NULL
          WHERE id = ? AND reservation_state = 'open'
-           AND multipart_upload_id IS NULL AND reserved_bytes = 0`
+           AND multipart_upload_id IS NULL AND reserved_bytes = 0
+           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)`
       )
         .bind(upload.uploadId, uploadSessionId)
         .run();
@@ -2754,7 +3284,8 @@ export class D1R2PersistenceService implements PersistenceService {
         `UPDATE upload_sessions
          SET reservation_state = 'completing', completion_started_at = ?
          WHERE id = ? AND reservation_state = 'uploading'
-           AND multipart_upload_id = ?`
+           AND multipart_upload_id = ?
+           AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id)`
       )
         .bind(Date.now(), uploadSessionId, request.uploadId)
         .run();
@@ -2780,6 +3311,7 @@ export class D1R2PersistenceService implements PersistenceService {
         )
           .bind(uploadSessionId, request.uploadId, session.reservedBytes)
           .run();
+        await this.cleanupClaimedUpload(uploadSessionId, session);
         return;
       }
       if (
@@ -2837,6 +3369,7 @@ export class D1R2PersistenceService implements PersistenceService {
           'Completed multipart object does not match its reservation.'
         );
       }
+      await this.cleanupClaimedUpload(uploadSessionId, session);
       return;
     }
     const upload = this.env.ARTIFACTS!.resumeMultipartUpload(
@@ -2880,6 +3413,21 @@ export class D1R2PersistenceService implements PersistenceService {
           'Multipart completion could not be reconciled.'
         );
       }
+    }
+    await this.cleanupClaimedUpload(uploadSessionId, session);
+  }
+
+  private async cleanupClaimedUpload(
+    uploadSessionId: string,
+    session: DurableUploadSession
+  ): Promise<void> {
+    if (
+      (isMeshImportArchiveKind(session.kind) &&
+        (await this.meshDiscardClaim(session.artifactId))) ||
+      (await this.projectCopyCleanupClaim(session.projectId))
+    ) {
+      const current = await this.loadUploadSession(uploadSessionId);
+      if (current) await this.cleanupUploadSession(current);
     }
   }
 
@@ -2964,7 +3512,14 @@ export class D1R2PersistenceService implements PersistenceService {
     )
       .bind(request.artifactId, request.projectId)
       .first<ArtifactRow>();
-    if (existingArtifact) return artifactFromRow(existingArtifact);
+    if (existingArtifact) {
+      if (
+        isMeshImportArchiveKind(existingArtifact.kind) &&
+        (await this.meshDiscardClaim(request.artifactId))
+      )
+        return null;
+      return artifactFromRow(existingArtifact);
+    }
 
     const upload = await this.requireUploadSession(
       userId,
@@ -2977,6 +3532,13 @@ export class D1R2PersistenceService implements PersistenceService {
       !upload.multipartUploadId ||
       upload.reservedBytes < 1
     ) {
+      return null;
+    }
+    if (
+      isMeshImportArchiveKind(upload.kind) &&
+      (await this.meshDiscardClaim(request.artifactId))
+    ) {
+      await this.cleanupUploadSession(upload);
       return null;
     }
     const stored = await this.env.ARTIFACTS!.head(upload.objectKey);
@@ -3050,6 +3612,9 @@ export class D1R2PersistenceService implements PersistenceService {
             )
           ]
         : [];
+    const discardGuard = isMeshImportArchiveKind(artifact.kind)
+      ? ' AND NOT EXISTS (SELECT 1 FROM artifact_mesh_discards WHERE artifact_id = ?)'
+      : '';
     const artifactInsertIndex = statements.length;
     statements.push(
       this.env.DB.prepare(
@@ -3066,7 +3631,8 @@ export class D1R2PersistenceService implements PersistenceService {
              SELECT 1 FROM projects
              WHERE id = upload_sessions.project_id
                AND (user_id = ? OR status != 'deleted')
-           )`
+               AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)
+           )${discardGuard}`
       ).bind(
         artifact.artifactId,
         artifact.kind,
@@ -3079,7 +3645,8 @@ export class D1R2PersistenceService implements PersistenceService {
         request.projectId,
         upload.ownerUserId,
         artifact.bytes,
-        userId
+        userId,
+        ...(discardGuard ? [artifact.artifactId] : [])
       ),
       this.env.DB.prepare(
         `DELETE FROM artifact_upload_parts
@@ -3106,6 +3673,14 @@ export class D1R2PersistenceService implements PersistenceService {
       throw mapped;
     }
     if (results[artifactInsertIndex]?.meta?.changes !== 1) {
+      if (
+        isMeshImportArchiveKind(artifact.kind) &&
+        (await this.meshDiscardClaim(artifact.artifactId))
+      ) {
+        const current = await this.loadUploadSession(request.uploadSessionId);
+        if (current) await this.cleanupUploadSession(current);
+        return null;
+      }
       await this.requireProjectRead(userId, request.projectId);
       const existing = await this.env.DB.prepare(
         `SELECT id, project_id, kind, name, object_key, content_type, bytes,
@@ -3131,6 +3706,218 @@ export class D1R2PersistenceService implements PersistenceService {
     }
 
     return artifact;
+  }
+
+  private async meshDiscardClaim(
+    artifactId: string
+  ): Promise<{ project_id: string; object_key: string } | null> {
+    return this.env
+      .DB!.prepare(
+        'SELECT project_id, object_key FROM artifact_mesh_discards WHERE artifact_id = ?'
+      )
+      .bind(artifactId)
+      .first<{ project_id: string; object_key: string }>();
+  }
+
+  async discardMeshPayload(
+    userId: UserId,
+    projectId: string,
+    artifactId: string,
+    originalKind?: 'stl-import' | 'mesh-import'
+  ): Promise<{ deleted: boolean }> {
+    if (!this.env.DB)
+      return getInMemoryPersistence().discardMeshPayload(
+        userId,
+        projectId,
+        artifactId,
+        originalKind
+      );
+    const expectedKind = originalKind ?? 'mesh-payload';
+    const access = await this.requireProjectEdit(userId, projectId);
+    // Finalized originals have no trusted uploader identity. Retain their
+    // owner-only removal policy while editors can compensate unused payloads.
+    if (originalKind && access.role !== 'owner')
+      throw new ProjectNotFoundError(projectId);
+    const trustedSource = await this.env.DB.prepare(
+      'SELECT 1 AS retained FROM project_copy_source_archives WHERE artifact_id = ?'
+    )
+      .bind(artifactId)
+      .first<{ retained: number }>();
+    if (trustedSource?.retained === 1) return { deleted: false };
+    if (this.env.PROJECT_ROOM) {
+      const url = new URL('https://project-room/_internal/source-cleanup');
+      url.searchParams.set('projectId', projectId);
+      const response = await this.env.PROJECT_ROOM.getByName(projectId).fetch(
+        new Request(url, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-openzcad-internal-source-cleanup': 'v1'
+          },
+          body: JSON.stringify({
+            action: 'discard-mesh',
+            userId,
+            artifactId,
+            ...(originalKind ? { kind: originalKind } : {})
+          })
+        })
+      );
+      if (!response.ok)
+        throw new ArtifactStorageError(
+          'Mesh payload cleanup could not be completed.'
+        );
+      const result = (await response.json()) as { deleted?: unknown };
+      if (typeof result.deleted !== 'boolean')
+        throw new ArtifactStorageError(
+          'Mesh payload cleanup could not be verified.'
+        );
+      return { deleted: result.deleted };
+    }
+    if (!this.env.ARTIFACTS) throw new ArtifactStorageError();
+    // Finalization atomically moves this id from upload_sessions to artifacts.
+    // Read both in one snapshot so that transition cannot look like absence.
+    const known = await this.env.DB.prepare(
+      `SELECT project_id, kind, object_key FROM artifacts WHERE id = ?
+       UNION ALL
+       SELECT project_id, kind, object_key FROM upload_sessions WHERE artifact_id = ?
+       LIMIT 1`
+    )
+      .bind(artifactId, artifactId)
+      .first<{ project_id: string; kind: string; object_key: string }>();
+    let claim = await this.meshDiscardClaim(artifactId);
+    if (!known && !claim) return { deleted: true };
+    if (
+      known &&
+      (known.project_id !== projectId || known.kind !== expectedKind)
+    )
+      return { deleted: false };
+    if (
+      claim &&
+      (claim.project_id !== projectId ||
+        (known && claim.object_key !== known.object_key))
+    )
+      return { deleted: false };
+    const head = await this.env.DB.prepare(
+      'SELECT document_version, document_json, document_object_id FROM projects WHERE id = ?'
+    )
+      .bind(projectId)
+      .first<{
+        document_version: number;
+        document_json: string;
+        document_object_id: string | null;
+      }>();
+    if (!head) throw new ProjectNotFoundError(projectId);
+    const current = await this.loadProject(userId, projectId);
+    if (!current || importArtifactIds(current).includes(artifactId))
+      return { deleted: false };
+    const revisions = await this.env.DB.prepare(
+      'SELECT id FROM revisions WHERE project_id = ?'
+    )
+      .bind(projectId)
+      .all<{ id: string }>();
+    for (const revision of revisions.results ?? []) {
+      const document = await this.loadRevision(userId, projectId, revision.id);
+      if (!document || importArtifactIds(document).includes(artifactId))
+        return { deleted: false };
+    }
+    if (!claim) {
+      await this.env.DB.prepare(
+        `INSERT OR IGNORE INTO artifact_mesh_discards
+           (artifact_id, project_id, object_key, claimed_at)
+         SELECT ?, ?, ?, ?
+         WHERE EXISTS (
+           SELECT 1 FROM projects AS project
+           WHERE project.id = ? AND project.document_version = ?
+             AND project.document_json = ? AND project.document_object_id IS ?
+             AND (project.user_id = ? OR (
+               ? = 1 AND project.status != 'deleted'
+               AND EXISTS (SELECT 1 FROM project_members
+                           WHERE project_id = project.id AND user_id = ? AND role = 'editor')
+               AND COALESCE((SELECT CASE WHEN json_valid(settings_json)
+                    THEN json_extract(settings_json, '$.collaboration.enabled') END
+                    FROM user_settings WHERE user_id = project.user_id), 1) = 1
+             ))
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM revisions WHERE project_id = ?
+             AND id NOT IN (SELECT value FROM json_each(?))
+         )
+         AND NOT EXISTS (SELECT 1 FROM project_copy_source_archives WHERE artifact_id = ?)
+         AND (EXISTS (
+           SELECT 1 FROM artifacts WHERE id = ? AND project_id = ?
+             AND kind = ? AND object_key = ?
+         ) OR EXISTS (
+           SELECT 1 FROM upload_sessions WHERE artifact_id = ? AND project_id = ?
+             AND kind = ? AND object_key = ?
+         ))`
+      )
+        .bind(
+          artifactId,
+          projectId,
+          known!.object_key,
+          nowIso(),
+          projectId,
+          head.document_version,
+          head.document_json,
+          head.document_object_id,
+          userId,
+          !originalKind &&
+            isCloudflareFeatureEnabled(this.env, 'PROJECT_SHARING_ENABLED')
+            ? 1
+            : 0,
+          userId,
+          projectId,
+          JSON.stringify(
+            (revisions.results ?? []).map((revision) => revision.id)
+          ),
+          artifactId,
+          artifactId,
+          projectId,
+          expectedKind,
+          known!.object_key,
+          artifactId,
+          projectId,
+          expectedKind,
+          known!.object_key
+        )
+        .run();
+      claim = await this.meshDiscardClaim(artifactId);
+      if (
+        !claim ||
+        claim.project_id !== projectId ||
+        claim.object_key !== known!.object_key
+      )
+        return { deleted: false };
+    }
+    const upload = await this.env.DB.prepare(
+      'SELECT id FROM upload_sessions WHERE artifact_id = ? AND project_id = ?'
+    )
+      .bind(artifactId, projectId)
+      .first<{ id: string }>();
+    if (upload) {
+      const session = await this.loadUploadSession(upload.id);
+      if (session && !(await this.cleanupUploadSession(session)))
+        return { deleted: false };
+    }
+    // The durable claim blocks every later canonical save before the bytes go.
+    // Keep artifact accounting until R2 acknowledges removal; a failure retries.
+    await this.env.ARTIFACTS.delete(claim.object_key);
+    await this.env.DB.prepare(
+      `DELETE FROM artifacts WHERE id = ? AND project_id = ? AND kind = ?
+       AND object_key = ? AND EXISTS (
+         SELECT 1 FROM artifact_mesh_discards WHERE artifact_id = ? AND project_id = ?
+       )`
+    )
+      .bind(
+        artifactId,
+        projectId,
+        expectedKind,
+        claim.object_key,
+        artifactId,
+        projectId
+      )
+      .run();
+    return { deleted: true };
   }
 
   async listArtifacts(
@@ -3627,9 +4414,17 @@ export class D1R2PersistenceService implements PersistenceService {
     userId: UserId,
     document: ProjectDocument,
     organization: ProjectOrganization = DEFAULT_PROJECT_ORGANIZATION,
-    localProjectId?: string
+    localProjectId?: string,
+    captureInitialHead?: (head: ProjectCopyStoredHead) => void,
+    adoptionSource?: ProjectDocument
   ): Promise<ProjectSummary> {
     this.assertDocumentCanBeStored(document);
+    // Keep the pre-localization IDs in the atomic insert guard: a discard may
+    // win while R2 stores this adoption's new account document.
+    const discardGuard = meshDiscardCommitGuard(adoptionSource ?? document);
+    const insertGuard = discardGuard.sql
+      ? ` WHERE 1 = 1${discardGuard.sql}`
+      : '';
     await this.assertAccountProjectCount(userId);
     await this.refreshAccountQuota(userId);
     // The row's edit time is the document's, not the insert's: a fresh document
@@ -3648,15 +4443,19 @@ export class D1R2PersistenceService implements PersistenceService {
     if (this.projectStorageBucket()) {
       const write = await this.putProjectStorageObjects(document);
       const envelope = projectObjectEnvelope(document, write.objectId);
+      captureInitialHead?.({
+        documentJson: envelope,
+        documentObjectId: write.objectId
+      });
       try {
-        await this.env.DB!.batch([
+        const inserted = await this.env.DB!.batch([
           this.env
             .DB!.prepare(
               `INSERT INTO projects
                (id, user_id, name, document_json, document_object_id,
                 document_version, document_bytes, updated_at, status, pinned,
                 sort_order, last_revision_id, revision_count)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             ${insertGuard ? 'SELECT' : 'VALUES'} ${insertGuard ? '' : '('}?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${insertGuard ? '' : ')'}${insertGuard}`
             )
             .bind(
               document.projectId,
@@ -3671,12 +4470,17 @@ export class D1R2PersistenceService implements PersistenceService {
               organization.pinned ? 1 : 0,
               organization.sortOrder,
               document.revisions.at(-1)?.revisionId ?? null,
-              document.revisions.length
+              document.revisions.length,
+              ...discardGuard.bindings
             ),
           this.documentObjectInsert(document.projectId, write, 'committed'),
           ...this.projectAssetStatements(document.projectId, write),
           ...adoptionStatements
         ]);
+        if (discardGuard.bindings.length && inserted[0]?.meta?.changes !== 1)
+          throw new ArtifactStorageError(
+            'An imported mesh payload was discarded.'
+          );
       } catch (error) {
         const resolution = await this.reconcileProjectStorageWrite(
           document.projectId,
@@ -3702,27 +4506,41 @@ export class D1R2PersistenceService implements PersistenceService {
         organization
       };
     }
+    const documentJson = JSON.stringify(document);
+    captureInitialHead?.({ documentJson, documentObjectId: null });
     try {
       const insert = this.env
         .DB!.prepare(
-          `INSERT INTO projects (id, user_id, name, document_json, document_version, document_bytes, updated_at, status, pinned, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO projects (id, user_id, name, document_json, document_version, document_bytes, updated_at, status, pinned, sort_order) ${insertGuard ? 'SELECT' : 'VALUES'} ${insertGuard ? '' : '('}?, ?, ?, ?, ?, ?, ?, ?, ?, ?${insertGuard ? '' : ')'}${insertGuard}`
         )
         .bind(
           document.projectId,
           userId,
           document.name,
-          JSON.stringify(document),
+          documentJson,
           document.version,
           persistedDocumentBytes(document),
           updatedAt,
           organization.status,
           organization.pinned ? 1 : 0,
-          organization.sortOrder
+          organization.sortOrder,
+          ...discardGuard.bindings
         );
       if (adoptionStatements.length) {
-        await this.env.DB!.batch([insert, ...adoptionStatements]);
+        const inserted = await this.env.DB!.batch([
+          insert,
+          ...adoptionStatements
+        ]);
+        if (discardGuard.bindings.length && inserted[0]?.meta?.changes !== 1)
+          throw new ArtifactStorageError(
+            'An imported mesh payload was discarded.'
+          );
       } else {
-        await insert.run();
+        const inserted = await insert.run();
+        if (discardGuard.bindings.length && inserted.meta?.changes !== 1)
+          throw new ArtifactStorageError(
+            'An imported mesh payload was discarded.'
+          );
       }
     } catch (error) {
       throw projectQuotaError(error, await this.ownerEntitlements(userId));
@@ -3853,7 +4671,10 @@ export class D1R2PersistenceService implements PersistenceService {
         'DELETE FROM project_invitations WHERE project_id IN',
         'DELETE FROM project_members WHERE project_id IN',
         'DELETE FROM upload_sessions WHERE project_id IN',
+        'DELETE FROM project_copy_source_archives WHERE project_id IN',
         'DELETE FROM artifacts WHERE project_id IN',
+        'DELETE FROM artifact_mesh_discards WHERE project_id IN',
+        'DELETE FROM project_copy_cleanup_claims WHERE project_id IN',
         'DELETE FROM project_measurements WHERE project_id IN',
         'DELETE FROM project_workspace_sessions WHERE project_id IN',
         'DELETE FROM revisions WHERE project_id IN',
@@ -3966,7 +4787,11 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const expired = await this.env.DB.prepare(
       `SELECT id FROM upload_sessions
-       WHERE expires_at < ?${ownerUserId === undefined ? '' : ' AND owner_user_id = ?'}
+       WHERE (expires_at < ? OR EXISTS (
+         SELECT 1 FROM artifact_mesh_discards WHERE artifact_id = upload_sessions.artifact_id
+       ) OR EXISTS (
+         SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = upload_sessions.project_id
+       ))${ownerUserId === undefined ? '' : ' AND owner_user_id = ?'}
        ORDER BY expires_at LIMIT ${ownerUserId === undefined ? 100 : MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS}`
     )
       .bind(
@@ -4439,6 +5264,7 @@ const ROOM_LATEST_KEY = 'room:latest';
 const ROOM_HISTORY_PREFIX = 'room:history:';
 const ROOM_EDIT_LEASE_KEY = 'room:edit-lease';
 const ROOM_SOCKET_TICKETS_KEY = 'room:socket-tickets';
+const ROOM_SOURCE_ARCHIVES_KEY = 'room:source-archives';
 /** Pre-split layout: the whole room under one value. Migrated away on load. */
 const LEGACY_ROOM_STATE_KEY = 'room-state';
 const ROOM_STORAGE_SCHEMA = 1;
@@ -4563,12 +5389,12 @@ async function socketTicketHash(ticket: string): Promise<string> {
  * bytes the room will reject. `null` means the caller must return the typed
  * oversize response; an absent body remains an invalid empty payload.
  */
-async function readSnapshotBody(request: Request): Promise<string | null> {
+async function readSnapshotBody(
+  request: Request,
+  maxBytes = MAX_SNAPSHOT_PAYLOAD_BYTES
+): Promise<string | null> {
   const contentLength = Number(request.headers.get('content-length') ?? '0');
-  if (
-    Number.isFinite(contentLength) &&
-    contentLength > MAX_SNAPSHOT_PAYLOAD_BYTES
-  ) {
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
     return null;
   }
   const reader = request.body?.getReader();
@@ -4585,7 +5411,7 @@ async function readSnapshotBody(request: Request): Promise<string | null> {
         break;
       }
       totalBytes += value.byteLength;
-      if (totalBytes > MAX_SNAPSHOT_PAYLOAD_BYTES) {
+      if (totalBytes > maxBytes) {
         await reader.cancel().catch(() => undefined);
         return null;
       }
@@ -4628,6 +5454,24 @@ function historyKey(version: number): string {
   return `${ROOM_HISTORY_PREFIX}${version}`;
 }
 
+function validCopiedArchive(value: unknown): value is CopiedImportArchive {
+  return (
+    isRecord(value) &&
+    typeof value.projectId === 'string' &&
+    !!value.projectId &&
+    value.projectId.length <= 200 &&
+    typeof value.artifactId === 'string' &&
+    !!value.artifactId &&
+    value.artifactId.length <= 200 &&
+    !value.artifactId.startsWith('artifact_local_') &&
+    typeof value.checksumSha256 === 'string' &&
+    /^[a-f0-9]{64}$/.test(value.checksumSha256) &&
+    Number.isSafeInteger(value.logicalBytes) &&
+    (value.logicalBytes as number) > 0 &&
+    (value.kind === 'mesh-payload' || value.kind === 'step-import')
+  );
+}
+
 export class ProjectCollaborationRoom extends DurableObject {
   private readonly roomContext: {
     storage: RoomStorage;
@@ -4647,6 +5491,8 @@ export class ProjectCollaborationRoom extends DurableObject {
   >();
   private latestDocument: ProjectDocument | null = null;
   private documentHistory = new Map<number, ProjectDocument>();
+  private sourceArchives: CopiedImportArchive[] = [];
+  private sourceCopyPublicationStarted = false;
   private historyVersions: number[] = [];
   private historyLoaded = false;
   private historyLoad: Promise<void> | null = null;
@@ -4678,16 +5524,53 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     this.ready = this.roomContext.blockConcurrencyWhile(async () => {
       await this.migrateLegacyRoomState();
+      const archives = await this.roomContext.storage.get<unknown>(
+        ROOM_SOURCE_ARCHIVES_KEY
+      );
+      if (archives !== undefined) {
+        if (
+          !Array.isArray(archives) ||
+          !archives.every(validCopiedArchive) ||
+          archives.some(
+            (archive) => archive.projectId !== archives[0]?.projectId
+          )
+        )
+          throw new ArtifactStorageError(
+            'Copied source ownership could not be restored.'
+          );
+        this.sourceArchives = archives;
+        this.sourceCopyPublicationStarted = true;
+        this.projectId = archives[0]?.projectId ?? null;
+      }
       const meta = await this.roomContext.storage.get<RoomMeta>(ROOM_META_KEY);
       if (!meta) {
         return;
       }
-      this.projectId = meta.projectId ?? null;
+      if (this.projectId && meta.projectId && this.projectId !== meta.projectId)
+        throw new ArtifactStorageError(
+          'Copied project identity could not be restored.'
+        );
+      this.projectId = meta.projectId ?? this.projectId;
       this.historyVersions = meta.historyVersions ?? [];
       this.latestDocument =
         (await this.roomContext.storage.get<ProjectDocument>(
           ROOM_LATEST_KEY
         )) ?? null;
+      if (this.latestDocument)
+        this.latestDocument = reconcileCopiedImportSources(
+          this.latestDocument,
+          this.sourceArchives
+        );
+      if (this.latestDocument && this.projectId && this.roomEnv.DB) {
+        try {
+          await this.restoreTrustedSourceArchives(
+            this.latestDocument.ownerUserId,
+            this.projectId
+          );
+        } catch (error) {
+          if (!(error instanceof ProjectNotFoundError)) throw error;
+        }
+      }
       const storedLease =
         await this.roomContext.storage.get<StoredProjectEditLeases>(
           ROOM_EDIT_LEASE_KEY
@@ -4720,13 +5603,59 @@ export class ProjectCollaborationRoom extends DurableObject {
         )
       );
       for (const document of history) {
-        if (document) this.documentHistory.set(document.version, document);
+        if (document)
+          this.documentHistory.set(
+            document.version,
+            reconcileCopiedImportSources(document, this.sourceArchives)
+          );
       }
       this.historyLoaded = true;
     })().finally(() => {
       this.historyLoad = null;
     });
     await this.historyLoad;
+  }
+
+  /** D1 provenance also survives an interrupted room-journal publication. */
+  private async restoreTrustedSourceArchives(
+    userId: UserId,
+    projectId: string
+  ): Promise<void> {
+    if (!this.roomEnv.DB) return;
+    const persistence = new D1R2PersistenceService({
+      ...this.roomEnv,
+      PROJECT_ROOM: undefined
+    });
+    const trusted = await persistence.loadCopiedImportArchives(
+      userId,
+      toProjectId(projectId)
+    );
+    const archives = new Map(
+      this.sourceArchives.map(
+        (archive) =>
+          [
+            `${archive.kind}:${archive.checksumSha256}:${archive.logicalBytes}`,
+            archive
+          ] as const
+      )
+    );
+    for (const archive of trusted)
+      archives.set(
+        `${archive.kind}:${archive.checksumSha256}:${archive.logicalBytes}`,
+        archive
+      );
+    this.sourceArchives = [...archives.values()];
+    if (this.latestDocument)
+      this.latestDocument = reconcileCopiedImportSources(
+        this.latestDocument,
+        this.sourceArchives
+      );
+    this.documentHistory = new Map(
+      [...this.documentHistory].map(([version, document]) => [
+        version,
+        reconcileCopiedImportSources(document, this.sourceArchives)
+      ])
+    );
   }
 
   /**
@@ -4767,6 +5696,9 @@ export class ProjectCollaborationRoom extends DurableObject {
 
   async fetch(request: Request): Promise<Response> {
     await this.ready;
+    if (new URL(request.url).pathname === '/_internal/source-cleanup') {
+      return this.acceptInternalSourceCleanup(request);
+    }
     if (request.method === 'DELETE') {
       return this.eraseRoom(request);
     }
@@ -4916,20 +5848,353 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     return this.roomContext.blockConcurrencyWhile(() =>
       this.enqueueLeaseOperation(async () => {
-        this.erasing = true;
-        for (const socket of this.roomContext.getWebSockets()) {
-          socket.close(4001, 'Cloud project was permanently deleted.');
-        }
-        this.sockets.clear();
-        this.presence.clear();
-        this.editLeases = [];
-        this.latestDocument = null;
-        this.documentHistory.clear();
-        this.projectId = null;
-        await this.roomContext.storage.deleteAll();
+        await this.eraseRoomState();
         return new Response(null, { status: 204 });
       })
     );
+  }
+
+  /** Caller already owns the canonical room queue; never re-enter it here. */
+  private async eraseRoomState(): Promise<void> {
+    this.erasing = true;
+    for (const socket of this.roomContext.getWebSockets()) {
+      socket.close(4001, 'Cloud project was permanently deleted.');
+    }
+    this.sockets.clear();
+    this.presence.clear();
+    this.editLeases = [];
+    this.latestDocument = null;
+    this.documentHistory.clear();
+    this.sourceArchives = [];
+    this.sourceCopyPublicationStarted = false;
+    this.historyVersions = [];
+    this.projectId = null;
+    await this.roomContext.storage.deleteAll();
+  }
+
+  private async acceptInternalSourceCleanup(
+    request: Request
+  ): Promise<Response> {
+    const projectId = new URL(request.url).searchParams.get('projectId');
+    if (
+      request.method !== 'POST' ||
+      new URL(request.url).pathname !== '/_internal/source-cleanup' ||
+      request.headers.get('x-openzcad-internal-source-cleanup') !== 'v1' ||
+      !projectId ||
+      projectId.length > 200 ||
+      (this.projectId !== null && this.projectId !== projectId)
+    )
+      return new Response('Invalid source cleanup request.', { status: 403 });
+    const body = await readSnapshotBody(request);
+    if (body === null)
+      return new Response('Invalid source cleanup request.', { status: 400 });
+    let payload: unknown;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      return new Response('Invalid source cleanup request.', { status: 400 });
+    }
+    if (
+      !isRecord(payload) ||
+      typeof payload.userId !== 'string' ||
+      !payload.userId ||
+      payload.userId.length > 256 ||
+      (payload.action !== 'discard-mesh' &&
+        payload.action !== 'rollback-copy' &&
+        payload.action !== 'complete-copy') ||
+      (payload.action !== 'complete-copy' &&
+        new TextEncoder().encode(body).byteLength > 2048) ||
+      (payload.action === 'discard-mesh' &&
+        (typeof payload.artifactId !== 'string' ||
+          !payload.artifactId ||
+          payload.artifactId.length > 200 ||
+          (payload.kind !== undefined &&
+            payload.kind !== 'stl-import' &&
+            payload.kind !== 'mesh-import'))) ||
+      (payload.action !== 'discard-mesh' &&
+        (!Number.isSafeInteger(payload.expectedVersion) ||
+          (payload.expectedVersion as number) < 0 ||
+          typeof payload.expectedDocumentDigest !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(payload.expectedDocumentDigest) ||
+          typeof payload.expectedDocumentJsonDigest !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(payload.expectedDocumentJsonDigest) ||
+          (payload.expectedDocumentObjectId !== null &&
+            (typeof payload.expectedDocumentObjectId !== 'string' ||
+              !payload.expectedDocumentObjectId ||
+              payload.expectedDocumentObjectId.length > 200)))) ||
+      (payload.action === 'complete-copy' &&
+        (!Array.isArray(payload.archives) ||
+          payload.archives.length > 10_000 ||
+          !payload.archives.every(validCopiedArchive) ||
+          payload.archives.some((archive) => archive.projectId !== projectId)))
+    )
+      return new Response('Invalid source cleanup request.', { status: 400 });
+    return this.enqueueLeaseOperation(async () => {
+      if (this.erasing)
+        return new Response('Project was erased.', { status: 410 });
+      if (this.projectId !== null && this.projectId !== projectId)
+        return new Response('Room project mismatch.', { status: 409 });
+      const persistence = new D1R2PersistenceService({
+        ...this.roomEnv,
+        PROJECT_ROOM: undefined
+      });
+      const userId = toUserId(payload.userId as string);
+      // D1 access remains authoritative even for this private namespace route.
+      await persistence.requireProjectEdit(userId, projectId);
+      await this.restoreTrustedSourceArchives(userId, projectId);
+      await this.ensureDocumentHistory();
+      const retained = [...this.documentHistory.values()];
+      if (this.latestDocument) retained.push(this.latestDocument);
+      const historyUnavailable = this.historyVersions.some(
+        (version) => !this.documentHistory.has(version)
+      );
+      if (payload.action === 'complete-copy') {
+        if (historyUnavailable)
+          throw new ArtifactStorageError(
+            'Retained collaboration history could not be checked.'
+          );
+        return this.completeImportedSourceCopy(
+          persistence,
+          userId,
+          {
+            projectId: toProjectId(projectId),
+            expectedVersion: payload.expectedVersion as number,
+            initialIdentity: {
+              documentDigest: payload.expectedDocumentDigest as string,
+              documentJsonDigest: payload.expectedDocumentJsonDigest as string,
+              documentObjectId: payload.expectedDocumentObjectId as
+                string | null
+            },
+            archives: payload.archives as CopiedImportArchive[]
+          },
+          retained
+        );
+      }
+      if (payload.action === 'discard-mesh') {
+        const artifactId = payload.artifactId as string;
+        if (
+          historyUnavailable ||
+          retained.some((document) =>
+            importArtifactIds(document).includes(artifactId)
+          )
+        )
+          return Response.json({ deleted: false });
+        return Response.json(
+          await persistence.discardMeshPayload(
+            userId,
+            projectId,
+            artifactId,
+            payload.kind as 'stl-import' | 'mesh-import' | undefined
+          )
+        );
+      }
+      const expectedVersion = payload.expectedVersion as number;
+      const newestVersion = Math.max(
+        expectedVersion,
+        ...this.historyVersions,
+        ...retained.map((document) => document.version)
+      );
+      let canonicalChanged = false;
+      if (newestVersion <= expectedVersion) {
+        // Hash bounded snapshots sequentially instead of retaining every
+        // encoded document at once inside the Worker memory ceiling.
+        // Trusted source aliases can change the in-memory representation
+        // without any author having published a new canonical snapshot.
+        // Rollback compares the immutable published snapshots instead.
+        const publishedKeys = [
+          ...this.historyVersions.map(historyKey),
+          ...(this.latestDocument ? [ROOM_LATEST_KEY] : [])
+        ];
+        for (const key of publishedKeys) {
+          const document =
+            await this.roomContext.storage.get<ProjectDocument>(key);
+          if (!document)
+            throw new ArtifactStorageError(
+              'Retained collaboration history could not be checked.'
+            );
+          if (
+            (await projectCopyDocumentDigest(document)) !==
+            payload.expectedDocumentDigest
+          ) {
+            canonicalChanged = true;
+            break;
+          }
+        }
+      }
+      if (
+        newestVersion > expectedVersion ||
+        canonicalChanged ||
+        this.sourceCopyPublicationStarted
+      )
+        return Response.json(
+          {
+            code: 'REVISION_CONFLICT',
+            currentVersion: newestVersion,
+            error:
+              'The new project changed before its source copy finished. Its newer edits were kept.'
+          },
+          { status: 409 }
+        );
+      if (historyUnavailable)
+        throw new ArtifactStorageError(
+          'Retained collaboration history could not be checked.'
+        );
+      try {
+        await persistence.discardUnmodifiedProjectCopy(
+          userId,
+          { projectId: toProjectId(projectId), version: expectedVersion },
+          {
+            documentDigest: payload.expectedDocumentDigest as string,
+            documentJsonDigest: payload.expectedDocumentJsonDigest as string,
+            documentObjectId: payload.expectedDocumentObjectId as string | null
+          },
+          () => this.eraseRoomState()
+        );
+        return new Response(null, { status: 204 });
+      } catch (error) {
+        if (error instanceof RevisionConflictError)
+          return Response.json(
+            {
+              code: 'REVISION_CONFLICT',
+              currentVersion: error.currentVersion,
+              error: error.message
+            },
+            { status: 409 }
+          );
+        throw error;
+      }
+    });
+  }
+
+  /** The caller holds the room queue throughout both durable publications. */
+  private async completeImportedSourceCopy(
+    persistence: D1R2PersistenceService,
+    userId: UserId,
+    request: ProjectCopyFinalizeRequest,
+    retained: readonly ProjectDocument[]
+  ): Promise<Response> {
+    const state = await persistence.loadProjectCopyState(
+      userId,
+      request.projectId
+    );
+    const room = this.latestDocument;
+    const publishedRoom = room
+      ? await this.roomContext.storage.get<ProjectDocument>(ROOM_LATEST_KEY)
+      : null;
+    if (room && !publishedRoom)
+      throw new ArtifactStorageError(
+        'The acknowledged collaboration document could not be checked.'
+      );
+    const roomDigest = publishedRoom
+      ? await projectCopyDocumentDigest(publishedRoom)
+      : request.initialIdentity.documentDigest;
+    const d1Changed =
+      state.identity.documentDigest !== request.initialIdentity.documentDigest;
+    const roomChanged = roomDigest !== request.initialIdentity.documentDigest;
+    if (
+      room &&
+      d1Changed &&
+      roomChanged &&
+      roomDigest !== state.identity.documentDigest
+    )
+      return Response.json(
+        {
+          code: 'REVISION_CONFLICT',
+          currentVersion: Math.max(room.version, state.document.version),
+          error:
+            'The project changed in two places while its sources were copied. Both versions were kept.'
+        },
+        { status: 409 }
+      );
+    const selected = room && roomChanged ? room : state.document;
+    const verified = await verifyCopiedImportArchives(
+      persistence,
+      userId,
+      request.projectId,
+      request.archives,
+      [selected, ...retained]
+    );
+    const journal = new Map(
+      this.sourceArchives.map(
+        (archive) =>
+          [
+            `${archive.kind}:${archive.checksumSha256}:${archive.logicalBytes}`,
+            archive
+          ] as const
+      )
+    );
+    for (const archive of verified)
+      journal.set(
+        `${archive.kind}:${archive.checksumSha256}:${archive.logicalBytes}`,
+        archive
+      );
+    const archives = [...journal.values()];
+    if (
+      new TextEncoder().encode(JSON.stringify(archives)).byteLength >
+      MAX_SNAPSHOT_PAYLOAD_BYTES
+    )
+      throw new ArtifactStorageError(
+        'Copied source ownership is too large to store.'
+      );
+    // The journal precedes either canonical write. Even if publication loses
+    // its acknowledgement, a fresh room can resolve every stale local id.
+    await this.roomContext.storage.put(ROOM_SOURCE_ARCHIVES_KEY, archives);
+    this.sourceArchives = archives;
+    this.sourceCopyPublicationStarted = true;
+    this.projectId = request.projectId;
+    if (this.latestDocument)
+      this.latestDocument = reconcileCopiedImportSources(
+        this.latestDocument,
+        archives
+      );
+    this.documentHistory = new Map(
+      [...this.documentHistory].map(([version, document]) => [
+        version,
+        reconcileCopiedImportSources(document, archives)
+      ])
+    );
+    try {
+      const result = await persistence.finalizeImportedSourceCopy(
+        userId,
+        request,
+        {
+          document: selected,
+          expectedHeadIdentity: state.identity
+        }
+      );
+      const oversize = checkPersistedSize(result.document);
+      if (oversize) {
+        if (!this.latestDocument && !this.documentHistory.size)
+          return Response.json(result);
+        return rejectionResponse(oversize);
+      }
+      if (
+        !(await this.commitDocument(
+          result.document,
+          new Set(this.documentHistory.keys())
+        ))
+      )
+        throw new ArtifactStorageError(
+          'Copied sources could not be published.'
+        );
+      await this.broadcast({
+        type: 'document',
+        clientId: 'source-copy',
+        document: result.document
+      });
+      return Response.json(result);
+    } catch (error) {
+      if (error instanceof RevisionConflictError)
+        return Response.json(
+          {
+            code: 'REVISION_CONFLICT',
+            currentVersion: error.currentVersion,
+            error: error.message
+          },
+          { status: 409 }
+        );
+      throw error;
+    }
   }
 
   private enqueueTicketOperation<T>(operation: () => Promise<T>): Promise<T> {
@@ -5328,7 +6593,15 @@ export class ProjectCollaborationRoom extends DurableObject {
       });
       return;
     }
-    const document = normalizeDocument(rawDocument);
+    await this.restoreTrustedSourceArchives(
+      connection.userId,
+      rawDocument.projectId
+    );
+    const submitted = normalizeDocument(rawDocument);
+    const document = reconcileCopiedImportSources(
+      submitted,
+      this.sourceArchives
+    );
     if (document.projectId !== this.projectId) {
       socket.close(1008, 'Document project does not match this room.');
       return;
@@ -5344,7 +6617,10 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (resolution.kind === 'same') {
       // A newly joined browser still needs confirmation of its merge base,
       // even when another browser already supplied this exact snapshot.
-      this.send(socket, ackFor(resolution.document, document));
+      this.send(
+        socket,
+        ackFor(resolution.document, submitted, document !== submitted)
+      );
       return;
     }
     if (resolution.kind === 'accept') {
@@ -5353,11 +6629,22 @@ export class ProjectCollaborationRoom extends DurableObject {
         this.send(socket, { type: 'error', ...oversize });
         return;
       }
-      await this.commitDocument(resolution.document);
+      if (!(await this.commitDocument(resolution.document))) {
+        this.send(socket, {
+          type: 'error',
+          code: 'document-invalid',
+          message:
+            'The project or one of its imported sources is being removed.'
+        });
+        return;
+      }
       // A merge produces a document the sender never had. The broadcast below
       // skips the sender, so the merged state has to ride along on the ack or
       // the sender stays silently divergent while reporting itself synced.
-      this.send(socket, ackFor(resolution.document, document));
+      this.send(
+        socket,
+        ackFor(resolution.document, submitted, document !== submitted)
+      );
       if (broadcast) {
         await this.broadcast(
           { type: 'document', clientId, document: resolution.document },
@@ -5729,8 +7016,22 @@ export class ProjectCollaborationRoom extends DurableObject {
    * what storage will accept, or the room reverts to an older document the
    * next time it is evicted.
    */
-  private async commitDocument(document: ProjectDocument): Promise<void> {
-    const dirty = new Set<number>();
+  private async commitDocument(
+    document: ProjectDocument,
+    dirtyHistoryVersions: ReadonlySet<number> = new Set()
+  ): Promise<boolean> {
+    if (this.roomEnv.DB) {
+      const guard = meshDiscardCommitGuard(document);
+      const allowed = await this.roomEnv.DB.prepare(
+        `SELECT 1 AS allowed WHERE NOT EXISTS (
+          SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = ?
+        )${guard.sql}`
+      )
+        .bind(document.projectId, ...guard.bindings)
+        .first<{ allowed: number }>();
+      if (allowed?.allowed !== 1) return false;
+    }
+    const dirty = new Set<number>(dirtyHistoryVersions);
     const previousLatest = this.latestDocument;
     const previousHistory = new Map(this.documentHistory);
     if (previousLatest && previousLatest.version !== document.version) {
@@ -5749,6 +7050,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       this.documentHistory = previousHistory;
       throw error;
     }
+    return true;
   }
 
   private async documentOwnerMatches(
@@ -5889,7 +7191,12 @@ export class ProjectCollaborationRoom extends DurableObject {
       });
     }
     this.projectId = projectId;
-    const document = normalizeDocument(payload.document);
+    await this.restoreTrustedSourceArchives(userId, projectId);
+    const submitted = normalizeDocument(payload.document);
+    const document = reconcileCopiedImportSources(
+      submitted,
+      this.sourceArchives
+    );
     if (document.projectId !== projectId) {
       return new Response('Document project mismatch.', { status: 400 });
     }
@@ -5919,14 +7226,21 @@ export class ProjectCollaborationRoom extends DurableObject {
       if (oversize) {
         return rejectionResponse(oversize);
       }
-      await this.commitDocument(resolution.document);
+      if (!(await this.commitDocument(resolution.document)))
+        return rejectionResponse({
+          code: 'document-invalid',
+          message:
+            'The project or one of its imported sources is being removed.'
+        });
       await this.broadcast({
         type: 'document',
         clientId: payload.clientId,
         document: resolution.document
       });
     }
-    return Response.json(ackFor(resolution.document, document));
+    return Response.json(
+      ackFor(resolution.document, submitted, document !== submitted)
+    );
   }
 
   /**
@@ -6167,6 +7481,12 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
       message: 'Collaboration document has invalid imported STEP source data.'
     };
   }
+  if (!hasValidImportedMeshSources(value as unknown as ProjectDocument)) {
+    return {
+      code: 'document-invalid',
+      message: 'Collaboration document has invalid imported mesh data.'
+    };
+  }
   return null;
 }
 
@@ -6197,9 +7517,10 @@ function checkPersistedSize(
  */
 function ackFor(
   resolved: ProjectDocument,
-  submitted: ProjectDocument
+  submitted: ProjectDocument,
+  canonicalSourcesChanged = false
 ): CollaborationServerMessage {
-  return resolved.version === submitted.version
+  return resolved.version === submitted.version && !canonicalSourcesChanged
     ? { type: 'ack', version: resolved.version }
     : { type: 'ack', version: resolved.version, document: resolved };
 }

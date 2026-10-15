@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument, findFeature } from '@openzcad/document-core';
 import {
+  IMPORTED_MESH_PAYLOAD_CONTENT_TYPE,
+  documentNodesWithHistory,
   toUserId,
   type ImportedSourceReference,
   type ProjectDocument
@@ -9,13 +11,38 @@ import {
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
+  importSourceChecksums,
   discardUnreferencedImportSource,
   listLocalOnlyImportSources,
+  meshPayloadArchive,
   settleImportSource,
   sourceBlobClaimExpired,
   sourceBlobClaimHolds,
   SOURCE_BLOB_CLAIM_TTL_MS
 } from './importArchival';
+import { parseCreateUploadSessionRequest } from '../../worker/validation';
+
+it.each([249, 250, 251, 252, 253, 254, 255])(
+  'archives a mesh payload with an accepted %i-character source filename',
+  (length) => {
+    const sourceName = `${'x'.repeat(length - 4)}.stl`;
+    expect(() =>
+      parseCreateUploadSessionRequest({
+        projectId: 'proj_filename',
+        fileName: sourceName,
+        contentType: 'model/stl',
+        kind: 'stl-import'
+      })
+    ).not.toThrow();
+    const archive = meshPayloadArchive(sourceName);
+    const request = parseCreateUploadSessionRequest({
+      projectId: 'proj_filename',
+      ...archive
+    });
+    expect(request.fileName).toHaveLength(255);
+    expect(request.fileName.endsWith('.ozmesh')).toBe(true);
+  }
+);
 
 function referenceFor(text: string): ImportedSourceReference {
   return {
@@ -473,3 +500,303 @@ function listStepFeatureData(document: ProjectDocument) {
         : []
     );
 }
+
+/**
+ * Mesh payloads are content-addressed import bytes exactly like STEP sources:
+ * every walk that keeps, lists or uploads those must see them too, or a
+ * referenced mesh is the one import other devices can never rebuild.
+ */
+describe('mesh payload references', () => {
+  function managerWithMeshes(): CommandManager {
+    const manager = new CommandManager(
+      createProjectDocument('Mesh sources', toUserId('user_archival'))
+    );
+    manager.execute(
+      commandFactories.importMesh({
+        name: 'Local mesh',
+        artifactId: 'artifact_local_mesh',
+        sourceName: 'scan.stl',
+        triangleCount: 1,
+        meshPayloadRef: referenceFor('mesh')
+      })
+    );
+    manager.execute(
+      commandFactories.importMesh({
+        name: 'Embedded mesh',
+        artifactId: 'artifact_local_embedded',
+        sourceName: 'old.stl',
+        triangleCount: 1,
+        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        indices: [0, 1, 2]
+      })
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Local import',
+        artifactId: 'artifact_local_abc',
+        sourceName: 'local.step',
+        stepSourceRef: referenceFor('local')
+      })
+    );
+    return manager;
+  }
+
+  it('lists a referenced mesh as local-only, never an embedded one', () => {
+    expect(listLocalOnlyImportSources(managerWithMeshes().document)).toEqual([
+      expect.objectContaining({
+        sourceName: 'scan.stl',
+        checksumSha256: referenceFor('mesh').checksumSha256,
+        kind: 'mesh-payload'
+      }),
+      expect.objectContaining({ sourceName: 'local.step', kind: 'step-source' })
+    ]);
+  });
+
+  it('protects a referenced payload from refused-import cleanup, history included', () => {
+    const manager = managerWithMeshes();
+    expect(importSourceChecksums(manager.document)).toContain(
+      referenceFor('mesh').checksumSha256
+    );
+    manager.undo();
+    manager.undo();
+    manager.undo();
+    // Only undo history names the mesh now; redo would need its bytes.
+    expect(manager.document.featureOrder).toEqual([]);
+    expect(importSourceChecksums(manager.document)).toContain(
+      referenceFor('mesh').checksumSha256
+    );
+  });
+
+  it('uploads a payload as a mesh-payload artifact and a STEP source as a step-import', async () => {
+    const manager = managerWithMeshes();
+    const uploads: { fileName: string; kind: string; type: string }[] = [];
+    const result = await archiveLocalOnlyImportSources({
+      document: manager.document,
+      loadSourceBytes: async () => new Uint8Array([1, 2, 3]),
+      archive: async (input) => {
+        uploads.push({
+          fileName: input.fileName,
+          kind: input.kind,
+          type: input.contentType
+        });
+        return `artifact_cloud_${uploads.length}`;
+      },
+      applyArtifactId: (featureId, artifactId) => {
+        manager.archiveSource(featureId, artifactId);
+        return true;
+      }
+    });
+    expect(result.archived).toEqual(['scan.stl', 'local.step']);
+    expect(uploads).toEqual([
+      {
+        fileName: 'scan.stl.ozmesh',
+        kind: 'mesh-payload',
+        type: IMPORTED_MESH_PAYLOAD_CONTENT_TYPE
+      },
+      { fileName: 'local.step', kind: 'step-import', type: 'model/step' }
+    ]);
+    expect(listLocalOnlyImportSources(manager.document)).toEqual([]);
+  });
+
+  it.each(['refuses', 'throws'] as const)(
+    'discards only the originating project payload when its edit %s after archival',
+    async (outcome) => {
+      const manager = managerWithMeshes();
+      const originating = manager.document;
+      let open = originating;
+      const payloads = new Set<string>();
+      const discard = vi.fn(async (_projectId: string, artifactId: string) => ({
+        deleted: payloads.delete(artifactId)
+      }));
+      const result = await archiveLocalOnlyImportSources({
+        document: originating,
+        currentDocument: () => open,
+        loadSourceBytes: async () => new Uint8Array([1, 2, 3]),
+        archive: async ({ kind }) => {
+          open = createProjectDocument(
+            'Different project',
+            toUserId('user_archival')
+          );
+          if (kind === 'mesh-payload') payloads.add('artifact_new_payload');
+          return kind === 'mesh-payload'
+            ? 'artifact_new_payload'
+            : 'artifact_new_step';
+        },
+        applyArtifactId: () => {
+          if (outcome === 'throws')
+            throw new Error('Project changed after upload');
+          return false;
+        },
+        discardMeshPayload: discard
+      });
+      expect(result).toEqual({
+        archived: [],
+        missing: [],
+        failed: ['scan.stl', 'local.step']
+      });
+      expect(discard).toHaveBeenCalledExactlyOnceWith(
+        originating.projectId,
+        'artifact_new_payload'
+      );
+      expect(open.projectId).not.toBe(originating.projectId);
+      expect(payloads.size).toBe(0);
+    }
+  );
+
+  it.each(['rejects', 'retains'] as const)(
+    'reports cleanup separately when the discard API %s without replacing the edit failure',
+    async (outcome) => {
+      const manager = managerWithMeshes();
+      const cleanupFailure = vi.fn((_sourceName: string, _error: unknown) => {
+        throw new Error('Observer failed');
+      });
+      const result = await archiveLocalOnlyImportSources({
+        document: manager.document,
+        currentDocument: () => manager.document,
+        loadSourceBytes: async () => new Uint8Array([1, 2, 3]),
+        archive: async () => 'artifact_new_payload',
+        applyArtifactId: () => {
+          throw new Error('Original edit refusal');
+        },
+        discardMeshPayload: async () => {
+          if (outcome === 'rejects') throw new Error('Cleanup unavailable');
+          return { deleted: false };
+        },
+        onCleanupFailure: cleanupFailure
+      });
+      expect(result.failed).toEqual(['scan.stl', 'local.step']);
+      expect(cleanupFailure).toHaveBeenCalledOnce();
+      expect(cleanupFailure.mock.calls[0]?.[0]).toBe('scan.stl');
+    }
+  );
+
+  it.each(['success', 'throws-after-rewire'] as const)(
+    'keeps mesh bytes when the originating history was rewired: %s',
+    async (outcome) => {
+      const manager = managerWithMeshes();
+      const discard = vi.fn();
+      const result = await archiveLocalOnlyImportSources({
+        document: manager.document,
+        currentDocument: () => manager.document,
+        loadSourceBytes: async () => new Uint8Array([1, 2, 3]),
+        archive: async () => 'artifact_new_payload',
+        applyArtifactId: (featureId, artifactId) => {
+          manager.archiveSource(featureId, artifactId);
+          if (outcome === 'throws-after-rewire')
+            throw new Error('UI publication failed');
+          return true;
+        },
+        discardMeshPayload: discard
+      });
+      expect(discard).not.toHaveBeenCalled();
+      expect(listLocalOnlyImportSources(manager.document)).toEqual([]);
+      expect(result[outcome === 'success' ? 'archived' : 'failed']).toEqual([
+        'scan.stl',
+        'local.step'
+      ]);
+    }
+  );
+
+  it('never discards an already owned mesh payload', async () => {
+    const manager = managerWithMeshes();
+    manager.archiveSource(
+      manager.document.featureOrder[0]!,
+      'artifact_existing_payload'
+    );
+    const discard = vi.fn();
+    const archive = vi.fn(
+      async (_input: { kind: string }) => 'artifact_new_step'
+    );
+    await archiveLocalOnlyImportSources({
+      document: manager.document,
+      currentDocument: () => manager.document,
+      loadSourceBytes: async () => new Uint8Array([1, 2, 3]),
+      archive,
+      applyArtifactId: () => false,
+      discardMeshPayload: discard
+    });
+    expect(archive).toHaveBeenCalledOnce();
+    expect(archive.mock.calls[0]?.[0]).toMatchObject({ kind: 'step-import' });
+    expect(discard).not.toHaveBeenCalled();
+  });
+
+  it('keeps a restored current mesh local while an older upload archives only its retained source', async () => {
+    const manager = managerWithMeshes();
+    const initial = manager.document;
+    const featureId = initial.featureOrder[0]!;
+    const newer = { ...referenceFor('different mesh'), logicalBytes: 23 };
+    const result = await archiveLocalOnlyImportSources({
+      document: initial,
+      currentDocument: () => manager.document,
+      loadSourceBytes: async () => new Uint8Array([1, 2, 3]),
+      archive: async ({ kind }) => {
+        if (kind === 'mesh-payload')
+          manager.execute(
+            commandFactories.updateFeature({
+              featureId,
+              data: {
+                artifactId: 'artifact_local_restored' as never,
+                meshPayloadRef: newer
+              }
+            })
+          );
+        return kind === 'mesh-payload'
+          ? 'artifact_cloud_old_mesh'
+          : 'artifact_cloud_step';
+      },
+      applyArtifactId: (id, artifactId, source) => {
+        manager.archiveSource(id, artifactId, source);
+        return true;
+      }
+    });
+    expect(result.archived).toEqual(['scan.stl', 'local.step']);
+    expect(findFeature(manager.document, featureId)!.data).toMatchObject({
+      artifactId: 'artifact_local_restored',
+      meshPayloadRef: newer
+    });
+    expect(
+      listLocalOnlyImportSources(manager.document).map(
+        (source) => source.checksumSha256
+      )
+    ).toEqual([newer.checksumSha256]);
+    manager.undo();
+    expect(findFeature(manager.document, featureId)!.data).toMatchObject({
+      artifactId: 'artifact_cloud_old_mesh',
+      meshPayloadRef: referenceFor('mesh')
+    });
+  });
+
+  it('discards the uploaded payload when a restore removes its model and retained history', async () => {
+    const manager = managerWithMeshes();
+    const initial = manager.document;
+    const discard = vi.fn(async () => ({ deleted: true }));
+    const result = await archiveLocalOnlyImportSources({
+      document: initial,
+      currentDocument: () => manager.document,
+      loadSourceBytes: async () => new Uint8Array([1, 2, 3]),
+      archive: async () => {
+        manager.document = {
+          ...createProjectDocument('Restored empty', initial.ownerUserId),
+          projectId: initial.projectId
+        };
+        return 'artifact_cloud_unused';
+      },
+      applyArtifactId: (id, artifactId, source) => {
+        const next = manager.archiveSource(id, artifactId, source);
+        return [...documentNodesWithHistory(next)].some(
+          (node) =>
+            node.kind === 'feature' &&
+            'artifactId' in node.data &&
+            node.data.artifactId === artifactId
+        );
+      },
+      discardMeshPayload: discard
+    });
+    expect(result.failed).toEqual(['scan.stl', 'local.step']);
+    expect(discard).toHaveBeenCalledExactlyOnceWith(
+      initial.projectId,
+      'artifact_cloud_unused'
+    );
+    expect(manager.document.featureOrder).toEqual([]);
+  });
+});

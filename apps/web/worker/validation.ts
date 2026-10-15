@@ -3,6 +3,7 @@ import {
   documentStructureError,
   documentEnvelopeError,
   assertDocumentTextBudget,
+  hasValidImportedMeshSources,
   hasValidImportedStepSources
 } from '@openzcad/shared';
 import {
@@ -67,6 +68,7 @@ const ARTIFACT_KINDS: readonly ArtifactKind[] = [
   'step-import',
   'stl-import',
   'mesh-import',
+  'mesh-payload',
   'step-export',
   'stl-export',
   '3mf-export',
@@ -127,6 +129,23 @@ function requireString(
     throw badRequest(`"${key}" must be at most ${maxLength} characters.`);
   }
   return trimmed;
+}
+
+export function parseDiscardMeshPayloadRequest(body: unknown): {
+  projectId: string;
+  kind?: 'stl-import' | 'mesh-import';
+} {
+  const record = asRecord(body, 'Request body');
+  if (
+    record.kind !== undefined &&
+    record.kind !== 'stl-import' &&
+    record.kind !== 'mesh-import'
+  )
+    throw badRequest('Original mesh cleanup kind is invalid.');
+  return {
+    projectId: requireString(record, 'projectId', 200),
+    ...(record.kind ? { kind: record.kind } : {})
+  };
 }
 
 export function parseCreateProjectRequest(body: unknown): CreateProjectRequest {
@@ -332,6 +351,9 @@ function parseProjectDocument(
   // Validate every copy before the document can be saved or shared.
   if (!hasValidImportedStepSources(value as ProjectDocument)) {
     throw badRequest('"document" has invalid imported STEP source data.');
+  }
+  if (!hasValidImportedMeshSources(value as ProjectDocument)) {
+    throw badRequest('"document" has invalid imported mesh data.');
   }
   return value as ProjectDocument;
 }

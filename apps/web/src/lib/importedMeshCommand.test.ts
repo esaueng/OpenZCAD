@@ -7,7 +7,10 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId, type UnitSystem } from '@openzcad/shared';
-import { importedMeshCommand } from './importedMeshCommand';
+import {
+  importedMeshCommand,
+  meshInDocumentUnits
+} from './importedMeshCommand';
 
 /** A 25.4 mm cube as an ASCII STL: one inch on every side. */
 function inchCubeStl(): ArrayBuffer {
@@ -50,7 +53,8 @@ function inchCubeStl(): ArrayBuffer {
 
 /**
  * Every mesh import — the STL preview, the STL commit and the kernel-read
- * formats — builds its `imported-mesh` command through `importedMeshCommand`.
+ * formats — adopts its triangles through `meshInDocumentUnits` and builds its
+ * `imported-mesh` command through `importedMeshCommand`.
  * The STL arm once built its own and skipped the unit scaling, so a 25.4 mm
  * cube STL landed in an inch project as a 25.4 in cube, while the same cube
  * as an OBJ read 1 in.
@@ -72,7 +76,13 @@ describe('importedMeshCommand', { timeout: 60_000 }, () => {
       ...createProjectDocument(`Cube ${units}`, toUserId('user_mesh_units')),
       units
     });
-    manager.execute(importedMeshCommand(parsed, units, 'artifact_local_cube'));
+    manager.execute(
+      importedMeshCommand(
+        parsed,
+        meshInDocumentUnits(parsed, units),
+        'artifact_local_cube'
+      )
+    );
     const bodyId = manager.document.bodyOrder[0]!;
     const derived = await adapter.syncDocument(manager.document);
     return { parsed, body: derived.bodyRepresentations[bodyId] };
@@ -95,8 +105,12 @@ describe('importedMeshCommand', { timeout: 60_000 }, () => {
       ['m', 0.0254],
       ['inch', 1]
     ] as const) {
-      const command = importedMeshCommand(parsed, units, 'artifact_cube');
-      expect(Math.max(...command.payload.vertices)).toBeCloseTo(edge, 9);
+      const command = importedMeshCommand(
+        parsed,
+        meshInDocumentUnits(parsed, units),
+        'artifact_cube'
+      );
+      expect(Math.max(...command.payload.vertices!)).toBeCloseTo(edge, 9);
       expect(command.payload).toMatchObject({
         name: 'cube.stl',
         sourceName: 'cube.stl',
@@ -109,9 +123,7 @@ describe('importedMeshCommand', { timeout: 60_000 }, () => {
 
   it('leaves a millimetre project with the vertices exactly as read', async () => {
     const { parsed, body } = await importedCube('mm');
-    expect(
-      importedMeshCommand(parsed, 'mm', 'artifact_cube').payload.vertices
-    ).toBe(parsed.vertices);
+    expect(meshInDocumentUnits(parsed, 'mm').vertices).toBe(parsed.vertices);
     expect(body?.bbox?.max.z).toBeCloseTo(25.4, 6);
   });
 });

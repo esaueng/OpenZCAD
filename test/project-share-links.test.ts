@@ -256,6 +256,11 @@ describe('project share links (persistence)', () => {
     const queries: string[] = [];
     const prepare = vi.fn((query: string) => ({
       bind: (...bindings: unknown[]) => ({
+        all: async () => {
+          expect(query).toContain('FROM project_copy_source_archives');
+          expect(bindings).toEqual([base.projectId]);
+          return { results: [] };
+        },
         first: async () => {
           queries.push(query);
           if (query.includes('FROM project_share_links l')) {
@@ -301,7 +306,8 @@ describe('project share links (persistence)', () => {
       query.includes('FROM artifacts a')
     );
     expect(sourceQuery).toContain('l.revoked_at IS NULL');
-    expect(sourceQuery).toContain("a.kind = 'step-import'");
+    // Import sources only: STEP sources and mesh payloads, never exports.
+    expect(sourceQuery).toContain("a.kind IN ('step-import', 'mesh-payload')");
     expect(sourceQuery).toContain("p.status != 'deleted'");
     expect(sourceQuery).toContain('$.collaboration.enabled');
     sourceAvailable = false;

@@ -321,11 +321,21 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
         preserveEntrySignatures: false,
         output: {
           // Worker builds have their own output configuration. Keep the
-          // analysis split there without pulling unrelated dependencies into
-          // every worker. Preserve evaluation order across the split.
+          // exact adapter splits there without pulling unrelated dependencies
+          // into every worker. Preserve evaluation order across the split.
           strictExecutionOrder: true,
           codeSplitting: {
             groups: [
+              {
+                name: 'exact-mesh-payload',
+                test: (id: string) =>
+                  id.includes(
+                    '/packages/kernel-adapter/src/imported-mesh-payload.ts'
+                  ),
+                // Keep mesh payload helpers behind the exact adapter's lazy
+                // boundary without moving the shared document dependencies.
+                includeDependenciesRecursively: false
+              },
               {
                 name: 'exact-analysis',
                 test: (id: string) =>
@@ -334,6 +344,9 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
                   ) ||
                   id.includes(
                     '/packages/kernel-adapter/src/exact-sync-memo.ts'
+                  ) ||
+                  id.includes(
+                    '/packages/kernel-adapter/src/remus-load-error.ts'
                   ) ||
                   id.includes(
                     '/packages/kernel-adapter/src/union-connectivity.ts'
@@ -433,6 +446,9 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               id.includes(
                 '/packages/kernel-adapter/src/imported-feature-query.ts'
               ) ||
+              // Runtime refusal classification shares the existing lazy
+              // analysis boundary without bringing the loader dependencies.
+              id.includes('/packages/kernel-adapter/src/remus-load-error.ts') ||
               id.includes('/packages/kernel-adapter/src/union-connectivity.ts') ||
               id.includes(
                 '/packages/kernel-adapter/src/feature-profile-dependencies.ts'
@@ -479,6 +495,9 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // and interaction captures. Keep this pure document helper in
               // the same preloaded model chunk without another request.
               id.includes('/apps/web/src/lib/projectDiagnostics.ts') ||
+              // Static top-bar modes and save-state presentation remain in
+              // the existing preloaded UI/model graph, including offline.
+              id.includes('/apps/web/src/lib/topBarPresentation.ts') ||
               // Export eligibility and sweep disclosure inspect document
               // history/topology. Keep them with the same preloaded model
               // helpers so their integration does not grow the entry chunk.

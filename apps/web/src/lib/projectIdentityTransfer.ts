@@ -7,6 +7,7 @@
  */
 import type { CommandManager } from '@openzcad/command-system';
 import {
+  localizeImportedSourceArtifacts,
   reidentifyProjectDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
@@ -19,9 +20,11 @@ import {
   type UserId
 } from '@openzcad/shared';
 import {
+  applyAccountSourceArchives,
   archiveAccountImportSources,
   sourceUploadMessage
 } from './accountImportSources';
+import { listLocalOnlyImportSources } from './importArchival';
 import { ApiError, api } from './api';
 import { archiveArtifact as archiveArtifactBody } from './archiveArtifact';
 import {
@@ -48,6 +51,7 @@ import {
   META_STORE_NAME,
   projectMatchesInterruptedAdoption,
   projectPreservesLocalWork,
+  projectsHaveSameCanonicalContent,
   resolvedProjectId,
   saveLocalProject,
   scopedTransaction,
@@ -98,7 +102,9 @@ function withAccountIdentity(
   ownerUserId: UserId
 ): ProjectDocument {
   return withAccountOwner(
-    reidentifyProjectDocument(document, projectId),
+    localizeImportedSourceArtifacts(
+      reidentifyProjectDocument(document, projectId)
+    ),
     ownerUserId
   );
 }
@@ -109,7 +115,12 @@ export function latestTransferredProjectDocument(
   live: ProjectDocument
 ): ProjectDocument {
   if (live.version <= transferred.version) return transferred;
-  const moved = reidentifyProjectDocument(live, transferred.projectId);
+  const moved = applyAccountSourceArchives(
+    localizeImportedSourceArtifacts(
+      reidentifyProjectDocument(live, transferred.projectId)
+    ),
+    transferred
+  );
   return {
     ...moved,
     ownerUserId: transferred.ownerUserId,
@@ -188,9 +199,8 @@ export function rekeyLocalProject(
       // durable later edit must win over an older network snapshot as well.
       const latest =
         stored && stored.version > source.version ? stored : source;
-      const reidentified = reidentifyProjectDocument(
-        latest,
-        toProjectId(targetProjectId)
+      const reidentified = localizeImportedSourceArtifacts(
+        reidentifyProjectDocument(latest, toProjectId(targetProjectId))
       );
       const moved = {
         ...reidentified,
@@ -204,14 +214,25 @@ export function rekeyLocalProject(
             }
           : {})
       };
+      // A completed upload changes only the source's account location. An
+      // interrupted adoption can already have that acknowledged target cache.
+      const comparableTarget = target
+        ? localizeImportedSourceArtifacts(target)
+        : undefined;
       if (
         target &&
-        !projectMatchesInterruptedAdoption(moved, target) &&
-        !projectPreservesLocalWork(moved, target)
+        comparableTarget &&
+        !projectMatchesInterruptedAdoption(moved, comparableTarget) &&
+        !projectPreservesLocalWork(moved, comparableTarget)
       ) {
         throw new LocalProjectIdentityConflictError(moved, target);
       }
-      const durable = target ? withMatchingLocalDerived(target, moved) : moved;
+      const durable = target
+        ? withMatchingLocalDerived(
+            target,
+            applyAccountSourceArchives(moved, target)
+          )
+        : moved;
       store(STORE_NAME).put(durable);
       if (preserveSource) {
         const retained = {
@@ -311,9 +332,11 @@ export function rekeyLocalProject(
         store(CHECKPOINT_STORE_NAME).put({
           ...checkpoint,
           projectId: targetProjectId,
-          document: reidentifyProjectDocument(
-            checkpoint.document,
-            toProjectId(targetProjectId)
+          document: localizeImportedSourceArtifacts(
+            reidentifyProjectDocument(
+              checkpoint.document,
+              toProjectId(targetProjectId)
+            )
           )
         });
       }
@@ -395,12 +418,87 @@ async function transferAdoptedProjectIdentity(
         : artifact
     )
   );
-  return withAccountIdentity(local, remote.projectId, remote.ownerUserId);
+  return applyAccountSourceArchives(
+    withAccountIdentity(local, remote.projectId, remote.ownerUserId),
+    remote
+  );
 }
 
 export type AdoptLocalProjectResult =
   | { state: 'adopted' | 'already-adopted' | 'missing'; sourceWarning?: string }
   | { state: 'conflict'; conflict: ProjectConflict };
+
+/** Restores a confirmed account record only after its required sources exist there. */
+export async function restoreAccountProjectFromDevice(
+  document: ProjectDocument,
+  summary: ProjectSummary,
+  sources: {
+    archive(): Promise<unknown>;
+    /** Null after the originating editor is replaced, even for the same project. */
+    currentDocument(): ProjectDocument | null;
+    remoteVersions: Map<string, number>;
+  }
+): Promise<{ document: ProjectDocument; project: ProjectSummary }> {
+  const expectedVersion = summary.documentVersion;
+  if (expectedVersion === undefined)
+    throw new Error('The account record could not be verified.');
+  sources.remoteVersions.set(document.projectId, expectedVersion);
+  if (listLocalOnlyImportSources(document).length) {
+    if (sources.currentDocument()?.projectId !== document.projectId)
+      throw new Error(
+        'The project changed. The account copy was not restored; reopen it to retry.'
+      );
+    await sources.archive();
+    const current = sources.currentDocument();
+    if (current?.projectId === document.projectId) {
+      // Keep completed uploads even when another source or the restore write
+      // fails. The live document can contain edits made during the upload.
+      // The live manager already recorded each archive. Keep the clicked
+      // lineage instead of persisting the replay's independently minted IDs.
+      const archived = {
+        ...applyAccountSourceArchives(document, current),
+        version: document.version,
+        revisions: document.revisions
+      };
+      // Reuse the actual archival lineage when nothing else changed. Newer
+      // authored work stays local while the confirmed snapshot is restored.
+      document =
+        current.ownerUserId === document.ownerUserId &&
+        projectsHaveSameCanonicalContent(
+          { ...archived, revisions: current.revisions },
+          current
+        )
+          ? current
+          : archived;
+      await saveLocalProject(current);
+    }
+    const remaining = listLocalOnlyImportSources(document);
+    if (remaining.length) {
+      throw new Error(
+        `Import sources could not be archived: ${remaining.map((source) => source.sourceName).join(', ')}. The account copy was not restored; use Repair needed to retry.`
+      );
+    }
+  }
+  const saved = await api.saveProjectDocument({
+    projectId: document.projectId,
+    expectedVersion,
+    document: withoutDerivedProjection(document)
+  });
+  const restored = {
+    ...document,
+    version: saved.version,
+    derived: { ...document.derived, updatedAt: saved.updatedAt }
+  };
+  return {
+    document: restored,
+    project: {
+      ...summary,
+      name: restored.name,
+      updatedAt: saved.updatedAt,
+      documentVersion: saved.version
+    }
+  };
+}
 
 /** The App state and account-save step an adoption needs beyond the transfer. */
 export interface LocalProjectAdoptionState extends AdoptedProjectIdentityState {

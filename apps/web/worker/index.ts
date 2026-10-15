@@ -39,6 +39,7 @@ import {
   parseCreateUploadSessionRequest,
   parseDuplicateProjectRequest,
   parseFinalizeImportRequest,
+  parseDiscardMeshPayloadRequest,
   parseReorderProjectsRequest,
   parseSaveProjectDocumentRequest,
   parseSaveRevisionRequest,
@@ -230,6 +231,8 @@ const UPLOAD_MULTIPART_ROUTE = /^\/api\/uploads\/([^/]+)\/multipart$/;
 const UPLOAD_MULTIPART_COMPLETE_ROUTE =
   /^\/api\/uploads\/([^/]+)\/multipart\/complete$/;
 const UPLOAD_PART_ROUTE = /^\/api\/uploads\/([^/]+)\/parts\/([1-9]\d*)$/;
+const ARTIFACT_DISCARD_ROUTE =
+  /^\/api\/artifacts\/([^/]+)\/discard-unreferenced$/;
 const ARTIFACT_ROUTE = /^\/api\/artifacts\/([^/]+)$/;
 const ARTIFACT_DOWNLOAD_ROUTE = /^\/api\/artifacts\/([^/]+)\/download$/;
 
@@ -827,7 +830,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       UPLOAD_MULTIPART_COMPLETE_ROUTE.test(pathname)) ||
     (request.method === 'PUT' && UPLOAD_PART_ROUTE.test(pathname)) ||
     (request.method === 'POST' &&
-      (pathname === '/api/artifacts/finalize' ||
+      (ARTIFACT_DISCARD_ROUTE.test(pathname) ||
+        pathname === '/api/artifacts/finalize' ||
         pathname === '/api/imports/finalize')) ||
     (request.method === 'GET' &&
       (PROJECT_ARTIFACTS_ROUTE.test(pathname) ||
@@ -1797,6 +1801,19 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       );
     }
     return json({ artifactId: artifact.artifactId });
+  }
+
+  const artifactDiscardMatch = ARTIFACT_DISCARD_ROUTE.exec(pathname);
+  if (request.method === 'POST' && artifactDiscardMatch) {
+    const payload = parseDiscardMeshPayloadRequest(await readJsonBody(request));
+    return json(
+      await persistence.discardMeshPayload(
+        userId,
+        payload.projectId,
+        artifactDiscardMatch[1]!,
+        payload.kind
+      )
+    );
   }
 
   const projectArtifactsMatch = PROJECT_ARTIFACTS_ROUTE.exec(pathname);

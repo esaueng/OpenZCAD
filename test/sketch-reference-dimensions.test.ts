@@ -21,8 +21,8 @@ function user() {
 }
 
 describe('S02-A reference dimension schema envelope', () => {
-  it('retains additive reference dimensions in the current v16 schema', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(16);
+  it('retains additive reference dimensions in the current v17 schema', () => {
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(17);
   });
 
   it('leaves a document without reference dimensions byte-identical', () => {

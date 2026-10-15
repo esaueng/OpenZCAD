@@ -1,4 +1,7 @@
-import { documentNodesWithHistory } from '@openzcad/shared';
+import {
+  documentNodesWithHistory,
+  importedSourceReferenceOf
+} from '@openzcad/shared';
 import type {
   ArtifactId,
   ImportedSourceReference,
@@ -7,6 +10,7 @@ import type {
 
 import { loadSourceBlob, putSourceBlob, sha256Hex } from './localProjectStore';
 import { sharedImportSourceUrl } from './projectShareClient';
+import { readSharedSourceBytes } from './sharedSourceDownload';
 
 /**
  * Bytes a cloud artifact download may stream before the rebuild gives up on
@@ -78,9 +82,10 @@ async function readResponseBytes(
 }
 
 /**
- * Fetch every reference-form STEP source before opening an anonymous share.
- * Workers resolve from the local content-addressed cache, so a missing or
- * damaged source must stop the open rather than produce an empty viewport.
+ * Fetch every reference-form STEP source and mesh payload before opening an
+ * anonymous share. Workers resolve from the local content-addressed cache, so
+ * a missing or damaged source must stop the open rather than produce an empty
+ * viewport.
  */
 export async function preloadSharedImportSources(
   document: ProjectDocument,
@@ -89,35 +94,31 @@ export async function preloadSharedImportSources(
 ): Promise<void> {
   const seen = new Set<string>();
   for (const node of documentNodesWithHistory(document)) {
-    if (
-      node.kind !== 'feature' ||
-      node.data.featureKind !== 'imported-step' ||
-      !node.data.stepSourceRef
-    ) {
+    if (node.kind !== 'feature') {
       continue;
     }
-    const ref = node.data.stepSourceRef;
+    const ref = importedSourceReferenceOf(node.data);
+    if (!ref) {
+      continue;
+    }
     if (seen.has(ref.checksumSha256)) continue;
     seen.add(ref.checksumSha256);
     if (await loadSourceBlob(ref.checksumSha256)) continue;
-    const sourceName = node.data.sourceName;
-    if (node.data.artifactId.startsWith('artifact_local_')) {
+    const { sourceName, artifactId } = node.data as {
+      sourceName: string;
+      artifactId: string;
+    };
+    if (artifactId.startsWith('artifact_local_')) {
       throw new Error(
         `The owner needs to save the source file for "${sourceName}" to their account before this link can open.`
       );
     }
-    const response = await fetcher(
-      sharedImportSourceUrl(token, node.data.artifactId),
-      { credentials: 'omit' }
-    );
-    if (!response.ok) {
-      throw new Error(
-        `The shared source file for "${sourceName}" is unavailable. Ask the owner to save its source file to their account.`
-      );
-    }
-    const bytes = await readResponseBytes(
-      response,
-      MAX_ARTIFACT_DOWNLOAD_BYTES
+    const bytes = await readSharedSourceBytes(
+      sharedImportSourceUrl(token, artifactId),
+      sourceName,
+      fetcher,
+      MAX_ARTIFACT_DOWNLOAD_BYTES,
+      SOURCE_DOWNLOAD_IDLE_MS
     );
     if (
       !bytes ||
@@ -216,7 +217,8 @@ function joinDownload(
 }
 
 /**
- * Resolves reference-form exact imports in any browser geometry worker.
+ * Resolves reference-form imports — STEP sources and mesh payloads — in any
+ * browser geometry worker.
  *
  * Local bytes win. The archive is other people's data as often as our own —
  * a shared project can reference a collaborator's upload — so the download

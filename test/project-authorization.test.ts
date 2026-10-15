@@ -19,6 +19,7 @@ interface MockStatement {
   bindings: unknown[];
   bind(...values: unknown[]): MockStatement;
   first<T>(): Promise<T | null>;
+  all<T>(): Promise<{ results: T[] }>;
   run(): Promise<{ meta: { changes: number } }>;
 }
 
@@ -41,6 +42,10 @@ function createAuthorizationDb(options?: { batchChanges?: number }): {
       sql,
       bindings,
       bind: (...values: unknown[]) => makeStatement(values),
+      all: async <T>() => {
+        expect(sql).toContain('FROM project_copy_source_archives');
+        return { results: [] as T[] };
+      },
       first: async <T>() => {
         if (sql.includes('AS resolved_role')) {
           const userId = bindings[0] as UserId;
@@ -69,7 +74,7 @@ function createAuthorizationDb(options?: { batchChanges?: number }): {
   });
 
   return {
-    db: { prepare, batch } as unknown as D1Database,
+    db: { prepare, batch },
     prepared,
     batched
   };
@@ -195,6 +200,10 @@ describe('project authorization', () => {
           sql,
           bindings,
           bind: (...values) => makeStatement(values),
+          all: async <T>() => {
+            expect(sql).toContain('FROM project_copy_source_archives');
+            return { results: [] as T[] };
+          },
           first: async <T>() => {
             if (sql.includes('AS resolved_role')) {
               return {
@@ -226,7 +235,7 @@ describe('project authorization', () => {
         }));
       };
       const service = new D1R2PersistenceService({
-        DB: { prepare, batch } as unknown as D1Database,
+        DB: { prepare, batch },
         PROJECT_SHARING_ENABLED: 'true'
       });
 
@@ -281,7 +290,10 @@ describe('project authorization', () => {
           await mayRead;
           return trashed
             ? null
-            : { document_json: JSON.stringify(document), document_object_id: null };
+            : {
+                document_json: JSON.stringify(document),
+                document_object_id: null
+              };
         }
       })
     });
@@ -349,7 +361,9 @@ describe('project authorization', () => {
         }
       })
     });
-    const batch = async (statements: Array<{ sql: string; bindings: unknown[] }>) => {
+    const batch = async (
+      statements: Array<{ sql: string; bindings: unknown[] }>
+    ) => {
       const insert = statements.find((statement) =>
         statement.sql.includes('INSERT INTO artifacts')
       );
@@ -360,7 +374,9 @@ describe('project authorization', () => {
       return statements.map((statement) => ({
         meta: {
           changes:
-            statement === insert && trashed && insertSql.includes("status != 'deleted'")
+            statement === insert &&
+            trashed &&
+            insertSql.includes("status != 'deleted'")
               ? 0
               : 1
         }
@@ -439,7 +455,9 @@ describe('project authorization', () => {
           all: async () => ({ results: [] })
         })
       });
-      const batch = async (statements: Array<{ sql: string; bindings: unknown[] }>) => {
+      const batch = async (
+        statements: Array<{ sql: string; bindings: unknown[] }>
+      ) => {
         updateSql = statements[1]?.sql ?? '';
         updateBindings = statements[1]?.bindings ?? [];
         commitReached();
@@ -447,7 +465,9 @@ describe('project authorization', () => {
         return statements.map((_, index) => ({
           meta: {
             changes:
-              index === 1 && trashed && updateSql.includes("status != 'deleted'")
+              index === 1 &&
+              trashed &&
+              updateSql.includes("status != 'deleted'")
                 ? 0
                 : 1
           }
