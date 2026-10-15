@@ -67,6 +67,18 @@ export class JsonComplexityGuard {
   }
 }
 
+/** Reuses the streamed request guard, including the surrounding save envelope. */
+export function documentRequestWithinComplexity(value: unknown): boolean {
+  try {
+    const text = JSON.stringify(value);
+    if (text === undefined) return false;
+    new JsonComplexityGuard().consume(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function isDocumentRecord(
   value: unknown
 ): value is Record<string, unknown> {
