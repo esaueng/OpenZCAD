@@ -5,7 +5,10 @@ import {
   createSavedRevision
 } from '@openzcad/document-core';
 import {
+  JsonComplexityGuard,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
+  MAX_DOCUMENT_VALUES,
+  documentStructureError,
   toUserId,
   type ProjectDocument,
   type SaveProjectDocumentResponse
@@ -864,6 +867,8 @@ describe('cloud project autosave — refusals', () => {
     [403, 'FORBIDDEN'],
     [403, 'PROJECT_UPDATE_REQUIRED'],
     [403, 'DOCUMENT_TOO_LARGE'],
+    [403, 'DOCUMENT_TOO_COMPLEX'],
+    [409, 'DOCUMENT_TOO_COMPLEX'],
     [409, 'LEASE_REQUIRED'],
     [413, 'PROJECT_STORAGE_QUOTA'],
     [413, 'PROJECT_COUNT_QUOTA'],
@@ -1001,6 +1006,176 @@ describe('cloud project autosave — refusals', () => {
     },
     15_000
   );
+
+  it.each(['separators', 'depth'] as const)(
+    'resumes after an actual Worker lexical %s refusal only when all structure limits fit',
+    async (constraint) => {
+      const user = toUserId(`user_complexity_${crypto.randomUUID()}`);
+      vi.stubGlobal(
+        'fetch',
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = new Request(
+            new URL(
+              typeof input === 'string'
+                ? input
+                : input instanceof URL
+                  ? input.href
+                  : input.url,
+              'https://example.com'
+            ),
+            init
+          );
+          request.headers.set('x-openzcad-development-user', user);
+          return worker.fetch(request, {
+            ENVIRONMENT: 'development',
+            AUTH_MODE: 'development'
+          });
+        }
+      );
+      const { document } = await api.createProject({
+        name: 'Complexity recovery'
+      });
+      const nested = (levels: number): unknown => {
+        let value: unknown = 0;
+        for (let i = 0; i < levels; i++) value = { child: value };
+        return value;
+      };
+      const fields = (count: number): Record<string, object> => {
+        const value: Record<string, object> = {};
+        for (let i = 0; i < count; i++) value[String(i)] = {};
+        return value;
+      };
+      let padding: unknown;
+      let stillComplex: unknown;
+      if (constraint === 'separators') {
+        const base = {
+          ...document,
+          version: document.version + 1,
+          padding: {}
+        };
+        const text = JSON.stringify(base);
+        // Derive the existing guard's count without duplicating its lexer.
+        let lower = 0;
+        let upper = MAX_DOCUMENT_VALUES * 2;
+        while (lower < upper) {
+          const middle = Math.floor((lower + upper) / 2);
+          try {
+            new JsonComplexityGuard(undefined, middle).consume(text);
+            upper = middle;
+          } catch {
+            lower = middle + 1;
+          }
+        }
+        // Empty-object fields add three separators each (two for the first).
+        const count = Math.floor((MAX_DOCUMENT_VALUES * 2 - lower + 1) / 3);
+        padding = fields(count);
+        stillComplex = fields(count - 1);
+        const canonical = { ...base, padding };
+        expect(documentStructureError(canonical)).toBeNull();
+        expect(() =>
+          new JsonComplexityGuard().consume(JSON.stringify(canonical))
+        ).not.toThrow();
+        // Only the complete request envelope exceeds the lexical ceiling.
+        expect(() =>
+          new JsonComplexityGuard().consume(
+            JSON.stringify({
+              projectId: document.projectId,
+              expectedVersion: document.version,
+              document: canonical
+            })
+          )
+        ).toThrow();
+      } else {
+        padding = nested(72);
+        stillComplex = nested(64);
+      }
+      const errors: unknown[] = [];
+      const respond = vi.fn(
+        async (input: {
+          expectedVersion: number;
+          document: ProjectDocument;
+        }) => {
+          try {
+            return await api.saveProjectDocument({
+              ...input,
+              projectId: document.projectId
+            });
+          } catch (error) {
+            errors.push(error);
+            throw error;
+          }
+        }
+      );
+      const { controller, statuses } = harness({ respond });
+      try {
+        controller.openProject(document.projectId, document.version);
+        controller.schedule({
+          ...document,
+          version: document.version + 1,
+          padding
+        } as ProjectDocument);
+        await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+        await controller.whenIdle();
+        expect(errors[0]).toBeInstanceOf(ApiError);
+        expect(errors[0]).toMatchObject({
+          status: 413,
+          message: 'Request JSON is too complex.',
+          code: 'DOCUMENT_TOO_COMPLEX'
+        });
+        expect((errors[0] as ApiError).details).not.toHaveProperty(
+          'limitBytes'
+        );
+        expect(lastState(statuses)).toBe('refused');
+        for (const refusedPadding of [
+          padding,
+          stillComplex,
+          new Array(MAX_DOCUMENT_VALUES + 1).fill(0)
+        ]) {
+          controller.schedule({
+            ...document,
+            version: document.version + 2,
+            padding: refusedPadding
+          } as ProjectDocument);
+          await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+          await controller.whenIdle();
+          expect(respond).toHaveBeenCalledTimes(1);
+        }
+        controller.schedule(documentAt(document.version + 3, document));
+        await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+        await controller.whenIdle();
+        expect(respond).toHaveBeenCalledTimes(2);
+        expect(lastState(statuses)).toBe('synced');
+        expect(await api.loadProject(document.projectId)).toMatchObject({
+          version: document.version + 3
+        });
+      } finally {
+        controller.dispose();
+      }
+    },
+    15_000
+  );
+
+  it('leaves generic request-complexity refusals unclassified', async () => {
+    let padding: unknown = 0;
+    for (let i = 0; i < 72; i++) padding = { child: padding };
+    const response = await worker.fetch(
+      new Request('https://example.com/api/projects', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-openzcad-development-user': toUserId(
+            `user_generic_${crypto.randomUUID()}`
+          )
+        },
+        body: JSON.stringify({ name: 'Generic complexity', padding })
+      }),
+      { ENVIRONMENT: 'development', AUTH_MODE: 'development' }
+    );
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({
+      error: 'Request JSON is too complex.'
+    });
+  });
 
   it('retries a transient failure quickly, then slows down rather than spinning', async () => {
     let attempts = 0;
