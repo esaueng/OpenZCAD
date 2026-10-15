@@ -17,6 +17,8 @@
     // Sweep expired D1 upload sessions only after their R2 state is gone.
     "crons": ["17 * * * *"]
   },
+  "ratelimits": [{"name":"GLIMPSE_USAGE_LIMITER", "namespace_id":"2026101501", "simple":{"limit":120,"period":60}}],
+  "services": [{"binding":"GLIMPSE", "service":"glimpse", "entrypoint":"OpenZCADIngest"}],
   "assets": {
     "directory": "./apps/web/dist",
     "binding": "ASSETS",
@@ -24,6 +26,8 @@
     "run_worker_first": ["/api/*", "/healthz", "/assets/freecadImportWorker-*"]
   },
   "vars": {
+    "GLIMPSE_BASIC_ENABLED": "false",
+    "GLIMPSE_USAGE_ENABLED": "false",
     "ENVIRONMENT": "beta",
     "AUTH_MODE": "email-code",
     "PRODUCTION_GUARD": "enabled",

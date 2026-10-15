@@ -139,6 +139,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     label: 'Privacy & data',
     detail: 'Local and cloud data controls',
     settings: [
+      'Optional usage analytics',
       'Reset application settings',
       'Local project data',
       'Delete all cloud projects',

@@ -48,6 +48,12 @@ phase numbers, priorities and status tables no longer define independent queues.
 ADRs retain architecture decisions. Update delivery status here, and update a
 supporting specification only when its contract changes.
 
+## Analytics integration
+
+| Master ID | Status | Scope and evidence |
+| --- | --- | --- |
+| A01 | In review | Glimpse: backend API counters plus separately opt-in feature/workflow/export aggregates; no model or identifying payloads. [Setup and privacy boundaries](docs/glimpse.md). Regression coverage in `analytics.test.ts` and `worker/glimpse.test.ts`; production provisioning, activation and live verification pending. |
+
 ## Where we are
 
 OpenZCAD has a working browser CAD foundation: exact solid modeling, editable

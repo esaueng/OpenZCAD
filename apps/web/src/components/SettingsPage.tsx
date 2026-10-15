@@ -1,3 +1,4 @@
+import { AnalyticsConsent } from './AnalyticsConsent';
 import {
   MIDDLE_DRAG_LABELS,
   POINTER_NAVIGATION_LABELS
@@ -2150,6 +2151,7 @@ export function SettingsPage({
                   Reset settings
                 </button>
               </SettingRow>
+              <AnalyticsConsent />
               <SettingRow
                 title="Local project data"
                 description="Local projects stay in this browser's storage. Delete them from the start screen; the cloud actions below never touch projects or settings on this device."
