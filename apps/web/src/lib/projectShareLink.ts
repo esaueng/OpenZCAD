@@ -8,6 +8,13 @@
  */
 export const PROJECT_SHARE_HASH_PREFIX = 'share=';
 
+/** The same app route, without an invitation or share capability fragment. */
+export function projectLinkPath(
+  location: Pick<Location, 'pathname' | 'search'> = globalThis.location
+): string {
+  return `${location.pathname}${location.search}`;
+}
+
 /** The token inside a `#share=` fragment, or null when the hash is not one. */
 export function shareTokenFromHash(hash: string): string | null {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash;
@@ -33,11 +40,7 @@ export function captureProjectShareToken(): string | null {
 export function clearProjectShareFragment(): void {
   try {
     if (shareTokenFromHash(globalThis.location?.hash ?? '') !== null) {
-      globalThis.history.replaceState(
-        null,
-        '',
-        `${globalThis.location.pathname}${globalThis.location.search}`
-      );
+      globalThis.history.replaceState(null, '', projectLinkPath());
     }
   } catch {
     // The URL is cosmetic here; failing to tidy it must not break the copy.
