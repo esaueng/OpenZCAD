@@ -26,6 +26,18 @@ describe('readStagePalette', () => {
     });
   });
 
+  it('reads the short hex form the production minifier ships', () => {
+    // The built stylesheet carries `--color-viewport-bg:#eee`; rejecting it
+    // painted the light backdrop's middle stop graphite.
+    const root = document.documentElement;
+    root.style.setProperty('--color-viewport-bg', '#eee');
+    root.style.setProperty('--color-stage-top', '#F5F5F5');
+
+    const palette = readStagePalette(root);
+    expect(palette.backdropMiddle).toBe('#eeeeee');
+    expect(palette.backdropTop).toBe('#F5F5F5');
+  });
+
   it('falls back to the graphite stage when a token is missing or unreadable', () => {
     const root = document.documentElement;
     root.style.setProperty('--color-viewport-bg', 'not a colour');
