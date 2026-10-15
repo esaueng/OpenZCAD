@@ -376,6 +376,7 @@ import {
 } from './lib/demoDefinitions';
 import type { DemoDefinition } from './lib/demoDefinitions';
 import { createProjectSharingClient } from './lib/projectSharing';
+import { collaborationSaveState } from './lib/collaborationSaveState';
 import {
   captureProjectInvitationLink,
   projectInvitationTokenFromHash,
@@ -383,6 +384,7 @@ import {
 } from './lib/projectInvitationLink';
 import {
   captureProjectShareToken,
+  projectLinkPath,
   clearProjectShareFragment
 } from './lib/projectShareLink';
 import type {
@@ -1805,10 +1807,42 @@ export function App() {
     (token: string, isCurrent: () => boolean) => Promise<void>
   >(async () => undefined);
   const fragmentNavigationRef = useRef(0);
+  const navigationBusyRef = useRef<{
+    navigation: number;
+    userId: string | null;
+  } | null>(null);
   const leaveShareSessionRef = useRef<
     (isCurrent: () => boolean) => Promise<void>
   >(async () => undefined);
+  const cancelNavigationBusy = useCallback(() => {
+    const owner = navigationBusyRef.current;
+    navigationBusyRef.current = null;
+    if (
+      owner?.navigation === fragmentNavigationRef.current &&
+      owner.userId === (sessionRef.current?.userId ?? null)
+    )
+      setBusy(false);
+  }, []);
+  const startNavigationBusy = useCallback(() => {
+    const owner = {
+      navigation: fragmentNavigationRef.current,
+      userId: sessionRef.current?.userId ?? null
+    };
+    navigationBusyRef.current = owner;
+    setBusy(true);
+    return (current: boolean) => {
+      if (navigationBusyRef.current !== owner) return;
+      navigationBusyRef.current = null;
+      if (
+        current &&
+        owner.navigation === fragmentNavigationRef.current &&
+        owner.userId === (sessionRef.current?.userId ?? null)
+      )
+        setBusy(false);
+    };
+  }, []);
   function beginProjectNavigation() {
+    cancelNavigationBusy();
     const navigation = ++fragmentNavigationRef.current;
     clearPendingProjectInvitation();
     pendingInvitationAttemptRef.current = null;
@@ -1824,7 +1858,7 @@ export function App() {
     window.history.replaceState(
       window.history.state,
       '',
-      `${window.location.pathname}${window.location.search}#share=${active.token}`
+      `${projectLinkPath()}#share=${active.token}`
     );
     shareOpenAttemptRef.current = active.token;
     setPendingShareToken(active.token);
@@ -1845,6 +1879,7 @@ export function App() {
         captureProjectInvitationLink();
         return;
       }
+      cancelNavigationBusy();
       const navigation = ++fragmentNavigationRef.current;
       if (window.location.hash.startsWith('#invite=')) {
         const token = projectInvitationTokenFromHash(window.location.hash);
@@ -1855,23 +1890,19 @@ export function App() {
           setPendingInvitationToken(token);
           setInvitationNavigation((current) => current + 1);
           setPendingShareToken(null);
-          setBusy(false);
           updateSettingsViewState({ open: true, activeSection: 'account' });
           setSettingsOpen(true);
           return;
         }
       }
-      const wasOpeningInvitation = pendingInvitationAttemptRef.current !== null;
       clearPendingProjectInvitation();
       pendingInvitationAttemptRef.current = null;
       setPendingInvitationToken(null);
       setPendingInvitationError(null);
       const token = captureProjectShareToken();
-      const wasOpeningShare = shareOpenAttemptRef.current !== null;
       shareOpenAttemptRef.current = null;
       setPendingShareToken(token);
       if (!token) {
-        if (wasOpeningShare || wasOpeningInvitation) setBusy(false);
         if (shareSessionRef.current) {
           void leaveShareSessionRef.current(
             () => fragmentNavigationRef.current === navigation
@@ -1883,7 +1914,7 @@ export function App() {
     };
     window.addEventListener('hashchange', openFragment);
     return () => window.removeEventListener('hashchange', openFragment);
-  }, []);
+  }, [cancelNavigationBusy]);
   const [cloudFunctionsEnabled, setCloudFunctionsEnabledState] = useState(
     cloudFunctionsAreEnabled
   );
@@ -4505,13 +4536,12 @@ export function App() {
   useEffect(() => {
     if (!sharedAccountProject || localSaveDirty || localSaveFailed) return;
     setSaveState(
-      collaboration.conflict
-        ? 'conflict'
-        : collaboration.status === 'offline'
-          ? 'offline'
-          : collaboration.roomVersion === doc?.version
-            ? 'synced'
-            : 'syncing'
+      collaborationSaveState(
+        collaboration.status,
+        Boolean(collaboration.conflict),
+        collaboration.roomVersion,
+        doc?.version
+      )
     );
   }, [
     sharedAccountProject,
@@ -9028,7 +9058,7 @@ export function App() {
     isCurrent: () => boolean = beginProjectNavigation()
   ) {
     const activeProjectSince = snapshotActiveProject();
-    setBusy(true);
+    const finishBusy = startNavigationBusy();
     try {
       await flushPendingLocalSave();
       if (!isCurrent()) return;
@@ -9151,7 +9181,7 @@ export function App() {
       if (isCurrent())
         setStatus(errorMessage(error, 'Failed to open project.'));
     } finally {
-      if (isCurrent()) setBusy(false);
+      finishBusy(isCurrent());
     }
   }
 
@@ -9162,7 +9192,7 @@ export function App() {
     if (!session || !projectSharingEnabled) {
       throw new Error('Project sharing is not enabled for this account.');
     }
-    setBusy(true);
+    const finishBusy = startNavigationBusy();
     setStatus('Accepting project invitation…');
     try {
       const accepted = await projectSharingClient.acceptInvitation(token);
@@ -9183,7 +9213,7 @@ export function App() {
       setStatus(errorMessage(error, 'Could not accept the invitation.'));
       throw error;
     } finally {
-      if (isCurrent()) setBusy(false);
+      finishBusy(isCurrent());
     }
   }
   acceptPendingInvitationRef.current = handleAcceptProjectInvitation;
@@ -9196,9 +9226,11 @@ export function App() {
    */
   const hydrateSharedDocumentRef = useRef(hydrateDocument);
   hydrateSharedDocumentRef.current = hydrateDocument;
+  const foregroundBusy = busy && navigationBusyRef.current === null;
   useEffect(() => {
     if (
       startupState !== 'ready' ||
+      foregroundBusy ||
       !pendingShareToken ||
       shareOpenAttemptRef.current === pendingShareToken
     ) {
@@ -9209,13 +9241,13 @@ export function App() {
     const navigation = fragmentNavigationRef.current;
     const isCurrent = () =>
       !cancelled && fragmentNavigationRef.current === navigation;
+    const finishBusy = startNavigationBusy();
     const restoreActiveShare = () => {
       const active = shareSessionRef.current;
       if (!active || active.token === pendingShareToken) return;
+      finishBusy(isCurrent());
       restoreShareSessionFragment();
-      setBusy(false);
     };
-    setBusy(true);
     updateSettingsViewState({ open: false });
     setSettingsOpen(false);
     setSharingOpen(false);
@@ -9262,7 +9294,7 @@ export function App() {
           });
         }
       } finally {
-        if (isCurrent()) setBusy(false);
+        finishBusy(isCurrent());
       }
     })();
     return () => {
@@ -9272,6 +9304,8 @@ export function App() {
     pendingShareToken,
     shareNavigation,
     startupState,
+    foregroundBusy,
+    startNavigationBusy,
     setStatus,
     restoreShareSessionFragment
   ]);
@@ -9289,7 +9323,7 @@ export function App() {
     }
     const activeProjectSince = snapshotActiveProject();
     const isCurrent = beginProjectNavigation();
-    setBusy(true);
+    const finishBusy = startNavigationBusy();
     try {
       const copy = duplicateProjectDocument(
         source,
@@ -9319,13 +9353,14 @@ export function App() {
       if (isCurrent())
         setStatus(errorMessage(error, 'Could not copy the shared model.'));
     } finally {
-      if (isCurrent()) setBusy(false);
+      finishBusy(isCurrent());
     }
   }
 
   useEffect(() => {
     if (
       startupState !== 'ready' ||
+      foregroundBusy ||
       !pendingInvitationToken ||
       !session ||
       !collaborationRollout.sharingEnabled
@@ -9379,20 +9414,13 @@ export function App() {
     pendingInvitationToken,
     invitationNavigation,
     session,
-    startupState
+    startupState,
+    foregroundBusy
   ]);
 
   function dismissProjectInvitation() {
-    const request = pendingInvitationRequestRef.current;
-    const dismissesActiveRequest =
-      request !== null &&
-      request.navigation === fragmentNavigationRef.current &&
-      request.token === pendingInvitationToken &&
-      pendingInvitationAttemptRef.current ===
-        `${sessionRef.current?.userId}:${request.token}`;
     beginProjectNavigation();
     restoreShareSessionFragment();
-    if (dismissesActiveRequest) setBusy(false);
     setStatus('Invitation dismissed.');
     closeSettings();
   }
@@ -9405,7 +9433,6 @@ export function App() {
     } catch {
       // Keep the failed document open, with its export/retry guidance. Opening
       // another project would otherwise replace the only unsaved snapshot.
-      if (isCurrent()) setBusy(false);
       return;
     }
     if (!isCurrent()) return;
@@ -9455,8 +9482,6 @@ export function App() {
       if (isCurrent()) {
         setStatus(errorMessage(error, 'Failed to refresh projects.'));
       }
-    } finally {
-      if (isCurrent()) setBusy(false);
     }
   }
   leaveShareSessionRef.current = handleGoHome;

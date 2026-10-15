@@ -1,16 +1,16 @@
 import { test, expect, stubApi } from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 
 const token = 'd'.repeat(43);
 
-async function ownedLocalWorkspace(page: Page) {
+async function ownedLocalWorkspace(page: Page, sharingEnabled = true) {
   await stubApi(page, { collaborationRole: 'owner' });
   await page.route('**/api/collaboration/config', (route) =>
     route.fulfill({
       json: {
-        sharingEnabled: true,
+        sharingEnabled,
         editLeasesEnforced: false,
         personalSyncEnabled: false,
         canary: false
@@ -139,6 +139,63 @@ test('dismisses pending acceptance and immediately enables the owned account act
     invitation.release();
   }
 });
+
+for (const sharingEnabled of [false, true]) {
+  test(`invitation navigation preserves an existing account save with rollout ${sharingEnabled}`, async ({
+    page
+  }) => {
+    const account = await ownedLocalWorkspace(page, sharingEnabled);
+    let accepted = 0;
+    await page.route('**/api/project-invitations/accept', (route) => {
+      accepted++;
+      return route.fulfill({ status: 503, json: { error: 'Unavailable' } });
+    });
+    const first = await openSharing(page);
+    account.holdAdoption();
+    await first
+      .getByRole('button', { name: 'Save to my account', exact: true })
+      .click();
+    let current!: Locator;
+    try {
+      await expect.poll(account.adoptionRequested).toBe(true);
+      await expect(
+        first.getByRole('button', {
+          name: 'Saving project and sources…',
+          exact: true
+        })
+      ).toBeDisabled();
+      await first.getByRole('button', { name: 'Close sharing' }).click();
+      await page.evaluate((invite) => {
+        window.location.hash = `invite=${invite}`;
+      }, token);
+      const settings = page.getByRole('dialog', { name: 'Settings' });
+      await expect(settings).toBeVisible();
+      expect(accepted).toBe(0);
+      await settings
+        .getByRole('button', { name: 'Back to workspace', exact: true })
+        .click();
+      await expect(settings).toHaveCount(0);
+      current = await openSharing(page);
+      await expect(
+        current.getByRole('button', {
+          name: 'Saving project and sources…',
+          exact: true
+        })
+      ).toBeDisabled();
+      expect(accepted).toBe(0);
+    } finally {
+      account.releaseAdoption();
+    }
+    if (sharingEnabled) {
+      await expect.poll(() => accepted).toBe(1);
+    } else {
+      await expect(
+        current.getByRole('button', { name: 'Save to my account', exact: true })
+      ).toBeEnabled();
+      expect(accepted).toBe(0);
+    }
+  });
+}
 
 test('late dismissed acceptance cannot release a newer account save or open its project', async ({
   page
