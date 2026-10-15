@@ -10,6 +10,7 @@ import type {
 
 import { loadSourceBlob, putSourceBlob, sha256Hex } from './localProjectStore';
 import { sharedImportSourceUrl } from './projectShareClient';
+import { readSharedSourceBytes } from './sharedSourceDownload';
 
 /**
  * Bytes a cloud artifact download may stream before the rebuild gives up on
@@ -112,17 +113,12 @@ export async function preloadSharedImportSources(
         `The owner needs to save the source file for "${sourceName}" to their account before this link can open.`
       );
     }
-    const response = await fetcher(sharedImportSourceUrl(token, artifactId), {
-      credentials: 'omit'
-    });
-    if (!response.ok) {
-      throw new Error(
-        `The shared source file for "${sourceName}" is unavailable. Ask the owner to save its source file to their account.`
-      );
-    }
-    const bytes = await readResponseBytes(
-      response,
-      MAX_ARTIFACT_DOWNLOAD_BYTES
+    const bytes = await readSharedSourceBytes(
+      sharedImportSourceUrl(token, artifactId),
+      sourceName,
+      fetcher,
+      MAX_ARTIFACT_DOWNLOAD_BYTES,
+      SOURCE_DOWNLOAD_IDLE_MS
     );
     if (
       !bytes ||
