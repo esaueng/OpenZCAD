@@ -20,6 +20,7 @@ import type {
 } from './lib/parameterVisualPreview';
 import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
+import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { featureHistory } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
@@ -113,7 +114,6 @@ import {
   numberedFeatureName,
   repairedDirectEditOperation,
   resolveParamValue,
-  restoreFromSaveState,
   staleDirectEditFaceRepair,
   withEchoedSavePoints,
   withoutDerivedProjection,
@@ -265,6 +265,7 @@ import {
 import { localAutosaveFailedStatus } from './lib/localAutosaveFailure';
 import {
   LocalProjectAutosave,
+  sameLocalProjectContent,
   type LocalProjectAutosaveOptions
 } from './lib/localProjectAutosave';
 import {
@@ -1443,12 +1444,6 @@ const E2E_SLOW_FRAME_MS =
  * backstop for a tab left open and in front of somebody.
  */
 const FRESHNESS_POLL_INTERVAL_MS = 60_000;
-/**
- * The save point a restore leaves behind for itself. Named once so the panel
- * and the handler agree on the row a user goes looking for to undo a restore
- * they have already closed the tab on.
- */
-const BEFORE_RESTORE_REASON = 'Before restore';
 /**
  * What an unnamed save is called. Ctrl+S stays a reflex and takes this; naming
  * one is its own gesture (Ctrl+Shift+S).
@@ -9620,7 +9615,15 @@ export function App() {
     setBusy(true);
     try {
       await flushPendingLocalSave();
-      if (session) {
+      const openDocument = managerRef.current?.document;
+      const deviceOnlySaveState = Boolean(
+        saveState &&
+        openDocument?.projectId === project.projectId &&
+        !openDocument.checkpoints.some(
+          (point) => point.checkpointId === saveState.checkpointId
+        )
+      );
+      if (session && !deviceOnlySaveState) {
         try {
           const response = await api.duplicateProject(project.projectId, {
             ...(saveState ? { revisionId: saveState.revisionId } : {})
@@ -9796,22 +9799,25 @@ export function App() {
         );
         return;
       }
-      const guarded = createCheckpoint(
-        appendRevision(current, BEFORE_RESTORE_REASON),
-        BEFORE_RESTORE_REASON
-      );
-      // Written before anything is replaced: this is the way back.
-      await saveLocalProject(guarded);
       const reason = `Restored “${checkpoint.reason}”`;
+      const next = await prepareSaveStateRestore(
+        current,
+        snapshot,
+        reason,
+        sharedAccountProject,
+        session?.userId ?? current.ownerUserId
+      );
+      if (
+        managerRef.current !== manager ||
+        !sameLocalProjectContent(manager.document, current) ||
+        !ensureCanEdit('restore a save state')
+      ) {
+        setStatus('The project changed while loading that save. Please retry.');
+        return;
+      }
       // The manager's document, not its input: only it carries the undo entry
       // that puts the restore back, and autosave persists what is shown.
-      const restored = manager.applyDocumentEdit(
-        createCheckpoint(
-          restoreFromSaveState(guarded, snapshot, reason),
-          reason
-        ),
-        reason
-      );
+      const restored = manager.applyDocumentEdit(next, reason);
       clearAutoFrame();
       // The meshes on screen belong to the document being left, and the
       // restored history has to be rebuilt from scratch to replace them.

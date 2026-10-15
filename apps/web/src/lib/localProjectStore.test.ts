@@ -1125,6 +1125,57 @@ describe('save states on the device', () => {
     expect(restored?.derived.warnings).toEqual(['kept']);
   });
 
+  it('upgrades version-11 save states and lists metadata using keys without reading snapshot values', async () => {
+    const saved = savedDocument(
+      'Legacy checkpoint',
+      'proj-a',
+      'Before upgrade'
+    );
+    const checkpoint = saved.checkpoints.at(-1)!;
+    const open = indexedDB.open(DATABASE_NAME, 11);
+    open.onupgradeneeded = () => {
+      const states = open.result.createObjectStore(
+        'projectCheckpointDocuments',
+        {
+          keyPath: ['projectId', 'checkpointId']
+        }
+      );
+      states.createIndex('byProjectDocumentVersion', [
+        'projectId',
+        'documentVersion'
+      ]);
+    };
+    const legacy = await request(open);
+    const tx = legacy.transaction('projectCheckpointDocuments', 'readwrite');
+    tx.objectStore('projectCheckpointDocuments').put({
+      projectId: saved.projectId,
+      ...checkpoint,
+      document: saved
+    });
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(failed(tx.error));
+    });
+    legacy.close();
+    const bodyCursor = vi
+      .spyOn(IDBIndex.prototype, 'openCursor')
+      .mockImplementation(() => {
+        throw new Error(
+          'History listing must not materialize snapshot bodies.'
+        );
+      });
+    try {
+      expect(await listLocalSaveStateCheckpoints(saved.projectId)).toEqual([
+        checkpoint
+      ]);
+    } finally {
+      bodyCursor.mockRestore();
+    }
+    expect(
+      await loadLocalSaveState(saved.projectId, checkpoint.checkpointId)
+    ).toEqual(saved);
+  });
+
   it('keeps the newest saves and drops the oldest past the bound', async () => {
     let document = projectDocument('Busy', 'proj-a');
     const reasons: string[] = [];
