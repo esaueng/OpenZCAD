@@ -19888,6 +19888,15 @@ export function App() {
           }
           localOnlySourceCount={localOnlySources.length}
           artifacts={artifacts}
+          meshCleanup={
+            session?.userId === doc.ownerUserId && activeProjectIsCloud
+              ? {
+                  document: doc,
+                  getDocument: () => managerRef.current?.document ?? null,
+                  transport: api
+                }
+              : undefined
+          }
           session={session}
           accountState={
             session
