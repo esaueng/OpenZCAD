@@ -434,6 +434,50 @@ describe.each(['memory', 'D1/R2'] as const)(
 );
 
 describe('D1/R2 mesh discard races and accounting', () => {
+  it('atomically fences a foreign source discarded while adoption stores its localized document', async () => {
+    const { service, hooks, db } = fixture();
+    const { document, artifact } = await finalized(service);
+    const manager = imported(document, artifact.artifactId);
+    let discardedDuringWrite = false;
+    hooks.put = async () => {
+      delete hooks.put;
+      expect(
+        await service.discardMeshPayload(
+          owner,
+          document.projectId,
+          artifact.artifactId
+        )
+      ).toEqual({ deleted: true });
+      discardedDuringWrite = true;
+    };
+    await expect(
+      service.createProject(outsider, {
+        name: 'Concurrent adoption',
+        document: manager.document,
+        adoptionProtocolVersion: 1
+      })
+    ).rejects.toThrow();
+    expect(discardedDuringWrite).toBe(true);
+    expect((await service.listProjects(outsider)).projects).toEqual([]);
+    expect(
+      db
+        .prepare(
+          'SELECT count(*) AS count FROM project_adoptions WHERE user_id = ?'
+        )
+        .get(outsider)
+    ).toMatchObject({ count: 0 });
+    expect(
+      db.prepare('SELECT count(*) AS count FROM artifact_mesh_discards').get()
+    ).toMatchObject({ count: 1 });
+    expect(
+      db
+        .prepare(
+          "SELECT count(*) AS count FROM project_document_objects WHERE state = 'pending'"
+        )
+        .get()
+    ).toMatchObject({ count: 0 });
+  });
+
   it('does not mistake the pending-to-finalized transition for an absent artifact', async () => {
     const { service, hooks, usage, objects } = fixture();
     const { document, session } = await upload(service);
