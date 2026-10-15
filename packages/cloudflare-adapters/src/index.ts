@@ -2447,16 +2447,13 @@ export class D1R2PersistenceService implements PersistenceService {
         );
       }
     }
-    // Room publication can still throw or refuse after the immutable insert.
-    // Keep all previously acknowledged revisions until that second commit wins.
-    if (!(await publish())) {
-      // A definitive refusal published nothing. Remove only this immutable
-      // insert; uncertain publication errors retain their recovery snapshot.
-      await this.env.DB.prepare(
-        `DELETE FROM revisions
+    const discardUnpublished = async () => {
+      await this.env
+        .DB!.prepare(
+          `DELETE FROM revisions
          WHERE id = ? AND project_id = ? AND document_json = ?
            AND document_object_id IS ? AND author_user_id = ?`
-      )
+        )
         .bind(
           revision.revisionId,
           saved.projectId,
@@ -2476,6 +2473,19 @@ export class D1R2PersistenceService implements PersistenceService {
             'Rejected checkpoint cleanup could not be verified.'
           );
       }
+    };
+    // Authorization is checked before publication starts, so a rejection here
+    // is known to have published nothing. Errors during publication itself
+    // can have lost a storage acknowledgement and keep the recovery snapshot.
+    try {
+      await beforeCommit();
+    } catch (error) {
+      await discardUnpublished();
+      throw error;
+    }
+    // Keep all previously acknowledged revisions until the room commit wins.
+    if (!(await publish())) {
+      await discardUnpublished();
       return false;
     }
     await this.pruneRevisions(saved.projectId);
@@ -4207,10 +4217,11 @@ export class D1R2PersistenceService implements PersistenceService {
       options?.reuseExistingAssetsOnly
         ? {
             externalizeAsset: async (reference) => {
-              const existing = await this.env.DB!.prepare(
-                `SELECT stored_bytes FROM project_storage_assets
+              const existing = await this.env
+                .DB!.prepare(
+                  `SELECT stored_bytes FROM project_storage_assets
                  WHERE project_id = ? AND checksum_sha256 = ? AND kind = ?`
-              )
+                )
                 .bind(
                   document.projectId,
                   reference.checksumSha256,
@@ -7495,14 +7506,8 @@ export class ProjectCollaborationRoom extends DurableObject {
       try {
         const published = await new D1R2PersistenceService(
           this.roomEnv
-        ).storeCollaborationCheckpoint(
-          userId,
-          checkpoint,
-          recheckAuthor,
-          async () => {
-            await recheckAuthor();
-            return this.commitDocument(checkpoint);
-          }
+        ).storeCollaborationCheckpoint(userId, checkpoint, recheckAuthor, () =>
+          this.commitDocument(checkpoint)
         );
         if (!published)
           return rejectionResponse({
