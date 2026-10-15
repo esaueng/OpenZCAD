@@ -725,6 +725,170 @@ describe('cloud project autosave — refusals', () => {
     controller.dispose();
   });
 
+  it('resumes the same open project after reducing a value-limit refusal', async () => {
+    const document = documentAt(2);
+    const oversized = {
+      ...document,
+      version: 3,
+      padding: new Array(500_001).fill(0)
+    };
+    const attempts: number[] = [];
+    const { controller, statuses } = harness({
+      respond: async (input) => {
+        attempts.push(input.document.version);
+        try {
+          parseSaveProjectDocumentRequest(
+            { ...input, projectId: input.document.projectId },
+            input.document.projectId
+          );
+        } catch (error) {
+          throw new ApiError(
+            (error as HttpError).status,
+            (error as Error).message
+          );
+        }
+        return {
+          projectId: input.document.projectId,
+          version: input.document.version,
+          updatedAt: '2026-01-01T00:00:00.000Z'
+        };
+      }
+    });
+    controller.openProject(document.projectId, 2);
+    controller.schedule(oversized);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(lastState(statuses)).toBe('refused');
+
+    // Neither unchanged content nor another oversized edit can retry.
+    controller.schedule(oversized);
+    controller.schedule({ ...oversized, version: 4 });
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_RETRY_MS * 2);
+    expect(attempts).toEqual([3]);
+    controller.schedule(documentAt(5, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(attempts).toEqual([3, 5]);
+    expect(controller.syncedVersion).toBe(5);
+    expect(controller.hasPendingChanges).toBe(false);
+    expect(lastState(statuses)).toBe('synced');
+    controller.dispose();
+  });
+
+  it('resumes only below the byte limit reported for a document-size refusal', async () => {
+    const document = documentAt(2);
+    const oversized = { ...document, version: 3, padding: 'x'.repeat(5_000) };
+    const respond = vi
+      .fn<
+        (input: {
+          expectedVersion: number;
+          document: ProjectDocument;
+        }) => Promise<SaveProjectDocumentResponse>
+      >()
+      .mockRejectedValueOnce(
+        new ApiError(413, 'Document is too large.', 'DOCUMENT_TOO_LARGE', {
+          limitBytes: 4_000
+        })
+      )
+      .mockImplementation(async (input) => ({
+        projectId: input.document.projectId,
+        version: input.document.version,
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      }));
+    const { controller, statuses } = harness({ respond });
+    controller.openProject(document.projectId, 2);
+    controller.schedule(oversized);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    controller.schedule({ ...oversized, version: 4 });
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS * 2);
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(lastState(statuses)).toBe('refused');
+    controller.schedule(documentAt(5, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(respond.mock.calls[1]![0].expectedVersion).toBe(2);
+    expect(controller.syncedVersion).toBe(5);
+    controller.dispose();
+  });
+
+  it('keeps the reduced edit scheduled before the oversized response arrives', async () => {
+    const held = gate();
+    const document = documentAt(2);
+    const respond = vi
+      .fn<
+        (input: {
+          expectedVersion: number;
+          document: ProjectDocument;
+        }) => Promise<SaveProjectDocumentResponse>
+      >()
+      .mockImplementationOnce(async () => {
+        await held.wait;
+        throw new ApiError(
+          400,
+          'Project document holds more than 500000 values.'
+        );
+      })
+      .mockImplementation(async (input) => ({
+        projectId: input.document.projectId,
+        version: input.document.version,
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      }));
+    const { controller } = harness({ respond });
+    controller.openProject(document.projectId, 2);
+    controller.schedule({
+      ...document,
+      version: 3,
+      padding: new Array(500_001).fill(0)
+    } as ProjectDocument);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    controller.schedule(documentAt(4, document));
+    held.open();
+    await controller.whenIdle();
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(respond.mock.calls[1]![0]).toMatchObject({
+      expectedVersion: 2,
+      document: { version: 4 }
+    });
+    expect(controller.hasPendingChanges).toBe(false);
+    controller.dispose();
+  });
+
+  it.each([
+    [403, 'FORBIDDEN'],
+    [403, 'PROJECT_UPDATE_REQUIRED'],
+    [403, 'DOCUMENT_TOO_LARGE'],
+    [409, 'LEASE_REQUIRED'],
+    [413, 'PROJECT_STORAGE_QUOTA'],
+    [413, 'PROJECT_COUNT_QUOTA'],
+    [413, undefined],
+    [401, 'SESSION_EXPIRED']
+  ] as const)(
+    'does not resume a %s/%s refusal when another edit fits',
+    async (status, code) => {
+      const respond = vi.fn().mockRejectedValue(
+        new ApiError(status, 'Account write refused.', code, {
+          limitBytes: 4_000
+        })
+      );
+      const { controller } = harness({ respond });
+      const document = documentAt(2);
+      controller.openProject(document.projectId, 2);
+      controller.schedule(documentAt(3, document));
+      await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+      await controller.whenIdle();
+      controller.schedule(documentAt(4, document));
+      await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_RETRY_MS * 2);
+      await controller.whenIdle();
+      expect(respond).toHaveBeenCalledTimes(1);
+      expect(controller.hasPendingChanges).toBe(true);
+      controller.dispose();
+    }
+  );
+
   it('retries a transient failure quickly, then slows down rather than spinning', async () => {
     let attempts = 0;
     const { controller } = harness({
