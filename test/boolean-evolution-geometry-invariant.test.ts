@@ -113,7 +113,9 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       const body = derived.bodyRepresentations[bodyId];
       expect(body, 'the cut body').toBeDefined();
       expect(body!.faceCount).toBe(5);
-      expect(body!.volume).toBeCloseTo(4137.839039, 4);
+      // Exact circular equators in Remus 2026.1.62 change this numerical
+      // reading at the adapter's unchanged measurement deflection.
+      expect(body!.volume).toBeCloseTo(4137.275147, 4);
     },
     120_000
   );

@@ -282,12 +282,14 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'boss-crossing-a-wall',
     metric: 'lineageNames',
-    remus: '20 names · 2b128a84',
+    remus: '20 names · 43124e2f',
     occt: 'none',
     owner: 'K0.6',
     note:
       BOOLEAN_CARRIER_NOTE +
-      ' The six face and fourteen edge names are recorded in baselines/import-modeling.json.'
+      ' The six face and fourteen edge names are recorded in baselines/import-modeling.json. ' +
+      'Remus 2026.1.62 splits carrier a5ae8c7a into three pieces; the first and third survive the fuse. ' +
+      'Stored of.2 references fail closed and require re-selection rather than traversal-order rebinding.'
   },
   {
     subject: 'boss-crossing-a-wall',
