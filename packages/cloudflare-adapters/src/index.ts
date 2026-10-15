@@ -7529,11 +7529,12 @@ export class ProjectCollaborationRoom extends DurableObject {
             'The named checkpoint could not be stored. Your current room document is unchanged.'
         });
       }
+      // The checkpoint is durable; socket delivery cannot suppress its HTTP ACK.
       await this.broadcast({
         type: 'document',
         clientId: payload.clientId,
         document: checkpoint
-      });
+      }).catch(() => undefined);
       return Response.json({
         type: 'ack',
         version: checkpoint.version,
