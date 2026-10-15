@@ -18,6 +18,8 @@ import {
 } from './localProjectStore';
 import * as localStore from './localProjectStore';
 import { useCollaboration } from './useCollaboration';
+import { preserveFailedCheckpoint } from './collaborationCheckpointFallback';
+import { STALE_CHUNK_MESSAGE } from './staleChunk';
 
 const chunkError = new Error('Checkpoint action chunk unavailable.');
 
@@ -156,6 +158,36 @@ async function rejectedSave(
 }
 
 describe('named saves when the checkpoint action cannot load', () => {
+  it('keeps the device durability confirmation with native chunk-load guidance', async () => {
+    const clicked = createProjectDocument(
+      'Missing native module',
+      toUserId('owner')
+    );
+    const hook = setup(clicked);
+    const primary = new TypeError(
+      'Failed to fetch dynamically imported module: https://app.test/assets/checkpoint-old.js'
+    );
+    const error = await rejectedSave(
+      preserveFailedCheckpoint(
+        primary,
+        clicked,
+        'Offline milestone',
+        hook.options,
+        () => true
+      )
+    );
+    expect(error.cause).toBe(primary);
+    expect(error.message).toBe(
+      `${STALE_CHUNK_MESSAGE} The named save is stored on this device.`
+    );
+    const checkpoint = hook.read().checkpoints.at(-1)!;
+    expect(
+      await loadLocalSaveState(clicked.projectId, checkpoint.checkpointId)
+    ).not.toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+    hook.unmount();
+  });
+
   it('uses the named-save deadline for a held import and never starts its late action', async () => {
     const clicked = createProjectDocument('Held action', toUserId('owner'));
     const later = box(clicked, 'Buffered box');
