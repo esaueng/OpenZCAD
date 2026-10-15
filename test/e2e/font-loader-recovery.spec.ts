@@ -310,3 +310,137 @@ test('a non-text solid never fetches the font parser', async ({
   expect(fault.urls).toHaveLength(0);
   await live.worker.evaluate(() => self.close());
 });
+
+test('the unchanged text solid restarts a stalled font download without replacing its worker', async ({
+  page,
+  context
+}) => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let requests = 0;
+  const aborted: string[] = [];
+  context.on('requestfailed', (request) => {
+    if (request.url().endsWith('/fonts/open-sans-regular.ttf'))
+      aborted.push(request.failure()?.errorText ?? 'failed');
+  });
+  await context.route('**/fonts/open-sans-regular.ttf', async (route) => {
+    requests += 1;
+    if (requests === 1) {
+      await held;
+      await route.abort().catch(() => undefined);
+      return;
+    }
+    await route.continue();
+  });
+  await stubAnonymousApi(page);
+  await page.goto('/');
+  const document = textSolid();
+  const live = await liveWorker(page, document);
+  try {
+    await expect
+      .poll(
+        async () =>
+          (await live.messages()).some(
+            (message) => message.phase === 'ready' && message.stale === true
+          ),
+        { timeout: 20_000 }
+      )
+      .toBe(true);
+    await expect
+      .poll(
+        async () =>
+          (await live.messages()).some(
+            (message) => message.phase === 'ready' && message.stale === false
+          ),
+        { timeout: 20_000 }
+      )
+      .toBe(true);
+    const final = (await live.messages())
+      .filter((message) => message.type === 'projection-delta')
+      .at(-1)!;
+    expect(final.packet?.state.exportableBodyIds).toEqual(document.bodyOrder);
+    expect(final.packet?.state.warnings).toEqual([]);
+    expect(requests).toBe(2);
+    expect(aborted).toHaveLength(1);
+    expect(
+      page.workers().filter((worker) => worker.url() === live.worker.url())
+    ).toEqual([live.worker]);
+  } finally {
+    release();
+    await live.worker.evaluate(() => self.close());
+  }
+});
+
+test('an explicit rectangle profile stays exact-ready when unrelated ordinary text has no font', async ({
+  page,
+  context
+}) => {
+  await context.route('**/fonts/open-sans-regular.ttf', (route) => {
+    return route.abort('internetdisconnected');
+  });
+  await stubAnonymousApi(page);
+  await page.goto('/');
+  const sketch = addSketchFeature(
+    createProjectDocument('Selected rectangle and label', toUserId('user')),
+    {
+      name: 'Rectangle with separate text',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        {
+          objectKind: 'rectangle',
+          centerX: 0,
+          centerY: 0,
+          width: 6,
+          height: 5
+        },
+        {
+          objectKind: 'text',
+          text: 'I',
+          fontFamily: 'open-sans',
+          fontStyle: 'regular',
+          size: 2,
+          x: 10,
+          y: 10
+        }
+      ]
+    }
+  );
+  const rectangle = findSketch(sketch.document, sketch.sketchId)!.objectIds[0]!;
+  const document = extrudeSketch(sketch.document, {
+    name: 'Only the rectangle',
+    sketchId: sketch.sketchId,
+    distance: 5,
+    profiles: [{ all: true, sourceEntityIds: [rectangle] }]
+  }).document;
+  const live = await liveWorker(page, document);
+  try {
+    await expect
+      .poll(
+        async () =>
+          (await live.messages()).some(
+            (message) => message.phase === 'ready' && message.stale === false
+          ),
+        { timeout: 20_000 }
+      )
+      .toBe(true);
+    const messages = await live.messages();
+    expect(messages.filter((message) => message.phase === 'ready')).toEqual([
+      expect.objectContaining({ version: document.version, stale: false })
+    ]);
+    const final = messages
+      .filter((message) => message.type === 'projection-delta')
+      .at(-1)!;
+    expect(final.packet?.state.exportableBodyIds).toEqual(document.bodyOrder);
+    expect(final.packet?.state.warnings).toEqual([]);
+    const phases = messages.filter((message) => message.phase);
+    await live.worker.evaluate(() => self.dispatchEvent(new Event('online')));
+    await page.waitForTimeout(1_100);
+    expect((await live.messages()).filter((message) => message.phase)).toEqual(
+      phases
+    );
+  } finally {
+    await live.worker.evaluate(() => self.close());
+  }
+});
