@@ -390,7 +390,12 @@ async function readJsonBody(
           structure.consume(chunk);
         } catch {
           await reader.cancel().catch(() => undefined);
-          throw new HttpError(413, 'Request JSON is too complex.');
+          throw new HttpError(
+            413,
+            'Request JSON is too complex.',
+            undefined,
+            documentRequest
+          );
         }
         chunks.push(chunk);
       }
@@ -1930,12 +1935,14 @@ async function dispatchApiRequest(
       return json(
         {
           error: error.message,
-          ...(error.limitBytes === undefined
-            ? {}
-            : {
-                code: 'DOCUMENT_TOO_LARGE',
-                limitBytes: error.limitBytes
-              })
+          ...(error.documentComplexity
+            ? { code: 'DOCUMENT_TOO_COMPLEX' }
+            : error.limitBytes === undefined
+              ? {}
+              : {
+                  code: 'DOCUMENT_TOO_LARGE',
+                  limitBytes: error.limitBytes
+                })
         },
         error.status
       );
