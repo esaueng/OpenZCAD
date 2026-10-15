@@ -1231,18 +1231,22 @@ test('publishes editor checkpoints through the room without an account revision 
         super(url, protocols);
         browser.__checkpointSocket = this;
       }
-      send(raw: string | ArrayBufferLike | Blob | ArrayBufferView) {
+      override send(raw: Parameters<WebSocket['send']>[0]) {
         super.send(raw);
         if (typeof raw !== 'string') return;
-        const message = JSON.parse(raw);
-        if (message.type !== 'document') return;
-        browser.__checkpointDocuments.push(message.document);
+        const message = JSON.parse(raw) as {
+          type?: string;
+          document?: { version: number };
+        };
+        if (message.type !== 'document' || !message.document) return;
+        const submitted = message.document;
+        browser.__checkpointDocuments.push(submitted);
         queueMicrotask(() =>
           this.dispatchEvent(
             new MessageEvent('message', {
               data: JSON.stringify({
                 type: 'ack',
-                version: message.document.version
+                version: submitted.version
               })
             })
           )
