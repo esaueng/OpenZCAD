@@ -374,6 +374,76 @@ describe('HistoryTimeline', () => {
     expect(row('Feature 3')).toHaveClass('selected');
   });
 
+  it('keeps the rest of a double-click on the row that opened the edit card', () => {
+    // Selecting a row opens its edit card above the list and pushes the row
+    // ~270 px down, so the second press landed on the card's Operation
+    // select and the next letter typed turned New body into Cut. Without a
+    // layout the card's controls stand in for what moved under the pointer.
+    const onOperationPress = vi.fn();
+    const onApply = vi.fn();
+    function Workspace() {
+      const [selected, setSelected] = useState<string | null>(null);
+      return (
+        <>
+          {selected ? (
+            <form aria-label="Edit card">
+              <select
+                aria-label="Operation"
+                defaultValue="new-body"
+                onMouseDown={onOperationPress}
+              >
+                <option value="new-body">New body</option>
+                <option value="cut">Cut</option>
+              </select>
+              <button type="button" onClick={onApply}>
+                Apply
+              </button>
+            </form>
+          ) : null}
+          <HistoryTimeline
+            {...timelineProps()}
+            selectedFeatureNodeId={selected}
+            onSelectFeature={setSelected}
+          />
+        </>
+      );
+    }
+    render(<Workspace />);
+    const main =
+      row('Feature 2').querySelector<HTMLElement>('.feature-row-main')!;
+    fireEvent.mouseDown(main, { detail: 1 });
+    fireEvent.click(main, { detail: 1 });
+    expect(row('Feature 2')).toHaveClass('selected');
+
+    const operation = screen.getByRole('combobox', { name: 'Operation' });
+    // fireEvent returns false when the default was prevented: no focus, no
+    // open list for a letter to pick from.
+    expect(fireEvent.mouseDown(operation, { detail: 2 })).toBe(false);
+    expect(onOperationPress).not.toHaveBeenCalled();
+    const apply = screen.getByRole('button', { name: 'Apply' });
+    expect(fireEvent.click(apply, { detail: 2 })).toBe(false);
+    fireEvent.dblClick(apply, { detail: 2 });
+    expect(onApply).not.toHaveBeenCalled();
+
+    // The next single press is the user's own again.
+    expect(fireEvent.mouseDown(apply, { detail: 1 })).toBe(true);
+    fireEvent.click(apply, { detail: 1 });
+    expect(onApply).toHaveBeenCalledOnce();
+  });
+
+  it('lets a double-click that stays on its row through', () => {
+    const { props } = renderTimeline();
+    const main =
+      row('Feature 2').querySelector<HTMLElement>('.feature-row-main')!;
+    fireEvent.mouseDown(main, { detail: 1 });
+    fireEvent.click(main, { detail: 1 });
+    expect(fireEvent.mouseDown(main, { detail: 2 })).toBe(true);
+    fireEvent.click(main, { detail: 2 });
+    expect(props.onSelectFeature).toHaveBeenCalledTimes(2);
+    // Ends the hold, as the user's next single press would.
+    fireEvent.mouseDown(document.body, { detail: 1 });
+  });
+
   it('filters by name and marks the match', async () => {
     const user = userEvent.setup();
     const { container, props } = renderTimeline({

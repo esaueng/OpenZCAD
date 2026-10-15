@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   addSketchFeature,
   createProjectDocument,
+  importStepBody,
   listFeaturesInOrder,
   updateFeature
 } from '@openzcad/document-core';
@@ -61,6 +62,7 @@ async function installWorker(
   const createExactKernelAdapter = vi.fn(async () => ({
     syncDocument,
     currentMassPropertiesEpoch: vi.fn(() => 1),
+    hasTransientFailures: vi.fn(() => false),
     prepareMassPropertiesForDocument: vi.fn(async () => 2),
     readCurrentMassProperties: vi.fn(() => ({
       status: 'unavailable',
@@ -341,6 +343,40 @@ describe('geometry worker rebuild coordination', () => {
     );
     expect(readCurrentMassProperties).toHaveBeenCalledTimes(2);
   });
+  it('announces a mass query as a rebuild before it restores exact history', async () => {
+    const restore = deferred<number>();
+    const prepareMassPropertiesForDocument = vi.fn(() => restore.promise);
+    const { scope } = await installWorker(async () => derived('exact'), {
+      currentMassPropertiesEpoch: () => null,
+      prepareMassPropertiesForDocument
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Long mass', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      }
+    );
+    post(scope, {
+      type: 'mass-properties',
+      document,
+      bodyId: document.bodyOrder[0]!,
+      requestId: 'long-mass'
+    });
+    await vi.waitFor(() =>
+      expect(prepareMassPropertiesForDocument).toHaveBeenCalled()
+    );
+    // The host watchdog budgets a silent replay by the last announced
+    // phase; a restore left at `starting` would get fifteen seconds.
+    const phases = scope.postMessage.mock.calls.flatMap(([message]) =>
+      message.type === 'state' && message.requestId === 'long-mass'
+        ? [message.phase]
+        : []
+    );
+    expect(phases.at(-1)).toBe('rebuilding');
+    restore.resolve(2);
+  });
   it('transfers each owned mesh buffer once without detaching adapter or cached meshes', async () => {
     const bodyId = toBodyId('body_transfer');
     const aliasId = toBodyId('body_alias');
@@ -555,6 +591,7 @@ describe('geometry worker rebuild coordination', () => {
       .mockResolvedValue({
         syncDocument,
         currentMassPropertiesEpoch: vi.fn(() => 1),
+        hasTransientFailures: vi.fn(() => false),
         exportStep: vi.fn(),
         exportStl: vi.fn(),
         inspectStep: vi.fn(),
@@ -596,6 +633,166 @@ describe('geometry worker rebuild coordination', () => {
     );
     expect(createExactKernelAdapter).toHaveBeenCalledTimes(2);
     expect(syncDocument).toHaveBeenCalledOnce();
+  });
+
+  describe('a live translator load failure', () => {
+    const workers: FakeWorkerScope[] = [];
+
+    async function translatorLive(
+      failures = 1,
+      parseError?: Error,
+      requestId?: string
+    ) {
+      let attempts = 0;
+      vi.doMock(
+        '../../../../packages/kernel-adapter/node_modules/remus-wasm-io',
+        () => ({
+          RemusIo: class {
+            constructor() {
+              attempts += 1;
+              if (attempts <= failures)
+                throw new Error('Translator WASM fetch failed.');
+            }
+          }
+        })
+      );
+      // Use the production lazy loader, including its rejected-promise reset,
+      // rather than giving the worker a synthetic transient build result.
+      const { loadRemusTranslators } =
+        await import('../../../../packages/kernel-adapter/src/remus-runtime');
+      const syncDocument = vi.fn(async (_document: ProjectDocument) => {
+        await loadRemusTranslators();
+        if (parseError) throw parseError;
+        return derived('imported');
+      });
+      const { scope } = await installWorker(syncDocument);
+      workers.push(scope);
+      const document = importStepBody(
+        createProjectDocument('Inline STEP recovery', toUserId('user')),
+        {
+          name: 'Imported solid',
+          artifactId: 'artifact_recovery',
+          sourceName: 'solid.step',
+          stepText: 'ISO-10303-21;END-ISO-10303-21;'
+        }
+      ).document;
+      post(scope, {
+        type: 'sync',
+        document,
+        ...(requestId ? { requestId } : {})
+      });
+      await vi.waitFor(() =>
+        expect(scope.postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'state', phase: 'failed' })
+        )
+      );
+      return {
+        scope,
+        syncDocument,
+        document,
+        attempts: () => attempts,
+        online: () => (scope as { ononline?: () => void }).ononline?.()
+      };
+    }
+
+    afterEach(() => {
+      for (const scope of workers.splice(0)) post(scope, { type: 'cancel' });
+      if (vi.isFakeTimers()) vi.clearAllTimers();
+      vi.useRealTimers();
+      vi.doUnmock(
+        '../../../../packages/kernel-adapter/node_modules/remus-wasm-io'
+      );
+    });
+
+    it('rebuilds the unchanged inline STEP document when connectivity recovers', async () => {
+      const live = await translatorLive();
+      expect(live.attempts()).toBe(1);
+      live.online();
+      await vi.waitFor(() =>
+        expect(live.scope.postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'state',
+            phase: 'ready',
+            stale: false
+          })
+        )
+      );
+      expect(live.attempts()).toBe(2);
+      expect(
+        live.syncDocument.mock.calls.map(([document]) => document)
+      ).toEqual([live.document, live.document]);
+    });
+
+    it('retries a failed translator load without requiring an online event', async () => {
+      vi.useFakeTimers();
+      const live = await translatorLive();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(live.attempts()).toBe(2);
+      expect(live.scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'state', phase: 'ready', stale: false })
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops after the existing three timed translator retries', async () => {
+      vi.useFakeTimers();
+      const live = await translatorLive(Infinity);
+      for (const delay of [1_000, 5_000, 15_000])
+        await vi.advanceTimersByTimeAsync(delay);
+      expect(live.attempts()).toBe(4);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(live.attempts()).toBe(4);
+    });
+
+    it.each(['close', 'switch'] as const)(
+      'does not recover the failed old import after a project %s',
+      async (action) => {
+        vi.useFakeTimers();
+        const live = await translatorLive();
+        if (action === 'close') post(live.scope, { type: 'cancel' });
+        else {
+          post(live.scope, {
+            type: 'sync',
+            document: createProjectDocument(
+              'New empty workspace',
+              toUserId('user')
+            )
+          });
+          await vi.waitFor(() =>
+            expect(live.scope.postMessage).toHaveBeenCalledWith(
+              expect.objectContaining({
+                type: 'state',
+                phase: 'ready',
+                stale: false
+              })
+            )
+          );
+        }
+        live.online();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(live.attempts()).toBe(1);
+        expect(live.syncDocument).toHaveBeenCalledOnce();
+      }
+    );
+
+    it('leaves caller-owned failed imports under caller control', async () => {
+      vi.useFakeTimers();
+      const live = await translatorLive(1, undefined, 'explicit-import');
+      live.online();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(live.attempts()).toBe(1);
+      expect(live.syncDocument).toHaveBeenCalledOnce();
+    });
+
+    it('does not retry a permanent parse failure after the translators load', async () => {
+      vi.useFakeTimers();
+      const live = await translatorLive(0, new Error('Invalid STEP header.'));
+      live.online();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(live.attempts()).toBe(1);
+      expect(live.syncDocument).toHaveBeenCalledOnce();
+    });
   });
 
   it('publishes only the newest broadcast when a rebuild is superseded', async () => {
@@ -644,6 +841,273 @@ describe('geometry worker rebuild coordination', () => {
       .filter((message) => message.type === 'projection-delta');
     expect(broadcastResults).toHaveLength(1);
     expect(broadcastResults[0]).toMatchObject({ version: newest.version });
+  });
+
+  describe('a live rebuild that waited on this device', () => {
+    const liveWorkers: FakeWorkerScope[] = [];
+
+    function liveWarnings(scope: FakeWorkerScope): string[][] {
+      return scope.postMessage.mock.calls.flatMap(([message]) =>
+        message.type === 'projection-delta'
+          ? [message.packet.state.warnings]
+          : []
+      );
+    }
+
+    async function transientLive(
+      fontsArrived: () => Promise<boolean>,
+      recovers = true,
+      transient = true
+    ) {
+      vi.doMock('../lib/textFonts', () => ({
+        preloadDocumentFonts: vi.fn(async () => undefined),
+        documentFontsArrived: vi.fn(fontsArrived)
+      }));
+      // The first build runs before a font face or source bytes arrived.
+      const missing = derived('waiting');
+      const first = deferred<ProjectDocument['derived']>();
+      const syncDocument = vi
+        .fn<ExactKernelAdapter['syncDocument']>()
+        .mockImplementationOnce(() => first.promise)
+        .mockImplementation(async () =>
+          recovers ? derived('built') : missing
+        );
+      const { scope } = await installWorker(syncDocument, {
+        hasTransientFailures: (result: object) =>
+          transient && result === missing
+      });
+      liveWorkers.push(scope);
+      const document = addPrimitiveFeature(
+        createProjectDocument('Waiting', toUserId('user')),
+        {
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 20, depth: 30 }
+        }
+      );
+      post(scope, { type: 'sync', document });
+      await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+      const finish = async () => {
+        first.resolve(missing);
+        await vi.waitFor(() =>
+          expect(liveWarnings(scope)[0]).toEqual(['waiting'])
+        );
+      };
+      const online = () => (scope as { ononline?: () => void }).ononline?.();
+      return { scope, syncDocument, finish, online, document };
+    }
+
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+    const liveReadyStaleness = (scope: FakeWorkerScope) =>
+      scope.postMessage.mock.calls.flatMap(([message]) =>
+        message.type === 'state' &&
+        message.phase === 'ready' &&
+        !message.requestId
+          ? [message.stale]
+          : []
+      );
+
+    afterEach(() => {
+      for (const scope of liveWorkers.splice(0))
+        post(scope, { type: 'cancel' });
+      if (vi.isFakeTimers()) vi.clearAllTimers();
+      vi.useRealTimers();
+      vi.doUnmock('../lib/textFonts');
+    });
+
+    it('retries a temporary source failure while the browser stays online', async () => {
+      vi.useFakeTimers();
+      const live = await transientLive(async () => false);
+      await live.finish();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(liveWarnings(live.scope)).toEqual([['waiting'], ['built']]);
+      const projections = live.scope.postMessage.mock.calls.flatMap(
+        ([message]) => (message.type === 'projection-delta' ? [message] : [])
+      );
+      expect(projections[0]).toMatchObject({ transient: true });
+      expect(projections[1]).not.toHaveProperty('transient');
+      expect(liveReadyStaleness(live.scope)).toEqual([true, false]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops polling after three unsuccessful timed retries', async () => {
+      vi.useFakeTimers();
+      const live = await transientLive(async () => false, false);
+      await live.finish();
+      for (const delay of [1_000, 5_000, 15_000])
+        await vi.advanceTimersByTimeAsync(delay);
+      expect(live.syncDocument).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(live.syncDocument).toHaveBeenCalledTimes(4);
+      expect(liveReadyStaleness(live.scope)).toEqual([true, true, true, true]);
+    });
+
+    it('does not poll a permanent missing source', async () => {
+      vi.useFakeTimers();
+      const live = await transientLive(async () => false, false, false);
+      await live.finish();
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(live.syncDocument).toHaveBeenCalledOnce();
+      expect(liveReadyStaleness(live.scope)).toEqual([false]);
+    });
+
+    it('cancels pending retries and ignores late recovery after the project closes', async () => {
+      vi.useFakeTimers();
+      const arrived = deferred<boolean>();
+      const live = await transientLive(() => arrived.promise);
+      await live.finish();
+      post(live.scope, { type: 'cancel' });
+      arrived.resolve(true);
+      live.online();
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(live.syncDocument).toHaveBeenCalledOnce();
+    });
+
+    it('drops a queued recovery after close while preserving a caller-owned sync', async () => {
+      vi.useFakeTimers();
+      const live = await transientLive(async () => false);
+      await live.finish();
+      const explicit = deferred<ProjectDocument['derived']>();
+      live.syncDocument.mockImplementationOnce(() => explicit.promise);
+      post(live.scope, {
+        type: 'sync',
+        document: { ...live.document, name: 'Explicit candidate' },
+        requestId: 'candidate'
+      });
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(2)
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      post(live.scope, { type: 'cancel' });
+      explicit.resolve(derived('candidate'));
+      await vi.advanceTimersByTimeAsync(10);
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+      expect(live.scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'sync',
+          ok: true,
+          requestId: 'candidate'
+        })
+      );
+    });
+
+    it('does not retry the old project or accept its font recovery after a switch', async () => {
+      vi.useFakeTimers();
+      const arrived = deferred<boolean>();
+      const live = await transientLive(() => arrived.promise);
+      await live.finish();
+      await vi.advanceTimersByTimeAsync(500);
+      const newest = addPrimitiveFeature(
+        createProjectDocument('New project', toUserId('user')),
+        {
+          name: 'New box',
+          primitiveKind: 'box',
+          dimensions: { width: 20, height: 30, depth: 40 }
+        }
+      );
+      post(live.scope, { type: 'sync', document: newest });
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(2)
+      );
+      arrived.resolve(true);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+      expect(
+        live.syncDocument.mock.calls.map(([document]) => document.projectId)
+      ).toEqual([live.document.projectId, newest.projectId]);
+    });
+
+    it('re-runs, uncached, once a late font face lands', async () => {
+      const arrived = deferred<boolean>();
+      const live = await transientLive(() => arrived.promise);
+      await live.finish();
+      expect(live.syncDocument).toHaveBeenCalledOnce();
+      arrived.resolve(true);
+      await vi.waitFor(() =>
+        expect(liveWarnings(live.scope)).toEqual([['waiting'], ['built']])
+      );
+      // Settled: a later connectivity change has nothing left to re-run.
+      live.online();
+      await settle();
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+    });
+
+    it('watches the faces still missing on the re-run a first face triggers', async () => {
+      const second = deferred<boolean>();
+      const arrivals = [Promise.resolve(true), second.promise];
+      let call = 0;
+      const live = await transientLive(
+        () => arrivals[call++] ?? new Promise<boolean>(() => undefined),
+        false
+      );
+      await live.finish();
+      // One face landed: the document re-runs, still misses the other face,
+      // and that rebuild watches it afresh.
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(2)
+      );
+      await settle();
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+      second.resolve(true);
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(3)
+      );
+    });
+
+    it('re-runs when the connection returns for a source it could not fetch', async () => {
+      const live = await transientLive(async () => false);
+      await live.finish();
+      await settle();
+      expect(live.syncDocument).toHaveBeenCalledOnce();
+      live.online();
+      await vi.waitFor(() =>
+        expect(liveWarnings(live.scope)).toEqual([['waiting'], ['built']])
+      );
+    });
+
+    it.each(['font face', 'connection'] as const)(
+      'latches a %s recovery that arrives while the rebuild still runs',
+      async (recovery) => {
+        // As in the browser: once the face has landed it is no longer
+        // missing, so asking after the rebuild would report nothing new.
+        let faceLoaded = false;
+        const landed = deferred<void>();
+        const live = await transientLive(async () => {
+          if (faceLoaded || recovery === 'connection') return false;
+          await landed.promise;
+          return true;
+        });
+        if (recovery === 'font face') {
+          faceLoaded = true;
+          landed.resolve();
+        } else {
+          live.online();
+        }
+        await settle();
+        await live.finish();
+        await vi.waitFor(() =>
+          expect(liveWarnings(live.scope)).toEqual([['waiting'], ['built']])
+        );
+      }
+    );
+
+    it('re-runs once per recovery, not again while still waiting', async () => {
+      const live = await transientLive(async () => false, false);
+      live.online();
+      await live.finish();
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(2)
+      );
+      await settle();
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+      // The next recovery re-runs the still-waiting document once more.
+      live.online();
+      await vi.waitFor(() =>
+        expect(live.syncDocument).toHaveBeenCalledTimes(3)
+      );
+    });
   });
 
   it('supplies task yields and drops a superseded interactive projection', async () => {
@@ -1270,6 +1734,7 @@ describe('resolveSourceBytes download safeguards', () => {
         resolveSourceBytes = deps.resolveSourceBytes;
         return {
           syncDocument: vi.fn(async () => derived('unused')),
+          hasTransientFailures: vi.fn(() => false),
           exportStep: vi.fn(),
           exportStl: vi.fn(),
           exportMesh: vi.fn(),

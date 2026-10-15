@@ -197,7 +197,7 @@ test('Shift-picked regions extrude together from any one of their arrows', async
 
   await editor.getByRole('button', { name: 'Create', exact: true }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
-    /Extruded region by -[\d.]+ mm \(cut\)\./,
+    /Extruded region by -[\d.]+ mm, cut into the body\./,
     { timeout: 30_000 }
   );
   await expectBodyCount(page, 1);
@@ -409,7 +409,7 @@ test('a glyph pick selects, arms and builds the whole word', async ({
   await keypad.getByRole('textbox').fill('2');
   await keypad.getByRole('button', { name: 'Apply height' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Extruded region by 2 mm (new-body).',
+    'Extruded region by 2 mm as a new body.',
     { timeout: 30_000 }
   );
   await expectBodyCount(page, 1);
