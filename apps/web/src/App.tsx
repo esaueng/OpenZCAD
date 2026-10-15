@@ -1209,8 +1209,10 @@ import {
   saveProjectThumbnail,
   saveLocalProject,
   saveLocalSaveStates,
+  sha256Hex,
   withMatchingLocalDerived
 } from './lib/localProjectStore';
+import { cacheCopySources } from './lib/sourceBlobClaims';
 import { reconcileRemoteOrganizations } from './lib/projectOrganizationMirror';
 import {
   applyLocalProjectOrganizations,
@@ -9670,6 +9672,7 @@ export function App() {
           'That save state is not stored on this device, and your account could not be reached to fetch it.'
         );
       }
+      await cacheCopySources(source, loadSourceBlob, sha256Hex);
       const copy = duplicateProjectDocument(
         source,
         duplicateProjectName(
