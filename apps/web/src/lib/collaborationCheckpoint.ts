@@ -1,25 +1,20 @@
-import {
-  createSavedRevision,
-  withEchoedSavePoints
-} from '@openzcad/document-core';
-import {
-  MAX_CHECKPOINT_REASON_LENGTH,
-  type ProjectDocument,
-  type ProjectEditLease
-} from '@openzcad/shared';
+import { withEchoedSavePoints } from '@openzcad/document-core';
+import type { ProjectDocument, ProjectEditLease } from '@openzcad/shared';
 import { desktopFetch } from './desktopBridge';
 import { parseServerMessage } from './collaborationProtocol';
+import {
+  abortableCheckpoint,
+  normalizeCheckpointReason,
+  preserveFailedCheckpoint,
+  type CheckpointOptions
+} from './collaborationCheckpointFallback';
 import {
   projectsHaveSameCanonicalContent,
   saveLocalSaveStates,
   withMatchingLocalDerived
 } from './localProjectStore';
 
-export interface CheckpointOptions {
-  isCurrent(): boolean;
-  readDocument(): ProjectDocument;
-  applyDocument(document: ProjectDocument): void;
-}
+export type { CheckpointOptions } from './collaborationCheckpointFallback';
 
 export interface CheckpointControls {
   controller: AbortController;
@@ -98,37 +93,6 @@ function confirmsCheckpoint(
   );
 }
 
-function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const abortReason = () => {
-      const reason: unknown = signal.reason;
-      return reason instanceof Error
-        ? reason
-        : new Error('The named save was cancelled.', { cause: reason });
-    };
-    const aborted = () => reject(abortReason());
-    if (signal.aborted) {
-      reject(abortReason());
-      return;
-    }
-    signal.addEventListener('abort', aborted, { once: true });
-    void operation.then(
-      (value) => {
-        signal.removeEventListener('abort', aborted);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener('abort', aborted);
-        reject(
-          error instanceof Error
-            ? error
-            : new Error('The named save failed.', { cause: error })
-        );
-      }
-    );
-  });
-}
-
 /** Loaded only for an explicit member Save, never for ordinary room edits. */
 export async function saveCollaborationCheckpoint(
   snapshot: ProjectDocument,
@@ -136,20 +100,9 @@ export async function saveCollaborationCheckpoint(
   options: CheckpointOptions,
   controls: CheckpointControls
 ): Promise<ProjectDocument> {
-  const normalized = reason.trim() || 'Saved';
-  const label =
-    normalized.length > MAX_CHECKPOINT_REASON_LENGTH
-      ? `${normalized.slice(0, MAX_CHECKPOINT_REASON_LENGTH - 1)}…`
-      : normalized;
+  const label = normalizeCheckpointReason(reason);
   let authoritative: ProjectDocument | null = null;
   let confirmed = false;
-  const timer = window.setTimeout(
-    () =>
-      controls.controller.abort(
-        new Error('The room did not confirm the named save. Please retry.')
-      ),
-    15_000
-  );
   const checkCurrent = () => {
     controls.controller.signal.throwIfAborted();
     if (!controls.isCurrent() || !options.isCurrent())
@@ -166,7 +119,7 @@ export async function saveCollaborationCheckpoint(
       lease.expiresAt <= Date.now()
     )
       throw new Error('A named save requires the active project edit lease.');
-    const response = await abortable(
+    const response = await abortableCheckpoint(
       desktopFetch(
         `/api/projects/${encodeURIComponent(snapshot.projectId)}/collaboration`,
         {
@@ -185,7 +138,7 @@ export async function saveCollaborationCheckpoint(
       controls.controller.signal
     );
     const message = parseServerMessage(
-      await abortable(response.text(), controls.controller.signal),
+      await abortableCheckpoint(response.text(), controls.controller.signal),
       snapshot.projectId
     );
     if (
@@ -221,26 +174,14 @@ export async function saveCollaborationCheckpoint(
     await saveLocalSaveStates([authoritative]);
     return authoritative;
   } catch (error) {
-    const local = authoritative ?? createSavedRevision(snapshot, label);
-    let localSaved = false;
-    try {
-      await saveLocalSaveStates([local]);
-      localSaved = true;
-      if (!confirmed && controls.isCurrent() && options.isCurrent()) {
-        const current = options.readDocument();
-        options.applyDocument(withEchoedSavePoints(current, local));
-      }
-    } catch {
-      // Keep the original server/cancellation diagnostic; add the durability
-      // failure instead of replacing the primary error.
-    }
-    const primary =
-      error instanceof Error ? error.message : 'The named save failed.';
-    throw new Error(
-      `${primary} ${confirmed ? 'The revision is stored in the room. ' : ''}${localSaved ? 'The named save is stored on this device.' : 'The named save could not be stored on this device.'}`,
-      { cause: error }
+    return preserveFailedCheckpoint(
+      error,
+      snapshot,
+      label,
+      options,
+      controls.isCurrent,
+      authoritative,
+      confirmed
     );
-  } finally {
-    window.clearTimeout(timer);
   }
 }
