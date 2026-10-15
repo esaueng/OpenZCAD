@@ -1077,6 +1077,9 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     request: CreateProjectRequest
   ): Promise<CreateProjectResponse> {
+    // Adoption rewrites old project-owned IDs into local source references.
+    // A delayed cancelled import must still be refused under its original ID.
+    if (request.document) this.assertMeshSourcesNotDiscarded(request.document);
     const document = request.document
       ? this.prepareAdoption(userId, request.document, request.name)
       : createProjectDocument(request.name, userId, request.units);
