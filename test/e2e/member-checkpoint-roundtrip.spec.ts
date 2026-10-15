@@ -597,7 +597,7 @@ for (const timing of ['after adoption', 'before broadcast'] as const) {
           server.release();
           await expect(named).toHaveCount(1);
         }
-        await addPrimitive(page, /^Cylinder/);
+        await addPrimitive(page, /^Cylinder \(C\)/);
         await expectBodyCount(page, 2);
         if (timing === 'before broadcast') {
           expect(server.stored()).toBeNull();
@@ -815,14 +815,67 @@ for (const [sendTiming, ackFault, sourceArchived] of [
           'artifact_local_checkpoint_copy'
         )
       ).toBe(!sourceArchived);
-      await expect(page.getByRole('contentinfo')).toContainText(
-        ackFault === 'lost'
-          ? 'The named save is stored on this device.'
-          : 'Saved revision.'
-      );
+      // A full ordinary ACK can replace the toast after naming an unarchived
+      // source. Verify the durable server identity as well as the visible row.
+      if (sourceArchived)
+        await expect(page.getByRole('contentinfo')).toContainText(
+          ackFault === 'lost'
+            ? 'The named save is stored on this device.'
+            : 'Saved revision.'
+        );
       await expect(
         page.locator('.revision-row', { hasText: 'Clicked box' })
       ).toHaveCount(1);
+      await expect
+        .poll(() =>
+          page.evaluate(
+            (projectId) =>
+              new Promise<unknown[]>((resolve, reject) => {
+                const open = indexedDB.open('openzcad-v2');
+                open.onerror = () => reject(open.error);
+                open.onsuccess = () => {
+                  const db = open.result;
+                  const tx = db.transaction(
+                    'projectCheckpointDocuments',
+                    'readonly'
+                  );
+                  const request = tx
+                    .objectStore('projectCheckpointDocuments')
+                    .getAll();
+                  tx.oncomplete = () => {
+                    db.close();
+                    resolve(
+                      request.result
+                        .filter(
+                          (row) =>
+                            row.projectId === projectId &&
+                            row.reason === 'Clicked box'
+                        )
+                        .map((row) => ({
+                          checkpointId: row.checkpointId,
+                          revisionId: row.revisionId,
+                          version: row.documentVersion,
+                          bodyCount: row.document.bodyOrder.length
+                        }))
+                    );
+                  };
+                  tx.onerror = () => {
+                    db.close();
+                    reject(tx.error);
+                  };
+                };
+              }),
+            server.read().projectId
+          )
+        )
+        .toEqual([
+          {
+            checkpointId: server.stored()!.checkpoints.at(-1)!.checkpointId,
+            revisionId: server.stored()!.checkpoints.at(-1)!.revisionId,
+            version: server.stored()!.version,
+            bodyCount: 2
+          }
+        ]);
       if (sourceArchived)
         expect(JSON.stringify(server.stored())).toContain(
           'artifact_checkpoint_copy'
@@ -833,7 +886,7 @@ for (const [sendTiming, ackFault, sourceArchived] of [
             window as unknown as { __restoreCheckpointSendTimer(): void }
           ).__restoreCheckpointSendTimer()
         );
-      await addPrimitive(page, /^Cylinder/);
+      await addPrimitive(page, /^Cylinder \(C\)/);
       await expectBodyCount(page, buffered ? 4 : 3);
       await expect
         .poll(() => server.read().bodyOrder.length)
