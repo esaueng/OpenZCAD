@@ -95,6 +95,7 @@ import {
   appendRevision,
   createCheckpoint,
   createSavePoint,
+  createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
@@ -107,6 +108,7 @@ import {
   listExposedParameters,
   listParameters,
   normalizeDocument,
+  normalizeDocumentHistory,
   numberedBodyName,
   numberedFeatureName,
   repairedDirectEditOperation,
@@ -1304,6 +1306,7 @@ import {
   clearUnresolvedConflict,
   conflictFromDocuments,
   hasUnresolvedConflict,
+  recoveryCopyName,
   recoveryCopyNote,
   resolveProjectConflict,
   type ConflictResolution,
@@ -1679,6 +1682,39 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
   };
 }
 
+function localRecoveryCopy(
+  source: ProjectDocument,
+  label: 'Recovery' | 'Local copy'
+): ProjectDocument {
+  const copy = structuredClone(source);
+  const projectId = toProjectId(`proj_recovery_${crypto.randomUUID()}`);
+  const name = recoveryCopyName(source.name, label);
+  copy.projectId = projectId;
+  if (copy.editHistory) {
+    copy.editHistory.projectId = projectId;
+    for (const historical of documentNodesWithHistory(copy)) {
+      if (historical.kind === 'project') historical.projectId = projectId;
+    }
+  }
+  const beforeRename = structuredClone(copy);
+  copy.name = name;
+  copy.revisions = [];
+  copy.checkpoints = [];
+  copy.derived.updatedAt = new Date().toISOString();
+  const root = copy.nodes[copy.rootNodeId];
+  if (root?.kind === 'project') {
+    root.projectId = projectId;
+    root.name = name;
+    root.revisionId = null;
+  }
+  // The source's save points stay with the source; the copy starts its own
+  // record. Born with none at all, it could not be saved: every Save,
+  // including Save to my account, refused for want of a revision to name.
+  return createSavedRevision(
+    normalizeDocumentHistory(beforeRename, copy),
+    `Recovered from ${source.name}`
+  );
+}
 
 /**
  * Stable empties for viewport props. An inline `[]` is a new array every
@@ -4164,7 +4200,6 @@ export function App() {
 
   const conflictHandlers: ConflictResolutionHandlers = {
     async writeRecoveryCopy(source) {
-      const { localRecoveryCopy } = await import('./lib/localRecoveryCopy');
       const copy = localRecoveryCopy(source, 'Recovery');
       await saveLocalProject(copy);
       // The shelf never loads a document to draw a card, so a copy saved

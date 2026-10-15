@@ -257,7 +257,10 @@ test('keeps cancellation status when finalized mesh cleanup fails', async ({
   await create(page, 'STL cleanup failure');
   await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles(fixture);
   await expect.poll(() => metadataReached).toBe(true);
-  expect(finalized).toEqual([originalId, payloadId]);
+  // The canonical payload is archived first. Cancellation while its metadata
+  // is pending must compensate that payload before starting an original copy.
+  expect(finalized).toEqual([payloadId]);
+  expect(uploads.has(originalId)).toBe(false);
   const pill = page.getByRole('region', { name: 'File import', exact: true });
   await pill.getByRole('button', { name: 'Cancel', exact: true }).click();
   releaseMetadata();
@@ -273,4 +276,6 @@ test('keeps cancellation status when finalized mesh cleanup fails', async ({
   await expect(page.locator('.activity-pill-cancel')).toHaveCount(0);
   await expectBodyCount(page, 0);
   await expect(page.locator('.feature-row')).toHaveCount(0);
+  expect(finalized).toEqual([payloadId]);
+  expect(uploads.has(originalId)).toBe(false);
 });
