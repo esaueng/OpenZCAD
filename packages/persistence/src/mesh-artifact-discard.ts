@@ -1,11 +1,23 @@
 import {
   documentNodesWithHistory,
+  documentAssetsWithHistory,
   type ProjectDocument
 } from '@openzcad/shared';
+
+/** Kinds whose cancelled upload can leave an unacknowledged mesh archive. */
+export function isMeshImportArchiveKind(kind: string): boolean {
+  return (
+    kind === 'mesh-payload' || kind === 'stl-import' || kind === 'mesh-import'
+  );
+}
 
 /** Source locations held by the model or by its durable undo/redo entries. */
 export function importArtifactIds(document: ProjectDocument): string[] {
   const ids = new Set<string>();
+  for (const asset of documentAssetsWithHistory(document)) {
+    if (asset.artifactId && !asset.artifactId.startsWith('artifact_local_'))
+      ids.add(asset.artifactId);
+  }
   for (const node of documentNodesWithHistory(document)) {
     if (
       node.kind === 'feature' &&
