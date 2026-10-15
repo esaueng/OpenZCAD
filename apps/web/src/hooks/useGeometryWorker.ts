@@ -537,6 +537,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
                   ok: true,
                   projectId: message.projectId,
                   version: message.version,
+                  ...(message.transient ? { transient: true } : {}),
                   derived: projection
                 };
         }
@@ -781,6 +782,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         recordEditPhase(result, 'analysis-ready');
         const submitted = broadcastDocument.current;
         readyDocument.current =
+          !result.transient &&
           submitted?.projectId === result.projectId &&
           submitted.version === result.version
             ? submitted
@@ -909,7 +911,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       if (!document) {
         if (broadcastDocument.current) {
           worker.postMessage({ type: 'cancel' });
-          broadcastDocument.current = readyDocument.current = null;
+          // Cancel recovery work without retiring a completed geometry witness.
+          broadcastDocument.current = null;
           lastSyncedKey.current = null;
           armedRef.current = pendingRequests().some(
             (pending) => pending.size > 0
