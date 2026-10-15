@@ -24,6 +24,43 @@ afterEach(() => {
 });
 
 describe('named-save failure durability', () => {
+  it('does not claim device storage when newer retained versions displace an old clicked snapshot', async () => {
+    const clicked = createProjectDocument(
+      'Old clicked model',
+      toUserId('owner')
+    );
+    for (let index = 0; index < MAX_LOCAL_CHECKPOINT_DOCUMENTS; index++) {
+      await localStore.saveLocalSaveStates([
+        createSavedRevision(
+          { ...clicked, version: index + 100 },
+          `Newer ${index}`
+        )
+      ]);
+    }
+    const error = await fallback
+      .preserveFailedCheckpoint(
+        new Error('Offline'),
+        clicked,
+        'Old name',
+        {
+          isCurrent: () => true,
+          readDocument: () => clicked,
+          applyDocument: vi.fn()
+        },
+        () => true
+      )
+      .catch((error: unknown) => error);
+    expect(error).toHaveProperty('deviceStored', false);
+    expect((error as Error).message).toContain(
+      'could not be stored on this device'
+    );
+    expect(
+      (await localStore.listLocalSaveStateCheckpoints(clicked.projectId)).some(
+        (point) => point.reason === 'Old name'
+      )
+    ).toBe(false);
+  });
+
   it.each([false, true])(
     'retains the latest failed name across equal model versions (timestamp ties %s)',
     async (sameTimestamp) => {

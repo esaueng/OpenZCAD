@@ -5,6 +5,7 @@ import {
 import type { ProjectDocument } from '@openzcad/shared';
 import {
   projectsHaveSameCanonicalContent,
+  listLocalSaveStateIds,
   saveLocalSaveStates
 } from './localProjectStore';
 import { errorMessage } from './errors';
@@ -87,7 +88,12 @@ export async function preserveFailedCheckpoint(
   try {
     // Save only the captured state, never an older project head.
     await saveLocalSaveStates([local]);
-    localSaved = true;
+    const checkpoint = local.checkpoints.at(-1);
+    localSaved =
+      !!checkpoint &&
+      (await listLocalSaveStateIds(local.projectId)).has(
+        checkpoint.checkpointId
+      );
     // Only server-backed points belong to the collaborative document. A local
     // fallback remains available through the device's saved-state projection.
     if (authoritative && !confirmed && isCurrent() && options.isCurrent()) {
