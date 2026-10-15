@@ -237,7 +237,11 @@ export function featureAwaitsEnvironment(
   return [...sketchIds].some((sketchId) =>
     findSketch(document, sketchId as SketchId)?.objectIds.some((objectId) => {
       const node = document.nodes[objectId];
-      if (node?.kind !== 'sketch-object' || node.data.objectKind !== 'text')
+      if (
+        node?.kind !== 'sketch-object' ||
+        node.data.objectKind !== 'text' ||
+        node.data.construction === true
+      )
         return false;
       const { fontFamily, fontStyle } = node.data;
       // An unknown family is a property of the document, not the moment.
