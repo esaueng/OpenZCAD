@@ -196,7 +196,7 @@ test('commits a finished extrude preview with its exact IDs and geometry, withou
     .getByRole('textbox', { name: 'Distance', exact: true })
     .press('Enter');
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Extruded region by -8 mm (cut).',
+    'Extruded region by -8 mm, cut into the body.',
     { timeout: 30_000 }
   );
   await expect
