@@ -21,7 +21,7 @@ import {
   meshInDocumentUnits
 } from './importedMeshCommand';
 import {
-  archiveImportedMesh,
+  archiveImportedMesh as archiveImportedMeshImplementation,
   holdImportedMeshPayload,
   meshImportRunResult,
   type MeshPayloadStore
@@ -75,6 +75,22 @@ function marks() {
 
 let ids = 0;
 const newId = () => `id_${(ids += 1)}`;
+
+function archiveImportedMesh(
+  input: Omit<
+    Parameters<typeof archiveImportedMeshImplementation>[0],
+    'discard'
+  > & {
+    discard?: Parameters<
+      typeof archiveImportedMeshImplementation
+    >[0]['discard'];
+  }
+) {
+  return archiveImportedMeshImplementation({
+    discard: async () => ({ deleted: true }),
+    ...input
+  });
+}
 
 describe('holding a mesh import payload', () => {
   const triangles = {
@@ -183,8 +199,8 @@ describe('archiving a mesh import', () => {
       newId
     });
     expect(uploads).toEqual([
-      'stl-import:scan.stl',
-      'mesh-payload:scan.stl.ozmesh'
+      'mesh-payload:scan.stl.ozmesh',
+      'stl-import:scan.stl'
     ]);
     expect(archived).toEqual({
       artifactId: 'artifact_mesh-payload',
@@ -230,6 +246,27 @@ describe('archiving a mesh import', () => {
     });
   });
 
+  it('uses the remaining quota for the required payload before the optional original', async () => {
+    const uploaded: string[] = [];
+    let remainingBytes = 8;
+    const archived = await archiveImportedMesh({
+      hold: { bytes: new Uint8Array(8) },
+      sourceName: 'scan.stl',
+      original,
+      archive: async (input) => {
+        if (input.body.size > remainingBytes) throw new Error('Quota exceeded');
+        remainingBytes -= input.body.size;
+        uploaded.push(input.kind);
+        return `artifact_${input.kind}`;
+      },
+      newId
+    });
+    expect(uploaded).toEqual(['mesh-payload']);
+    expect(archived.artifactId).toBe('artifact_mesh-payload');
+    expect(archived.payloadArchived).toBe(true);
+    expect(archived.originalArchived).toBe(false);
+  });
+
   it('rethrows a cancelled upload instead of landing local-only', async () => {
     const abort = new AbortController();
     await expect(
@@ -247,13 +284,11 @@ describe('archiving a mesh import', () => {
     ).rejects.toThrow('stopped');
   });
 
-  it('never uploads a hidden payload when the original upload is cancelled', async () => {
+  it('discards the finalized payload when the optional original upload is cancelled', async () => {
     const controller = new AbortController();
     const reason = new DOMException('original upload stopped', 'AbortError');
     const finalizedPayloads: string[] = [];
     const archive = vi.fn(async (input: { kind: string }) => {
-      // With the old order, this succeeds before the original is cancelled
-      // below and the hidden finalized artifact becomes an orphan.
       if (input.kind === 'mesh-payload') {
         finalizedPayloads.push('artifact_payload');
         return 'artifact_payload';
@@ -261,28 +296,9 @@ describe('archiving a mesh import', () => {
       controller.abort(reason);
       throw reason;
     });
-    await expect(
-      archiveImportedMesh({
-        hold: { bytes: new Uint8Array([1, 2, 3]) },
-        sourceName: 'scan.stl',
-        original,
-        archive,
-        signal: controller.signal
-      })
-    ).rejects.toBe(reason);
-    expect(finalizedPayloads).toEqual([]);
-    expect(archive).toHaveBeenCalledOnce();
-    expect(archive).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: 'stl-import' })
-    );
-  });
-
-  it('checks cancellation between the original and payload even when the upload returns an id', async () => {
-    const controller = new AbortController();
-    const reason = new DOMException('stopped before payload', 'AbortError');
-    const archive = vi.fn(async () => {
-      controller.abort(reason);
-      return 'artifact_original';
+    const discard = vi.fn(async (artifactId: string) => {
+      finalizedPayloads.splice(finalizedPayloads.indexOf(artifactId), 1);
+      return { deleted: true };
     });
     await expect(
       archiveImportedMesh({
@@ -290,10 +306,35 @@ describe('archiving a mesh import', () => {
         sourceName: 'scan.stl',
         original,
         archive,
+        discard,
+        signal: controller.signal
+      })
+    ).rejects.toBe(reason);
+    expect(finalizedPayloads).toEqual([]);
+    expect(discard).toHaveBeenCalledExactlyOnceWith('artifact_payload');
+    expect(archive).toHaveBeenCalledTimes(2);
+  });
+
+  it('checks cancellation between the payload and original even when the upload returns an id', async () => {
+    const controller = new AbortController();
+    const reason = new DOMException('stopped before original', 'AbortError');
+    const archive = vi.fn(async () => {
+      controller.abort(reason);
+      return 'artifact_payload';
+    });
+    const discard = vi.fn(async () => ({ deleted: true }));
+    await expect(
+      archiveImportedMesh({
+        hold: { bytes: new Uint8Array([1, 2, 3]) },
+        sourceName: 'scan.stl',
+        original,
+        archive,
+        discard,
         signal: controller.signal
       })
     ).rejects.toBe(reason);
     expect(archive).toHaveBeenCalledOnce();
+    expect(discard).toHaveBeenCalledExactlyOnceWith('artifact_payload');
   });
 
   it('archives a usable payload when the courtesy original cannot upload', async () => {
@@ -328,6 +369,38 @@ describe('archiving a mesh import', () => {
       })
     ).rejects.toBe(reason);
   });
+
+  it.each([false, true])(
+    'reports failed cleanup and preserves cancellation (throw=%s)',
+    async (throws) => {
+      const controller = new AbortController();
+      const reason = new DOMException('original cancelled', 'AbortError');
+      const onCleanupFailure = vi.fn();
+      const discard = vi.fn(async () => {
+        if (throws) throw new Error('cleanup offline');
+        return { deleted: false };
+      });
+      await expect(
+        archiveImportedMesh({
+          hold: { bytes: new Uint8Array([1]) },
+          sourceName: 'scan.stl',
+          original,
+          archive: async (input) => {
+            if (input.kind === 'mesh-payload') return 'artifact_payload';
+            controller.abort(reason);
+            throw reason;
+          },
+          discard,
+          signal: controller.signal,
+          onCleanupFailure
+        })
+      ).rejects.toBe(reason);
+      expect(discard).toHaveBeenCalledExactlyOnceWith('artifact_payload');
+      expect(onCleanupFailure).toHaveBeenCalledExactlyOnceWith(
+        expect.any(Error)
+      );
+    }
+  );
 
   it('aborts the payload multipart session without finalizing a hidden artifact', async () => {
     const controller = new AbortController();
@@ -384,10 +457,8 @@ describe('archiving a mesh import', () => {
       'multipart_mesh'
     );
     expect(transport.completeMultipartUpload).not.toHaveBeenCalled();
-    expect(transport.finalizeArtifact).toHaveBeenCalledOnce();
-    expect(transport.finalizeArtifact).toHaveBeenCalledWith(
-      expect.objectContaining({ artifactId: 'artifact_stl-import' })
-    );
+    expect(transport.finalizeArtifact).not.toHaveBeenCalled();
+    expect(transport.createUploadSession).toHaveBeenCalledOnce();
   });
 });
 
