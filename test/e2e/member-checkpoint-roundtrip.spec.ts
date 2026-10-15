@@ -499,7 +499,12 @@ for (const ackFault of [undefined, 'lost'] as const) {
         ({ checksumSha256, text }) =>
           new Promise<void>((resolve, reject) => {
             const open = indexedDB.open('openzcad-v2');
-            open.onerror = () => reject(open.error);
+            open.onerror = () =>
+              reject(
+                new Error('Could not open the source cache.', {
+                  cause: open.error
+                })
+              );
             open.onsuccess = () => {
               const db = open.result;
               const tx = db.transaction('sourceBlobs', 'readwrite');
@@ -515,7 +520,11 @@ for (const ackFault of [undefined, 'lost'] as const) {
               };
               tx.onabort = () => {
                 db.close();
-                reject(tx.error);
+                reject(
+                  new Error('Could not cache the copied source.', {
+                    cause: tx.error
+                  })
+                );
               };
             };
           }),
