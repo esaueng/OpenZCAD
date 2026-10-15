@@ -24,6 +24,7 @@ import {
   verifyCopiedImportArchives,
   assertCopiedSourcesArchived,
   importArtifactIds,
+  isMeshImportArchiveKind,
   meshDiscardCommitGuard,
   DocumentTooLargeError,
   getInMemoryPersistence,
@@ -3573,7 +3574,7 @@ export class D1R2PersistenceService implements PersistenceService {
     session: DurableUploadSession
   ): Promise<void> {
     if (
-      (session.kind === 'mesh-payload' &&
+      (isMeshImportArchiveKind(session.kind) &&
         (await this.meshDiscardClaim(session.artifactId))) ||
       (await this.projectCopyCleanupClaim(session.projectId))
     ) {
@@ -3665,7 +3666,7 @@ export class D1R2PersistenceService implements PersistenceService {
       .first<ArtifactRow>();
     if (existingArtifact) {
       if (
-        existingArtifact.kind === 'mesh-payload' &&
+        isMeshImportArchiveKind(existingArtifact.kind) &&
         (await this.meshDiscardClaim(request.artifactId))
       )
         return null;
@@ -3686,7 +3687,7 @@ export class D1R2PersistenceService implements PersistenceService {
       return null;
     }
     if (
-      upload.kind === 'mesh-payload' &&
+      isMeshImportArchiveKind(upload.kind) &&
       (await this.meshDiscardClaim(request.artifactId))
     ) {
       await this.cleanupUploadSession(upload);
@@ -3763,10 +3764,9 @@ export class D1R2PersistenceService implements PersistenceService {
             )
           ]
         : [];
-    const discardGuard =
-      artifact.kind === 'mesh-payload'
-        ? ' AND NOT EXISTS (SELECT 1 FROM artifact_mesh_discards WHERE artifact_id = ?)'
-        : '';
+    const discardGuard = isMeshImportArchiveKind(artifact.kind)
+      ? ' AND NOT EXISTS (SELECT 1 FROM artifact_mesh_discards WHERE artifact_id = ?)'
+      : '';
     const artifactInsertIndex = statements.length;
     statements.push(
       this.env.DB.prepare(
@@ -3826,7 +3826,7 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     if (results[artifactInsertIndex]?.meta?.changes !== 1) {
       if (
-        artifact.kind === 'mesh-payload' &&
+        isMeshImportArchiveKind(artifact.kind) &&
         (await this.meshDiscardClaim(artifact.artifactId))
       ) {
         const current = await this.loadUploadSession(request.uploadSessionId);
@@ -3874,14 +3874,17 @@ export class D1R2PersistenceService implements PersistenceService {
   async discardMeshPayload(
     userId: UserId,
     projectId: string,
-    artifactId: string
+    artifactId: string,
+    originalKind?: 'stl-import' | 'mesh-import'
   ): Promise<{ deleted: boolean }> {
     if (!this.env.DB)
       return getInMemoryPersistence().discardMeshPayload(
         userId,
         projectId,
-        artifactId
+        artifactId,
+        originalKind
       );
+    const expectedKind = originalKind ?? 'mesh-payload';
     await this.requireProjectEdit(userId, projectId);
     const trustedSource = await this.env.DB.prepare(
       'SELECT 1 AS retained FROM project_copy_source_archives WHERE artifact_id = ?'
@@ -3899,7 +3902,12 @@ export class D1R2PersistenceService implements PersistenceService {
             'content-type': 'application/json',
             'x-openzcad-internal-source-cleanup': 'v1'
           },
-          body: JSON.stringify({ action: 'discard-mesh', userId, artifactId })
+          body: JSON.stringify({
+            action: 'discard-mesh',
+            userId,
+            artifactId,
+            ...(originalKind ? { kind: originalKind } : {})
+          })
         })
       );
       if (!response.ok)
@@ -3928,7 +3936,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!known && !claim) return { deleted: true };
     if (
       known &&
-      (known.project_id !== projectId || known.kind !== 'mesh-payload')
+      (known.project_id !== projectId || known.kind !== expectedKind)
     )
       return { deleted: false };
     if (
@@ -3985,10 +3993,10 @@ export class D1R2PersistenceService implements PersistenceService {
          AND NOT EXISTS (SELECT 1 FROM project_copy_source_archives WHERE artifact_id = ?)
          AND (EXISTS (
            SELECT 1 FROM artifacts WHERE id = ? AND project_id = ?
-             AND kind = 'mesh-payload' AND object_key = ?
+             AND kind = ? AND object_key = ?
          ) OR EXISTS (
            SELECT 1 FROM upload_sessions WHERE artifact_id = ? AND project_id = ?
-             AND kind = 'mesh-payload' AND object_key = ?
+             AND kind = ? AND object_key = ?
          ))`
       )
         .bind(
@@ -4012,9 +4020,11 @@ export class D1R2PersistenceService implements PersistenceService {
           artifactId,
           artifactId,
           projectId,
+          expectedKind,
           known!.object_key,
           artifactId,
           projectId,
+          expectedKind,
           known!.object_key
         )
         .run();
@@ -4040,12 +4050,19 @@ export class D1R2PersistenceService implements PersistenceService {
     // Keep artifact accounting until R2 acknowledges removal; a failure retries.
     await this.env.ARTIFACTS.delete(claim.object_key);
     await this.env.DB.prepare(
-      `DELETE FROM artifacts WHERE id = ? AND project_id = ? AND kind = 'mesh-payload'
+      `DELETE FROM artifacts WHERE id = ? AND project_id = ? AND kind = ?
        AND object_key = ? AND EXISTS (
          SELECT 1 FROM artifact_mesh_discards WHERE artifact_id = ? AND project_id = ?
        )`
     )
-      .bind(artifactId, projectId, claim.object_key, artifactId, projectId)
+      .bind(
+        artifactId,
+        projectId,
+        expectedKind,
+        claim.object_key,
+        artifactId,
+        projectId
+      )
       .run();
     return { deleted: true };
   }
@@ -6038,7 +6055,10 @@ export class ProjectCollaborationRoom extends DurableObject {
       (payload.action === 'discard-mesh' &&
         (typeof payload.artifactId !== 'string' ||
           !payload.artifactId ||
-          payload.artifactId.length > 200)) ||
+          payload.artifactId.length > 200 ||
+          (payload.kind !== undefined &&
+            payload.kind !== 'stl-import' &&
+            payload.kind !== 'mesh-import'))) ||
       (payload.action !== 'discard-mesh' &&
         (!Number.isSafeInteger(payload.expectedVersion) ||
           (payload.expectedVersion as number) < 0 ||
@@ -6108,7 +6128,12 @@ export class ProjectCollaborationRoom extends DurableObject {
         )
           return Response.json({ deleted: false });
         return Response.json(
-          await persistence.discardMeshPayload(userId, projectId, artifactId)
+          await persistence.discardMeshPayload(
+            userId,
+            projectId,
+            artifactId,
+            payload.kind as 'stl-import' | 'mesh-import' | undefined
+          )
         );
       }
       const expectedVersion = payload.expectedVersion as number;

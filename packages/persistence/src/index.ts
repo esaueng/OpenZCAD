@@ -17,6 +17,7 @@ export {
 import { importArtifactIds } from './mesh-artifact-discard';
 export {
   importArtifactIds,
+  isMeshImportArchiveKind,
   meshDiscardCommitGuard
 } from './mesh-artifact-discard';
 import {
@@ -571,11 +572,13 @@ export interface PersistenceService {
     userId: UserId,
     request: FinalizeArtifactRequest
   ): Promise<ArtifactRecord | null>;
-  /** Remove a cancelled mesh upload only while no saved model needs it. */
+  /** Remove a cancelled mesh upload only while no saved model needs it.
+   * The default is payload-only; original cleanup must specify its exact kind. */
   discardMeshPayload(
     userId: UserId,
     projectId: string,
-    artifactId: string
+    artifactId: string,
+    originalKind?: 'stl-import' | 'mesh-import'
   ): Promise<{ deleted: boolean }>;
   listArtifacts(
     userId: UserId,
@@ -1953,7 +1956,8 @@ export class InMemoryPersistenceService implements PersistenceService {
   async discardMeshPayload(
     userId: UserId,
     projectId: string,
-    artifactId: string
+    artifactId: string,
+    originalKind?: 'stl-import' | 'mesh-import'
   ): Promise<{ deleted: boolean }> {
     await this.requireProjectEdit(userId, projectId);
     if (
@@ -1971,7 +1975,10 @@ export class InMemoryPersistenceService implements PersistenceService {
       const claimedProject = this.discardedMeshArtifacts.get(artifactId);
       return { deleted: !claimedProject || claimedProject === projectId };
     }
-    if (known.projectId !== projectId || known.kind !== 'mesh-payload')
+    if (
+      known.projectId !== projectId ||
+      known.kind !== (originalKind ?? 'mesh-payload')
+    )
       return { deleted: false };
     const documents = [
       this.projects.get(projectId)!,

@@ -19949,7 +19949,8 @@ export function App() {
               ? {
                   document: doc,
                   getDocument: () => managerRef.current?.document ?? null,
-                  transport: api
+                  transport: api,
+                  onRemove: setArtifacts
                 }
               : undefined
           }
