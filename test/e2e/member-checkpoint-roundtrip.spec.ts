@@ -44,6 +44,7 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
   let checkpointInput: ProjectDocument | null = null;
   let accountWrites = 0;
   let revisionReads = 0;
+  let lastWriteBase: number | null = null;
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -76,6 +77,7 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
     input: () => checkpointInput,
     accountWrites: () => accountWrites,
     revisionReads: () => revisionReads,
+    lastWriteBase: () => lastWriteBase,
     async install(page: Page) {
       await stubApi(page, { collaborationRole: 'editor' });
       await page.route('**/api/projects', (route) =>
@@ -193,7 +195,8 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
       );
       await page.exposeFunction(
         '__recordCheckpointRoomDocument',
-        async (next: ProjectDocument) => {
+        async (next: ProjectDocument, baseVersion: number | null) => {
+          lastWriteBase = baseVersion;
           if (copiedImport && JSON.stringify(next).includes(localSourceId)) {
             sourceWritePending = true;
             await sourceWriteGate;
@@ -207,7 +210,8 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
       await page.addInitScript((initial) => {
         const browser = window as unknown as {
           __recordCheckpointRoomDocument(
-            document: ProjectDocument
+            document: ProjectDocument,
+            baseVersion: number | null
           ): Promise<ProjectDocument | null>;
         };
         const Original = window.WebSocket;
@@ -225,6 +229,7 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
             const frame = JSON.parse(raw) as {
               type: string;
               clientId: string;
+              baseVersion?: number | null;
               document?: ProjectDocument;
             };
             if (frame.type === 'hello') {
@@ -264,7 +269,10 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
             } else if (frame.type === 'document' && frame.document) {
               const submitted = frame.document;
               void browser
-                .__recordCheckpointRoomDocument(submitted)
+                .__recordCheckpointRoomDocument(
+                  submitted,
+                  frame.baseVersion ?? null
+                )
                 .then((canonical) =>
                   this.dispatchEvent(
                     new MessageEvent('message', {
@@ -435,54 +443,77 @@ test('a late member checkpoint leaves the newer share navigation and status unch
   }
 });
 
-for (const ackFault of ['lost', 'late'] as const) {
-  test(`an adopted member checkpoint keeps its server identity after a ${ackFault} HTTP acknowledgement`, async ({
-    page
-  }) => {
-    test.setTimeout(60_000);
-    const server = roomFixture(ackFault);
-    await server.install(page);
-    try {
-      await page.goto('/');
-      await page.getByLabel('Project name').fill(server.read().name);
-      await page.getByRole('button', { name: 'Create project' }).click();
-      await addPrimitive(page, /^Box \(B\)/);
-      await expectBodyCount(page, 1);
-      await expect(
-        page.getByRole('status', { name: 'Saved', exact: true })
-      ).toBeVisible();
-      await startNamedSave(page);
-      await expect.poll(server.requested).toBe(true);
-      server.release();
-      const named = page.locator('.revision-row', { hasText: 'Clicked box' });
-      await expect(named).toHaveCount(1);
-      await addPrimitive(page, /^Cylinder/);
-      await expectBodyCount(page, 2);
-      if (ackFault === 'lost') server.releaseAck();
-      await expect(page.getByRole('contentinfo')).toContainText(
-        'The named save is stored on this device.',
-        { timeout: ackFault === 'late' ? 20_000 : 10_000 }
-      );
-      await expect(named).toHaveCount(1);
-      await expect.poll(() => server.read().bodyOrder.length).toBe(2);
-      expect(server.read().checkpoints).toEqual(server.stored()!.checkpoints);
-      expect(server.read().revisions).toEqual([
-        ...server.stored()!.revisions,
-        expect.objectContaining({ reason: 'Add cylinder', commandCount: 2 })
-      ]);
-      expect(server.stored()!.bodyOrder).toHaveLength(1);
-      expect(server.accountWrites()).toBe(0);
-      if (ackFault === 'late') {
-        server.releaseAck();
-        await page.waitForTimeout(250);
+for (const timing of ['after adoption', 'before broadcast'] as const) {
+  for (const ackFault of ['lost', 'late'] as const) {
+    test(`a member checkpoint keeps its server identity with edits ${timing} and a ${ackFault} HTTP acknowledgement`, async ({
+      page
+    }) => {
+      test.setTimeout(60_000);
+      const server = roomFixture(ackFault);
+      await server.install(page);
+      try {
+        await page.goto('/');
+        await page.getByLabel('Project name').fill(server.read().name);
+        await page.getByRole('button', { name: 'Create project' }).click();
+        await addPrimitive(page, /^Box \(B\)/);
+        await expectBodyCount(page, 1);
+        await expect(
+          page.getByRole('status', { name: 'Saved', exact: true })
+        ).toBeVisible();
+        await startNamedSave(page);
+        await expect.poll(server.requested).toBe(true);
+        const named = page.locator('.revision-row', { hasText: 'Clicked box' });
+        if (timing === 'after adoption') {
+          server.release();
+          await expect(named).toHaveCount(1);
+        }
+        await addPrimitive(page, /^Cylinder/);
+        await expectBodyCount(page, 2);
+        if (timing === 'before broadcast') {
+          expect(server.stored()).toBeNull();
+          expect(server.input()?.bodyOrder).toHaveLength(1);
+          server.release();
+          await expect.poll(() => server.stored()?.bodyOrder.length).toBe(1);
+          await expectBodyCount(page, 2);
+        }
+        if (ackFault === 'lost') server.releaseAck();
+        await expect(page.getByRole('contentinfo')).toContainText(
+          'The named save is stored on this device.',
+          { timeout: ackFault === 'late' ? 20_000 : 10_000 }
+        );
         await expect(named).toHaveCount(1);
-        expect(server.read().checkpoints).toEqual(server.stored()!.checkpoints);
+        await expect.poll(() => server.read().bodyOrder.length).toBe(2);
+        await expect
+          .poll(() => server.read().checkpoints)
+          .toEqual(server.stored()!.checkpoints);
+        await expect
+          .poll(() => server.read().revisions)
+          .toEqual([
+            ...server.stored()!.revisions,
+            expect.objectContaining({ reason: 'Add cylinder', commandCount: 2 })
+          ]);
+        expect(server.lastWriteBase()).toBe(server.stored()!.version);
+        expect(server.read().version).toBeGreaterThan(server.stored()!.version);
+        expect(server.stored()!.bodyOrder).toHaveLength(1);
+        expect(server.accountWrites()).toBe(0);
+        await page.keyboard.press('ControlOrMeta+z');
+        await expectBodyCount(page, 1);
+        await page.keyboard.press('ControlOrMeta+Shift+z');
+        await expectBodyCount(page, 2);
+        if (ackFault === 'late') {
+          server.releaseAck();
+          await page.waitForTimeout(250);
+          await expect(named).toHaveCount(1);
+          expect(server.read().checkpoints).toEqual(
+            server.stored()!.checkpoints
+          );
+        }
+      } finally {
+        server.release();
+        server.releaseAck();
       }
-    } finally {
-      server.release();
-      server.releaseAck();
-    }
-  });
+    });
+  }
 }
 
 for (const ackFault of [undefined, 'lost'] as const) {
