@@ -1,4 +1,6 @@
 import type { WorkspaceSaveState } from './cloudProjectAutosave';
+import type { ProjectDocument } from '@openzcad/shared';
+import { checkpointRoomCoversDocument } from './collaborationCheckpointFallback';
 
 /**
  * The state the indicators should show. The autosave controller only knows
@@ -8,8 +10,15 @@ import type { WorkspaceSaveState } from './cloudProjectAutosave';
  */
 export function presentedWorkspaceSaveState(
   saveState: WorkspaceSaveState,
-  localOnlySourceCount: number
+  localOnlySourceCount: number,
+  checkpointRoomDocument: ProjectDocument | null = null,
+  document: ProjectDocument | null = null
 ): WorkspaceSaveState {
+  if (
+    saveState === 'device-failed' &&
+    checkpointRoomCoversDocument(checkpointRoomDocument, document)
+  )
+    saveState = 'room-only';
   return saveState === 'synced' && localOnlySourceCount > 0
     ? 'local-source'
     : saveState;
@@ -76,6 +85,18 @@ export const WORKSPACE_SAVE_STATE_PRESENTATION: Record<
     statusBarLabel: 'Not saved',
     title:
       'This device could not store your work — it exists only in this tab and will be lost if you close it. Export your model now.'
+  },
+  'room-only': {
+    topBarLabel: 'Room only',
+    statusBarLabel: 'Revision in room',
+    title:
+      'The named revision is stored in the room. The latest save on this device failed. Keep this tab open and retry or export.'
+  },
+  'checkpoint-failed': {
+    topBarLabel: 'Save unconfirmed',
+    statusBarLabel: 'Save unconfirmed',
+    title:
+      'The named save could not be confirmed. See the save result for room and device storage details.'
   },
   paused: {
     topBarLabel: 'Autosave off',

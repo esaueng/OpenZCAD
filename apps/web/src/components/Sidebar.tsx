@@ -1,5 +1,5 @@
 import type { DiagnosticRow } from '../lib/diagnosticsRows';
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useArrivals } from '../hooks/useArrivals';
 import {
   AlertTriangle,
@@ -33,6 +33,10 @@ import {
   type HistoryRowActions
 } from './HistoryTimeline';
 import { AddParameterRow, ParameterRow, parameterTable } from './ParameterRows';
+import {
+  listLocalSaveStateCheckpoints,
+  onLocalSaveStatesChanged
+} from '../lib/localProjectStore';
 
 /**
  * One collapsible browser section. The count is on the header so a collapsed
@@ -118,6 +122,7 @@ interface SidebarProps {
   warnings: DiagnosticRow[];
   historyDetails?: ReactNode;
   checkpoints: ProjectCheckpoint[];
+  projectId?: string;
   /** The open document's version, to mark the save point it sits on. */
   documentVersion: number;
   /**
@@ -226,6 +231,7 @@ export function Sidebar({
   warnings,
   historyDetails,
   checkpoints,
+  projectId,
   documentVersion,
   restorableCheckpointIds,
   onSelectFeature,
@@ -254,6 +260,47 @@ export function Sidebar({
   onToggleSection,
   onClose
 }: SidebarProps) {
+  const [localSaveStates, setLocalSaveStates] = useState<{
+    projectId: string;
+    checkpoints: ProjectCheckpoint[];
+  } | null>(null);
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    let generation = 0;
+    const refresh = () => {
+      const request = ++generation;
+      void listLocalSaveStateCheckpoints(projectId)
+        .catch(() => [])
+        .then((stored) => {
+          if (!cancelled && request === generation)
+            setLocalSaveStates({ projectId, checkpoints: stored });
+        });
+    };
+    refresh();
+    const stop = onLocalSaveStatesChanged((storedProjectId) => {
+      if (storedProjectId === projectId) refresh();
+    });
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [projectId, restorableCheckpointIds]);
+  const canonicalCheckpointIds = new Set(
+    checkpoints.map((point) => point.checkpointId)
+  );
+  const localCheckpoints =
+    localSaveStates && localSaveStates.projectId === projectId
+      ? localSaveStates.checkpoints
+      : [];
+  const privateCheckpoints = localCheckpoints.filter(
+    (point) => !canonicalCheckpointIds.has(point.checkpointId)
+  );
+  const visibleCheckpoints = privateCheckpoints.length
+    ? [...checkpoints, ...privateCheckpoints].sort((left, right) =>
+        left.createdAt.localeCompare(right.createdAt)
+      )
+    : checkpoints;
   const [findOpen, setFindOpen] = useState(false);
   const findToggleRef = useRef<HTMLButtonElement>(null);
   const [showConsumed, setShowConsumed] = useState(false);
@@ -531,29 +578,33 @@ export function Sidebar({
         {historyDetails}
       </SidebarSection>
 
-      {checkpoints.length > 0 && (
+      {visibleCheckpoints.length > 0 && (
         <SidebarSection
           id="revisions"
           title="Revisions"
-          count={checkpoints.length}
+          count={visibleCheckpoints.length}
           open={panelState.sidebarSections.revisions}
           className="revisions"
           onToggle={onToggleSection}
         >
           <div className="revision-list">
-            {[...checkpoints].reverse().map((checkpoint, index) => {
+            {[...visibleCheckpoints].reverse().map((checkpoint, index) => {
               // The save point the open document is currently sitting on.
               // Offering to restore what is already loaded would be a no-op
               // dressed up as an action.
-              const isCurrent = checkpoint.documentVersion === documentVersion;
-              const stored = restorableCheckpointIds.has(
-                checkpoint.checkpointId
-              );
+              const isCurrent =
+                canonicalCheckpointIds.has(checkpoint.checkpointId) &&
+                checkpoint.documentVersion === documentVersion;
+              const stored =
+                restorableCheckpointIds.has(checkpoint.checkpointId) ||
+                localCheckpoints.some(
+                  (point) => point.checkpointId === checkpoint.checkpointId
+                );
               return (
                 <div
                   key={checkpoint.checkpointId}
                   className={`revision-row ${index === 0 ? 'latest' : ''}`}
-                  title={`${checkpoint.reason} · document v${checkpoint.documentVersion} · ${new Date(checkpoint.createdAt).toLocaleString()}`}
+                  title={`${checkpoint.reason} · document v${checkpoint.documentVersion} · ${new Date(checkpoint.createdAt).toLocaleString()}${canonicalCheckpointIds.has(checkpoint.checkpointId) ? '' : ' · Stored on this device'}`}
                 >
                   <span className="revision-dot" aria-hidden="true" />
                   <span className="revision-reason">{checkpoint.reason}</span>

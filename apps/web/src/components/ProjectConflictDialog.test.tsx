@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import type { ConflictSource, ProjectConflict } from '../lib/conflictRecovery';
+import { STALE_CHUNK_MESSAGE } from '../lib/staleChunk';
 import { ProjectConflictDialog } from './ProjectConflictDialog';
 
 const owner = toUserId('user_conflict_owner');
@@ -20,6 +21,43 @@ function conflict(source: ConflictSource): ProjectConflict {
 }
 
 describe('ProjectConflictDialog', () => {
+  it.each([
+    new TypeError(
+      'Failed to fetch dynamically imported module: /assets/keepLocalRoomVersion-old.js'
+    ),
+    new TypeError('Importing a module script failed.')
+  ])(
+    'keeps conflict work available with reload guidance after %s',
+    async (failure) => {
+      const user = userEvent.setup();
+      const value = conflict('room');
+      const original = structuredClone(value);
+      const onResolve = vi.fn().mockRejectedValue(failure);
+      const onClose = vi.fn();
+      render(
+        <ProjectConflictDialog
+          conflict={value}
+          busy={false}
+          onResolve={onResolve}
+          onClose={onClose}
+        />
+      );
+      const keep = screen.getByRole('button', {
+        name: 'Keep this device’s version'
+      });
+      await user.click(keep);
+      expect(screen.getByRole('alert')).toHaveTextContent(STALE_CHUNK_MESSAGE);
+      expect(keep).toBeEnabled();
+      expect(keep).not.toHaveAttribute('aria-disabled');
+      expect(
+        screen.getByRole('button', { name: 'Use the live version' })
+      ).toBeEnabled();
+      expect(value).toEqual(original);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(onResolve).toHaveBeenCalledExactlyOnceWith('keep-mine');
+    }
+  );
+
   it('explains matching version numbers and shows the saved-history differences', () => {
     const value = conflict('account');
     value.remoteDocument.version = value.localDocument.version;

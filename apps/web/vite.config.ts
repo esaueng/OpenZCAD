@@ -449,7 +449,9 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // Runtime refusal classification shares the existing lazy
               // analysis boundary without bringing the loader dependencies.
               id.includes('/packages/kernel-adapter/src/remus-load-error.ts') ||
-              id.includes('/packages/kernel-adapter/src/union-connectivity.ts') ||
+              id.includes(
+                '/packages/kernel-adapter/src/union-connectivity.ts'
+              ) ||
               id.includes(
                 '/packages/kernel-adapter/src/feature-profile-dependencies.ts'
               )
@@ -511,6 +513,9 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               id.includes('/apps/web/src/lib/editTrace.ts') ||
               id.includes('/apps/web/src/lib/topologyResolution.ts') ||
               id.includes('/apps/web/src/lib/topologyLabels.ts') ||
+              // Room transport validation is shared by the eager socket hook
+              // and named saves. Keep it in this already preloaded chunk.
+              id.includes('/apps/web/src/lib/collaborationProtocol.ts') ||
               // Thumbnail coordination and shelf version checks must be
               // resident before leave-time flush. Reuse this preloaded chunk.
               id.includes('/apps/web/src/lib/projectThumbnailCapture.ts') ||
@@ -520,6 +525,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // workspace dependencies. Keep them resident in this existing
               // preloaded chunk, including before a reload or navigation.
               id.includes('/apps/web/src/lib/localProjectAutosave.ts') ||
+              id.includes('/apps/web/src/lib/localProjectStore.ts') ||
               id.includes('/apps/web/src/lib/localAutosaveFailure.ts') ||
               id.includes(
                 '/apps/web/src/lib/workspaceSaveStatePresentation.ts'
