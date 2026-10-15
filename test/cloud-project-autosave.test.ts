@@ -5,11 +5,13 @@ import {
   createSavedRevision
 } from '@openzcad/document-core';
 import {
+  MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   toUserId,
   type ProjectDocument,
   type SaveProjectDocumentResponse
 } from '@openzcad/shared';
-import { ApiError } from '../apps/web/src/lib/api';
+import { api, ApiError } from '../apps/web/src/lib/api';
+import worker from '../apps/web/worker/index';
 import {
   CloudProjectAutosave,
   PROJECT_AUTOSAVE_IDLE_MS,
@@ -340,6 +342,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -887,6 +890,116 @@ describe('cloud project autosave — refusals', () => {
       expect(controller.hasPendingChanges).toBe(true);
       controller.dispose();
     }
+  );
+
+  it.each([
+    {
+      path: 'canonical document',
+      limitBytes: MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
+      contentLength: false
+    },
+    {
+      path: 'declared request length',
+      limitBytes: 25 * 1024 * 1024,
+      contentLength: true
+    },
+    {
+      path: 'streamed request bytes',
+      limitBytes: 25 * 1024 * 1024,
+      contentLength: false
+    }
+  ])(
+    'resumes after the actual Worker $path size refusal',
+    async ({ limitBytes, contentLength }) => {
+      const user = toUserId(`user_wire_${crypto.randomUUID()}`);
+      vi.stubGlobal(
+        'fetch',
+        async (input: RequestInfo | URL, init?: RequestInit) => {
+          const request = new Request(
+            new URL(
+              typeof input === 'string'
+                ? input
+                : input instanceof URL
+                  ? input.href
+                  : input.url,
+              'https://example.com'
+            ),
+            init
+          );
+          request.headers.set('x-openzcad-development-user', user);
+          if (contentLength && typeof init?.body === 'string') {
+            request.headers.set(
+              'content-length',
+              String(new TextEncoder().encode(init.body).byteLength)
+            );
+          }
+          return worker.fetch(request, {
+            ENVIRONMENT: 'development',
+            AUTH_MODE: 'development'
+          });
+        }
+      );
+      const created = await api.createProject({ name: 'Wire size recovery' });
+      const document = created.document;
+      const errors: unknown[] = [];
+      const respond = vi.fn(
+        async (input: {
+          expectedVersion: number;
+          document: ProjectDocument;
+        }) => {
+          try {
+            return await api.saveProjectDocument({
+              ...input,
+              projectId: document.projectId
+            });
+          } catch (error) {
+            errors.push(error);
+            throw error;
+          }
+        }
+      );
+      const { controller, statuses } = harness({ respond });
+      try {
+        controller.openProject(document.projectId, document.version);
+        controller.schedule({
+          ...document,
+          version: document.version + 1,
+          padding: 'x'.repeat(limitBytes + 8_192)
+        } as ProjectDocument);
+        await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+        await controller.whenIdle();
+        expect(errors[0]).toBeInstanceOf(ApiError);
+        expect((errors[0] as ApiError).status).toBe(413);
+        expect(lastState(statuses)).toBe('refused');
+        if (limitBytes > MAX_CLOUD_PROJECT_DOCUMENT_BYTES) {
+          // A request fitting 25 MiB may still exceed the canonical 24 MiB cap.
+          controller.schedule({
+            ...document,
+            version: document.version + 2,
+            padding: 'x'.repeat(MAX_CLOUD_PROJECT_DOCUMENT_BYTES + 8_192)
+          } as ProjectDocument);
+          await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+          await controller.whenIdle();
+          expect(respond).toHaveBeenCalledTimes(1);
+        }
+        const reduced = documentAt(document.version + 3, document);
+        controller.schedule(reduced);
+        await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+        await controller.whenIdle();
+        expect(respond).toHaveBeenCalledTimes(2);
+        expect(errors[0]).toMatchObject({
+          code: 'DOCUMENT_TOO_LARGE',
+          details: { limitBytes }
+        });
+        expect(lastState(statuses)).toBe('synced');
+        expect(await api.loadProject(document.projectId)).toMatchObject({
+          version: reduced.version
+        });
+      } finally {
+        controller.dispose();
+      }
+    },
+    15_000
   );
 
   it('retries a transient failure quickly, then slows down rather than spinning', async () => {
