@@ -593,6 +593,24 @@ describe('settings advanced section', () => {
 });
 
 describe('settings desktop account section', () => {
+  it('explains browser-only analytics without offering a desktop consent control', () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {}
+    });
+    try {
+      renderSettings(null, { initialSection: 'privacy' });
+      expect(
+        screen.queryByRole('checkbox', { name: 'Optional usage analytics' })
+      ).toBeNull();
+      expect(
+        screen.getByText(/This desktop app does not send usage events/)
+      ).toBeVisible();
+    } finally {
+      delete (window as Window & { __TAURI_INTERNALS__?: unknown })
+        .__TAURI_INTERNALS__;
+    }
+  });
   it('turns project sharing off from the account section', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

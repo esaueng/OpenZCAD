@@ -1,3 +1,4 @@
+import { trackUsage } from './lib/analytics';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
@@ -46,6 +47,7 @@ if (import.meta.env.VITE_E2E === '1') {
 }
 
 mark('bundle.evaluated');
+trackUsage('workspace_opened');
 
 const rootElement = document.getElementById('root');
 

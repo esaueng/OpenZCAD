@@ -1,3 +1,4 @@
+import { AnalyticsConsent } from './AnalyticsConsent';
 import {
   MIDDLE_DRAG_LABELS,
   POINTER_NAVIGATION_LABELS
@@ -2149,6 +2150,23 @@ export function SettingsPage({
                   <RefreshCcw size={14} aria-hidden="true" />
                   Reset settings
                 </button>
+              </SettingRow>
+              <SettingRow
+                title="Optional usage analytics"
+                description={
+                  desktopApp
+                    ? 'Optional usage analytics are available in the web browser. This desktop app does not send usage events.'
+                    : 'Allow Glimpse to count feature use, workflow steps, exports and coarse timings. No model contents, geometry, filenames, project names or identity. Off by default. DNT/GPC and turning off cloud features suppress sending while preserving this choice; withdraw here to stop sending immediately. Existing anonymous totals cannot be attributed or removed. Basic server counters measure API activity and reliability. Local operations require opt-in. This browser-only choice is separate for each app.'
+                }
+                scope="This device"
+              >
+                {desktopApp ? (
+                  <span className="settings-card-action-note">
+                    Web browser only
+                  </span>
+                ) : (
+                  <AnalyticsConsent />
+                )}
               </SettingRow>
               <SettingRow
                 title="Local project data"

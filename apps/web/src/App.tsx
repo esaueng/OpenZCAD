@@ -1,3 +1,4 @@
+import { setAnalyticsEnabled, trackUsage } from './lib/analytics';
 import type {
   GeometryBodyRepresentation,
   GeometryReadyState,
@@ -6671,6 +6672,7 @@ export function App() {
       }
       recordLocalCommit(next, before);
       setDoc(next);
+      trackUsage('feature_used');
       setStatus(commandOutcomeMessage(command.label));
       return true;
     } catch (error) {
@@ -7380,6 +7382,8 @@ export function App() {
    * to cancel it from.
    */
   function handleWorkspaceMode(mode: WorkspaceMode) {
+    if (mode !== workspaceModeRef.current)
+      trackUsage(mode === 'build' ? 'workflow_model' : 'workflow_setup');
     if (mode === 'view' || mode === 'tweak') {
       cancelDirectManipulationRef.current?.();
       cylinderRadiusPreview.clear();
@@ -8571,13 +8575,16 @@ export function App() {
       return;
     }
     const defaults = defaultAppSettings();
+    const analyticsReset = setAnalyticsEnabled(false);
     // A reset is a local edit like any other: it must survive the next boot
     // rather than being undone by the account copy.
     handleAppSettingsChange(defaults);
     setSettingsMessage(
-      sessionRef.current && accountSettingsRef.current
-        ? 'Application settings reset · saving to cloud profile…'
-        : 'Application settings reset on this device.'
+      !analyticsReset
+        ? 'Application settings reset. Analytics are off in this page; clear this site’s stored data if withdrawal cannot be saved.'
+        : sessionRef.current && accountSettingsRef.current
+          ? 'Application settings reset · saving to cloud profile…'
+          : 'Application settings reset on this device.'
     );
   }
 
@@ -11695,6 +11702,7 @@ export function App() {
         fileName,
         new Blob([text], { type: 'application/json' })
       );
+      trackUsage('export_completed');
       setStatus(`Exported complete project ${snapshot.name}.`);
       sink.finish({ tone: 'ok', message: 'complete project', landed: true });
     } catch (error) {
@@ -11851,6 +11859,7 @@ export function App() {
         cancelled();
         return;
       }
+      trackUsage('export_completed');
       sink.update({ phase: 'archiving', fraction: null });
       let archived = false;
       try {
@@ -11906,6 +11915,7 @@ export function App() {
         cancelled();
         return;
       }
+      trackUsage('export_failed');
       const message = errorMessage(error, `${input.label} export failed.`);
       setStatus(message);
       sink.finish({ tone: 'error', message });
