@@ -622,6 +622,61 @@ function seedRetainedRevisions(fixture: Awaited<ReturnType<typeof setup>>) {
 }
 
 for (const mode of ['inline', 'R2'] as const) {
+  it.each(['socket send', 'attachment refresh'] as const)(
+    `acknowledges a committed ${mode} checkpoint when its broadcast fails during %s`,
+    async (stage) => {
+      const fixture = await setup(mode === 'R2' ? objectBucket() : undefined);
+      try {
+        if (stage === 'socket send') {
+          vi.spyOn(fixture.socket, 'send').mockImplementationOnce(() => {
+            throw new Error('Socket send unavailable');
+          });
+        } else {
+          const put = fixture.storage.context.storage.put.bind(
+            fixture.storage.context.storage
+          );
+          vi.spyOn(
+            fixture.storage.context.storage,
+            'put'
+          ).mockImplementationOnce(async (entries, value) => {
+            await put(entries, value);
+            fixture.db
+              .prepare(
+                "UPDATE project_members SET role='viewer' WHERE project_id=? AND user_id=?"
+              )
+              .run(fixture.document.projectId, fixture.editor);
+          });
+          vi.spyOn(
+            fixture.socket,
+            'serializeAttachment'
+          ).mockImplementationOnce(() => {
+            throw new Error('Attachment storage unavailable');
+          });
+        }
+        const response = await fixture.post({
+          checkpointReason: 'Committed point'
+        });
+        expect(response.status).toBe(200);
+        const ack = (await response.json()) as {
+          type: string;
+          document: ProjectDocument;
+        };
+        expect(ack.type).toBe('ack');
+        expect(ack.document.checkpoints.at(-1)?.reason).toBe('Committed point');
+        expect(fixture.storage.values.get('room:latest')).toEqual(ack.document);
+        expect(
+          await fixture.service.loadRevision(
+            fixture.owner,
+            ack.document.projectId,
+            ack.document.checkpoints.at(-1)!.revisionId
+          )
+        ).toEqual(ack.document);
+      } finally {
+        fixture.db.close();
+      }
+    }
+  );
+
   it.each(['membership revoked', 'lease expired'] as const)(
     `removes an inserted ${mode} checkpoint when %s before publication starts`,
     async (reason) => {
