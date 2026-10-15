@@ -8,7 +8,10 @@ import {
 } from './localProjectStore';
 import * as localStore from './localProjectStore';
 import { setup, box, rejectedSave } from './collaborationCheckpointTestHarness';
-import { preserveFailedCheckpoint } from './collaborationCheckpointFallback';
+import {
+  CheckpointSaveError,
+  preserveFailedCheckpoint
+} from './collaborationCheckpointFallback';
 import { STALE_CHUNK_MESSAGE } from './staleChunk';
 
 // Leave the rejected module mocked for this file's entire lifetime. A held
@@ -166,6 +169,8 @@ describe('named saves when the checkpoint action cannot load', () => {
     expect(error.message).toContain(
       'The named save could not be stored on this device.'
     );
+    expect(error).toBeInstanceOf(CheckpointSaveError);
+    expect(error).toMatchObject({ roomStored: false, deviceStored: false });
     expect(error.message).not.toContain('Device quota exceeded.');
     expect(storage).toHaveBeenCalledOnce();
     expect(hook.apply).not.toHaveBeenCalled();
