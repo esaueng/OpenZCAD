@@ -1027,3 +1027,196 @@ for (const tier of ['free', 'premium'] as const) {
     await expect(membership).toContainText('cloud file storage');
   });
 }
+
+test('optional Glimpse analytics require a new opt-in and withdraw immediately', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.route('**/api/glimpse/usage', (route) =>
+    route.fulfill({ status: 204 })
+  );
+  const requests: unknown[] = [];
+  page.on('request', (request) => {
+    if (request.url().endsWith('/api/glimpse/usage'))
+      requests.push(request.postDataJSON());
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page
+    .getByRole('button', { name: 'Privacy & data', exact: true })
+    .click();
+  const consent = page.getByRole('checkbox', {
+    name: 'Optional usage analytics',
+    exact: true
+  });
+  const row = page.locator('.setting-row').filter({ has: consent });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const copy = await row.locator('.setting-copy').boundingBox();
+    const control = await row.locator('.setting-control').boundingBox();
+    if (!copy || !control) throw new Error('Analytics setting is not visible');
+    expect(copy.width).toBeGreaterThan(200);
+    expect(
+      control.x >= copy.x + copy.width - 1 ||
+        control.y >= copy.y + copy.height - 1
+    ).toBe(true);
+  }
+  await expect(consent).not.toBeChecked();
+  expect(requests).toEqual([]);
+  await consent.check();
+  await expect(consent).toBeChecked();
+  await page.reload();
+  await expect(consent).toBeChecked();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]).toEqual({ event: 'workspace_opened', bucket: 'none' });
+  await consent.uncheck();
+  await page.reload();
+  await expect(consent).not.toBeChecked();
+  expect(requests).toHaveLength(1);
+});
+
+for (const privacySignal of ['doNotTrack', 'globalPrivacyControl'] as const) {
+  test(`analytics consent can be revoked with ${privacySignal} enabled`, async ({
+    page
+  }) => {
+    await stubApi(page);
+    await page.addInitScript((signal) => {
+      Object.defineProperty(navigator, signal, {
+        configurable: true,
+        value: signal === 'doNotTrack' ? '1' : true
+      });
+    }, privacySignal);
+    await page.goto('/');
+    await page.evaluate(() =>
+      localStorage.setItem('openzcad.glimpse.consent.v1', 'granted-v1')
+    );
+    await page.reload();
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await page
+      .getByRole('button', { name: 'Privacy & data', exact: true })
+      .click();
+    const consent = page.getByRole('checkbox', {
+      name: 'Optional usage analytics',
+      exact: true
+    });
+    await expect(consent).toBeChecked();
+    await consent.uncheck();
+    await page.reload();
+    await expect(consent).not.toBeChecked();
+    expect(
+      await page.evaluate(() =>
+        localStorage.getItem('openzcad.glimpse.consent.v1')
+      )
+    ).toBeNull();
+  });
+}
+
+test('reset settings revokes analytics consent and persists the default', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.route('**/api/glimpse/usage', (route) =>
+    route.fulfill({ status: 204 })
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page
+    .getByRole('button', { name: 'Privacy & data', exact: true })
+    .click();
+  const consent = page.getByRole('checkbox', {
+    name: 'Optional usage analytics',
+    exact: true
+  });
+  await consent.check();
+  page.once('dialog', (dialog) => dialog.accept());
+  await page
+    .getByRole('button', { name: 'Reset settings', exact: true })
+    .click();
+  await expect(consent).not.toBeChecked();
+  await page.reload();
+  await expect(consent).not.toBeChecked();
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem('openzcad.glimpse.consent.v1')
+    )
+  ).toBeNull();
+});
+
+test('analytics consent follows a new cross-tab opt-in after withdrawal', async ({
+  page,
+  context
+}) => {
+  const second = await context.newPage();
+  for (const tab of [page, second]) {
+    await stubApi(tab);
+    await tab.route('**/api/glimpse/usage', (route) =>
+      route.fulfill({ status: 204 })
+    );
+    await tab.goto('/');
+    await expect(
+      tab.getByRole('button', { name: 'Open settings' })
+    ).toBeVisible();
+  }
+  // Load both tabs before opening settings: that overlay's navigation state
+  // is persisted and would otherwise already be open in the second tab.
+  for (const tab of [page, second]) {
+    await tab.getByRole('button', { name: 'Open settings' }).click();
+    await tab
+      .getByRole('button', { name: 'Privacy & data', exact: true })
+      .click();
+  }
+  const consent = page.getByRole('checkbox', {
+    name: 'Optional usage analytics',
+    exact: true
+  });
+  const secondConsent = second.getByRole('checkbox', {
+    name: 'Optional usage analytics',
+    exact: true
+  });
+  await consent.check();
+  await expect(secondConsent).toBeChecked();
+  await consent.uncheck();
+  await expect(secondConsent).not.toBeChecked();
+  await secondConsent.check();
+  await expect(consent).toBeChecked();
+});
+
+test('cloud-off suppresses analytics while keeping the saved consent revocable', async ({
+  page
+}) => {
+  await stubApi(page);
+  const usage: unknown[] = [];
+  await page.route('**/api/glimpse/usage', (route) => {
+    usage.push(route.request().postDataJSON());
+    return route.fulfill({ status: 204 });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page
+    .getByRole('button', { name: 'Privacy & data', exact: true })
+    .click();
+  const consent = page.getByRole('checkbox', {
+    name: 'Optional usage analytics',
+    exact: true
+  });
+  await consent.check();
+  await page.getByRole('button', { name: 'General', exact: true }).click();
+  await page
+    .getByRole('checkbox', { name: 'Cloud features', exact: true })
+    .uncheck();
+  await page.reload();
+  await expect(
+    page.getByRole('checkbox', { name: 'Cloud features', exact: true })
+  ).not.toBeChecked();
+  expect(usage).toEqual([]);
+  await page
+    .getByRole('button', { name: 'Privacy & data', exact: true })
+    .click();
+  await expect(consent).toBeChecked();
+  await consent.uncheck();
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem('openzcad.glimpse.consent.v1')
+    )
+  ).toBeNull();
+});

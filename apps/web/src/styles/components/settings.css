@@ -646,6 +646,20 @@
   background: var(--color-accent-dim);
 }
 
+.settings-analytics-consent {
+  min-width: 0;
+  max-width: 22rem;
+  display: grid;
+  gap: var(--sp-2);
+  overflow-wrap: anywhere;
+}
+
+.settings-analytics-consent p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
 .settings-control-collection + .settings-control-collection {
   border-top: var(--border-thin);
 }
