@@ -1129,3 +1129,35 @@ test('reset settings revokes analytics consent and persists the default', async 
     )
   ).toBeNull();
 });
+
+test('analytics consent follows a new cross-tab opt-in after withdrawal', async ({
+  page,
+  context
+}) => {
+  const second = await context.newPage();
+  for (const tab of [page, second]) {
+    await stubApi(tab);
+    await tab.route('**/api/glimpse/usage', (route) =>
+      route.fulfill({ status: 204 })
+    );
+    await tab.goto('/');
+    await tab.getByRole('button', { name: 'Open settings' }).click();
+    await tab
+      .getByRole('button', { name: 'Privacy & data', exact: true })
+      .click();
+  }
+  const consent = page.getByRole('checkbox', {
+    name: 'Optional usage analytics',
+    exact: true
+  });
+  const secondConsent = second.getByRole('checkbox', {
+    name: 'Optional usage analytics',
+    exact: true
+  });
+  await consent.check();
+  await expect(secondConsent).toBeChecked();
+  await consent.uncheck();
+  await expect(secondConsent).not.toBeChecked();
+  await secondConsent.check();
+  await expect(consent).toBeChecked();
+});
