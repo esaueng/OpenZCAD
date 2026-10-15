@@ -15,6 +15,7 @@ import {
 } from '../../packages/kernel-adapter/src/remus-runtime';
 import { letteredHolder } from '../support/lettered-holder';
 import type { RebuildCacheEvent } from '../../packages/kernel-adapter/src/exact';
+import { benchmarkStepInput } from '../support/benchmarkStepInput';
 
 /**
  * H02 measurement probe (ROADMAP.md): the first parameter edit after a reload
@@ -185,6 +186,9 @@ function collectStages(
 type HolderSource = { file: string } | { name: string; buffer: Buffer };
 
 async function importHolder(page: Page, source: HolderSource, project: string) {
+  const input = await benchmarkStepInput(
+    'file' in source ? fixture(source.file) : source
+  );
   await stubApi(page, { assistantEnabled: true });
   await page.route('**/api/assistant/status', (route) =>
     route.fulfill({
@@ -200,15 +204,11 @@ async function importHolder(page: Page, source: HolderSource, project: string) {
   await page.getByLabel('Project name').fill(project);
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
-  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles(
-    'file' in source
-      ? fixture(source.file)
-      : {
-          name: source.name,
-          mimeType: 'application/step',
-          buffer: source.buffer
-        }
-  );
+  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+    name: input.name,
+    mimeType: 'application/step',
+    buffer: input.buffer
+  });
   await expect(page.locator('.feature-row').first()).toBeVisible({
     timeout: 60_000
   });
@@ -216,6 +216,7 @@ async function importHolder(page: Page, source: HolderSource, project: string) {
     timeout: 60_000
   });
   await expectBodyCount(page, 1);
+  return input.sha256;
 }
 
 async function applyVerified(page: Page, label: string) {
@@ -534,7 +535,11 @@ for (const scenario of scenarios) {
     });
     const name = scenario.parameter;
     const field = () => page.getByLabel(`Expression for ${name}`);
-    await importHolder(page, await scenario.source(), 'Holder reload perf');
+    const sourceSha256 = await importHolder(
+      page,
+      await scenario.source(),
+      'Holder reload perf'
+    );
     await openAssistant(page);
     for (const suggestion of scenario.suggestions) {
       await applyVerified(page, suggestion);
@@ -709,11 +714,7 @@ for (const scenario of scenarios) {
       lockfileSha256: createHash('sha256')
         .update(await readFile('pnpm-lock.yaml'))
         .digest('hex'),
-      sourceSha256: process.env.OZ_PERF_HOLDER_STEP
-        ? createHash('sha256')
-            .update(await readFile(process.env.OZ_PERF_HOLDER_STEP))
-            .digest('hex')
-        : null,
+      sourceSha256,
       // Adapter byte accounting and WASM capacity are recorded in cacheEvents.
       // Neither is a worker retained-heap measurement.
       workerHeap: await retainedWorkerHeap(page),
