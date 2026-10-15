@@ -10,6 +10,7 @@ import {
   PDFJS_ASSET_DIRS
 } from './src/lib/assistant/pdfjsAssets';
 import { resolveSourceCommit } from './build/sourceCommit';
+import { remusTranslatorRetry } from './build/remusTranslatorRetry';
 import {
   FONT_ASSET_BASE,
   FONT_FAMILIES
@@ -266,6 +267,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
   plugins.push(
     react(),
     wasm(),
+    remusTranslatorRetry(),
     pdfjsAssets(),
     textFontAssets(),
     buildMetadata(commit, remus)
@@ -357,7 +359,10 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
       },
       // The plugin supports several Vite majors, so narrow its cross-version
       // return type to the Vite version used by this workspace.
-      plugins: (): PluginOption[] => [wasm() as PluginOption]
+      plugins: (): PluginOption[] => [
+        wasm() as PluginOption,
+        remusTranslatorRetry()
+      ]
     },
     resolve: {
       alias: {
