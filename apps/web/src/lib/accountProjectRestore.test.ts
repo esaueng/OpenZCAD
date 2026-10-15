@@ -4,12 +4,14 @@ import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
+  appendRevision,
   createProjectDocument,
   duplicateProjectDocument
 } from '@openzcad/document-core';
 import {
   documentNodesWithHistory,
   encodeImportedMeshPayload,
+  MAX_PROJECT_REVISION_RECORDS,
   toUserId
 } from '@openzcad/shared';
 import { api, ApiError } from './api';
@@ -18,6 +20,7 @@ import {
   listLocalOnlyImportSources
 } from './importArchival';
 import {
+  chooseProjectDocument,
   loadLocalProject,
   loadSourceBlob,
   putSourceBlobIfAbsent,
@@ -336,4 +339,99 @@ it('does not start the old project archive against a replacement editor after th
   expect(replacement.document).toEqual(before);
   expect(archive).not.toHaveBeenCalled();
   expect(upload).not.toHaveBeenCalled();
+});
+
+it.each([
+  { editDuringUpload: false, fullHistory: false },
+  { editDuringUpload: true, fullHistory: false },
+  { editDuringUpload: true, fullHistory: true }
+])(
+  'reopens archived device work without a divergent lineage (edited: $editDuringUpload, full history: $fullHistory)',
+  async ({ editDuringUpload, fullHistory }) => {
+    const manager = await imports();
+    // A new command clears redo, so first retain its source in the current
+    // model for the concurrent-edit case, just as in the refused-save case.
+    if (editDuringUpload) manager.redo();
+    if (fullHistory) {
+      for (let index = 0; index < MAX_PROJECT_REVISION_RECORDS; index++) {
+        manager.document = appendRevision(manager.document, 'Existing work');
+      }
+    }
+    const clicked = manager.document;
+    vi.spyOn(api, 'saveProjectDocument').mockImplementation(async (input) => ({
+      projectId: input.projectId,
+      version: input.document.version,
+      updatedAt: '2026-10-15T00:00:00.000Z'
+    }));
+    let edited = false;
+    const restored = await restore(clicked, 1, {
+      archive: archiver(manager, async (input) => {
+        if (editDuringUpload && !edited) {
+          edited = true;
+          manager.execute(
+            commandFactories.renameNode({
+              nodeId: manager.document.rootNodeId,
+              name: 'Edited during recovery'
+            })
+          );
+        }
+        return `artifact_owned_${input.fileName}`;
+      }),
+      currentDocument: () => manager.document
+    });
+    const device = (await loadLocalProject(clicked.projectId))!;
+    expect(
+      chooseProjectDocument(device, restored, restored.version).choice
+    ).toBe(editDuringUpload ? 'local' : 'remote');
+    expect(chooseProjectDocument(device, restored).choice).toBe(
+      editDuringUpload ? 'local' : 'remote'
+    );
+    expect(restored.revisions).toEqual(
+      editDuringUpload ? clicked.revisions : device.revisions
+    );
+    if (fullHistory) {
+      // The temporary archival replay trimmed the oldest IDs. The confirmed
+      // snapshot still owns all of its original bounded revision records.
+      expect(restored.revisions).toHaveLength(MAX_PROJECT_REVISION_RECORDS);
+      expect(device.revisions[0]?.revisionId).not.toBe(
+        restored.revisions[0]?.revisionId
+      );
+    } else {
+      expect(device.revisions.slice(0, restored.revisions.length)).toEqual(
+        restored.revisions
+      );
+    }
+    expect(restored.name).toBe('Account repair');
+    expect(device.name).toBe(
+      editDuringUpload ? 'Edited during recovery' : 'Account repair'
+    );
+    expect(listLocalOnlyImportSources(restored)).toEqual([]);
+    expect(listLocalOnlyImportSources(device)).toEqual([]);
+  }
+);
+
+it('keeps the confirmed owner when the live identity changes during archival', async () => {
+  const manager = await imports();
+  const clicked = manager.document;
+  const replacementOwner = toUserId('replacement-owner');
+  vi.spyOn(api, 'saveProjectDocument').mockImplementation(async (input) => ({
+    projectId: input.projectId,
+    version: input.document.version,
+    updatedAt: '2026-10-15T00:00:00.000Z'
+  }));
+  const restored = await restore(clicked, 1, {
+    archive: archiver(manager, async (input) => {
+      manager.document = {
+        ...manager.document,
+        ownerUserId: replacementOwner
+      };
+      return `artifact_owned_${input.fileName}`;
+    }),
+    currentDocument: () => manager.document
+  });
+  expect(restored.ownerUserId).toBe(clicked.ownerUserId);
+  expect(restored.revisions).toEqual(clicked.revisions);
+  expect((await loadLocalProject(clicked.projectId))!.ownerUserId).toBe(
+    replacementOwner
+  );
 });
