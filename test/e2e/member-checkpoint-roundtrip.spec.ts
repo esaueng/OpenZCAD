@@ -7,7 +7,7 @@ import {
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
 
-function roomFixture() {
+function roomFixture(ackFault?: 'lost' | 'late') {
   let document = createProjectDocument(
     'Durable member checkpoint',
     toUserId('owner')
@@ -21,6 +21,10 @@ function roomFixture() {
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
+  let releaseAck!: () => void;
+  const ackGate = new Promise<void>((resolve) => {
+    releaseAck = resolve;
+  });
   const summary = () => ({
     projectId: document.projectId,
     name: document.name,
@@ -30,6 +34,7 @@ function roomFixture() {
   });
   return {
     release,
+    releaseAck,
     read: () => document,
     stored: () => stored,
     requested: () => checkpointRequested,
@@ -107,6 +112,7 @@ function roomFixture() {
             document: ProjectDocument;
             checkpointReason: string;
             leaseId: string;
+            clientId: string;
           };
           checkpointRequested = true;
           checkpointInput = input.document;
@@ -117,6 +123,29 @@ function roomFixture() {
             input.checkpointReason
           );
           document = stored;
+          if (ackFault) {
+            await page.evaluate(
+              ({ saved, clientId }) => {
+                const socket = (
+                  window as unknown as {
+                    __checkpointRoundtripSocket: WebSocket;
+                  }
+                ).__checkpointRoundtripSocket;
+                socket.dispatchEvent(
+                  new MessageEvent('message', {
+                    data: JSON.stringify({
+                      type: 'document',
+                      document: saved,
+                      clientId
+                    })
+                  })
+                );
+              },
+              { saved: stored, clientId: input.clientId }
+            );
+            await ackGate;
+            if (ackFault === 'lost') return route.abort('failed');
+          }
           return route.fulfill({
             json: { type: 'ack', version: stored.version, document: stored }
           });
@@ -136,6 +165,14 @@ function roomFixture() {
         };
         const Original = window.WebSocket;
         window.WebSocket = class extends Original {
+          constructor(url: string | URL, protocols?: string | string[]) {
+            super(url, protocols);
+            (
+              window as unknown as {
+                __checkpointRoundtripSocket: WebSocket;
+              }
+            ).__checkpointRoundtripSocket = this;
+          }
           override send(raw: Parameters<WebSocket['send']>[0]) {
             if (typeof raw !== 'string') return;
             const frame = JSON.parse(raw) as {
@@ -347,3 +384,50 @@ test('a late member checkpoint leaves the newer share navigation and status unch
     releaseShare();
   }
 });
+
+for (const ackFault of ['lost', 'late'] as const) {
+  test(`an adopted member checkpoint keeps its server identity after a ${ackFault} HTTP acknowledgement`, async ({
+    page
+  }) => {
+    test.setTimeout(60_000);
+    const server = roomFixture(ackFault);
+    await server.install(page);
+    try {
+      await page.goto('/');
+      await page.getByLabel('Project name').fill(server.read().name);
+      await page.getByRole('button', { name: 'Create project' }).click();
+      await addPrimitive(page, /^Box \(B\)/);
+      await expectBodyCount(page, 1);
+      await expect(
+        page.getByRole('status', { name: 'Saved', exact: true })
+      ).toBeVisible();
+      await startNamedSave(page);
+      await expect.poll(server.requested).toBe(true);
+      server.release();
+      const named = page.locator('.revision-row', { hasText: 'Clicked box' });
+      await expect(named).toHaveCount(1);
+      await addPrimitive(page, /^Cylinder/);
+      await expectBodyCount(page, 2);
+      if (ackFault === 'lost') server.releaseAck();
+      await expect(page.getByRole('contentinfo')).toContainText(
+        'The named save is stored on this device.',
+        { timeout: ackFault === 'late' ? 20_000 : 10_000 }
+      );
+      await expect(named).toHaveCount(1);
+      await expect.poll(() => server.read().bodyOrder.length).toBe(2);
+      expect(server.read().checkpoints).toEqual(server.stored()!.checkpoints);
+      expect(server.read().revisions).toEqual(server.stored()!.revisions);
+      expect(server.stored()!.bodyOrder).toHaveLength(1);
+      expect(server.accountWrites()).toBe(0);
+      if (ackFault === 'late') {
+        server.releaseAck();
+        await page.waitForTimeout(250);
+        await expect(named).toHaveCount(1);
+        expect(server.read().checkpoints).toEqual(server.stored()!.checkpoints);
+      }
+    } finally {
+      server.release();
+      server.releaseAck();
+    }
+  });
+}
