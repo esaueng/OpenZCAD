@@ -416,7 +416,10 @@ for (const ackFault of ['lost', 'late'] as const) {
       await expect(named).toHaveCount(1);
       await expect.poll(() => server.read().bodyOrder.length).toBe(2);
       expect(server.read().checkpoints).toEqual(server.stored()!.checkpoints);
-      expect(server.read().revisions).toEqual(server.stored()!.revisions);
+      expect(server.read().revisions).toEqual([
+        ...server.stored()!.revisions,
+        expect.objectContaining({ reason: 'Add cylinder', commandCount: 2 })
+      ]);
       expect(server.stored()!.bodyOrder).toHaveLength(1);
       expect(server.accountWrites()).toBe(0);
       if (ackFault === 'late') {
