@@ -832,7 +832,12 @@ for (const [sendTiming, ackFault, sourceArchived] of [
             (projectId) =>
               new Promise<unknown[]>((resolve, reject) => {
                 const open = indexedDB.open('openzcad-v2');
-                open.onerror = () => reject(open.error);
+                open.onerror = () =>
+                  reject(
+                    new Error('Checkpoint database could not open.', {
+                      cause: open.error
+                    })
+                  );
                 open.onsuccess = () => {
                   const db = open.result;
                   const tx = db.transaction(
@@ -845,7 +850,16 @@ for (const [sendTiming, ackFault, sourceArchived] of [
                   tx.oncomplete = () => {
                     db.close();
                     resolve(
-                      request.result
+                      (
+                        request.result as Array<{
+                          projectId: string;
+                          reason: string;
+                          checkpointId: string;
+                          revisionId: string;
+                          documentVersion: number;
+                          document: ProjectDocument;
+                        }>
+                      )
                         .filter(
                           (row) =>
                             row.projectId === projectId &&
@@ -861,7 +875,9 @@ for (const [sendTiming, ackFault, sourceArchived] of [
                   };
                   tx.onerror = () => {
                     db.close();
-                    reject(tx.error);
+                    reject(
+                      new Error('Checkpoint read failed.', { cause: tx.error })
+                    );
                   };
                 };
               }),
