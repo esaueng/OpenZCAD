@@ -37,4 +37,22 @@ describe('loadRemusTranslators', () => {
     await expect(loadRemusTranslators()).resolves.toBe(io);
     expect(attempts).toBe(2);
   });
+
+  it('marks translator initialization failures without losing their cause', async () => {
+    const failure = new Error('Translator WASM fetch failed.');
+    vi.doMock('remus-wasm-io', () => ({
+      RemusIo: class {
+        constructor() {
+          throw failure;
+        }
+      }
+    }));
+    const { loadRemusTranslators } = await import('./remus-runtime');
+    await expect(loadRemusTranslators()).rejects.toMatchObject({
+      name: 'RemusTranslatorLoadError',
+      category: 'environment-load',
+      message: failure.message,
+      cause: failure
+    });
+  });
 });

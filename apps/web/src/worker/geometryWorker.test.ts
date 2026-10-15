@@ -3,6 +3,7 @@ import {
   addPrimitiveFeature,
   addSketchFeature,
   createProjectDocument,
+  importStepBody,
   listFeaturesInOrder,
   updateFeature
 } from '@openzcad/document-core';
@@ -634,6 +635,166 @@ describe('geometry worker rebuild coordination', () => {
     expect(syncDocument).toHaveBeenCalledOnce();
   });
 
+  describe('a live translator load failure', () => {
+    const workers: FakeWorkerScope[] = [];
+
+    async function translatorLive(
+      failures = 1,
+      parseError?: Error,
+      requestId?: string
+    ) {
+      let attempts = 0;
+      vi.doMock(
+        '../../../../packages/kernel-adapter/node_modules/remus-wasm-io',
+        () => ({
+          RemusIo: class {
+            constructor() {
+              attempts += 1;
+              if (attempts <= failures)
+                throw new Error('Translator WASM fetch failed.');
+            }
+          }
+        })
+      );
+      // Use the production lazy loader, including its rejected-promise reset,
+      // rather than giving the worker a synthetic transient build result.
+      const { loadRemusTranslators } =
+        await import('../../../../packages/kernel-adapter/src/remus-runtime');
+      const syncDocument = vi.fn(async (_document: ProjectDocument) => {
+        await loadRemusTranslators();
+        if (parseError) throw parseError;
+        return derived('imported');
+      });
+      const { scope } = await installWorker(syncDocument);
+      workers.push(scope);
+      const document = importStepBody(
+        createProjectDocument('Inline STEP recovery', toUserId('user')),
+        {
+          name: 'Imported solid',
+          artifactId: 'artifact_recovery',
+          sourceName: 'solid.step',
+          stepText: 'ISO-10303-21;END-ISO-10303-21;'
+        }
+      ).document;
+      post(scope, {
+        type: 'sync',
+        document,
+        ...(requestId ? { requestId } : {})
+      });
+      await vi.waitFor(() =>
+        expect(scope.postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'state', phase: 'failed' })
+        )
+      );
+      return {
+        scope,
+        syncDocument,
+        document,
+        attempts: () => attempts,
+        online: () => (scope as { ononline?: () => void }).ononline?.()
+      };
+    }
+
+    afterEach(() => {
+      for (const scope of workers.splice(0)) post(scope, { type: 'cancel' });
+      if (vi.isFakeTimers()) vi.clearAllTimers();
+      vi.useRealTimers();
+      vi.doUnmock(
+        '../../../../packages/kernel-adapter/node_modules/remus-wasm-io'
+      );
+    });
+
+    it('rebuilds the unchanged inline STEP document when connectivity recovers', async () => {
+      const live = await translatorLive();
+      expect(live.attempts()).toBe(1);
+      live.online();
+      await vi.waitFor(() =>
+        expect(live.scope.postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'state',
+            phase: 'ready',
+            stale: false
+          })
+        )
+      );
+      expect(live.attempts()).toBe(2);
+      expect(
+        live.syncDocument.mock.calls.map(([document]) => document)
+      ).toEqual([live.document, live.document]);
+    });
+
+    it('retries a failed translator load without requiring an online event', async () => {
+      vi.useFakeTimers();
+      const live = await translatorLive();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(live.attempts()).toBe(2);
+      expect(live.scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'state', phase: 'ready', stale: false })
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(live.syncDocument).toHaveBeenCalledTimes(2);
+    });
+
+    it('stops after the existing three timed translator retries', async () => {
+      vi.useFakeTimers();
+      const live = await translatorLive(Infinity);
+      for (const delay of [1_000, 5_000, 15_000])
+        await vi.advanceTimersByTimeAsync(delay);
+      expect(live.attempts()).toBe(4);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(live.attempts()).toBe(4);
+    });
+
+    it.each(['close', 'switch'] as const)(
+      'does not recover the failed old import after a project %s',
+      async (action) => {
+        vi.useFakeTimers();
+        const live = await translatorLive();
+        if (action === 'close') post(live.scope, { type: 'cancel' });
+        else {
+          post(live.scope, {
+            type: 'sync',
+            document: createProjectDocument(
+              'New empty workspace',
+              toUserId('user')
+            )
+          });
+          await vi.waitFor(() =>
+            expect(live.scope.postMessage).toHaveBeenCalledWith(
+              expect.objectContaining({
+                type: 'state',
+                phase: 'ready',
+                stale: false
+              })
+            )
+          );
+        }
+        live.online();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(live.attempts()).toBe(1);
+        expect(live.syncDocument).toHaveBeenCalledOnce();
+      }
+    );
+
+    it('leaves caller-owned failed imports under caller control', async () => {
+      vi.useFakeTimers();
+      const live = await translatorLive(1, undefined, 'explicit-import');
+      live.online();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(live.attempts()).toBe(1);
+      expect(live.syncDocument).toHaveBeenCalledOnce();
+    });
+
+    it('does not retry a permanent parse failure after the translators load', async () => {
+      vi.useFakeTimers();
+      const live = await translatorLive(0, new Error('Invalid STEP header.'));
+      live.online();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(live.attempts()).toBe(1);
+      expect(live.syncDocument).toHaveBeenCalledOnce();
+    });
+  });
+
   it('publishes only the newest broadcast when a rebuild is superseded', async () => {
     const first = deferred<ProjectDocument['derived']>();
     const syncDocument = vi
@@ -762,8 +923,7 @@ describe('geometry worker rebuild coordination', () => {
       await vi.advanceTimersByTimeAsync(1_000);
       expect(liveWarnings(live.scope)).toEqual([['waiting'], ['built']]);
       const projections = live.scope.postMessage.mock.calls.flatMap(
-        ([message]) =>
-          message.type === 'projection-delta' ? [message] : []
+        ([message]) => (message.type === 'projection-delta' ? [message] : [])
       );
       expect(projections[0]).toMatchObject({ transient: true });
       expect(projections[1]).not.toHaveProperty('transient');
