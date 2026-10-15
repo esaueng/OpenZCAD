@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,7 @@ import {
   type BodyRepresentation,
   type FeatureNode,
   type FeatureId,
+  type ParameterNode,
   type ProjectCheckpoint
 } from '@openzcad/shared';
 import { defaultPanelState } from '../lib/panelState';
@@ -265,5 +266,48 @@ describe('Sidebar', () => {
       }),
       older.toLocaleDateString()
     ]);
+  });
+
+  it('clears a parameter refusal once another parameter change goes through', async () => {
+    const user = userEvent.setup();
+    const parameter = (name: string, expression: string) =>
+      ({
+        id: `node_${name}`,
+        kind: 'parameter',
+        parameterId: `parameter_${name}`,
+        name,
+        expression,
+        value: Number(expression)
+      }) as unknown as ParameterNode;
+    const panelState = defaultPanelState();
+    panelState.sidebarSections.parameters = true;
+    const onSetParameter = vi.fn(async (name: string) =>
+      name === 'w' ? 'Changing w would break Fillet 1.' : null
+    );
+    const { rerender, props } = renderSidebar({
+      panelState,
+      parameters: [parameter('w', '60'), parameter('h', '20')],
+      parameterValues: { w: 60, h: 20 },
+      onSetParameter
+    });
+    const width = screen.getByLabelText('Expression for w');
+    await user.clear(width);
+    await user.type(width, '70{Enter}');
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Changing w would break Fillet 1. No change applied.'
+      )
+    );
+    const height = screen.getByLabelText('Expression for h');
+    await user.clear(height);
+    await user.type(height, '24{Enter}');
+    rerender(
+      <Sidebar
+        {...props}
+        parameters={[parameter('w', '60'), parameter('h', '24')]}
+        parameterValues={{ w: 60, h: 24 }}
+      />
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
