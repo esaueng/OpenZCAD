@@ -275,6 +275,10 @@ import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient
 import { shaprMigrationDraft } from './lib/shaprMigration';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
 import {
+  CheckpointSaveError,
+  failedCheckpointSaveState
+} from './lib/collaborationCheckpointFallback';
+import {
   cancelDesktopSignIn,
   isDesktopApp,
   listenForDesktopMenu,
@@ -2501,6 +2505,10 @@ export function App() {
     geometry: GeometryReadyState;
   } | null>(null);
   const [saveState, setSaveState] = useState<WorkspaceSaveState>('saving');
+  const checkpointRoomRef = useRef<{
+    document: ProjectDocument;
+    isCurrent(): boolean;
+  } | null>(null);
   const saveStateRef = useRef(saveState);
   saveStateRef.current = saveState;
   const desktopMenuHandlerRef = useRef<(command: DesktopMenuCommand) => void>(
@@ -5252,7 +5260,11 @@ export function App() {
   );
   const presentedSaveState = presentedWorkspaceSaveState(
     localSaveDirty ? (localSaveFailed ? 'device-failed' : 'saving') : saveState,
-    localOnlySources.length
+    localOnlySources.length,
+    checkpointRoomRef.current?.isCurrent()
+      ? checkpointRoomRef.current.document
+      : null,
+    doc
   );
   const parameterScope = useMemo(
     () => (doc ? getParameterScope(doc) : { scope: {}, errors: [] }),
@@ -10309,6 +10321,7 @@ export function App() {
             }
           );
           if (isCurrent()) {
+            checkpointRoomRef.current = { document: saved, isCurrent };
             setSaveState(
               savingManager.document.version === saved.version
                 ? 'synced'
@@ -10318,7 +10331,19 @@ export function App() {
           }
         } catch (error) {
           if (isCurrent()) {
-            setSaveState('local');
+            if (error instanceof CheckpointSaveError && error.roomDocument)
+              checkpointRoomRef.current = {
+                document: error.roomDocument,
+                isCurrent
+              };
+            setSaveState((current) =>
+              failedCheckpointSaveState(
+                error,
+                current,
+                localAutosave.dirty,
+                savingManager.document
+              )
+            );
             setStatus(
               errorMessage(error, 'The named save could not be confirmed.')
             );

@@ -1292,6 +1292,10 @@ describe('durable room checkpoints', () => {
     const rejected = expect(saving).rejects.toThrow(
       'The revision is stored in the room. The named save could not be stored on this device.'
     );
+    const typedFailure = expect(saving).rejects.toMatchObject({
+      roomStored: true,
+      deviceStored: false
+    });
     await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     hook.edit(later);
     const saved = checkpoint(document);
@@ -1306,6 +1310,7 @@ describe('durable room checkpoints', () => {
         )
       );
       await rejected;
+      await typedFailure;
     });
     expect(hook.result.current.roomVersion).toBe(saved.version);
     expect(hook.read().nodes).toEqual(later.nodes);
