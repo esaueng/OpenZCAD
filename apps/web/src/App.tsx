@@ -10312,6 +10312,22 @@ export function App() {
         );
         return;
       }
+      if (sharedAccountProject) {
+        // The room publishes changed document versions, while the owner's
+        // account checkpoint endpoint deliberately refuses member writes.
+        // Commit the save point before yielding so later edits descend from it.
+        savingDocument = createCheckpoint(
+          appendRevision(savingDocument, reason),
+          reason
+        );
+        showAccountEcho(savingDocument);
+        await saveLocalProject(savingDocument);
+        if (isCurrentProject())
+          setStatus(
+            'Saved revision on this device · sharing through the room.'
+          );
+        return;
+      }
       if (
         cloudFunctionsEnabled &&
         session &&

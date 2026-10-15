@@ -1181,6 +1181,147 @@ test('saves incoming member updates through the room without refused account wri
   expect(accountWrites).toBe(0);
 });
 
+test('publishes editor checkpoints through the room without an account revision request', async ({
+  page
+}) => {
+  const document = createProjectDocument(
+    'Editor checkpoint',
+    toUserId('other_owner')
+  );
+  const summary = {
+    projectId: document.projectId,
+    name: document.name,
+    revisionCount: 1,
+    documentVersion: document.version,
+    updatedAt: document.derived.updatedAt
+  };
+  await stubApi(page, { collaborationRole: 'editor' });
+  await page.route('**/api/projects', (route) =>
+    route.fulfill({
+      json:
+        route.request().method() === 'POST'
+          ? { project: summary, document }
+          : { projects: [summary] }
+    })
+  );
+  let accountWrites = 0;
+  await page.route(
+    `**/api/projects/${document.projectId}/document`,
+    (route) => {
+      accountWrites++;
+      return route.fulfill({ status: 404, json: { error: 'Room required' } });
+    }
+  );
+  await page.route(
+    `**/api/projects/${document.projectId}/revisions`,
+    (route) => {
+      if (route.request().method() === 'POST') accountWrites++;
+      return route.fulfill({ json: { revisions: [] } });
+    }
+  );
+  await page.addInitScript(() => {
+    const browser = window as unknown as {
+      __checkpointSocket: WebSocket;
+      __checkpointDocuments: unknown[];
+    };
+    browser.__checkpointDocuments = [];
+    const Original = window.WebSocket;
+    window.WebSocket = class extends Original {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        browser.__checkpointSocket = this;
+      }
+      send(raw: string | ArrayBufferLike | Blob | ArrayBufferView) {
+        super.send(raw);
+        if (typeof raw !== 'string') return;
+        const message = JSON.parse(raw);
+        if (message.type !== 'document') return;
+        browser.__checkpointDocuments.push(message.document);
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            new MessageEvent('message', {
+              data: JSON.stringify({
+                type: 'ack',
+                version: message.document.version
+              })
+            })
+          )
+        );
+      }
+    };
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(document.name);
+  await page
+    .getByRole('button', { name: 'Create project', exact: true })
+    .click();
+  await expect(page.locator('.breadcrumb')).toContainText(document.name);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Boolean(
+          (window as unknown as { __checkpointSocket?: WebSocket })
+            .__checkpointSocket
+        )
+      )
+    )
+    .toBe(true);
+  await page.evaluate((document) => {
+    const socket = (window as unknown as { __checkpointSocket: WebSocket })
+      .__checkpointSocket;
+    for (const frame of [
+      { type: 'state', members: [], document, role: 'editor' },
+      {
+        type: 'lease-granted',
+        lease: {
+          projectId: document.projectId,
+          leaseId: 'checkpoint_lease',
+          expiresAt: Date.now() + 600000
+        }
+      }
+    ])
+      socket.dispatchEvent(
+        new MessageEvent('message', { data: JSON.stringify(frame) })
+      );
+  }, document);
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled();
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (
+          window as unknown as {
+            __checkpointDocuments: { checkpoints: { reason: string }[] }[];
+          }
+        ).__checkpointDocuments.some(
+          (d) => d.checkpoints.at(-1)?.reason === 'Manual save'
+        )
+      )
+    )
+    .toBe(true);
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible();
+  expect(accountWrites).toBe(0);
+  const sent = await page.evaluate(() =>
+    (
+      window as unknown as {
+        __checkpointDocuments: {
+          version: number;
+          checkpoints: { reason: string; documentVersion: number }[];
+        }[];
+      }
+    ).__checkpointDocuments.at(-1)!
+  );
+  expect(sent.version).toBeGreaterThan(document.version);
+  expect(sent.checkpoints.at(-1)?.documentVersion).toBe(sent.version);
+  await page.reload();
+  await expect(
+    page.locator('.revision-row', { hasText: 'Manual save' })
+  ).toBeVisible();
+  expect(accountWrites).toBe(0);
+});
+
 test('focuses signed-out invitation links on email sign-in and resumes them', async ({
   page
 }) => {
