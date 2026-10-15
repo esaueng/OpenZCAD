@@ -395,6 +395,29 @@ for (const roomStored of [true, false]) {
         'aria-label',
         roomStored ? 'Room only' : 'Save unconfirmed'
       );
+      if (roomStored) {
+        // A failed retry does not invalidate proof for the unchanged live head.
+        await page.route(
+          `**/api/projects/${server.read().projectId}/collaboration`,
+          (route) =>
+            route.fulfill({
+              status: 503,
+              json: { error: 'The checkpoint retry is unavailable.' }
+            })
+        );
+        await startNamedSave(page);
+        await expect(page.getByRole('contentinfo')).toContainText(
+          'The checkpoint retry is unavailable.'
+        );
+        await expect(page.locator('.save-state')).toHaveAttribute(
+          'aria-label',
+          'Room only'
+        );
+        await expect(page.locator('.save-state')).not.toHaveAttribute(
+          'title',
+          /exists only in this tab/
+        );
+      }
       await expectBodyCount(page, 1);
       expect(server.accountWrites()).toBe(0);
     } finally {
