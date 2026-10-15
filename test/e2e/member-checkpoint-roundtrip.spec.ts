@@ -41,10 +41,12 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
     }).document;
   let stored: ProjectDocument | null = null;
   let checkpointRequested = false;
+  let checkpointBroadcasted = false;
   let checkpointInput: ProjectDocument | null = null;
   let accountWrites = 0;
   let revisionReads = 0;
   let lastWriteBase: number | null = null;
+  let lastWriteLease: string | null = null;
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -74,10 +76,12 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
     read: () => document,
     stored: () => stored,
     requested: () => checkpointRequested,
+    broadcasted: () => checkpointBroadcasted,
     input: () => checkpointInput,
     accountWrites: () => accountWrites,
     revisionReads: () => revisionReads,
     lastWriteBase: () => lastWriteBase,
+    lastWriteLease: () => lastWriteLease,
     async install(page: Page) {
       await stubApi(page, { collaborationRole: 'editor' });
       await page.route('**/api/projects', (route) =>
@@ -185,6 +189,7 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
               },
               { saved: stored, clientId: input.clientId }
             );
+            checkpointBroadcasted = true;
             await ackGate;
             if (ackFault === 'lost') return route.abort('failed');
           }
@@ -195,8 +200,13 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
       );
       await page.exposeFunction(
         '__recordCheckpointRoomDocument',
-        async (next: ProjectDocument, baseVersion: number | null) => {
+        async (
+          next: ProjectDocument,
+          baseVersion: number | null,
+          leaseId: string | null
+        ) => {
           lastWriteBase = baseVersion;
+          lastWriteLease = leaseId;
           if (copiedImport && JSON.stringify(next).includes(localSourceId)) {
             sourceWritePending = true;
             await sourceWriteGate;
@@ -211,9 +221,12 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
         const browser = window as unknown as {
           __recordCheckpointRoomDocument(
             document: ProjectDocument,
-            baseVersion: number | null
+            baseVersion: number | null,
+            leaseId: string | null
           ): Promise<ProjectDocument | null>;
         };
+        let leaseNumber = 0;
+        let leaseId = 'browser_checkpoint_lease';
         const Original = window.WebSocket;
         window.WebSocket = class extends Original {
           constructor(url: string | URL, protocols?: string | string[]) {
@@ -230,6 +243,7 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
               type: string;
               clientId: string;
               baseVersion?: number | null;
+              leaseId?: string;
               document?: ProjectDocument;
             };
             if (frame.type === 'hello') {
@@ -250,6 +264,13 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
               frame.type === 'lease-acquire' ||
               frame.type === 'lease-renew'
             ) {
+              if (frame.type === 'lease-acquire') {
+                leaseNumber++;
+                leaseId =
+                  leaseNumber === 1
+                    ? 'browser_checkpoint_lease'
+                    : `browser_checkpoint_lease_${leaseNumber}`;
+              }
               queueMicrotask(() =>
                 this.dispatchEvent(
                   new MessageEvent('message', {
@@ -257,7 +278,7 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
                       type: 'lease-granted',
                       lease: {
                         projectId: initial.projectId,
-                        leaseId: 'browser_checkpoint_lease',
+                        leaseId,
                         clientId: frame.clientId,
                         userId: 'user_e2e',
                         expiresAt: Date.now() + 120_000
@@ -271,7 +292,8 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
               void browser
                 .__recordCheckpointRoomDocument(
                   submitted,
-                  frame.baseVersion ?? null
+                  frame.baseVersion ?? null,
+                  frame.leaseId ?? null
                 )
                 .then((canonical) =>
                   this.dispatchEvent(
@@ -515,6 +537,64 @@ for (const timing of ['after adoption', 'before broadcast'] as const) {
     });
   }
 }
+
+test('a committed member checkpoint fences buffered edits after a new lease replaces the lost lease', async ({
+  page
+}) => {
+  test.setTimeout(60_000);
+  const server = roomFixture('late');
+  await server.install(page);
+  try {
+    await page.goto('/');
+    await page.getByLabel('Project name').fill(server.read().name);
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await addPrimitive(page, /^Box \(B\)/);
+    await expectBodyCount(page, 1);
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible();
+    await startNamedSave(page);
+    await expect.poll(server.requested).toBe(true);
+    await addPrimitive(page, /^Cylinder/);
+    await expectBodyCount(page, 2);
+    expect(server.input()?.bodyOrder).toHaveLength(1);
+    server.release();
+    await expect.poll(server.broadcasted).toBe(true);
+    await page.evaluate(() => {
+      (
+        window as unknown as { __checkpointRoundtripSocket: WebSocket }
+      ).__checkpointRoundtripSocket.dispatchEvent(
+        new MessageEvent('message', {
+          data: JSON.stringify({ type: 'lease-lost', reason: 'expired' })
+        })
+      );
+    });
+    await expect.poll(server.lastWriteLease).toBe('browser_checkpoint_lease_2');
+    expect(server.lastWriteBase()).toBe(server.stored()!.version);
+    expect(server.read().version).toBeGreaterThan(server.stored()!.version);
+    await expect
+      .poll(() => server.read().checkpoints)
+      .toEqual(server.stored()!.checkpoints);
+    await expect
+      .poll(() => server.read().revisions)
+      .toEqual([
+        ...server.stored()!.revisions,
+        expect.objectContaining({ reason: 'Add cylinder', commandCount: 2 })
+      ]);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'The revision is stored in the room.'
+    );
+    await expectBodyCount(page, 2);
+    await page.keyboard.press('ControlOrMeta+z');
+    await expectBodyCount(page, 1);
+    await page.keyboard.press('ControlOrMeta+Shift+z');
+    await expectBodyCount(page, 2);
+    expect(server.accountWrites()).toBe(0);
+  } finally {
+    server.release();
+    server.releaseAck();
+  }
+});
 
 for (const ackFault of [undefined, 'lost'] as const) {
   test(`a member checkpoint accepts the drained copied-source rewrite with a ${ackFault ?? 'confirmed'} HTTP acknowledgement`, async ({
