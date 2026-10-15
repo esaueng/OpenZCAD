@@ -220,6 +220,7 @@ export async function archiveImportedMesh(deps: {
     signal?: AbortSignal;
     onCleanupFailure?(error: unknown): void;
   }): Promise<string>;
+  discard(artifactId: string): Promise<{ deleted: boolean }>;
   /** Defaults to `crypto.randomUUID`. */
   newId?(): string;
   signal?: AbortSignal;
@@ -243,23 +244,36 @@ export async function archiveImportedMesh(deps: {
       return null;
     }
   };
-  // Archive the user-visible original first. Cancelling that transfer must
-  // not leave a finalized, hidden payload occupying the account's quota
-  // when the import is about to discard its only local reference.
-  const originalArtifactId = await attempt({
-    ...deps.original,
-    metadata: { source: 'direct-upload' }
-  });
+  // Reserve quota for the referenced bytes before storing the optional
+  // original. If cancellation follows finalization, withdraw the hidden
+  // payload here: the caller has not received its id to clean up yet.
   let payloadArtifactId: string | null = null;
-  if (deps.hold.bytes) {
-    const archive = meshPayloadArchive(deps.sourceName);
-    payloadArtifactId = await attempt({
-      ...archive,
-      body: new Blob([deps.hold.bytes], { type: archive.contentType }),
+  let originalArtifactId: string | null;
+  try {
+    if (deps.hold.bytes) {
+      const archive = meshPayloadArchive(deps.sourceName);
+      payloadArtifactId = await attempt({
+        ...archive,
+        body: new Blob([deps.hold.bytes], { type: archive.contentType }),
+        metadata: { source: 'direct-upload' }
+      });
+    }
+    originalArtifactId = await attempt({
+      ...deps.original,
       metadata: { source: 'direct-upload' }
     });
+    signal?.throwIfAborted();
+  } catch (error) {
+    if (payloadArtifactId) {
+      const failure = await cleanupUncommittedMeshArchive(
+        { artifactId: payloadArtifactId, payloadArchived: true },
+        false,
+        deps.discard
+      );
+      if (failure) deps.onCleanupFailure?.(failure);
+    }
+    throw error;
   }
-  signal?.throwIfAborted();
   const localArtifactId = `artifact_local_${(deps.newId ?? (() => crypto.randomUUID()))()}`;
   const payloadArchived = deps.hold.bytes ? payloadArtifactId !== null : null;
   const originalArchived = originalArtifactId !== null;
@@ -281,7 +295,7 @@ export async function archiveImportedMesh(deps: {
 
 /** Dispose only the hidden payload created by an import that did not commit. */
 export async function cleanupUncommittedMeshArchive(
-  archive: ImportedMeshArchive | null,
+  archive: Pick<ImportedMeshArchive, 'artifactId' | 'payloadArchived'> | null,
   committed: boolean,
   discard: (artifactId: string) => Promise<{ deleted: boolean }>
 ): Promise<Error | null> {

@@ -10593,6 +10593,8 @@ export function App() {
           let meshArchive: Awaited<
             ReturnType<typeof meshImport.archiveImportedMesh>
           > | null = null;
+          const discardMeshPayload = (artifactId: string) =>
+            api.discardMeshPayload(doc.projectId, artifactId);
           try {
             outcome = await validatedFeature.run(
               meshImport.importedMeshCommand(
@@ -10643,6 +10645,7 @@ export function App() {
                         body: file
                       },
                       archive: archiveArtifact,
+                      discard: discardMeshPayload,
                       signal: abort.signal,
                       onCleanupFailure: (error) => {
                         meshCleanupFailure = error;
@@ -10669,8 +10672,7 @@ export function App() {
               (await meshImport.cleanupUncommittedMeshArchive(
                 meshArchive,
                 outcome === 'committed',
-                (artifactId) =>
-                  api.discardMeshPayload(doc.projectId, artifactId)
+                discardMeshPayload
               )) ?? meshCleanupFailure;
             // Kept for a commit, removed for a refusal or a cancel — and
             // never left behind by a run that threw on the way.
@@ -10827,6 +10829,8 @@ export function App() {
       ReturnType<typeof meshImport.archiveImportedMesh>
     > | null = null;
     let meshCleanupFailure: unknown = null;
+    const discardMeshPayload = (artifactId: string) =>
+      api.discardMeshPayload(doc.projectId, artifactId);
     try {
       // Best-effort: a storage failure must not block the import.
       const archived = (meshArchive = await meshImport.archiveImportedMesh({
@@ -10839,6 +10843,7 @@ export function App() {
           body: file
         },
         archive: archiveArtifact,
+        discard: discardMeshPayload,
         onCleanupFailure: (error) => {
           meshCleanupFailure = error;
         }
@@ -10875,7 +10880,7 @@ export function App() {
         (await meshImport.cleanupUncommittedMeshArchive(
           meshArchive,
           created,
-          (artifactId) => api.discardMeshPayload(doc.projectId, artifactId)
+          discardMeshPayload
         )) ?? meshCleanupFailure;
       await hold.settle(
         created ? 'committed' : 'refused',
