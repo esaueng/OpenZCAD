@@ -1223,3 +1223,71 @@ it('does not store a checkpoint referencing a payload discarded during its R2 up
     fixture.db.close();
   }
 });
+
+for (const mode of ['inline', 'R2'] as const) {
+  it.each(['socket send', 'membership read'] as const)(
+    `acknowledges a committed ${mode} checkpoint after %s fails during broadcast`,
+    async (failure) => {
+      const fixture = await setup(mode === 'R2' ? objectBucket() : undefined);
+      let triggered = false;
+      try {
+        const reason = 'Committed before broadcast';
+        if (failure === 'socket send') {
+          vi.spyOn(fixture.socket, 'send').mockImplementationOnce(() => {
+            triggered = true;
+            throw new Error('Socket delivery failed');
+          });
+        } else {
+          fixture.setStatementHook((sql) => {
+            const latest = fixture.storage.values.get(
+              'room:latest'
+            ) as ProjectDocument;
+            if (
+              !triggered &&
+              latest.checkpoints.at(-1)?.reason === reason &&
+              sql.includes('project_members')
+            ) {
+              triggered = true;
+              throw new Error('Membership lookup failed');
+            }
+          });
+        }
+        let response: Response | undefined;
+        let failureValue: unknown;
+        try {
+          response = await fixture.post({ checkpointReason: reason });
+        } catch (error) {
+          failureValue = error;
+        }
+        const saved = fixture.storage.values.get(
+          'room:latest'
+        ) as ProjectDocument;
+        expect(saved.checkpoints.at(-1)?.reason).toBe(reason);
+        expect(
+          fixture.db
+            .prepare(
+              'SELECT COUNT(*) AS count FROM revisions WHERE project_id = ?'
+            )
+            .get(saved.projectId)
+        ).toMatchObject({ count: 1 });
+        expect(triggered).toBe(true);
+        expect(failureValue).toBeUndefined();
+        expect(response?.status).toBe(200);
+        expect(await response!.json()).toMatchObject({
+          type: 'ack',
+          version: saved.version,
+          document: saved
+        });
+        expect(
+          await fixture.service.loadRevision(
+            fixture.editor,
+            saved.projectId,
+            saved.checkpoints.at(-1)!.revisionId
+          )
+        ).toEqual(saved);
+      } finally {
+        fixture.db.close();
+      }
+    }
+  );
+}
