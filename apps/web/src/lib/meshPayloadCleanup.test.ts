@@ -122,7 +122,8 @@ function importArchive(transport: ArchiveArtifactTransport) {
       kind: 'stl-import',
       body: new Blob(['solid scan'])
     },
-    archive: (input) => archiveArtifact(transport, PROJECT, input)
+    archive: (input) => archiveArtifact(transport, PROJECT, input),
+    discard: (artifactId) => transport.discardMeshPayload!(PROJECT, artifactId)
   });
 }
 
@@ -172,7 +173,7 @@ describe('a finalized mesh payload whose import cannot commit', () => {
       vi
         .mocked(transport.finalizeArtifact)
         .mock.calls.map(([input]) => input.artifactId)
-    ).toEqual([ORIGINAL_ID, PAYLOAD_ID]);
+    ).toEqual([PAYLOAD_ID, ORIGINAL_ID]);
     const decision = deferred<boolean>();
     const cleanup = decision.promise.then((committed) =>
       cleanupUncommittedMeshArchive(archived, committed, (artifactId) =>
