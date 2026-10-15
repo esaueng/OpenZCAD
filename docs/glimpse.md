@@ -4,6 +4,8 @@ OpenZCAD uses its own `GLIMPSE` service binding and fixed app entrypoint in [Gli
 
 ## Collection and controls
 
+Optional usage collection is browser-only. The packaged desktop app displays an explanation instead of a consent control and sends no optional usage requests. Turning off the browser's **Cloud features** switch also suppresses new sends and aborts in-flight requests without changing the saved consent choice.
+
 Basic statistics count backend API requests, HTTP 5xx failures and response time buckets. They exclude health probes, static assets and the optional-analytics relay. No browser Basic ping is added. Since exports and solves run locally, those appear only under Optional analytics; backend API totals are not visitor counts.
 
 Optional analytics default off. Consent is an explicit checkbox at **Settings → Privacy & data → Optional usage analytics**. The choice is per browser and app origin, never synced to an account or across apps. The new versioned `granted-v1` preference is not a visitor identifier. Older default-on analytics choices do not grant Glimpse consent. Withdrawal stops future sends immediately, aborts pending requests, and follows cross-tab storage changes. DNT/GPC suppress collection. Already received anonymous aggregates cannot be attributed or removed; no per-person history exists. If browser storage blocks withdrawal, the current page stops collection and explains how to clear the older saved grant.

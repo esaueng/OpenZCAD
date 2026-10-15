@@ -21,6 +21,7 @@ beforeEach(async () => {
     })
   );
   vi.stubGlobal('navigator', { doNotTrack: '0' });
+  vi.stubGlobal('localStorage', window.localStorage);
   send = vi
     .fn<typeof fetch>()
     .mockResolvedValue(new Response(null, { status: 204 }));
@@ -32,6 +33,29 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe('Glimpse explicit consent', () => {
+  it('does not send from the packaged desktop origin even with a saved grant', () => {
+    analytics.setAnalyticsEnabled(true);
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {} });
+    expect(analytics.hasAnalyticsConsent()).toBe(true);
+    expect(analytics.isAnalyticsEnabled()).toBe(false);
+    analytics.trackUsage('workspace_opened');
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('honors the cloud-off switch and cancels in-flight sends without revoking consent', async () => {
+    const { setCloudFunctionsEnabled } = await import('./cloudMode');
+    send.mockImplementation(() => new Promise<Response>(() => undefined));
+    analytics.setAnalyticsEnabled(true);
+    analytics.trackUsage('workspace_opened');
+    const signal = send.mock.calls[0]![1]!.signal!;
+    setCloudFunctionsEnabled(false);
+    expect(signal.aborted).toBe(true);
+    expect(analytics.hasAnalyticsConsent()).toBe(true);
+    analytics.trackUsage('feature_used');
+    expect(send).toHaveBeenCalledOnce();
+    setCloudFunctionsEnabled(true);
+    analytics.trackUsage('feature_used');
+    expect(send).toHaveBeenCalledTimes(2);
+  });
   it.each([{ doNotTrack: '1' }, { globalPrivacyControl: true }])(
     'keeps the stored grant revocable while privacy signals suppress sending: %j',
     (privacySignal) => {
