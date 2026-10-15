@@ -38,6 +38,7 @@ import {
 import {
   abortableCheckpoint,
   startCheckpointDeadline,
+  collaborationClientId as clientId,
   collaborationDocument,
   parseServerMessage,
   rejectionStatus
@@ -91,16 +92,6 @@ export interface CollaborationClientState {
 
 const MAX_MESSAGE_BYTES = 900_000;
 const ROOM_CHANGED_MESSAGE = 'The room changed.';
-function clientId(): string {
-  const key = 'openzcad-collaboration-client';
-  const existing = sessionStorage.getItem(key);
-  if (existing) {
-    return existing;
-  }
-  const created = crypto.randomUUID();
-  sessionStorage.setItem(key, created);
-  return created;
-}
 
 export function useCollaboration({
   enabled,

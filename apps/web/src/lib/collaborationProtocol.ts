@@ -32,6 +32,17 @@ export function startCheckpointDeadline(controller: AbortController): number {
   );
 }
 
+export function collaborationClientId(): string {
+  const key = 'openzcad-collaboration-client';
+  const existing = sessionStorage.getItem(key);
+  if (existing) {
+    return existing;
+  }
+  const created = crypto.randomUUID();
+  sessionStorage.setItem(key, created);
+  return created;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
