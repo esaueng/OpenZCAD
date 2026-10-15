@@ -6,7 +6,11 @@ import {
   createProjectDocument,
   createSavedRevision
 } from '@openzcad/document-core';
-import { toProjectId, toUserId } from '@openzcad/shared';
+import {
+  MAX_LOCAL_CHECKPOINT_DOCUMENTS,
+  toProjectId,
+  toUserId
+} from '@openzcad/shared';
 import { LocalProjectAutosave } from './localProjectAutosave';
 import * as localStore from './localProjectStore';
 import * as fallback from './collaborationCheckpointFallback';
@@ -14,9 +18,71 @@ import * as fallback from './collaborationCheckpointFallback';
 beforeEach(() => {
   globalThis.indexedDB = new IDBFactory();
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe('named-save failure durability', () => {
+  it.each([false, true])(
+    'retains the latest failed name across equal model versions (timestamp ties %s)',
+    async (sameTimestamp) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const start = Date.UTC(2026, 9, 15);
+      vi.setSystemTime(start);
+      let nextId = 9999;
+      vi.spyOn(crypto, 'randomUUID').mockImplementation(
+        () => `00000000-0000-4000-8000-${String(nextId--).padStart(12, '0')}`
+      );
+      const clicked = createProjectDocument(
+        'Unchanged model',
+        toUserId('owner')
+      );
+      const names: string[] = [];
+      for (let index = 0; index < MAX_LOCAL_CHECKPOINT_DOCUMENTS + 4; index++) {
+        if (!sameTimestamp) vi.setSystemTime(start + index);
+        const reason = `Device save ${index}`;
+        names.push(reason);
+        const error = await fallback
+          .preserveFailedCheckpoint(
+            new Error('Offline'),
+            clicked,
+            reason,
+            {
+              isCurrent: () => true,
+              readDocument: () => clicked,
+              applyDocument: vi.fn()
+            },
+            () => true
+          )
+          .catch((error: unknown) => error);
+        expect(error).toHaveProperty('deviceStored', true);
+        const points = await localStore.listLocalSaveStateCheckpoints(
+          clicked.projectId
+        );
+        const newest = points.find((point) => point.reason === reason);
+        expect(newest).toBeDefined();
+        expect(
+          await localStore.loadLocalSaveState(
+            clicked.projectId,
+            newest!.checkpointId
+          )
+        ).not.toBeNull();
+        expect(points.length).toBeLessThanOrEqual(
+          MAX_LOCAL_CHECKPOINT_DOCUMENTS
+        );
+      }
+      if (!sameTimestamp) {
+        const retained = await localStore.listLocalSaveStateCheckpoints(
+          clicked.projectId
+        );
+        expect(new Set(retained.map((point) => point.reason))).toEqual(
+          new Set(names.slice(-MAX_LOCAL_CHECKPOINT_DOCUMENTS))
+        );
+      }
+    }
+  );
+
   it.each([
     [false, false],
     [false, true],
