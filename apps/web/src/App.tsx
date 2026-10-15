@@ -1,6 +1,7 @@
 import type {
   GeometryBodyRepresentation,
-  GeometryReadyState
+  GeometryReadyState,
+  UserId
 } from '@openzcad/shared';
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
@@ -396,19 +397,23 @@ import type { GeometryWorkerState } from './worker/geometryWorker';
 
 /** The export dialog's progress stage for one geometry-worker state. */
 function exportProgressFor(state: GeometryWorkerState): ExportProgress | null {
-  switch (state.phase) {
-    case 'starting':
-      return 'preparing';
-    case 'loading-remus':
-      return 'loading-kernel';
-    case 'rebuilding':
-      return 'building';
-    default:
-      return null; // Terminal states arrive as the result or the error.
-  }
+  return state.phase === 'starting'
+    ? 'preparing'
+    : state.phase === 'loading-remus'
+      ? 'loading-kernel'
+      : state.phase === 'rebuilding'
+        ? 'building'
+        : null; // Terminal states arrive as the result or the error.
 }
 
 /** Per-format file identity for exports from the Export mesh dialog. */
+const STL_EXPORT_FILE_INFO = {
+  extension: 'stl',
+  contentType: 'model/stl',
+  label: 'STL',
+  kind: 'stl-export' as const,
+  binaryFormat: 'stl' as const
+};
 const MESH_EXPORT_FILE_INFO: Record<
   MeshExportDialogFormat,
   {
@@ -426,20 +431,8 @@ const MESH_EXPORT_FILE_INFO: Record<
     kind: '3mf-export',
     binaryFormat: '3mf'
   },
-  'stl-binary': {
-    extension: 'stl',
-    contentType: 'model/stl',
-    label: 'STL',
-    kind: 'stl-export',
-    binaryFormat: 'stl'
-  },
-  stl: {
-    extension: 'stl',
-    contentType: 'model/stl',
-    label: 'STL',
-    kind: 'stl-export',
-    binaryFormat: 'stl'
-  },
+  'stl-binary': STL_EXPORT_FILE_INFO,
+  stl: STL_EXPORT_FILE_INFO,
   obj: {
     extension: 'obj',
     contentType: 'model/obj',
@@ -8607,31 +8600,37 @@ export function App() {
   }
 
   async function handleCreateProject(name: string, units: UnitSystem) {
+    const isCurrent = beginProjectNavigation();
     const activeProjectSince = snapshotActiveProject();
     setAssistantCollapsed(true);
-    setBusy(true);
+    const finishBusy = startNavigationBusy();
+    async function createLocal(userId: UserId, message?: string) {
+      const localDocument = createProjectDocument(name, userId, units);
+      await saveLocalProject(localDocument);
+      if (!isCurrent()) return;
+      hydrateDocument(localDocument, { activeProjectSince });
+      setProjects((current) => [
+        summarizeLocalDocument(localDocument),
+        ...current
+      ]);
+      setCloudAvailable(false);
+      setStatus(message ?? `Created ${localDocument.name} locally.`);
+    }
     try {
       await flushPendingLocalSave();
     } catch {
       // This is a failed device save, not a cloud-create failure. Do not enter
       // the offline fallback and replace the unsaved project on screen.
-      setBusy(false);
+      finishBusy(isCurrent());
       return;
     }
     try {
+      if (!isCurrent()) return;
       if (!session) {
-        const localDocument = createProjectDocument(name, localUserId, units);
-        await saveLocalProject(localDocument);
-        hydrateDocument(localDocument, { activeProjectSince });
-        setProjects((current) => [
-          summarizeLocalDocument(localDocument),
-          ...current
-        ]);
-        setCloudAvailable(false);
         // The document effect's flush lands on 'local' once the device write
         // is done; forcing it here would show "Local only" for a frame and
         // then the spinner the effect reports anyway.
-        setStatus(`Created ${localDocument.name} locally.`);
+        await createLocal(localUserId);
         return;
       }
       const response = await api.createProject({ name, units });
@@ -8644,6 +8643,7 @@ export function App() {
         response.document.projectId,
         response.document.version
       );
+      if (!isCurrent()) return;
       setCloudAvailable(true);
       setCloudProjectIds((current) =>
         new Set(current).add(response.document.projectId)
@@ -8652,6 +8652,7 @@ export function App() {
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
     } catch (error) {
+      if (!isCurrent()) return;
       // A refused request is not an unreachable one. Falling back to local mode
       // on a validation failure would persist exactly the project the server
       // just rejected, so surface it and let the user correct the input.
@@ -8669,23 +8670,12 @@ export function App() {
         remoteVersionsRef.current.clear();
         endCloudSettingsSession();
       }
-      const localDocument = createProjectDocument(
-        name,
+      await createLocal(
         sessionExpired ? localUserId : (session?.userId ?? localUserId),
-        units
-      );
-      await saveLocalProject(localDocument);
-      hydrateDocument(localDocument, { activeProjectSince });
-      setProjects((current) => [
-        summarizeLocalDocument(localDocument),
-        ...current
-      ]);
-      setCloudAvailable(false);
-      setStatus(
         `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
       );
     } finally {
-      setBusy(false);
+      finishBusy(isCurrent());
     }
   }
 
@@ -9014,11 +9004,13 @@ export function App() {
    */
 
   async function handleOpenDemo(definition: DemoDefinition) {
+    const isCurrent = beginProjectNavigation();
     const activeProjectSince = snapshotActiveProject();
-    setBusy(true);
+    const finishBusy = startNavigationBusy();
     try {
       await flushPendingLocalSave();
       const existing = await loadLocalProject(definition.projectId);
+      if (!isCurrent()) return;
       if (existing) {
         hydrateDocument(existing, { activeProjectSince });
         setStatus(`Opened ${existing.name}.`);
@@ -9038,6 +9030,7 @@ export function App() {
       // Rev A and Rev B can be restored rather than listed as "not stored".
       await saveLocalSaveStates(saveStates);
       await saveLocalProject(document);
+      if (!isCurrent()) return;
       hydrateDocument(document, { activeProjectSince });
       setCloudAvailable(false);
       setProjects((current) => [
@@ -9048,9 +9041,10 @@ export function App() {
         `${definition.name} ready — three revisions in the feature history.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'Failed to build the demo.'));
+      if (isCurrent())
+        setStatus(errorMessage(error, 'Failed to build the demo.'));
     } finally {
-      setBusy(false);
+      finishBusy(isCurrent());
     }
   }
 
@@ -11547,9 +11541,10 @@ export function App() {
 
   async function handleImportProject(file: File) {
     if (projectTransferRef.current) return;
+    const isCurrent = beginProjectNavigation(shareSessionRef.current === null);
     projectTransferRef.current = true;
     setProjectTransferBusy(true);
-    setBusy(true);
+    const finishBusy = startNavigationBusy();
     const origin = managerRef.current;
     const activeProjectSince = snapshotActiveProject();
     const sink = createImportProgressSink();
@@ -11569,9 +11564,9 @@ export function App() {
       );
       sink.update({ phase: 'saving', fraction: null });
       await saveImportedProject(backup);
-      if (managerRef.current === origin) {
+      if (isCurrent() && managerRef.current === origin) {
         await flushPendingLocalSave();
-        if (managerRef.current === origin) {
+        if (isCurrent() && managerRef.current === origin) {
           setShareSession(null);
           shareSessionRef.current = null;
           clearProjectShareFragment();
@@ -11588,9 +11583,10 @@ export function App() {
           summarizeLocalDocument(backup.document, DEFAULT_PROJECT_ORGANIZATION)
         ].sort(compareProjectSummaries)
       );
-      setStatus(
-        `Imported ${backup.document.name} as a separate local project.`
-      );
+      if (isCurrent())
+        setStatus(
+          `Imported ${backup.document.name} as a separate local project.`
+        );
       sink.finish({
         tone: 'ok',
         message: `opened as ${backup.document.name}`,
@@ -11598,12 +11594,12 @@ export function App() {
       });
     } catch (error) {
       const message = errorMessage(error, 'Unable to read backup.');
-      setStatus(`Project import failed: ${message}`);
+      if (isCurrent()) setStatus(`Project import failed: ${message}`);
       sink.finish({ tone: 'error', message });
     } finally {
       projectTransferRef.current = false;
       setProjectTransferBusy(false);
-      setBusy(false);
+      finishBusy(isCurrent());
     }
   }
 
