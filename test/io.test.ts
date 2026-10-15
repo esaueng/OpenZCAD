@@ -408,6 +408,8 @@ describe('STL parsing', () => {
       const text =
         Array.from({ length: 100 }, () => `solid x ${facet}`).join(' ') +
         '\n' +
+        ' '.repeat(16_000) +
+        '\n' +
         Array.from({ length: 50 }, () => facet).join('\n') +
         '\nendsolid different';
       const original = RegExp.prototype.exec;
