@@ -55,59 +55,1275 @@ test('loads the OpenZCAD shell', async ({ page }) => {
   await expect(page.getByText('parametric cad in the browser')).toBeVisible();
 });
 
-test('accepts a signed-in project invitation link and scrubs the token', async ({
+for (const fromPublicShare of [false, true]) {
+  test(`accepts a signed-in invitation from ${fromPublicShare ? 'a public share' : 'Settings'} without reload`, async ({
+    page
+  }) => {
+    const document = createProjectDocument(
+      'Invited Link Part',
+      toUserId('user_invitation_owner')
+    );
+    let accepted = false;
+    await stubApi(page, {
+      collaborationRole: fromPublicShare ? 'editor' : 'viewer'
+    });
+    if (fromPublicShare) {
+      await page.route('**/api/collaboration/config', (route) =>
+        route.fulfill({
+          json: {
+            sharingEnabled: true,
+            editLeasesEnforced: false,
+            personalSyncEnabled: false,
+            canary: false
+          }
+        })
+      );
+    }
+    const publicDocument = createProjectDocument(
+      'Public snapshot',
+      toUserId('public_owner')
+    );
+    await page.route('**/api/share/*', (route) =>
+      route.fulfill({
+        json: {
+          document: publicDocument,
+          project: { name: publicDocument.name },
+          mode: 'tweak'
+        }
+      })
+    );
+    await page.route('**/api/project-invitations/accept', (route) => {
+      expect(route.request().postDataJSON()).toEqual({
+        token: invitationToken
+      });
+      accepted = true;
+      return route.fulfill({
+        json: {
+          projectId: document.projectId,
+          role: fromPublicShare ? 'editor' : 'viewer'
+        }
+      });
+    });
+    await page.route('**/api/projects', (route) =>
+      route.fulfill({
+        json: {
+          projects: accepted
+            ? [
+                {
+                  projectId: document.projectId,
+                  name: document.name,
+                  revisionCount: 0,
+                  documentVersion: document.version,
+                  updatedAt: document.derived.updatedAt
+                }
+              ]
+            : []
+        }
+      })
+    );
+    await page.route(`**/api/projects/${document.projectId}`, (route) =>
+      route.fulfill({ json: document })
+    );
+
+    await page.goto('/');
+    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    if (fromPublicShare) {
+      await page.evaluate(() => {
+        window.location.hash = `share=${'p'.repeat(43)}`;
+      });
+      await expect(
+        page.getByRole('button', { name: 'Make a copy', exact: true })
+      ).toBeVisible();
+    }
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await page.evaluate((token) => {
+      window.location.hash = `invite=${token}`;
+    }, invitationToken);
+
+    if (fromPublicShare) {
+      await expect(
+        page
+          .getByRole('group', { name: 'Workspace mode' })
+          .getByRole('button', { name: 'Build' })
+      ).toBeEnabled();
+      await expect(
+        page.getByRole('button', { name: 'Make a copy', exact: true })
+      ).toHaveCount(0);
+    } else {
+      await expect(
+        page.getByRole('button', { name: 'Rename project' })
+      ).toHaveCount(0);
+    }
+    await expect(page.locator('.breadcrumb')).toContainText(document.name);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      `Opened ${document.name}`
+    );
+    expect(await page.evaluate(() => window.location.hash)).toBe('');
+    expect(
+      await page.evaluate(
+        (key) => window.sessionStorage.getItem(key),
+        PROJECT_INVITATION_SESSION_KEY
+      )
+    ).toBeNull();
+    if (fromPublicShare) {
+      await page.getByTitle('Back to projects').click();
+      await expect(
+        page.locator('.start-tile-open', { hasText: publicDocument.name })
+      ).toHaveCount(0);
+      await expect(
+        page.locator('.start-tile-open', { hasText: document.name })
+      ).toBeVisible();
+    }
+  });
+}
+
+for (const stage of ['accept', 'document', 'public share'] as const) {
+  test(`ignores a superseded invitation after delayed ${stage}`, async ({
+    page
+  }) => {
+    await stubApi(page, { collaborationRole: 'viewer' });
+    const oldDocument = createProjectDocument(
+      'Old invitation',
+      toUserId('owner')
+    );
+    const latest = createProjectDocument(
+      'Latest destination',
+      toUserId('owner')
+    );
+    const newerToken = 'n'.repeat(43);
+    let releaseOld!: () => void;
+    let releaseNew!: () => void;
+    const oldGate = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const newGate = new Promise<void>((resolve) => {
+      releaseNew = resolve;
+    });
+    let oldRequested = false;
+    let newRequested = false;
+    await page.route('**/api/project-invitations/accept', async (route) => {
+      const payload = route.request().postDataJSON() as { token: string };
+      const old = payload.token === invitationToken;
+      if (old && stage === 'accept') {
+        oldRequested = true;
+        await oldGate;
+      }
+      if (!old) {
+        newRequested = true;
+        await newGate;
+      }
+      await route.fulfill({
+        json: {
+          projectId: (old ? oldDocument : latest).projectId,
+          role: 'viewer'
+        }
+      });
+    });
+    await page.route(
+      `**/api/projects/${oldDocument.projectId}`,
+      async (route) => {
+        if (stage !== 'accept') {
+          oldRequested = true;
+          await oldGate;
+        }
+        await route.fulfill({ json: oldDocument });
+      }
+    );
+    await page.route(`**/api/projects/${latest.projectId}`, (route) =>
+      route.fulfill({ json: latest })
+    );
+    await page.route('**/api/share/*', (route) =>
+      route.fulfill({
+        json: {
+          document: latest,
+          project: { name: latest.name },
+          mode: 'tweak'
+        }
+      })
+    );
+    await page.goto('/');
+    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await page.evaluate((token) => {
+      window.location.hash = `invite=${token}`;
+    }, invitationToken);
+    await expect.poll(() => oldRequested).toBe(true);
+    await page.evaluate(
+      ({ stage, token }) => {
+        window.location.hash = `${stage === 'public share' ? 'share' : 'invite'}=${token}`;
+      },
+      { stage, token: newerToken }
+    );
+    if (stage === 'public share') {
+      await expect(page.locator('.breadcrumb')).toContainText(latest.name);
+    } else {
+      await expect.poll(() => newRequested).toBe(true);
+    }
+    const oldResponse = page.waitForResponse((r) =>
+      stage === 'accept'
+        ? r.url().endsWith('/api/project-invitations/accept') &&
+          (r.request().postDataJSON() as { token: string }).token ===
+            invitationToken
+        : r.url().endsWith(`/api/projects/${oldDocument.projectId}`)
+    );
+    releaseOld();
+    await oldResponse;
+    await page.waitForTimeout(250);
+    if (stage !== 'public share') {
+      expect(
+        await page.evaluate(
+          (key) => sessionStorage.getItem(key),
+          PROJECT_INVITATION_SESSION_KEY
+        )
+      ).toBe(newerToken);
+      await expect(
+        page.getByRole('dialog', { name: 'Settings' })
+      ).toBeVisible();
+      releaseNew();
+    }
+    await expect(page.locator('.breadcrumb')).toContainText(latest.name);
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+    await expect(page.getByText(oldDocument.name, { exact: true })).toHaveCount(
+      0
+    );
+    expect(
+      await page.evaluate(
+        (key) => sessionStorage.getItem(key),
+        PROJECT_INVITATION_SESSION_KEY
+      )
+    ).toBeNull();
+  });
+}
+
+for (const stage of ['accept', 'document'] as const) {
+  test(`preserves an identical invitation while its ${stage} request is pending`, async ({
+    page
+  }) => {
+    await stubApi(page, { collaborationRole: 'viewer' });
+    const document = createProjectDocument(
+      'Repeated invitation',
+      toUserId('owner')
+    );
+    let calls = 0;
+    let pending = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/api/project-invitations/accept', async (route) => {
+      calls++;
+      if (stage === 'accept' && calls === 1) {
+        pending = true;
+        await gate;
+      }
+      await route.fulfill({
+        json: { projectId: document.projectId, role: 'viewer' }
+      });
+    });
+    await page.route(`**/api/projects/${document.projectId}`, async (route) => {
+      if (stage === 'document') {
+        pending = true;
+        await gate;
+      }
+      await route.fulfill({ json: document });
+    });
+    await page.goto('/');
+    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await page.evaluate((token) => {
+      window.location.hash = `invite=${token}`;
+    }, invitationToken);
+    await expect.poll(() => pending).toBe(true);
+    await page.evaluate((token) => {
+      window.location.hash = `invite=${token}`;
+    }, invitationToken);
+    await page.waitForTimeout(250);
+    expect(calls).toBe(1);
+    release();
+    await expect(page.locator('.breadcrumb')).toContainText(document.name);
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+    await page.evaluate((token) => {
+      window.location.hash = `invite=${token}`;
+    }, invitationToken);
+    await expect.poll(() => calls).toBe(2);
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+  });
+}
+
+for (const stage of ['accept', 'document', 'public share'] as const) {
+  test(`dismisses an invitation during ${stage} without blocking the current workspace`, async ({
+    page
+  }) => {
+    await stubApi(page, { collaborationRole: 'owner' });
+    await page.route('**/api/collaboration/config', (route) =>
+      route.fulfill({
+        json: {
+          sharingEnabled: true,
+          editLeasesEnforced: false,
+          personalSyncEnabled: false,
+          canary: false
+        }
+      })
+    );
+    const invited = createProjectDocument(
+      'Dismissed invitation',
+      toUserId('other_owner')
+    );
+    const shared = createProjectDocument(
+      'Retained public workspace',
+      toUserId('other_owner')
+    );
+    let release!: () => void;
+    let pending = false;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/api/project-invitations/accept', async (route) => {
+      if (stage !== 'document') {
+        pending = true;
+        await gate;
+      }
+      await route.fulfill({
+        json: { projectId: invited.projectId, role: 'viewer' }
+      });
+    });
+    await page.route(`**/api/projects/${invited.projectId}`, async (route) => {
+      if (stage === 'document') {
+        pending = true;
+        await gate;
+      }
+      await route.fulfill({ json: invited });
+    });
+    await page.route('**/api/share/*', (route) =>
+      route.fulfill({
+        json: {
+          document: shared,
+          project: { name: shared.name },
+          mode: 'tweak'
+        }
+      })
+    );
+    await page.goto('/');
+    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    if (stage === 'public share') {
+      await page.evaluate(() => {
+        window.location.hash = `share=${'p'.repeat(43)}`;
+      });
+      await expect(
+        page.getByRole('button', { name: 'Make a copy', exact: true })
+      ).toBeVisible();
+    } else {
+      await page.getByLabel('Project name').fill('Workspace retained');
+      await page.getByRole('button', { name: 'Create project' }).click();
+      await expect(
+        page.getByRole('button', { name: 'Rename project' })
+      ).toBeVisible();
+    }
+    await page.evaluate((token) => {
+      window.location.hash = `invite=${token}`;
+    }, invitationToken);
+    await expect.poll(() => pending).toBe(true);
+    await page.getByRole('button', { name: 'Not now', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+    if (stage === 'public share') {
+      await expect(
+        page.getByRole('button', { name: 'Make a copy', exact: true })
+      ).toBeEnabled();
+      expect(new URL(page.url()).hash).toBe(`#share=${'p'.repeat(43)}`);
+    } else {
+      await page.getByRole('button', { name: 'Rename project' }).click();
+      await page.getByLabel('Project name').fill('Edits after dismissal');
+      await page.getByLabel('Project name').press('Enter');
+    }
+    const response = page.waitForResponse((r) =>
+      stage === 'document'
+        ? r.url().endsWith(`/api/projects/${invited.projectId}`)
+        : r.url().endsWith('/api/project-invitations/accept')
+    );
+    release();
+    await response;
+    await page.waitForTimeout(250);
+    await expect(page.locator('.breadcrumb')).toContainText(
+      stage === 'public share' ? shared.name : 'Edits after dismissal'
+    );
+    await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        (key) => sessionStorage.getItem(key),
+        PROJECT_INVITATION_SESSION_KEY
+      )
+    ).toBeNull();
+  });
+}
+
+test('retries the same invitation after a failed acceptance', async ({
   page
 }) => {
-  const document = createProjectDocument(
-    'Invited Link Part',
-    toUserId('user_invitation_owner')
-  );
-  let accepted = false;
   await stubApi(page, { collaborationRole: 'viewer' });
-  await page.route('**/api/project-invitations/accept', (route) => {
-    expect(route.request().postDataJSON()).toEqual({ token: invitationToken });
-    accepted = true;
-    return route.fulfill({
-      json: { projectId: document.projectId, role: 'viewer' }
-    });
-  });
-  await page.route('**/api/projects', (route) =>
-    route.fulfill({
-      json: {
-        projects: accepted
-          ? [
-              {
-                projectId: document.projectId,
-                name: document.name,
-                revisionCount: 0,
-                documentVersion: document.version,
-                updatedAt: document.derived.updatedAt
-              }
-            ]
-          : []
-      }
-    })
+  const document = createProjectDocument(
+    'Retried invitation',
+    toUserId('owner')
   );
+  let calls = 0;
+  await page.route('**/api/project-invitations/accept', (route) => {
+    calls++;
+    return calls === 1
+      ? route.fulfill({ status: 503, json: { error: 'Unavailable' } })
+      : route.fulfill({
+          json: { projectId: document.projectId, role: 'viewer' }
+        });
+  });
   await page.route(`**/api/projects/${document.projectId}`, (route) =>
     route.fulfill({ json: document })
   );
-
   await page.goto(`/#invite=${invitationToken}`);
-
   await expect(
-    page.getByRole('button', { name: 'Rename project' })
-  ).toHaveCount(0);
+    page.getByText(/This invitation could not be accepted/)
+  ).toBeVisible();
+  await page.evaluate((token) => {
+    window.location.hash = `invite=${token}`;
+  }, invitationToken);
+  await expect.poll(() => calls).toBe(2);
   await expect(page.locator('.breadcrumb')).toContainText(document.name);
-  await expect(page.getByRole('contentinfo')).toContainText(
-    `Opened ${document.name}`
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+});
+
+test('allows signed-out invitation sign-in while a superseded share request is pending', async ({
+  page
+}) => {
+  await stubEmailLoginApi(page);
+  await page.route('**/api/collaboration/config', (route) =>
+    route.fulfill({
+      json: {
+        sharingEnabled: true,
+        editLeasesEnforced: true,
+        personalSyncEnabled: false,
+        canary: false
+      }
+    })
   );
-  expect(await page.evaluate(() => window.location.hash)).toBe('');
+  const document = createProjectDocument(
+    'Pending public share',
+    toUserId('owner')
+  );
+  let release!: () => void;
+  let requested = false;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route('**/api/share/*', async (route) => {
+    requested = true;
+    await gate;
+    await route.fulfill({
+      json: { document, project: { name: document.name }, mode: 'tweak' }
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await page.evaluate(() => {
+    window.location.hash = `share=${'p'.repeat(43)}`;
+  });
+  await expect.poll(() => requested).toBe(true);
+  await page.evaluate((token) => {
+    window.location.hash = `invite=${token}`;
+  }, invitationToken);
+  await page.getByLabel('Email address').fill('maker@example.com');
+  await expect(
+    page.getByRole('button', { name: 'Email me a code' })
+  ).toBeEnabled();
+  const response = page.waitForResponse(/\/api\/share\//);
+  release();
+  await response;
+  await page.waitForTimeout(250);
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Email me a code' })
+  ).toBeEnabled();
+  await page.getByRole('button', { name: 'Not now', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Create project', exact: true })
+  ).toBeEnabled();
+});
+
+test('opens a public link instead of resuming an older retained invitation', async ({
+  page
+}) => {
+  await stubApi(page, { collaborationRole: 'viewer' });
+  await page.addInitScript(
+    ({ key, token }) => sessionStorage.setItem(key, token),
+    { key: PROJECT_INVITATION_SESSION_KEY, token: invitationToken }
+  );
+  const document = createProjectDocument(
+    'Explicit public destination',
+    toUserId('owner')
+  );
+  let acceptCalls = 0;
+  await page.route('**/api/project-invitations/accept', (route) => {
+    acceptCalls++;
+    return route.fulfill({ status: 410, json: { error: 'Expired' } });
+  });
+  await page.route('**/api/share/*', (route) =>
+    route.fulfill({
+      json: { document, project: { name: document.name }, mode: 'tweak' }
+    })
+  );
+  await page.goto(`/#share=${'p'.repeat(43)}`);
+  await expect(page.locator('.breadcrumb')).toContainText(document.name);
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toBeVisible();
+  expect(acceptCalls).toBe(0);
   expect(
     await page.evaluate(
-      (key) => window.sessionStorage.getItem(key),
+      (key) => sessionStorage.getItem(key),
       PROJECT_INVITATION_SESSION_KEY
     )
   ).toBeNull();
+});
+
+test('opens and switches public links in an already-open Settings tab', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  const first = createProjectDocument('First shared model', toUserId('owner'));
+  const second = createProjectDocument(
+    'Second shared model',
+    toUserId('owner')
+  );
+  const tokens = ['a'.repeat(43), 'b'.repeat(43)];
+  await page.route('**/api/share/*', (route) => {
+    const index = tokens.indexOf(route.request().url().split('/').at(-1)!);
+    const document = [first, second][index]!;
+    return route.fulfill({
+      json: {
+        document,
+        mode: 'tweak',
+        project: {
+          projectId: document.projectId,
+          name: document.name,
+          documentVersion: document.version,
+          revisionCount: 1,
+          updatedAt: document.derived.updatedAt
+        }
+      }
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.evaluate((token) => {
+    window.location.hash = `share=${token}`;
+  }, tokens[0]);
+  await expect(page.locator('.breadcrumb')).toContainText(first.name);
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+  await expect(
+    page
+      .getByRole('group', { name: 'Workspace mode' })
+      .getByRole('button', { name: 'Build' })
+  ).toBeDisabled();
+  await page.evaluate((token) => {
+    window.location.hash = `share=${token}`;
+  }, tokens[1]);
+  await expect(page.locator('.breadcrumb')).toContainText(second.name);
+});
+
+for (const active of [false, true]) {
+  test(`cleans up an invalid invitation during ${active ? 'an active' : 'a pending'} share`, async ({
+    page
+  }) => {
+    await stubAnonymousApi(page);
+    const document = createProjectDocument(
+      'Invalid invitation source',
+      toUserId('owner')
+    );
+    let release!: () => void;
+    let requested = false;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route('**/api/share/*', async (route) => {
+      requested = true;
+      await gate;
+      await route.fulfill({
+        json: { document, project: { name: document.name }, mode: 'tweak' }
+      });
+    });
+    await page.goto('/');
+    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await page.evaluate(() => {
+      window.location.hash = `share=${'c'.repeat(43)}`;
+    });
+    await expect.poll(() => requested).toBe(true);
+    if (active) {
+      release();
+      await expect(
+        page.getByRole('button', { name: 'Make a copy', exact: true })
+      ).toBeVisible();
+    }
+    await page.evaluate(
+      ({ key, token }) => {
+        sessionStorage.setItem(key, token);
+        window.location.hash = 'invite=truncated';
+      },
+      { key: PROJECT_INVITATION_SESSION_KEY, token: invitationToken }
+    );
+    if (!active) {
+      const response = page.waitForResponse(/\/api\/share\//);
+      release();
+      await response;
+      await page.waitForTimeout(250);
+    }
+    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: 'Create project', exact: true })
+    ).toBeEnabled();
+    await expect(
+      page.getByRole('button', { name: 'Make a copy', exact: true })
+    ).toHaveCount(0);
+    expect(new URL(page.url()).hash).toBe('');
+    expect(
+      await page.evaluate(
+        (key) => sessionStorage.getItem(key),
+        PROJECT_INVITATION_SESSION_KEY
+      )
+    ).toBeNull();
+  });
+}
+
+for (const status of [404, 503]) {
+  test(`restores the active model URL when a replacement share returns ${status}`, async ({
+    page
+  }) => {
+    await stubAnonymousApi(page);
+    const document = createProjectDocument(
+      'Retained shared model',
+      toUserId('owner')
+    );
+    await page.route('**/api/share/*', (route) =>
+      route.request().url().endsWith('a'.repeat(43))
+        ? route.fulfill({
+            json: { document, project: { name: document.name }, mode: 'tweak' }
+          })
+        : route.fulfill({ status, json: { error: 'Replacement unavailable.' } })
+    );
+    await page.goto(`/#share=${'a'.repeat(43)}`);
+    await expect(
+      page.getByRole('button', { name: 'Make a copy', exact: true })
+    ).toBeVisible();
+    await page.evaluate(() => {
+      window.location.hash = `share=${'b'.repeat(43)}`;
+    });
+    await expect(page.getByRole('contentinfo')).toContainText(
+      status === 404
+        ? 'This share link is no longer available'
+        : 'Replacement unavailable.'
+    );
+    expect(new URL(page.url()).hash).toBe(`#share=${'a'.repeat(43)}`);
+    await expect(page.locator('.breadcrumb')).toContainText(document.name);
+    await expect(
+      page.getByRole('button', { name: 'Make a copy', exact: true })
+    ).toBeEnabled();
+    await page.reload();
+    await expect(page.locator('.breadcrumb')).toContainText(document.name);
+  });
+}
+
+for (const status of [404, 503]) {
+  test(`clears a failed share URL when opening a normal project after ${status}`, async ({
+    page
+  }) => {
+    await stubAnonymousApi(page);
+    await page.goto('/');
+    await page
+      .getByLabel('Project name')
+      .fill('Local project after failed link');
+    await page
+      .getByRole('button', { name: 'Create project', exact: true })
+      .click();
+    await expect(
+      page.getByRole('button', { name: 'Rename project' })
+    ).toBeVisible();
+    await page.getByTitle('Back to projects').click();
+    await expect(page.getByRole('tab', { name: 'Parts 1' })).toBeVisible();
+    await page.route('**/api/share/*', (route) =>
+      route.fulfill({ status, json: { error: 'Unavailable share' } })
+    );
+    await page.evaluate(() => {
+      window.location.hash = `share=${'f'.repeat(43)}`;
+    });
+    await expect(
+      page.getByRole('status').filter({
+        hasText:
+          status === 404
+            ? 'This share link is no longer available'
+            : 'Unavailable share'
+      })
+    ).toBeVisible();
+    await page
+      .locator('.start-tile-open', {
+        hasText: 'Local project after failed link'
+      })
+      .click();
+    await expect(page.locator('.breadcrumb')).toContainText(
+      'Local project after failed link'
+    );
+    expect(new URL(page.url()).hash).toBe('');
+  });
+}
+
+for (const action of ['create', 'demo', 'import'] as const) {
+  for (const pending of [true, false]) {
+    test(`abandons ${pending ? 'a pending' : 'a failed'} share when the shelf opens ${action}`, async ({
+      page
+    }) => {
+      await stubAnonymousApi(page);
+      const document = createProjectDocument(
+        'Abandoned share',
+        toUserId('owner')
+      );
+      let release!: () => void;
+      let requested = false;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route('**/api/share/*', async (route) => {
+        requested = true;
+        if (pending) await gate;
+        await route.fulfill(
+          pending
+            ? {
+                json: {
+                  document,
+                  project: { name: document.name },
+                  mode: 'tweak'
+                }
+              }
+            : { status: 404, json: { error: 'Unavailable' } }
+        );
+      });
+      await page.goto('/');
+      await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+      await page.evaluate(() => {
+        window.location.hash = `share=${'f'.repeat(43)}`;
+      });
+      await expect.poll(() => requested).toBe(true);
+      if (!pending)
+        await expect(
+          page
+            .getByRole('status')
+            .filter({ hasText: 'This share link is no longer available' })
+        ).toBeVisible();
+      try {
+        if (action === 'create') {
+          await page.getByLabel('Project name').fill('New shelf project');
+          await page
+            .getByRole('button', { name: 'Create project', exact: true })
+            .click();
+        } else if (action === 'demo') {
+          await page
+            .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+            .click();
+        } else {
+          await page.getByLabel('Import project backup').setInputFiles({
+            name: 'shelf.openzcad',
+            mimeType: 'application/json',
+            buffer: Buffer.from(
+              JSON.stringify({
+                format: 'openzcad-project',
+                version: 1,
+                document: createProjectDocument(
+                  'Imported shelf project',
+                  toUserId('local')
+                ),
+                files: []
+              })
+            )
+          });
+        }
+        const name =
+          action === 'create'
+            ? 'New shelf project'
+            : action === 'demo'
+              ? 'Mounting Bracket'
+              : 'Imported shelf project';
+        await expect(page.locator('.breadcrumb')).toContainText(name);
+        expect(new URL(page.url()).hash).toBe('');
+        if (pending) {
+          const response = page.waitForResponse(/\/api\/share\//);
+          release();
+          await response;
+          await page.waitForTimeout(250);
+        }
+        await expect(page.locator('.breadcrumb')).toContainText(name);
+        await expect(
+          page.getByRole('button', { name: 'Make a copy', exact: true })
+        ).toHaveCount(0);
+        await expect(
+          page
+            .getByRole('group', { name: 'Workspace mode' })
+            .getByRole('button', { name: 'Build', exact: true })
+        ).toBeEnabled();
+      } finally {
+        release();
+      }
+    });
+  }
+}
+
+test('keeps revoked-link guidance visible after delayed startup completes', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  await page.route('**/api/share/*', (route) =>
+    route.fulfill({ status: 404, json: { error: 'Unavailable' } })
+  );
+  await page.route('**/api/session', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.fulfill({ status: 401, json: { error: 'Signed out' } });
+  });
+  await page.goto(`/#share=${'a'.repeat(43)}`);
+  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await expect(
+    page
+      .getByRole('status')
+      .filter({ hasText: 'This share link is no longer available' })
+  ).toBeVisible();
+  // Status lifetime must not erase the explanation before the user reads it.
+  await page.waitForTimeout(6500);
+  await expect(
+    page.getByText(
+      'This share link is no longer available. It may have been revoked.'
+    )
+  ).toBeVisible();
+});
+
+test('cancels a pending share on Back and leaves an active share when its fragment is removed', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  const document = createProjectDocument('Cancelled share', toUserId('owner'));
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let delay = true;
+  let requested = false;
+  await page.route('**/api/share/*', async (route) => {
+    requested = true;
+    if (delay) await delayed;
+    await route.fulfill({
+      json: { document, project: { name: document.name }, mode: 'tweak' }
+    });
+  });
+  await page.goto('/');
+  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await page.evaluate(() => {
+    window.location.hash = `share=${'c'.repeat(43)}`;
+  });
+  await expect.poll(() => requested).toBe(true);
+  await page.goBack();
+  const response = page.waitForResponse(/\/api\/share\//);
+  release();
+  await response;
+  // Let the old loader process its delayed response before checking that it
+  // cannot replace the library after navigation has cancelled it.
+  await page.waitForTimeout(250);
+  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Create project', exact: true })
+  ).toBeEnabled();
+  delay = false;
+  await page.evaluate(() => {
+    window.location.hash = `share=${'c'.repeat(43)}`;
+  });
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toBeVisible();
+  await page.evaluate(() => {
+    window.location.hash = '';
+  });
+  await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toHaveCount(0);
+});
+
+for (const departure of ['fragment', 'home'] as const) {
+  test(`keeps a newer share open when an earlier ${departure} departure finishes later`, async ({
+    page
+  }) => {
+    await stubApi(page);
+    const documents = [
+      createProjectDocument('First departure share', toUserId('owner')),
+      createProjectDocument('Latest navigation share', toUserId('owner'))
+    ];
+    let release!: () => void;
+    const delayed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let blockListing = false;
+    let listingRequested = false;
+    await page.route('**/api/projects', async (route) => {
+      if (blockListing) {
+        listingRequested = true;
+        await delayed;
+      }
+      await route.fulfill({ json: { projects: [] } });
+    });
+    await page.route('**/api/share/*', (route) => {
+      const document =
+        documents[route.request().url().endsWith('a'.repeat(43)) ? 0 : 1]!;
+      return route.fulfill({
+        json: { document, project: { name: document.name }, mode: 'tweak' }
+      });
+    });
+    await page.goto('/');
+    await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+    await page.evaluate(() => {
+      window.location.hash = `share=${'a'.repeat(43)}`;
+    });
+    await expect(page.locator('.breadcrumb')).toContainText(documents[0]!.name);
+    blockListing = true;
+    if (departure === 'home') await page.getByTitle('Back to projects').click();
+    else
+      await page.evaluate(() => {
+        window.location.hash = '';
+      });
+    await expect.poll(() => listingRequested).toBe(true);
+    await page.evaluate(() => {
+      window.location.hash = `share=${'b'.repeat(43)}`;
+    });
+    await expect(page.locator('.breadcrumb')).toContainText(documents[1]!.name);
+    const response = page.waitForResponse(
+      (r) => new URL(r.url()).pathname === '/api/projects'
+    );
+    release();
+    await response;
+    await page.waitForTimeout(250);
+    await expect(page.locator('.breadcrumb')).toContainText(documents[1]!.name);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      `Opened shared model ${documents[1]!.name}`
+    );
+    expect(new URL(page.url()).hash).toBe(`#share=${'b'.repeat(43)}`);
+  });
+}
+
+test('makes a durable share copy without storing the owner snapshot', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  const document = createProjectDocument('Anonymous source', toUserId('owner'));
+  await page.route('**/api/share/*', (route) =>
+    route.fulfill({
+      json: { document, project: { name: document.name }, mode: 'tweak' }
+    })
+  );
+  await page.goto(`/#share=${'p'.repeat(43)}`);
+  await page.getByRole('button', { name: 'Make a copy', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Rename project' })
+  ).toContainText('Anonymous source');
+  await expect(
+    page
+      .getByRole('group', { name: 'Workspace mode' })
+      .getByRole('button', { name: 'Build' })
+  ).toBeEnabled();
+  expect(new URL(page.url()).hash).toBe('');
+  await page.getByTitle('Back to projects').click();
+  await expect(page.getByRole('tab', { name: 'Parts 1' })).toBeVisible();
+  const ids = await page.evaluate(
+    () =>
+      new Promise<IDBValidKey[]>((resolve, reject) => {
+        const open = indexedDB.open('openzcad-v2');
+        open.onerror = () =>
+          reject(new Error('Unable to inspect stored projects'));
+        open.onsuccess = () => {
+          const db = open.result;
+          const read = db
+            .transaction('projects', 'readonly')
+            .objectStore('projects')
+            .getAllKeys();
+          read.onsuccess = () => {
+            resolve(read.result);
+            db.close();
+          };
+          read.onerror = () => {
+            reject(new Error('Unable to inspect stored projects'));
+            db.close();
+          };
+        };
+      })
+  );
+  expect(ids).toHaveLength(1);
+  expect(ids).not.toContain(document.projectId);
+});
+
+test('saves incoming member updates through the room without refused account writes', async ({
+  page
+}) => {
+  const document = createProjectDocument(
+    'Member model',
+    toUserId('other_owner')
+  );
+  const summary = {
+    projectId: document.projectId,
+    name: document.name,
+    revisionCount: 1,
+    documentVersion: document.version,
+    updatedAt: document.derived.updatedAt
+  };
+  await stubApi(page, { collaborationRole: 'viewer' });
+  await page.route('**/api/projects', (route) =>
+    route.fulfill({
+      json:
+        route.request().method() === 'POST'
+          ? { project: summary, document }
+          : { projects: [summary] }
+    })
+  );
+  let accountWrites = 0;
+  await page.route(
+    `**/api/projects/${document.projectId}/document`,
+    (route) => {
+      accountWrites += 1;
+      return route.fulfill({
+        status: 404,
+        json: { error: 'Lease checked room required' }
+      });
+    }
+  );
+  await page.addInitScript(() => {
+    const browser = window as unknown as { __memberSocket: WebSocket };
+    const Original = window.WebSocket;
+    window.WebSocket = class extends Original {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        browser.__memberSocket = this;
+      }
+    };
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(document.name);
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(
+    page.getByRole('button', { name: /Open project sharing/ })
+  ).toContainText('Read-only');
+  const incoming = {
+    ...document,
+    name: 'Updated member model',
+    version: document.version + 1
+  };
+  await page.evaluate(
+    ({ document, incoming }) => {
+      const socket = (window as unknown as { __memberSocket: WebSocket })
+        .__memberSocket;
+      for (const frame of [
+        { type: 'state', members: [], document, role: 'viewer', lease: null },
+        { type: 'document', clientId: 'owner', document: incoming }
+      ])
+        socket.dispatchEvent(
+          new MessageEvent('message', { data: JSON.stringify(frame) })
+        );
+    },
+    { document, incoming }
+  );
+  await expect(page.locator('.breadcrumb')).toContainText(incoming.name);
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible();
+  await page.waitForTimeout(4500);
+  expect(accountWrites).toBe(0);
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible();
+  // Opening this same cached project by a public link must stay session-local,
+  // even though the account listing still contains its member project ID.
+  for (const frame of [
+    { type: 'error', code: 'document-too-large', message: 'Room size limit' },
+    { type: 'error', code: 'permission-denied', message: 'Room write refused' },
+    {
+      type: 'document',
+      clientId: 'newer-client',
+      document: {
+        ...incoming,
+        schemaVersion: incoming.schemaVersion + 1,
+        version: incoming.version + 1
+      }
+    }
+  ]) {
+    await page.evaluate((message) => {
+      const socket = (window as unknown as { __memberSocket: WebSocket })
+        .__memberSocket;
+      socket.dispatchEvent(
+        new MessageEvent('message', { data: JSON.stringify(message) })
+      );
+    }, frame);
+    await expect(
+      page.getByRole('status', { name: 'Local only', exact: true })
+    ).toBeVisible();
+    await expect(page.locator('.save-state.is-syncing')).toHaveCount(0);
+  }
+  await page.route('**/api/share/*', (route) =>
+    route.fulfill({
+      json: { document: incoming, project: summary, mode: 'tweak' }
+    })
+  );
+  await page.evaluate(() => {
+    window.location.hash = `share=${'p'.repeat(43)}`;
+  });
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('status', { name: 'Local only', exact: true })
+  ).toBeVisible();
+  expect(accountWrites).toBe(0);
+});
+
+test('publishes editor checkpoints through the room without an account revision request', async ({
+  page
+}) => {
+  const document = createProjectDocument(
+    'Editor checkpoint',
+    toUserId('other_owner')
+  );
+  const summary = {
+    projectId: document.projectId,
+    name: document.name,
+    revisionCount: 1,
+    documentVersion: document.version,
+    updatedAt: document.derived.updatedAt
+  };
+  await stubApi(page, { collaborationRole: 'editor' });
+  await page.route('**/api/projects', (route) =>
+    route.fulfill({
+      json:
+        route.request().method() === 'POST'
+          ? { project: summary, document }
+          : { projects: [summary] }
+    })
+  );
+  let accountWrites = 0;
+  await page.route(
+    `**/api/projects/${document.projectId}/document`,
+    (route) => {
+      accountWrites++;
+      return route.fulfill({ status: 404, json: { error: 'Room required' } });
+    }
+  );
+  await page.route(
+    `**/api/projects/${document.projectId}/revisions`,
+    (route) => {
+      if (route.request().method() === 'POST') accountWrites++;
+      return route.fulfill({ json: { revisions: [] } });
+    }
+  );
+  await page.addInitScript(() => {
+    const browser = window as unknown as {
+      __checkpointSocket: WebSocket;
+      __checkpointDocuments: unknown[];
+    };
+    browser.__checkpointDocuments = [];
+    const Original = window.WebSocket;
+    window.WebSocket = class extends Original {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        browser.__checkpointSocket = this;
+      }
+      override send(raw: Parameters<WebSocket['send']>[0]) {
+        super.send(raw);
+        if (typeof raw !== 'string') return;
+        const message = JSON.parse(raw) as {
+          type?: string;
+          document?: { version: number };
+        };
+        if (message.type !== 'document' || !message.document) return;
+        const submitted = message.document;
+        browser.__checkpointDocuments.push(submitted);
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            new MessageEvent('message', {
+              data: JSON.stringify({
+                type: 'ack',
+                version: submitted.version
+              })
+            })
+          )
+        );
+      }
+    };
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(document.name);
+  await page
+    .getByRole('button', { name: 'Create project', exact: true })
+    .click();
+  await expect(page.locator('.breadcrumb')).toContainText(document.name);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        Boolean(
+          (window as unknown as { __checkpointSocket?: WebSocket })
+            .__checkpointSocket
+        )
+      )
+    )
+    .toBe(true);
+  await page.evaluate((document) => {
+    const socket = (window as unknown as { __checkpointSocket: WebSocket })
+      .__checkpointSocket;
+    for (const frame of [
+      { type: 'state', members: [], document, role: 'editor' },
+      {
+        type: 'lease-granted',
+        lease: {
+          projectId: document.projectId,
+          leaseId: 'checkpoint_lease',
+          expiresAt: Date.now() + 600000
+        }
+      }
+    ])
+      socket.dispatchEvent(
+        new MessageEvent('message', { data: JSON.stringify(frame) })
+      );
+  }, document);
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled();
+  await page.keyboard.press('ControlOrMeta+s');
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (
+          window as unknown as {
+            __checkpointDocuments: { checkpoints: { reason: string }[] }[];
+          }
+        ).__checkpointDocuments.some(
+          (d) => d.checkpoints.at(-1)?.reason === 'Manual save'
+        )
+      )
+    )
+    .toBe(true);
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible();
+  expect(accountWrites).toBe(0);
+  const sent = await page.evaluate(() =>
+    (
+      window as unknown as {
+        __checkpointDocuments: {
+          version: number;
+          checkpoints: { reason: string; documentVersion: number }[];
+        }[];
+      }
+    ).__checkpointDocuments.at(-1)!
+  );
+  expect(sent.version).toBeGreaterThan(document.version);
+  expect(sent.checkpoints.at(-1)?.documentVersion).toBe(sent.version);
+  await page.reload();
+  await expect(
+    page.locator('.revision-row', { hasText: 'Manual save' })
+  ).toBeVisible();
+  expect(accountWrites).toBe(0);
 });
 
 test('focuses signed-out invitation links on email sign-in and resumes them', async ({

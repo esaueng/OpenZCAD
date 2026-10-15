@@ -307,6 +307,25 @@ const OPERATION_PHRASES: Record<OperationInference['operation'], string> = {
   'new-body': 'make a new body'
 };
 
+const OUTCOME_PHRASES: Record<OperationInference['operation'], string> = {
+  cut: ', cut into the body',
+  add: ', added to the body',
+  'new-body': ' as a new body'
+};
+
+/**
+ * The status line for a committed region extrusion. It printed the stored
+ * operation token — "Extruded region by 10 mm (new-body)." — where a
+ * sentence belongs.
+ */
+export function regionExtrudeOutcome(
+  resolved: { inference: Pick<OperationInference, 'operation'> },
+  distance: number,
+  units = ''
+): string {
+  return `Extruded region by ${distance} ${units}${OUTCOME_PHRASES[resolved.inference.operation]}.`;
+}
+
 /**
  * The refusal for selected profiles that would not extrude the same way on
  * their own, or null when they agree.
