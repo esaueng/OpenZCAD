@@ -1300,7 +1300,9 @@ export class D1R2PersistenceService implements PersistenceService {
           userId,
           document,
           DEFAULT_PROJECT_ORGANIZATION,
-          request.document?.projectId
+          request.document?.projectId,
+          undefined,
+          request.document
         ),
         document
       };
@@ -4391,10 +4393,13 @@ export class D1R2PersistenceService implements PersistenceService {
     document: ProjectDocument,
     organization: ProjectOrganization = DEFAULT_PROJECT_ORGANIZATION,
     localProjectId?: string,
-    captureInitialHead?: (head: ProjectCopyStoredHead) => void
+    captureInitialHead?: (head: ProjectCopyStoredHead) => void,
+    adoptionSource?: ProjectDocument
   ): Promise<ProjectSummary> {
     this.assertDocumentCanBeStored(document);
-    const discardGuard = meshDiscardCommitGuard(document);
+    // Keep the pre-localization IDs in the atomic insert guard: a discard may
+    // win while R2 stores this adoption's new account document.
+    const discardGuard = meshDiscardCommitGuard(adoptionSource ?? document);
     const insertGuard = discardGuard.sql
       ? ` WHERE 1 = 1${discardGuard.sql}`
       : '';
