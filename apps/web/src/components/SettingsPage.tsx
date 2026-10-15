@@ -2153,7 +2153,7 @@ export function SettingsPage({
               </SettingRow>
               <SettingRow
                 title="Optional usage analytics"
-                description="Choose whether this browser contributes anonymous usage counts."
+                description="Allow Glimpse to count feature use, workflow steps, exports and coarse timings. No model contents, geometry, filenames, project names or identity. Off by default. DNT/GPC suppress sending while preserving this choice; withdraw here to stop sending immediately. Existing anonymous totals cannot be attributed or removed. Basic server counters measure API activity and reliability. Local operations require opt-in. This browser-only choice is separate for each app."
                 scope="This device"
               >
                 <AnalyticsConsent />
