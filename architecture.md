@@ -41,7 +41,7 @@ from silently rotating or mirroring the sketch, since no normal-only rule can
 be continuous everywhere. The snapshot still never decides which face resolves.
 Legacy attachments without lineage retain their migration frame with a warning. See [ADR-014](docs/adrs/ADR-014-true-face-attachment.md).
 
-When opening a project, local and remote copies are loaded together. The higher document version wins; derived timestamps break ties. This prevents an older cloud response from shadowing newer local edits.
+When opening a project, local and remote copies are loaded together and reconciled by content, never by version number or clock alone ([ADR-016](docs/adrs/ADR-016-project-cloud-sync.md)). A copy that retains all of the other's authored work is taken. Otherwise the device's last-synced version shows which side moved; when both moved, or that baseline is unknown, a copy wins only if its revision history descends from the other's latest revision. Anything else opens as an explicit conflict rather than a silent winner.
 
 ## Exact export lifecycle
 
