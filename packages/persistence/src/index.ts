@@ -1,8 +1,31 @@
+import { copyImportedSources } from './copy-import-sources';
+export { copyImportedSources } from './copy-import-sources';
+import {
+  copiedImportArchives,
+  reconcileCopiedImportSources,
+  verifyCopiedImportArchives,
+  assertCopiedSourcesArchived,
+  type CopiedImportArchive
+} from './copied-source-reconciliation';
+export {
+  copiedImportArchives,
+  reconcileCopiedImportSources,
+  verifyCopiedImportArchives,
+  assertCopiedSourcesArchived,
+  type CopiedImportArchive
+} from './copied-source-reconciliation';
+import { importArtifactIds } from './mesh-artifact-discard';
+export {
+  importArtifactIds,
+  isMeshImportArchiveKind,
+  meshDiscardCommitGuard
+} from './mesh-artifact-discard';
 import {
   applyOrganizationUpdate,
   compareProjectSummaries,
   DEFAULT_PROJECT_ORGANIZATION,
   duplicateProjectName,
+  importedSourceReferenceOf,
   isPurgeDue,
   MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS,
   MAX_ACCOUNT_ARTIFACT_BYTES,
@@ -190,9 +213,8 @@ export function sharedDocumentReferencesImport(
   for (const node of Object.values(document.nodes)) {
     if (
       node.kind === 'feature' &&
-      node.data.featureKind === 'imported-step' &&
-      node.data.stepSourceRef !== undefined &&
-      node.data.artifactId === artifactId
+      importedSourceReferenceOf(node.data) !== undefined &&
+      (node.data as { artifactId: string }).artifactId === artifactId
     ) {
       return true;
     }
@@ -550,6 +572,14 @@ export interface PersistenceService {
     userId: UserId,
     request: FinalizeArtifactRequest
   ): Promise<ArtifactRecord | null>;
+  /** Remove a cancelled mesh upload only while no saved model needs it.
+   * The default is payload-only; original cleanup must specify its exact kind. */
+  discardMeshPayload(
+    userId: UserId,
+    projectId: string,
+    artifactId: string,
+    originalKind?: 'stl-import' | 'mesh-import'
+  ): Promise<{ deleted: boolean }>;
   listArtifacts(
     userId: UserId,
     projectId: string
@@ -576,6 +606,7 @@ export class InMemoryPersistenceService implements PersistenceService {
   }
 
   private readonly projects = new Map<string, ProjectDocument>();
+  private readonly discardedMeshArtifacts = new Map<string, string>();
   private readonly projectAdoptions = new Map<UserId, Map<string, string>>();
   private readonly projectMembers = new Map<
     string,
@@ -621,6 +652,11 @@ export class InMemoryPersistenceService implements PersistenceService {
   private readonly multipartParts = new Map<string, Map<number, ArrayBuffer>>();
   private readonly activeMultipartUploads = new Map<string, string>();
   private readonly completedMultipartUploads = new Map<string, string>();
+  private readonly projectCopyCleanupClaims = new Set<string>();
+  private readonly copiedImportSourceArchives = new Map<
+    string,
+    CopiedImportArchive[]
+  >();
 
   async requireProjectRead(
     userId: UserId,
@@ -634,7 +670,10 @@ export class InMemoryPersistenceService implements PersistenceService {
     projectId: string
   ): Promise<ProjectAccess> {
     const access = this.resolveProjectAccess(userId, projectId);
-    if (access.role === 'viewer') {
+    if (
+      access.role === 'viewer' ||
+      this.projectCopyCleanupClaims.has(projectId)
+    ) {
       throw new ProjectNotFoundError(projectId);
     }
     return access;
@@ -980,7 +1019,12 @@ export class InMemoryPersistenceService implements PersistenceService {
       projectId: link.projectId,
       name: document.name,
       mode: link.mode,
-      document: sharedProjectSnapshotDocument(normalizeDocument(document))
+      document: sharedProjectSnapshotDocument(
+        reconcileCopiedImportSources(
+          normalizeDocument(document),
+          this.copiedImportSourceArchives.get(document.projectId) ?? []
+        )
+      )
     };
   }
 
@@ -1008,7 +1052,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     if (
       !artifact ||
       artifact.projectId !== shared.projectId ||
-      artifact.kind !== 'step-import'
+      (artifact.kind !== 'step-import' && artifact.kind !== 'mesh-payload')
     ) {
       return null;
     }
@@ -1036,14 +1080,22 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     request: CreateProjectRequest
   ): Promise<CreateProjectResponse> {
+    // Adoption rewrites old project-owned IDs into local source references.
+    // A delayed cancelled import must still be refused under its original ID.
+    if (request.document) this.assertMeshSourcesNotDiscarded(request.document);
     const document = request.document
       ? this.prepareAdoption(userId, request.document, request.name)
       : createProjectDocument(request.name, userId, request.units);
     this.assertProjectCount(userId);
+    this.assertMeshSourcesNotDiscarded(document);
     this.projects.set(document.projectId, document);
     if (request.document) {
       let mappings = this.projectAdoptions.get(userId);
-      if (!mappings) this.projectAdoptions.set(userId, (mappings = new Map<string, string>()));
+      if (!mappings)
+        this.projectAdoptions.set(
+          userId,
+          (mappings = new Map<string, string>())
+        );
       mappings.set(request.document.projectId, document.projectId);
     }
     return {
@@ -1092,7 +1144,10 @@ export class InMemoryPersistenceService implements PersistenceService {
     const branch = request.revisionId
       ? this.branchPointFor(request.projectId, request.revisionId, head)
       : null;
-    const source = branch?.document ?? head;
+    const source = reconcileCopiedImportSources(
+      branch?.document ?? head,
+      this.copiedImportSourceArchives.get(request.projectId) ?? []
+    );
     const owned = this.ownedProjects(userId);
     const name =
       request.name ??
@@ -1107,6 +1162,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       branch?.origin
     );
     this.assertProjectCount(userId);
+    this.assertMeshSourcesNotDiscarded(document);
     this.projects.set(document.projectId, document);
     // A copy lands next to its original rather than at the top of the shelf,
     // which is where you go looking for it. It starts unpinned and active: the
@@ -1119,7 +1175,144 @@ export class InMemoryPersistenceService implements PersistenceService {
           ? this.organizationOf(request.projectId).sortOrder
           : 0
     });
-    return { project: this.summarize(document), document };
+    let sourcesCopiedSuccessfully = false;
+    try {
+      let copied = await copyImportedSources(
+        this,
+        userId,
+        source,
+        document,
+        undefined,
+        async (archive) => {
+          if (
+            this.discardedMeshArtifacts.has(archive.artifactId) ||
+            this.projectCopyCleanupClaims.has(archive.projectId)
+          )
+            throw new ArtifactStorageError(
+              'The verified copy source was discarded.'
+            );
+          const entries =
+            this.copiedImportSourceArchives.get(archive.projectId) ?? [];
+          if (
+            !entries.some(
+              (entry) =>
+                entry.kind === archive.kind &&
+                entry.checksumSha256 === archive.checksumSha256 &&
+                entry.logicalBytes === archive.logicalBytes
+            )
+          )
+            this.copiedImportSourceArchives.set(archive.projectId, [
+              ...entries,
+              archive
+            ]);
+        }
+      );
+      sourcesCopiedSuccessfully = true;
+      if (copied !== document) {
+        const current = this.projects.get(document.projectId);
+        if (!current) throw new ProjectNotFoundError(document.projectId);
+        const archives = await verifyCopiedImportArchives(
+          this,
+          userId,
+          document.projectId,
+          copiedImportArchives(copied),
+          [current]
+        );
+        const reconciled = reconcileCopiedImportSources(current, archives);
+        assertCopiedSourcesArchived(reconciled);
+        copied = { ...reconciled, version: current.version + 1 };
+        const saved = await this.saveDocument(
+          userId,
+          {
+            projectId: copied.projectId,
+            expectedVersion: current.version,
+            document: copied
+          },
+          current
+        );
+        copied = {
+          ...copied,
+          derived: { ...copied.derived, updatedAt: saved.updatedAt }
+        };
+      }
+      return {
+        project: {
+          ...this.summarize(copied),
+          updatedAt: copied.derived.updatedAt
+        },
+        document: copied
+      };
+    } catch (error) {
+      if (sourcesCopiedSuccessfully) throw error;
+      try {
+        const current = this.projects.get(document.projectId);
+        if (
+          current &&
+          (current.version !== document.version ||
+            JSON.stringify({
+              ...normalizeDocument(current),
+              derived: undefined
+            }) !==
+              JSON.stringify({
+                ...normalizeDocument(document),
+                derived: undefined
+              }))
+        ) {
+          const conflict = new RevisionConflictError(
+            document.projectId,
+            current.version
+          );
+          conflict.message =
+            'The new project changed before its source copy finished. Its newer edits were kept.';
+          throw conflict;
+        }
+        this.projectCopyCleanupClaims.add(document.projectId);
+        await this.deleteProject(userId, document.projectId);
+      } catch (cleanupError) {
+        if (cleanupError instanceof RevisionConflictError) throw cleanupError;
+        throw new AggregateError(
+          [error, cleanupError],
+          'Project copy failed and its incomplete project could not be removed.',
+          { cause: cleanupError }
+        );
+      }
+      throw error;
+    }
+  }
+
+  async loadCopiedImportArchives(
+    userId: UserId,
+    projectId: ProjectId
+  ): Promise<CopiedImportArchive[]> {
+    await this.requireProjectRead(userId, projectId);
+    return (this.copiedImportSourceArchives.get(projectId) ?? []).filter(
+      (entry) => {
+        const artifact = this.artifacts.get(entry.artifactId);
+        return (
+          artifact?.projectId === projectId &&
+          artifact.kind === entry.kind &&
+          artifact.bytes === entry.logicalBytes &&
+          !this.discardedMeshArtifacts.has(entry.artifactId)
+        );
+      }
+    );
+  }
+
+  private assertMeshUploadNotDiscarded(upload: UploadSessionRecord): void {
+    if (this.projectCopyCleanupClaims.has(upload.projectId))
+      throw new ProjectNotFoundError(upload.projectId);
+    if (this.discardedMeshArtifacts.has(upload.artifactId))
+      throw new ArtifactStorageError('The mesh payload upload was discarded.');
+  }
+
+  private assertMeshSourcesNotDiscarded(document: ProjectDocument): void {
+    if (
+      importArtifactIds(document).some((id) =>
+        this.discardedMeshArtifacts.has(id)
+      )
+    ) {
+      throw new ArtifactStorageError('An imported mesh payload was discarded.');
+    }
   }
 
   private assertProjectCount(userId: UserId): void {
@@ -1153,6 +1346,8 @@ export class InMemoryPersistenceService implements PersistenceService {
     if (!document || document.ownerUserId !== userId) {
       throw new ProjectNotFoundError(request.projectId);
     }
+    if (this.projectCopyCleanupClaims.has(request.projectId))
+      throw new ProjectNotFoundError(request.projectId);
     this.organization.set(
       request.projectId,
       applyOrganizationUpdate(this.organizationOf(request.projectId), request)
@@ -1220,7 +1415,10 @@ export class InMemoryPersistenceService implements PersistenceService {
     }
     try {
       await this.requireProjectRead(userId, projectId);
-      return normalizeDocument(document);
+      return reconcileCopiedImportSources(
+        normalizeDocument(document),
+        await this.loadCopiedImportArchives(userId, document.projectId)
+      );
     } catch (error) {
       if (error instanceof ProjectNotFoundError) {
         return null;
@@ -1246,7 +1444,12 @@ export class InMemoryPersistenceService implements PersistenceService {
     ) {
       throw new RevisionConflictError(request.projectId, existing.version);
     }
-    const normalized = normalizeDocument(request.document);
+    const normalized = normalizeDocument(
+      reconcileCopiedImportSources(
+        request.document,
+        await this.loadCopiedImportArchives(userId, request.projectId)
+      )
+    );
     if (
       normalized.projectId !== request.projectId ||
       normalized.ownerUserId !== access.ownerUserId
@@ -1258,6 +1461,13 @@ export class InMemoryPersistenceService implements PersistenceService {
       request.reason
     );
     assertPersistableDocument(document);
+    this.assertMeshSourcesNotDiscarded(document);
+    if (this.projectCopyCleanupClaims.has(request.projectId))
+      throw new ProjectNotFoundError(request.projectId);
+    const current = this.projects.get(request.projectId);
+    if (!current) throw new ProjectNotFoundError(request.projectId);
+    if (current.version !== request.expectedVersion)
+      throw new RevisionConflictError(request.projectId, current.version);
     this.projects.set(request.projectId, document);
     this.recordRevision(request.projectId, document, userId, request.reason);
     return document;
@@ -1317,7 +1527,12 @@ export class InMemoryPersistenceService implements PersistenceService {
     const stored = (this.revisions.get(projectId) ?? []).find(
       (revision) => revision.revisionId === revisionId
     );
-    return stored ? normalizeDocument(stored.document) : null;
+    return stored
+      ? reconcileCopiedImportSources(
+          normalizeDocument(stored.document),
+          await this.loadCopiedImportArchives(userId, stored.document.projectId)
+        )
+      : null;
   }
 
   /**
@@ -1415,13 +1630,22 @@ export class InMemoryPersistenceService implements PersistenceService {
 
   async saveDocument(
     userId: UserId,
-    request: SaveProjectDocumentRequest
+    request: SaveProjectDocumentRequest,
+    expectedDocument?: ProjectDocument
   ): Promise<SaveProjectDocumentResponse> {
     const existing = this.projects.get(request.projectId);
     if (!existing) {
       throw new ProjectNotFoundError(request.projectId);
     }
     const access = await this.requireProjectEdit(userId, request.projectId);
+    if (
+      expectedDocument &&
+      this.projects.get(request.projectId) !== expectedDocument
+    )
+      throw new RevisionConflictError(
+        request.projectId,
+        this.projects.get(request.projectId)?.version ?? existing.version
+      );
     if (existing.version !== request.expectedVersion) {
       throw new RevisionConflictError(request.projectId, existing.version);
     }
@@ -1431,7 +1655,12 @@ export class InMemoryPersistenceService implements PersistenceService {
       throw new RevisionConflictError(request.projectId, existing.version);
     }
     const normalized = withoutDerivedProjection(
-      normalizeDocument(request.document)
+      normalizeDocument(
+        reconcileCopiedImportSources(
+          request.document,
+          await this.loadCopiedImportArchives(userId, request.projectId)
+        )
+      )
     );
     if (
       normalized.projectId !== request.projectId ||
@@ -1440,6 +1669,16 @@ export class InMemoryPersistenceService implements PersistenceService {
       throw new ProjectNotFoundError(request.projectId);
     }
     assertPersistableDocument(normalized);
+    this.assertMeshSourcesNotDiscarded(normalized);
+    if (this.projectCopyCleanupClaims.has(request.projectId))
+      throw new ProjectNotFoundError(request.projectId);
+    const current = this.projects.get(request.projectId);
+    if (!current) throw new ProjectNotFoundError(request.projectId);
+    if (
+      current.version !== request.expectedVersion ||
+      (expectedDocument && current !== expectedDocument)
+    )
+      throw new RevisionConflictError(request.projectId, current.version);
     this.projects.set(request.projectId, normalized);
     return {
       projectId: request.projectId,
@@ -1474,6 +1713,8 @@ export class InMemoryPersistenceService implements PersistenceService {
       kind: request.kind,
       metadata: request.metadata ?? {}
     };
+    if (this.projectCopyCleanupClaims.has(request.projectId))
+      throw new ProjectNotFoundError(request.projectId);
     this.uploads.set(session.uploadSessionId, session);
     return { session };
   }
@@ -1489,6 +1730,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     }
     const access = await this.requireProjectEdit(userId, upload.projectId);
     this.assertArtifactQuota(access.ownerUserId, body.byteLength);
+    this.assertMeshUploadNotDiscarded(upload);
     this.uploadBodies.set(upload.objectKey, body);
   }
 
@@ -1501,6 +1743,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       throw new ArtifactStorageError('Upload session was not found.');
     }
     await this.requireProjectEdit(userId, upload.projectId);
+    this.assertMeshUploadNotDiscarded(upload);
     if (upload.kind === 'thumbnail') {
       throw new ArtifactStorageError(
         'Thumbnail artifacts must use single uploads.'
@@ -1542,6 +1785,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       throw new ArtifactStorageError('Upload part is invalid or too large.');
     }
     const access = await this.requireProjectEdit(userId, upload.projectId);
+    this.assertMeshUploadNotDiscarded(upload);
     const previous = parts.get(partNumber);
     if (!previous && parts.size >= MAX_ARTIFACT_UPLOAD_PARTS) {
       throw new ArtifactStorageError('Upload has too many parts.');
@@ -1577,6 +1821,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       throw new ArtifactStorageError('Multipart upload was not found.');
     }
     await this.requireProjectEdit(userId, upload.projectId);
+    this.assertMeshUploadNotDiscarded(upload);
     const ordered = [...request.parts].sort(
       (a, b) => a.partNumber - b.partNumber
     );
@@ -1609,6 +1854,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       return;
     }
     await this.requireProjectEdit(userId, upload.projectId);
+    this.assertMeshUploadNotDiscarded(upload);
     if (
       this.activeMultipartUploads.get(uploadSessionId) !== uploadId &&
       this.completedMultipartUploads.get(uploadSessionId) !== uploadId
@@ -1700,8 +1946,74 @@ export class InMemoryPersistenceService implements PersistenceService {
         }
       }
     }
+    if (this.discardedMeshArtifacts.has(artifact.artifactId)) return null;
+    if (this.projectCopyCleanupClaims.has(artifact.projectId))
+      throw new ProjectNotFoundError(artifact.projectId);
     this.artifacts.set(artifact.artifactId, artifact);
     return artifact;
+  }
+
+  async discardMeshPayload(
+    userId: UserId,
+    projectId: string,
+    artifactId: string,
+    originalKind?: 'stl-import' | 'mesh-import'
+  ): Promise<{ deleted: boolean }> {
+    const access = await this.requireProjectEdit(userId, projectId);
+    // Originals are stored files, and finalized records do not identify the
+    // uploader. Only the owner may remove them, including cancellation cleanup.
+    if (originalKind && access.role !== 'owner')
+      throw new ProjectNotFoundError(projectId);
+    if (
+      (
+        await this.loadCopiedImportArchives(userId, toProjectId(projectId))
+      ).some((archive) => archive.artifactId === artifactId)
+    )
+      return { deleted: false };
+    const artifact = this.artifacts.get(artifactId);
+    const pending = [...this.uploads.values()].find(
+      (upload) => upload.artifactId === artifactId
+    );
+    const known = artifact ?? pending;
+    if (!known) {
+      const claimedProject = this.discardedMeshArtifacts.get(artifactId);
+      return { deleted: !claimedProject || claimedProject === projectId };
+    }
+    if (
+      known.projectId !== projectId ||
+      known.kind !== (originalKind ?? 'mesh-payload')
+    )
+      return { deleted: false };
+    const documents = [
+      this.projects.get(projectId)!,
+      ...(this.revisions.get(projectId) ?? []).map(
+        (revision) => revision.document
+      )
+    ];
+    if (
+      documents.some((document) =>
+        importArtifactIds(document).includes(artifactId)
+      )
+    )
+      return { deleted: false };
+    // There is no await between the reference check, claim and removal.
+    this.discardedMeshArtifacts.set(artifactId, projectId);
+    this.artifacts.delete(artifactId);
+    this.uploadBodies.delete(known.objectKey);
+    if (pending) {
+      const active = this.activeMultipartUploads.get(pending.uploadSessionId);
+      const completed = this.completedMultipartUploads.get(
+        pending.uploadSessionId
+      );
+      if (active)
+        this.multipartParts.delete(`${pending.uploadSessionId}:${active}`);
+      if (completed)
+        this.multipartParts.delete(`${pending.uploadSessionId}:${completed}`);
+      this.activeMultipartUploads.delete(pending.uploadSessionId);
+      this.completedMultipartUploads.delete(pending.uploadSessionId);
+      this.uploads.delete(pending.uploadSessionId);
+    }
+    return { deleted: true };
   }
 
   async listArtifacts(
@@ -1764,10 +2076,16 @@ export class InMemoryPersistenceService implements PersistenceService {
   }
 
   private destroyProject(projectId: string): void {
+    this.projectCopyCleanupClaims.delete(projectId);
+    this.copiedImportSourceArchives.delete(projectId);
     for (const mappings of this.projectAdoptions.values()) {
       for (const [localId, cloudId] of mappings) {
         if (cloudId === projectId) mappings.delete(localId);
       }
+    }
+    for (const [artifactId, ownerProject] of this.discardedMeshArtifacts) {
+      if (ownerProject === projectId)
+        this.discardedMeshArtifacts.delete(artifactId);
     }
     this.projects.delete(projectId);
     this.revisions.delete(projectId);

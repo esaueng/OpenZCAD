@@ -305,7 +305,7 @@ let service: D1R2PersistenceService;
 
 beforeEach(() => {
   sqlite = new DatabaseSync(':memory:');
-  applyMigrations(sqlite, 23);
+  applyMigrations(sqlite, 27);
   seedAccount(sqlite, OWNER, PROJECT);
   seedAccount(sqlite, OTHER_OWNER, OTHER_PROJECT);
   d1 = new SqliteD1(sqlite);
@@ -1237,7 +1237,7 @@ describe('migration 0017 legacy handling', () => {
         .run(PROJECT)
     ).toThrow('artifact_upload_owner_required');
 
-    applyMigrations(db, 20, 17);
+    applyMigrations(db, 27, 17);
     const adapter = new SqliteD1(db);
     const bucket = new FakeR2();
     const legacyService = new D1R2PersistenceService({
@@ -1300,6 +1300,8 @@ describe('migration 0020 single-part compatibility', () => {
       expires_at: expiry,
       single_part: 0
     });
+    // Exercise the current adapter against the fully migrated legacy state.
+    applyMigrations(db, 27, 20);
     const migrated = new D1R2PersistenceService({
       DB: new SqliteD1(db).database,
       ARTIFACTS: new FakeR2().bucket

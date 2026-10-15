@@ -3,6 +3,7 @@ export * from './document-validation';
 export * from './document-history';
 export * from './textLimits';
 export * from './imported-step-source';
+export * from './imported-mesh-payload';
 export * from './sketch-reference-dimensions';
 export * from './mass-density';
 import type { DocumentHistory } from './document-history';
@@ -26,7 +27,7 @@ export type SketchReferenceAnnotationId = Brand<
 >;
 export type ShaprImportId = Brand<string, 'ShaprImportId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 16 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 17 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1089,10 +1090,26 @@ export type FeatureData =
       artifactId: ArtifactId;
       sourceName: string;
       triangleCount: number;
-      /** Flat xyz triples in document units. */
-      vertices: number[];
-      /** Triangle vertex indices. */
-      indices: number[];
+      /**
+       * Flat xyz triples in document units, embedded. Written by imports
+       * that predate `meshPayloadRef`, and still by the fallback when this
+       * browser denies blob storage. Like `stepText`, never migrated into the
+       * reference form. Present exactly when `indices` is, and exactly when
+       * `meshPayloadRef` is not.
+       */
+      vertices?: number[];
+      /** Triangle vertex indices, embedded alongside `vertices`. */
+      indices?: number[];
+      /**
+       * Content-addressed alternative to `vertices`/`indices`: the SHA-256 of
+       * the canonical payload (`encodeImportedMeshPayload`) holding the same
+       * triangles in document units. The bytes live in the source blob store
+       * and in the `mesh-payload` artifact named by `artifactId`, so neither
+       * this node, its `import.mesh` command nor its undo entry repeats the
+       * mesh. Schema v17 keeps clients that only understand embedded meshes
+       * from accepting this document and silently omitting its imported body.
+       */
+      meshPayloadRef?: ImportedSourceReference;
     }
   | {
       featureKind: 'imported-step';
@@ -2280,6 +2297,11 @@ export interface ArtifactRecord {
     | 'stl-import'
     /** Any other mesh interchange import: 3MF, OBJ, glTF binary, PLY. */
     | 'mesh-import'
+    /**
+     * The canonical triangles behind an `imported-mesh` feature's
+     * `meshPayloadRef`; internal, not a file anyone downloads.
+     */
+    | 'mesh-payload'
     | 'step-export'
     | 'stl-export'
     | '3mf-export'

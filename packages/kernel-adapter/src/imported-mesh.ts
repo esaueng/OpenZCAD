@@ -1,54 +1,16 @@
-import { MAX_IMPORT_TRIANGLES, writeAsciiStl } from '@openzcad/io-stl';
 import type { FeatureNode } from '@openzcad/shared';
 
-/**
- * The single mesh handoff between a document and a kernel.
- *
- * An `imported-mesh` feature stores the triangle soup the STL parser produced.
- * Both exact kernels take meshes back in through their own STL importer — that
- * importer owns vertex welding and shell orientation, so the adapter must not
- * invent a second, divergent mesh-to-B-rep path. Serializing to ASCII STL here
- * keeps exactly one conversion in the tree.
- */
+// Keep the existing mesh handoff exports while the Worker build places its
+// payload helpers in a separate chunk behind the exact adapter's lazy load.
+export {
+  importedMeshStl,
+  importedMeshTriangles
+} from './imported-mesh-payload';
+
 export type ImportedMeshFeatureData = Extract<
   FeatureNode['data'],
   { featureKind: 'imported-mesh' }
 >;
-
-export function importedMeshStl(feature: ImportedMeshFeatureData): string {
-  if (
-    !Number.isSafeInteger(feature.triangleCount) ||
-    feature.triangleCount < 0 ||
-    feature.triangleCount > MAX_IMPORT_TRIANGLES ||
-    feature.indices.length !== feature.triangleCount * 3 ||
-    feature.vertices.length % 3 !== 0 ||
-    feature.vertices.some((value) => !Number.isFinite(value))
-  ) {
-    throw new Error(
-      'Imported mesh data is malformed or exceeds the import limit.'
-    );
-  }
-  const vertexCount = feature.vertices.length / 3;
-  for (let offset = 0; offset < feature.indices.length; offset += 3) {
-    const triangle = feature.indices.slice(offset, offset + 3);
-    if (
-      triangle.some(
-        (index) =>
-          !Number.isSafeInteger(index) || index < 0 || index >= vertexCount
-      ) ||
-      new Set(triangle).size !== 3
-    ) {
-      throw new Error('Imported mesh contains an invalid triangle index.');
-    }
-  }
-  return writeAsciiStl(feature.sourceName, [
-    {
-      name: feature.sourceName,
-      vertices: feature.vertices,
-      indices: feature.indices
-    }
-  ]);
-}
 
 /**
  * Typed refusal for the one thing an imported mesh still cannot do.

@@ -152,3 +152,270 @@ test('settles an STL parse refusal and releases the geometry reservation', async
   await page.getByRole('button', { name: 'Create', exact: true }).click();
   await expectBodyCount(page, 1);
 });
+
+for (const originalCleanup of [false, true]) {
+  test(`keeps cancellation status and recovers failed ${originalCleanup ? 'original' : 'mesh'} cleanup after reload`, async ({
+    page
+  }) => {
+    test.setTimeout(90_000);
+    await stubApi(page);
+    const originalId = 'artifact_original_cleanup_e2e';
+    const payloadId = 'artifact_payload_cleanup_e2e';
+    const uploads = new Map<
+      string,
+      {
+        projectId: string;
+        fileName: string;
+        contentType: string;
+        kind: string;
+        metadata?: Record<string, string | number | boolean>;
+      }
+    >();
+    const finalized: string[] = [];
+    const cleanups: { projectId: string; artifactId: string; kind?: string }[] =
+      [];
+    let cleanupAvailable = false;
+    let payloadDeleted = false;
+    let originalDeleted = false;
+    let metadataReached = false;
+    let releaseMetadata!: () => void;
+    const metadataHeld = new Promise<void>((resolve) => {
+      releaseMetadata = resolve;
+    });
+    await page.route('**/api/uploads', (route) => {
+      const input = route.request().postDataJSON() as {
+        projectId: string;
+        fileName: string;
+        contentType: string;
+        kind: string;
+        metadata?: Record<string, string | number | boolean>;
+      };
+      if (input.kind !== 'stl-import' && input.kind !== 'mesh-payload')
+        return route.fallback();
+      const artifactId = input.kind === 'mesh-payload' ? payloadId : originalId;
+      uploads.set(artifactId, input);
+      return route.fulfill({
+        status: 201,
+        json: {
+          session: {
+            uploadSessionId: `upload_${artifactId}`,
+            artifactId,
+            projectId: input.projectId,
+            objectKey: `${input.projectId}/${artifactId}`,
+            uploadUrl: `/api/uploads/upload_${artifactId}/content`,
+            expiresAt: '2099-01-01T00:00:00.000Z',
+            fileName: input.fileName,
+            contentType: input.contentType,
+            kind: input.kind,
+            metadata: input.metadata ?? {}
+          }
+        }
+      });
+    });
+    await page.route(
+      '**/api/uploads/upload_artifact_*_cleanup_e2e/content',
+      (route) => route.fulfill({ status: 204 })
+    );
+    await page.route('**/api/artifacts/finalize', (route) => {
+      const input = route.request().postDataJSON() as { artifactId: string };
+      if (!uploads.has(input.artifactId)) return route.fallback();
+      finalized.push(input.artifactId);
+      return route.fulfill({ json: { artifactId: input.artifactId } });
+    });
+    await page.route(
+      '**/api/artifacts/artifact_*_cleanup_e2e',
+      async (route) => {
+        const artifactId = new URL(route.request().url()).pathname
+          .split('/')
+          .at(-1)!;
+        const input = uploads.get(artifactId)!;
+        if (artifactId === (originalCleanup ? originalId : payloadId)) {
+          metadataReached = true;
+          await metadataHeld;
+        }
+        await route.fulfill({
+          json: {
+            artifact: {
+              artifactId,
+              projectId: input.projectId,
+              kind: input.kind,
+              name: input.fileName,
+              contentType: input.contentType,
+              bytes: 3,
+              objectKey: `${input.projectId}/${artifactId}`,
+              metadata: input.metadata ?? {},
+              createdAt: new Date().toISOString()
+            }
+          }
+        });
+      }
+    );
+    await page.route('**/api/artifacts/*/discard-unreferenced', (route) => {
+      const input = route.request().postDataJSON() as {
+        projectId: string;
+        kind?: string;
+      };
+      const artifactId = new URL(route.request().url()).pathname
+        .split('/')
+        .at(-2)!;
+      cleanups.push({
+        projectId: input.projectId,
+        artifactId,
+        ...(input.kind ? { kind: input.kind } : {})
+      });
+      if (originalCleanup && artifactId === payloadId) {
+        payloadDeleted = true;
+        return route.fulfill({ json: { deleted: true } });
+      }
+      if (!cleanupAvailable)
+        return route.fulfill({
+          status: 503,
+          json: { error: 'Cleanup temporarily unavailable' }
+        });
+      if (artifactId === payloadId) payloadDeleted = true;
+      else originalDeleted = true;
+      return route.fulfill({ json: { deleted: true } });
+    });
+    await page.goto('/');
+    await create(page, 'STL cleanup failure');
+    await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles(fixture);
+    await expect.poll(() => metadataReached).toBe(true);
+    // Cancel before the selected archive's metadata acknowledgement.
+    expect(finalized).toEqual(
+      originalCleanup ? [payloadId, originalId] : [payloadId]
+    );
+    expect(uploads.has(originalId)).toBe(originalCleanup);
+    const pill = page.getByRole('region', { name: 'File import', exact: true });
+    await pill.getByRole('button', { name: 'Cancel', exact: true }).click();
+    releaseMetadata();
+    await expect
+      .poll(() => cleanups)
+      .toEqual(
+        originalCleanup
+          ? [
+              {
+                projectId: uploads.get(originalId)!.projectId,
+                artifactId: originalId,
+                kind: 'stl-import'
+              },
+              {
+                projectId: uploads.get(payloadId)!.projectId,
+                artifactId: payloadId
+              }
+            ]
+          : [
+              {
+                projectId: uploads.get(payloadId)!.projectId,
+                artifactId: payloadId
+              }
+            ]
+      );
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'you cancelled it'
+    );
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Cleanup temporarily unavailable'
+    );
+    await expect(page.locator('.activity-pill-cancel')).toHaveCount(0);
+    await expectBodyCount(page, 0);
+    await expect(page.locator('.feature-row')).toHaveCount(0);
+    expect(finalized).toEqual(
+      originalCleanup ? [payloadId, originalId] : [payloadId]
+    );
+    expect(uploads.has(originalId)).toBe(originalCleanup);
+
+    const projectId = uploads.get(payloadId)!.projectId;
+    // The account retains finalized bytes even when compensation failed. A
+    // fresh load discovers them from the durable artifact listing, not a
+    // surviving in-memory cleanup callback.
+    await page.route('**/api/projects', (route) =>
+      route.request().method() === 'GET'
+        ? route.fulfill({
+            json: {
+              projects: [
+                {
+                  projectId,
+                  name: 'STL cleanup failure',
+                  revisionCount: 1,
+                  documentVersion: 1,
+                  updatedAt: new Date().toISOString()
+                }
+              ]
+            }
+          })
+        : route.fallback()
+    );
+    await page.route('**/api/projects/*/artifacts', (route) =>
+      route.fulfill({
+        json: {
+          artifacts: finalized
+            .filter((id) =>
+              id === payloadId ? !payloadDeleted : !originalDeleted
+            )
+            .map((artifactId) => {
+              const input = uploads.get(artifactId)!;
+              return {
+                artifactId,
+                projectId,
+                kind: input.kind,
+                name: input.fileName,
+                contentType: input.contentType,
+                objectKey: '',
+                bytes: 3,
+                metadata: {},
+                createdAt: new Date().toISOString()
+              };
+            })
+        }
+      })
+    );
+    await page.reload();
+    await expect(
+      page.getByRole('region', { name: '3D viewport' })
+    ).toBeVisible();
+    await page.getByTitle('File: save, import and export').click();
+    const remove = page.getByRole('button', {
+      name: originalCleanup
+        ? 'Remove unused imported file: simple-block.stl'
+        : 'Remove unused mesh data: simple-block.stl.ozmesh'
+    });
+    await expect(remove).toBeVisible();
+    const originalDownload = page.locator(
+      `a[href="/api/artifacts/${originalId}/download"]`
+    );
+    if (originalCleanup) await expect(originalDownload).toHaveCount(1);
+    await remove.click();
+    await expect(
+      page.getByRole('status', { name: 'Mesh cleanup' })
+    ).toContainText('Cleanup temporarily unavailable');
+    await expect(remove).toBeEnabled();
+    if (originalCleanup) await expect(originalDownload).toHaveCount(1);
+    expect(originalCleanup ? originalDeleted : payloadDeleted).toBe(false);
+    cleanupAvailable = true;
+    await remove.click();
+    await expect(remove).toHaveCount(0);
+    if (originalCleanup) {
+      await expect(originalDownload).toHaveCount(0);
+      await page.getByTitle('File: save, import and export').click();
+      await page.getByTitle('File: save, import and export').click();
+      await expect(originalDownload).toHaveCount(0);
+    }
+    expect(cleanups).toEqual(
+      originalCleanup
+        ? [
+            { projectId, artifactId: originalId, kind: 'stl-import' },
+            { projectId, artifactId: payloadId },
+            { projectId, artifactId: originalId, kind: 'stl-import' },
+            { projectId, artifactId: originalId, kind: 'stl-import' }
+          ]
+        : Array.from({ length: 3 }, () => ({
+            projectId,
+            artifactId: payloadId
+          }))
+    );
+    expect(payloadDeleted).toBe(true);
+    if (originalCleanup) expect(originalDeleted).toBe(true);
+    await expectBodyCount(page, 0);
+    await expect(page.locator('.feature-row')).toHaveCount(0);
+  });
+}

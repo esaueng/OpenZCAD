@@ -1,6 +1,7 @@
 import {
   documentNodesWithHistory,
   documentAssetsWithHistory,
+  importedSourceReferenceOf,
   assertDocumentHistory,
   documentStructureError
 } from '@openzcad/shared';
@@ -294,23 +295,23 @@ export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
   }
   for (const document of documents) {
     for (const node of documentNodesWithHistory(document)) {
+      if (node.kind !== 'feature') continue;
+      const sourceRef = importedSourceReferenceOf(node.data);
+      if (sourceRef === undefined) continue;
+      // STEP sources and mesh payloads alike: a reference the backup cannot
+      // satisfy is a project that would restore without its geometry.
+      const what =
+        node.data.featureKind === 'imported-mesh' ? 'mesh data' : 'STEP source';
       if (
-        node.kind === 'feature' &&
-        node.data.featureKind === 'imported-step' &&
-        node.data.stepSourceRef !== undefined
-      ) {
-        if (
-          !isImportedSourceReference(node.data.stepSourceRef) ||
-          !sourceIds.has(node.data.stepSourceRef.checksumSha256)
-        )
-          throw new Error(`Missing STEP source: ${node.name}`);
-        const sourceRef = node.data.stepSourceRef;
-        const source = (
-          parsed.sources as NonNullable<ProjectBackup['sources']>
-        ).find((entry) => entry.sha256 === sourceRef.checksumSha256);
-        if (source?.logicalBytes !== node.data.stepSourceRef.logicalBytes)
-          throw new Error('Invalid STEP source length.');
-      }
+        !isImportedSourceReference(sourceRef) ||
+        !sourceIds.has(sourceRef.checksumSha256)
+      )
+        throw new Error(`Missing ${what}: ${node.name}`);
+      const source = (
+        parsed.sources as NonNullable<ProjectBackup['sources']>
+      ).find((entry) => entry.sha256 === sourceRef.checksumSha256);
+      if (source?.logicalBytes !== sourceRef.logicalBytes)
+        throw new Error(`Invalid ${what} length.`);
     }
     for (const asset of documentAssetsWithHistory(document)) {
       if (

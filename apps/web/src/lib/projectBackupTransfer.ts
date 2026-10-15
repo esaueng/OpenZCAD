@@ -1,4 +1,7 @@
-import { documentNodesWithHistory } from '@openzcad/shared';
+import {
+  documentNodesWithHistory,
+  importedSourceReferenceOf
+} from '@openzcad/shared';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import { withoutDerivedProjection } from '@openzcad/document-core';
 import type { ArtifactRecord, ProjectDocument } from '@openzcad/shared';
@@ -58,7 +61,13 @@ export async function createProjectBackup(
   measurements?: StoredMeasurementRecord
 ): Promise<string> {
   const snapshot = withoutDerivedProjection(structuredClone(document));
-  const files = await loadProjectBackupFiles(snapshot.projectId);
+  const storedFiles = await loadProjectBackupFiles(snapshot.projectId);
+  // Internal mesh payloads belong in sources, where their content key makes
+  // one copy serve the current document, undo history and saved states.
+  // Keep older backups' file bytes available as a source-resolution fallback.
+  const files = storedFiles.filter(
+    (file) => file.artifact.kind !== 'mesh-payload'
+  );
   const backup: ProjectBackup = {
     format: 'openzcad-project',
     version: 1,
@@ -81,6 +90,7 @@ export async function createProjectBackup(
     const archived = await api.listArtifacts(snapshot.projectId);
     for (const artifact of archived.artifacts) {
       if (
+        artifact.kind === 'mesh-payload' ||
         files.some((file) => file.artifact.artifactId === artifact.artifactId)
       )
         continue;
@@ -118,23 +128,21 @@ export async function createProjectBackup(
     ...backup.saveStates!.map((state) => state.document)
   ]) {
     for (const node of documentNodesWithHistory(candidate)) {
-      if (
-        node.kind !== 'feature' ||
-        node.data.featureKind !== 'imported-step' ||
-        !node.data.stepSourceRef
-      )
-        continue;
-      const ref = node.data.stepSourceRef;
-      const artifactId = node.data.artifactId;
+      if (node.kind !== 'feature') continue;
+      // STEP sources and mesh payloads: a restored project must rebuild
+      // without the account, so it carries the bytes its references name.
+      const ref = importedSourceReferenceOf(node.data);
+      if (!ref) continue;
+      const { artifactId } = node.data as { artifactId: string };
       if (
         backup.sources!.some((source) => source.sha256 === ref.checksumSha256)
       )
         continue;
       let bytes = await loadSourceBlob(ref.checksumSha256);
       if (!bytes) {
-        const archived = files.find(
-          (file) => file.artifact.artifactId === artifactId
-        );
+        const archived =
+          storedFiles.find((file) => file.artifact.artifactId === artifactId) ??
+          files.find((file) => file.artifact.artifactId === artifactId);
         bytes = archived
           ? backupFileBytes(archived)
           : await readBackupResponse(
@@ -147,7 +155,9 @@ export async function createProjectBackup(
         bytes.length !== ref.logicalBytes ||
         (await checksum(bytes)) !== ref.checksumSha256
       )
-        throw new Error(`Missing or damaged STEP source: ${node.name}`);
+        throw new Error(
+          `Missing or damaged ${node.data.featureKind === 'imported-mesh' ? 'mesh data' : 'STEP source'}: ${node.name}`
+        );
       let binary = '';
       for (let offset = 0; offset < bytes.length; offset += 32768)
         binary += String.fromCharCode(

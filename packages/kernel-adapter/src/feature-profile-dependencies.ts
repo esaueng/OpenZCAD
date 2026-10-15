@@ -1,4 +1,9 @@
 import { getParameterScope } from '@openzcad/document-core';
+import {
+  findFontFamily,
+  resolveFontStyle,
+  textFontProvider
+} from '@openzcad/geometry';
 import type {
   FeatureNode,
   ProjectDocument,
@@ -6,6 +11,39 @@ import type {
   SketchProfileReference
 } from '@openzcad/shared';
 import { resolveRegionProfiles } from './region-profile';
+
+/** Only a missing font consumed by this feature can make its result transient. */
+export function featureProfileAwaitsFonts(
+  document: ProjectDocument,
+  feature: FeatureNode,
+  sketch: SketchNode
+): boolean {
+  const provider = textFontProvider();
+  const missing = new Set<string>(
+    sketch.objectIds.filter((objectId) => {
+      const node = document.nodes[objectId];
+      if (
+        node?.kind !== 'sketch-object' ||
+        node.data.objectKind !== 'text' ||
+        node.data.construction === true
+      )
+        return false;
+      const { fontFamily, fontStyle } = node.data;
+      // An unknown family is a property of the document, not the moment.
+      return (
+        findFontFamily(fontFamily) !== undefined &&
+        !provider?.(
+          fontFamily,
+          resolveFontStyle(fontFamily, fontStyle) ?? fontStyle
+        )
+      );
+    })
+  );
+  return (
+    missing.size > 0 &&
+    featureProfileUsesObjects(document, feature, sketch, missing)
+  );
+}
 
 /** The authored profile objects a solid builder actually consumes. */
 export function featureProfileUsesObjects(

@@ -1,9 +1,13 @@
 import {
   documentNodesWithHistory,
+  importedSourceReferenceOf,
+  IMPORTED_MESH_PAYLOAD_CONTENT_TYPE,
+  isImportedMeshSourceData,
   isImportedStepSourceData
 } from '@openzcad/shared';
-import type { FeatureId, ProjectDocument } from '@openzcad/shared';
+import type { FeatureId, ProjectDocument, ProjectId } from '@openzcad/shared';
 import { importSourceChecksums } from './sourceBlobClaims';
+import type { ImportedSourceArchiveIdentity } from '@openzcad/document-core';
 
 export {
   importSourceChecksums,
@@ -20,29 +24,27 @@ export {
  */
 export const LOCAL_ARTIFACT_ID_PREFIX = 'artifact_local_';
 
-export interface LocalOnlyImportSource {
+export interface LocalOnlyImportSource extends ImportedSourceArchiveIdentity {
   featureId: FeatureId;
   sourceName: string;
   /** Content-addressed reference; the bytes it names live only on this device. */
   checksumSha256: string;
+  /** What the bytes are: a STEP source, or an imported mesh's payload. */
+  kind: 'step-source' | 'mesh-payload';
 }
 
 /**
- * STEP imports this device alone can rebuild: reference-form sources whose
- * bytes were never archived, so no other device can resolve the checksum.
+ * Imports this device alone can rebuild: reference-form STEP sources and mesh
+ * payloads whose bytes were never archived, so no other device can resolve
+ * the checksum.
  *
- * Two kinds of import are excluded, for the same reason — the document itself
- * carries what a rebuild needs, and it syncs:
- *
- * - Mesh imports embed their geometry.
- * - STEP imports in the legacy embedded form carry `stepText`, which
- *   `prepareProjectStorageSnapshot` externalises into a project asset and
- *   hydration restores, and which the kernel consumes directly without
- *   consulting the blob store or the artifact. Reporting one of these as
- *   local-only would warn about a project every device can already open.
- *
- * In both cases only the *original uploaded file* is unarchived, which costs
- * nobody a rebuild.
+ * Embedded imports are excluded — a STEP import in the legacy `stepText`
+ * form, and a mesh import carrying its `vertices`/`indices` — for the same
+ * reason: the document itself carries what a rebuild needs, and it syncs.
+ * (`prepareProjectStorageSnapshot` externalises both into project assets and
+ * hydration restores them.) Reporting one of these as local-only would warn
+ * about a project every device can already open; only the *original uploaded
+ * file* is unarchived, which costs nobody a rebuild.
  */
 export function listLocalOnlyImportSources(
   document: ProjectDocument
@@ -52,28 +54,74 @@ export function listLocalOnlyImportSources(
     // Stored documents and undo snapshots can predate ingress validation.
     // Only well-formed reference imports can name bytes to archive.
     if (!feature || feature.kind !== 'feature' || !feature.data) continue;
-    if (!isImportedStepSourceData(feature.data)) {
-      continue;
-    }
+    const kind = isImportedStepSourceData(feature.data)
+      ? 'step-source'
+      : isImportedMeshSourceData(feature.data)
+        ? 'mesh-payload'
+        : null;
+    const ref = importedSourceReferenceOf(feature.data);
     if (
-      !feature.data.artifactId.startsWith(LOCAL_ARTIFACT_ID_PREFIX) ||
-      feature.data.stepText !== undefined ||
-      feature.data.stepSourceRef === undefined
+      kind === null ||
+      ref === undefined ||
+      !(feature.data as { artifactId: string }).artifactId.startsWith(
+        LOCAL_ARTIFACT_ID_PREFIX
+      )
     ) {
       continue;
     }
-    const checksumSha256 = feature.data.stepSourceRef.checksumSha256;
     sources.push({
       featureId: feature.featureId,
-      sourceName: feature.data.sourceName,
-      checksumSha256
+      sourceName: (feature.data as { sourceName: string }).sourceName,
+      checksumSha256: ref.checksumSha256,
+      logicalBytes: ref.logicalBytes,
+      kind
     });
   }
   return [
     ...new Map(
-      sources.map((source) => [source.checksumSha256, source])
+      sources.map((source) => [
+        `${source.kind}:${source.checksumSha256}:${source.logicalBytes}`,
+        source
+      ])
     ).values()
   ];
+}
+
+/**
+ * How an imported mesh's payload is archived: named after the import so the
+ * artifact reads as belonging to it, and suffixed so nobody mistakes the
+ * payload for the original file.
+ */
+export function meshPayloadArchive(sourceName: string): {
+  fileName: string;
+  contentType: string;
+  kind: 'mesh-payload';
+} {
+  // Upload sessions accept at most 255 characters, including this suffix.
+  // The original filename is unchanged; this is only an internal payload.
+  const suffix = '.ozmesh';
+  return {
+    fileName: `${sourceName.slice(0, 255 - suffix.length)}${suffix}`,
+    contentType: IMPORTED_MESH_PAYLOAD_CONTENT_TYPE,
+    kind: 'mesh-payload'
+  };
+}
+
+/** How an import's referenced bytes are archived, by what they are. */
+export function importSourceArchive(
+  source: Pick<LocalOnlyImportSource, 'kind' | 'sourceName'>
+): {
+  fileName: string;
+  contentType: string;
+  kind: 'step-import' | 'mesh-payload';
+} {
+  return source.kind === 'mesh-payload'
+    ? meshPayloadArchive(source.sourceName)
+    : {
+        fileName: source.sourceName,
+        contentType: 'model/step',
+        kind: 'step-import'
+      };
 }
 
 /** Answers whether any import is still working with a checksum's bytes. */
@@ -282,25 +330,38 @@ export interface ArchiveLocalSourcesResult {
 }
 
 /**
- * Uploads every local-only STEP source it can find bytes for, then rewires
- * the owning feature to the finalized artifact id via the injected document
- * edit. The document keeps its content-addressed reference, so a partial
- * failure loses nothing — the untouched features simply stay local-only and
- * the action can run again.
+ * Uploads every local-only STEP source and mesh payload it can find bytes
+ * for, then rewires the owning feature to the finalized artifact id via the
+ * injected document edit. The document keeps its content-addressed
+ * reference, so a partial failure loses nothing — the untouched features
+ * simply stay local-only and the action can run again.
  */
 export async function archiveLocalOnlyImportSources(deps: {
   document: ProjectDocument;
+  /** The originating manager's latest model, including retained history. */
+  currentDocument?(): ProjectDocument | null;
   loadSourceBytes(checksumSha256: string): Promise<Uint8Array | null>;
   archive(input: {
     fileName: string;
     contentType: string;
-    kind: 'step-import';
+    kind: 'step-import' | 'mesh-payload';
     body: Blob;
     metadata: Record<string, string>;
   }): Promise<string>;
   /** Applies the artifact id to the feature; false when the edit refused. */
-  applyArtifactId(featureId: FeatureId, artifactId: string): boolean;
+  applyArtifactId(
+    featureId: FeatureId,
+    artifactId: string,
+    source: ImportedSourceArchiveIdentity
+  ): boolean;
+  discardMeshPayload?(
+    projectId: ProjectId,
+    artifactId: string
+  ): Promise<{ deleted: boolean }>;
+  /** Cleanup must not replace the edit failure or stop the other sources. */
+  onCleanupFailure?(sourceName: string, error: unknown): void;
 }): Promise<ArchiveLocalSourcesResult> {
+  const projectId = deps.document.projectId;
   const result: ArchiveLocalSourcesResult = {
     archived: [],
     missing: [],
@@ -316,23 +377,68 @@ export async function archiveLocalOnlyImportSources(deps: {
       result.missing.push(source.sourceName);
       continue;
     }
+    let meshArtifactId: string | null = null;
+    let applied = false;
     try {
+      const archive = importSourceArchive(source);
       const artifactId = await deps.archive({
-        fileName: source.sourceName,
-        contentType: 'model/step',
-        kind: 'step-import',
+        ...archive,
         body: new Blob([bytes as Uint8Array<ArrayBuffer>], {
-          type: 'model/step'
+          type: archive.contentType
         }),
         metadata: { source: 'retry-archive' }
       });
-      if (deps.applyArtifactId(source.featureId, artifactId)) {
+      if (source.kind === 'mesh-payload') meshArtifactId = artifactId;
+      applied = deps.applyArtifactId(source.featureId, artifactId, source);
+      if (applied) {
         result.archived.push(source.sourceName);
       } else {
         result.failed.push(source.sourceName);
       }
     } catch {
       result.failed.push(source.sourceName);
+    } finally {
+      if (meshArtifactId && !applied && deps.discardMeshPayload) {
+        let cleanupIncomplete = false;
+        let cleanupFailure: unknown;
+        try {
+          // An edit can update the manager before a later UI step throws.
+          // Preserve those bytes until the model and its history are saved.
+          const references = (document: ProjectDocument | null) =>
+            document &&
+            [...documentNodesWithHistory(document)].some(
+              (node) =>
+                node.kind === 'feature' &&
+                'artifactId' in node.data &&
+                node.data.artifactId === meshArtifactId
+            );
+          if (
+            !references(deps.document) &&
+            !references(deps.currentDocument?.() ?? null)
+          ) {
+            const discarded = await deps.discardMeshPayload(
+              projectId,
+              meshArtifactId
+            );
+            if (!discarded.deleted) {
+              cleanupIncomplete = true;
+              cleanupFailure = new Error(
+                'Cloud mesh cleanup has not completed.'
+              );
+            }
+          }
+        } catch (error) {
+          cleanupIncomplete = true;
+          cleanupFailure = error;
+        }
+        if (cleanupIncomplete) {
+          try {
+            deps.onCleanupFailure?.(source.sourceName, cleanupFailure);
+          } catch {
+            // Observer failures cannot replace the original archive result.
+          }
+        }
+      }
     }
   }
   return result;
