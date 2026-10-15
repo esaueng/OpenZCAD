@@ -622,6 +622,59 @@ function seedRetainedRevisions(fixture: Awaited<ReturnType<typeof setup>>) {
 }
 
 for (const mode of ['inline', 'R2'] as const) {
+  it.each(['membership revoked', 'lease expired'] as const)(
+    `removes an inserted ${mode} checkpoint when %s before publication starts`,
+    async (reason) => {
+      const bucket = mode === 'R2' ? objectBucket() : undefined;
+      const fixture = await setup(bucket);
+      const clock = vi.spyOn(Date, 'now');
+      try {
+        seedRetainedRevisions(fixture);
+        const revisions = () =>
+          fixture.db
+            .prepare('SELECT * FROM revisions WHERE project_id = ? ORDER BY id')
+            .all(fixture.document.projectId);
+        const before = revisions();
+        const objects = new Set(bucket?.objects.keys());
+        const batch = fixture.env.DB.batch.bind(fixture.env.DB);
+        vi.spyOn(fixture.env.DB, 'batch').mockImplementationOnce(
+          async (statements) => {
+            const results = await batch(statements);
+            expect(revisions()).toHaveLength(MAX_PROJECT_REVISIONS + 1);
+            if (reason === 'membership revoked') {
+              fixture.db
+                .prepare(
+                  "UPDATE project_members SET role='viewer' WHERE project_id=? AND user_id=?"
+                )
+                .run(fixture.document.projectId, fixture.editor);
+            } else clock.mockReturnValue(fixture.leaseExpiresAt + 1);
+            return results;
+          }
+        );
+        const response = await fixture.post({
+          checkpointReason: 'Unpublished'
+        });
+        expect(response.status).toBe(
+          reason === 'membership revoked' ? 403 : 409
+        );
+        expect(await response.json()).toMatchObject({
+          code:
+            reason === 'membership revoked'
+              ? 'permission-denied'
+              : 'lease-required'
+        });
+        expect(revisions()).toEqual(before);
+        if (bucket) expect(new Set(bucket.objects.keys())).toEqual(objects);
+        expect(fixture.storage.values.get('room:latest')).toEqual(
+          fixture.document
+        );
+      } finally {
+        clock.mockRestore();
+        fixture.db.close();
+      }
+    }
+  );
+
   it.each(['room storage failure', 'publication refusal'] as const)(
     `keeps every retained ${mode} revision when checkpoint publication ends in %s`,
     async (stage) => {
@@ -672,6 +725,15 @@ for (const mode of ['inline', 'R2'] as const) {
           ).toEqual(revisionIdsBefore);
           if (bucket)
             expect(new Set(bucket.objects.keys())).toEqual(objectKeys);
+        } else {
+          // A failed storage acknowledgement can hide a committed room write.
+          // Its immutable body must remain available for recovery.
+          expect(
+            fixture.db
+              .prepare('SELECT id FROM revisions WHERE project_id = ?')
+              .all(fixture.document.projectId)
+          ).toHaveLength(MAX_PROJECT_REVISIONS + 1);
+          if (bucket) expect(bucket.objects.size).toBe(objectKeys.size + 1);
         }
         for (const key of objectKeys)
           expect(bucket?.objects.has(key)).toBe(true);
