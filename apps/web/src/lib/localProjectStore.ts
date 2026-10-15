@@ -300,15 +300,32 @@ function createExpectedStores(
     const checkpoints = database.createObjectStore(CHECKPOINT_STORE_NAME, {
       keyPath: ['projectId', 'checkpointId']
     });
-    // Original version index. Retention now uses the metadata keys below to
-    // also compare creation times: device-only names can share a version, and
-    // the random primary key cannot distinguish their age.
+    // Version and capture time provide the age ordering. Retention also
+    // protects a just-written point when both values tie at clock resolution.
     checkpoints.createIndex(CHECKPOINT_AGE_INDEX, [
       'projectId',
-      'documentVersion'
+      'documentVersion',
+      'createdAt'
     ]);
   }
   const checkpoints = upgrade?.objectStore(CHECKPOINT_STORE_NAME);
+  if (
+    checkpoints &&
+    (!checkpoints.indexNames.contains(CHECKPOINT_AGE_INDEX) ||
+      JSON.stringify(checkpoints.index(CHECKPOINT_AGE_INDEX).keyPath) !==
+        JSON.stringify(['projectId', 'documentVersion', 'createdAt']))
+  ) {
+    // Private points can name the same live model version repeatedly. Their
+    // capture time must order retention before the random primary key does.
+    if (checkpoints.indexNames.contains(CHECKPOINT_AGE_INDEX)) {
+      checkpoints.deleteIndex(CHECKPOINT_AGE_INDEX);
+    }
+    checkpoints.createIndex(CHECKPOINT_AGE_INDEX, [
+      'projectId',
+      'documentVersion',
+      'createdAt'
+    ]);
+  }
   if (
     checkpoints &&
     !checkpoints.indexNames.contains(CHECKPOINT_METADATA_INDEX)
