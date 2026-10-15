@@ -233,11 +233,12 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
     return closed || completeVertices >= 3;
   };
   /**
-   * Skips the name after `solid` or `endsolid`. Names may hold short facet
-   * prefixes. Inline geometry needs a closed body with a vertex of three
-   * coordinate-like tokens, or three such statements even if its closing
-   * marker is missing. Probe
-   * only to the next facet/solid boundary, then let the reader validate every
+   * Skips the name after `solid` or `endsolid`. Exact matching names on the
+   * delimiter lines are literal, even when they look like geometry. Otherwise
+   * names may hold short facet prefixes. Inline geometry needs a closed body
+   * with a vertex of three coordinate-like tokens, or three such statements
+   * even if its closing marker is missing. Probe only to the next facet/solid
+   * boundary, then let the reader validate every
    * coordinate and the closure; `nan` must not turn geometry into a name. A
    * one-line file has no line end to stop at, so there the name ends at the
    * first `facet` followed by `normal` or `outer`, and everything from it on
@@ -245,19 +246,40 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
    * cost is that a one-line file whose name itself says `facet normal` is
    * refused.
    */
-  const skipName = () => {
+  const solidBoundary =
+    /^[ \t]*(solid|endsolid)(?:[ \t]+([^\r\n]*))?[ \t]*$/gim;
+  let literalFooter = -1;
+  const skipName = (closing: boolean) => {
     const lineEnd = oneLine ? length : nextLineBreak();
+    const nameStart = index;
+    let literalName = closing && start === literalFooter;
+    if (!closing) literalFooter = -1;
     for (;;) {
       const mark = index;
       const token = next();
       if (token === null) return;
       if (
         start > lineEnd ||
-        (keywordOf(token) === 'facet' &&
+        (!literalName &&
+          keywordOf(token) === 'facet' &&
           (oneLine
             ? ['normal', 'outer'].includes(peekKeyword())
             : hasInlineFacetBody()))
       ) {
+        if (start <= lineEnd && !oneLine && !closing) {
+          // Matching literal delimiter names disambiguate a geometry-shaped
+          // name. Stop at the next solid boundary: several solids stay linear.
+          solidBoundary.lastIndex = lineEnd + 1;
+          const boundary = solidBoundary.exec(text);
+          if (
+            boundary?.[1]?.toLowerCase() === 'endsolid' &&
+            (boundary[2] ?? '').trim() === text.slice(nameStart, lineEnd).trim()
+          ) {
+            literalFooter = boundary.index + boundary[0].search(/\S/);
+            literalName = true;
+            continue;
+          }
+        }
         index = mark;
         return;
       }
@@ -287,7 +309,7 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
           `ASCII STL facet ${facets} is not closed by "endfacet".`
         );
       }
-      skipName();
+      skipName(keyword === 'endsolid');
     } else if (keyword === 'facet') {
       if (facetVertices >= 0) {
         throw new StlParseError(

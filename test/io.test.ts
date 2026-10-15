@@ -319,6 +319,76 @@ describe('STL parsing', () => {
       }
     );
 
+    it.each([
+      ['LF', '\n', '0 0 0'],
+      ['CRLF', '\r\n', '0 0 0'],
+      ['CR', '\r', '0 0 0'],
+      ['LF', '\n', 'nan 0 0'],
+      ['CRLF', '\r\n', 'nan 0 0'],
+      ['CR', '\r', 'nan 0 0']
+    ])(
+      'preserves an exactly repeated facet-shaped solid name (%s, ending %j, vertex %s)',
+      (_label, ending, first) => {
+        const phrase = `facet normal 0 0 1 outer loop vertex ${first} vertex 1 0 0 vertex 0 1 0 endloop endfacet`;
+        const name = `part ${phrase}`;
+        const body =
+          'facet normal 1 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet';
+        const parse = (footer: string) =>
+          parseStl(
+            new TextEncoder().encode(
+              `solid ${name}${ending}${body}${ending}endsolid${footer ? ' ' + footer : ''}`
+            ).buffer,
+            'literal-facet-name.stl'
+          );
+        const literal = parse(name);
+        expect(literal.triangleCount).toBe(1);
+        expect(literal.vertices).toEqual([0, 0, 0, 0, 1, 0, 0, 0, 1]);
+        // Without a matching end-marker name, the same header retains its
+        // inline-facet interpretation, including finite-coordinate validation.
+        for (const footer of ['', 'part']) {
+          if (first === 'nan 0 0')
+            expect(() => parse(footer)).toThrow(/finite numbers/i);
+          else {
+            expect(parse(footer).triangleCount).toBe(2);
+            expect(parse(footer).vertices).toEqual(TWO_FACETS);
+          }
+        }
+      }
+    );
+
+    it('does not match a facet-shaped name to a later solid block', () => {
+      const phrase =
+        'facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet';
+      const name = `part ${phrase}`;
+      const body =
+        'facet normal 1 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet';
+      const text = [
+        `solid ${name}`,
+        body,
+        'endsolid different',
+        `\tSOLID ${name}`,
+        body,
+        `\tENDSOLID ${name}`
+      ].join('\n');
+      const parsed = parseStl(
+        new TextEncoder().encode(text).buffer,
+        'bounded-names.stl'
+      );
+      expect(parsed.triangleCount).toBe(3);
+      expect(parsed.vertices).toEqual([
+        ...TWO_FACETS,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1
+      ]);
+    });
+
     it('reads an inline first STL facet whose vertex statements wrap onto later lines', () => {
       const text =
         'solid x facet normal 0 0 1 outer loop\n' +
