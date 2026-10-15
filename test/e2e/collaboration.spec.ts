@@ -7,7 +7,12 @@ import {
   stubEmailLoginApi,
   stubTurnstileLoadFailureApi
 } from './openzcad-fixtures';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  appendRevision,
+  createCheckpoint,
+  createProjectDocument
+} from '@openzcad/document-core';
+import type { ProjectDocument } from '@openzcad/shared';
 import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
 import { PROJECT_INVITATION_SESSION_KEY } from '../../apps/web/src/lib/projectInvitationLink';
@@ -743,9 +748,11 @@ for (const status of [404, 503]) {
     ).toBeVisible();
     await page.getByTitle('Back to projects').click();
     await expect(page.getByRole('tab', { name: 'Parts 1' })).toBeVisible();
-    await page.route('**/api/share/*', (route) =>
-      route.fulfill({ status, json: { error: 'Unavailable share' } })
-    );
+    let shareReads = 0;
+    await page.route('**/api/share/*', (route) => {
+      shareReads += 1;
+      return route.fulfill({ status, json: { error: 'Unavailable share' } });
+    });
     await page.evaluate(() => {
       window.location.hash = `share=${'f'.repeat(43)}`;
     });
@@ -766,6 +773,16 @@ for (const status of [404, 503]) {
       'Local project after failed link'
     );
     expect(new URL(page.url()).hash).toBe('');
+    expect(shareReads).toBe(1);
+    await page.reload();
+    await expect(page.locator('.breadcrumb')).toContainText(
+      'Local project after failed link'
+    );
+    await expect(
+      page.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeEnabled();
+    expect(new URL(page.url()).hash).toBe('');
+    expect(shareReads).toBe(1);
   });
 }
 
@@ -1254,6 +1271,27 @@ test('publishes editor checkpoints through the room without an account revision 
       }
     };
   });
+  await page.route(
+    `**/api/projects/${document.projectId}/collaboration`,
+    async (route) => {
+      const input = route.request().postDataJSON() as {
+        document: ProjectDocument;
+        checkpointReason: string;
+      };
+      const saved = createCheckpoint(
+        appendRevision(input.document, input.checkpointReason),
+        input.checkpointReason
+      );
+      await page.evaluate((saved) => {
+        (
+          window as unknown as { __checkpointDocuments: ProjectDocument[] }
+        ).__checkpointDocuments.push(saved);
+      }, saved);
+      return route.fulfill({
+        json: { type: 'ack', version: saved.version, document: saved }
+      });
+    }
+  );
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
   await page

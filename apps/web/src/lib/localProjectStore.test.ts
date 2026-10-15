@@ -23,6 +23,8 @@ import {
   hasSourceBlob,
   listLocalProjects,
   listLocalSaveStateIds,
+  listLocalSaveStateCheckpoints,
+  onLocalSaveStatesChanged,
   loadLocalSaveState,
   loadProjectMeasurements,
   saveProjectMeasurements,
@@ -969,6 +971,45 @@ describe('project measurements', () => {
 });
 
 describe('save states on the device', () => {
+  it('announces only committed snapshots and projects their checkpoint metadata', async () => {
+    const saved = createCheckpoint(
+      projectDocument('Private', 'proj-a'),
+      'Device milestone'
+    );
+    const announced = vi.fn();
+    const stop = onLocalSaveStatesChanged(announced);
+    const stopBrokenObserver = onLocalSaveStatesChanged(() => {
+      throw new Error('Observer failed.');
+    });
+    try {
+      const invalid = {
+        ...saved,
+        checkpoints: null
+      } as unknown as ProjectDocument;
+      await expect(saveLocalSaveStates([saved, invalid])).rejects.toThrow();
+      expect(announced).not.toHaveBeenCalled();
+      expect(await listLocalSaveStateCheckpoints('proj-a')).toEqual([]);
+      await expect(saveLocalSaveStates([saved])).resolves.toBeUndefined();
+      expect(announced).toHaveBeenCalledExactlyOnceWith('proj-a');
+      expect(await listLocalSaveStateCheckpoints('proj-a')).toEqual([
+        saved.checkpoints.at(-1)
+      ]);
+      expect(await loadLocalProject('proj-a')).toBeNull();
+      expect(
+        (
+          await loadLocalSaveState(
+            'proj-a',
+            saved.checkpoints.at(-1)!.checkpointId
+          )
+        )?.nodes
+      ).toEqual(saved.nodes);
+      expect(await listLocalSaveStateCheckpoints('other-project')).toEqual([]);
+    } finally {
+      stop();
+      stopBrokenObserver();
+    }
+  });
+
   /** A document sitting exactly on a save point, as an explicit save leaves it. */
   function savedDocument(
     name: string,
@@ -1084,6 +1125,57 @@ describe('save states on the device', () => {
     expect(restored?.derived.warnings).toEqual(['kept']);
   });
 
+  it('upgrades version-11 save states and lists metadata using keys without reading snapshot values', async () => {
+    const saved = savedDocument(
+      'Legacy checkpoint',
+      'proj-a',
+      'Before upgrade'
+    );
+    const checkpoint = saved.checkpoints.at(-1)!;
+    const open = indexedDB.open(DATABASE_NAME, 11);
+    open.onupgradeneeded = () => {
+      const states = open.result.createObjectStore(
+        'projectCheckpointDocuments',
+        {
+          keyPath: ['projectId', 'checkpointId']
+        }
+      );
+      states.createIndex('byProjectDocumentVersion', [
+        'projectId',
+        'documentVersion'
+      ]);
+    };
+    const legacy = await request(open);
+    const tx = legacy.transaction('projectCheckpointDocuments', 'readwrite');
+    tx.objectStore('projectCheckpointDocuments').put({
+      projectId: saved.projectId,
+      ...checkpoint,
+      document: saved
+    });
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(failed(tx.error));
+    });
+    legacy.close();
+    const bodyCursor = vi
+      .spyOn(IDBIndex.prototype, 'openCursor')
+      .mockImplementation(() => {
+        throw new Error(
+          'History listing must not materialize snapshot bodies.'
+        );
+      });
+    try {
+      expect(await listLocalSaveStateCheckpoints(saved.projectId)).toEqual([
+        checkpoint
+      ]);
+    } finally {
+      bodyCursor.mockRestore();
+    }
+    expect(
+      await loadLocalSaveState(saved.projectId, checkpoint.checkpointId)
+    ).toEqual(saved);
+  });
+
   it('keeps the newest saves and drops the oldest past the bound', async () => {
     let document = projectDocument('Busy', 'proj-a');
     const reasons: string[] = [];
@@ -1099,6 +1191,12 @@ describe('save states on the device', () => {
 
     const stored = await listLocalSaveStateIds('proj-a');
     expect(stored.size).toBe(MAX_LOCAL_CHECKPOINT_DOCUMENTS);
+    const metadata = await listLocalSaveStateCheckpoints('proj-a');
+    expect(metadata).toHaveLength(MAX_LOCAL_CHECKPOINT_DOCUMENTS);
+    expect(new Set(metadata.map((point) => point.checkpointId))).toEqual(
+      stored
+    );
+    expect(metadata.every((point) => !('document' in point))).toBe(true);
     const kept = document.checkpoints.filter((checkpoint) =>
       stored.has(checkpoint.checkpointId)
     );
@@ -1108,6 +1206,86 @@ describe('save states on the device', () => {
       reasons.slice(-MAX_LOCAL_CHECKPOINT_DOCUMENTS)
     );
   });
+
+  it.each(['fresh', 'version 12'] as const)(
+    'retains the newest same-version private saves in %s storage',
+    async (initialSchema) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      let legacy: IDBDatabase | null = null;
+      try {
+        vi.setSystemTime(new Date('2026-10-15T00:00:00Z'));
+        if (initialSchema === 'version 12') {
+          const open = indexedDB.open(DATABASE_NAME, 12);
+          open.onupgradeneeded = () => {
+            const states = open.result.createObjectStore(
+              'projectCheckpointDocuments',
+              {
+                keyPath: ['projectId', 'checkpointId']
+              }
+            );
+            states.createIndex('byProjectDocumentVersion', [
+              'projectId',
+              'documentVersion'
+            ]);
+            states.createIndex('byProjectCheckpointMetadata', [
+              'projectId',
+              'documentVersion',
+              'checkpointId',
+              'revisionId',
+              'createdAt',
+              'reason'
+            ]);
+          };
+          legacy = await request(open);
+        }
+        const current = projectDocument(
+          'Unchanged shared model',
+          'proj-private-retention'
+        );
+        const ids: string[] = [];
+        for (
+          let index = 0;
+          index < MAX_LOCAL_CHECKPOINT_DOCUMENTS + 4;
+          index += 1
+        ) {
+          vi.setSystemTime(new Date(Date.UTC(2026, 9, 15, 0, 0, index)));
+          const saved = createCheckpoint(
+            appendRevision(current, `Private ${index}`),
+            `Private ${index}`
+          );
+          const point = saved.checkpoints.at(-1)!;
+          // Newer keys sort first: UUID order must never decide which save wins.
+          point.checkpointId = `checkpoint_${String(10000 - index).padStart(6, '0')}`;
+          ids.push(point.checkpointId);
+          if (legacy && index < MAX_LOCAL_CHECKPOINT_DOCUMENTS) {
+            const tx = legacy.transaction(
+              'projectCheckpointDocuments',
+              'readwrite'
+            );
+            tx.objectStore('projectCheckpointDocuments').put({
+              projectId: saved.projectId,
+              ...point,
+              document: saved
+            });
+            await new Promise<void>((resolve, reject) => {
+              tx.oncomplete = () => resolve();
+              tx.onabort = () => reject(failed(tx.error));
+            });
+          } else {
+            legacy?.close();
+            legacy = null;
+            await saveLocalSaveStates([saved]);
+          }
+        }
+        expect(await listLocalSaveStateIds(current.projectId)).toEqual(
+          new Set(ids.slice(-MAX_LOCAL_CHECKPOINT_DOCUMENTS))
+        );
+      } finally {
+        legacy?.close();
+        vi.useRealTimers();
+      }
+    }
+  );
 
   it('reports a save this device never had, rather than inventing one', async () => {
     await saveLocalProject(projectDocument('Bracket', 'proj-a'));

@@ -65,7 +65,9 @@ export function saveGlyphFor(state: WorkspaceSaveState): SaveGlyph {
     state === 'conflict' ||
     state === 'repair' ||
     state === 'refused' ||
-    state === 'local-source'
+    state === 'local-source' ||
+    state === 'room-only' ||
+    state === 'checkpoint-failed'
   ) {
     return 'warning';
   }
