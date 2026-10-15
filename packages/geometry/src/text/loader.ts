@@ -16,7 +16,12 @@ import type { Font } from 'opentype.js';
 
 /** Resolves a bundled asset file name to its bytes. */
 export type FontDataSource = (
-  request: Readonly<{ file: string; url: string; family: string; style: FontStyle }>
+  request: Readonly<{
+    file: string;
+    url: string;
+    family: string;
+    style: FontStyle;
+  }>
 ) => Promise<ArrayBuffer>;
 
 export interface LoadedFont {
@@ -128,18 +133,63 @@ export class FontLibrary {
 /**
  * A `FontDataSource` backed by `fetch`. Browser and worker use this; the URL
  * comes from the registry, so the app only has to serve the asset directory.
+ * An optional idle deadline includes response headers and body bytes. Each
+ * body chunk renews it, so a progressing face may outlive the preload budget.
+ * Rejection releases the in-flight face even if a fetch ignores cancellation.
  */
 export function fetchFontDataSource(
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  idleTimeoutMs?: number
 ): FontDataSource {
   return async ({ url, family, style }) => {
-    const response = await fetchImpl(url);
-    if (!response.ok) {
-      throw new TextGeometryError(
-        `Font asset for ${family} ${style} responded ${response.status} (${url}).`
-      );
+    const controller =
+      idleTimeoutMs === undefined ? null : new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let renewBudget = () => {};
+    const load = async () => {
+      const response = controller
+        ? await fetchImpl(url, { signal: controller.signal })
+        : await fetchImpl(url);
+      if (!response.ok) {
+        throw new TextGeometryError(
+          `Font asset for ${family} ${style} responded ${response.status} (${url}).`
+        );
+      }
+      if (controller && response.body) {
+        renewBudget();
+        return await new Response(
+          response.body.pipeThrough(
+            new TransformStream<Uint8Array, Uint8Array>({
+              transform(chunk, output) {
+                renewBudget();
+                output.enqueue(chunk);
+              }
+            })
+          )
+        ).arrayBuffer();
+      }
+      return await response.arrayBuffer();
+    };
+    if (!controller) return load();
+    try {
+      const expired = new Promise<ArrayBuffer>((_resolve, reject) => {
+        renewBudget = () => {
+          if (controller.signal.aborted) return;
+          if (timer !== undefined) clearTimeout(timer);
+          timer = setTimeout(() => {
+            const error = new TextGeometryError(
+              `Font asset for ${family} ${style} exceeded its download idle budget (${url}).`
+            );
+            controller.abort(error);
+            reject(error);
+          }, idleTimeoutMs);
+        };
+        renewBudget();
+      });
+      return await Promise.race([load(), expired]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
-    return response.arrayBuffer();
   };
 }
 
