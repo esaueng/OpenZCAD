@@ -247,8 +247,10 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
    * cost is that a one-line file whose name itself says `facet normal` is
    * refused.
    */
+  // A single separator avoids backtracking across a run of whitespace.
   const solidBoundary =
-    /(?:^([\t\v\f ]*)|[\t\v\f ]+)(solid|endsolid)(?=[\t\v\f \r\n]|$)([^\r\n]*)/gim;
+    /(^|[\t\v\f \r\n])(solid|endsolid)(?=[\t\v\f \r\n]|$)/gim;
+  const footerName = /[^\r\n]*/y;
   const atLineStart = (at: number): boolean => {
     while (at > 0) {
       const previous = text.charCodeAt(--at);
@@ -281,14 +283,22 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
           // name. Stop at any solid marker; only a standalone footer names it.
           solidBoundary.lastIndex = lineEnd + 1;
           const boundary = solidBoundary.exec(text);
+          const footer = boundary
+            ? boundary.index + (boundary[1]?.length ?? 0)
+            : -1;
           if (
-            boundary?.[1] !== undefined &&
-            boundary[2]?.toLowerCase() === 'endsolid' &&
-            (boundary[3] ?? '').trim() === text.slice(nameStart, lineEnd).trim()
+            boundary?.[2]?.toLowerCase() === 'endsolid' &&
+            atLineStart(footer)
           ) {
-            literalFooter = boundary.index + boundary[0].search(/\S/);
-            literalName = true;
-            continue;
+            footerName.lastIndex = solidBoundary.lastIndex;
+            if (
+              footerName.exec(text)?.[0].trim() ===
+              text.slice(nameStart, lineEnd).trim()
+            ) {
+              literalFooter = footer;
+              literalName = true;
+              continue;
+            }
           }
         }
         index = mark;
