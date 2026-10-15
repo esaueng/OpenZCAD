@@ -953,7 +953,12 @@ export function adoptProjectDocument(
   ownerUserId: UserId,
   name = source.name
 ): ProjectDocument {
-  const copy = cloneDocument(normalizeDocument(source));
+  // An adopted project receives a new account home. Archived source IDs are
+  // owned by its old project; keep their checksum bytes available for upload
+  // rather than claiming those foreign IDs belong to the new account copy.
+  const copy = localizeImportedSourceArtifacts(
+    cloneDocument(normalizeDocument(source))
+  );
   const rootNode = copy.nodes[copy.rootNodeId];
   if (rootNode?.kind === 'project') {
     copy.nodes[copy.rootNodeId] = { ...rootNode, name };
