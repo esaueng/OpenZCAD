@@ -19,7 +19,18 @@ const STAGE_TOKENS: Record<
   gridMajor: '--color-stage-grid-major'
 };
 
-const HEX = /^#[0-9a-f]{6}$/i;
+/**
+ * The production CSS minifier shortens `#eeeeee` to `#eee`, so the short form
+ * is what the light stage actually ships. Rejecting it dropped the backdrop's
+ * middle stop to the graphite fallback: a black band across the light stage.
+ */
+const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+function expandHex(value: string): string {
+  return value.length === 4
+    ? `#${[...value.slice(1)].map((digit) => digit + digit).join('')}`
+    : value;
+}
 
 export function readStagePalette(element: Element): StagePalette {
   const styles = window.getComputedStyle(element);
@@ -29,7 +40,7 @@ export function readStagePalette(element: Element): StagePalette {
     string
   ][]) {
     const value = styles.getPropertyValue(token).trim();
-    if (HEX.test(value)) palette[key] = value;
+    if (HEX.test(value)) palette[key] = expandHex(value);
   }
   const shadow = Number.parseFloat(
     styles.getPropertyValue('--stage-shadow-opacity')
