@@ -7,7 +7,12 @@ import {
   stubEmailLoginApi,
   stubTurnstileLoadFailureApi
 } from './openzcad-fixtures';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  appendRevision,
+  createCheckpoint,
+  createProjectDocument
+} from '@openzcad/document-core';
+import type { ProjectDocument } from '@openzcad/shared';
 import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
 import { PROJECT_INVITATION_SESSION_KEY } from '../../apps/web/src/lib/projectInvitationLink';
@@ -1266,6 +1271,27 @@ test('publishes editor checkpoints through the room without an account revision 
       }
     };
   });
+  await page.route(
+    `**/api/projects/${document.projectId}/collaboration`,
+    async (route) => {
+      const input = route.request().postDataJSON() as {
+        document: ProjectDocument;
+        checkpointReason: string;
+      };
+      const saved = createCheckpoint(
+        appendRevision(input.document, input.checkpointReason),
+        input.checkpointReason
+      );
+      await page.evaluate((saved) => {
+        (
+          window as unknown as { __checkpointDocuments: ProjectDocument[] }
+        ).__checkpointDocuments.push(saved);
+      }, saved);
+      return route.fulfill({
+        json: { type: 'ack', version: saved.version, document: saved }
+      });
+    }
+  );
   await page.goto('/');
   await page.getByLabel('Project name').fill(document.name);
   await page

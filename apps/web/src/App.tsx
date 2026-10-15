@@ -10285,6 +10285,42 @@ export function App() {
     let accountWriteStarted = false;
     let savingDocument = savingManager.document;
     try {
+      if (sharedAccountProject) {
+        const navigation = fragmentNavigationRef.current;
+        const userId = sessionRef.current?.userId;
+        const isCurrent = () =>
+          isCurrentProject() &&
+          fragmentNavigationRef.current === navigation &&
+          sessionRef.current?.userId === userId;
+        setSaveState('saving');
+        try {
+          const saved = await collaboration.saveCheckpoint(
+            savingDocument,
+            reason,
+            {
+              isCurrent,
+              readDocument: () => savingManager.document,
+              applyDocument: showAccountEcho
+            }
+          );
+          if (isCurrent()) {
+            setSaveState(
+              savingManager.document.version === saved.version
+                ? 'synced'
+                : 'syncing'
+            );
+            setStatus('Saved revision.');
+          }
+        } catch (error) {
+          if (isCurrent()) {
+            setSaveState('local');
+            setStatus(
+              errorMessage(error, 'The named save could not be confirmed.')
+            );
+          }
+        }
+        return;
+      }
       await projectOwnershipSettledRef.current;
       if (
         !isCurrentProject() ||
@@ -10310,22 +10346,6 @@ export function App() {
         setSaveState(
           collaboration.conflict || accountConflict ? 'conflict' : 'local'
         );
-        return;
-      }
-      if (sharedAccountProject) {
-        // The room publishes changed document versions, while the owner's
-        // account checkpoint endpoint deliberately refuses member writes.
-        // Commit the save point before yielding so later edits descend from it.
-        savingDocument = createCheckpoint(
-          appendRevision(savingDocument, reason),
-          reason
-        );
-        showAccountEcho(savingDocument);
-        await saveLocalProject(savingDocument);
-        if (isCurrentProject())
-          setStatus(
-            'Saved revision on this device · sharing through the room.'
-          );
         return;
       }
       if (

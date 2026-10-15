@@ -1,5 +1,9 @@
 import { test, expect, stubApi } from './openzcad-fixtures';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  appendRevision,
+  createCheckpoint,
+  createProjectDocument
+} from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 
 test('a member editor saves a named checkpoint through the lease-checked room', async ({
@@ -26,6 +30,13 @@ test('a member editor saves a named checkpoint through the lease-checked room', 
     })
   );
   let accountWrites = 0;
+  const checkpointRequests: Array<{
+    document: ProjectDocument;
+    baseVersion: number;
+    leaseId: string;
+    checkpointReason: string;
+  }> = [];
+  const checkpointDocuments: ProjectDocument[] = [];
   for (const endpoint of ['document', 'revisions']) {
     await page.route(
       `**/api/projects/${document.projectId}/${endpoint}`,
@@ -40,6 +51,23 @@ test('a member editor saves a named checkpoint through the lease-checked room', 
       }
     );
   }
+  await page.route(
+    `**/api/projects/${document.projectId}/collaboration`,
+    (route) => {
+      const submitted = route
+        .request()
+        .postDataJSON() as (typeof checkpointRequests)[number];
+      checkpointRequests.push(submitted);
+      const saved = createCheckpoint(
+        appendRevision(submitted.document, submitted.checkpointReason),
+        submitted.checkpointReason
+      );
+      checkpointDocuments.push(saved);
+      return route.fulfill({
+        json: { type: 'ack', version: saved.version, document: saved }
+      });
+    }
+  );
   await page.addInitScript(() => {
     const browser = window as unknown as {
       __checkpointSocket: WebSocket;
@@ -105,44 +133,21 @@ test('a member editor saves a named checkpoint through the lease-checked room', 
   await expect(
     page.locator('.revision-row', { hasText: 'Member milestone' })
   ).toBeVisible();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () =>
-          (window as unknown as { __checkpointFrames: unknown[] })
-            .__checkpointFrames.length
-      )
-    )
-    .toBe(1);
-  const frames = await page.evaluate(
-    () =>
-      (
-        window as unknown as {
-          __checkpointFrames: Array<{
-            document: ProjectDocument;
-            baseVersion: number;
-            leaseId: string;
-          }>;
-        }
-      ).__checkpointFrames
-  );
-  const checkpoint = frames.at(0);
+  await expect.poll(() => checkpointRequests.length).toBe(1);
+  const checkpoint = checkpointRequests.at(0);
   expect(checkpoint).toBeDefined();
   if (!checkpoint) throw new Error('No checkpoint was published to the room.');
   expect(checkpoint.baseVersion).toBe(document.version);
   expect(checkpoint.leaseId).toBe('member_checkpoint_lease');
-  expect(checkpoint.document.checkpoints.at(-1)?.reason).toBe(
-    'Member milestone'
-  );
-  expect(checkpoint.document.version).toBe(document.version + 1);
-  expect(checkpoint.document.checkpoints.at(-1)?.documentVersion).toBe(
-    checkpoint.document.version
-  );
-  expect(checkpoint.document.revisions).toHaveLength(
-    document.revisions.length + 1
-  );
-  expect(checkpoint.document.checkpoints.at(-1)?.revisionId).toBe(
-    checkpoint.document.revisions.at(-1)?.revisionId
+  expect(checkpoint.checkpointReason).toBe('Member milestone');
+  const saved = checkpointDocuments.at(0);
+  if (!saved) throw new Error('No durable checkpoint was acknowledged.');
+  expect(saved.checkpoints.at(-1)?.reason).toBe('Member milestone');
+  expect(saved.version).toBe(document.version + 1);
+  expect(saved.checkpoints.at(-1)?.documentVersion).toBe(saved.version);
+  expect(saved.revisions).toHaveLength(document.revisions.length + 1);
+  expect(saved.checkpoints.at(-1)?.revisionId).toBe(
+    saved.revisions.at(-1)?.revisionId
   );
   expect(checkpoint.document.nodes).toEqual(document.nodes);
   expect(checkpoint.document.commandLog).toEqual(document.commandLog);
@@ -162,7 +167,7 @@ test('a member editor saves a named checkpoint through the lease-checked room', 
       socket.dispatchEvent(
         new MessageEvent('message', { data: JSON.stringify(frame) })
       );
-  }, checkpoint.document);
+  }, saved);
   const modes = page.getByRole('group', { name: 'Workspace mode' });
   await expect(modes.getByRole('button', { name: 'Build' })).toBeDisabled();
   await expect(modes.getByRole('button', { name: 'View' })).toHaveAttribute(
@@ -187,6 +192,7 @@ test('a member editor saves a named checkpoint through the lease-checked room', 
         (window as unknown as { __checkpointFrames: unknown[] })
           .__checkpointFrames.length
     )
-  ).toBe(1);
+  ).toBe(0);
+  expect(checkpointRequests).toHaveLength(1);
   expect(accountWrites).toBe(0);
 });
