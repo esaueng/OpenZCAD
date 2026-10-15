@@ -3418,8 +3418,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * seed face resolves by hash plus optional v5 reference, exactly like a
    * direct-edit commit; any resolution miss answers `seed-face-missing`
    * rather than throwing, because a stale pick is a display state, not a
-   * build failure. Dimensions are scaled from kernel millimetres into
-   * document units before publishing; the refusal reason travels verbatim.
+   * build failure. Dimensions are published as measured: the rebuilt solid
+   * is already in document units, exactly as the measure pass publishes its
+   * `recognizedImportedFeatures`. The refusal reason travels verbatim.
    */
   async recognizeImportedFace(
     input: Parameters<ExactKernelAdapter['recognizeImportedFace']>[0]
@@ -3479,15 +3480,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           message: recognitionRefusalMessage(outcome.reason)
         };
       }
-      const scale = 1 / UNIT_TO_MM[input.document.units];
-      const dimensions = Object.fromEntries(
-        Object.entries(importedProofDisplayDimensions(outcome.proof)).map(
-          ([key, value]) => [
-            key,
-            key === 'angleRadians' ? value : value * scale
-          ]
-        )
-      );
+      // Already document units: the import adopted the solid at
+      // 1/UNIT_TO_MM, so scaling again shrank an inch document's 5 mm bore
+      // to 0.0078 in, disagreeing with the measure pass by 25.4×.
+      const dimensions = importedProofDisplayDimensions(outcome.proof);
       const proofKind = outcome.proof.kind;
       const kindLabel =
         proofKind === 'blind-cylindrical-hole'
