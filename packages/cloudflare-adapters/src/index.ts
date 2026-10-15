@@ -2448,7 +2448,35 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     // Room publication can still throw or refuse after the immutable insert.
     // Keep all previously acknowledged revisions until that second commit wins.
-    if (!(await publish())) return false;
+    if (!(await publish())) {
+      // A definitive refusal published nothing. Remove only this immutable
+      // insert; uncertain publication errors retain their recovery snapshot.
+      await this.env.DB.prepare(
+        `DELETE FROM revisions
+         WHERE id = ? AND project_id = ? AND document_json = ?
+           AND document_object_id IS ? AND author_user_id = ?`
+      )
+        .bind(
+          revision.revisionId,
+          saved.projectId,
+          storedJson,
+          write?.objectId ?? null,
+          userId
+        )
+        .run();
+      if (write) {
+        const cleanup = await this.reconcileProjectStorageWrite(
+          saved.projectId,
+          access.ownerUserId,
+          write
+        );
+        if (cleanup.state === 'unknown')
+          throw new ProjectObjectStorageError(
+            'Rejected checkpoint cleanup could not be verified.'
+          );
+      }
+      return false;
+    }
     await this.pruneRevisions(saved.projectId);
     await this.pruneUnreferencedProjectObjects(saved.projectId);
     return true;

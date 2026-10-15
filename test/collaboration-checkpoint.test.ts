@@ -524,6 +524,9 @@ for (const mode of ['inline', 'R2'] as const) {
             )
             .all(fixture.document.projectId);
         const before = retained();
+        const revisionIdsBefore = fixture.db
+          .prepare('SELECT id FROM revisions WHERE project_id = ? ORDER BY id')
+          .all(fixture.document.projectId);
         const objectKeys = new Set(bucket?.objects.keys());
         if (stage === 'room storage failure') {
           vi.spyOn(
@@ -547,6 +550,17 @@ for (const mode of ['inline', 'R2'] as const) {
           stage === 'room storage failure' ? 500 : 400
         );
         expect(retained()).toEqual(before);
+        if (stage === 'publication refusal') {
+          expect(
+            fixture.db
+              .prepare(
+                'SELECT id FROM revisions WHERE project_id = ? ORDER BY id'
+              )
+              .all(fixture.document.projectId)
+          ).toEqual(revisionIdsBefore);
+          if (bucket)
+            expect(new Set(bucket.objects.keys())).toEqual(objectKeys);
+        }
         for (const key of objectKeys)
           expect(bucket?.objects.has(key)).toBe(true);
         expect(fixture.storage.values.get('room:latest')).toEqual(
@@ -887,7 +901,7 @@ it.each([
   }
 );
 
-it('refuses success when copy cleanup blocks room publication after the snapshot was stored', async () => {
+it('removes the rejected snapshot when copy cleanup blocks room publication after insertion', async () => {
   const fixture = await setup();
   try {
     let claimed = false;
@@ -914,7 +928,7 @@ it('refuses success when copy cleanup blocks room publication after the snapshot
       fixture.db
         .prepare('SELECT COUNT(*) AS count FROM revisions WHERE project_id=?')
         .get(fixture.document.projectId)
-    ).toMatchObject({ count: 1 });
+    ).toMatchObject({ count: 0 });
     expect(fixture.storage.values.get('room:latest')).toEqual(fixture.document);
   } finally {
     fixture.db.close();
