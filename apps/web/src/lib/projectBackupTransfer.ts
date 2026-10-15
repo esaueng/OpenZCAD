@@ -8,6 +8,7 @@ import type { ArtifactRecord, ProjectDocument } from '@openzcad/shared';
 import { api } from './api';
 import {
   loadLastSyncedVersion,
+  listLocalSaveStateCheckpoints,
   loadLocalSaveState,
   loadProjectBackupFiles,
   loadProjectMeasurements,
@@ -108,16 +109,24 @@ export async function createProjectBackup(
       files.push(file);
     }
   }
-  for (const checkpoint of snapshot.checkpoints) {
+  const canonicalIds = new Set(
+    snapshot.checkpoints.map((checkpoint) => checkpoint.checkpointId)
+  );
+  const deviceOnly = (
+    await listLocalSaveStateCheckpoints(snapshot.projectId)
+  ).filter((checkpoint) => !canonicalIds.has(checkpoint.checkpointId));
+  for (const checkpoint of [...snapshot.checkpoints, ...deviceOnly]) {
+    const privatePoint = !canonicalIds.has(checkpoint.checkpointId);
     const saved =
       (await loadLocalSaveState(snapshot.projectId, checkpoint.checkpointId)) ??
-      (remote
+      (remote && !privatePoint
         ? await api.loadRevision(snapshot.projectId, checkpoint.revisionId)
         : null);
     if (saved) {
       const state = {
         checkpointId: checkpoint.checkpointId,
-        document: withoutDerivedProjection(saved)
+        document: withoutDerivedProjection(saved),
+        ...(privatePoint ? { deviceOnly: true as const } : {})
       };
       reserve(new Blob([JSON.stringify(state)]).size);
       backup.saveStates!.push(state);

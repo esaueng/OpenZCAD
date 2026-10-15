@@ -229,7 +229,8 @@ describe('what STL export actually writes', () => {
     // The exported mesh stays closed as well.
     const stl = measureStl(await adapter.exportStl(document, [bodyId]));
     expect(stl.openEdges).toBe(0);
-    expect(stl.facets).toBe(3234);
+    // Exact equator carriers in Remus 2026.1.62 refine the spherical boundary.
+    expect(stl.facets).toBe(5934);
     expect(derived.warnings).toEqual([]);
   }, 120_000);
 });

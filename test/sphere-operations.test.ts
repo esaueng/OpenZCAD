@@ -175,7 +175,7 @@ describe('a sphere under boolean and offset', () => {
       expect(faces).toBe(2);
       // And it uses the kernel's tolerance-driven analytic-sphere mesh, not
       // the 2588-plane polyhedron the old path substituted.
-      expect(triangles).toBe(24_964);
+      expect(triangles).toBe(98_536);
       expect(warnings).toEqual([]);
     }, 120_000);
 
@@ -301,7 +301,7 @@ describe('a sphere under boolean and offset', () => {
     it('hands the viewport a closed mesh', async () => {
       const { openEdges, triangles, warnings } = await overlappingCut();
       expect(openEdges).toBe(0);
-      expect(triangles).toBe(65_792);
+      expect(triangles).toBe(65_984);
       expect(warnings).toEqual([]);
     }, 120_000);
 

@@ -124,6 +124,7 @@ export const MEASUREMENT_STORE_NAME = 'projectMeasurements';
  */
 const CHECKPOINT_STORE_NAME = LOCAL_PROJECT_CHECKPOINT_STORE;
 const CHECKPOINT_AGE_INDEX = 'byProjectDocumentVersion';
+const CHECKPOINT_METADATA_INDEX = 'byProjectCheckpointMetadata';
 /**
  * Version 7 shipped the measurement store and, crucially, taught every opened
  * connection to close on `versionchange`. Every version after it — 8's claims,
@@ -299,19 +300,46 @@ function createExpectedStores(
     const checkpoints = database.createObjectStore(CHECKPOINT_STORE_NAME, {
       keyPath: ['projectId', 'checkpointId']
     });
-    // Checkpoint ids are random, so the primary key says nothing about age.
-    // Retention needs the oldest first, and listing what a project has stored
-    // must not deserialize documents to find out — both are key-only reads
-    // over this index.
-    //
-    // Ordered by document version rather than by timestamp: the version is the
-    // project's own clock and strictly increases, while `createdAt` has
-    // millisecond resolution and several saves can land inside one. Ties there
-    // are broken by the random primary key, which would let retention drop a
-    // newer save and keep an older one.
+    // Version and capture time provide the age ordering. Retention also
+    // protects a just-written point when both values tie at clock resolution.
     checkpoints.createIndex(CHECKPOINT_AGE_INDEX, [
       'projectId',
-      'documentVersion'
+      'documentVersion',
+      'createdAt'
+    ]);
+  }
+  const checkpoints = upgrade?.objectStore(CHECKPOINT_STORE_NAME);
+  if (
+    checkpoints &&
+    (!checkpoints.indexNames.contains(CHECKPOINT_AGE_INDEX) ||
+      JSON.stringify(checkpoints.index(CHECKPOINT_AGE_INDEX).keyPath) !==
+        JSON.stringify(['projectId', 'documentVersion', 'createdAt']))
+  ) {
+    // Private points can name the same live model version repeatedly. Their
+    // capture time must order retention before the random primary key does.
+    if (checkpoints.indexNames.contains(CHECKPOINT_AGE_INDEX)) {
+      checkpoints.deleteIndex(CHECKPOINT_AGE_INDEX);
+    }
+    checkpoints.createIndex(CHECKPOINT_AGE_INDEX, [
+      'projectId',
+      'documentVersion',
+      'createdAt'
+    ]);
+  }
+  if (
+    checkpoints &&
+    !checkpoints.indexNames.contains(CHECKPOINT_METADATA_INDEX)
+  ) {
+    // IndexedDB builds this projection for existing records during upgrade.
+    // A key cursor can then list history without cloning any snapshot body
+    // into JavaScript, including on the first open after the upgrade.
+    checkpoints.createIndex(CHECKPOINT_METADATA_INDEX, [
+      'projectId',
+      'documentVersion',
+      'checkpointId',
+      'revisionId',
+      'createdAt',
+      'reason'
     ]);
   }
 }
@@ -393,7 +421,11 @@ function openDatabase(): Promise<IDBDatabase> {
     () =>
       new Promise<IDBDatabase>((resolve, reject) => {
         const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
-        request.onupgradeneeded = () => createExpectedStores(request.result);
+        request.onupgradeneeded = () =>
+          createExpectedStores(
+            request.result,
+            request.transaction ?? undefined
+          );
         request.onsuccess = () => {
           const database = request.result;
           database.onversionchange = () => database.close();
@@ -931,6 +963,18 @@ export function saveLocalProject(document: ProjectDocument): Promise<void> {
   );
 }
 
+const saveStateListeners = new Set<(projectId: string) => void>();
+
+/** Device-only history refreshes never change the collaborative document. */
+export function onLocalSaveStatesChanged(
+  listener: (projectId: string) => void
+): () => void {
+  saveStateListeners.add(listener);
+  return () => {
+    saveStateListeners.delete(listener);
+  };
+}
+
 /**
  * Stores the save states these documents ARE, and nothing else.
  *
@@ -958,7 +1002,19 @@ export function saveLocalSaveStates(
         }
       }
     }
-  );
+  ).then(() => {
+    for (const projectId of new Set(
+      documents.map((document) => document.projectId)
+    )) {
+      for (const listener of saveStateListeners) {
+        try {
+          listener(projectId);
+        } catch {
+          /* Observers cannot fail a durable write. */
+        }
+      }
+    }
+  });
 }
 
 /**
@@ -1005,7 +1061,7 @@ async function putSaveState(
     document: withoutDerivedProjection(document)
   };
   store.put(record);
-  await pruneSaveStates(store, document.projectId);
+  await pruneSaveStates(store, document.projectId, checkpoint.checkpointId);
 }
 
 /**
@@ -1015,15 +1071,22 @@ async function putSaveState(
  */
 async function pruneSaveStates(
   store: IDBObjectStore,
-  projectId: string
+  projectId: string,
+  writtenCheckpointId: string
 ): Promise<void> {
-  const index = store.index(CHECKPOINT_AGE_INDEX);
-  const oldestFirst = await settled(
-    index.getAllKeys(checkpointKeyRange(projectId))
+  const oldestFirst = (await retainedCheckpointMetadata(store, projectId)).sort(
+    (left, right) =>
+      left.documentVersion - right.documentVersion ||
+      Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+      // A just-written name must survive even when the clock's resolution
+      // cannot distinguish it from earlier saves of the same model version.
+      Number(left.checkpointId === writtenCheckpointId) -
+        Number(right.checkpointId === writtenCheckpointId) ||
+      left.checkpointId.localeCompare(right.checkpointId)
   );
   const excess = oldestFirst.length - MAX_LOCAL_CHECKPOINT_DOCUMENTS;
   for (let position = 0; position < excess; position += 1) {
-    store.delete(oldestFirst[position]!);
+    store.delete([projectId, oldestFirst[position]!.checkpointId]);
   }
 }
 
@@ -1085,6 +1148,54 @@ export function listLocalSaveStateIds(projectId: string): Promise<Set<string>> {
       );
     }
   );
+}
+
+/** Project retained checkpoint metadata without collecting snapshot bodies. */
+export function listLocalSaveStateCheckpoints(
+  projectId: string
+): Promise<ProjectCheckpoint[]> {
+  return scopedTransaction(
+    'readonly',
+    [CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
+    async (store) => {
+      const resolved = await resolvedProjectId(
+        store(ALIAS_STORE_NAME),
+        projectId
+      );
+      return retainedCheckpointMetadata(store(CHECKPOINT_STORE_NAME), resolved);
+    }
+  );
+}
+
+/** Read index keys only, shared by history listing and retention. */
+function retainedCheckpointMetadata(
+  store: IDBObjectStore,
+  projectId: string
+): Promise<ProjectCheckpoint[]> {
+  return new Promise<ProjectCheckpoint[]>((resolve, reject) => {
+    const checkpoints: ProjectCheckpoint[] = [];
+    const request = store
+      .index(CHECKPOINT_METADATA_INDEX)
+      .openKeyCursor(checkpointKeyRange(projectId));
+    request.onerror = () =>
+      reject(
+        request.error ?? new Error('Local save states could not be read.')
+      );
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return resolve(checkpoints);
+      const [, documentVersion, checkpointId, revisionId, createdAt, reason] =
+        cursor.key as [string, number, string, RevisionId, string, string];
+      checkpoints.push({
+        checkpointId,
+        revisionId,
+        documentVersion,
+        createdAt,
+        reason
+      });
+      cursor.continue();
+    };
+  });
 }
 
 export function loadLocalProject(
@@ -1892,7 +2003,9 @@ export async function saveImportedProject(
       store(BACKUP_STORE_NAME).put(backup.files, document.projectId);
       for (const source of sources) store(BLOB_STORE_NAME).put(source);
       for (const state of backup.saveStates ?? []) {
-        const checkpoint = document.checkpoints.find(
+        const checkpoint = (
+          state.deviceOnly ? state.document : document
+        ).checkpoints.find(
           (entry) => entry.checkpointId === state.checkpointId
         )!;
         store(CHECKPOINT_STORE_NAME).put({

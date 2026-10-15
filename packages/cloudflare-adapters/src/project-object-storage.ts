@@ -204,23 +204,31 @@ async function visitHistoryPayloads(
  * The browser document remains self-contained. Only this cloud projection
  * replaces imported STEP text and expanded mesh arrays with content-addressed
  * references, including the duplicate copies held by import commands.
+ * A declined asset stays embedded throughout the snapshot and its history.
  */
 export async function prepareProjectStorageSnapshot(
-  document: ProjectDocument
+  document: ProjectDocument,
+  options?: {
+    externalizeAsset?: (
+      reference: ProjectStorageAssetReference
+    ) => Promise<boolean>;
+  }
 ): Promise<PreparedProjectStorageSnapshot> {
   const projected = JSON.parse(JSON.stringify(document)) as Record<
     string,
     unknown
   >;
   const assetsByKey = new Map<string, ProjectStorageAssetObject>();
+  const embeddedKeys = new Set<string>();
 
   const addAsset = async (
     kind: ProjectStorageAssetKind,
     logicalBody: Uint8Array,
     contentType: string
-  ): Promise<ProjectStorageAssetReference> => {
+  ): Promise<ProjectStorageAssetReference | null> => {
     const checksumSha256 = await sha256Hex(logicalBody);
     const objectKey = assetObjectKey(document.projectId, kind, checksumSha256);
+    if (embeddedKeys.has(objectKey)) return null;
     const existing = assetsByKey.get(objectKey);
     if (existing) {
       return {
@@ -233,15 +241,25 @@ export async function prepareProjectStorageSnapshot(
         contentEncoding: existing.contentEncoding
       };
     }
-    const storedBody = await gzip(logicalBody);
-    const asset: ProjectStorageAssetObject = {
+    const reference: ProjectStorageAssetReference = {
       marker: PROJECT_ASSET_REFERENCE_MARKER,
       version: PROJECT_ASSET_REFERENCE_VERSION,
       kind,
       objectKey,
       checksumSha256,
       logicalBytes: logicalBody.byteLength,
-      contentEncoding: 'gzip',
+      contentEncoding: 'gzip'
+    };
+    if (
+      options?.externalizeAsset &&
+      !(await options.externalizeAsset(reference))
+    ) {
+      embeddedKeys.add(objectKey);
+      return null;
+    }
+    const storedBody = await gzip(logicalBody);
+    const asset: ProjectStorageAssetObject = {
+      ...reference,
       storedBody,
       storedBytes: storedBody.byteLength,
       contentType
@@ -263,11 +281,12 @@ export async function prepareProjectStorageSnapshot(
     if (typeof payload.stepText !== 'string') {
       return;
     }
-    payload.stepText = await addAsset(
+    const reference = await addAsset(
       'step-source',
       bytesFor(payload.stepText),
       'application/step'
     );
+    if (reference) payload.stepText = reference;
   };
 
   const externalizeMesh = async (payload: Record<string, unknown>) => {
@@ -278,11 +297,13 @@ export async function prepareProjectStorageSnapshot(
     const logicalBody = bytesFor(
       JSON.stringify({ vertices: payload.vertices, indices: payload.indices })
     );
-    payload[MESH_PAYLOAD_REFERENCE_KEY] = await addAsset(
+    const reference = await addAsset(
       'mesh-payload',
       logicalBody,
       'application/json'
     );
+    if (!reference) return;
+    payload[MESH_PAYLOAD_REFERENCE_KEY] = reference;
     delete payload.vertices;
     delete payload.indices;
   };
