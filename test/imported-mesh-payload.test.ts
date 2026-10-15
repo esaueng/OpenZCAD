@@ -502,6 +502,38 @@ describe(
 );
 
 describe('referenced mesh rebuilds', { timeout: 120_000 }, () => {
+  it('retries a transient payload miss instead of restoring the missing mesh', async () => {
+    const { ref, bytes } = payloadReference(boxSoup());
+    const manager = referencedMeshDocument(ref, 12, 'artifact_mesh_retry');
+    let resolverCalls = 0;
+    const retrying = await createExactKernelAdapter({
+      resolveSourceBytes: async () => {
+        resolverCalls += 1;
+        if (resolverCalls === 1)
+          throw new Error('Network temporarily unavailable.');
+        return bytes;
+      }
+    });
+    try {
+      const missed = await retrying.syncDocument(manager.document);
+      expect(Object.keys(missed.bodyRepresentations)).toHaveLength(0);
+      expect(missed.warnings.join('\n')).toContain(
+        'not available on this device'
+      );
+      const retried = await retrying.syncDocument(manager.document);
+      expect(retrying.hasTransientFailures(missed)).toBe(true);
+      expect(Object.keys(retried.bodyRepresentations)).toHaveLength(1);
+      expect(
+        retried.bodyRepresentations[manager.document.bodyOrder[0]!]!.volume
+      ).toBeCloseTo(6000, 6);
+      expect(retried.warnings).toEqual([]);
+      expect(retrying.hasTransientFailures(retried)).toBe(false);
+      expect(resolverCalls).toBe(2);
+    } finally {
+      retrying.dispose();
+    }
+  });
+
   let adapter: ExactKernelAdapter;
   const payloads = new Map<string, Uint8Array>();
   const requests: {
@@ -512,8 +544,8 @@ describe('referenced mesh rebuilds', { timeout: 120_000 }, () => {
 
   beforeAll(async () => {
     adapter = await createExactKernelAdapter({
-      async resolveSourceBytes(ref, context) {
-        requests.push({ checksum: ref.checksumSha256, ...context });
+      async resolveSourceBytes(ref, { artifactId, sourceName }) {
+        requests.push({ checksum: ref.checksumSha256, artifactId, sourceName });
         const bytes = payloads.get(ref.checksumSha256);
         if (!bytes) throw new Error('not here');
         return bytes;

@@ -15,6 +15,7 @@ import { toBodyId, toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   combinedVerdictIsUniform,
   mixedExtrudeRefusal,
+  regionExtrudeOutcome,
   regionInferenceRefusal,
   resolveExtrudeOperation
 } from './extrudeInference';
@@ -68,6 +69,29 @@ describe('mixedExtrudeRefusal', () => {
     ).toBe(
       'The selected profiles sit over different bodies; extrude them separately.'
     );
+  });
+});
+
+describe('regionExtrudeOutcome', () => {
+  // The status line printed the stored token: "(new-body)", "(cut)", "(add)".
+  it('says what the extrusion did in words, not the stored operation token', () => {
+    const resolvedAs = (operation: 'new-body' | 'add' | 'cut') => ({
+      inference: { operation }
+    });
+    expect(regionExtrudeOutcome(resolvedAs('new-body'), 10, 'mm')).toBe(
+      'Extruded region by 10 mm as a new body.'
+    );
+    expect(regionExtrudeOutcome(resolvedAs('cut'), -8, 'mm')).toBe(
+      'Extruded region by -8 mm, cut into the body.'
+    );
+    expect(regionExtrudeOutcome(resolvedAs('add'), 0.5, 'inch')).toBe(
+      'Extruded region by 0.5 inch, added to the body.'
+    );
+    for (const operation of ['new-body', 'cut', 'add'] as const) {
+      expect(regionExtrudeOutcome(resolvedAs(operation), 1, 'mm')).not.toMatch(
+        /[()]/
+      );
+    }
   });
 });
 
