@@ -27,7 +27,11 @@ import {
   isDesktopApp
 } from './desktopBridge';
 import { cloudFunctionsAreEnabled } from './cloudMode';
-import { projectPreservesLocalWork } from './localProjectStore';
+import {
+  chooseProjectDocument,
+  projectPreservesLocalWork,
+  projectsHaveSameCanonicalContent
+} from './localProjectStore';
 
 export type CollaborationStatus =
   | 'connecting'
@@ -629,15 +633,32 @@ export function useCollaboration({
             }
             serverVersionRef.current = message.document.version;
             setRoomVersion(message.document.version);
-            // A viewer cannot submit local work, so the room is authoritative.
-            // Editors must keep a divergent offline document until their lease
-            // is granted and the room answers that submission with ack/conflict.
+            // Establish the merge base before requesting a lease. Otherwise an
+            // unchanged observer looks like unsent work on every broadcast.
+            // Content/lineage proves adoption safe; a genuinely divergent
+            // offline edit still waits for the room's fenced submission.
             const retained = retainConflict(message.document);
-            if (message.role === 'viewer' && !retained) {
+            const local = documentRef.current;
+            const canAdopt =
+              message.role === 'viewer' ||
+              chooseProjectDocument(local, message.document).choice ===
+                'remote';
+            if (canAdopt && !retained) {
               lastSentVersionRef.current = message.document.version;
               baseVersionRef.current = message.document.version;
               documentRef.current = message.document;
-              remoteHandlerRef.current(message.document);
+              if (
+                message.role === 'viewer' ||
+                !local ||
+                local.version !== message.document.version ||
+                !projectsHaveSameCanonicalContent(local, message.document)
+              ) {
+                if (message.role === 'viewer') {
+                  remoteHandlerRef.current(message.document);
+                } else {
+                  remoteHandlerRef.current(message.document, { adopted: true });
+                }
+              }
             }
           }
           if (
