@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parseStepMetadata } from '@openzcad/io-step';
 import {
   MAX_IMPORT_TRIANGLES,
@@ -387,6 +387,52 @@ describe('STL parsing', () => {
         0,
         1
       ]);
+    });
+
+    it('does not use a closing name beyond an inline solid marker', () => {
+      const first =
+        'facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet';
+      const second =
+        'facet normal 1 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet';
+      const name = `part ${first}`;
+      const text = `solid ${name}\n${second} solid other\n${second}\nendsolid ${name}`;
+      expect(
+        parseStl(new TextEncoder().encode(text).buffer, 'inline-boundary.stl')
+          .triangleCount
+      ).toBe(4);
+    });
+
+    it('bounds matching-name scans when many solid markers share a line', () => {
+      const facet =
+        'facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet';
+      const text =
+        Array.from({ length: 100 }, () => `solid x ${facet}`).join(' ') +
+        '\n' +
+        Array.from({ length: 50 }, () => facet).join('\n') +
+        '\nendsolid different';
+      const original = RegExp.prototype.exec;
+      let scanned = 0;
+      const spy = vi
+        .spyOn(RegExp.prototype, 'exec')
+        .mockImplementation(function (this: RegExp, input: string) {
+          const from = this.lastIndex;
+          const result = original.call(this, input);
+          if (input === text) {
+            scanned +=
+              (result ? result.index + result[0].length : input.length) - from;
+          }
+          return result;
+        });
+      try {
+        expect(
+          parseStl(new TextEncoder().encode(text).buffer, 'inline-solids.stl')
+            .triangleCount
+        ).toBe(150);
+      } finally {
+        spy.mockRestore();
+      }
+      // Bound actual regex scan ranges, avoiding a machine-dependent timer.
+      expect(scanned).toBeLessThanOrEqual(text.length * 5);
     });
 
     it('reads an inline first STL facet whose vertex statements wrap onto later lines', () => {

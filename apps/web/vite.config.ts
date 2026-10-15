@@ -489,6 +489,9 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // and interaction captures. Keep this pure document helper in
               // the same preloaded model chunk without another request.
               id.includes('/apps/web/src/lib/projectDiagnostics.ts') ||
+              // Static top-bar modes and save-state presentation remain in
+              // the existing preloaded UI/model graph, including offline.
+              id.includes('/apps/web/src/lib/topBarPresentation.ts') ||
               // Export eligibility and sweep disclosure inspect document
               // history/topology. Keep them with the same preloaded model
               // helpers so their integration does not grow the entry chunk.
