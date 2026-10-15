@@ -194,9 +194,13 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
   /** Whether the whole file is one line, trailing line breaks aside. */
   const body = text.trimEnd();
   const oneLine = !body.includes('\n') && !body.includes('\r');
+  const inlineFacetBody =
+    /\s+(?:normal\s+\S+\s+\S+\s+\S+\s+)?outer\s+loop\s+vertex(?:\s|$)/iy;
   /**
-   * Skips the name after `solid` or `endsolid`. In a file of several lines
-   * the name is the rest of its line, always, whatever words it holds. A
+   * Skips the name after `solid` or `endsolid`. Names may hold keywords; an
+   * inline facet's `outer loop vertex` body distinguishes it from a name in
+   * a file with later line breaks. Its vertices are validated by the reader,
+   * so malformed inline geometry cannot disappear into the name. A
    * one-line file has no line end to stop at, so there the name ends at the
    * first `facet` followed by `normal` or `outer`, and everything from it on
    * is geometry — a malformed facet is refused, never read as a name. The
@@ -209,11 +213,13 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
       const mark = index;
       const token = next();
       if (token === null) return;
+      inlineFacetBody.lastIndex = index;
       if (
-        oneLine
-          ? keywordOf(token) === 'facet' &&
-            ['normal', 'outer'].includes(peekKeyword())
-          : start > lineEnd
+        start > lineEnd ||
+        (keywordOf(token) === 'facet' &&
+          (oneLine
+            ? ['normal', 'outer'].includes(peekKeyword())
+            : inlineFacetBody.test(text)))
       ) {
         index = mark;
         return;
