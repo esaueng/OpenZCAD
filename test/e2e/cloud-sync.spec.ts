@@ -447,12 +447,104 @@ async function renameProject(page: Page, name: string): Promise<void> {
   ).toContainText(name);
 }
 
-for (const action of ['edit', 'leave', 'switch'] as const) {
+test('drains a pending account edit before opening a public share', async ({
+  page
+}) => {
+  const api = new SharedCloudProjectApi();
+  await api.install(page);
+  const shared = createProjectDocument(
+    'Public navigation target',
+    toUserId('other_owner')
+  );
+  await page.route('**/api/share/*', (route) =>
+    route.fulfill({
+      json: { document: shared, project: { name: shared.name }, mode: 'tweak' }
+    })
+  );
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Account before navigation');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible();
+  await page.waitForTimeout(1500);
+  await page.clock.install({ time: 0 });
+  await page.clock.pauseAt(60_000);
+  await renameProject(page, 'Account edit retained');
+  expect(api.project?.name).toBe('Account before navigation');
+  await page.evaluate(() => {
+    window.location.hash = `share=${'p'.repeat(43)}`;
+  });
+  await expect(page.locator('.breadcrumb')).toContainText(shared.name);
+  expect(api.project?.name).toBe('Account edit retained');
+  await expect(
+    page.getByRole('button', { name: 'Make a copy', exact: true })
+  ).toBeVisible();
+});
+
+test('drains a pending account edit before opening an invitation', async ({
+  page
+}) => {
+  const api = new SharedCloudProjectApi();
+  await stubApi(page, { collaborationRole: 'owner' });
+  await api.install(page);
+  const invited = createProjectDocument(
+    'Invitation navigation target',
+    toUserId('other_owner')
+  );
+  await page.route('**/api/collaboration/config', (route) =>
+    route.fulfill({
+      json: {
+        sharingEnabled: true,
+        editLeasesEnforced: false,
+        personalSyncEnabled: false,
+        canary: false
+      }
+    })
+  );
+  await page.route('**/api/project-invitations/accept', (route) =>
+    route.fulfill({ json: { projectId: invited.projectId, role: 'editor' } })
+  );
+  await page.route(`**/api/projects/${invited.projectId}`, (route) =>
+    route.fulfill({ json: invited })
+  );
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Account before invitation');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible();
+  await page.waitForTimeout(1500);
+  await page.clock.install({ time: 0 });
+  await page.clock.pauseAt(60_000);
+  await renameProject(page, 'Invitation edit retained');
+  expect(api.project?.name).toBe('Account before invitation');
+  await page.evaluate(() => {
+    window.location.hash = `invite=${'i'.repeat(43)}`;
+  });
+  await expect(page.locator('.breadcrumb')).toContainText(invited.name);
+  expect(api.project?.name).toBe('Invitation edit retained');
+});
+
+for (const action of ['edit', 'leave', 'switch', 'share'] as const) {
   test(`preserves the active workspace after a pending manual save and ${action}`, async ({
     page
   }) => {
     const api = new SharedCloudProjectApi();
     await api.install(page);
+    const shared = createProjectDocument(
+      'Shared during checkpoint',
+      toUserId('other_owner')
+    );
+    await page.route('**/api/share/*', (route) =>
+      route.fulfill({
+        json: {
+          document: shared,
+          project: { name: shared.name },
+          mode: 'tweak'
+        }
+      })
+    );
     await page.goto('/');
     await page.getByLabel('Project name').fill('Pending save');
     await page.getByRole('button', { name: 'Create project' }).click();
@@ -483,6 +575,11 @@ for (const action of ['edit', 'leave', 'switch'] as const) {
     try {
       if (action === 'edit') {
         await renameProject(page, 'Newer edit');
+      } else if (action === 'share') {
+        await page.evaluate(() => {
+          window.location.hash = `share=${'s'.repeat(43)}`;
+        });
+        await expect(page.locator('.breadcrumb')).toContainText(shared.name);
       } else {
         await page.getByTitle('Back to projects').click();
         await expect(
@@ -501,7 +598,14 @@ for (const action of ['edit', 'leave', 'switch'] as const) {
     }
     // Let the response and the following IndexedDB writes finish before asserting.
     await page.waitForTimeout(1000);
-    if (action === 'leave') {
+    if (action === 'share') {
+      await expect(page.locator('.breadcrumb')).toContainText(shared.name);
+      await expect(
+        page.getByRole('button', { name: 'Make a copy', exact: true })
+      ).toBeVisible();
+      expect(await storedProjectNames(page)).toContain('Pending save');
+      expect(await storedProjectNames(page)).not.toContain(shared.name);
+    } else if (action === 'leave') {
       await expect(
         page.getByRole('button', { name: 'Create project' })
       ).toBeVisible();

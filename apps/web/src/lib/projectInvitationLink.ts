@@ -1,3 +1,5 @@
+import { projectLinkPath } from './projectShareLink';
+
 const PROJECT_INVITATION_SESSION_KEY = 'openzcad:pending-project-invitation:v1';
 const PROJECT_INVITATION_TOKEN = /^[A-Za-z0-9_-]{40,128}$/;
 
@@ -37,11 +39,7 @@ export function captureProjectInvitationLink(
   const hashWasInvitation = location.hash.startsWith('#invite=');
   const fromHash = projectInvitationTokenFromHash(location.hash);
   if (hashWasInvitation) {
-    history.replaceState(
-      history.state,
-      '',
-      `${location.pathname}${location.search}`
-    );
+    history.replaceState(history.state, '', projectLinkPath(location));
   }
   try {
     if (fromHash) {

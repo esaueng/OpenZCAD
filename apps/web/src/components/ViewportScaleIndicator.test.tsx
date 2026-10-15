@@ -13,23 +13,25 @@ describe('ViewportScaleIndicator', () => {
     vi.restoreAllMocks();
   });
 
-  it('strokes the rule in the viewport colours, not the themed chrome ones', () => {
-    // The light theme turns the chrome text dark; the viewport stays dark.
+  it('strokes the rule in the stage ink, not the chrome text colours', () => {
+    // The rule sits straight on the stage, so it follows the stage's ink
+    // rather than the chrome's, which can differ from it.
     const tokens: Record<string, string> = {
       '--color-text': '#111111',
       '--color-text-muted': '#222222',
       '--color-accent': '#333333',
-      '--color-viewport-text': '#eeeeee',
-      '--color-viewport-text-muted': '#dddddd',
+      '--color-stage-ink': '#eeeeee',
+      '--color-stage-ink-muted': '#dddddd',
       '--color-preselect': '#cccccc'
     };
     const computed = window.getComputedStyle.bind(window);
-    vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) =>
-      element instanceof HTMLCanvasElement
-        ? ({
-            getPropertyValue: (name: string) => tokens[name] ?? ''
-          } as unknown as CSSStyleDeclaration)
-        : computed(element, pseudo)
+    vi.spyOn(window, 'getComputedStyle').mockImplementation(
+      (element, pseudo) =>
+        element instanceof HTMLCanvasElement
+          ? ({
+              getPropertyValue: (name: string) => tokens[name] ?? ''
+            } as unknown as CSSStyleDeclaration)
+          : computed(element, pseudo)
     );
     const strokes: string[] = [];
     const context = {
