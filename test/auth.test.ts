@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toUserId } from '@openzcad/shared';
+import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
+import { deleteAccountData } from '../apps/web/worker/accountDeletion';
+import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
 
 import {
   assistantProviderIdentity,
@@ -53,6 +56,7 @@ async function verificationD1(
   let attempts = 0;
   let consumedAt: number | null = null;
   let incorrectUpdates = 0;
+  const sessionHashes = new Set<string>();
   const expiresAt = Math.floor(Date.now() / 1000) + 600;
   let releaseLegacyIncorrectUpdates!: () => void;
   const legacyIncorrectUpdateGate = new Promise<void>((resolve) => {
@@ -81,40 +85,44 @@ async function verificationD1(
         return null;
       },
       async run() {
-        if (query.includes('SET attempts = CASE')) {
-          const codeMatches = Number(values[0]) === 1;
-          if (!codeMatches) {
-            incorrectUpdates += 1;
-          }
+        if (query.includes('INSERT INTO auth_sessions')) {
           if (
             consumedAt !== null ||
-            attempts >= Number(values[4]) ||
-            expiresAt < Number(values[5])
+            attempts >= Number(values[6]) ||
+            expiresAt < Number(values[7])
           ) {
             return { success: true, meta: { changes: 0 } };
           }
-          if (codeMatches) {
-            consumedAt = Number(values[2]);
-          } else {
-            attempts += 1;
-          }
+          sessionHashes.add(String(values[0]));
           return { success: true, meta: { changes: 1 } };
         }
         if (query.includes('SET attempts = attempts + 1')) {
           incorrectUpdates += 1;
-          if (options.stallLegacyIncorrectUpdates) {
+          if (
+            options.stallLegacyIncorrectUpdates &&
+            !query.includes('AND attempts < ?')
+          ) {
             await legacyIncorrectUpdateGate;
           }
-          if (consumedAt === null) {
-            attempts += 1;
+          if (
+            consumedAt !== null ||
+            attempts >= Number(values[1]) ||
+            expiresAt < Number(values[2])
+          ) {
+            return { success: true, meta: { changes: 0 } };
           }
+          attempts += 1;
           return { success: true, meta: { changes: 1 } };
         }
         if (
           query.includes('UPDATE auth_email_challenges') &&
           query.includes('SET consumed_at')
         ) {
-          if (consumedAt !== null) {
+          if (
+            consumedAt !== null ||
+            (query.includes('FROM auth_sessions') &&
+              !sessionHashes.has(String(values[2])))
+          ) {
             return { success: true, meta: { changes: 0 } };
           }
           consumedAt = Number(values[0]);
@@ -131,7 +139,9 @@ async function verificationD1(
   const db: D1Database = {
     prepare,
     async batch(statements) {
-      return Promise.all(statements.map((statement) => statement.run()));
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      return results;
     }
   };
   return {
@@ -201,6 +211,55 @@ function loginStartD1() {
     }
   };
   return { db, challenge: () => challenge };
+}
+
+/**
+ * Real sign-in code flow for one email on migrated SQLite, with Turnstile
+ * and the email binding stubbed. `start(ip)` requests a code from that
+ * address; `sent` holds every emailed code in order.
+ */
+function signInHarness(email = 'person@example.com') {
+  const sent: string[] = [];
+  const env = {
+    ENVIRONMENT: 'beta' as const,
+    AUTH_MODE: 'email-code' as const,
+    DB: sqliteD1(migratedDatabase()),
+    EMAIL: {
+      send: async (message: EmailMessageBuilder) => {
+        sent.push(message.subject.slice(0, 6));
+        return { messageId: `message-${sent.length}` };
+      }
+    },
+    AUTH_EMAIL_FROM: 'login@auth.example.com',
+    AUTH_OTP_PEPPER: 'test-pepper',
+    TURNSTILE_SITE_KEY: 'site-key',
+    TURNSTILE_SECRET_KEY: 'turnstile-secret'
+  };
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () =>
+      Response.json({
+        success: true,
+        action: 'email-code',
+        hostname: 'example.com'
+      })
+    )
+  );
+  const start = (ip: string) =>
+    startEmailLogin(
+      new Request('https://example.com/api/auth/email/start', {
+        headers: { 'cf-connecting-ip': ip }
+      }),
+      { email, turnstileToken: 'turnstile-token' },
+      env
+    );
+  const verify = (challengeId: string, code: string) =>
+    verifyEmailLogin({ challengeId, code }, env);
+  return { env, sent, start, verify };
+}
+
+function wrongCode(code: string): string {
+  return code === '000000' ? '000001' : '000000';
 }
 
 afterEach(() => {
@@ -574,6 +633,423 @@ describe('worker authentication', () => {
     expect(failures.every((result) => result.status === 'rejected')).toBe(true);
     expect(fixture.attempts()).toBe(5);
     expect(fixture.consumedAt()).toBeNull();
+  });
+});
+
+// SEC-3 (project review, 14 October 2026): one shared per-email request
+// limit, and every new request voiding the pending code, let anyone who knew
+// an address keep that account from signing in with ~3 Turnstile solves per
+// 15 minutes.
+describe('sign-in cannot be denied by someone who only knows the email', () => {
+  it.each(['profile', 'all'] as const)(
+    'allows immediate sign-in after deleting %s data without resetting other limits',
+    async (scope) => {
+      const { env, sent, start, verify } = signInHarness();
+      const first = await start('198.51.100.7');
+      const firstCode = sent.at(-1)!;
+      await start('198.51.100.7');
+      await start('198.51.100.7');
+      for (let request = 0; request < 3; request += 1)
+        await start('198.51.100.8');
+      const startOtherEmail = () =>
+        startEmailLogin(
+          new Request('https://example.com/api/auth/email/start', {
+            headers: { 'cf-connecting-ip': '198.51.100.7' }
+          }),
+          { email: 'other@example.com', turnstileToken: 'turnstile-token' },
+          env
+        );
+      await startOtherEmail();
+      const { session } = await verify(first.challengeId, firstCode);
+      const deletionEnv = {
+        ...env,
+        PROJECT_STORAGE: {
+          put: vi.fn(),
+          get: vi.fn(),
+          delete: vi.fn()
+        } as unknown as R2Bucket,
+        PROJECT_ROOM: { getByName: vi.fn() } as never
+      };
+      await expect(
+        deleteAccountData(
+          session,
+          { scope, confirmation: session.email },
+          deletionEnv,
+          new D1R2PersistenceService(deletionEnv)
+        )
+      ).resolves.toMatchObject({ ok: true, signedOut: true });
+
+      // Both requesters exhausted three codes before deletion. Neither may
+      // retain a silent limiter after its pending challenges have been erased.
+      for (const ip of ['198.51.100.7', '198.51.100.8']) {
+        const sentCount = sent.length;
+        const reopened = await start(ip);
+        expect(sent).toHaveLength(sentCount + 1);
+        await expect(
+          verify(reopened.challengeId, sent.at(-1)!)
+        ).resolves.toHaveProperty('cookie');
+      }
+      // Deleting one email must preserve another email's requester budget.
+      const sentCount = sent.length;
+      await startOtherEmail();
+      const otherPending = await startOtherEmail();
+      const otherRepeat = await startOtherEmail();
+      expect(sent).toHaveLength(sentCount + 2);
+      expect(otherRepeat.challengeId).toBe(otherPending.challengeId);
+
+      // The shared IP budget also survives deletion, including the requests
+      // made before it. These are requests nine, ten and eleven from this IP.
+      await start('198.51.100.7');
+      await start('198.51.100.7');
+      await expect(start('198.51.100.7')).rejects.toMatchObject({
+        status: 429,
+        code: 'AUTH_RATE_LIMITED'
+      });
+    }
+  );
+
+  async function reachFailureLimit(
+    harness: ReturnType<typeof signInHarness>
+  ): Promise<void> {
+    for (let host = 1; host <= 4; host += 1) {
+      const challenge = await harness.start(`203.0.113.${host}`);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await expect(
+          harness.verify(challenge.challengeId, wrongCode(harness.sent.at(-1)!))
+        ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+      }
+    }
+  }
+
+  it("keeps the victim's pending code valid when someone else requests one", async () => {
+    const { sent, start, verify } = signInHarness();
+    const victim = await start('198.51.100.7');
+    const victimCode = sent.at(-1)!;
+
+    await start('203.0.113.1');
+
+    await expect(verify(victim.challengeId, victimCode)).resolves.toMatchObject(
+      { session: { email: 'person@example.com' } }
+    );
+  });
+
+  it('sends the victim a code after three requests from other addresses', async () => {
+    const { sent, start, verify } = signInHarness();
+    await start('203.0.113.1');
+    await start('203.0.113.2');
+    await start('203.0.113.3');
+
+    const victim = await start('198.51.100.7');
+
+    expect(victim.expiresInSeconds).toBe(600);
+    expect(sent).toHaveLength(4);
+    await expect(verify(victim.challengeId, sent[3]!)).resolves.toMatchObject({
+      session: { email: 'person@example.com' }
+    });
+  });
+
+  it("answers a requester's throttled repeat with its pending code and sends nothing", async () => {
+    const { sent, start, verify } = signInHarness();
+    await start('198.51.100.7');
+    await start('198.51.100.7');
+    const third = await start('198.51.100.7');
+
+    const repeat = await start('198.51.100.7');
+
+    expect(sent).toHaveLength(3);
+    expect(repeat.challengeId).toBe(third.challengeId);
+    expect(repeat.expiresInSeconds).toBeGreaterThan(0);
+    expect(repeat.expiresInSeconds).toBeLessThanOrEqual(600);
+    await expect(verify(repeat.challengeId, sent[2]!)).resolves.toMatchObject({
+      session: { email: 'person@example.com' }
+    });
+  });
+
+  it('resumes an earlier usable code when the newest code has spent its one try', async () => {
+    const harness = signInHarness();
+    const { sent, start, verify } = harness;
+    await reachFailureLimit(harness);
+    await start('198.51.100.7');
+    const usable = await start('198.51.100.7');
+    const usableCode = sent.at(-1)!;
+    const locked = await start('198.51.100.7');
+    await expect(
+      verify(locked.challengeId, wrongCode(sent.at(-1)!))
+    ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+
+    const sentCount = sent.length;
+    const repeat = await start('198.51.100.7');
+
+    expect(sent).toHaveLength(sentCount);
+    expect(repeat.challengeId).toBe(usable.challengeId);
+    await expect(verify(repeat.challengeId, usableCode)).resolves.toMatchObject(
+      {
+        session: { email: 'person@example.com' }
+      }
+    );
+  });
+
+  it('returns no spent one-try challenge when a requester has no usable code left', async () => {
+    const harness = signInHarness();
+    const { sent, start, verify } = harness;
+    await reachFailureLimit(harness);
+    const spent = [];
+    for (let request = 0; request < 3; request += 1) {
+      const challenge = await start('198.51.100.7');
+      spent.push(challenge.challengeId);
+      await expect(
+        verify(challenge.challengeId, wrongCode(sent.at(-1)!))
+      ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+    }
+
+    const sentCount = sent.length;
+    const repeat = await start('198.51.100.7');
+
+    expect(sent).toHaveLength(sentCount);
+    expect(spent).not.toContain(repeat.challengeId);
+    await expect(
+      verify(repeat.challengeId, sent.at(-1)!)
+    ).rejects.toMatchObject({
+      code: 'AUTH_CODE_INVALID'
+    });
+  });
+
+  it('caps codes per email across requesters without a refusal', async () => {
+    const { sent, start, verify } = signInHarness();
+    for (let host = 1; host <= 10; host += 1) {
+      await start(`203.0.113.${host}`);
+    }
+    expect(sent).toHaveLength(10);
+
+    const capped = await start('198.51.100.7');
+
+    expect(sent).toHaveLength(10);
+    expect(capped.expiresInSeconds).toBe(600);
+    await expect(verify(capped.challengeId, sent[9]!)).rejects.toMatchObject({
+      code: 'AUTH_CODE_INVALID'
+    });
+  });
+
+  it("cancels every one of the email's pending codes on a successful sign-in", async () => {
+    const { sent, start, verify } = signInHarness();
+    const first = await start('198.51.100.7');
+    const second = await start('203.0.113.1');
+
+    await verify(first.challengeId, sent[0]!);
+
+    await expect(verify(second.challengeId, sent[1]!)).rejects.toMatchObject({
+      code: 'AUTH_CODE_INVALID'
+    });
+  });
+
+  it('permits only one session when sibling verifications overlap', async () => {
+    const { env, sent, start, verify } = signInHarness();
+    const first = await start('198.51.100.7');
+    const second = await start('203.0.113.1');
+    const batch = env.DB.batch.bind(env.DB);
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // Stop the first sign-in just before its session transaction. On the
+    // regressed implementation its individual code was already consumed.
+    vi.spyOn(env.DB, 'batch').mockImplementationOnce(async (statements) => {
+      entered();
+      await gate;
+      return batch(statements);
+    });
+    const pending = verify(first.challengeId, sent[0]!);
+    const firstOutcome = expect(pending).rejects.toMatchObject({
+      code: 'AUTH_CODE_INVALID'
+    });
+    await waiting;
+    try {
+      await expect(
+        verify(second.challengeId, sent[1]!)
+      ).resolves.toHaveProperty('cookie');
+    } finally {
+      release();
+    }
+    await firstOutcome;
+    const sessions = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM auth_sessions'
+    ).first<{ count: number }>();
+    expect(sessions?.count).toBe(1);
+  });
+
+  it('consumes a code once when the same correct verification arrives concurrently', async () => {
+    const { env, sent, start, verify } = signInHarness();
+    const challenge = await start('198.51.100.7');
+    const outcomes = await Promise.allSettled([
+      verify(challenge.challengeId, sent[0]!),
+      verify(challenge.challengeId, sent[0]!)
+    ]);
+
+    expect(
+      outcomes.filter((outcome) => outcome.status === 'fulfilled')
+    ).toHaveLength(1);
+    const rejected = outcomes.filter(
+      (outcome) => outcome.status === 'rejected'
+    );
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({
+      reason: { code: 'AUTH_CODE_INVALID' }
+    });
+    const sessions = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM auth_sessions'
+    ).first<{ count: number }>();
+    expect(sessions?.count).toBe(1);
+  });
+
+  it('leaves every code usable if the session transaction rolls back', async () => {
+    const { env, sent, start, verify } = signInHarness();
+    const first = await start('198.51.100.7');
+    const second = await start('203.0.113.1');
+    const batch = env.DB.batch.bind(env.DB);
+    vi.spyOn(env.DB, 'batch').mockImplementationOnce((statements) =>
+      batch([...statements, env.DB.prepare('SELECT * FROM missing_auth_table')])
+    );
+
+    await expect(verify(first.challengeId, sent[0]!)).rejects.toThrow(
+      'no such table'
+    );
+    const pending = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM auth_email_challenges WHERE consumed_at IS NULL'
+    ).first<{ count: number }>();
+    const sessions = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM auth_sessions'
+    ).first<{ count: number }>();
+    expect(pending?.count).toBe(2);
+    expect(sessions?.count).toBe(0);
+    await expect(verify(second.challengeId, sent[1]!)).resolves.toHaveProperty(
+      'cookie'
+    );
+  });
+
+  it.each(['verification', 'throttled reuse'] as const)(
+    'keeps guesses near expiry in the failure window for %s',
+    async (operation) => {
+      const { sent, start, verify } = signInHarness();
+      let clock = Date.parse('2026-10-14T08:00:00Z');
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      try {
+        const challenges = [];
+        for (let host = 1; host <= 4; host += 1) {
+          const challenge = await start(`203.0.113.${host}`);
+          challenges.push({ ...challenge, code: sent.at(-1)! });
+        }
+        // Spend the guesses late in each code's ten-minute lifetime.
+        clock += 9 * 60 * 1000;
+        for (const challenge of challenges) {
+          for (let attempt = 0; attempt < 5; attempt += 1) {
+            await expect(
+              verify(challenge.challengeId, wrongCode(challenge.code))
+            ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+          }
+        }
+        // The codes were created more than a day ago, but these failures
+        // are only 23 hours and 56 minutes old. Request cleanup must retain them.
+        clock += (24 * 60 - 4) * 60 * 1000;
+        if (operation === 'verification') {
+          const limited = await start('198.51.100.7');
+          const code = sent.at(-1)!;
+          await expect(
+            verify(limited.challengeId, wrongCode(code))
+          ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+          await expect(verify(limited.challengeId, code)).rejects.toMatchObject(
+            {
+              status: 429,
+              code: 'AUTH_CODE_LOCKED'
+            }
+          );
+          const owner = await start('198.51.100.8');
+          await expect(
+            verify(owner.challengeId, sent.at(-1)!)
+          ).resolves.toHaveProperty('cookie');
+
+          // Expiry is the conservative upper bound on the last failure.
+          // Once that bound is more than a day old, five attempts return.
+          clock += 5 * 60 * 1000 + 1000;
+          const recovered = await start('198.51.100.7');
+          const recoveredCode = sent.at(-1)!;
+          await expect(
+            verify(recovered.challengeId, wrongCode(recoveredCode))
+          ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+          await expect(
+            verify(recovered.challengeId, recoveredCode)
+          ).resolves.toHaveProperty('cookie');
+        } else {
+          await start('198.51.100.7');
+          const usable = await start('198.51.100.7');
+          const usableCode = sent.at(-1)!;
+          const spent = await start('198.51.100.7');
+          await expect(
+            verify(spent.challengeId, wrongCode(sent.at(-1)!))
+          ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+          const sentCount = sent.length;
+          const repeat = await start('198.51.100.7');
+          expect(sent).toHaveLength(sentCount);
+          expect(repeat.challengeId).toBe(usable.challengeId);
+          await expect(
+            verify(repeat.challengeId, usableCode)
+          ).resolves.toHaveProperty('cookie');
+        }
+      } finally {
+        now.mockRestore();
+      }
+    }
+  );
+
+  it('allows one try per code after a day of failed codes, without locking out', async () => {
+    const { sent, start, verify } = signInHarness();
+    let clock = Date.parse('2026-10-14T08:00:00Z');
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    try {
+      // Twenty wrong codes: four codes, five failures each.
+      for (let host = 1; host <= 4; host += 1) {
+        const { challengeId } = await start(`203.0.113.${host}`);
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          await expect(
+            verify(challengeId, wrongCode(sent.at(-1)!))
+          ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+        }
+      }
+
+      // An hour later every one of those codes has expired, and the
+      // failures still count.
+      clock += 60 * 60 * 1000;
+      const oneTry = await start('198.51.100.7');
+      const oneTryCode = sent.at(-1)!;
+      await expect(
+        verify(oneTry.challengeId, wrongCode(oneTryCode))
+      ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+      await expect(
+        verify(oneTry.challengeId, oneTryCode)
+      ).rejects.toMatchObject({ status: 429, code: 'AUTH_CODE_LOCKED' });
+
+      // The owner still signs in with a code entered correctly first time.
+      const owner = await start('198.51.100.8');
+      await expect(
+        verify(owner.challengeId, sent.at(-1)!)
+      ).resolves.toMatchObject({ session: { email: 'person@example.com' } });
+
+      // A day after those failures every code gets five tries again.
+      clock += 24 * 60 * 60 * 1000;
+      const nextDay = await start('198.51.100.7');
+      const nextDayCode = sent.at(-1)!;
+      await expect(
+        verify(nextDay.challengeId, wrongCode(nextDayCode))
+      ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+      await expect(
+        verify(nextDay.challengeId, nextDayCode)
+      ).resolves.toMatchObject({ session: { email: 'person@example.com' } });
+    } finally {
+      now.mockRestore();
+    }
   });
 });
 
