@@ -1,5 +1,6 @@
 import {
   isDocumentHistory,
+  MAX_CHECKPOINT_REASON_LENGTH,
   type CollaborationMember,
   type CollaborationServerMessage,
   type ProjectAccessRole,
@@ -189,4 +190,11 @@ export function abortableCheckpoint<T>(
       }
     );
   });
+}
+
+export function normalizeCheckpointReason(reason: string): string {
+  const normalized = reason.trim() || 'Saved';
+  return normalized.length > MAX_CHECKPOINT_REASON_LENGTH
+    ? `${normalized.slice(0, MAX_CHECKPOINT_REASON_LENGTH - 1)}…`
+    : normalized;
 }
