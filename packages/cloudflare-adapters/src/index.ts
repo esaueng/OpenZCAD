@@ -2336,7 +2336,9 @@ export class D1R2PersistenceService implements PersistenceService {
     const documentJson = JSON.stringify(saved);
     const documentBytes = persistedDocumentBytes(saved);
     const write = this.projectStorageBucket()
-      ? await this.putProjectStorageObjects(saved)
+      ? await this.putProjectStorageObjects(saved, {
+          reuseExistingAssetsOnly: true
+        })
       : null;
     const storedJson = write
       ? projectObjectEnvelope(saved, write.objectId)
@@ -2393,8 +2395,7 @@ export class D1R2PersistenceService implements PersistenceService {
               revision.revisionId,
               saved.projectId,
               write.objectId
-            ),
-            ...this.projectAssetStatements(saved.projectId, write, true)
+            )
           ])
         : await this.env.DB.batch([insert]);
       if (results[write ? 1 : 0]?.meta?.changes !== 1) {
@@ -4186,7 +4187,8 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   private async putProjectStorageObjects(
-    document: ProjectDocument
+    document: ProjectDocument,
+    options?: { reuseExistingAssetsOnly?: boolean }
   ): Promise<ProjectStorageWrite> {
     const bucket = this.projectStorageBucket();
     if (!bucket) {
@@ -4195,7 +4197,35 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     this.assertCloudDocumentWithinCeiling(document);
-    const prepared = await prepareProjectStorageSnapshot(document);
+    // Checkpoints publish to a room after inserting their immutable snapshot.
+    // Until publication wins, new sources belong only to that snapshot: keep
+    // them embedded so refusal can remove them without racing a canonical save
+    // that reused the same content-addressed asset. Existing shared assets are
+    // still deduplicated and never acquire checkpoint-only metadata.
+    const prepared = await prepareProjectStorageSnapshot(
+      document,
+      options?.reuseExistingAssetsOnly
+        ? {
+            externalizeAsset: async (reference) => {
+              const existing = await this.env.DB!.prepare(
+                `SELECT stored_bytes FROM project_storage_assets
+                 WHERE project_id = ? AND checksum_sha256 = ? AND kind = ?`
+              )
+                .bind(
+                  document.projectId,
+                  reference.checksumSha256,
+                  reference.kind
+                )
+                .first<{ stored_bytes: number }>();
+              const stored =
+                existing && typeof bucket.head === 'function'
+                  ? await bucket.head(reference.objectKey)
+                  : null;
+              return !!existing && stored?.size === existing.stored_bytes;
+            }
+          }
+        : undefined
+    );
     const createdAt = nowIso();
     const objectId = `project_object_${crypto.randomUUID()}`;
     const objectKey = `${PROJECT_OBJECT_STORAGE_PREFIX}/${document.projectId}/documents/${crypto.randomUUID()}.json.gz`;
@@ -4205,7 +4235,10 @@ export class D1R2PersistenceService implements PersistenceService {
     // project deletion able to sweep every object deterministically.
     const missingAssets: ProjectStorageAssetObject[] = [];
     let newAssetBytes = 0;
-    for (const asset of prepared.assets) {
+    const assetsToCheck = options?.reuseExistingAssetsOnly
+      ? []
+      : prepared.assets;
+    for (const asset of assetsToCheck) {
       const existing = await this.env
         .DB!.prepare(
           `SELECT stored_bytes FROM project_storage_assets WHERE project_id = ? AND checksum_sha256 = ? AND kind = ?`
@@ -4311,8 +4344,7 @@ export class D1R2PersistenceService implements PersistenceService {
 
   private projectAssetStatements(
     projectId: string,
-    write: ProjectStorageWrite,
-    revision = false
+    write: ProjectStorageWrite
   ): D1PreparedStatement[] {
     return write.prepared.assets.map((asset) =>
       this.env
@@ -4322,8 +4354,8 @@ export class D1R2PersistenceService implements PersistenceService {
               stored_bytes, content_encoding, created_at)
            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
            WHERE EXISTS (
-             SELECT 1 FROM ${revision ? 'revisions' : 'projects'}
-             WHERE ${revision ? 'project_id' : 'id'} = ? AND document_object_id = ?
+             SELECT 1 FROM projects
+             WHERE id = ? AND document_object_id = ?
            )`
         )
         .bind(

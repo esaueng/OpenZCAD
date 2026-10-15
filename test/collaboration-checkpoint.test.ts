@@ -293,7 +293,7 @@ it.each(['inline', 'R2'] as const)(
   }
 );
 
-it('retains R2 checkpoint source assets without changing the account head', async () => {
+it('retains new R2 checkpoint sources inside its snapshot without changing the account head', async () => {
   const bucket = objectBucket();
   const fixture = await setup(bucket);
   try {
@@ -327,11 +327,123 @@ it('retains R2 checkpoint source assets without changing the account head', asyn
           'SELECT COUNT(*) AS count FROM project_storage_assets WHERE project_id=?'
         )
         .get(imported.projectId)
-    ).toMatchObject({ count: 1 });
+    ).toMatchObject({ count: 0 });
   } finally {
     fixture.db.close();
   }
 });
+
+it.each(['accepted', 'refused'] as const)(
+  'keeps acknowledged sources intact when a checkpoint with new sources is %s',
+  async (outcome) => {
+    const bucket = objectBucket();
+    const fixture = await setup(bucket);
+    try {
+      const sharedStep = importStepBody(fixture.document, {
+        name: 'Shared STEP',
+        artifactId: 'artifact_shared_step',
+        sourceName: 'shared.step',
+        stepText: 'ISO-10303-21;\nSHARED;\nEND-ISO-10303-21;'
+      }).document;
+      const shared = importMeshBody(sharedStep, {
+        name: 'Shared mesh',
+        artifactId: 'artifact_shared_mesh',
+        sourceName: 'shared.stl',
+        triangleCount: 1,
+        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+        indices: [0, 1, 2]
+      }).document;
+      await fixture.service.saveDocument(fixture.owner, {
+        projectId: shared.projectId,
+        expectedVersion: fixture.document.version,
+        document: shared
+      });
+      await fixture.socket.receive(
+        JSON.stringify({
+          type: 'document',
+          clientId: fixture.clientId,
+          baseVersion: fixture.document.version,
+          document: shared,
+          leaseId: fixture.leaseId
+        })
+      );
+      expect(fixture.socket.lastFrame()).toMatchObject({ type: 'ack' });
+      const newStep = importStepBody(shared, {
+        name: 'Checkpoint STEP',
+        artifactId: 'artifact_checkpoint_new_step',
+        sourceName: 'new.step',
+        stepText: 'ISO-10303-21;\nCHECKPOINT ONLY;\nEND-ISO-10303-21;'
+      }).document;
+      const clicked = importMeshBody(newStep, {
+        name: 'Checkpoint mesh',
+        artifactId: 'artifact_checkpoint_new_mesh',
+        sourceName: 'new.stl',
+        triangleCount: 1,
+        vertices: [0, 0, 0, 2, 0, 0, 0, 2, 0],
+        indices: [0, 1, 2]
+      }).document;
+      const assets = () =>
+        fixture.db
+          .prepare('SELECT * FROM project_storage_assets ORDER BY object_key')
+          .all();
+      const storedBytes = () =>
+        fixture.db
+          .prepare(
+            `SELECT (SELECT COALESCE(SUM(stored_bytes), 0) FROM project_storage_assets)
+              + (SELECT COALESCE(SUM(stored_bytes), 0) FROM project_document_objects) AS bytes`
+          )
+          .get();
+      const beforeAssets = assets();
+      expect(beforeAssets).toHaveLength(2);
+      const beforeKeys = new Set(bucket.objects.keys());
+      const beforeBytes = storedBytes();
+      if (outcome === 'refused') {
+        let claimed = false;
+        fixture.setStatementHook((sql) => {
+          if (claimed || !sql.includes('SELECT 1 AS allowed WHERE NOT EXISTS'))
+            return;
+          claimed = true;
+          fixture.db
+            .prepare(
+              'INSERT INTO project_copy_cleanup_claims (project_id, claimed_at) VALUES (?, ?)'
+            )
+            .run(shared.projectId, '2026-10-14T00:00:00.000Z');
+        });
+      }
+      const response = await fixture.post({
+        checkpointReason: 'Sources captured',
+        baseVersion: shared.version,
+        document: clicked
+      });
+      expect(response.status).toBe(outcome === 'accepted' ? 200 : 400);
+      expect(assets()).toEqual(beforeAssets);
+      if (outcome === 'refused') {
+        expect(new Set(bucket.objects.keys())).toEqual(beforeKeys);
+        expect(storedBytes()).toEqual(beforeBytes);
+        expect(fixture.storage.values.get('room:latest')).toEqual(shared);
+      } else {
+        const { document: saved } = (await response.json()) as {
+          document: ProjectDocument;
+        };
+        expect(saved.nodes).toEqual(clicked.nodes);
+        expect(saved.editHistory).toEqual(clicked.editHistory);
+        expect(
+          await fixture.service.loadRevision(
+            fixture.editor,
+            shared.projectId,
+            saved.checkpoints.at(-1)!.revisionId
+          )
+        ).toEqual(saved);
+        expect(bucket.objects.size).toBe(beforeKeys.size + 1);
+      }
+      expect(
+        await fixture.service.loadProject(fixture.owner, shared.projectId)
+      ).toEqual(shared);
+    } finally {
+      fixture.db.close();
+    }
+  }
+);
 
 it.each(['viewer', 'wrong lease', 'revoked member'] as const)(
   'refuses a named checkpoint from %s',
