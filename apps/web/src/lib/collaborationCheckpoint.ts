@@ -110,6 +110,15 @@ export async function saveCollaborationCheckpoint(
   const label = normalizeCheckpointReason(reason);
   let authoritative: ProjectDocument | null = null;
   let confirmed = false;
+  let checkpointLease: ProjectEditLease | null = null;
+  const confirm = (
+    saved: ProjectDocument,
+    current = mergeCheckpointEcho(options.readDocument(), snapshot, saved)
+  ) => {
+    options.applyDocument(current);
+    controls.confirm(saved, current);
+    confirmed = true;
+  };
   const checkCurrent = () => {
     controls.controller.signal.throwIfAborted();
     if (!controls.isCurrent() || !options.isCurrent())
@@ -145,12 +154,14 @@ export async function saveCollaborationCheckpoint(
       lease.expiresAt <= Date.now()
     )
       throw new Error('A named save requires the active project edit lease.');
+    checkpointLease = lease;
     // A committed checkpoint can arrive over the room before its HTTP reply.
     // Keep that exact body even when the user buffers later edits or names.
     controls.observeEcho((echo) => {
       if (
         controls.isCurrent() &&
         options.isCurrent() &&
+        controls.lease()?.leaseId === lease.leaseId &&
         confirmsCheckpoint(snapshot, echo, label)
       )
         authoritative = echo;
@@ -196,20 +207,35 @@ export async function saveCollaborationCheckpoint(
       throw new Error(
         'The edit lease changed before the named save completed.'
       );
-    const current = mergeCheckpointEcho(
-      options.readDocument(),
-      snapshot,
-      authoritative
-    );
-    options.applyDocument(current);
-    controls.confirm(authoritative, current);
-    confirmed = true;
+    confirm(authoritative);
     // The server's version and lineage are known even if this device runs out
     // of storage. Record them before yielding, so buffered edits use that base.
     // Persist only the captured save state, never an older project head.
     await saveLocalSaveStates([authoritative]);
     return authoritative;
   } catch (error) {
+    if (
+      authoritative &&
+      !confirmed &&
+      controls.isCurrent() &&
+      options.isCurrent() &&
+      controls.lease()?.leaseId === checkpointLease?.leaseId
+    ) {
+      try {
+        // The broadcast proves the room committed this exact named state.
+        // Merge its lineage into live edits and fence their next publication.
+        const live = options.readDocument();
+        const current = mergeCheckpointEcho(live, snapshot, authoritative);
+        confirm(
+          authoritative,
+          live.version > authoritative.version
+            ? { ...current, version: live.version }
+            : current
+        );
+      } catch {
+        // Keep the primary failure and let local preservation report durability.
+      }
+    }
     return preserveFailedCheckpoint(
       error,
       snapshot,

@@ -508,6 +508,197 @@ describe('durable room checkpoints', () => {
     hook.unmount();
   });
 
+  it.each(['lost response', 'deadline'] as const)(
+    'preserves buffered edits and the unadopted server checkpoint after a %s',
+    async (failure) => {
+      const document = clickedModel('Buffered before checkpoint echo');
+      let fail!: (error: Error) => void;
+      const fetch = vi.fn(
+        () =>
+          new Promise<Response>((_resolve, reject) => {
+            fail = reject;
+          })
+      );
+      vi.stubGlobal('fetch', fetch);
+      const hook = setup(document);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const saving = hook.result.current
+        .saveCheckpoint(document, 'Clicked model', hook.options)
+        .catch((error: unknown) => error);
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+      const later = addPrimitiveFeature(document, {
+        name: 'Buffered cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 2, height: 10 }
+      });
+      hook.edit(later);
+      const saved = checkpoint(document);
+      act(() => {
+        hook.socket.receive({
+          type: 'document',
+          clientId: sessionStorage.getItem('openzcad-collaboration-client')!,
+          document: saved
+        });
+      });
+      // Observing the named save must not replace the edited live model.
+      expect(hook.read()).toBe(later);
+      expect(hook.apply).not.toHaveBeenCalled();
+      await act(async () => {
+        if (failure === 'deadline') await vi.advanceTimersByTimeAsync(15_000);
+        else fail(new Error('Checkpoint response lost.'));
+        expect(await saving).toBeInstanceOf(Error);
+      });
+      expect(hook.read().nodes).toEqual(later.nodes);
+      expect(hook.read().featureOrder).toEqual(later.featureOrder);
+      expect(hook.read().checkpoints).toEqual(saved.checkpoints);
+      expect(hook.read().revisions).toEqual(saved.revisions);
+      expect(hook.read().version).toBeGreaterThan(saved.version);
+      const frame = hook.socket.sent
+        .filter((sent) => sent.type === 'document')
+        .at(-1)!;
+      expect(frame.baseVersion).toBe(saved.version);
+      expect(frame.document?.version).toBeGreaterThan(saved.version);
+      expect(frame.document?.nodes).toEqual(later.nodes);
+      expect(frame.document?.checkpoints).toEqual(saved.checkpoints);
+      expect(frame.document?.revisions).toEqual(saved.revisions);
+      const local = await loadLocalSaveState(
+        document.projectId,
+        saved.checkpoints.at(-1)!.checkpointId
+      );
+      expect(local?.nodes).toEqual(saved.nodes);
+      expect(local?.revisions).toEqual(saved.revisions);
+      expect(
+        await localStore.listLocalSaveStateIds(document.projectId)
+      ).toHaveProperty('size', 1);
+      hook.unmount();
+    }
+  );
+
+  it.each([
+    'other client',
+    'other body',
+    'other owner',
+    'departed manager',
+    'changed account'
+  ] as const)(
+    'does not trust an unadopted checkpoint echo from %s',
+    async (mismatch) => {
+      const document = clickedModel('Untrusted buffered checkpoint echo');
+      let fail!: (error: Error) => void;
+      const fetch = vi.fn(
+        () =>
+          new Promise<Response>((_resolve, reject) => {
+            fail = reject;
+          })
+      );
+      vi.stubGlobal('fetch', fetch);
+      const hook = setup(document);
+      const saving = hook.result.current
+        .saveCheckpoint(document, 'Clicked model', hook.options)
+        .catch((error: unknown) => error);
+      await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+      const later = addPrimitiveFeature(document, {
+        name: 'Buffered cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 2, height: 10 }
+      });
+      hook.edit(later);
+      const echo = checkpoint(
+        mismatch === 'other body'
+          ? { ...document, name: 'Unrelated named model' }
+          : mismatch === 'other owner'
+            ? { ...document, ownerUserId: toUserId('another-owner') }
+            : document
+      );
+      if (mismatch === 'departed manager') hook.leave();
+      if (mismatch === 'changed account') hook.changeAccount();
+      act(() => {
+        hook.socket.receive({
+          type: 'document',
+          clientId:
+            mismatch === 'other client'
+              ? 'another-device'
+              : sessionStorage.getItem('openzcad-collaboration-client')!,
+          document: echo
+        });
+      });
+      await act(async () => {
+        fail(new Error('Checkpoint response lost.'));
+        expect(await saving).toBeInstanceOf(Error);
+      });
+      expect(hook.read().nodes).toEqual(later.nodes);
+      expect(
+        await loadLocalSaveState(
+          document.projectId,
+          echo.checkpoints.at(-1)!.checkpointId
+        )
+      ).toBeNull();
+      if (mismatch === 'departed manager' || mismatch === 'changed account') {
+        expect(hook.apply).not.toHaveBeenCalled();
+        expect(hook.read()).toBe(later);
+        expect(
+          hook.socket.sent.filter((sent) => sent.type === 'document')
+        ).toHaveLength(0);
+      } else {
+        expect(hook.read().checkpoints.at(-1)?.checkpointId).not.toBe(
+          echo.checkpoints.at(-1)!.checkpointId
+        );
+        const frame = hook.socket.sent
+          .filter((sent) => sent.type === 'document')
+          .at(-1)!;
+        expect(frame.baseVersion).toBe(document.version);
+      }
+      hook.unmount();
+    }
+  );
+
+  it.each(['role-changed', 'expired'] as const)(
+    'keeps the lease-loss status after an observed checkpoint and %s lease',
+    async (reason) => {
+      const document = clickedModel('Checkpoint before lease loss');
+      const fetch = vi.fn(() => new Promise<Response>(() => {}));
+      vi.stubGlobal('fetch', fetch);
+      const hook = setup(document);
+      const saving = hook.result.current
+        .saveCheckpoint(document, 'Clicked model', hook.options)
+        .catch((error: unknown) => error);
+      await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+      const later = addPrimitiveFeature(document, {
+        name: 'Buffered cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 2, height: 10 }
+      });
+      hook.edit(later);
+      const saved = checkpoint(document);
+      await act(async () => {
+        hook.socket.receive({
+          type: 'document',
+          clientId: sessionStorage.getItem('openzcad-collaboration-client')!,
+          document: saved
+        });
+        hook.socket.receive({ type: 'lease-lost', reason });
+        expect(await saving).toBeInstanceOf(Error);
+      });
+      expect(hook.result.current.status).toBe(
+        reason === 'role-changed' ? 'read-only' : 'connecting'
+      );
+      expect(hook.result.current.lease).toBeNull();
+      expect(hook.read().nodes).toEqual(later.nodes);
+      expect(
+        hook.socket.sent.filter((sent) => sent.type === 'document')
+      ).toHaveLength(0);
+      expect(
+        (
+          await loadLocalSaveState(
+            document.projectId,
+            saved.checkpoints.at(-1)!.checkpointId
+          )
+        )?.revisions
+      ).toEqual(saved.revisions);
+      hook.unmount();
+    }
+  );
+
   it('retains an observed server checkpoint locally without applying it after the account changes', async () => {
     const document = clickedModel('Old account checkpoint');
     let answer!: (response: Response) => void;
