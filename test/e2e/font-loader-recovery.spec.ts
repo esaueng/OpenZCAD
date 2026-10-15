@@ -310,3 +310,65 @@ test('a non-text solid never fetches the font parser', async ({
   expect(fault.urls).toHaveLength(0);
   await live.worker.evaluate(() => self.close());
 });
+
+test('the unchanged text solid restarts a stalled font download without replacing its worker', async ({
+  page,
+  context
+}) => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let requests = 0;
+  const aborted: string[] = [];
+  context.on('requestfailed', (request) => {
+    if (request.url().endsWith('/fonts/open-sans-regular.ttf'))
+      aborted.push(request.failure()?.errorText ?? 'failed');
+  });
+  await context.route('**/fonts/open-sans-regular.ttf', async (route) => {
+    requests += 1;
+    if (requests === 1) {
+      await held;
+      await route.abort().catch(() => undefined);
+      return;
+    }
+    await route.continue();
+  });
+  await stubAnonymousApi(page);
+  await page.goto('/');
+  const document = textSolid();
+  const live = await liveWorker(page, document);
+  try {
+    await expect
+      .poll(
+        async () =>
+          (await live.messages()).some(
+            (message) => message.phase === 'ready' && message.stale === true
+          ),
+        { timeout: 20_000 }
+      )
+      .toBe(true);
+    await expect
+      .poll(
+        async () =>
+          (await live.messages()).some(
+            (message) => message.phase === 'ready' && message.stale === false
+          ),
+        { timeout: 20_000 }
+      )
+      .toBe(true);
+    const final = (await live.messages())
+      .filter((message) => message.type === 'projection-delta')
+      .at(-1)!;
+    expect(final.packet?.state.exportableBodyIds).toEqual(document.bodyOrder);
+    expect(final.packet?.state.warnings).toEqual([]);
+    expect(requests).toBe(2);
+    expect(aborted).toHaveLength(1);
+    expect(
+      page.workers().filter((worker) => worker.url() === live.worker.url())
+    ).toEqual([live.worker]);
+  } finally {
+    release();
+    await live.worker.evaluate(() => self.close());
+  }
+});
