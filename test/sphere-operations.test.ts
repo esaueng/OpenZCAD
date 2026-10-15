@@ -175,7 +175,9 @@ describe('a sphere under boolean and offset', () => {
       expect(faces).toBe(2);
       // And it uses the kernel's tolerance-driven analytic-sphere mesh, not
       // the 2588-plane polyhedron the old path substituted.
-      expect(triangles).toBe(98_536);
+      // Keep the viewport cost guard: 2026.1.62 currently emits 98,536 at
+      // these unchanged tolerances. A package refresh must fix that upstream.
+      expect(triangles).toBe(24_964);
       expect(warnings).toEqual([]);
     }, 120_000);
 
