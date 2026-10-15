@@ -464,6 +464,10 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // preloaded, so this adds no request or async commit boundary.
               id.includes('/apps/web/src/lib/featureHistory.ts') ||
               id.includes('/apps/web/src/lib/featureSuppression.ts') ||
+              // Sanitized document diagnostics are shared by the workspace
+              // and interaction captures. Keep this pure document helper in
+              // the same preloaded model chunk without another request.
+              id.includes('/apps/web/src/lib/projectDiagnostics.ts') ||
               // Export eligibility and sweep disclosure inspect document
               // history/topology. Keep them with the same preloaded model
               // helpers so their integration does not grow the entry chunk.
