@@ -268,6 +268,41 @@ function placeTimeline(list: HTMLElement) {
 }
 
 /**
+ * Keeps the rest of a multi-click that started on `row` on that row.
+ *
+ * Selecting a row opens its edit card above the list, which pushes the row
+ * down the lane and puts the card's controls where it was. The second press
+ * of a double-click then landed on whatever moved under the pointer — the
+ * Operation select, so the next letter typed silently turned New body into
+ * Cut. Its presses, clicks and double-click anywhere but the row are
+ * dropped; the next single press ends the hold.
+ */
+function holdMultiClickToRow(row: HTMLElement) {
+  const doc = row.ownerDocument;
+  const drop = (event: MouseEvent) => {
+    if (
+      event.detail > 1 &&
+      !(event.target instanceof Node && row.contains(event.target))
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
+  const press = (event: MouseEvent) => {
+    if (event.detail > 1) {
+      drop(event);
+      return;
+    }
+    doc.removeEventListener('mousedown', press, true);
+    doc.removeEventListener('click', drop, true);
+    doc.removeEventListener('dblclick', drop, true);
+  };
+  doc.addEventListener('mousedown', press, true);
+  doc.addEventListener('click', drop, true);
+  doc.addEventListener('dblclick', drop, true);
+}
+
+/**
  * The History list: features on a vertical timeline, one short value per row,
  * and a single handle on the line that marks the end of history.
  *
@@ -832,7 +867,13 @@ export function HistoryTimeline({
                   type="button"
                   className="feature-row-main"
                   aria-pressed={selected}
-                  onClick={() => onSelectFeature(feature.id)}
+                  onClick={(event) => {
+                    // A pointer's first click: Enter and Space report 0.
+                    if (event.detail === 1) {
+                      holdMultiClickToRow(event.currentTarget);
+                    }
+                    onSelectFeature(feature.id);
+                  }}
                   // Every row used to announce the same generic kind label, so
                   // a history read aloud was a list of identical items. The
                   // feature's own name comes first, as on screen.

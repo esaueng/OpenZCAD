@@ -11,6 +11,7 @@ export {
 export type { RemusIo, StepImportResult } from 'remus-wasm-io';
 
 import type { RemusIo as RemusIoInstance } from 'remus-wasm-io';
+import { RemusTranslatorLoadError } from './remus-load-error';
 
 /**
  * The file-format translators (STEP, IGES, STL, 3MF, OBJ, PLY, glTF) ship as
@@ -29,10 +30,19 @@ export function loadRemusTranslators(): Promise<RemusIoInstance> {
   if (translators) {
     return Promise.resolve(translators);
   }
-  translatorsLoading ??= import('remus-wasm-io').then(({ RemusIo }) => {
-    translators = new RemusIo();
-    return translators;
-  });
+  translatorsLoading ??= import('remus-wasm-io')
+    .then(({ RemusIo }) => {
+      translators = new RemusIo();
+      return translators;
+    })
+    .catch((error: unknown) => {
+      // A failed chunk fetch or instantiate is usually transient. Forget it
+      // so the next import, export or sync attempts a fresh load instead of
+      // replaying this rejection for the rest of the worker's life — the
+      // same rule the geometry worker applies to its kernel load.
+      translatorsLoading = null;
+      throw new RemusTranslatorLoadError(error);
+    });
   return translatorsLoading;
 }
 
