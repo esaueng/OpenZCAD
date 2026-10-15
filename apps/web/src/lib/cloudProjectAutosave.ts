@@ -425,7 +425,11 @@ export class CloudProjectAutosave {
       const canonical = withoutDerivedProjection(document);
       if (
         !documentStructureError(canonical) &&
-        persistedDocumentBytes(canonical) <= this.#sizeRefusal.limitBytes
+        persistedDocumentBytes(canonical) <=
+          Math.min(
+            this.#sizeRefusal.limitBytes,
+            MAX_CLOUD_PROJECT_DOCUMENT_BYTES
+          )
       ) {
         this.#halted = null;
         this.#sizeRefusal = null;
