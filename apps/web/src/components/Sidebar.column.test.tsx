@@ -85,6 +85,46 @@ function renderSidebar(
 }
 
 describe('Sidebar', () => {
+  it('hides local saves during navigation and reads late saved points when the view resumes', async () => {
+    vi.stubGlobal('indexedDB', new IDBFactory());
+    const original = createProjectDocument(
+      'Leaving project',
+      toUserId('owner')
+    );
+    const saved = createSavedRevision(original, 'Before navigation');
+    const panelState = defaultPanelState();
+    panelState.sidebarSections.revisions = true;
+    const sidebar = renderSidebar({
+      projectId: original.projectId,
+      checkpoints: original.checkpoints,
+      panelState
+    });
+    try {
+      await act(async () => {
+        await saveLocalSaveStates([saved]);
+      });
+      await screen.findByRole('button', { name: 'Restore Before navigation' });
+      sidebar.rerender(<Sidebar {...sidebar.props} projectId={undefined} />);
+      expect(screen.queryByText('Before navigation')).not.toBeInTheDocument();
+      await act(async () => {
+        await saveLocalSaveStates([
+          createSavedRevision(original, 'Completed after navigation')
+        ]);
+      });
+      expect(
+        screen.queryByText('Completed after navigation')
+      ).not.toBeInTheDocument();
+      sidebar.rerender(<Sidebar {...sidebar.props} />);
+      await screen.findByRole('button', { name: 'Restore Before navigation' });
+      await screen.findByRole('button', {
+        name: 'Restore Completed after navigation'
+      });
+      expect(sidebar.props.checkpoints).toEqual(original.checkpoints);
+    } finally {
+      sidebar.unmount();
+    }
+  });
+
   it('shows device-only saved states after commit and reopen without adding them to the document', async () => {
     vi.stubGlobal('indexedDB', new IDBFactory());
     const original = createProjectDocument(

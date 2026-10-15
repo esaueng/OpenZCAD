@@ -19740,7 +19740,9 @@ export function App() {
         />
       }
       checkpoints={doc?.checkpoints ?? []}
-      projectId={doc.projectId}
+      projectId={
+        navigationBusyRef.current || shareSession ? undefined : doc.projectId
+      }
       documentVersion={doc?.version ?? 0}
       restorableCheckpointIds={restorableCheckpointIds}
       onSelectFeature={handleSelectFeatureFromTree}
