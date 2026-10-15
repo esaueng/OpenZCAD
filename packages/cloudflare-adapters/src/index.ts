@@ -7533,6 +7533,10 @@ export class ProjectCollaborationRoom extends DurableObject {
         type: 'document',
         clientId: payload.clientId,
         document: checkpoint
+      }).catch(() => {
+        // Both durable writes already won. Socket delivery must not turn the
+        // initiating client's committed save into an unacknowledged request.
+        console.error('Checkpoint broadcast failed after durable publication.');
       });
       return Response.json({
         type: 'ack',
