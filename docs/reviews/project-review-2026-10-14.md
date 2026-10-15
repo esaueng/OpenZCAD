@@ -140,10 +140,12 @@ Probes are referenced by name; they live with the review notes, and every fix PR
 
 ## Follow-ups found while reviewing the fix PRs
 
-Both predate the review and behave the same on `ab3c1f1b`; they are recorded under ROADMAP F04.
+None is a regression from the fix PRs; each is recorded in the ROADMAP row named.
 
-- A mesh import whose file read is still pending when the user switches projects lands in the newly open project, for every mesh format. Refuse an import whose project changed mid-read.
-- A padded binary STL whose 80-byte header reads like an ASCII `vertex` statement with coordinates is routed to the ASCII reader and refused. Binary plausibility should outrank that match.
+- A mesh import whose file read is still pending when the user switches projects lands in the newly open project, for every mesh format. Refuse an import whose project changed mid-read. (F04)
+- A padded binary STL whose 80-byte header reads like an ASCII `vertex` statement with coordinates is routed to the ASCII reader and refused. Binary plausibility should outrank that match. (F04)
+- A request-tagged worker job cancelled while it is inside an uninterruptible WASM call drops its watchdog clock, so later queued work is unsupervised until it ends; supervising it needs the worker to acknowledge each cancelled request's real end. Text on revolve and legacy-extrude paths is refused permanently yet classed as awaiting a font, costing up to three capped recovery rebuilds. (K02)
+- Parameter-row refusals clear when the parameter table changes but not when other model state they were validated against changes (a feature edit, suppression, deletion or unit change). (U03)
 
 ## Checked and sound
 
@@ -158,7 +160,7 @@ Both predate the review and behave the same on `ab3c1f1b`; they are recorded und
 
 ## What was fixed
 
-Eight focused PRs started from `ab3c1f1b`, each with regression tests that fail before the fix and pass after it, and each passing lint, typecheck, `pnpm test`, the parity corpus, the build (with the size gate) and `git-privacy-guard verify` locally at the original review. Delivery snapshot as of 15 October, with `main` at `84011770`: #667 (`9d6fef87`), #668 (`b631bbee`), #669 (`dc0db806`), #670 (`5cab6e93`), #671 (`84011770`), #673 (`c6037ea5`) and #674 (`1f01fded`) are merged; #672 remains open. These are source-merge records; deployment was not rechecked for this update. `main` deploys to zcad.app.
+Eight focused PRs started from `ab3c1f1b`, each with regression tests that fail before the fix and pass after it, and each passing lint, typecheck, `pnpm test`, the parity corpus, the build (with the size gate) and `git-privacy-guard verify` locally at the original review. Delivery as of 15 October: all eight fix PRs are merged into `main` as squash commits — #667 (`9d6fef87`), #668 (`b631bbee`), #674 (`1f01fded`), #670 (`5cab6e93`), #669 (`dc0db806`), #673 (`c6037ea5`), #671 (`84011770`) and #672 (`895abf3e`). These are source-merge records; deployment was not rechecked for this update. `main` deploys to zcad.app.
 
 | PR                                                                                                                                                                | Findings                                                                                                    | Entry chunk |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------: |
@@ -175,7 +177,7 @@ This report's own PR also corrects `architecture.md` (DOC-8).
 
 **Combined check.** All eight branches merged together on top of `ab3c1f1b` pass every gate locally: root Vitest 4,311 passed / 8 skipped, web Vitest 2,632 passed, parity corpus 185 passed / 1 skipped, build with 0 size failures. The entry chunk is 511,150 B together (850 B of headroom, 96 B more than today). The geometry worker's `exact-*.js` chunk is 511,162 B, **838 B under its 512,000 B default budget**, mostly from #672: the next kernel-adapter addition there needs a split or an approved exception.
 
-**Merge notes (15 October, `84011770` snapshot).** Seven of the original eight fix PRs are already merged. #672 remains; #676 builds the mesh-payload work on the merged #673 fixes, and #677 addresses SEC-3. The remaining branches must incorporate current `main`, resolve their review findings and pass fresh CI before merging. Every source merge triggers the existing zcad.app deployment. None of these fix PRs needs a D1 migration. This report records the original combined local check above; it does not qualify the later repair heads.
+**Merge notes.** Each fix PR was brought up to date with `main` and passed validate, e2e, commit-privacy and Cloudflare verify on its final head before it was squash-merged; every merge triggered the existing zcad.app deployment, and none needed a D1 migration. Review feedback added further fixes to #671, #672 and #673 before they landed, some from parallel sessions; those later heads were qualified by CI, not by the original combined local check above. #676 (mesh payloads by reference) and #677 (SEC-3) are separate follow-up PRs.
 
 **Not verified locally:** production behaviour of any fix; headed-browser checks for VIEW-1 (context loss is proven against a fake renderer), KERN-1/KERN-4 (`online` event, stalled-body abort) and the App wiring of DOC-5/6/7; `apple-silicon` was not dispatched.
 
