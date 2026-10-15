@@ -3,10 +3,10 @@ import type { ProjectDocument, ProjectEditLease } from '@openzcad/shared';
 import { desktopFetch } from './desktopBridge';
 import {
   abortableCheckpoint,
+  normalizeCheckpointReason,
   parseServerMessage
 } from './collaborationProtocol';
 import {
-  normalizeCheckpointReason,
   preserveFailedCheckpoint,
   type CheckpointOptions
 } from './collaborationCheckpointFallback';

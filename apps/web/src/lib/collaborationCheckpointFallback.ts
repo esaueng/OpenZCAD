@@ -2,24 +2,15 @@ import {
   createSavedRevision,
   withEchoedSavePoints
 } from '@openzcad/document-core';
-import {
-  MAX_CHECKPOINT_REASON_LENGTH,
-  type ProjectDocument
-} from '@openzcad/shared';
+import type { ProjectDocument } from '@openzcad/shared';
 import { saveLocalSaveStates } from './localProjectStore';
 import { errorMessage } from './errors';
+import { normalizeCheckpointReason } from './collaborationProtocol';
 
 export interface CheckpointOptions {
   isCurrent(): boolean;
   readDocument(): ProjectDocument;
   applyDocument(document: ProjectDocument): void;
-}
-
-export function normalizeCheckpointReason(reason: string): string {
-  const normalized = reason.trim() || 'Saved';
-  return normalized.length > MAX_CHECKPOINT_REASON_LENGTH
-    ? `${normalized.slice(0, MAX_CHECKPOINT_REASON_LENGTH - 1)}…`
-    : normalized;
 }
 
 /** Keep the clicked named state even when the room action cannot load. */
