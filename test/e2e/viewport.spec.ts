@@ -666,6 +666,9 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
 
   const widget = page.getByRole('group', { name: 'View orientation' });
   await expect(widget).toBeVisible();
+  await expect(widget.getByRole('button', { name: /Rotate view/ })).toHaveCount(
+    0
+  );
 
   const canvas = page.locator('.viewer-host canvas');
   const pollLiveCamera = async (
@@ -763,14 +766,11 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   expect(Math.abs(rightOffset[1]!)).toBeLessThan(0.1);
   expect(Math.abs(rightOffset[2]!)).toBeLessThan(0.1);
 
-  // The rotate arrows swing the camera a quarter turn about the world up
-  // axis: from iso (x > 0, y < 0), a clockwise model turn lands at y > 0.
+  // Reset to isometric before checking free rotation by dragging the cube.
   await selectRailView(page, /^Isometric view/);
   const iso = await pollLiveDirection([1, -1, 0.9]);
   expect(iso.position[0]!).toBeGreaterThan(0);
   expect(iso.position[1]!).toBeLessThan(0);
-  await widget.getByRole('button', { name: 'Rotate view clockwise' }).click();
-  await pollLiveDirection([1, 1, 0.9]);
 
   // Dragging a visible cube face continuously orbits the camera. Releasing
   // must suppress the face's click, or the camera would then glide to the
