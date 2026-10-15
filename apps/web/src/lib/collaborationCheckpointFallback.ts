@@ -7,6 +7,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { saveLocalSaveStates } from './localProjectStore';
+import { errorMessage } from './errors';
 
 export interface CheckpointOptions {
   isCurrent(): boolean;
@@ -80,8 +81,7 @@ export async function preserveFailedCheckpoint(
   } catch {
     // Preserve the primary failure while reporting device durability honestly.
   }
-  const primary =
-    error instanceof Error ? error.message : 'The named save failed.';
+  const primary = errorMessage(error, 'The named save failed.');
   throw new Error(
     `${primary} ${confirmed ? 'The revision is stored in the room. ' : ''}${localSaved ? 'The named save is stored on this device.' : 'The named save could not be stored on this device.'}`,
     { cause: error }
