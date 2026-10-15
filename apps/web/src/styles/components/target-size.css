@@ -5,7 +5,7 @@
    row icons) are simply 24 px (sidebar.css, revisions.css), and the rename
    button is 24 px tall (topbar.css): a reaching hit area there would only
    take room from a neighbour. The controls below sit alone — the brand,
-   the view-roll buttons, 14 px section headers and an 8 px timeline thumb.
+   14 px section headers and an 8 px timeline thumb.
    Each keeps its drawn size; an invisible ::after
    reaches out to 24 px on any axis that is shorter, centred on the control,
    so nothing in the layout moves. An axis already 24 px or longer gets an
@@ -22,7 +22,6 @@
 
 :where(
   button.brand,
-  .orientation-roll,
   button.section-title,
   summary.section-title,
   .history-handle
@@ -32,7 +31,6 @@
 
 :where(
   button.brand,
-  .orientation-roll,
   button.section-title,
   summary.section-title,
   .history-handle

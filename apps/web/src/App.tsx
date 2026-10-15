@@ -2617,10 +2617,6 @@ export function App() {
   } | null>(null);
   const [normalToFaceRequest, setNormalToFaceRequest] =
     useState<NormalToFaceRequest | null>(null);
-  const [rotateRequest, setRotateRequest] = useState<{
-    direction: 'cw' | 'ccw';
-    nonce: number;
-  } | null>(null);
   // The command bar has focus and its list is up.
   const [paletteOpen, setPaletteOpen] = useState(false);
   // A question typed into command search, handed to the assistant with a
@@ -7649,10 +7645,6 @@ export function App() {
       nonce: ++viewNonceRef.current
     });
     setStatus(`${normalToFaceTarget.label}: viewing normal to face.`);
-  }
-
-  function requestRotate(direction: 'cw' | 'ccw') {
-    setRotateRequest({ direction, nonce: ++viewNonceRef.current });
   }
 
   function cycleDisplayMode() {
@@ -20191,7 +20183,6 @@ export function App() {
             autoFrame={autoFrame}
             viewRequest={viewRequest}
             normalToFaceRequest={normalToFaceRequest}
-            rotateRequest={rotateRequest}
             units={doc.units}
             // Every drag handle below is disarmed by passing nothing to arm:
             // the viewer only builds a manipulator when it is given a target,
@@ -20541,7 +20532,6 @@ export function App() {
             measuring={measuring}
             onMeasure={toggleMeasure}
             onView={requestView}
-            onRotateView={requestRotate}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
             sectionRange={
