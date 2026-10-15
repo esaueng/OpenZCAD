@@ -612,7 +612,7 @@ export async function startEmailLogin(
   const [requesterAllowed] = await Promise.all([
     takeRateLimit(
       env.DB,
-      `email-ip:${requesterKey}`,
+      `${emailBucket}:ip:${requesterKey}`,
       LOGIN_REQUESTER_RATE_LIMIT,
       timestamp
     ),
