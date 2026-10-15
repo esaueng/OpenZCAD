@@ -2302,12 +2302,13 @@ export class D1R2PersistenceService implements PersistenceService {
     return document;
   }
 
-  /** Stores a room-minted immutable save point; it never rewrites the account head. */
+  /** Stores and publishes a room save point before retiring older revisions. */
   async storeCollaborationCheckpoint(
     userId: UserId,
     document: ProjectDocument,
-    beforeCommit?: () => Promise<void>
-  ): Promise<void> {
+    beforeCommit: () => Promise<void>,
+    publish: () => Promise<boolean>
+  ): Promise<boolean> {
     if (!this.env.DB) {
       throw new ProjectObjectStorageError(
         'Durable checkpoint storage is unavailable.'
@@ -2338,7 +2339,7 @@ export class D1R2PersistenceService implements PersistenceService {
       ? projectObjectEnvelope(saved, write.objectId)
       : documentJson;
     try {
-      await beforeCommit?.();
+      await beforeCommit();
       const insert = this.env.DB.prepare(
         `INSERT INTO revisions
            (id, project_id, reason, document_json, document_object_id,
@@ -2442,8 +2443,12 @@ export class D1R2PersistenceService implements PersistenceService {
         );
       }
     }
+    // Room publication can still throw or refuse after the immutable insert.
+    // Keep all previously acknowledged revisions until that second commit wins.
+    if (!(await publish())) return false;
     await this.pruneRevisions(saved.projectId);
     await this.pruneUnreferencedProjectObjects(saved.projectId);
+    return true;
   }
 
   /**
@@ -7393,11 +7398,18 @@ export class ProjectCollaborationRoom extends DurableObject {
         if (denied) throw new Error('Checkpoint authorization changed.');
       };
       try {
-        await new D1R2PersistenceService(
+        const published = await new D1R2PersistenceService(
           this.roomEnv
-        ).storeCollaborationCheckpoint(userId, checkpoint, recheckAuthor);
-        await recheckAuthor();
-        if (!(await this.commitDocument(checkpoint)))
+        ).storeCollaborationCheckpoint(
+          userId,
+          checkpoint,
+          recheckAuthor,
+          async () => {
+            await recheckAuthor();
+            return this.commitDocument(checkpoint);
+          }
+        );
+        if (!published)
           return rejectionResponse({
             code: 'document-invalid',
             message:
