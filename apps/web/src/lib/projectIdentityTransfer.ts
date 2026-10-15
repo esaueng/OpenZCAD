@@ -51,6 +51,7 @@ import {
   META_STORE_NAME,
   projectMatchesInterruptedAdoption,
   projectPreservesLocalWork,
+  projectsHaveSameCanonicalContent,
   resolvedProjectId,
   saveLocalProject,
   scopedTransaction,
@@ -452,7 +453,23 @@ export async function restoreAccountProjectFromDevice(
     if (current?.projectId === document.projectId) {
       // Keep completed uploads even when another source or the restore write
       // fails. The live document can contain edits made during the upload.
-      document = applyAccountSourceArchives(document, current);
+      // The live manager already recorded each archive. Keep the clicked
+      // lineage instead of persisting the replay's independently minted IDs.
+      const archived = {
+        ...applyAccountSourceArchives(document, current),
+        version: document.version,
+        revisions: document.revisions
+      };
+      // Reuse the actual archival lineage when nothing else changed. Newer
+      // authored work stays local while the confirmed snapshot is restored.
+      document =
+        current.ownerUserId === document.ownerUserId &&
+        projectsHaveSameCanonicalContent(
+          { ...archived, revisions: current.revisions },
+          current
+        )
+          ? current
+          : archived;
       await saveLocalProject(current);
     }
     const remaining = listLocalOnlyImportSources(document);
