@@ -52,7 +52,9 @@ import {
 export class HttpError extends Error {
   constructor(
     readonly status: number,
-    message: string
+    message: string,
+    /** Set only for a document or document-request byte-size refusal. */
+    readonly limitBytes?: number
   ) {
     super(message);
     this.name = 'HttpError';
@@ -356,7 +358,8 @@ function assertDocumentWithinCeiling(document: ProjectDocument): void {
   if (bytes > MAX_CLOUD_PROJECT_DOCUMENT_BYTES) {
     throw new HttpError(
       413,
-      `Document is ${bytes} bytes; cloud storage accepts at most ${MAX_CLOUD_PROJECT_DOCUMENT_BYTES}.`
+      `Document is ${bytes} bytes; cloud storage accepts at most ${MAX_CLOUD_PROJECT_DOCUMENT_BYTES}.`,
+      MAX_CLOUD_PROJECT_DOCUMENT_BYTES
     );
   }
 }
