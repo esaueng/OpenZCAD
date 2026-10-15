@@ -752,6 +752,12 @@ describe('geometry worker rebuild coordination', () => {
       await live.finish();
       await vi.advanceTimersByTimeAsync(1_000);
       expect(liveWarnings(live.scope)).toEqual([['waiting'], ['built']]);
+      const projections = live.scope.postMessage.mock.calls.flatMap(
+        ([message]) =>
+          message.type === 'projection-delta' ? [message] : []
+      );
+      expect(projections[0]).toMatchObject({ transient: true });
+      expect(projections[1]).not.toHaveProperty('transient');
       await vi.advanceTimersByTimeAsync(60_000);
       expect(live.syncDocument).toHaveBeenCalledTimes(2);
     });

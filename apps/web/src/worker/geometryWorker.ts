@@ -193,6 +193,7 @@ export type GeometrySyncResult =
       projectId: ProjectId;
       version: number;
       requestId?: string;
+      transient?: boolean;
       derived: ProjectDocument['derived'];
     }
   | {
@@ -314,6 +315,7 @@ export type GeometryWorkerResult =
       type: 'projection-delta';
       projectId: ProjectId;
       version: number;
+      transient?: boolean;
       packet: ProjectionPacket;
     }
   | {
@@ -984,6 +986,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       projectId: document.projectId,
       version: document.version,
       ...(request.requestId ? { requestId: request.requestId } : {}),
+      ...(transient ? { transient: true } : {}),
       derived
     };
     if (request.requestId) {
@@ -1007,6 +1010,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           type: 'projection-delta',
           projectId: document.projectId,
           version: document.version,
+          ...(transient ? { transient: true } : {}),
           packet
         },
         projectionTransferables(packet)
