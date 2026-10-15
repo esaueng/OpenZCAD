@@ -8,6 +8,7 @@ import {
 } from '@openzcad/document-core';
 import {
   encodeImportedMeshPayload,
+  MAX_PROJECT_REVISIONS,
   toUserId,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -477,6 +478,121 @@ it.each(['D1', 'room publication'] as const)(
     }
   }
 );
+
+function seedRetainedRevisions(fixture: Awaited<ReturnType<typeof setup>>) {
+  const head = fixture.db
+    .prepare(
+      'SELECT document_json, document_object_id FROM projects WHERE id = ?'
+    )
+    .get(fixture.document.projectId) as {
+    document_json: string;
+    document_object_id: string | null;
+  };
+  for (let index = 0; index < MAX_PROJECT_REVISIONS; index += 1) {
+    fixture.db
+      .prepare(
+        `INSERT INTO revisions
+           (id, project_id, reason, document_json, document_object_id,
+            document_bytes, created_at, author_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        `retained_${index.toString().padStart(3, '0')}`,
+        fixture.document.projectId,
+        `Retained point ${index}`,
+        head.document_json,
+        head.document_object_id,
+        Buffer.byteLength(JSON.stringify(fixture.document)),
+        new Date(Date.UTC(2026, 9, 1, 0, 0, index)).toISOString(),
+        fixture.owner
+      );
+  }
+}
+
+for (const mode of ['inline', 'R2'] as const) {
+  it.each(['room storage failure', 'publication refusal'] as const)(
+    `keeps every retained ${mode} revision when checkpoint publication ends in %s`,
+    async (stage) => {
+      const bucket = mode === 'R2' ? objectBucket() : undefined;
+      const fixture = await setup(bucket);
+      try {
+        seedRetainedRevisions(fixture);
+        const retained = () =>
+          fixture.db
+            .prepare(
+              "SELECT * FROM revisions WHERE project_id = ? AND id LIKE 'retained_%' ORDER BY id"
+            )
+            .all(fixture.document.projectId);
+        const before = retained();
+        const objectKeys = new Set(bucket?.objects.keys());
+        if (stage === 'room storage failure') {
+          vi.spyOn(
+            fixture.storage.context.storage,
+            'put'
+          ).mockRejectedValueOnce(new Error('Room storage unavailable'));
+        } else {
+          fixture.setStatementHook((sql) => {
+            if (!sql.includes('SELECT 1 AS allowed WHERE NOT EXISTS')) return;
+            fixture.db
+              .prepare(
+                'INSERT OR IGNORE INTO project_copy_cleanup_claims (project_id, claimed_at) VALUES (?, ?)'
+              )
+              .run(fixture.document.projectId, '2026-10-15T00:00:00.000Z');
+          });
+        }
+        const response = await fixture.post({
+          checkpointReason: 'Failed point'
+        });
+        expect(response.status).toBe(
+          stage === 'room storage failure' ? 500 : 400
+        );
+        expect(retained()).toEqual(before);
+        for (const key of objectKeys)
+          expect(bucket?.objects.has(key)).toBe(true);
+        expect(fixture.storage.values.get('room:latest')).toEqual(
+          fixture.document
+        );
+      } finally {
+        fixture.db.close();
+      }
+    }
+  );
+
+  it(`prunes retained ${mode} revisions only after the checkpoint is published`, async () => {
+    const fixture = await setup(mode === 'R2' ? objectBucket() : undefined);
+    try {
+      seedRetainedRevisions(fixture);
+      let publishedBeforePruning = false;
+      fixture.setStatementHook((sql) => {
+        if (!sql.includes('DELETE FROM revisions WHERE project_id')) return;
+        const latest = fixture.storage.values.get(
+          'room:latest'
+        ) as ProjectDocument;
+        publishedBeforePruning =
+          latest.checkpoints.at(-1)?.reason === 'Published point';
+      });
+      const response = await fixture.post({
+        checkpointReason: 'Published point'
+      });
+      expect(response.status).toBe(200);
+      expect(publishedBeforePruning).toBe(true);
+      const { document } = (await response.json()) as {
+        document: ProjectDocument;
+      };
+      expect(fixture.storage.values.get('room:latest')).toEqual(document);
+      const rows = fixture.db
+        .prepare('SELECT id FROM revisions WHERE project_id = ? ORDER BY id')
+        .all(fixture.document.projectId);
+      expect(rows).toHaveLength(MAX_PROJECT_REVISIONS);
+      expect(rows).not.toContainEqual({ id: 'retained_000' });
+      expect(rows).toContainEqual({
+        id: document.checkpoints.at(-1)!.revisionId
+      });
+    } finally {
+      fixture.db.close();
+    }
+  });
+}
 
 it('recovers a durably committed R2 checkpoint whose D1 acknowledgement was lost', async () => {
   const fixture = await setup(objectBucket());
