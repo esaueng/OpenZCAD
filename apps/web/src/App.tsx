@@ -10193,25 +10193,26 @@ export function App() {
     setSaveState('saving');
     setStatus('Restoring the account copy from this device…');
     try {
-      const saved = await api.saveProjectDocument({
-        projectId: localDocument.projectId,
-        expectedVersion: summary.documentVersion,
-        document: withoutDerivedProjection(localDocument)
-      });
-      const restored = {
-        ...localDocument,
-        version: saved.version,
-        derived: {
-          ...localDocument.derived,
-          updatedAt: saved.updatedAt
+      const originatingManager = managerRef.current;
+      const { restoreAccountProjectFromDevice } =
+        await import('./lib/projectIdentityTransfer');
+      const restored = await restoreAccountProjectFromDevice(
+        localDocument,
+        summary,
+        {
+          archive: () => handleArchiveLocalSources(true),
+          currentDocument: () =>
+            managerRef.current === originatingManager
+              ? (originatingManager?.document ?? null)
+              : null,
+          remoteVersions: remoteVersionsRef.current
         }
-      };
-      await acceptAccountDocument(restored, localDocument, {
-        ...summary,
-        name: restored.name,
-        updatedAt: saved.updatedAt,
-        documentVersion: saved.version
-      });
+      );
+      await acceptAccountDocument(
+        restored.document,
+        localDocument,
+        restored.project
+      );
       setStatus('Restored the account copy from this device.');
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
