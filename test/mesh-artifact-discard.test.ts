@@ -28,6 +28,11 @@ import {
   HttpError,
   parseDiscardMeshPayloadRequest
 } from '../apps/web/worker/validation';
+import {
+  archiveArtifact,
+  type ArchiveArtifactTransport
+} from '../apps/web/src/lib/archiveArtifact';
+import { archiveImportedMesh } from '../apps/web/src/lib/importedMeshPayload';
 import worker from '../apps/web/worker/index';
 import {
   isArtifactUploadAccountingReady,
@@ -353,6 +358,81 @@ describe.each(['memory', 'D1/R2'] as const)(
             kind
           )
         ).toEqual({ deleted: true });
+      }
+    );
+
+    it.each(['stl-import', 'mesh-import'] as const)(
+      'reserves removal of an acknowledged %s original for its project owner',
+      async (kind) => {
+        const state = backend === 'D1/R2' ? fixture() : null;
+        const service = state?.service ?? new InMemoryPersistenceService();
+        const { document, artifact } = await finalized(service, kind);
+        if (state) {
+          state.db
+            .prepare(
+              'INSERT INTO project_members (project_id, user_id, role, added_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0)'
+            )
+            .run(document.projectId, outsider, 'editor', owner);
+        } else {
+          await (service as InMemoryPersistenceService).setProjectMemberRole(
+            owner,
+            document.projectId,
+            outsider,
+            'editor'
+          );
+        }
+        expect(
+          (await service.listArtifacts(outsider, document.projectId)).artifacts
+        ).toContainEqual(artifact);
+        await expect(
+          service.discardMeshPayload(
+            outsider,
+            document.projectId,
+            artifact.artifactId,
+            kind
+          )
+        ).rejects.toBeInstanceOf(ProjectNotFoundError);
+        expect(
+          await service.downloadArtifact(owner, artifact.artifactId)
+        ).not.toBeNull();
+
+        // Finalized artifacts have no trusted uploader identity. An editor's
+        // cancelled original is retained for the owner's explicit removal too.
+        const { session } = await service.createUploadSession(outsider, {
+          projectId: document.projectId,
+          fileName: 'editor-original.stl',
+          kind,
+          contentType: 'application/octet-stream'
+        });
+        await service.putUpload(
+          outsider,
+          session.uploadSessionId,
+          bytes.buffer
+        );
+        const editorOriginal = (await service.finalizeArtifact(outsider, {
+          projectId: document.projectId,
+          uploadSessionId: session.uploadSessionId,
+          artifactId: session.artifactId
+        }))!;
+        expect(editorOriginal).not.toBeNull();
+        await expect(
+          service.discardMeshPayload(
+            outsider,
+            document.projectId,
+            editorOriginal.artifactId,
+            kind
+          )
+        ).rejects.toBeInstanceOf(ProjectNotFoundError);
+        for (const original of [artifact, editorOriginal]) {
+          expect(
+            await service.discardMeshPayload(
+              owner,
+              document.projectId,
+              original.artifactId,
+              kind
+            )
+          ).toEqual({ deleted: true });
+        }
       }
     );
 
@@ -841,9 +921,9 @@ describe('D1/R2 mesh discard races and accounting', () => {
     }
   );
 
-  it('does not delete an original when the editor loses access before the atomic claim', async () => {
+  it('does not delete a payload when the editor loses access before the atomic claim', async () => {
     const { service, hooks, db, objects } = fixture(true);
-    const { document, artifact } = await finalized(service, 'stl-import');
+    const { document, artifact } = await finalized(service);
     db.prepare(
       'INSERT INTO project_members (project_id, user_id, role, added_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0)'
     ).run(document.projectId, outsider, 'editor', owner);
@@ -858,8 +938,7 @@ describe('D1/R2 mesh discard races and accounting', () => {
       await service.discardMeshPayload(
         outsider,
         document.projectId,
-        artifact.artifactId,
-        'stl-import'
+        artifact.artifactId
       )
     ).toEqual({ deleted: false });
     expect(objects.has(artifact.objectKey)).toBe(true);
@@ -1024,6 +1103,111 @@ describe('D1/R2 mesh discard races and accounting', () => {
 });
 
 describe('mesh discard HTTP and rollout boundary', () => {
+  it.each(['stl-import', 'mesh-import'] as const)(
+    'retains an editor-cancelled %s original for owner retry while compensating its payload',
+    async (kind) => {
+      const { service, db, usage } = fixture();
+      const { document } = await service.createProject(owner, {
+        name: 'Editor import cancelled'
+      });
+      db.prepare(
+        'INSERT INTO project_members (project_id, user_id, role, added_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0)'
+      ).run(document.projectId, outsider, 'editor', owner);
+      const sessions = new Map<string, string>();
+      const controller = new AbortController();
+      const reason = new DOMException('Import cancelled', 'AbortError');
+      const onCleanupFailure = vi.fn();
+      const unexpectedMultipart = async (): Promise<never> => {
+        throw new Error('Small import must use a single upload.');
+      };
+      const transport: ArchiveArtifactTransport = {
+        createUploadSession: async (input) => {
+          const result = await service.createUploadSession(outsider, input);
+          sessions.set(
+            result.session.uploadUrl!,
+            result.session.uploadSessionId
+          );
+          return result;
+        },
+        uploadArtifact: async (url, body) => {
+          await service.putUpload(
+            outsider,
+            sessions.get(url)!,
+            await body.arrayBuffer()
+          );
+        },
+        createMultipartUpload: unexpectedMultipart,
+        uploadArtifactPart: unexpectedMultipart,
+        completeMultipartUpload: unexpectedMultipart,
+        abortMultipartUpload: unexpectedMultipart,
+        finalizeArtifact: async (input) => ({
+          artifactId:
+            (await service.finalizeArtifact(outsider, input))?.artifactId ??
+            null
+        }),
+        getArtifactMetadata: async (artifactId) => {
+          const result = await service.getArtifactMetadata(
+            outsider,
+            artifactId
+          );
+          if (result.artifact?.kind === kind) controller.abort(reason);
+          return result;
+        },
+        discardMeshPayload: (projectId, artifactId, originalKind) =>
+          service.discardMeshPayload(
+            outsider,
+            projectId,
+            artifactId,
+            originalKind
+          )
+      };
+      const originalBytes = new TextEncoder().encode('Original mesh file');
+      await expect(
+        archiveImportedMesh({
+          hold: { bytes },
+          sourceName: 'scan.stl',
+          original: {
+            fileName: 'scan.stl',
+            kind,
+            contentType: 'application/octet-stream',
+            body: new Blob([originalBytes])
+          },
+          signal: controller.signal,
+          onCleanupFailure,
+          archive: (input) =>
+            archiveArtifact(transport, document.projectId, input),
+          discard: (artifactId) =>
+            service.discardMeshPayload(outsider, document.projectId, artifactId)
+        })
+      ).rejects.toBe(reason);
+      expect(onCleanupFailure).toHaveBeenCalledExactlyOnceWith(
+        expect.any(ProjectNotFoundError)
+      );
+      const remaining = (await service.listArtifacts(owner, document.projectId))
+        .artifacts;
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]!.kind).toBe(kind);
+      expect(usage()).toMatchObject({
+        finalized_bytes: originalBytes.length,
+        reserved_bytes: 0,
+        active_sessions: 0
+      });
+      expect(
+        await service.discardMeshPayload(
+          owner,
+          document.projectId,
+          remaining[0]!.artifactId,
+          kind
+        )
+      ).toEqual({ deleted: true });
+      expect(usage()).toMatchObject({
+        finalized_bytes: 0,
+        reserved_bytes: 0,
+        active_sessions: 0
+      });
+    }
+  );
+
   it.each(CLEANUP_KINDS)('authenticates cleanup POST (%s)', async (kind) => {
     const state = fixture();
     const { document, artifact } = await finalized(state.service, kind);
@@ -1080,7 +1264,7 @@ describe('mesh discard HTTP and rollout boundary', () => {
     expect(state.objects.has(artifact.objectKey)).toBe(false);
   });
 
-  it.each(CLEANUP_KINDS)('requires edit access (%s)', async (kind) => {
+  it.each(CLEANUP_KINDS)('requires the cleanup role for %s', async (kind) => {
     const { service, db } = fixture();
     const { document, artifact } = await finalized(service, kind);
     db.prepare(
@@ -1097,15 +1281,92 @@ describe('mesh discard HTTP and rollout boundary', () => {
     db.prepare(
       'UPDATE project_members SET role = ? WHERE project_id = ? AND user_id = ?'
     ).run('editor', document.projectId, outsider);
-    expect(
-      await service.discardMeshPayload(
-        outsider,
-        document.projectId,
-        artifact.artifactId,
-        kind === 'mesh-payload' ? undefined : kind
-      )
-    ).toEqual({ deleted: true });
+    const cleanup = service.discardMeshPayload(
+      outsider,
+      document.projectId,
+      artifact.artifactId,
+      kind === 'mesh-payload' ? undefined : kind
+    );
+    if (kind === 'mesh-payload') {
+      expect(await cleanup).toEqual({ deleted: true });
+    } else {
+      await expect(cleanup).rejects.toBeInstanceOf(ProjectNotFoundError);
+      expect(
+        await service.downloadArtifact(owner, artifact.artifactId)
+      ).not.toBeNull();
+    }
   });
+
+  it.each(CLEANUP_KINDS)(
+    'enforces original ownership on the authenticated cleanup route (%s)',
+    async (kind) => {
+      const { service, db, env, objects, usage } = fixture();
+      const { document, artifact } = await finalized(service, kind);
+      db.prepare(
+        'INSERT INTO project_members (project_id, user_id, role, added_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0)'
+      ).run(document.projectId, outsider, 'editor', owner);
+      const token = 'discard_editor_test_session';
+      db.prepare(
+        'INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)'
+      ).run(
+        createHash('sha256').update(token).digest('hex'),
+        outsider,
+        Math.floor(Date.now() / 1000),
+        Math.floor(Date.now() / 1000) + 3600
+      );
+      const workerEnv = {
+        ...env,
+        ENVIRONMENT: 'development' as const,
+        AUTH_MODE: 'email-code' as const
+      };
+      const headers = {
+        cookie: `__Host-openzcad_session=${token}`,
+        origin: 'https://example.com'
+      };
+      const listing = await worker.fetch(
+        new Request(
+          `https://example.com/api/projects/${document.projectId}/artifacts`,
+          { headers }
+        ),
+        workerEnv
+      );
+      expect(listing.status).toBe(200);
+      expect(await listing.json()).toMatchObject({
+        artifacts: [
+          expect.objectContaining({ artifactId: artifact.artifactId })
+        ]
+      });
+      const response = await worker.fetch(
+        new Request(
+          `https://example.com/api/artifacts/${artifact.artifactId}/discard-unreferenced`,
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              projectId: document.projectId,
+              kind: kind === 'mesh-payload' ? undefined : kind
+            })
+          }
+        ),
+        workerEnv
+      );
+      if (kind === 'mesh-payload') {
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ deleted: true });
+        expect(objects.has(artifact.objectKey)).toBe(false);
+        expect(usage()).toMatchObject({ finalized_bytes: 0 });
+      } else {
+        expect(response.status).toBe(404);
+        expect(objects.has(artifact.objectKey)).toBe(true);
+        expect(usage()).toMatchObject({ finalized_bytes: bytes.length });
+        expect(
+          db
+            .prepare('SELECT count(*) AS count FROM artifact_mesh_discards')
+            .get()
+        ).toMatchObject({ count: 0 });
+      }
+    }
+  );
 
   it.each([
     'artifact_mesh_discards',
@@ -2016,4 +2277,51 @@ describe('room-serialized mesh cleanup', () => {
     ).rejects.toBeInstanceOf(ProjectNotFoundError);
     expect(objects.has(artifact.objectKey)).toBe(true);
   });
+
+  it.each(CLEANUP_KINDS)(
+    'enforces original ownership inside the serialized room cleanup (%s)',
+    async (kind) => {
+      const { service, room, objects, usage, db } = roomFixture();
+      const { document, artifact } = await finalized(service, kind);
+      db.prepare(
+        'INSERT INTO project_members (project_id, user_id, role, added_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0)'
+      ).run(document.projectId, outsider, 'editor', owner);
+      const request = (userId: string) =>
+        new Request(
+          `https://room.test/_internal/source-cleanup?projectId=${document.projectId}`,
+          {
+            method: 'POST',
+            headers: { 'x-openzcad-internal-source-cleanup': 'v1' },
+            body: JSON.stringify({
+              action: 'discard-mesh',
+              userId,
+              artifactId: artifact.artifactId,
+              kind: kind === 'mesh-payload' ? undefined : kind
+            })
+          }
+        );
+      if (kind === 'mesh-payload') {
+        const response = await room.fetch(request(outsider));
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ deleted: true });
+        expect(objects.has(artifact.objectKey)).toBe(false);
+      } else {
+        await expect(room.fetch(request(outsider))).rejects.toBeInstanceOf(
+          ProjectNotFoundError
+        );
+        expect(objects.has(artifact.objectKey)).toBe(true);
+        expect(usage()).toMatchObject({ finalized_bytes: bytes.length });
+        expect(
+          db
+            .prepare('SELECT count(*) AS count FROM artifact_mesh_discards')
+            .get()
+        ).toMatchObject({ count: 0 });
+        const response = await room.fetch(request(owner));
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ deleted: true });
+        expect(objects.has(artifact.objectKey)).toBe(false);
+        expect(usage()).toMatchObject({ finalized_bytes: 0 });
+      }
+    }
+  );
 });
