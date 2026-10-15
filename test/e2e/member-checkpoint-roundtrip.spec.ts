@@ -534,6 +534,10 @@ for (const ackFault of [undefined, 'lost'] as const) {
       await startNamedSave(page);
       server.releaseSourceWrite();
       await expect.poll(server.requested).toBe(true);
+      expect(server.input()?.bodyOrder).toHaveLength(2);
+      expect(JSON.stringify(server.input())).not.toContain(
+        'artifact_local_checkpoint_copy'
+      );
       server.release();
       if (ackFault === 'lost') server.releaseAck();
       await expect(page.getByRole('contentinfo')).toContainText(
