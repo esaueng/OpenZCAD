@@ -6,6 +6,7 @@ import {
   addPrimitiveFeature,
   appendRevision,
   createCheckpoint,
+  createSavedRevision,
   createProjectDocument
 } from '@openzcad/document-core';
 import {
@@ -133,6 +134,127 @@ function checkpoint(document: ProjectDocument, reason = 'Clicked model') {
 }
 
 describe('durable room checkpoints', () => {
+  it('reuses a checkpoint broadcast adopted before its HTTP acknowledgement without another room write', async () => {
+    const document = createProjectDocument(
+      'Early save echo',
+      toUserId('owner')
+    );
+    let answer!: (response: Response) => void;
+    const fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        })
+    );
+    vi.stubGlobal('fetch', fetch);
+    const hook = setup(document);
+    let saving!: Promise<ProjectDocument>;
+    act(() => {
+      saving = hook.result.current.saveCheckpoint(
+        document,
+        'Clicked model',
+        hook.options
+      );
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    const saved = checkpoint(document);
+    act(() => {
+      hook.socket.receive({
+        type: 'document',
+        clientId: sessionStorage.getItem('openzcad-collaboration-client')!,
+        document: saved
+      });
+      // App adopts the broadcast through onRemoteDocument before fetch resolves.
+      hook.edit(saved);
+    });
+    const sentBeforeAck = hook.socket.sent.filter(
+      (frame) => frame.type === 'document'
+    ).length;
+    await act(async () => {
+      answer(
+        new Response(
+          JSON.stringify({
+            type: 'ack',
+            version: saved.version,
+            document: saved
+          })
+        )
+      );
+      await saving;
+    });
+    expect(hook.read().version).toBe(saved.version);
+    expect(hook.read().checkpoints).toEqual(saved.checkpoints);
+    expect(
+      hook.socket.sent.filter((frame) => frame.type === 'document')
+    ).toHaveLength(sentBeforeAck);
+    expect(
+      await loadLocalSaveState(
+        document.projectId,
+        saved.checkpoints.at(-1)!.checkpointId
+      )
+    ).not.toBeNull();
+    hook.unmount();
+  });
+
+  it('preserves a new local named save at the echoed version while the HTTP acknowledgement is held', async () => {
+    const document = createProjectDocument(
+      'New save after echo',
+      toUserId('owner')
+    );
+    let answer!: (response: Response) => void;
+    const fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        })
+    );
+    vi.stubGlobal('fetch', fetch);
+    const hook = setup(document);
+    let saving!: Promise<ProjectDocument>;
+    act(() => {
+      saving = hook.result.current.saveCheckpoint(
+        document,
+        'Clicked model',
+        hook.options
+      );
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    const saved = checkpoint(document);
+    const later = createSavedRevision(saved, 'Local note after echo');
+    expect(later.version).toBe(saved.version);
+    act(() => {
+      hook.socket.receive({
+        type: 'document',
+        clientId: sessionStorage.getItem('openzcad-collaboration-client')!,
+        document: saved
+      });
+      hook.edit(later);
+    });
+    await act(async () => {
+      answer(
+        new Response(
+          JSON.stringify({
+            type: 'ack',
+            version: saved.version,
+            document: saved
+          })
+        )
+      );
+      await saving;
+    });
+    expect(hook.read().version).toBeGreaterThan(saved.version);
+    expect(hook.read().checkpoints).toEqual(later.checkpoints);
+    expect(hook.read().revisions).toEqual(later.revisions);
+    const frame = hook.socket.sent
+      .filter((sent) => sent.type === 'document')
+      .at(-1)!;
+    expect(frame.baseVersion).toBe(saved.version);
+    expect(frame.document?.version).toBeGreaterThan(saved.version);
+    expect(frame.document?.checkpoints).toEqual(later.checkpoints);
+    expect(frame.document?.revisions).toEqual(later.revisions);
+    hook.unmount();
+  });
+
   it('advances the confirmed room base and preserves buffered edits when local checkpoint storage fails', async () => {
     const document = createProjectDocument(
       'Storage failure',
