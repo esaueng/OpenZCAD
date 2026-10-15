@@ -40,6 +40,12 @@ The source digest is retained from the exact buffer sent to the browser, before
 the import. Replacing the STEP file during a run cannot relabel an earlier
 import as the replacement; a regression exercises that file-change case.
 
+Matched arms require a clean checkout, including staged and untracked source.
+The runner pins the source commit and lockfile digest before building, checks
+them before and after the build and at the start/end of each arm, and retains
+that identity in the sample. A dirty or changed checkout refuses the sample.
+Do not edit or switch the measured checkout while a campaign is running.
+
 Raw samples identify the source/lockfile hashes, source commit, pair, parameter
 sequence, observed worker cache mode, document bytes, body/face counts, stages
 and per-edit cache events. The running disabled arm must restore zero features
