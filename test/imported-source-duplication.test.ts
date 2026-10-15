@@ -32,6 +32,8 @@ import {
   createRoomContext,
   createTestRoom
 } from './collaboration-room-harness';
+import { archiveAccountImportSources } from '../apps/web/src/lib/accountImportSources';
+import { listLocalOnlyImportSources } from '../apps/web/src/lib/importArchival';
 
 const owner = toUserId('user_copy_owner');
 const mesh = encodeImportedMeshPayload({
@@ -296,6 +298,128 @@ async function cleanupIdentity(
 describe.each(['memory', 'D1/R2'] as const)(
   '%s import duplication',
   (backend) => {
+    it('adopts cached foreign sources into independently owned archives, including redo history', async () => {
+      const fixture = backend === 'D1/R2' ? d1Service() : null;
+      const service: PersistenceService =
+        fixture?.service ?? new InMemoryPersistenceService();
+      const destinationOwner = toUserId('user_adoption_owner');
+      fixture?.db
+        .prepare('INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)')
+        .run(destinationOwner, 'adoption-owner@example.com', '2026-01-01');
+      const {
+        document: source,
+        artifact: original,
+        manager
+      } = await importedProject(service);
+      const step = new TextEncoder().encode('ISO-10303-21; cached source');
+      const { session } = await service.createUploadSession(owner, {
+        projectId: source.projectId,
+        fileName: 'cached.step',
+        kind: 'step-import',
+        contentType: 'model/step'
+      });
+      await service.putUpload(owner, session.uploadSessionId, step.buffer);
+      const originalStep = (await service.finalizeArtifact(owner, {
+        projectId: source.projectId,
+        uploadSessionId: session.uploadSessionId,
+        artifactId: session.artifactId
+      }))!;
+      manager.execute(
+        commandFactories.importStep({
+          name: 'Cached exact source',
+          sourceName: 'cached.step',
+          artifactId: originalStep.artifactId,
+          stepSourceRef: reference(step)
+        })
+      );
+      manager.undo();
+      const cached = structuredClone(manager.document);
+      const adopted = await service.createProject(destinationOwner, {
+        name: cached.name,
+        document: cached,
+        adoptionProtocolVersion: 1
+      });
+      expect(manager.document).toEqual(cached);
+      expect(listLocalOnlyImportSources(adopted.document)).toHaveLength(2);
+      await expect(
+        service.downloadArtifact(destinationOwner, original.artifactId)
+      ).rejects.toBeInstanceOf(ProjectNotFoundError);
+      const uploads = vi.fn(
+        async (
+          input: Parameters<
+            Parameters<typeof archiveAccountImportSources>[1]['archive']
+          >[0]
+        ) => {
+          const { session: upload } = await service.createUploadSession(
+            destinationOwner,
+            { projectId: adopted.document.projectId, ...input }
+          );
+          await service.putUpload(
+            destinationOwner,
+            upload.uploadSessionId,
+            await input.body.arrayBuffer()
+          );
+          return (await service.finalizeArtifact(destinationOwner, {
+            projectId: adopted.document.projectId,
+            uploadSessionId: upload.uploadSessionId,
+            artifactId: upload.artifactId
+          }))!.artifactId;
+        }
+      );
+      const prepared = await archiveAccountImportSources(adopted.document, {
+        loadSourceBytes: async (checksum) =>
+          checksum === reference(mesh).checksumSha256 ? mesh : step,
+        archive: uploads
+      });
+      expect(uploads).toHaveBeenCalledTimes(2);
+      expect(prepared.result.missing).toEqual([]);
+      const restored = new CommandManager(prepared.document);
+      restored.redo();
+      expect(restored.document.featureOrder).toHaveLength(2);
+      await service.saveDocument(destinationOwner, {
+        projectId: restored.document.projectId,
+        expectedVersion: adopted.document.version,
+        document: restored.document
+      });
+      const retry = await archiveAccountImportSources(restored.document, {
+        loadSourceBytes: async () => {
+          throw new Error('An owned source must not be uploaded again.');
+        },
+        archive: uploads
+      });
+      expect(retry.document).toEqual(restored.document);
+      expect(uploads).toHaveBeenCalledTimes(2);
+      await service.deleteProject(owner, source.projectId);
+      const fresh = fixture ? new D1R2PersistenceService(fixture.env) : service;
+      const loaded = (await fresh.loadProject(
+        destinationOwner,
+        adopted.document.projectId
+      ))!;
+      await fresh.createProjectShareLink(destinationOwner, loaded.projectId, {
+        shareLinkId: 'adopted_sources',
+        tokenHash: 'adopted_sources_hash',
+        mode: 'view',
+        createdAt: Date.now()
+      });
+      const ownedArtifacts = (
+        await fresh.listArtifacts(destinationOwner, loaded.projectId)
+      ).artifacts;
+      expect(ownedArtifacts).toHaveLength(2);
+      for (const artifact of ownedArtifacts) {
+        expect(artifact.artifactId).not.toBe(original.artifactId);
+        expect(artifact.artifactId).not.toBe(originalStep.artifactId);
+        const shared = await fresh.loadSharedProjectImportSource(
+          'adopted_sources_hash',
+          artifact.artifactId
+        );
+        expect(shared).not.toBeNull();
+        expect(
+          new Uint8Array(await new Response(shared!.body).arrayBuffer())
+        ).toEqual(artifact.kind === 'mesh-payload' ? mesh : step);
+      }
+      expect(listLocalOnlyImportSources(loaded)).toEqual([]);
+    });
+
     it('owns shareable payload bytes that survive purging the original project', async () => {
       const service: PersistenceService =
         backend === 'memory'
