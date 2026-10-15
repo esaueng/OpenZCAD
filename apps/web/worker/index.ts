@@ -350,11 +350,16 @@ function json(
 
 async function readJsonBody(
   request: Request,
-  maxBytes = MAX_JSON_BODY_BYTES
+  maxBytes = MAX_JSON_BODY_BYTES,
+  documentRequest = false
 ): Promise<unknown> {
   const contentLength = Number(request.headers.get('content-length') ?? '0');
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    throw new HttpError(413, 'Request body is too large.');
+    throw new HttpError(
+      413,
+      'Request body is too large.',
+      documentRequest ? maxBytes : undefined
+    );
   }
   try {
     const reader = request.body?.getReader();
@@ -374,7 +379,11 @@ async function readJsonBody(
         totalBytes += value.byteLength;
         if (totalBytes > maxBytes) {
           await reader.cancel().catch(() => undefined);
-          throw new HttpError(413, 'Request body is too large.');
+          throw new HttpError(
+            413,
+            'Request body is too large.',
+            documentRequest ? maxBytes : undefined
+          );
         }
         const chunk = decoder.decode(value, { stream: true });
         try {
@@ -1657,7 +1666,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const revisionsMatch = PROJECT_REVISIONS_ROUTE.exec(pathname);
   if (request.method === 'POST' && revisionsMatch) {
     const payload = parseSaveRevisionRequest(
-      await readJsonBody(request),
+      await readJsonBody(request, MAX_JSON_BODY_BYTES, true),
       revisionsMatch[1]!
     );
     return json(await persistence.saveRevision(userId, payload));
@@ -1685,7 +1694,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const documentMatch = PROJECT_DOCUMENT_ROUTE.exec(pathname);
   if (request.method === 'PUT' && documentMatch) {
     const payload = parseSaveProjectDocumentRequest(
-      await readJsonBody(request),
+      await readJsonBody(request, MAX_JSON_BODY_BYTES, true),
       documentMatch[1]!
     );
     return json(await persistence.saveDocument(userId, payload));
@@ -1918,7 +1927,18 @@ async function dispatchApiRequest(
     return await handleApiRequest(request, env);
   } catch (error) {
     if (error instanceof HttpError) {
-      return json({ error: error.message }, error.status);
+      return json(
+        {
+          error: error.message,
+          ...(error.limitBytes === undefined
+            ? {}
+            : {
+                code: 'DOCUMENT_TOO_LARGE',
+                limitBytes: error.limitBytes
+              })
+        },
+        error.status
+      );
     }
     if (error instanceof AuthFlowError) {
       return json({ error: error.message, code: error.code }, error.status);
