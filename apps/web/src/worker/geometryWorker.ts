@@ -1107,6 +1107,19 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       post(result);
     }
     post(stateFor('failed', request, { stale: true, error: message }));
+    // A translator chunk can fail before a rebuild returns any transient
+    // projection. Keep that live document recoverable without treating a
+    // source parse or ordinary modeling refusal as an environmental miss.
+    if (
+      !job.requestId &&
+      (error as { category?: unknown } | null)?.category === 'environment-load'
+    ) {
+      if (environmentRecovered) rerunLatestBroadcast();
+      else {
+        broadcastAwaitsEnvironment = true;
+        scheduleEnvironmentRetry();
+      }
+    }
   } finally {
     // A cancel that raced a job already running leaves its entry behind;
     // sweep it so the set cannot grow across a long session.
@@ -1123,7 +1136,8 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
   // — the rebuild, the cache key, the history digest — expects plain arrays.
   const request = unpackWorkerRequest(event.data);
   if (request.type === 'cancel') {
-    if (request.requestId !== undefined) cancelledRequests.add(request.requestId);
+    if (request.requestId !== undefined)
+      cancelledRequests.add(request.requestId);
     else {
       clearEnvironmentRetry();
       latestBroadcast = null;

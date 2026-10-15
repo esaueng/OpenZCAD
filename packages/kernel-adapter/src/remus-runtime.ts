@@ -25,6 +25,21 @@ import type { RemusIo as RemusIoInstance } from 'remus-wasm-io';
 let translators: RemusIoInstance | null = null;
 let translatorsLoading: Promise<RemusIoInstance> | null = null;
 
+/** Loading the runtime failed before any source file could be parsed. */
+class RemusTranslatorLoadError extends Error {
+  readonly category = 'environment-load';
+
+  constructor(cause: unknown) {
+    super(
+      cause instanceof Error
+        ? cause.message
+        : 'The Remus file-format translators failed to load.',
+      { cause }
+    );
+    this.name = 'RemusTranslatorLoadError';
+  }
+}
+
 export function loadRemusTranslators(): Promise<RemusIoInstance> {
   if (translators) {
     return Promise.resolve(translators);
@@ -40,7 +55,7 @@ export function loadRemusTranslators(): Promise<RemusIoInstance> {
       // replaying this rejection for the rest of the worker's life — the
       // same rule the geometry worker applies to its kernel load.
       translatorsLoading = null;
-      throw error;
+      throw new RemusTranslatorLoadError(error);
     });
   return translatorsLoading;
 }
