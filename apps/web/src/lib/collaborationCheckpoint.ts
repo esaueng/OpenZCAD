@@ -50,6 +50,15 @@ export function mergeCheckpointEcho(
   snapshot: ProjectDocument,
   saved: ProjectDocument
 ): ProjectDocument {
+  // A room broadcast may adopt the saved checkpoint before its HTTP ACK.
+  // Reuse that complete echo; matching geometry alone can hide newer history.
+  if (
+    live.version === saved.version &&
+    live.ownerUserId === saved.ownerUserId &&
+    projectsHaveSameCanonicalContent(live, saved)
+  ) {
+    return withMatchingLocalDerived(saved, live);
+  }
   if (
     live.version === snapshot.version &&
     sameCheckpointSnapshot(live, snapshot)
