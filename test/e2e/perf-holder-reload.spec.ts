@@ -1,5 +1,3 @@
-import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
@@ -16,6 +14,10 @@ import {
 import { letteredHolder } from '../support/lettered-holder';
 import type { RebuildCacheEvent } from '../../packages/kernel-adapter/src/exact';
 import { benchmarkStepInput } from '../support/benchmarkStepInput';
+import {
+  assertBenchmarkCheckout,
+  benchmarkCheckout
+} from '../support/benchmarkCheckout';
 
 /**
  * H02 measurement probe (ROADMAP.md): the first parameter edit after a reload
@@ -523,6 +525,13 @@ for (const scenario of scenarios) {
     page
   }, testInfo) => {
     test.setTimeout(600_000);
+    const checkout = benchmarkCheckout({
+      requireClean: !!process.env.H02_CACHE_MODE
+    });
+    if (process.env.H02_CACHE_MODE) {
+      expect(checkout.sourceCommit).toBe(process.env.H02_SOURCE_COMMIT);
+      expect(checkout.lockfileSha256).toBe(process.env.H02_LOCKFILE_SHA256);
+    }
     const stages: StageLog[] = [];
     const caches: (RebuildCacheEvent & { t: number })[] = [];
     await installWorkerLog(page);
@@ -703,17 +712,13 @@ for (const scenario of scenarios) {
       states: secondReloadLog
     };
 
+    if (process.env.H02_CACHE_MODE) assertBenchmarkCheckout(checkout);
     const sample = {
       recordedAt: new Date().toISOString(),
       cacheMode: process.env.H02_CACHE_MODE ?? 'enabled',
       observedCacheModes: cacheModes,
       pair: process.env.H02_PAIR ?? null,
-      sourceCommit: execFileSync('git', ['rev-parse', 'HEAD'], {
-        encoding: 'utf8'
-      }).trim(),
-      lockfileSha256: createHash('sha256')
-        .update(await readFile('pnpm-lock.yaml'))
-        .digest('hex'),
+      ...checkout,
       sourceSha256,
       // Adapter byte accounting and WASM capacity are recorded in cacheEvents.
       // Neither is a worker retained-heap measurement.

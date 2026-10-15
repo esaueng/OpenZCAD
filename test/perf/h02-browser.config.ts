@@ -2,12 +2,26 @@ import { accessSync, existsSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { defineConfig } from '@playwright/test';
 import base from '../../playwright.config';
+import {
+  assertBenchmarkCheckout,
+  benchmarkCheckout
+} from '../support/benchmarkCheckout';
 
 if (!process.env.OZ_PERF || !process.env.OZ_PERF_HOLDER_STEP)
   throw new Error(
     'Set OZ_PERF=1 and OZ_PERF_HOLDER_STEP to a local STEP source.'
   );
 accessSync(process.env.OZ_PERF_HOLDER_STEP);
+const checkout = benchmarkCheckout();
+// Playwright loads this config again in workers. Preserve the coordinator's
+// build identity instead of silently repinning after a checkout switch.
+assertBenchmarkCheckout({
+  sourceCommit: process.env.H02_SOURCE_COMMIT ?? checkout.sourceCommit,
+  lockfileSha256: process.env.H02_LOCKFILE_SHA256 ?? checkout.lockfileSha256
+});
+process.env.H02_SOURCE_COMMIT = checkout.sourceCommit;
+process.env.H02_LOCKFILE_SHA256 = checkout.lockfileSha256;
+process.env.OPENZCAD_BUILD_COMMIT = checkout.sourceCommit;
 if (!['disabled', 'enabled'].includes(process.env.H02_CACHE_MODE ?? ''))
   throw new Error('H02_CACHE_MODE must be disabled or enabled.');
 if (!process.env.OZ_PERF_OUT || !isAbsolute(process.env.OZ_PERF_OUT))
