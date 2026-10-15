@@ -48,7 +48,9 @@ export function setAnalyticsEnabled(enabled: boolean): boolean {
   try {
     if (enabled) window.localStorage.setItem(CONSENT_KEY, 'granted-v1');
     else window.localStorage.removeItem(CONSENT_KEY);
-    withdrawn = !enabled;
+    // A persisted revocation is represented by storage, so a later opt-in in
+    // another tab is visible. Keep the page-local latch only after failure.
+    withdrawn = false;
     window.dispatchEvent(new Event('glimpse-consent-changed'));
     return true;
   } catch {

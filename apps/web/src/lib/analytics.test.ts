@@ -112,6 +112,34 @@ describe('Glimpse explicit consent', () => {
     analytics.trackUsage('feature_used');
     expect(send).toHaveBeenCalledOnce();
   });
+  it('follows a cross-tab opt-in after a successful local withdrawal', () => {
+    analytics.setAnalyticsEnabled(true);
+    analytics.setAnalyticsEnabled(false);
+    store.set('openzcad.glimpse.consent.v1', 'granted-v1');
+    const event = new Event('storage');
+    Object.defineProperty(event, 'key', {
+      value: 'openzcad.glimpse.consent.v1'
+    });
+    window.dispatchEvent(event);
+    expect(analytics.hasAnalyticsConsent()).toBe(true);
+    analytics.trackUsage('workspace_opened');
+    expect(send).toHaveBeenCalledOnce();
+  });
+  it('retains the local safety latch after a failed withdrawal despite cross-tab changes', () => {
+    analytics.setAnalyticsEnabled(true);
+    vi.spyOn(window.localStorage, 'removeItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    expect(analytics.setAnalyticsEnabled(false)).toBe(false);
+    const event = new Event('storage');
+    Object.defineProperty(event, 'key', {
+      value: 'openzcad.glimpse.consent.v1'
+    });
+    window.dispatchEvent(event);
+    expect(analytics.hasAnalyticsConsent()).toBe(false);
+    analytics.trackUsage('workspace_opened');
+    expect(send).not.toHaveBeenCalled();
+  });
   it('honors DNT and GPC and rejects free-text events and invalid timings', () => {
     analytics.setAnalyticsEnabled(true);
     vi.stubGlobal('navigator', { globalPrivacyControl: true });
