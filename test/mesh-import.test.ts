@@ -715,6 +715,51 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
     }
   );
 
+  it.each([
+    ['bare CR', '\r', '\r'],
+    ['mixed LF and CR', '\n', '\r'],
+    ['CRLF', '\r\n', '\r\n']
+  ])(
+    'refuses an over-budget OBJ polygon after %s records before translation',
+    async (_label, firstEnding, followingEnding) => {
+      const io = await loadRemusTranslators();
+      const importObj = vi.spyOn(io, 'importObj').mockImplementation(() => {
+        throw new Error('OBJ preflight reached the translator');
+      });
+      try {
+        const polygon = new TextEncoder().encode(
+          `o part${firstEnding}v 0 0 0${followingEnding}` +
+            `v 1 0 0${followingEnding}v 0 1 0${followingEnding}` +
+            `f 1 2${' 3'.repeat(MAX_IMPORT_TRIANGLES + 1)}${followingEnding}`
+        );
+        await expect(importMeshFile('obj', polygon, 'mm')).rejects.toThrow(
+          `OBJ has more than ${MAX_IMPORT_TRIANGLES} triangles; the browser import limit is ${MAX_IMPORT_TRIANGLES}.`
+        );
+        expect(importObj).not.toHaveBeenCalled();
+      } finally {
+        importObj.mockRestore();
+      }
+    }
+  );
+
+  it('ends an OBJ face at CR without charging the following group names', async () => {
+    const io = await loadRemusTranslators();
+    const importObj = vi.spyOn(io, 'importObj').mockImplementation(() => {
+      throw new Error('OBJ preflight reached the translator');
+    });
+    try {
+      const faces = new TextEncoder().encode(
+        `f 1 2 3\rg${' part'.repeat(MAX_IMPORT_TRIANGLES + 1)}\rf 1 2 3\r`
+      );
+      await expect(importMeshFile('obj', faces, 'mm')).rejects.toThrow(
+        'OBJ preflight reached the translator'
+      );
+      expect(importObj).toHaveBeenCalledOnce();
+    } finally {
+      importObj.mockRestore();
+    }
+  });
+
   /**
    * The rebuild check runs at the units the document stores, not millimetres.
    *
