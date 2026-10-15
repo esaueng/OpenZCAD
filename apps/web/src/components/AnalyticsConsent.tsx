@@ -9,7 +9,7 @@ export function AnalyticsConsent() {
     return () => window.removeEventListener('glimpse-consent-changed', update);
   }, []);
   return (
-    <div className="settings-privacy-note">
+    <div className="settings-analytics-consent">
       <label>
         <input
           type="checkbox"
@@ -26,18 +26,6 @@ export function AnalyticsConsent() {
         />{' '}
         Optional usage analytics
       </label>
-      <p>
-        Allow Glimpse to count feature use, workflow steps, exports, and coarse
-        timings. No model contents, geometry, filenames, project names, or
-        identity. Off by default. DNT and GPC suppress sending while preserving
-        this choice. Withdraw here to stop collection immediately; existing
-        anonymous totals cannot be attributed or removed.
-      </p>
-      <p>
-        Basic server counters measure API activity and reliability. Local
-        operations are counted only with your opt-in. This choice stays in this
-        browser and is separate for each app.
-      </p>
       {error && <p role="status">{error}</p>}
     </div>
   );

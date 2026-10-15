@@ -1049,6 +1049,18 @@ test('optional Glimpse analytics require a new opt-in and withdraw immediately',
     name: 'Optional usage analytics',
     exact: true
   });
+  const row = page.locator('.setting-row').filter({ has: consent });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const copy = await row.locator('.setting-copy').boundingBox();
+    const control = await row.locator('.setting-control').boundingBox();
+    if (!copy || !control) throw new Error('Analytics setting is not visible');
+    expect(copy.width).toBeGreaterThan(200);
+    expect(
+      control.x >= copy.x + copy.width - 1 ||
+        control.y >= copy.y + copy.height - 1
+    ).toBe(true);
+  }
   await expect(consent).not.toBeChecked();
   expect(requests).toEqual([]);
   await consent.check();
