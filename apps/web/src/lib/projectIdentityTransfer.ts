@@ -24,6 +24,7 @@ import {
   archiveAccountImportSources,
   sourceUploadMessage
 } from './accountImportSources';
+import { listLocalOnlyImportSources } from './importArchival';
 import { ApiError, api } from './api';
 import { archiveArtifact as archiveArtifactBody } from './archiveArtifact';
 import {
@@ -425,6 +426,58 @@ async function transferAdoptedProjectIdentity(
 export type AdoptLocalProjectResult =
   | { state: 'adopted' | 'already-adopted' | 'missing'; sourceWarning?: string }
   | { state: 'conflict'; conflict: ProjectConflict };
+
+/** Restores a confirmed account record only after its required sources exist there. */
+export async function restoreAccountProjectFromDevice(
+  document: ProjectDocument,
+  summary: ProjectSummary,
+  sources: {
+    archive(): Promise<unknown>;
+    /** Null after the originating editor is replaced, even for the same project. */
+    currentDocument(): ProjectDocument | null;
+    remoteVersions: Map<string, number>;
+  }
+): Promise<{ document: ProjectDocument; project: ProjectSummary }> {
+  const expectedVersion = summary.documentVersion;
+  if (expectedVersion === undefined)
+    throw new Error('The account record could not be verified.');
+  sources.remoteVersions.set(document.projectId, expectedVersion);
+  if (listLocalOnlyImportSources(document).length) {
+    await sources.archive();
+    const current = sources.currentDocument();
+    if (current?.projectId === document.projectId) {
+      // Keep completed uploads even when another source or the restore write
+      // fails. The live document can contain edits made during the upload.
+      document = applyAccountSourceArchives(document, current);
+      await saveLocalProject(current);
+    }
+    const remaining = listLocalOnlyImportSources(document);
+    if (remaining.length) {
+      throw new Error(
+        `Import sources could not be archived: ${remaining.map((source) => source.sourceName).join(', ')}. The account copy was not restored; use Repair needed to retry.`
+      );
+    }
+  }
+  const saved = await api.saveProjectDocument({
+    projectId: document.projectId,
+    expectedVersion,
+    document: withoutDerivedProjection(document)
+  });
+  const restored = {
+    ...document,
+    version: saved.version,
+    derived: { ...document.derived, updatedAt: saved.updatedAt }
+  };
+  return {
+    document: restored,
+    project: {
+      ...summary,
+      name: restored.name,
+      updatedAt: saved.updatedAt,
+      documentVersion: saved.version
+    }
+  };
+}
 
 /** The App state and account-save step an adoption needs beyond the transfer. */
 export interface LocalProjectAdoptionState extends AdoptedProjectIdentityState {
