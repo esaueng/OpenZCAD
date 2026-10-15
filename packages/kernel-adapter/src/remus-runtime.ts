@@ -11,6 +11,7 @@ export {
 export type { RemusIo, StepImportResult } from 'remus-wasm-io';
 
 import type { RemusIo as RemusIoInstance } from 'remus-wasm-io';
+import { RemusTranslatorLoadError } from './remus-load-error';
 
 /**
  * The file-format translators (STEP, IGES, STL, 3MF, OBJ, PLY, glTF) ship as
@@ -24,21 +25,6 @@ import type { RemusIo as RemusIoInstance } from 'remus-wasm-io';
  */
 let translators: RemusIoInstance | null = null;
 let translatorsLoading: Promise<RemusIoInstance> | null = null;
-
-/** Loading the runtime failed before any source file could be parsed. */
-class RemusTranslatorLoadError extends Error {
-  readonly category = 'environment-load';
-
-  constructor(cause: unknown) {
-    super(
-      cause instanceof Error
-        ? cause.message
-        : 'The Remus file-format translators failed to load.',
-      { cause }
-    );
-    this.name = 'RemusTranslatorLoadError';
-  }
-}
 
 export function loadRemusTranslators(): Promise<RemusIoInstance> {
   if (translators) {
