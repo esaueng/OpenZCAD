@@ -159,12 +159,15 @@ export function useCollaboration({
   const checkpointEchoRef = useRef<
     ((document: ProjectDocument) => void) | null
   >(null);
+  const checkpointAckRef = useRef<((document: ProjectDocument) => void) | null>(
+    null
+  );
   const checkpointDrainRef = useRef<{
     resolve(): void;
     reject(error: Error): void;
   } | null>(null);
   const drainDocumentRef = useRef<
-    ((signal: AbortSignal) => Promise<void>) | null
+    ((signal: AbortSignal) => Promise<ProjectDocument | null>) | null
   >(null);
   documentRef.current = document;
   remoteHandlerRef.current = onRemoteDocument;
@@ -277,9 +280,10 @@ export function useCollaboration({
     let leaseRetryTimer: number | undefined;
     let reconnectAttempt = 0;
     let pendingDocument: ProjectDocument | null = null;
+    let acknowledgedDocument: ProjectDocument | null = null;
     drainDocumentRef.current = (signal) => {
       signal.throwIfAborted();
-      if (!pendingDocument) return Promise.resolve();
+      if (!pendingDocument) return Promise.resolve(acknowledgedDocument);
       return new Promise<void>((resolve, reject) => {
         const pending = { resolve, reject };
         checkpointDrainRef.current = pending;
@@ -293,7 +297,7 @@ export function useCollaboration({
           },
           { once: true }
         );
-      });
+      }).then(() => acknowledgedDocument);
     };
     const id = clientId();
 
@@ -362,6 +366,7 @@ export function useCollaboration({
       }
       lastSentVersionRef.current = message.version;
       baseVersionRef.current = message.version;
+      if (message.document) acknowledgedDocument = message.document;
       settleCheckpointDrain();
       if (keepMinePendingRef.current) {
         settleKeepMine();
@@ -373,7 +378,9 @@ export function useCollaboration({
       setStatus('live');
       if (message.document) {
         documentRef.current = message.document;
-        remoteHandlerRef.current(message.document, { adopted: true });
+        if (checkpointAckRef.current)
+          checkpointAckRef.current(message.document);
+        else remoteHandlerRef.current(message.document, { adopted: true });
       }
       sendCurrentDocumentRef.current?.();
     };
@@ -975,6 +982,12 @@ export function useCollaboration({
         socketRef.current === socket &&
         documentRef.current?.projectId === snapshot.projectId &&
         roleRef.current !== 'viewer';
+      // Keep this accepted drain ACK in the manager that owns the named save.
+      // The ordinary remote-adoption path can replace it for source aliases.
+      checkpointAckRef.current = (acknowledged) => {
+        if (isCurrent() && options.isCurrent())
+          options.applyDocument(acknowledged);
+      };
       const captured = collaborationDocument(snapshot);
       // Loading the optional room action shares the save's deadline and room
       // cancellation. Its late resolution must not publish after local fallback.
@@ -1028,6 +1041,7 @@ export function useCollaboration({
           if (checkpointRef.current !== controller) return;
           checkpointRef.current = null;
           checkpointEchoRef.current = null;
+          checkpointAckRef.current = null;
           if (isCurrent() && options.isCurrent())
             sendCurrentDocumentRef.current?.();
         });
