@@ -274,6 +274,48 @@ describe('STL parsing', () => {
       expect(parsed.vertices).toEqual(TWO_FACETS);
     });
 
+    it.each(['\n', '\r\n', '\r'])(
+      'reads an inline first STL facet before later %j line breaks',
+      (ending) => {
+        const text =
+          'solid x facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet' +
+          ending +
+          'facet normal 1 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet' +
+          ending +
+          'endsolid x';
+        const parsed = parseStl(
+          new TextEncoder().encode(text).buffer,
+          'mixed-layout.stl'
+        );
+        expect(parsed.triangleCount).toBe(2);
+        expect(parsed.vertices).toEqual(TWO_FACETS);
+      }
+    );
+
+    it('reads an inline first STL facet whose vertex statements wrap onto later lines', () => {
+      const text =
+        'solid x facet normal 0 0 1 outer loop\n' +
+        'vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet\n' +
+        'facet normal 1 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet endsolid x';
+      const parsed = parseStl(
+        new TextEncoder().encode(text).buffer,
+        'wrapped-inline.stl'
+      );
+      expect(parsed.triangleCount).toBe(2);
+      expect(parsed.vertices).toEqual(TWO_FACETS);
+    });
+
+    it('refuses a malformed inline first STL facet before later line breaks', () => {
+      const text =
+        'solid x facet normal 0 0 1 outer loop vertex nan 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet\n' +
+        'facet normal 1 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet\nendsolid x';
+      expect(() =>
+        parseStl(new TextEncoder().encode(text).buffer, 'mixed-layout-nan.stl')
+      ).toThrow(
+        'ASCII STL facet 1 has a vertex that is not three finite numbers: "vertex nan 0 0".'
+      );
+    });
+
     it('reads an ASCII STL with CRLF or bare CR line endings', () => {
       for (const ending of ['\r\n', '\r']) {
         const text = asciiStlText([
