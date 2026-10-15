@@ -1961,7 +1961,9 @@ export async function saveImportedProject(
       store(BACKUP_STORE_NAME).put(backup.files, document.projectId);
       for (const source of sources) store(BLOB_STORE_NAME).put(source);
       for (const state of backup.saveStates ?? []) {
-        const checkpoint = document.checkpoints.find(
+        const checkpoint = (
+          state.deviceOnly ? state.document : document
+        ).checkpoints.find(
           (entry) => entry.checkpointId === state.checkpointId
         )!;
         store(CHECKPOINT_STORE_NAME).put({
