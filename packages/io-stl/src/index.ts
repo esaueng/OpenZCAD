@@ -196,11 +196,44 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
   const oneLine = !body.includes('\n') && !body.includes('\r');
   const inlineFacetBody =
     /\s+(?:normal\s+\S+\s+\S+\s+\S+\s+)?outer\s+loop\s+vertex(?:\s|$)/iy;
+  const hasInlineFacetBody = (): boolean => {
+    inlineFacetBody.lastIndex = index;
+    if (!inlineFacetBody.test(text)) return false;
+    const mark = index;
+    const tokenStart = start;
+    let coordinates = -1;
+    let completeVertices = 0;
+    let closed = false;
+    for (let token = next(); token !== null; token = next()) {
+      const keyword = keywordOf(token);
+      if (
+        keyword === 'facet' ||
+        keyword === 'solid' ||
+        keyword === 'endsolid'
+      ) {
+        break;
+      }
+      if (keyword === 'vertex') {
+        coordinates = 0;
+      } else if (keyword === 'endfacet') {
+        closed = completeVertices > 0;
+        break;
+      } else if (keyword === '') {
+        if (coordinates >= 0 && ++coordinates === 3) completeVertices += 1;
+      } else {
+        coordinates = -1;
+      }
+    }
+    index = mark;
+    start = tokenStart;
+    return closed || completeVertices >= 3;
+  };
   /**
-   * Skips the name after `solid` or `endsolid`. Names may hold keywords; an
-   * inline facet's `outer loop vertex` body distinguishes it from a name in
-   * a file with later line breaks. Its vertices are validated by the reader,
-   * so malformed inline geometry cannot disappear into the name. A
+   * Skips the name after `solid` or `endsolid`. Names may hold short facet
+   * prefixes. Inline geometry needs a closed body with a three-token vertex,
+   * or three such statements even if its closing marker is missing. Probe
+   * only to the next facet/solid boundary, then let the reader validate every
+   * coordinate and the closure; `nan` must not turn geometry into a name. A
    * one-line file has no line end to stop at, so there the name ends at the
    * first `facet` followed by `normal` or `outer`, and everything from it on
    * is geometry — a malformed facet is refused, never read as a name. The
@@ -213,13 +246,12 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
       const mark = index;
       const token = next();
       if (token === null) return;
-      inlineFacetBody.lastIndex = index;
       if (
         start > lineEnd ||
         (keywordOf(token) === 'facet' &&
           (oneLine
             ? ['normal', 'outer'].includes(peekKeyword())
-            : inlineFacetBody.test(text)))
+            : hasInlineFacetBody()))
       ) {
         index = mark;
         return;
