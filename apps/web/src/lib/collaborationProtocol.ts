@@ -7,6 +7,48 @@ import {
   type ProjectDocument,
   type ProjectEditLease
 } from '@openzcad/shared';
+import {
+  copiedImportArchives,
+  reconcileCopiedImportSources
+} from '@openzcad/persistence';
+import { projectsHaveSameCanonicalContent } from './localProjectStore';
+
+/** Only a complete echo of this clicked write can rehome buffered sources. */
+export function reconcileCheckpointFlush(
+  clicked: ProjectDocument,
+  live: ProjectDocument,
+  acknowledged: ProjectDocument
+): ProjectDocument | null {
+  if (
+    acknowledged.projectId !== clicked.projectId ||
+    acknowledged.ownerUserId !== clicked.ownerUserId ||
+    live.projectId !== clicked.projectId ||
+    live.ownerUserId !== clicked.ownerUserId ||
+    acknowledged.version < clicked.version
+  )
+    return null;
+  try {
+    const archives = copiedImportArchives(acknowledged);
+    if (
+      !projectsHaveSameCanonicalContent(
+        reconcileCopiedImportSources(clicked, archives),
+        acknowledged
+      )
+    )
+      return null;
+    const current = reconcileCopiedImportSources(live, archives);
+    return {
+      ...current,
+      version:
+        current.version <= acknowledged.version &&
+        projectsHaveSameCanonicalContent(current, acknowledged)
+          ? acknowledged.version
+          : Math.max(current.version, acknowledged.version) + 1
+    };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Inbound frames wrap a room document (bounded server-side by

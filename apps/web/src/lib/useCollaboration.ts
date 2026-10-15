@@ -26,6 +26,7 @@ import {
   isDesktopApp
 } from './desktopBridge';
 import { cloudFunctionsAreEnabled } from './cloudMode';
+import { listLocalOnlyImportSources } from './importArchival';
 import {
   chooseProjectDocument,
   projectPreservesLocalWork,
@@ -40,6 +41,7 @@ import {
   startCheckpointDeadline,
   collaborationClientId as clientId,
   collaborationDocument,
+  reconcileCheckpointFlush,
   parseServerMessage,
   rejectionStatus
 } from './collaborationProtocol';
@@ -153,9 +155,10 @@ export function useCollaboration({
   const checkpointEchoRef = useRef<
     ((document: ProjectDocument) => void) | null
   >(null);
-  const checkpointAckRef = useRef<((document: ProjectDocument) => void) | null>(
-    null
-  );
+  const checkpointAckRef = useRef<{
+    submitted: ProjectDocument;
+    accept(document: ProjectDocument, version?: number): ProjectDocument | null;
+  } | null>(null);
   const checkpointDrainRef = useRef<{
     resolve(): void;
     reject(error: Error): void;
@@ -340,11 +343,25 @@ export function useCollaboration({
       const local = documentRef.current;
       serverVersionRef.current = message.version;
       setRoomVersion(message.version);
+      const checkpoint = checkpointAckRef.current;
+      const ownsFlush = checkpoint?.submitted === submitted;
+      const checkpointCurrent =
+        ownsFlush && message.document
+          ? checkpoint.accept(message.document, message.version)
+          : null;
+      if (ownsFlush && message.document && !checkpointCurrent) {
+        retainConflict(message.document, true);
+        settleCheckpointDrain(
+          new Error('The room did not confirm the clicked edit.')
+        );
+        return;
+      }
       // A merge acknowledges the submitted snapshot, not edits made while it
       // was in flight. Preserve those newer edits for explicit reconciliation.
       if (
         message.document &&
         local &&
+        !checkpointCurrent &&
         !projectPreservesLocalWork(local, submitted ?? message.document)
       ) {
         retainConflict(message.document, true);
@@ -369,12 +386,19 @@ export function useCollaboration({
         setConflict(null);
       }
       if (conflictRef.current) return;
-      setStatus('live');
+      if (checkpointCurrent && roleRef.current === 'viewer')
+        setStatus('read-only');
+      else if (
+        !checkpointCurrent ||
+        (leaseRef.current?.expiresAt ?? 0) > Date.now()
+      )
+        setStatus('live');
       if (message.document) {
-        documentRef.current = message.document;
-        if (checkpointAckRef.current)
-          checkpointAckRef.current(message.document);
-        else remoteHandlerRef.current(message.document, { adopted: true });
+        documentRef.current = checkpointCurrent ?? message.document;
+        if (!checkpointCurrent) {
+          if (checkpoint) checkpoint.accept(message.document);
+          else remoteHandlerRef.current(message.document, { adopted: true });
+        }
       }
       sendCurrentDocumentRef.current?.();
     };
@@ -972,9 +996,13 @@ export function useCollaboration({
       const epoch = roomEpochRef.current;
       const socket = socketRef.current;
       const captured = collaborationDocument(snapshot);
-      // Flush the clicked edit before the barrier blocks its debounce timer.
-      // Later edits stay buffered while this exact ordinary write is drained.
-      if (options.isCurrent()) sendCurrentDocumentRef.current?.(captured);
+      // Copied sources need an ordinary ACK's trusted aliases before naming.
+      // Plain models retain their direct HTTP save and buffered-edit merge.
+      if (
+        options.isCurrent() &&
+        listLocalOnlyImportSources(captured).length > 0
+      )
+        sendCurrentDocumentRef.current?.(captured);
       // Reserve the outgoing barrier before the dynamic import or ACK drain.
       checkpointRef.current = controller;
       checkpointEchoRef.current = null;
@@ -984,9 +1012,23 @@ export function useCollaboration({
         documentRef.current?.projectId === snapshot.projectId;
       // Keep this accepted drain ACK in the manager that owns the named save.
       // The ordinary remote-adoption path can replace it for source aliases.
-      checkpointAckRef.current = (acknowledged) => {
-        if (isCurrent() && options.isCurrent())
-          options.applyDocument(acknowledged);
+      checkpointAckRef.current = {
+        submitted: captured,
+        accept: (acknowledged, version) => {
+          if (!isCurrent() || !options.isCurrent()) return null;
+          const current =
+            version === undefined
+              ? acknowledged
+              : version === acknowledged.version
+                ? reconcileCheckpointFlush(
+                    captured,
+                    options.readDocument(),
+                    acknowledged
+                  )
+                : null;
+          if (current) options.applyDocument(current);
+          return current;
+        }
       };
       // Loading the optional room action shares the save's deadline and room
       // cancellation. Its late resolution must not publish after local fallback.
