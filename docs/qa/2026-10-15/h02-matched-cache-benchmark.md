@@ -36,6 +36,10 @@ with retained timing samples. This is a small characterization on a shared
 host, not an isolated tail-latency study. p95 is nearest rank and therefore the
 maximum of three samples; slower completed samples remain included.
 
+The source digest is retained from the exact buffer sent to the browser, before
+the import. Replacing the STEP file during a run cannot relabel an earlier
+import as the replacement; a regression exercises that file-change case.
+
 Raw samples identify the source/lockfile hashes, source commit, pair, parameter
 sequence, observed worker cache mode, document bytes, body/face counts, stages
 and per-edit cache events. The running disabled arm must restore zero features
