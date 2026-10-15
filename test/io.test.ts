@@ -375,7 +375,13 @@ describe('STL parsing', () => {
       'part facet outer loop vertex bracket endfacet',
       'part facet outer loop vertex bracket endloop endfacet',
       'part facet outer loop vertex bracket vertex bracket vertex bracket',
-      'part facet outer loop vertex bracket part vertex bracket part vertex bracket part'
+      'part facet outer loop vertex bracket part vertex bracket part vertex bracket part',
+      'part facet outer loop vertex alpha beta gamma endfacet',
+      'part FACET OUTER LOOP VERTEX ALPHA BETA GAMMA ENDLOOP ENDFACET',
+      'part facet normal 0 0 1 outer loop vertex alpha beta gamma endfacet',
+      'part facet outer loop vertex 1 2 bracket endfacet',
+      'part facet outer loop vertex bracket 1 2 endfacet',
+      'part facet outer loop vertex alpha beta gamma vertex delta epsilon zeta vertex eta theta iota endloop endfacet'
     ])('reads keywords in the solid name "%s" as part of the name', (name) => {
       for (const ending of ['\n', '\r\n', '\r']) {
         const text = [
@@ -442,6 +448,27 @@ describe('STL parsing', () => {
         parseStl(new TextEncoder().encode(text).buffer, 'unclosed-inline.stl')
       ).toThrow('ASCII STL facet 1 is not closed by "endfacet".');
     });
+
+    it.each([
+      ['nan', 'inf', '-1.#IND'],
+      ['NaN', 'INF', '1.#QNAN'],
+      ['1x', '+.25broken', '-1e+bogus']
+    ])(
+      'refuses an inline first facet whose coordinates all look numeric but are invalid: %s',
+      (first, second, third) => {
+        const text =
+          `solid x facet normal 0 0 1 outer loop vertex ${first} 0 0 vertex ${second} 0 0 vertex ${third} 0 0 endloop endfacet\n` +
+          'facet normal 1 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet\nendsolid x';
+        expect(() =>
+          parseStl(
+            new TextEncoder().encode(text).buffer,
+            'inline-invalid-numbers.stl'
+          )
+        ).toThrow(
+          `ASCII STL facet 1 has a vertex that is not three finite numbers: "vertex ${first} 0 0".`
+        );
+      }
+    );
 
     it.each([
       ['vertex 0 0 0 vertex 1 0 0', 'has 2 vertices; a facet needs three'],
