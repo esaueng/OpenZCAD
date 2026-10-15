@@ -169,10 +169,13 @@ for (const fault of ['missing', 'stalled', 'rejected'] as const) {
       const dialog = page.getByRole('dialog', { name: 'Name this save' });
       await dialog.getByLabel('Save name').fill('Offline milestone');
       await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+      const named = page.locator('.revision-row').filter({
+        has: page.getByText('Offline milestone', { exact: true })
+      });
       await expect.poll(() => moduleRequests).toBe(1);
-      await expect(
-        page.locator('.revision-row', { hasText: 'Offline milestone' })
-      ).toBeVisible({ timeout: fault === 'stalled' ? 20_000 : 10_000 });
+      await expect(named).toBeVisible({
+        timeout: fault === 'stalled' ? 20_000 : 10_000
+      });
       await expect(page.getByRole('contentinfo')).toContainText(
         'The named save is stored on this device.'
       );
@@ -224,12 +227,7 @@ for (const fault of ['missing', 'stalled', 'rejected'] as const) {
           sent.revisions.map((revision) => revision.revisionId)
         ).not.toContain(revisionId);
       }
-      await expect(
-        page.locator('.revision-row', { hasText: 'Offline milestone' })
-      ).toBeVisible();
-      const named = page.locator('.revision-row', {
-        hasText: 'Offline milestone'
-      });
+      await expect(named).toBeVisible();
       await named.hover();
       await named
         .getByRole('button', { name: 'Restore Offline milestone', exact: true })
@@ -252,6 +250,11 @@ for (const fault of ['missing', 'stalled', 'rejected'] as const) {
       await page.reload();
       await expectBodyCount(page, 2);
       await expect(named).toBeVisible();
+      await expect(
+        page.locator('.revision-row').filter({
+          has: page.getByText('Restored “Offline milestone”', { exact: true })
+        })
+      ).toBeVisible();
       const saved = (await storedCheckpoints(page)).find(
         (checkpoint) => checkpoint.reason === 'Offline milestone'
       );
