@@ -997,6 +997,31 @@ test('saves incoming member updates through the room without refused account wri
   ).toBeVisible();
   // Opening this same cached project by a public link must stay session-local,
   // even though the account listing still contains its member project ID.
+  for (const frame of [
+    { type: 'error', code: 'document-too-large', message: 'Room size limit' },
+    { type: 'error', code: 'permission-denied', message: 'Room write refused' },
+    {
+      type: 'document',
+      clientId: 'newer-client',
+      document: {
+        ...incoming,
+        schemaVersion: incoming.schemaVersion + 1,
+        version: incoming.version + 1
+      }
+    }
+  ]) {
+    await page.evaluate((message) => {
+      const socket = (window as unknown as { __memberSocket: WebSocket })
+        .__memberSocket;
+      socket.dispatchEvent(
+        new MessageEvent('message', { data: JSON.stringify(message) })
+      );
+    }, frame);
+    await expect(
+      page.getByRole('status', { name: 'Local only', exact: true })
+    ).toBeVisible();
+    await expect(page.locator('.save-state.is-syncing')).toHaveCount(0);
+  }
   await page.route('**/api/share/*', (route) =>
     route.fulfill({
       json: { document: incoming, project: summary, mode: 'tweak' }
