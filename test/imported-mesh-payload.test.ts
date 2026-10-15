@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
@@ -209,14 +210,22 @@ describe('imported mesh payload encoding', () => {
     ).toThrow(/invalid triangle index/);
   });
 
-  it('decodes from an unaligned view of a larger buffer', () => {
-    const bytes = encodeImportedMeshPayload(boxSoup());
-    const padded = new Uint8Array(bytes.length + 3);
-    padded.set(bytes, 3);
-    expect(
-      Array.from(decodeImportedMeshPayload(padded.subarray(3)).vertices)
-    ).toEqual(boxSoup().vertices);
-  });
+  it.each([
+    ['Uint8Array', (length: number) => new Uint8Array(length)],
+    ['Buffer', (length: number) => Buffer.alloc(length)]
+  ] as const)(
+    'owns the decoded data from an unaligned %s view',
+    (_kind, allocate) => {
+      const mesh = boxSoup();
+      const bytes = encodeImportedMeshPayload(mesh);
+      const padded = allocate(bytes.length + 3);
+      padded.set(bytes, 3);
+      const decoded = decodeImportedMeshPayload(padded.subarray(3));
+      padded.fill(0);
+      expect(Array.from(decoded.vertices)).toEqual(mesh.vertices);
+      expect(Array.from(decoded.indices)).toEqual(mesh.indices);
+    }
+  );
 });
 
 describe('imported mesh feature forms', () => {
