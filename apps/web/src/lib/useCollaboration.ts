@@ -974,8 +974,7 @@ export function useCollaboration({
       const isCurrent = () =>
         roomEpochRef.current === epoch &&
         socketRef.current === socket &&
-        documentRef.current?.projectId === snapshot.projectId &&
-        roleRef.current !== 'viewer';
+        documentRef.current?.projectId === snapshot.projectId;
       // Keep this accepted drain ACK in the manager that owns the named save.
       // The ordinary remote-adoption path can replace it for source aliases.
       checkpointAckRef.current = (acknowledged) => {
@@ -1012,7 +1011,6 @@ export function useCollaboration({
                 baseVersionRef.current = saved.version;
                 serverVersionRef.current = saved.version;
                 setRoomVersion(saved.version);
-                setStatus('live');
               }
             }),
           (error: unknown) =>
@@ -1034,7 +1032,7 @@ export function useCollaboration({
             sendCurrentDocumentRef.current?.();
         });
     },
-    [setStatus]
+    []
   );
 
   return {

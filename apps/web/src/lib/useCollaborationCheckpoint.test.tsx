@@ -670,6 +670,7 @@ describe('durable room checkpoints', () => {
       });
       hook.edit(later);
       const saved = checkpoint(document);
+      let failure: unknown;
       await act(async () => {
         hook.socket.receive({
           type: 'document',
@@ -677,16 +678,128 @@ describe('durable room checkpoints', () => {
           document: saved
         });
         hook.socket.receive({ type: 'lease-lost', reason });
-        expect(await saving).toBeInstanceOf(Error);
+        failure = await saving;
       });
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toContain(
+        'The revision is stored in the room.'
+      );
       expect(hook.result.current.status).toBe(
         reason === 'role-changed' ? 'read-only' : 'connecting'
       );
       expect(hook.result.current.lease).toBeNull();
       expect(hook.read().nodes).toEqual(later.nodes);
+      expect(hook.read().checkpoints).toContainEqual(saved.checkpoints.at(-1));
+      expect(hook.read().revisions).toContainEqual(saved.revisions.at(-1));
       expect(
         hook.socket.sent.filter((sent) => sent.type === 'document')
       ).toHaveLength(0);
+      expect(
+        (
+          await loadLocalSaveState(
+            document.projectId,
+            saved.checkpoints.at(-1)!.checkpointId
+          )
+        )?.revisions
+      ).toEqual(saved.revisions);
+      hook.unmount();
+    }
+  );
+
+  it.each(
+    (['checkpoint_lease', 'renewed_checkpoint_lease'] as const).flatMap(
+      (leaseId) =>
+        (['before settlement', 'after settlement'] as const).map((timing) => ({
+          leaseId,
+          timing
+        }))
+    )
+  )(
+    'publishes buffered descendants of the observed checkpoint after $leaseId returns $timing',
+    async ({ leaseId, timing }) => {
+      const document = clickedModel('Checkpoint lease renewal');
+      const fetch = vi.fn(() => new Promise<Response>(() => {}));
+      vi.stubGlobal('fetch', fetch);
+      const hook = setup(document);
+      const saving = hook.result.current
+        .saveCheckpoint(document, 'Clicked model', hook.options)
+        .catch((error: unknown) => error);
+      await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+      const later = createSavedRevision(
+        addPrimitiveFeature(document, {
+          name: 'Buffered cylinder',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 2, height: 10 }
+        }),
+        'Buffered local note'
+      );
+      hook.edit(later);
+      const saved = checkpoint(document);
+      const grantLease = () =>
+        hook.socket.receive({
+          type: 'lease-granted',
+          lease: {
+            projectId: document.projectId,
+            leaseId,
+            clientId: sessionStorage.getItem('openzcad-collaboration-client')!,
+            userId: toUserId('member'),
+            expiresAt: Date.now() + 60_000
+          }
+        });
+      let failure: unknown;
+      await act(async () => {
+        hook.socket.receive({
+          type: 'document',
+          clientId: sessionStorage.getItem('openzcad-collaboration-client')!,
+          document: saved
+        });
+        hook.socket.receive({ type: 'lease-lost', reason: 'expired' });
+        if (timing === 'before settlement') grantLease();
+        failure = await saving;
+      });
+      if (timing === 'after settlement') {
+        // App's applyDocument publishes the merged manager document to React.
+        hook.edit(hook.read());
+        expect(hook.result.current.status).toBe('connecting');
+        expect(
+          hook.socket.sent.filter((frame) => frame.type === 'document')
+        ).toHaveLength(0);
+        act(grantLease);
+      }
+      const frame = hook.socket.sent
+        .filter((sent) => sent.type === 'document')
+        .at(-1)!;
+      expect(frame.baseVersion).toBe(saved.version);
+      expect(frame.document?.version).toBeGreaterThan(saved.version);
+      expect((failure as Error).message).toContain(
+        'The revision is stored in the room.'
+      );
+      expect(frame.document?.nodes).toEqual(later.nodes);
+      expect(frame.document?.commandLog).toEqual(later.commandLog);
+      expect(frame.document?.editHistory).toEqual(later.editHistory);
+      expect(
+        new Set(frame.document?.checkpoints.map((point) => point.checkpointId))
+      ).toEqual(
+        new Set(
+          [...saved.checkpoints, ...later.checkpoints].map(
+            (point) => point.checkpointId
+          )
+        )
+      );
+      expect(
+        new Set(
+          frame.document?.revisions.map((revision) => revision.revisionId)
+        )
+      ).toEqual(
+        new Set(
+          [...saved.revisions, ...later.revisions].map(
+            (revision) => revision.revisionId
+          )
+        )
+      );
+      expect(hook.result.current.conflict).toBeNull();
+      expect(hook.result.current.status).toBe('live');
+      expect(fetch).toHaveBeenCalledOnce();
       expect(
         (
           await loadLocalSaveState(
