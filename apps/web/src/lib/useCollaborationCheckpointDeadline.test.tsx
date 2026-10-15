@@ -2,7 +2,11 @@ import { act } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
-import { loadLocalSaveState, listLocalSaveStateIds } from './localProjectStore';
+import {
+  loadLocalSaveState,
+  listLocalSaveStateIds,
+  listLocalSaveStateCheckpoints
+} from './localProjectStore';
 import { setup, box, rejectedSave } from './collaborationCheckpointTestHarness';
 
 // Each held-module scenario owns one permanent mock. Replacing a successful
@@ -60,7 +64,10 @@ it('uses the named-save deadline for a held import and never starts its late act
       'The room did not confirm the named save. Please retry.'
     );
     expect(error.message).toContain('The named save is stored on this device.');
-    const local = hook.read().checkpoints.at(-1)!;
+    const local = (await listLocalSaveStateCheckpoints(clicked.projectId)).find(
+      (point) => point.reason === 'Deadline milestone'
+    )!;
+    expect(hook.apply).not.toHaveBeenCalled();
     expect(local.reason).toBe('Deadline milestone');
     expect(
       (await loadLocalSaveState(clicked.projectId, local.checkpointId))?.nodes

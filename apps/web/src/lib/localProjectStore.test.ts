@@ -23,6 +23,8 @@ import {
   hasSourceBlob,
   listLocalProjects,
   listLocalSaveStateIds,
+  listLocalSaveStateCheckpoints,
+  onLocalSaveStatesChanged,
   loadLocalSaveState,
   loadProjectMeasurements,
   saveProjectMeasurements,
@@ -969,6 +971,45 @@ describe('project measurements', () => {
 });
 
 describe('save states on the device', () => {
+  it('announces only committed snapshots and projects their checkpoint metadata', async () => {
+    const saved = createCheckpoint(
+      projectDocument('Private', 'proj-a'),
+      'Device milestone'
+    );
+    const announced = vi.fn();
+    const stop = onLocalSaveStatesChanged(announced);
+    const stopBrokenObserver = onLocalSaveStatesChanged(() => {
+      throw new Error('Observer failed.');
+    });
+    try {
+      const invalid = {
+        ...saved,
+        checkpoints: null
+      } as unknown as ProjectDocument;
+      await expect(saveLocalSaveStates([saved, invalid])).rejects.toThrow();
+      expect(announced).not.toHaveBeenCalled();
+      expect(await listLocalSaveStateCheckpoints('proj-a')).toEqual([]);
+      await expect(saveLocalSaveStates([saved])).resolves.toBeUndefined();
+      expect(announced).toHaveBeenCalledExactlyOnceWith('proj-a');
+      expect(await listLocalSaveStateCheckpoints('proj-a')).toEqual([
+        saved.checkpoints.at(-1)
+      ]);
+      expect(await loadLocalProject('proj-a')).toBeNull();
+      expect(
+        (
+          await loadLocalSaveState(
+            'proj-a',
+            saved.checkpoints.at(-1)!.checkpointId
+          )
+        )?.nodes
+      ).toEqual(saved.nodes);
+      expect(await listLocalSaveStateCheckpoints('other-project')).toEqual([]);
+    } finally {
+      stop();
+      stopBrokenObserver();
+    }
+  });
+
   /** A document sitting exactly on a save point, as an explicit save leaves it. */
   function savedDocument(
     name: string,
@@ -1099,6 +1140,12 @@ describe('save states on the device', () => {
 
     const stored = await listLocalSaveStateIds('proj-a');
     expect(stored.size).toBe(MAX_LOCAL_CHECKPOINT_DOCUMENTS);
+    const metadata = await listLocalSaveStateCheckpoints('proj-a');
+    expect(metadata).toHaveLength(MAX_LOCAL_CHECKPOINT_DOCUMENTS);
+    expect(new Set(metadata.map((point) => point.checkpointId))).toEqual(
+      stored
+    );
+    expect(metadata.every((point) => !('document' in point))).toBe(true);
     const kept = document.checkpoints.filter((checkpoint) =>
       stored.has(checkpoint.checkpointId)
     );

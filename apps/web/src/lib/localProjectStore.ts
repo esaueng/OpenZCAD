@@ -931,6 +931,18 @@ export function saveLocalProject(document: ProjectDocument): Promise<void> {
   );
 }
 
+const saveStateListeners = new Set<(projectId: string) => void>();
+
+/** Device-only history refreshes never change the collaborative document. */
+export function onLocalSaveStatesChanged(
+  listener: (projectId: string) => void
+): () => void {
+  saveStateListeners.add(listener);
+  return () => {
+    saveStateListeners.delete(listener);
+  };
+}
+
 /**
  * Stores the save states these documents ARE, and nothing else.
  *
@@ -958,7 +970,19 @@ export function saveLocalSaveStates(
         }
       }
     }
-  );
+  ).then(() => {
+    for (const projectId of new Set(
+      documents.map((document) => document.projectId)
+    )) {
+      for (const listener of saveStateListeners) {
+        try {
+          listener(projectId);
+        } catch {
+          /* Observers cannot fail a durable write. */
+        }
+      }
+    }
+  });
 }
 
 /**
@@ -1083,6 +1107,51 @@ export function listLocalSaveStateIds(projectId: string): Promise<Set<string>> {
           .map((key) => (Array.isArray(key) ? key[1] : undefined))
           .filter((id): id is string => typeof id === 'string')
       );
+    }
+  );
+}
+
+/** Project retained checkpoint metadata without collecting snapshot bodies. */
+export function listLocalSaveStateCheckpoints(
+  projectId: string
+): Promise<ProjectCheckpoint[]> {
+  return scopedTransaction(
+    'readonly',
+    [CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
+    async (store) => {
+      const resolved = await resolvedProjectId(
+        store(ALIAS_STORE_NAME),
+        projectId
+      );
+      return new Promise<ProjectCheckpoint[]>((resolve, reject) => {
+        const checkpoints: ProjectCheckpoint[] = [];
+        const request = store(CHECKPOINT_STORE_NAME)
+          .index(CHECKPOINT_AGE_INDEX)
+          .openCursor(checkpointKeyRange(resolved));
+        request.onerror = () =>
+          reject(
+            request.error ?? new Error('Local save states could not be read.')
+          );
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) return resolve(checkpoints);
+          const {
+            checkpointId,
+            revisionId,
+            documentVersion,
+            createdAt,
+            reason
+          } = cursor.value as ProjectCheckpointDocumentRecord;
+          checkpoints.push({
+            checkpointId,
+            revisionId,
+            documentVersion,
+            createdAt,
+            reason
+          });
+          cursor.continue();
+        };
+      });
     }
   );
 }
