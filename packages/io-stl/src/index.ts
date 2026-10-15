@@ -114,10 +114,9 @@ const SNIFFED_VERTEX = new RegExp(`vertex${SNIFFED_COORDINATE.repeat(3)}`, 'gi')
 /**
  * Whether the text holds a `vertex` statement: the keyword, in either letter
  * case, at the start or after whitespace, followed by three coordinate-like
- * tokens — wherever the line breaks fall. A binary STL's 80-byte header is
- * free text that may say `solid … vertex colors`, and a padded binary file
- * fails the exact-size test, so the keyword alone would send it to the ASCII
- * reader to be refused. A literal search that checks the one character
+ * tokens — wherever the line breaks fall. An STL's header may say
+ * `solid … vertex colors`, so the keyword alone does not identify ASCII
+ * geometry. A literal search that checks the one character
  * before each hit: putting that alternation in the pattern made the sniff of
  * a large whitespace-padded file several times slower.
  */
@@ -353,13 +352,14 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
  * Parses an STL file (binary or ASCII) into raw triangle geometry. A binary
  * STL is an 80-byte header, a uint32 triangle count, then 50 bytes per
  * triangle; the "solid" prefix alone is unreliable (binary exporters may
- * emit it too), so an exact size match takes precedence.
+ * emit it too), so a complete declared binary payload takes precedence,
+ * including files with trailing padding.
  */
 export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
   if (buffer.byteLength >= BINARY_STL_HEADER_BYTES) {
     const declared = new DataView(buffer).getUint32(80, true);
     if (
-      BINARY_STL_HEADER_BYTES + declared * BINARY_STL_TRIANGLE_BYTES ===
+      BINARY_STL_HEADER_BYTES + declared * BINARY_STL_TRIANGLE_BYTES <=
       buffer.byteLength
     ) {
       return parseBinaryStl(buffer, fileName);
@@ -370,10 +370,9 @@ export function parseStl(buffer: ArrayBuffer, fileName: string): ParsedStl {
   const head = new TextDecoder().decode(bytes.subarray(0, Math.min(bytes.length, 512)));
   if (head.trimStart().toLowerCase().startsWith('solid')) {
     const text = new TextDecoder().decode(bytes);
-    // A binary exporter's "solid" header carries no vertex statements; only
-    // commit to ASCII when the body has at least one, otherwise fall through
-    // to the tolerant binary branch. Either letter case: an upper-case ASCII
-    // file read as binary was refused as a corrupt binary one.
+    // A complete binary payload was already handled, regardless of its
+    // free-form header. Sniff the remaining text in either letter case;
+    // malformed coordinate-like tokens must still reach ASCII validation.
     if (
       hasVertexStatement(text) ||
       buffer.byteLength < BINARY_STL_HEADER_BYTES
