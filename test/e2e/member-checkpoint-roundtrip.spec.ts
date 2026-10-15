@@ -397,17 +397,21 @@ for (const roomStored of [true, false]) {
       );
       if (roomStored) {
         // A failed retry does not invalidate proof for the unchanged live head.
+        let retryRequested = false;
         await page.route(
           `**/api/projects/${server.read().projectId}/collaboration`,
-          (route) =>
-            route.fulfill({
+          (route) => {
+            retryRequested = true;
+            return route.fulfill({
               status: 503,
               json: { error: 'The checkpoint retry is unavailable.' }
-            })
+            });
+          }
         );
         await startNamedSave(page);
+        await expect.poll(() => retryRequested).toBe(true);
         await expect(page.getByRole('contentinfo')).toContainText(
-          'The checkpoint retry is unavailable.'
+          'The room did not confirm a durable named revision. Please retry.'
         );
         await expect(page.locator('.save-state')).toHaveAttribute(
           'aria-label',
