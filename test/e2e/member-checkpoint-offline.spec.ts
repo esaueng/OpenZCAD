@@ -227,7 +227,31 @@ for (const fault of ['missing', 'stalled', 'rejected'] as const) {
       await expect(
         page.locator('.revision-row', { hasText: 'Offline milestone' })
       ).toBeVisible();
+      const named = page.locator('.revision-row', {
+        hasText: 'Offline milestone'
+      });
+      await named.hover();
+      await named
+        .getByRole('button', { name: 'Restore Offline milestone', exact: true })
+        .click();
+      await expectBodyCount(page, 1);
+      await page.keyboard.press('ControlOrMeta+z');
+      await expectBodyCount(page, 2);
+      await expect.poll(() => roomDocuments.at(-1)?.bodyOrder.length).toBe(2);
+      for (const sent of roomDocuments) {
+        expect(
+          sent.checkpoints.map((point) => point.checkpointId)
+        ).not.toContain(checkpointId);
+        expect(
+          sent.revisions.map((revision) => revision.revisionId)
+        ).not.toContain(revisionId);
+      }
+      await expect(
+        page.getByRole('status', { name: 'Saved', exact: true })
+      ).toBeVisible();
       await page.reload();
+      await expectBodyCount(page, 2);
+      await expect(named).toBeVisible();
       const saved = (await storedCheckpoints(page)).find(
         (checkpoint) => checkpoint.reason === 'Offline milestone'
       );
