@@ -861,6 +861,80 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
     );
   });
 
+  it.each(['verification', 'throttled reuse'] as const)(
+    'keeps guesses near expiry in the failure window for %s',
+    async (operation) => {
+      const { sent, start, verify } = signInHarness();
+      let clock = Date.parse('2026-10-14T08:00:00Z');
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      try {
+        const challenges = [];
+        for (let host = 1; host <= 4; host += 1) {
+          const challenge = await start(`203.0.113.${host}`);
+          challenges.push({ ...challenge, code: sent.at(-1)! });
+        }
+        // Spend the guesses late in each code's ten-minute lifetime.
+        clock += 9 * 60 * 1000;
+        for (const challenge of challenges) {
+          for (let attempt = 0; attempt < 5; attempt += 1) {
+            await expect(
+              verify(challenge.challengeId, wrongCode(challenge.code))
+            ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+          }
+        }
+        // The codes were created more than a day ago, but these failures
+        // are only 23 hours and 56 minutes old. Request cleanup must retain them.
+        clock += (24 * 60 - 4) * 60 * 1000;
+        if (operation === 'verification') {
+          const limited = await start('198.51.100.7');
+          const code = sent.at(-1)!;
+          await expect(
+            verify(limited.challengeId, wrongCode(code))
+          ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+          await expect(verify(limited.challengeId, code)).rejects.toMatchObject(
+            {
+              status: 429,
+              code: 'AUTH_CODE_LOCKED'
+            }
+          );
+          const owner = await start('198.51.100.8');
+          await expect(
+            verify(owner.challengeId, sent.at(-1)!)
+          ).resolves.toHaveProperty('cookie');
+
+          // Expiry is the conservative upper bound on the last failure.
+          // Once that bound is more than a day old, five attempts return.
+          clock += 5 * 60 * 1000 + 1000;
+          const recovered = await start('198.51.100.7');
+          const recoveredCode = sent.at(-1)!;
+          await expect(
+            verify(recovered.challengeId, wrongCode(recoveredCode))
+          ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+          await expect(
+            verify(recovered.challengeId, recoveredCode)
+          ).resolves.toHaveProperty('cookie');
+        } else {
+          await start('198.51.100.7');
+          const usable = await start('198.51.100.7');
+          const usableCode = sent.at(-1)!;
+          const spent = await start('198.51.100.7');
+          await expect(
+            verify(spent.challengeId, wrongCode(sent.at(-1)!))
+          ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+          const sentCount = sent.length;
+          const repeat = await start('198.51.100.7');
+          expect(sent).toHaveLength(sentCount);
+          expect(repeat.challengeId).toBe(usable.challengeId);
+          await expect(
+            verify(repeat.challengeId, usableCode)
+          ).resolves.toHaveProperty('cookie');
+        }
+      } finally {
+        now.mockRestore();
+      }
+    }
+  );
+
   it('allows one try per code after a day of failed codes, without locking out', async () => {
     const { sent, start, verify } = signInHarness();
     let clock = Date.parse('2026-10-14T08:00:00Z');
