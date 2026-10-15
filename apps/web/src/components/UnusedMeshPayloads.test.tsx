@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
+import { InMemoryPersistenceService } from '@openzcad/persistence';
 import {
   toArtifactId,
+  toAssetId,
   toUserId,
   type ArtifactRecord,
   type ProjectDocument
@@ -102,8 +104,9 @@ describe('manual unused mesh cleanup', () => {
           payload(other),
           {
             ...artifact,
-            artifactId: toArtifactId('artifact_original'),
-            kind: 'stl-import'
+            artifactId: toArtifactId('artifact_other_kind'),
+            name: 'other.step',
+            kind: 'step-import'
           }
         ]
       });
@@ -115,12 +118,197 @@ describe('manual unused mesh cleanup', () => {
         screen.queryByRole('button', { name: /artifact_unused/ })
       ).not.toBeInTheDocument();
       expect(
-        screen.queryByRole('button', { name: /artifact_original/ })
+        screen.queryByRole('button', { name: /other.step/ })
       ).not.toBeInTheDocument();
       expect(screen.getAllByRole('button')).toHaveLength(1);
       expect(transport.discardMeshPayload).not.toHaveBeenCalled();
     }
   );
+
+  it.each(['stl-import', 'mesh-import'] as const)(
+    'recovers failed cleanup of an unused %s original after reopening File',
+    async (kind) => {
+      const service = new InMemoryPersistenceService();
+      const owner = toUserId('user_original_cleanup');
+      const { document } = await service.createProject(owner, {
+        name: 'Original cleanup'
+      });
+      const body = new Uint8Array([1, 2, 3]);
+      const { session } = await service.createUploadSession(owner, {
+        projectId: document.projectId,
+        fileName: 'scan.stl',
+        kind,
+        contentType: 'model/stl'
+      });
+      await service.putUpload(owner, session.uploadSessionId, body.buffer);
+      await service.finalizeArtifact(owner, {
+        projectId: document.projectId,
+        uploadSessionId: session.uploadSessionId,
+        artifactId: session.artifactId
+      });
+      const transport: UnusedMeshPayloadsProps['transport'] = {
+        listArtifacts: vi.fn<
+          UnusedMeshPayloadsProps['transport']['listArtifacts']
+        >(async (projectId) => service.listArtifacts(owner, projectId)),
+        discardMeshPayload: vi.fn<
+          UnusedMeshPayloadsProps['transport']['discardMeshPayload']
+        >(async (projectId, artifactId, originalKind) =>
+          service.discardMeshPayload(owner, projectId, artifactId, originalKind)
+        )
+      };
+      vi.mocked(transport.discardMeshPayload).mockRejectedValueOnce(
+        new Error('Original cleanup unavailable')
+      );
+      const props = { document, getDocument: () => document, transport };
+      const view = render(<UnusedMeshPayloads {...props} />);
+      const remove = await screen.findByRole('button', {
+        name: 'Remove unused imported file: scan.stl'
+      });
+      fireEvent.click(remove);
+      await waitFor(() =>
+        expect(
+          screen.getByRole('status', { name: 'Mesh cleanup' })
+        ).toHaveTextContent('Original cleanup unavailable')
+      );
+      expect(remove).toBeEnabled();
+      expect(await service.getStorageUsage(owner)).toMatchObject({
+        artifactBytes: body.length,
+        artifactCount: 1
+      });
+      view.unmount();
+      render(<UnusedMeshPayloads {...props} />);
+      const retry = await screen.findByRole('button', {
+        name: 'Remove unused imported file: scan.stl'
+      });
+      fireEvent.click(retry);
+      await waitFor(() => expect(retry).not.toBeInTheDocument());
+      expect(transport.discardMeshPayload).toHaveBeenLastCalledWith(
+        document.projectId,
+        session.artifactId,
+        kind
+      );
+      expect(await service.getStorageUsage(owner)).toMatchObject({
+        artifactBytes: 0,
+        artifactCount: 0
+      });
+      expect(
+        await service.downloadArtifact(owner, session.artifactId)
+      ).toBeNull();
+    }
+  );
+
+  it.each(['current', 'undo'] as const)(
+    'keeps an original referenced by a %s project asset out of removal',
+    async (state) => {
+      const { props, artifact, transport } = fixture();
+      artifact.kind = 'stl-import';
+      artifact.name = 'scan.stl';
+      const assetId = toAssetId('asset_original');
+      const asset = {
+        assetId,
+        artifactId: artifact.artifactId,
+        name: artifact.name,
+        kind: 'stl-source' as const,
+        storage: 'remote' as const,
+        contentType: 'model/stl',
+        createdAt: artifact.createdAt
+      };
+      const document: ProjectDocument = {
+        ...props.document,
+        assets: state === 'current' ? { [assetId]: asset } : {},
+        ...(state === 'undo'
+          ? {
+              editHistory: {
+                schemaVersion: 1 as const,
+                projectId: props.document.projectId,
+                actorUserId: props.document.ownerUserId,
+                entries: [
+                  {
+                    id: 'asset_undo',
+                    label: 'Remove original',
+                    changes: [
+                      {
+                        kind: 'value' as const,
+                        field: 'assets' as const,
+                        key: assetId,
+                        before: asset
+                      }
+                    ]
+                  }
+                ],
+                cursor: 1,
+                trimmed: 0
+              }
+            }
+          : {})
+      };
+      transport.listArtifacts.mockResolvedValue({
+        artifacts: [
+          artifact,
+          {
+            ...artifact,
+            artifactId: toArtifactId('artifact_unreferenced_original'),
+            name: 'unused.stl'
+          }
+        ]
+      });
+      render(
+        <UnusedMeshPayloads
+          {...props}
+          document={document}
+          getDocument={() => document}
+        />
+      );
+      await screen.findByRole('button', {
+        name: 'Remove unused imported file: unused.stl'
+      });
+      expect(
+        screen.queryByRole('button', {
+          name: 'Remove unused imported file: scan.stl'
+        })
+      ).not.toBeInTheDocument();
+      expect(transport.discardMeshPayload).not.toHaveBeenCalled();
+    }
+  );
+
+  it('updates only the captured project listing after confirmed removal', async () => {
+    const { props, artifact, transport } = fixture();
+    artifact.kind = 'stl-import';
+    artifact.name = 'scan.stl';
+    const onRemove = vi.fn<NonNullable<UnusedMeshPayloadsProps['onRemove']>>();
+    render(<UnusedMeshPayloads {...props} onRemove={onRemove} />);
+    const remove = await screen.findByRole('button', {
+      name: 'Remove unused imported file: scan.stl'
+    });
+    fireEvent.click(remove);
+    await waitFor(() => expect(remove).toBeEnabled());
+    expect(onRemove).not.toHaveBeenCalled();
+    transport.discardMeshPayload.mockRejectedValueOnce(new Error('Offline'));
+    fireEvent.click(remove);
+    await waitFor(() =>
+      expect(
+        screen.getByRole('status', { name: 'Mesh cleanup' })
+      ).toHaveTextContent('Offline')
+    );
+    expect(onRemove).not.toHaveBeenCalled();
+    transport.discardMeshPayload.mockResolvedValueOnce({ deleted: true });
+    fireEvent.click(remove);
+    await waitFor(() => expect(remove).not.toBeInTheDocument());
+    expect(onRemove).toHaveBeenCalledOnce();
+    const otherProject = createProjectDocument(
+      'Other',
+      toUserId('user_cleanup')
+    );
+    const foreign = { ...artifact, projectId: otherProject.projectId };
+    const retained = {
+      ...artifact,
+      artifactId: toArtifactId('artifact_retained')
+    };
+    expect(onRemove.mock.calls[0]![0]([artifact, foreign, retained])).toEqual([
+      foreign,
+      retained
+    ]);
+  });
 
   it.each(['retained', 'offline'] as const)(
     'keeps a %s server refusal visible for an explicit retry',
