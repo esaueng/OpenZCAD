@@ -95,7 +95,7 @@ export function decodeImportedMeshPayload(
   bytes: Uint8Array
 ): DecodedImportedMeshPayload {
   // A copy owns an aligned buffer, whatever view it was handed.
-  const owned = bytes.slice();
+  const owned = new Uint8Array(bytes);
   const [vertexCount = 0, indexCount = 0] =
     owned.byteLength >= HEADER_BYTES ? new Uint32Array(owned.buffer, 8, 2) : [];
   if (
