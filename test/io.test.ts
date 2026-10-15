@@ -76,11 +76,17 @@ describe('STL parsing', () => {
     expect(parsed.vertices[0]).toBeCloseTo(1.5, 6);
   });
 
-  it.each(['solid exported with vertex colors', 'SOLID part VERTEX 1 of 3'])(
+  it.each([
+    'solid exported with vertex colors',
+    'SOLID part VERTEX 1 of 3',
+    'solid VERTEX 1 2 3',
+    'solid vertex 1 2 3',
+    'SoLiD vErTeX 1 2 3'
+  ])(
     'reads a padded binary STL whose header says "%s" as binary',
     (header) => {
-      // The header is free text. The word `vertex` in it, without three
-      // coordinates after it, is not an ASCII vertex statement.
+      // The header is free text, including coordinate-shaped vertex phrases.
+      // A complete declared binary payload takes precedence over that text.
       const triangleCount = 3;
       const buffer = new ArrayBuffer(84 + triangleCount * 50 + 2);
       const bytes = new Uint8Array(buffer);
@@ -96,6 +102,27 @@ describe('STL parsing', () => {
       expect(parsed.vertices[0]).toBeCloseTo(1.5, 6);
     }
   );
+
+  it('refuses a non-finite padded binary vertex despite an ASCII-shaped header', () => {
+    const buffer = new ArrayBuffer(84 + 50 + 2);
+    new Uint8Array(buffer).set(new TextEncoder().encode('solid VERTEX 1 2 3'));
+    const view = new DataView(buffer);
+    view.setUint32(80, 1, true);
+    view.setFloat32(84 + 12, Number.NaN, true);
+    expect(() => parseStl(buffer, 'padded-nan.stl')).toThrow(
+      'Binary STL contains a non-finite vertex.'
+    );
+  });
+
+  it('refuses an over-budget padded binary STL despite an ASCII-shaped header', () => {
+    const triangles = MAX_IMPORT_TRIANGLES + 1;
+    const buffer = new ArrayBuffer(84 + triangles * 50 + 2);
+    new Uint8Array(buffer).set(new TextEncoder().encode('solid VERTEX 1 2 3'));
+    new DataView(buffer).setUint32(80, triangles, true);
+    expect(() => parseStl(buffer, 'padded-limit.stl')).toThrow(
+      `STL has ${triangles} triangles; the browser import limit is ${MAX_IMPORT_TRIANGLES}.`
+    );
+  });
 
   it('refuses an ASCII STL whose only vertices are malformed as ASCII', () => {
     // Malformed coordinates still read as a vertex statement, so the file
