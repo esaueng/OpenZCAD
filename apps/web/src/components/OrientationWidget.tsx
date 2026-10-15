@@ -246,10 +246,6 @@ const AXIS_VECTORS: Record<'x' | 'y' | 'z', Vec3> = {
   z: [0, 0, 1]
 };
 
-/** Face fill lerps between these as it turns toward the camera. */
-const FACE_GLANCING = [0x22, 0x2a, 0x34] as const;
-const FACE_FRONTAL = [0x3a, 0x44, 0x50] as const;
-
 /** Below this facing ratio a facet is a sliver not worth drawing or clicking. */
 const FACING_EPSILON = 0.03;
 /** Above this the face is head-on, and clicking it flips to the far side. */
@@ -267,11 +263,13 @@ interface CubeDragState {
   dragging: boolean;
 }
 
-function shade(facing: number): string {
-  const fill = FACE_GLANCING.map((from, channel) =>
-    Math.round(from + ((FACE_FRONTAL[channel] ?? from) - from) * facing)
-  );
-  return `rgb(${fill[0]}, ${fill[1]}, ${fill[2]})`;
+/**
+ * Lights a facet by how squarely it faces the camera. The stylesheet mixes
+ * the theme's glancing and frontal cube colours by this (viewport-overlays.css),
+ * so the cube re-themes without the frame loop knowing the palette.
+ */
+function shade(polygon: SVGPolygonElement, facing: number) {
+  polygon.style.setProperty('--cube-facing', facing.toFixed(3));
 }
 
 /**
@@ -457,7 +455,7 @@ export function OrientationWidget({
           )
         );
         // The cube is lit by facing angle alone: full-on facets are lightest.
-        polygon.setAttribute('fill', shade(facing));
+        shade(polygon, facing);
         // An orthographic projection of a planar face is exactly a 2D affine
         // map, so the label lies on the face via a single matrix: text-right
         // along u, text-up along v (negated — SVG y grows downward).
@@ -490,7 +488,7 @@ export function OrientationWidget({
         polygon.style.display = '';
         hit.style.display = '';
         polygon.setAttribute('points', outline(corner.points));
-        polygon.setAttribute('fill', shade(facing));
+        shade(polygon, facing);
         hit.setAttribute('points', cornerTargetOutline(corner));
       });
 
