@@ -449,7 +449,9 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // Runtime refusal classification shares the existing lazy
               // analysis boundary without bringing the loader dependencies.
               id.includes('/packages/kernel-adapter/src/remus-load-error.ts') ||
-              id.includes('/packages/kernel-adapter/src/union-connectivity.ts') ||
+              id.includes(
+                '/packages/kernel-adapter/src/union-connectivity.ts'
+              ) ||
               id.includes(
                 '/packages/kernel-adapter/src/feature-profile-dependencies.ts'
               )
@@ -523,6 +525,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // workspace dependencies. Keep them resident in this existing
               // preloaded chunk, including before a reload or navigation.
               id.includes('/apps/web/src/lib/localProjectAutosave.ts') ||
+              id.includes('/apps/web/src/lib/localProjectStore.ts') ||
               id.includes('/apps/web/src/lib/localAutosaveFailure.ts') ||
               id.includes(
                 '/apps/web/src/lib/workspaceSaveStatePresentation.ts'
