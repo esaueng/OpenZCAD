@@ -170,7 +170,6 @@ function idleProps(): ModelViewerProps {
     fitSignal: 0,
     viewRequest: null,
     normalToFaceRequest: null,
-    rotateRequest: null,
     units: 'mm',
     editableBodyIds: [],
     movePreview: null,
