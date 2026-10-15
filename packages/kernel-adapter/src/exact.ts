@@ -140,6 +140,7 @@ import { suppressedPassThroughBody } from './exact-suppression';
 import { ImportedStepCache } from './exact-imported-step-cache';
 import {
   isBuildCancelled,
+  raceBuildCancellation,
   throwIfBuildCancelled,
   type BuildCancellationSignal
 } from './exact-cancellation';
@@ -197,6 +198,7 @@ import {
   MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES,
   MAX_HISTORY_REPLAY_WORK,
   cloneBuildState,
+  featureAwaitsEnvironment,
   historyCheckpointIndices,
   historyFeatureDigest,
   historyScopeDigest,
@@ -214,6 +216,7 @@ import {
   ownedMeshFaceOffsets
 } from './owned-mesh-output';
 import { PrimitiveBuildCache } from './exact-primitive-cache';
+import { isBooleanEvolutionProbeEligible } from './exact-boolean-evolution';
 export type { RebuildCacheEvent };
 export {
   booleanEvolutionProbeNeeded,
@@ -584,6 +587,12 @@ export interface ExactKernelAdapter {
       yieldControl?: () => Promise<void> | void;
     }
   ): Promise<DerivedState>;
+  /**
+   * Whether a sync result carries a failure of this device's moment — a
+   * font face or import source that had not arrived — rather than of the
+   * document. Such a result must not be cached by content.
+   */
+  hasTransientFailures(result: object): boolean;
   /** Epoch of the most recent live sync, or null after its handles were retired. */
   currentMassPropertiesEpoch(): number | null;
   /** Reads one live body's optional properties without replaying document history. */
@@ -742,11 +751,18 @@ export interface ExactKernelAdapterOptions {
   /**
    * Produces the raw source bytes for a reference-form import. Absent means
    * only legacy embedded imports can rebuild — a reference then fails with an
-   * explicit error instead of silently dropping the body.
+   * explicit error instead of silently dropping the body. A rejection is a
+   * miss this device may recover from (retried by the next sync, never
+   * checkpointed) unless the error carries `permanent: true`. `signal`
+   * aborts when the build that asked is superseded.
    */
   resolveSourceBytes?: (
     ref: ImportedSourceReference,
-    context: { artifactId: ArtifactId; sourceName: string }
+    context: {
+      artifactId: ArtifactId;
+      sourceName: string;
+      signal?: AbortSignal;
+    }
   ) => Promise<Uint8Array>;
   /**
    * Overrides {@link MAX_IMPORTED_STEP_CACHE_BYTES}. Zero disables import
@@ -861,6 +877,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * recover their source bytes normally.
    */
   private readonly importedSteps: ImportedStepCache;
+
+  /**
+   * Checksums the preceding prefetch failed to resolve for a reason this
+   * device may recover from. Read by the build of the same history job.
+   */
+  private unresolvedSources = new Set<string>();
+  private readonly transientResults = new WeakSet<object>();
+
+  hasTransientFailures(result: object): boolean {
+    return this.transientResults.has(result);
+  }
 
   /**
    * The adapter-owned history kernel and its retained prefix table, shared by
@@ -1170,11 +1197,29 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     readMemo: SyncReadMemo;
     recycleReason?: 'replay-budget';
     cacheResetReason?: 'checkpoint-ownership' | 'checkpoint-restore';
+    /** A feature this sync rebuilt waited on a font or source; see below. */
+    transient: boolean;
   }> {
     cancellation = this.historySignal(cancellation);
     throwIfBuildCancelled(cancellation);
     this.clearCurrentMassSnapshot();
     const features = listFeaturesInOrder(document);
+    // The first feature whose failure would describe this device's moment
+    // rather than the document. Nothing at or after it is checkpointed, so
+    // the next sync rebuilds it once the font face or source bytes arrive.
+    const hasText = Object.values(document.nodes).some(
+      (node) => node.kind === 'sketch-object' && node.data.objectKind === 'text'
+    );
+    const transientFrom = features.findIndex(
+      (feature) =>
+        !isFeatureSuppressed(feature) &&
+        featureAwaitsEnvironment(
+          document,
+          feature,
+          this.unresolvedSources,
+          hasText
+        )
+    );
     const recycled =
       this.historyKernel !== null &&
       this.historyReplayWork >= MAX_HISTORY_REPLAY_WORK;
@@ -1204,6 +1249,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             scope,
             normalizedDemand
           )
+        )
+      : [];
+    // A request that may skip a boolean's probe can still restore a
+    // checkpoint where the probe ran: it adds lineage to the same geometry.
+    // Previews and exports pass no demand, so without this every switch back
+    // to the idle sync replayed everything after the first boolean.
+    const probedDigests = normalizedDemand
+      ? features.map((feature, index) =>
+          cachingEnabled && isBooleanEvolutionProbeEligible(feature)
+            ? historyFeatureDigest(document, feature, index, scope)
+            : undefined
         )
       : [];
 
@@ -1266,7 +1322,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           entry.featureIndex !== checkpointIndices[index] ||
           entry.digests.length !== entry.featureIndex - from + 1 ||
           entry.digests.some(
-            (digest, offset) => digest !== digests[from + offset]
+            (digest, offset) =>
+              digest !== digests[from + offset] &&
+              digest !== probedDigests[from + offset]
           )
         ) {
           break;
@@ -1409,7 +1467,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           /* Display observers cannot change exact acceptance. */
         }
       }
-      if (!checkpointIndexSet.has(index)) return;
+      if (
+        !checkpointIndexSet.has(index) ||
+        (transientFrom >= 0 && index >= transientFrom)
+      )
+        return;
       // A checkpoint is cheap to create but makes the next mutation copy the
       // arena. Admit against that projected cost, including retired slots.
       const memory = checkpointMemoryStats(activeKernel);
@@ -1550,7 +1612,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       ...(cacheResetReason ? { cacheResetReason } : {}),
       ...(recycled ? { recycleReason: 'replay-budget' as const } : {}),
       strictVerdicts,
-      readMemo
+      readMemo,
+      transient: transientFrom >= startIndex
     };
   }
 
@@ -1567,12 +1630,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * protected from eviction for the whole build — otherwise a later import in the
    * same document could evict the entry whose bytes were never read.
    */
-  private async prefetchImportSources(document: ProjectDocument): Promise<{
+  private async prefetchImportSources(
+    document: ProjectDocument,
+    cancellation?: BuildCancellationSignal
+  ): Promise<{
     sources: Map<string, Uint8Array>;
     pinned: Set<string>;
   }> {
     const sources = new Map<string, Uint8Array>();
     const pinned = new Set<string>();
+    this.unresolvedSources = new Set();
     for (const feature of listFeaturesInOrder(document)) {
       if (
         feature.data.featureKind !== 'imported-step' ||
@@ -1589,19 +1656,28 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       if (this.importedSteps.lookup(ref.checksumSha256)) {
         continue;
       }
-      if (!this.options.resolveSourceBytes) {
+      const resolveSourceBytes = this.options.resolveSourceBytes;
+      if (!resolveSourceBytes) {
         continue;
       }
+      const { artifactId, sourceName } = feature.data;
       try {
         sources.set(
           ref.checksumSha256,
-          await this.options.resolveSourceBytes(ref, {
-            artifactId: feature.data.artifactId,
-            sourceName: feature.data.sourceName
-          })
+          // A stalled download must not hold the serialized worker queue
+          // once a newer edit has superseded this build.
+          await raceBuildCancellation(
+            (signal) =>
+              resolveSourceBytes(ref, { artifactId, sourceName, signal }),
+            cancellation
+          )
         );
-      } catch {
+      } catch (error) {
+        if (isBuildCancelled(error)) throw error;
         // The imported-step case reports the miss with the feature's name.
+        if (!(error as { permanent?: unknown } | null)?.permanent) {
+          this.unresolvedSources.add(ref.checksumSha256);
+        }
       }
     }
     return { sources, pinned };
@@ -2192,7 +2268,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       );
     const report = rebuildReporter(onProgress);
     const sourcesDone = report('sources', 'Loading imported sources');
-    const { sources, pinned } = await this.prefetchImportSources(document);
+    const { sources, pinned } = await this.prefetchImportSources(
+      document,
+      cancellation
+    );
     // Feature builders run synchronously inside the build loop, so a document
     // with file-backed features needs the translator module resident first.
     if (documentNeedsTranslators(document)) {
@@ -2216,7 +2295,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         strictVerdicts,
         readMemo,
         recycleReason,
-        cacheResetReason
+        cacheResetReason,
+        transient
       } = await this.buildWithHistoryCache(
         document,
         sources,
@@ -2651,7 +2731,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         epoch: this.massPropertiesEpoch,
         bodies: massBodies
       };
-      return {
+      const derived: DerivedState = {
         bodyRepresentations,
         ...(analysis ? { editAnalysis: structuredClone(analysis) } : {}),
         exportableBodyIds: exportableBodyIds.filter(
@@ -2667,6 +2747,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           : {}),
         featureWarnings: build.featureWarnings
       };
+      if (transient) this.transientResults.add(derived);
+      return derived;
     } catch (error) {
       // Cancellation is not a failure to recover from: it commits nothing —
       // no measured shapes, no mass snapshot, no cache event — and rethrows
@@ -3418,8 +3500,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * seed face resolves by hash plus optional v5 reference, exactly like a
    * direct-edit commit; any resolution miss answers `seed-face-missing`
    * rather than throwing, because a stale pick is a display state, not a
-   * build failure. Dimensions are scaled from kernel millimetres into
-   * document units before publishing; the refusal reason travels verbatim.
+   * build failure. Dimensions are published as measured: the rebuilt solid
+   * is already in document units, exactly as the measure pass publishes its
+   * `recognizedImportedFeatures`. The refusal reason travels verbatim.
    */
   async recognizeImportedFace(
     input: Parameters<ExactKernelAdapter['recognizeImportedFace']>[0]
@@ -3479,15 +3562,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           message: recognitionRefusalMessage(outcome.reason)
         };
       }
-      const scale = 1 / UNIT_TO_MM[input.document.units];
-      const dimensions = Object.fromEntries(
-        Object.entries(importedProofDisplayDimensions(outcome.proof)).map(
-          ([key, value]) => [
-            key,
-            key === 'angleRadians' ? value : value * scale
-          ]
-        )
-      );
+      // Already document units: the import adopted the solid at
+      // 1/UNIT_TO_MM, so scaling again shrank an inch document's 5 mm bore
+      // to 0.0078 in, disagreeing with the measure pass by 25.4×.
+      const dimensions = importedProofDisplayDimensions(outcome.proof);
       const proofKind = outcome.proof.kind;
       const kindLabel =
         proofKind === 'blind-cylindrical-hole'

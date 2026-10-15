@@ -6,9 +6,14 @@ import {
   extrudeSketch,
   getLatestBodyId,
   getLatestSketchId,
+  holeBody,
   importStepBody
 } from '@openzcad/document-core';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  toUserId,
+  type ProjectDocument,
+  type UnitSystem
+} from '@openzcad/shared';
 import { createCadDocumentDigest } from '@openzcad/ai-contracts';
 import {
   createExactKernelAdapter,
@@ -220,3 +225,119 @@ describe('imported exact pocket and boss features', { timeout: 180_000 }, () => 
     }
   });
 });
+
+/**
+ * Recognizing a picked imported face on demand answers in document units —
+ * the numbers the measure pass already publishes for the same body.
+ *
+ * The import adopts the solid at 1/UNIT_TO_MM, so the recognizer measures
+ * document units directly. The on-demand path scaled by 1/UNIT_TO_MM a second
+ * time, as if the kernel spoke millimetres: an inch document's Inspector read
+ * a 5 mm bore as 0.0078 in, 25.4 times smaller than the published proof.
+ */
+describe(
+  'on-demand imported-face recognition units',
+  { timeout: 180_000 },
+  () => {
+    const BORE_DIAMETER = 5;
+    let adapter: ExactKernelAdapter;
+    let boreStep: string;
+
+    beforeAll(async () => {
+      adapter = await createExactKernelAdapter();
+      let source = addPrimitiveFeature(
+        createProjectDocument('Bore source', toUserId('user_bore_source')),
+        {
+          name: 'Plate',
+          primitiveKind: 'box',
+          dimensions: { width: 60, height: 24, depth: 12 }
+        }
+      );
+      const plateBodyId = getLatestBodyId(source)!;
+      source = { ...source, derived: await adapter.syncDocument(source) };
+      const top = source.derived.bodyRepresentations[
+        plateBodyId
+      ]!.topology!.faces.find(
+        (face) =>
+          face.geometry?.surfaceType === 'plane' &&
+          (face.geometry.normal?.z ?? 0) > 0.9
+      )!;
+      source = holeBody(source, {
+        name: 'Blind bore',
+        style: 'simple',
+        targetBodyId: plateBodyId,
+        faceHash: top.hash,
+        ...(top.reference ? { faceReference: top.reference } : {}),
+        diameter: BORE_DIAMETER,
+        depthMode: 'blind',
+        depth: 8,
+        position: { u: 0, v: 0 }
+      }).document;
+      source = { ...source, derived: await adapter.syncDocument(source) };
+      expect(source.derived.warnings).toEqual([]);
+      boreStep = await adapter.exportStep(source, [getLatestBodyId(source)!]);
+    });
+
+    afterAll(() => {
+      adapter.dispose();
+    });
+
+    async function recognizeBore(units: UnitSystem) {
+      const imported = importStepBody(
+        {
+          ...createProjectDocument(
+            `Imported bore ${units}`,
+            toUserId('user_bore_import')
+          ),
+          units
+        },
+        {
+          name: 'Imported bore plate',
+          artifactId: `artifact_imported_bore_${units}`,
+          sourceName: 'bore-plate.step',
+          stepText: boreStep
+        }
+      ).document;
+      const document = {
+        ...imported,
+        derived: await adapter.syncDocument(imported)
+      };
+      const bodyId = document.bodyOrder[0]!;
+      const topology = document.derived.bodyRepresentations[bodyId]!.topology!;
+      const bore = topology.faces.find(
+        (face) => face.geometry?.surfaceType === 'cylinder'
+      )!;
+      const published = topology.recognizedImportedFeatures?.find(
+        (feature) => feature.kind === 'blind-cylindrical-hole'
+      );
+      const onDemand = await adapter.recognizeImportedFace({
+        document,
+        bodyId,
+        faceHash: bore.hash,
+        ...(bore.reference?.kind === 'face'
+          ? { faceReference: bore.reference }
+          : {})
+      });
+      expect(onDemand.kind).toBe('recognized');
+      return {
+        published:
+          published?.kind === 'blind-cylindrical-hole'
+            ? published.diameter
+            : undefined,
+        onDemand: onDemand.dimensions?.diameter
+      };
+    }
+
+    it('reads the bore in millimetres in a millimetre document', async () => {
+      const { published, onDemand } = await recognizeBore('mm');
+      expect(published).toBeCloseTo(BORE_DIAMETER, 6);
+      expect(onDemand).toBeCloseTo(BORE_DIAMETER, 6);
+    });
+
+    it('reads the bore in inches in an inch document, as the measure pass does', async () => {
+      const { published, onDemand } = await recognizeBore('inch');
+      expect(published).toBeCloseTo(BORE_DIAMETER / 25.4, 6);
+      expect(onDemand).toBeCloseTo(BORE_DIAMETER / 25.4, 6);
+    });
+  }
+);

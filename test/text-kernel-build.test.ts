@@ -435,6 +435,44 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
     }
   });
 
+  it('rebuilds text once its face loads instead of restoring the miss', async () => {
+    // The worker's font preload gives up after its budget and lets the
+    // rebuild run without the face; the face lands later. That miss belongs
+    // to the moment, so the long-lived adapter must not checkpoint it.
+    let faceLoaded = false;
+    setTextFontProvider((family, style) =>
+      faceLoaded ? library.peek(family, style) : undefined
+    );
+    const live = (derived: DerivedState) =>
+      Object.values(derived.bodyRepresentations).filter(
+        (body) => !body.consumed && body.volume > 0
+      ).length;
+    try {
+      const { document } = textScene('HI');
+      const cold = await adapter.syncDocument(document);
+      expect(live(cold)).toBe(0);
+      expect(adapter.hasTransientFailures(cold)).toBe(true);
+
+      faceLoaded = true;
+      // The same document again, then an unrelated edit after the text.
+      const retried = await adapter.syncDocument(document);
+      const afterEdit = await adapter.syncDocument(
+        addPrimitiveFeature(document, {
+          name: 'Later box',
+          primitiveKind: 'box',
+          dimensions: { width: 5, height: 5, depth: 5 }
+        })
+      );
+      expect({
+        retried: live(retried),
+        afterEdit: live(afterEdit),
+        transient: adapter.hasTransientFailures(retried)
+      }).toEqual({ retried: 1, afterEdit: 2, transient: false });
+    } finally {
+      setTextFontProvider((family, style) => library.peek(family, style));
+    }
+  });
+
   it('refuses the legacy single-profile sweep instead of approximating', async () => {
     // An extrude with no profile reference sweeps the sketch's first object
     // as one polygonal loop. Text is many regions with holes and exact

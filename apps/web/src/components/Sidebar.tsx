@@ -32,7 +32,7 @@ import {
   HistoryTimeline,
   type HistoryRowActions
 } from './HistoryTimeline';
-import { AddParameterRow, ParameterRow } from './ParameterRows';
+import { AddParameterRow, ParameterRow, parameterTable } from './ParameterRows';
 
 /**
  * One collapsible browser section. The count is on the header so a collapsed
@@ -372,6 +372,7 @@ export function Sidebar({
       </span>
     </span>
   ) : undefined;
+  const table = parameterTable(parameters);
   return (
     <aside
       className="sidebar"
@@ -410,6 +411,7 @@ export function Sidebar({
               onDescribe={onDescribeParameter}
               bodies={liveBodies}
               onConfigureToggle={onConfigureToggle}
+              table={table}
             />
           ))}
           <AddParameterRow
