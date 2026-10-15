@@ -306,3 +306,37 @@ test('dismissing a settled invitation failure preserves a newer account save bus
     current.getByRole('button', { name: 'Save to my account', exact: true })
   ).toBeEnabled();
 });
+
+test('disabling cloud during acceptance releases its busy state across reconnect', async ({
+  page
+}) => {
+  await ownedLocalWorkspace(page);
+  const invitation = await heldInvitation(page);
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await settings.getByRole('button', { name: /^General\b/ }).click();
+  const cloud = settings.getByRole('checkbox', { name: 'Cloud features' });
+  try {
+    await cloud.uncheck();
+    invitation.release();
+    await page.waitForTimeout(250);
+    const reconnect = page.waitForResponse((response) =>
+      response.url().endsWith('/api/collaboration/config')
+    );
+    await cloud.check();
+    await reconnect;
+    await settings.getByRole('button', { name: /^Account\b/ }).click();
+    await settings
+      .getByRole('button', { name: 'Not now', exact: true })
+      .click();
+    const sharing = await openSharing(page);
+    await expect(
+      sharing.getByRole('button', { name: 'Save to my account', exact: true })
+    ).toBeEnabled();
+    await expect(page.locator('.breadcrumb')).toContainText(
+      'Owned local workspace'
+    );
+    expect(invitation.reads()).toBe(0);
+  } finally {
+    invitation.release();
+  }
+});

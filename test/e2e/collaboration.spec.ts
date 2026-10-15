@@ -743,9 +743,11 @@ for (const status of [404, 503]) {
     ).toBeVisible();
     await page.getByTitle('Back to projects').click();
     await expect(page.getByRole('tab', { name: 'Parts 1' })).toBeVisible();
-    await page.route('**/api/share/*', (route) =>
-      route.fulfill({ status, json: { error: 'Unavailable share' } })
-    );
+    let shareReads = 0;
+    await page.route('**/api/share/*', (route) => {
+      shareReads += 1;
+      return route.fulfill({ status, json: { error: 'Unavailable share' } });
+    });
     await page.evaluate(() => {
       window.location.hash = `share=${'f'.repeat(43)}`;
     });
@@ -766,6 +768,16 @@ for (const status of [404, 503]) {
       'Local project after failed link'
     );
     expect(new URL(page.url()).hash).toBe('');
+    expect(shareReads).toBe(1);
+    await page.reload();
+    await expect(page.locator('.breadcrumb')).toContainText(
+      'Local project after failed link'
+    );
+    await expect(
+      page.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeEnabled();
+    expect(new URL(page.url()).hash).toBe('');
+    expect(shareReads).toBe(1);
   });
 }
 

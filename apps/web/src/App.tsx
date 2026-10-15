@@ -11549,6 +11549,7 @@ export function App() {
     const origin = managerRef.current;
     const activeProjectSince = snapshotActiveProject();
     const sink = createImportProgressSink();
+    let opened = false;
     sink.start({
       kind: 'restore',
       fileName: file.name,
@@ -11575,6 +11576,7 @@ export function App() {
           setSaveState('local');
           setSharingOpen(false);
           hydrateDocument(backup.document, { activeProjectSince });
+          opened = true;
           handleWorkspaceMode('build');
         }
       }
@@ -11590,8 +11592,10 @@ export function App() {
         );
       sink.finish({
         tone: 'ok',
-        message: `opened as ${backup.document.name}`,
-        landed: true
+        message: opened
+          ? `opened as ${backup.document.name}`
+          : 'saved on this device',
+        landed: opened
       });
     } catch (error) {
       const message = errorMessage(error, 'Unable to read backup.');
