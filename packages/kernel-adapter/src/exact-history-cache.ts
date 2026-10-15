@@ -24,6 +24,11 @@ import {
   getParameterScope,
   keyableImportedNodeData
 } from '@openzcad/document-core';
+import {
+  findFontFamily,
+  resolveFontStyle,
+  textFontProvider
+} from '@openzcad/geometry';
 import type { FeatureNode, ProjectDocument, SketchId } from '@openzcad/shared';
 import type { BodyId } from '@openzcad/shared';
 import type {
@@ -40,6 +45,7 @@ import {
   type BooleanLineageDemand
 } from './exact-boolean-evolution';
 import type { RemusKernel } from './remus-runtime';
+import { featureProfileUsesObjects } from './feature-profile-dependencies';
 
 /**
  * Retained checkpoints are full `Topology` arena clones (the kernel
@@ -204,6 +210,58 @@ export function historyFeatureDigest(
             booleanEvolutionProbeNeeded(document, feature, lineageDemand)
         }
       : {})
+  });
+}
+
+/**
+ * Whether a feature's build waits on something this device may still
+ * provide: a text face (or the font library itself) that has not loaded, or
+ * an import source whose resolve failed and may yet succeed. Its failure
+ * describes the moment, not the document, so it must never be retained as
+ * the feature's checkpointed result — the digest has no input for it.
+ * Callers skip the text walk for documents without text.
+ */
+export function featureAwaitsEnvironment(
+  document: ProjectDocument,
+  feature: FeatureNode,
+  unresolvedSources: ReadonlySet<string>,
+  hasText: boolean
+): boolean {
+  const { data } = feature;
+  if (data.featureKind === 'imported-step') {
+    return unresolvedSources.has(data.stepSourceRef?.checksumSha256 ?? '');
+  }
+  if (!hasText || data.featureKind === 'sketch') return false;
+  const sketchIds = new Set<string>();
+  collectSketchIds(data, sketchIds);
+  const provider = textFontProvider();
+  return [...sketchIds].some((sketchId) => {
+    const sketch = findSketch(document, sketchId as SketchId);
+    if (!sketch) return false;
+    const missing = new Set<string>(
+      sketch.objectIds.filter((objectId) => {
+        const node = document.nodes[objectId];
+        if (
+          node?.kind !== 'sketch-object' ||
+          node.data.objectKind !== 'text' ||
+          node.data.construction === true
+        )
+          return false;
+        const { fontFamily, fontStyle } = node.data;
+        // An unknown family is a property of the document, not the moment.
+        return (
+          findFontFamily(fontFamily) !== undefined &&
+          !provider?.(
+            fontFamily,
+            resolveFontStyle(fontFamily, fontStyle) ?? fontStyle
+          )
+        );
+      })
+    );
+    return (
+      missing.size > 0 &&
+      featureProfileUsesObjects(document, feature, sketch, missing)
+    );
   });
 }
 
