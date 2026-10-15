@@ -2,19 +2,16 @@ import { ProjectImportButton } from './ProjectImportButton';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
-  Box,
   Check,
   CircleUserRound,
   CloudOff,
   Download,
-  Eye,
   Files,
   FolderOpen,
   LoaderCircle,
   Pencil,
   Save,
   Settings as SettingsIcon,
-  SlidersHorizontal,
   TriangleAlert,
   Upload,
   Users
@@ -27,6 +24,22 @@ import { COLLABORATION_LABELS } from '../lib/collaborationLabels';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import { StableLabel } from './StableLabel';
+import {
+  ACCOUNT_LABEL_RESERVE,
+  CLOUD_SAVE_LABEL_RESERVE,
+  COLLABORATION_LABEL_RESERVE,
+  DEVICE_SAVE_LABEL_RESERVE,
+  WORKSPACE_MODE_OPTIONS,
+  saveGlyphFor,
+  type SaveGlyph
+} from '../lib/topBarPresentation';
+import { createLazyPanel } from './LazyPanel';
+import type { UnusedMeshPayloadsProps } from './UnusedMeshPayloads';
+
+const UnusedMeshPayloads = createLazyPanel<UnusedMeshPayloadsProps>(
+  'Mesh cleanup',
+  () => import('./UnusedMeshPayloads')
+);
 
 /**
  * What the save button says, per state. Every one of these except `saving`
@@ -55,6 +68,7 @@ interface TopBarProps {
    */
   localOnlySourceCount: number;
   artifacts: ArtifactRecord[];
+  meshCleanup?: UnusedMeshPayloadsProps;
   session: AuthSession | null;
   accountState: 'checking' | 'signed-in' | 'signed-out' | 'unavailable';
   collaborationStatus: CollaborationStatus;
@@ -107,75 +121,6 @@ interface TopBarProps {
   onOpenSettings(): void;
 }
 
-/**
- * The three workspaces, in the order they appear. Each hint doubles as the
- * tooltip body — the one place the difference between the modes is spelled
- * out, which matters most for Tweak, a mode a shared-link visitor may be
- * meeting for the first time.
- */
-const WORKSPACE_MODE_OPTIONS: ReadonlyArray<{
-  mode: WorkspaceMode;
-  label: string;
-  hint: string;
-  Icon: typeof Eye;
-}> = [
-  {
-    mode: 'view',
-    label: 'View',
-    hint: 'Read the model. Measure, orbit, inspect — nothing changes.',
-    Icon: Eye
-  },
-  {
-    mode: 'tweak',
-    label: 'Tweak',
-    hint: 'Adjust parameters and export. The design itself stays locked.',
-    Icon: SlidersHorizontal
-  },
-  {
-    mode: 'build',
-    label: 'Build',
-    hint: 'Full modeling workspace. Sketch, features, history.',
-    Icon: Box
-  }
-];
-
-/**
- * Labels a chip cycles through in ordinary use. Each chip reserves the widest
- * of these so a save, a sync or a presence change never resizes it — and no
- * more, so the chip stays as narrow as its own cycle allows. The rare
- * decision states (conflict, repair, update required) may still take extra
- * room while they show, as they demand a look anyway.
- */
-const saveStateLabels = (states: readonly WorkspaceSaveState[]) =>
-  states.map((state) => WORKSPACE_SAVE_STATE_PRESENTATION[state].topBarLabel);
-/** Signed in: the account round-trip. Signed out: device saves only. */
-const CLOUD_SAVE_LABEL_RESERVE = saveStateLabels([
-  'saving',
-  'syncing',
-  'synced',
-  'offline'
-]);
-const DEVICE_SAVE_LABEL_RESERVE = saveStateLabels(['saving', 'local']);
-// "Joining…" rather than "Connecting…": the room is joined for the opening
-// frames of every cloud project, and the longer word would either resize the
-// chip on the way in or cost the bar four characters for good.
-const COLLABORATION_LABEL_RESERVE = ['9 live', 'Offline', 'Joining…'];
-const ACCOUNT_LABEL_RESERVE = ['Checking', 'Signed out'];
-
-type SaveGlyph = 'busy' | 'warning' | 'saved' | 'idle';
-function saveGlyphFor(state: WorkspaceSaveState): SaveGlyph {
-  if (state === 'saving' || state === 'syncing') return 'busy';
-  if (
-    state === 'conflict' ||
-    state === 'repair' ||
-    state === 'refused' ||
-    state === 'local-source'
-  ) {
-    return 'warning';
-  }
-  return state === 'synced' ? 'saved' : 'idle';
-}
-
 export function TopBar({
   projectName,
   units,
@@ -187,6 +132,7 @@ export function TopBar({
   geometryFailed = false,
   localOnlySourceCount,
   artifacts: storedArtifacts,
+  meshCleanup,
   session,
   accountState,
   collaborationStatus,
@@ -230,6 +176,7 @@ export function TopBar({
   // the title takes it back. A blur commit leaves focus where it went.
   const refocusProjectTitleRef = useRef(false);
   const fileMenuRef = useRef<HTMLDetailsElement>(null);
+  const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   // Model readiness rides on the glyph, not the label: "Saved · preparing
   // model" shows after every edit, so reserving its width left a short
@@ -617,6 +564,7 @@ export function TopBar({
           <details
             ref={fileMenuRef}
             className="topbar-menu file-menu"
+            onToggle={(event) => setFileMenuOpen(event.currentTarget.open)}
             // Tabbing past its last item left it open over the stage. Only a
             // move to another control closes it: a press on its own labels
             // drops focus to nothing, and the pointer handler covers clicks.
@@ -817,6 +765,12 @@ export function TopBar({
                   </a>
                 ))
               )}
+              {fileMenuOpen && meshCleanup ? (
+                <UnusedMeshPayloads
+                  key={meshCleanup.document.projectId}
+                  {...meshCleanup}
+                />
+              ) : null}
               <div className="topbar-menu-sep" />
               <strong className="topbar-menu-label">Troubleshooting</strong>
               <button

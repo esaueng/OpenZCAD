@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parseStepMetadata } from '@openzcad/io-step';
 import {
   MAX_IMPORT_TRIANGLES,
@@ -318,6 +318,124 @@ describe('STL parsing', () => {
         expect(parsed.vertices).toEqual(TWO_FACETS);
       }
     );
+
+    it.each([
+      ['LF', '\n', '0 0 0'],
+      ['CRLF', '\r\n', '0 0 0'],
+      ['CR', '\r', '0 0 0'],
+      ['LF', '\n', 'nan 0 0'],
+      ['CRLF', '\r\n', 'nan 0 0'],
+      ['CR', '\r', 'nan 0 0']
+    ])(
+      'preserves an exactly repeated facet-shaped solid name (%s, ending %j, vertex %s)',
+      (_label, ending, first) => {
+        const phrase = `facet normal 0 0 1 outer loop vertex ${first} vertex 1 0 0 vertex 0 1 0 endloop endfacet`;
+        const name = `part ${phrase}`;
+        const body =
+          'facet normal 1 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet';
+        const parse = (footer: string) =>
+          parseStl(
+            new TextEncoder().encode(
+              `solid ${name}${ending}${body}${ending}endsolid${footer ? ' ' + footer : ''}`
+            ).buffer,
+            'literal-facet-name.stl'
+          );
+        const literal = parse(name);
+        expect(literal.triangleCount).toBe(1);
+        expect(literal.vertices).toEqual([0, 0, 0, 0, 1, 0, 0, 0, 1]);
+        // Without a matching end-marker name, the same header retains its
+        // inline-facet interpretation, including finite-coordinate validation.
+        for (const footer of ['', 'part']) {
+          if (first === 'nan 0 0')
+            expect(() => parse(footer)).toThrow(/finite numbers/i);
+          else {
+            expect(parse(footer).triangleCount).toBe(2);
+            expect(parse(footer).vertices).toEqual(TWO_FACETS);
+          }
+        }
+      }
+    );
+
+    it('does not match a facet-shaped name to a later solid block', () => {
+      const phrase =
+        'facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet';
+      const name = `part ${phrase}`;
+      const body =
+        'facet normal 1 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet';
+      const text = [
+        `solid ${name}`,
+        body,
+        'endsolid different',
+        `\tSOLID ${name}`,
+        body,
+        `\tENDSOLID ${name}`
+      ].join('\n');
+      const parsed = parseStl(
+        new TextEncoder().encode(text).buffer,
+        'bounded-names.stl'
+      );
+      expect(parsed.triangleCount).toBe(3);
+      expect(parsed.vertices).toEqual([
+        ...TWO_FACETS,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1
+      ]);
+    });
+
+    it('does not use a closing name beyond an inline solid marker', () => {
+      const first =
+        'facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet';
+      const second =
+        'facet normal 1 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet';
+      const name = `part ${first}`;
+      const text = `solid ${name}\n${second} solid other\n${second}\nendsolid ${name}`;
+      expect(
+        parseStl(new TextEncoder().encode(text).buffer, 'inline-boundary.stl')
+          .triangleCount
+      ).toBe(4);
+    });
+
+    it('bounds matching-name scans when many solid markers share a line', () => {
+      const facet =
+        'facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop endfacet';
+      const text =
+        Array.from({ length: 100 }, () => `solid x ${facet}`).join(' ') +
+        '\n' +
+        ' '.repeat(16_000) +
+        '\n' +
+        Array.from({ length: 50 }, () => facet).join('\n') +
+        '\nendsolid different';
+      const original = RegExp.prototype.exec;
+      let scanned = 0;
+      const spy = vi
+        .spyOn(RegExp.prototype, 'exec')
+        .mockImplementation(function (this: RegExp, input: string) {
+          const from = this.lastIndex;
+          const result = original.call(this, input);
+          if (input === text) {
+            scanned +=
+              (result ? result.index + result[0].length : input.length) - from;
+          }
+          return result;
+        });
+      try {
+        expect(
+          parseStl(new TextEncoder().encode(text).buffer, 'inline-solids.stl')
+            .triangleCount
+        ).toBe(150);
+      } finally {
+        spy.mockRestore();
+      }
+      // Bound actual regex scan ranges, avoiding a machine-dependent timer.
+      expect(scanned).toBeLessThanOrEqual(text.length * 5);
+    });
 
     it('reads an inline first STL facet whose vertex statements wrap onto later lines', () => {
       const text =

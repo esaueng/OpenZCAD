@@ -233,31 +233,74 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
     return closed || completeVertices >= 3;
   };
   /**
-   * Skips the name after `solid` or `endsolid`. Names may hold short facet
-   * prefixes. Inline geometry needs a closed body with a vertex of three
-   * coordinate-like tokens, or three such statements even if its closing
-   * marker is missing. Probe
-   * only to the next facet/solid boundary, then let the reader validate every
-   * coordinate and the closure; `nan` must not turn geometry into a name. A
+   * Skips the name after `solid` or `endsolid`. Matching standalone delimiter
+   * names are literal when the next solid marker is that matching footer,
+   * even when they look like geometry. Otherwise
+   * names may hold short facet prefixes. Inline geometry needs a closed body
+   * with a vertex of three coordinate-like tokens, or three such statements
+   * even if its closing marker is missing. Probe only to the next facet/solid
+   * boundary, then let the reader validate every coordinate and the closure;
+   * `nan` must not turn geometry into a name. A
    * one-line file has no line end to stop at, so there the name ends at the
    * first `facet` followed by `normal` or `outer`, and everything from it on
    * is geometry — a malformed facet is refused, never read as a name. The
    * cost is that a one-line file whose name itself says `facet normal` is
    * refused.
    */
-  const skipName = () => {
+  // A single separator avoids backtracking across a run of whitespace.
+  const solidBoundary =
+    /(^|[\t\v\f \r\n])(solid|endsolid)(?=[\t\v\f \r\n]|$)/gim;
+  const footerName = /[^\r\n]*/y;
+  const atLineStart = (at: number): boolean => {
+    while (at > 0) {
+      const previous = text.charCodeAt(--at);
+      if (previous === 10 || previous === 13) return true;
+      if (!isSeparator(previous)) return false;
+    }
+    return true;
+  };
+  let literalFooter = -1;
+  const skipName = (closing: boolean) => {
     const lineEnd = oneLine ? length : nextLineBreak();
+    const nameStart = index;
+    const standalone = !closing && atLineStart(start);
+    let literalName = closing && start === literalFooter;
+    if (!closing) literalFooter = -1;
     for (;;) {
       const mark = index;
       const token = next();
       if (token === null) return;
       if (
         start > lineEnd ||
-        (keywordOf(token) === 'facet' &&
+        (!literalName &&
+          keywordOf(token) === 'facet' &&
           (oneLine
             ? ['normal', 'outer'].includes(peekKeyword())
             : hasInlineFacetBody()))
       ) {
+        if (start <= lineEnd && !oneLine && standalone) {
+          // Matching literal delimiter names disambiguate a geometry-shaped
+          // name. Stop at any solid marker; only a standalone footer names it.
+          solidBoundary.lastIndex = lineEnd + 1;
+          const boundary = solidBoundary.exec(text);
+          const footer = boundary
+            ? boundary.index + (boundary[1]?.length ?? 0)
+            : -1;
+          if (
+            boundary?.[2]?.toLowerCase() === 'endsolid' &&
+            atLineStart(footer)
+          ) {
+            footerName.lastIndex = solidBoundary.lastIndex;
+            if (
+              footerName.exec(text)?.[0].trim() ===
+              text.slice(nameStart, lineEnd).trim()
+            ) {
+              literalFooter = footer;
+              literalName = true;
+              continue;
+            }
+          }
+        }
         index = mark;
         return;
       }
@@ -287,7 +330,7 @@ function parseAsciiStl(text: string, fileName: string): ParsedStl {
           `ASCII STL facet ${facets} is not closed by "endfacet".`
         );
       }
-      skipName();
+      skipName(keyword === 'endsolid');
     } else if (keyword === 'facet') {
       if (facetVertices >= 0) {
         throw new StlParseError(

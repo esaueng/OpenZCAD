@@ -153,7 +153,7 @@ test('settles an STL parse refusal and releases the geometry reservation', async
   await expectBodyCount(page, 1);
 });
 
-test('keeps cancellation status when finalized mesh cleanup fails', async ({
+test('keeps cancellation status and recovers failed mesh cleanup after reload', async ({
   page
 }) => {
   test.setTimeout(90_000);
@@ -172,6 +172,8 @@ test('keeps cancellation status when finalized mesh cleanup fails', async ({
   >();
   const finalized: string[] = [];
   const cleanups: { projectId: string; artifactId: string }[] = [];
+  let cleanupAvailable = false;
+  let payloadDeleted = false;
   let metadataReached = false;
   let releaseMetadata!: () => void;
   const metadataHeld = new Promise<void>((resolve) => {
@@ -248,10 +250,13 @@ test('keeps cancellation status when finalized mesh cleanup fails', async ({
       projectId: input.projectId,
       artifactId: new URL(route.request().url()).pathname.split('/').at(-2)!
     });
-    return route.fulfill({
-      status: 503,
-      json: { error: 'Cleanup temporarily unavailable' }
-    });
+    if (!cleanupAvailable)
+      return route.fulfill({
+        status: 503,
+        json: { error: 'Cleanup temporarily unavailable' }
+      });
+    payloadDeleted = true;
+    return route.fulfill({ json: { deleted: true } });
   });
   await page.goto('/');
   await create(page, 'STL cleanup failure');
@@ -278,4 +283,69 @@ test('keeps cancellation status when finalized mesh cleanup fails', async ({
   await expect(page.locator('.feature-row')).toHaveCount(0);
   expect(finalized).toEqual([payloadId]);
   expect(uploads.has(originalId)).toBe(false);
+
+  const projectId = uploads.get(payloadId)!.projectId;
+  // The account retains finalized bytes even when compensation failed. A
+  // fresh load discovers them from the durable artifact listing, not a
+  // surviving in-memory cleanup callback.
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'GET'
+      ? route.fulfill({
+          json: {
+            projects: [
+              {
+                projectId,
+                name: 'STL cleanup failure',
+                revisionCount: 1,
+                documentVersion: 1,
+                updatedAt: new Date().toISOString()
+              }
+            ]
+          }
+        })
+      : route.fallback()
+  );
+  await page.route('**/api/projects/*/artifacts', (route) =>
+    route.fulfill({
+      json: {
+        artifacts: payloadDeleted
+          ? []
+          : [
+              {
+                artifactId: payloadId,
+                projectId,
+                kind: 'mesh-payload',
+                name: uploads.get(payloadId)!.fileName,
+                contentType: uploads.get(payloadId)!.contentType,
+                objectKey: '',
+                bytes: 3,
+                metadata: {},
+                createdAt: new Date().toISOString()
+              }
+            ]
+      }
+    })
+  );
+  await page.reload();
+  await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
+  await page.getByText('File', { exact: true }).click();
+  const remove = page.getByRole('button', {
+    name: 'Remove unused mesh data: simple-block.stl.ozmesh'
+  });
+  await expect(remove).toBeVisible();
+  await remove.click();
+  await expect(
+    page.getByRole('status', { name: 'Mesh cleanup' })
+  ).toContainText('Cleanup temporarily unavailable');
+  await expect(remove).toBeEnabled();
+  expect(payloadDeleted).toBe(false);
+  cleanupAvailable = true;
+  await remove.click();
+  await expect(remove).toHaveCount(0);
+  expect(cleanups).toEqual(
+    Array.from({ length: 3 }, () => ({ projectId, artifactId: payloadId }))
+  );
+  expect(payloadDeleted).toBe(true);
+  await expectBodyCount(page, 0);
+  await expect(page.locator('.feature-row')).toHaveCount(0);
 });
