@@ -6,6 +6,7 @@ import {
 } from '@openzcad/document-core';
 import {
   DEFAULT_APP_SETTINGS,
+  documentNodesWithHistory,
   toProjectId,
   toUserId,
   type ProjectDocument,
@@ -16,6 +17,7 @@ import {
 import type { StoredMeasurementRecord } from '../../apps/web/src/lib/measurementRecord';
 import {
   createProject,
+  expectBodyCount,
   expect,
   seedOpenModelDrawer,
   setSelectionFilter,
@@ -852,6 +854,230 @@ test('restores an unreadable account document from the confirmed device copy', a
     timeout: SYNC_BUDGET_MS
   });
 });
+
+class RecoveryMeshArchive {
+  readonly artifactId = 'artifact_recovery_mesh_e2e';
+  attempts = 0;
+  downloads = 0;
+  body: Buffer | null = null;
+  projectId = '';
+
+  constructor(readonly available: boolean) {}
+
+  async install(page: Page) {
+    await page.route('**/api/uploads', async (route) => {
+      const input = route.request().postDataJSON() as {
+        projectId: string;
+        kind: string;
+      };
+      if (input.kind !== 'mesh-payload') return route.fallback();
+      this.attempts++;
+      if (!this.available)
+        return route.fulfill({
+          status: 503,
+          json: { error: 'Recovery source upload unavailable.' }
+        });
+      this.projectId = input.projectId;
+      return route.fulfill({
+        status: 201,
+        json: {
+          session: {
+            uploadSessionId: 'upload_recovery_mesh_e2e',
+            artifactId: this.artifactId,
+            projectId: input.projectId,
+            objectKey: `${input.projectId}/${this.artifactId}`,
+            uploadUrl: '/api/uploads/upload_recovery_mesh_e2e/content',
+            expiresAt: '2099-01-01T00:00:00.000Z'
+          }
+        }
+      });
+    });
+    await page.route(
+      '**/api/uploads/upload_recovery_mesh_e2e/content',
+      (route) => {
+        this.body = route.request().postDataBuffer();
+        return route.fulfill({ status: 204 });
+      }
+    );
+    await page.route('**/api/artifacts/finalize', (route) => {
+      const input = route.request().postDataJSON() as { artifactId: string };
+      return input.artifactId === this.artifactId
+        ? route.fulfill({ json: { artifactId: this.artifactId } })
+        : route.fallback();
+    });
+    await page.route(`**/api/artifacts/${this.artifactId}`, (route) =>
+      route.fulfill({
+        json: {
+          artifact: {
+            artifactId: this.artifactId,
+            projectId: this.projectId,
+            kind: 'mesh-payload',
+            name: 'Recovered mesh payload',
+            contentType: 'application/vnd.openzcad.mesh-payload',
+            bytes: this.body?.byteLength ?? 0,
+            objectKey: `${this.projectId}/${this.artifactId}`,
+            metadata: {},
+            createdAt: new Date().toISOString()
+          }
+        }
+      })
+    );
+    await page.route(
+      `**/api/artifacts/${this.artifactId}/download`,
+      (route) => {
+        this.downloads++;
+        return this.body
+          ? route.fulfill({
+              body: this.body,
+              contentType: 'application/vnd.openzcad.mesh-payload'
+            })
+          : route.fulfill({ status: 404 });
+      }
+    );
+  }
+}
+
+function meshArtifactIds(document: ProjectDocument | null) {
+  return document
+    ? Array.from(documentNodesWithHistory(document)).flatMap((node) =>
+        node.kind === 'feature' && node.data.featureKind === 'imported-mesh'
+          ? [node.data.artifactId]
+          : []
+      )
+    : [];
+}
+
+for (const uploadAvailable of [true, false]) {
+  test(`repairs imported mesh sources ${uploadAvailable ? 'before restoring an unreadable account copy' : 'without claiming success when the required upload fails'}`, async ({
+    page,
+    browser
+  }) => {
+    test.setTimeout(90_000);
+    const api = new SharedCloudProjectApi();
+    await api.install(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Imported repair fixture');
+    await page
+      .getByRole('button', { name: 'Create project', exact: true })
+      .click();
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    // The original import cannot archive, but its canonical payload is durable
+    // on this browser. Recovery must later carry these exact bytes to account.
+    await page
+      .getByLabel(/^Import FreeCAD, STEP or /)
+      .setInputFiles('samples/simple-block.stl');
+    await expectBodyCount(page, 1);
+    await expect
+      .poll(
+        () =>
+          meshArtifactIds(api.project).some((id) =>
+            id.startsWith('artifact_local_')
+          ),
+        { timeout: SYNC_BUDGET_MS }
+      )
+      .toBe(true);
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expectBodyCount(page, 0);
+    await page.getByRole('button', { name: 'Redo', exact: true }).click();
+    await expectBodyCount(page, 1);
+    await page.waitForTimeout(3000);
+    api.documentUnavailable = true;
+    await page.reload();
+    await expect(
+      page.getByRole('button', { name: 'Repair needed', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await expectBodyCount(page, 1);
+    const archive = new RecoveryMeshArchive(uploadAvailable);
+    await archive.install(page);
+    let restores = 0;
+    page.on('request', (request) => {
+      if (
+        request.method() === 'POST' &&
+        /\/api\/projects\/[^/]+\/document$/.test(
+          new URL(request.url()).pathname
+        )
+      )
+        restores++;
+    });
+    const accepted = page
+      .waitForEvent('dialog')
+      .then((dialog) => dialog.accept());
+    await page
+      .getByRole('button', { name: 'Repair needed', exact: true })
+      .click();
+    await accepted;
+    await expect
+      .poll(() => archive.attempts, { timeout: SYNC_BUDGET_MS })
+      .toBeGreaterThan(0);
+    if (!uploadAvailable) {
+      await expect(page.getByRole('contentinfo')).toContainText(
+        'The account copy was not restored'
+      );
+      await expect(
+        page.getByRole('button', { name: 'Repair needed', exact: true })
+      ).toBeVisible();
+      expect(api.documentUnavailable).toBe(true);
+      expect(restores).toBe(0);
+      await expectBodyCount(page, 1);
+      return;
+    }
+    await expect.poll(() => api.documentUnavailable).toBe(false);
+    expect(archive.body?.byteLength).toBeGreaterThan(0);
+    const ids = meshArtifactIds(api.project);
+    expect(ids.length).toBeGreaterThan(1); // current plus undo/redo history
+    expect(new Set(ids)).toEqual(new Set([archive.artifactId]));
+    // Recovery must retain one canonical revision lineage on this device and
+    // in the account. Independent archive revisions used to diverge on reload.
+    await page.reload();
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await expect(
+      page.getByRole('dialog', { name: 'This project changed in two places' })
+    ).toHaveCount(0);
+    await expectBodyCount(page, 1);
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expectBodyCount(page, 0);
+    await page.getByRole('button', { name: 'Redo', exact: true }).click();
+    await expectBodyCount(page, 1);
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await expect(
+      page.getByRole('dialog', { name: 'This project changed in two places' })
+    ).toHaveCount(0);
+    // Finish the original device before clearing its optional view handoff.
+    // A late session write would otherwise open the fresh device's resume UI.
+    await page.close();
+    api.sessions = [];
+    const device = await browser.newContext();
+    try {
+      const fresh = await device.newPage();
+      await api.install(fresh);
+      await archive.install(fresh);
+      await fresh.goto('/');
+      await fresh
+        .locator('.start-tile-open', { hasText: 'Imported repair fixture' })
+        .click();
+      await expectBodyCount(fresh, 1);
+      await expect(
+        fresh.getByRole('status', { name: 'Saved', exact: true })
+      ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+      await expect.poll(() => archive.downloads).toBeGreaterThan(0);
+      await fresh.getByRole('button', { name: 'Undo', exact: true }).click();
+      await expectBodyCount(fresh, 0);
+      await fresh.getByRole('button', { name: 'Redo', exact: true }).click();
+      await expectBodyCount(fresh, 1);
+      await expect(
+        fresh.getByRole('status', { name: 'Saved', exact: true })
+      ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    } finally {
+      await device.close();
+    }
+  });
+}
 
 test('does not restore an unreadable account document from an older device copy', async ({
   page

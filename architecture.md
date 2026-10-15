@@ -4,7 +4,7 @@ OpenZCAD is a local-first parametric CAD system. The canonical `ProjectDocument`
 
 ## Layers
 
-- `shared`: branded IDs and schema-v16 contracts for nodes, revisions, checkpoints, assets, additive schema-v5 topology lineage, versioned canonical sketch bases, collaboration messages, modeling features, and API payloads.
+- `shared`: branded IDs and schema-v17 contracts for nodes, revisions, checkpoints, assets, additive schema-v5 topology lineage, versioned canonical sketch bases, reference-form mesh payloads, collaboration messages, modeling features, and API payloads.
 - `document-core`: immutable document operations, feature ordering, parameter expression evaluation, editable STEP features, finishing/pattern/modeling features, v1–v12 normalization, and checkpoint creation.
 - `command-system`: pre-assigned deterministic IDs, validation, transactions, replay, and bounded undo/redo. It also converts reviewed `CadPatchProposal` operations into ordinary commands.
 - `ai-contracts`: compact document digests, the strict JSON Schema sent to the model, runtime proposal validation, and the allowlisted patch operation types.
@@ -50,6 +50,10 @@ STEP/STL buttons send an export request to the existing geometry worker with the
 ## Editable STEP lifecycle
 
 The browser reads an imported STEP file (up to 128 MB), stores its bytes in the content-addressed source blob store, and records a SHA-256 reference plus artifact id in an `imported-step` feature command (documents from before references carry the source text embedded, capped at 12 MB, and replay unchanged). The canonical document — now a few hundred bytes per import — goes to the geometry worker, which resolves references from the blob store or the archived artifact before rebuilding. The kernel imports the exact shape on every replay, honouring the file's own declared length and plane-angle units; later transforms, booleans, finishing, patterns, selection, and export therefore share one exact B-rep path. The Cloudflare Worker archives the source best-effort; replay does not depend on that network artifact.
+
+## Imported mesh lifecycle
+
+STL, 3MF, OBJ, glTF binary and PLY imports become one `imported-mesh` feature whose triangles are already in document units. The triangles are encoded once into a canonical binary payload (`OZMESH` v1: little-endian float64 vertices and uint32 indices, lossless against the embedded JSON numbers), stored in the same content-addressed source blob store as STEP sources, and the feature and its `import.mesh` command carry only a SHA-256 `meshPayloadRef` — so neither the node, the command log nor the undo entry repeats the mesh. The payload is archived as the feature's `mesh-payload` artifact, which is what other devices, share links and backups resolve the reference from; the original upload is still archived best-effort as a stored file. The geometry worker resolves references with the STEP prefetch (blob store first, then the checksum-verified artifact) and rebuilds through the same STL handoff, so no file parser runs on replay. Documents written before references embed `vertices`/`indices` and replay unchanged; they are never rewritten into the reference form, and embedding remains the fallback when this browser denies blob storage.
 
 ## Collaboration lifecycle
 

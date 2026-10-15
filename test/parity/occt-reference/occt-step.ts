@@ -62,7 +62,10 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { displayTessellationForExtents } from '../../../packages/kernel-adapter/src/display-tessellation';
-import { importedMeshStl } from '../../../packages/kernel-adapter/src/imported-mesh';
+import {
+  importedMeshStl,
+  importedMeshTriangles
+} from '../../../packages/kernel-adapter/src/imported-mesh';
 import {
   connectedRegionGroups,
   resolveRegionProfiles
@@ -1550,7 +1553,13 @@ export class OcctStepKernelAdapter {
             if (feature.bodyId) {
               result.shapes.set(
                 feature.bodyId,
-                this.kernel.importStl(importedMeshStl(feature.data))
+                this.kernel.importStl(
+                  importedMeshStl({
+                    ...feature.data,
+                    // The corpus documents embed their triangles.
+                    ...importedMeshTriangles(feature.data, new Map())
+                  })
+                )
               );
               result.lineages.set(
                 feature.bodyId,

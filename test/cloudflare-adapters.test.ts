@@ -258,6 +258,10 @@ describe('cloudflare adapters', () => {
     const put = vi.fn();
     const prepare = vi.fn((query: string) => ({
       bind: () => ({
+        all: async () => {
+          expect(query).toContain('FROM project_copy_source_archives');
+          return { results: [] };
+        },
         first: async () => {
           if (query.includes('user_id AS owner_user_id')) {
             return { owner_user_id: userId };
@@ -606,6 +610,10 @@ describe('cloudflare adapters', () => {
     };
     const prepare = vi.fn((query: string) => ({
       bind: () => ({
+        all: async () => {
+          expect(query).toContain('FROM project_copy_source_archives');
+          return { results: [] };
+        },
         first: async () => {
           if (query.includes('user_id AS owner_user_id')) {
             return { owner_user_id: userId };

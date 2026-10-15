@@ -47,6 +47,7 @@ function database(
             storage_assets_index: 1,
             pointer_indexes: 2,
             quota_triggers: 11,
+            cleanup_claims_ready: 1,
             revision_owner_trigger: 1
           };
         }

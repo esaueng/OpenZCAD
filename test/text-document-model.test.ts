@@ -629,8 +629,9 @@ describe('existing documents are unaffected', () => {
     // the optional `solidIndices` partial-import field, and v13 the additive
     // guided Shapr import collections; v14 adds history and v15 optional
     // parameter toggles. v16 adds the canonical basis marker, which stays absent
-    // on existing sketches. None needs a legacy node migration.
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(16);
+    // on existing sketches. v17 adds reference-form mesh payloads without
+    // rewriting legacy embedded triangles. None needs a legacy node migration.
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(17);
     // Nothing but the version stamp moves.
     expect({ ...migrated, schemaVersion: 6 }).toEqual(legacy);
   });
