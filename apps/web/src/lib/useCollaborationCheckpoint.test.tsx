@@ -10,7 +10,10 @@ import {
   createProjectDocument,
   importMeshBody
 } from '@openzcad/document-core';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
+import { reconcileCopiedImportSources } from '@openzcad/persistence';
 import {
+  toArtifactId,
   toUserId,
   type CollaborationServerMessage,
   type ProjectDocument
@@ -68,7 +71,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function setup(document: ProjectDocument, room = document) {
+function setup(
+  document: ProjectDocument,
+  room = document,
+  replaceRemoteManager = false
+) {
   let live = document;
   let current = true;
   let userId = toUserId('member');
@@ -91,7 +98,13 @@ function setup(document: ProjectDocument, room = document) {
           displayName: 'Member',
           mode: 'development'
         },
-        onRemoteDocument: vi.fn(),
+        onRemoteDocument: vi.fn((next: ProjectDocument) => {
+          if (
+            replaceRemoteManager &&
+            !localStore.projectsHaveSameRebuildInputs(live, next)
+          )
+            current = false;
+        }),
         onConflict: vi.fn()
       }),
     { initialProps: { document, userId } }
@@ -169,6 +182,203 @@ function oversizedDocument(base: ProjectDocument) {
 }
 
 describe('durable room checkpoints', () => {
+  it.each([
+    ['before action loads', 'success'],
+    ['while draining', 'success'],
+    ['while draining', 'lost response'],
+    ['while draining', 'buffered changes'],
+    ['while draining', 'foreign artifact'],
+    ['while draining', 'unrelated content'],
+    ['while draining', 'foreign owner'],
+    ['while draining', 'foreign project']
+  ] as const)(
+    'validates source aliases acknowledged %s with %s',
+    async (timing, scenario) => {
+      const rejected = [
+        'foreign artifact',
+        'unrelated content',
+        'foreign owner',
+        'foreign project'
+      ].includes(scenario);
+      const base = createProjectDocument(
+        'Canonical import checkpoint',
+        toUserId('owner')
+      );
+      const manager = new CommandManager(base);
+      manager.execute(
+        commandFactories.importMesh({
+          name: 'Copied mesh',
+          sourceName: 'copy.stl',
+          artifactId: 'artifact_local_copied_mesh',
+          triangleCount: 1,
+          meshPayloadRef: {
+            marker: 'openzcad-source-ref',
+            version: 1,
+            hashAlgorithm: 'sha256',
+            checksumSha256: 'a'.repeat(64),
+            logicalBytes: 100
+          }
+        })
+      );
+      const clicked = manager.document;
+      const archives = [
+        {
+          projectId: clicked.projectId,
+          artifactId: toArtifactId('artifact_owned_copied_mesh'),
+          kind: 'mesh-payload' as const,
+          checksumSha256: 'a'.repeat(64),
+          logicalBytes: 100
+        }
+      ];
+      const canonical = {
+        ...reconcileCopiedImportSources(clicked, archives),
+        version: clicked.version + 1
+      };
+      let saved!: ProjectDocument;
+      let expectedLive: ProjectDocument | undefined;
+      const fetch = vi.fn(
+        async (_url: RequestInfo | URL, options?: RequestInit) => {
+          const { document } = JSON.parse(options!.body as string) as {
+            document: ProjectDocument;
+          };
+          saved = checkpoint({
+            ...reconcileCopiedImportSources(document, archives),
+            version: canonical.version
+          });
+          if (scenario === 'lost response') {
+            act(() => {
+              hook.socket.receive({
+                type: 'document',
+                clientId: sessionStorage.getItem(
+                  'openzcad-collaboration-client'
+                )!,
+                document: saved
+              });
+              hook.edit(saved);
+            });
+            throw new Error('Checkpoint response lost.');
+          }
+          if (scenario === 'buffered changes') {
+            expectedLive = createSavedRevision(
+              addPrimitiveFeature(canonical, {
+                name: 'Buffered cylinder',
+                primitiveKind: 'cylinder',
+                dimensions: { radius: 2, height: 10 }
+              }),
+              'Buffered name'
+            );
+            hook.edit(expectedLive);
+          }
+          let responseDocument = saved;
+          if (scenario === 'foreign artifact')
+            responseDocument = JSON.parse(
+              JSON.stringify(saved).replaceAll(
+                'artifact_owned_copied_mesh',
+                'artifact_foreign_untrusted'
+              )
+            ) as ProjectDocument;
+          if (scenario === 'unrelated content')
+            responseDocument = {
+              ...addPrimitiveFeature(saved, {
+                name: 'Unrelated box',
+                primitiveKind: 'box',
+                dimensions: { width: 2, depth: 2, height: 2 }
+              }),
+              version: saved.version
+            };
+          if (scenario === 'foreign owner')
+            responseDocument = {
+              ...saved,
+              ownerUserId: toUserId('foreign-owner')
+            };
+          if (scenario === 'foreign project')
+            responseDocument = {
+              ...saved,
+              projectId: createProjectDocument(
+                'Foreign project',
+                toUserId('owner')
+              ).projectId
+            };
+          return new Response(
+            JSON.stringify({
+              type: 'ack',
+              version: responseDocument.version,
+              document: responseDocument
+            })
+          );
+        }
+      );
+      vi.stubGlobal('fetch', fetch);
+      const hook = setup(clicked, base, !rejected);
+      const saving = hook.result.current
+        .saveCheckpoint(clicked, 'Clicked model', hook.options)
+        .catch((error: unknown) => error);
+      if (timing === 'while draining')
+        await act(async () => {
+          await vi.dynamicImportSettled();
+        });
+      expect(fetch).not.toHaveBeenCalled();
+      act(() => {
+        hook.socket.receive({
+          type: 'ack',
+          version: canonical.version,
+          document: canonical
+        });
+        hook.edit(canonical);
+      });
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await saving;
+      });
+      if (rejected) {
+        expect(outcome).toBeInstanceOf(Error);
+        expect(hook.read().ownerUserId).toBe(clicked.ownerUserId);
+        expect(hook.read().projectId).toBe(clicked.projectId);
+        expect(hook.read().nodes).toEqual(canonical.nodes);
+        expect(hook.read().checkpoints).not.toEqual(saved.checkpoints);
+        hook.unmount();
+        return;
+      }
+      if (scenario === 'lost response') expect(outcome).toBeInstanceOf(Error);
+      else expect(outcome).not.toBeInstanceOf(Error);
+      const submitted = JSON.parse(fetch.mock.calls[0]![1]!.body as string) as {
+        document: ProjectDocument;
+      };
+      expect(JSON.stringify(submitted.document)).not.toContain(
+        'artifact_local_copied_mesh'
+      );
+      if (scenario === 'buffered changes') {
+        expect(hook.read().nodes).toEqual(expectedLive!.nodes);
+        expect(
+          hook
+            .read()
+            .checkpoints.some((point) => point.reason === 'Buffered name')
+        ).toBe(true);
+        expect(
+          hook
+            .read()
+            .checkpoints.some(
+              (point) =>
+                point.checkpointId === saved.checkpoints.at(-1)!.checkpointId
+            )
+        ).toBe(true);
+        expect(hook.read().version).toBeGreaterThan(saved.version);
+      } else {
+        expect(hook.read().checkpoints).toEqual(saved.checkpoints);
+        expect(hook.read().version).toBe(saved.version);
+      }
+      expect(
+        (
+          await loadLocalSaveState(
+            clicked.projectId,
+            saved.checkpoints.at(-1)!.checkpointId
+          )
+        )?.nodes
+      ).toEqual(canonical.nodes);
+      hook.unmount();
+    }
+  );
+
   it.each(['lost response', 'deadline'] as const)(
     'keeps the adopted server checkpoint identity after a %s',
     async (failure) => {

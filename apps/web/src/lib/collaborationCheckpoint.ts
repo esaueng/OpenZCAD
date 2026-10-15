@@ -1,4 +1,8 @@
 import { withEchoedSavePoints } from '@openzcad/document-core';
+import {
+  copiedImportArchives,
+  reconcileCopiedImportSources
+} from '@openzcad/persistence';
 import type { ProjectDocument, ProjectEditLease } from '@openzcad/shared';
 import { desktopFetch } from './desktopBridge';
 import {
@@ -21,7 +25,7 @@ export type { CheckpointOptions } from './collaborationCheckpointFallback';
 export interface CheckpointControls {
   controller: AbortController;
   isCurrent(): boolean;
-  drain(signal: AbortSignal): Promise<void>;
+  drain(signal: AbortSignal): Promise<ProjectDocument | null>;
   lease(): ProjectEditLease | null;
   baseVersion(): number | null;
   clientId: string;
@@ -113,8 +117,27 @@ export async function saveCollaborationCheckpoint(
   };
   try {
     checkCurrent();
-    await controls.drain(controls.controller.signal);
+    const acknowledged = await controls.drain(controls.controller.signal);
     checkCurrent();
+    if (
+      acknowledged?.projectId === snapshot.projectId &&
+      acknowledged.ownerUserId === snapshot.ownerUserId
+    ) {
+      // Only the already accepted room ACK supplies trusted source aliases.
+      // A new save response cannot authorize substituting arbitrary artifacts.
+      const canonical = reconcileCopiedImportSources(
+        snapshot,
+        copiedImportArchives(acknowledged)
+      );
+      if (canonical !== snapshot) {
+        snapshot = projectsHaveSameCanonicalContent(canonical, acknowledged)
+          ? {
+              ...canonical,
+              version: Math.max(canonical.version, acknowledged.version)
+            }
+          : canonical;
+      }
+    }
     const lease = controls.lease();
     if (
       !lease ||
