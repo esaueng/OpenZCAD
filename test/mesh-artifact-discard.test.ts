@@ -20,6 +20,7 @@ import {
   documentNodesWithHistory,
   importedSourceReferenceOf,
   toUserId,
+  toAssetId,
   type ArtifactKind,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -39,6 +40,8 @@ import {
   installWorkerSocketGlobals
 } from './collaboration-room-harness';
 import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
+
+const CLEANUP_KINDS = ['mesh-payload', 'stl-import', 'mesh-import'] as const;
 
 const owner = toUserId('user_discard_owner');
 const outsider = toUserId('user_discard_outsider');
@@ -290,6 +293,176 @@ describe.each(['memory', 'D1/R2'] as const)(
         await service.downloadArtifact(owner, artifact.artifactId)
       ).not.toBeNull();
     });
+
+    it.each(['stl-import', 'mesh-import'] as const)(
+      'requires an explicit matching kind before removing an unreferenced %s original',
+      async (kind) => {
+        const service = serviceOf();
+        const { document, artifact } = await finalized(service, kind);
+        await expect(
+          service.discardMeshPayload(
+            outsider,
+            document.projectId,
+            artifact.artifactId,
+            kind
+          )
+        ).rejects.toBeInstanceOf(ProjectNotFoundError);
+        expect(
+          await service.discardMeshPayload(
+            owner,
+            document.projectId,
+            artifact.artifactId
+          )
+        ).toEqual({ deleted: false });
+        expect(
+          await service.discardMeshPayload(
+            owner,
+            document.projectId,
+            artifact.artifactId,
+            kind === 'stl-import' ? 'mesh-import' : 'stl-import'
+          )
+        ).toEqual({ deleted: false });
+        const other = await service.createProject(owner, { name: 'Other' });
+        expect(
+          await service.discardMeshPayload(
+            owner,
+            other.document.projectId,
+            artifact.artifactId,
+            kind
+          )
+        ).toEqual({ deleted: false });
+        expect(
+          await service.downloadArtifact(owner, artifact.artifactId)
+        ).not.toBeNull();
+        expect(
+          await service.discardMeshPayload(
+            owner,
+            document.projectId,
+            artifact.artifactId,
+            kind
+          )
+        ).toEqual({ deleted: true });
+        expect(
+          await service.downloadArtifact(owner, artifact.artifactId)
+        ).toBeNull();
+        expect(
+          await service.discardMeshPayload(
+            owner,
+            document.projectId,
+            artifact.artifactId,
+            kind
+          )
+        ).toEqual({ deleted: true });
+      }
+    );
+
+    it.each(['current', 'undo', 'redo'] as const)(
+      'preserves an original needed by a %s legacy mesh',
+      async (state) => {
+        const service = serviceOf();
+        const { document, artifact } = await finalized(service, 'stl-import');
+        const manager = new CommandManager(document);
+        manager.execute(
+          commandFactories.importMesh({
+            name: 'Legacy scan',
+            sourceName: 'scan.stl',
+            artifactId: artifact.artifactId,
+            vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+            indices: [0, 1, 2],
+            triangleCount: 1
+          })
+        );
+        if (state === 'undo')
+          manager.execute(
+            commandFactories.deleteFeature({
+              featureId: manager.document.featureOrder[0]!
+            })
+          );
+        if (state === 'redo') manager.undo();
+        if (state !== 'current')
+          expect(manager.document.featureOrder).toEqual([]);
+        await service.saveDocument(owner, {
+          projectId: document.projectId,
+          expectedVersion: document.version,
+          document: manager.document
+        });
+        expect(
+          await service.discardMeshPayload(
+            owner,
+            document.projectId,
+            artifact.artifactId,
+            'stl-import'
+          )
+        ).toEqual({ deleted: false });
+        expect(
+          await service.downloadArtifact(owner, artifact.artifactId)
+        ).not.toBeNull();
+      }
+    );
+
+    it.each(['current', 'undo'] as const)(
+      'preserves an original referenced by a %s project asset',
+      async (state) => {
+        const service = serviceOf();
+        const { document, artifact } = await finalized(service, 'mesh-import');
+        const assetId = toAssetId('asset_mesh_source');
+        const asset = {
+          assetId,
+          artifactId: artifact.artifactId,
+          kind: 'stl-source' as const,
+          name: 'scan.obj',
+          contentType: 'text/plain',
+          storage: 'remote' as const,
+          createdAt: artifact.createdAt
+        };
+        const saved: ProjectDocument = {
+          ...document,
+          version: document.version + 1,
+          assets: state === 'current' ? { [assetId]: asset } : {},
+          ...(state === 'undo'
+            ? {
+                editHistory: {
+                  schemaVersion: 1 as const,
+                  projectId: document.projectId,
+                  actorUserId: owner,
+                  entries: [
+                    {
+                      id: 'removed_source_asset',
+                      label: 'Remove source',
+                      changes: [
+                        {
+                          kind: 'value' as const,
+                          field: 'assets' as const,
+                          key: assetId,
+                          before: asset
+                        }
+                      ]
+                    }
+                  ],
+                  cursor: 1,
+                  trimmed: 0
+                }
+              }
+            : {})
+        };
+        await service.saveDocument(owner, {
+          projectId: document.projectId,
+          expectedVersion: document.version,
+          document: saved
+        });
+        expect(
+          await service.discardMeshPayload(
+            owner,
+            document.projectId,
+            artifact.artifactId,
+            'mesh-import'
+          )
+        ).toEqual({ deleted: false });
+        expect(
+          await service.downloadArtifact(owner, artifact.artifactId)
+        ).not.toBeNull();
+      }
+    );
 
     it('retains verified copy aliases even after the live model stops referring to them', async () => {
       const service = serviceOf();
@@ -575,14 +748,19 @@ describe('D1/R2 mesh discard races and accounting', () => {
     });
   });
 
-  it('keeps quota visible when object deletion fails, then retries the same claim', async () => {
+  it.each(CLEANUP_KINDS)('retries failed deletion (%s)', async (kind) => {
     const { service, objects, hooks, usage } = fixture();
-    const { document, artifact } = await finalized(service);
+    const { document, artifact, session } = await finalized(service, kind);
     hooks.delete = async () => {
       throw new Error('R2 interrupted');
     };
     await expect(
-      service.discardMeshPayload(owner, document.projectId, artifact.artifactId)
+      service.discardMeshPayload(
+        owner,
+        document.projectId,
+        artifact.artifactId,
+        kind === 'mesh-payload' ? undefined : kind
+      )
     ).rejects.toThrow('R2 interrupted');
     expect(objects.has(artifact.objectKey)).toBe(true);
     expect(usage()).toMatchObject({
@@ -592,12 +770,20 @@ describe('D1/R2 mesh discard races and accounting', () => {
     expect(
       (await service.listArtifacts(owner, document.projectId)).artifacts
     ).toHaveLength(1);
+    expect(
+      await service.finalizeArtifact(owner, {
+        projectId: document.projectId,
+        uploadSessionId: session.uploadSessionId,
+        artifactId: artifact.artifactId
+      })
+    ).toBeNull();
     delete hooks.delete;
     expect(
       await service.discardMeshPayload(
         owner,
         document.projectId,
-        artifact.artifactId
+        artifact.artifactId,
+        kind === 'mesh-payload' ? undefined : kind
       )
     ).toEqual({ deleted: true });
     expect(objects.has(artifact.objectKey)).toBe(false);
@@ -655,6 +841,33 @@ describe('D1/R2 mesh discard races and accounting', () => {
     }
   );
 
+  it('does not delete an original when the editor loses access before the atomic claim', async () => {
+    const { service, hooks, db, objects } = fixture(true);
+    const { document, artifact } = await finalized(service, 'stl-import');
+    db.prepare(
+      'INSERT INTO project_members (project_id, user_id, role, added_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0)'
+    ).run(document.projectId, outsider, 'editor', owner);
+    hooks.statement = (sql) => {
+      if (!sql.includes('INSERT OR IGNORE INTO artifact_mesh_discards')) return;
+      delete hooks.statement;
+      db.prepare(
+        'UPDATE project_members SET role = ? WHERE project_id = ? AND user_id = ?'
+      ).run('viewer', document.projectId, outsider);
+    };
+    expect(
+      await service.discardMeshPayload(
+        outsider,
+        document.projectId,
+        artifact.artifactId,
+        'stl-import'
+      )
+    ).toEqual({ deleted: false });
+    expect(objects.has(artifact.objectKey)).toBe(true);
+    expect(
+      db.prepare('SELECT count(*) AS count FROM artifact_mesh_discards').get()
+    ).toMatchObject({ count: 0 });
+  });
+
   it('refuses deletion when a concurrent save wins before its versioned claim', async () => {
     const { service, hooks, db, objects } = fixture(true);
     const { document, artifact } = await finalized(service);
@@ -683,9 +896,9 @@ describe('D1/R2 mesh discard races and accounting', () => {
     ).toMatchObject({ count: 0 });
   });
 
-  it('claims an active completion without releasing its reservation before R2 finishes', async () => {
+  it.each(CLEANUP_KINDS)('claims active completion (%s)', async (kind) => {
     const { service, hooks, usage, objects, db } = fixture();
-    const { document, session } = await upload(service);
+    const { document, session } = await upload(service, kind);
     const entered = deferred();
     const release = deferred();
     hooks.complete = async () => {
@@ -702,7 +915,8 @@ describe('D1/R2 mesh discard races and accounting', () => {
       await service.discardMeshPayload(
         owner,
         document.projectId,
-        session.artifactId
+        session.artifactId,
+        kind === 'mesh-payload' ? undefined : kind
       )
     ).toEqual({ deleted: false });
     expect(usage()).toMatchObject({
@@ -733,9 +947,9 @@ describe('D1/R2 mesh discard races and accounting', () => {
     ).toEqual([]);
   });
 
-  it('prevents a delayed finalizer from recreating a discarded pending artifact', async () => {
+  it.each(CLEANUP_KINDS)('fences a late finalizer (%s)', async (kind) => {
     const { service, hooks, usage, objects } = fixture();
-    const { document, session } = await upload(service);
+    const { document, session } = await upload(service, kind);
     await service.putUpload(owner, session.uploadSessionId, bytes.buffer);
     const entered = deferred();
     const release = deferred();
@@ -754,7 +968,8 @@ describe('D1/R2 mesh discard races and accounting', () => {
       await service.discardMeshPayload(
         owner,
         document.projectId,
-        session.artifactId
+        session.artifactId,
+        kind === 'mesh-payload' ? undefined : kind
       )
     ).toEqual({ deleted: true });
     release.resolve();
@@ -788,6 +1003,17 @@ describe('D1/R2 mesh discard races and accounting', () => {
     });
   });
 
+  it('accepts only an explicitly allowed original cleanup kind', () => {
+    for (const kind of ['stl-import', 'mesh-import'] as const)
+      expect(
+        parseDiscardMeshPayloadRequest({ projectId: 'project_scan', kind })
+      ).toEqual({ projectId: 'project_scan', kind });
+    for (const kind of ['step-import', 'thumbnail', 'mesh-payload', '', null])
+      expect(() =>
+        parseDiscardMeshPayloadRequest({ projectId: 'project_scan', kind })
+      ).toThrow(HttpError);
+  });
+
   it('requires a bounded project id in the discard request', () => {
     expect(
       parseDiscardMeshPayloadRequest({ projectId: 'project_scan' })
@@ -798,9 +1024,9 @@ describe('D1/R2 mesh discard races and accounting', () => {
 });
 
 describe('mesh discard HTTP and rollout boundary', () => {
-  it('authenticates its POST and applies the same-origin guard before deletion', async () => {
+  it.each(CLEANUP_KINDS)('authenticates cleanup POST (%s)', async (kind) => {
     const state = fixture();
-    const { document, artifact } = await finalized(state.service);
+    const { document, artifact } = await finalized(state.service, kind);
     const token = 'discard_test_session';
     state.db
       .prepare(
@@ -823,7 +1049,10 @@ describe('mesh discard HTTP and rollout boundary', () => {
         {
           method: 'POST',
           headers,
-          body: JSON.stringify({ projectId: document.projectId })
+          body: JSON.stringify({
+            projectId: document.projectId,
+            kind: kind === 'mesh-payload' ? undefined : kind
+          })
         }
       );
     expect((await worker.fetch(request(), env)).status).toBe(401);
@@ -851,9 +1080,9 @@ describe('mesh discard HTTP and rollout boundary', () => {
     expect(state.objects.has(artifact.objectKey)).toBe(false);
   });
 
-  it('allows an editor to remove an orphan but refuses a viewer', async () => {
+  it.each(CLEANUP_KINDS)('requires edit access (%s)', async (kind) => {
     const { service, db } = fixture();
-    const { document, artifact } = await finalized(service);
+    const { document, artifact } = await finalized(service, kind);
     db.prepare(
       'INSERT INTO project_members (project_id, user_id, role, added_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, 0, 0)'
     ).run(document.projectId, outsider, 'viewer', owner);
@@ -861,7 +1090,8 @@ describe('mesh discard HTTP and rollout boundary', () => {
       service.discardMeshPayload(
         outsider,
         document.projectId,
-        artifact.artifactId
+        artifact.artifactId,
+        kind === 'mesh-payload' ? undefined : kind
       )
     ).rejects.toThrow();
     db.prepare(
@@ -871,7 +1101,8 @@ describe('mesh discard HTTP and rollout boundary', () => {
       await service.discardMeshPayload(
         outsider,
         document.projectId,
-        artifact.artifactId
+        artifact.artifactId,
+        kind === 'mesh-payload' ? undefined : kind
       )
     ).toEqual({ deleted: true });
   });
@@ -1581,30 +1812,34 @@ describe('room-serialized mesh cleanup', () => {
     ).not.toBe(await projectCopyDocumentDigest(document));
   });
 
-  it('keeps a mesh acknowledged by the live room before D1 mirrors its document', async () => {
-    const { service, room, values } = roomFixture();
-    const { document, artifact } = await finalized(service);
-    const manager = imported(document, artifact.artifactId);
-    const response = await room.fetch(roomSubmission(manager.document));
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ type: 'ack' });
-    expect(
-      (await service.loadProject(owner, document.projectId))?.featureOrder
-    ).toEqual([]);
-    expect(
-      await service.discardMeshPayload(
-        owner,
-        document.projectId,
-        artifact.artifactId
-      )
-    ).toEqual({ deleted: false });
-    expect(
-      await service.downloadArtifact(owner, artifact.artifactId)
-    ).not.toBeNull();
-    expect(
-      (values.get('room:latest') as ProjectDocument).featureOrder
-    ).toHaveLength(1);
-  });
+  it.each(CLEANUP_KINDS)(
+    'protects room acknowledgements (%s)',
+    async (kind) => {
+      const { service, room, values } = roomFixture();
+      const { document, artifact } = await finalized(service, kind);
+      const manager = imported(document, artifact.artifactId);
+      const response = await room.fetch(roomSubmission(manager.document));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: 'ack' });
+      expect(
+        (await service.loadProject(owner, document.projectId))?.featureOrder
+      ).toEqual([]);
+      expect(
+        await service.discardMeshPayload(
+          owner,
+          document.projectId,
+          artifact.artifactId,
+          kind === 'mesh-payload' ? undefined : kind
+        )
+      ).toEqual({ deleted: false });
+      expect(
+        await service.downloadArtifact(owner, artifact.artifactId)
+      ).not.toBeNull();
+      expect(
+        (values.get('room:latest') as ProjectDocument).featureOrder
+      ).toHaveLength(1);
+    }
+  );
 
   it.each(['retained', 'missing'] as const)(
     'keeps sources held by %s room history after hibernation',
@@ -1652,9 +1887,9 @@ describe('room-serialized mesh cleanup', () => {
     }
   );
 
-  it('rejects a late HTTP room commit queued behind payload removal', async () => {
+  it.each(CLEANUP_KINDS)('rejects late HTTP publication (%s)', async (kind) => {
     const { service, room, hooks, values } = roomFixture();
-    const { document, artifact } = await finalized(service);
+    const { document, artifact } = await finalized(service, kind);
     const manager = imported(document, artifact.artifactId);
     const entered = deferred();
     const release = deferred();
@@ -1665,7 +1900,8 @@ describe('room-serialized mesh cleanup', () => {
     const discarding = service.discardMeshPayload(
       owner,
       document.projectId,
-      artifact.artifactId
+      artifact.artifactId,
+      kind === 'mesh-payload' ? undefined : kind
     );
     await entered.promise;
     const submission = room.fetch(roomSubmission(manager.document));
@@ -1683,73 +1919,77 @@ describe('room-serialized mesh cleanup', () => {
     ).toBeNull();
   });
 
-  it('rejects late WebSocket publication without acknowledging its missing mesh', async () => {
-    const globals = installWorkerSocketGlobals();
-    try {
-      const { service, room, values, hooks } = roomFixture();
-      const { document, artifact } = await finalized(service);
-      const manager = imported(document, artifact.artifactId);
-      const upgrade = await room.fetch(
-        new Request(`https://room.test/?projectId=${document.projectId}`, {
-          headers: {
-            upgrade: 'websocket',
-            'x-openzcad-user-id': owner,
-            'x-openzcad-display-name': 'Owner',
-            'x-openzcad-project-role': 'owner'
-          }
-        })
-      );
-      expect(upgrade.status).toBe(101);
-      const socket = globals.serverSockets.at(-1)!;
-      await socket.receive(
-        JSON.stringify({
-          type: 'hello',
-          clientId: 'client_discard',
-          displayName: 'Owner',
-          baseVersion: null,
-          document
-        })
-      );
-      const before = socket
-        .frames()
-        .filter((frame) => frame.type === 'ack').length;
-      const entered = deferred();
-      const release = deferred();
-      hooks.delete = async () => {
-        entered.resolve();
-        await release.promise;
-      };
-      const discarding = service.discardMeshPayload(
-        owner,
-        document.projectId,
-        artifact.artifactId
-      );
-      await entered.promise;
-      const incoming = socket.receive(
-        JSON.stringify({
-          type: 'document',
-          clientId: 'client_discard',
-          baseVersion: document.version,
-          document: manager.document
-        })
-      );
-      release.resolve();
-      expect(await discarding).toEqual({ deleted: true });
-      await incoming;
-      expect(
-        socket.frames().filter((frame) => frame.type === 'ack')
-      ).toHaveLength(before);
-      expect(socket.frames()).toContainEqual(
-        expect.objectContaining({ type: 'error', code: 'document-invalid' })
-      );
-      expect(
-        (values.get('room:latest') as ProjectDocument).featureOrder
-      ).toEqual([]);
-      expect(socket.closed).toBeNull();
-    } finally {
-      globals.restore();
+  it.each(CLEANUP_KINDS)(
+    'refuses missing-source WS ACKs (%s)',
+    async (kind) => {
+      const globals = installWorkerSocketGlobals();
+      try {
+        const { service, room, values, hooks } = roomFixture();
+        const { document, artifact } = await finalized(service, kind);
+        const manager = imported(document, artifact.artifactId);
+        const upgrade = await room.fetch(
+          new Request(`https://room.test/?projectId=${document.projectId}`, {
+            headers: {
+              upgrade: 'websocket',
+              'x-openzcad-user-id': owner,
+              'x-openzcad-display-name': 'Owner',
+              'x-openzcad-project-role': 'owner'
+            }
+          })
+        );
+        expect(upgrade.status).toBe(101);
+        const socket = globals.serverSockets.at(-1)!;
+        await socket.receive(
+          JSON.stringify({
+            type: 'hello',
+            clientId: 'client_discard',
+            displayName: 'Owner',
+            baseVersion: null,
+            document
+          })
+        );
+        const before = socket
+          .frames()
+          .filter((frame) => frame.type === 'ack').length;
+        const entered = deferred();
+        const release = deferred();
+        hooks.delete = async () => {
+          entered.resolve();
+          await release.promise;
+        };
+        const discarding = service.discardMeshPayload(
+          owner,
+          document.projectId,
+          artifact.artifactId,
+          kind === 'mesh-payload' ? undefined : kind
+        );
+        await entered.promise;
+        const incoming = socket.receive(
+          JSON.stringify({
+            type: 'document',
+            clientId: 'client_discard',
+            baseVersion: document.version,
+            document: manager.document
+          })
+        );
+        release.resolve();
+        expect(await discarding).toEqual({ deleted: true });
+        await incoming;
+        expect(
+          socket.frames().filter((frame) => frame.type === 'ack')
+        ).toHaveLength(before);
+        expect(socket.frames()).toContainEqual(
+          expect.objectContaining({ type: 'error', code: 'document-invalid' })
+        );
+        expect(
+          (values.get('room:latest') as ProjectDocument).featureOrder
+        ).toEqual([]);
+        expect(socket.closed).toBeNull();
+      } finally {
+        globals.restore();
+      }
     }
-  });
+  );
 
   it('requires the private pathname, header and an authorized editor', async () => {
     const { service, room, objects } = roomFixture();

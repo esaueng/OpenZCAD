@@ -40,14 +40,23 @@ function deferred<T>() {
 function fixture() {
   const sessions = new Map<string, UploadSessionRecord>();
   const finalized = new Map<string, ArtifactRecord>();
-  const discard = vi.fn(async (projectId: string, artifactId: string) => {
-    const stored = finalized.get(artifactId);
-    if (stored?.projectId !== projectId || stored.kind !== 'mesh-payload') {
-      return { deleted: false };
+  const discard = vi.fn(
+    async (
+      projectId: string,
+      artifactId: string,
+      originalKind?: 'stl-import' | 'mesh-import'
+    ) => {
+      const stored = finalized.get(artifactId);
+      if (
+        stored?.projectId !== projectId ||
+        stored.kind !== (originalKind ?? 'mesh-payload')
+      ) {
+        return { deleted: false };
+      }
+      finalized.delete(artifactId);
+      return { deleted: true };
     }
-    finalized.delete(artifactId);
-    return { deleted: true };
-  });
+  );
   const metadata = vi.fn<ArchiveArtifactTransport['getArtifactMetadata']>(
     async (artifactId) => ({ artifact: finalized.get(artifactId) ?? null })
   );
@@ -164,6 +173,139 @@ describe('a finalized mesh payload whose import cannot commit', () => {
     expect(discard).not.toHaveBeenCalledWith(openProject, PAYLOAD_ID);
     expect(finalized.has(PAYLOAD_ID)).toBe(false);
     expect(stored).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['stl-import', 'finalize'],
+    ['stl-import', 'metadata'],
+    ['mesh-import', 'finalize'],
+    ['mesh-import', 'metadata']
+  ] as const)(
+    'removes both archives when the optional %s original is cancelled during %s',
+    async (kind, stage) => {
+      const { transport, metadata, discard, finalized } = fixture();
+      const controller = new AbortController();
+      const reason = new DOMException('Import cancelled', 'AbortError');
+      const originalMetadata = deferred<ArtifactMetadataResponse>();
+      const finalizedNormally = vi
+        .mocked(transport.finalizeArtifact)
+        .getMockImplementation()!;
+      vi.mocked(transport.finalizeArtifact).mockImplementation(
+        async (input) => {
+          const result = await finalizedNormally(input);
+          if (stage === 'finalize' && input.artifactId === ORIGINAL_ID)
+            controller.abort(reason);
+          return result;
+        }
+      );
+      metadata.mockImplementation(async (artifactId) =>
+        artifactId === ORIGINAL_ID && stage === 'metadata'
+          ? originalMetadata.promise
+          : { artifact: finalized.get(artifactId) ?? null }
+      );
+      const acknowledged = vi.fn();
+      const work = archiveImportedMesh({
+        hold: { bytes: new Uint8Array([1, 2, 3]) },
+        sourceName: kind === 'stl-import' ? 'scan.stl' : 'scan.obj',
+        original: {
+          fileName: kind === 'stl-import' ? 'scan.stl' : 'scan.obj',
+          contentType: 'text/plain',
+          kind,
+          body: new Blob(['mesh original'])
+        },
+        signal: controller.signal,
+        archive: (input) =>
+          archiveArtifact(transport, PROJECT, input, acknowledged),
+        discard: (artifactId) =>
+          transport.discardMeshPayload!(PROJECT, artifactId)
+      });
+      const rejected = expect(work).rejects.toBe(reason);
+      if (stage === 'metadata') {
+        await vi.waitFor(() =>
+          expect(metadata).toHaveBeenCalledWith(ORIGINAL_ID)
+        );
+        expect(finalized.has(ORIGINAL_ID)).toBe(true);
+        controller.abort(reason);
+        originalMetadata.resolve({ artifact: finalized.get(ORIGINAL_ID)! });
+      }
+      await rejected;
+      expect(finalized.has(PAYLOAD_ID)).toBe(false);
+      expect(finalized.has(ORIGINAL_ID)).toBe(false);
+      expect(discard).toHaveBeenCalledWith(PROJECT, PAYLOAD_ID);
+      expect(discard).toHaveBeenCalledWith(PROJECT, ORIGINAL_ID, kind);
+      expect(
+        discard.mock.calls.every(([projectId]) => projectId === PROJECT)
+      ).toBe(true);
+      expect(acknowledged).not.toHaveBeenCalledWith(
+        expect.objectContaining({ artifactId: ORIGINAL_ID })
+      );
+    }
+  );
+
+  it.each([false, true])(
+    'reports failed original compensation without replacing cancellation (throw=%s)',
+    async (throws) => {
+      const { transport, metadata, discard, finalized } = fixture();
+      const normalDiscard = discard.getMockImplementation()!;
+      discard.mockImplementation(
+        async (projectId, artifactId, originalKind) => {
+          if (artifactId === ORIGINAL_ID) {
+            if (throws) throw new Error('Original cleanup unavailable');
+            return { deleted: false };
+          }
+          return normalDiscard(projectId, artifactId, originalKind);
+        }
+      );
+      const controller = new AbortController();
+      const reason = new DOMException('Import cancelled', 'AbortError');
+      metadata.mockImplementation(async (artifactId) => {
+        if (artifactId === ORIGINAL_ID) controller.abort(reason);
+        return { artifact: finalized.get(artifactId) ?? null };
+      });
+      const onCleanupFailure = vi.fn();
+      await expect(
+        archiveImportedMesh({
+          hold: { bytes: new Uint8Array([1, 2, 3]) },
+          sourceName: 'scan.stl',
+          original: {
+            fileName: 'scan.stl',
+            contentType: 'model/stl',
+            kind: 'stl-import',
+            body: new Blob(['solid scan'])
+          },
+          signal: controller.signal,
+          onCleanupFailure,
+          archive: (input) => archiveArtifact(transport, PROJECT, input),
+          discard: (artifactId) =>
+            transport.discardMeshPayload!(PROJECT, artifactId)
+        })
+      ).rejects.toBe(reason);
+      expect(discard).toHaveBeenCalledWith(PROJECT, ORIGINAL_ID, 'stl-import');
+      expect(onCleanupFailure).toHaveBeenCalledOnce();
+      expect(finalized.has(PAYLOAD_ID)).toBe(false);
+      expect(finalized.has(ORIGINAL_ID)).toBe(true);
+    }
+  );
+
+  it('retains an acknowledged original if its stored-file observer later throws', async () => {
+    const { transport, discard, finalized } = fixture();
+    await expect(
+      archiveArtifact(
+        transport,
+        PROJECT,
+        {
+          fileName: 'scan.stl',
+          contentType: 'model/stl',
+          kind: 'stl-import',
+          body: new Blob(['solid scan'])
+        },
+        () => {
+          throw new Error('Stored-file observer failed');
+        }
+      )
+    ).rejects.toThrow('Stored-file observer failed');
+    expect(discard).not.toHaveBeenCalled();
+    expect(finalized.has(ORIGINAL_ID)).toBe(true);
   });
 
   it('cleans a payload when a delayed commit refuses while keeping the original file', async () => {
