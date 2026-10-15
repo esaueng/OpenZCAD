@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toUserId } from '@openzcad/shared';
+import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
+import { deleteAccountData } from '../apps/web/worker/accountDeletion';
 import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
 
 import {
@@ -639,6 +641,73 @@ describe('worker authentication', () => {
 // an address keep that account from signing in with ~3 Turnstile solves per
 // 15 minutes.
 describe('sign-in cannot be denied by someone who only knows the email', () => {
+  it.each(['profile', 'all'] as const)(
+    'allows immediate sign-in after deleting %s data without resetting other limits',
+    async (scope) => {
+      const { env, sent, start, verify } = signInHarness();
+      const first = await start('198.51.100.7');
+      const firstCode = sent.at(-1)!;
+      await start('198.51.100.7');
+      await start('198.51.100.7');
+      for (let request = 0; request < 3; request += 1)
+        await start('198.51.100.8');
+      const startOtherEmail = () =>
+        startEmailLogin(
+          new Request('https://example.com/api/auth/email/start', {
+            headers: { 'cf-connecting-ip': '198.51.100.7' }
+          }),
+          { email: 'other@example.com', turnstileToken: 'turnstile-token' },
+          env
+        );
+      await startOtherEmail();
+      const { session } = await verify(first.challengeId, firstCode);
+      const deletionEnv = {
+        ...env,
+        PROJECT_STORAGE: {
+          put: vi.fn(),
+          get: vi.fn(),
+          delete: vi.fn()
+        } as unknown as R2Bucket,
+        PROJECT_ROOM: { getByName: vi.fn() } as never
+      };
+      await expect(
+        deleteAccountData(
+          session,
+          { scope, confirmation: session.email },
+          deletionEnv,
+          new D1R2PersistenceService(deletionEnv)
+        )
+      ).resolves.toMatchObject({ ok: true, signedOut: true });
+
+      // Both requesters exhausted three codes before deletion. Neither may
+      // retain a silent limiter after its pending challenges have been erased.
+      for (const ip of ['198.51.100.7', '198.51.100.8']) {
+        const sentCount = sent.length;
+        const reopened = await start(ip);
+        expect(sent).toHaveLength(sentCount + 1);
+        await expect(
+          verify(reopened.challengeId, sent.at(-1)!)
+        ).resolves.toHaveProperty('cookie');
+      }
+      // Deleting one email must preserve another email's requester budget.
+      const sentCount = sent.length;
+      await startOtherEmail();
+      const otherPending = await startOtherEmail();
+      const otherRepeat = await startOtherEmail();
+      expect(sent).toHaveLength(sentCount + 2);
+      expect(otherRepeat.challengeId).toBe(otherPending.challengeId);
+
+      // The shared IP budget also survives deletion, including the requests
+      // made before it. These are requests nine, ten and eleven from this IP.
+      await start('198.51.100.7');
+      await start('198.51.100.7');
+      await expect(start('198.51.100.7')).rejects.toMatchObject({
+        status: 429,
+        code: 'AUTH_RATE_LIMITED'
+      });
+    }
+  );
+
   async function reachFailureLimit(
     harness: ReturnType<typeof signInHarness>
   ): Promise<void> {
