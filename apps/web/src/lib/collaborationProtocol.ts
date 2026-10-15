@@ -21,6 +21,17 @@ const PROJECT_ROLES: readonly ProjectAccessRole[] = [
   'viewer'
 ];
 
+/** The action download and its room request share this one deadline. */
+export function startCheckpointDeadline(controller: AbortController): number {
+  return window.setTimeout(
+    () =>
+      controller.abort(
+        new Error('The room did not confirm the named save. Please retry.')
+      ),
+    15_000
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
