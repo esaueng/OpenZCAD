@@ -65,7 +65,9 @@ describe('WorkspaceTour', () => {
     expect(origin).toHaveFocus();
   });
 
-  it('finishes into the command bar when the keyboard came from nowhere', () => {
+  it('finishes into the workspace, not the command bar, when the keyboard came from nowhere', () => {
+    // The command bar was the fallback, so "press B" — the first step's own
+    // advice — typed a B into search instead of opening Box.
     render(
       <>
         <input className="command-bar-input" aria-label="Command" />
@@ -81,7 +83,22 @@ describe('WorkspaceTour', () => {
     const finish = screen.getByRole('button', { name: 'Finish' });
     finish.focus();
     fireEvent.click(finish);
-    expect(screen.getByRole('textbox', { name: 'Command' })).toHaveFocus();
+    expect(screen.getByRole('textbox', { name: 'Command' })).not.toHaveFocus();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('skips into the workspace when the keyboard came from nowhere', () => {
+    render(
+      <>
+        <input className="command-bar-input" aria-label="Command" />
+        <WorkspaceTour {...idle} onDismiss={vi.fn()} />
+      </>
+    );
+    const skip = screen.getByRole('button', { name: 'Skip the tour' });
+    skip.focus();
+    fireEvent.click(skip);
+    expect(screen.getByRole('textbox', { name: 'Command' })).not.toHaveFocus();
+    expect(document.activeElement).toBe(document.body);
   });
 
   it('announces a step that changes on its own', () => {
