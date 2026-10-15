@@ -1,7 +1,16 @@
 import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
-import { addPrimitiveFeature, importStepBody } from '@openzcad/document-core';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import { createHash } from 'node:crypto';
+import {
+  addPrimitiveFeature,
+  importMeshBody,
+  importStepBody
+} from '@openzcad/document-core';
+import {
+  encodeImportedMeshPayload,
+  toUserId,
+  type ProjectDocument
+} from '@openzcad/shared';
 import { ProjectNotFoundError } from '@openzcad/persistence';
 import * as fakeIndexedDb from '../apps/web/node_modules/fake-indexeddb';
 import {
@@ -24,8 +33,43 @@ afterAll(() => globals.restore());
 
 function objectBucket() {
   const objects = new Map<string, ArrayBuffer>();
+  const multipart = new Map<string, Map<number, ArrayBuffer>>();
+  let nextUpload = 0;
+  const upload = (key: string, uploadId: string) => ({
+    key,
+    uploadId,
+    uploadPart: async (partNumber: number, body: ArrayBuffer) => {
+      multipart.get(uploadId)!.set(partNumber, body.slice(0));
+      return { partNumber, etag: `part-${partNumber}` };
+    },
+    complete: async (parts: { partNumber: number }[]) => {
+      const chunks = parts.map((part) =>
+        multipart.get(uploadId)!.get(part.partNumber)!
+      );
+      const body = new Uint8Array(
+        chunks.reduce((sum, part) => sum + part.byteLength, 0)
+      );
+      let offset = 0;
+      for (const chunk of chunks) {
+        body.set(new Uint8Array(chunk), offset);
+        offset += chunk.byteLength;
+      }
+      objects.set(key, body.buffer);
+      multipart.delete(uploadId);
+      return { key, size: body.byteLength };
+    },
+    abort: async () => {
+      multipart.delete(uploadId);
+    }
+  });
   return {
     objects,
+    createMultipartUpload: async (key: string) => {
+      const uploadId = `checkpoint_upload_${++nextUpload}`;
+      multipart.set(uploadId, new Map());
+      return upload(key, uploadId);
+    },
+    resumeMultipartUpload: upload,
     put: vi.fn(async (key: string, body: ArrayBuffer) => {
       objects.set(key, body.slice(0));
     }),
@@ -46,7 +90,10 @@ function objectBucket() {
   };
 }
 
-async function setup(bucket?: ReturnType<typeof objectBucket>) {
+async function setup(
+  bucket?: ReturnType<typeof objectBucket>,
+  artifacts?: ReturnType<typeof objectBucket>
+) {
   const db = migratedDatabase();
   const owner = toUserId('checkpoint_owner');
   const editor = toUserId('checkpoint_editor');
@@ -60,6 +107,7 @@ async function setup(bucket?: ReturnType<typeof objectBucket>) {
   const env = {
     DB: sqliteD1(db, { onStatement: (sql) => statementHook?.(sql) }),
     PROJECT_STORAGE: bucket as unknown as R2Bucket | undefined,
+    ARTIFACTS: artifacts as unknown as R2Bucket | undefined,
     PROJECT_SHARING_ENABLED: 'true',
     PROJECT_EDIT_LEASES_ENFORCED: 'true'
   };
@@ -634,6 +682,184 @@ it('refuses a named checkpoint with a forged document owner', async () => {
         )
       ).revisions
     ).toHaveLength(0);
+  } finally {
+    fixture.db.close();
+  }
+});
+
+const meshBytes = encodeImportedMeshPayload({
+  vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+  indices: [0, 1, 2]
+});
+function meshDocument(document: ProjectDocument, artifactId: string) {
+  return importMeshBody(document, {
+    name: 'Scan',
+    sourceName: 'scan.stl',
+    artifactId,
+    triangleCount: 1,
+    meshPayloadRef: {
+      marker: 'openzcad-source-ref',
+      version: 1,
+      hashAlgorithm: 'sha256',
+      checksumSha256: createHash('sha256').update(meshBytes).digest('hex'),
+      logicalBytes: meshBytes.length
+    }
+  }).document;
+}
+
+it.each([
+  ['inline', 'discarded source'],
+  ['R2', 'discarded source'],
+  ['inline', 'copy cleanup'],
+  ['R2', 'copy cleanup']
+] as const)(
+  'atomically refuses a %s checkpoint when %s wins before the revision insert',
+  async (mode, claim) => {
+    const bucket = mode === 'R2' ? objectBucket() : undefined;
+    const fixture = await setup(bucket);
+    try {
+      const before = new Set(bucket?.objects.keys());
+      const artifactId = 'artifact_checkpoint_atomic_mesh';
+      const document =
+        claim === 'discarded source'
+          ? meshDocument(fixture.document, artifactId)
+          : fixture.document;
+      let claimed = false;
+      fixture.setStatementHook((sql) => {
+        if (claimed || !sql.includes('INSERT INTO revisions')) return;
+        claimed = true;
+        if (claim === 'discarded source')
+          fixture.db
+            .prepare(
+              'INSERT INTO artifact_mesh_discards (artifact_id, project_id, object_key, claimed_at) VALUES (?, ?, ?, ?)'
+            )
+            .run(
+              artifactId,
+              document.projectId,
+              `${document.projectId}/${artifactId}`,
+              '2026-10-14T00:00:00.000Z'
+            );
+        else
+          fixture.db
+            .prepare(
+              'INSERT INTO project_copy_cleanup_claims (project_id, claimed_at) VALUES (?, ?)'
+            )
+            .run(document.projectId, '2026-10-14T00:00:00.000Z');
+      });
+      const response = await fixture.post({
+        document,
+        checkpointReason: 'Removed before insertion'
+      });
+      expect(claimed).toBe(true);
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({
+        type: 'error',
+        code: 'permission-denied'
+      });
+      expect(
+        fixture.db
+          .prepare('SELECT COUNT(*) AS count FROM revisions WHERE project_id=?')
+          .get(document.projectId)
+      ).toMatchObject({ count: 0 });
+      expect(fixture.storage.values.get('room:latest')).toEqual(
+        fixture.document
+      );
+      if (bucket) expect(new Set(bucket.objects.keys())).toEqual(before);
+    } finally {
+      fixture.db.close();
+    }
+  }
+);
+
+it('refuses success when copy cleanup blocks room publication after the snapshot was stored', async () => {
+  const fixture = await setup();
+  try {
+    let claimed = false;
+    fixture.setStatementHook((sql) => {
+      if (claimed || !sql.includes('SELECT 1 AS allowed WHERE NOT EXISTS'))
+        return;
+      claimed = true;
+      fixture.db
+        .prepare(
+          'INSERT INTO project_copy_cleanup_claims (project_id, claimed_at) VALUES (?, ?)'
+        )
+        .run(fixture.document.projectId, '2026-10-14T00:00:00.000Z');
+    });
+    const response = await fixture.post({
+      checkpointReason: 'Publication refused'
+    });
+    expect(claimed).toBe(true);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      type: 'error',
+      code: 'document-invalid'
+    });
+    expect(
+      fixture.db
+        .prepare('SELECT COUNT(*) AS count FROM revisions WHERE project_id=?')
+        .get(fixture.document.projectId)
+    ).toMatchObject({ count: 1 });
+    expect(fixture.storage.values.get('room:latest')).toEqual(fixture.document);
+  } finally {
+    fixture.db.close();
+  }
+});
+
+it('does not store a checkpoint referencing a payload discarded during its R2 upload', async () => {
+  const bucket = objectBucket();
+  const artifacts = objectBucket();
+  const fixture = await setup(bucket, artifacts);
+  try {
+    const { session } = await fixture.service.createUploadSession(
+      fixture.owner,
+      {
+        projectId: fixture.document.projectId,
+        fileName: 'scan.ozmesh',
+        kind: 'mesh-payload',
+        contentType: 'application/octet-stream'
+      }
+    );
+    await fixture.service.putUpload(
+      fixture.owner,
+      session.uploadSessionId,
+      meshBytes.buffer
+    );
+    const artifact = await fixture.service.finalizeArtifact(fixture.owner, {
+      projectId: fixture.document.projectId,
+      uploadSessionId: session.uploadSessionId,
+      artifactId: session.artifactId
+    });
+    expect(artifact).not.toBeNull();
+    const document = meshDocument(fixture.document, session.artifactId);
+    const before = new Set(bucket.objects.keys());
+    const put = bucket.put.getMockImplementation()!;
+    bucket.put.mockImplementationOnce(async (key, body) => {
+      await put(key, body);
+      expect(
+        await fixture.service.discardMeshPayload(
+          fixture.owner,
+          document.projectId,
+          session.artifactId
+        )
+      ).toEqual({ deleted: true });
+    });
+    const response = await fixture.post({
+      document,
+      checkpointReason: 'Removed during upload'
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      type: 'error',
+      code: 'permission-denied'
+    });
+    expect(artifacts.objects.size).toBe(0);
+    expect(new Set(bucket.objects.keys())).toEqual(before);
+    expect(
+      fixture.db
+        .prepare('SELECT COUNT(*) AS count FROM revisions WHERE project_id=?')
+        .get(document.projectId)
+    ).toMatchObject({ count: 0 });
+    expect(fixture.storage.values.get('room:latest')).toEqual(fixture.document);
   } finally {
     fixture.db.close();
   }

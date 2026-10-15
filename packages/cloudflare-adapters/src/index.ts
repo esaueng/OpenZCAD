@@ -2327,6 +2327,7 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ProjectNotFoundError(saved.projectId);
     }
     this.assertDocumentCanBeStored(saved);
+    const discardGuard = meshDiscardCommitGuard(saved);
     await this.refreshAccountQuota(access.ownerUserId);
     const documentJson = JSON.stringify(saved);
     const documentBytes = persistedDocumentBytes(saved);
@@ -2353,7 +2354,11 @@ export class D1R2PersistenceService implements PersistenceService {
                  THEN json_extract(owner_settings.settings_json, '$.collaboration.enabled')
                END, 1
              ) = 1
-           ))`
+           ))${discardGuard.sql}
+           AND NOT EXISTS (
+             SELECT 1 FROM project_copy_cleanup_claims
+             WHERE project_id = p.id
+           )`
       ).bind(
         revision.revisionId,
         saved.projectId,
@@ -2366,7 +2371,8 @@ export class D1R2PersistenceService implements PersistenceService {
         userId,
         saved.projectId,
         access.ownerUserId,
-        userId
+        userId,
+        ...discardGuard.bindings
       );
       const results = write
         ? await this.env.DB.batch([
@@ -7391,7 +7397,12 @@ export class ProjectCollaborationRoom extends DurableObject {
           this.roomEnv
         ).storeCollaborationCheckpoint(userId, checkpoint, recheckAuthor);
         await recheckAuthor();
-        await this.commitDocument(checkpoint);
+        if (!(await this.commitDocument(checkpoint)))
+          return rejectionResponse({
+            code: 'document-invalid',
+            message:
+              'The project or one of its imported sources is being removed.'
+          });
       } catch (error) {
         if (denied) return denied;
         if (error instanceof ProjectNotFoundError) {
