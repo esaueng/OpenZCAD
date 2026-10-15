@@ -40,13 +40,32 @@ async function fontLibrary(): Promise<FontLibrary> {
   // it cannot move anything into a separate chunk (rollup says so, loudly).
   // `setTextFontProvider` comes from the provider module, which has no
   // opentype dependency and is free to stay in the entry bundle.
-  libraryPromise ??= import('@openzcad/geometry/text-loader').then(
-    ({ FontLibrary, fetchFontDataSource }) => {
-      const created = new FontLibrary(fetchFontDataSource());
+  // Expire the import itself so retries can use a fresh URL. Constructing the
+  // provider after the race keeps a late original import from replacing it.
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  libraryPromise ??= Promise.race([
+    import('@openzcad/geometry/text-loader'),
+    new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(
+        () => reject(new Error('Font parser load timed out.')),
+        FONT_PRELOAD_BUDGET_MS
+      );
+    })
+  ])
+    .finally(() => clearTimeout(timeout))
+    .then(({ FontLibrary, fetchFontDataSource }) => {
+      const created = new FontLibrary(
+        fetchFontDataSource(fetch, FONT_PRELOAD_BUDGET_MS)
+      );
       setTextFontProvider((family, style) => created.peek(family, style));
       return created;
-    }
-  );
+    })
+    .catch((error: unknown) => {
+      // A failed chunk fetch is usually transient; the next preload or
+      // recovery check must load afresh rather than replay this rejection.
+      libraryPromise = null;
+      throw error;
+    });
   return libraryPromise;
 }
 
@@ -87,9 +106,9 @@ export function loadedFontStyle(family: string, style: FontStyle): FontStyle {
   return resolveFontStyle(family, style) ?? style;
 }
 
-export async function preloadDocumentFonts(
+function documentFaces(
   document: ProjectDocument
-): Promise<void> {
+): { family: string; style: FontStyle }[] {
   const wanted = new Map<string, { family: string; style: FontStyle }>();
   for (const node of Object.values(document.nodes)) {
     if (node.kind !== 'sketch-object' || node.data.objectKind !== 'text') {
@@ -99,21 +118,55 @@ export async function preloadDocumentFonts(
     const style = loadedFontStyle(family, node.data.fontStyle);
     wanted.set(`${family}|${style}`, { family, style });
   }
+  return [...wanted.values()];
+}
+
+export async function preloadDocumentFonts(
+  document: ProjectDocument
+): Promise<void> {
+  const wanted = documentFaces(document);
   // A document with no text never pays for the font parser at all.
-  if (wanted.size === 0) {
+  if (wanted.length === 0) {
     return;
   }
   await Promise.race([
     (async () => {
       const library = await fontLibrary();
       await Promise.all(
-        [...wanted.values()].map(async ({ family, style }) =>
+        wanted.map(async ({ family, style }) =>
           library.load(family, style).catch(() => undefined)
         )
       );
     })(),
     new Promise((resolve) => setTimeout(resolve, FONT_PRELOAD_BUDGET_MS))
   ]).catch(() => undefined);
+}
+
+/**
+ * Resolves true as soon as any face the document names, missing when called,
+ * has loaded — with no budget, and without waiting on the others: one stalled
+ * face must not hold back text that another has made buildable. The geometry
+ * worker uses it to rebuild text whose face outlived the preload budget, and
+ * the rebuild watches whatever is still missing. False means nothing new can
+ * arrive (no face was missing, or every missing one failed to load).
+ */
+export async function documentFontsArrived(
+  document: ProjectDocument
+): Promise<boolean> {
+  const wanted = documentFaces(document);
+  if (wanted.length === 0) {
+    return false;
+  }
+  const library = await fontLibrary();
+  const missing = wanted.filter(
+    ({ family, style }) => !library.peek(family, style)
+  );
+  return Promise.any(
+    missing.map(({ family, style }) => library.load(family, style))
+  ).then(
+    () => true,
+    () => false
+  );
 }
 
 /** Loads one face on demand — for previews in the font picker. */

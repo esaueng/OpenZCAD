@@ -50,20 +50,25 @@ export function WorkspaceTour({
     }
   };
 
-  // Skip and Finish unmount the card with the focus inside it, which left
-  // the keyboard on <body>. It goes back where it came from or, failing
-  // that, to the command bar.
+  // Skip and Finish unmount the card with the focus inside it. It goes back
+  // where it came from or, failing that, to the workspace itself: the
+  // command bar was the fallback, so the first step's "press B" typed a B
+  // into search instead of opening Box.
   const releaseFocus = () => {
     const doc = globalThis.document;
-    if (!cardRef.current?.contains(doc.activeElement)) {
+    const active = doc.activeElement;
+    if (
+      !(active instanceof HTMLElement) ||
+      !cardRef.current?.contains(active)
+    ) {
       return;
     }
     const back = returnFocusRef.current;
-    const target =
-      back && back.isConnected
-        ? back
-        : doc.querySelector<HTMLElement>('.command-bar-input');
-    target?.focus();
+    if (back && back.isConnected) {
+      back.focus();
+    } else {
+      active.blur();
+    }
   };
 
   useEffect(() => {
