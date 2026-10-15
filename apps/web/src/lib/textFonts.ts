@@ -42,7 +42,9 @@ async function fontLibrary(): Promise<FontLibrary> {
   // opentype dependency and is free to stay in the entry bundle.
   libraryPromise ??= import('@openzcad/geometry/text-loader')
     .then(({ FontLibrary, fetchFontDataSource }) => {
-      const created = new FontLibrary(fetchFontDataSource());
+      const created = new FontLibrary(
+        fetchFontDataSource(fetch, FONT_PRELOAD_BUDGET_MS)
+      );
       setTextFontProvider((family, style) => created.peek(family, style));
       return created;
     })
