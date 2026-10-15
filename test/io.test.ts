@@ -340,7 +340,15 @@ describe('STL parsing', () => {
       // keywords it spells.
       'endfacet facet normal bracket',
       'facet normal endfacet vertex 1 2 3 bracket',
-      'facet normal vertex 1 2 3 endfacet bracket'
+      'facet normal vertex 1 2 3 endfacet bracket',
+      'part facet outer loop vertex bracket',
+      'part FACET OUTER LOOP VERTEX bracket',
+      'part facet normal 0 0 1 outer loop vertex bracket',
+      'part facet outer loop vertex bracket endloop',
+      'part facet outer loop vertex bracket endfacet',
+      'part facet outer loop vertex bracket endloop endfacet',
+      'part facet outer loop vertex bracket vertex bracket vertex bracket',
+      'part facet outer loop vertex bracket part vertex bracket part vertex bracket part'
     ])('reads keywords in the solid name "%s" as part of the name', (name) => {
       for (const ending of ['\n', '\r\n', '\r']) {
         const text = [
@@ -398,6 +406,36 @@ describe('STL parsing', () => {
         'ASCII STL facet 1 has a vertex that is not three finite numbers: "vertex nan 0 0".'
       );
     });
+
+    it('refuses an unclosed inline first facet before a later facet', () => {
+      const text =
+        'solid x facet normal 0 0 1 outer loop vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 endloop\n' +
+        'facet normal 1 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet\nendsolid x';
+      expect(() =>
+        parseStl(new TextEncoder().encode(text).buffer, 'unclosed-inline.stl')
+      ).toThrow('ASCII STL facet 1 is not closed by "endfacet".');
+    });
+
+    it.each([
+      ['vertex 0 0 0 vertex 1 0 0', 'has 2 vertices; a facet needs three'],
+      [
+        'vertex 0 0 0 vertex 1 0 0 vertex 0 1 0 vertex 0 0 1',
+        'has more than three vertices'
+      ]
+    ])(
+      'refuses an inline first facet with invalid vertex count: %s',
+      (vertices, error) => {
+        const text =
+          `solid x facet normal 0 0 1 outer loop ${vertices} endloop endfacet\n` +
+          'facet normal 1 0 0 outer loop vertex 0 0 0 vertex 0 1 0 vertex 0 0 1 endloop endfacet\nendsolid x';
+        expect(() =>
+          parseStl(
+            new TextEncoder().encode(text).buffer,
+            'invalid-inline-count.stl'
+          )
+        ).toThrow(`ASCII STL facet 1 ${error}.`);
+      }
+    );
   });
 
   it('round-trips write -> parse -> solid', () => {
