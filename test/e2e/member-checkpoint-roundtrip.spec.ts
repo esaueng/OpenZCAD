@@ -698,8 +698,13 @@ test('a committed member checkpoint fences buffered edits after a new lease repl
   }
 });
 
-for (const ackFault of [undefined, 'lost'] as const) {
-  test(`a member checkpoint accepts the drained copied-source rewrite with a ${ackFault ?? 'confirmed'} HTTP acknowledgement`, async ({
+for (const [sendTiming, ackFault] of [
+  ['pending', undefined],
+  ['pending', 'lost'],
+  ['scheduled', undefined],
+  ['scheduled', 'lost']
+] as const) {
+  test(`a member checkpoint accepts the drained copied-source rewrite with a ${ackFault ?? 'confirmed'} HTTP acknowledgement ${sendTiming === 'scheduled' ? 'before the room-send timer' : 'after a pending write'}`, async ({
     page
   }) => {
     test.setTimeout(60_000);
@@ -750,18 +755,50 @@ for (const ackFault of [undefined, 'lost'] as const) {
       await expect(
         page.getByRole('group', { name: 'Workspace status' })
       ).toContainText('syncLocal source only');
+      if (sendTiming === 'scheduled') {
+        expect(server.sourceWritePending()).toBe(false);
+        // Hold the actual debounce rather than racing clicks against 500 ms.
+        await page.evaluate(() => {
+          const nativeTimeout = window.setTimeout.bind(window);
+          (
+            window as unknown as { __restoreCheckpointSendTimer(): void }
+          ).__restoreCheckpointSendTimer = () => {
+            window.setTimeout = nativeTimeout;
+          };
+          window.setTimeout = ((
+            handler: TimerHandler,
+            delay?: number,
+            ...args: unknown[]
+          ) =>
+            nativeTimeout(
+              handler,
+              delay === 500 ? 30_000 : delay,
+              ...args
+            )) as typeof window.setTimeout;
+        });
+      }
       await addPrimitive(page, /^Box \(B\)/);
       await expectBodyCount(page, 2);
-      await expect.poll(server.sourceWritePending).toBe(true);
+      if (sendTiming === 'pending')
+        await expect.poll(server.sourceWritePending).toBe(true);
+      else expect(server.sourceWritePending()).toBe(false);
       await startNamedSave(page);
       server.releaseSourceWrite();
       await expect.poll(server.requested).toBe(true);
       expect(server.input()?.bodyOrder).toHaveLength(2);
-      expect(JSON.stringify(server.input())).not.toContain(
-        'artifact_local_checkpoint_copy'
-      );
       server.release();
       if (ackFault === 'lost') server.releaseAck();
+      await expect.poll(() => server.stored()?.bodyOrder.length).toBe(2);
+      expect(
+        JSON.stringify(server.stored()).includes(
+          'artifact_local_checkpoint_copy'
+        )
+      ).toBe(false);
+      expect(
+        JSON.stringify(server.input()).includes(
+          'artifact_local_checkpoint_copy'
+        )
+      ).toBe(false);
       await expect(page.getByRole('contentinfo')).toContainText(
         ackFault === 'lost'
           ? 'The named save is stored on this device.'
@@ -776,6 +813,12 @@ for (const ackFault of [undefined, 'lost'] as const) {
       expect(JSON.stringify(server.stored())).toContain(
         'artifact_checkpoint_copy'
       );
+      if (sendTiming === 'scheduled')
+        await page.evaluate(() =>
+          (
+            window as unknown as { __restoreCheckpointSendTimer(): void }
+          ).__restoreCheckpointSendTimer()
+        );
       await addPrimitive(page, /^Cylinder/);
       await expectBodyCount(page, 3);
       await expect.poll(() => server.read().bodyOrder.length).toBe(3);
