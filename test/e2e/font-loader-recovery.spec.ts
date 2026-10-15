@@ -372,3 +372,75 @@ test('the unchanged text solid restarts a stalled font download without replacin
     await live.worker.evaluate(() => self.close());
   }
 });
+
+test('an explicit rectangle profile stays exact-ready when unrelated ordinary text has no font', async ({
+  page,
+  context
+}) => {
+  await context.route('**/fonts/open-sans-regular.ttf', (route) => {
+    return route.abort('internetdisconnected');
+  });
+  await stubAnonymousApi(page);
+  await page.goto('/');
+  const sketch = addSketchFeature(
+    createProjectDocument('Selected rectangle and label', toUserId('user')),
+    {
+      name: 'Rectangle with separate text',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        {
+          objectKind: 'rectangle',
+          centerX: 0,
+          centerY: 0,
+          width: 6,
+          height: 5
+        },
+        {
+          objectKind: 'text',
+          text: 'I',
+          fontFamily: 'open-sans',
+          fontStyle: 'regular',
+          size: 2,
+          x: 10,
+          y: 10
+        }
+      ]
+    }
+  );
+  const rectangle = findSketch(sketch.document, sketch.sketchId)!.objectIds[0]!;
+  const document = extrudeSketch(sketch.document, {
+    name: 'Only the rectangle',
+    sketchId: sketch.sketchId,
+    distance: 5,
+    profiles: [{ all: true, sourceEntityIds: [rectangle] }]
+  }).document;
+  const live = await liveWorker(page, document);
+  try {
+    await expect
+      .poll(
+        async () =>
+          (await live.messages()).some(
+            (message) => message.phase === 'ready' && message.stale === false
+          ),
+        { timeout: 20_000 }
+      )
+      .toBe(true);
+    const messages = await live.messages();
+    expect(messages.filter((message) => message.phase === 'ready')).toEqual([
+      expect.objectContaining({ version: document.version, stale: false })
+    ]);
+    const final = messages
+      .filter((message) => message.type === 'projection-delta')
+      .at(-1)!;
+    expect(final.packet?.state.exportableBodyIds).toEqual(document.bodyOrder);
+    expect(final.packet?.state.warnings).toEqual([]);
+    const phases = messages.filter((message) => message.phase);
+    await live.worker.evaluate(() => self.dispatchEvent(new Event('online')));
+    await page.waitForTimeout(1_100);
+    expect((await live.messages()).filter((message) => message.phase)).toEqual(
+      phases
+    );
+  } finally {
+    await live.worker.evaluate(() => self.close());
+  }
+});
