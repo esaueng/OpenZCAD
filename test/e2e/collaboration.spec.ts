@@ -750,14 +750,12 @@ for (const status of [404, 503]) {
       window.location.hash = `share=${'f'.repeat(43)}`;
     });
     await expect(
-      page
-        .getByRole('status')
-        .filter({
-          hasText:
-            status === 404
-              ? 'This share link is no longer available'
-              : 'Unavailable share'
-        })
+      page.getByRole('status').filter({
+        hasText:
+          status === 404
+            ? 'This share link is no longer available'
+            : 'Unavailable share'
+      })
     ).toBeVisible();
     await page
       .locator('.start-tile-open', {
@@ -769,6 +767,105 @@ for (const status of [404, 503]) {
     );
     expect(new URL(page.url()).hash).toBe('');
   });
+}
+
+for (const action of ['create', 'demo', 'import'] as const) {
+  for (const pending of [true, false]) {
+    test(`abandons ${pending ? 'a pending' : 'a failed'} share when the shelf opens ${action}`, async ({
+      page
+    }) => {
+      await stubAnonymousApi(page);
+      const document = createProjectDocument(
+        'Abandoned share',
+        toUserId('owner')
+      );
+      let release!: () => void;
+      let requested = false;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route('**/api/share/*', async (route) => {
+        requested = true;
+        if (pending) await gate;
+        await route.fulfill(
+          pending
+            ? {
+                json: {
+                  document,
+                  project: { name: document.name },
+                  mode: 'tweak'
+                }
+              }
+            : { status: 404, json: { error: 'Unavailable' } }
+        );
+      });
+      await page.goto('/');
+      await expect(page.getByRole('tab', { name: 'Parts 0' })).toBeVisible();
+      await page.evaluate(() => {
+        window.location.hash = `share=${'f'.repeat(43)}`;
+      });
+      await expect.poll(() => requested).toBe(true);
+      if (!pending)
+        await expect(
+          page
+            .getByRole('status')
+            .filter({ hasText: 'This share link is no longer available' })
+        ).toBeVisible();
+      try {
+        if (action === 'create') {
+          await page.getByLabel('Project name').fill('New shelf project');
+          await page
+            .getByRole('button', { name: 'Create project', exact: true })
+            .click();
+        } else if (action === 'demo') {
+          await page
+            .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+            .click();
+        } else {
+          await page.getByLabel('Import project backup').setInputFiles({
+            name: 'shelf.openzcad',
+            mimeType: 'application/json',
+            buffer: Buffer.from(
+              JSON.stringify({
+                format: 'openzcad-project',
+                version: 1,
+                document: createProjectDocument(
+                  'Imported shelf project',
+                  toUserId('local')
+                ),
+                files: []
+              })
+            )
+          });
+        }
+        const name =
+          action === 'create'
+            ? 'New shelf project'
+            : action === 'demo'
+              ? 'Mounting Bracket'
+              : 'Imported shelf project';
+        await expect(page.locator('.breadcrumb')).toContainText(name);
+        expect(new URL(page.url()).hash).toBe('');
+        if (pending) {
+          const response = page.waitForResponse(/\/api\/share\//);
+          release();
+          await response;
+          await page.waitForTimeout(250);
+        }
+        await expect(page.locator('.breadcrumb')).toContainText(name);
+        await expect(
+          page.getByRole('button', { name: 'Make a copy', exact: true })
+        ).toHaveCount(0);
+        await expect(
+          page
+            .getByRole('group', { name: 'Workspace mode' })
+            .getByRole('button', { name: 'Build', exact: true })
+        ).toBeEnabled();
+      } finally {
+        release();
+      }
+    });
+  }
 }
 
 test('keeps revoked-link guidance visible after delayed startup completes', async ({
