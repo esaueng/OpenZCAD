@@ -1028,6 +1028,26 @@ for (const uploadAvailable of [true, false]) {
     const ids = meshArtifactIds(api.project);
     expect(ids.length).toBeGreaterThan(1); // current plus undo/redo history
     expect(new Set(ids)).toEqual(new Set([archive.artifactId]));
+    // Recovery must retain one canonical revision lineage on this device and
+    // in the account. Independent archive revisions used to diverge on reload.
+    await page.reload();
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await expect(
+      page.getByRole('dialog', { name: 'This project changed in two places' })
+    ).toHaveCount(0);
+    await expectBodyCount(page, 1);
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expectBodyCount(page, 0);
+    await page.getByRole('button', { name: 'Redo', exact: true }).click();
+    await expectBodyCount(page, 1);
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await expect(
+      page.getByRole('dialog', { name: 'This project changed in two places' })
+    ).toHaveCount(0);
     api.sessions = [];
     const device = await browser.newContext();
     try {
