@@ -49,7 +49,12 @@ function backup() {
   };
 }
 
-for (const { failFirstUpload, editDuringUpload, lostAdoptionResponse } of [
+for (const {
+  failFirstUpload,
+  editDuringUpload,
+  lostAdoptionResponse,
+  cachedAccountProject
+} of [
   {
     failFirstUpload: false,
     editDuringUpload: false,
@@ -69,9 +74,15 @@ for (const { failFirstUpload, editDuringUpload, lostAdoptionResponse } of [
     failFirstUpload: false,
     editDuringUpload: false,
     lostAdoptionResponse: true
+  },
+  {
+    failFirstUpload: false,
+    editDuringUpload: false,
+    lostAdoptionResponse: false,
+    cachedAccountProject: true
   }
 ])
-  test(`import stays editable and account save includes sources${failFirstUpload ? ' with retry' : editDuringUpload ? ' while editing' : lostAdoptionResponse ? ' after an interrupted adoption' : ''}`, async ({
+  test(`import stays editable and account save includes sources${failFirstUpload ? ' with retry' : editDuringUpload ? ' while editing' : lostAdoptionResponse ? ' after an interrupted adoption' : cachedAccountProject ? ' from a cached different account' : ''}`, async ({
     page
   }, testInfo) => {
     const errors: string[] = [];
@@ -88,6 +99,12 @@ for (const { failFirstUpload, editDuringUpload, lostAdoptionResponse } of [
         document?: ProjectDocument;
       };
       if (!payload.document) return route.fallback();
+      if (cachedAccountProject) {
+        expect(payload.document.ownerUserId).toBe('previous-account');
+        expect(JSON.stringify(payload.document)).toContain(
+          'artifact_previous_account_cube'
+        );
+      }
       adoptionAttempts++;
       deviceProjectId = payload.document.projectId;
       if (adopted)
@@ -236,6 +253,79 @@ for (const { failFirstUpload, editDuringUpload, lostAdoptionResponse } of [
     await expect(
       page.getByRole('button', { name: 'Rename project' })
     ).toHaveText('Editable imported cube');
+    if (cachedAccountProject) {
+      // Account A was cached on this browser before account B signed in.
+      // Its content-addressed bytes remain on-device, but A's archived IDs
+      // cannot identify bytes owned by the new account project.
+      await page.getByRole('button', { name: 'OpenZCAD Beta' }).click();
+      const cachedTile = page.locator('.start-tile-open', {
+        hasText: 'Editable imported cube'
+      });
+      await expect(cachedTile).toBeVisible();
+      await expect
+        .poll(() =>
+          page.evaluate(async () => {
+            const db = await new Promise<IDBDatabase>((resolve, reject) => {
+              const open = indexedDB.open('openzcad-v2');
+              open.onsuccess = () => resolve(open.result);
+              open.onerror = () =>
+                reject(
+                  new Error('Cached account database unavailable.', {
+                    cause: open.error
+                  })
+                );
+            });
+            return new Promise<boolean>((resolve, reject) => {
+              const tx = db.transaction(
+                ['projects', 'accountProjectIdentities'],
+                'readwrite'
+              );
+              const store = tx.objectStore('projects');
+              const request = store.getAll();
+              let found = false;
+              request.onsuccess = () => {
+                const cached = (request.result as ProjectDocument[]).find(
+                  (document) => document.name === 'Editable imported cube'
+                );
+                if (!cached) return;
+                found = true;
+                const rehomed = JSON.parse(
+                  JSON.stringify(cached, (key, value: unknown) =>
+                    key === 'artifactId' &&
+                    typeof value === 'string' &&
+                    value.startsWith('artifact_local_')
+                      ? 'artifact_previous_account_cube'
+                      : value
+                  )
+                ) as ProjectDocument;
+                rehomed.ownerUserId =
+                  'previous-account' as ProjectDocument['ownerUserId'];
+                if (rehomed.editHistory)
+                  rehomed.editHistory.actorUserId = rehomed.ownerUserId;
+                store.put(rehomed);
+                tx.objectStore('accountProjectIdentities').put({
+                  projectId: rehomed.projectId
+                });
+              };
+              tx.oncomplete = () => {
+                db.close();
+                resolve(found);
+              };
+              tx.onabort = () => {
+                db.close();
+                reject(new Error('Cached account source unavailable.'));
+              };
+            });
+          })
+        )
+        .toBe(true);
+      await cachedTile.click();
+      await expect(
+        page
+          .getByRole('banner')
+          .getByText('Editable imported cube', { exact: true })
+      ).toHaveText('Editable imported cube');
+    }
     const beforeUrls = await page.evaluate(
       () =>
         (window as unknown as { __e2eCollaborationSocketUrls: string[] })
@@ -366,7 +456,12 @@ for (const { failFirstUpload, editDuringUpload, lostAdoptionResponse } of [
       },
       { deviceProjectId, accountProjectId }
     );
-    expect(persisted.old).toBeUndefined();
+    if (cachedAccountProject) {
+      expect(persisted.old).toMatchObject({ ownerUserId: 'previous-account' });
+      expect(JSON.stringify(persisted.old)).toContain(
+        'artifact_previous_account_cube'
+      );
+    } else expect(persisted.old).toBeUndefined();
     expect(persisted.current).toMatchObject({
       projectId: accountProjectId,
       name: editDuringUpload ? 'Edited during upload' : 'Editable imported cube'
