@@ -1141,6 +1141,13 @@ test('analytics consent follows a new cross-tab opt-in after withdrawal', async 
       route.fulfill({ status: 204 })
     );
     await tab.goto('/');
+    await expect(
+      tab.getByRole('button', { name: 'Open settings' })
+    ).toBeVisible();
+  }
+  // Load both tabs before opening settings: that overlay's navigation state
+  // is persisted and would otherwise already be open in the second tab.
+  for (const tab of [page, second]) {
     await tab.getByRole('button', { name: 'Open settings' }).click();
     await tab
       .getByRole('button', { name: 'Privacy & data', exact: true })
