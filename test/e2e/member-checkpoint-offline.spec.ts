@@ -37,8 +37,8 @@ async function storedCheckpoints(page: Page) {
   );
 }
 
-for (const fault of ['missing', 'stalled'] as const) {
-  test(`the first member named save survives a ${fault} checkpoint module on this device`, async ({
+for (const fault of ['missing', 'stalled', 'rejected'] as const) {
+  test(`the first member named save survives ${fault === 'rejected' ? 'a rejected room request' : `a ${fault} checkpoint module`} on this device`, async ({
     page
   }) => {
     const document = addPrimitiveFeature(
@@ -72,6 +72,13 @@ for (const fault of ['missing', 'stalled'] as const) {
       route.fulfill({ json: document })
     );
     let roomWrites = 0;
+    const roomDocuments: ProjectDocument[] = [];
+    await page.exposeFunction(
+      '__recordDeviceCheckpointRoomDocument',
+      (submitted: ProjectDocument) => {
+        roomDocuments.push(submitted);
+      }
+    );
     await page.route(
       `**/api/projects/${document.projectId}/collaboration`,
       (route) => {
@@ -92,6 +99,7 @@ for (const fault of ['missing', 'stalled'] as const) {
       '**/assets/collaborationCheckpoint-*.js*',
       async (route) => {
         moduleRequests += 1;
+        if (fault === 'rejected') return route.continue();
         if (fault === 'stalled') {
           await moduleGate;
           return route.continue();
@@ -100,6 +108,11 @@ for (const fault of ['missing', 'stalled'] as const) {
       }
     );
     await page.addInitScript((initial) => {
+      const browser = window as typeof window & {
+        __recordDeviceCheckpointRoomDocument(
+          submitted: ProjectDocument
+        ): Promise<void>;
+      };
       const Original = window.WebSocket;
       window.WebSocket = class extends Original {
         override send(raw: Parameters<WebSocket['send']>[0]) {
@@ -109,6 +122,8 @@ for (const fault of ['missing', 'stalled'] as const) {
             clientId: string;
             document?: ProjectDocument;
           };
+          if (frame.type === 'document' && frame.document)
+            void browser.__recordDeviceCheckpointRoomDocument(frame.document);
           const message =
             frame.type === 'hello'
               ? {
@@ -166,7 +181,7 @@ for (const fault of ['missing', 'stalled'] as const) {
           (await storedCheckpoints(page)).map((checkpoint) => checkpoint.reason)
         )
         .toContain('Offline milestone');
-      expect(roomWrites).toBe(0);
+      expect(roomWrites).toBe(fault === 'rejected' ? 1 : 0);
       if (fault === 'stalled') {
         const loaded = page.waitForResponse(
           '**/assets/collaborationCheckpoint-*.js*'
@@ -181,6 +196,37 @@ for (const fault of ['missing', 'stalled'] as const) {
           )
         ).toHaveLength(1);
       }
+      const local = (await storedCheckpoints(page)).find(
+        (checkpoint) => checkpoint.reason === 'Offline milestone'
+      )!.document;
+      const checkpointId = local.checkpoints.at(-1)!.checkpointId;
+      const revisionId = local.revisions.at(-1)!.revisionId;
+      await page.getByRole('button', { name: /^Cylinder/ }).click();
+      await page
+        .getByRole('region', { name: 'Feature inspector' })
+        .getByRole('button', { name: 'Create', exact: true })
+        .click();
+      await expectBodyCount(page, 2);
+      await expect
+        .poll(() =>
+          roomDocuments.some(
+            (sent) =>
+              Object.keys(sent.nodes).length >
+              Object.keys(document.nodes).length
+          )
+        )
+        .toBe(true);
+      for (const sent of roomDocuments) {
+        expect(
+          sent.checkpoints.map((point) => point.checkpointId)
+        ).not.toContain(checkpointId);
+        expect(
+          sent.revisions.map((revision) => revision.revisionId)
+        ).not.toContain(revisionId);
+      }
+      await expect(
+        page.locator('.revision-row', { hasText: 'Offline milestone' })
+      ).toBeVisible();
       await page.reload();
       const saved = (await storedCheckpoints(page)).find(
         (checkpoint) => checkpoint.reason === 'Offline milestone'
@@ -190,7 +236,7 @@ for (const fault of ['missing', 'stalled'] as const) {
       expect(saved?.document.checkpoints.at(-1)?.reason).toBe(
         'Offline milestone'
       );
-      expect(roomWrites).toBe(0);
+      expect(roomWrites).toBe(fault === 'rejected' ? 1 : 0);
     } finally {
       release();
     }
