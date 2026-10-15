@@ -1,3 +1,4 @@
+import { expandedMetric } from './glimpseContract';
 // Deliberately duplicated small wire contract; Glimpse revalidates at its RPC boundary.
 export interface GlimpseBinding {
   record(value: {
@@ -48,9 +49,10 @@ export function parseUsage(
     Object.keys(v).length !== 2 ||
     typeof v.event !== 'string' ||
     typeof v.bucket !== 'string' ||
-    !EVENTS.has(v.event)
+    (!EVENTS.has(v.event) && !expandedMetric(v.event, v.bucket, 'openzcad'))
   )
     return null;
+  if (expandedMetric(v.event, v.bucket, 'openzcad')) return {level: 'optional', event: v.event, bucket: v.bucket};
   if (
     v.event === 'operation_latency'
       ? !BUCKETS.has(v.bucket)

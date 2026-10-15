@@ -52,7 +52,7 @@ supporting specification only when its contract changes.
 
 | Master ID | Status | Scope and evidence |
 | --- | --- | --- |
-| A01 | In review | Glimpse: backend API counters plus separately opt-in feature/workflow/export aggregates; no model or identifying payloads. [Setup and privacy boundaries](docs/glimpse.md). Regression coverage in `analytics.test.ts` and `worker/glimpse.test.ts`; production provisioning, activation and live verification pending. |
+| A01 | In review | Glimpse: backend counters; fresh opt-in diagnostic/feature/size/part aggregates and user-shared reports; separate expiring cloud-account/storage census with no exported identifiers. [Setup and privacy boundaries](docs/glimpse.md). Regression coverage in `analytics.test.ts` and `worker/glimpse.test.ts`; production provisioning, activation and live verification pending. |
 
 ## Where we are
 

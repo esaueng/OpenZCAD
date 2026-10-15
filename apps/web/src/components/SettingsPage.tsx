@@ -1,4 +1,4 @@
-import { AnalyticsConsent } from './AnalyticsConsent';
+import { AnalyticsConsent, CloudStatisticsConsent } from './AnalyticsConsent';
 import {
   MIDDLE_DRAG_LABELS,
   POINTER_NAVIGATION_LABELS
@@ -1799,6 +1799,7 @@ export function SettingsPage({
                   onChange={setPersonalInfoVisible}
                 />
               </SettingRow>
+
               {session ? (
                 <>
                   <SettingRow
@@ -2156,7 +2157,7 @@ export function SettingsPage({
                 description={
                   desktopApp
                     ? 'Optional usage analytics are available in the web browser. This desktop app does not send usage events.'
-                    : 'Allow Glimpse to count feature use, workflow steps, exports and coarse timings. No model contents, geometry, filenames, project names or identity. Off by default. DNT/GPC and turning off cloud features suppress sending while preserving this choice; withdraw here to stop sending immediately. Existing anonymous totals cannot be attributed or removed. Basic server counters measure API activity and reliability. Local operations require opt-in. This browser-only choice is separate for each app.'
+                    : 'Allow Glimpse to count feature categories, workflow steps, exports, diagnostic codes, part-count and project-file-size ranges, transfer-size ranges, and coarse timings. This expanded scope requires a fresh choice. No model contents, geometry, filenames, project names or identity. Off by default. DNT/GPC and turning off cloud features suppress sending while preserving this choice; withdraw here to stop sending immediately. Existing anonymous totals cannot be attributed or removed. Basic server counters measure API activity and reliability. Local operations require opt-in. This browser-only choice is separate for each app.'
                 }
                 scope="This device"
               >
@@ -2168,6 +2169,9 @@ export function SettingsPage({
                   <AnalyticsConsent />
                 )}
               </SettingRow>
+              {session && !desktopApp && <SettingRow title="Cloud account statistics" description="Separately allow hourly aggregate account, owned-project, revision and known storage-byte snapshots for 30 days, across your devices. Only opted-in accounts are included. No account or project identifiers leave OpenZCAD. Includes retained trash and storage metadata, never model contents. Withdraw here at any time; published aggregates remain up to 90 days. This account-wide permission is separate from browser DNT/GPC and this device’s cloud switch." scope="This account">
+                {cloudFunctionsEnabled ? <CloudStatisticsConsent key={session.userId} accountKey={session.userId} /> : <p className="settings-card-action-note">Enable cloud features to manage this online permission. An existing grant remains active until withdrawn or its 30-day expiry.</p>}
+              </SettingRow>}
               <SettingRow
                 title="Local project data"
                 description="Local projects stay in this browser's storage. Delete them from the start screen; the cloud actions below never touch projects or settings on this device."

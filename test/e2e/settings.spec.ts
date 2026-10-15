@@ -1088,7 +1088,7 @@ for (const privacySignal of ['doNotTrack', 'globalPrivacyControl'] as const) {
     }, privacySignal);
     await page.goto('/');
     await page.evaluate(() =>
-      localStorage.setItem('openzcad.glimpse.consent.v1', 'granted-v1')
+      localStorage.setItem('openzcad.glimpse.consent.v1', 'granted-v2')
     );
     await page.reload();
     await page.getByRole('button', { name: 'Open settings' }).click();

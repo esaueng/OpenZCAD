@@ -1,4 +1,4 @@
-import { setAnalyticsEnabled, trackUsage } from './lib/analytics';
+import { setAnalyticsEnabled, trackUsage, trackDetail, trackParts, trackSize, isAnalyticsEnabled, durationBucket } from './lib/analytics';
 import type {
   GeometryBodyRepresentation,
   GeometryReadyState,
@@ -6673,9 +6673,12 @@ export function App() {
       recordLocalCommit(next, before);
       setDoc(next);
       trackUsage('feature_used');
+      trackDetail('feature_operation', command.kind);
+      trackParts(Object.values(next.nodes).filter(node => node.kind === 'body').length);
       setStatus(commandOutcomeMessage(command.label));
       return true;
     } catch (error) {
+      trackDetail('error_feature');
       setStatus(errorMessage(error, 'Command failed.'));
       return false;
     }
@@ -11120,6 +11123,7 @@ export function App() {
         // this document will store.
         mesh = await importMeshFileInDisposableWorker(file, format, doc.units);
       } catch (error) {
+        trackDetail('error_import');
         setStatus(errorMessage(error, `${file.name} import failed.`));
         return;
       }
@@ -11672,6 +11676,7 @@ export function App() {
     projectTransferRef.current = true;
     setProjectTransferBusy(true);
     const snapshot = doc;
+    const analyticsStarted = isAnalyticsEnabled() ? performance.now() : null;
     const fileName = `${exportFileStem(snapshot.name)}.openzcad`;
     const sink = createImportProgressSink();
     sink.start({
@@ -11703,6 +11708,11 @@ export function App() {
         new Blob([text], { type: 'application/json' })
       );
       trackUsage('export_completed');
+      if (analyticsStarted !== null) {
+        trackSize('project_size',new Blob([text]).size);
+        const bucket = durationBucket(performance.now()-analyticsStarted);
+        if(bucket)trackDetail('export_latency',bucket);
+      }
       setStatus(`Exported complete project ${snapshot.name}.`);
       sink.finish({ tone: 'ok', message: 'complete project', landed: true });
     } catch (error) {
@@ -11773,6 +11783,7 @@ export function App() {
         landed: opened
       });
     } catch (error) {
+      trackDetail('error_import');
       const message = errorMessage(error, 'Unable to read backup.');
       if (isCurrent()) setStatus(`Project import failed: ${message}`);
       sink.finish({ tone: 'error', message });
@@ -11916,6 +11927,7 @@ export function App() {
         return;
       }
       trackUsage('export_failed');
+      trackDetail('error_export');
       const message = errorMessage(error, `${input.label} export failed.`);
       setStatus(message);
       sink.finish({ tone: 'error', message });
