@@ -173,7 +173,7 @@ test('cuts two native profiles with explicit intent and retains it through undo 
   await distance.fill('-8');
   await distance.press('Enter');
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Extruded region by -8 mm (cut).',
+    'Extruded region by -8 mm, cut into the body.',
     { timeout: 30_000 }
   );
   await expectBodyCount(page, 1);

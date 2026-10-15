@@ -1,6 +1,7 @@
 import type {
   GeometryBodyRepresentation,
-  GeometryReadyState
+  GeometryReadyState,
+  UserId
 } from '@openzcad/shared';
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
@@ -186,8 +187,7 @@ import type {
 import {
   toShaprImportId,
   toSketchConstraintId,
-  toUserId,
-  UNIT_TO_MM
+  toUserId
 } from '@openzcad/shared';
 import {
   buildConstraint,
@@ -260,6 +260,7 @@ import {
   listLocalOnlyImportSources,
   type ArchiveLocalSourcesResult
 } from './lib/importArchival';
+import { importedMeshCommand } from './lib/importedMeshCommand';
 import {
   coalesceImportProgress,
   type ImportProgressSink,
@@ -297,6 +298,7 @@ import {
 import {
   CloudProjectAutosave,
   currentVersionOf,
+  PROJECT_TOO_LARGE_FOR_ACCOUNT,
   type WorkspaceSaveState
 } from './lib/cloudProjectAutosave';
 import { applyAccountProjectRefresh } from './lib/accountProjectRefresh';
@@ -376,16 +378,17 @@ import {
 } from './lib/demoDefinitions';
 import type { DemoDefinition } from './lib/demoDefinitions';
 import { createProjectSharingClient } from './lib/projectSharing';
+import { collaborationSaveState } from './lib/collaborationSaveState';
 import {
   captureProjectInvitationLink,
+  projectInvitationTokenFromHash,
   clearPendingProjectInvitation
 } from './lib/projectInvitationLink';
 import {
   captureProjectShareToken,
+  projectLinkPath,
   clearProjectShareFragment
 } from './lib/projectShareLink';
-import { fetchSharedProject } from './lib/projectShareClient';
-import { preloadSharedImportSources } from './lib/exactSourceResolver';
 import type {
   ExportProgress,
   MeshExportDialogFormat
@@ -395,19 +398,23 @@ import type { GeometryWorkerState } from './worker/geometryWorker';
 
 /** The export dialog's progress stage for one geometry-worker state. */
 function exportProgressFor(state: GeometryWorkerState): ExportProgress | null {
-  switch (state.phase) {
-    case 'starting':
-      return 'preparing';
-    case 'loading-remus':
-      return 'loading-kernel';
-    case 'rebuilding':
-      return 'building';
-    default:
-      return null; // Terminal states arrive as the result or the error.
-  }
+  return state.phase === 'starting'
+    ? 'preparing'
+    : state.phase === 'loading-remus'
+      ? 'loading-kernel'
+      : state.phase === 'rebuilding'
+        ? 'building'
+        : null; // Terminal states arrive as the result or the error.
 }
 
 /** Per-format file identity for exports from the Export mesh dialog. */
+const STL_EXPORT_FILE_INFO = {
+  extension: 'stl',
+  contentType: 'model/stl',
+  label: 'STL',
+  kind: 'stl-export' as const,
+  binaryFormat: 'stl' as const
+};
 const MESH_EXPORT_FILE_INFO: Record<
   MeshExportDialogFormat,
   {
@@ -425,20 +432,8 @@ const MESH_EXPORT_FILE_INFO: Record<
     kind: '3mf-export',
     binaryFormat: '3mf'
   },
-  'stl-binary': {
-    extension: 'stl',
-    contentType: 'model/stl',
-    label: 'STL',
-    kind: 'stl-export',
-    binaryFormat: 'stl'
-  },
-  stl: {
-    extension: 'stl',
-    contentType: 'model/stl',
-    label: 'STL',
-    kind: 'stl-export',
-    binaryFormat: 'stl'
-  },
+  'stl-binary': STL_EXPORT_FILE_INFO,
+  stl: STL_EXPORT_FILE_INFO,
   obj: {
     extension: 'obj',
     contentType: 'model/obj',
@@ -1763,29 +1758,143 @@ export function App() {
   const [desktopAuthorizationAttempt] = useState(
     desktopAuthorizationAttemptFromLocation
   );
-  const [pendingInvitationToken, setPendingInvitationToken] = useState(
-    captureProjectInvitationLink
-  );
+  const [pendingInvitationToken, setPendingInvitationToken] = useState(() => {
+    // An explicit public link supersedes an invitation retained for sign-in.
+    if (captureProjectShareToken()) {
+      clearPendingProjectInvitation();
+      return null;
+    }
+    const hash = globalThis.location?.hash ?? '';
+    if (hash.startsWith('#invite=') && !projectInvitationTokenFromHash(hash)) {
+      captureProjectInvitationLink();
+      clearPendingProjectInvitation();
+      return null;
+    }
+    return captureProjectInvitationLink();
+  });
   /**
-   * A `#share=` link this tab was opened with, read once at mount. Non-null
+   * A `#share=` link opened at startup or by same-document navigation. Non-null
    * turns this into a shared-link session: the shared document is fetched
    * anonymously, pinned to the Tweak workspace, and never written to this
    * device's storage — Make a copy is the one road out.
    */
-  const [pendingShareToken] = useState(captureProjectShareToken);
+  const [pendingShareToken, setPendingShareToken] = useState(
+    captureProjectShareToken
+  );
   const [shareSession, setShareSession] = useState<{ token: string } | null>(
     null
   );
   const shareSessionRef = useRef(shareSession);
   shareSessionRef.current = shareSession;
-  const shareOpenAttemptRef = useRef(false);
+  const shareOpenAttemptRef = useRef<string | null>(null);
+  const [shareNavigation, setShareNavigation] = useState(0);
   const [pendingInvitationError, setPendingInvitationError] = useState<
     string | null
   >(null);
   const pendingInvitationAttemptRef = useRef<string | null>(null);
-  const acceptPendingInvitationRef = useRef<(token: string) => Promise<void>>(
-    async () => undefined
-  );
+  const pendingInvitationRequestRef = useRef<{
+    token: string;
+    navigation: number;
+  } | null>(null);
+  const [invitationNavigation, setInvitationNavigation] = useState(0);
+  const acceptPendingInvitationRef = useRef<
+    (token: string, isCurrent: () => boolean) => Promise<void>
+  >(async () => undefined);
+  const fragmentNavigationRef = useRef(0);
+  const navigationBusyRef = useRef<object | null>(null);
+  const leaveShareSessionRef = useRef<
+    (isCurrent: () => boolean) => Promise<void>
+  >(async () => undefined);
+  const cancelNavigationBusy = useCallback(() => {
+    if (navigationBusyRef.current === null) return;
+    navigationBusyRef.current = null;
+    setBusy(false);
+  }, []);
+  const startNavigationBusy = useCallback(() => {
+    const owner = {};
+    navigationBusyRef.current = owner;
+    setBusy(true);
+    return () => {
+      if (navigationBusyRef.current !== owner) return;
+      navigationBusyRef.current = null;
+      setBusy(false);
+    };
+  }, []);
+  function beginProjectNavigation(clearShareFragment = true) {
+    cancelNavigationBusy();
+    if (clearShareFragment) clearProjectShareFragment();
+    const navigation = ++fragmentNavigationRef.current;
+    clearPendingProjectInvitation();
+    pendingInvitationAttemptRef.current = null;
+    setPendingInvitationToken(null);
+    setPendingInvitationError(null);
+    shareOpenAttemptRef.current = null;
+    setPendingShareToken(null);
+    return () => fragmentNavigationRef.current === navigation;
+  }
+  const restoreShareSessionFragment = useCallback(() => {
+    const active = shareSessionRef.current;
+    if (!active) return;
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${projectLinkPath()}#share=${active.token}`
+    );
+    shareOpenAttemptRef.current = active.token;
+    setPendingShareToken(active.token);
+  }, []);
+  useEffect(() => {
+    const openFragment = () => {
+      const repeatedInvitation = projectInvitationTokenFromHash(
+        window.location.hash
+      );
+      const activeInvitation = pendingInvitationRequestRef.current;
+      if (
+        repeatedInvitation &&
+        activeInvitation?.token === repeatedInvitation &&
+        activeInvitation.navigation === fragmentNavigationRef.current &&
+        pendingInvitationAttemptRef.current ===
+          `${sessionRef.current?.userId}:${repeatedInvitation}`
+      ) {
+        captureProjectInvitationLink();
+        return;
+      }
+      cancelNavigationBusy();
+      const navigation = ++fragmentNavigationRef.current;
+      if (window.location.hash.startsWith('#invite=')) {
+        const token = projectInvitationTokenFromHash(window.location.hash);
+        captureProjectInvitationLink();
+        if (token) {
+          pendingInvitationAttemptRef.current = null;
+          setPendingInvitationError(null);
+          setPendingInvitationToken(token);
+          setInvitationNavigation((current) => current + 1);
+          setPendingShareToken(null);
+          updateSettingsViewState({ open: true, activeSection: 'account' });
+          setSettingsOpen(true);
+          return;
+        }
+      }
+      clearPendingProjectInvitation();
+      pendingInvitationAttemptRef.current = null;
+      setPendingInvitationToken(null);
+      setPendingInvitationError(null);
+      const token = captureProjectShareToken();
+      shareOpenAttemptRef.current = null;
+      setPendingShareToken(token);
+      if (!token) {
+        if (shareSessionRef.current) {
+          void leaveShareSessionRef.current(
+            () => fragmentNavigationRef.current === navigation
+          );
+        }
+        return;
+      }
+      setShareNavigation((current) => current + 1);
+    };
+    window.addEventListener('hashchange', openFragment);
+    return () => window.removeEventListener('hashchange', openFragment);
+  }, [cancelNavigationBusy]);
   const [cloudFunctionsEnabled, setCloudFunctionsEnabledState] = useState(
     cloudFunctionsAreEnabled
   );
@@ -3269,6 +3378,12 @@ export function App() {
   const regionDistanceSetter = useRef<((value: ParamValue) => void) | null>(
     null
   );
+  /**
+   * The profiles the Extrude command selected. While they are still the
+   * selection, the region card asks for its Distance field to hold the
+   * keyboard; a canvas pick replaces them and leaves it with the workspace.
+   */
+  const extrudeCommandProfiles = useRef<RegionPickData[]>([]);
   const extrudeEditRequest = useRef(0);
   const reusableRegionExtrudePreview = useRef<ResolvedExtrudePreview | null>(
     null
@@ -3612,10 +3727,12 @@ export function App() {
                 : (warning ?? 'This size did not produce a valid body.')
             );
           }
+          // In the card's own verb: with a tool open this is its create
+          // card, whose button says Create; an edit card's says Apply.
           setStatus(
             warning ??
               (valid
-                ? 'Preview · Apply to save the result.'
+                ? `Preview · ${toolRef.current ? 'Create' : 'Apply'} to save the result.`
                 : 'This size did not produce a valid body.')
           );
         }
@@ -3815,6 +3932,14 @@ export function App() {
     (cloudProjectIds.has(doc.projectId) ||
       remoteVersionsRef.current.has(doc.projectId))
   );
+  // Member edits use the lease-checked room. The account document endpoint
+  // deliberately refuses editor writes while leases are enforced.
+  const sharedAccountProject = Boolean(
+    !shareSession &&
+    activeProjectIsCloud &&
+    session &&
+    doc?.ownerUserId !== session.userId
+  );
 
   const collaboration = useCollaboration({
     enabled: cloudFunctionsEnabled,
@@ -3874,7 +3999,11 @@ export function App() {
         controller?.syncedVersion ??
         remoteVersionsRef.current.get(remoteDocument.projectId) ??
         null;
-      if (controller && accountVersion !== null) {
+      if (
+        controller &&
+        accountVersion !== null &&
+        remoteDocument.ownerUserId === sessionRef.current?.userId
+      ) {
         controller.adoptAccountVersion(
           remoteDocument.projectId,
           accountVersion
@@ -4312,12 +4441,7 @@ export function App() {
             'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
           );
         } else if (status.state === 'refused') {
-          setStatus(
-            errorMessage(
-              status.error,
-              'This document is too large for the account. It stays saved on this device.'
-            )
-          );
+          setStatus(errorMessage(status.error, PROJECT_TOO_LARGE_FOR_ACCOUNT));
         }
       },
       onSynced({ projectId, version }) {
@@ -4375,6 +4499,8 @@ export function App() {
       !cloudFunctionsEnabled ||
       !projectId ||
       !session ||
+      shareSession ||
+      sharedAccountProject ||
       accountDocumentUnavailableProjectIdRef.current === projectId ||
       accountVersion === undefined
     ) {
@@ -4382,7 +4508,33 @@ export function App() {
       return;
     }
     controller.openProject(projectId, accountVersion);
-  }, [cloudFunctionsEnabled, doc?.projectId, session]);
+  }, [
+    cloudFunctionsEnabled,
+    doc?.projectId,
+    session,
+    shareSession,
+    sharedAccountProject
+  ]);
+
+  useEffect(() => {
+    if (!sharedAccountProject || localSaveDirty || localSaveFailed) return;
+    setSaveState(
+      collaborationSaveState(
+        collaboration.status,
+        Boolean(collaboration.conflict),
+        collaboration.roomVersion,
+        doc?.version
+      )
+    );
+  }, [
+    sharedAccountProject,
+    localSaveDirty,
+    localSaveFailed,
+    collaboration.conflict,
+    collaboration.status,
+    collaboration.roomVersion,
+    doc?.version
+  ]);
 
   /**
    * Exactly one tab writes a project's device storage.
@@ -4545,7 +4697,13 @@ export function App() {
    * which is what the room is for.
    */
   useEffect(() => {
-    if (!cloudFunctionsEnabled || !doc?.projectId || !session) {
+    if (
+      !cloudFunctionsEnabled ||
+      !doc?.projectId ||
+      !session ||
+      shareSession ||
+      sharedAccountProject
+    ) {
       return;
     }
     let cancelled = false;
@@ -4663,7 +4821,13 @@ export function App() {
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('online', onFocus);
     };
-  }, [cloudFunctionsEnabled, doc?.projectId, session]);
+  }, [
+    cloudFunctionsEnabled,
+    doc?.projectId,
+    session,
+    shareSession,
+    sharedAccountProject
+  ]);
 
   useEffect(() => {
     syncCloudSettingsSession(
@@ -6407,6 +6571,7 @@ export function App() {
       setSaveState('repair');
       return;
     }
+    if (sharedAccountProject) return;
     // Nothing reaches the account until its device transaction has committed.
     // The displayed state stays Saving while any newer device write is pending.
     const controller = cloudProjectAutosaveRef.current;
@@ -6757,6 +6922,7 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(sketchId);
+    extrudeCommandProfiles.current = chosen;
     setSelectedProfiles(chosen);
     setTool(null);
     if (activeSketch) {
@@ -8424,31 +8590,37 @@ export function App() {
   }
 
   async function handleCreateProject(name: string, units: UnitSystem) {
+    const isCurrent = beginProjectNavigation();
     const activeProjectSince = snapshotActiveProject();
     setAssistantCollapsed(true);
-    setBusy(true);
+    const finishBusy = startNavigationBusy();
+    async function createLocal(userId: UserId, message?: string) {
+      const localDocument = createProjectDocument(name, userId, units);
+      await saveLocalProject(localDocument);
+      if (!isCurrent()) return;
+      hydrateDocument(localDocument, { activeProjectSince });
+      setProjects((current) => [
+        summarizeLocalDocument(localDocument),
+        ...current
+      ]);
+      setCloudAvailable(false);
+      setStatus(message ?? `Created ${localDocument.name} locally.`);
+    }
     try {
       await flushPendingLocalSave();
     } catch {
       // This is a failed device save, not a cloud-create failure. Do not enter
       // the offline fallback and replace the unsaved project on screen.
-      setBusy(false);
+      finishBusy();
       return;
     }
     try {
+      if (!isCurrent()) return;
       if (!session) {
-        const localDocument = createProjectDocument(name, localUserId, units);
-        await saveLocalProject(localDocument);
-        hydrateDocument(localDocument, { activeProjectSince });
-        setProjects((current) => [
-          summarizeLocalDocument(localDocument),
-          ...current
-        ]);
-        setCloudAvailable(false);
         // The document effect's flush lands on 'local' once the device write
         // is done; forcing it here would show "Local only" for a frame and
         // then the spinner the effect reports anyway.
-        setStatus(`Created ${localDocument.name} locally.`);
+        await createLocal(localUserId);
         return;
       }
       const response = await api.createProject({ name, units });
@@ -8461,6 +8633,7 @@ export function App() {
         response.document.projectId,
         response.document.version
       );
+      if (!isCurrent()) return;
       setCloudAvailable(true);
       setCloudProjectIds((current) =>
         new Set(current).add(response.document.projectId)
@@ -8469,6 +8642,7 @@ export function App() {
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
     } catch (error) {
+      if (!isCurrent()) return;
       // A refused request is not an unreachable one. Falling back to local mode
       // on a validation failure would persist exactly the project the server
       // just rejected, so surface it and let the user correct the input.
@@ -8486,23 +8660,12 @@ export function App() {
         remoteVersionsRef.current.clear();
         endCloudSettingsSession();
       }
-      const localDocument = createProjectDocument(
-        name,
+      await createLocal(
         sessionExpired ? localUserId : (session?.userId ?? localUserId),
-        units
-      );
-      await saveLocalProject(localDocument);
-      hydrateDocument(localDocument, { activeProjectSince });
-      setProjects((current) => [
-        summarizeLocalDocument(localDocument),
-        ...current
-      ]);
-      setCloudAvailable(false);
-      setStatus(
         `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
       );
     } finally {
-      setBusy(false);
+      finishBusy();
     }
   }
 
@@ -8831,11 +8994,13 @@ export function App() {
    */
 
   async function handleOpenDemo(definition: DemoDefinition) {
+    const isCurrent = beginProjectNavigation();
     const activeProjectSince = snapshotActiveProject();
-    setBusy(true);
+    const finishBusy = startNavigationBusy();
     try {
       await flushPendingLocalSave();
       const existing = await loadLocalProject(definition.projectId);
+      if (!isCurrent()) return;
       if (existing) {
         hydrateDocument(existing, { activeProjectSince });
         setStatus(`Opened ${existing.name}.`);
@@ -8855,6 +9020,7 @@ export function App() {
       // Rev A and Rev B can be restored rather than listed as "not stored".
       await saveLocalSaveStates(saveStates);
       await saveLocalProject(document);
+      if (!isCurrent()) return;
       hydrateDocument(document, { activeProjectSince });
       setCloudAvailable(false);
       setProjects((current) => [
@@ -8865,18 +9031,27 @@ export function App() {
         `${definition.name} ready — three revisions in the feature history.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'Failed to build the demo.'));
+      if (isCurrent())
+        setStatus(errorMessage(error, 'Failed to build the demo.'));
     } finally {
-      setBusy(false);
+      finishBusy();
     }
   }
 
-  async function handleOpenProject(projectId: string) {
+  async function handleOpenProject(
+    projectId: string,
+    isCurrent: () => boolean = beginProjectNavigation()
+  ) {
     const activeProjectSince = snapshotActiveProject();
-    setBusy(true);
+    const finishBusy = startNavigationBusy();
     try {
       await flushPendingLocalSave();
+      if (!isCurrent()) return;
+      const draining = cloudProjectAutosaveRef.current?.flushPending();
+      if (!accountSavePendingRef.current) await draining;
+      if (!isCurrent()) return;
       await sharedThumbnailCapture.flush();
+      if (!isCurrent()) return;
       sharedThumbnailCapture.discard();
       if (
         accountDocumentUnavailableProjectIdRef.current !== null &&
@@ -8901,6 +9076,7 @@ export function App() {
           )
         ]);
       const remoteDocument = remoteResult.document;
+      if (!isCurrent()) return;
       setArtifacts(artifactList);
       // A project this device holds alone is not in the account, and the
       // account says so with a 404. That is the ordinary answer, not an
@@ -8980,37 +9156,49 @@ export function App() {
         await saveLocalProject(openedDocument);
         await saveLastSyncedVersion(projectId, openedDocument.version);
       }
+      if (!isCurrent()) return;
       setStatus(
         outcome.choice === 'local' && remoteDocument
           ? `Opened newer local edits for ${openedDocument.name}.`
           : `Opened ${openedDocument.name}.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'Failed to open project.'));
+      if (isCurrent())
+        setStatus(errorMessage(error, 'Failed to open project.'));
     } finally {
-      setBusy(false);
+      finishBusy();
     }
   }
 
-  async function handleAcceptProjectInvitation(token: string) {
+  async function handleAcceptProjectInvitation(
+    token: string,
+    isCurrent: () => boolean
+  ) {
     if (!session || !projectSharingEnabled) {
       throw new Error('Project sharing is not enabled for this account.');
     }
-    setBusy(true);
+    const finishBusy = startNavigationBusy();
     setStatus('Accepting project invitation…');
     try {
       const accepted = await projectSharingClient.acceptInvitation(token);
+      if (!isCurrent()) return;
       const listed = await loadProjectSummaries(true);
+      if (!isCurrent()) return;
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
       setStatus(`Invitation accepted with ${accepted.role} access.`);
-      await handleOpenProject(accepted.projectId);
+      // Leave the anonymous workspace completely before opening member access.
+      // Clearing only its flag would briefly persist the public snapshot.
+      if (shareSessionRef.current) await handleGoHome(isCurrent);
+      if (!isCurrent()) return;
+      await handleOpenProject(accepted.projectId, isCurrent);
     } catch (error) {
+      if (!isCurrent()) return;
       setStatus(errorMessage(error, 'Could not accept the invitation.'));
       throw error;
     } finally {
-      setBusy(false);
+      finishBusy();
     }
   }
   acceptPendingInvitationRef.current = handleAcceptProjectInvitation;
@@ -9021,41 +9209,91 @@ export function App() {
    * document. Reloading re-fetches the owner's current model; Make a copy is
    * how the visitor keeps a project. Source bytes use the local rebuild cache.
    */
+  const hydrateSharedDocumentRef = useRef(hydrateDocument);
+  hydrateSharedDocumentRef.current = hydrateDocument;
+  const foregroundBusy = busy && navigationBusyRef.current === null;
   useEffect(() => {
-    if (!pendingShareToken || shareOpenAttemptRef.current) {
+    if (
+      startupState !== 'ready' ||
+      foregroundBusy ||
+      !pendingShareToken ||
+      shareOpenAttemptRef.current === pendingShareToken
+    ) {
       return;
     }
-    shareOpenAttemptRef.current = true;
-    setBusy(true);
+    shareOpenAttemptRef.current = pendingShareToken;
+    let cancelled = false;
+    const navigation = fragmentNavigationRef.current;
+    const isCurrent = () =>
+      !cancelled && fragmentNavigationRef.current === navigation;
+    const finishBusy = startNavigationBusy();
+    const restoreActiveShare = () => {
+      const active = shareSessionRef.current;
+      if (!active || active.token === pendingShareToken) return;
+      finishBusy();
+      restoreShareSessionFragment();
+    };
+    updateSettingsViewState({ open: false });
+    setSettingsOpen(false);
+    setSharingOpen(false);
     void (async () => {
       try {
-        const shared = await fetchSharedProject(pendingShareToken);
+        const { loadSharedProject } = await import('./lib/sharedProjectLoader');
+        if (!isCurrent()) return;
+        const shared = await loadSharedProject(pendingShareToken, isCurrent);
+        if (!isCurrent()) return;
         if (!shared) {
+          restoreActiveShare();
           setStatus(
-            'This share link is no longer available. It may have been revoked.'
+            'This share link is no longer available. It may have been revoked.',
+            { sticky: true }
           );
           return;
         }
-        await preloadSharedImportSources(shared.document, pendingShareToken);
+        await flushPendingLocalSaveRef.current();
+        if (!isCurrent()) return;
+        // The device write queues its account mirror. Drain that queue before
+        // entering a public session, whose effect closes the account writer.
+        const draining = cloudProjectAutosaveRef.current?.flushPending();
+        // Checkpoints are fenced to their originating manager. As with Home,
+        // a safe device copy may leave without their network response.
+        if (!accountSavePendingRef.current) await draining;
+        if (!isCurrent()) return;
         // Before the document lands: the collaboration hook and the cloud
         // autosave controller must treat this project as not account-backed,
         // whatever this browser knew about the account before.
         setCloudAvailable(false);
         setShareSession({ token: pendingShareToken });
         shareSessionRef.current = { token: pendingShareToken };
-        hydrateDocument(shared.document, {
+        hydrateSharedDocumentRef.current(shared.document, {
           rememberProject: false
         });
         setStatus(
           `Opened shared model ${shared.project.name} · adjust its parameters and export. Make a copy to build on it.`
         );
       } catch (error) {
-        setStatus(errorMessage(error, 'Could not open the share link.'));
+        if (isCurrent()) {
+          restoreActiveShare();
+          setStatus(errorMessage(error, 'Could not open the share link.'), {
+            sticky: true
+          });
+        }
       } finally {
-        setBusy(false);
+        finishBusy();
       }
     })();
-  }, [pendingShareToken]);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    pendingShareToken,
+    shareNavigation,
+    startupState,
+    foregroundBusy,
+    startNavigationBusy,
+    setStatus,
+    restoreShareSessionFragment
+  ]);
 
   /**
    * The road out of a shared-link session: the shared document becomes an
@@ -9069,7 +9307,8 @@ export function App() {
       return;
     }
     const activeProjectSince = snapshotActiveProject();
-    setBusy(true);
+    const isCurrent = beginProjectNavigation(false);
+    const finishBusy = startNavigationBusy();
     try {
       const copy = duplicateProjectDocument(
         source,
@@ -9079,10 +9318,11 @@ export function App() {
         ),
         session?.userId ?? localUserId
       );
+      await saveLocalProject(copy);
+      if (!isCurrent()) return;
       setShareSession(null);
       shareSessionRef.current = null;
       clearProjectShareFragment();
-      await saveLocalProject(copy);
       setProjects((current) =>
         [
           ...current,
@@ -9095,15 +9335,17 @@ export function App() {
         `${copy.name} is yours now — saved on this device. Build mode is open.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not copy the shared model.'));
+      if (isCurrent())
+        setStatus(errorMessage(error, 'Could not copy the shared model.'));
     } finally {
-      setBusy(false);
+      finishBusy();
     }
   }
 
   useEffect(() => {
     if (
       startupState !== 'ready' ||
+      foregroundBusy ||
       !pendingInvitationToken ||
       !session ||
       !collaborationRollout.sharingEnabled
@@ -9115,11 +9357,20 @@ export function App() {
       return;
     }
     pendingInvitationAttemptRef.current = attempt;
+    const navigation = fragmentNavigationRef.current;
+    const isCurrent = () =>
+      fragmentNavigationRef.current === navigation &&
+      sessionRef.current?.userId === session.userId &&
+      pendingInvitationAttemptRef.current === attempt;
+    const request = { token: pendingInvitationToken, navigation };
+    pendingInvitationRequestRef.current = request;
     setPendingInvitationError(null);
     setSettingsMessage('Opening the shared project…');
     void acceptPendingInvitationRef
-      .current(pendingInvitationToken)
+      .current(pendingInvitationToken, isCurrent)
       .then(() => {
+        if (!isCurrent()) return;
+        pendingInvitationAttemptRef.current = null;
         clearPendingProjectInvitation();
         setPendingInvitationToken(null);
         setPendingInvitationError(null);
@@ -9127,6 +9378,7 @@ export function App() {
         setSettingsOpen(false);
       })
       .catch(() => {
+        if (!isCurrent()) return;
         setPendingInvitationError(
           'This invitation could not be accepted. It may be expired, revoked, or intended for a different email address.'
         );
@@ -9136,23 +9388,31 @@ export function App() {
           activeSection: 'account'
         });
         setSettingsOpen(true);
+      })
+      .finally(() => {
+        if (pendingInvitationRequestRef.current === request) {
+          pendingInvitationRequestRef.current = null;
+        }
       });
   }, [
     collaborationRollout.sharingEnabled,
     pendingInvitationToken,
+    invitationNavigation,
     session,
-    startupState
+    startupState,
+    foregroundBusy
   ]);
 
   function dismissProjectInvitation() {
-    clearPendingProjectInvitation();
-    pendingInvitationAttemptRef.current = null;
-    setPendingInvitationToken(null);
-    setPendingInvitationError(null);
+    beginProjectNavigation();
+    restoreShareSessionFragment();
+    setStatus('Invitation dismissed.');
     closeSettings();
   }
 
-  async function handleGoHome() {
+  async function handleGoHome(
+    isCurrent: () => boolean = beginProjectNavigation()
+  ) {
     try {
       await flushPendingLocalSave();
     } catch {
@@ -9160,15 +9420,18 @@ export function App() {
       // another project would otherwise replace the only unsaved snapshot.
       return;
     }
+    if (!isCurrent()) return;
     const draining = cloudProjectAutosaveRef.current?.flushPending();
     // A manual checkpoint now shares the account queue. The device is safe;
     // navigation need not wait for its network response. Its continuation is
     // guarded by the originating manager, and closing discards stale mirrors.
     if (!accountSavePendingRef.current) await draining;
+    if (!isCurrent()) return;
     // The card is written before the shelf that shows it is listed. Then
     // forgotten: a project trashed from that shelf must not get its record
     // written back by a later flush.
     await sharedThumbnailCapture.flush();
+    if (!isCurrent()) return;
     sharedThumbnailCapture.discard();
     if (shareSessionRef.current) {
       // Leaving the shared session drops it: the shelf that follows is this
@@ -9192,6 +9455,7 @@ export function App() {
     setTool(null);
     try {
       const listed = await loadProjectSummaries(Boolean(session));
+      if (!isCurrent()) return;
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
@@ -9200,9 +9464,12 @@ export function App() {
       // the account answered, so a listing leaves the status line empty.
       setStatus('');
     } catch (error) {
-      setStatus(errorMessage(error, 'Failed to refresh projects.'));
+      if (isCurrent()) {
+        setStatus(errorMessage(error, 'Failed to refresh projects.'));
+      }
     }
   }
+  leaveShareSessionRef.current = handleGoHome;
 
   /**
    * Records shelf state in both stores. The device copy is written first and
@@ -10050,6 +10317,22 @@ export function App() {
         );
         return;
       }
+      if (sharedAccountProject) {
+        // The room publishes changed document versions, while the owner's
+        // account checkpoint endpoint deliberately refuses member writes.
+        // Commit the save point before yielding so later edits descend from it.
+        savingDocument = createCheckpoint(
+          appendRevision(savingDocument, reason),
+          reason
+        );
+        showAccountEcho(savingDocument);
+        await saveLocalProject(savingDocument);
+        if (isCurrentProject())
+          setStatus(
+            'Saved revision on this device · sharing through the room.'
+          );
+        return;
+      }
       if (
         cloudFunctionsEnabled &&
         session &&
@@ -10573,15 +10856,14 @@ export function App() {
           const { createBodyFeatureIds } =
             await import('@openzcad/document-core');
           const previewIds = createBodyFeatureIds();
-          const previewCommand = commandFactories.importMesh({
-            name: parsed.name,
-            artifactId: `artifact_local_${crypto.randomUUID()}`,
-            sourceName: parsed.name,
-            triangleCount: parsed.triangleCount,
-            vertices: parsed.vertices,
-            indices: parsed.indices,
-            ids: previewIds
-          });
+          // Through the shared builder, so the preview and the commit both
+          // adopt the millimetre triangles in this document's units.
+          const previewCommand = importedMeshCommand(
+            parsed,
+            doc.units,
+            `artifact_local_${crypto.randomUUID()}`,
+            previewIds
+          );
           let rejection: string | null = null;
           const outcome = await validatedFeature.run(previewCommand, {
             featureName: parsed.name,
@@ -10637,15 +10919,12 @@ export function App() {
                   'AbortError'
                 );
               }
-              return commandFactories.importMesh({
-                name: parsed.name,
+              return importedMeshCommand(
+                parsed,
+                doc.units,
                 artifactId,
-                sourceName: parsed.name,
-                triangleCount: parsed.triangleCount,
-                vertices: parsed.vertices,
-                indices: parsed.indices,
-                ids: previewIds
-              });
+                previewIds
+              );
             }
           });
           // Every terminal result settles the card before its abort handle is
@@ -10748,14 +11027,14 @@ export function App() {
   }
 
   /**
-   * The half of a mesh import every format shares: scale the triangles into
-   * document units, archive the original upload, and commit one
-   * `imported-mesh` feature.
+   * The kernel-read formats' half of a mesh import: archive the original
+   * upload, and commit one `imported-mesh` feature in document units.
    *
-   * STL and the kernel-read formats differ only in how the triangles were
-   * produced. Sharing the commit is what keeps them the same feature — a mesh
-   * body from a 3MF is indistinguishable downstream from one out of an STL,
-   * including in autosave, reopen and export.
+   * STL commits through the validated-feature run instead, but builds the
+   * same command with the same `importedMeshCommand` — that shared builder,
+   * units included, is what keeps them the same feature: a mesh body from a
+   * 3MF is indistinguishable downstream from one out of an STL, including in
+   * autosave, reopen and export.
    */
   async function commitImportedMesh(input: {
     file: File;
@@ -10781,17 +11060,6 @@ export function App() {
       // and `doc` is the same render's value throughout.
       return;
     }
-    // The triangles arrive in millimetres — a 3MF's declared unit and glTF's
-    // metres are applied by the importer, and the formats that declare none
-    // follow the STL interchange convention. The mesh exports multiply by
-    // UNIT_TO_MM on the way out, so adopting the vertices at 1/UNIT_TO_MM
-    // keeps a non-mm document's round trip at the same physical size.
-    const meshScale = 1 / UNIT_TO_MM[doc.units];
-    const vertices =
-      meshScale === 1
-        ? mesh.vertices
-        : mesh.vertices.map((value) => value * meshScale);
-
     // Best-effort archive of the original upload; the mesh itself lives in
     // the document, so a storage failure must not block the import.
     let artifactId = `artifact_local_${crypto.randomUUID()}`;
@@ -10812,23 +11080,17 @@ export function App() {
     // Between the entry check and here are two awaits, the second an
     // upload of up to 128 MB. This path shows no busy state and no import
     // card, so Home and the project shelf stay live throughout — and the
-    // vertices were already scaled by the units of the document that was
-    // open when the file was read, so landing them anywhere else is both
-    // the wrong project and the wrong size. The STEP path is guarded by
-    // `useValidatedFeatureCommit`; this one had nothing.
+    // import's rebuild check ran in the units of the document that was open
+    // when the file was read, which also scale the vertices below, so landing
+    // them anywhere else is both the wrong project and the wrong size. The
+    // STEP path is guarded by `useValidatedFeatureCommit`; this one had
+    // nothing.
     if (managerRef.current !== importManager) {
       setStatus('The project changed while the import finished.');
       return;
     }
     const created = executeCommand(
-      commandFactories.importMesh({
-        name: mesh.name,
-        artifactId,
-        sourceName: mesh.name,
-        triangleCount: mesh.triangleCount,
-        vertices,
-        indices: mesh.indices
-      })
+      importedMeshCommand(mesh, doc.units, artifactId)
     );
     if (created) {
       // A converted file says so: the numbers in the document are not the
@@ -11264,9 +11526,10 @@ export function App() {
 
   async function handleImportProject(file: File) {
     if (projectTransferRef.current) return;
+    const isCurrent = beginProjectNavigation(shareSessionRef.current === null);
     projectTransferRef.current = true;
     setProjectTransferBusy(true);
-    setBusy(true);
+    const finishBusy = startNavigationBusy();
     const origin = managerRef.current;
     const activeProjectSince = snapshotActiveProject();
     const sink = createImportProgressSink();
@@ -11286,9 +11549,9 @@ export function App() {
       );
       sink.update({ phase: 'saving', fraction: null });
       await saveImportedProject(backup);
-      if (managerRef.current === origin) {
+      if (isCurrent() && managerRef.current === origin) {
         await flushPendingLocalSave();
-        if (managerRef.current === origin) {
+        if (isCurrent() && managerRef.current === origin) {
           setShareSession(null);
           shareSessionRef.current = null;
           clearProjectShareFragment();
@@ -11305,9 +11568,10 @@ export function App() {
           summarizeLocalDocument(backup.document, DEFAULT_PROJECT_ORGANIZATION)
         ].sort(compareProjectSummaries)
       );
-      setStatus(
-        `Imported ${backup.document.name} as a separate local project.`
-      );
+      if (isCurrent())
+        setStatus(
+          `Imported ${backup.document.name} as a separate local project.`
+        );
       sink.finish({
         tone: 'ok',
         message: `opened as ${backup.document.name}`,
@@ -11315,12 +11579,12 @@ export function App() {
       });
     } catch (error) {
       const message = errorMessage(error, 'Unable to read backup.');
-      setStatus(`Project import failed: ${message}`);
+      if (isCurrent()) setStatus(`Project import failed: ${message}`);
       sink.finish({ tone: 'error', message });
     } finally {
       projectTransferRef.current = false;
       setProjectTransferBusy(false);
-      setBusy(false);
+      finishBusy();
     }
   }
 
@@ -14692,8 +14956,11 @@ export function App() {
           choice,
           ...(faceAttachment ? { faceAttachment } : {})
         };
-        const { regionInferenceRefusal, resolveCurrentExtrude } =
-          await extrudeInference();
+        const {
+          regionExtrudeOutcome,
+          regionInferenceRefusal,
+          resolveCurrentExtrude
+        } = await extrudeInference();
         const agreement = {
           ...options,
           derive: (document: ProjectDocument) => geometry.syncOnce(document)
@@ -14735,7 +15002,7 @@ export function App() {
         await executeValidatedDirectEdit(
           command,
           resultBodyId,
-          `Extruded region by ${rounded} ${doc?.units ?? ''} (${resolved.inference.operation}).`,
+          regionExtrudeOutcome(resolved, rounded, doc?.units),
           rounded,
           () => {
             setSelectedProfiles([]);
@@ -20132,6 +20399,15 @@ export function App() {
           calloutOperationModel ? null : (
             <ToolCard
               model={contextualToolCard}
+              focusRequest={
+                selectedProfiles === extrudeCommandProfiles.current &&
+                selectedProfiles
+              }
+              focusReady={
+                !geometryBusy &&
+                (interaction.mode !== 'region' ||
+                  interaction.phase !== 'validating')
+              }
               selectAllEdges={
                 interaction.mode === 'edges' &&
                 edgeModifierBody?.topology &&

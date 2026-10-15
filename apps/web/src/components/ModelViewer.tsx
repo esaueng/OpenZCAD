@@ -14,6 +14,7 @@ import { buildHoleGhostRig } from './viewer/holeGhostRig';
 import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import { buildPrimitiveGhostRig } from './viewer/primitiveGhostRig';
 import { createdBodiesToFrame, type AutoFrameRequest } from '../lib/autoFrame';
+import { readStagePalette, watchStageTheme } from '../lib/stagePalette';
 import { mark, measure, timed } from '../lib/perf';
 import { recordEditPhase } from '../lib/editTrace';
 import {
@@ -101,6 +102,7 @@ import {
   createFatLine,
   measureSnapEdges,
   createFatLineMaterial,
+  applyStagePalette,
   createGradientBackdrop,
   createObjectForBody,
   updateObjectForBody,
@@ -2314,6 +2316,20 @@ export function ModelViewer({
     scene.add(grid);
     const shadowCatcher = createShadowCatcher();
     scene.add(shadowCatcher);
+    // The stage takes the theme's colours, and repaints when the Appearance
+    // setting or (under 'system') the OS appearance changes.
+    // The first paint draws no frame itself: requestRender reads frame state
+    // declared further down this effect, and init requests the first frame.
+    const paintStage = () =>
+      applyStagePalette(
+        { scene, backdrop: gradientBackdrop, grid, shadowCatcher },
+        readStagePalette(host)
+      );
+    paintStage();
+    const stopWatchingTheme = watchStageTheme(() => {
+      paintStage();
+      requestRender();
+    });
 
     // Stretched per frame by updateAxesGizmo so each axis runs past the
     // viewport edge — on screen they read as infinite. Fat lines keep a
@@ -8748,6 +8764,7 @@ export function ModelViewer({
       onBodiesDrawnElsewhereRef.current?.(drawnBodyReport.reset());
       pixelRatioQuery?.removeEventListener('change', onPixelRatioChange);
       observer.disconnect();
+      stopWatchingTheme();
       renderer.domElement.removeEventListener(
         'pointermove',
         handlePointerMove,
