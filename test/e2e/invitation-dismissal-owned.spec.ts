@@ -140,6 +140,40 @@ test('dismisses pending acceptance and immediately enables the owned account act
   }
 });
 
+test('disabling cloud features releases a pending invitation navigation', async ({
+  page
+}) => {
+  await ownedLocalWorkspace(page);
+  const invitation = await heldInvitation(page);
+  try {
+    const settings = page.getByRole('dialog', { name: 'Settings' });
+    await settings
+      .getByRole('button', { name: 'General', exact: true })
+      .click();
+    await settings
+      .getByRole('checkbox', { name: 'Cloud features', exact: true })
+      .uncheck();
+    await settings
+      .getByRole('button', { name: 'Back to workspace', exact: true })
+      .click();
+    await expect(settings).toHaveCount(0);
+    await expect(
+      page.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeEnabled();
+    invitation.release();
+    await page.waitForTimeout(250);
+    expect(invitation.reads()).toBe(0);
+    await expect(page.locator('.breadcrumb')).toContainText(
+      'Owned local workspace'
+    );
+    await expect(
+      page.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeEnabled();
+  } finally {
+    invitation.release();
+  }
+});
+
 for (const sharingEnabled of [false, true]) {
   test(`invitation navigation preserves an existing account save with rollout ${sharingEnabled}`, async ({
     page

@@ -1800,38 +1800,23 @@ export function App() {
     (token: string, isCurrent: () => boolean) => Promise<void>
   >(async () => undefined);
   const fragmentNavigationRef = useRef(0);
-  const navigationBusyRef = useRef<{
-    navigation: number;
-    userId: string | null;
-  } | null>(null);
+  const navigationBusyRef = useRef<object | null>(null);
   const leaveShareSessionRef = useRef<
     (isCurrent: () => boolean) => Promise<void>
   >(async () => undefined);
   const cancelNavigationBusy = useCallback(() => {
-    const owner = navigationBusyRef.current;
+    if (navigationBusyRef.current === null) return;
     navigationBusyRef.current = null;
-    if (
-      owner?.navigation === fragmentNavigationRef.current &&
-      owner.userId === (sessionRef.current?.userId ?? null)
-    )
-      setBusy(false);
+    setBusy(false);
   }, []);
   const startNavigationBusy = useCallback(() => {
-    const owner = {
-      navigation: fragmentNavigationRef.current,
-      userId: sessionRef.current?.userId ?? null
-    };
+    const owner = {};
     navigationBusyRef.current = owner;
     setBusy(true);
-    return (current: boolean) => {
+    return () => {
       if (navigationBusyRef.current !== owner) return;
       navigationBusyRef.current = null;
-      if (
-        current &&
-        owner.navigation === fragmentNavigationRef.current &&
-        owner.userId === (sessionRef.current?.userId ?? null)
-      )
-        setBusy(false);
+      setBusy(false);
     };
   }, []);
   function beginProjectNavigation(clearShareFragment = true) {
@@ -8621,7 +8606,7 @@ export function App() {
     } catch {
       // This is a failed device save, not a cloud-create failure. Do not enter
       // the offline fallback and replace the unsaved project on screen.
-      finishBusy(isCurrent());
+      finishBusy();
       return;
     }
     try {
@@ -8675,7 +8660,7 @@ export function App() {
         `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
       );
     } finally {
-      finishBusy(isCurrent());
+      finishBusy();
     }
   }
 
@@ -9044,7 +9029,7 @@ export function App() {
       if (isCurrent())
         setStatus(errorMessage(error, 'Failed to build the demo.'));
     } finally {
-      finishBusy(isCurrent());
+      finishBusy();
     }
   }
 
@@ -9176,7 +9161,7 @@ export function App() {
       if (isCurrent())
         setStatus(errorMessage(error, 'Failed to open project.'));
     } finally {
-      finishBusy(isCurrent());
+      finishBusy();
     }
   }
 
@@ -9208,7 +9193,7 @@ export function App() {
       setStatus(errorMessage(error, 'Could not accept the invitation.'));
       throw error;
     } finally {
-      finishBusy(isCurrent());
+      finishBusy();
     }
   }
   acceptPendingInvitationRef.current = handleAcceptProjectInvitation;
@@ -9240,7 +9225,7 @@ export function App() {
     const restoreActiveShare = () => {
       const active = shareSessionRef.current;
       if (!active || active.token === pendingShareToken) return;
-      finishBusy(isCurrent());
+      finishBusy();
       restoreShareSessionFragment();
     };
     updateSettingsViewState({ open: false });
@@ -9289,7 +9274,7 @@ export function App() {
           });
         }
       } finally {
-        finishBusy(isCurrent());
+        finishBusy();
       }
     })();
     return () => {
@@ -9348,7 +9333,7 @@ export function App() {
       if (isCurrent())
         setStatus(errorMessage(error, 'Could not copy the shared model.'));
     } finally {
-      finishBusy(isCurrent());
+      finishBusy();
     }
   }
 
@@ -11599,7 +11584,7 @@ export function App() {
     } finally {
       projectTransferRef.current = false;
       setProjectTransferBusy(false);
-      finishBusy(isCurrent());
+      finishBusy();
     }
   }
 
