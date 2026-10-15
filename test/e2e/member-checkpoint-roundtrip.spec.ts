@@ -11,7 +11,11 @@ import { reconcileCopiedImportSources } from '@openzcad/persistence';
 import { toArtifactId, toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
 
-function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
+function roomFixture(
+  ackFault?: 'lost' | 'late',
+  copiedImport = false,
+  sourceArchived = true
+) {
   let document = createProjectDocument(
     'Durable member checkpoint',
     toUserId('owner')
@@ -161,7 +165,7 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
           await gate;
           stored = createCheckpoint(
             appendRevision(
-              copiedImport
+              copiedImport && sourceArchived
                 ? reconcileCopiedImportSources(input.document, [archive])
                 : input.document,
               input.checkpointReason
@@ -210,7 +214,9 @@ function roomFixture(ackFault?: 'lost' | 'late', copiedImport = false) {
           if (copiedImport && JSON.stringify(next).includes(localSourceId)) {
             sourceWritePending = true;
             await sourceWriteGate;
-            document = reconcileCopiedImportSources(next, [archive]);
+            document = sourceArchived
+              ? reconcileCopiedImportSources(next, [archive])
+              : next;
             return document;
           }
           document = next;
@@ -698,17 +704,20 @@ test('a committed member checkpoint fences buffered edits after a new lease repl
   }
 });
 
-for (const [sendTiming, ackFault] of [
-  ['pending', undefined],
-  ['pending', 'lost'],
-  ['scheduled', undefined],
-  ['scheduled', 'lost']
+for (const [sendTiming, ackFault, sourceArchived] of [
+  ['pending', undefined, true],
+  ['pending', 'lost', true],
+  ['scheduled', undefined, true],
+  ['scheduled', 'lost', true],
+  ['scheduled-buffered', undefined, true],
+  ['scheduled-buffered', undefined, false]
 ] as const) {
-  test(`a member checkpoint accepts the drained copied-source rewrite with a ${ackFault ?? 'confirmed'} HTTP acknowledgement ${sendTiming === 'scheduled' ? 'before the room-send timer' : 'after a pending write'}`, async ({
+  test(`a member checkpoint accepts the drained copied-source rewrite with a ${ackFault ?? 'confirmed'} HTTP acknowledgement ${sendTiming === 'pending' ? 'after a pending write' : 'before the room-send timer'}${sendTiming === 'scheduled-buffered' ? ` with buffered edits ${sourceArchived ? 'and a server archive' : 'without a server archive'}` : ''}`, async ({
     page
   }) => {
     test.setTimeout(60_000);
-    const server = roomFixture(ackFault, true);
+    const server = roomFixture(ackFault, true, sourceArchived);
+    const buffered = sendTiming === 'scheduled-buffered';
     await server.install(page);
     try {
       await page.goto('/');
@@ -755,7 +764,7 @@ for (const [sendTiming, ackFault] of [
       await expect(
         page.getByRole('group', { name: 'Workspace status' })
       ).toContainText('syncLocal source only');
-      if (sendTiming === 'scheduled') {
+      if (sendTiming !== 'pending') {
         expect(server.sourceWritePending()).toBe(false);
         // Hold the actual debounce rather than racing clicks against 500 ms.
         await page.evaluate(() => {
@@ -783,6 +792,13 @@ for (const [sendTiming, ackFault] of [
         await expect.poll(server.sourceWritePending).toBe(true);
       else expect(server.sourceWritePending()).toBe(false);
       await startNamedSave(page);
+      if (buffered) {
+        await expect.poll(server.sourceWritePending).toBe(true);
+        await addPrimitive(page, /^Cylinder/);
+        await expectBodyCount(page, 3);
+        expect(server.requested()).toBe(false);
+        expect(server.read().bodyOrder).toHaveLength(1);
+      }
       server.releaseSourceWrite();
       await expect.poll(server.requested).toBe(true);
       expect(server.input()?.bodyOrder).toHaveLength(2);
@@ -793,12 +809,12 @@ for (const [sendTiming, ackFault] of [
         JSON.stringify(server.stored()).includes(
           'artifact_local_checkpoint_copy'
         )
-      ).toBe(false);
+      ).toBe(!sourceArchived);
       expect(
         JSON.stringify(server.input()).includes(
           'artifact_local_checkpoint_copy'
         )
-      ).toBe(false);
+      ).toBe(!sourceArchived);
       await expect(page.getByRole('contentinfo')).toContainText(
         ackFault === 'lost'
           ? 'The named save is stored on this device.'
@@ -807,35 +823,51 @@ for (const [sendTiming, ackFault] of [
       await expect(
         page.locator('.revision-row', { hasText: 'Clicked box' })
       ).toHaveCount(1);
-      expect(JSON.stringify(server.stored())).not.toContain(
-        'artifact_local_checkpoint_copy'
-      );
-      expect(JSON.stringify(server.stored())).toContain(
-        'artifact_checkpoint_copy'
-      );
-      if (sendTiming === 'scheduled')
+      if (sourceArchived)
+        expect(JSON.stringify(server.stored())).toContain(
+          'artifact_checkpoint_copy'
+        );
+      if (sendTiming !== 'pending')
         await page.evaluate(() =>
           (
             window as unknown as { __restoreCheckpointSendTimer(): void }
           ).__restoreCheckpointSendTimer()
         );
       await addPrimitive(page, /^Cylinder/);
-      await expectBodyCount(page, 3);
-      await expect.poll(() => server.read().bodyOrder.length).toBe(3);
+      await expectBodyCount(page, buffered ? 4 : 3);
+      await expect
+        .poll(() => server.read().bodyOrder.length)
+        .toBe(buffered ? 4 : 3);
       expect(server.read().checkpoints).toEqual(server.stored()!.checkpoints);
-      // The imported body is seeded; box and cylinder are the two commands.
-      expect(server.read().revisions).toEqual([
-        ...server.stored()!.revisions,
-        expect.objectContaining({ reason: 'Add cylinder', commandCount: 2 })
-      ]);
-      expect(JSON.stringify(server.read())).not.toContain(
-        'artifact_local_checkpoint_copy'
-      );
+      // The seeded import is not a command; every later command must survive.
+      if (buffered) {
+        expect(server.read().revisions).toHaveLength(
+          server.stored()!.revisions.length + 2
+        );
+        expect(server.read().revisions).toEqual(
+          expect.arrayContaining([
+            ...server.stored()!.revisions,
+            expect.objectContaining({
+              reason: 'Add cylinder',
+              commandCount: 2
+            }),
+            expect.objectContaining({ reason: 'Add cylinder', commandCount: 3 })
+          ])
+        );
+      } else {
+        expect(server.read().revisions).toEqual([
+          ...server.stored()!.revisions,
+          expect.objectContaining({ reason: 'Add cylinder', commandCount: 2 })
+        ]);
+      }
+      expect(
+        JSON.stringify(server.read()).includes('artifact_local_checkpoint_copy')
+      ).toBe(!sourceArchived);
       expect(server.accountWrites()).toBe(0);
       await page.keyboard.press('ControlOrMeta+z');
-      await expectBodyCount(page, 2);
+      await expectBodyCount(page, buffered ? 3 : 2);
       await page.keyboard.press('ControlOrMeta+Shift+z');
-      await expectBodyCount(page, 3);
+      await expectBodyCount(page, buffered ? 4 : 3);
     } finally {
       server.releaseSourceWrite();
       server.release();
