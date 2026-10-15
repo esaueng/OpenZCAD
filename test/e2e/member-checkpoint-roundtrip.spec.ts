@@ -567,9 +567,10 @@ for (const ackFault of [undefined, 'lost'] as const) {
       await expectBodyCount(page, 3);
       await expect.poll(() => server.read().bodyOrder.length).toBe(3);
       expect(server.read().checkpoints).toEqual(server.stored()!.checkpoints);
+      // The imported body is seeded; box and cylinder are the two commands.
       expect(server.read().revisions).toEqual([
         ...server.stored()!.revisions,
-        expect.objectContaining({ reason: 'Add cylinder', commandCount: 3 })
+        expect.objectContaining({ reason: 'Add cylinder', commandCount: 2 })
       ]);
       expect(JSON.stringify(server.read())).not.toContain(
         'artifact_local_checkpoint_copy'
