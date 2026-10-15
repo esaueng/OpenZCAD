@@ -344,6 +344,9 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
                     '/packages/kernel-adapter/src/exact-sync-memo.ts'
                   ) ||
                   id.includes(
+                    '/packages/kernel-adapter/src/remus-load-error.ts'
+                  ) ||
+                  id.includes(
                     '/packages/kernel-adapter/src/union-connectivity.ts'
                   ),
                 includeDependenciesRecursively: false
@@ -435,6 +438,9 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               id.includes(
                 '/packages/kernel-adapter/src/imported-feature-query.ts'
               ) ||
+              // Runtime refusal classification shares the existing lazy
+              // analysis boundary without bringing the loader dependencies.
+              id.includes('/packages/kernel-adapter/src/remus-load-error.ts') ||
               id.includes('/packages/kernel-adapter/src/union-connectivity.ts')
             ) {
               return 'exact-analysis';
