@@ -10,6 +10,7 @@ import {
   PDFJS_ASSET_DIRS
 } from './src/lib/assistant/pdfjsAssets';
 import { resolveSourceCommit } from './build/sourceCommit';
+import { remusTranslatorRetry } from './build/remusTranslatorRetry';
 import {
   FONT_ASSET_BASE,
   FONT_FAMILIES
@@ -266,6 +267,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
   plugins.push(
     react(),
     wasm(),
+    remusTranslatorRetry(),
     pdfjsAssets(),
     textFontAssets(),
     buildMetadata(commit, remus)
@@ -319,11 +321,21 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
         preserveEntrySignatures: false,
         output: {
           // Worker builds have their own output configuration. Keep the
-          // analysis split there without pulling unrelated dependencies into
-          // every worker. Preserve evaluation order across the split.
+          // exact adapter splits there without pulling unrelated dependencies
+          // into every worker. Preserve evaluation order across the split.
           strictExecutionOrder: true,
           codeSplitting: {
             groups: [
+              {
+                name: 'exact-mesh-payload',
+                test: (id: string) =>
+                  id.includes(
+                    '/packages/kernel-adapter/src/imported-mesh-payload.ts'
+                  ),
+                // Keep mesh payload helpers behind the exact adapter's lazy
+                // boundary without moving the shared document dependencies.
+                includeDependenciesRecursively: false
+              },
               {
                 name: 'exact-analysis',
                 test: (id: string) =>
@@ -334,7 +346,13 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
                     '/packages/kernel-adapter/src/exact-sync-memo.ts'
                   ) ||
                   id.includes(
+                    '/packages/kernel-adapter/src/remus-load-error.ts'
+                  ) ||
+                  id.includes(
                     '/packages/kernel-adapter/src/union-connectivity.ts'
+                  ) ||
+                  id.includes(
+                    '/packages/kernel-adapter/src/feature-profile-dependencies.ts'
                   ),
                 includeDependenciesRecursively: false
               }
@@ -344,7 +362,10 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
       },
       // The plugin supports several Vite majors, so narrow its cross-version
       // return type to the Vite version used by this workspace.
-      plugins: (): PluginOption[] => [wasm() as PluginOption]
+      plugins: (): PluginOption[] => [
+        wasm() as PluginOption,
+        remusTranslatorRetry()
+      ]
     },
     resolve: {
       alias: {
@@ -419,13 +440,19 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
           // bundle, so isolate it for better caching without relying on the
           // object form supported by Rollup-only Vite releases.
           manualChunks: (id: string) => {
-            // Imported-feature and union-connectivity analysis stay behind the
-            // exact adapter's lazy boundary in the existing analysis chunk.
+            // Imported-feature, profile-dependency and union analysis stay
+            // behind the exact adapter's lazy boundary in its existing chunk.
             if (
               id.includes(
                 '/packages/kernel-adapter/src/imported-feature-query.ts'
               ) ||
-              id.includes('/packages/kernel-adapter/src/union-connectivity.ts')
+              // Runtime refusal classification shares the existing lazy
+              // analysis boundary without bringing the loader dependencies.
+              id.includes('/packages/kernel-adapter/src/remus-load-error.ts') ||
+              id.includes('/packages/kernel-adapter/src/union-connectivity.ts') ||
+              id.includes(
+                '/packages/kernel-adapter/src/feature-profile-dependencies.ts'
+              )
             ) {
               return 'exact-analysis';
             }

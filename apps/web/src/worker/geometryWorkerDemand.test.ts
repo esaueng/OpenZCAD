@@ -30,6 +30,7 @@ async function installWorker(
   const createExactKernelAdapter = vi.fn(async () => ({
     syncDocument,
     currentMassPropertiesEpoch: vi.fn(() => 1),
+    hasTransientFailures: vi.fn(() => false),
     prepareMassPropertiesForDocument: vi.fn(async () => 2),
     readCurrentMassProperties: vi.fn(() => ({
       status: 'unavailable',
