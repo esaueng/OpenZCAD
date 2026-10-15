@@ -31,7 +31,11 @@ import {
   projectPreservesLocalWork,
   projectsHaveSameCanonicalContent
 } from './localProjectStore';
-import type { CheckpointOptions } from './collaborationCheckpoint';
+import {
+  abortableCheckpoint,
+  preserveFailedCheckpoint,
+  type CheckpointOptions
+} from './collaborationCheckpointFallback';
 import {
   collaborationDocument,
   parseServerMessage,
@@ -966,29 +970,51 @@ export function useCollaboration({
         documentRef.current?.projectId === snapshot.projectId &&
         roleRef.current !== 'viewer';
       const captured = collaborationDocument(snapshot);
-      return import('./collaborationCheckpoint')
-        .then(({ saveCollaborationCheckpoint }) =>
-          saveCollaborationCheckpoint(captured, reason, options, {
-            controller,
-            isCurrent,
-            drain: (signal) =>
-              drainDocumentRef.current?.(signal) ??
-              Promise.reject(new Error('The room is offline.')),
-            lease: () =>
-              roleRef.current === 'viewer' ? null : leaseRef.current,
-            baseVersion: () => baseVersionRef.current,
-            clientId: clientId(),
-            confirm: (saved, current) => {
-              documentRef.current = current;
-              lastSentVersionRef.current = saved.version;
-              baseVersionRef.current = saved.version;
-              serverVersionRef.current = saved.version;
-              setRoomVersion(saved.version);
-              setStatus('live');
-            }
-          })
+      // Loading the optional room action shares the save's deadline and room
+      // cancellation. Its late resolution must not publish after local fallback.
+      const timer = window.setTimeout(
+        () =>
+          controller.abort(
+            new Error('The room did not confirm the named save. Please retry.')
+          ),
+        15_000
+      );
+      return abortableCheckpoint(
+        import('./collaborationCheckpoint'),
+        controller.signal
+      )
+        .then(
+          ({ saveCollaborationCheckpoint }) =>
+            saveCollaborationCheckpoint(captured, reason, options, {
+              controller,
+              isCurrent,
+              drain: (signal) =>
+                drainDocumentRef.current?.(signal) ??
+                Promise.reject(new Error('The room is offline.')),
+              lease: () =>
+                roleRef.current === 'viewer' ? null : leaseRef.current,
+              baseVersion: () => baseVersionRef.current,
+              clientId: clientId(),
+              confirm: (saved, current) => {
+                documentRef.current = current;
+                lastSentVersionRef.current = saved.version;
+                baseVersionRef.current = saved.version;
+                serverVersionRef.current = saved.version;
+                setRoomVersion(saved.version);
+                setStatus('live');
+              }
+            }),
+          (error: unknown) =>
+            preserveFailedCheckpoint(
+              error,
+              captured,
+              reason,
+              options,
+              isCurrent
+            )
         )
         .finally(() => {
+          window.clearTimeout(timer);
           if (checkpointRef.current !== controller) return;
           checkpointRef.current = null;
           if (isCurrent() && options.isCurrent())
