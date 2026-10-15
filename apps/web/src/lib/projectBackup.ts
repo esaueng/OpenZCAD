@@ -34,7 +34,12 @@ export interface ProjectBackup {
   document: ProjectDocument;
   files: BackupFile[];
   sources?: { sha256: string; base64: string; logicalBytes: number }[];
-  saveStates?: { checkpointId: string; document: ProjectDocument }[];
+  saveStates?: {
+    checkpointId: string;
+    document: ProjectDocument;
+    /** A retained device checkpoint absent from the collaborative timeline. */
+    deviceOnly?: true;
+  }[];
   measurements?: StoredMeasurementRecord | null;
 }
 
@@ -280,11 +285,21 @@ export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
   for (const value of (parsed.saveStates ?? []) as unknown[]) {
     const state = record(value);
     validateDocument(state.document);
-    const checkpoint = parsed.document.checkpoints.find(
+    const canonical = parsed.document.checkpoints.find(
       (entry) => entry.checkpointId === state.checkpointId
     );
+    const checkpoint = state.deviceOnly
+      ? state.document.checkpoints.at(-1)
+      : canonical;
     if (
+      (state.deviceOnly !== undefined && state.deviceOnly !== true) ||
       !checkpoint ||
+      checkpoint.checkpointId !== state.checkpointId ||
+      (state.deviceOnly === true &&
+        (canonical !== undefined ||
+          state.document.ownerUserId !== parsed.document.ownerUserId ||
+          state.document.revisions.at(-1)?.revisionId !==
+            checkpoint.revisionId)) ||
       checkpoints.has(checkpoint.checkpointId) ||
       state.document.projectId !== parsed.document.projectId ||
       checkpoint.documentVersion !== state.document.version
