@@ -329,6 +329,81 @@ async function startNamedSave(page: Page) {
   await dialog.getByRole('button', { name: 'Save', exact: true }).click();
 }
 
+for (const roomStored of [true, false]) {
+  test(`a failed device checkpoint reports ${roomStored ? 'room-only storage' : 'an unconfirmed named save'} without claiming a local copy`, async ({
+    page
+  }) => {
+    const server = roomFixture();
+    await server.install(page);
+    if (!roomStored) {
+      await page.route(
+        `**/api/projects/${server.read().projectId}/collaboration`,
+        (route) =>
+          route.fulfill({
+            status: 503,
+            json: { error: 'The room checkpoint is unavailable.' }
+          })
+      );
+    }
+    try {
+      await page.goto('/');
+      await page.getByLabel('Project name').fill(server.read().name);
+      await page.getByRole('button', { name: 'Create project' }).click();
+      await addPrimitive(page, /^Box \(B\)/);
+      await expectBodyCount(page, 1);
+      await expect(
+        page.getByRole('status', { name: 'Saved', exact: true })
+      ).toBeVisible();
+      await page.evaluate(() => {
+        const put = IDBObjectStore.prototype.put;
+        IDBObjectStore.prototype.put = function (
+          value: unknown,
+          key?: IDBValidKey
+        ) {
+          if (this.name === 'projectCheckpointDocuments') {
+            throw new DOMException(
+              'Checkpoint storage is full.',
+              'QuotaExceededError'
+            );
+          }
+          return key === undefined
+            ? put.call(this, value)
+            : put.call(this, value, key);
+        };
+      });
+      await startNamedSave(page);
+      if (roomStored) {
+        await expect.poll(server.requested).toBe(true);
+        server.release();
+      }
+      await expect(page.getByRole('contentinfo')).toContainText(
+        'The named save could not be stored on this device.'
+      );
+      if (roomStored) {
+        expect(server.stored()?.bodyOrder).toHaveLength(1);
+        await expect(page.getByRole('contentinfo')).toContainText(
+          'The revision is stored in the room.'
+        );
+      } else {
+        expect(server.stored()).toBeNull();
+      }
+      await expect(page.locator('.save-state')).not.toHaveAttribute(
+        'title',
+        /Saved on this device\. Not in your account\./
+      );
+      await expect(page.locator('.save-state')).toHaveAttribute(
+        'aria-label',
+        roomStored ? 'Room only' : 'Save unconfirmed'
+      );
+      await expectBodyCount(page, 1);
+      expect(server.accountWrites()).toBe(0);
+    } finally {
+      server.release();
+      server.releaseAck();
+    }
+  });
+}
+
 test('a clicked member checkpoint survives buffered edits and restores through the account on a fresh device', async ({
   page,
   browser
