@@ -17,7 +17,7 @@ it('refuses dirty benchmark arms and a different clean revision', async () => {
   const sourceGit = (...args: string[]) =>
     execFileSync('git', args, { cwd: repository, encoding: 'utf8' }).trim();
   try {
-    // Borrow public source commits without creating commits or overriding hooks.
+    // Borrow public source objects; all fixture mutations stay in this repo.
     git('init', '--quiet');
     await writeFile(
       join(directory, '.git/objects/info/alternates'),
@@ -63,7 +63,18 @@ it('refuses dirty benchmark arms and a different clean revision', async () => {
         directory
       )
     ).toThrow(/changed after the build/);
-    git('reset', '--hard', sourceGit('rev-parse', 'HEAD^'));
+    // CI checkouts can be shallow. Make an isolated same-tree revision using
+    // the source commit's existing metadata, without needing parent history.
+    const revision = execFileSync(
+      'git',
+      ['hash-object', '-t', 'commit', '-w', '--stdin'],
+      {
+        cwd: directory,
+        encoding: 'utf8',
+        input: `${sourceGit('cat-file', 'commit', 'HEAD')}\n\nH02 fixture revision.\n`
+      }
+    ).trim();
+    git('reset', '--hard', revision);
     expect(() => assertBenchmarkCheckout(initial, directory)).toThrow(
       /changed after the build/
     );
