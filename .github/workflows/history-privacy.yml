@@ -1,0 +1,51 @@
+name: History privacy
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  push:
+    branches: ["**"]
+    tags: ["**"]
+  merge_group:
+  workflow_dispatch:
+  # Catch owner refs that predate this workflow or omit it entirely.
+  schedule:
+    - cron: "23 8 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  history-privacy-regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/privacy/
+            /.github/workflows/commit-privacy.yml
+      - name: Synthetic privacy regression tests (no secrets)
+        run: python3 -m unittest discover -s .github/privacy -p 'test_*.py'
+
+  history-privacy-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      # Immutable reviewed source, retained by a protected policy tag. Never
+      # check out a PR head or run its programs with the fingerprint key.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 8c17911770859d188c7c1e2bb9f853dfc0893a53
+          persist-credentials: false
+          sparse-checkout: .github/privacy
+      - name: Inspect incoming objects and publish the exact-head check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HISTORY_PRIVACY_HMAC_KEY: ${{ secrets.HISTORY_PRIVACY_HMAC_KEY }}
+        run: python3 .github/privacy/history_privacy.py --ci

@@ -324,7 +324,7 @@ jobs:
                   for commit in commits:
                       for field in invalid_fields(commit):
                           # Never echo names, emails, commit subjects, or response bodies.
-                          print(f"::error::Commit {commit['sha'][:12]} has noncompliant {field} metadata. Use an approved public name and matching GitHub noreply email; run git-privacy-guard verify before pushing.")
+                          print(f"::error::An incoming commit has noncompliant {field} metadata. Use an approved public name and matching GitHub noreply email; run git-privacy-guard verify before pushing.")
                           failures += 1
                   print(f"Checked {len(commits)} new commits; {failures} identity violations.")
                   passed = failures == 0
