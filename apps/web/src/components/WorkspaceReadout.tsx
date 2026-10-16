@@ -248,7 +248,7 @@ interface ActivityLogButtonProps {
 /**
  * The activity log's button, on the instrument rail with the other panels.
  * It used to close the bottom-left readout, which made that island as wide
- * as the column for one chip and one icon; here it sits with Items, History
+ * as the column for one chip and one icon; here it sits with Objects, History
  * and Parameters, which is what it is: a panel about the model.
  */
 export function ActivityLogButton({

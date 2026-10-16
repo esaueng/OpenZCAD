@@ -100,6 +100,7 @@ textarea {
    instant: it tracks the pointer, and a lagging target reads as the wrong
    slot. */
 .feature-row,
+.object-row,
 .body-row {
   transition:
     background-color var(--dur-fast) var(--ease-out),
@@ -270,6 +271,7 @@ textarea {
    own background. Only arrivals get it (useArrivals), not every row on a
    panel open. */
 .feature-row.is-arrival,
+.object-row.is-arrival,
 .body-row.is-arrival {
   animation:
     oz-rise var(--dur-base) var(--ease-out),

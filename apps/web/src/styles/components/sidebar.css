@@ -105,6 +105,29 @@
   line-height: 1.5;
 }
 
+.object-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+}
+
+.object-filter select {
+  flex: 1;
+  min-width: 0;
+  min-height: 32px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: var(--fs-sm);
+}
+
 .param-list {
   display: grid;
   gap: 3px;
@@ -289,6 +312,7 @@
 }
 
 .feature-row,
+.object-row,
 .body-row {
   display: flex;
   align-items: center;
@@ -299,6 +323,7 @@
 }
 
 .feature-row.selected,
+.object-row.selected,
 .body-row.selected {
   background: var(--color-accent-dim);
   border-left-color: var(--color-accent);
@@ -358,12 +383,15 @@
 
 .feature-row:hover .feature-row-main,
 .feature-row.selected .feature-row-main,
+.object-row:hover .body-row-main,
+.object-row.selected .body-row-main,
 .body-row:hover .body-row-main,
 .body-row.selected .body-row-main {
   color: var(--color-text);
 }
 
 .feature-row:not(.selected):hover,
+.object-row:not(.selected):hover,
 .body-row:not(.selected):hover {
   background: var(--color-surface-hover);
 }
@@ -376,6 +404,7 @@
 }
 
 .feature-row.selected .feature-icon,
+.object-row.selected .feature-icon,
 .body-row.selected .feature-icon {
   color: var(--color-accent);
 }
@@ -501,6 +530,7 @@
   /* Two classes, to outrank the later `.row-visibility` rule in
      viewport-overlays.css. Revision actions are in revisions.css. */
   .feature-row .row-visibility,
+  .object-row .row-visibility,
   .body-row .row-visibility {
     opacity: 1;
   }

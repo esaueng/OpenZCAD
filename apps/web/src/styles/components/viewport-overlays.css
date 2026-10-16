@@ -226,6 +226,8 @@
 
 .feature-row:hover .row-visibility,
 .feature-row.hidden-body .row-visibility,
+.object-row:hover .row-visibility,
+.object-row.hidden-body .row-visibility,
 .body-row:hover .row-visibility,
 .body-row.hidden-body .row-visibility,
 .row-visibility:focus-visible {
@@ -242,6 +244,7 @@
 }
 
 .feature-row.hidden-body .feature-name,
+.object-row.hidden-body .feature-name,
 .body-row.hidden-body .feature-name {
   color: var(--color-text-subtle);
   font-style: italic;

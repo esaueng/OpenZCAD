@@ -289,7 +289,7 @@ async function exportedDocument(page: Page): Promise<ProjectDocument> {
 
 /** The plate's volume as the inspector reads it out. */
 async function plateVolume(page: Page): Promise<number> {
-  const bodies = page.getByRole('button', { name: /^Bodies \d/ });
+  const bodies = page.getByRole('button', { name: /^Objects \d/ });
   if ((await bodies.getAttribute('aria-expanded')) === 'false') {
     await bodies.click();
   }

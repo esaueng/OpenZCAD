@@ -20297,7 +20297,7 @@ export function App() {
                 >
                   {(
                     [
-                      ['bodies', 'Items', Layers],
+                      ['bodies', 'Objects', Layers],
                       ['history', 'History', ListOrdered],
                       ['parameters', 'Parameters', SlidersHorizontal]
                     ] as const
