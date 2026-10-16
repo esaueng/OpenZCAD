@@ -16,16 +16,17 @@ export function repairLegacyBracketDemo(
     : appendRevision(repaired, 'Repair bracket fillet clearance');
 }
 
-/** Restore discards source history, after validating the owner's identity. */
+/** Restore discards source history; the caller must authorize collaborator edits. */
 export function repairLegacyBracketSaveState(
   current: ProjectDocument,
   snapshot: ProjectDocument,
-  owners: readonly UserId[]
+  owners: readonly UserId[],
+  authorizedEditor = false
 ): ProjectDocument {
   if (
     current.projectId !== snapshot.projectId ||
     current.ownerUserId !== snapshot.ownerUserId ||
-    !owners.includes(current.ownerUserId)
+    (!owners.includes(current.ownerUserId) && !authorizedEditor)
   )
     return snapshot;
   return repairLegacyBracketModel(normalizeDocument(snapshot));
