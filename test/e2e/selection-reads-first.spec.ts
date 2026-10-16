@@ -209,6 +209,7 @@ test('an edge pick carries its operation on the chip, refusal included', async (
               element.dispatchEvent(
                 new CustomEvent('openzcad:e2e-select-edge', {
                   detail: {
+                    role: 'topmost',
                     resolve: (selection: unknown) => resolve(selection !== null)
                   }
                 })
@@ -283,6 +284,81 @@ test('an edge pick carries its operation on the chip, refusal included', async (
 
   // The handle's own riding label stays: the chip did not replace it.
   await expect(page.getByTestId('direct-manipulation-value')).toBeVisible();
+
+  // A tall diagnostic and the riding handle previously made two positioning
+  // passes feed each other's offsets back on every render. Exercise real
+  // frames with the camera and pointer fixed, including reduced motion.
+  for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+    await page.emulateMedia({ reducedMotion });
+    const positions = await chip.evaluate(async (element) => {
+      const canvas = document.querySelector<HTMLCanvasElement>(
+        '.viewer-host canvas'
+      )!;
+      const bounds = canvas.getBoundingClientRect();
+      const samples: { x: number; y: number; right: number; bottom: number }[] =
+        [];
+      for (let frame = 0; frame < 80; frame += 1) {
+        canvas.dispatchEvent(
+          new PointerEvent('pointermove', {
+            clientX: bounds.left + 8,
+            clientY: bounds.top + bounds.height / 2,
+            bubbles: true
+          })
+        );
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => resolve())
+        );
+        if (frame >= 20) {
+          const rect = element.getBoundingClientRect();
+          samples.push({
+            x: rect.x,
+            y: rect.y,
+            right: rect.right,
+            bottom: rect.bottom
+          });
+        }
+      }
+      return samples;
+    });
+    expect(
+      Math.max(...positions.map((p) => p.y)) -
+        Math.min(...positions.map((p) => p.y))
+    ).toBeLessThan(0.5);
+    expect(
+      Math.max(...positions.map((p) => p.x)) -
+        Math.min(...positions.map((p) => p.x))
+    ).toBeLessThan(0.5);
+    const toolbarBottom = await page
+      .locator('.app-shell > .topbar')
+      .evaluate((element) => element.getBoundingClientRect().bottom);
+    expect(Math.min(...positions.map((p) => p.y))).toBeGreaterThanOrEqual(
+      toolbarBottom
+    );
+    expect(Math.max(...positions.map((p) => p.bottom))).toBeLessThanOrEqual(
+      900
+    );
+    expect(Math.min(...positions.map((p) => p.x))).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...positions.map((p) => p.right))).toBeLessThanOrEqual(
+      1440
+    );
+    const handle = (await page
+      .getByTestId('direct-manipulation-value')
+      .boundingBox())!;
+    const placed = positions[0]!;
+    expect(
+      placed.right < handle.x - 100 ||
+        placed.x > handle.x + handle.width + 100 ||
+        placed.bottom < handle.y - 100 ||
+        placed.y > handle.y + handle.height + 100
+    ).toBe(true);
+    await test.info().attach(`chip-positions-${reducedMotion}`, {
+      body: JSON.stringify(positions),
+      contentType: 'application/json'
+    });
+    await page.screenshot({
+      path: test.info().outputPath(`stable-refusal-${reducedMotion}.png`)
+    });
+  }
 });
 
 /**

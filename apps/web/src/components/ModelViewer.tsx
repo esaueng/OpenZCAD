@@ -200,12 +200,10 @@ import {
 import { setLiveDiameter } from '../lib/liveLabels';
 import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
-  keepSelectionCalloutClear,
+  placeSelectionCallouts,
   refreshSelectionCallout,
   renderSelectionCallout,
-  SELECTION_CALLOUT_CHIP_CLASS,
-  SELECTION_CALLOUT_OBSTACLES,
-  selectionCalloutObstacleShift
+  SELECTION_CALLOUT_CHIP_CLASS
 } from '../lib/selectionCalloutView';
 import { measureFitFrame } from '../lib/fitFrame';
 import type { DimensionMode } from '../lib/keypad';
@@ -1094,7 +1092,7 @@ function calloutLift(box: THREE.Box3, units: string): number {
  */
 function clampNameCallouts(container: HTMLElement) {
   const labels = container.querySelectorAll<HTMLElement>(
-    '.selection-callout:not(.dimension-callout):not(.extrude-value-callout):not(.measurement-callout)'
+    `.selection-callout:not(.${SELECTION_CALLOUT_CHIP_CLASS}):not(.dimension-callout):not(.extrude-value-callout):not(.measurement-callout)`
   );
   if (labels.length === 0) {
     return;
@@ -1118,17 +1116,6 @@ function clampNameCallouts(container: HTMLElement) {
     currentTop: parseFloat(label.style.marginTop) || 0,
     rect: label.getBoundingClientRect()
   }));
-  // The selection chip carries verbs and its operation's way out, so it
-  // also keeps out from under the panels floating over the viewport.
-  const obstacles = measured.some(({ label }) =>
-    label.classList.contains(SELECTION_CALLOUT_CHIP_CLASS)
-  )
-    ? [
-        ...(container
-          .closest('.viewer-area')
-          ?.querySelectorAll<HTMLElement>(SELECTION_CALLOUT_OBSTACLES) ?? [])
-      ].map((element) => element.getBoundingClientRect())
-    : [];
   for (const { label, currentLeft, currentTop, rect } of measured) {
     const baseLeft = rect.left - currentLeft;
     const baseRight = rect.right - currentLeft;
@@ -1145,28 +1132,6 @@ function clampNameCallouts(container: HTMLElement) {
       marginTop = top + pad - baseTop;
     } else if (baseBottom > bounds.bottom - pad) {
       marginTop = bounds.bottom - pad - baseBottom;
-    }
-    if (
-      obstacles.length > 0 &&
-      label.classList.contains(SELECTION_CALLOUT_CHIP_CLASS)
-    ) {
-      const shift = selectionCalloutObstacleShift(
-        {
-          left: baseLeft + marginLeft,
-          right: baseRight + marginLeft,
-          top: baseTop + marginTop,
-          bottom: baseBottom + marginTop
-        },
-        obstacles,
-        {
-          left: bounds.left + pad,
-          right: bounds.right - pad,
-          top: top + pad,
-          bottom: bounds.bottom - pad
-        }
-      );
-      marginLeft += shift.dx;
-      marginTop += shift.dy;
     }
     if (marginLeft !== currentLeft) {
       label.style.marginLeft = marginLeft ? `${marginLeft}px` : '';
@@ -3678,7 +3643,7 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           curve?: 'circle' | 'any';
-          role?: 'outer-circle';
+          role?: 'outer-circle' | 'topmost';
           select?: boolean;
           resolve?: (
             selection:
@@ -3705,6 +3670,22 @@ export function ModelViewer({
             .map((edge) => ({ body, edge }))
         )
         .sort((left, right) => {
+          if (detail?.role === 'topmost') {
+            const screenHeight = (points: readonly number[]) => {
+              const center = new THREE.Vector3();
+              for (let index = 0; index < points.length; index += 3) {
+                center.x += points[index]!;
+                center.y += points[index + 1]!;
+                center.z += points[index + 2]!;
+              }
+              return center
+                .multiplyScalar(3 / points.length)
+                .project(context.activeCamera).y;
+            };
+            return (
+              screenHeight(right.edge.points) - screenHeight(left.edge.points)
+            );
+          }
           if (detail?.role !== 'outer-circle') {
             return 0;
           }
@@ -8696,6 +8677,7 @@ export function ModelViewer({
         });
       }
       clampNameCallouts(labelRenderer.domElement);
+      placeSelectionCallouts(labelRenderer.domElement);
       updateMeasurementCallouts(
         measurementCalloutsRef.current,
         measurementBoundsRef.current,
@@ -9752,8 +9734,6 @@ export function ModelViewer({
       // value.
       renderSelectionCallout(label.element, fallback, callout);
       selectionCalloutElementRef.current = label.element;
-      // Placed every frame, so kept off the drag handle every frame too.
-      label.onAfterRender = () => keepSelectionCalloutClear(label.element);
       label.position.copy(top);
       if (bodyId) {
         // The callout lives in the overlay group, not under the body, so a
