@@ -861,7 +861,7 @@ export function duplicateProjectDocument(
   branchedFrom?: ProjectBranchPoint
 ): ProjectDocument {
   const copy = cloneDocument(
-    normalizeDocument(repairLegacyBracketModel(source))
+    repairLegacyBracketModel(normalizeDocument(source))
   );
   delete copy.editHistory;
   const projectId = toProjectId(createId('proj'));

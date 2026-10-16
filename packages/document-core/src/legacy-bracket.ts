@@ -105,7 +105,7 @@ function parameterOnlyPatches(entry: DocumentHistoryEntry): boolean {
 export function repairLegacyBracketRecipe(
   document: ProjectDocument
 ): ProjectDocument {
-  if (document.units !== 'mm' || document.featureOrder.length !== NAMES.length)
+  if (document.units !== 'mm' || document.featureOrder?.length !== NAMES.length)
     return document;
   const root = document.nodes[document.rootNodeId];
   if (

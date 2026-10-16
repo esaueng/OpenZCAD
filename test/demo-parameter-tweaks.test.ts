@@ -27,7 +27,11 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  toUserId,
+  projectBranchPoint,
+  type ProjectDocument
+} from '@openzcad/shared';
 import { meshEdgeUse } from './parity/mesh-probe';
 import {
   buildDemoDocument,
@@ -380,6 +384,46 @@ describe('demo parameter tweaks', () => {
     },
     60_000
   );
+
+  it('normalizes pre-parametric copy, branch, restore and cache inputs before recipe recognition', () => {
+    const source = createProjectDocument(
+      'Pre-parametric source',
+      bracket.ownerUserId
+    );
+    Reflect.deleteProperty(source, 'featureOrder');
+    Reflect.deleteProperty(source, 'bodyOrder');
+    const before = structuredClone(source);
+    for (const branchPoint of [
+      undefined,
+      projectBranchPoint(source, source.checkpoints[0]!)
+    ]) {
+      const copy = duplicateProjectDocument(
+        source,
+        'Copy',
+        source.ownerUserId,
+        branchPoint
+      );
+      expect(copy.projectId).not.toBe(source.projectId);
+      expect(copy.featureOrder).toEqual([]);
+      expect(copy.bodyOrder).toEqual([]);
+      expect(copy.nodes[copy.rootNodeId]).toMatchObject({
+        projectId: copy.projectId
+      });
+      expect(() =>
+        restoreDuplicateDerivedProjection(copy, source)
+      ).not.toThrow();
+    }
+    const snapshot = repairLegacyBracketSaveState(source, source, [
+      source.ownerUserId
+    ]);
+    expect(snapshot.featureOrder).toEqual([]);
+    expect(snapshot.bodyOrder).toEqual([]);
+    expect(
+      restoreFromSaveState(source, snapshot, 'Restore old source').name
+    ).toBe(source.name);
+    expect(repairLegacyBracketModel(source)).toBe(source);
+    expect(source).toEqual(before);
+  });
 
   it('abstains from custom models and user-edited legacy recipes', () => {
     const old = legacyBracket(bracket);

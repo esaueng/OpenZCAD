@@ -1,5 +1,6 @@
 import {
   appendRevision,
+  normalizeDocument,
   repairLegacyBracketRecipe,
   repairLegacyBracketModel
 } from '@openzcad/document-core';
@@ -27,5 +28,5 @@ export function repairLegacyBracketSaveState(
     !owners.includes(current.ownerUserId)
   )
     return snapshot;
-  return repairLegacyBracketModel(snapshot);
+  return repairLegacyBracketModel(normalizeDocument(snapshot));
 }
