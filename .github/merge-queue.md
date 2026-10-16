@@ -7,8 +7,9 @@ no bypass actors, builds at most two queue entries concurrently, and uses
 no minimum-group wait and a 180-minute check timeout, matching Remus.
 
 Branch protection requires `checks / validate`, `checks / e2e`,
-`commit-privacy`, and Cloudflare `verify` (the `verify` job in the
-`Cloudflare version` workflow), all bound to GitHub Actions. Existing review
+`commit-privacy`, `history-privacy`, and Cloudflare `verify` (the `verify` job in the
+`Cloudflare version` workflow), with both privacy checks bound to the dedicated Esau History Privacy App and
+the other checks bound to GitHub Actions. Existing review
 requirements and conversation resolution are preserved. The queue validates
 changes with the latest main. Strict up-to-date status checks are disabled: being behind
 main alone does not require a manual merge or rebase. Resolve actual merge
@@ -25,8 +26,9 @@ merges it.
 CI and Cloudflare verification handle `merge_group: checks_requested` without
 replacing pending queue verdicts. The immutable fleet workflow runs queue
 candidates on GitHub-hosted runners; its PR-only kernel announcement policy
-is checked before enqueueing. Commit privacy already checks the merge-group
-base-to-head range. Cloudflare queue runs perform dry-run verification only;
+is checked before enqueueing. Commit privacy checks the merge-group base-to-head range. History privacy
+audits that exact candidate through the default-branch `workflow_run` after the
+read-only requester completes; verify the dedicated App verdict on the queue SHA. Cloudflare queue runs perform dry-run verification only;
 version uploads remain limited to main pushes and manual dispatches. Merging
 continues to trigger the repository's existing automatic deployment workflows.
 
@@ -34,11 +36,10 @@ continues to trigger the repository's existing automatic deployment workflows.
 
 1. Read live repository settings, branch protection, and the queue ruleset.
    Keep every required context and app binding, review requirement, and
-   conversation-resolution setting. Classic `enforce_admins: false` does not
-   grant a bypass of the active queue ruleset.
+   conversation-resolution setting. Classic protection enforces administrators; the active queue ruleset has no bypass actors.
 2. Inspect the PR’s current head, reviews, comments, resolved threads, and
-   individual jobs. The four required contexts are `checks / validate`,
-   `checks / e2e`, `commit-privacy`, and `verify`. Also wait for Workers Builds,
+   individual jobs. The five required contexts are `checks / validate`,
+   `checks / e2e`, `commit-privacy`, `history-privacy`, and `verify`. Also wait for Workers Builds,
    audits, public commit metadata, and all six browser shards. A passing suite
    or checks on an older head are insufficient. Cloudflare `verify` is required
    on both the PR head and the merge-group candidate.
@@ -58,8 +59,8 @@ continues to trigger the repository's existing automatic deployment workflows.
 
 4. Read the entry’s `headCommit.oid` after it reaches `AWAITING_CHECKS` (it
    can initially be null). Match that SHA to the `merge_group` workflow runs.
-   The queue automatically merges only after all four required contexts pass:
-   validation, the browser aggregate, commit privacy, and Cloudflare `verify`.
+   The queue automatically merges only after all five required contexts pass:
+   validation, the browser aggregate, commit privacy, history privacy, and Cloudflare `verify`.
    A pending or failing Cloudflare `verify` blocks the merge. Confirm `upload`
    is skipped; queue candidates perform dry-run verification only. A manual
    dispatch or green PR checks do not replace queue verdicts.

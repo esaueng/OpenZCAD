@@ -167,8 +167,9 @@ merge method; commit titles use the PR title and bodies use its description.
 See [.github/merge-queue.md](.github/merge-queue.md) for the enqueue procedure.
 
 Branch protection requires `checks / validate`, `checks / e2e`,
-`commit-privacy`, and Cloudflare `verify` (the `verify` job in the
-`Cloudflare version` workflow), each bound to GitHub Actions. Review
+`commit-privacy`, `history-privacy`, and Cloudflare `verify` (the `verify` job in the
+`Cloudflare version` workflow), with both privacy checks bound to the dedicated Esau History Privacy App and
+the other checks bound to GitHub Actions. Review
 requirements remain unchanged (currently zero required approvals), and
 conversation resolution is required. The queue validates candidates against current main, so strict
 status checks are disabled: a branch behind main does not need a manual
@@ -177,7 +178,7 @@ rerun checks on any changed PR head.
 
 - **Inspect the current PR head before enqueueing.** Read its individual
   check runs, including quality, unit, validation, all six browser shards,
-  `checks / validate`, `checks / e2e`, `commit-privacy`, Cloudflare `verify`,
+  `checks / validate`, `checks / e2e`, `commit-privacy`, `history-privacy`, Cloudflare `verify`,
   Workers Builds, dependency audits, and public commit metadata. Confirm a
   CI run exists for that exact head and wait for pending jobs. A passing
   check suite alone is insufficient. Inspect reviews, comments, and threads;
@@ -191,7 +192,7 @@ rerun checks on any changed PR head.
   authorization.
 - **Verify the separate queue run.** Match the `merge_group` run’s head SHA
   to the candidate reported by the queue, not the original PR head. The
-  four required checks, including Cloudflare `verify`, must pass on that
+  five required checks, including Cloudflare `verify`, must pass on that
   candidate before GitHub merges it. A pending or failing `verify` blocks
   the queue merge. Confirm Cloudflare `upload` is skipped. Verify
   the final merged PR and squash commit; do not report enqueueing as a
@@ -199,7 +200,7 @@ rerun checks on any changed PR head.
   failure, inspect and repair or retry it before re-enqueueing.
 - **Preserve every protection.** Keep required contexts and app bindings,
   reviews, and conversation resolution. The queue ruleset has no bypass
-  actors even though classic protection has `enforce_admins` off. Keep
+  actors, and classic protection also enforces administrators. Keep
   Cloudflare `verify` required on both the PR head and merge-group candidate.
   When restoring queue configuration, activate and verify the queue before
   disabling strict status checks; keep all other protections in place.

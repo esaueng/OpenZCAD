@@ -6,6 +6,8 @@ describe('workflow runner policy', () => {
     const workflowDirectory = '.github/workflows';
     const expectedRunners: Record<string, string[]> = {
       'commit-privacy.yml': ['ubuntu-24.04'],
+      'history-privacy.yml': ['ubuntu-24.04'],
+      'history-privacy-request.yml': ['ubuntu-24.04'],
       'ci.yml': [],
       'public-commit-metadata.yml': ['ubuntu-24.04'],
       'fleet-ci.yml': Array(5).fill('*fleet-runner'),

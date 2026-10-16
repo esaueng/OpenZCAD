@@ -1,0 +1,55 @@
+name: History privacy
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  workflow_run:
+    workflows: ["History privacy request"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      audit_head:
+        description: "Optional exact commit to audit during protected bootstrap"
+        required: false
+        type: string
+  schedule:
+    - cron: "23 8 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  history-privacy-audit:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.head_repository.full_name == github.repository &&
+       (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'merge_group'))
+    environment: history-privacy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # This definition runs only from trusted main or the exact protected
+      # bootstrap tag permitted by the environment's branch/tag restrictions.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: efcd61354b46ea0216c9dc6ebcb49174208be5e2
+          persist-credentials: false
+          sparse-checkout: .github/privacy
+      - name: Create narrowly scoped check publisher token
+        id: publisher
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.HISTORY_PRIVACY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HISTORY_PRIVACY_APP_PRIVATE_KEY }}
+          permission-checks: write
+      - name: Inspect incoming objects and publish the exact-head check
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+          HISTORY_PRIVACY_HMAC_KEY: ${{ secrets.HISTORY_PRIVACY_HMAC_KEY }}
+        run: python3 .github/privacy/history_privacy.py --ci
+      - name: Publish protected public-identity verdict
+        if: always() && steps.publisher.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+          GH_READ_TOKEN: ${{ github.token }}
+        run: python3 .github/privacy/commit_privacy.py --publish

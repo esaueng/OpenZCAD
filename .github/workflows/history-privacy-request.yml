@@ -1,0 +1,27 @@
+name: History privacy request
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["**"]
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  history-privacy-regressions:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/privacy/
+            /.github/workflows/commit-privacy.yml
+            /.github/workflows/history-privacy*.yml
+      - name: Synthetic privacy regression tests and audit request (no secrets)
+        run: python3 -m unittest discover -s .github/privacy -p 'test_*.py'
