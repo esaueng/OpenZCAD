@@ -52,7 +52,7 @@ supporting specification only when its contract changes.
 
 | Master ID | Status | Scope and evidence |
 | --- | --- | --- |
-| A01 | In review | Glimpse: backend counters; fresh opt-in diagnostic/feature/size/part aggregates and user-shared reports; separate expiring cloud-account/storage census with no exported identifiers. [Setup and privacy boundaries](docs/glimpse.md). Regression coverage in `analytics.test.ts` and `worker/glimpse.test.ts`; production collector and consent migrations verified; activation enables both deployment switches while preserving fresh browser and separate account consent. Live delivery is checked during rollout. |
+| A01 | In review | Glimpse: backend counters; fresh opt-in diagnostic/feature/size/part aggregates and user-shared reports; separate expiring cloud-account/storage census with no exported identifiers. [Setup and privacy boundaries](docs/glimpse.md). Regression coverage in `analytics.test.ts` and `worker/glimpse.test.ts`; production collector and consent migrations verified; activation enables both deployment switches while preserving fresh browser and separate account consent. Live delivery is checked during rollout. Local-only reopen probes now skip absent account copies while genuine failures remain observable (`accountProjectLoad.test.ts`, `local-project-cloud-load.spec.ts`); live rollout remains separate. |
 
 ## Where we are
 
