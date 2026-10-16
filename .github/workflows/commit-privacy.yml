@@ -202,6 +202,10 @@ jobs:
               assert not valid_public_identity("Example Person", "123+example-automation[bot]@users.noreply.github.com")
               assert not valid_public_identity("Example Person", "123+example-user@users.noreply.github.com")
               assert not valid_public_identity("example-user", "example@example.invalid")
+              # Pin the renamed account explicitly; reject mismatched public aliases.
+              assert PROTECTED_LOGINS == {"petertoday"}
+              assert invalid_fields(fixture("petertoday", "171875562+petertoday@users.noreply.github.com", "petertoday")) == []
+              assert invalid_fields(fixture("example-previous-handle", "123+example-previous-handle@users.noreply.github.com", "petertoday")) == ["author", "committer"]
               protected = next(iter(PROTECTED_LOGINS))
               assert invalid_fields(fixture("Example Person", "example@example.invalid", protected)) == ["author", "committer"]
               # A public bot identity cannot disguise the protected human account.
