@@ -19,7 +19,6 @@
   },
   "ratelimits": [{"name":"GLIMPSE_USAGE_LIMITER", "namespace_id":"2026101501", "simple":{"limit":120,"period":60}}],
   // Production collection enabled; optional analytics still require browser consent.
-  "previews": { "vars": { "GLIMPSE_BASIC_ENABLED": "false", "GLIMPSE_USAGE_ENABLED": "false" } },
   "services": [{"binding":"GLIMPSE", "service":"glimpse", "entrypoint":"OpenZCADIngest"}],
   // See docs/glimpse.md for consent controls and rollback.
   "assets": {
