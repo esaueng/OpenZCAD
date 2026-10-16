@@ -58,8 +58,9 @@ browser analytics does. The account preference's existing user key and expiry
 stay in OpenZCAD. Erasing accounts are excluded; deletion cascades the grant.
 DNT/GPC suppresses browser analytics but does not revoke the separate account
 permission: withdraw it with its own checkbox. The UI reads server state,
-displays expiry and explains failed changes. Failed/offline withdrawal leaves
-the previous server permission in force until acknowledged or expired.
+displays expiry and explains failed changes. A failed/offline request has an unconfirmed outcome: refresh to read the server
+permission. Until withdrawal is confirmed, assume an existing grant may remain
+active until its 30-day expiry.
 
 The hourly existing cron and consent changes publish aggregate snapshots with
 an app-wide monotonic generation. No account/project key leaves this app, and

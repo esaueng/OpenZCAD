@@ -1266,7 +1266,7 @@ test('cloud statistics require acknowledged consent and keep a failed withdrawal
   await expect(consent).toBeChecked();
   await expect(row).toContainText(`Enabled until ${expiresAt.slice(0, 10)} UTC.`);
   await consent.click();
-  await expect(row).toContainText('Could not save this change. The last server permission still applies; try again.');
+  await expect(row).toContainText('Could not confirm this change. Refresh to check the server permission before trying again.');
   await expect(consent).toBeChecked();
   await expect(consent).toBeEnabled();
   await consent.click();
