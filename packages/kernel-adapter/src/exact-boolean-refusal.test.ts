@@ -99,15 +99,16 @@ describe('the untyped contract the adapter no longer uses', () => {
   });
 
   /**
-   * The policy decision, pinned rather than argued: a refused pair is NOT
-   * rerouted to `booleanWithQuality` without `exactOnly`. On this very pair
-   * that path throws "non-manifold result" — it trades one failure for a
-   * worse one, so the refusal is surfaced instead.
+   * The explicit fallback now builds this pair, but discloses approximation.
+   * It must never substitute for the typed exact-only refusal above.
    */
-  it('is not rescued by dropping the exact-only policy', () => {
+  it('discloses approximation when the caller explicitly drops exact-only policy', () => {
     const kernel = new RemusKernel();
     const [a, b] = offsetSpheres(kernel);
-    expect(() => kernel.booleanWithQuality('fuse', a, b, false)).toThrowError();
+    const outcome = kernel.booleanWithQuality('fuse', a, b, false);
+    expect(outcome.quality).toBe('approximate');
+    expect(outcome.deflection).toBe(0.1);
+    expect(kernel.validateSolid(outcome.solid)).toBe(0);
   });
 });
 

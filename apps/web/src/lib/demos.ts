@@ -1,3 +1,4 @@
+import { BRACKET_BOSS_HEIGHT } from './bracketDemoPlacement';
 import {
   CommandManager,
   commandFactories,
@@ -270,6 +271,13 @@ async function buildBracket(
     })
   ]);
 
+  // The wall starts 0.5 mm below the base top. Keep the boss and its
+  // coaxial bore below the top fillet's contact line, with 0.25 mm of design
+  // clearance. The default stays at half height; shorter walls/larger bosses
+  // move down together. Blending into the boss opening is unsupported and
+  // older kernels could return a self-intersecting wall there.
+  const bossHeight = BRACKET_BOSS_HEIGHT;
+
   const boss = createBodyFeatureIds();
   const unionBoss = createBodyFeatureIds();
   const bore = createBodyFeatureIds();
@@ -292,7 +300,7 @@ async function buildBracket(
       translation: {
         x: 'width / 2',
         y: 'depth - plate_t + 2',
-        z: 'plate_t + wall_h / 2'
+        z: bossHeight
       }
     }),
     commandFactories.booleanBodies({
@@ -314,7 +322,7 @@ async function buildBracket(
       translation: {
         x: 'width / 2',
         y: 'depth + 8',
-        z: 'plate_t + wall_h / 2'
+        z: bossHeight
       }
     }),
     commandFactories.booleanBodies({

@@ -806,7 +806,7 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       });
       expect(asStored.volume).toBeUndefined();
       expect(asStored.warnings).toEqual([
-        expect.stringContaining('Sewing this mesh changed its size')
+        expect.stringContaining('merges both ends of a boundary edge')
       ]);
 
       // So the import must say so while it is still a file, rather than
@@ -814,7 +814,7 @@ describe('mesh file imports', { timeout: 30_000 }, () => {
       await expect(
         importMeshFile('obj', thinPlateObj(THIN_PLATE_MM), 'm')
       ).rejects.toThrow(
-        /^This OBJ file could not be imported as a body: Sewing this mesh changed its size/
+        /^This OBJ file could not be imported as a body: .*merges both ends of a boundary edge/
       );
     });
 

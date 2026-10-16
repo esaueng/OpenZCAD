@@ -1,3 +1,11 @@
+import {
+  repairLegacyBracketModel,
+  repairLegacyBracketRecipe
+} from '@openzcad/document-core';
+import {
+  repairLegacyBracketDemo,
+  repairLegacyBracketSaveState
+} from './lib/bracketDemoCompatibility';
 import { setAnalyticsEnabled, trackUsage, trackDetail, trackParts, trackSize, isAnalyticsEnabled, durationBucket } from './lib/analytics';
 import type {
   GeometryBodyRepresentation,
@@ -6447,6 +6455,19 @@ export function App() {
     let normalized: ProjectDocument;
     try {
       normalized = normalizeDocument(nextDocument);
+      // Shares are ephemeral; every persistence path still rejects owner writes.
+      if (shareSessionRef.current) {
+        normalized = repairLegacyBracketModel(normalized);
+      } else if (
+        normalized.ownerUserId === localUserId ||
+        normalized.ownerUserId === sessionRef.current?.userId
+      ) {
+        normalized = repairLegacyBracketDemo(normalized);
+      } else {
+        // Foreign collaboration documents retain their canonical clock/history.
+        // This local normalization grants no edit rights or owner persistence.
+        normalized = repairLegacyBracketRecipe(normalized);
+      }
     } catch (error) {
       // A newer client wrote this document: the version stamp cannot be
       // trusted and unknown features would rebuild silently, so refuse with
@@ -9853,7 +9874,15 @@ export function App() {
       }
       const next = await prepareSaveStateRestore(
         current,
-        snapshot,
+        repairLegacyBracketSaveState(
+          current,
+          snapshot,
+          [
+            localUserId,
+            ...(sessionRef.current ? [sessionRef.current.userId] : [])
+          ],
+          collaboration.role === 'editor'
+        ),
         reason,
         sharedAccountProject,
         session?.userId ?? current.ownerUserId
