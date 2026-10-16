@@ -6,6 +6,7 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import { meshEdgeUse } from './parity/mesh-probe';
 import {
   buildDemoDocument,
   buildDemoSeed,
@@ -70,6 +71,76 @@ describe('demo parameter tweaks', () => {
   }, 120_000);
 
   it.each([
+    ['default', null, null, 24, 32, 10],
+    ['short wall', 'wall_h', '26', 20.25, 26, 10],
+    ['large boss', 'boss_r', '14', 22.25, 32, 14]
+  ] as const)(
+    'keeps the %s boss and bore coaxial below two real radius-3 blends',
+    async (_, name, expression, height, wallHeight, bossRadius) => {
+      const document =
+        name === null
+          ? bracket
+          : new CommandManager(bracket).runTransaction('Tweak', [
+              commandFactories.setParameter({
+                name,
+                expression,
+                ids: createParameterIds()
+              })
+            ]);
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.exportableBodyIds).toHaveLength(1);
+      const bodyId = derived.exportableBodyIds[0]!;
+      const body = derived.bodyRepresentations[bodyId]!;
+      const cylinders = body
+        .topology!.faces.map((face) => face.geometry!)
+        .filter((face) => face.surfaceType === 'cylinder');
+      const blends = cylinders.filter((face) => face.featureType === 'blend');
+      expect(blends).toHaveLength(2);
+      for (const blend of blends) {
+        expect(blend.blendRadius).toBeCloseTo(3, 6);
+        expect(blend.axialLength).toBeCloseTo(80, 6);
+        expect(blend.axisStart!.z).toBeCloseTo(8 + wallHeight - 0.5 - 3, 6);
+      }
+      const boss = cylinders.find((face) => face.radius === bossRadius)!;
+      const bore = cylinders.find((face) => face.radius === 4)!;
+      expect(boss).toBeDefined();
+      expect(bore.featureType).toBe('through-hole');
+      for (const cylinder of [boss, bore]) {
+        expect(cylinder.axisStart!.x).toBeCloseTo(40, 6);
+        expect(cylinder.axisEnd!.x).toBeCloseTo(40, 6);
+        expect(cylinder.axisStart!.z).toBeCloseTo(height, 6);
+        expect(cylinder.axisEnd!.z).toBeCloseTo(height, 6);
+      }
+      expect(height - bossRadius).toBeGreaterThan(8);
+      expect(
+        8 + wallHeight - 0.5 - 3 - (height + bossRadius)
+      ).toBeGreaterThanOrEqual(0.25);
+      const fillet = Object.values(document.nodes).find(
+        (node) => node.kind === 'feature' && node.data.featureKind === 'fillet'
+      )!;
+      if (fillet.kind !== 'feature' || fillet.data.featureKind !== 'fillet') {
+        throw new Error('Missing bracket fillet');
+      }
+      const source = derived.bodyRepresentations[fillet.data.targetBodyId]!;
+      // Two full-length quarter-cylinder rounds must remove this exact
+      // volume. Valid/exportable alone would also accept a no-op or a bevel.
+      expect(source.volume - body.volume).toBeCloseTo(
+        2 * 80 * 3 ** 2 * (1 - Math.PI / 4),
+        6
+      );
+      expect(meshEdgeUse(body.mesh.vertices, body.mesh.indices)).toMatchObject({
+        boundaryEdges: 0,
+        nonManifoldEdges: 0
+      });
+      expect(await adapter.exportStep(document, [bodyId])).toContain(
+        'ISO-10303-21;'
+      );
+    },
+    60_000
+  );
+
+  it.each([
     ['width', '81'],
     ['width', '60'],
     ['width', '120'],
@@ -77,7 +148,8 @@ describe('demo parameter tweaks', () => {
     ['depth', '60'],
     // The wall is plate_t thick and carries two fillet_r breaks, so the
     // envelope is 2 * fillet_r < plate_t; and the r = boss_r boss sits at half
-    // the wall height, so wall_h > 2 * boss_r keeps it inside the wall.
+    // the wall height when there is room, otherwise moves down to clear
+    // the top fillet. These are independent edits, not a Cartesian product.
     ['plate_t', '7'],
     ['plate_t', '12'],
     ['wall_h', '26'],

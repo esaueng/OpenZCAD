@@ -244,9 +244,8 @@ function identityPlacement(solid: number): MeshPlacement {
 /**
  * Every placement's triangles, in one list.
  *
- * A solid placed more than once is tessellated once and emitted once per
- * placement, so a build plate that repeats one object imports as many copies
- * as it asks for rather than the one the translator hands back.
+ * Repeated handles share one tessellation. 3MF solids arrive already placed
+ * by the translator; optional GLB node placement is applied here.
  */
 function tessellatePlacements(
   kernel: RemusKernel,
