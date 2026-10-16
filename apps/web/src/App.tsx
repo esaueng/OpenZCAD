@@ -1,3 +1,4 @@
+import { repairLegacyBracketDemo } from './lib/bracketDemoCompatibility';
 import { setAnalyticsEnabled, trackUsage, trackDetail, trackParts, trackSize, isAnalyticsEnabled, durationBucket } from './lib/analytics';
 import type {
   GeometryBodyRepresentation,
@@ -6448,6 +6449,14 @@ export function App() {
     let normalized: ProjectDocument;
     try {
       normalized = normalizeDocument(nextDocument);
+      // Only the owner may upgrade the original saved local demo recipe.
+      if (
+        !shareSessionRef.current &&
+        (normalized.ownerUserId === localUserId ||
+          normalized.ownerUserId === sessionRef.current?.userId)
+      ) {
+        normalized = repairLegacyBracketDemo(normalized);
+      }
     } catch (error) {
       // A newer client wrote this document: the version stamp cannot be
       // trusted and unknown features would rebuild silently, so refuse with

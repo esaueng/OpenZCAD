@@ -1,6 +1,11 @@
+import { repairLegacyBracketDemo } from '../apps/web/src/lib/bracketDemoCompatibility';
+import { legacyBracket } from './helpers/legacy-bracket';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { createParameterIds } from '@openzcad/document-core';
+import {
+  createParameterIds,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -69,6 +74,86 @@ describe('demo parameter tweaks', () => {
       expect(state.checkpoints.at(-1)?.documentVersion).toBe(state.version);
     }
   }, 120_000);
+
+  it.each([
+    ['wall_h', '26'],
+    ['boss_r', '14']
+  ])(
+    'repairs a saved legacy %s=%s bracket without losing its edits or history',
+    async (name, expression) => {
+      const old = new CommandManager(legacyBracket(bracket)).runTransaction(
+        'Saved tweak',
+        [
+          commandFactories.setParameter({
+            name,
+            expression,
+            ids: createParameterIds()
+          })
+        ]
+      );
+      const before = structuredClone(old);
+      expect((await adapter.syncDocument(old)).warnings).toHaveLength(1);
+      const repaired = repairLegacyBracketDemo(old);
+      expect(repaired).not.toBe(old);
+      expect(old).toEqual(before);
+      expect(repaired.projectId).toBe(old.projectId);
+      expect(repaired.featureOrder).toEqual(old.featureOrder);
+      expect(repaired.parameterOrder).toEqual(old.parameterOrder);
+      expect(repaired.checkpoints).toEqual(old.checkpoints);
+      expect(repaired.commandLog.slice(0, old.commandLog.length)).toEqual(
+        old.commandLog
+      );
+      for (const node of Object.values(old.nodes).filter(
+        (node) => node.kind === 'parameter'
+      )) {
+        expect(repaired.nodes[node.id]).toEqual(node);
+      }
+      const derived = await adapter.syncDocument(repaired);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.exportableBodyIds).toHaveLength(1);
+      expect(
+        await adapter.exportStep(repaired, derived.exportableBodyIds)
+      ).toContain('ISO-10303-21;');
+      expect(repairLegacyBracketDemo(repaired)).toBe(repaired);
+      const manager = new CommandManager(repaired);
+      expect(manager.undoLabel).toBe('Repair bracket fillet clearance');
+      manager.undo();
+      expect(manager.document.nodes).toEqual(old.nodes);
+      expect(repairLegacyBracketDemo(manager.document)).toBe(manager.document);
+      manager.redo();
+      expect(manager.document.nodes).toEqual(repaired.nodes);
+      expect((await adapter.syncDocument(manager.document)).warnings).toEqual(
+        []
+      );
+    },
+    60_000
+  );
+
+  it('abstains from custom models and user-edited legacy recipes', () => {
+    const old = legacyBracket(bracket);
+    const cases = [
+      { ...old, projectId: 'proj_custom' as typeof old.projectId },
+      new CommandManager(old).runTransaction('Custom boss', [
+        commandFactories.updateFeature({
+          featureId: listFeaturesInOrder(old).find(
+            (node) => node.kind === 'feature' && node.name === 'Boss'
+          )!.featureId,
+          data: { dimensions: { radius: 'boss_r + 1' } }
+        })
+      ]),
+      new CommandManager(old).runTransaction('Custom placement', [
+        commandFactories.updateFeature({
+          featureId: listFeaturesInOrder(old).find(
+            (node) =>
+              node.kind === 'feature' && node.name === 'Place boss on wall'
+          )!.featureId,
+          name: 'Custom boss placement'
+        })
+      ])
+    ];
+    for (const document of [bracket, ...cases])
+      expect(repairLegacyBracketDemo(document)).toBe(document);
+  });
 
   it.each([
     ['default', null, null, 24, 32, 10],

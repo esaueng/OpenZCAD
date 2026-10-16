@@ -1,3 +1,4 @@
+import { BRACKET_BOSS_HEIGHT } from './bracketDemoPlacement';
 import {
   CommandManager,
   commandFactories,
@@ -275,8 +276,7 @@ async function buildBracket(
   // clearance. The default stays at half height; shorter walls/larger bosses
   // move down together. Blending into the boss opening is unsupported and
   // older kernels could return a self-intersecting wall there.
-  const bossHeight =
-    'plate_t + min(wall_h / 2, wall_h - 0.5 - boss_r - fillet_r - 0.25)';
+  const bossHeight = BRACKET_BOSS_HEIGHT;
 
   const boss = createBodyFeatureIds();
   const unionBoss = createBodyFeatureIds();
