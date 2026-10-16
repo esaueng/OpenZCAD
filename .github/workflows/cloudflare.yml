@@ -2,6 +2,8 @@ name: Cloudflare version
 
 on:
   pull_request: {}
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   workflow_dispatch: {}
@@ -10,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: cloudflare-${{ github.ref }}
+  group: cloudflare-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -35,7 +37,8 @@ jobs:
       - run: pnpm --filter @openzcad/web exec wrangler deploy --dry-run --config ../../wrangler.jsonc
 
   upload:
-    if: github.event_name != 'pull_request'
+    # Queue candidates get the dry-run verification, never a version upload.
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 30
