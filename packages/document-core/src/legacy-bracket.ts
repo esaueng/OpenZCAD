@@ -51,22 +51,31 @@ function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** Prove unclassified edits and all pending Redo from their actual patches. */
-function parameterOnlyPatches(entry: DocumentHistoryEntry): boolean {
+/** Prove unclassified edits and pending Redo are parameters or feature renames. */
+function nonModelingPatches(entry: DocumentHistoryEntry): boolean {
   return entry.changes.every((change) => {
     if (change.field === 'nodes' && change.kind === 'value') {
+      if (!record(change.before) || !record(change.after)) return false;
+      const before = change.before;
+      const after = change.after;
+      if (before.kind === 'parameter' && after.kind === 'parameter')
+        return before.id === after.id && before.name === after.name;
+      // Old node.rename entries lack commandKinds. Compare the complete node
+      // after substituting only the display name: feature data, identity and
+      // links must be identical in both history endpoints.
       return (
-        record(change.before) &&
-        record(change.after) &&
-        change.before.kind === 'parameter' &&
-        change.after.kind === 'parameter' &&
-        change.before.id === change.after.id &&
-        change.before.name === change.after.name
+        before.kind === 'feature' &&
+        after.kind === 'feature' &&
+        typeof before.name === 'string' &&
+        typeof after.name === 'string' &&
+        canonical({ ...before, name: after.name }) === canonical(after)
       );
     }
     if (change.field === 'commandLog' && change.kind === 'splice') {
       return [...change.before, ...change.after].every(
-        (command) => record(command) && command.kind === 'parameter.set'
+        (command) =>
+          record(command) &&
+          (command.kind === 'parameter.set' || command.kind === 'node.rename')
       );
     }
     return false;
@@ -108,11 +117,11 @@ export function repairLegacyBracketRecipe(
     document.editHistory?.entries.some((entry) =>
       entry.commandKinds?.length
         ? entry.commandKinds.some((kind) => !SEED_COMMANDS.has(kind))
-        : !parameterOnlyPatches(entry)
+        : !nonModelingPatches(entry)
     ) ||
     document.editHistory?.entries
       .slice(document.editHistory.cursor)
-      .some((entry) => !parameterOnlyPatches(entry))
+      .some((entry) => !nonModelingPatches(entry))
   )
     return document;
 

@@ -16,6 +16,7 @@ import {
   restoreFromSaveState,
   duplicateProjectDocument,
   repairLegacyBracketModel,
+  repairLegacyBracketRecipe,
   appendRevision
 } from '@openzcad/document-core';
 import {
@@ -404,46 +405,99 @@ describe('demo parameter tweaks', () => {
       manager.runTransaction('Old tweak', [
         commandFactories.setParameter({ name, expression })
       ]);
-      const before = structuredClone(manager.document);
-      expect(
-        (await adapter.syncDocument(before)).warnings.length
-      ).toBeGreaterThan(0);
-      const repaired = repairLegacyBracketDemo(before);
-      expect(
-        listFeaturesInOrder(repaired).map((feature) => feature.name)
-      ).toEqual(names.map((input) => input.name));
-      expect(repaired.editHistory).toMatchObject({
-        cursor: before.editHistory!.cursor,
-        actorUserId: before.editHistory!.actorUserId
-      });
-      expect(repaired.editHistory!.entries.map((entry) => entry.label)).toEqual(
-        before.editHistory!.entries.map((entry) => entry.label)
-      );
-      const reopened = new CommandManager(repaired);
-      const derived = await adapter.syncDocument(reopened.document);
+      for (const legacyHistory of [false, true]) {
+        const before = structuredClone(manager.document);
+        if (legacyHistory)
+          for (const entry of before.editHistory!.entries)
+            delete entry.commandKinds;
+        expect(
+          (await adapter.syncDocument(before)).warnings.length
+        ).toBeGreaterThan(0);
+        const repaired = repairLegacyBracketDemo(before);
+        expect(
+          listFeaturesInOrder(repaired).map((feature) => feature.name)
+        ).toEqual(names.map((input) => input.name));
+        expect(repaired.editHistory).toMatchObject({
+          cursor: before.editHistory!.cursor,
+          actorUserId: before.editHistory!.actorUserId
+        });
+        expect(
+          repaired.editHistory!.entries.map((entry) => entry.label)
+        ).toEqual(before.editHistory!.entries.map((entry) => entry.label));
+        const reopened = new CommandManager(repaired);
+        const derived = await adapter.syncDocument(reopened.document);
+        expect(derived.warnings).toEqual([]);
+        expect(
+          await adapter.exportStep(reopened.document, derived.exportableBodyIds)
+        ).toContain('ISO-10303-21;');
+        reopened.undo();
+        expect(
+          Object.values(reopened.document.nodes).find(
+            (node) => node.kind === 'parameter' && node.name === name
+          )
+        ).toMatchObject({ expression: original });
+        expect(
+          listFeaturesInOrder(reopened.document).map((feature) => feature.name)
+        ).toEqual(names.map((input) => input.name));
+        reopened.undo();
+        expect(
+          listFeaturesInOrder(reopened.document).map((feature) => feature.name)
+        ).toEqual(listFeaturesInOrder(legacy).map((feature) => feature.name));
+        reopened.redo();
+        reopened.redo();
+        expect(
+          (await adapter.syncDocument(reopened.document)).warnings
+        ).toEqual([]);
+        expect(manager.document.nodes).toEqual(before.nodes);
+      }
+    },
+    60_000
+  );
+
+  it.each([
+    ['wall_h', '26'],
+    ['boss_r', '14']
+  ])(
+    'normalizes foreign collaboration %s=%s without changing the canonical clock or owner',
+    async (name, expression) => {
+      const source = legacyBracket(bracket);
+      const before = structuredClone(source);
+      const normalized = repairLegacyBracketRecipe(source);
+      expect(normalized.version).toBe(source.version);
+      expect(normalized.revisions).toEqual(source.revisions);
+      expect(normalized.checkpoints).toEqual(source.checkpoints);
+      expect(normalized.ownerUserId).toBe(source.ownerUserId);
+      expect(legacyBracket(normalized).editHistory).toEqual(source.editHistory);
+      const editor = toUserId('collaboration_editor');
+      const manager = new CommandManager(normalized, editor);
+      expect(manager.canUndo).toBe(false);
+      manager.runTransaction('Editor tweak', [
+        commandFactories.setParameter({ name, expression })
+      ]);
+      expect(manager.document.version).toBeGreaterThan(source.version);
+      expect(manager.document.ownerUserId).toBe(source.ownerUserId);
+      const derived = await adapter.syncDocument(manager.document);
       expect(derived.warnings).toEqual([]);
       expect(
-        await adapter.exportStep(reopened.document, derived.exportableBodyIds)
+        await adapter.exportStep(manager.document, derived.exportableBodyIds)
       ).toContain('ISO-10303-21;');
-      reopened.undo();
+      const oldSnapshot = legacyBracket(manager.document);
       expect(
-        Object.values(reopened.document.nodes).find(
-          (node) => node.kind === 'parameter' && node.name === name
-        )
-      ).toMatchObject({ expression: original });
-      expect(
-        listFeaturesInOrder(reopened.document).map((feature) => feature.name)
-      ).toEqual(names.map((input) => input.name));
-      reopened.undo();
-      expect(
-        listFeaturesInOrder(reopened.document).map((feature) => feature.name)
-      ).toEqual(listFeaturesInOrder(legacy).map((feature) => feature.name));
-      reopened.redo();
-      reopened.redo();
-      expect((await adapter.syncDocument(reopened.document)).warnings).toEqual(
-        []
+        repairLegacyBracketSaveState(manager.document, oldSnapshot, [editor])
+      ).toBe(oldSnapshot);
+      const snapshot = repairLegacyBracketSaveState(
+        manager.document,
+        oldSnapshot,
+        [editor],
+        true
       );
-      expect(before).toEqual(manager.document);
+      const restored = restoreFromSaveState(
+        manager.document,
+        snapshot,
+        'Editor restore'
+      );
+      expect((await adapter.syncDocument(restored)).warnings).toEqual([]);
+      expect(source).toEqual(before);
     },
     60_000
   );

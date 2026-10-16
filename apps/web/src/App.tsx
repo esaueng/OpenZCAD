@@ -1,4 +1,7 @@
-import { repairLegacyBracketModel } from '@openzcad/document-core';
+import {
+  repairLegacyBracketModel,
+  repairLegacyBracketRecipe
+} from '@openzcad/document-core';
 import {
   repairLegacyBracketDemo,
   repairLegacyBracketSaveState
@@ -6461,6 +6464,10 @@ export function App() {
         normalized.ownerUserId === sessionRef.current?.userId
       ) {
         normalized = repairLegacyBracketDemo(normalized);
+      } else {
+        // Foreign collaboration documents retain their canonical clock/history.
+        // This local normalization grants no edit rights or owner persistence.
+        normalized = repairLegacyBracketRecipe(normalized);
       }
     } catch (error) {
       // A newer client wrote this document: the version stamp cannot be
@@ -9853,10 +9860,15 @@ export function App() {
       }
       const next = await prepareSaveStateRestore(
         current,
-        repairLegacyBracketSaveState(current, snapshot, [
-          localUserId,
-          ...(sessionRef.current ? [sessionRef.current.userId] : [])
-        ]),
+        repairLegacyBracketSaveState(
+          current,
+          snapshot,
+          [
+            localUserId,
+            ...(sessionRef.current ? [sessionRef.current.userId] : [])
+          ],
+          collaboration.role === 'editor'
+        ),
         reason,
         sharedAccountProject,
         session?.userId ?? current.ownerUserId

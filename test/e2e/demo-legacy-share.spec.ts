@@ -13,6 +13,7 @@ import {
   expect,
   expectBodyCount,
   stubAnonymousApi,
+  stubApi,
   test
 } from './openzcad-fixtures';
 
@@ -129,7 +130,7 @@ for (const [name, value] of [
     await page.getByRole('button', { name: /Export STEP/ }).click();
     const file = await download;
     expect(await file.failure()).toBeNull();
-    expect(await readFile((await file.path()), 'utf8')).toContain(
+    expect(await readFile(await file.path(), 'utf8')).toContain(
       'ISO-10303-21;'
     );
     expect(
@@ -139,5 +140,127 @@ for (const [name, value] of [
     ).toBe(false);
     expect(shared).toEqual(before);
     expect(errors).toEqual([]);
+  });
+}
+
+for (const [name, value] of [
+  ['wall_h', '26'],
+  ['boss_r', '14']
+] as const) {
+  test(`a collaboration editor can tweak the foreign legacy bracket with ${name}=${value}`, async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    const adapter = await createExactKernelAdapter();
+    let source: ProjectDocument;
+    try {
+      source = legacyBracket(
+        await buildDemoDocument(
+          DEMO_DEFINITIONS.find((definition) => definition.key === 'bracket')!,
+          toUserId('other_owner'),
+          (document) => adapter.syncDocument(document)
+        )
+      );
+    } finally {
+      adapter.dispose();
+    }
+    const before = structuredClone(source);
+    await stubApi(page, { collaborationRole: 'editor' });
+    await page.route('**/api/collaboration/config', (route) =>
+      route.fulfill({
+        json: {
+          sharingEnabled: true,
+          editLeasesEnforced: false,
+          personalSyncEnabled: false,
+          canary: false
+        }
+      })
+    );
+    await page.route('**/api/health', (route) =>
+      route.fulfill({
+        json: {
+          status: 'ok',
+          environment: 'beta',
+          projectSharingEnabled: true,
+          projectEditLeasesEnforced: false,
+          projectPersonalSyncEnabled: false
+        }
+      })
+    );
+    const summary = {
+      projectId: source.projectId,
+      name: source.name,
+      revisionCount: source.revisions.length,
+      documentVersion: source.version,
+      updatedAt: source.derived.updatedAt
+    };
+    await page.route('**/api/projects', (route) =>
+      route.fulfill({
+        json:
+          route.request().method() === 'POST'
+            ? { project: summary, document: source }
+            : { projects: [summary] }
+      })
+    );
+    await page.route(`**/api/projects/${source.projectId}`, (route) =>
+      route.fulfill({ json: source })
+    );
+    let ownerWrites = 0;
+    await page.route(
+      `**/api/projects/${source.projectId}/document`,
+      (route) => {
+        ownerWrites++;
+        return route.fulfill({
+          status: 403,
+          json: { error: 'Owner endpoint' }
+        });
+      }
+    );
+    await page.route(
+      `**/api/projects/${source.projectId}/revisions`,
+      (route) => {
+        if (route.request().method() !== 'GET') ownerWrites++;
+        return route.fulfill({ json: { revisions: [] } });
+      }
+    );
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill(source.name);
+    await page
+      .getByRole('button', { name: 'Create project', exact: true })
+      .click();
+    await expectBodyCount(page, 1);
+    await page.getByRole('button', { name: 'Tweak', exact: true }).click();
+    const input = page.getByLabel(`Expression for ${name}`, { exact: true });
+    await expect(input).toBeEditable();
+    await input.fill(value);
+    await input.press('Enter');
+    await expect(page.getByRole('contentinfo')).toContainText(
+      `Parameter ${name} updated.`,
+      { timeout: 30_000 }
+    );
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: /Export STEP/ }).click();
+    const file = await download;
+    expect(await file.failure()).toBeNull();
+    expect(await readFile(await file.path(), 'utf8')).toContain(
+      'ISO-10303-21;'
+    );
+    const cached = (await localDocuments(page)).find(
+      (document) => document.projectId === source.projectId
+    )!;
+    expect(cached.ownerUserId).toBe(source.ownerUserId);
+    expect(
+      Object.values(cached.nodes).find(
+        (node) => node.kind === 'parameter' && node.name === name
+      )
+    ).toMatchObject({ expression: value });
+    expect(ownerWrites).toBe(0);
+    expect(errors).toEqual([]);
+    expect(source).toEqual(before);
   });
 }
