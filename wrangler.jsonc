@@ -18,9 +18,10 @@
     "crons": ["17 * * * *"]
   },
   "ratelimits": [{"name":"GLIMPSE_USAGE_LIMITER", "namespace_id":"2026101501", "simple":{"limit":120,"period":60}}],
-  // Collector is provisioned; collection still defaults off in both switches.
+  // Production collection enabled; optional analytics still require browser consent.
+  "previews": { "vars": { "GLIMPSE_BASIC_ENABLED": "false", "GLIMPSE_USAGE_ENABLED": "false" } },
   "services": [{"binding":"GLIMPSE", "service":"glimpse", "entrypoint":"OpenZCADIngest"}],
-  // See docs/glimpse.md. Disabled collection must not require that service.
+  // See docs/glimpse.md for consent controls and rollback.
   "assets": {
     "directory": "./apps/web/dist",
     "binding": "ASSETS",
@@ -28,8 +29,8 @@
     "run_worker_first": ["/api/*", "/healthz", "/assets/freecadImportWorker-*"]
   },
   "vars": {
-    "GLIMPSE_BASIC_ENABLED": "false",
-    "GLIMPSE_USAGE_ENABLED": "false",
+    "GLIMPSE_BASIC_ENABLED": "true",
+    "GLIMPSE_USAGE_ENABLED": "true",
     "ENVIRONMENT": "beta",
     "AUTH_MODE": "email-code",
     "PRODUCTION_GUARD": "enabled",
