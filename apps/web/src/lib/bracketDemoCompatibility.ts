@@ -2,7 +2,8 @@ import { appendRevision, listFeaturesInOrder } from '@openzcad/document-core';
 import type {
   DocumentHistoryEntry,
   ProjectDocument,
-  SerializedCommand
+  SerializedCommand,
+  UserId
 } from '@openzcad/shared';
 import { BRACKET_BOSS_HEIGHT } from './bracketDemoPlacement';
 
@@ -36,6 +37,23 @@ const SEED_COMMANDS = new Set([
   'node.rename',
   'node.metadata.set'
 ]);
+
+/** Restore discards source history; upgrade its proven model before copying it. */
+export function repairLegacyBracketSaveState(
+  current: ProjectDocument,
+  snapshot: ProjectDocument,
+  owners: readonly UserId[]
+): ProjectDocument {
+  if (
+    current.projectId !== snapshot.projectId ||
+    current.ownerUserId !== snapshot.ownerUserId ||
+    !owners.includes(current.ownerUserId)
+  )
+    return snapshot;
+  const { editHistory: _sourceHistory, ...model } = snapshot;
+  const repaired = repairLegacyBracketDemo(model);
+  return repaired === model ? snapshot : repaired;
+}
 
 function seedCommand(command: SerializedCommand): boolean {
   return command.kind === 'transaction'
@@ -86,7 +104,8 @@ function parameterOnlyPatches(entry: DocumentHistoryEntry): boolean {
  * different project identity, changed expression or changed target abstains.
  * Only their placement fields are migrated in nodes, creation commands and
  * history endpoints together. Parameters, entry IDs, labels, actor, cursor
- * and pending Redo survive. Checkpoint documents are repaired when opened.
+ * and pending Redo survive. Owned snapshots are upgraded separately before
+ * named-save restore.
  * Caller must establish ownership before applying this document edit.
  */
 export function repairLegacyBracketDemo(

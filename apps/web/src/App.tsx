@@ -1,4 +1,7 @@
-import { repairLegacyBracketDemo } from './lib/bracketDemoCompatibility';
+import {
+  repairLegacyBracketDemo,
+  repairLegacyBracketSaveState
+} from './lib/bracketDemoCompatibility';
 import { setAnalyticsEnabled, trackUsage, trackDetail, trackParts, trackSize, isAnalyticsEnabled, durationBucket } from './lib/analytics';
 import type {
   GeometryBodyRepresentation,
@@ -9848,7 +9851,10 @@ export function App() {
       }
       const next = await prepareSaveStateRestore(
         current,
-        snapshot,
+        repairLegacyBracketSaveState(current, snapshot, [
+          localUserId,
+          ...(sessionRef.current ? [sessionRef.current.userId] : [])
+        ]),
         reason,
         sharedAccountProject,
         session?.userId ?? current.ownerUserId
