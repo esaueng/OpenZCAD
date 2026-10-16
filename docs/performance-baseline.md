@@ -808,3 +808,22 @@ both imported caps through reversal, cancel, delayed exact release and undo,
 and asserts zero geometry-worker rebuild requests during the drag. The generic
 fixture reproduced the 1.5× area error with the previous kernel and passes with
 the paired fix from [Remus #807](https://github.com/esaueng/remus/pull/807).
+
+
+## H02 matched-cache benchmark preparation (2026-10-15)
+
+The [current evidence and reproduction](qa/2026-10-15/h02-matched-cache-benchmark.md)
+retain the existing production holder-reload probe and add explicit
+cache-disabled/enabled benchmark builds, paired input validation, per-stage
+median/p95 reporting and optional post-GC Chromium geometry-worker JS heap
+telemetry. Only test configuration changes cache budgets; runtime defaults
+remain unchanged. Measurement reporting handles overlapping outer timers in
+the staged-analysis pipeline.
+
+The current-pin local holder oracle matches normalized publication across
+17 bodies and 720 faces, and the unchanged-source payload hit matches its full
+buffer bytes and structure. The browser campaign produced no complete matched
+pair before being stopped under severe unrelated host contention (load average
+150.53 on 32 logical CPUs). No timing, browser retained-heap or 20% p95 claim is
+made. A quiet target-machine campaign and the design's separate branch-lifetime,
+mutation, B-rep and retention qualifications remain required. H02 stays Partial.
