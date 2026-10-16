@@ -979,7 +979,7 @@ export async function seedOpenCommandFold(page: Page) {
  */
 export async function revealModelDrawer(
   page: Page,
-  section: 'History' | 'Parameters' | 'Items' = 'History'
+  section: 'History' | 'Parameters' | 'Objects' = 'History'
 ) {
   const drawer = page.locator('.model-drawer-float');
   if ((await drawer.count()) > 0) {
@@ -993,7 +993,7 @@ export async function revealModelDrawer(
 }
 
 /**
- * Selects a body from its row in the Items panel, the way a user picks one
+ * Selects a body from its row in the Objects panel, the way a user picks one
  * without aiming at it, and waits for its selection chip. A create leaves
  * nothing selected (design review G15), so a spec that reads the new body's
  * chip asks for it first.
@@ -1001,7 +1001,7 @@ export async function revealModelDrawer(
 export async function selectBodyFromItems(page: Page, name?: string) {
   const items = page
     .getByRole('toolbar', { name: 'Model panels' })
-    .getByRole('button', { name: 'Items panel' });
+    .getByRole('button', { name: 'Objects panel' });
   if ((await items.getAttribute('aria-pressed')) !== 'true') {
     await items.click();
   }

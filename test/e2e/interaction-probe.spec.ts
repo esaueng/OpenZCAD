@@ -319,7 +319,7 @@ test('cylinder radius proxy probe', async ({ page }) => {
   await inspector.getByLabel('Radius', { exact: true }).fill('14');
   await inspector.getByLabel('Height', { exact: true }).fill('28');
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  await expect(page.getByRole('button', { name: 'Bodies 1' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Objects 1' })).toBeVisible();
 
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });

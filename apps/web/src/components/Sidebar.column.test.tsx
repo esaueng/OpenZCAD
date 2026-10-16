@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -51,6 +51,7 @@ function renderSidebar(
     features,
     representations: {},
     selectedFeatureNodeId: null,
+    selectedSketchProfileId: null,
     selectedBodyIds: [],
     hiddenBodyIds: new Set(),
     hiddenSketchIds: new Set(),
@@ -209,7 +210,7 @@ describe('Sidebar', () => {
       consumed: true
     } as unknown as BodyRepresentation;
     renderSidebar({ panelState, representations: { 'body-1': body } });
-    const list = screen.getByRole('list', { name: 'Bodies' });
+    const list = screen.getByRole('list', { name: 'Objects' });
     expect(
       [...list.children].every(
         (child) => child.getAttribute('role') === 'listitem'
@@ -222,13 +223,165 @@ describe('Sidebar', () => {
       screen.getByRole('button', { name: 'Original' })
     ).toBeInTheDocument();
   });
-  it('gives the empty Bodies message list-item semantics', () => {
+  it('gives the empty Objects message list-item semantics', () => {
     const panelState = defaultPanelState();
     panelState.sidebarSections.bodies = true;
     renderSidebar({ panelState });
     expect(
-      screen.getByText('No bodies yet. Create a primitive or extrude a sketch.')
+      screen.getByText(
+        'No objects yet. Create a body or sketch to get started.'
+      )
     ).toHaveAttribute('role', 'listitem');
+  });
+
+  it('lists bodies and sketches once, counts both types, and filters without changing selection', async () => {
+    const body = {
+      bodyId: 'body-1',
+      name: 'Plate',
+      consumed: false
+    } as unknown as BodyRepresentation;
+    const sketch = feature(1, {
+      name: 'Outline',
+      featureKind: 'sketch',
+      data: { featureKind: 'sketch', sketchId: 'sketch-1' }
+    } as Partial<FeatureNode>);
+    const { props } = renderSidebar({
+      features: [
+        sketch,
+        feature(2, { bodyId: body.bodyId }),
+        feature(3, { bodyId: body.bodyId })
+      ],
+      representations: { [body.bodyId]: body },
+      selectedBodyIds: [body.bodyId]
+    });
+    const list = within(screen.getByRole('list', { name: 'Objects' }));
+    expect(screen.getByTitle('Collapse Objects')).toHaveTextContent('Objects2');
+    expect(list.getAllByRole('listitem')).toHaveLength(2);
+    expect(list.getByRole('button', { name: 'Plate' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    const filter = screen.getByRole('combobox', {
+      name: 'Filter objects by type'
+    });
+    await userEvent.selectOptions(filter, 'sketches');
+    expect(
+      list.queryByRole('button', { name: 'Plate' })
+    ).not.toBeInTheDocument();
+    await userEvent.click(list.getByRole('button', { name: 'Outline' }));
+    expect(props.onSelectFeature).toHaveBeenCalledExactlyOnceWith(sketch.id);
+    await userEvent.selectOptions(filter, 'bodies');
+    expect(
+      list.queryByRole('button', { name: 'Outline' })
+    ).not.toBeInTheDocument();
+    expect(list.getByRole('button', { name: 'Plate' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    await userEvent.click(list.getByRole('button', { name: 'Plate' }));
+    expect(props.onSelectBody).toHaveBeenCalledExactlyOnceWith(
+      body.bodyId,
+      false
+    );
+    await userEvent.selectOptions(filter, 'all');
+    expect(list.getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  it('shows sketches without body geometry and uses their own visibility and selected state', async () => {
+    const sketch = feature(1, {
+      name: 'Profile',
+      featureKind: 'sketch',
+      data: { featureKind: 'sketch', sketchId: 'sketch-1' }
+    } as Partial<FeatureNode>);
+    const sidebar = renderSidebar({
+      features: [sketch],
+      selectedFeatureNodeId: sketch.id,
+      hiddenSketchIds: new Set(['sketch-1'])
+    });
+    const list = within(screen.getByRole('list', { name: 'Objects' }));
+    expect(list.getByRole('button', { name: 'Profile' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(list.queryByText(/No objects yet/)).not.toBeInTheDocument();
+    await userEvent.click(
+      list.getByRole('button', { name: 'Show sketch Profile' })
+    );
+    expect(
+      sidebar.props.onToggleSketchVisibility
+    ).toHaveBeenCalledExactlyOnceWith('sketch-1');
+    expect(sidebar.props.onToggleBodyVisibility).not.toHaveBeenCalled();
+    sidebar.rerender(
+      <Sidebar {...sidebar.props} hiddenSketchIds={new Set()} />
+    );
+    await userEvent.click(
+      list.getByRole('button', { name: 'Hide sketch Profile' })
+    );
+    expect(sidebar.props.onToggleSketchVisibility).toHaveBeenCalledTimes(2);
+    await userEvent.selectOptions(
+      screen.getByRole('combobox', { name: 'Filter objects by type' }),
+      'bodies'
+    );
+    expect(
+      list.getByText('No bodies yet. Create a primitive or extrude a sketch.')
+    ).toHaveAttribute('role', 'listitem');
+  });
+
+  it('tracks viewport sketch selection independently of the selected history feature', () => {
+    const sketches = [1, 2].map((index) =>
+      feature(index, {
+        name: `Profile ${index}`,
+        featureKind: 'sketch',
+        data: { featureKind: 'sketch', sketchId: `sketch-${index}` }
+      } as Partial<FeatureNode>)
+    );
+    const sidebar = renderSidebar({
+      features: sketches,
+      selectedSketchProfileId: 'sketch-2'
+    });
+    const list = within(screen.getByRole('list', { name: 'Objects' }));
+    expect(list.getByRole('button', { name: 'Profile 1' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    const selected = list.getByRole('button', { name: 'Profile 2' });
+    expect(selected).toHaveAttribute('aria-pressed', 'true');
+    expect(selected.closest('.object-row')).toHaveClass('selected');
+    sidebar.rerender(
+      <Sidebar {...sidebar.props} selectedSketchProfileId={null} />
+    );
+    expect(selected).toHaveAttribute('aria-pressed', 'false');
+    expect(selected.closest('.object-row')).not.toHaveClass('selected');
+  });
+
+  it('keeps source bodies out of the sketch filter and restores their disclosure state', async () => {
+    renderSidebar({
+      representations: {
+        source: {
+          bodyId: 'source',
+          name: 'Source',
+          consumed: true
+        } as unknown as BodyRepresentation
+      }
+    });
+    await userEvent.click(
+      screen.getByRole('button', { name: '1 source body' })
+    );
+    const filter = screen.getByRole('combobox', {
+      name: 'Filter objects by type'
+    });
+    await userEvent.selectOptions(filter, 'sketches');
+    expect(
+      screen.queryByRole('button', { name: 'Source' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '1 source body' })
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText('No sketches yet. Start a sketch on a plane or face.')
+    ).toBeInTheDocument();
+    await userEvent.selectOptions(filter, 'all');
+    expect(screen.getByRole('button', { name: 'Source' })).toBeInTheDocument();
   });
   it('collapses History into one line that counts and names the newest feature', () => {
     const { container } = renderSidebar();

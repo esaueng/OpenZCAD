@@ -41,7 +41,7 @@ for (const viewport of [
         const drawer = page.locator('.model-drawer-float');
         const headers = drawer.locator('button.section-title');
         await expect(headers).toHaveCount(4);
-        for (const title of ['Parameters', 'Bodies', 'History', 'Revisions']) {
+        for (const title of ['Parameters', 'Objects', 'History', 'Revisions']) {
           const header = headers.filter({ hasText: title });
           await header.scrollIntoViewIfNeeded();
           const initiallyOpen = await header.getAttribute('aria-expanded');

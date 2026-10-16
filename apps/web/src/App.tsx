@@ -17229,6 +17229,7 @@ export function App() {
     }
     setSelectedEdges([]);
     setSelectedTopology(null);
+    setSelectedSketchProfileId(null);
     const nextIds = additive
       ? selectedBodyIds.includes(bodyId)
         ? selectedBodyIds.filter((id) => id !== bodyId)
@@ -19841,6 +19842,7 @@ export function App() {
         currentGeometrySnapshot || currentFaceGeometryPreview
       )}
       selectedFeatureNodeId={selectedFeatureNodeId}
+      selectedSketchProfileId={selectedSketchProfileId}
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
       warnings={diagnostics}
@@ -20297,7 +20299,7 @@ export function App() {
                 >
                   {(
                     [
-                      ['bodies', 'Items', Layers],
+                      ['bodies', 'Objects', Layers],
                       ['history', 'History', ListOrdered],
                       ['parameters', 'Parameters', SlidersHorizontal]
                     ] as const

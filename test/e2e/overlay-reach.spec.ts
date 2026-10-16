@@ -77,7 +77,7 @@ test('UI-01: an inch part’s selection chip stays under the top bar and its Mov
     units: 'inch',
     size: ['2', '1', '0.5']
   });
-  await revealModelDrawer(page, 'Items');
+  await revealModelDrawer(page, 'Objects');
   await page.locator('.body-row').first().click();
   const chip = page.locator('.selection-callout-chip');
   const move = chip.getByRole('button', { name: 'Selection: Move' });

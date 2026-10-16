@@ -394,7 +394,7 @@ test('reuses an exact frame on reversal and waits for complete validation on rel
   ).toContainText('Validating');
   // A released drag keeps the drawer suspended through validation; opening
   // it explicitly must still disclose the preview's incomplete analysis.
-  await page.getByRole('button', { name: 'Items panel', exact: true }).click();
+  await page.getByRole('button', { name: 'Objects panel', exact: true }).click();
   await expect(page.getByText('Preparing model details…')).toBeVisible();
   await expect(page.getByRole('contentinfo')).not.toContainText(
     'Cylinder height set to 31 mm.'
@@ -1250,7 +1250,7 @@ for (const surface of ['top-cap', 'wall'] as const) {
       .toBe(1);
     expect(await fullRequests()).toBe(fullBefore + 1);
     await page
-      .getByRole('button', { name: 'Items panel', exact: true })
+      .getByRole('button', { name: 'Objects panel', exact: true })
       .click();
     await expect(page.getByText('Preparing model details…')).toBeVisible();
     // The preview cannot change history before the complete worker result.

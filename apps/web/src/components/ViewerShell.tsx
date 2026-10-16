@@ -147,7 +147,7 @@ interface ViewerShellProps {
   dockExtras?: ReactNode;
   /**
    * More islands for the instrument rail, under the viewer bar: the model
-   * drawer's Items, History and Parameters buttons.
+   * drawer's Objects, History and Parameters buttons.
    */
   railExtras?: ReactNode;
   hideViewerToolbar?: boolean;
