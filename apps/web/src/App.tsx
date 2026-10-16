@@ -248,6 +248,10 @@ import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
 import { ApiError, api, isProjectDocumentUnavailableError } from './lib/api';
 import {
+  loadAccountProjectResult,
+  type AccountProjectLoadResult
+} from './lib/accountProjectLoad';
+import {
   applyAccountSourceArchives,
   sourceUploadMessage
 } from './lib/accountImportSources';
@@ -1586,21 +1590,6 @@ interface HydrateOptions {
    * is kept rather than overwritten.
    */
   activeProjectSince?: ActiveProjectSnapshot;
-}
-
-interface AccountProjectLoadResult {
-  document: ProjectDocument | null;
-  error?: unknown;
-}
-
-async function loadAccountProjectResult(
-  projectId: string
-): Promise<AccountProjectLoadResult> {
-  try {
-    return { document: await api.loadProject(projectId) };
-  } catch (error) {
-    return { document: null, error };
-  }
 }
 
 /**
@@ -4876,17 +4865,28 @@ export function App() {
               api.session().catch(() => null)
             )
           : null;
+        const listedPromise = timedAsync('startup.projectList', () =>
+          loadProjectSummaries(Boolean(activeSession))
+        );
+        const lastSyncedVersionPromise = startupProjectId
+          ? loadLastSyncedVersion(startupProjectId)
+          : Promise.resolve(null);
         const [
           listed,
           rememberedRemoteResult,
           remoteSettings,
-          collaborationCapabilities
+          collaborationCapabilities,
+          lastSyncedVersion
         ] = await Promise.all([
-          timedAsync('startup.projectList', () =>
-            loadProjectSummaries(Boolean(activeSession))
-          ),
+          listedPromise,
           activeSession && startupProjectId
-            ? loadAccountProjectResult(startupProjectId)
+            ? lastSyncedVersionPromise.then((baseline) =>
+                loadAccountProjectResult(startupProjectId, {
+                  localDocument: rememberedLocal,
+                  previouslySynced: baseline !== null,
+                  accountProjects: listedPromise
+                })
+              )
             : Promise.resolve<AccountProjectLoadResult>({
                 document: null
               }),
@@ -4895,7 +4895,8 @@ export function App() {
             ? api
                 .collaborationCapabilities()
                 .catch(() => DISABLED_COLLABORATION_ROLLOUT)
-            : DISABLED_COLLABORATION_ROLLOUT
+            : DISABLED_COLLABORATION_ROLLOUT,
+          lastSyncedVersionPromise
         ]);
         if (cancelled) {
           return;
@@ -4916,9 +4917,7 @@ export function App() {
         const restoredOutcome = chooseProjectDocument(
           rememberedLocal,
           rememberedRemote,
-          startupProjectId
-            ? await loadLastSyncedVersion(startupProjectId)
-            : null
+          lastSyncedVersion
         );
         let restoredDocument =
           restoredOutcome.choice === 'none'
@@ -9093,15 +9092,30 @@ export function App() {
       ) {
         accountDocumentUnavailableProjectIdRef.current = null;
       }
+      const localDocumentPromise = loadLocalProject(projectId);
+      const lastSyncedVersionPromise = loadLastSyncedVersion(projectId);
       const [localDocument, remoteResult, lastSyncedVersion, artifactList] =
         await Promise.all([
-          loadLocalProject(projectId),
+          localDocumentPromise,
           session
-            ? loadAccountProjectResult(projectId)
+            ? Promise.all([
+                localDocumentPromise,
+                lastSyncedVersionPromise
+              ]).then(([localDocument, baseline]) =>
+                loadAccountProjectResult(projectId, {
+                  localDocument,
+                  previouslySynced:
+                    baseline !== null || cloudProjectIds.has(projectId),
+                  accountProjects: {
+                    remoteReached: accountProjectListReached,
+                    cloudProjectIds
+                  }
+                })
+              )
             : Promise.resolve<AccountProjectLoadResult>({
                 document: null
               }),
-          loadLastSyncedVersion(projectId),
+          lastSyncedVersionPromise,
           // Read alongside the document so the File menu's count is on the
           // bar from the workspace's first frame, not a round-trip later.
           listProjectArtifacts(
