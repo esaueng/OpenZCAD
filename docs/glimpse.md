@@ -70,3 +70,12 @@ model contents to derive analytics.
 Glimpse `0003_census.sql` and OpenZCAD `0028_glimpse_consent.sql`, then service
 before app code. Neither new migration has been applied remotely. Keep collection
 flags off until end-to-end staging checks and deployment privacy review pass.
+
+Local v2 verification: root 4,629 passed / 8 skipped; web 2,956 passed; parity
+185 passed / 1 skipped. Typecheck, production build/bundle gate and Wrangler
+dry-run passed. Lint: zero errors, 16 existing hook warnings. Settings browser
+suite: 29 passed, plus three repeated cloud-off cold-reload probes. Focused
+consent/API/census checks: 99 root and 62 web passed. The full unrelated browser
+suite was not rerun. The master cloud switch is rechecked from persisted storage
+on every send, including startup and other-tab changes; regression coverage
+protects this boundary. Hosted checks and production verification are separate.
