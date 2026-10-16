@@ -3,14 +3,10 @@
  *
  * A 3MF's `<model>` element carries a `unit` attribute and its `<build>`
  * section says which of the `<resources>` objects are actually placed, how
- * many times, and where. The paired translator normalizes resource vertices
- * to millimetres, while an `<item>` transform is dropped, so a doubled box imports at
- * original size; an object placed twice imports once; and an object never
- * placed at all imports anyway. Every one of those is geometry silently
- * different from what the file states, which is exactly the guessing the
- * adapter refuses everywhere else — so the declaration, the placements and
- * their matrices are read here and the import honours them. Translation
- * entries are converted to millimetres once when applying those matrices.
+ * many times, and where. The paired translator now honors those placements
+ * and normalizes their coordinates to millimetres. This browser preflight
+ * validates declarations, unsupported features, bounds and expected placement
+ * counts before invoking it. The browser must not apply those transforms again.
  *
  * Reading them means opening the Zip package, which is why there is a small
  * Zip reader here. The relationship part is read in its first 64 KB; the 3D
@@ -47,9 +43,8 @@ export interface ThreeMfUnit {
 export interface ThreeMfPlacement {
   /**
    * Index of the placed object among the package's mesh objects, in
-   * `<resources>` document order — which is the order the translator returns
-   * its solids in. Verified on the pin: reversing two `<object>` elements
-   * reverses the two solids.
+   * `<resources>` document order. Used to validate the build's references;
+   * the translator now resolves and places those resources itself.
    */
   readonly objectIndex: number;
   /** The object id the item named, for messages. */

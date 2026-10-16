@@ -14,9 +14,7 @@ import { glbPlacement } from './glb-scene';
 import {
   applyThreeMfTransform,
   readThreeMfPackage,
-  transformDeterminant,
-  type ThreeMfPackage,
-  type ThreeMfPlacement
+  transformDeterminant
 } from './three-mf-package';
 
 /** What an `imported-mesh` feature needs, in millimetres. */
@@ -61,9 +59,10 @@ interface MeshPlacement {
  * their numbers are adopted as written — the STL convention. A 3MF declares
  * one, and also declares in its `<build>` section which of its objects are
  * placed, how often, and with what matrix; glTF is metres and +Y up by
- * definition, and places its meshes through a node graph. The pinned
- * translators read none of that, so it is read from the file here and
- * applied. Anything a file states that this import cannot carry out
+ * definition, and places its meshes through a node graph. The paired 3MF
+ * translator applies build selection, instances and transforms in millimetres;
+ * the browser preflight still refuses unsupported package features. GLB node
+ * placement is applied here. Anything a file states that this import cannot carry out
  * faithfully is refused by name rather than dropped.
  *
  * One file becomes one mesh body, and whether a file can is decided by trying,
@@ -133,13 +132,16 @@ export async function importMeshFile(
   let indices: number[];
   try {
     const solids = Array.from(kernel.deserializeSolids(document));
+    if (pkg && solids.length !== pkg.placements.length) {
+      throw new Error(
+        `This 3MF requests ${pkg.placements.length} placements but the translator returned ${solids.length} bodies.`
+      );
+    }
     ({ vertices, indices } = tessellatePlacements(
       kernel,
-      pkg
-        ? threeMfPlacements(pkg, solids)
-        : glbTransform
-          ? solids.map((solid) => ({ solid, transform: glbTransform }))
-          : solids.map(identityPlacement)
+      glbTransform
+        ? solids.map((solid) => ({ solid, transform: glbTransform }))
+        : solids.map(identityPlacement)
     ));
 
     const triangleCount = indices.length / 3;
@@ -240,43 +242,10 @@ function identityPlacement(solid: number): MeshPlacement {
 }
 
 /**
- * What a 3MF's `<build>` section asks the import to place.
- *
- * The translator returns one solid per `<object>` resource, in document order
- * — verified on the pin — and ignores `<build>` completely. So the mapping
- * from a build item to a solid is positional, and it is checked: if the
- * package's mesh objects and the translator's solids do not correspond one for
- * one, the correspondence is not established and the import refuses rather
- * than placing whichever solid happens to sit at that index.
- */
-function threeMfPlacements(
-  pkg: ThreeMfPackage,
-  solids: readonly number[]
-): MeshPlacement[] {
-  if (solids.length !== pkg.meshObjectCount) {
-    throw new Error(
-      `This 3MF declares ${pkg.meshObjectCount} mesh object(s) but read as ` +
-        `${solids.length}, so the import cannot tell which object its build ` +
-        'places. Re-export the file, or import each object from its own file.'
-    );
-  }
-  return pkg.placements.map((placement: ThreeMfPlacement) => ({
-    solid: solids[placement.objectIndex]!,
-    // The paired translator normalizes resource vertices to millimetres.
-    // Build translations remain in the model's unit; scale those once here.
-    transform:
-      placement.transform?.map((value, index) =>
-        index >= 9 ? value * pkg.unit.millimetres : value
-      ) ?? null
-  }));
-}
-
-/**
  * Every placement's triangles, in one list.
  *
- * A solid placed more than once is tessellated once and emitted once per
- * placement, so a build plate that repeats one object imports as many copies
- * as it asks for rather than the one the translator hands back.
+ * Repeated handles share one tessellation. 3MF solids arrive already placed
+ * by the translator; optional GLB node placement is applied here.
  */
 function tessellatePlacements(
   kernel: RemusKernel,
