@@ -222,7 +222,7 @@ def select_event(name, event, default_head):
         # Use only GitHub's event envelope. Never trust requester artifacts,
         # outputs, checkout code, a supplied repository URL, or its conclusion.
         if (run["event"] not in ("push", "merge_group") or
-                run["path"] != ".github/workflows/history-privacy-request.yml" or
+                run["path"].split("@", 1)[0] != ".github/workflows/history-privacy-request.yml" or
                 run["head_repository"]["full_name"].lower() != os.environ["GITHUB_REPOSITORY"].lower()):
             raise PrivacyError("Untrusted audit request; verification refused.")
         head = run["head_sha"]
@@ -252,6 +252,13 @@ def api(method, path, body):
         raise PrivacyError("GitHub check result could not be published; retry required.") from None
 
 
+def audit_all_refs(name, event):
+    # Push request payloads can peel annotated tags to their commits. Fetch all
+    # owner refs so tag objects, tagger metadata and signatures are still scanned.
+    return ((name in ("workflow_dispatch", "schedule") and not event.get("inputs", {}).get("audit_head"))
+            or (name == "workflow_run" and event["workflow_run"]["event"] == "push"))
+
+
 def ci(policy_path):
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
     heads, refs, report_head = select_event(os.environ["GITHUB_EVENT_NAME"], event, os.environ["GITHUB_SHA"])
@@ -264,7 +271,8 @@ def ci(policy_path):
         if report_head:
             if not OID.fullmatch(report_head):
                 raise PrivacyError("Invalid check head.")
-            check = api("POST", "/check-runs", {"name": "history-privacy", "head_sha": report_head, "status": "in_progress"})
+            check = api("POST", "/check-runs", {"name": "history-privacy", "head_sha": report_head, "status": "in_progress",
+                    "details_url": "https://github.com/" + os.environ["GITHUB_REPOSITORY"] + "/actions/runs/" + os.environ.get("GITHUB_RUN_ID", "")})
         policy = Policy(policy_path, os.environ.get("HISTORY_PRIVACY_HMAC_KEY", ""))
         repository = os.environ["GITHUB_REPOSITORY"]
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
@@ -277,21 +285,22 @@ def ci(policy_path):
                     raise PrivacyError("Invalid fetch target.")
                 git(directory, "-c", "protocol.file.allow=never", "-c", "protocol.ext.allow=never",
                     "fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "origin", oid)
-            full_audit = (os.environ["GITHUB_EVENT_NAME"] in ("workflow_dispatch", "schedule")
-                          and not event.get("inputs", {}).get("audit_head"))
+            full_audit = audit_all_refs(os.environ["GITHUB_EVENT_NAME"], event)
             if full_audit:
                 git(directory, "fetch", "--quiet", "--no-recurse-submodules", "origin",
                     "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
                 advertised = git(directory, "for-each-ref", "--format=%(objectname) %(refname)",
                                  "refs/heads", "refs/tags").decode("utf-8").splitlines()
-                heads, refs = [], []
+                # Preserve the originally requested head, even if its branch
+                # moved or disappeared before this complete owner-ref audit.
                 for line in advertised:
                     oid, ref = line.split(" ", 1)
                     heads.append(oid)
                     refs.append(ref)
             if check is None:
                 report_head = git(directory, "rev-parse", "--verify", heads[0] + "^{commit}").decode("ascii").strip()
-                check = api("POST", "/check-runs", {"name": "history-privacy", "head_sha": report_head, "status": "in_progress"})
+                check = api("POST", "/check-runs", {"name": "history-privacy", "head_sha": report_head, "status": "in_progress",
+                    "details_url": "https://github.com/" + os.environ["GITHUB_REPOSITORY"] + "/actions/runs/" + os.environ.get("GITHUB_RUN_ID", "")})
             count = scan(directory, policy, heads, excludes=[] if full_audit else [policy.baseline], refs=refs)
         print(f"PASS: inspected {count} incoming Git objects; privacy details withheld.")
         passed = True

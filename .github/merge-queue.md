@@ -8,7 +8,7 @@ no minimum-group wait and a 180-minute check timeout, matching Remus.
 
 Branch protection requires `checks / validate`, `checks / e2e`,
 `commit-privacy`, `history-privacy`, and Cloudflare `verify` (the `verify` job in the
-`Cloudflare version` workflow), with `history-privacy` bound to the dedicated Esau History Privacy App and
+`Cloudflare version` workflow), with both privacy checks bound to the dedicated Esau History Privacy App and
 the other checks bound to GitHub Actions. Existing review
 requirements and conversation resolution are preserved. The queue validates
 changes with the latest main. Strict up-to-date status checks are disabled: being behind

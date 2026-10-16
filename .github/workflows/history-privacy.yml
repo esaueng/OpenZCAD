@@ -37,7 +37,7 @@ jobs:
           sparse-checkout: .github/privacy
       - name: Create narrowly scoped check publisher token
         id: publisher
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.HISTORY_PRIVACY_APP_CLIENT_ID }}
           private-key: ${{ secrets.HISTORY_PRIVACY_APP_PRIVATE_KEY }}
@@ -47,3 +47,9 @@ jobs:
           GH_TOKEN: ${{ steps.publisher.outputs.token }}
           HISTORY_PRIVACY_HMAC_KEY: ${{ secrets.HISTORY_PRIVACY_HMAC_KEY }}
         run: python3 .github/privacy/history_privacy.py --ci
+      - name: Publish protected public-identity verdict
+        if: always() && steps.publisher.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
+          GH_READ_TOKEN: ${{ github.token }}
+        run: python3 .github/privacy/commit_privacy.py --publish

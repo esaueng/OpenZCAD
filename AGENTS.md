@@ -168,8 +168,8 @@ See [.github/merge-queue.md](.github/merge-queue.md) for the enqueue procedure.
 
 Branch protection requires `checks / validate`, `checks / e2e`,
 `commit-privacy`, `history-privacy`, and Cloudflare `verify` (the `verify` job in the
-`Cloudflare version` workflow), with `history-privacy` bound to the dedicated Esau History Privacy App and the
-other checks bound to GitHub Actions. Review
+`Cloudflare version` workflow), with both privacy checks bound to the dedicated Esau History Privacy App and
+the other checks bound to GitHub Actions. Review
 requirements remain unchanged (currently zero required approvals), and
 conversation resolution is required. The queue validates candidates against current main, so strict
 status checks are disabled: a branch behind main does not need a manual

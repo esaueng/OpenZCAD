@@ -28,3 +28,11 @@ class WorkflowTrustTests(unittest.TestCase):
         self.assertNotRegex(text, r':\s*write\b')
         for event in ('push:', 'merge_group:'):
             self.assertIn(event, text)
+
+    def test_metadata_convenience_workflow_cannot_publish_a_required_check(self):
+        text = (Path(__file__).parents[1] / 'workflows' / 'commit-privacy.yml').read_text()
+        self.assertNotIn('secrets.', text)
+        self.assertNotIn('environment:', text)
+        self.assertNotRegex(text, r':\s*write\b')
+        self.assertNotIn('--publish', text)
+        self.assertIn('GH_READ_TOKEN: ${{ github.token }}', text)

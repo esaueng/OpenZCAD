@@ -1,0 +1,323 @@
+import json
+from pathlib import Path
+from history_privacy import select_event
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+# Public GitHub handles and explicitly approved public display names only.
+# Never put private names, emails, or a denylist here.
+PROTECTED_LOGINS = {"petertoday"}
+PUBLIC_DISPLAY_NAMES = {"petertoday": {"Peter"}}
+# Public automation identities; do not exempt an entire actor or commit.
+PUBLIC_BOT_IDENTITIES = {"noreply@anthropic.com": {"claude", "claude code"}}
+BOT_DISPLAY_NAMES = {
+    "claude[bot]": {"claude", "claude code"},
+    "claude-code-action[bot]": {"claude", "claude code"},
+}
+POLICY = "protected-users"
+NOREPLY = re.compile(r"(?:[0-9]+\+)?([A-Za-z0-9-]+(?:\[bot\])?)@users\.noreply\.github\.com", re.IGNORECASE)
+SHA = re.compile(r"[0-9a-f]{40}")
+
+
+class CheckError(Exception):
+    pass
+
+
+def valid_public_identity(name, email):
+    if name == "GitHub" and email == "noreply@github.com":
+        return True
+    if name.casefold() in PUBLIC_BOT_IDENTITIES.get(email.casefold(), set()):
+        return True
+    match = NOREPLY.fullmatch(email)
+    if match is None:
+        return False
+    login = match.group(1).casefold()
+    approved = {login} | {value.casefold() for value in PUBLIC_DISPLAY_NAMES.get(login, set())}
+    if login.endswith("[bot]"):
+        approved |= {login[:-5]} | BOT_DISPLAY_NAMES.get(login, set())
+    return name.casefold() in approved
+
+
+def invalid_fields(commit):
+    invalid = []
+    for field in ("author", "committer"):
+        raw = commit["commit"][field]
+        name, email = raw["name"], raw["email"]
+        account = commit.get(field) or {}
+        login = account.get("login", "").casefold()
+        match = NOREPLY.fullmatch(email)
+        public_login = match.group(1).casefold() if match else ""
+        protected_names = {
+            display.casefold()
+            for protected_login in PROTECTED_LOGINS
+            for display in PUBLIC_DISPLAY_NAMES.get(protected_login, set())
+        }
+        protected = bool({login, name.casefold(), public_login} & (PROTECTED_LOGINS | protected_names))
+        if POLICY == "all-users" or protected:
+            if not valid_public_identity(name, email):
+                invalid.append(field)
+            elif protected and public_login not in PROTECTED_LOGINS:
+                invalid.append(field)
+    return invalid
+
+
+def missing_commit(error):
+    if error.code == 404:
+        return True
+    if error.code != 422:
+        return False
+    try:
+        body = json.load(error)
+    except (ValueError, TypeError):
+        return False
+    message = body.get("message", "") if isinstance(body, dict) else ""
+    return isinstance(message, str) and message.startswith("No commit found for SHA:")
+
+
+def resolve_commit(oid, request):
+    # Push payloads can identify an annotated tag object rather than its commit.
+    seen = set()
+    while oid not in seen:
+        seen.add(oid)
+        commit = request("/commits/" + oid, allow_missing=True)
+        if commit is not None:
+            return commit["sha"]
+        target = request("/git/tags/" + oid)["object"]
+        if target["type"] not in ("tag", "commit"):
+            raise CheckError("Tag does not point to a commit.")
+        oid = target["sha"]
+    raise CheckError("Tag cycle cannot be verified.")
+
+
+def commit_range(event_name, event, request):
+    if event_name in ("pull_request", "pull_request_target"):
+        pr = event["pull_request"]
+        return pr["base"]["sha"], pr["head"]["sha"]
+    if event_name == "merge_group":
+        group = event["merge_group"]
+        return group["base_sha"], group["head_sha"]
+    if event_name == "push":
+        if event.get("deleted"):
+            return None
+        head = event["after"]
+        base = event["before"]
+        if event.get("ref", "").startswith("refs/tags/"):
+            head = resolve_commit(head, request)
+            if base != "0" * 40:
+                base = resolve_commit(base, request)
+        if base == "0" * 40:
+            # A new branch has no previous tip. Compare with the current default
+            # branch, rather than rejecting inherited upstream history.
+            branch = urllib.parse.quote(event["repository"]["default_branch"], safe="")
+            base = request("/commits/" + branch)["sha"]
+        return base, head
+    raise CheckError("Unsupported event; commit range cannot be verified.")
+
+
+def collect_commits(base, head, request):
+    if not SHA.fullmatch(base) or not SHA.fullmatch(head):
+        raise CheckError("Invalid commit range.")
+    if base == head:
+        return []
+    commits = []
+    total = None
+    page = 1
+    while True:
+        result = request(f"/compare/{base}...{head}?per_page=100&page={page}")
+        if total is None:
+            total = result["total_commits"]
+        elif total != result["total_commits"]:
+            raise CheckError("Commit range changed while checking it.")
+        batch = result["commits"]
+        commits.extend(batch)
+        if len(commits) >= total:
+            break
+        if not batch:
+            raise CheckError("Incomplete commit range; check refused.")
+        page += 1
+    if len(commits) != total or len({c["sha"] for c in commits}) != total:
+        raise CheckError("Incomplete or duplicate commit range; check refused.")
+    return commits
+
+
+def regression_checks():
+    # GitHub returns 422, rather than 404, for an annotated tag object.
+    from io import BytesIO
+    def http_error(code, body):
+        return urllib.error.HTTPError("https://example.invalid", code, "fixture", None, BytesIO(body))
+    assert missing_commit(http_error(404, b""))
+    assert missing_commit(http_error(422, b'{"message":"No commit found for SHA: synthetic"}'))
+    assert not missing_commit(http_error(422, b'{"message":"Validation Failed"}'))
+    assert not missing_commit(http_error(422, b'[]'))
+    assert not missing_commit(http_error(403, b'{"message":"No commit found for SHA: synthetic"}'))
+    # Synthetic examples only: no real personal identifiers in tests or logs.
+    def fixture(name, email, login=None):
+        raw = {"name": name, "email": email}
+        account = {"login": login} if login else None
+        return {"commit": {"author": raw, "committer": raw}, "author": account, "committer": account}
+    assert valid_public_identity("example-user", "123+example-user@users.noreply.github.com")
+    assert valid_public_identity("example-user", "example-user@users.noreply.github.com")
+    assert valid_public_identity("github-actions[bot]", "41898282+github-actions[bot]@users.noreply.github.com")
+    assert valid_public_identity("GitHub", "noreply@github.com")
+    for name, email, login in (
+        ("Claude", "noreply@anthropic.com", "claude"),
+        ("Claude Code", "noreply@anthropic.com", "claude"),
+        ("CLAUDE", "NOREPLY@ANTHROPIC.COM", "claude"),
+        ("Claude", "209825114+claude[bot]@users.noreply.github.com", "claude[bot]"),
+        ("Claude Code", "208546643+claude-code-action[bot]@users.noreply.github.com", "claude-code-action[bot]"),
+        ("example-automation", "123+example-automation[bot]@users.noreply.github.com", "example-automation[bot]"),
+        ("dependabot[bot]", "49699333+dependabot[bot]@users.noreply.github.com", "dependabot[bot]"),
+    ):
+        assert valid_public_identity(name, email)
+        assert invalid_fields(fixture(name, email, login)) == []
+    assert not valid_public_identity("Example Person", "noreply@anthropic.com")
+    assert not valid_public_identity("Claude", "example@anthropic.com")
+    assert not valid_public_identity("Claude", "noreply@anthropic.com.example.invalid")
+    assert not valid_public_identity("Example Person", "123+example-automation[bot]@users.noreply.github.com")
+    assert not valid_public_identity("Example Person", "123+example-user@users.noreply.github.com")
+    assert not valid_public_identity("example-user", "example@example.invalid")
+    # Pin the renamed account explicitly; reject mismatched public aliases.
+    assert PROTECTED_LOGINS == {"petertoday"}
+    assert invalid_fields(fixture("petertoday", "171875562+petertoday@users.noreply.github.com", "petertoday")) == []
+    assert invalid_fields(fixture("example-previous-handle", "123+example-previous-handle@users.noreply.github.com", "petertoday")) == ["author", "committer"]
+    protected = next(iter(PROTECTED_LOGINS))
+    assert invalid_fields(fixture("Example Person", "example@example.invalid", protected)) == ["author", "committer"]
+    # A public bot identity cannot disguise the protected human account.
+    assert invalid_fields(fixture("Claude", "noreply@anthropic.com", protected)) == ["author", "committer"]
+    mixed = fixture("Claude", "noreply@anthropic.com", "claude")
+    mixed["commit"]["committer"] = {"name": "Example Person", "email": "example@example.invalid"}
+    mixed["committer"] = {"login": protected}
+    assert invalid_fields(mixed) == ["committer"]
+    mixed = fixture(protected, protected + "@users.noreply.github.com", protected)
+    mixed["commit"]["committer"] = {"name": "Claude", "email": "noreply@anthropic.com"}
+    mixed["committer"] = {"login": "claude"}
+    assert invalid_fields(mixed) == []
+    assert invalid_fields(fixture(protected, protected + "@users.noreply.github.com", protected)) == []
+    assert invalid_fields(fixture("example-user", "example-user@users.noreply.github.com", protected)) == ["author", "committer"]
+    for display_name in PUBLIC_DISPLAY_NAMES.get(protected, set()):
+        assert invalid_fields(fixture(display_name, protected + "@users.noreply.github.com", protected)) == []
+        assert invalid_fields(fixture(display_name, "123+" + protected + "@users.noreply.github.com", protected)) == []
+        assert invalid_fields(fixture(display_name, "example-user@users.noreply.github.com", protected)) == ["author", "committer"]
+        assert not valid_public_identity(display_name, "example-user@users.noreply.github.com")
+        assert invalid_fields(fixture(display_name, "example-user@users.noreply.github.com", "other-contributor")) == ["author", "committer"]
+        assert invalid_fields(fixture(display_name, "example@example.invalid", protected)) == ["author", "committer"]
+        assert invalid_fields(fixture(display_name, "example@example.invalid", None)) == ["author", "committer"]
+        assert invalid_fields(fixture(display_name.casefold(), "example@example.invalid", None)) == ["author", "committer"]
+        assert invalid_fields(fixture(display_name, protected + "@users.noreply.github.com", None)) == []
+    contributor = invalid_fields(fixture("Example Contributor", "contributor@example.invalid", "other-contributor"))
+    assert contributor == (["author", "committer"] if POLICY == "all-users" else [])
+    event = {"pull_request": {"base": {"sha": "a" * 40}, "head": {"sha": "b" * 40}}}
+    assert commit_range("pull_request", event, None) == ("a" * 40, "b" * 40)
+    assert commit_range("pull_request_target", event, None) == ("a" * 40, "b" * 40)
+    assert commit_range("push", {"deleted": True}, None) is None
+    assert commit_range("push", {"before": "a" * 40, "after": "b" * 40}, None) == ("a" * 40, "b" * 40)
+    group = {"merge_group": {"base_sha": "a" * 40, "head_sha": "b" * 40}}
+    assert commit_range("merge_group", group, None) == ("a" * 40, "b" * 40)
+    new_branch = {"before": "0" * 40, "after": "b" * 40, "repository": {"default_branch": "feature/default"}}
+    assert commit_range("push", new_branch, lambda path: {"sha": "a" * 40}) == ("a" * 40, "b" * 40)
+    empty_branch = {"before": "0" * 40, "after": "a" * 40, "repository": {"default_branch": "main"}}
+    assert commit_range("push", empty_branch, lambda path: {"sha": "a" * 40}) == ("a" * 40, "a" * 40)
+    assert collect_commits("a" * 40, "a" * 40, None) == []
+    def tag_request(path, allow_missing=False):
+        if path == "/git/tags/" + "c" * 40:
+            return {"object": {"type": "commit", "sha": "b" * 40}}
+        if path == "/commits/" + "c" * 40:
+            assert allow_missing
+            return None
+        if path == "/commits/" + "b" * 40:
+            return {"sha": "b" * 40}
+        if path == "/commits/main":
+            return {"sha": "a" * 40}
+        raise AssertionError("Unexpected tag request")
+    tag_event = {"before": "0" * 40, "after": "c" * 40, "ref": "refs/tags/v-test", "repository": {"default_branch": "main"}}
+    assert commit_range("push", tag_event, tag_request) == ("a" * 40, "b" * 40)
+    assert resolve_commit("b" * 40, tag_request) == "b" * 40
+    changed_base = {"pull_request": {"base": {"sha": "d" * 40}, "head": {"sha": "b" * 40}}}
+    assert commit_range("pull_request_target", changed_base, tag_request) == ("d" * 40, "b" * 40)
+    # Cover more than 250 commits; never rely on truncated event/PR commit lists.
+    calls = []
+    def paginated(path):
+        page = int(path.rsplit("=", 1)[1])
+        calls.append(page)
+        start = (page - 1) * 100
+        return {"total_commits": 251, "commits": [{"sha": f"{i:040x}"} for i in range(start, min(start + 100, 251))]}
+    assert len(collect_commits("a" * 40, "b" * 40, paginated)) == 251
+    assert calls == [1, 2, 3]
+    try:
+        collect_commits("a" * 40, "b" * 40, lambda path: {"total_commits": 2, "commits": []})
+    except CheckError:
+        pass
+    else:
+        raise AssertionError("Incomplete history was accepted")
+
+
+def main(publish=False):
+    regression_checks()
+    if os.environ.get("COMMIT_PRIVACY_SELF_TEST") == "1":
+        print("PASS: commit privacy regression checks")
+        return 0
+    with open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8") as stream:
+        event = json.load(stream)
+    api = os.environ["GITHUB_API_URL"].rstrip("/")
+    repository = os.environ["GITHUB_REPOSITORY"]
+    def request(path, allow_missing=False, method="GET", payload=None):
+        req = urllib.request.Request(api + "/repos/" + repository + path, method=method,
+            data=json.dumps(payload).encode("utf-8") if payload is not None else None, headers={
+            "Authorization": "Bearer " + os.environ["GH_TOKEN" if method in ("POST", "PATCH") else "GH_READ_TOKEN"],
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            if allow_missing and missing_commit(error):
+                return None
+            raise CheckError("GitHub could not supply commit metadata; retry the check.") from None
+        except (urllib.error.URLError, ValueError):
+            raise CheckError("GitHub could not supply commit metadata; retry the check.") from None
+    if publish:
+        heads, _, head = select_event(os.environ["GITHUB_EVENT_NAME"], event, os.environ["GITHUB_SHA"])
+        baseline = json.loads(Path(__file__).with_name("policy.json").read_text())["baseline"]
+        selected = baseline, head
+    else:
+        selected = commit_range(os.environ["GITHUB_EVENT_NAME"], event, request)
+    if selected is None:
+        print("Branch deletion: no new commits to check.")
+        return 0
+    report = None
+    passed = False
+    if publish:
+        report = request("/check-runs", method="POST", payload={
+            "name": "commit-privacy", "head_sha": selected[1], "status": "in_progress",
+        })
+    try:
+        commits = collect_commits(*selected, request)
+        failures = 0
+        for commit in commits:
+            for field in invalid_fields(commit):
+                # Never echo names, emails, commit subjects, or response bodies.
+                print(f"::error::An incoming commit has noncompliant {field} metadata. Use an approved public name and matching GitHub noreply email; run git-privacy-guard verify before pushing.")
+                failures += 1
+        print(f"Checked {len(commits)} new commits; {failures} identity violations.")
+        passed = failures == 0
+        return bool(failures)
+    finally:
+        if report is not None:
+            request("/check-runs/" + str(report["id"]), method="PATCH", payload={
+                "status": "completed", "conclusion": "success" if passed else "failure",
+                "output": {"title": "Commit privacy result", "summary": "Public identity policy evaluated on the exact PR head; identifying values withheld."},
+            })
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(publish="--publish" in sys.argv))
+    except (CheckError, KeyError, TypeError, OSError, AssertionError) as error:
+        message = str(error) if isinstance(error, CheckError) else "Commit privacy verification failed; details redacted."
+        print("::error::" + message)
+        sys.exit(1)

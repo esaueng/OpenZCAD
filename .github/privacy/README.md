@@ -48,8 +48,11 @@ cannot orphan it. PR events use `pull_request_target` so a PR cannot change its 
 The privileged workflow has no `push` or `merge_group` trigger. A separate,
 unprivileged requester runs those events; its completion triggers the audit from
 the default branch through `workflow_run`. The audit trusts only GitHub event
-metadata for the exact owner-repository head and requester workflow path; it
-ignores requester conclusions, outputs and artifacts.
+metadata for the exact owner-repository head and requester workflow path (with
+or without GitHub's ref suffix); it
+ignores requester conclusions, outputs and artifacts. Every push request audits
+all advertised owner branches/tags as well as the originally requested head, so
+annotated-tag objects and their metadata cannot be lost by event peeling.
 Incoming Git objects are fetched into a fresh bare repository as data. The audit
 never checks out incoming trees, runs their programs, installs their dependencies,
 loads their configuration or uploads their contents as artifacts. Git subprocesses
@@ -60,18 +63,22 @@ The job publishes a separate `history-privacy` check explicitly on the PR head
 runs on the default-branch SHA. The workflow job is named
 `history-privacy-audit` to distinguish it from the required head check.
 
-Require `history-privacy` from the dedicated **Esau History Privacy** GitHub App
+Require both `history-privacy` and `commit-privacy` from the dedicated **Esau History Privacy** GitHub App
 in protected-main status checks, alongside all existing checks. The App has only
 checks write and mandatory metadata read access, installed on these six public
 repositories. Its job token is restricted to the current repository and revoked
-after use. An Actions-app check with the same name cannot satisfy this binding.
+after use. An Actions-app check with the same name cannot satisfy either binding.
+`commit-privacy.yml` is a read-only convenience check; the protected History
+workflow publishes the authoritative identity verdict using pinned policy/code.
+Read-only metadata API requests use the contents-read Actions token, while only
+check publication uses the dedicated App token.
 The audit's own `GITHUB_TOKEN` has contents read permission only.
 
 Provision the HMAC key and `HISTORY_PRIVACY_APP_PRIVATE_KEY` only as environment
 secrets, and `HISTORY_PRIVACY_APP_CLIENT_ID` as a repository variable. The
 `history-privacy` environment must use **selected branches and tags**, allowing
 only branch `main`. During initial rollout, the exact immutable tag
-`history-privacy-policy-20261016-v4-bootstrap` may also be allowed; remove that
+`history-privacy-policy-20261016-v5-bootstrap` may also be allowed; remove that
 exception after the default workflow passes. Do not allow arbitrary protected
 branches, tag patterns, or merge-queue branches to access these credentials.
 Delete the superseded repository-level HMAC secret after migration.
