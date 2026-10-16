@@ -5,10 +5,13 @@ on:
     # `labeled`/`unlabeled` re-run the kernel-bump guard below when the
     # `kernel-bump` label is applied or removed, without needing a push.
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Non-PR runs must not replace a pending merge-group verdict.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
