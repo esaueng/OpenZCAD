@@ -99,6 +99,7 @@ describe('demo parameter tweaks', () => {
           ids: createParameterIds()
         })
       ]);
+      delete old.editHistory!.entries.at(-1)!.commandKinds;
       const before = structuredClone(old);
       expect((await adapter.syncDocument(old)).warnings).toHaveLength(1);
       const repaired = repairLegacyBracketDemo(old);
@@ -206,6 +207,32 @@ describe('demo parameter tweaks', () => {
       expect(old).toEqual(before);
     }
   );
+
+  it('preserves custom applied restores without command-kind metadata', () => {
+    const old = legacyBracket(bracket);
+    const custom = new CommandManager(old).runTransaction('Custom boss', [
+      commandFactories.updateFeature({
+        featureId: listFeaturesInOrder(old).find(
+          (feature) => feature.name === 'Boss'
+        )!.featureId,
+        data: { dimensions: { radius: 'boss_r + 1' } }
+      })
+    ]);
+    const manager = new CommandManager(old);
+    manager.applyDocumentEdit(custom, 'Restore custom');
+    manager.applyDocumentEdit(old, 'Restore original');
+    const restored = manager.document;
+    expect(restored.nodes).toEqual(old.nodes);
+    expect(restored.commandLog).toEqual(old.commandLog);
+    expect(
+      restored.editHistory!.entries.slice(-2).map((entry) => entry.commandKinds)
+    ).toEqual([undefined, undefined]);
+    const before = structuredClone(restored);
+    expect(repairLegacyBracketDemo(restored)).toBe(restored);
+    expect(restored).toEqual(before);
+    manager.undo();
+    expect(manager.document.nodes).toEqual(custom.nodes);
+  });
 
   it('abstains from custom models and user-edited legacy recipes', () => {
     const old = legacyBracket(bracket);

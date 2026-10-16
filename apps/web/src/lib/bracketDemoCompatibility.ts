@@ -58,8 +58,8 @@ function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** Older histories may lack commandKinds. Prove pending edits from patches. */
-function parameterOnlyRedo(entry: DocumentHistoryEntry): boolean {
+/** Prove unclassified edits and all pending Redo from their actual patches. */
+function parameterOnlyPatches(entry: DocumentHistoryEntry): boolean {
   return entry.changes.every((change) => {
     if (change.field === 'nodes' && change.kind === 'value') {
       return (
@@ -106,11 +106,13 @@ export function repairLegacyBracketDemo(
     ) ||
     document.commandLog.some((command) => !seedCommand(command)) ||
     document.editHistory?.entries.some((entry) =>
-      entry.commandKinds?.some((kind) => !SEED_COMMANDS.has(kind))
+      entry.commandKinds?.length
+        ? entry.commandKinds.some((kind) => !SEED_COMMANDS.has(kind))
+        : !parameterOnlyPatches(entry)
     ) ||
     document.editHistory?.entries
       .slice(document.editHistory.cursor)
-      .some((entry) => !parameterOnlyRedo(entry))
+      .some((entry) => !parameterOnlyPatches(entry))
   )
     return document;
 
