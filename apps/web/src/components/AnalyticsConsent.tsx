@@ -120,7 +120,7 @@ export function CloudStatisticsConsent({ accountKey }: { accountKey: string }) {
       );
     } catch {
       setStatus(
-        'Could not save this change. The last server permission still applies; try again.'
+        'Could not confirm this change. Refresh to check the server permission before trying again.'
       );
     } finally {
       setBusy(false);
