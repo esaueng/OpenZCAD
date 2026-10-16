@@ -17229,6 +17229,7 @@ export function App() {
     }
     setSelectedEdges([]);
     setSelectedTopology(null);
+    setSelectedSketchProfileId(null);
     const nextIds = additive
       ? selectedBodyIds.includes(bodyId)
         ? selectedBodyIds.filter((id) => id !== bodyId)
