@@ -208,17 +208,28 @@ class HistoryTests(unittest.TestCase):
         self.assertNotIn(REMOVED, result.stdout + result.stderr)
         self.assertNotIn(self.oid().encode(), result.stdout + result.stderr)
 
-    def test_event_selection_uses_pr_head_and_checks_tag_object(self):
+    def test_trusted_events_select_exact_head(self):
         head = "b" * 40
         event = {"pull_request": {"head": {"sha": head, "ref": "topic"}}}
         self.assertEqual(guard.select_event("pull_request_target", event, self.base), ([head], ["topic"], head))
-        self.assertEqual(guard.select_event("push", {"after": head, "ref": "refs/tags/v1"}, self.base),
-                         ([head], ["refs/tags/v1"], None))
-        self.assertEqual(guard.select_event("push", {"deleted": True}, self.base), ([], [], None))
-        self.assertEqual(guard.select_event("merge_group", {"merge_group": {"head_sha": head}}, self.base),
+        self.assertEqual(guard.select_event("workflow_dispatch", {"inputs": {"audit_head": head}}, self.base),
                          ([head], [], head))
+        self.assertEqual(guard.select_event("schedule", {}, self.base), ([self.base], [], self.base))
+        run = {"event": "merge_group", "path": ".github/workflows/history-privacy-request.yml",
+               "head_repository": {"full_name": "example/repository"}, "head_sha": head,
+               "head_branch": "gh-readonly-queue/main/fixture"}
+        with patch.dict(os.environ, GITHUB_REPOSITORY="example/repository"):
+            self.assertEqual(guard.select_event("workflow_run", {"workflow_run": run}, self.base),
+                             ([head], [run["head_branch"]], head))
+            for field, bad in (("event", "pull_request"), ("path", "other.yml"),
+                               ("head_repository", {"full_name": "foreign/repository"})):
+                with self.subTest(field=field), self.assertRaises(guard.PrivacyError):
+                    guard.select_event("workflow_run", {"workflow_run": dict(run, **{field: bad})}, self.base)
+        for name in ("push", "merge_group", "pull_request"):
+            with self.subTest(name=name), self.assertRaises(guard.PrivacyError):
+                guard.select_event(name, {}, self.base)
         with self.assertRaises(guard.PrivacyError):
-            guard.select_event("pull_request", {}, self.base)
+            guard.select_event("workflow_dispatch", {"inputs": {"audit_head": "untrusted argument"}}, self.base)
 
     def test_incoming_program_is_never_executed(self):
         marker = self.root / "should-not-exist"

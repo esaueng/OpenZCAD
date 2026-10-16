@@ -35,7 +35,7 @@ in the policy. This avoids publishing pointers to removed GitHub objects.
 Removed identifiers remain in the operator's local private denylist. Public
 policy entries contain lengths and domain-separated HMAC-SHA256 fingerprints of
 each case-folded byte string and its two-byte prefix. The random 256-bit key is
-the repository Actions secret `HISTORY_PRIVACY_HMAC_KEY`. Short prefixes are
+the protected `history-privacy` environment secret `HISTORY_PRIVACY_HMAC_KEY`. Short prefixes are
 recovered in memory using the key; efficient prefix searches select candidates
 for full HMAC comparison. Neither private strings nor the key are committed.
 Do not replace keyed fingerprints with unsalted hashes of private identifiers.
@@ -45,6 +45,11 @@ Do not replace keyed fingerprints with unsalted hashes of private identifiers.
 The audit workflow pins its scanner and policy checkout to a reviewed immutable
 commit, retained by an update- and deletion-protected policy tag so squash merges
 cannot orphan it. PR events use `pull_request_target` so a PR cannot change its own policy.
+The privileged workflow has no `push` or `merge_group` trigger. A separate,
+unprivileged requester runs those events; its completion triggers the audit from
+the default branch through `workflow_run`. The audit trusts only GitHub event
+metadata for the exact owner-repository head and requester workflow path; it
+ignores requester conclusions, outputs and artifacts.
 Incoming Git objects are fetched into a fresh bare repository as data. The audit
 never checks out incoming trees, runs their programs, installs their dependencies,
 loads their configuration or uploads their contents as artifacts. Git subprocesses
@@ -55,14 +60,32 @@ The job publishes a separate `history-privacy` check explicitly on the PR head
 runs on the default-branch SHA. The workflow job is named
 `history-privacy-audit` to distinguish it from the required head check.
 
-Require `history-privacy` from the GitHub Actions app in the protected-main status
-checks, alongside all existing checks. Keep admin enforcement enabled and force
-pushes disabled. Preserve active merge queues and their existing review rules.
-The key must be provisioned before enabling the required check.
+Require `history-privacy` from the dedicated **Esau History Privacy** GitHub App
+in protected-main status checks, alongside all existing checks. The App has only
+checks write and mandatory metadata read access, installed on these six public
+repositories. Its job token is restricted to the current repository and revoked
+after use. An Actions-app check with the same name cannot satisfy this binding.
+The audit's own `GITHUB_TOKEN` has contents read permission only.
+
+Provision the HMAC key and `HISTORY_PRIVACY_APP_PRIVATE_KEY` only as environment
+secrets, and `HISTORY_PRIVACY_APP_CLIENT_ID` as a repository variable. The
+`history-privacy` environment must use **selected branches and tags**, allowing
+only branch `main`. During initial rollout, the exact immutable tag
+`history-privacy-policy-20261016-v4-bootstrap` may also be allowed; remove that
+exception after the default workflow passes. Do not allow arbitrary protected
+branches, tag patterns, or merge-queue branches to access these credentials.
+Delete the superseded repository-level HMAC secret after migration.
+
+Keep admin enforcement enabled and force pushes disabled. Preserve active merge
+queues and their existing review rules. Provision credentials and verify a real
+App-published passing audit before enforcing the App-specific required check.
 
 Public fingerprint updates and scanner updates go through review. To update the
 pin, first commit the scanner, tests and policy, preserve the source with a new
 `history-privacy-policy-*` tag, then pin that commit in a second commit.
+A protected bootstrap dispatch may specify `audit_head` as an exact commit,
+including a merge-group candidate; ordinary dispatch without an input audits all
+owner refs. Never dispatch from an untrusted ref.
 Regenerate keyed fingerprints when rotating the key; do not rotate only
 the secret. A new redaction must add the replaced objects to the blocked set and
 extend local denylist coverage before refreshing the public policy.

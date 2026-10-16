@@ -217,16 +217,23 @@ def select_event(name, event, default_head):
     if name == "pull_request_target":
         pr = event["pull_request"]
         return [pr["head"]["sha"]], [pr["head"]["ref"]], pr["head"]["sha"]
-    if name == "merge_group":
-        head = event["merge_group"]["head_sha"]
-        return [head], [], head
-    if name == "push":
-        if event.get("deleted"):
-            return [], [], None
-        return [event["after"]], [event["ref"]], None
+    if name == "workflow_run":
+        run = event["workflow_run"]
+        # Use only GitHub's event envelope. Never trust requester artifacts,
+        # outputs, checkout code, a supplied repository URL, or its conclusion.
+        if (run["event"] not in ("push", "merge_group") or
+                run["path"] != ".github/workflows/history-privacy-request.yml" or
+                run["head_repository"]["full_name"].lower() != os.environ["GITHUB_REPOSITORY"].lower()):
+            raise PrivacyError("Untrusted audit request; verification refused.")
+        head = run["head_sha"]
+        return [head], [run["head_branch"]] if run.get("head_branch") else [], head
     if name in ("workflow_dispatch", "schedule"):
-        return [default_head], [], default_head
-    raise PrivacyError("Unsupported event; verification refused.")
+        head = event.get("inputs", {}).get("audit_head") or default_head
+        if not OID.fullmatch(head):
+            raise PrivacyError("Invalid audit target.")
+        return [head], [], head
+    # Branch-controlled push/merge_group definitions never receive credentials.
+    raise PrivacyError("Unsupported privileged event; verification refused.")
 
 
 def api(method, path, body):
@@ -270,7 +277,8 @@ def ci(policy_path):
                     raise PrivacyError("Invalid fetch target.")
                 git(directory, "-c", "protocol.file.allow=never", "-c", "protocol.ext.allow=never",
                     "fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "origin", oid)
-            full_audit = os.environ["GITHUB_EVENT_NAME"] in ("workflow_dispatch", "schedule")
+            full_audit = (os.environ["GITHUB_EVENT_NAME"] in ("workflow_dispatch", "schedule")
+                          and not event.get("inputs", {}).get("audit_head"))
             if full_audit:
                 git(directory, "fetch", "--quiet", "--no-recurse-submodules", "origin",
                     "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
@@ -292,7 +300,9 @@ def ci(policy_path):
             api("PATCH", "/check-runs/" + str(check["id"]), {
                 "status": "completed", "conclusion": "success" if passed else "failure",
                 "output": {"title": "History privacy " + ("passed" if passed else "failed"),
-                           "summary": "Replaced history and removed identifiers checked without executing incoming code."
+                           "summary": "Replaced history and removed identifiers checked without executing incoming code. Audit: "
+                           + "https://github.com/" + os.environ["GITHUB_REPOSITORY"] + "/actions/runs/"
+                           + os.environ.get("GITHUB_RUN_ID", "")
                            if passed else "History privacy verification failed. Values and object IDs are withheld; inspect the trusted audit job."}})
 
 

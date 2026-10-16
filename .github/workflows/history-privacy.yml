@@ -3,12 +3,15 @@ name: History privacy
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited, ready_for_review]
-  push:
-    branches: ["**"]
-    tags: ["**"]
-  merge_group:
+  workflow_run:
+    workflows: ["History privacy request"]
+    types: [completed]
   workflow_dispatch:
-  # Catch owner refs that predate this workflow or omit it entirely.
+    inputs:
+      audit_head:
+        description: "Optional exact commit to audit during protected bootstrap"
+        required: false
+        type: string
   schedule:
     - cron: "23 8 * * *"
 
@@ -16,36 +19,31 @@ permissions:
   contents: read
 
 jobs:
-  history-privacy-regressions:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout-cone-mode: false
-          sparse-checkout: |
-            /.github/privacy/
-            /.github/workflows/commit-privacy.yml
-      - name: Synthetic privacy regression tests (no secrets)
-        run: python3 -m unittest discover -s .github/privacy -p 'test_*.py'
-
   history-privacy-audit:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.head_repository.full_name == github.repository &&
+       (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'merge_group'))
+    environment: history-privacy
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    permissions:
-      contents: read
-      checks: write
     steps:
-      # Immutable reviewed source, retained by a protected policy tag. Never
-      # check out a PR head or run its programs with the fingerprint key.
+      # This definition runs only from trusted main or the exact protected
+      # bootstrap tag permitted by the environment's branch/tag restrictions.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ef7f33459d0697016bb8237ced8b0c8bb8af2406
           persist-credentials: false
           sparse-checkout: .github/privacy
+      - name: Create narrowly scoped check publisher token
+        id: publisher
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        with:
+          client-id: ${{ vars.HISTORY_PRIVACY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HISTORY_PRIVACY_APP_PRIVATE_KEY }}
+          permission-checks: write
       - name: Inspect incoming objects and publish the exact-head check
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.publisher.outputs.token }}
           HISTORY_PRIVACY_HMAC_KEY: ${{ secrets.HISTORY_PRIVACY_HMAC_KEY }}
         run: python3 .github/privacy/history_privacy.py --ci
