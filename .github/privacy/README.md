@@ -9,6 +9,8 @@ entering protected history. It supplements `commit-privacy` and secret scanning.
 - Every newly reachable tree and blob, including filenames, binary data and files
   deleted again before the branch tip.
 - Annotated and nested tags and incoming branch/tag names.
+- Raw binary tree references, including submodule/gitlink targets that Git's
+  object traversal deliberately does not follow. Submodules are never fetched.
 - Fingerprints of objects replaced by both October 16, 2026 redaction passes.
 - Full-length textual references to those replaced object IDs, including pins.
 

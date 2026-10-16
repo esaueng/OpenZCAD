@@ -104,6 +104,32 @@ def git(repo, *args, data=None):
     return result.stdout
 
 
+class TreeScanner:
+    """Check binary tree references, including gitlinks omitted by rev-list."""
+
+    def __init__(self, policy):
+        self.policy = policy
+        self.pending = b""
+
+    def feed(self, block, final=False):
+        self.pending += block
+        offset = 0
+        while True:
+            end = self.pending.find(b"\0", offset)
+            if end < 0 or len(self.pending) < end + 21:
+                break
+            entry = self.pending[offset:end].split(b" ", 1)
+            if len(entry) != 2 or not re.fullmatch(rb"[0-7]{5,6}", entry[0]) or not entry[1]:
+                raise PrivacyError("Invalid Git tree entry; verification refused.")
+            # Trees store raw 20-byte IDs. Submodule targets need not exist in
+            # this repository, so inspect the ID without following the gitlink.
+            self.policy.check_oid(self.pending[end + 1:end + 21].hex())
+            offset = end + 21
+        self.pending = self.pending[offset:]
+        if final and self.pending:
+            raise PrivacyError("Truncated Git tree entry; verification refused.")
+
+
 def scan(repo, policy, heads, excludes=(), refs=()):
     if not heads:
         raise PrivacyError("No history selected for verification.")
@@ -156,6 +182,7 @@ def scan(repo, policy, heads, excludes=(), refs=()):
                     raise PrivacyError("Git object could not be read completely.")
                 remaining = int(header[2])
                 tail = b""
+                tree = TreeScanner(policy) if header[1] == b"tree" else None
                 while remaining:
                     block = process.stdout.read(min(CHUNK, remaining))
                     if not block:
@@ -164,6 +191,10 @@ def scan(repo, policy, heads, excludes=(), refs=()):
                     joined = tail + block
                     policy.check(joined)
                     tail = joined[-policy.overlap:]
+                    if tree is not None:
+                        tree.feed(block)
+                if tree is not None:
+                    tree.feed(b"", final=True)
                 if process.stdout.read(1) != b"\n":
                     raise PrivacyError("Invalid Git object framing.")
             if process.wait():

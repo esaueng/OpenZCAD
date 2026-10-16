@@ -129,6 +129,28 @@ class HistoryTests(unittest.TestCase):
         with self.assertRaises(guard.PrivacyError):
             self.inspect()
 
+    def test_blocked_gitlink_is_rejected_even_when_target_object_is_absent(self):
+        old = "1" * 40
+        self.write_policy(banned=(old,))
+        self.policy = guard.Policy(self.policy_path, KEY)
+        self.run_git("update-index", "--add", "--cacheinfo", "160000," + old + ",module")
+        self.run_git("commit", "--quiet", "-m", "gitlink fixture")
+        for chunk in (guard.CHUNK, 7):
+            with self.subTest(chunk=chunk), patch.object(guard, "CHUNK", chunk):
+                with self.assertRaisesRegex(guard.PrivacyError, "Reintroduced Git object"):
+                    self.inspect()
+
+    def test_clean_gitlink_needs_no_submodule_fetch(self):
+        self.run_git("update-index", "--add", "--cacheinfo", "160000," + "2" * 40 + ",module")
+        self.run_git("commit", "--quiet", "-m", "clean gitlink fixture")
+        self.assertGreater(self.inspect(), 0)
+
+    def test_truncated_binary_tree_fails_closed(self):
+        tree = guard.TreeScanner(self.policy)
+        tree.feed(b"160000 module\0" + b"\x11" * 19)
+        with self.assertRaisesRegex(guard.PrivacyError, "Truncated Git tree"):
+            tree.feed(b"", final=True)
+
     def test_non_fast_forward_history_and_merge_parent_are_checked(self):
         self.commit("old.txt", REMOVED, "dirty side branch")
         old = self.oid()
