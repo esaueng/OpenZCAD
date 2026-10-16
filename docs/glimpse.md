@@ -53,6 +53,13 @@ user count or cross-app identity exists. Transfer download observations measure 
 as uncompressed UTF-8 bytes, including both project and revision loads.
 Project/revision metadata listings are excluded. Pruned revision 404s retain
 their normal null result and do not contribute cloud-failure observations.
+Startup and library opens skip the account document request for a device-only
+project when a successful account listing confirms there is no cloud copy.
+Previously synced projects, listed account projects, cloud-only opens and
+unreachable listings still use the normal load path and retain genuine failure
+observations. This prevents expected local-only 404 probes from appearing as
+cloud-load errors without suppressing missing account documents or outages.
+Already published anonymous event totals remain historical observations.
 Failed or malformed downloads do not contribute a size observation.
 Delivery is best effort and can drop
 counts; reports' page-local counts need not equal delivered service counts.
