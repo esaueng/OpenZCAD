@@ -44,11 +44,13 @@ import {
 import {
   FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
+  type BodyId,
   type BodyRepresentation,
   type DerivedState,
   type DirectEditOperation,
   type EdgeTopology,
   type ParamValue,
+  type ProjectDocument,
   type PrimitiveKind
 } from '@openzcad/shared';
 import { computeSketchRegions, profileContainsPoint } from '@openzcad/geometry';
@@ -5282,53 +5284,54 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     ).toBeLessThan(0.01);
   });
 
-  it('fillets an edge of an already-filleted body (sequential fillets)', async () => {
-    // Remus can extend a second blend from most planar-adjacent edges. What
-    // this pins is not which edges those are but that every REFUSAL carries
-    // advice the kernel agrees with: a refusal that says "try a smaller
-    // radius" is checked by actually trying smaller radii, and one that says
-    // to edit the earlier feature is checked by confirming no smaller radius
-    // works either.
-    //
-    // That replaces a pin on the wording. The wording used to be inferred
-    // from surface type — a blend face WAS a `bspline`, so an edge touching
-    // one was blend-adjacent. The kernel now returns exact cylinders for
-    // straight-edge fillets, which made every second-fillet refusal here fall
-    // through to "try a smaller radius" whether or not a smaller radius could
-    // work. Both halves are now derived from what the kernel accepts.
-    const base = addPrimitiveFeature(
-      createProjectDocument('Sequential fillets', toUserId('user_exact')),
-      {
-        name: 'Block',
-        primitiveKind: 'box',
-        dimensions: { width: 30, height: 18, depth: 24 }
-      }
-    );
-    const baseDerived = await adapter.syncDocument(base);
-    const firstEdgeHash = Object.values(baseDerived.bodyRepresentations)[0]
-      ?.topology?.edges[0]?.hash;
-    expect(firstEdgeHash).toBeTypeOf('number');
+  describe('sequential fillets', () => {
+    let first: ProjectDocument;
+    let firstBodyId: BodyId;
+    let firstBody: BodyRepresentation;
+    const outcomes = new Map<
+      number,
+      'succeeded' | 'size-bound' | 'structural'
+    >();
 
-    const first = filletEdges(base, {
-      name: 'First fillet',
-      targetBodyId: base.bodyOrder[0]!,
-      edgeHashes: [firstEdgeHash!],
-      size: 2
-    }).document;
-    const firstDerived = await adapter.syncDocument(first);
-    const firstBodyId = first.bodyOrder.at(-1)!;
-    const firstBody = firstDerived.bodyRepresentations[firstBodyId];
-    expect(firstDerived.warnings).toEqual([]);
-    expect(firstBody?.topology?.edges.length).toBeGreaterThan(12);
+    // Each edge owns its own test deadline. All 15 trials and their smaller
+    // radius probes still run; the aggregate below requires full coverage.
+    beforeAll(async () => {
+      const base = addPrimitiveFeature(
+        createProjectDocument('Sequential fillets', toUserId('user_exact')),
+        {
+          name: 'Block',
+          primitiveKind: 'box',
+          dimensions: { width: 30, height: 18, depth: 24 }
+        }
+      );
+      const baseDerived = await adapter.syncDocument(base);
+      const firstEdgeHash = Object.values(baseDerived.bodyRepresentations)[0]
+        ?.topology?.edges[0]?.hash;
+      expect(firstEdgeHash).toBeTypeOf('number');
 
-    // The first fillet's band is an exact cylinder of the requested radius,
-    // not a spline fitted near one.
-    const firstBand = firstBody!.topology!.faces.filter(
-      (face) => face.geometry?.surfaceType !== 'plane'
-    );
-    expect(firstBand).toHaveLength(1);
-    expect(firstBand[0]!.geometry?.surfaceType).toBe('cylinder');
-    expect(firstBand[0]!.geometry?.radius).toBeCloseTo(2, 9);
+      first = filletEdges(base, {
+        name: 'First fillet',
+        targetBodyId: base.bodyOrder[0]!,
+        edgeHashes: [firstEdgeHash!],
+        size: 2
+      }).document;
+      const firstDerived = await adapter.syncDocument(first);
+      firstBodyId = first.bodyOrder.at(-1)!;
+      firstBody = firstDerived.bodyRepresentations[firstBodyId]!;
+      expect(firstDerived.warnings).toEqual([]);
+      expect(firstBody?.topology?.edges.length).toBeGreaterThan(12);
+
+      // The first fillet's band is an exact cylinder of the requested radius,
+      // not a spline fitted near one.
+      const firstBand = firstBody.topology!.faces.filter(
+        (face) => face.geometry?.surfaceType !== 'plane'
+      );
+      expect(firstBand).toHaveLength(1);
+      expect(firstBand[0]!.geometry?.surfaceType).toBe('cylinder');
+      expect(firstBand[0]!.geometry?.radius).toBeCloseTo(2, 9);
+
+      expect(firstBody.topology!.edges).toHaveLength(15);
+    }, 120_000);
 
     const secondFillet = async (edgeHash: number, size: number) => {
       const second = filletEdges(first, {
@@ -5348,44 +5351,60 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     // or concave blends may remove or add volume, but must produce a distinct,
     // positive solid. Every failure must carry advice that is TRUE of this
     // body, which is asserted by re-running the same pick at smaller radii.
-    let succeeded = 0;
-    let sizeBound = 0;
-    let structural = 0;
-    for (const edge of firstBody!.topology!.edges) {
-      const attempt = await secondFillet(edge.hash, 2);
-      if (attempt.warnings.length === 0) {
-        succeeded += 1;
-        expect(attempt.body?.volume).toBeGreaterThan(0);
-        expect(attempt.body?.volume).not.toBeCloseTo(firstBody!.volume, 6);
-        continue;
-      }
-      expect(attempt.warnings).toHaveLength(1);
-      expect(attempt.warnings[0]).not.toContain('WebAssembly.Exception');
-      const smallerRadiiThatWork = (
-        await Promise.all(
-          [1, 0.5, 0.25, 0.1].map((size) => secondFillet(edge.hash, size))
-        )
-      ).filter((result) => result.warnings.length === 0);
-      if (/Try a smaller radius/.test(attempt.warnings[0]!)) {
-        sizeBound += 1;
-        // The advice has to be actionable, so a smaller radius must actually
-        // produce a body.
-        expect(smallerRadiiThatWork.length).toBeGreaterThan(0);
-        expect(smallerRadiiThatWork[0]!.body?.volume).toBeGreaterThan(0);
-      } else {
-        structural += 1;
-        // The structural advice claims no radius helps, so nothing smaller
-        // may quietly succeed.
-        expect(smallerRadiiThatWork).toHaveLength(0);
-        expect(attempt.warnings[0]).toMatch(/edit that earlier feature/i);
-      }
-    }
-    expect(succeeded).toBeGreaterThanOrEqual(7);
-    expect(sizeBound + structural).toBeLessThanOrEqual(8);
-    // Blend-on-blend is still the dominant refusal on this body; if that ever
-    // becomes zero the classifier has stopped recognising its own bands.
-    expect(structural).toBeGreaterThan(0);
-  }, 60_000);
+    it.each(Array.from({ length: 15 }, (_, index) => index))(
+      'checks sequential fillet edge %i',
+      async (index) => {
+        const edge = firstBody.topology!.edges[index]!;
+        const attempt = await secondFillet(edge.hash, 2);
+        if (attempt.warnings.length === 0) {
+          outcomes.set(index, 'succeeded');
+          expect(attempt.body?.volume).toBeGreaterThan(0);
+          expect(attempt.body?.volume).not.toBeCloseTo(firstBody.volume, 6);
+          return;
+        }
+        expect(attempt.warnings).toHaveLength(1);
+        expect(attempt.warnings[0]).not.toContain('WebAssembly.Exception');
+        const smallerRadiiThatWork = (
+          await Promise.all(
+            [1, 0.5, 0.25, 0.1].map((size) => secondFillet(edge.hash, size))
+          )
+        ).filter((result) => result.warnings.length === 0);
+        if (/Try a smaller radius/.test(attempt.warnings[0]!)) {
+          outcomes.set(index, 'size-bound');
+          // The advice has to be actionable, so a smaller radius must actually
+          // produce a body.
+          expect(smallerRadiiThatWork.length).toBeGreaterThan(0);
+          expect(smallerRadiiThatWork[0]!.body?.volume).toBeGreaterThan(0);
+        } else {
+          outcomes.set(index, 'structural');
+          // The structural advice claims no radius helps, so nothing smaller
+          // may quietly succeed.
+          expect(smallerRadiiThatWork).toHaveLength(0);
+          expect(attempt.warnings[0]).toMatch(/edit that earlier feature/i);
+        }
+      },
+      60_000
+    );
+
+    afterAll(() => {
+      expect(outcomes.size).toBe(15);
+      const counts = Array.from(outcomes.values());
+      const succeeded = counts.filter(
+        (outcome) => outcome === 'succeeded'
+      ).length;
+      const sizeBound = counts.filter(
+        (outcome) => outcome === 'size-bound'
+      ).length;
+      const structural = counts.filter(
+        (outcome) => outcome === 'structural'
+      ).length;
+      expect(succeeded).toBeGreaterThanOrEqual(7);
+      expect(sizeBound + structural).toBeLessThanOrEqual(8);
+      // Blend-on-blend is still the dominant refusal on this body; if that ever
+      // becomes zero the classifier has stopped recognising its own bands.
+      expect(structural).toBeGreaterThan(0);
+    });
+  });
 
   it('fillets the result of a boolean subtract', async () => {
     const withBase = addPrimitiveFeature(

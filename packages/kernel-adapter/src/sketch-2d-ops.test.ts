@@ -158,10 +158,10 @@ describe('exact sketch corner fillet', () => {
   });
 });
 
-describe('why the kernel fillet2d is not the sketch fillet', () => {
-  // Pinned deliberately: if a later kernel makes fillet2d a true tangent
-  // fillet, this test fails and the exact construction above can be retired.
-  it('parameterises by setback rather than by radius', () => {
+describe('kernel fillet2d qualification', () => {
+  // Remus now honors radius; the sampled polyline still does not replace
+  // the consumer's exact tangent-arc construction.
+  it('uses the requested radius to derive the corner setback', () => {
     const filleted = withKernel((kernel) =>
       // A 120-degree corner at the origin, legs 20 long.
       kernel.fillet2d(
@@ -184,10 +184,11 @@ describe('why the kernel fillet2d is not the sketch fillet', () => {
       (point) => Math.hypot(point.x, point.y) < 6
     );
     expect(nearCorner.length).toBeGreaterThan(2);
-    // Both ends of the inserted run sit exactly the requested "radius" from
-    // the corner, which is the setback, not the radius: a true radius-2
-    // fillet of a 120-degree corner sets back 2 / tan(60) = 1.155.
-    expect(Math.hypot(nearCorner[0]!.x, nearCorner[0]!.y)).toBeCloseTo(2, 6);
+    // A radius-2 fillet of a 120-degree corner sets back 2 / tan(60).
+    expect(Math.hypot(nearCorner[0]!.x, nearCorner[0]!.y)).toBeCloseTo(
+      2 / Math.tan((60 * Math.PI) / 180),
+      6
+    );
     expect(2 / Math.tan((60 * Math.PI) / 180)).toBeCloseTo(1.1547, 4);
   });
 

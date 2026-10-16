@@ -101,11 +101,9 @@ function normalKeyOf(kernel: RemusKernel, face: number): string {
  * Variable-radius fillets and asymmetric chamfers, measured rather than
  * assumed.
  *
- * Remus ships both behind an experimental blend surface, and one of them
- * fails in a way no type or schema can catch: `filletVariable` answers a
- * radius law it does not recognize with a silent CONSTANT blend instead of a
- * refusal. The first group below pins that behaviour, because it is the
- * entire reason the qualified-law gate sits on the ZCAD side of the call.
+ * The consumer gate and Remus 2026.1.62 both refuse unknown radius laws.
+ * Earlier kernels silently substituted a constant blend. Keep both checks so
+ * neither boundary can regress to that behavior.
  */
 describe('variable-radius fillet', { timeout: 60_000 }, () => {
   let kernel: RemusKernel;
@@ -181,32 +179,18 @@ describe('variable-radius fillet', { timeout: 60_000 }, () => {
     expect(Math.abs(removed('scurve') - oracle) / oracle).toBeLessThan(0.03);
   });
 
-  it('is answered by a silent constant blend when the law is unqualified', () => {
-    // The distrust harness for this feature. An unrecognized law does not
-    // refuse, does not warn, and does not mark the result: it comes back as
-    // the constant blend at the START radius, indistinguishable from a
-    // success. Sending an unqualified law and checking afterwards is
-    // therefore not a design that can work, and this test fails the moment
-    // the kernel starts refusing — at which point the gate can move.
+  it('refuses an unknown kernel law without altering the input solid', () => {
     const box = kernel.makeBox(20, 20, 10);
     const before = kernel.volume(box, DEFLECTION);
     const edge = verticalEdgeOf(kernel, box);
-    const degraded = kernel.filletVariable(
-      box,
-      JSON.stringify([{ edge, law: 'cubic', start: 1, end: 3 }])
-    );
-    expect(kernel.validateSolid(degraded)).toBe(0);
-    const removed = before - kernel.volume(degraded, DEFLECTION);
-    const constantAtStart =
-      before -
-      kernel.volume(
-        kernel.filletVariable(
-          box,
-          JSON.stringify([{ edge, law: 'constant', start: 1, end: 3 }])
-        ),
-        DEFLECTION
-      );
-    expect(removed).toBeCloseTo(constantAtStart, 9);
+    expect(() =>
+      kernel.filletVariable(
+        box,
+        JSON.stringify([{ edge, law: 'cubic', start: 1, end: 3 }])
+      )
+    ).toThrow(/law.*constant, linear, or scurve/);
+    expect(kernel.validateSolid(box)).toBe(0);
+    expect(kernel.volume(box, DEFLECTION)).toBe(before);
   });
 
   it('refuses an unqualified law before the kernel can degrade it', () => {

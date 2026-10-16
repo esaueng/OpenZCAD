@@ -1,3 +1,12 @@
+import { listFeaturesInOrder } from './feature-order';
+export { listFeaturesInOrder } from './feature-order';
+export { withoutDerivedProjection } from './document-projection';
+import { repairLegacyBracketModel } from './legacy-bracket';
+export {
+  repairLegacyBracketModel,
+  repairLegacyBracketRecipe,
+  BRACKET_BOSS_HEIGHT
+} from './legacy-bracket';
 import { rewriteNodeExpressions } from './parameter-expressions';
 import { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 export { localizeImportedSourceArtifacts } from './imported-source-artifacts';
@@ -840,10 +849,10 @@ export function cloneDocument(document: ProjectDocument): ProjectDocument {
 
 /**
  * An independent copy of `source` under a new project id. The feature tree,
- * parameters, and command log all come across intact — a duplicate is meant to
- * be a branching-off point for a variant, so it has to stay as editable and
- * replayable as the original. Node ids are document-scoped and are therefore
- * kept, which also keeps every intra-document reference valid.
+ * parameters, and command log remain editable and replayable. A recognized
+ * legacy bracket recipe receives its bounded placement repair before copying.
+ * A duplicate is a branching-off point for a variant. Node ids are document-scoped
+ * and are therefore kept, preserving every intra-document reference.
  */
 export function duplicateProjectDocument(
   source: ProjectDocument,
@@ -851,7 +860,9 @@ export function duplicateProjectDocument(
   ownerUserId: UserId,
   branchedFrom?: ProjectBranchPoint
 ): ProjectDocument {
-  const copy = cloneDocument(normalizeDocument(source));
+  const copy = cloneDocument(
+    repairLegacyBracketModel(normalizeDocument(source))
+  );
   delete copy.editHistory;
   const projectId = toProjectId(createId('proj'));
   const rootNode = copy.nodes[copy.rootNodeId];
@@ -979,27 +990,6 @@ export function adoptProjectDocument(
   return adopted.revisions.length === 0
     ? adopted
     : createCheckpoint(adopted, 'Saved to account');
-}
-
-/**
- * `document` without its derived projection. Meshes and exportable-body lists
- * are rebuilt from canonical history on load, so storing or transmitting them
- * costs bytes that buy nothing — and for a dense import they are most of the
- * document. `updatedAt` and `warnings` stay: they are conclusions about the
- * document rather than geometry, and the shelf reads `updatedAt`.
- */
-export function withoutDerivedProjection(
-  document: ProjectDocument
-): ProjectDocument {
-  return {
-    ...document,
-    derived: {
-      bodyRepresentations: {},
-      exportableBodyIds: [],
-      warnings: document.derived.warnings,
-      updatedAt: document.derived.updatedAt
-    }
-  };
 }
 
 export function getNode<TNode extends DocumentNode>(
@@ -1144,26 +1134,6 @@ function extrudeBodyName(
   return input.targetBodyId !== undefined && input.operation !== 'new-body'
     ? derivedBodyName(document, input.targetBodyId, input.bodyName)
     : input.bodyName;
-}
-
-export function listFeaturesInOrder(document: ProjectDocument): FeatureNode[] {
-  const features = listNodesByKind(document, 'feature');
-  const byId = new Map(features.map((feature) => [feature.featureId, feature]));
-  const ordered: FeatureNode[] = [];
-  const seen = new Set<FeatureId>();
-  for (const featureId of document.featureOrder) {
-    const feature = byId.get(featureId);
-    if (feature && !seen.has(featureId)) {
-      ordered.push(feature);
-      seen.add(featureId);
-    }
-  }
-  for (const feature of features) {
-    if (!seen.has(feature.featureId)) {
-      ordered.push(feature);
-    }
-  }
-  return ordered;
 }
 
 function attachToPart(document: ProjectDocument, ...nodeIds: EntityId[]): void {

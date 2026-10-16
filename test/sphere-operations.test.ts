@@ -168,14 +168,20 @@ describe('a sphere under boolean and offset', () => {
       // sphere with 2588 planes were independent symptoms with independent
       // fixes, so they keep independent pins and a half-regression cannot
       // hide behind the other half still passing.
-      const { faces, surfaces, triangles, warnings } =
+      const { faces, surfaces, triangles, mesh, warnings } =
         await cutWithDisjointTool('sphere', { radius: SPHERE_R });
       expect(surfaces).toEqual(new Set(['sphere']));
       // Two hemispheres, which is how Remus builds a sphere.
       expect(faces).toBe(2);
       // And it uses the kernel's tolerance-driven analytic-sphere mesh, not
       // the 2588-plane polyhedron the old path substituted.
+      // 2026.1.62 quadrupled this mesh; 2026.1.64 restores its original cost.
       expect(triangles).toBe(24_964);
+      // The published mesh omits normals; the viewer allocates an equal-size
+      // normal attribute. Bound those three buffers, not total GPU memory.
+      expect(
+        2 * mesh.vertices.byteLength + mesh.indices.byteLength
+      ).toBeLessThanOrEqual(599_904);
       expect(warnings).toEqual([]);
     }, 120_000);
 
@@ -301,7 +307,7 @@ describe('a sphere under boolean and offset', () => {
     it('hands the viewport a closed mesh', async () => {
       const { openEdges, triangles, warnings } = await overlappingCut();
       expect(openEdges).toBe(0);
-      expect(triangles).toBe(65_792);
+      expect(triangles).toBe(65_984);
       expect(warnings).toEqual([]);
     }, 120_000);
 
