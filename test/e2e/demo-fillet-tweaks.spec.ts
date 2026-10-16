@@ -47,7 +47,7 @@ async function savedState(page: Page, name: string) {
         expression: node?.kind === 'parameter' ? node.expression : undefined,
         heights,
         version: bracket?.version,
-        label: bracket?.editHistory?.entries.at(-1)?.label
+        label: bracket?.revisions.at(-1)?.reason
       };
     } finally {
       db.close();
@@ -146,7 +146,7 @@ for (const legacy of [false, true])
         timeout: 30_000
       });
       await page.getByRole('button', { name: 'Build', exact: true }).click();
-      if (!legacy) {
+      {
         await page.getByRole('button', { name: 'Undo', exact: true }).click();
         await expect(input).toHaveValue(original!);
         await page.getByRole('button', { name: 'Redo', exact: true }).click();

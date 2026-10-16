@@ -1,5 +1,4 @@
-import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { listFeaturesInOrder } from '@openzcad/document-core';
+import { appendRevision, listFeaturesInOrder } from '@openzcad/document-core';
 import type { ProjectDocument, SerializedCommand } from '@openzcad/shared';
 import { BRACKET_BOSS_HEIGHT } from './bracketDemoPlacement';
 
@@ -55,8 +54,9 @@ function canonical(value: unknown): string {
  * Repair only the original deterministic local demo with its original feature
  * recipe. Parameter edits and presentation changes survive. A modeling edit,
  * different project identity, changed expression or changed target abstains.
- * The two updates form one ordinary, durable, undoable transaction; no stored
- * snapshot, checkpoint or earlier command is rewritten.
+ * Only their placement fields are migrated in nodes, creation commands and
+ * history endpoints together. Parameters, entry IDs, labels, actor, cursor
+ * and pending Redo survive. Checkpoint documents are repaired when opened.
  * Caller must establish ownership before applying this document edit.
  */
 export function repairLegacyBracketDemo(
@@ -67,11 +67,6 @@ export function repairLegacyBracketDemo(
     document.units !== 'mm'
   )
     return document;
-  // An owner who explicitly undid the repair keeps that choice and its redo.
-  if (
-    document.editHistory?.entries.some((entry) => entry.label === REPAIR_LABEL)
-  )
-    return document;
   const features = listFeaturesInOrder(document);
   if (
     features.length !== NAMES.length ||
@@ -79,7 +74,10 @@ export function repairLegacyBracketDemo(
       (feature, index) =>
         feature.name !== NAMES[index] || feature.metadata?.suppressed
     ) ||
-    document.commandLog.some((command) => !seedCommand(command))
+    document.commandLog.some((command) => !seedCommand(command)) ||
+    document.editHistory?.entries.some((entry) =>
+      entry.commandKinds?.some((kind) => !SEED_COMMANDS.has(kind))
+    )
   )
     return document;
 
@@ -143,21 +141,46 @@ export function repairLegacyBracketDemo(
     fillet.edgeReferences?.length !== 2
   )
     return document;
-  const updates = [features[5]!, features[8]!].map((feature) => {
-    if (feature.data.featureKind !== 'transform')
-      throw new Error('Expected demo placement');
-    return commandFactories.updateFeature({
-      featureId: feature.featureId,
-      data: {
-        transform: {
-          ...feature.data.transform,
-          translation: {
-            ...feature.data.transform.translation,
-            z: BRACKET_BOSS_HEIGHT
-          }
-        }
-      }
-    });
-  });
-  return new CommandManager(document).runTransaction(REPAIR_LABEL, updates);
+  const featureIds = new Set([features[5]!.featureId, features[8]!.featureId]);
+  const bodyIds = new Set([features[4]!.bodyId, features[7]!.bodyId]);
+  const next = structuredClone(document);
+  const pending: unknown[] = [next.nodes, next.commandLog, next.editHistory];
+  while (pending.length) {
+    const value = pending.pop();
+    if (!value || typeof value !== 'object') continue;
+    const object = value as Record<string, unknown>;
+    // History node changes contain complete feature nodes. Rewrite only the
+    // two identified placements, including their before/after endpoints.
+    if (
+      object.kind === 'feature' &&
+      featureIds.has(object.featureId as (typeof features)[5]['featureId'])
+    ) {
+      const data = object.data as {
+        featureKind: string;
+        transform?: { translation: { z: unknown } };
+      };
+      if (
+        data.featureKind === 'transform' &&
+        data.transform?.translation.z === LEGACY_HEIGHT
+      )
+        data.transform.translation.z = BRACKET_BOSS_HEIGHT;
+    }
+    // Serialized creation commands (also retained inside history splices)
+    // must replay the same repaired placements as the current nodes.
+    if (object.kind === 'feature.transform') {
+      const payload = object.payload as {
+        targetBodyId?: (typeof features)[4]['bodyId'];
+        translation?: { z: unknown };
+      };
+      if (
+        bodyIds.has(payload.targetBodyId) &&
+        payload.translation?.z === LEGACY_HEIGHT
+      )
+        payload.translation.z = BRACKET_BOSS_HEIGHT;
+    }
+    for (const child of Object.values(object)) {
+      if (child && typeof child === 'object') pending.push(child);
+    }
+  }
+  return appendRevision(next, REPAIR_LABEL);
 }
