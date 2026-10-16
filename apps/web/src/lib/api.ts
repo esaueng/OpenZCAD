@@ -143,6 +143,14 @@ async function requestJson<T>(
     );
   }
 
+  if (collect && projectCall && !writing) {
+    // Read once and measure the successfully parsed UTF-8 JSON body. Content-
+    // Length may describe compressed bytes or be absent; names/IDs stay local.
+    const text = await response.text();
+    const value = JSON.parse(text) as T;
+    trackSize('transfer_download', new TextEncoder().encode(text).byteLength);
+    return value;
+  }
   return (await response.json()) as T;
 }
 

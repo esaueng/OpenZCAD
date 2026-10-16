@@ -43,7 +43,10 @@ The complete [measurement definitions and limits](https://github.com/esaueng/gli
 explain repeatable observations versus account/project stocks and the consent
 review. Size observations are not unique projects, parts are not a per-part
 inventory, and diagnostic signals are not distinct bugs. No unique anonymous
-user count or cross-app identity exists. Delivery is best effort and can drop
+user count or cross-app identity exists. Transfer download observations measure successfully parsed JSON response bodies
+in UTF-8 bytes before compression, including both project and revision loads.
+Failed or malformed downloads do not contribute a size observation.
+Delivery is best effort and can drop
 counts; reports' page-local counts need not equal delivered service counts.
 
 OpenZCAD separately offers an expiring **Cloud account statistics for 30 days**
