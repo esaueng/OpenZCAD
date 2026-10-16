@@ -10,25 +10,7 @@ export const BRACKET_BOSS_HEIGHT =
   'plate_t + min(wall_h / 2, wall_h - 0.5 - boss_r - fillet_r - 0.25)';
 
 const LEGACY_HEIGHT = 'plate_t + wall_h / 2';
-const NAMES = [
-  'Base plate',
-  'Wall plate',
-  'Seat wall on base',
-  'Union L bracket',
-  'Boss',
-  'Place boss on wall',
-  'Union boss',
-  'Boss bore tool',
-  'Aim bore through boss',
-  'Boss bore',
-  'Mount hole L',
-  'Place mount hole L',
-  'Mount hole R',
-  'Place mount hole R',
-  'Mount hole L cut',
-  'Mounting holes',
-  'Wall top edge break'
-];
+const FEATURE_COUNT = 17;
 const SEED_COMMANDS = new Set([
   'parameter.set',
   'primitive.add',
@@ -105,7 +87,10 @@ function parameterOnlyPatches(entry: DocumentHistoryEntry): boolean {
 export function repairLegacyBracketRecipe(
   document: ProjectDocument
 ): ProjectDocument {
-  if (document.units !== 'mm' || document.featureOrder?.length !== NAMES.length)
+  if (
+    document.units !== 'mm' ||
+    document.featureOrder?.length !== FEATURE_COUNT
+  )
     return document;
   const root = document.nodes[document.rootNodeId];
   if (
@@ -117,11 +102,8 @@ export function repairLegacyBracketRecipe(
     return document;
   const features = listFeaturesInOrder(document);
   if (
-    features.length !== NAMES.length ||
-    features.some(
-      (feature, index) =>
-        feature.name !== NAMES[index] || feature.metadata?.suppressed
-    ) ||
+    features.length !== FEATURE_COUNT ||
+    features.some((feature) => feature.metadata?.suppressed) ||
     document.commandLog.some((command) => !seedCommand(command)) ||
     document.editHistory?.entries.some((entry) =>
       entry.commandKinds?.length

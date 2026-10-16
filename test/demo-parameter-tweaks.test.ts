@@ -385,6 +385,69 @@ describe('demo parameter tweaks', () => {
     60_000
   );
 
+  it.each([
+    ['wall_h', '26', '32'],
+    ['boss_r', '14', '10']
+  ])(
+    'preserves renamed history while repairing %s=%s',
+    async (name, expression, original) => {
+      const legacy = legacyBracket(bracket);
+      const manager = new CommandManager(legacy);
+      const names = listFeaturesInOrder(legacy).map((feature, index) => ({
+        nodeId: feature.id,
+        name: `My operation ${index + 1}`
+      }));
+      manager.runTransaction(
+        'Rename my history',
+        names.map((input) => commandFactories.renameNode(input))
+      );
+      manager.runTransaction('Old tweak', [
+        commandFactories.setParameter({ name, expression })
+      ]);
+      const before = structuredClone(manager.document);
+      expect(
+        (await adapter.syncDocument(before)).warnings.length
+      ).toBeGreaterThan(0);
+      const repaired = repairLegacyBracketDemo(before);
+      expect(
+        listFeaturesInOrder(repaired).map((feature) => feature.name)
+      ).toEqual(names.map((input) => input.name));
+      expect(repaired.editHistory).toMatchObject({
+        cursor: before.editHistory!.cursor,
+        actorUserId: before.editHistory!.actorUserId
+      });
+      expect(repaired.editHistory!.entries.map((entry) => entry.label)).toEqual(
+        before.editHistory!.entries.map((entry) => entry.label)
+      );
+      const reopened = new CommandManager(repaired);
+      const derived = await adapter.syncDocument(reopened.document);
+      expect(derived.warnings).toEqual([]);
+      expect(
+        await adapter.exportStep(reopened.document, derived.exportableBodyIds)
+      ).toContain('ISO-10303-21;');
+      reopened.undo();
+      expect(
+        Object.values(reopened.document.nodes).find(
+          (node) => node.kind === 'parameter' && node.name === name
+        )
+      ).toMatchObject({ expression: original });
+      expect(
+        listFeaturesInOrder(reopened.document).map((feature) => feature.name)
+      ).toEqual(names.map((input) => input.name));
+      reopened.undo();
+      expect(
+        listFeaturesInOrder(reopened.document).map((feature) => feature.name)
+      ).toEqual(listFeaturesInOrder(legacy).map((feature) => feature.name));
+      reopened.redo();
+      reopened.redo();
+      expect((await adapter.syncDocument(reopened.document)).warnings).toEqual(
+        []
+      );
+      expect(before).toEqual(manager.document);
+    },
+    60_000
+  );
+
   it('normalizes pre-parametric copy, branch, restore and cache inputs before recipe recognition', () => {
     const source = createProjectDocument(
       'Pre-parametric source',
