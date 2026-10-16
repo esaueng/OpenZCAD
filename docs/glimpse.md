@@ -16,11 +16,11 @@ The browser sends exactly `event` and a fixed `bucket`, omitting credentials and
 
 ## Configuration and rollout
 
-The checked-in `GLIMPSE_BASIC_ENABLED` and `GLIMPSE_USAGE_ENABLED` flags both start as `false`. The collector is now provisioned and the production config declares the fixed `OpenZCADIngest` service binding. The two switches remain false. Self-hosted and preview configurations must deliberately configure their own collector or remain disabled. The two switches are independent; the Optional switch additionally requires the browser's explicit opt-in. Missing/unavailable collectors do not affect app operations. Self-hosted/static configurations stay unconfigured unless deliberately connected to a separately protected service.
+Production enables `GLIMPSE_BASIC_ENABLED` and `GLIMPSE_USAGE_ENABLED` with the fixed `OpenZCADIngest` service binding. Enabling the deployment switches does not grant browser or account consent. Self-hosted and preview configurations must deliberately configure their own collector or remain disabled. The two switches are independent; the Optional switch additionally requires the browser's explicit opt-in. Missing/unavailable collectors do not affect app operations. Self-hosted/static configurations stay unconfigured unless deliberately connected to a separately protected service.
 
 Deploy and configure the Glimpse Worker/D1/Access application first; then deploy this integration with its service binding. Confirm the intended audience, jurisdictions, lawful basis where relevant, notices and metadata retention before enabling Basic. Optional remains opt-in even if a jurisdiction offers an analytics exemption. Cookieless does not automatically mean consent-free. Edge/Access/existing app security logs still need separate review: the network necessarily processes IP and headers, although analytics stores neither. Dashboard authentication uses its own Access identity/cookies, not analytics identifiers.
 
-Production deployment and remote migrations require separate authorization. No production resources, consent decisions or settings were changed by this PR. Roll back by setting both deployment switches to false and redeploying; users may withdraw independently through the same UI.
+Production collection activation is authorized. Browser choices and the separate account-statistics permission remain independent and opt-in. Roll back by setting both deployment switches to false and redeploying; users may withdraw independently through the same UI.
 
 ## Validation
 
@@ -80,8 +80,7 @@ model contents to derive analytics.
 
 **Rollout dependency:** reviewed, separately authorized production migrations
 Glimpse `0003_census.sql` and OpenZCAD `0028_glimpse_consent.sql`, then service
-before app code. Neither new migration has been applied remotely. Keep collection
-flags off until end-to-end staging checks and deployment privacy review pass.
+before app code. Both migrations must be present before enabling production collection; activation verifies the live migration ledgers. Browser and account permission checks remain required.
 
 Local v2 verification: root 4,629 passed / 8 skipped; web 2,956 passed; parity
 185 passed / 1 skipped. Typecheck, production build/bundle gate and Wrangler
