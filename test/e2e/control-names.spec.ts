@@ -76,7 +76,6 @@ const SIZED_TARGETS = [
 ];
 const REACHING_TARGETS = [
   'button.brand',
-  '.orientation-roll',
   'button.section-title',
   'summary.section-title',
   '.history-handle'

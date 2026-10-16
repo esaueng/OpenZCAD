@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import type { MutableRefObject } from 'react';
 import { fireEvent, render } from '@testing-library/react';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -76,7 +74,6 @@ function renderWidget() {
   } as MutableRefObject<((axes: AxisProjection) => void) | null>;
   const callbacks = {
     onSelectView: vi.fn(),
-    onRotateView: vi.fn(),
     onDragStart: vi.fn(),
     onDrag: vi.fn(),
     onDragEnd: vi.fn()
@@ -527,19 +524,18 @@ describe('OrientationWidget pointer lifecycle', () => {
   });
 });
 
-describe('OrientationWidget roll buttons', () => {
-  it('draws them at the full 24 px target without moving the cube', () => {
-    // They were 22 px circles reaching to 24 px with an invisible ::after.
-    // happy-dom does no layout, so read the sheet the browser applies.
-    const css = readFileSync(
-      resolve(__dirname, '../styles/components/viewport-overlays.css'),
-      'utf8'
-    );
-    const rule = /(?:^|\n)\.orientation-roll\s*\{([^}]*)\}/.exec(css)?.[1];
-    expect(rule).toBeDefined();
-    expect(rule).toMatch(/\bwidth:\s*24px;/);
-    expect(rule).toMatch(/\bheight:\s*24px;/);
-    // Their layout box stays the old 22 px, so the cube keeps its place.
-    expect(rule).toMatch(/\bmargin:\s*0 -1px;/);
+describe('OrientationWidget controls', () => {
+  it('keeps cube navigation without separate rotate buttons', () => {
+    const { queryByRole, getByRole, orientationRef } = renderWidget();
+    orientationRef.current?.({
+      x: { x: 0.70711, y: 0.40825, z: 0.57735 },
+      y: { x: -0.70711, y: 0.40825, z: 0.57735 },
+      z: { x: 0, y: -0.8165, z: 0.57735 }
+    });
+    expect(queryByRole('button', { name: /Rotate view/ })).toBeNull();
+    expect(
+      getByRole('group', { name: 'Drag to rotate the view' })
+    ).toBeDefined();
+    expect(getByRole('button', { name: 'Right view' })).toBeDefined();
   });
 });
