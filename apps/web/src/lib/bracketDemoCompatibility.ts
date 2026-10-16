@@ -1,5 +1,9 @@
 import { appendRevision, listFeaturesInOrder } from '@openzcad/document-core';
-import type { ProjectDocument, SerializedCommand } from '@openzcad/shared';
+import type {
+  DocumentHistoryEntry,
+  ProjectDocument,
+  SerializedCommand
+} from '@openzcad/shared';
 import { BRACKET_BOSS_HEIGHT } from './bracketDemoPlacement';
 
 const LEGACY_HEIGHT = 'plate_t + wall_h / 2';
@@ -50,6 +54,32 @@ function canonical(value: unknown): string {
   );
 }
 
+function record(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Older histories may lack commandKinds. Prove pending edits from patches. */
+function parameterOnlyRedo(entry: DocumentHistoryEntry): boolean {
+  return entry.changes.every((change) => {
+    if (change.field === 'nodes' && change.kind === 'value') {
+      return (
+        record(change.before) &&
+        record(change.after) &&
+        change.before.kind === 'parameter' &&
+        change.after.kind === 'parameter' &&
+        change.before.id === change.after.id &&
+        change.before.name === change.after.name
+      );
+    }
+    if (change.field === 'commandLog' && change.kind === 'splice') {
+      return [...change.before, ...change.after].every(
+        (command) => record(command) && command.kind === 'parameter.set'
+      );
+    }
+    return false;
+  });
+}
+
 /**
  * Repair only the original deterministic local demo with its original feature
  * recipe. Parameter edits and presentation changes survive. A modeling edit,
@@ -77,7 +107,10 @@ export function repairLegacyBracketDemo(
     document.commandLog.some((command) => !seedCommand(command)) ||
     document.editHistory?.entries.some((entry) =>
       entry.commandKinds?.some((kind) => !SEED_COMMANDS.has(kind))
-    )
+    ) ||
+    document.editHistory?.entries
+      .slice(document.editHistory.cursor)
+      .some((entry) => !parameterOnlyRedo(entry))
   )
     return document;
 

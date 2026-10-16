@@ -164,7 +164,9 @@ describe('demo parameter tweaks', () => {
         })
       ]);
       manager.undo();
-      const old = manager.document;
+      const old = structuredClone(manager.document);
+      // This is how durable history written before commandKinds is stored.
+      delete old.editHistory!.entries.at(-1)!.commandKinds;
       const repaired = repairLegacyBracketDemo(old);
       expect(legacyBracket(repaired).editHistory).toEqual(old.editHistory);
       const restored = new CommandManager(repaired);
@@ -181,6 +183,28 @@ describe('demo parameter tweaks', () => {
       ).toContain('ISO-10303-21;');
     },
     60_000
+  );
+
+  it.each([undefined, ['parameter.set']])(
+    'abstains from a custom pending Redo even with missing or misleading kinds: %s',
+    (kinds) => {
+      const manager = new CommandManager(legacyBracket(bracket));
+      manager.runTransaction('Custom boss', [
+        commandFactories.updateFeature({
+          featureId: listFeaturesInOrder(manager.document).find(
+            (feature) => feature.name === 'Boss'
+          )!.featureId,
+          data: { dimensions: { radius: 'boss_r + 1' } }
+        })
+      ]);
+      manager.undo();
+      const old = structuredClone(manager.document);
+      if (kinds) old.editHistory!.entries.at(-1)!.commandKinds = kinds;
+      else delete old.editHistory!.entries.at(-1)!.commandKinds;
+      const before = structuredClone(old);
+      expect(repairLegacyBracketDemo(old)).toBe(old);
+      expect(old).toEqual(before);
+    }
   );
 
   it('abstains from custom models and user-edited legacy recipes', () => {

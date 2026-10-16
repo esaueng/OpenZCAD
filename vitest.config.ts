@@ -44,11 +44,11 @@ export default defineConfig({
   test: {
     environment: 'node',
     // Exact-kernel suites instantiate large OCCT/Remus WASM modules. Keep
-    // file-level parallelism bounded. The qualified kernel's refusal probes
-    // are CPU-heavy; four simultaneous suites caused both the unchanged
-    // sequential-fillet and unrelated glyph-audit deadlines to fail in CI.
-    // Run every case and probe with less CPU/memory contention.
-    maxWorkers: 2,
+    // file-level parallelism bounded. Remus refusal probes are CPU-heavy:
+    // even two simultaneous suites pushed the unchanged sequential-fillet
+    // corpus past its 60 s deadline on hosted runners. Keep every case,
+    // probe and assertion, with one suite owning the available CPU/memory.
+    maxWorkers: 1,
     // Package-owned tests live beside their source so they resolve that
     // package's own dependencies (`three` is not a root dependency).
     include: ['test/**/*.test.ts', 'packages/*/src/**/*.test.ts'],
