@@ -528,13 +528,16 @@ describe('generated boolean edges', () => {
   });
 
   it('names no edge when one face pair meets in more than one place', () => {
-    // A bored plate with a box fused over half of it: the box's left side
+    // A plate with a rectangular through-hole and a box fused over half of it:
+    // the box's left side
     // crosses the plate's top on both sides of the bore, so that one face
     // pair makes two separate edges, and neither is "the" edge between them.
     const kernel = new RemusKernel();
     const blank = kernel.makeBox(40, 40, 10);
-    const bore = kernel.makeCylinder(5, 30);
-    kernel.transformSolid(bore, rowMajor(20, 20, -10));
+    // Keep the naming witness on the qualified all-planar boolean path.
+    // The curved-bore variant is refused by the kernel's material audit.
+    const bore = kernel.makeBox(10, 10, 30);
+    kernel.transformSolid(bore, rowMajor(15, 15, -10));
     const plate = (
       JSON.parse(kernel.cutWithEntityEvolution(blank, bore)) as {
         solid: number;
@@ -569,6 +572,26 @@ describe('generated boolean edges', () => {
     // Seams that are a unique pair (the cover's front meeting the plate's
     // top, say) are still named.
     expect(names.length).toBeGreaterThan(0);
+  });
+
+  it('refuses the curved-bore union that previously returned an invalid evolved solid', () => {
+    const kernel = new RemusKernel();
+    const blank = kernel.makeBox(40, 40, 10);
+    const bore = kernel.makeCylinder(5, 30);
+    kernel.transformSolid(bore, rowMajor(20, 20, -10));
+    const plate = JSON.parse(kernel.cutWithEntityEvolution(blank, bore)) as {
+      solid: number;
+    };
+    const cover = kernel.makeBox(20, 40, 20);
+    kernel.transformSolid(cover, rowMajor(20, 0, 5));
+    expect(kernel.validateSolid(plate.solid)).toBe(0);
+    expect(kernel.validateSolid(cover)).toBe(0);
+    // The 1.58 result had three validation errors and lost 32.53 mm^3.
+    // Both geometry and provenance must respect the new material audit.
+    expect(() => kernel.fuse(plate.solid, cover)).toThrow(/exact-only policy/);
+    expect(() => kernel.fuseWithEntityEvolution(plate.solid, cover)).toThrow(
+      /exact-only policy/
+    );
   });
 });
 
