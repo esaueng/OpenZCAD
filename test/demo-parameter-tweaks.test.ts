@@ -1,9 +1,14 @@
 import { repairLegacyBracketDemo } from '../apps/web/src/lib/bracketDemoCompatibility';
 import { legacyBracket } from './helpers/legacy-bracket';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CommandManager, commandFactories } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandFactories,
+  replayCommands
+} from '@openzcad/command-system';
 import {
   createParameterIds,
+  createProjectDocument,
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import {
@@ -81,16 +86,19 @@ describe('demo parameter tweaks', () => {
   ])(
     'repairs a saved legacy %s=%s bracket without losing its edits or history',
     async (name, expression) => {
-      const old = new CommandManager(legacyBracket(bracket)).runTransaction(
-        'Saved tweak',
-        [
-          commandFactories.setParameter({
-            name,
-            expression,
-            ids: createParameterIds()
-          })
-        ]
+      const actor = toUserId(
+        name === 'boss_r' ? 'user_legacy_other_actor' : bracket.ownerUserId
       );
+      const old = new CommandManager(
+        legacyBracket(bracket),
+        actor
+      ).runTransaction('Saved tweak', [
+        commandFactories.setParameter({
+          name,
+          expression,
+          ids: createParameterIds()
+        })
+      ]);
       const before = structuredClone(old);
       expect((await adapter.syncDocument(old)).warnings).toHaveLength(1);
       const repaired = repairLegacyBracketDemo(old);
@@ -100,9 +108,8 @@ describe('demo parameter tweaks', () => {
       expect(repaired.featureOrder).toEqual(old.featureOrder);
       expect(repaired.parameterOrder).toEqual(old.parameterOrder);
       expect(repaired.checkpoints).toEqual(old.checkpoints);
-      expect(repaired.commandLog.slice(0, old.commandLog.length)).toEqual(
-        old.commandLog
-      );
+      expect(legacyBracket(repaired).commandLog).toEqual(old.commandLog);
+      expect(legacyBracket(repaired).editHistory).toEqual(old.editHistory);
       for (const node of Object.values(old.nodes).filter(
         (node) => node.kind === 'parameter'
       )) {
@@ -114,17 +121,64 @@ describe('demo parameter tweaks', () => {
       expect(
         await adapter.exportStep(repaired, derived.exportableBodyIds)
       ).toContain('ISO-10303-21;');
+      const replayed = replayCommands(
+        createProjectDocument(repaired.name, repaired.ownerUserId, 'mm'),
+        repaired.commandLog
+      );
+      const cold = await adapter.syncDocument(replayed);
+      expect(cold.warnings).toEqual([]);
+      expect(
+        cold.bodyRepresentations[cold.exportableBodyIds[0]!]!.volume
+      ).toBeCloseTo(
+        derived.bodyRepresentations[derived.exportableBodyIds[0]!]!.volume,
+        6
+      );
       expect(repairLegacyBracketDemo(repaired)).toBe(repaired);
-      const manager = new CommandManager(repaired);
-      expect(manager.undoLabel).toBe('Repair bracket fillet clearance');
+      const manager = new CommandManager(repaired, actor);
+      expect(manager.undoLabel).toBe('Saved tweak');
       manager.undo();
-      expect(manager.document.nodes).toEqual(old.nodes);
-      expect(repairLegacyBracketDemo(manager.document)).toBe(manager.document);
+      expect((await adapter.syncDocument(manager.document)).warnings).toEqual(
+        []
+      );
       manager.redo();
       expect(manager.document.nodes).toEqual(repaired.nodes);
       expect((await adapter.syncDocument(manager.document)).warnings).toEqual(
         []
       );
+    },
+    60_000
+  );
+
+  it.each([
+    ['wall_h', '26'],
+    ['boss_r', '14']
+  ])(
+    'preserves a pending Redo of the saved %s=%s tweak',
+    async (name, expression) => {
+      const manager = new CommandManager(legacyBracket(bracket));
+      manager.runTransaction('Saved tweak', [
+        commandFactories.setParameter({
+          name,
+          expression,
+          ids: createParameterIds()
+        })
+      ]);
+      manager.undo();
+      const old = manager.document;
+      const repaired = repairLegacyBracketDemo(old);
+      expect(legacyBracket(repaired).editHistory).toEqual(old.editHistory);
+      const restored = new CommandManager(repaired);
+      expect(restored.redoLabel).toBe('Saved tweak');
+      restored.redo();
+      expect((await adapter.syncDocument(restored.document)).warnings).toEqual(
+        []
+      );
+      expect(
+        await adapter.exportStep(
+          restored.document,
+          restored.document.bodyOrder.slice(-1)
+        )
+      ).toContain('ISO-10303-21;');
     },
     60_000
   );
