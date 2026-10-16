@@ -172,3 +172,25 @@ metadata, provenance and handle records as well as mesh buffers, and are not
 claims about actual worker heap. The unchanged 32-checkpoint, 32 MiB derived
 rebuild and 128 MiB measurement ceilings do not authorize an additional branch
 allocation; branch retention is zero until its contract and acceptance pass.
+
+
+## Matched benchmark preparation (2026-10-15)
+
+[Current harness and evidence](../qa/2026-10-15/h02-matched-cache-benchmark.md)
+adds an opt-in production-preview comparison of the existing adapter caches,
+using zero budgets in the disabled arm and unchanged defaults in the enabled
+arm. Normal application builds and runtime cache behavior are unchanged.
+Mode observations, pair/input identity checks, per-edit cache diagnostics,
+nearest-rank median/p95 aggregation and optional post-GC Chromium geometry-worker
+JS heap telemetry make the comparison reproducible without sharing the source.
+Measurement timings account for the current pipeline's overlapping deferred
+analysis timers rather than summing them.
+
+The available local source passes the current-pin structural publication
+oracle (17 bodies / 720 faces; zero difference paths) and the unchanged-source
+byte/structure hit check. This supersedes the old publication-mismatch blocker
+for this source under the oracle's documented normalization; it does not prove
+raw B-rep byte equivalence. The attempted browser comparison was interrupted
+under severe unrelated host load before a complete matched pair existed.
+Median/p95, browser retention and the 20% target remain unmeasured in that
+campaign. H02 remains Partial, and no proposed Text-branch cache is accepted.

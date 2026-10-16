@@ -1088,7 +1088,7 @@ for (const privacySignal of ['doNotTrack', 'globalPrivacyControl'] as const) {
     }, privacySignal);
     await page.goto('/');
     await page.evaluate(() =>
-      localStorage.setItem('openzcad.glimpse.consent.v1', 'granted-v1')
+      localStorage.setItem('openzcad.glimpse.consent.v1', 'granted-v2')
     );
     await page.reload();
     await page.getByRole('button', { name: 'Open settings' }).click();
@@ -1204,6 +1204,12 @@ test('cloud-off suppresses analytics while keeping the saved consent revocable',
   await page
     .getByRole('checkbox', { name: 'Cloud features', exact: true })
     .uncheck();
+  expect(usage).toEqual([]);
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem('openzcad-cloud-functions-enabled:v1')
+    )
+  ).toBe('false');
   await page.reload();
   await expect(
     page.getByRole('checkbox', { name: 'Cloud features', exact: true })
@@ -1219,4 +1225,109 @@ test('cloud-off suppresses analytics while keeping the saved consent revocable',
       localStorage.getItem('openzcad.glimpse.consent.v1')
     )
   ).toBeNull();
+});
+
+test('cloud statistics require acknowledged consent and keep a failed withdrawal visible', async ({ page }) => {
+  await stubApi(page);
+  const changes: unknown[] = [];
+  let enabled = false;
+  let failWithdrawal = true;
+  let releaseGrant!: () => void;
+  const grantGate = new Promise<void>(resolve => { releaseGrant = resolve; });
+  const expiresAt = new Date(Date.now() + 30 * 86400000).toISOString();
+  await page.route('**/api/glimpse/account-consent', async (route) => {
+    if (route.request().method() === 'POST') {
+      const input = route.request().postDataJSON() as { enabled: boolean; version: number };
+      changes.push(input);
+      if (input.enabled) await grantGate;
+      if (!input.enabled && failWithdrawal) {
+        failWithdrawal = false;
+        await route.fulfill({ status: 503, json: { error: 'Unavailable' } });
+        return;
+      }
+      enabled = input.enabled;
+    }
+    await route.fulfill({ json: { enabled, expiresAt: enabled ? expiresAt : null } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Privacy & data', exact: true }).click();
+  const consent = page.getByRole('checkbox', { name: 'Cloud account statistics for 30 days', exact: true });
+  const row = page.locator('.setting-row').filter({ has: consent });
+  await expect(consent).toBeEnabled();
+  await expect(consent).not.toBeChecked();
+  await consent.click();
+  try {
+    await expect(consent).toBeDisabled();
+    await expect(consent).not.toBeChecked();
+  } finally {
+    releaseGrant();
+  }
+  await expect(consent).toBeChecked();
+  await expect(row).toContainText(`Enabled until ${expiresAt.slice(0, 10)} UTC.`);
+  await consent.click();
+  await expect(row).toContainText('Could not confirm this change. Refresh to check the server permission before trying again.');
+  await expect(consent).toBeChecked();
+  await expect(consent).toBeEnabled();
+  await consent.click();
+  await expect(consent).not.toBeChecked();
+  await expect(row).toContainText('Withdrawn. Future cloud snapshots exclude this account.');
+  expect(changes).toEqual([
+    { enabled: true, version: 2 },
+    { enabled: false, version: 2 },
+    { enabled: false, version: 2 }
+  ]);
+});
+
+test('consented diagnostics count transaction edits without sending names', async ({ page }) => {
+  await stubApi(page);
+  await page.addInitScript(() => localStorage.setItem('openzcad.glimpse.consent.v1', 'granted-v2'));
+  const requests: Array<{ event: string; bucket: string }> = [];
+  await page.route('**/api/glimpse/usage', route => {
+    requests.push(route.request().postDataJSON() as { event: string; bucket: string });
+    return route.fulfill({ status: 204 });
+  });
+  await createProject(page, 'Private diagnostic project');
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page.getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: 'Create', exact: true }).click();
+  await expectBodyCount(page, 1);
+  const observations = (event: string) => requests.filter(row => row.event === event);
+  await expect.poll(() => observations('feature_operation')).toEqual([
+    { event: 'feature_operation', bucket: 'primitive.add' }
+  ]);
+  await expect.poll(() => observations('part_count')).toEqual([
+    { event: 'part_count', bucket: '1' }
+  ]);
+  const row = page.locator('.feature-row').filter({ has: page.locator('.feature-name', { hasText: /^Box$/ }) });
+  await row.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
+  const name = page.getByRole('textbox', { name: 'Rename Box', exact: true });
+  await name.fill('Private renamed feature');
+  await name.press('Enter');
+  await expect(page.locator('.feature-name', { hasText: /^Private renamed feature$/ })).toBeVisible();
+  await expect.poll(() => observations('feature_operation')).toEqual([
+    { event: 'feature_operation', bucket: 'primitive.add' },
+    { event: 'feature_operation', bucket: 'node.rename' }
+  ]);
+  await expect.poll(() => observations('part_count')).toEqual([
+    { event: 'part_count', bucket: '1' },
+    { event: 'part_count', bucket: '1' }
+  ]);
+  await expect.poll(() => observations('feature_used')).toHaveLength(2);
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await expectBodyCount(page, 2);
+  await expect.poll(() => observations('part_count').at(-1)?.bucket).toBe('2_10');
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box 1' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder 1' }).click();
+  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await expectBodyCount(page, 1);
+  await expect.poll(() => observations('feature_operation').at(-1)).toEqual({
+    event: 'feature_operation', bucket: 'feature.boolean'
+  });
+  await expect.poll(() => observations('part_count').at(-1)?.bucket).toBe('1');
+  expect(JSON.stringify(requests)).not.toContain('Private');
 });

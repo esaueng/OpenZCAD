@@ -1,3 +1,4 @@
+import { accountConsent, publishCensus } from './glimpseCensus';
 import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
 import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
 import {
@@ -1091,6 +1092,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   ) {
     await enforceApiRateLimit(env, `api:${userId}`, 120);
   }
+  if (pathname === '/api/glimpse/account-consent') {
+    await assertAccountNotErasing(env.DB, userId);
+    return accountConsent(request, env, userId);
+  }
   const collaborationRollout = projectCollaborationRollout(env, session.email);
   const persistence = createPersistenceService(
     envForCollaborationRollout(env, collaborationRollout)
@@ -1915,6 +1920,7 @@ export default {
   async scheduled(_controller: unknown, env: Env): Promise<void> {
     assertSafeRuntimeConfiguration(env);
     await createPersistenceService(env).purgeExpiredUploadSessions();
+    await publishCensus(env);
   },
   async fetch(
     request: Request,

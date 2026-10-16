@@ -1,3 +1,4 @@
+import { isAnalyticsEnabled, trackDetail, trackSize, durationBucket } from './analytics';
 import type {
   AccountStorageUsage,
   AccountDeletionPreview,
@@ -90,16 +91,36 @@ export function isProjectDocumentUnavailableError(
 
 async function requestJson<T>(
   input: RequestInfo,
-  init?: RequestInit
+  init?: RequestInit,
+  observations: { documentDownload?: boolean; expectedMissing?: boolean } = {}
 ): Promise<T> {
-  const response = await desktopFetch(input, {
-    ...init,
-    credentials: 'same-origin',
-    headers: {
-      'content-type': 'application/json',
-      ...(init?.headers ?? {})
+  const collect = isAnalyticsEnabled();
+  const started = performance.now();
+  // Use only a fixed operation class; never send the URL or embedded IDs.
+  const projectCall = typeof input === 'string' && input.startsWith('/api/projects');
+  const writing = !['GET','HEAD','OPTIONS'].includes(init?.method ?? 'GET');
+  let response: Response;
+  try {
+    response = await desktopFetch(input, {
+      ...init, credentials: 'same-origin',
+      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) }
+    });
+  } catch (error) {
+    if (collect && projectCall) { trackDetail(writing ? 'error_cloud_save' : 'error_cloud_load'); trackDetail('cloud_status','network'); }
+    throw error;
+  }
+  if (collect && projectCall) {
+    if (!response.ok) {
+      // Revision retention's documented null result is not a load failure.
+      if (!(observations.expectedMissing && response.status === 404)) {
+        trackDetail(writing ? 'error_cloud_save' : 'error_cloud_load');
+        trackDetail('cloud_status', response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden' : response.status === 409 ? 'conflict' : response.status === 413 ? 'too_large' : response.status === 429 ? 'rate_limited' : response.status >= 500 ? 'server' : 'other');
+      }
+    } else if (writing && typeof init?.body === 'string') {
+      trackSize('transfer_upload',new Blob([init.body]).size);
+      const bucket=durationBucket(performance.now()-started); if(bucket)trackDetail('save_latency',bucket);
     }
-  });
+  }
 
   if (!response.ok) {
     const text = await response.text();
@@ -126,6 +147,14 @@ async function requestJson<T>(
     );
   }
 
+  if (collect && observations.documentDownload && !writing) {
+    // Read once and measure the successfully parsed UTF-8 JSON body. Content-
+    // Length may describe compressed bytes or be absent; names/IDs stay local.
+    const text = await response.text();
+    const value = JSON.parse(text) as T;
+    trackSize('transfer_download', new TextEncoder().encode(text).byteLength);
+    return value;
+  }
   return (await response.json()) as T;
 }
 
@@ -218,7 +247,9 @@ export const api = {
   },
   loadProject: (projectId: string) =>
     requestJson<ProjectDocument>(
-      `/api/projects/${encodeURIComponent(projectId)}`
+      `/api/projects/${encodeURIComponent(projectId)}`,
+      undefined,
+      { documentDownload: true }
     ),
   /**
    * Copies a project. With `revisionId`, the copy starts from that stored save
@@ -253,7 +284,9 @@ export const api = {
   loadRevision: async (projectId: string, revisionId: string) => {
     try {
       return await requestJson<ProjectDocument>(
-        `/api/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`
+        `/api/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`,
+        undefined,
+        { documentDownload: true, expectedMissing: true }
       );
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {

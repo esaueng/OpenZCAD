@@ -84,6 +84,7 @@ it.skipIf(!sourcePath)(
       measurementCacheDiagnostics: true
     });
     const cold = await createExactKernelAdapter({
+      importedStepCacheBytes: 0,
       historyCheckpointLimit: 0,
       measuredShapeCacheBytes: 0
     });
