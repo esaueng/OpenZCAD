@@ -194,6 +194,8 @@ describe('durable room checkpoints', () => {
     ['while draining', 'success'],
     ['while draining', 'lost response'],
     ['while draining', 'buffered changes'],
+    ['while draining', 'buffered before ACK'],
+    ['while draining', 'buffered before ACK lost response'],
     ['while draining', 'foreign artifact'],
     ['while draining', 'unrelated content'],
     ['while draining', 'foreign owner'],
