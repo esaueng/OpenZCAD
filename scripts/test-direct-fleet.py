@@ -154,6 +154,48 @@ class DirectFleetTests(unittest.TestCase):
         for expression in EXPRESSIONS:
             self.assertIsInstance(evaluate(expression, self.github, self.variables), str)
 
+    def test_merge_groups_run_on_hosted_runners_without_pr_fields(self):
+        self.github.update(
+            event_name="merge_group",
+            ref="refs/heads/gh-readonly-queue/main/pr-7-synthetic",
+            event={"merge_group": {"base_ref": "refs/heads/main"}},
+        )
+        for expression in EXPRESSIONS:
+            self.assertEqual(evaluate(expression, self.github, self.variables), "ubuntu-latest")
+
+    def test_queue_checks_have_triggers_and_independent_verdicts(self):
+        cloudflare = (ROOT / ".github/workflows/cloudflare.yml").read_text()
+        privacy = (ROOT / ".github/workflows/commit-privacy.yml").read_text()
+        for workflow in (CALLER, cloudflare, privacy):
+            self.assertRegex(workflow, r"(?m)^  merge_group:")
+        for workflow in (CALLER, cloudflare):
+            self.assertIn("merge_group:\n    types: [checks_requested]", workflow)
+            group = re.search(r"^  group: .*?(\$\{\{.+\}\})$", workflow, re.M)[1]
+            keys = []
+            for event, run_id in (("merge_group", 101), ("merge_group", 102), ("pull_request", 103), ("pull_request", 104)):
+                github = dict(self.github, event_name=event, run_id=run_id)
+                keys.append(evaluate(group, github, self.variables))
+            self.assertNotEqual(keys[0], keys[1])
+            self.assertEqual(keys[2], keys[3])
+            self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
+
+    def test_queue_candidates_cannot_upload_cloudflare_versions(self):
+        cloudflare = (ROOT / ".github/workflows/cloudflare.yml").read_text()
+        upload = cloudflare.split("\n  upload:\n", 1)[1]
+        condition = re.search(r"^    if: (.+)$", upload, re.M)[1]
+        for event, ref, expected in (
+            ("pull_request", "refs/pull/7/merge", False),
+            ("merge_group", "refs/heads/gh-readonly-queue/main/pr-7-synthetic", False),
+            ("push", "refs/heads/feature", False),
+            ("push", "refs/heads/main", True),
+            ("workflow_dispatch", "refs/heads/main", True),
+        ):
+            github = dict(self.github, event_name=event, ref=ref)
+            self.assertEqual(evaluate("${{ " + condition + " }}", github, self.variables), expected)
+        verify = cloudflare.split("\n  verify:\n", 1)[1].split("\n  upload:\n", 1)[0]
+        self.assertNotRegex(verify, r"(?m)^    if:")
+        self.assertIn("wrangler deploy --dry-run", verify)
+
     def test_no_hosted_bootstrap_and_guard_before_checkout(self):
         self.assertNotIn("select-runner.yml", TEXT)
         self.assertNotIn("/routing/v1/target", TEXT)
