@@ -1278,3 +1278,56 @@ test('cloud statistics require acknowledged consent and keep a failed withdrawal
     { enabled: false, version: 2 }
   ]);
 });
+
+test('consented diagnostics count transaction edits without sending names', async ({ page }) => {
+  await stubApi(page);
+  await page.addInitScript(() => localStorage.setItem('openzcad.glimpse.consent.v1', 'granted-v2'));
+  const requests: Array<{ event: string; bucket: string }> = [];
+  await page.route('**/api/glimpse/usage', route => {
+    requests.push(route.request().postDataJSON() as { event: string; bucket: string });
+    return route.fulfill({ status: 204 });
+  });
+  await createProject(page, 'Private diagnostic project');
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page.getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: 'Create', exact: true }).click();
+  await expectBodyCount(page, 1);
+  const observations = (event: string) => requests.filter(row => row.event === event);
+  await expect.poll(() => observations('feature_operation')).toEqual([
+    { event: 'feature_operation', bucket: 'primitive.add' }
+  ]);
+  await expect.poll(() => observations('part_count')).toEqual([
+    { event: 'part_count', bucket: '1' }
+  ]);
+  const row = page.locator('.feature-row').filter({ has: page.locator('.feature-name', { hasText: /^Box$/ }) });
+  await row.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click();
+  const name = page.getByRole('textbox', { name: 'Rename Box', exact: true });
+  await name.fill('Private renamed feature');
+  await name.press('Enter');
+  await expect(page.locator('.feature-name', { hasText: /^Private renamed feature$/ })).toBeVisible();
+  await expect.poll(() => observations('feature_operation')).toEqual([
+    { event: 'feature_operation', bucket: 'primitive.add' },
+    { event: 'feature_operation', bucket: 'node.rename' }
+  ]);
+  await expect.poll(() => observations('part_count')).toEqual([
+    { event: 'part_count', bucket: '1' },
+    { event: 'part_count', bucket: '1' }
+  ]);
+  await expect.poll(() => observations('feature_used')).toHaveLength(2);
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await expectBodyCount(page, 2);
+  await expect.poll(() => observations('part_count').at(-1)?.bucket).toBe('2_10');
+  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await inspector.locator('.pick-row', { hasText: 'Box 1' }).click();
+  await inspector.locator('.pick-row', { hasText: 'Cylinder 1' }).click();
+  await inspector.getByRole('button', { name: 'Create', exact: true }).click();
+  await expectBodyCount(page, 1);
+  await expect.poll(() => observations('feature_operation').at(-1)).toEqual({
+    event: 'feature_operation', bucket: 'feature.boolean'
+  });
+  await expect.poll(() => observations('part_count').at(-1)?.bucket).toBe('1');
+  expect(JSON.stringify(requests)).not.toContain('Private');
+});
