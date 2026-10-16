@@ -11,7 +11,8 @@ import {
   HANDLE_KEEP_OUT_PX,
   refreshSelectionCallout,
   renderSelectionCallout,
-  selectionCalloutClearance,
+  placeSelectionCallouts,
+  selectionCalloutPlacement,
   selectionCalloutObstacleShift
 } from './selectionCalloutView';
 import { textLabelSegments } from './topologyLabels';
@@ -463,38 +464,113 @@ describe('renderSelectionCallout', () => {
   });
 });
 
-describe('selectionCalloutClearance', () => {
-  const viewport = { left: 0, top: 0, right: 1000, bottom: 800 };
-  const valueChip = { left: 500, top: 400, right: 600, bottom: 424 };
+describe('selection callout placement', () => {
+  const bounds = { left: 4, top: 52, right: 1196, bottom: 846 };
+  const handle = { left: 690, top: 225, right: 840, bottom: 249 };
 
-  it('leaves a chip far from the handle where it is', () => {
+  it('leaves a chip clear of the chrome and handle at its anchor', () => {
     expect(
-      selectionCalloutClearance(
+      selectionCalloutPlacement(
         { left: 100, top: 100, right: 300, bottom: 124 },
-        valueChip,
-        viewport
+        bounds,
+        [],
+        handle
       )
-    ).toBe(0);
+    ).toEqual({ dx: 0, dy: 0 });
   });
 
-  it('lifts a chip over the handle clear of the arrow', () => {
-    const chip = { left: 450, top: 380, right: 700, bottom: 404 };
-    const shift = selectionCalloutClearance(chip, valueChip, viewport);
-    expect(shift).toBeLessThan(0);
-    expect(chip.bottom + shift).toBeLessThanOrEqual(
-      valueChip.top - HANDLE_KEEP_OUT_PX
+  it('keeps a phone chip inside the viewport and above its drawer', () => {
+    const chip = { left: 200, top: 520, right: 566, bottom: 610 };
+    const phone = { left: 4, top: 52, right: 386, bottom: 840 };
+    const drawer = { left: 0, top: 500, right: 390, bottom: 844 };
+    const shift = selectionCalloutPlacement(chip, phone, [drawer], null);
+    expect(chip.left + shift.dx).toBeGreaterThanOrEqual(phone.left);
+    expect(chip.right + shift.dx).toBeLessThanOrEqual(phone.right);
+    expect(chip.top + shift.dy).toBeGreaterThanOrEqual(phone.top);
+    expect(chip.bottom + shift.dy).toBeLessThan(drawer.top);
+  });
+
+  it('clears the handle and toolbar together when there is no room above', () => {
+    const chip = { left: 388, top: 136, right: 988, bottom: 226 };
+    const shift = selectionCalloutPlacement(chip, bounds, [], handle);
+    expect(chip.top + shift.dy).toBeGreaterThanOrEqual(bounds.top);
+    expect(chip.bottom + shift.dy).toBeLessThanOrEqual(bounds.bottom);
+    expect(chip.top + shift.dy).toBeGreaterThan(
+      handle.bottom + HANDLE_KEEP_OUT_PX
     );
   });
 
-  it('drops below the handle when there is no room above', () => {
-    const high = { left: 500, top: 80, right: 600, bottom: 104 };
-    const chip = { left: 450, top: 90, right: 700, bottom: 114 };
-    const shift = selectionCalloutClearance(chip, high, viewport);
-    expect(shift).toBeGreaterThan(0);
-    expect(chip.top + shift).toBeGreaterThanOrEqual(
-      high.bottom + HANDLE_KEEP_OUT_PX
-    );
+  it('clears a handle and a side panel with one combined offset', () => {
+    const chip = { left: 600, top: 300, right: 900, bottom: 390 };
+    const panel = { left: 800, top: 52, right: 1196, bottom: 600 };
+    const shift = selectionCalloutPlacement(chip, bounds, [panel], handle);
+    const placed = {
+      left: chip.left + shift.dx,
+      right: chip.right + shift.dx,
+      top: chip.top + shift.dy,
+      bottom: chip.bottom + shift.dy
+    };
+    expect(placed.right <= panel.left || placed.top >= panel.bottom).toBe(true);
+    expect(
+      placed.right < handle.left - HANDLE_KEEP_OUT_PX ||
+        placed.left > handle.right + HANDLE_KEEP_OUT_PX ||
+        placed.bottom < handle.top - HANDLE_KEEP_OUT_PX ||
+        placed.top > handle.bottom + HANDLE_KEEP_OUT_PX
+    ).toBe(true);
   });
+
+  it.each([24, 90])(
+    'holds a stationary %i px chip across repeated render frames and clears its offset when the handle hides',
+    (height) => {
+      const root = document.createElement('div');
+      root.className = 'app-shell';
+      root.innerHTML = `<div class="topbar"></div><div class="viewer-area"><div class="viewer-shell"><div class="labels"><div class="selection-callout selection-callout-chip"></div></div><div class="handle-value-chip"></div></div></div>`;
+      document.body.append(root);
+      try {
+        const container = root.querySelector<HTMLElement>('.labels')!;
+        const chip = root.querySelector<HTMLElement>(
+          '.selection-callout-chip'
+        )!;
+        const value = root.querySelector<HTMLElement>('.handle-value-chip')!;
+        chip.style.marginTop = '-34px';
+        vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(
+          new DOMRect(0, 0, 1200, 850)
+        );
+        vi.spyOn(
+          root.querySelector('.topbar')!,
+          'getBoundingClientRect'
+        ).mockReturnValue(new DOMRect(0, 0, 1200, 48));
+        vi.spyOn(value, 'getBoundingClientRect').mockReturnValue(
+          new DOMRect(handle.left, handle.top, 150, 24)
+        );
+        vi.spyOn(chip, 'getBoundingClientRect').mockImplementation(() => {
+          const [x, y] = chip.style.translate
+            .split(/\s+/)
+            .map(Number.parseFloat);
+          return new DOMRect(
+            388 + (x || 0),
+            170 + Number.parseFloat(chip.style.marginTop) + (y || 0),
+            600,
+            height
+          );
+        });
+        placeSelectionCallouts(container);
+        const first = chip.getBoundingClientRect();
+        expect(first.top).toBeGreaterThanOrEqual(bounds.top);
+        for (let frame = 0; frame < 120; frame += 1) {
+          placeSelectionCallouts(container);
+          expect(chip.getBoundingClientRect().toJSON()).toEqual(first.toJSON());
+        }
+        expect(chip.style.marginTop).toBe('-34px');
+        value.hidden = true;
+        placeSelectionCallouts(container);
+        expect(chip.style.translate).toBe('');
+        expect(chip.getBoundingClientRect().top).toBe(136);
+      } finally {
+        root.remove();
+      }
+    }
+  );
 });
 
 describe('selectionCalloutObstacleShift', () => {

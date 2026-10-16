@@ -252,12 +252,6 @@ export interface ScreenRect {
   bottom: number;
 }
 
-function overlaps(a: ScreenRect, b: ScreenRect): boolean {
-  return (
-    a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
-  );
-}
-
 /**
  * The panels floating over the viewport that a selection chip must not
  * slide under: the right lane (inspector, drawer, command card), the left
@@ -312,15 +306,17 @@ export function selectionCalloutObstacleShift(
   if (now === 0) {
     return stay;
   }
-  const candidates: { dx: number; dy: number }[] = [];
-  for (const panel of panels.filter((candidate) => overlaps(chip, candidate))) {
-    candidates.push(
-      { dx: panel.left - gap - chip.right, dy: 0 },
-      { dx: panel.right + gap - chip.left, dy: 0 },
-      { dx: 0, dy: panel.top - gap - chip.bottom },
-      { dx: 0, dy: panel.bottom + gap - chip.top }
-    );
+  // Include combinations: clearing a handle sideways can otherwise put the
+  // chip under a panel that was not intersecting its original position.
+  const xs = new Set([0, bounds.left - chip.left, bounds.right - chip.right]);
+  const ys = new Set([0, bounds.top - chip.top, bounds.bottom - chip.bottom]);
+  for (const panel of panels) {
+    xs.add(panel.left - gap - chip.right);
+    xs.add(panel.right + gap - chip.left);
+    ys.add(panel.top - gap - chip.bottom);
+    ys.add(panel.bottom + gap - chip.top);
   }
+  const candidates = [...xs].flatMap((dx) => [...ys].map((dy) => ({ dx, dy })));
   let best = stay;
   let bestCovered = now;
   for (const candidate of candidates) {
@@ -355,77 +351,105 @@ export function selectionCalloutObstacleShift(
 export const HANDLE_KEEP_OUT_PX = 100;
 
 /**
- * The vertical shift that keeps the selection chip off a drag handle.
- *
- * The chip hangs over the pick and the handle grows out of it, so in some
- * views they land on the same pixels — and a verb button over the arrow
- * takes the press meant for the drag. `chip` is the chip's box without any
- * shift, `valueChip` the handle's value chip. The chip moves above the
- * keep-out zone, or below it when above would leave the viewport; zero when
- * they do not meet.
+ * One offset for viewport, chrome, panels and the drag handle together.
+ * The chip is the original projected rectangle, including its CSS margin.
+ * On constrained screens, preserve the viewport and minimize covered area.
  */
-export function selectionCalloutClearance(
+export function selectionCalloutPlacement(
   chip: ScreenRect,
-  valueChip: ScreenRect,
-  viewport: ScreenRect,
-  keepOut = HANDLE_KEEP_OUT_PX
-): number {
-  const zone = {
-    left: valueChip.left - keepOut,
-    top: valueChip.top - keepOut,
-    right: valueChip.right + keepOut,
-    bottom: valueChip.bottom + keepOut
-  };
-  const meets =
-    chip.left < zone.right &&
-    chip.right > zone.left &&
-    chip.top < zone.bottom &&
-    chip.bottom > zone.top;
-  if (!meets) {
-    return 0;
-  }
-  const gap = 4;
-  const up = zone.top - gap - chip.bottom;
-  if (chip.top + up >= viewport.top + gap) {
-    return up;
-  }
-  return zone.bottom + gap - chip.top;
+  bounds: ScreenRect,
+  obstacles: readonly ScreenRect[],
+  valueChip: ScreenRect | null
+): { dx: number; dy: number } {
+  const dx = Math.max(
+    bounds.left - chip.left,
+    Math.min(0, bounds.right - chip.right)
+  );
+  const dy = Math.max(
+    bounds.top - chip.top,
+    Math.min(0, bounds.bottom - chip.bottom)
+  );
+  const panels = valueChip
+    ? [
+        ...obstacles,
+        {
+          left: valueChip.left - HANDLE_KEEP_OUT_PX,
+          right: valueChip.right + HANDLE_KEEP_OUT_PX,
+          top: valueChip.top - HANDLE_KEEP_OUT_PX,
+          bottom: valueChip.bottom + HANDLE_KEEP_OUT_PX
+        }
+      ]
+    : obstacles;
+  const shift = selectionCalloutObstacleShift(
+    {
+      left: chip.left + dx,
+      right: chip.right + dx,
+      top: chip.top + dy,
+      bottom: chip.bottom + dy
+    },
+    panels,
+    bounds
+  );
+  return { dx: dx + shift.dx, dy: dy + shift.dy };
 }
 
 /**
- * Applies {@link selectionCalloutClearance} to a chip on screen. Run after
- * the label renderer places the chip each frame; the shift rides the CSS
- * `translate` property, which composes with the renderer's inline transform
- * and the edge clamp's margins instead of fighting them.
+ * Places selection chips once after CSS2DRenderer. All constraints use the
+ * original projected rectangle, recovered by removing our previous translate.
+ * A separate handle translate and viewport margin used to feed each other's
+ * corrections back into the next frame, making a stationary chip jump.
+ * CSS margins remain part of the anchor; this is its only positioning writer.
  */
-export function keepSelectionCalloutClear(element: HTMLElement): void {
-  if (!element.classList.contains(SELECTION_CALLOUT_CHIP_CLASS)) {
+export function placeSelectionCallouts(container: HTMLElement): void {
+  const elements = container.querySelectorAll<HTMLElement>(
+    `.${SELECTION_CALLOUT_CHIP_CLASS}`
+  );
+  if (elements.length === 0) {
     return;
   }
-  const scope = element.closest('.viewer-shell') ?? element.ownerDocument;
-  const valueChip = scope.querySelector<HTMLElement>(
-    '.handle-value-chip:not([hidden])'
-  );
-  const current = Number.parseFloat(
-    element.style.translate.split(' ')[1] ?? '0'
-  );
-  const shift = Number.isFinite(current) ? current : 0;
-  let next = 0;
-  const container = element.parentElement;
-  if (valueChip && container) {
+  const scope = container.closest('.viewer-shell') ?? container.ownerDocument;
+  const valueChip =
+    scope
+      .querySelector<HTMLElement>('.handle-value-chip:not([hidden])')
+      ?.getBoundingClientRect() ?? null;
+  const rect = container.getBoundingClientRect();
+  const topbar = container.ownerDocument.querySelector('.app-shell > .topbar');
+  const bounds = {
+    left: rect.left + 4,
+    right: rect.right - 4,
+    top:
+      Math.max(rect.top, topbar?.getBoundingClientRect().bottom ?? rect.top) +
+      4,
+    bottom: rect.bottom - 4
+  };
+  const obstacles = [
+    ...(container
+      .closest('.viewer-area')
+      ?.querySelectorAll<HTMLElement>(SELECTION_CALLOUT_OBSTACLES) ?? [])
+  ].map((element) => element.getBoundingClientRect());
+  // Read every rectangle before writing, so multiple chips share one layout.
+  const placements = [...elements].map((element) => {
+    const [x, y] = element.style.translate.split(/\s+/);
+    const dx = Number.parseFloat(x ?? '') || 0;
+    const dy = Number.parseFloat(y ?? '') || 0;
     const rect = element.getBoundingClientRect();
-    next = selectionCalloutClearance(
+    const shift = selectionCalloutPlacement(
       {
-        left: rect.left,
-        right: rect.right,
-        top: rect.top - shift,
-        bottom: rect.bottom - shift
+        left: rect.left - dx,
+        right: rect.right - dx,
+        top: rect.top - dy,
+        bottom: rect.bottom - dy
       },
-      valueChip.getBoundingClientRect(),
-      container.getBoundingClientRect()
+      bounds,
+      obstacles,
+      valueChip
     );
-  }
-  if (Math.abs(next - shift) > 0.5) {
-    element.style.translate = next ? `0 ${next}px` : '';
+    return { element, shift };
+  });
+  for (const { element, shift } of placements) {
+    const translate = shift.dx || shift.dy ? `${shift.dx}px ${shift.dy}px` : '';
+    if (element.style.translate !== translate) {
+      element.style.translate = translate;
+    }
   }
 }
