@@ -3168,3 +3168,14 @@ describe('save-state history routes', () => {
     });
   });
 });
+
+describe('Glimpse cloud consent authentication boundary', () => {
+  it('does not expose account permission to unauthenticated callers', async () => {
+    const response=await worker.fetch(new Request('https://example.com/api/glimpse/account-consent'), {...env,AUTH_MODE:'email-code',DB:{prepare:()=>({bind:()=>({first:async()=>null})})}} as never);
+    expect(response.status).toBe(401);
+  });
+  it('rejects cross-origin account consent changes before reading or writing account data', async () => {
+    const response=await worker.fetch(new Request('https://example.com/api/glimpse/account-consent',{method:'POST',headers:{Origin:'https://other.example','Content-Type':'application/json'},body:JSON.stringify({enabled:true,version:2})}),env);
+    expect(response.status).toBe(403);
+  });
+});

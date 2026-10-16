@@ -1,4 +1,4 @@
-import { setAnalyticsEnabled, trackUsage } from './lib/analytics';
+import { setAnalyticsEnabled, trackUsage, trackDetail, trackParts, trackSize, isAnalyticsEnabled, durationBucket } from './lib/analytics';
 import type {
   GeometryBodyRepresentation,
   GeometryReadyState,
@@ -2618,10 +2618,6 @@ export function App() {
   } | null>(null);
   const [normalToFaceRequest, setNormalToFaceRequest] =
     useState<NormalToFaceRequest | null>(null);
-  const [rotateRequest, setRotateRequest] = useState<{
-    direction: 'cw' | 'ccw';
-    nonce: number;
-  } | null>(null);
   // The command bar has focus and its list is up.
   const [paletteOpen, setPaletteOpen] = useState(false);
   // A question typed into command search, handed to the assistant with a
@@ -2940,6 +2936,7 @@ export function App() {
       run: handleUndo
     });
   };
+  const pendingPartCountRef = useRef<Pick<ProjectDocument, 'projectId' | 'version'> | null>(null);
   const [geometrySnapshot, setGeometrySnapshot] = useState<{
     projectId: string;
     version: number;
@@ -2974,6 +2971,7 @@ export function App() {
             : null
         );
         const validated = manager.commitDerivedState(derived);
+        trackCommittedParts(validated, derived);
         recordFeatureAttribution(validated, derived);
         setParameterPreviewBase({ ...validated, derived });
         setDoc(validated);
@@ -6672,10 +6670,16 @@ export function App() {
       }
       recordLocalCommit(next, before);
       setDoc(next);
-      trackUsage('feature_used');
+      if (isAnalyticsEnabled()) {
+        trackUsage('feature_used');
+        trackDetail('feature_operation', command.kind);
+        pendingPartCountRef.current = { projectId: next.projectId, version: next.version };
+        if (derived) trackCommittedParts(next, derived);
+      }
       setStatus(commandOutcomeMessage(command.label));
       return true;
     } catch (error) {
+      trackDetail('error_feature');
       setStatus(errorMessage(error, 'Command failed.'));
       return false;
     }
@@ -6707,12 +6711,34 @@ export function App() {
       }
       recordLocalCommit(next, before);
       setDoc(next);
+      if (isAnalyticsEnabled()) {
+        trackUsage('feature_used');
+        for (const command of commands)
+          trackDetail('feature_operation', command.kind);
+        pendingPartCountRef.current = { projectId: next.projectId, version: next.version };
+        if (derived) trackCommittedParts(next, derived);
+      }
       setStatus(commandOutcomeMessage(label));
       return true;
     } catch (error) {
+      trackDetail('error_feature');
       setStatus(errorMessage(error, 'Edit failed.'));
       return false;
     }
+  }
+
+  function trackCommittedParts(
+    document: ProjectDocument,
+    derived: ProjectDocument['derived']
+  ): void {
+    const pending = pendingPartCountRef.current;
+    if (!pending || pending.projectId !== document.projectId || pending.version !== document.version)
+      return;
+    pendingPartCountRef.current = null;
+    // Count the completed result, including hidden parts but excluding consumed
+    // replay sources. Pending edits are sampled only after their owned rebuild.
+    if (isAnalyticsEnabled())
+      trackParts(Object.values(derived.bodyRepresentations).filter(body => !body.consumed).length);
   }
 
   function finishFeatureCreation(): void {
@@ -7653,10 +7679,6 @@ export function App() {
       nonce: ++viewNonceRef.current
     });
     setStatus(`${normalToFaceTarget.label}: viewing normal to face.`);
-  }
-
-  function requestRotate(direction: 'cw' | 'ccw') {
-    setRotateRequest({ direction, nonce: ++viewNonceRef.current });
   }
 
   function cycleDisplayMode() {
@@ -11120,6 +11142,7 @@ export function App() {
         // this document will store.
         mesh = await importMeshFileInDisposableWorker(file, format, doc.units);
       } catch (error) {
+        trackDetail('error_import');
         setStatus(errorMessage(error, `${file.name} import failed.`));
         return;
       }
@@ -11672,6 +11695,7 @@ export function App() {
     projectTransferRef.current = true;
     setProjectTransferBusy(true);
     const snapshot = doc;
+    const analyticsStarted = isAnalyticsEnabled() ? performance.now() : null;
     const fileName = `${exportFileStem(snapshot.name)}.openzcad`;
     const sink = createImportProgressSink();
     sink.start({
@@ -11703,6 +11727,11 @@ export function App() {
         new Blob([text], { type: 'application/json' })
       );
       trackUsage('export_completed');
+      if (analyticsStarted !== null) {
+        trackSize('project_size',new Blob([text]).size);
+        const bucket = durationBucket(performance.now()-analyticsStarted);
+        if(bucket)trackDetail('export_latency',bucket);
+      }
       setStatus(`Exported complete project ${snapshot.name}.`);
       sink.finish({ tone: 'ok', message: 'complete project', landed: true });
     } catch (error) {
@@ -11773,6 +11802,7 @@ export function App() {
         landed: opened
       });
     } catch (error) {
+      trackDetail('error_import');
       const message = errorMessage(error, 'Unable to read backup.');
       if (isCurrent()) setStatus(`Project import failed: ${message}`);
       sink.finish({ tone: 'error', message });
@@ -11916,6 +11946,7 @@ export function App() {
         return;
       }
       trackUsage('export_failed');
+      trackDetail('error_export');
       const message = errorMessage(error, `${input.label} export failed.`);
       setStatus(message);
       sink.finish({ tone: 'error', message });
@@ -20201,7 +20232,6 @@ export function App() {
             autoFrame={autoFrame}
             viewRequest={viewRequest}
             normalToFaceRequest={normalToFaceRequest}
-            rotateRequest={rotateRequest}
             units={doc.units}
             // Every drag handle below is disarmed by passing nothing to arm:
             // the viewer only builds a manipulator when it is given a target,
@@ -20551,7 +20581,6 @@ export function App() {
             measuring={measuring}
             onMeasure={toggleMeasure}
             onView={requestView}
-            onRotateView={requestRotate}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
             sectionRange={

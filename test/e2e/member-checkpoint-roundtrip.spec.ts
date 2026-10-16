@@ -15,7 +15,8 @@ import type { Page } from '@playwright/test';
 function roomFixture(
   ackFault?: 'lost' | 'late',
   copiedImport = false,
-  sourceArchived = true
+  sourceArchived = true,
+  holdLeaseRenewals = false
 ) {
   let document = createProjectDocument(
     'Durable member checkpoint',
@@ -218,13 +219,15 @@ function roomFixture(
             document = sourceArchived
               ? reconcileCopiedImportSources(next, [archive])
               : next;
-            return document;
+            // Production ackFor includes a full body only when canonical source
+            // identities changed (or a merge minted a new room version).
+            return sourceArchived ? document : null;
           }
           document = next;
           return null;
         }
       );
-      await page.addInitScript((initial) => {
+      await page.addInitScript(({ initial, holdLeaseRenewals }) => {
         const browser = window as unknown as {
           __recordCheckpointRoomDocument(
             document: ProjectDocument,
@@ -267,6 +270,11 @@ function roomFixture(
                   })
                 )
               );
+            } else if (frame.type === 'lease-renew' && holdLeaseRenewals) {
+              // The before-send arm holds renewal ACKs too: lease-granted
+              // flushes immediately, independently of the 500 ms debounce.
+              // The initial lease remains valid for 120 s (test limit: 60 s).
+              return;
             } else if (
               frame.type === 'lease-acquire' ||
               frame.type === 'lease-renew'
@@ -316,7 +324,7 @@ function roomFixture(
             }
           }
         };
-      }, document);
+      }, { initial: document, holdLeaseRenewals });
     }
   };
 }
@@ -896,18 +904,52 @@ test('a committed member checkpoint fences buffered edits after a new lease repl
 for (const [sendTiming, ackFault, sourceArchived] of [
   ['pending', undefined, true],
   ['pending', 'lost', true],
+  ['pending-buffered', undefined, true],
+  ['pending-buffered', undefined, false],
   ['scheduled', undefined, true],
   ['scheduled', 'lost', true],
   ['scheduled-buffered', undefined, true],
   ['scheduled-buffered', undefined, false]
 ] as const) {
-  test(`a member checkpoint accepts the drained copied-source rewrite with a ${ackFault ?? 'confirmed'} HTTP acknowledgement ${sendTiming === 'pending' ? 'after a pending write' : 'before the room-send timer'}${sendTiming === 'scheduled-buffered' ? ` with buffered edits ${sourceArchived ? 'and a server archive' : 'without a server archive'}` : ''}`, async ({
+  test(`a member checkpoint accepts the drained copied-source rewrite with a ${ackFault ?? 'confirmed'} HTTP acknowledgement ${sendTiming.startsWith('pending') ? 'after a pending write' : 'before the room-send timer'}${sendTiming.endsWith('buffered') ? ` with buffered edits ${sourceArchived ? 'and a server archive' : 'without a server archive'}` : ''}`, async ({
     page
   }) => {
     test.setTimeout(60_000);
-    const server = roomFixture(ackFault, true, sourceArchived);
-    const buffered = sendTiming === 'scheduled-buffered';
+    const server = roomFixture(
+      ackFault, true, sourceArchived, sendTiming.startsWith('scheduled')
+    );
+    const buffered = sendTiming.endsWith('buffered');
+    const pending = sendTiming.startsWith('pending');
     await server.install(page);
+    if (!pending) {
+      // Install before navigation so an already scheduled send cannot escape.
+      // Park the actual debounce until the named save is confirmed; no wall-
+      // clock delay can expire under contention and turn this into a pending arm.
+      await page.addInitScript(() => {
+        const nativeTimeout = window.setTimeout.bind(window);
+        const held = new Set<number>();
+        (
+          window as unknown as { __restoreCheckpointSendTimer(): void }
+        ).__restoreCheckpointSendTimer = () => {
+          window.setTimeout = nativeTimeout;
+          for (const timer of held) window.clearTimeout(timer);
+          held.clear();
+        };
+        window.setTimeout = ((
+          handler: TimerHandler,
+          delay?: number,
+          ...args: unknown[]
+        ) => {
+          const timer = nativeTimeout(
+            handler,
+            delay === 500 ? 2_147_483_647 : delay,
+            ...args
+          );
+          if (delay === 500) held.add(timer);
+          return timer;
+        }) as typeof window.setTimeout;
+      });
+    }
     try {
       await page.goto('/');
       await expect(page.getByRole('tab', { name: 'Parts 1' })).toBeVisible();
@@ -953,31 +995,10 @@ for (const [sendTiming, ackFault, sourceArchived] of [
       await expect(
         page.getByRole('group', { name: 'Workspace status' })
       ).toContainText('syncLocal source only');
-      if (sendTiming !== 'pending') {
-        expect(server.sourceWritePending()).toBe(false);
-        // Hold the actual debounce rather than racing clicks against 500 ms.
-        await page.evaluate(() => {
-          const nativeTimeout = window.setTimeout.bind(window);
-          (
-            window as unknown as { __restoreCheckpointSendTimer(): void }
-          ).__restoreCheckpointSendTimer = () => {
-            window.setTimeout = nativeTimeout;
-          };
-          window.setTimeout = ((
-            handler: TimerHandler,
-            delay?: number,
-            ...args: unknown[]
-          ) =>
-            nativeTimeout(
-              handler,
-              delay === 500 ? 30_000 : delay,
-              ...args
-            )) as typeof window.setTimeout;
-        });
-      }
+      if (!pending) expect(server.sourceWritePending()).toBe(false);
       await addPrimitive(page, /^Box \(B\)/);
       await expectBodyCount(page, 2);
-      if (sendTiming === 'pending')
+      if (pending)
         await expect.poll(server.sourceWritePending).toBe(true);
       else expect(server.sourceWritePending()).toBe(false);
       await startNamedSave(page);
@@ -1085,7 +1106,7 @@ for (const [sendTiming, ackFault, sourceArchived] of [
         expect(JSON.stringify(server.stored())).toContain(
           'artifact_checkpoint_copy'
         );
-      if (sendTiming !== 'pending')
+      if (!pending)
         await page.evaluate(() =>
           (
             window as unknown as { __restoreCheckpointSendTimer(): void }

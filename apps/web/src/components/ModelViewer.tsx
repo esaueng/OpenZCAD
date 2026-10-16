@@ -682,11 +682,6 @@ export interface ModelViewerProps {
   viewRequest: { view: ViewTarget; nonce: number } | null;
   /** Set to centre and frame an exact planar face; nonce forces re-runs. */
   normalToFaceRequest: NormalToFaceRequest | null;
-  /**
-   * Set to spin the view a quarter turn about the world up axis; direction is
-   * how the model appears to turn on screen. Nonce forces re-runs.
-   */
-  rotateRequest: { direction: 'cw' | 'ccw'; nonce: number } | null;
   units: string;
   /** Primitive box bodies whose planar faces can drive document dimensions. */
   editableBodyIds: string[];
@@ -1714,7 +1709,6 @@ export function ModelViewer({
   autoFrame = null,
   viewRequest,
   normalToFaceRequest,
-  rotateRequest,
   units,
   editableBodyIds,
   movePreview,
@@ -11534,36 +11528,6 @@ export function ModelViewer({
       { ease: viewJumpEase }
     );
   }, [bodies, normalToFaceRequest]);
-
-  // The view-cube arrows swing the camera a quarter turn around the world up
-  // axis. In a head-on top or bottom view the orbit offset is only the tiny
-  // nudge VIEW_DIRECTIONS keeps off the pole, so the same quarter turn reads
-  // as the drawing spinning in place — which is what the arrows should do
-  // there.
-  useEffect(() => {
-    const context = contextRef.current;
-    if (!context || !rotateRequest) {
-      return;
-    }
-    const { camera, controls } = context;
-    // `direction` names the way the model appears to turn on screen, so the
-    // camera swings the opposite way: model clockwise = camera counterclockwise.
-    const angle = rotateRequest.direction === 'cw' ? Math.PI / 2 : -Math.PI / 2;
-    const offset = camera.position
-      .clone()
-      .sub(controls.target)
-      .applyAxisAngle(new THREE.Vector3(0, 0, 1), angle);
-    context.startCameraTween(
-      {
-        position: controls.target.clone().add(offset),
-        target: controls.target.clone(),
-        near: camera.near,
-        far: camera.far
-      },
-      undefined,
-      { ease: viewJumpEase }
-    );
-  }, [rotateRequest]);
 
   return (
     <div className="viewer-host" ref={hostRef}>

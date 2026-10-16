@@ -123,3 +123,17 @@ describe('Glimpse privacy boundary', () => {
     await expect(countApi(env, 200, 10)).resolves.toBeUndefined();
   });
 });
+
+it('accepts bounded expanded diagnostics and rejects private text and extra dimensions', () => {
+  expect(parseUsage({event:'project_size',bucket:'1_10mib'})).toEqual({level:'optional',event:'project_size',bucket:'1_10mib'});
+  expect(parseUsage({event:'error_runtime',bucket:'none'})).toEqual({level:'optional',event:'error_runtime',bucket:'none'});
+  expect(parseUsage({event:'error_runtime',bucket:'private.step'})).toBeNull();
+  expect(parseUsage({event:'error_runtime',bucket:'none',stack:'private'})).toBeNull();
+});
+
+it('keeps client and relay wire vocabularies aligned', async () => {
+  const client=await import('../src/lib/glimpseContract');
+  const relay=await import('./glimpseContract');
+  expect(client.EXPANDED).toEqual(relay.EXPANDED);
+  expect(client.CENSUS_FIELDS).toEqual(relay.CENSUS_FIELDS);
+});

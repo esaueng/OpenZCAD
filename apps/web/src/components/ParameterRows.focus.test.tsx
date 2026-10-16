@@ -135,7 +135,11 @@ describe('focus after a parameter rename', () => {
     await user.keyboard('{Control>}a{/Control}plate_width');
     // A browser goes on from an uncancelled Enter to press whatever has
     // focus by then: the name button, which reopened the editor.
-    expect(fireEvent.keyDown(editor, { key: 'Enter' })).toBe(false);
+    // The rename callback resolves asynchronously. Flush its state update and
+    // focus effect before asserting focus; finding the button alone can race it.
+    await act(async () => {
+      expect(fireEvent.keyDown(editor, { key: 'Enter' })).toBe(false);
+    });
     expect(
       await screen.findByRole('button', { name: 'Rename parameter width' })
     ).toHaveFocus();
