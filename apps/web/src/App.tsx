@@ -19841,6 +19841,7 @@ export function App() {
         currentGeometrySnapshot || currentFaceGeometryPreview
       )}
       selectedFeatureNodeId={selectedFeatureNodeId}
+      selectedSketchProfileId={selectedSketchProfileId}
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
       warnings={diagnostics}

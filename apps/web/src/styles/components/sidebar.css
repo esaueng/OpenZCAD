@@ -28,6 +28,9 @@
 }
 
 .sidebar-section {
+  /* The drawer owns scrolling. Keep each section's controls and diagnostics
+     at their full height when the mixed Objects list grows. */
+  flex-shrink: 0;
   padding: 12px 10px 10px;
   border-bottom: var(--border-thin);
 }

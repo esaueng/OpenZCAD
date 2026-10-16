@@ -137,6 +137,14 @@ async function targetConflicts(page: Page) {
       const failures: string[] = [];
       const audit = (selector: string, reaches: boolean) => {
         for (const element of document.querySelectorAll(selector)) {
+          // The Objects filter can push later sections below the drawer's
+          // scrollport. Audit each control after revealing it, including its
+          // whole target, rather than hit-testing through the clipped area.
+          element.scrollIntoView({
+            block: 'nearest',
+            inline: 'nearest',
+            behavior: 'instant'
+          });
           const box = element.getBoundingClientRect();
           if (box.width === 0 || box.height === 0) continue;
           const cx = box.left + box.width / 2;

@@ -115,6 +115,7 @@ interface SidebarProps {
   representations: Record<string, BodyRepresentation>;
   geometryPending?: boolean;
   selectedFeatureNodeId: string | null;
+  selectedSketchProfileId: string | null;
   selectedBodyIds: string[];
   hiddenBodyIds: ReadonlySet<string>;
   /** Sketches currently hidden — consumed by default, or by the eye toggle. */
@@ -225,6 +226,7 @@ export function Sidebar({
   representations,
   geometryPending = false,
   selectedFeatureNodeId,
+  selectedSketchProfileId,
   selectedBodyIds,
   hiddenBodyIds,
   hiddenSketchIds,
@@ -529,7 +531,9 @@ export function Sidebar({
               if (sketch.data.featureKind !== 'sketch') return null;
               const sketchId = sketch.data.sketchId;
               const hidden = hiddenSketchIds.has(sketchId);
-              const selected = selectedFeatureNodeId === sketch.id;
+              const selected =
+                selectedFeatureNodeId === sketch.id ||
+                selectedSketchProfileId === sketchId;
               return (
                 <div
                   key={sketch.id}

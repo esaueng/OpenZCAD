@@ -51,6 +51,7 @@ function renderSidebar(
     features,
     representations: {},
     selectedFeatureNodeId: null,
+    selectedSketchProfileId: null,
     selectedBodyIds: [],
     hiddenBodyIds: new Set(),
     hiddenSketchIds: new Set(),
@@ -324,6 +325,33 @@ describe('Sidebar', () => {
     expect(
       list.getByText('No bodies yet. Create a primitive or extrude a sketch.')
     ).toHaveAttribute('role', 'listitem');
+  });
+
+  it('tracks viewport sketch selection independently of the selected history feature', () => {
+    const sketches = [1, 2].map((index) =>
+      feature(index, {
+        name: `Profile ${index}`,
+        featureKind: 'sketch',
+        data: { featureKind: 'sketch', sketchId: `sketch-${index}` }
+      } as Partial<FeatureNode>)
+    );
+    const sidebar = renderSidebar({
+      features: sketches,
+      selectedSketchProfileId: 'sketch-2'
+    });
+    const list = within(screen.getByRole('list', { name: 'Objects' }));
+    expect(list.getByRole('button', { name: 'Profile 1' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    const selected = list.getByRole('button', { name: 'Profile 2' });
+    expect(selected).toHaveAttribute('aria-pressed', 'true');
+    expect(selected.closest('.object-row')).toHaveClass('selected');
+    sidebar.rerender(
+      <Sidebar {...sidebar.props} selectedSketchProfileId={null} />
+    );
+    expect(selected).toHaveAttribute('aria-pressed', 'false');
+    expect(selected.closest('.object-row')).not.toHaveClass('selected');
   });
 
   it('keeps source bodies out of the sketch filter and restores their disclosure state', async () => {
