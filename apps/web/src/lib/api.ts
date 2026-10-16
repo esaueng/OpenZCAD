@@ -91,7 +91,8 @@ export function isProjectDocumentUnavailableError(
 
 async function requestJson<T>(
   input: RequestInfo,
-  init?: RequestInit
+  init?: RequestInit,
+  observations: { documentDownload?: boolean } = {}
 ): Promise<T> {
   const collect = isAnalyticsEnabled();
   const started = performance.now();
@@ -143,7 +144,7 @@ async function requestJson<T>(
     );
   }
 
-  if (collect && projectCall && !writing) {
+  if (collect && observations.documentDownload && !writing) {
     // Read once and measure the successfully parsed UTF-8 JSON body. Content-
     // Length may describe compressed bytes or be absent; names/IDs stay local.
     const text = await response.text();
@@ -243,7 +244,9 @@ export const api = {
   },
   loadProject: (projectId: string) =>
     requestJson<ProjectDocument>(
-      `/api/projects/${encodeURIComponent(projectId)}`
+      `/api/projects/${encodeURIComponent(projectId)}`,
+      undefined,
+      { documentDownload: true }
     ),
   /**
    * Copies a project. With `revisionId`, the copy starts from that stored save
@@ -278,7 +281,9 @@ export const api = {
   loadRevision: async (projectId: string, revisionId: string) => {
     try {
       return await requestJson<ProjectDocument>(
-        `/api/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`
+        `/api/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`,
+        undefined,
+        { documentDownload: true }
       );
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
