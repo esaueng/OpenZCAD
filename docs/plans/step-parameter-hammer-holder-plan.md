@@ -432,9 +432,12 @@ Required cases:
 
 Run the repository's required lint, typecheck, root and web tests, parity
 corpus, production build/bundle checks, and Playwright gates. Preserve all
-existing assertions. Read `validate`, `e2e`, and `Cloudflare version / verify`
-from the PR head's own check runs before an authorized merge; do not trigger
-Apple Silicon CI unless requested.
+existing assertions. Read all four required contexts (`checks / validate`,
+`checks / e2e`, `commit-privacy`, and Cloudflare `verify`) from the PR head’s
+own check runs before enqueueing an authorized PR. Follow the
+[merge queue procedure](../../.github/merge-queue.md) and verify these same
+contexts on the merge-group candidate before reporting the queued merge.
+Do not trigger Apple Silicon CI unless requested.
 
 Exit: a recorded fresh-import-to-export browser walkthrough passes on the
 release candidate, with no prepared-project shortcut.
