@@ -13,8 +13,16 @@ import {
   createParameterIds,
   createProjectDocument,
   listFeaturesInOrder,
-  restoreFromSaveState
+  restoreFromSaveState,
+  duplicateProjectDocument,
+  repairLegacyBracketModel,
+  appendRevision
 } from '@openzcad/document-core';
+import {
+  InMemoryPersistenceService,
+  sharedProjectSnapshotDocument
+} from '@openzcad/persistence';
+import { restoreDuplicateDerivedProjection } from '../apps/web/src/lib/localProjectStore';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -289,6 +297,86 @@ describe('demo parameter tweaks', () => {
       expect((await adapter.syncDocument(manager.document)).warnings).toEqual(
         []
       );
+    },
+    60_000
+  );
+
+  it.each([
+    ['wall_h', '26'],
+    ['boss_r', '14']
+  ])(
+    'normalizes %s=%s in shared views, old copies and local/server copies without changing the source',
+    async (name, expression) => {
+      const old = new CommandManager(legacyBracket(bracket)).runTransaction(
+        'Old tweak',
+        [
+          commandFactories.setParameter({
+            name,
+            expression,
+            ids: createParameterIds()
+          })
+        ]
+      );
+      const before = structuredClone(old);
+      const shared = sharedProjectSnapshotDocument(old);
+      const sharedBefore = structuredClone(shared);
+      const view = repairLegacyBracketModel(shared);
+      expect(view.version).toBe(shared.version);
+      expect(view.revisions).toEqual(shared.revisions);
+      expect(view.checkpoints).toEqual(shared.checkpoints);
+      expect(view.ownerUserId).toBe(shared.ownerUserId);
+      expect(shared).toEqual(sharedBefore);
+      const localCopy = duplicateProjectDocument(
+        old,
+        'Copy',
+        toUserId('copy_owner')
+      );
+      expect(localCopy.projectId).not.toBe(old.projectId);
+      expect(localCopy.derived.bodyRepresentations).toEqual({});
+      expect(restoreDuplicateDerivedProjection(localCopy, old)).toBe(localCopy);
+      const oldCopy = legacyBracket(
+        duplicateProjectDocument(bracket, 'Old copy', bracket.ownerUserId)
+      );
+      const repairedOldCopy = repairLegacyBracketDemo(oldCopy);
+      expect(repairedOldCopy).not.toBe(oldCopy);
+      const service = new InMemoryPersistenceService();
+      const created = await service.createProject(old.ownerUserId, {
+        name: 'Legacy copy source',
+        units: 'mm',
+        document: old
+      });
+      const saved = await service.saveRevision(old.ownerUserId, {
+        projectId: created.document.projectId,
+        expectedVersion: created.document.version,
+        document: appendRevision(created.document, 'Old point'),
+        reason: 'Old point'
+      });
+      const serverBefore = structuredClone(saved);
+      const serverCopy = await service.duplicateProject(old.ownerUserId, {
+        projectId: saved.projectId
+      });
+      const serverBranch = await service.duplicateProject(old.ownerUserId, {
+        projectId: saved.projectId,
+        revisionId: saved.revisions.at(-1)!.revisionId
+      });
+      for (const document of [
+        view,
+        localCopy,
+        repairedOldCopy,
+        serverCopy.document,
+        serverBranch.document
+      ]) {
+        const derived = await adapter.syncDocument(document);
+        expect(derived.warnings).toEqual([]);
+        expect(derived.exportableBodyIds).toHaveLength(1);
+        expect(
+          await adapter.exportStep(document, derived.exportableBodyIds)
+        ).toContain('ISO-10303-21;');
+      }
+      expect(old).toEqual(before);
+      expect(
+        await service.loadProject(old.ownerUserId, saved.projectId)
+      ).toEqual(serverBefore);
     },
     60_000
   );

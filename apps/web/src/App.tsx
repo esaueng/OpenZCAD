@@ -1,3 +1,4 @@
+import { repairLegacyBracketModel } from '@openzcad/document-core';
 import {
   repairLegacyBracketDemo,
   repairLegacyBracketSaveState
@@ -6452,11 +6453,12 @@ export function App() {
     let normalized: ProjectDocument;
     try {
       normalized = normalizeDocument(nextDocument);
-      // Only the owner may upgrade the original saved local demo recipe.
-      if (
-        !shareSessionRef.current &&
-        (normalized.ownerUserId === localUserId ||
-          normalized.ownerUserId === sessionRef.current?.userId)
+      // Shares are ephemeral; every persistence path still rejects owner writes.
+      if (shareSessionRef.current) {
+        normalized = repairLegacyBracketModel(normalized);
+      } else if (
+        normalized.ownerUserId === localUserId ||
+        normalized.ownerUserId === sessionRef.current?.userId
       ) {
         normalized = repairLegacyBracketDemo(normalized);
       }

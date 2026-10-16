@@ -11,7 +11,10 @@ import {
   type ProjectSummary,
   type RevisionId
 } from '@openzcad/shared';
-import { withoutDerivedProjection } from '@openzcad/document-core';
+import {
+  withoutDerivedProjection,
+  repairLegacyBracketModel
+} from '@openzcad/document-core';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import type { SourceBlobClaim } from './sourceBlobClaims';
 import {
@@ -1223,6 +1226,10 @@ export function restoreDuplicateDerivedProjection(
   duplicate: ProjectDocument,
   localSource: ProjectDocument | null
 ): ProjectDocument {
+  // A legacy template copy is normalized by the model layer. Its old source
+  // projection belongs to a different placement and must be rebuilt.
+  if (localSource && repairLegacyBracketModel(localSource) !== localSource)
+    return duplicate;
   const copiedFromRevisionId = duplicate.revisions.at(-2)?.revisionId;
   const localRevisionId = localSource?.revisions.at(-1)?.revisionId;
   if (
