@@ -39,13 +39,20 @@ Withdrawal clears them and aborts sends. The user may explicitly download a
 bounded JSON report, review it, then share it themselves. No automatic upload.
 The Glimpse owner can inspect a strict report locally, using a file or pasted JSON.
 
+Successful transactions contribute operation-kind observations for their
+committed commands and one feature-use observation per commit. Part-count
+observations wait for the committed rebuild, include hidden parts and exclude
+consumed replay sources. Rapid edits can coalesce into the latest completed
+part-count observation.
+
 The complete [measurement definitions and limits](https://github.com/esaueng/glimpse/blob/codex/diagnostics-overhaul/docs/EXPANDED-ANALYTICS.md)
 explain repeatable observations versus account/project stocks and the consent
 review. Size observations are not unique projects, parts are not a per-part
 inventory, and diagnostic signals are not distinct bugs. No unique anonymous
 user count or cross-app identity exists. Transfer download observations measure successfully parsed JSON response bodies
 as uncompressed UTF-8 bytes, including both project and revision loads.
-Project/revision metadata listings are excluded.
+Project/revision metadata listings are excluded. Pruned revision 404s retain
+their normal null result and do not contribute cloud-failure observations.
 Failed or malformed downloads do not contribute a size observation.
 Delivery is best effort and can drop
 counts; reports' page-local counts need not equal delivered service counts.

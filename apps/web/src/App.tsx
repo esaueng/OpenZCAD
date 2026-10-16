@@ -2936,6 +2936,7 @@ export function App() {
       run: handleUndo
     });
   };
+  const pendingPartCountRef = useRef<Pick<ProjectDocument, 'projectId' | 'version'> | null>(null);
   const [geometrySnapshot, setGeometrySnapshot] = useState<{
     projectId: string;
     version: number;
@@ -2970,6 +2971,7 @@ export function App() {
             : null
         );
         const validated = manager.commitDerivedState(derived);
+        trackCommittedParts(validated, derived);
         recordFeatureAttribution(validated, derived);
         setParameterPreviewBase({ ...validated, derived });
         setDoc(validated);
@@ -6668,9 +6670,12 @@ export function App() {
       }
       recordLocalCommit(next, before);
       setDoc(next);
-      trackUsage('feature_used');
-      trackDetail('feature_operation', command.kind);
-      trackParts(Object.values(next.nodes).filter(node => node.kind === 'body').length);
+      if (isAnalyticsEnabled()) {
+        trackUsage('feature_used');
+        trackDetail('feature_operation', command.kind);
+        pendingPartCountRef.current = { projectId: next.projectId, version: next.version };
+        if (derived) trackCommittedParts(next, derived);
+      }
       setStatus(commandOutcomeMessage(command.label));
       return true;
     } catch (error) {
@@ -6706,12 +6711,34 @@ export function App() {
       }
       recordLocalCommit(next, before);
       setDoc(next);
+      if (isAnalyticsEnabled()) {
+        trackUsage('feature_used');
+        for (const command of commands)
+          trackDetail('feature_operation', command.kind);
+        pendingPartCountRef.current = { projectId: next.projectId, version: next.version };
+        if (derived) trackCommittedParts(next, derived);
+      }
       setStatus(commandOutcomeMessage(label));
       return true;
     } catch (error) {
+      trackDetail('error_feature');
       setStatus(errorMessage(error, 'Edit failed.'));
       return false;
     }
+  }
+
+  function trackCommittedParts(
+    document: ProjectDocument,
+    derived: ProjectDocument['derived']
+  ): void {
+    const pending = pendingPartCountRef.current;
+    if (!pending || pending.projectId !== document.projectId || pending.version !== document.version)
+      return;
+    pendingPartCountRef.current = null;
+    // Count the completed result, including hidden parts but excluding consumed
+    // replay sources. Pending edits are sampled only after their owned rebuild.
+    if (isAnalyticsEnabled())
+      trackParts(Object.values(derived.bodyRepresentations).filter(body => !body.consumed).length);
   }
 
   function finishFeatureCreation(): void {

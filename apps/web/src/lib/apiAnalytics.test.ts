@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError } from './api';
-import { isAnalyticsEnabled, trackSize } from './analytics';
+import { isAnalyticsEnabled, trackDetail, trackSize } from './analytics';
 import { desktopFetch } from './desktopBridge';
 
 vi.mock('./analytics', () => ({
@@ -39,6 +39,17 @@ describe('project download size observations', () => {
     vi.mocked(desktopFetch).mockResolvedValue(new Response('{"version":1}'));
     expect(await api.loadProject('project')).toEqual({ version: 1 });
     expect(trackSize).not.toHaveBeenCalled();
+  });
+
+  it('treats a pruned revision as an ordinary null result without failure metrics', async () => {
+    vi.mocked(desktopFetch).mockResolvedValue(new Response('{"error":"pruned"}', { status: 404 }));
+    expect(await api.loadRevision('project', 'revision')).toBeNull();
+    expect(trackDetail).not.toHaveBeenCalled();
+    expect(trackSize).not.toHaveBeenCalled();
+    vi.mocked(desktopFetch).mockResolvedValue(new Response('{"error":"missing"}', { status: 404 }));
+    await expect(api.loadProject('project')).rejects.toBeInstanceOf(ApiError);
+    expect(trackDetail).toHaveBeenCalledWith('error_cloud_load');
+    expect(trackDetail).toHaveBeenCalledWith('cloud_status', 'other');
   });
 
   it('does not record unsuccessful or malformed downloads', async () => {

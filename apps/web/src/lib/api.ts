@@ -92,7 +92,7 @@ export function isProjectDocumentUnavailableError(
 async function requestJson<T>(
   input: RequestInfo,
   init?: RequestInit,
-  observations: { documentDownload?: boolean } = {}
+  observations: { documentDownload?: boolean; expectedMissing?: boolean } = {}
 ): Promise<T> {
   const collect = isAnalyticsEnabled();
   const started = performance.now();
@@ -111,8 +111,11 @@ async function requestJson<T>(
   }
   if (collect && projectCall) {
     if (!response.ok) {
-      trackDetail(writing ? 'error_cloud_save' : 'error_cloud_load');
-      trackDetail('cloud_status', response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden' : response.status === 409 ? 'conflict' : response.status === 413 ? 'too_large' : response.status === 429 ? 'rate_limited' : response.status >= 500 ? 'server' : 'other');
+      // Revision retention's documented null result is not a load failure.
+      if (!(observations.expectedMissing && response.status === 404)) {
+        trackDetail(writing ? 'error_cloud_save' : 'error_cloud_load');
+        trackDetail('cloud_status', response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden' : response.status === 409 ? 'conflict' : response.status === 413 ? 'too_large' : response.status === 429 ? 'rate_limited' : response.status >= 500 ? 'server' : 'other');
+      }
     } else if (writing && typeof init?.body === 'string') {
       trackSize('transfer_upload',new Blob([init.body]).size);
       const bucket=durationBucket(performance.now()-started); if(bucket)trackDetail('save_latency',bucket);
@@ -283,7 +286,7 @@ export const api = {
       return await requestJson<ProjectDocument>(
         `/api/projects/${encodeURIComponent(projectId)}/revisions/${encodeURIComponent(revisionId)}`,
         undefined,
-        { documentDownload: true }
+        { documentDownload: true, expectedMissing: true }
       );
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
