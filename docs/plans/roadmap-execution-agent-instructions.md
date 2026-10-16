@@ -71,9 +71,10 @@ verification and delivery constraints; this file describes roadmap bookkeeping.
   [merge queue procedure](../../.github/merge-queue.md), and verify live
   protection settings. Before enqueueing an authorized PR, check its exact
   head, all individual CI jobs (including six browser shards),
-  `checks / validate`, `checks / e2e`, `commit-privacy`, and Cloudflare
-  `verify`, plus reviews, comments, and resolved conversations. Enqueue with
-  `expectedHeadOid`, then verify required checks on the separate merge-group
+  the four required contexts (`checks / validate`, `checks / e2e`,
+  `commit-privacy`, and Cloudflare `verify`), plus reviews, comments, and
+  resolved conversations. Enqueue with `expectedHeadOid`, then verify required
+  checks on the separate merge-group
   candidate and the final queued squash merge. The queue checks current main;
   do not manually merge or rebase merely because the PR branch is behind.
   Resolve actual conflicts and rerun changed heads. Never direct/admin merge

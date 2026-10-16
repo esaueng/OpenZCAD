@@ -6,10 +6,11 @@ no bypass actors, builds at most two queue entries concurrently, and uses
 `SQUASH` and `ALLGREEN`. It merges one or two passing entries at a time, with
 no minimum-group wait and a 180-minute check timeout, matching Remus.
 
-Branch protection retains `checks / validate`, `checks / e2e`, and
-`commit-privacy`, their GitHub Actions app bindings, the existing review
-requirements, and conversation resolution. The queue validates changes with
-the latest main. Strict up-to-date status checks are disabled: being behind
+Branch protection requires `checks / validate`, `checks / e2e`,
+`commit-privacy`, and Cloudflare `verify` (the `verify` job in the
+`Cloudflare version` workflow), all bound to GitHub Actions. Existing review
+requirements and conversation resolution are preserved. The queue validates
+changes with the latest main. Strict up-to-date status checks are disabled: being behind
 main alone does not require a manual merge or rebase. Resolve actual merge
 conflicts, and rerun PR checks whenever its head changes. If restoring these
 settings, activate and verify the queue before disabling strict status checks.
@@ -36,11 +37,11 @@ continues to trigger the repository's existing automatic deployment workflows.
    conversation-resolution setting. Classic `enforce_admins: false` does not
    grant a bypass of the active queue ruleset.
 2. Inspect the PR’s current head, reviews, comments, resolved threads, and
-   individual jobs. Required contexts are `checks / validate`, `checks / e2e`,
-   and `commit-privacy`; also wait for Cloudflare `verify`, Workers Builds,
+   individual jobs. The four required contexts are `checks / validate`,
+   `checks / e2e`, `commit-privacy`, and `verify`. Also wait for Workers Builds,
    audits, public commit metadata, and all six browser shards. A passing suite
-   or checks on an older head are insufficient. Cloudflare `verify` is a
-   pre-enqueue PR gate, not a required branch-protection context.
+   or checks on an older head are insufficient. Cloudflare `verify` is required
+   on both the PR head and the merge-group candidate.
 3. Obtain the PR node ID and current head SHA, then recheck them immediately
    before enqueueing. With those verified values in `PR_ID` and `HEAD_SHA`,
    enqueue only that PR with head protection and without jumping the queue:
@@ -57,13 +58,11 @@ continues to trigger the repository's existing automatic deployment workflows.
 
 4. Read the entry’s `headCommit.oid` after it reaches `AWAITING_CHECKS` (it
    can initially be null). Match that SHA to the `merge_group` workflow runs.
-   The queue automatically merges when its required validation, browser
-   aggregate, and privacy checks pass. Observe Cloudflare `verify` and confirm
-   `upload` is skipped, but it is not an enforced queue hold: GitHub can merge
-   before Cloudflare finishes, including a later failure. Report that result
-   separately from the queued merge. Requiring Cloudflare on the queue would
-   need a separate protection change adding its context to the required list.
-   A manual dispatch or green PR checks do not replace queue verdicts.
+   The queue automatically merges only after all four required contexts pass:
+   validation, the browser aggregate, commit privacy, and Cloudflare `verify`.
+   A pending or failing Cloudflare `verify` blocks the merge. Confirm `upload`
+   is skipped; queue candidates perform dry-run verification only. A manual
+   dispatch or green PR checks do not replace queue verdicts.
 5. Verify the PR is merged, the merged commit is the successful candidate,
    and it has one parent with the PR title and description (GitHub may wrap
    body lines). Recheck live protections and report the queued merge. If a
