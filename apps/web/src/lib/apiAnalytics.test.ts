@@ -50,6 +50,18 @@ describe('project download size observations', () => {
     expect(trackSize).not.toHaveBeenCalled();
   });
 
+  it.each(['projects', 'revisions'] as const)(
+    'excludes %s metadata listings from document download observations',
+    async (kind) => {
+      vi.mocked(desktopFetch).mockResolvedValue(new Response('{}'));
+      const loaded = kind === 'projects'
+        ? await api.listProjects()
+        : await api.listRevisions('project');
+      expect(loaded).toEqual({});
+      expect(trackSize).not.toHaveBeenCalled();
+    }
+  );
+
   it('excludes account responses from project transfer observations', async () => {
     vi.mocked(desktopFetch).mockResolvedValue(new Response('{}'));
     expect(await api.session()).toEqual({});

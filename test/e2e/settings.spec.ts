@@ -1226,3 +1226,55 @@ test('cloud-off suppresses analytics while keeping the saved consent revocable',
     )
   ).toBeNull();
 });
+
+test('cloud statistics require acknowledged consent and keep a failed withdrawal visible', async ({ page }) => {
+  await stubApi(page);
+  const changes: unknown[] = [];
+  let enabled = false;
+  let failWithdrawal = true;
+  let releaseGrant!: () => void;
+  const grantGate = new Promise<void>(resolve => { releaseGrant = resolve; });
+  const expiresAt = new Date(Date.now() + 30 * 86400000).toISOString();
+  await page.route('**/api/glimpse/account-consent', async (route) => {
+    if (route.request().method() === 'POST') {
+      const input = route.request().postDataJSON() as { enabled: boolean; version: number };
+      changes.push(input);
+      if (input.enabled) await grantGate;
+      if (!input.enabled && failWithdrawal) {
+        failWithdrawal = false;
+        await route.fulfill({ status: 503, json: { error: 'Unavailable' } });
+        return;
+      }
+      enabled = input.enabled;
+    }
+    await route.fulfill({ json: { enabled, expiresAt: enabled ? expiresAt : null } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Privacy & data', exact: true }).click();
+  const consent = page.getByRole('checkbox', { name: 'Cloud account statistics for 30 days', exact: true });
+  const row = page.locator('.setting-row').filter({ has: consent });
+  await expect(consent).toBeEnabled();
+  await expect(consent).not.toBeChecked();
+  await consent.click();
+  try {
+    await expect(consent).toBeDisabled();
+    await expect(consent).not.toBeChecked();
+  } finally {
+    releaseGrant();
+  }
+  await expect(consent).toBeChecked();
+  await expect(row).toContainText(`Enabled until ${expiresAt.slice(0, 10)} UTC.`);
+  await consent.click();
+  await expect(row).toContainText('Could not save this change. The last server permission still applies; try again.');
+  await expect(consent).toBeChecked();
+  await expect(consent).toBeEnabled();
+  await consent.click();
+  await expect(consent).not.toBeChecked();
+  await expect(row).toContainText('Withdrawn. Future cloud snapshots exclude this account.');
+  expect(changes).toEqual([
+    { enabled: true, version: 2 },
+    { enabled: false, version: 2 },
+    { enabled: false, version: 2 }
+  ]);
+});
