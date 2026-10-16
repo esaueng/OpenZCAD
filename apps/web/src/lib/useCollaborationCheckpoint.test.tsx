@@ -379,6 +379,7 @@ describe('durable room checkpoints', () => {
       if (scenario.includes('lost response'))
         expect(outcome).toBeInstanceOf(Error);
       else expect(outcome).not.toBeInstanceOf(Error);
+      expect(fetch).toHaveBeenCalledOnce();
       const submitted = JSON.parse(fetch.mock.calls[0]![1]!.body as string) as {
         document: ProjectDocument;
       };
