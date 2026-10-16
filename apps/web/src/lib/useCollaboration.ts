@@ -344,9 +344,18 @@ export function useCollaboration({
       serverVersionRef.current = message.version;
       setRoomVersion(message.version);
       const checkpoint = checkpointAckRef.current;
-      const ownsFlush = checkpoint?.submitted === submitted;
+      // A debounce or lease grant may have published the clicked model before
+      // saveCheckpoint cloned it. Match that exact persisted write, including
+      // owner and version, rather than depending on the clone's object identity.
+      const ownsFlush = Boolean(
+        checkpoint &&
+          submitted &&
+          checkpoint.submitted.ownerUserId === submitted.ownerUserId &&
+          checkpoint.submitted.version === submitted.version &&
+          projectsHaveSameCanonicalContent(checkpoint.submitted, submitted)
+      );
       const checkpointCurrent =
-        ownsFlush && message.document
+        checkpoint && ownsFlush && message.document
           ? checkpoint.accept(message.document, message.version)
           : null;
       if (ownsFlush && message.document && !checkpointCurrent) {
