@@ -67,13 +67,18 @@ verification and delivery constraints; this file describes roadmap bookkeeping.
   closed-form volume/area, inclusion–exclusion, pinned counts. "Two numbers
   agree" is not an oracle when both come from the same integrator — the
   corpus docs explain why.
-- **Merge gate (OpenZCAD):** follow the current root `AGENTS.md` and verify
-  live protection settings before a merge; the original claim that no checks
-  are required is obsolete. Read the check runs yourself — `validate`,
-  the `e2e` aggregate, and `Cloudflare version / verify` green on the PR's
-  actual head SHA, with a run confirmed to exist for that SHA. Never
-  auto-merge; never dispatch `apple-silicon` or `Cloudflare version`
-  manually; `pnpm deploy:beta` is never a validation step.
+- **Merge gate (OpenZCAD):** follow root `AGENTS.md` and the
+  [merge queue procedure](../../.github/merge-queue.md), and verify live
+  protection settings. Before enqueueing an authorized PR, check its exact
+  head, all individual CI jobs (including six browser shards),
+  `checks / validate`, `checks / e2e`, `commit-privacy`, and Cloudflare
+  `verify`, plus reviews, comments, and resolved conversations. Enqueue with
+  `expectedHeadOid`, then verify required checks on the separate merge-group
+  candidate and the final queued squash merge. The queue checks current main;
+  do not manually merge or rebase merely because the PR branch is behind.
+  Resolve actual conflicts and rerun changed heads. Never direct/admin merge
+  or use `gh pr merge --auto`; never dispatch `apple-silicon` or
+  `Cloudflare version` manually; `pnpm deploy:beta` is never a validation step.
 - Existing pins are law: the parity corpus (`test/parity/`), kernel-seam
   pins, and `corpus-pins.ts` fail on both unpinned divergence _and_ repaired
   divergence — when your change fixes a pinned defect, retire the pin in the
@@ -247,7 +252,8 @@ typed refusal, not a hang.
 
 ## What you must never do
 
-Never merge on a passing check _suite_ alone; never `gh pr merge --auto`;
+Never merge on a passing check _suite_ alone; never bypass the merge queue
+or use `gh pr merge --auto`;
 never dispatch `apple-silicon` unless the maintainer asked; never run
 `pnpm deploy:beta`; never hand-edit the kernel pin; never delete or bypass
 the parity corpus, the distrust harness, or a workaround whose blocking
