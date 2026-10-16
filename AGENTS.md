@@ -191,16 +191,21 @@ rerun checks on any changed PR head.
 - **Verify the separate queue run.** Match the `merge_group` run’s head SHA
   to the candidate reported by the queue, not the original PR head. The
   required checks must pass on that candidate before GitHub merges it.
-  Cloudflare queue runs must also pass `verify` and skip `upload`. Verify
+  Observe Cloudflare queue `verify` and confirm `upload` is skipped, but
+  report those results separately: Cloudflare is not a required context,
+  so the queue can merge before it finishes, even if it later fails. Verify
   the final merged PR and squash commit; do not report enqueueing as a
-  completed merge. If the queue removes an entry after a failure, inspect
-  and repair or retry the failing check before re-enqueueing.
+  completed merge. If the queue removes an entry after a required-check
+  failure, inspect and repair or retry it before re-enqueueing.
 - **Preserve every protection.** Keep required contexts and app bindings,
   reviews, and conversation resolution. The queue ruleset has no bypass
   actors even though classic protection has `enforce_admins` off. Cloudflare
-  `verify` is an additional operational gate, not a required status context.
-  When restoring queue configuration, activate and verify the queue before
-  disabling strict status checks; do not turn protections off to merge.
+  `verify` is a pre-enqueue PR gate; its merge-group result is additional
+  evidence, not an enforced hold on the automatic queue merge. Making it
+  block the queue would require a separate protection change adding it to
+  the required contexts. When restoring queue configuration, activate and
+  verify the queue before disabling strict status checks; keep all other
+  protections in place.
 - **Recover missing CI without deploying.** A conflicting PR has no merge
   ref for `pull_request` workflows; resolve the conflict first. If the exact
   PR head has no CI run, dispatch `ci.yml` and wait for its results. Do not

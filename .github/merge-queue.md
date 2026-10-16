@@ -39,8 +39,8 @@ continues to trigger the repository's existing automatic deployment workflows.
    individual jobs. Required contexts are `checks / validate`, `checks / e2e`,
    and `commit-privacy`; also wait for Cloudflare `verify`, Workers Builds,
    audits, public commit metadata, and all six browser shards. A passing suite
-   or checks on an older head are insufficient. Cloudflare `verify` remains
-   an operational gate rather than a required branch-protection context.
+   or checks on an older head are insufficient. Cloudflare `verify` is a
+   pre-enqueue PR gate, not a required branch-protection context.
 3. Obtain the PR node ID and current head SHA, then recheck them immediately
    before enqueueing. With those verified values in `PR_ID` and `HEAD_SHA`,
    enqueue only that PR with head protection and without jumping the queue:
@@ -57,9 +57,13 @@ continues to trigger the repository's existing automatic deployment workflows.
 
 4. Read the entry’s `headCommit.oid` after it reaches `AWAITING_CHECKS` (it
    can initially be null). Match that SHA to the `merge_group` workflow runs.
-   Require the queue candidate’s validation, browser aggregate, and privacy
-   checks to pass; verify Cloudflare `verify` succeeds and `upload` is skipped.
-   A manual dispatch or green PR checks do not replace these queue verdicts.
+   The queue automatically merges when its required validation, browser
+   aggregate, and privacy checks pass. Observe Cloudflare `verify` and confirm
+   `upload` is skipped, but it is not an enforced queue hold: GitHub can merge
+   before Cloudflare finishes, including a later failure. Report that result
+   separately from the queued merge. Requiring Cloudflare on the queue would
+   need a separate protection change adding its context to the required list.
+   A manual dispatch or green PR checks do not replace queue verdicts.
 5. Verify the PR is merged, the merged commit is the successful candidate,
    and it has one parent with the PR title and description (GitHub may wrap
    body lines). Recheck live protections and report the queued merge. If a
