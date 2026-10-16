@@ -79,7 +79,7 @@ export interface PanelState {
   /**
    * The model drawer on the right (parameters, bodies, history, revisions,
    * diagnostics). Closed to begin with: the quiet stage opens on the model,
-   * and the instrument rail's Items, History and Parameters buttons open it
+   * and the instrument rail's Objects, History and Parameters buttons open it
    * on the section they name. Remembered like every other chrome habit.
    */
   drawerOpen: boolean;

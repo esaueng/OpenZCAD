@@ -95,7 +95,7 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await inspector.getByLabel('Radius', { exact: true }).fill('14');
   await inspector.getByLabel('Height', { exact: true }).fill('28');
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  await expect(page.getByRole('button', { name: 'Bodies 1' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Objects 1' })).toBeVisible();
 
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
@@ -1339,7 +1339,7 @@ for (const modifier of [
     });
     await expect(blend).toBeVisible();
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Bodies 1' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Objects 1' })).toBeVisible();
     await expectConsumedBodyCount(page, 1);
     await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
     await expect(page.locator('.feature-row')).toHaveCount(2);
@@ -1412,7 +1412,7 @@ for (const modifier of [
     );
     await expect(page.locator('.feature-row')).toHaveCount(2);
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Bodies 1' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Objects 1' })).toBeVisible();
     await expectConsumedBodyCount(page, 1);
     await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
     await cylinder.locator('.feature-row-main').click();

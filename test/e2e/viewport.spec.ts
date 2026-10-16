@@ -2168,7 +2168,7 @@ test('the selection callout follows the body it names through a move', async ({
 
   // Selecting the body raises the name callout over it.
   await page
-    .getByRole('list', { name: 'Bodies' })
+    .getByRole('list', { name: 'Objects' })
     .getByRole('button', { name: /^Box/ })
     .click();
   const callout = page.locator('.selection-callout');
@@ -2207,7 +2207,7 @@ test('the selection callout follows the body it names through a move', async ({
   await expect(overlay).toBeHidden();
   await expect(callout).toHaveCount(0);
   await page
-    .getByRole('list', { name: 'Bodies' })
+    .getByRole('list', { name: 'Objects' })
     .getByRole('button', { name: /^Box/ })
     .click();
   await expect(callout).toHaveCount(1);
@@ -2266,7 +2266,7 @@ test('a viewport callout keeps its position while it animates in', async ({
     .click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await page
-    .getByRole('list', { name: 'Bodies' })
+    .getByRole('list', { name: 'Objects' })
     .getByRole('button', { name: /^Box/ })
     .click();
 

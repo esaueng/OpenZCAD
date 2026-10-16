@@ -24,7 +24,7 @@ async function createInchProject(page: Page, name: string) {
 }
 
 async function bodyReadout(page: Page) {
-  const bodies = page.getByRole('button', { name: /^Bodies \d/ });
+  const bodies = page.getByRole('button', { name: /^Objects \d/ });
   if ((await bodies.getAttribute('aria-expanded')) === 'false')
     await bodies.click();
   await page.locator('.body-row:not(.consumed) .body-row-main').first().click();

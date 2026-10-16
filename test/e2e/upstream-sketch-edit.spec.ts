@@ -44,7 +44,7 @@ async function createProject(page: Page, name: string) {
 }
 
 async function bodyReadout(page: Page, bodyName: RegExp) {
-  const bodies = page.getByRole('button', { name: /^Bodies \d/ });
+  const bodies = page.getByRole('button', { name: /^Objects \d/ });
   if ((await bodies.getAttribute('aria-expanded')) === 'false')
     await bodies.click();
   await page

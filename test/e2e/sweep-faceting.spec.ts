@@ -67,7 +67,7 @@ test('discloses a faceted round sweep in Diagnostics and explains Smooth', async
   });
 
   // Disclosure only: the body is still the one the QA run measured.
-  const bodies = page.getByRole('button', { name: /^Bodies \d/ });
+  const bodies = page.getByRole('button', { name: /^Objects \d/ });
   if ((await bodies.getAttribute('aria-expanded')) === 'false')
     await bodies.click();
   await page.locator('.body-row:not(.consumed) .body-row-main').first().click();

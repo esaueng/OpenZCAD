@@ -240,7 +240,7 @@ for (const kind of ['loft', 'sweep', 'helical-sweep'] as const) {
       );
     };
     const volume = async () => {
-      const bodies = page.getByRole('button', { name: /^Bodies \d/ });
+      const bodies = page.getByRole('button', { name: /^Objects \d/ });
       if ((await bodies.getAttribute('aria-expanded')) === 'false')
         await bodies.click();
       await page
