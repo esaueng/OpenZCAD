@@ -107,6 +107,9 @@ for (const viewport of [
       objects.getByRole('button', { name: /^Plate/, exact: true })
     ).toHaveAttribute('aria-pressed', 'true');
     await filter.selectOption('all');
+    await expect(
+      objects.getByRole('button', { name: 'Plate outline', exact: true })
+    ).toHaveAttribute('aria-pressed', 'false');
     await page.keyboard.press('Escape');
     await page.setViewportSize(viewport);
     await expect(objects.getByRole('listitem')).toHaveCount(3);
