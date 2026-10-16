@@ -1,4 +1,7 @@
-import { repairLegacyBracketDemo } from '../apps/web/src/lib/bracketDemoCompatibility';
+import {
+  repairLegacyBracketDemo,
+  repairLegacyBracketSaveState
+} from '../apps/web/src/lib/bracketDemoCompatibility';
 import { legacyBracket } from './helpers/legacy-bracket';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -9,7 +12,8 @@ import {
 import {
   createParameterIds,
   createProjectDocument,
-  listFeaturesInOrder
+  listFeaturesInOrder,
+  restoreFromSaveState
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
@@ -233,6 +237,61 @@ describe('demo parameter tweaks', () => {
     manager.undo();
     expect(manager.document.nodes).toEqual(custom.nodes);
   });
+
+  it.each([
+    ['wall_h', '26'],
+    ['boss_r', '14']
+  ])(
+    'repairs an owned legacy %s=%s save before restore and preserves both ways back',
+    async (name, expression) => {
+      const snapshot = new CommandManager(
+        legacyBracket(bracket)
+      ).runTransaction('Old named save', [
+        commandFactories.setParameter({
+          name,
+          expression,
+          ids: createParameterIds()
+        })
+      ]);
+      const beforeSnapshot = structuredClone(snapshot);
+      const manager = new CommandManager(bracket);
+      manager.runTransaction('Later width', [
+        commandFactories.setParameter({
+          name: 'width',
+          expression: '81',
+          ids: createParameterIds()
+        })
+      ]);
+      const before = structuredClone(manager.document);
+      expect(
+        repairLegacyBracketSaveState(before, snapshot, [
+          toUserId('another_owner')
+        ])
+      ).toBe(snapshot);
+      const repaired = repairLegacyBracketSaveState(before, snapshot, [
+        before.ownerUserId
+      ]);
+      expect(snapshot).toEqual(beforeSnapshot);
+      manager.applyDocumentEdit(
+        restoreFromSaveState(before, repaired, 'Restored legacy'),
+        'Restored legacy'
+      );
+      const restored = structuredClone(manager.document);
+      expect((await adapter.syncDocument(restored)).warnings).toEqual([]);
+      expect(
+        await adapter.exportStep(restored, restored.bodyOrder.slice(-1))
+      ).toContain('ISO-10303-21;');
+      manager.undo();
+      expect(manager.document.nodes).toEqual(before.nodes);
+      expect(manager.document.commandLog).toEqual(before.commandLog);
+      manager.redo();
+      expect(manager.document.nodes).toEqual(restored.nodes);
+      expect((await adapter.syncDocument(manager.document)).warnings).toEqual(
+        []
+      );
+    },
+    60_000
+  );
 
   it('abstains from custom models and user-edited legacy recipes', () => {
     const old = legacyBracket(bracket);

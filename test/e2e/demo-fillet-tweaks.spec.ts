@@ -47,7 +47,8 @@ async function savedState(page: Page, name: string) {
         expression: node?.kind === 'parameter' ? node.expression : undefined,
         heights,
         version: bracket?.version,
-        label: bracket?.revisions.at(-1)?.reason
+        label: bracket?.revisions.at(-1)?.reason,
+        checkpoint: bracket?.checkpoints.at(-1)?.reason
       };
     } finally {
       db.close();
@@ -55,16 +56,22 @@ async function savedState(page: Page, name: string) {
   }, name);
 }
 
-for (const legacy of [false, true])
+for (const mode of ['new', 'reopen', 'restore'] as const)
   for (const [name, value, original] of [
     ['wall_h', '26', '32'],
     ['boss_r', '14', '10']
   ]) {
-    test(`the ${legacy ? 'saved legacy' : 'new'} bracket keeps its radius-3 fillets with ${name} = ${value}`, async ({
+    const legacy = mode === 'reopen';
+    const restore = mode === 'restore';
+    test(`the ${mode} bracket keeps its radius-3 fillets with ${name} = ${value}`, async ({
       page
     }, testInfo) => {
       test.setTimeout(120_000);
       await stubApi(page);
+      if (restore)
+        await page.route('**/api/session', (route) =>
+          route.fulfill({ json: null })
+        );
       await page.setViewportSize({ width: 1440, height: 1000 });
       const errors: string[] = [];
       page.on('pageerror', (error) => errors.push(error.message));
@@ -90,6 +97,91 @@ for (const legacy of [false, true])
       await expect(
         page.getByRole('button', { name: /Export STEP/ })
       ).toBeEnabled();
+
+      if (restore) {
+        const reason = `Old ${name} save`;
+        await page.getByRole('button', { name: 'Build', exact: true }).click();
+        await page.keyboard.press('ControlOrMeta+Shift+s');
+        const dialog = page.getByRole('dialog', { name: 'Name this save' });
+        await dialog.getByLabel('Save name').fill(reason);
+        await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+        await expect
+          .poll(async () => (await savedState(page, name!)).checkpoint, {
+            timeout: 30_000
+          })
+          .toBe(reason);
+        await page.getByRole('button', { name: 'Tweak', exact: true }).click();
+        await input.fill(original!);
+        await input.press('Enter');
+        await expect
+          .poll(async () => (await savedState(page, name!)).expression, {
+            timeout: 30_000
+          })
+          .toBe(original);
+        await page.evaluate(
+          async ({ height, reason }) => {
+            const db = await new Promise<IDBDatabase>((resolve, reject) => {
+              const request = indexedDB.open('openzcad-v2');
+              request.onsuccess = () => resolve(request.result);
+              request.onerror = () =>
+                reject(request.error ?? new Error('Open failed'));
+            });
+            try {
+              const transaction = db.transaction(
+                'projectCheckpointDocuments',
+                'readwrite'
+              );
+              const store = transaction.objectStore(
+                'projectCheckpointDocuments'
+              );
+              const request = store.getAll();
+              request.onsuccess = () => {
+                const point = (
+                  request.result as {
+                    reason: string;
+                    document: ProjectDocument;
+                  }[]
+                ).find((point) => point.reason === reason);
+                if (!point) {
+                  transaction.abort();
+                  return;
+                }
+                const document = JSON.parse(
+                  JSON.stringify(point.document, (_, value: unknown) =>
+                    value === height ? 'plate_t + wall_h / 2' : value
+                  )
+                ) as ProjectDocument;
+                document.derived = point.document.derived;
+                store.put({ ...point, document });
+              };
+              await new Promise<void>((resolve, reject) => {
+                transaction.oncomplete = () => resolve();
+                transaction.onabort = () =>
+                  reject(
+                    transaction.error ?? new Error('Missing named snapshot')
+                  );
+              });
+            } finally {
+              db.close();
+            }
+          },
+          { height: BRACKET_BOSS_HEIGHT, reason }
+        );
+        await page.getByRole('button', { name: 'Build', exact: true }).click();
+        await page
+          .getByRole('button', { name: `Restore ${reason}`, exact: true })
+          .click();
+        await expect
+          .poll(async () => (await savedState(page, name!)).expression, {
+            timeout: 30_000
+          })
+          .toBe(value);
+        await expect
+          .poll(async () => (await savedState(page, name!)).heights, {
+            timeout: 30_000
+          })
+          .toEqual([BRACKET_BOSS_HEIGHT, BRACKET_BOSS_HEIGHT]);
+      }
 
       if (legacy) {
         // Reconstruct the old application's durable nodes, command payloads
