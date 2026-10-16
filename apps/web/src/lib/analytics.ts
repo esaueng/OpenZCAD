@@ -1,4 +1,8 @@
-import { cloudFunctionsAreEnabled, cloudRequestSignal } from './cloudMode';
+import {
+  CLOUD_FUNCTIONS_STORAGE_KEY,
+  cloudFunctionsAreEnabled,
+  cloudRequestSignal
+} from './cloudMode';
 import { isDesktopApp } from './desktopBridge';
 
 import { expandedMetric, type Report } from './glimpseContract';
@@ -35,6 +39,15 @@ export function hasAnalyticsConsent(): boolean {
   }
 }
 export function isAnalyticsEnabled(): boolean {
+  if (!hasAnalyticsConsent()) return false;
+  // Recheck the persisted master switch too: cold boot/module ordering and
+  // changes in another tab must never turn an offline choice into a send.
+  try {
+    if (window.localStorage.getItem(CLOUD_FUNCTIONS_STORAGE_KEY) === 'false')
+      return false;
+  } catch {
+    return false;
+  }
   if (isDesktopApp() || !cloudFunctionsAreEnabled()) return false;
   if (
     typeof navigator !== 'undefined' &&
@@ -43,7 +56,7 @@ export function isAnalyticsEnabled(): boolean {
         .globalPrivacyControl)
   )
     return false;
-  return hasAnalyticsConsent();
+  return true;
 }
 export function setAnalyticsEnabled(enabled: boolean): boolean {
   if (typeof window === 'undefined') return false;
@@ -181,7 +194,11 @@ if (typeof window !== 'undefined') {
     trackDetail('error_runtime')
   );
   window.addEventListener('storage', (event) => {
-    if (event.key === CONSENT_KEY || event.key === null) {
+    if (
+      event.key === CONSENT_KEY ||
+      event.key === CLOUD_FUNCTIONS_STORAGE_KEY ||
+      event.key === null
+    ) {
       if (!isAnalyticsEnabled()) stopPending();
       window.dispatchEvent(new Event('glimpse-consent-changed'));
     }

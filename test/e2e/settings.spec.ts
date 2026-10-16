@@ -1204,6 +1204,12 @@ test('cloud-off suppresses analytics while keeping the saved consent revocable',
   await page
     .getByRole('checkbox', { name: 'Cloud features', exact: true })
     .uncheck();
+  expect(usage).toEqual([]);
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem('openzcad-cloud-functions-enabled:v1')
+    )
+  ).toBe('false');
   await page.reload();
   await expect(
     page.getByRole('checkbox', { name: 'Cloud features', exact: true })
