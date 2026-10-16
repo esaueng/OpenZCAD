@@ -15,7 +15,8 @@ import type { Page } from '@playwright/test';
 function roomFixture(
   ackFault?: 'lost' | 'late',
   copiedImport = false,
-  sourceArchived = true
+  sourceArchived = true,
+  holdLeaseRenewals = false
 ) {
   let document = createProjectDocument(
     'Durable member checkpoint',
@@ -226,7 +227,7 @@ function roomFixture(
           return null;
         }
       );
-      await page.addInitScript((initial) => {
+      await page.addInitScript(({ initial, holdLeaseRenewals }) => {
         const browser = window as unknown as {
           __recordCheckpointRoomDocument(
             document: ProjectDocument,
@@ -269,6 +270,11 @@ function roomFixture(
                   })
                 )
               );
+            } else if (frame.type === 'lease-renew' && holdLeaseRenewals) {
+              // The before-send arm holds renewal ACKs too: lease-granted
+              // flushes immediately, independently of the 500 ms debounce.
+              // The initial lease remains valid for 120 s (test limit: 60 s).
+              return;
             } else if (
               frame.type === 'lease-acquire' ||
               frame.type === 'lease-renew'
@@ -318,7 +324,7 @@ function roomFixture(
             }
           }
         };
-      }, document);
+      }, { initial: document, holdLeaseRenewals });
     }
   };
 }
@@ -909,7 +915,9 @@ for (const [sendTiming, ackFault, sourceArchived] of [
     page
   }) => {
     test.setTimeout(60_000);
-    const server = roomFixture(ackFault, true, sourceArchived);
+    const server = roomFixture(
+      ackFault, true, sourceArchived, sendTiming.startsWith('scheduled')
+    );
     const buffered = sendTiming.endsWith('buffered');
     const pending = sendTiming.startsWith('pending');
     await server.install(page);
