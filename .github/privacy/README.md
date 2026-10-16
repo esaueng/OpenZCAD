@@ -14,6 +14,11 @@ entering protected history. It supplements `commit-privacy` and secret scanning.
 - Fingerprints of objects replaced by both October 16, 2026 redaction passes.
 - Full-length textual references to those replaced object IDs, including pins.
 
+The blocked-object ledger is the union for all six public Esau repositories.
+A dependency pin or gitlink cannot point at another project's retired object
+merely because that object is absent from this repository's object database.
+The policy requires the complete public-repository scope.
+
 The baseline is an audited, immutable clean commit recorded in `policy.json`.
 Incoming history is compared to that fixed commit, rather than trusting the
 previous push tip, PR commit-list limits, replace refs, or retained PR/cache refs.

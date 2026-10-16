@@ -18,6 +18,10 @@ OID = re.compile(r"[0-9a-f]{40}")
 HEX256 = re.compile(r"[0-9a-f]{64}")
 OBJECT_REFERENCE = re.compile(rb"(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])")
 CHUNK = 1024 * 1024
+PUBLIC_REPOSITORIES = tuple(sorted((
+    "esaueng/remus", "esaueng/OpenZCAD", "esaueng/OpenFEA",
+    "esaueng/OpenLattice3D", "esaueng/glimpse", "esaueng/isitjunk",
+)))
 
 
 class PrivacyError(Exception):
@@ -34,6 +38,8 @@ class Policy:
             data = json.loads(Path(path).read_text(encoding="utf-8"))
             self.key = bytes.fromhex(key)
             if len(self.key) != 32 or data["version"] != 1:
+                raise ValueError()
+            if data["object_ledger_scope"] != list(PUBLIC_REPOSITORIES):
                 raise ValueError()
             if not hmac.compare_digest(data["verification_digest"], fingerprint(self.key, b"key", b"history-privacy-v1")):
                 raise ValueError()

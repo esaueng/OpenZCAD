@@ -58,6 +58,7 @@ class HistoryTests(unittest.TestCase):
         raw = bytes.fromhex(key)
         self.policy_path.write_text(json.dumps({
             "version": 1, "baseline": self.base,
+            "object_ledger_scope": list(guard.PUBLIC_REPOSITORIES),
             "verification_digest": guard.fingerprint(raw, b"key", b"history-privacy-v1"),
             "blocked_file_sha256": hashlib.sha256(blocked).hexdigest(),
             "blocked_object_count": len(banned),
@@ -128,6 +129,21 @@ class HistoryTests(unittest.TestCase):
         self.commit("pin.txt", old.upper().encode(), "old pin fixture")
         with self.assertRaises(guard.PrivacyError):
             self.inspect()
+
+    def test_cross_repository_retired_pin_is_blocked(self):
+        own, foreign = "a" * 40, "b" * 40
+        self.write_policy(banned=(own, foreign))
+        self.policy = guard.Policy(self.policy_path, KEY)
+        self.commit("dependency-pin.txt", foreign.encode(), "foreign repository pin fixture")
+        with self.assertRaisesRegex(guard.PrivacyError, "Reference to a replaced Git object"):
+            self.inspect()
+
+    def test_object_ledger_must_cover_every_public_repository(self):
+        data = json.loads(self.policy_path.read_text())
+        data["object_ledger_scope"].pop()
+        self.policy_path.write_text(json.dumps(data))
+        with self.assertRaises(guard.PrivacyError):
+            guard.Policy(self.policy_path, KEY)
 
     def test_blocked_gitlink_is_rejected_even_when_target_object_is_absent(self):
         old = "1" * 40
