@@ -91,7 +91,7 @@ describe('Glimpse explicit consent', () => {
     expect(
       JSON.parse(typeof options.body === 'string' ? options.body : '')
     ).toEqual({ event: 'export_completed', bucket: 'none' });
-    expect([...store.values()]).toEqual(['granted-v1']);
+    expect([...store.values()]).toEqual(['granted-v2']);
     analytics.trackUsage('operation_latency', 1234);
     expect(JSON.parse(send.mock.calls[1]![1]!.body as string)).toEqual({
       event: 'operation_latency',
@@ -139,7 +139,7 @@ describe('Glimpse explicit consent', () => {
   it('follows a cross-tab opt-in after a successful local withdrawal', () => {
     analytics.setAnalyticsEnabled(true);
     analytics.setAnalyticsEnabled(false);
-    store.set('openzcad.glimpse.consent.v1', 'granted-v1');
+    store.set('openzcad.glimpse.consent.v1', 'granted-v2');
     const event = new Event('storage');
     Object.defineProperty(event, 'key', {
       value: 'openzcad.glimpse.consent.v1'
@@ -186,4 +186,50 @@ describe('Glimpse explicit consent', () => {
     expect(() => analytics.trackUsage('export_completed')).not.toThrow();
     expect(send).toHaveBeenCalledOnce();
   });
+});
+
+it('requires fresh consent for expanded diagnostics and never includes raw data in reports', () => {
+  store.set('openzcad.glimpse.consent.v1', 'granted-v1');
+  analytics.trackDetail('error_runtime');
+  expect(send).not.toHaveBeenCalled();
+  analytics.setAnalyticsEnabled(true);
+  analytics.trackDetail('error_runtime');
+  analytics.trackDetail('private.step');
+  analytics.trackDetail('project_size', 'private-project');
+  expect(analytics.diagnosticReport()).toEqual({
+    schema: 2,
+    app: 'openzcad',
+    rows: [{ event: 'error_runtime', bucket: 'none', count: 1 }]
+  });
+  expect(send).toHaveBeenCalledOnce();
+  analytics.setAnalyticsEnabled(false);
+  expect(analytics.diagnosticReport().rows).toEqual([]);
+});
+it('records only coarse validated size and part observations', () => {
+  analytics.setAnalyticsEnabled(true);
+  analytics.trackSize('project_size', 1048576);
+  analytics.trackParts(7);
+  analytics.trackParts(-1);
+  analytics.trackParts(Infinity);
+  analytics.trackSize('project_size', NaN);
+  expect(analytics.diagnosticReport().rows).toEqual([
+    { event: 'project_size', bucket: '1_10mib', count: 1 },
+    { event: 'part_count', bucket: '2_10', count: 1 }
+  ]);
+});
+
+it('honors a persisted cloud-off choice on cold boot and after another tab changes it', async () => {
+  store.set('openzcad-cloud-functions-enabled:v1', 'false');
+  store.set('openzcad.glimpse.consent.v1', 'granted-v2');
+  vi.resetModules();
+  analytics = await import('./analytics');
+  analytics.trackUsage('workspace_opened');
+  expect(send).not.toHaveBeenCalled();
+  const { setCloudFunctionsEnabled } = await import('./cloudMode');
+  setCloudFunctionsEnabled(true);
+  analytics.trackUsage('workspace_opened');
+  expect(send).toHaveBeenCalledOnce();
+  store.set('openzcad-cloud-functions-enabled:v1', 'false');
+  analytics.trackDetail('error_runtime');
+  expect(send).toHaveBeenCalledOnce();
 });

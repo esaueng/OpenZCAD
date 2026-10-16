@@ -5,7 +5,6 @@ import {
   type MutableRefObject,
   type PointerEvent as ReactPointerEvent
 } from 'react';
-import { RotateCcwSquare, RotateCwSquare } from 'lucide-react';
 import {
   VIEW_LABELS,
   type AxisProjection,
@@ -13,7 +12,6 @@ import {
   type StandardView,
   type ViewTarget
 } from '@openzcad/viewport';
-import { Tooltip } from './Tooltip';
 
 const AXIS_COLORS = {
   x: 'var(--color-handle-x)',
@@ -276,7 +274,7 @@ function shade(polygon: SVGPolygonElement, facing: number) {
  * View cube in the viewport's upper-right: a truncated cube whose six faces
  * are the standard views and whose eight bevelled corner facets are the
  * diagonal isometric views, with an XYZ triad anchored on the origin corner
- * and two arrows that spin the view a quarter turn about the world up axis.
+ * alongside drag-to-orbit navigation.
  * Clicking the face you are already looking at flips to the opposite side,
  * so bottom/left/back stay one-or-two clicks away even when their facets are
  * turned away.
@@ -291,14 +289,12 @@ function shade(polygon: SVGPolygonElement, facing: number) {
 export function OrientationWidget({
   orientationRef,
   onSelectView,
-  onRotateView,
   onDragStart,
   onDrag,
   onDragEnd
 }: {
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   onSelectView(view: ViewTarget): void;
-  onRotateView(direction: 'cw' | 'ccw'): void;
   onDragStart(): void;
   onDrag(deltaX: number, deltaY: number): void;
   onDragEnd(): void;
@@ -610,18 +606,6 @@ export function OrientationWidget({
       role="group"
       aria-label="View orientation"
     >
-      {/* Roll glyphs, not Undo and Redo's: those stand on the rail just
-          above, and the cube's buttons read as a second pair of them. */}
-      <Tooltip label="Rotate view clockwise">
-        <button
-          type="button"
-          className="orientation-roll"
-          aria-label="Rotate view clockwise"
-          onClick={() => onRotateView('cw')}
-        >
-          <RotateCwSquare size={12} aria-hidden="true" />
-        </button>
-      </Tooltip>
       {/* A group, not the img an SVG with a title is by default: an img's
           children are presentational, which hid the face and corner buttons
           inside it from some screen readers. */}
@@ -746,16 +730,6 @@ export function OrientationWidget({
         ))}
         <g className="orientation-triad" ref={overLayerRef} />
       </svg>
-      <Tooltip label="Rotate view counterclockwise">
-        <button
-          type="button"
-          className="orientation-roll"
-          aria-label="Rotate view counterclockwise"
-          onClick={() => onRotateView('ccw')}
-        >
-          <RotateCcwSquare size={12} aria-hidden="true" />
-        </button>
-      </Tooltip>
     </div>
   );
 }

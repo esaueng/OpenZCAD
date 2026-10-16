@@ -120,34 +120,6 @@
   user-select: none;
 }
 
-/* Drawn at the full 24px target. The -1px side margins keep the layout box
-   at the 22px the buttons used to be, so the cube and both arrows stay
-   where they were and only the drawn circle grows into the slack. */
-.orientation-roll {
-  pointer-events: auto;
-  width: 24px;
-  height: 24px;
-  margin: 0 -1px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  color: var(--color-viewport-text);
-  background: rgba(21, 24, 29, 0.72);
-  border: 1px solid var(--color-viewport-border);
-  transition:
-    background var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
-}
-
-/* Stays on the dark stage when hovered: the chrome's hover surface is light
-   in the light theme and flipped this button white against the canvas. */
-.orientation-roll:hover {
-  color: var(--color-viewport-text);
-  background: rgba(230, 234, 243, 0.16);
-  border-color: var(--color-viewport-text-muted);
-}
-
 /* The menu takes focus itself when it opens, so Escape and the arrow keys
    land in the menu rather than wherever the pointer left the page. It is a
    tabindex="-1" container rather than a tab stop, and a ring around the
