@@ -661,7 +661,10 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   ).toBeVisible({
     timeout: 30_000
   });
-  await page.getByRole('button', { name: 'Sketch 01', exact: true }).click();
+  await page
+    .locator('.feature-row-main')
+    .filter({ hasText: 'Sketch 01' })
+    .click();
   await page
     .getByRole('button', { name: 'Edit sketch in viewport', exact: true })
     .click();
@@ -990,7 +993,10 @@ test('shows profile readiness and preserves exact entity edits through extrude a
     'Extruded region by 4 mm'
   );
   await page.keyboard.press('Escape');
-  await page.getByRole('button', { name: 'Sketch 01', exact: true }).click();
+  await page
+    .locator('.feature-row-main')
+    .filter({ hasText: 'Sketch 01' })
+    .click();
   await page
     .getByRole('button', { name: 'Edit sketch in viewport', exact: true })
     .click();
