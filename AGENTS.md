@@ -166,10 +166,11 @@ a 180-minute check timeout, and no bypass actors. Squash is the only enabled
 merge method; commit titles use the PR title and bodies use its description.
 See [.github/merge-queue.md](.github/merge-queue.md) for the enqueue procedure.
 
-Branch protection requires `checks / validate`, `checks / e2e`, and
-`commit-privacy`, each bound to GitHub Actions. Review requirements remain
-unchanged (currently zero required approvals), and conversation resolution is
-required. The queue validates candidates against current main, so strict
+Branch protection requires `checks / validate`, `checks / e2e`,
+`commit-privacy`, and Cloudflare `verify` (the `verify` job in the
+`Cloudflare version` workflow), each bound to GitHub Actions. Review
+requirements remain unchanged (currently zero required approvals), and
+conversation resolution is required. The queue validates candidates against current main, so strict
 status checks are disabled: a branch behind main does not need a manual
 merge or rebase solely to enter the queue. Resolve actual conflicts and
 rerun checks on any changed PR head.
@@ -190,22 +191,18 @@ rerun checks on any changed PR head.
   authorization.
 - **Verify the separate queue run.** Match the `merge_group` run’s head SHA
   to the candidate reported by the queue, not the original PR head. The
-  required checks must pass on that candidate before GitHub merges it.
-  Observe Cloudflare queue `verify` and confirm `upload` is skipped, but
-  report those results separately: Cloudflare is not a required context,
-  so the queue can merge before it finishes, even if it later fails. Verify
+  four required checks, including Cloudflare `verify`, must pass on that
+  candidate before GitHub merges it. A pending or failing `verify` blocks
+  the queue merge. Confirm Cloudflare `upload` is skipped. Verify
   the final merged PR and squash commit; do not report enqueueing as a
   completed merge. If the queue removes an entry after a required-check
   failure, inspect and repair or retry it before re-enqueueing.
 - **Preserve every protection.** Keep required contexts and app bindings,
   reviews, and conversation resolution. The queue ruleset has no bypass
-  actors even though classic protection has `enforce_admins` off. Cloudflare
-  `verify` is a pre-enqueue PR gate; its merge-group result is additional
-  evidence, not an enforced hold on the automatic queue merge. Making it
-  block the queue would require a separate protection change adding it to
-  the required contexts. When restoring queue configuration, activate and
-  verify the queue before disabling strict status checks; keep all other
-  protections in place.
+  actors even though classic protection has `enforce_admins` off. Keep
+  Cloudflare `verify` required on both the PR head and merge-group candidate.
+  When restoring queue configuration, activate and verify the queue before
+  disabling strict status checks; keep all other protections in place.
 - **Recover missing CI without deploying.** A conflicting PR has no merge
   ref for `pull_request` workflows; resolve the conflict first. If the exact
   PR head has no CI run, dispatch `ci.yml` and wait for its results. Do not
