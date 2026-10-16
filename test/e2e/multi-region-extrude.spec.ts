@@ -221,7 +221,7 @@ test('Shift-picked regions extrude together from any one of their arrows', async
   expect(depth).toBeGreaterThan(0);
   expect(depth).toBeLessThanOrEqual(8);
 
-  const bodies = page.getByRole('button', { name: /^Bodies \d/ });
+  const bodies = page.getByRole('button', { name: /^Objects \d/ });
   if ((await bodies.getAttribute('aria-expanded')) === 'false') {
     await bodies.click();
   }

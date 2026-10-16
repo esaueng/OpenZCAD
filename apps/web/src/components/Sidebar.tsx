@@ -304,6 +304,14 @@ export function Sidebar({
   const [findOpen, setFindOpen] = useState(false);
   const findToggleRef = useRef<HTMLButtonElement>(null);
   const [showConsumed, setShowConsumed] = useState(false);
+  const [objectFilter, setObjectFilter] = useState('all');
+  const sketches = features.filter(
+    (feature) => feature.data.featureKind === 'sketch'
+  );
+  const sketchArrivals = useArrivals(
+    sketches.map((sketch) => sketch.id),
+    ARRIVAL_MS
+  );
   // Bodies in feature-history order so the tree matches the timeline below.
   const bodies: BodyRepresentation[] = [];
   const seen = new Set<string>();
@@ -331,6 +339,11 @@ export function Sidebar({
   );
   const liveBodies = bodies.filter((body) => !body.consumed);
   const consumedBodies = bodies.filter((body) => body.consumed);
+  const showBodies = objectFilter !== 'sketches';
+  const showSketches = objectFilter !== 'bodies';
+  const objectCount = liveBodies.length + sketches.length;
+  const filteredCount =
+    (showBodies ? bodies.length : 0) + (showSketches ? sketches.length : 0);
 
   function renderBodyRow(body: BodyRepresentation) {
     const hidden = hiddenBodyIds.has(body.bodyId);
@@ -478,24 +491,89 @@ export function Sidebar({
 
       <SidebarSection
         id="bodies"
-        title="Bodies"
-        count={liveBodies.length}
+        title="Objects"
+        count={objectCount}
         open={panelState.sidebarSections.bodies}
         onToggle={onToggleSection}
       >
-        <div className="feature-list" role="list" aria-label="Bodies">
+        <div className="object-filter">
+          <Layers size={13} aria-hidden="true" />
+          <select
+            aria-label="Filter objects by type"
+            value={objectFilter}
+            onChange={(event) => setObjectFilter(event.target.value)}
+          >
+            <option value="all">All objects</option>
+            <option value="bodies">Bodies</option>
+            <option value="sketches">Sketches</option>
+          </select>
+        </div>
+        <div className="feature-list" role="list" aria-label="Objects">
           {geometryPending && (
             <p className="muted sidebar-hint" role="status">
               Preparing model details…
             </p>
           )}
-          {bodies.length === 0 && !geometryPending && (
+          {filteredCount === 0 && !geometryPending && (
             <p className="muted sidebar-hint" role="listitem">
-              No bodies yet. Create a primitive or extrude a sketch.
+              {objectFilter === 'all'
+                ? 'No objects yet. Create a body or sketch to get started.'
+                : objectFilter === 'bodies'
+                  ? 'No bodies yet. Create a primitive or extrude a sketch.'
+                  : 'No sketches yet. Start a sketch on a plane or face.'}
             </p>
           )}
-          {liveBodies.map(renderBodyRow)}
-          {consumedBodies.length > 0 && (
+          {showBodies && liveBodies.map(renderBodyRow)}
+          {showSketches &&
+            sketches.map((sketch) => {
+              if (sketch.data.featureKind !== 'sketch') return null;
+              const sketchId = sketch.data.sketchId;
+              const hidden = hiddenSketchIds.has(sketchId);
+              const selected = selectedFeatureNodeId === sketch.id;
+              return (
+                <div
+                  key={sketch.id}
+                  className={`object-row${selected ? ' selected' : ''}${hidden ? ' hidden-body' : ''}${sketchArrivals.has(sketch.id) ? ' is-arrival' : ''}`}
+                  role="listitem"
+                >
+                  <button
+                    type="button"
+                    className="body-row-main"
+                    aria-pressed={selected}
+                    title={`${sketch.name} — click to select sketch`}
+                    onClick={() => onSelectFeature(sketch.id)}
+                  >
+                    <span className="feature-icon">
+                      <PenLine size={13} aria-hidden="true" />
+                    </span>
+                    <span className="feature-name">{sketch.name}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`row-visibility${hidden ? ' is-hidden' : ''}`}
+                    title={
+                      hidden
+                        ? `Show sketch ${sketch.name}`
+                        : `Hide sketch ${sketch.name}`
+                    }
+                    aria-label={
+                      hidden
+                        ? `Show sketch ${sketch.name}`
+                        : `Hide sketch ${sketch.name}`
+                    }
+                    aria-pressed={hidden}
+                    onClick={() => onToggleSketchVisibility(sketchId)}
+                  >
+                    {hidden ? (
+                      <EyeOff size={12} aria-hidden="true" />
+                    ) : (
+                      <Eye size={12} aria-hidden="true" />
+                    )}
+                  </button>
+                </div>
+              );
+            })}
+          {showBodies && consumedBodies.length > 0 && (
             <div role="listitem">
               <button
                 type="button"
@@ -520,7 +598,7 @@ export function Sidebar({
               </button>
             </div>
           )}
-          {showConsumed && consumedBodies.map(renderBodyRow)}
+          {showBodies && showConsumed && consumedBodies.map(renderBodyRow)}
         </div>
       </SidebarSection>
 

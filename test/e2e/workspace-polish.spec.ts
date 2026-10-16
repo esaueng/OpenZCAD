@@ -182,7 +182,7 @@ test('lists bodies in the model browser and selects them from the tree', async (
 }) => {
   await createBoxProject(page, 'Bodies Tree Part');
 
-  const bodies = page.getByRole('list', { name: 'Bodies' });
+  const bodies = page.getByRole('list', { name: 'Objects' });
   await expect(bodies.getByRole('button', { name: /^Box/ })).toBeVisible();
 
   await bodies.getByRole('button', { name: /^Box/ }).click();
