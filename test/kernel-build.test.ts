@@ -6,9 +6,10 @@ import {
   shortCommit
 } from '../apps/web/src/lib/kernelBuild';
 
+const SYNTHETIC_COMMIT = '0123456789abcdef0123456789abcdef01234567';
 const PINNED = resolveKernelBuild({
   OZ_REMUS_VERSION: '0.4.2',
-  OZ_REMUS_COMMIT: 'bbce6cff72c7f81319063326ce8bc1df273b2d64'
+  OZ_REMUS_COMMIT: SYNTHETIC_COMMIT
 });
 
 describe('kernel build identity', () => {
@@ -16,7 +17,7 @@ describe('kernel build identity', () => {
     expect(PINNED).toEqual({
       adapter: 'remus',
       packageVersion: '0.4.2',
-      sourceCommit: 'bbce6cff72c7f81319063326ce8bc1df273b2d64'
+      sourceCommit: SYNTHETIC_COMMIT
     });
   });
 
@@ -36,17 +37,18 @@ describe('kernel build identity', () => {
 
 describe('kernel build formatting', () => {
   it('abbreviates a full sha and leaves anything else alone', () => {
-    expect(shortCommit('bbce6cff72c7f81319063326ce8bc1df273b2d64')).toBe(
-      'c4edaeb'
+    expect(shortCommit(SYNTHETIC_COMMIT)).toBe('0123456');
+    expect(shortCommit('abcdef0123456789abcdef0123456789abcdef01')).toBe(
+      'abcdef0'
     );
     expect(shortCommit('unknown')).toBe('unknown');
-    expect(shortCommit('c4edaeb')).toBe('c4edaeb');
+    expect(shortCommit('0123456')).toBe('0123456');
     // Not a sha: 40 characters, but not all hex.
     expect(shortCommit('z'.repeat(40))).toBe('z'.repeat(40));
   });
 
   it('labels the row with the version and an abbreviated commit', () => {
-    expect(kernelBuildLabel(PINNED)).toBe('Remus 0.4.2 · c4edaeb');
+    expect(kernelBuildLabel(PINNED)).toBe('Remus 0.4.2 · 0123456');
     expect(kernelBuildLabel(resolveKernelBuild({}))).toBe(
       'Remus unknown · unknown'
     );
@@ -56,7 +58,7 @@ describe('kernel build formatting', () => {
     // A short sha is ambiguous across repositories; a defect report needs the
     // repository and the whole commit.
     expect(kernelBuildDetail(PINNED)).toBe(
-      'Remus 0.4.2 — esaueng/remus@bbce6cff72c7f81319063326ce8bc1df273b2d64'
+      'Remus 0.4.2 — esaueng/remus@0123456789abcdef0123456789abcdef01234567'
     );
   });
 });
