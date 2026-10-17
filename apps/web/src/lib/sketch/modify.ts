@@ -516,9 +516,14 @@ function remapConstraint(
           : data;
       }
       const at = mapRef(data.at);
-      return at
-        ? { ...data, a: mapObject(data.a), b: mapObject(data.b), at }
-        : null;
+      if (!at) {
+        return null;
+      }
+      // The arc side follows its contact point: a split's far end moves to
+      // the new piece, and the tangent must name that piece as its arc.
+      const side = (objectId: EntityId) =>
+        objectId === data.at!.objectId ? at.objectId : mapObject(objectId);
+      return { ...data, a: side(data.a), b: side(data.b), at };
     }
   }
 }
@@ -1019,14 +1024,73 @@ function sameCurve(first: Curve2, second: Curve2): boolean {
   if (!near(first.c, second.c) || Math.abs(first.r - second.r) > ON_CURVE) {
     return false;
   }
+  // A full sweep is the whole circle wherever its seam sits.
+  const full = (curve: Curve2) =>
+    curve.kind === 'circle' ||
+    (curve.kind === 'arc' && curve.sweep >= TAU - 1e-9);
+  if (full(first) || full(second)) {
+    return full(first) && full(second);
+  }
   if (first.kind === 'circle' || second.kind === 'circle') {
-    return first.kind === second.kind;
+    return false;
   }
   const s = pointOnCurve(first, 0);
   const e = pointOnCurve(first, first.sweep);
   return (
     near(s, pointOnCurve(second, 0)) &&
     near(e, pointOnCurve(second, second.sweep))
+  );
+}
+
+/**
+ * True when two curves share more than a point: the same circle, collinear
+ * lines whose spans overlap, or co-circular arcs whose sweeps overlap.
+ * Touching end to end is fine; overlapping makes the profile ambiguous.
+ */
+function curvesOverlap(first: Curve2, second: Curve2): boolean {
+  if (sameCurve(first, second)) {
+    return true;
+  }
+  if (first.kind === 'line' && second.kind === 'line') {
+    const d = sub(first.b, first.a);
+    const length = Math.hypot(d.x, d.y);
+    const u = { x: d.x / length, y: d.y / length };
+    const off = (p: Point2) => Math.abs(cross(sub(p, first.a), u));
+    if (off(second.a) > ON_CURVE || off(second.b) > ON_CURVE) {
+      return false;
+    }
+    const t1 = dot(sub(second.a, first.a), u);
+    const t2 = dot(sub(second.b, first.a), u);
+    return (
+      Math.min(length, Math.max(t1, t2)) - Math.max(0, Math.min(t1, t2)) >
+      ON_CURVE
+    );
+  }
+  if (first.kind !== 'arc' || second.kind !== 'arc') {
+    // A circle overlaps any co-circular arc.
+    return (
+      first.kind !== 'line' &&
+      second.kind !== 'line' &&
+      distance(first.c, second.c) <= ON_CURVE &&
+      Math.abs(first.r - second.r) <= ON_CURVE
+    );
+  }
+  if (
+    distance(first.c, second.c) > ON_CURVE ||
+    Math.abs(first.r - second.r) > ON_CURVE
+  ) {
+    return false;
+  }
+  // Sweep overlap on the circle: does either arc's interior start inside
+  // the other?
+  const slack = ON_CURVE / first.r;
+  const inside = (arc: typeof first, angle: number) => {
+    const offset = normalizeAngle(angle - arc.start);
+    return offset > slack && offset < arc.sweep - slack;
+  };
+  return (
+    inside(first, second.start + slack * 2) ||
+    inside(second, first.start + slack * 2)
   );
 }
 
@@ -1285,6 +1349,13 @@ function transformCurve(
   };
 }
 
+function instancesOverlap(source: Curve2, copies: Curve2[]): boolean {
+  const placed = [source, ...copies];
+  return placed.some((curve, index) =>
+    placed.slice(0, index).some((earlier) => curvesOverlap(earlier, curve))
+  );
+}
+
 function refuseCount(count: number): string | null {
   if (!Number.isInteger(count)) {
     return 'A pattern count is a whole number of instances.';
@@ -1424,6 +1495,13 @@ export function planSketchLinearPattern(
       )
     );
   }
+  if (instancesOverlap(source.curve, copies)) {
+    return {
+      status: 'refuse',
+      reason:
+        'Some instances would overlap others. Use a spacing at least as long as the entity along the direction.'
+    };
+  }
   return {
     status: 'commands',
     label: 'Linear pattern',
@@ -1502,16 +1580,11 @@ export function planSketchCircularPattern(
   }
   // A line through the pivot lands back on itself after half a turn, so
   // an even count would stack duplicates that break profiles.
-  const placed = [source.curve, ...copies];
-  if (
-    placed.some((curve, index) =>
-      placed.slice(0, index).some((earlier) => sameCurve(earlier, curve))
-    )
-  ) {
+  if (instancesOverlap(source.curve, copies)) {
     return {
       status: 'refuse',
       reason:
-        'Some instances would land exactly on others. Change the count or the angle, or move the pivot off the entity.'
+        'Some instances would overlap others. Change the count or the angle, or move the pivot off the entity.'
     };
   }
   return {

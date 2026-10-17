@@ -420,6 +420,51 @@ describe('Trim', () => {
     expect(constraints.some((c) => c.constraintKind === 'tangent')).toBe(false);
   });
 
+  it('moves an arc tangent at the split far end onto the new piece', () => {
+    const { manager, sketchId, ids, sketch, commit, constrain } = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 10,
+        startAngleDeg: 0,
+        endAngleDeg: 180
+      },
+      { objectKind: 'line', x1: -5, y1: 0, x2: -5, y2: 20 },
+      { objectKind: 'line', x1: 5, y1: 0, x2: 5, y2: 20 },
+      // Tangent to the arc at its end, (-10, 0).
+      { objectKind: 'line', x1: -10, y1: 0, x2: -10, y2: -8 }
+    ]);
+    const [arc, , , leg] = ids as [string, string, string, string];
+    constrain({
+      constraintKind: 'tangent',
+      a: leg as never,
+      b: arc as never,
+      at: { objectId: arc as never, point: 'end' }
+    });
+    commit(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        arc,
+        { x: 0, y: 10 },
+        resolve
+      )
+    );
+    const piece = sketch().objectIds.map(String).at(-1)!;
+    expect(
+      (sketch().constraints ?? [])
+        .map((c) => c.data)
+        .find((data) => data.constraintKind === 'tangent')
+    ).toEqual({
+      constraintKind: 'tangent',
+      a: leg,
+      b: piece,
+      at: { objectId: piece, point: 'end' }
+    });
+  });
+
   it('refuses a circle only one curve touches', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },
@@ -596,6 +641,30 @@ describe('Mirror', () => {
     ]);
   });
 
+  it('refuses a full-sweep arc mirrored about a line through its centre', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 3,
+        radius: 2,
+        startAngleDeg: 30,
+        endAngleDeg: 30
+      }
+    ]);
+    expect(
+      planSketchMirror(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[1]!,
+        ids[0]!,
+        resolve
+      )
+    ).toMatchObject({ status: 'refuse' });
+  });
+
   it('refuses an entity that is its own mirror image, and a non-line mirror', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
@@ -682,6 +751,56 @@ describe('Patterns', () => {
       )
     );
     expect(kinds(sketch().constraints ?? [])).toEqual(['equal', 'parallel']);
+  });
+
+  it('refuses a linear pattern whose lines overlap along the direction, but lets them touch', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+      { objectKind: 'line', x1: 0, y1: -5, x2: 10, y2: -5 }
+    ]);
+    const plan = (spacing: number) =>
+      planSketchLinearPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        ids[1]!,
+        spacing,
+        3,
+        resolve
+      );
+    expect(plan(3)).toMatchObject({
+      status: 'refuse',
+      reason:
+        'Some instances would overlap others. Use a spacing at least as long as the entity along the direction.'
+    });
+    expect(plan(4)).toMatchObject({ status: 'commands' });
+  });
+
+  it('refuses a circular pattern of arcs whose sweeps overlap', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 5,
+        startAngleDeg: 0,
+        endAngleDeg: 180
+      }
+    ]);
+    const plan = (count: number) =>
+      planSketchCircularPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 0, y: 0 },
+        count,
+        360,
+        resolve
+      );
+    expect(plan(4)).toMatchObject({ status: 'refuse' });
+    expect(plan(2)).toMatchObject({ status: 'commands' });
   });
 
   it('refuses fractional, too small and too large counts, and zero spacing', () => {
@@ -785,7 +904,7 @@ describe('Patterns', () => {
       expect(plan(count)).toEqual({
         status: 'refuse',
         reason:
-          'Some instances would land exactly on others. Change the count or the angle, or move the pivot off the entity.'
+          'Some instances would overlap others. Change the count or the angle, or move the pivot off the entity.'
       });
     }
     expect(plan(3)).toMatchObject({ status: 'commands' });
