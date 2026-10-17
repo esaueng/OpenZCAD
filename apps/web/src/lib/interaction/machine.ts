@@ -109,8 +109,15 @@ export type SketchConstraintToolKind =
   | 'lock'
   | 'disconnect';
 
-/** Modify tools exposed by the sketch rail: fillet, chamfer, offset. */
-export type SketchEditToolKind = 'fillet' | 'chamfer' | 'offset';
+/** Modify tools exposed by the sketch rail. */
+export type SketchEditToolKind =
+  | 'fillet'
+  | 'chamfer'
+  | 'offset'
+  | 'trim'
+  | 'mirror'
+  | 'linear-pattern'
+  | 'circular-pattern';
 
 export type SketchConstraintPick =
   | { kind: 'object'; objectId: string }

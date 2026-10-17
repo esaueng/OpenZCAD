@@ -10,7 +10,10 @@ import {
   Crosshair,
   CircleDot,
   Construction,
+  Columns3,
   Diameter,
+  Ellipsis,
+  FlipHorizontal2,
   Grid3x3,
   Layers3,
   Magnet,
@@ -18,7 +21,9 @@ import {
   Minus,
   Play,
   Radius,
+  RotateCw,
   ScanSearch,
+  Scissors,
   Slice,
   Square,
   SquareDashed,
@@ -194,8 +199,25 @@ const CIRCLE_MODES: {
 const EDIT_TOOL_ICONS: Record<SketchEditToolKind, typeof Minus> = {
   fillet: Radius,
   chamfer: Slice,
-  offset: SquareDashed
+  offset: SquareDashed,
+  trim: Scissors,
+  mirror: FlipHorizontal2,
+  'linear-pattern': Columns3,
+  'circular-pattern': RotateCw
 };
+
+/**
+ * Fillet and Chamfer keep their own rail slots; the rest of the modify tools
+ * share one, opening beside the rail. The rail is a fixed column with no
+ * room left, so a new modify tool joins this fold rather than the column.
+ */
+const FOLDED_EDIT_TOOLS = new Set<SketchEditToolKind>([
+  'offset',
+  'trim',
+  'mirror',
+  'linear-pattern',
+  'circular-pattern'
+]);
 
 function circleModeSpec(mode: SketchCircleMode) {
   return CIRCLE_MODES.find((spec) => spec.mode === mode) ?? CIRCLE_MODES[0]!;
@@ -329,6 +351,8 @@ export function SketchToolRail({
   const togglePalette = () =>
     onTogglePalette ? onTogglePalette() : setPaletteOpenState((open) => !open);
   const constraintGroupRef = useRef<HTMLFieldSetElement>(null);
+  const [modifyOpen, setModifyOpen] = useState(false);
+  const modifyGroupId = useId();
   const reviewRequested = useRef(false);
   const [inspectedConstraintId, setInspectedConstraintId] = useState<
     string | null
@@ -469,32 +493,88 @@ export function SketchToolRail({
       {TOOLS.slice(3).map(drawTool)}
     </>
   );
+  const editTool = (
+    { kind, label, hint }: (typeof SKETCH_EDIT_TOOL_SPECS)[number],
+    inFold: boolean
+  ) => {
+    const Icon = EDIT_TOOL_ICONS[kind];
+    const active = pendingEdit?.kind === kind;
+    return (
+      <Tooltip
+        key={kind}
+        label={label}
+        description={canConstrain ? hint : 'Draw an entity first.'}
+      >
+        <button
+          type="button"
+          className={
+            inFold
+              ? `sketch-modify-item${active ? ' active' : ''}`
+              : active
+                ? 'active'
+                : undefined
+          }
+          aria-pressed={active}
+          aria-label={label}
+          disabled={!canConstrain}
+          onClick={() => {
+            if (inFold) setModifyOpen(false);
+            if (active) onEditTool(null);
+            else onEditTool(kind, hint);
+          }}
+        >
+          <Icon size={16} aria-hidden="true" />
+          {inFold && <span aria-hidden="true">{label}</span>}
+        </button>
+      </Tooltip>
+    );
+  };
+  const foldArmed =
+    pendingEdit !== null && FOLDED_EDIT_TOOLS.has(pendingEdit.kind);
   const modifyTools = (
     <>
-      {SKETCH_EDIT_TOOL_SPECS.map(({ kind, label, hint }) => {
-        const Icon = EDIT_TOOL_ICONS[kind];
-        const active = pendingEdit?.kind === kind;
-        return (
-          <Tooltip
-            key={kind}
-            label={label}
-            description={canConstrain ? hint : 'Draw an entity first.'}
+      {SKETCH_EDIT_TOOL_SPECS.filter(
+        ({ kind }) => !FOLDED_EDIT_TOOLS.has(kind)
+      ).map((spec) => editTool(spec, false))}
+      <span
+        className="sketch-modify-tool"
+        // Escape closes the fold from the toggle as well as from inside.
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && modifyOpen) {
+            event.stopPropagation();
+            setModifyOpen(false);
+          }
+        }}
+      >
+        <Tooltip
+          label="More modify tools"
+          description="Offset, trim, mirror and patterns"
+        >
+          <button
+            type="button"
+            className={foldArmed ? 'active' : undefined}
+            aria-label="More modify tools"
+            aria-expanded={modifyOpen}
+            aria-controls={modifyOpen ? modifyGroupId : undefined}
+            onClick={() => setModifyOpen((open) => !open)}
           >
-            <button
-              type="button"
-              className={active ? 'active' : undefined}
-              aria-pressed={active}
-              aria-label={label}
-              disabled={!canConstrain}
-              onClick={() =>
-                active ? onEditTool(null) : onEditTool(kind, hint)
-              }
-            >
-              <Icon size={16} aria-hidden="true" />
-            </button>
-          </Tooltip>
-        );
-      })}
+            <Ellipsis size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+        {modifyOpen && (
+          <span
+            id={modifyGroupId}
+            className="sketch-modify-flyout"
+            role="group"
+            aria-label="More modify tools"
+            data-rail-flyout=""
+          >
+            {SKETCH_EDIT_TOOL_SPECS.filter(({ kind }) =>
+              FOLDED_EDIT_TOOLS.has(kind)
+            ).map((spec) => editTool(spec, true))}
+          </span>
+        )}
+      </span>
     </>
   );
   // The solve status is the button's tone dot and its tooltip; the text

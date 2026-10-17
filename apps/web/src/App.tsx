@@ -545,7 +545,10 @@ import {
   type SketchConstraintToolKind,
   type SketchEditToolKind
 } from './lib/interaction/machine';
-import type { SketchEditHost } from './lib/sketch/edits';
+import type {
+  SketchEditHost,
+  SketchEditPickContext
+} from './lib/sketch/edits';
 import {
   faceOffsetBaseline,
   planFaceOffset,
@@ -13843,6 +13846,9 @@ export function App() {
   const [sketchEditDraft, setSketchEditDraft] = useState<{
     kind: SketchEditToolKind;
     picks: string[];
+    values?: number[];
+    raws?: string[];
+    anchor?: { x: number; y: number };
     documentVersion: number;
   } | null>(null);
   // The pill describes a solve of THIS session's sketch; leaving sketch mode
@@ -14193,17 +14199,25 @@ export function App() {
         evalParamValue(value, parameterScope.scope, base.units) ?? undefined,
       addPick: (objectId) =>
         dispatchInteraction({ type: 'sketch-edit-pick', objectId }),
-      askValue: (kind, picks, label, initial) => {
-        setSketchEditDraft({ kind, picks, documentVersion: base.version });
+      askValue: (kind, picks, label, initial, step) => {
+        setSketchEditDraft({
+          kind,
+          picks,
+          ...step,
+          anchor,
+          documentVersion: base.version
+        });
         setKeypad({
           kind: 'sketch-edit',
           label,
           initial,
-          unitKind: 'length',
+          unitKind: step?.unitKind ?? 'length',
           ...(anchor ? { fixedClientAnchor: anchor } : {})
         });
         dispatchInteraction({ type: 'sketch-edit-tool', kind: null });
       },
+      disarm: () =>
+        dispatchInteraction({ type: 'sketch-edit-tool', kind: null }),
       runOperation: (operation) =>
         geometry.sketchPlanarOperation(base, operation),
       commit: async (sketchId, commands, label) => {
@@ -14228,7 +14242,8 @@ export function App() {
    */
   function handleSketchEditPick(
     objectId: string | null,
-    clickPoint: { x: number; y: number }
+    clickPoint: { x: number; y: number },
+    context: SketchEditPickContext
   ): boolean {
     const pending =
       interaction.mode === 'sketch' ? interaction.session.pendingEdit : null;
@@ -14239,7 +14254,7 @@ export function App() {
       const host = sketchEditHost(doc, clickPoint);
       const sketch = editingSketchNode;
       void import('./lib/sketch/edits').then(({ advanceSketchEdit }) =>
-        advanceSketchEdit(host, doc, sketch, pending, objectId)
+        advanceSketchEdit(host, doc, sketch, pending, objectId, context)
       );
     }
     return true;
@@ -14267,13 +14282,14 @@ export function App() {
     }
     const { runSketchEdit } = await import('./lib/sketch/edits');
     await runSketchEdit(
-      sketchEditHost(base),
+      sketchEditHost(base, draft.anchor),
       base,
       sketch,
       draft.kind,
       draft.picks,
       value,
-      raw
+      raw,
+      draft
     );
   }
 
@@ -20683,7 +20699,12 @@ export function App() {
             onSketchMoveCommit={(objectId, data, verb) =>
               handleUpdateSketchEntity(data, verb, objectId)
             }
-            onSketchSelectObject={(objectId, snapPoint, clickPoint) => {
+            onSketchSelectObject={(
+              objectId,
+              snapPoint,
+              clickPoint,
+              planePoint
+            ) => {
               if (
                 handleSketchConstraintPick(
                   objectId,
@@ -20693,7 +20714,12 @@ export function App() {
               ) {
                 return;
               }
-              if (handleSketchEditPick(objectId, clickPoint)) {
+              if (
+                handleSketchEditPick(objectId, clickPoint, {
+                  at: planePoint,
+                  snapPoint
+                })
+              ) {
                 return;
               }
               dispatchInteraction({ type: 'sketch-select-object', objectId });

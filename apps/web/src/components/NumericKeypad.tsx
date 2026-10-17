@@ -30,7 +30,8 @@ export interface KeypadRequest {
   initial: string;
   /** Captured first keys continue at the caret; measured prefills select all. */
   selectInitial?: boolean;
-  unitKind: 'length' | 'angle';
+  /** A count is a plain whole number: no unit chips, no conversion. */
+  unitKind: 'length' | 'angle' | 'count';
   /** Radial display/entry notation; committed values are always radii. */
   dimensionMode?: DimensionMode;
   /** Total extent whose entered value normalizes to a signed offset. */
@@ -186,7 +187,7 @@ export function NumericKeypad({
   // The document's own unit, always: every prefill in App.tsx is a value in
   // document units, so any other starting chip rescales it behind the user.
   const [entryUnit, setEntryUnit] = useState<KeypadUnit>(
-    request.unitKind === 'angle' ? 'deg' : units
+    request.unitKind === 'length' ? units : 'deg'
   );
   const label = dimensionMode
     ? dimensionMode === 'diameter'
@@ -394,7 +395,7 @@ export function NumericKeypad({
         evaluation.typedUnit ||
         (request.unitKind === 'length' && entryUnit !== units && evaluation.ok)
           ? evaluation.ok && evaluation.value !== undefined
-            ? `= ${formatNumber(evaluation.displayValue ?? evaluation.value)}${request.unitKind === 'angle' ? '°' : ` ${unitLabel('length', units)}`}`
+            ? `= ${formatNumber(evaluation.displayValue ?? evaluation.value)}${request.unitKind === 'angle' ? '°' : request.unitKind === 'count' ? '' : ` ${unitLabel('length', units)}`}`
             : (evaluation.error ?? 'invalid')
           : ''}
       </div>
@@ -425,43 +426,45 @@ export function NumericKeypad({
           ))}
         </div>
       )}
-      <div
-        className="keypad-units"
-        role="radiogroup"
-        aria-label="Entry unit"
-        onKeyDown={onRadioGroupKeyDown}
-      >
-        {(request.unitKind === 'angle'
-          ? (['deg'] as KeypadUnit[])
-          : lengthUnitsFor(units)
-        ).map((unit) => (
-          <button
-            key={unit}
-            type="button"
-            role="radio"
-            aria-checked={entryUnit === unit}
-            tabIndex={entryUnit === unit ? 0 : -1}
-            className={entryUnit === unit ? 'active' : undefined}
-            // Unit chips only rescale plain numbers, not expressions.
-            disabled={evaluation.isExpression}
-            onClick={() => {
-              setEntryUnit(unit);
-              const result = evaluateKeypadInput(
-                value,
-                unit,
-                units,
-                scope,
-                dimensionMode
-              );
-              if (result.ok && result.value !== undefined) {
-                onPreview(offsetFromTotal(result.value, request));
-              }
-            }}
-          >
-            {UNIT_LABELS[unit] ?? unit}
-          </button>
-        ))}
-      </div>
+      {request.unitKind !== 'count' && (
+        <div
+          className="keypad-units"
+          role="radiogroup"
+          aria-label="Entry unit"
+          onKeyDown={onRadioGroupKeyDown}
+        >
+          {(request.unitKind === 'angle'
+            ? (['deg'] as KeypadUnit[])
+            : lengthUnitsFor(units)
+          ).map((unit) => (
+            <button
+              key={unit}
+              type="button"
+              role="radio"
+              aria-checked={entryUnit === unit}
+              tabIndex={entryUnit === unit ? 0 : -1}
+              className={entryUnit === unit ? 'active' : undefined}
+              // Unit chips only rescale plain numbers, not expressions.
+              disabled={evaluation.isExpression}
+              onClick={() => {
+                setEntryUnit(unit);
+                const result = evaluateKeypadInput(
+                  value,
+                  unit,
+                  units,
+                  scope,
+                  dimensionMode
+                );
+                if (result.ok && result.value !== undefined) {
+                  onPreview(offsetFromTotal(result.value, request));
+                }
+              }}
+            >
+              {UNIT_LABELS[unit] ?? unit}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="keypad-grid">
         {PAD_KEYS.flat().map((key) => (
           <button

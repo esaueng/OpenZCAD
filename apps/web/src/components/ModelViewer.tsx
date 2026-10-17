@@ -927,7 +927,12 @@ export interface ModelViewerProps {
       point: 'start' | 'end' | 'center';
     } | null,
     /** Client-space click used to place a driving-dimension editor. */
-    clickPoint: { x: number; y: number }
+    clickPoint: { x: number; y: number },
+    /**
+     * The click on the sketch plane, unsnapped: where along a curve the
+     * click fell, which Trim needs and a snap would move to an end.
+     */
+    planePoint: { x: number; y: number } | null
   ): void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
@@ -7851,10 +7856,17 @@ export function ModelViewer({
                   point: activeSketchSnap.pointRef
                 }
               : null;
-          onSketchSelectObjectRef.current(objectId, snapPoint, {
-            x: event.clientX,
-            y: event.clientY
-          });
+          const planePoint = screenRayToPlanePoint(
+            context.raycaster.ray.origin,
+            context.raycaster.ray.direction,
+            mode.basis
+          );
+          onSketchSelectObjectRef.current(
+            objectId,
+            snapPoint,
+            { x: event.clientX, y: event.clientY },
+            planePoint ? { x: planePoint.x, y: planePoint.y } : null
+          );
           if (!objectId) {
             const profile = picker.pick(event)?.region;
             if (profile) {
