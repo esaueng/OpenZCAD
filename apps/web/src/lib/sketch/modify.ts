@@ -1498,10 +1498,20 @@ function landsOnExisting(
 const LANDS_ON_EXISTING =
   'The result would lie on top of geometry already in the sketch.';
 
-function instancesOverlap(source: Curve2, copies: Curve2[]): boolean {
+/**
+ * True when instances overlap the source or each other. Construction copies
+ * never bound a profile, so for them only an exact duplicate — which adds
+ * nothing — is refused.
+ */
+function instancesOverlap(
+  source: Curve2,
+  copies: Curve2[],
+  construction: boolean
+): boolean {
+  const clash = construction ? sameCurve : curvesOverlap;
   const placed = [source, ...copies];
   return placed.some((curve, index) =>
-    placed.slice(0, index).some((earlier) => curvesOverlap(earlier, curve))
+    placed.slice(0, index).some((earlier) => clash(earlier, curve))
   );
 }
 
@@ -1644,7 +1654,9 @@ export function planSketchLinearPattern(
       )
     );
   }
-  if (instancesOverlap(source.curve, copies)) {
+  if (
+    instancesOverlap(source.curve, copies, Boolean(source.data.construction))
+  ) {
     return {
       status: 'refuse',
       reason:
@@ -1732,7 +1744,9 @@ export function planSketchCircularPattern(
   }
   // A line through the pivot lands back on itself after half a turn, so
   // an even count would stack duplicates that break profiles.
-  if (instancesOverlap(source.curve, copies)) {
+  if (
+    instancesOverlap(source.curve, copies, Boolean(source.data.construction))
+  ) {
     return {
       status: 'refuse',
       reason:

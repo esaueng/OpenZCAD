@@ -1091,6 +1091,39 @@ describe('Patterns', () => {
     expect(plan(4)).toMatchObject({ status: 'commands' });
   });
 
+  it('lets construction pattern instances overlap, but not duplicate', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0, construction: true },
+      { objectKind: 'line', x1: 0, y1: -5, x2: 10, y2: -5 }
+    ]);
+    const [guide, direction] = ids as [string, string];
+    expect(
+      planSketchLinearPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        guide,
+        direction,
+        5,
+        3,
+        resolve
+      )
+    ).toMatchObject({ status: 'commands' });
+    // Half a turn about the midpoint puts the guide back on itself.
+    expect(
+      planSketchCircularPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        guide,
+        { x: 5, y: 0 },
+        2,
+        360,
+        resolve
+      )
+    ).toMatchObject({ status: 'refuse' });
+  });
+
   it('refuses a circular pattern of arcs whose sweeps overlap', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       {
