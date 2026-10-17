@@ -1391,7 +1391,9 @@ export function planSketchMirror(
         onAxis
       )
     );
-  } else if (source.kind === 'circle') {
+  } else if (source.kind === 'circle' || source.sweep >= TAU - 1e-9) {
+    // A full round is its centre and radius: a full-sweep arc's two ends
+    // are one seam point, so mirroring them would leave the centre free.
     links.push(
       ...mirrorLink(
         sketch,

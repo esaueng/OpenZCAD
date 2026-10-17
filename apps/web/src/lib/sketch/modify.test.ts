@@ -870,6 +870,41 @@ describe('Mirror', () => {
     ).toMatchObject({ status: 'commands' });
   });
 
+  it('links a full-sweep arc’s image through its centre, like a circle', () => {
+    const { manager, sketchId, ids, sketch, commit } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      {
+        objectKind: 'arc',
+        centerX: 5,
+        centerY: 2,
+        radius: 1,
+        startAngleDeg: 30,
+        endAngleDeg: 30
+      }
+    ]);
+    const [axis, source] = ids as [string, string];
+    commit(
+      planSketchMirror(
+        manager.document,
+        sketch(),
+        sketchId,
+        source,
+        axis,
+        resolve
+      )
+    );
+    const image = sketch().objectIds.map(String).at(-1)!;
+    expect((sketch().constraints ?? []).map((c) => c.data)).toEqual([
+      {
+        constraintKind: 'symmetric',
+        a: { objectId: source, point: 'center' },
+        b: { objectId: image, point: 'center' },
+        axis
+      },
+      { constraintKind: 'equal', a: source, b: image }
+    ]);
+  });
+
   it('refuses a full-sweep arc mirrored about a line through its centre', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
