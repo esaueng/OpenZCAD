@@ -1233,6 +1233,15 @@ export function planSketchMirror(
         'That entity is already symmetric about the line; its mirror image is itself.'
     };
   }
+  // A line crossing the axis off-centre, or an arc centred on it with an
+  // uneven sweep, reflects onto part of itself.
+  if (curvesOverlap(source, image)) {
+    return {
+      status: 'refuse',
+      reason:
+        'The mirror image would overlap part of its source. Trim the entity at the mirror line first.'
+    };
+  }
   if (landsOnExisting(document, sketch, sourceId, [image], resolve)) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }

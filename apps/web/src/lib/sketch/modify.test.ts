@@ -641,6 +641,39 @@ describe('Mirror', () => {
     ]);
   });
 
+  it('refuses a mirror image that overlaps part of its source', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: -10, y1: 0, x2: 10, y2: 0 },
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 3,
+        startAngleDeg: 0,
+        endAngleDeg: 270
+      },
+      // Crosses the axis off-centre: its image shares the span 0 < y < 2.
+      { objectKind: 'line', x1: 5, y1: -2, x2: 5, y2: 6 }
+    ]);
+    const [axis, arc, line] = ids as [string, string, string];
+    for (const source of [arc, line]) {
+      expect(
+        planSketchMirror(
+          manager.document,
+          sketch(),
+          sketchId,
+          source,
+          axis,
+          resolve
+        )
+      ).toEqual({
+        status: 'refuse',
+        reason:
+          'The mirror image would overlap part of its source. Trim the entity at the mirror line first.'
+      });
+    }
+  });
+
   it('refuses a full-sweep arc mirrored about a line through its centre', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
