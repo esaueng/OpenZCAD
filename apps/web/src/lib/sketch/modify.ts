@@ -1122,7 +1122,8 @@ function curvesOverlap(first: Curve2, second: Curve2): boolean {
 
 /**
  * True when a relation already keeps this point on the axis line: held on
- * it, at its midpoint, or joined to one of its ends.
+ * it, at its midpoint, or joined to one of its ends — or locked, where it
+ * already sits on the axis and any further equation on it is redundant.
  */
 function heldOnAxis(
   sketch: SketchNode,
@@ -1137,6 +1138,8 @@ function heldOnAxis(
         return same(data.point) && data.objectId === axisId;
       case 'midpoint':
         return same(data.point) && data.line === axisId;
+      case 'lock':
+        return same(data.point);
       case 'coincident':
         return (
           (same(data.a) && data.b.objectId === axisId) ||

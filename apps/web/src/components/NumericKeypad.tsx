@@ -187,7 +187,11 @@ export function NumericKeypad({
   // The document's own unit, always: every prefill in App.tsx is a value in
   // document units, so any other starting chip rescales it behind the user.
   const [entryUnit, setEntryUnit] = useState<KeypadUnit>(
-    request.unitKind === 'length' ? units : 'deg'
+    request.unitKind === 'length'
+      ? units
+      : request.unitKind === 'count'
+        ? 'count'
+        : 'deg'
   );
   const label = dimensionMode
     ? dimensionMode === 'diameter'

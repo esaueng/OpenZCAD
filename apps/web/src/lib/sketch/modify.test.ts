@@ -640,6 +640,35 @@ describe('Mirror', () => {
     ]);
   });
 
+  it('adds no axis relation to a locked on-axis point', () => {
+    const { manager, sketchId, ids, sketch, commit, constrain } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      { objectKind: 'line', x1: 0, y1: 2, x2: 6, y2: 5 }
+    ]);
+    const [axis, source] = ids as [string, string];
+    constrain({
+      constraintKind: 'lock',
+      point: { objectId: source as never, point: 'start' },
+      x: 0,
+      y: 2
+    });
+    commit(
+      planSketchMirror(
+        manager.document,
+        sketch(),
+        sketchId,
+        source,
+        axis,
+        resolve
+      )
+    );
+    expect(kinds(sketch().constraints ?? [])).toEqual([
+      'coincident',
+      'lock',
+      'symmetric'
+    ]);
+  });
+
   it('reverses an arc’s sweep and links its ends crosswise with an equal radius', () => {
     const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
       { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
