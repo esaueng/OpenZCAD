@@ -353,6 +353,31 @@ describe('Trim', () => {
     expect(lone.sketch().objectIds).toEqual([]);
   });
 
+  it('cuts against a polygon’s edges', () => {
+    // A square-on-its-corner polygon (4 sides, top vertex at (0, 5)) whose
+    // left and right corners sit at x = ±5 on the line y = 0.
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      { objectKind: 'line', x1: -20, y1: 1, x2: 20, y2: 1 },
+      { objectKind: 'polygon', sides: 4, radius: 5, centerX: 0, centerY: 0 }
+    ]);
+    const plan = commit(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 0, y: 1 },
+        resolve
+      )
+    );
+    expect(plan.message).toBe('Trim split the line in two.');
+    expectClose(object(ids[0]!), { x1: -20, x2: -4 });
+    expectClose(object(sketch().objectIds.map(String).at(-1)!), {
+      x1: 4,
+      x2: 20
+    });
+  });
+
   it('turns a circle into the arc outside two crossings, carrying its relations', () => {
     const { manager, sketchId, ids, sketch, object, commit, constrain } =
       sketchWith([

@@ -137,10 +137,34 @@ export function evaluateCurve(
 /**
  * Every curve an object contributes as a trim boundary. Composite outlines
  * cut too — a line trimmed back to a rectangle's edge is ordinary — though
- * nothing can be attached to them afterwards. Polygons and text are left
- * out: their outlines are derived by the profile builder, not here.
+ * nothing can be attached to them afterwards. Text is left out: its glyph
+ * outlines need font data this module does not load.
  */
 function cutterCurves(data: SketchObjectData, resolve: Resolve): Curve2[] {
+  if (data.objectKind === 'polygon') {
+    const v = evaluateNumbers(
+      [data.sides, data.radius, data.centerX, data.centerY],
+      resolve
+    );
+    if (!v || !Number.isInteger(v[0]) || v[0]! < 3 || !(v[1]! > 0)) {
+      return [];
+    }
+    const [sides, radius, cx, cy] = v as [number, number, number, number];
+    // The profile builder's vertices (packages/geometry regions.ts): top
+    // first, counter-clockwise.
+    const corners = Array.from({ length: sides }, (_, index) => {
+      const angle = (index / sides) * TAU + Math.PI / 2;
+      return {
+        x: cx + Math.cos(angle) * radius,
+        y: cy + Math.sin(angle) * radius
+      };
+    });
+    return corners.map((a, index) => ({
+      kind: 'line' as const,
+      a,
+      b: corners[(index + 1) % sides]!
+    }));
+  }
   if (data.objectKind === 'rectangle') {
     const v = evaluateNumbers(
       [data.width, data.height, data.centerX, data.centerY],
