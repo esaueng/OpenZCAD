@@ -4,9 +4,15 @@ import {
   type BodyId,
   type FeatureId,
   type FeatureKind,
+  type FeatureWarning,
   type ProjectDocument,
   type SketchId
 } from '@openzcad/shared';
+import {
+  FeatureBuildError,
+  refusingWarningDetail,
+  validatedFeatureRejection
+} from './featureValidation';
 
 // Every FeatureKind must be handled in the downstream walk below. The check is
 // structural (not behavioral): hole was once missing here, so downstream hole
@@ -202,4 +208,174 @@ export function affectedFeatureTargets(
   }
 
   return targets;
+}
+
+/**
+ * Result features a history reorder can change, earliest in the new order
+ * first, so a refusal names the first feature the move breaks.
+ *
+ * Everything before min(from, to) replays exactly as it did; every feature in
+ * the moved span runs against a different input, and so does whatever builds
+ * on one of them. Empty when the move is a no-op or touches nothing that
+ * builds a body (a lone sketch moved past an unrelated feature).
+ */
+export function reorderFeatureTargets(
+  document: ProjectDocument,
+  featureId: FeatureId,
+  toIndex: number
+): AffectedFeatureTarget[] {
+  const features = listFeaturesInOrder(document);
+  const from = features.findIndex((feature) => feature.featureId === featureId);
+  if (from < 0 || toIndex === from || toIndex < 0 || toIndex >= features.length)
+    return [];
+  const reordered = [...features];
+  reordered.splice(toIndex, 0, ...reordered.splice(from, 1));
+  const position = new Map(
+    reordered.map((feature, index) => [feature.featureId, index])
+  );
+  const seen = new Set<string>();
+  return features
+    .slice(Math.min(from, toIndex), Math.max(from, toIndex) + 1)
+    .flatMap((feature) => affectedFeatureTargets(document, feature.featureId))
+    .filter(({ featureId: id, resultBodyId }) => {
+      const key = `${id}\u0000${resultBodyId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => position.get(a.featureId)! - position.get(b.featureId)!);
+}
+
+/** How a History reorder proceeds; see {@link planReorder}. */
+export type ReorderPlan =
+  /** Nothing to rebuild, or refused by the order gate: commit as a command. */
+  | { kind: 'direct' }
+  /** The edit guard refused it; nothing rebuilds and nothing runs. */
+  | { kind: 'blocked' }
+  /** The current version's exact rebuild has not landed yet. */
+  | { kind: 'pending' }
+  | { kind: 'validate'; targets: AffectedFeatureTarget[] };
+
+/**
+ * Routes a History reorder before anything is rebuilt. A reorder that needs
+ * the exact preflight must pass the edit guard first — otherwise a read-only
+ * session waits out a rebuild only to be refused at commit — and must wait
+ * for the current version's own projection, because the comparison in
+ * {@link reorderRefusal} against a stale one blames the move for failures it
+ * did not cause.
+ */
+export function planReorder(
+  document: ProjectDocument | null,
+  featureId: FeatureId,
+  toIndex: number,
+  gates: {
+    /** The command's own order gate; throws for an illegal order. */
+    orderGate(document: ProjectDocument): void;
+    canEdit(): boolean;
+    geometryReady(document: ProjectDocument): boolean;
+  }
+): ReorderPlan {
+  const targets = document
+    ? reorderFeatureTargets(document, featureId, toIndex)
+    : [];
+  if (!document || targets.length === 0) return { kind: 'direct' };
+  try {
+    gates.orderGate(document);
+  } catch {
+    return { kind: 'direct' }; // Reported by the command, as before.
+  }
+  if (!gates.canEdit()) return { kind: 'blocked' };
+  if (!gates.geometryReady(document)) return { kind: 'pending' };
+  return { kind: 'validate', targets };
+}
+
+/**
+ * The first feature from the moved span onward that the reordered rebuild
+ * refuses and the current model does not, as a refusal naming it.
+ *
+ * Every feature is compared with the current model, so a failure the design
+ * already has does not block an otherwise valid reorder. Features with no
+ * result body — a face-attached sketch nothing builds on yet — are checked
+ * by their own warnings; the rest also need every result body to exist.
+ */
+export function reorderRefusal(
+  document: ProjectDocument,
+  derived: ProjectDocument['derived'],
+  featureId: FeatureId,
+  toIndex: number,
+  /**
+   * Attribution for `document.derived`, which the saved document does not
+   * carry. Without it only the candidate's exact failure warning, on a feature
+   * no other shares its name with, counts as a prior failure.
+   */
+  beforeWarnings?: readonly FeatureWarning[]
+): FeatureBuildError | null {
+  const features = listFeaturesInOrder(document);
+  const from = features.findIndex((feature) => feature.featureId === featureId);
+  if (from < 0) return null;
+  const reordered = [...features];
+  reordered.splice(toIndex, 0, ...reordered.splice(from, 1));
+  const bodies = new Map<FeatureId, BodyId[]>();
+  for (const target of reorderFeatureTargets(document, featureId, toIndex)) {
+    bodies.set(target.featureId, [
+      ...(bodies.get(target.featureId) ?? []),
+      target.resultBodyId
+    ]);
+  }
+  const before = document.derived;
+  const named = new Map<string, number>();
+  for (const feature of features)
+    named.set(feature.name, (named.get(feature.name) ?? 0) + 1);
+  // Without typed attribution a saved warning cannot say whether it was a
+  // failure or an advisory, so only the exact failure the candidate reports,
+  // on a uniquely named feature, counts as one the model already had.
+  const candidateFailures = (feature: (typeof features)[number]): string[] =>
+    derived.featureWarnings
+      ? derived.featureWarnings
+          .filter(
+            (entry) =>
+              entry.featureId === feature.featureId &&
+              (entry.kind === 'build-failed' || entry.kind === 'refusal')
+          )
+          .map((entry) => entry.message)
+      : derived.warnings.filter((warning) =>
+          warning.startsWith(`Feature "${feature.name}":`)
+        );
+  const failedBefore = (feature: (typeof features)[number]): boolean =>
+    beforeWarnings
+      ? Boolean(
+          refusingWarningDetail(
+            feature.name,
+            before?.warnings ?? [],
+            beforeWarnings,
+            feature.featureId
+          )
+        )
+      : named.get(feature.name) === 1 &&
+        candidateFailures(feature).some((message) =>
+          (before?.warnings ?? []).includes(message)
+        );
+  for (const feature of reordered.slice(Math.min(from, toIndex))) {
+    if (isFeatureSuppressed(feature)) continue;
+    const rejection = validatedFeatureRejection({
+      featureName: feature.name,
+      featureId: feature.featureId,
+      warnings: derived.warnings,
+      ...(derived.featureWarnings
+        ? { featureWarnings: derived.featureWarnings }
+        : {}),
+      bodyPresent: (bodies.get(feature.featureId) ?? []).every((bodyId) =>
+        Boolean(derived.bodyRepresentations[bodyId])
+      ),
+      documentMoved: false
+    });
+    if (rejection && !failedBefore(feature)) {
+      return new FeatureBuildError(
+        rejection.message,
+        feature.featureId,
+        feature.name
+      );
+    }
+  }
+  return null;
 }

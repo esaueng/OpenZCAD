@@ -1262,6 +1262,8 @@ import { PatternProgress } from './components/PatternProgress';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
+  planReorder,
+  reorderRefusal,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
 import {
@@ -17436,16 +17438,50 @@ export function App() {
     }
   }
 
+  /**
+   * Moves a History step, keyboard and drag alike. The order gate refuses a
+   * producer moved after its consumer at once; a legal order that leaves a
+   * later feature unbuildable is refused by name after an exact rebuild of
+   * the moved span, as a feature edit is, and the order stays as it was.
+   */
   function handleReorderFeature(featureId: FeatureId, toIndex: number) {
     const name =
       doc &&
       listFeaturesInOrder(doc).find((f) => f.featureId === featureId)?.name;
-    executeCommand(
-      commandFactories.moveFeature(
-        { featureId, toIndex },
-        name ? `Reorder ${name}` : 'Reorder feature'
-      )
-    );
+    const label = name ? `Reorder ${name}` : 'Reorder feature';
+    const command = commandFactories.moveFeature({ featureId, toIndex }, label);
+    const base = doc;
+    const plan = planReorder(base, featureId, toIndex, {
+      orderGate: (document) => command.validate(document),
+      canEdit: () => ensureCanEdit(`reorder ${name ?? 'this feature'}`),
+      geometryReady: (document) => geometry.isReadyFor(document)
+    });
+    if (plan.kind === 'direct') executeCommand(command);
+    if (plan.kind === 'pending')
+      setStatus('Exact geometry is still rebuilding. Reorder once it finishes.');
+    if (plan.kind !== 'validate') return;
+    let failed = '';
+    const attribution =
+      featureAttribution && featureAttribution.derived === base?.derived
+        ? featureAttribution.featureWarnings
+        : undefined;
+    void validatedFeature.runTransaction([command], {
+      label,
+      // Compared with the current model in `reorderRefusal`, so a failure the
+      // design already has does not block the move.
+      targets: [],
+      validateDerived: (derived) => {
+        const refusal =
+          base &&
+          reorderRefusal(base, derived, featureId, toIndex, attribution);
+        if (!refusal) return;
+        failed = `: ${refusal.featureName} would not rebuild`;
+        throw refusal;
+      },
+      validatingMessage: `Checking features after ${name ?? 'the move'}…`,
+      successMessage: commandOutcomeMessage(label),
+      onFailure: (message) => announce(`${label} not applied${failed}. ${message}`)
+    });
   }
 
   function handleToggleFeatureSuppression(feature: FeatureNode) {
