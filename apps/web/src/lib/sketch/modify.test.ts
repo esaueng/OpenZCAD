@@ -593,6 +593,28 @@ describe('Trim', () => {
     });
   });
 
+  it('trims a construction guide at its own scale, not the profile’s', () => {
+    // A 2e10 profile line puts the profile tolerance near 2; the guide's
+    // crossings at x = 1 and x = 9 must still cut it.
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0, construction: true },
+      { objectKind: 'line', x1: 1, y1: -5, x2: 1, y2: 5 },
+      { objectKind: 'line', x1: 9, y1: -5, x2: 9, y2: 5 },
+      { objectKind: 'line', x1: -1e10, y1: 50, x2: 1e10, y2: 50 }
+    ]);
+    commit(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 5, y: 0 },
+        resolve
+      )
+    );
+    expect(object(ids[0]!)).toMatchObject({ x1: 0, x2: 1 });
+  });
+
   it('refuses a circle only one curve touches', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },
@@ -1441,6 +1463,29 @@ describe('Patterns', () => {
     ).toEqual({
       status: 'refuse',
       reason: 'The result would lie on top of geometry already in the sketch.'
+    });
+  });
+
+  it('refuses a result so far away that small geometry turns degenerate', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: 0, y1: -10, x2: 10, y2: -10 }
+    ]);
+    expect(
+      planSketchLinearPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        ids[1]!,
+        2e10,
+        2,
+        resolve
+      )
+    ).toEqual({
+      status: 'refuse',
+      reason:
+        'The result would reach so far that small geometry in the sketch becomes too small to keep at that scale.'
     });
   });
 

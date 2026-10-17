@@ -632,6 +632,23 @@ function remapCommands(
   return { release, restate, dropped };
 }
 
+/**
+ * The length under which a trim fragment counts as nothing: the profile
+ * builder's tolerance for profile geometry, which it would otherwise drop
+ * as degenerate, and the fixed on-curve slack for a construction guide,
+ * which never reaches the profile builder.
+ */
+function trimTolerance(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  target: SketchObjectData,
+  resolve: Resolve
+): number {
+  return target.construction
+    ? ON_CURVE
+    : profileTolerance(document, sketch, [], resolve);
+}
+
 // ---------------------------------------------------------------------------
 // Trim
 
@@ -785,14 +802,14 @@ export function planSketchTrim(
       at,
       Math.max(
         PARAM_EPS * TAU,
-        profileTolerance(document, sketch, [], resolve) / curve.r
+        trimTolerance(document, sketch, data, resolve) / curve.r
       )
     );
   }
   const span = curve.kind === 'line' ? 1 : curve.sweep;
   // A crossing closer to an end than the profile builder's tolerance would
   // leave a fragment it calls degenerate, so it counts as that end.
-  const tol = profileTolerance(document, sketch, [], resolve);
+  const tol = trimTolerance(document, sketch, data, resolve);
   const eps =
     curve.kind === 'line'
       ? Math.max(PARAM_EPS, tol / distance(curve.a, curve.b))
@@ -1395,11 +1412,17 @@ export function planSketchMirror(
         'The mirror image would overlap part of its source. Trim the entity at the mirror line first.'
     };
   }
-  if (
-    landsOnExisting(document, sketch, sourceId, [image], resolve, tol) ||
-    profileClash(document, sketch, [curveObject(image, data)], resolve)
-  ) {
+  if (landsOnExisting(document, sketch, sourceId, [image], resolve, tol)) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
+  }
+  const clash = profileClash(
+    document,
+    sketch,
+    [curveObject(image, data)],
+    resolve
+  );
+  if (clash) {
+    return { status: 'refuse', reason: clash };
   }
   const id = sourceId as EntityId;
   const axisEntity = axisId as EntityId;
@@ -1634,30 +1657,53 @@ function profileClash(
   sketch: SketchNode,
   added: readonly SketchObjectData[],
   resolve: Resolve
-): boolean {
+): string | null {
   const newIds = added.map((_, index) => `modify-result-${index}`);
-  const objects = [
-    ...sketch.objectIds.flatMap((objectId) => {
-      const data = sketchObject(document, sketch, objectId);
-      return data ? [{ id: String(objectId), data }] : [];
-    }),
-    ...added.map((data, index) => ({ id: newIds[index]!, data }))
-  ];
-  try {
-    const { diagnostics } = computeSketchProfileAnalysis(
+  const existing = sketch.objectIds.flatMap((objectId) => {
+    const data = sketchObject(document, sketch, objectId);
+    return data ? [{ id: String(objectId), data }] : [];
+  });
+  const degenerate = (objects: typeof existing) =>
+    computeSketchProfileAnalysis(
       objects,
       (value) => resolve(value) ?? Number.NaN
+    ).diagnostics;
+  try {
+    const before = new Set(
+      degenerate(existing)
+        .filter((diagnostic) => diagnostic.code === 'degenerate-entity')
+        .flatMap((diagnostic) => diagnostic.sourceEntityIds)
     );
-    return diagnostics.some(
-      (diagnostic) =>
-        (diagnostic.code === 'duplicate-entity' ||
-          diagnostic.code === 'overlapping-segments') &&
-        diagnostic.sourceEntityIds.some((id) => newIds.includes(id))
-    );
+    const diagnostics = degenerate([
+      ...existing,
+      ...added.map((data, index) => ({ id: newIds[index]!, data }))
+    ]);
+    if (
+      diagnostics.some(
+        (diagnostic) =>
+          (diagnostic.code === 'duplicate-entity' ||
+            diagnostic.code === 'overlapping-segments') &&
+          diagnostic.sourceEntityIds.some((id) => newIds.includes(id))
+      )
+    ) {
+      return LANDS_ON_EXISTING;
+    }
+    // A result far enough away widens the profile builder's tolerance
+    // until small geometry, new or old, reads as degenerate and drops out.
+    if (
+      diagnostics.some(
+        (diagnostic) =>
+          diagnostic.code === 'degenerate-entity' &&
+          diagnostic.sourceEntityIds.some((id) => !before.has(id))
+      )
+    ) {
+      return 'The result would reach so far that small geometry in the sketch becomes too small to keep at that scale.';
+    }
+    return null;
   } catch {
     // A sketch the classifier cannot analyse is refused elsewhere; this
     // check only adds refusals it can prove.
-    return false;
+    return null;
   }
 }
 
@@ -1842,16 +1888,17 @@ export function planSketchLinearPattern(
         'Some instances would overlap others. Use a spacing at least as long as the entity along the direction.'
     };
   }
-  if (
-    landsOnExisting(document, sketch, sourceId, copies, resolve, tol) ||
-    profileClash(
-      document,
-      sketch,
-      copies.map((copy) => curveObject(copy, source.data)),
-      resolve
-    )
-  ) {
+  if (landsOnExisting(document, sketch, sourceId, copies, resolve, tol)) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
+  }
+  const clash = profileClash(
+    document,
+    sketch,
+    copies.map((copy) => curveObject(copy, source.data)),
+    resolve
+  );
+  if (clash) {
+    return { status: 'refuse', reason: clash };
   }
   return {
     status: 'commands',
@@ -1952,16 +1999,17 @@ export function planSketchCircularPattern(
         'Some instances would overlap others. Change the count or the angle, or move the pivot off the entity.'
     };
   }
-  if (
-    landsOnExisting(document, sketch, sourceId, copies, resolve, tol) ||
-    profileClash(
-      document,
-      sketch,
-      copies.map((copy) => curveObject(copy, source.data)),
-      resolve
-    )
-  ) {
+  if (landsOnExisting(document, sketch, sourceId, copies, resolve, tol)) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
+  }
+  const clash = profileClash(
+    document,
+    sketch,
+    copies.map((copy) => curveObject(copy, source.data)),
+    resolve
+  );
+  if (clash) {
+    return { status: 'refuse', reason: clash };
   }
   return {
     status: 'commands',
