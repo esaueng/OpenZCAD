@@ -1,0 +1,430 @@
+# Implementation research audit — 17 October 2026
+
+Audit of OpenZCAD `main` at `7ad5ebcb` (#700) against a 211-entry capability
+inventory (ZC-001…ZC-211) recorded in a reference CAD on 12–16 October 2026.
+The inventory lists observed outcomes and proposed acceptance tests. It is not
+a specification, and it does not show that OpenZCAD lacks anything. Each
+entry below was checked against current source and tests, not against
+function or button names. The machine-readable ledger is
+[`implementation-research-audit-2026-10-17.json`](implementation-research-audit-2026-10-17.json),
+which records, per entry, the code paths, tests, evidence, gaps, required
+changes, dependencies, acceptance criteria, priority and effort.
+
+[ROADMAP.md](../../ROADMAP.md) remains the only priority ledger. This audit
+maps each ZC entry onto an existing roadmap row and proposes an order. It
+changes no row status.
+
+## Summary
+
+| Classification            | Count |
+| ------------------------- | ----: |
+| Implemented and verified  |    30 |
+| Implemented with gaps     |    71 |
+| Missing                   |    80 |
+| Deliberately out of scope |    14 |
+| Blocked                   |    16 |
+
+| Family              | Verified | Gaps | Missing | Out of scope | Blocked |
+| ------------------- | -------: | ---: | ------: | -----------: | ------: |
+| Sketch (24)         |        2 |    9 |      12 |            0 |       1 |
+| Constraints (23)    |        5 |    9 |       9 |            0 |       0 |
+| Planes/axes (12)    |        0 |    0 |      12 |            0 |       0 |
+| Solids (23)         |        5 |    9 |       5 |            2 |       2 |
+| Transform (10)      |        0 |    6 |       3 |            0 |       1 |
+| History/params (17) |        6 |    8 |       3 |            0 |       0 |
+| Inspection (14)     |        2 |    8 |       3 |            1 |       0 |
+| Items/projects (15) |        8 |    5 |       1 |            0 |       1 |
+| Command/input (9)   |        1 |    6 |       1 |            1 |       0 |
+| Drawings (26)       |        0 |    0 |      23 |            0 |       3 |
+| Import/export (27)  |        1 |   11 |       6 |            1 |       8 |
+| Visualization (11)  |        0 |    0 |       2 |            9 |       0 |
+
+The audit confirms the roadmap's structural gaps: reference geometry (R01),
+sketch tools and constraints (S04, S05, S07, I01), extrude end conditions
+(F01) and drawings (D01–D03). It adds two findings. First, the pinned kernel
+already exposes most of the sketch-side primitives these rows need, so their
+remaining work is in the app. Second, it found six confirmed defects; five
+need no schema change.
+
+## Confirmed defects (code-read; no schema change)
+
+Each was confirmed by reading the cited code. None has yet been reproduced in
+the running app.
+
+| ZC     | Defect                                                                                                                                                                                                                     | Location                                                            | Row     |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------- |
+| ZC-113 | Isolate overwrites `hiddenBodyIds`, and leaving isolation calls `showAllBodies()`, so bodies the user had hidden before isolating come back.                                                                               | `apps/web/src/App.tsx` `isolateBody`/`showAllBodies`                | U06     |
+| ZC-108 | `featureNeedsRepair` requires a `bodyId`, so a failed transform (which owns no body) never shows as needing repair.                                                                                                        | `apps/web/src/lib/featureRepair.ts`                                 | U06     |
+| ZC-095 | The pattern builder rounds a fractional count (`Math.round`) instead of refusing it as not a whole number.                                                                                                                 | `packages/kernel-adapter/src/exact-feature-builders.ts`             | F05     |
+| ZC-023 | Deleting a sketch entity checks only reference-dimension dependents. It skips the downstream `checkSketchEdit` preflight that entity edits run, so a dependent extrude breaks without warning.                             | `App.tsx` `handleDeleteSketchEntity`, `lib/sketch/solveEvidence.ts` | S05/U02 |
+| ZC-103 | `validateFeatureReorder` checks only producer/consumer order. It does not check the relative order of in-place modifiers on the same body, so moving a transform before a fillet on that body changes the result silently. | `apps/web/src/lib/featureHistory.ts`                                | U06     |
+| ZC-083 | `ParametricTransform3D` stores no pivot. The gizmo folds its pivot into the translation, so a later rotation edit turns the body about the world origin. Scale is also about the world origin only.                        | `packages/shared/src/index.ts` `ParametricTransform3D`              | M10     |
+
+## Kernel capability already on the pin, unused by the app
+
+Read from the Remus bindings pinned at the audited commit (8ef16f90). The
+next pin, 9add24f (#698), changes cone box cuts and STEP plane placement only.
+
+- GCS constraints: `symmetric`, `fixX`/`fixY`, fixed points through
+  `gcsAddPoint`, `pointLineDistance`, `pointOnCircle`/`pointOnArc` and
+  `tangentArcArc`. Together these cover Symmetry, Lock/Unlock,
+  point-on-curve and arc tangency (ZC-027/028/034/036/037). The app maps
+  every point as unfixed (`packages/kernel-adapter/src/gcs-sketch.ts`).
+- Sketch entities: `gcsAddEllipse`, `makeEllipseEdge`, `interpolatePoints`,
+  `makeNurbsEdge` and `projectCurvesOntoSketchPlane`, for ellipse, fit/control
+  splines and projection (ZC-004/005/010/013). The I01 note that ellipse waits
+  on Remus B75 is out of date; only spline _constraints_ need B75.
+- `offsetWire2DWithJoin` already supports the sharp (intersection) join, but
+  the UI hard-codes `'arc'` (ZC-015).
+- `revolve` accepts an arbitrary origin and direction, but the app limits the
+  axis to the sketch's horizontal/vertical axis (ZC-072).
+- `projectEdges` returns orthographic visible/hidden polylines. Nothing in the
+  app calls it, and it is the base of D01 (ZC-141).
+- `replaceSurfaceJournaled` (planar Replace Face, ZC-079) and the draft
+  operation (extrude draft, ZC-064) can partially cover those entries.
+
+## Proposed delivery order
+
+This follows the shared operation contract in the research package: typed
+roles, a cancellable preview, validation before commit, one transaction,
+visible unresolved references, and persisted identity and expressions. It is
+reconciled with the roadmap's _Next bounded picks_ (H02 → H01 → S03 → S02 →
+S04 → R01 → U05 → U06). Each stage is one or more focused PRs. Each PR updates
+its roadmap row with evidence.
+
+### Stage 0 — Defect batch (P1, S)
+
+Fix the five schema-free defects above, each with a regression test: an isolate
+layer over hidden state; a failure state driven by
+`FeatureWarning.featureId`; whole-count refusal at the pattern consumer;
+delete preflight that reuses `checkSketchEdit`; a same-body modifier-order
+check in reorder validation. The transform-pivot fix needs a schema field, so
+it moves to Stage 1b.
+
+### Stage 1 — Foundations (P0/P1)
+
+- **1a Typed parameters (F05; ZC-093–096).** Store length/angle/number on each
+  parameter so `width + 5 mm` evaluates. Consumers refuse dimension mismatches
+  and non-integer counts, and a cycle refusal names the cycle. Needs a
+  document migration.
+- **1b Transform pivot and copy (M10; ZC-083–085, 087).** Persist the pivot or
+  frame and a copy policy. The gizmo and the numeric form write the same
+  state. Tests: translate +10 then −10, rotate 90° then the inverse, scale 2
+  gives ×8 volume, and a copy keeps the source.
+- **1c History depth (U06; ZC-099, 104).** A related-to-selection filter over
+  the graph `featureHistory.ts` already builds. Duplicate step for transform,
+  pattern and mirror creates new identities in one undoable transaction;
+  unsupported kinds show an explicit state.
+
+**Decision needed:** R01's design claims the v17→v18 migration. Either R01
+keeps v18 and typed parameters take v19, or the two ship as one migration.
+
+### Stage 2 — Sketch completeness (S07, S05, S04, I01, S03)
+
+- **2a Constraints, all on existing GCS types:** Symmetry, Lock/Unlock (which
+  adds the fixed state to ZC-046), Disconnect, point-on-curve, arc tangency
+  and a diameter dimension (ZC-027/028/034–037/045).
+- **2b Modify tools:** Trim (exact crossings already computed in
+  `lib/sketch/session.ts`), Mirror, linear and circular patterns, single-curve
+  offset with a user-selectable join, and make-construction on existing
+  entities (ZC-014/015/018/019/021/022/024).
+- **2c S04 composite identity**, then the viewport polygon tool, a
+  centre-anchored rectangle and a three-point rectangle (ZC-006–008/011).
+- **2d New entities:** ellipse, fit and control splines, and projection with a
+  linked/unlinked choice (ZC-004/005/010/013).
+- **2e S03:** anchor order and viewport constraint glyphs with a show/hide
+  filter (ZC-039/041).
+
+### Stage 3 — Reference geometry (R01; ZC-048–059, 090)
+
+Offset Plane and Midplane exactly as `docs/plans/datum-geometry-plan.md`
+designs them, with Sketch, Split and Mirror consumers. Then three-point plane,
+parallel-at-point plane, the axis constructors, and their revolve, pattern and
+rotate-about-axis consumers. Each constructor is a separate slice with its own
+analytic test from the handoff (for example offset +12 gives z=12, the
+three-point case gives z=0, collinear points are refused, and parallel planes
+are refused for an axis).
+
+### Stage 4 — Solid options (F01, M11; ZC-060–064, 072, 075–078)
+
+Through-all as a single-target cut (design and probe exist), to-face extents
+with an unresolved state when the target goes away, extrude draft, an
+intersect result intent, and revolve about an edge or datum axis with a
+stored add/cut. Booleans and split get keep-originals. This stage also adds
+the missing independent analytic oracles: cube pair 1750/750/250, split
+500/500, swept circle 80π, ruled loft 3066.67.
+
+### Stage 5 — Workspace conventions (U05, U06, U07)
+
+A keymap registry with user remapping and conflict detection; recent and
+context-filtered command search; saved views kept in a sibling store, not the
+document; X-ray with opacity and select-through; an FOV setting; Objects
+search, body rename and folders; persisted sketch visibility; box select of
+edges and faces (ZC-115/116/121/125–129/203–206).
+
+### Stage 6 — Exchange (I04, D04, I05, I07)
+
+An explicit export scope (selection / visible / all including hidden); a unit
+choice for unitless imports and an export unit; angular tolerance with a
+measured deviation and triangle-count test; DXF sketch import plus the
+existing whole-sketch export placed in the menu; a shared export→reimport
+harness with a written loss contract per format; reference images; SVG; PNG
+viewport export (ZC-176/177/183–186/188/190/192/199–202).
+
+### Stage 7 — Drawings (D01 → bounded D02; milestone 3)
+
+The chain is: a drawing section in the document (sequenced after the Stage 1
+and 3 migrations) → checkpoint-fenced snapshot resolution → a projection
+service on `projectEdges` with a box and drilled-plate bounds test → a preview
+using the same page transform as export → one line-length dimension that
+survives reopen → explicit Update with a visible stale state → PDF export
+(ZC-139–142, 146, 163, 164). Open decisions: the PDF writer and font policy;
+whether Remus returns source edge identity with projected runs or the app
+projects named edges itself; and a kernel ask for silhouette (outline) curves
+on curved faces, which hidden bores, centerlines and cylinder dimensions need
+(ZC-145, 149, 157).
+
+## Blocked and out-of-scope ledger
+
+| Entries                                             | Blocker                                                                                              | Next action                                                          |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| ZC-070, 071 loft guides, periodic loft              | Pinned `loftWithOptions` reads only ruled/start/end point (Remus P-Class 7.2)                        | Remus binding for guides and closed loft; then M04 slice             |
+| ZC-086 non-uniform scale                            | `transformSolid` silently rewrites analytic carriers to NURBS (Remus B74)                            | Kernel disclosure or refusal first                                   |
+| ZC-145 hidden lines (curved)                        | `projectEdges` produces no silhouettes for curved faces                                              | Remus silhouette request; a box-only D01 slice is not blocked        |
+| ZC-144 detail view, ZC-164 drawing export           | Per-view scale field and PDF/font policy are undecided in the D01 design                             | Design decision in D01                                               |
+| ZC-046 per-entity DOF, ZC-042 projected length      | GCS reports one sketch-wide DOF; no two-point dx/dy constraint                                       | Remus GCS request, or an app emulation through construction geometry |
+| ZC-181, 189, 193–198 Parasolid, DWG, native CAD, JT | Licensed translator/SDK; I10 must choose it. **Release blocker; no licensing clearance is claimed.** | I10 qualification with an authorized corpus                          |
+| ZC-003, 210 pen/touch; ZC-175, 187 AR/USDZ          | Needs real supported devices; L02/I09 deferred                                                       | Measured demand, then a device test matrix                           |
+| ZC-135 teamspace                                    | No roadmap row; needs isolated test accounts                                                         | Product decision                                                     |
+| ZC-080 imprint, ZC-082 wrap/emboss                  | K09 / M12 deferred                                                                                   | Representation design first                                          |
+| ZC-123, 165–170, 173, 174 presentation              | L02 defers materials, decals, environments, capture and generated imagery                            | Reprioritize from demand                                             |
+
+## Rights and originality boundaries
+
+The research package was used only to understand outcomes and acceptance
+tests. Its screenshot gallery, wording and layouts are not repository or
+product assets. Its fixture files are independently generated FreeCAD
+geometry with no third-party content. Use them only after re-checking their
+provenance, and prefer fixtures built from closed-form expectations. The
+package is not patent or contractual clearance; native-format and DWG work
+stays blocked on I10 licensing review.
+
+## Appendix — per-entry classification
+
+Statuses: **V** implemented and verified, **G** implemented with gaps,
+**M** missing, **O** out of scope, **B** blocked. The JSON ledger holds the
+code paths, tests, evidence and acceptance criteria for each entry.
+
+| ZC     | Family                 | Capability                            | Status | Row                                      | Priority | Main gap                                                                                                                                                                             |
+| ------ | ---------------------- | ------------------------------------- | ------ | ---------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ZC-001 | Sketch                 | Line                                  | V      | S06 (entry/numeric drawing); S02 (refere | P2       | No test asserts the exact (0,0)-(30,40) => 50 mm case or an angle readout on a committed line; the editor exposes endpoints, not length/direction fields.                            |
+| ZC-002 | Sketch                 | Arc                                   | G      | S05 (arc inputs) / S06                   | P1       | Only one construction mode (no 3-point/endpoint arc, no tangent arc). No arc-length readout or test for the radius-10 semicircle (10*pi). The intended region is not preserved…      |
+| ZC-003 | Sketch                 | Automatic pen Line/Arc                | B      | none (no ROADMAP row; mentioned only in  | P3       | Everything: stroke capture, line/arc classification, cancellation semantics.                                                                                                         |
+| ZC-004 | Sketch                 | Fit spline                            | M      | I01 (spline entity slice)                | P2       | No entity, tool, editor, region/profile support, extrude path or persistence.                                                                                                        |
+| ZC-005 | Sketch                 | Control spline                        | M      | I01 (spline entity slice)                | P2       | No degree/knots/weights representation, no control-polygon UI, no persistence.                                                                                                       |
+| ZC-006 | Sketch                 | Diagonal rectangle                    | G      | S04 (composite identity)                 | P1       | No durable H/V/coincident intent or corner identity (S04 is Open); no unit test for the exact (0,0)-(20,12) case with area 240 and perimeter 64.                                     |
+| ZC-007 | Sketch                 | Center rectangle                      | G      | S04 / S06                                | P2       | No centre-anchored drawing mode in the viewport. No test asserts that centre (5,7) with 20x12 gives corners (-5,1)/(15,13), or that the centre stays put on resize.                  |
+| ZC-008 | Sketch                 | Three-point rectangle                 | M      | S04 (prerequisite); no explicit row slic | P2       | No rotated rectangle, no three-point tool, no collinear-third-point refusal.                                                                                                         |
+| ZC-009 | Sketch                 | Circle                                | G      | S02 (diameter references) / S06          | P2       | No radius-versus-diameter dimension policy: no diameter field, diameter constraint or diameter reference dimension, so 'change diameter to 12 gives radius 6' is not expressible…    |
+| ZC-010 | Sketch                 | Ellipse                               | M      | I01 (ellipse entity slice)               | P2       | Everything app-side: schema, tool, editor, region/profile and extrude path, persistence.                                                                                             |
+| ZC-011 | Sketch                 | Polygon                               | G      | S04 (composite identity) / S06           | P2       | No viewport polygon tool or presets; the radius convention is labelled only 'Radius'; no test for hexagon circumradius 10 => side 10; no vertex identity (S04).                      |
+| ZC-012 | Sketch                 | Text                                  | V      | none (shipped; docs/plans/text-feature-p | P3       | Text is not convertible to editable geometry (intentional). Missing-font behaviour is fail-closed rather than a substitution choice, which satisfies the 'visible decision' intent.  |
+| ZC-013 | Sketch                 | Sketch projection                     | M      | I01                                      | P2       | No projection command, no linked or detached mode, no broken-reference handling.                                                                                                     |
+| ZC-014 | Sketch                 | Sketch edge offset: single            | M      | S05 (open: arc/circle inputs)            | P1       | No single-curve offset (line, arc or circle), no side/extension policy, no collapse refusal for circles.                                                                             |
+| ZC-015 | Sketch                 | Sketch edge offset: chain             | G      | S05                                      | P1       | Join policy is not user-selectable, so the acceptance test's 22x14 sharp-corner miter result cannot be made from the UI; open chains and loops containing arcs are refused; no…      |
+| ZC-016 | Sketch                 | Sketch move/rotate                    | G      | S05 (closest owner; no explicit transfor | P2       | No multi-entity selection transform, no numeric translate/rotate, no rotation of lines/arcs/profiles, no copy option, no constraint-aware moves (constrained entities are not…       |
+| ZC-017 | Sketch                 | Sketch scale                          | M      | none (no ROADMAP row)                    | P3       | Everything.                                                                                                                                                                          |
+| ZC-018 | Sketch                 | Sketch linear pattern                 | M      | S05 (open: patterns)                     | P1       | Everything, including the persistent pattern relation.                                                                                                                               |
+| ZC-019 | Sketch                 | Sketch circular pattern               | M      | S05 (open: patterns)                     | P1       | Everything.                                                                                                                                                                          |
+| ZC-020 | Sketch                 | Sketch rotate around axis             | M      | none (no ROADMAP row)                    | P3       | Everything, including the policy for off-plane results.                                                                                                                              |
+| ZC-021 | Sketch                 | Sketch mirror                         | M      | S05 (open: mirror); S07 (symmetry constr | P1       | Everything, including optional symmetry persistence.                                                                                                                                 |
+| ZC-022 | Sketch                 | Trim                                  | M      | S05 (open: trim/extend)                  | P1       | Everything: intersection splitting, keeping unaffected segments, reassigning or explaining dependent constraints, undo.                                                              |
+| ZC-023 | Sketch                 | Sketch delete                         | G      | S05 / U02 (downstream consequence)       | P1       | No consequence preview or test showing that deleting a rectangle-profile edge leaves the dependent extrude visibly unresolved, and no test that undo restores both; delete is…       |
+| ZC-024 | Sketch                 | Construction geometry                 | G      | S05 / S06 (no explicit slice)            | P1       | No make-construction/make-regular action for an existing entity (the entity editor preserves the flag but cannot change it); no test that toggling one closed-loop edge removes…     |
+| ZC-025 | Constraints            | Parallel                              | V      | S07 (constraint set; parallel shipped un | P3       | Lines only; rectangle/polygon edges cannot be picked until S04 gives them line identity.                                                                                             |
+| ZC-026 | Constraints            | Perpendicular                         | G      | S03/S07                                  | P2       | No test edits a driving dimension on a perpendicular pair and re-checks the dot product (the acceptance's 'driver edit preserves the relation').                                     |
+| ZC-027 | Constraints            | Tangent                               | G      | S07 (constraint set); S05 for fillet-wri | P2       | Tool refuses arc picks; no curve/curve tangency; no trimmed-domain policy (finite arc contact vs supporting circle) defined or tested for user-authored tangents.                    |
+| ZC-028 | Constraints            | Coincident                            | G      | S07 (drag-to-coincide), S08              | P2       | No point-on-curve intent (point on line/circle/arc) even though the kernel has pointOnCircle/pointOnArc/pointLineDistance; no drop-a-point-on-a-point creation (S07); no direct…     |
+| ZC-029 | Constraints            | Midpoint                              | G      | S07                                      | P2       | Target must be a line (no arc midpoint by curve class); no test changes the segment length and checks the bound point follows (the 20 -> 30 case).                                   |
+| ZC-030 | Constraints            | Concentric                            | G      | S07                                      | P3       | No test asserts radii stay independent (changing one radius leaves the other); arc-arc and arc-circle paths have no solve oracle.                                                    |
+| ZC-031 | Constraints            | Horizontal                            | V      | S07                                      | P3       | No solver DOF count per constraint (see ZC-046).                                                                                                                                     |
+| ZC-032 | Constraints            | Vertical                              | G      | S07                                      | P3       | Missing direct oracle (x1 == x2) and a test that re-anchoring the sketch support keeps local vertical.                                                                               |
+| ZC-033 | Constraints            | Equal                                 | V      | S07                                      | P3       | Equal-radius solve has no oracle (only line length).                                                                                                                                 |
+| ZC-034 | Constraints            | Symmetry                              | M      | S07                                      | P1       | Entire capability: schema kind, two-entity + axis pick flow, GCS mapping, axis validation, refusal, undo.                                                                            |
+| ZC-035 | Constraints            | Disconnect                            | M      | S07                                      | P1       | No one-step command that removes the coincident/midpoint relations on a picked point while leaving other relations and dimensions.                                                   |
+| ZC-036 | Constraints            | Lock                                  | M      | S07                                      | P1       | Lock command, persisted fixation, locked-entity display, conflict preservation.                                                                                                      |
+| ZC-037 | Constraints            | Unlock                                | M      | S07                                      | P1       | Unlock that removes only the fixation relation.                                                                                                                                      |
+| ZC-038 | Constraints            | Automatic constraints                 | M      | S08                                      | P2       | Inferred persistent relations (H/V, perpendicular, tangent, coincident), an on/off setting, visibility/deletability of inferred relations.                                           |
+| ZC-039 | Constraints            | Constraint visibility                 | M      | S03 (entity highlighting) / S08 (visible | P2       | Viewport relation indicators and a presentation-only filter (contextual vs always).                                                                                                  |
+| ZC-040 | Constraints            | Dimension visibility                  | M      | S01/S02 (no row owns a visibility toggle | P3       | A presentation-only visibility preference for dimension labels.                                                                                                                      |
+| ZC-041 | Constraints            | Anchor order                          | M      | S03 ('The anchored-entity setting remain | P2       | Declared anchor policy and setting; reversed-order Equal test.                                                                                                                       |
+| ZC-042 | Constraints            | Length dimension                      | G      | S02 (distance-type badge slice; H/V vari | P1       | No horizontal/vertical (projected) distance type, no point-to-line distance, no driving-vs-projection test (diagonal 50 vs horizontal 30).                                           |
+| ZC-043 | Constraints            | Angle dimension                       | G      | S02/S07 (no row names arc sweep)         | P2       | No arc sweep angle dimension (180 -> 120 case); arc angle is only editable as entity fields, not as a solver constraint.                                                             |
+| ZC-044 | Constraints            | Radius dimension                      | V      | S01/S02                                  | P3       | No diameter readout to check the 20 -> 16 relation (see ZC-045); display-precision independence asserted only implicitly.                                                            |
+| ZC-045 | Constraints            | Diameter dimension                    | M      | None explicit (nearest S02)              | P2       | Diameter driving/reference dimension, label, save/reopen of a diameter formula.                                                                                                      |
+| ZC-046 | Constraints            | Fully-defined and under-defined state | G      | S03                                      | P1       | No per-entity under-defined state (kernel gives one DOF scalar); no 'fixed' state because Lock is missing.                                                                           |
+| ZC-047 | Constraints            | Constraint conflict recovery          | V      | S03                                      | P3       | Culprit attribution stays unknown for rank-redundant conflicts where the kernel gives no residual (intentional).                                                                     |
+| ZC-048 | Planes                 | Offset Plane                          | M      | R01                                      | P1       | Whole capability: datum node, v17->v18 schema/timeline migration, source resolution, finite display extent, consumers, broken-reference repair.                                      |
+| ZC-049 | Planes                 | Midplane                              | M      | R01                                      | P1       | Whole capability; non-parallel source pair refusal also undefined in code.                                                                                                           |
+| ZC-050 | Planes                 | Plane Through 3 Points                | M      | R01                                      | P2       | Whole capability; no design beyond the catalogue line.                                                                                                                               |
+| ZC-051 | Planes                 | Plane on Curve at Point               | M      | R01                                      | P2       | Whole capability; no design beyond the catalogue line.                                                                                                                               |
+| ZC-052 | Planes                 | Plane Perpendicular to Edge at Point  | M      | R01                                      | P2       | Whole capability; no design beyond the catalogue line.                                                                                                                               |
+| ZC-053 | Planes                 | Plane Through Edge at Angle           | M      | R01                                      | P2       | Whole capability; no design beyond the catalogue line.                                                                                                                               |
+| ZC-054 | Planes                 | Plane Parallel to Face at Point       | M      | R01                                      | P2       | Whole capability; no design beyond the catalogue line.                                                                                                                               |
+| ZC-055 | Axes                   | Axis Through 2 Points                 | M      | R01                                      | P2       | Whole capability, including the revolve/pattern/rotate consumers that would use it.                                                                                                  |
+| ZC-056 | Axes                   | Axis Through 2 Planes                 | M      | R01                                      | P2       | Whole capability, including the revolve/pattern/rotate consumers that would use it.                                                                                                  |
+| ZC-057 | Axes                   | Axis of Cylinder/Cone                 | M      | R01                                      | P2       | Whole capability, including the revolve/pattern/rotate consumers that would use it.                                                                                                  |
+| ZC-058 | Axes                   | Axis Along Edge                       | M      | R01                                      | P2       | Whole capability, including the revolve/pattern/rotate consumers that would use it.                                                                                                  |
+| ZC-059 | Axes                   | Axis Perpendicular to Face at Point   | M      | R01                                      | P2       | Whole capability, including the revolve/pattern/rotate consumers that would use it.                                                                                                  |
+| ZC-060 | Solids                 | Extrude                               | G      | F01                                      | P2       | ExtrudeOperation is only 'new-body'\|'add'\|'cut': no Intersect result intent. The exact 20x12x10=2400 case is not literally asserted (the closed-form box test is equivalent).      |
+| ZC-061 | Solids                 | Extrude symmetric                     | V      | F01                                      | P3       | —                                                                                                                                                                                    |
+| ZC-062 | Solids                 | Extrude to object                     | M      | F01                                      | P1       | Whole capability: endCondition field, face/plane target reference, extent derivation, moving/deleted-target behaviour.                                                               |
+| ZC-063 | Solids                 | Extrude through all                   | M      | F01                                      | P1       | Whole product capability; the designed first slice is single-target cut only, so the acceptance case of two separated blocks needs the later multi-body slice.                       |
+| ZC-064 | Solids                 | Extrude draft                         | M      | F01                                      | P2       | Whole capability: stored draft angle with neutral support, per-side draft for two-sided, and a closed-form check (cap width 20-10*tan5deg = 19.1251).                                |
+| ZC-065 | Solids                 | Offset Face                           | V      | M07                                      | P3       | —                                                                                                                                                                                    |
+| ZC-066 | Solids                 | Fillet                                | V      | M03                                      | P3       | Tangent-edge chain propagation and corner/setback policy are not offered (M03 open, Remus B72).                                                                                      |
+| ZC-067 | Solids                 | Chamfer                               | V      | M03                                      | P3       | Explicit tangent propagation is not offered (M03/B72).                                                                                                                               |
+| ZC-068 | Solids                 | Shell                                 | V      | M07                                      | P3       | —                                                                                                                                                                                    |
+| ZC-069 | Solids                 | Loft                                  | G      | M04                                      | P2       | Sections must be sketch profiles; body faces cannot be loft sections. Only similar (square) sections have a closed-form oracle; the non-similar 20x12->10x8 prismatoid (3066.67)…    |
+| ZC-070 | Solids                 | Loft guides and connection points     | B      | M04                                      | P3       | Whole capability.                                                                                                                                                                    |
+| ZC-071 | Solids                 | Loft periodicity                      | B      | M04                                      | P3       | Whole capability.                                                                                                                                                                    |
+| ZC-072 | Solids                 | Revolve                               | G      | F01                                      | P1       | Axis is limited to the sketch's horizontal/vertical axis (no model edge or datum axis); no stored result intent (always a new body; F01 extends add/cut to revolve); no…             |
+| ZC-073 | Solids                 | Revolve with height                   | G      | M04                                      | P3       | No exact helical surface; not offered as revolve elevation about a profile edge; no analytic volume oracle.                                                                          |
+| ZC-074 | Solids                 | Sweep                                 | G      | M04                                      | P2       | The circle-along-straight-line volume (80*pi) is not asserted; no orientation, twist, scale, profile position or corner controls; bent paths faceted.                                |
+| ZC-075 | Solids                 | Union                                 | G      | M11                                      | P2       | Inputs are always consumed: no keep-originals choice (M11). The overlapping cube pair (1750) is not literally asserted; the box/cylinder overlap oracle is equivalent.               |
+| ZC-076 | Solids                 | Subtract                              | G      | M11                                      | P2       | No stored keep-originals or in-card target/tool swap (M11); the 750 mm3 cube pair is not literally asserted.                                                                         |
+| ZC-077 | Solids                 | Intersect                             | G      | M11                                      | P2       | No independent closed-form intersect volume (recorded kernel values only: 181.578, 163.596637); tangent case and keep-originals (M11) untested.                                      |
+| ZC-078 | Solids                 | Split Body                            | G      | M11                                      | P2       | No keep-original option; tool is only an inline numeric plane (no datum, face, sketch-profile or multi-tool split).                                                                  |
+| ZC-079 | Solids                 | Replace Face                          | M      | M07                                      | P2       | Whole capability.                                                                                                                                                                    |
+| ZC-080 | Solids                 | Imprint Edge / Project edges          | O      | K09                                      | P3       | Whole capability.                                                                                                                                                                    |
+| ZC-081 | Solids                 | Offset Edge 3D                        | M      | I01                                      | P2       | Whole capability: face/edge-loop source link, new-sketch creation, broken-reference behaviour.                                                                                       |
+| ZC-082 | Solids                 | Wrap & Emboss                         | O      | M12                                      | P3       | Whole capability.                                                                                                                                                                    |
+| ZC-083 | Transform              | Move/Rotate 3D                        | G      | M10 (U01 gizmo contract)                 | P2       | No persisted pivot or manipulator frame; no custom pivot; composeMoveTransform has no direct unit test; no test asserts +5 mm then inverse restores bounds; a failed transform…      |
+| ZC-084 | Transform              | Copy                                  | M      | M10                                      | P2       | No copy badge on move/rotate/scale; no declared independent vs linked copy identity; no repeated stamps.                                                                             |
+| ZC-085 | Transform              | Uniform scale                         | G      | M10                                      | P2       | Pivot is fixed at the world origin (no declared/movable centre); scale is only in TransformForm, not the Move gizmo; no inverse-scale restore or edge-length assertion; no copy…     |
+| ZC-086 | Transform              | Non-uniform scale                     | B      | M10                                      | P3       | No per-axis factors, frame, or zero-factor refusal.                                                                                                                                  |
+| ZC-087 | Transform              | Translate                             | G      | M10                                      | P2       | No 'translate by two picked points' mode; no test of an exact point-to-point vector or inverse bounds restore.                                                                       |
+| ZC-088 | Transform              | Linear pattern 3D                     | G      | M02                                      | P2       | Spacing-only (no total-extent mode); source inclusion is implicit, not declared; no third linear axis; fractional count is silently rounded (countError whole=false, Math.round…     |
+| ZC-089 | Transform              | Circular pattern 3D                   | G      | M02                                      | P2       | No arbitrary axis (origin+direction, edge or datum axis); no angular-spacing mode; no orientation policy (rotated vs preserved/translated-only).                                     |
+| ZC-090 | Transform              | Rotate Around Axis                    | M      | M10                                      | P2       | No axis reference (cylinder axis, edge, datum axis), no signed-angle-about-axis storage, no copy intent.                                                                             |
+| ZC-091 | Transform              | Align                                 | M      | M10                                      | P2       | No source/target support pick, flip, offset or snap positions.                                                                                                                       |
+| ZC-092 | Transform              | Mirror                                | G      | M11                                      | P2       | Source retention is fixed (no keep-none/replace option per M11); no test asserting opposite signed bounds across z=0.                                                                |
+| ZC-093 | History and parameters | Create variable: Length               | G      | F05                                      | P1       | No parameter unit type (length/angle/number) in the schema; length parameters cannot mix with suffixed literals; ROADMAP F05 lists this as open.                                     |
+| ZC-094 | History and parameters | Create variable: Angle                | G      | F05                                      | P1       | No persisted angle type; consumers cannot reject an angle parameter used as a length.                                                                                                |
+| ZC-095 | History and parameters | Create variable: Number               | G      | F05                                      | P1       | No integer requirement at pattern-count consumers; no number type.                                                                                                                   |
+| ZC-096 | History and parameters | Expressions and mixed units           | G      | F05                                      | P1       | Parameters are dimensionless in scope, so 'width + 5 mm' is refused; cycle refusal reads as 'Unknown identifier', not a named cycle; document-unit threading for some modeling…      |
+| ZC-097 | History and parameters | Edit feature                          | V      | U02 / delivered baseline (#307-#314)     | P3       | Drawing stale-state part of the acceptance is not applicable until drawings exist (D01).                                                                                             |
+| ZC-098 | History and parameters | Edit references                       | G      | U06                                      | P1       | No uniform 're-pick this reference' affordance on every history card (U06); split-plane replacement with compatibility check not covered by a test.                                  |
+| ZC-099 | History and parameters | Related-to-selection filter           | M      | U06                                      | P1       | No 'related to selection' filter.                                                                                                                                                    |
+| ZC-100 | History and parameters | Rename feature                        | V      | U02                                      | P3       | —                                                                                                                                                                                    |
+| ZC-101 | History and parameters | Suppress/unsuppress                   | V      | U02                                      | P3       | —                                                                                                                                                                                    |
+| ZC-102 | History and parameters | Breakpoint                            | V      | U06 (timeline groundwork) / U02          | P3       | —                                                                                                                                                                                    |
+| ZC-103 | History and parameters | Reorder                               | G      | U06                                      | P2       | Validation only checks producer order, not relative order of in-place modifiers on the same body (e.g. a transform moved before a fillet on that body changes meaning silently);…    |
+| ZC-104 | History and parameters | Duplicate step                        | M      | U06                                      | P1       | No feature duplication with new identities and reviewable copied references.                                                                                                         |
+| ZC-105 | History and parameters | Merge history                         | M      | U06                                      | P2       | No bake to an exact imported-style body, no sketch/parameter retention choice.                                                                                                       |
+| ZC-106 | History and parameters | Undo                                  | G      | U02                                      | P1       | Selection identity after undo is not restored/verified (U02 lists undo-selection findings to recheck); no boolean-specific undo test comparing body counts and exact geometry.       |
+| ZC-107 | History and parameters | Redo                                  | V      | U02                                      | P3       | —                                                                                                                                                                                    |
+| ZC-108 | History and parameters | Dependency failure repair             | G      | U06 / U02                                | P1       | Bodyless features (transform) never flag 'needs repair' because featureNeedsRepair needs a bodyId; the failing role/source is not named uniformly; uniform re-pick per role is…      |
+| ZC-109 | History and parameters | Native save/reopen                    | V      | L01                                      | P3       | Live cross-device and named-build acceptance remain open under L01 (not a code gap).                                                                                                 |
+| ZC-110 | Inspection             | Measure                               | G      | M13 (Partial)                            | P2       | M13 open slices: viewport picks choosing a point kind, maximum/central/parallel distances, hover-highlight of measured entity, sums over multi-picks. No test that a body hidden…    |
+| ZC-111 | Inspection             | Pin measurement                       | V      | M13 (Partial)                            | P2       | No browser case that edits an extrusion and asserts the pinned volume refreshes; no global 'show pinned measurements' toggle.                                                        |
+| ZC-112 | Inspection             | Section View                          | G      | M08 (Partial); M09 first slice           | P2       | Arbitrary/datum/face-aligned planes, move/tilt/flip gizmo, section-only and 2D normal-to-section views, per-body fills, sketch on section plane, sections in saved views; e2e…       |
+| ZC-113 | Inspection             | Isolate                               | G      | U06 (Partial: selection-set isolate, his | P1       | Defect: no temporary isolation layer, prior hidden state overwritten on exit; isolates bodies only (not sketches/planes or a selection set); no behavioral test; history not…        |
+| ZC-114 | Inspection             | Standard views                        | V      | U05 (⌘1-7 full set open)                 | P1       | Only four view keys; back/bottom/left reachable only via cube; no explicit assertion that a view change leaves sketch frame/geometry untouched.                                      |
+| ZC-115 | Inspection             | Saved views                           | M      | U07 (Open)                               | P1       | Up to eight named views storing camera, projection/FOV, display mode and active section; restore and persistence tests.                                                              |
+| ZC-116 | Inspection             | Orthographic/perspective              | G      | U07 (Open: FOV slider)                   | P1       | No FOV slider; e2e checks only the pressed state/status text, not that exact bounds or framing are unchanged across the switch.                                                      |
+| ZC-117 | Inspection             | Grid and axes                         | G      | none specific (U03/U07 adjacent)         | P3       | No user-selectable grid plane or fixed spacing; no test that zooming/grid changes leave stored coordinates unchanged.                                                                |
+| ZC-118 | Inspection             | Units and precision                   | G      | I03 (Deferred: whole-document unit conve | P2       | Precision control exists only in the measurement workbench (no global display precision for dims/fields); no explicit test that lowering precision never quantizes stored…           |
+| ZC-119 | Inspection             | Snapping and guides                   | G      | S03/S08 (anchored-entity rule)           | P2       | No test asserting an accepted snap creates no constraint (or a deliberate one); no inference guide lines beyond axis snap; no opt-in 'make coincident' on snap.                      |
+| ZC-120 | Inspection             | Shaded display                        | G      | U07 (hidden edges, silhouettes)          | P2       | No browser test that switching mode leaves measurements/export unchanged; no hidden-edge or silhouette modes.                                                                        |
+| ZC-121 | Inspection             | X-ray                                 | M      | U07 (Open)                               | P1       | X-ray mode with opacity slider, select-through picking of rear edges, return to shaded preserving visibility/topology.                                                               |
+| ZC-122 | Inspection             | Surface analysis                      | M      | M09 (Open)                               | P2       | Declared analysis methods with units and analytic plane/sphere/cylinder qualification.                                                                                               |
+| ZC-123 | Inspection             | Screenshot capture                    | O      | L02 (Deferred: capture with resolution p | P3       | User capture with resolution, grid/edge/background options and UI exclusion.                                                                                                         |
+| ZC-124 | Items and projects     | Face/edge/body/profile selection      | V      | U07 (select-through, sketch-group double | P1       | Pick-list e2e covers stacked faces, not a sketch over a face; select-through and connected-sketch-group double-click remain U07.                                                     |
+| ZC-125 | Items and projects     | Area selection and filters            | G      | U07 (Open: Tab/B/F/E filter keys)        | P1       | No box selection of edges, faces or sketch curves (the acceptance case uses a partially crossed edge); no filter keys during drag.                                                   |
+| ZC-126 | Items and projects     | Items search/filter                   | G      | U06 (Partial)                            | P1       | No text search in the Objects browser; no test that clearing a search restores identical items.                                                                                      |
+| ZC-127 | Items and projects     | Rename item                           | G      | U06 (Partial: rename on every card)      | P1       | No body rename in Objects/Inspector; no test that a renamed item's boolean/drawing dependants survive reopen.                                                                        |
+| ZC-128 | Items and projects     | Folders                               | M      | U06 (Partial: groups listed as remaining | P1       | Folders with membership independent of geometry, group visibility, undoable moves.                                                                                                   |
+| ZC-129 | Items and projects     | Visibility                            | G      | U06 (show-hidden, invert visibility rema | P1       | Sketch visibility not persisted across reload; no show-hidden/invert; no test of hide-sketch, pick face, restore with constraints intact; isolate overwrites visibility (ZC-113).    |
+| ZC-130 | Items and projects     | Project rename                        | V      |                                          | P3       | —                                                                                                                                                                                    |
+| ZC-131 | Items and projects     | New project                           | V      |                                          | P3       | No explicit e2e that a new project contains no bodies from the previously open one (covered indirectly).                                                                             |
+| ZC-132 | Items and projects     | Project duplication                   | V      | L03 (Deferred, versions depth)           | P3       | History scope of a duplicate is not user-selectable.                                                                                                                                 |
+| ZC-133 | Items and projects     | Project storage state                 | V      | L01 (Partial, live evidence)             | P2       | Live cross-device evidence is still L01; no offload/cloud-only storage tier.                                                                                                         |
+| ZC-134 | Items and projects     | Versions                              | V      | L03 (Deferred: versions list, diffs, rea | P3       | Comparison/diff, read-only preview and editor/device columns deferred to L03.                                                                                                        |
+| ZC-135 | Items and projects     | Teamspace                             | B      | none (no roadmap row)                    | P3       | Team spaces with membership and nonmember denial.                                                                                                                                    |
+| ZC-136 | Items and projects     | Sync                                  | V      | L01 (Partial: live cross-device evidence | P2       | Live deployed cross-device run still pending (L01).                                                                                                                                  |
+| ZC-137 | Items and projects     | Review links                          | G      | L08 (Deferred: comments, drawings on sha | P3       | Links are live (not a pinned snapshot) and have no expiry; comments/drawings deferred (L08).                                                                                         |
+| ZC-138 | Items and projects     | Sharing permissions                   | V      | L01 (live revocation/lease evidence)     | P2       | Live multi-account run pending (L01).                                                                                                                                                |
+| ZC-139 | Drawings               | Create drawing                        | M      | D01 (Partial: design only)               | P2       | No versioned drawing-sheet section in the canonical document, no create command or four-view starter, no checkpoint-fenced snapshot resolution.                                      |
+| ZC-140 | Drawings               | Sheet/projection/scale                | M      | D01; projection-angle field in D02 title | P2       | No first/third-angle field or layout rule; ANSI sizes (B/C/D) and ISO A2+ absent from design; per-view scale override explicitly deferred as a later D01 design slice.               |
+| ZC-141 | Drawings               | Base view                             | M      | D01                                      | P2       | Only four fixed frames in the design (front/top/right/iso); six orthographic orientations and custom camera angles are later D01 acceptance; no in-repo oracle harness.              |
+| ZC-142 | Drawings               | Projected view                        | M      | D01                                      | P2       | No base->projected relationship, no alignment constraint when the base moves, no dependency state when a source body is removed.                                                     |
+| ZC-143 | Drawings               | Section drawing view                  | M      | D03 (Open)                               | P3       | No section-line authoring on a view, no cut-and-project of the retained half, no hatching, no arbitrary/datum planes (M08 open).                                                     |
+| ZC-144 | Drawings               | Detail view                           | B      | D03 (Open); D01 per-view scale override  | P3       | Per-view scale override undefined; no 2D circular crop; no detail callout linkage.                                                                                                   |
+| ZC-145 | Drawings               | Hidden lines                          | B      | D01                                      | P2       | Kernel lacks silhouette (outline) generation for cylinders/cones/spheres/NURBS; no per-view hidden toggle UI; no dashed line style in preview or export.                             |
+| ZC-146 | Drawings               | Line length                           | M      | D02 (Open) first handoff slice           | P2       | No drawing annotation model; projected runs carry no source edge/vertex identity (ProjectedEdges{visible,hidden} anonymous polylines); D02 must decide between a Remus…              |
+| ZC-147 | Drawings               | Point-point dimension                 | M      | D02                                      | P2       | No vertex picking in views, no aligned/horizontal/vertical modes.                                                                                                                    |
+| ZC-148 | Drawings               | Point-line dimension                  | M      | D02                                      | P3       | No finite-segment vs infinite-support semantics defined.                                                                                                                             |
+| ZC-149 | Drawings               | Line-line distance                    | M      | D02                                      | P2       | No parallel-distance annotation; silhouette-line references unavailable from the kernel.                                                                                             |
+| ZC-150 | Drawings               | Arc angle                             | M      | D02                                      | P3       | No analytic circle reference through projection.                                                                                                                                     |
+| ZC-151 | Drawings               | Three-point angle                     | M      | D02                                      | P3       | No vertex-ray angle annotation or coincident-ray refusal.                                                                                                                            |
+| ZC-152 | Drawings               | Line-line angle                       | M      | D02                                      | P3       | No quadrant/side selection persistence.                                                                                                                                              |
+| ZC-153 | Drawings               | Radius                                | M      | D02                                      | P2       | No analytic-circle check; sampled projection cannot distinguish a spline from an arc.                                                                                                |
+| ZC-154 | Drawings               | Diameter                              | M      | D02                                      | P2       | No drawing diameter annotation.                                                                                                                                                      |
+| ZC-155 | Drawings               | Min/max distance                      | M      | D02                                      | P3       | No circle-circle min/max semantics in views.                                                                                                                                         |
+| ZC-156 | Drawings               | Tolerance                             | M      | D02                                      | P2       | No tolerance model separate from nominal value.                                                                                                                                      |
+| ZC-157 | Drawings               | Centerline                            | M      | D02                                      | P2       | No geometry annotations; cylinder-silhouette pairs depend on ZC-145.                                                                                                                 |
+| ZC-158 | Drawings               | Center mark                           | M      | D02                                      | P2       | No analytic-centre reference.                                                                                                                                                        |
+| ZC-159 | Drawings               | Intersection mark                     | M      | D02                                      | P3       | No virtual-intersection computation.                                                                                                                                                 |
+| ZC-160 | Drawings               | Note                                  | M      | D02                                      | P2       | No sheet text model, font policy or undo integration.                                                                                                                                |
+| ZC-161 | Drawings               | Image annotation                      | M      | D02                                      | P3       | No sheet image storage, resize or export path; storage/size and metadata-stripping policy undefined.                                                                                 |
+| ZC-162 | Drawings               | Title block                           | M      | D02                                      | P2       | No layouts, fields or overlap avoidance with views.                                                                                                                                  |
+| ZC-163 | Drawings               | Update after source change            | M      | D01 revision behaviour (slice 6); D02 ex | P2       | No staleness detection, rebind/Update command, or annotation re-resolution; invalid references must keep presentation and offer re-pick, never nearest-edge rebinding.               |
+| ZC-164 | Drawings               | Drawing export                        | B      | D01 slice 5 (PDF), D04 (DXF), I04 (expor | P2       | PDF writer/dependency and font policy undecided; DXF lacks layers, LTYPE (hidden/center), TEXT/DIMENSION entities; no page-size/line-weight metadata; DWG unplanned for drawings.    |
+| ZC-165 | Visualization          | Material assignment                   | O      | L02                                      | P3       | No per-body/per-face material scope, no persisted material record, no licensed material asset set.                                                                                   |
+| ZC-166 | Visualization          | Material properties                   | O      | L02                                      | P3       | No colour picker, no parameter persistence, no colour-space contract.                                                                                                                |
+| ZC-167 | Visualization          | Material orientation                  | O      | L02                                      | P3       | No texture coordinate frame independent of body placement.                                                                                                                           |
+| ZC-168 | Visualization          | Decals                                | O      | L02                                      | P3       | Entire capability absent by decision.                                                                                                                                                |
+| ZC-169 | Visualization          | Environment                           | O      | L02                                      | P3       | No named environments, no rotation/elevation/intensity/exposure state, no persistence.                                                                                               |
+| ZC-170 | Visualization          | Light/ground/shadows                  | O      | L02                                      | P3       | No light orientation/intensity control, no shadow toggle, no ground policy, nothing persisted.                                                                                       |
+| ZC-171 | Visualization          | Camera field of view                  | M      | none (closest L02)                       | P3       | No FOV setting, no declared angle convention (vertical), no persistence of FOV.                                                                                                      |
+| ZC-172 | Visualization          | Depth of field                        | M      | none                                     | P3       | Focus target/distance, aperture and blur model absent; would add a post-processing dependency and bundle cost (three.js chunk is the tight budget).                                  |
+| ZC-173 | Visualization          | Capture render                        | O      | L02                                      | P3       | No user capture command, resolution choice, alpha/background contract or metadata stripping.                                                                                         |
+| ZC-174 | Visualization          | Generative Render                     | O      | L02                                      | P3       | Excluded by roadmap decision.                                                                                                                                                        |
+| ZC-175 | Visualization          | AR/XR                                 | O      | L02; I09 (Deferred)                      | P3       | No AR export or viewing; no platform device in test matrix.                                                                                                                          |
+| ZC-176 | Import and export      | Insert image                          | M      | I05 (Open)                               | P2       | Entire import path, item, gizmo, opacity, sketch underlay and artifact storage missing.                                                                                              |
+| ZC-177 | Import and export      | Insert file                           | G      | F04 (Partial), F04a (Partial), I02 (Part | P1       | Import: no DXF, SVG, IGES, image or .gltf(JSON) import; STEP names/colours/hierarchy dropped (I02); unitless formats (STL/OBJ/PLY) always read as mm with no explicit…               |
+| ZC-178 | Import and export      | Insert project                        | M      | AS01 (Open)                              | P2       | No insert-into-open-document, no identity remap/duplication policy, no parent group, no copy-vs-link contract.                                                                       |
+| ZC-179 | Import and export      | Native project export                 | V      | none (delivered baseline: project backup | P3       | Browser download-and-reimport e2e for the .openzcad path not found (unit-level only); ROADMAP I10 TEST-4 hostile-fixture guards apply to the other native importer, not this one.    |
+| ZC-180 | Import and export      | STEP                                  | G      | I02 (Partial), I04 (Open)                | P1       | Import: product names/colours/assembly hierarchy are scanned but not applied (I02). Export: no names/colours/hierarchy (kernel writer boundary test confirms), no…                   |
+| ZC-181 | Import and export      | Parasolid                             | B      | I11 (Open), I10 (Open)                   | P3       | Both directions missing. Release blocker: needs a licensed translator/SDK decision (I10) or an independently implemented reader; licensing/distribution clearance is not…            |
+| ZC-182 | Import and export      | IGES                                  | M      | I06 (Open)                               | P3       | Import and export both missing in app; kernel path unqualified (lossy).                                                                                                              |
+| ZC-183 | Import and export      | STL                                   | G      | F04 (Partial), I04 (Open)                | P1       | Import: unitless coordinates are always interpreted as mm without a user choice. Export: always mm, no unit option; no angular tolerance.                                            |
+| ZC-184 | Import and export      | 3MF                                   | G      | F04 (Partial), I04 (Open)                | P2       | Import: multiple objects merge to one body; colours/materials dropped. Export: no per-object names/colours/materials metadata asserted; no export->reimport parity test for 3MF…     |
+| ZC-185 | Import and export      | OBJ                                   | G      | F04 (Partial), I04 (Open)                | P2       | Import: unitless, read as mm with no interpretation choice; .mtl/colours ignored. Export: no colours/materials (I04 lists OBJ colours open); no export->reimport test found.         |
+| ZC-186 | Import and export      | GLB                                   | G      | I04 (Open; GLB units slice delivered), F | P2       | Export: no colours/materials (I04 open), one merged mesh per body set; Import: .gltf JSON absent by decision; materials dropped.                                                     |
+| ZC-187 | Import and export      | USDZ                                  | O      | I09 (Deferred)                           | P3       | Export missing by deferral; verification needs an Apple device.                                                                                                                      |
+| ZC-188 | Import and export      | DXF                                   | G      | D04 (Partial)                            | P1       | Import: DXF sketch import entirely missing. Export: whole-sketch export has no menu entry; flattened/drawing-view export absent (D01); no layers/units header choice; no…            |
+| ZC-189 | Import and export      | DWG                                   | B      | I04 (Open; DWG is an optional separately | P3       | Import and export both missing.                                                                                                                                                      |
+| ZC-190 | Import and export      | SVG                                   | M      | I07 (Open)                               | P2       | Import and export both missing.                                                                                                                                                      |
+| ZC-191 | Import and export      | PDF                                   | M      | D01 (Partial; PDF writer open), D02, I05 | P2       | Export: drawing sheet PDF missing. Import: PDF-as-reference-image missing (I05).                                                                                                     |
+| ZC-192 | Import and export      | Image export                          | M      | none (closest L02 capture)               | P3       | No resolution, transparency, grid/edge toggles or metadata stripping.                                                                                                                |
+| ZC-193 | Import and export      | SolidWorks part/assembly              | B      | I14 (Open), I10 (Open)                   | P3       | Import missing; no fixtures.                                                                                                                                                         |
+| ZC-194 | Import and export      | NX                                    | B      | I18 (Deferred), I10                      | P3       | Import missing.                                                                                                                                                                      |
+| ZC-195 | Import and export      | CATIA                                 | B      | I19 (Deferred), I10                      | P3       | Import missing.                                                                                                                                                                      |
+| ZC-196 | Import and export      | Creo                                  | B      | I17 (Deferred), I10                      | P3       | Import missing.                                                                                                                                                                      |
+| ZC-197 | Import and export      | Solid Edge                            | B      | I20 (Deferred), I10                      | P3       | Import missing.                                                                                                                                                                      |
+| ZC-198 | Import and export      | JT                                    | B      | I16 (Deferred), I10                      | P3       | Import and export missing.                                                                                                                                                           |
+| ZC-199 | Import and export      | Hidden/isolated item inclusion        | G      | I04 (Open)                               | P1       | No explicit include-hidden toggle or visible export scope summary; viewport-hidden vs parameter-off policy not user-selectable; no per-body/zip split; no export->reimport…          |
+| ZC-200 | Import and export      | Mesh tolerance                        | G      | I04 (Open)                               | P1       | No angular tolerance; no test measuring max deviation and triangle count at two tolerances on a curved body; tolerance shown in mm regardless of document units.                     |
+| ZC-201 | Import and export      | Units on exchange                     | G      | I04 (Open), I03 (Deferred), F04          | P1       | Unitless imports (STL/OBJ/PLY) never ask for an interpretation; no user-chosen export unit; inch-declared STEP and DXF $INSUNITS import not evidenced; I03 whole-document…           |
+| ZC-202 | Import and export      | Neutral round trip                    | G      | I02, I04, F04, I08                       | P1       | No per-format documented loss contract; no round-trip tests for 3MF/OBJ or DXF; metadata (names/colours) not compared; isolated-subset STEP round trip with body names absent.       |
+| ZC-203 | Command and input      | Command search                        | G      | U05 (Open)                               | P1       | No abbreviation matching, no recent commands on empty query, no filtering to commands valid for the current pick; no test that search-run and shortcut-run produce equivalent state. |
+| ZC-204 | Command and input      | Hotkeys                               | G      | U05 (Open)                               | P1       | Most tools and all relations lack hotkeys; no keymap table test; no direct e2e typing a tool letter into a text field.                                                               |
+| ZC-205 | Command and input      | Shortcut customization                | M      | U05 (Open: user-remappable)              | P1       | User bindings with conflict detection, persistence and restore defaults; hotkey-vs-search setting.                                                                                   |
+| ZC-206 | Command and input      | Navigation presets                    | G      | U07 (Open: presets emulating other CAD p | P1       | No preset bundles; no test that changing presets leaves geometry/selection unchanged.                                                                                                |
+| ZC-207 | Command and input      | Menu labels                           | G      | U02/U03                                  | P3       | No localization layer, so the 'localization does not alter identity' half is untestable.                                                                                             |
+| ZC-208 | Command and input      | Theme                                 | G      | U03 (Partial: non-colour states, theme c | P1       | U03 audit of non-colour selection/constraint states remains open; sketch solve state relies on colour tone.                                                                          |
+| ZC-209 | Command and input      | Mouse/trackpad                        | V      |                                          | P2       | Physical-device runs are outside CI.                                                                                                                                                 |
+| ZC-210 | Command and input      | Pen/touch                             | O      | L02 (Deferred: touch/tablet pass)        | P3       | Qualified pen/touch input on real hardware.                                                                                                                                          |
+| ZC-211 | Command and input      | Accessibility and focus               | G      | U03 (Partial)                            | P1       | No automated a11y scan and no real screen-reader verification; U03 audit open.                                                                                                       |
