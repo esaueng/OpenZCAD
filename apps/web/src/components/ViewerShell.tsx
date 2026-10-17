@@ -268,8 +268,9 @@ interface ViewerShellProps {
       objectId: string;
       point: 'start' | 'end' | 'center';
     } | null,
-    clickPoint: { x: number; y: number }
-  ): void;
+    clickPoint: { x: number; y: number },
+    planePoint: { x: number; y: number } | null
+  ): boolean | void;
   sketchViews: SketchViewData[];
   selectedProfileIds: string[];
   profileSelectionMode: boolean;

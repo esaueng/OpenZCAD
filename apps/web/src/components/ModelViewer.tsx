@@ -921,7 +921,11 @@ export interface ModelViewerProps {
     data: SketchObjectData,
     verb: 'Move' | 'Rotate'
   ): Promise<boolean> | boolean;
-  /** Selects a committed entity for exact-value editing. */
+  /**
+   * Selects a committed entity for exact-value editing. Returns true when an
+   * armed constraint or modify tool took the click, which then must not also
+   * select the region under it.
+   */
   onSketchSelectObject(
     objectId: string | null,
     /**
@@ -934,8 +938,13 @@ export interface ModelViewerProps {
       point: 'start' | 'end' | 'center';
     } | null,
     /** Client-space click used to place a driving-dimension editor. */
-    clickPoint: { x: number; y: number }
-  ): void;
+    clickPoint: { x: number; y: number },
+    /**
+     * The click on the sketch plane, unsnapped: where along a curve the
+     * click fell, which Trim needs and a snap would move to an end.
+     */
+    planePoint: { x: number; y: number } | null
+  ): boolean | void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   /**
@@ -7882,11 +7891,18 @@ export function ModelViewer({
                   point: activeSketchSnap.pointRef
                 }
               : null;
-          onSketchSelectObjectRef.current(objectId, snapPoint, {
-            x: event.clientX,
-            y: event.clientY
-          });
-          if (!objectId) {
+          const planePoint = screenRayToPlanePoint(
+            context.raycaster.ray.origin,
+            context.raycaster.ray.direction,
+            mode.basis
+          );
+          const consumed = onSketchSelectObjectRef.current(
+            objectId,
+            snapPoint,
+            { x: event.clientX, y: event.clientY },
+            planePoint ? { x: planePoint.x, y: planePoint.y } : null
+          );
+          if (!objectId && consumed !== true) {
             const profile = picker.pick(event)?.region;
             if (profile) {
               onSelectRegionRef.current(profile, {

@@ -181,7 +181,11 @@ describe('sketch modify tool picking', () => {
     expect(SKETCH_EDIT_TOOL_SPECS.map((spec) => spec.kind)).toEqual([
       'fillet',
       'chamfer',
-      'offset'
+      'offset',
+      'trim',
+      'mirror',
+      'linear-pattern',
+      'circular-pattern'
     ]);
     expect(sketchEditToolSpec('fillet').picks).toBe(2);
     expect(sketchEditToolSpec('offset').picks).toBe(1);
@@ -581,7 +585,8 @@ describe('sketch offset', () => {
         String(distance),
         resolve
       );
-      if (plan.status !== 'operation') throw new Error(plan.reason);
+      if (plan.status !== 'operation')
+        throw new Error('reason' in plan ? plan.reason : plan.status);
       const result = await withAdapter((adapter) =>
         adapter.sketchPlanarOperation(plan.operation)
       );
@@ -704,7 +709,9 @@ describe('the pick sequence and plan the rail drives', () => {
       advanceSketchEditPick(document, sketch, 'fillet', [legA], legB, resolve)
     ).toEqual({
       status: 'value',
+      picks: [legA, legB],
       label: 'Fillet radius',
+      unitKind: 'length',
       initial: 2.5,
       message: 'Fillet: enter the value.'
     });
@@ -741,7 +748,9 @@ describe('the pick sequence and plan the rail drives', () => {
       advanceSketchEditPick(document, sketch, 'offset', [], loopSeed, resolve)
     ).toEqual({
       status: 'value',
+      picks: [loopSeed],
       label: 'Offset distance',
+      unitKind: 'length',
       initial: 1,
       message: 'Offset: enter the distance. Positive is outward.'
     });
@@ -759,7 +768,8 @@ describe('the pick sequence and plan the rail drives', () => {
       '2',
       resolve
     );
-    if (fillet.status !== 'operation') throw new Error(fillet.reason);
+    if (fillet.status !== 'operation')
+      throw new Error('reason' in fillet ? fillet.reason : fillet.status);
     expect(fillet.operation).toEqual({
       kind: 'fillet',
       corner: {
@@ -782,7 +792,8 @@ describe('the pick sequence and plan the rail drives', () => {
       '3',
       resolve
     );
-    if (chamfer.status !== 'operation') throw new Error(chamfer.reason);
+    if (chamfer.status !== 'operation')
+      throw new Error('reason' in chamfer ? chamfer.reason : chamfer.status);
     expect(chamfer.operation.kind).toBe('chamfer');
 
     const offset = planSketchEdit(
@@ -795,7 +806,8 @@ describe('the pick sequence and plan the rail drives', () => {
       '2',
       resolve
     );
-    if (offset.status !== 'operation') throw new Error(offset.reason);
+    if (offset.status !== 'operation')
+      throw new Error('reason' in offset ? offset.reason : offset.status);
     expect(offset.operation).toMatchObject({
       kind: 'offset',
       distance: 2,
@@ -847,6 +859,7 @@ describe('driving a modify tool end to end through its host', () => {
       addPick: (objectId) => picks.push(objectId),
       askValue: (kind, sequence, label, initial) =>
         values.push(`${kind} ${sequence.join(',')} ${label} ${initial}`),
+      disarm: () => log.push('disarm'),
       runOperation: async (operation) =>
         withAdapter((adapter) => adapter.sketchPlanarOperation(operation)),
       commit: async (sketchId, commands, label) => {
