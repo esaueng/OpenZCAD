@@ -1669,35 +1669,41 @@ function profileClash(
       (value) => resolve(value) ?? Number.NaN
     ).diagnostics;
   try {
+    // Only what the change introduces counts; a sketch may already carry
+    // diagnostics of its own.
+    const clashCodes = new Set([
+      'duplicate-entity',
+      'overlapping-segments',
+      'degenerate-entity'
+    ]);
+    const keyOf = (diagnostic: { code: string; sourceEntityIds: string[] }) =>
+      `${diagnostic.code}:${[...diagnostic.sourceEntityIds].sort().join(',')}`;
     const before = new Set(
       degenerate(existing)
-        .filter((diagnostic) => diagnostic.code === 'degenerate-entity')
-        .flatMap((diagnostic) => diagnostic.sourceEntityIds)
+        .filter((diagnostic) => clashCodes.has(diagnostic.code))
+        .map(keyOf)
     );
-    const diagnostics = degenerate([
+    const introduced = degenerate([
       ...existing,
       ...added.map((data, index) => ({ id: newIds[index]!, data }))
-    ]);
+    ]).filter(
+      (diagnostic) =>
+        clashCodes.has(diagnostic.code) && !before.has(keyOf(diagnostic))
+    );
     if (
-      diagnostics.some(
+      introduced.some(
         (diagnostic) =>
-          (diagnostic.code === 'duplicate-entity' ||
-            diagnostic.code === 'overlapping-segments') &&
+          diagnostic.code !== 'degenerate-entity' &&
           diagnostic.sourceEntityIds.some((id) => newIds.includes(id))
       )
     ) {
       return LANDS_ON_EXISTING;
     }
-    // A result far enough away widens the profile builder's tolerance
-    // until small geometry, new or old, reads as degenerate and drops out.
-    if (
-      diagnostics.some(
-        (diagnostic) =>
-          diagnostic.code === 'degenerate-entity' &&
-          diagnostic.sourceEntityIds.some((id) => !before.has(id))
-      )
-    ) {
-      return 'The result would reach so far that small geometry in the sketch becomes too small to keep at that scale.';
+    // Anything else it introduced comes from scale: a result far enough
+    // away widens the profile builder's tolerance until small or close
+    // geometry, new or old, reads as degenerate or merged.
+    if (introduced.length > 0) {
+      return 'The result would reach so far that existing geometry becomes too small or too close together to keep at that scale.';
     }
     return null;
   } catch {

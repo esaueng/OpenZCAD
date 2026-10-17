@@ -1485,7 +1485,33 @@ describe('Patterns', () => {
     ).toEqual({
       status: 'refuse',
       reason:
-        'The result would reach so far that small geometry in the sketch becomes too small to keep at that scale.'
+        'The result would reach so far that existing geometry becomes too small or too close together to keep at that scale.'
+    });
+  });
+
+  it('refuses a far result that merges two existing lines at the new scale', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 10 },
+      { objectKind: 'line', x1: 0, y1: -20, x2: 10, y2: -20 },
+      // Two parallel lines 0.5 apart: distinct now, merged at ~2 tolerance.
+      { objectKind: 'line', x1: 30, y1: 0, x2: 40, y2: 0 },
+      { objectKind: 'line', x1: 30, y1: 0.5, x2: 40, y2: 0.5 }
+    ]);
+    expect(
+      planSketchLinearPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        ids[1]!,
+        2e10,
+        2,
+        resolve
+      )
+    ).toEqual({
+      status: 'refuse',
+      reason:
+        'The result would reach so far that existing geometry becomes too small or too close together to keep at that scale.'
     });
   });
 
