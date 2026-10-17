@@ -700,6 +700,40 @@ describe('Mirror', () => {
       'lock',
       'symmetric'
     ]);
+    // An axis fixed through coincidences with locked points counts too.
+    const joined = fixture();
+    joined.manager.execute(
+      commandFactories.addSketchObjects({
+        sketchId: joined.sketchId,
+        objects: [
+          { objectKind: 'line', x1: 0, y1: -10, x2: -5, y2: -10 },
+          { objectKind: 'line', x1: 0, y1: 10, x2: -5, y2: 10 }
+        ]
+      })
+    );
+    const [, , low, high] = joined.sketch().objectIds.map(String) as [
+      string,
+      string,
+      string,
+      string
+    ];
+    for (const [anchor, axisEnd, y] of [
+      [low, 'start', -10],
+      [high, 'end', 10]
+    ] as const) {
+      joined.constrain({
+        constraintKind: 'lock',
+        point: { objectId: anchor as never, point: 'start' },
+        x: 0,
+        y
+      });
+      joined.constrain({
+        constraintKind: 'coincident',
+        a: { objectId: joined.ids[0] as never, point: axisEnd },
+        b: { objectId: anchor as never, point: 'start' }
+      });
+    }
+    expect(mirrorKinds(joined)).not.toContain('point-on-object');
   });
 
   it('reverses an arc’s sweep and links its ends crosswise with an equal radius', () => {

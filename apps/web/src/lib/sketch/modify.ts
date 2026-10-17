@@ -1138,24 +1138,24 @@ function heldOnAxis(
 ): boolean {
   const same = (ref: SketchPointRef) =>
     ref.objectId === point.objectId && ref.point === point.point;
-  const axisLocked = (['start', 'end'] as const).every((end) =>
-    constraintsOf(sketch).some(
-      ({ data }) =>
-        data.constraintKind === 'lock' &&
-        data.point.objectId === axisId &&
-        data.point.point === end
-    )
-  );
+  const fixed = fixedPoints(sketch);
+  const isFixed = (ref: SketchPointRef) => fixed.has(pointKey(ref));
+  // A fixed point on a fixed axis already satisfies the axis condition, so
+  // stating it again is redundant; with a free axis the relation is what
+  // keeps the axis through the joint.
+  if (
+    isFixed(point) &&
+    isFixed({ objectId: axisId, point: 'start' }) &&
+    isFixed({ objectId: axisId, point: 'end' })
+  ) {
+    return true;
+  }
   return constraintsOf(sketch).some(({ data }) => {
     switch (data.constraintKind) {
       case 'point-on-object':
         return same(data.point) && data.objectId === axisId;
       case 'midpoint':
         return same(data.point) && data.line === axisId;
-      case 'lock':
-        // Only redundant when the axis cannot move either; with a free axis
-        // the relation is what keeps the axis through the locked joint.
-        return same(data.point) && axisLocked;
       case 'coincident':
         return (
           (same(data.a) && data.b.objectId === axisId) ||
@@ -1165,6 +1165,40 @@ function heldOnAxis(
         return false;
     }
   });
+}
+
+function pointKey(ref: SketchPointRef): string {
+  return `${ref.objectId}:${ref.point}`;
+}
+
+/**
+ * Points with no freedom left: locked, or joined by a chain of coincidences
+ * to a locked point. A sketch can fix a point in other ways (distances and
+ * angles from fixed geometry); the solver still reports those as redundant,
+ * this only catches the plain cases.
+ */
+function fixedPoints(sketch: SketchNode): Set<string> {
+  const fixed = new Set<string>();
+  const joins: [string, string][] = [];
+  for (const { data } of constraintsOf(sketch)) {
+    if (data.constraintKind === 'lock') {
+      fixed.add(pointKey(data.point));
+    } else if (data.constraintKind === 'coincident') {
+      joins.push([pointKey(data.a), pointKey(data.b)]);
+    }
+  }
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [a, b] of joins) {
+      if (fixed.has(a) !== fixed.has(b)) {
+        fixed.add(a);
+        fixed.add(b);
+        grew = true;
+      }
+    }
+  }
+  return fixed;
 }
 
 /**
