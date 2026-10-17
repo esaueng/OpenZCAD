@@ -782,11 +782,21 @@ export function planSketchTrim(
       data as CircleData,
       curve,
       crossings,
-      at
+      at,
+      Math.max(
+        PARAM_EPS * TAU,
+        profileTolerance(document, sketch, [], resolve) / curve.r
+      )
     );
   }
   const span = curve.kind === 'line' ? 1 : curve.sweep;
-  const eps = curve.kind === 'line' ? PARAM_EPS : PARAM_EPS * TAU;
+  // A crossing closer to an end than the profile builder's tolerance would
+  // leave a fragment it calls degenerate, so it counts as that end.
+  const tol = profileTolerance(document, sketch, [], resolve);
+  const eps =
+    curve.kind === 'line'
+      ? Math.max(PARAM_EPS, tol / distance(curve.a, curve.b))
+      : Math.max(PARAM_EPS * TAU, tol / curve.r);
   // A click just past an arc's end reads round through 2π; take whichever
   // end it is nearer. A line's click clamps onto the segment.
   const raw = curveParam(curve, at);
@@ -822,7 +832,8 @@ export function planSketchTrim(
       data,
       curve,
       keepStart ? 0 : cut.param,
-      keepStart ? cut.param : span
+      keepStart ? cut.param : span,
+      resolve
     );
     const remap = remapCommands(sketch, sketchId, {
       objectId: id,
@@ -858,10 +869,10 @@ export function planSketchTrim(
     points: { end: pieceEnd },
     lengthChanged: curve.kind === 'line'
   });
-  const kept = trimmedData(data, curve, 0, below.param);
+  const kept = trimmedData(data, curve, 0, below.param, resolve);
   // Built from the stored data, so the far end it inherits keeps any
   // expression that drove it; only the new cut end is a number.
-  const piece = trimmedData(data, curve, above.param, span);
+  const piece = trimmedData(data, curve, above.param, span, resolve);
   // The far piece is the same curve: collinear for a line, the same circle
   // for an arc.
   const sameCurve: AnyCommand[] =
@@ -932,7 +943,8 @@ function trimmedData(
   data: SketchObjectData,
   curve: Curve2,
   from: number,
-  to: number
+  to: number,
+  resolve: Resolve
 ): SketchObjectData {
   if (curve.kind === 'line' && data.objectKind === 'line') {
     const next: LineData = { ...data };
@@ -949,12 +961,19 @@ function trimmedData(
     return next;
   }
   if (curve.kind === 'arc' && data.objectKind === 'arc') {
+    // Each moved angle is written in the turn of the stored angle it is
+    // measured from, so an arc stored as 400°–500° trims to 410°–500°, not
+    // 50°–500°, and its sweep reads the same to the profile builder.
+    const toDegrees = (radians: number) => (radians * 180) / Math.PI;
+    const storedStart = resolve(data.startAngleDeg) ?? toDegrees(curve.start);
+    const storedEnd =
+      resolve(data.endAngleDeg) ?? storedStart + toDegrees(curve.sweep);
     const next: ArcData = { ...data };
     if (from !== 0) {
-      next.startAngleDeg = toDeg(curve.start + from);
+      next.startAngleDeg = storedEnd - toDegrees(curve.sweep - from);
     }
     if (to !== curve.sweep) {
-      next.endAngleDeg = toDeg(curve.start + to);
+      next.endAngleDeg = storedStart + toDegrees(to);
     }
     return next;
   }
@@ -968,18 +987,20 @@ function trimCircle(
   data: CircleData,
   curve: Extract<Curve2, { kind: 'circle' }>,
   crossings: Crossing[],
-  at: Point2
+  at: Point2,
+  /** Angular slack under which two crossings are one point. */
+  eps: number
 ): SketchModifyPlan {
   const distinct: Crossing[] = [];
   for (const crossing of [...crossings].sort((a, b) => a.param - b.param)) {
     const last = distinct.at(-1);
-    if (!last || crossing.param - last.param > PARAM_EPS * TAU) {
+    if (!last || crossing.param - last.param > eps) {
       distinct.push(crossing);
     }
   }
   if (
     distinct.length > 1 &&
-    TAU - distinct.at(-1)!.param + distinct[0]!.param <= PARAM_EPS * TAU
+    TAU - distinct.at(-1)!.param + distinct[0]!.param <= eps
   ) {
     distinct.pop();
   }

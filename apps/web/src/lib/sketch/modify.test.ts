@@ -540,6 +540,59 @@ describe('Trim', () => {
     });
   });
 
+  it('keeps a trimmed arc’s angles in the turn they were stored in', () => {
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 10,
+        startAngleDeg: 400,
+        endAngleDeg: 500
+      },
+      // A ray from the centre through 90°.
+      { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 20 }
+    ]);
+    commit(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        // Near 45°, the start side of the crossing.
+        { x: 7.07, y: 7.07 },
+        resolve
+      )
+    );
+    const arc = object(ids[0]!) as {
+      startAngleDeg: number;
+      endAngleDeg: number;
+    };
+    expect(arc.startAngleDeg).toBeCloseTo(450, 9);
+    expect(arc.endAngleDeg).toBe(500);
+  });
+
+  it('treats a crossing within the profile tolerance of an end as that end', () => {
+    // The vertical crosses 5e-7 from the line's start: cutting there would
+    // leave a fragment the profile builder calls degenerate.
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },
+      { objectKind: 'line', x1: 5e-7, y1: -5, x2: 5e-7, y2: 5 }
+    ]);
+    const plan = planSketchTrim(
+      manager.document,
+      sketch(),
+      sketchId,
+      ids[0]!,
+      { x: 5, y: 0 },
+      resolve
+    );
+    expect(plan).toMatchObject({
+      status: 'commands',
+      message: 'Trim removed the whole line: nothing crosses it.'
+    });
+  });
+
   it('refuses a circle only one curve touches', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },
