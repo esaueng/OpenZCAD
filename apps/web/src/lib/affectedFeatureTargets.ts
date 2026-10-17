@@ -7,6 +7,7 @@ import {
   type ProjectDocument,
   type SketchId
 } from '@openzcad/shared';
+import { FeatureBuildError, refusingWarningDetail } from './featureValidation';
 
 // Every FeatureKind must be handled in the downstream walk below. The check is
 // structural (not behavioral): hole was once missing here, so downstream hole
@@ -238,4 +239,51 @@ export function reorderFeatureTargets(
       return true;
     })
     .sort((a, b) => position.get(a.featureId)! - position.get(b.featureId)!);
+}
+
+/**
+ * The first feature from the moved span onward that the reordered rebuild
+ * fails and the current model does not, as a refusal naming it.
+ *
+ * {@link reorderFeatureTargets} covers result bodies. A feature with no result
+ * body of its own — a face-attached sketch nothing builds on yet — would
+ * otherwise fail to attach behind a commit that checked only bodies.
+ */
+export function reorderRefusal(
+  document: ProjectDocument,
+  derived: ProjectDocument['derived'],
+  featureId: FeatureId,
+  toIndex: number
+): FeatureBuildError | null {
+  const features = listFeaturesInOrder(document);
+  const from = features.findIndex((feature) => feature.featureId === featureId);
+  if (from < 0) return null;
+  const reordered = [...features];
+  reordered.splice(toIndex, 0, ...reordered.splice(from, 1));
+  const before = document.derived;
+  for (const feature of reordered.slice(Math.min(from, toIndex))) {
+    if (isFeatureSuppressed(feature)) continue;
+    const failure = refusingWarningDetail(
+      feature.name,
+      derived.warnings,
+      derived.featureWarnings,
+      feature.featureId
+    );
+    if (
+      failure &&
+      !refusingWarningDetail(
+        feature.name,
+        before?.warnings ?? [],
+        before?.featureWarnings,
+        feature.featureId
+      )
+    ) {
+      return new FeatureBuildError(
+        failure.reason,
+        feature.featureId,
+        feature.name
+      );
+    }
+  }
+  return null;
 }

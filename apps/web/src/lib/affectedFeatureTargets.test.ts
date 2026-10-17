@@ -19,7 +19,8 @@ import {
 } from '@openzcad/shared';
 import {
   affectedFeatureTargets,
-  reorderFeatureTargets
+  reorderFeatureTargets,
+  reorderRefusal
 } from './affectedFeatureTargets';
 
 describe('affected feature targets', () => {
@@ -279,5 +280,68 @@ describe('affected feature targets', () => {
     // A no-op or out-of-range move rebuilds nothing.
     expect(reorderFeatureTargets(document, id('Block'), 2)).toEqual([]);
     expect(reorderFeatureTargets(document, id('Block'), 9)).toEqual([]);
+  });
+
+  it('refuses a reorder that newly fails a feature with no result body', () => {
+    const block = addPrimitiveFeature(
+      createProjectDocument('Reorder sketch', toUserId('user_affected')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 8, height: 8, depth: 8 }
+      }
+    );
+    const sketched = addSketchFeature(block, {
+      name: 'Top sketch',
+      plane: 'XY',
+      offset: 8,
+      object: {
+        objectKind: 'rectangle',
+        width: 2,
+        height: 2,
+        centerX: 0,
+        centerY: 0
+      }
+    }).document;
+    const [blockFeature, sketch] = listFeaturesInOrder(sketched);
+    const failed = {
+      featureId: sketch!.featureId,
+      featureName: 'Top sketch',
+      message: 'Feature "Top sketch": The attachment face no longer exists.',
+      kind: 'build-failed' as const
+    };
+    const derived = (
+      featureWarnings: (typeof failed)[]
+    ): ProjectDocument['derived'] => ({
+      ...sketched.derived,
+      warnings: featureWarnings.map((warning) => warning.message),
+      featureWarnings
+    });
+
+    const refusal = reorderRefusal(
+      sketched,
+      derived([failed]),
+      sketch!.featureId,
+      0
+    );
+    expect(refusal).toMatchObject({
+      featureId: sketch!.featureId,
+      featureName: 'Top sketch',
+      message: 'The attachment face no longer exists.'
+    });
+    // A clean rebuild, or a failure the current model already has, is not
+    // this reorder's doing.
+    expect(
+      reorderRefusal(sketched, derived([]), sketch!.featureId, 0)
+    ).toBeNull();
+    const alreadyFailing = { ...sketched, derived: derived([failed]) };
+    expect(
+      reorderRefusal(
+        alreadyFailing,
+        derived([failed]),
+        blockFeature!.featureId,
+        1
+      )
+    ).toBeNull();
   });
 });

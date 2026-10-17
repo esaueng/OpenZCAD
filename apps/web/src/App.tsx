@@ -1261,6 +1261,7 @@ import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
   reorderFeatureTargets,
+  reorderRefusal,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
 import {
@@ -17371,6 +17372,7 @@ export function App() {
       listFeaturesInOrder(doc).find((f) => f.featureId === featureId)?.name;
     const label = name ? `Reorder ${name}` : 'Reorder feature';
     const command = commandFactories.moveFeature({ featureId, toIndex }, label);
+    const base = doc;
     let targets = doc ? reorderFeatureTargets(doc, featureId, toIndex) : [];
     try {
       if (doc && targets.length > 0) command.validate(doc);
@@ -17388,6 +17390,12 @@ export function App() {
       validatingMessage: `Checking features after ${name ?? 'the move'}…`,
       successMessage: commandOutcomeMessage(label),
       onTargetRefused: (featureName) => (failed = `: ${featureName} would not rebuild`),
+      validateDerived: (derived) => {
+        const refusal = base && reorderRefusal(base, derived, featureId, toIndex);
+        if (!refusal) return;
+        failed = `: ${refusal.featureName} would not rebuild`;
+        throw refusal;
+      },
       onFailure: (message) => announce(`${label} not applied${failed}. ${message}`)
     });
   }
