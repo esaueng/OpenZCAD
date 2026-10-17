@@ -846,10 +846,11 @@ export function SketchToolRail({
   );
 }
 
-/** Relations dividers: before the positional group and the dimensions. */
+/** Relations dividers: before the positional group, the dimensions and the point relations. */
 const RELATION_GROUP_STARTS = new Set<SketchConstraintToolKind>([
   'concentric',
-  'radius'
+  'radius',
+  'symmetric'
 ]);
 
 interface SketchRelationsRailProps {

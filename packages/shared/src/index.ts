@@ -610,7 +610,29 @@ export type SketchConstraintData =
       value: ParamValue;
     }
   | { constraintKind: 'radius'; objectId: EntityId; value: ParamValue }
-  | { constraintKind: 'angle'; a: EntityId; b: EntityId; valueDeg: ParamValue };
+  | { constraintKind: 'angle'; a: EntityId; b: EntityId; valueDeg: ParamValue }
+  /** Two points mirrored about a line: the axis bisects them at a right angle. */
+  | {
+      constraintKind: 'symmetric';
+      a: SketchPointRef;
+      b: SketchPointRef;
+      axis: EntityId;
+    }
+  /**
+   * A point held on a line (or its extension), a circle, or an arc's circle.
+   * The point stays free to slide along the curve.
+   */
+  | {
+      constraintKind: 'point-on-object';
+      point: SketchPointRef;
+      objectId: EntityId;
+    }
+  /**
+   * A point held at a fixed position in sketch coordinates, recorded when the
+   * lock was made. An edit that would move it conflicts instead of dragging
+   * the lock along; removing the constraint unlocks the point.
+   */
+  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number };
 
 export type SketchConstraintKind = SketchConstraintData['constraintKind'];
 
