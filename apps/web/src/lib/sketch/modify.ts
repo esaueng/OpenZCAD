@@ -296,7 +296,9 @@ function circleCircleCrossings(
   tol = ON_CURVE
 ): Point2[] {
   const d = distance(c1, c2);
-  if (d === 0 || d > r1 + r2 + tol || d < Math.abs(r1 - r2) - tol) {
+  // Centres closer than the tolerance are concentric to the profile
+  // builder (`arcArcIntersections`), which then finds no crossing at all.
+  if (d < tol || d > r1 + r2 + tol || d < Math.abs(r1 - r2) - tol) {
     return [];
   }
   const along = (d * d + r1 * r1 - r2 * r2) / (2 * d);

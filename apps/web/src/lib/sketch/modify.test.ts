@@ -820,6 +820,25 @@ describe('Trim', () => {
     });
   });
 
+  it('sees no crossing between near-concentric rounds, as the profile builder does', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },
+      { objectKind: 'circle', centerX: 5e-7, centerY: 0, radius: 5 }
+    ]);
+    expect(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 0, y: 5 },
+        resolve
+      )
+    ).toMatchObject({
+      message: 'Trim removed the whole circle: nothing crosses it.'
+    });
+  });
+
   it('refuses a circle only one curve touches', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },
