@@ -25,7 +25,7 @@
 > their meaning; mixed payloads are refused), a frame map keyed by datum id
 > that Sketch/Split/Mirror read at their history position in both the Remus
 > build and the OCCT parity reference through one pure construction module
-> (`packages/geometry/src/datum-plane.ts`), fail-closed resolution with the
+> (in `packages/geometry`), fail-closed resolution with the
 > datum named and no stored-frame fallback, and refusal to delete a datum
 > while anything still uses it. Reorder refuses a sketch moving before its
 > datum because the reorder gate now reads a sketch's plane reference too.
