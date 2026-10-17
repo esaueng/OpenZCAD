@@ -6,6 +6,32 @@
 > relations (#705). Read this plan's v17 → v18 bump as v18 → v19, and its
 > "pre-v18" documents as pre-v19; the migration content is unchanged.
 
+> **Implementation deviation (2026-10-17, R01-A/B):** a datum plane is a
+> `FeatureNode` with `featureKind: 'datum-plane'` in `featureOrder`, not a
+> separate `DatumPlaneNode` in a new `historyOrder` union. The datum
+> reference is therefore `{ type: 'datum', datumFeatureId: FeatureId }`, and
+> `featureOrder` stays the one authoritative timeline. This removes the union
+> migration, the legacy `featureOrder`-projection reconciliation for old undo
+> entries, and the dedicated `history.*` commands: reorder, suppression,
+> rollback, deletion, undo/redo, persistence and the prefix cache already
+> treat every feature uniformly, so a datum inherits them unchanged. The
+> datum owns no body (`bodyId` stays undefined), and its warnings carry its
+> real feature id instead of an invented one.
+>
+> Every other contract here stands: the three source kinds (a face source
+> requires `faceReference` and `sourceCentroid`), parallel-only Midplane,
+> signed expression-capable offsets, `reverseNormal`, the
+> `ModelingPlaneReference` union on Split/Mirror (legacy numeric planes keep
+> their meaning; mixed payloads are refused), a frame map keyed by datum id
+> that Sketch/Split/Mirror read at their history position in both the Remus
+> build and the OCCT parity reference through one pure construction module
+> (`packages/geometry/src/datum-plane.ts`), fail-closed resolution with the
+> datum named and no stored-frame fallback, and refusal to delete a datum
+> while anything still uses it. Reorder refuses a sketch moving before its
+> datum because the reorder gate now reads a sketch's plane reference too.
+> The bump is v18 → v19. The Plane tool, Items/History presentation and AI
+> operations (R01-C/D) remain open.
+
 This revision replaces the earlier canonical-offset-only first slice.
 [ROADMAP.md](../../ROADMAP.md#r01) owns delivery status. This document proposes
 contracts and acceptance evidence; it adds no runtime capability or schema bump.

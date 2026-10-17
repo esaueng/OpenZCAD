@@ -13,6 +13,7 @@ export {
   geometryTolerance,
   isNearlyZero
 } from './tolerance';
+export { midDatumPlane, offsetDatumPlane } from './datum-plane';
 export {
   computeSketchProfileAnalysis,
   computeSketchRegions,
@@ -279,6 +280,13 @@ export function frameForPlaneRef(
       v: base.v,
       normal: base.normal
     };
+  }
+  if (ref.type === 'datum') {
+    // A datum resolves once, at its own history position, in the exact
+    // build; nothing here can re-derive it without that context.
+    throw new Error(
+      'A datum-attached plane resolves in the exact build, not from its reference alone.'
+    );
   }
   const frame = ref.frame;
   return {

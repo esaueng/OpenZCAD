@@ -51,6 +51,7 @@ import {
   toShaprImportId,
   type BodyId,
   type EntityId,
+  type FeatureNode,
   type ParamValue,
   type ProjectDocument,
   type SerializedCommand,
@@ -58,7 +59,8 @@ import {
   type SketchId,
   type SketchObjectData,
   type SketchProfileReference,
-  type UnitSystem
+  type UnitSystem,
+  isDatumPlaneRef
 } from '@openzcad/shared';
 import {
   addSketchReferenceDimension,
@@ -173,7 +175,8 @@ import {
   translateSketch,
   updateFeature,
   updateSketch,
-  updateSketchObject
+  updateSketchObject,
+  validateModelingPlane
 } from '@openzcad/document-core';
 import {
   expandEditCandidateProposal,
@@ -371,6 +374,24 @@ function collectDataStrings(value: unknown, into: Set<string>): void {
 }
 
 /**
+ * Every id a feature consumes. A sketch feature's payload names only its
+ * sketch; an R01 datum it is drawn on lives on the sketch node's plane, so
+ * that id is added here or a reorder could replay the sketch before its datum.
+ */
+function featureReferences(
+  document: ProjectDocument,
+  feature: FeatureNode
+): Set<string> {
+  const referenced = new Set<string>();
+  collectDataStrings(feature.data, referenced);
+  if (feature.data.featureKind === 'sketch') {
+    const planeRef = findSketch(document, feature.data.sketchId)?.planeRef;
+    if (planeRef?.type === 'datum') referenced.add(planeRef.datumFeatureId);
+  }
+  return referenced;
+}
+
+/**
  * Refuse a parameter delete that would strand an expression still reading it.
  *
  * Deleting is not symmetric with the failures around it. A feature whose
@@ -459,8 +480,7 @@ function validateFeatureReorder(
   }
 
   reordered.forEach((feature, index) => {
-    const referenced = new Set<string>();
-    collectDataStrings(feature.data, referenced);
+    const referenced = featureReferences(document, feature);
     for (const id of referenced) {
       const producedAt = bodyProducerPosition.get(id);
       if (
@@ -537,8 +557,7 @@ function validateFeatureHistoryPosition(
       bodyProducerPosition.set(body.bodyId, producer);
     }
   }
-  const referenced = new Set<string>();
-  collectDataStrings(feature.data, referenced);
+  const referenced = featureReferences(document, feature);
   for (const id of referenced) {
     // A body the feature produces itself resolves to its own position, which
     // is not "later" — that is what keeps a split's second body legal here.
@@ -697,6 +716,10 @@ function validateMirrorInput(
   input: MirrorInput
 ): void {
   validateBodyTarget(document, input.targetBodyId);
+  if (isDatumPlaneRef(input.plane)) {
+    validateModelingPlane(document, input.plane, null);
+    return;
+  }
   const origin = input.plane.origin;
   const normal = input.plane.normal;
   for (const [label, value] of Object.entries({
@@ -724,6 +747,10 @@ function validateSplitInput(
   input: SplitInput
 ): void {
   validateBodyTarget(document, input.targetBodyId);
+  if (isDatumPlaneRef(input.plane)) {
+    validateModelingPlane(document, input.plane, null);
+    return;
+  }
   const { origin, normal } = input.plane;
   for (const [label, value] of Object.entries({
     'split origin X': origin.x,

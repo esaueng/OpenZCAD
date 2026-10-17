@@ -34,6 +34,8 @@ import {
   circleProfile,
   frameForPlaneRef,
   mergeAdjacentProfiles,
+  midDatumPlane,
+  offsetDatumPlane,
   polygonProfile,
   rectangleProfile,
   type PlaneBasis,
@@ -45,6 +47,7 @@ import {
 import {
   UNIT_TO_MM,
   bodyDisplayColor,
+  isDatumPlaneRef,
   nowIso,
   type BodyId,
   type BodyRepresentation,
@@ -54,10 +57,13 @@ import {
   type FaceAnalyticWitnessV1,
   type FaceGeometry,
   type FaceWitnessV1,
+  type FeatureId,
   type FeatureNode,
   type ProjectDocument,
   type SketchId,
+  type ParamValue,
   type SketchNode,
+  type SketchPlaneRef,
   type SketchObjectData,
   type UnitSystem
 } from '@openzcad/shared';
@@ -133,6 +139,7 @@ interface OcctBuildResult {
   shapes: Map<BodyId, ShapeHandle>;
   lineages: Map<BodyId, OcctLineageState>;
   sketchBases: Map<SketchId, PlaneBasis>;
+  datumFrames: Map<FeatureId, PlaneBasis>;
   consumed: Set<BodyId>;
   warnings: string[];
 }
@@ -1078,7 +1085,33 @@ export class OcctStepKernelAdapter {
     result: OcctBuildResult,
     scope: Record<string, number>
   ): PlaneBasis {
-    const planeRef = sketch.planeRef;
+    return this.resolvePlaneRefAtHistory(
+      document,
+      sketch.planeRef,
+      sketch.name,
+      result,
+      scope
+    );
+  }
+
+  /** Mirrors the production resolver, including R01 datum frames. */
+  private resolvePlaneRefAtHistory(
+    document: ProjectDocument,
+    planeRef: SketchPlaneRef,
+    ownerName: string,
+    result: OcctBuildResult,
+    scope: Record<string, number>
+  ): PlaneBasis {
+    const sketch = { name: ownerName };
+    if (planeRef.type === 'datum') {
+      const frame = result.datumFrames.get(planeRef.datumFeatureId);
+      if (!frame) {
+        throw new Error(
+          `"${ownerName}" cannot use datum plane ${planeRef.datumFeatureId}: it is unavailable at this point in history.`
+        );
+      }
+      return frame;
+    }
     if (planeRef.type !== 'face' || !planeRef.faceReference) {
       if (planeRef.type === 'face') {
         result.warnings.push(
@@ -1453,6 +1486,7 @@ export class OcctStepKernelAdapter {
       shapes: new Map(),
       lineages: new Map(),
       sketchBases: new Map(),
+      datumFrames: new Map(),
       consumed: new Set(),
       warnings: [...errors]
     };
@@ -1601,6 +1635,36 @@ export class OcctStepKernelAdapter {
             );
             break;
           }
+          case 'datum-plane': {
+            const { definition } = feature.data;
+            const source = (planeRef: SketchPlaneRef) =>
+              this.resolvePlaneRefAtHistory(
+                document,
+                planeRef,
+                feature.name,
+                result,
+                scope
+              );
+            result.datumFrames.set(
+              feature.featureId,
+              definition.kind === 'offset'
+                ? offsetDatumPlane(
+                    source(definition.source),
+                    resolveParamValue(
+                      definition.offset,
+                      scope,
+                      'datum plane offset'
+                    ),
+                    definition.reverseNormal
+                  )
+                : midDatumPlane(
+                    source(definition.sources[0]),
+                    source(definition.sources[1]),
+                    definition.reverseNormal
+                  )
+            );
+            break;
+          }
           case 'mirror': {
             if (!feature.bodyId) {
               throw new Error('Mirror has no result body.');
@@ -1611,18 +1675,34 @@ export class OcctStepKernelAdapter {
             }
             const target = this.collapseToSolid(storedTarget);
             const plane = feature.data.plane;
-            const mirrored = mirrorOcctSolid(this.kernel, target, {
-              planePoint: {
-                x: resolveParamValue(plane.origin.x, scope, 'plane origin X'),
-                y: resolveParamValue(plane.origin.y, scope, 'plane origin Y'),
-                z: resolveParamValue(plane.origin.z, scope, 'plane origin Z')
-              },
-              planeNormal: {
-                x: resolveParamValue(plane.normal.x, scope, 'plane normal X'),
-                y: resolveParamValue(plane.normal.y, scope, 'plane normal Y'),
-                z: resolveParamValue(plane.normal.z, scope, 'plane normal Z')
-              }
-            });
+            const value = (raw: ParamValue, name: string) =>
+              resolveParamValue(raw, scope, name);
+            const mirrorPlane = isDatumPlaneRef(plane)
+              ? ((frame) => ({
+                  planePoint: frame.origin,
+                  planeNormal: frame.normal
+                }))(
+                  this.resolvePlaneRefAtHistory(
+                    document,
+                    plane,
+                    feature.name,
+                    result,
+                    scope
+                  )
+                )
+              : {
+                  planePoint: {
+                    x: value(plane.origin.x, 'plane origin X'),
+                    y: value(plane.origin.y, 'plane origin Y'),
+                    z: value(plane.origin.z, 'plane origin Z')
+                  },
+                  planeNormal: {
+                    x: value(plane.normal.x, 'plane normal X'),
+                    y: value(plane.normal.y, 'plane normal Y'),
+                    z: value(plane.normal.z, 'plane normal Z')
+                  }
+                };
+            const mirrored = mirrorOcctSolid(this.kernel, target, mirrorPlane);
             result.shapes.set(feature.bodyId, mirrored);
             result.lineages.set(
               feature.bodyId,

@@ -49,6 +49,7 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
     case 'helical-sweep':
     case 'imported-step':
     case 'imported-mesh':
+    case 'datum-plane':
       return [];
   }
 }

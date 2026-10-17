@@ -91,9 +91,24 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       return;
     case 'mirror':
     case 'split':
-      vector(data.plane.origin, rewrite);
-      vector(data.plane.normal, rewrite);
+      // A datum reference carries no expressions of its own; the datum's
+      // feature is rewritten where it stands in history.
+      if ('origin' in data.plane) {
+        vector(data.plane.origin, rewrite);
+        vector(data.plane.normal, rewrite);
+      }
       return;
+    case 'datum-plane': {
+      const definition = data.definition;
+      const sources =
+        definition.kind === 'offset'
+          ? [definition.source]
+          : definition.sources;
+      if (definition.kind === 'offset') fields(definition, ['offset'], rewrite);
+      for (const source of sources)
+        if (source.type === 'canonical') fields(source, ['offset'], rewrite);
+      return;
+    }
     case 'hole':
       fields(
         data,
