@@ -1486,6 +1486,9 @@ export function planSketchMirror(
       reason: 'That entity has a dimension that does not evaluate.'
     };
   }
+  if (zeroLength(source)) {
+    return { status: 'refuse', reason: ZERO_LENGTH };
+  }
   const axisDir = sub(axis.b, axis.a);
   const axisLength = Math.hypot(axisDir.x, axisDir.y);
   if (axisLength === 0) {
@@ -1883,10 +1886,19 @@ function patternSource(
     return { error: composite };
   }
   const curve = evaluateCurve(data, resolve);
-  return curve
-    ? { data, curve }
-    : { error: 'That entity has a dimension that does not evaluate.' };
+  if (!curve) {
+    return { error: 'That entity has a dimension that does not evaluate.' };
+  }
+  return zeroLength(curve) ? { error: ZERO_LENGTH } : { data, curve };
 }
+
+/** A line whose ends meet has no direction to copy or link. */
+function zeroLength(curve: Curve2): boolean {
+  return curve.kind === 'line' && distance(curve.a, curve.b) <= ON_CURVE;
+}
+
+const ZERO_LENGTH =
+  'That line has no length, so there is nothing to copy. Give it a length first.';
 
 /**
  * Copies of one source, each tied back to it: equal length or radius always,

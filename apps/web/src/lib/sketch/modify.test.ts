@@ -1713,6 +1713,38 @@ describe('Patterns', () => {
     });
   });
 
+  it('refuses to copy a zero-length line, construction or not', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 2, y1: 2, x2: 2, y2: 2, construction: true },
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },
+      { objectKind: 'line', x1: -5, y1: -10, x2: -5, y2: 10 }
+    ]);
+    const reason =
+      'That line has no length, so there is nothing to copy. Give it a length first.';
+    expect(
+      planSketchLinearPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        ids[1]!,
+        5,
+        3,
+        resolve
+      )
+    ).toEqual({ status: 'refuse', reason });
+    expect(
+      planSketchMirror(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        ids[2]!,
+        resolve
+      )
+    ).toEqual({ status: 'refuse', reason });
+  });
+
   it('refuses fractional, too small and too large counts, and zero spacing', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
