@@ -1,6 +1,8 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
 import {
+  isDatumPlaneRef,
   isFeatureSuppressed,
+  type DatumPlaneSource,
   type BodyId,
   type FeatureId,
   type FeatureKind,
@@ -40,7 +42,8 @@ const HANDLED_FEATURE_KINDS: ReadonlySet<FeatureKind> = new Set<FeatureKind>([
   'pattern',
   'direct-edit',
   'imported-step',
-  'imported-mesh'
+  'imported-mesh',
+  'datum-plane'
 ]);
 
 function assertAllFeatureKindsHandled(kind: FeatureKind): void {
@@ -87,10 +90,14 @@ export function affectedFeatureTargets(
       : undefined);
   const sourceSketchId =
     source?.data.featureKind === 'sketch' ? source.data.sketchId : undefined;
+  // A datum plane builds no body, but every sketch, Split and Mirror on it
+  // (and every datum built from it) moves when it does.
+  const sourceDatumId =
+    source?.data.featureKind === 'datum-plane' ? source.featureId : undefined;
   if (
     sourceIndex < 0 ||
     !source ||
-    (!sourceBodyId && !sourceSketchId) ||
+    (!sourceBodyId && !sourceSketchId && !sourceDatumId) ||
     isFeatureSuppressed(source)
   ) {
     return [];
@@ -100,6 +107,13 @@ export function affectedFeatureTargets(
   const affectedSketches = new Set<SketchId>(
     sourceSketchId ? [sourceSketchId] : []
   );
+  const affectedDatums = new Set<FeatureId>(
+    sourceDatumId ? [sourceDatumId] : []
+  );
+  const planeAffected = (plane: DatumPlaneSource) =>
+    plane.type === 'datum'
+      ? affectedDatums.has(plane.datumFeatureId)
+      : plane.type === 'face' && affectedBodies.has(plane.bodyId);
   const targets: AffectedFeatureTarget[] = sourceBodyId
     ? [
         {
@@ -120,13 +134,22 @@ export function affectedFeatureTargets(
     assertAllFeatureKindsHandled(data.featureKind);
     switch (data.featureKind) {
       case 'sketch': {
-        const sketch = findSketch(document, data.sketchId);
+        const planeRef = findSketch(document, data.sketchId)?.planeRef;
         if (
-          sketch?.planeRef.type === 'face' &&
-          affectedBodies.has(sketch.planeRef.bodyId)
+          (planeRef?.type === 'face' || planeRef?.type === 'datum') &&
+          planeAffected(planeRef as DatumPlaneSource)
         ) {
           affectedSketches.add(data.sketchId);
         }
+        continue;
+      }
+      case 'datum-plane': {
+        const { definition } = data;
+        const sources =
+          definition.kind === 'offset'
+            ? [definition.source]
+            : definition.sources;
+        if (sources.some(planeAffected)) affectedDatums.add(feature.featureId);
         continue;
       }
       case 'extrude':
@@ -159,9 +182,14 @@ export function affectedFeatureTargets(
         );
         break;
       case 'split':
+      case 'mirror':
+        affected =
+          affectedBodies.has(data.targetBodyId) ||
+          (isDatumPlaneRef(data.plane) &&
+            affectedDatums.has(data.plane.datumFeatureId));
+        break;
       case 'hole':
       case 'transform':
-      case 'mirror':
       case 'shell':
       case 'solid-offset':
       case 'draft':

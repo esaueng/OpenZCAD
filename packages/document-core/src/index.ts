@@ -50,8 +50,11 @@ import {
   toRevisionId,
   toShaprImportId,
   toSketchId,
+  isDatumPlaneRef,
   type BodyId,
   type BodyNode,
+  type DatumPlaneDefinition,
+  type DatumPlaneSource,
   type AxisId,
   type BooleanOperation,
   type DocumentNode,
@@ -68,7 +71,7 @@ import {
   type ParameterId,
   type ParameterNode,
   type ParametricVector3,
-  type ParametricPlane,
+  type ModelingPlaneReference,
   type ParamValue,
   type PatternKind,
   type PlaneId,
@@ -412,8 +415,14 @@ export interface TransformInput {
 export interface MirrorInput {
   name: string;
   targetBodyId: BodyId;
-  plane: ParametricPlane;
+  plane: ModelingPlaneReference;
   ids?: BodyFeatureIds;
+}
+
+export interface DatumPlaneInput {
+  name: string;
+  definition: DatumPlaneDefinition;
+  ids?: FeatureOnlyIds;
 }
 
 export interface HoleInput {
@@ -440,7 +449,7 @@ export interface SplitInput {
   name: string;
   /** Consumed: the two halves replace it. */
   targetBodyId: BodyId;
-  plane: ParametricPlane;
+  plane: ModelingPlaneReference;
   ids?: SplitFeatureIds;
 }
 
@@ -1196,6 +1205,10 @@ export function addSketchFeature(
 ): { document: ProjectDocument; sketchId: SketchId } {
   const next = cloneDocument(document);
   const { planeRef, objects } = resolveSketchInput(input);
+  if (planeRef.type === 'datum') {
+    // A new sketch lands last, so every datum already in history is earlier.
+    requireEarlierDatum(document, planeRef.datumFeatureId, null);
+  }
   const ids = normalizeSketchFeatureIds(
     input.ids ?? createSketchFeatureIds(objects.length)
   );
@@ -1260,6 +1273,18 @@ export function updateSketch(
     throw new Error(`Sketch ${input.sketchId} not found.`);
   }
   if (input.planeRef !== undefined) {
+    if (input.planeRef.type === 'datum') {
+      const owner = listFeaturesInOrder(document).find(
+        (feature) =>
+          feature.data.featureKind === 'sketch' &&
+          feature.data.sketchId === input.sketchId
+      );
+      requireEarlierDatum(
+        document,
+        input.planeRef.datumFeatureId,
+        owner?.featureId ?? null
+      );
+    }
     sketch.planeRef = input.planeRef;
   } else if (input.plane !== undefined || input.offset !== undefined) {
     // v3 payloads patch the canonical plane fields piecemeal.
@@ -2073,6 +2098,183 @@ export function booleanBodies(
   return { document: next, bodyId };
 }
 
+/**
+ * The datum features defined before `beforeFeatureId` (all of them when it is
+ * null, which is where a new feature lands). A reference may only point
+ * backward in history: the datum resolves at its own position, and nothing
+ * after it can change what an earlier consumer saw.
+ */
+function datumFeaturesBefore(
+  document: ProjectDocument,
+  beforeFeatureId: FeatureId | null
+): Set<FeatureId> {
+  const datums = new Set<FeatureId>();
+  for (const feature of listFeaturesInOrder(document)) {
+    if (feature.featureId === beforeFeatureId) break;
+    if (feature.data.featureKind === 'datum-plane') datums.add(feature.featureId);
+  }
+  return datums;
+}
+
+function requireEarlierDatum(
+  document: ProjectDocument,
+  datumFeatureId: FeatureId,
+  beforeFeatureId: FeatureId | null
+): void {
+  const node = listFeaturesInOrder(document).find(
+    (feature) => feature.featureId === datumFeatureId
+  );
+  if (!node || node.data.featureKind !== 'datum-plane') {
+    throw new Error(`No datum plane ${datumFeatureId} exists.`);
+  }
+  if (!datumFeaturesBefore(document, beforeFeatureId).has(datumFeatureId)) {
+    throw new Error(
+      `Datum plane "${node.name}" comes later in history; a plane can only use an earlier one.`
+    );
+  }
+}
+
+/** A Split or Mirror plane: finite numbers, or an earlier datum. */
+export function validateModelingPlane(
+  document: ProjectDocument,
+  plane: ModelingPlaneReference,
+  ownFeatureId: FeatureId | null
+): void {
+  if (isDatumPlaneRef(plane)) {
+    requireEarlierDatum(document, plane.datumFeatureId, ownFeatureId);
+    if (Object.keys(plane).some((key) => key !== 'type' && key !== 'datumFeatureId')) {
+      throw new Error('A datum plane reference carries only the datum id.');
+    }
+  }
+}
+
+function sameSource(a: DatumPlaneSource, b: DatumPlaneSource): boolean {
+  if (a.type !== b.type) return false;
+  if (a.type === 'datum' && b.type === 'datum')
+    return a.datumFeatureId === b.datumFeatureId;
+  if (a.type === 'face' && b.type === 'face')
+    return (
+      a.bodyId === b.bodyId &&
+      a.faceReference.lineageName === b.faceReference.lineageName &&
+      a.faceReference.producingFeatureId === b.faceReference.producingFeatureId
+    );
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function requireFiniteLiteral(value: ParamValue, label: string): void {
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    throw new Error(`${label} must be a finite distance.`);
+  }
+}
+
+/**
+ * Structural checks on a datum definition at its history position. Geometric
+ * ones (parallel, separated, a resolvable face) need the exact build and are
+ * refused there, by name, with the datum's authored definition kept.
+ */
+export function validateDatumPlaneDefinition(
+  document: ProjectDocument,
+  definition: DatumPlaneDefinition,
+  ownFeatureId: FeatureId | null
+): void {
+  const sources =
+    definition.kind === 'offset' ? [definition.source] : definition.sources;
+  if (definition.kind === 'offset') {
+    requireFiniteLiteral(definition.offset, 'The plane offset');
+  } else if (definition.kind !== 'midplane' || sources.length !== 2) {
+    throw new Error('A datum plane is an offset plane or a midplane.');
+  }
+  for (const source of sources) {
+    switch (source.type) {
+      case 'canonical':
+        if (!['XY', 'XZ', 'YZ'].includes(source.plane)) {
+          throw new Error(`Unknown canonical plane "${String(source.plane)}".`);
+        }
+        requireFiniteLiteral(source.offset, 'The source plane offset');
+        break;
+      case 'datum':
+        if (source.datumFeatureId === ownFeatureId) {
+          throw new Error('A datum plane cannot be its own source.');
+        }
+        requireEarlierDatum(document, source.datumFeatureId, ownFeatureId);
+        break;
+      case 'face':
+        if (!source.faceReference || !source.sourceCentroid) {
+          throw new Error(
+            'A face source needs a qualified lineage reference; pick an exact planar face.'
+          );
+        }
+        if (!document.bodyOrder.includes(source.bodyId)) {
+          throw new Error(`The source face's body ${source.bodyId} does not exist.`);
+        }
+        break;
+      default:
+        throw new Error('A datum plane source is a plane, a datum or a face.');
+    }
+  }
+  if (definition.kind === 'midplane' && sameSource(sources[0]!, sources[1]!)) {
+    throw new Error('A midplane needs two different source planes.');
+  }
+}
+
+/**
+ * The names of everything that resolves through datum `datumFeatureId`: later
+ * datums built from it, Mirror and Split features cutting on it, and sketches
+ * drawn on it. Suppressed entries count; their references are still live.
+ */
+export function datumPlaneDependents(
+  document: ProjectDocument,
+  datumFeatureId: FeatureId
+): string[] {
+  const names: string[] = [];
+  const usesDatum = (source: DatumPlaneSource | ModelingPlaneReference) =>
+    'type' in source &&
+    source.type === 'datum' &&
+    source.datumFeatureId === datumFeatureId;
+  for (const feature of listFeaturesInOrder(document)) {
+    const { data } = feature;
+    let uses = false;
+    if (data.featureKind === 'datum-plane') {
+      const sources =
+        data.definition.kind === 'offset'
+          ? [data.definition.source]
+          : data.definition.sources;
+      uses = sources.some(usesDatum);
+    } else if (data.featureKind === 'mirror' || data.featureKind === 'split') {
+      uses = usesDatum(data.plane);
+    } else if (data.featureKind === 'sketch') {
+      const planeRef = findSketch(document, data.sketchId)?.planeRef;
+      uses = planeRef?.type === 'datum' && planeRef.datumFeatureId === datumFeatureId;
+    }
+    if (uses) names.push(feature.name);
+  }
+  return names;
+}
+
+/** Adds an R01 datum plane at the end of history; it owns no body. */
+export function addDatumPlane(
+  document: ProjectDocument,
+  input: DatumPlaneInput
+): { document: ProjectDocument; featureId: FeatureId } {
+  validateDatumPlaneDefinition(document, input.definition, null);
+  const next = cloneDocument(document);
+  const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
+  next.nodes[featureNodeId] = {
+    id: featureNodeId,
+    kind: 'feature',
+    name: input.name,
+    parentId: next.activePartId,
+    revisionId: null,
+    featureId,
+    featureKind: 'datum-plane',
+    data: { featureKind: 'datum-plane', definition: deepClone(input.definition) }
+  };
+  next.featureOrder.push(featureId);
+  attachToPart(next, featureNodeId);
+  next.version += 1;
+  return { document: next, featureId };
+}
+
 export function transformBody(
   document: ProjectDocument,
   input: TransformInput
@@ -2243,6 +2445,7 @@ export function addSplitFeature(
   document: ProjectDocument,
   input: SplitInput
 ): { document: ProjectDocument; bodyId: BodyId; secondBodyId: BodyId } {
+  validateModelingPlane(document, input.plane, null);
   const next = cloneDocument(document);
   const ids = input.ids ?? createSplitFeatureIds();
   const { featureId, featureNodeId, bodyId, bodyNodeId } = ids;
@@ -2313,6 +2516,7 @@ export function mirrorBody(
   document: ProjectDocument,
   input: MirrorInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  validateModelingPlane(document, input.plane, null);
   return addBodyResultFeature(
     document,
     input.name,
@@ -3059,6 +3263,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   boolean: ['operation', 'targetBodyIds'],
   transform: ['targetBodyId', 'transform'],
   mirror: ['targetBodyId', 'plane'],
+  'datum-plane': ['definition'],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane'],
   hole: [
@@ -3214,6 +3419,16 @@ export function updateFeature(
       }
       delete data[key];
     }
+  }
+  // R01: a datum may only read earlier datums, and Mirror/Split only an
+  // existing earlier one, whichever path edited them.
+  if (feature.data.featureKind === 'datum-plane') {
+    validateDatumPlaneDefinition(next, feature.data.definition, feature.featureId);
+  } else if (
+    feature.data.featureKind === 'mirror' ||
+    feature.data.featureKind === 'split'
+  ) {
+    validateModelingPlane(next, feature.data.plane, feature.featureId);
   }
   // New Body has no dependency on the previous Add/Cut target. Undefined
   // patch values are normally ignored, so clear this semantic dependency here.
@@ -3492,6 +3707,17 @@ export function deleteFeature(
   const feature = findFeature(next, input.featureId);
   if (!feature) {
     throw new Error(`Feature ${input.featureId} not found.`);
+  }
+  if (feature.data.featureKind === 'datum-plane') {
+    // No implicit cascade or detachment: a dependent keeps reading this id.
+    const dependents = datumPlaneDependents(next, feature.featureId);
+    if (dependents.length > 0) {
+      throw new Error(
+        `Cannot delete datum plane "${feature.name}": ${dependents.join(', ')} ${
+          dependents.length === 1 ? 'uses' : 'use'
+        } it. Delete those or move them to another plane first.`
+      );
+    }
   }
 
   const removedNodeIds = new Set<string>([feature.id]);

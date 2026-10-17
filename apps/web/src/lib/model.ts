@@ -193,7 +193,8 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   pattern: 'Pattern',
   'direct-edit': 'Direct edit',
   'imported-step': 'Imported STEP',
-  'imported-mesh': 'Imported mesh'
+  'imported-mesh': 'Imported mesh',
+  'datum-plane': 'Datum plane'
 };
 
 /**

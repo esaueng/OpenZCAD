@@ -31,8 +31,11 @@ export type ShaprImportId = Brand<string, 'ShaprImportId'>;
  * v18 adds the S07 constraint kinds (`symmetric`, `point-on-object`, `lock`).
  * They are additive, but a v17 client would accept them and solve without
  * them, so the bump makes older clients refuse such documents instead.
+ *
+ * v19 adds R01 datum planes: the `datum-plane` feature kind and the datum
+ * references sketches, Split and Mirror can hold in place of a numeric plane.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 18 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 19 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -63,7 +66,8 @@ export type FeatureKind =
   | 'hole'
   | 'direct-edit'
   | 'imported-step'
-  | 'imported-mesh';
+  | 'imported-mesh'
+  | 'datum-plane';
 export type SketchObjectKind =
   'rectangle' | 'circle' | 'polygon' | 'line' | 'arc' | 'text';
 /**
@@ -224,6 +228,25 @@ export interface ParametricPlane {
   origin: ParametricVector3;
   /** Resolved and normalized during exact preflight; zero vectors are invalid. */
   normal: ParametricVector3;
+}
+
+/**
+ * A reference to an R01 datum plane by the feature that defines it. The
+ * datum resolves once, at its own history position; every consumer reads
+ * that result and never re-derives a plane from final topology.
+ */
+export interface DatumPlaneRef {
+  type: 'datum';
+  datumFeatureId: FeatureId;
+}
+
+/** A Split or Mirror plane: authored numbers, or a datum by reference. */
+export type ModelingPlaneReference = ParametricPlane | DatumPlaneRef;
+
+export function isDatumPlaneRef(
+  plane: ModelingPlaneReference | SketchPlaneRef
+): plane is DatumPlaneRef {
+  return (plane as { type?: unknown }).type === 'datum';
 }
 
 export type FaceDistanceMoveMode =
@@ -472,6 +495,7 @@ export interface SketchPlaneFrame {
  * schema-v4 migration and diagnostics; it is never a fallback for a v5 ref.
  */
 export type SketchPlaneRef =
+  | DatumPlaneRef
   | {
       type: 'canonical';
       plane: PlaneId;
@@ -515,6 +539,40 @@ export type SketchPlaneRef =
       sourceCentroid?: Vector3;
       sourceNormal: Vector3;
       frame: SketchPlaneFrame;
+    };
+
+/** A canonical plane (optionally offset), as a datum source. */
+export type CanonicalPlaneSource = Extract<SketchPlaneRef, { type: 'canonical' }>;
+
+/**
+ * A qualified exact planar face, as a datum source: lineage and the
+ * area-centroid anchor are both required, so the datum's origin never
+ * depends on the legacy vertex-mean marker.
+ */
+export type FacePlaneSource = Extract<SketchPlaneRef, { type: 'face' }> & {
+  faceReference: FaceTopologyReferenceV5;
+  sourceCentroid: Vector3;
+};
+
+export type DatumPlaneSource =
+  | CanonicalPlaneSource
+  | DatumPlaneRef
+  | FacePlaneSource;
+
+export type DatumPlaneDefinition =
+  | {
+      kind: 'offset';
+      source: DatumPlaneSource;
+      /** Signed distance along the source normal; zero is the source. */
+      offset: ParamValue;
+      /** Flips the result's normal (and v) without moving it. */
+      reverseNormal?: boolean;
+    }
+  | {
+      kind: 'midplane';
+      /** Ordered roles A and B; the result keeps A's frame. */
+      sources: [DatumPlaneSource, DatumPlaneSource];
+      reverseNormal?: boolean;
     };
 
 export interface SketchNode extends BaseNode {
@@ -823,6 +881,15 @@ export interface SketchPathReference {
 
 export type FeatureData =
   | {
+      /**
+       * R01: a datum plane. It owns no body; its resolved frame is published
+       * at its history position for the sketches, Splits and Mirrors that
+       * reference it by this feature's id.
+       */
+      featureKind: 'datum-plane';
+      definition: DatumPlaneDefinition;
+    }
+  | {
       featureKind: 'primitive';
       primitiveKind: PrimitiveKind;
       dimensions: Record<string, ParamValue>;
@@ -946,7 +1013,7 @@ export type FeatureData =
       featureKind: 'mirror';
       targetBodyId: BodyId;
       /** The original remains live; this feature owns only the mirrored copy. */
-      plane: ParametricPlane;
+      plane: ModelingPlaneReference;
     }
   | {
       featureKind: 'hole';
@@ -997,7 +1064,7 @@ export type FeatureData =
       featureKind: 'split';
       /** Consumed: the two halves replace the input body. */
       targetBodyId: BodyId;
-      plane: ParametricPlane;
+      plane: ModelingPlaneReference;
       /**
        * The half on the side the plane normal points away from. The
        * feature's own `bodyId` names the positive half; a `FeatureNode`
@@ -2245,9 +2312,23 @@ export interface EditAnalysisRequest {
   faceHashes: number[];
 }
 
+/** A resolved world frame: right-handed, u × v = normal. */
+export interface DatumFrame {
+  origin: Vector3;
+  u: Vector3;
+  v: Vector3;
+  normal: Vector3;
+}
+
 export interface DerivedState {
   editAnalysis?: EditAnalysisRequest;
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
+  /**
+   * R01: each datum plane's frame as the exact build resolved it at its own
+   * history position, so the browser places datum-attached sketches exactly
+   * as the kernel did. A datum that failed or is suppressed is absent.
+   */
+  datumFrames?: Record<FeatureId, DatumFrame>;
   exportableBodyIds: BodyId[];
   warnings: string[];
   updatedAt: string;
@@ -3405,7 +3486,8 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   hole: '#fb923c',
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
-  'imported-mesh': '#7aa3ff'
+  'imported-mesh': '#7aa3ff',
+  'datum-plane': '#9aa5b8'
 };
 
 export const featureColor = (kind: FeatureKind): string =>

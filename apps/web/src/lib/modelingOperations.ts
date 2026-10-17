@@ -14,6 +14,8 @@ import {
 } from '@openzcad/document-core';
 import {
   MAX_HELICAL_SWEEP_TURNS,
+  isDatumPlaneRef,
+  type ModelingPlaneReference,
   type BodyId,
   type BodyRepresentation,
   type BodyTopology,
@@ -67,6 +69,11 @@ export interface MirrorFormState {
   targetBodyId: BodyId | '';
   origin: { x: string; y: string; z: string };
   normal: { x: string; y: string; z: string };
+  /**
+   * The datum plane the feature cuts or mirrors across, when it has one. The
+   * id survives a reopen untouched; the numeric fields are not consulted.
+   */
+  datumFeatureId?: FeatureId;
 }
 
 export interface ShellFormState {
@@ -433,8 +440,16 @@ export function modelingFormStateFromFeature(
         value: {
           name,
           targetBodyId: data.targetBodyId,
-          origin: vectorText(data.plane.origin),
-          normal: vectorText(data.plane.normal)
+          ...(isDatumPlaneRef(data.plane)
+            ? {
+                origin: { x: '0', y: '0', z: '0' },
+                normal: { x: '0', y: '0', z: '1' },
+                datumFeatureId: data.plane.datumFeatureId
+              }
+            : {
+                origin: vectorText(data.plane.origin),
+                normal: vectorText(data.plane.normal)
+              })
         }
       };
     case 'shell':
@@ -915,6 +930,7 @@ export function modelingFormValidationReason(
     case 'split': {
       const label = state.operation === 'mirror' ? 'Mirror' : 'Split';
       if (state.value.targetBodyId === '') return 'Select a target body.';
+      if (state.value.datumFeatureId) return null;
       const expressions = [
         ...Object.values(state.value.origin),
         ...Object.values(state.value.normal)
@@ -1127,18 +1143,20 @@ export function buildModelingOperationSubmission(
   const targetBodyId = state.value.targetBodyId;
   if (targetBodyId === '') throw new Error('A target body is required.');
   if (state.operation === 'mirror' || state.operation === 'split') {
-    const plane = {
-      origin: {
-        x: coerceParamValue(state.value.origin.x),
-        y: coerceParamValue(state.value.origin.y),
-        z: coerceParamValue(state.value.origin.z)
-      },
-      normal: {
-        x: coerceParamValue(state.value.normal.x),
-        y: coerceParamValue(state.value.normal.y),
-        z: coerceParamValue(state.value.normal.z)
-      }
-    };
+    const plane: ModelingPlaneReference = state.value.datumFeatureId
+      ? { type: 'datum', datumFeatureId: state.value.datumFeatureId }
+      : {
+          origin: {
+            x: coerceParamValue(state.value.origin.x),
+            y: coerceParamValue(state.value.origin.y),
+            z: coerceParamValue(state.value.origin.z)
+          },
+          normal: {
+            x: coerceParamValue(state.value.normal.x),
+            y: coerceParamValue(state.value.normal.y),
+            z: coerceParamValue(state.value.normal.z)
+          }
+        };
     return state.operation === 'mirror'
       ? { operation: 'mirror', input: { name, targetBodyId, plane } }
       : { operation: 'split', input: { name, targetBodyId, plane } };
