@@ -33,7 +33,7 @@ import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
-import { featureHistory } from './lib/featureHistory';
+import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
@@ -5769,6 +5769,18 @@ export function App() {
     selectedTopology
   ]);
   const selectedFeatureNodeId = selectedFeature?.id ?? null;
+  // History's Related view: the selected step's or bodies' lineage, or null
+  // with nothing selected so the toggle says why it is unavailable.
+  const historyRelatedFeatureIds = useMemo(
+    () =>
+      doc && (selectedFeature || selectedBodyIds.length > 0)
+        ? relatedFeatureIds(doc, {
+            featureId: selectedFeature?.featureId ?? null,
+            bodyIds: selectedFeature ? [] : selectedBodyIds
+          })
+        : null,
+    [doc, selectedFeature, selectedBodyIds]
+  );
   /**
    * Each opening of an edit card gets its own session. A late Apply must
    * leave a reopened card alone, even when it edits the same feature.
@@ -20006,6 +20018,7 @@ export function App() {
       geometryPending={Boolean(
         currentGeometrySnapshot || currentFaceGeometryPreview
       )}
+      relatedFeatureIds={historyRelatedFeatureIds}
       selectedFeatureNodeId={selectedFeatureNodeId}
       selectedSketchProfileId={selectedSketchProfileId}
       hiddenBodyIds={hiddenBodyIds}

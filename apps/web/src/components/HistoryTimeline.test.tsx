@@ -463,6 +463,55 @@ describe('HistoryTimeline', () => {
     expect(props.onCloseFind).toHaveBeenCalledTimes(1);
   });
 
+  it('narrows to the steps related to the selection, alongside the text filter', async () => {
+    const user = userEvent.setup();
+    const related = new Set([
+      'feature-1',
+      'feature-3',
+      'feature-4'
+    ] as FeatureId[]);
+    const { container, rerender, props } = renderTimeline({
+      findOpen: true,
+      relatedFeatureIds: related
+    });
+    const toggle = screen.getByRole('button', { name: 'Related' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(3);
+    expect(screen.getByText('3 of 4')).toBeInTheDocument();
+    // Hidden rows sit between the related ones, so reordering is off while
+    // the list is filtered: a step could otherwise move past an invisible one.
+    const grip = screen.getByRole('button', {
+      name: 'Reorder Feature 1. Use the arrow keys to move it.'
+    });
+    expect(grip).toBeDisabled();
+    fireEvent.keyDown(grip, { key: 'ArrowDown' });
+    expect(props.onReorderFeature).not.toHaveBeenCalled();
+    // The two filters combine.
+    await user.type(
+      screen.getByRole('searchbox', { name: 'Find a step' }),
+      'Feature 4'
+    );
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(1);
+    // Clearing the selection disables the toggle and restores every row
+    // the text filter allows, rather than emptying the list.
+    rerender(<HistoryTimeline {...props} findOpen relatedFeatureIds={null} />);
+    expect(screen.getByRole('button', { name: 'Related' })).toBeDisabled();
+    await user.clear(screen.getByRole('searchbox', { name: 'Find a step' }));
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(4);
+    // A new selection does not re-filter on its own: Related stays off
+    // until it is pressed again.
+    rerender(
+      <HistoryTimeline {...props} findOpen relatedFeatureIds={related} />
+    );
+    expect(screen.getByRole('button', { name: 'Related' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(4);
+  });
+
   it('opens the feature menu from the row', async () => {
     const user = userEvent.setup();
     const { props } = renderTimeline();

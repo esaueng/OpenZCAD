@@ -120,3 +120,34 @@ export function featureHistory(document: ProjectDocument) {
   };
   return { features, parents, downstream, missing };
 }
+
+/**
+ * The history steps related to a selection: the selected feature (or every
+ * feature that produced or edited a selected body), everything those steps
+ * were built from, and everything built on them. Order and suppression are
+ * untouched; this only says which rows a "related to selection" view keeps.
+ */
+export function relatedFeatureIds(
+  document: ProjectDocument,
+  selection: { featureId?: FeatureId | null; bodyIds?: readonly string[] }
+): Set<FeatureId> {
+  const { features, parents, downstream } = featureHistory(document);
+  const bodies = new Set(selection.bodyIds ?? []);
+  const seeds = features.filter(
+    (feature) =>
+      feature.featureId === selection.featureId ||
+      featureResultBodyIds(feature).some((id) => bodies.has(id))
+  );
+  const related = new Set<FeatureId>();
+  const ancestors = (id: FeatureId) => {
+    if (related.has(id)) return;
+    related.add(id);
+    for (const parent of parents.get(id) ?? []) ancestors(parent);
+  };
+  for (const seed of seeds) {
+    ancestors(seed.featureId);
+    for (const dependent of downstream(seed.featureId))
+      related.add(dependent.featureId);
+  }
+  return related;
+}
