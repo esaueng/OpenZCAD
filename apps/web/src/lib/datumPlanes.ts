@@ -22,6 +22,7 @@ import {
   formatNumber,
   previewExpression
 } from './model';
+import { affectedFeatureTargets } from './affectedFeatureTargets';
 import { earlierDatumPlanes } from './datumPlaneDisplay';
 
 export {
@@ -390,16 +391,22 @@ export function requireResolvedDatum(
 }
 
 /**
- * The datums built, directly or through other datums, on datum `featureId`,
- * in history order. A datum owns no body, so a body-target walk never sees
- * one; an edit has to check their frames itself or a later midplane could
- * go coincident behind a "validated" commit.
+ * The datums an edit of datum `featureId` can move, in history order: those
+ * built on it through other datums, and those on a face of a body that a
+ * Split, Mirror or other feature driven by it produces. A datum owns no
+ * body, so a body-target walk never reports one; an edit has to check their
+ * frames itself or a later plane could fail behind a "validated" commit.
  */
 export function downstreamDatumIds(
   document: ProjectDocument,
   featureId: FeatureId
 ): FeatureId[] {
-  const affected = new Set<FeatureId>([featureId]);
+  const affected = new Set<string>([
+    featureId,
+    ...affectedFeatureTargets(document, featureId).map(
+      (target) => target.resultBodyId
+    )
+  ]);
   const downstream: FeatureId[] = [];
   let after = false;
   for (const feature of listFeaturesInOrder(document)) {
@@ -412,9 +419,10 @@ export function downstreamDatumIds(
     const sources =
       definition.kind === 'offset' ? [definition.source] : definition.sources;
     if (
-      sources.some(
-        (source) =>
-          source.type === 'datum' && affected.has(source.datumFeatureId)
+      sources.some((source) =>
+        source.type === 'datum'
+          ? affected.has(source.datumFeatureId)
+          : source.type === 'face' && affected.has(source.bodyId)
       )
     ) {
       affected.add(feature.featureId);

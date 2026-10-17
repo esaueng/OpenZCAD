@@ -288,6 +288,47 @@ describe('Plane card commands (R01-C)', () => {
     ).not.toThrow();
   });
 
+  it('also checks a later datum on a face of a body the edit splits', () => {
+    const { document, first } = twoDatums();
+    const boxed = addPrimitiveFeature(document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 20 }
+    });
+    const split = addSplitFeature(boxed, {
+      name: 'Split',
+      targetBodyId: boxed.bodyOrder.at(-1)!,
+      plane: { type: 'datum', datumFeatureId: first }
+    });
+    const half = split.document.bodyOrder.at(-1)!;
+    const onFace = addDatumPlane(split.document, {
+      name: 'Plane 3',
+      definition: {
+        kind: 'offset',
+        source: {
+          type: 'face',
+          bodyId: half,
+          faceHash: 1,
+          faceReference: { kind: 'face' } as never,
+          sourceArea: 1,
+          sourceCenter: { x: 0, y: 0, z: 0 },
+          sourceCentroid: { x: 0, y: 0, z: 0 },
+          sourceNormal: { x: 0, y: 0, z: 1 },
+          frame: {
+            origin: { x: 0, y: 0, z: 0 },
+            xAxis: { x: 1, y: 0, z: 0 },
+            yAxis: { x: 0, y: 1, z: 0 },
+            zAxis: { x: 0, y: 0, z: 1 }
+          }
+        },
+        offset: 1
+      }
+    });
+    expect(downstreamDatumIds(onFace.document, first)).toContain(
+      onFace.featureId
+    );
+  });
+
   it('lets Split name a datum by id', () => {
     const { document, first } = twoDatums();
     const boxed = addPrimitiveFeature(document, {
