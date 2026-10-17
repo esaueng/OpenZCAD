@@ -814,7 +814,11 @@ export function HistoryTimeline({
                 );
               }}
               onDragOver={(event) => {
-                if (!dragFeatureId || dragFeatureId === feature.featureId) {
+                if (
+                  filtering ||
+                  !dragFeatureId ||
+                  dragFeatureId === feature.featureId
+                ) {
                   return;
                 }
                 event.preventDefault();
@@ -827,7 +831,7 @@ export function HistoryTimeline({
                 );
               }}
               onDrop={(event) => {
-                if (!dragFeatureId) {
+                if (filtering || !dragFeatureId) {
                   return;
                 }
                 event.preventDefault();
@@ -841,8 +845,14 @@ export function HistoryTimeline({
                 type="button"
                 className="row-action feature-row-grip"
                 aria-label={`Reorder ${feature.name}. Use the arrow keys to move it.`}
-                title="Drag to reorder"
-                draggable
+                // A filtered list hides the rows a move would pass, so a
+                // step could jump past an invisible one: reorder only the
+                // whole history.
+                title={
+                  filtering ? 'Clear the filter to reorder' : 'Drag to reorder'
+                }
+                disabled={filtering}
+                draggable={!filtering}
                 onDragStart={(event) => {
                   event.dataTransfer.effectAllowed = 'move';
                   event.dataTransfer.setData('text/plain', feature.featureId);
@@ -866,7 +876,7 @@ export function HistoryTimeline({
                       : event.key === 'ArrowDown'
                         ? 1
                         : 0;
-                  if (offset === 0) {
+                  if (offset === 0 || filtering) {
                     return;
                   }
                   event.preventDefault();

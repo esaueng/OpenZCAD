@@ -480,6 +480,14 @@ describe('HistoryTimeline', () => {
     expect(toggle).toHaveAttribute('aria-pressed', 'true');
     expect(container.querySelectorAll('.feature-row')).toHaveLength(3);
     expect(screen.getByText('3 of 4')).toBeInTheDocument();
+    // Hidden rows sit between the related ones, so reordering is off while
+    // the list is filtered: a step could otherwise move past an invisible one.
+    const grip = screen.getByRole('button', {
+      name: 'Reorder Feature 1. Use the arrow keys to move it.'
+    });
+    expect(grip).toBeDisabled();
+    fireEvent.keyDown(grip, { key: 'ArrowDown' });
+    expect(props.onReorderFeature).not.toHaveBeenCalled();
     // The two filters combine.
     await user.type(
       screen.getByRole('searchbox', { name: 'Find a step' }),
