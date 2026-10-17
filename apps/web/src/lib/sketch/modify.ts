@@ -14,6 +14,8 @@
  */
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
+  boundedArcSweepDegrees,
+  boundedPolygonSides,
   computeSketchProfileAnalysis,
   geometryTolerance
 } from '@openzcad/geometry';
@@ -70,13 +72,18 @@ function toDeg(angle: number): number {
   return Math.abs(deg - 360) < 1e-9 ? 0 : deg;
 }
 
-function arcSweep(startDeg: number, endDeg: number): number {
-  let sweep = ((endDeg - startDeg) * Math.PI) / 180;
-  sweep = sweep % TAU;
-  if (sweep <= 0) {
-    sweep += TAU;
+/**
+ * The arc's counter-clockwise sweep in radians, read exactly as the profile
+ * builder reads it (`boundedArcSweepDegrees`): a full turn is an end one
+ * turn past the start, and equal angles are no arc at all. Null when the
+ * profile builder would reject the arc.
+ */
+function arcSweep(startDeg: number, endDeg: number): number | null {
+  try {
+    return (boundedArcSweepDegrees(startDeg, endDeg) * Math.PI) / 180;
+  } catch {
+    return null;
   }
-  return sweep;
 }
 
 function evaluateNumbers(
@@ -125,13 +132,14 @@ export function evaluateCurve(
       ],
       resolve
     );
-    return v && v[2]! > 0
+    const sweep = v ? arcSweep(v[3]!, v[4]!) : null;
+    return v && v[2]! > 0 && sweep !== null
       ? {
           kind: 'arc',
           c: { x: v[0]!, y: v[1]! },
           r: v[2]!,
           start: normalizeAngle((v[3]! * Math.PI) / 180),
-          sweep: arcSweep(v[3]!, v[4]!)
+          sweep
         }
       : null;
   }
@@ -150,10 +158,18 @@ function cutterCurves(data: SketchObjectData, resolve: Resolve): Curve2[] {
       [data.sides, data.radius, data.centerX, data.centerY],
       resolve
     );
-    if (!v || !Number.isInteger(v[0]) || v[0]! < 3 || !(v[1]! > 0)) {
+    if (!v || !(v[1]! > 0)) {
       return [];
     }
-    const [sides, radius, cx, cy] = v as [number, number, number, number];
+    // The profile builder's own side limits: a polygon it rejects is not
+    // drawn, so it must not cut either.
+    let sides: number;
+    try {
+      sides = boundedPolygonSides(v[0]!);
+    } catch {
+      return [];
+    }
+    const [, radius, cx, cy] = v as [number, number, number, number];
     // The profile builder's vertices (packages/geometry regions.ts): top
     // first, counter-clockwise.
     const corners = Array.from({ length: sides }, (_, index) => {
@@ -397,7 +413,9 @@ function curveObject(
       centerY: curve.c.y,
       radius: curve.r,
       startAngleDeg: toDeg(curve.start),
-      endAngleDeg: toDeg(curve.start + curve.sweep)
+      // The end is written as start plus sweep, never wrapped, so a full
+      // turn stays a 360° arc rather than collapsing to equal angles.
+      endAngleDeg: toDeg(curve.start) + (curve.sweep * 180) / Math.PI
     },
     source
   );

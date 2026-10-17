@@ -401,6 +401,26 @@ describe('Trim', () => {
     });
   });
 
+  it('ignores a polygon the profile builder would reject', () => {
+    const { manager, sketchId, ids, sketch, commit } = sketchWith([
+      { objectKind: 'line', x1: -20, y1: 1, x2: 20, y2: 1 },
+      { objectKind: 'polygon', sides: 1e9, radius: 5, centerX: 0, centerY: 0 }
+    ]);
+    const plan = commit(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 0, y: 1 },
+        resolve
+      )
+    );
+    expect(plan.message).toBe(
+      'Trim removed the whole line: nothing crosses it.'
+    );
+  });
+
   it('turns a circle into the arc outside two crossings, carrying its relations', () => {
     const { manager, sketchId, ids, sketch, object, commit, constrain } =
       sketchWith([
@@ -879,7 +899,7 @@ describe('Mirror', () => {
         centerY: 2,
         radius: 1,
         startAngleDeg: 30,
-        endAngleDeg: 30
+        endAngleDeg: 390
       }
     ]);
     const [axis, source] = ids as [string, string];
@@ -905,6 +925,35 @@ describe('Mirror', () => {
     ]);
   });
 
+  it('writes a full-sweep image one turn past its start, as the profile builder reads it', () => {
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      {
+        objectKind: 'arc',
+        centerX: 5,
+        centerY: 2,
+        radius: 1,
+        startAngleDeg: 30,
+        endAngleDeg: 390
+      }
+    ]);
+    commit(
+      planSketchMirror(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[1]!,
+        ids[0]!,
+        resolve
+      )
+    );
+    const image = object(sketch().objectIds.map(String).at(-1)!) as {
+      startAngleDeg: number;
+      endAngleDeg: number;
+    };
+    expect(image.endAngleDeg - image.startAngleDeg).toBeCloseTo(360, 9);
+  });
+
   it('refuses a full-sweep arc mirrored about a line through its centre', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
@@ -914,7 +963,7 @@ describe('Mirror', () => {
         centerY: 3,
         radius: 2,
         startAngleDeg: 30,
-        endAngleDeg: 30
+        endAngleDeg: 390
       }
     ]);
     expect(
