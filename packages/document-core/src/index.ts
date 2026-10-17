@@ -1512,6 +1512,12 @@ function constraintObjectIds(data: SketchConstraintData): EntityId[] {
       return [data.point.objectId, data.line];
     case 'distance':
       return [data.a.objectId, data.b.objectId];
+    case 'symmetric':
+      return [data.a.objectId, data.b.objectId, data.axis];
+    case 'point-on-object':
+      return [data.point.objectId, data.objectId];
+    case 'lock':
+      return [data.point.objectId];
   }
 }
 
@@ -1685,7 +1691,54 @@ function validateSketchConstraint(
         throw new Error('Angle must be a finite number of degrees.');
       }
       break;
+    case 'symmetric':
+      requireConstraintPoint(document, sketch, data.a);
+      requireConstraintPoint(document, sketch, data.b);
+      requireConstrainableObject(document, sketch, data.axis, ['line']);
+      if (samePointRef(data.a, data.b)) {
+        throw new Error('A symmetric constraint mirrors two different points.');
+      }
+      // A line's own endpoint cannot be mirrored about that line: the only
+      // solution collapses the axis onto the point.
+      if (data.a.objectId === data.axis || data.b.objectId === data.axis) {
+        throw new Error(
+          'A symmetry axis cannot be one of the lines it mirrors.'
+        );
+      }
+      break;
+    case 'point-on-object':
+      requireConstraintPoint(document, sketch, data.point);
+      requireConstrainableObject(document, sketch, data.objectId, [
+        'line',
+        'arc',
+        'circle'
+      ]);
+      if (data.point.objectId === data.objectId) {
+        throw new Error(
+          'A point cannot be held on the object it already belongs to.'
+        );
+      }
+      break;
+    case 'lock':
+      requireConstraintPoint(document, sketch, data.point);
+      if (!Number.isFinite(data.x) || !Number.isFinite(data.y)) {
+        throw new Error('A locked point needs a finite position.');
+      }
+      if (
+        (sketch.constraints ?? []).some(
+          (existing) =>
+            existing.data.constraintKind === 'lock' &&
+            samePointRef(existing.data.point, data.point)
+        )
+      ) {
+        throw new Error('That point is already locked.');
+      }
+      break;
   }
+}
+
+function samePointRef(a: SketchPointRef, b: SketchPointRef): boolean {
+  return a.objectId === b.objectId && a.point === b.point;
 }
 
 export function addSketchConstraint(

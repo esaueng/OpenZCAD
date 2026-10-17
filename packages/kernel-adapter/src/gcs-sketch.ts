@@ -24,12 +24,7 @@ export interface GcsKernelSurface {
   gcsAddPoint(sketch: number, x: number, y: number, fixed: boolean): number;
   gcsAddLine(sketch: number, p1: number, p2: number): number;
   gcsAddCircle(sketch: number, center: number, radius: number): number;
-  gcsAddArc(
-    sketch: number,
-    center: number,
-    start: number,
-    end: number
-  ): number;
+  gcsAddArc(sketch: number, center: number, start: number, end: number): number;
   gcsAddConstraint(sketch: number, json: string): number;
   gcsSolveDetailed(
     sketch: number,
@@ -384,10 +379,42 @@ export function solveSketchWithGcs(
           l1: objectHandles(data.a).entity,
           l2: objectHandles(data.b).entity,
           // The kernel residual is trigonometric in the raw value: radians.
-          value:
-            resolveValue(data.valueDeg, 'angle') * RADIANS_PER_DEGREE
+          value: resolveValue(data.valueDeg, 'angle') * RADIANS_PER_DEGREE
         });
         break;
+      case 'symmetric':
+        add(id, {
+          type: 'symmetric',
+          a: pointHandle(data.a),
+          b: pointHandle(data.b),
+          axis: objectHandles(data.axis).entity
+        });
+        break;
+      case 'point-on-object': {
+        const target = objectHandles(data.objectId);
+        const point = pointHandle(data.point);
+        if (target.kind === 'line') {
+          add(id, {
+            type: 'pointLineDistance',
+            point,
+            line: target.entity,
+            value: 0
+          });
+        } else if (target.kind === 'circle') {
+          add(id, { type: 'pointOnCircle', point, circle: target.entity });
+        } else {
+          add(id, { type: 'pointOnArc', point, arc: target.entity });
+        }
+        break;
+      }
+      case 'lock': {
+        // Two kernel equations under one document constraint; the residual
+        // read-back reports the worse of the two.
+        const point = pointHandle(data.point);
+        add(id, { type: 'fixX', point, value: data.x });
+        add(id, { type: 'fixY', point, value: data.y });
+        break;
+      }
     }
   }
 
@@ -515,10 +542,18 @@ export function solveSketchWithGcs(
       numParams: requireNumber(dofRecord, 'numParams'),
       numEquations: requireNumber(dofRecord, 'numEquations')
     },
-    constraintResiduals: kernelHandles.map(({ constraintId, handle }) => ({
-      constraintId,
-      maxResidual: residualByHandle.get(handle) ?? 0
-    })),
+    constraintResiduals: [
+      ...kernelHandles
+        .reduce((byConstraint, { constraintId, handle }) => {
+          const residual = residualByHandle.get(handle) ?? 0;
+          byConstraint.set(
+            constraintId,
+            Math.max(byConstraint.get(constraintId) ?? 0, residual)
+          );
+          return byConstraint;
+        }, new Map<string, number>())
+        .entries()
+    ].map(([constraintId, maxResidual]) => ({ constraintId, maxResidual })),
     objects: solvedObjects
   };
 }

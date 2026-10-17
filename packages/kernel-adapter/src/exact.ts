@@ -234,11 +234,9 @@ import {
   topologyHashOfWitness,
   topologyWitnessesEqual
 } from './topology-lineage';
-import {
-  solveSketchWithGcs,
-  type ResolvedSketchObject,
-  type SketchSolveOutcome
-} from './gcs-sketch';
+// Type-only: the solver mapping loads on the first sketch solve, keeping it
+// out of the lazily loaded exact chunk, which sits at its size budget.
+import type { ResolvedSketchObject, SketchSolveOutcome } from './gcs-sketch';
 
 export type {
   SketchDofSummary,
@@ -3393,6 +3391,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         });
       }
     }
+    const { solveSketchWithGcs } = await import('./gcs-sketch');
     const kernel = new RemusKernel();
     try {
       return solveSketchWithGcs(

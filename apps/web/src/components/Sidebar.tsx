@@ -114,6 +114,7 @@ interface SidebarProps {
   features: FeatureNode[];
   representations: Record<string, BodyRepresentation>;
   failedFeatureIds?: ReadonlySet<FeatureId>;
+  relatedFeatureIds?: ReadonlySet<FeatureId> | null;
   geometryPending?: boolean;
   selectedFeatureNodeId: string | null;
   selectedSketchProfileId: string | null;
@@ -226,6 +227,7 @@ export function Sidebar({
   features,
   representations,
   failedFeatureIds,
+  relatedFeatureIds,
   geometryPending = false,
   selectedFeatureNodeId,
   selectedSketchProfileId,
@@ -309,11 +311,18 @@ export function Sidebar({
   const findToggleRef = useRef<HTMLButtonElement>(null);
   const [showConsumed, setShowConsumed] = useState(false);
   const [objectFilter, setObjectFilter] = useState('all');
-  const sketches = features.filter(
+  const [objectQuery, setObjectQuery] = useState('');
+  const objectNeedle = objectQuery.trim().toLowerCase();
+  // Name search narrows the rows only: identities, selection and visibility
+  // are untouched, and clearing the field brings back exactly the same list.
+  const matchesObject = (name: string) =>
+    !objectNeedle || name.toLowerCase().includes(objectNeedle);
+  const allSketches = features.filter(
     (feature) => feature.data.featureKind === 'sketch'
   );
+  const sketches = allSketches.filter((sketch) => matchesObject(sketch.name));
   const sketchArrivals = useArrivals(
-    sketches.map((sketch) => sketch.id),
+    allSketches.map((sketch) => sketch.id),
     ARRIVAL_MS
   );
   // Bodies in feature-history order so the tree matches the timeline below.
@@ -341,13 +350,16 @@ export function Sidebar({
     bodies.map((body) => body.bodyId),
     ARRIVAL_MS
   );
-  const liveBodies = bodies.filter((body) => !body.consumed);
-  const consumedBodies = bodies.filter((body) => body.consumed);
+  const allLiveBodies = bodies.filter((body) => !body.consumed);
+  const matchingBodies = bodies.filter((body) => matchesObject(body.name));
+  const liveBodies = matchingBodies.filter((body) => !body.consumed);
+  const consumedBodies = matchingBodies.filter((body) => body.consumed);
   const showBodies = objectFilter !== 'sketches';
   const showSketches = objectFilter !== 'bodies';
-  const objectCount = liveBodies.length + sketches.length;
+  const objectCount = allLiveBodies.length + allSketches.length;
   const filteredCount =
-    (showBodies ? bodies.length : 0) + (showSketches ? sketches.length : 0);
+    (showBodies ? matchingBodies.length : 0) +
+    (showSketches ? sketches.length : 0);
 
   function renderBodyRow(body: BodyRepresentation) {
     const hidden = hiddenBodyIds.has(body.bodyId);
@@ -473,7 +485,7 @@ export function Sidebar({
               onExpose={onExposeParameter}
               exposedInTweak={exposedParameterNames.has(parameter.name)}
               onDescribe={onDescribeParameter}
-              bodies={liveBodies}
+              bodies={allLiveBodies}
               onConfigureToggle={onConfigureToggle}
               table={table}
             />
@@ -482,7 +494,7 @@ export function Sidebar({
             existingNames={parameters.map((parameter) => parameter.name)}
             onSet={onSetParameter}
             onConfigureToggle={onConfigureToggle}
-            bodies={liveBodies}
+            bodies={allLiveBodies}
           />
         </div>
         {parameters.length === 0 && (
@@ -512,6 +524,23 @@ export function Sidebar({
             <option value="sketches">Sketches</option>
           </select>
         </div>
+        <div className="object-filter">
+          <Search size={13} aria-hidden="true" />
+          <input
+            type="search"
+            aria-label="Find an object by name"
+            placeholder="Find an object"
+            value={objectQuery}
+            onChange={(event) => setObjectQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && objectQuery) {
+                event.preventDefault();
+                event.stopPropagation();
+                setObjectQuery('');
+              }
+            }}
+          />
+        </div>
         <div className="feature-list" role="list" aria-label="Objects">
           {geometryPending && (
             <p className="muted sidebar-hint" role="status">
@@ -520,11 +549,13 @@ export function Sidebar({
           )}
           {filteredCount === 0 && !geometryPending && (
             <p className="muted sidebar-hint" role="listitem">
-              {objectFilter === 'all'
-                ? 'No objects yet. Create a body or sketch to get started.'
-                : objectFilter === 'bodies'
-                  ? 'No bodies yet. Create a primitive or extrude a sketch.'
-                  : 'No sketches yet. Start a sketch on a plane or face.'}
+              {objectNeedle
+                ? `No objects match “${objectQuery.trim()}”.`
+                : objectFilter === 'all'
+                  ? 'No objects yet. Create a body or sketch to get started.'
+                  : objectFilter === 'bodies'
+                    ? 'No bodies yet. Create a primitive or extrude a sketch.'
+                    : 'No sketches yet. Start a sketch on a plane or face.'}
             </p>
           )}
           {showBodies && liveBodies.map(renderBodyRow)}
@@ -636,6 +667,7 @@ export function Sidebar({
           features={features}
           representations={representations}
           failedFeatureIds={failedFeatureIds}
+          relatedFeatureIds={relatedFeatureIds}
           geometryPending={geometryPending}
           selectedFeatureNodeId={selectedFeatureNodeId}
           hiddenBodyIds={hiddenBodyIds}

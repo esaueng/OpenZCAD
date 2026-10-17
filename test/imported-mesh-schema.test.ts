@@ -48,8 +48,8 @@ describe('reference mesh schema boundary', () => {
     const document = meshDocument('reference');
     const saved = JSON.parse(JSON.stringify(document)) as ProjectDocument;
 
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(17);
-    expect(saved.schemaVersion).toBe(17);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(18);
+    expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect(saved.schemaVersion).toBeGreaterThan(16);
     expect(normalizeDocument(saved)).toEqual(document);
     for (const node of documentNodesWithHistory(saved)) {
@@ -85,7 +85,7 @@ describe('reference mesh schema boundary', () => {
       );
       const normalized = normalizeDocument(hydrated);
 
-      expect(normalized.schemaVersion).toBe(17);
+      expect(normalized.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
       expect({ ...normalized, schemaVersion: 16 }).toEqual(before);
       expect(legacy).toEqual(before);
       expect(normalizeDocument(normalized)).toEqual(normalized);

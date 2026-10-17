@@ -33,7 +33,7 @@ import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
-import { featureHistory } from './lib/featureHistory';
+import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
@@ -206,7 +206,9 @@ import {
   constraintToolsForObject,
   constraintToolSpec,
   describeConstraint,
+  disconnectConstraintIds,
   fullyDefinedIds,
+  lockConstraintIds,
   measureDrivingDimension,
   planConstraintFromSelection,
   refusePick,
@@ -5767,6 +5769,18 @@ export function App() {
     selectedTopology
   ]);
   const selectedFeatureNodeId = selectedFeature?.id ?? null;
+  // History's Related view: the selected step's or bodies' lineage, or null
+  // with nothing selected so the toggle says why it is unavailable.
+  const historyRelatedFeatureIds = useMemo(
+    () =>
+      doc && (selectedFeature || selectedBodyIds.length > 0)
+        ? relatedFeatureIds(doc, {
+            featureId: selectedFeature?.featureId ?? null,
+            bodyIds: selectedFeature ? [] : selectedBodyIds
+          })
+        : null,
+    [doc, selectedFeature, selectedBodyIds]
+  );
   /**
    * Each opening of an edit card gets its own session. A late Apply must
    * leave a reopened card alone, even when it edits the same feature.
@@ -14079,7 +14093,55 @@ export function App() {
       );
       return true;
     }
-    const built = buildConstraint(doc, editingSketchNode, pending.kind, picks);
+    if (pending.kind === 'lock' || pending.kind === 'disconnect') {
+      const point = picks[0]!;
+      const ref = {
+        objectId: point.objectId as EntityId,
+        point: point.kind === 'point' ? point.point : 'center'
+      } as const;
+      // A second Lock on a locked point unlocks it; Disconnect only removes.
+      const removals =
+        pending.kind === 'lock'
+          ? lockConstraintIds(editingSketchNode, ref)
+          : disconnectConstraintIds(editingSketchNode, ref);
+      if (removals.length > 0) {
+        const verb = pending.kind === 'lock' ? 'Unlock point' : 'Disconnect point';
+        if (
+          executeTransaction(
+            verb,
+            removals.map((constraintId) =>
+              commandFactories.deleteSketchConstraint({
+                sketchId: editingSketchNode.sketchId,
+                constraintId: toSketchConstraintId(constraintId)
+              })
+            )
+          )
+        ) {
+          setSketchSolveStatus(null);
+          setStatus(
+            pending.kind === 'lock'
+              ? 'Point unlocked.'
+              : `Disconnected · removed ${removals.length} relation${removals.length === 1 ? '' : 's'}.`
+          );
+        }
+        dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+        return true;
+      }
+      if (pending.kind === 'disconnect') {
+        setStatus('That point has no coincident, midpoint or on-curve relation.');
+        dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+        return true;
+      }
+    }
+    const built = buildConstraint(
+      doc,
+      editingSketchNode,
+      pending.kind,
+      picks,
+      undefined,
+      (value) =>
+        evalParamValue(value, parameterScope.scope, doc.units) ?? undefined
+    );
     if ('error' in built) {
       setStatus(built.error);
     } else if (
@@ -20005,6 +20067,7 @@ export function App() {
       geometryPending={Boolean(
         currentGeometrySnapshot || currentFaceGeometryPreview
       )}
+      relatedFeatureIds={historyRelatedFeatureIds}
       selectedFeatureNodeId={selectedFeatureNodeId}
       selectedSketchProfileId={selectedSketchProfileId}
       hiddenBodyIds={hiddenBodyIds}
