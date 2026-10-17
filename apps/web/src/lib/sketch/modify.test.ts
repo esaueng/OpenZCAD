@@ -665,6 +665,57 @@ describe('Mirror', () => {
     ).toMatchObject({ status: 'refuse' });
   });
 
+  it('refuses a mirror or pattern that lands on existing geometry', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      { objectKind: 'circle', centerX: 4, centerY: 0, radius: 1 },
+      // Already where the mirror image and the second instance would go.
+      { objectKind: 'circle', centerX: -4, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: 4, y1: 0, x2: 12, y2: 0 },
+      { objectKind: 'circle', centerX: 12, centerY: 0, radius: 1 }
+    ]);
+    const [axis, circle, , direction] = ids as [string, string, string, string];
+    const refusal = {
+      status: 'refuse',
+      reason: 'The result would lie on top of geometry already in the sketch.'
+    };
+    expect(
+      planSketchMirror(
+        manager.document,
+        sketch(),
+        sketchId,
+        circle,
+        axis,
+        resolve
+      )
+    ).toEqual(refusal);
+    const linear = (spacing: number) =>
+      planSketchLinearPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        circle,
+        direction,
+        spacing,
+        3,
+        resolve
+      );
+    expect(linear(4)).toEqual(refusal);
+    expect(linear(3)).toMatchObject({ status: 'commands' });
+    expect(
+      planSketchCircularPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        circle,
+        { x: 0, y: 0 },
+        2,
+        360,
+        resolve
+      )
+    ).toEqual(refusal);
+  });
+
   it('refuses an entity that is its own mirror image, and a non-line mirror', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },

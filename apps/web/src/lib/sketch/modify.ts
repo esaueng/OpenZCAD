@@ -1233,6 +1233,9 @@ export function planSketchMirror(
         'That entity is already symmetric about the line; its mirror image is itself.'
     };
   }
+  if (landsOnExisting(document, sketch, sourceId, [image], resolve)) {
+    return { status: 'refuse', reason: LANDS_ON_EXISTING };
+  }
   const id = sourceId as EntityId;
   const axisEntity = axisId as EntityId;
   const imageId = newEntityId();
@@ -1348,6 +1351,33 @@ function transformCurve(
     start: normalizeAngle(curve.start + turn)
   };
 }
+
+/**
+ * True when any new curve would overlap geometry already in the sketch
+ * other than its source, which the profile builder would then reject as a
+ * duplicate or an overlapping segment.
+ */
+function landsOnExisting(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  sourceId: string,
+  curves: readonly Curve2[],
+  resolve: Resolve
+): boolean {
+  const existing = sketch.objectIds.flatMap((objectId) => {
+    if (objectId === sourceId) {
+      return [];
+    }
+    const data = sketchObject(document, sketch, objectId);
+    return data ? cutterCurves(data, resolve) : [];
+  });
+  return curves.some((curve) =>
+    existing.some((other) => curvesOverlap(other, curve))
+  );
+}
+
+const LANDS_ON_EXISTING =
+  'The result would lie on top of geometry already in the sketch.';
 
 function instancesOverlap(source: Curve2, copies: Curve2[]): boolean {
   const placed = [source, ...copies];
@@ -1502,6 +1532,9 @@ export function planSketchLinearPattern(
         'Some instances would overlap others. Use a spacing at least as long as the entity along the direction.'
     };
   }
+  if (landsOnExisting(document, sketch, sourceId, copies, resolve)) {
+    return { status: 'refuse', reason: LANDS_ON_EXISTING };
+  }
   return {
     status: 'commands',
     label: 'Linear pattern',
@@ -1586,6 +1619,9 @@ export function planSketchCircularPattern(
       reason:
         'Some instances would overlap others. Change the count or the angle, or move the pivot off the entity.'
     };
+  }
+  if (landsOnExisting(document, sketch, sourceId, copies, resolve)) {
+    return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
   return {
     status: 'commands',
