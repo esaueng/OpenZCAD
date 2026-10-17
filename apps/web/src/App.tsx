@@ -20710,17 +20710,13 @@ export function App() {
                   objectId,
                   snapPoint ?? null,
                   clickPoint
-                )
-              ) {
-                return;
-              }
-              if (
+                ) ||
                 handleSketchEditPick(objectId, clickPoint, {
                   at: planePoint,
                   snapPoint
                 })
               ) {
-                return;
+                return true;
               }
               dispatchInteraction({ type: 'sketch-select-object', objectId });
             }}

@@ -271,7 +271,10 @@ test('Circular pattern turns an entity about a picked circle’s centre', async 
   await modifyTool(page, 'Circular pattern');
   await page.mouse.click(small.x + 14, small.y);
   await expect(status).toContainText('Circular pattern: pick 2 of 2.');
-  await page.mouse.click(pivot.x - 50, pivot.y);
+  // The pivot is the hub's centre snap: no curve under the click, so
+  // the snap names it, and the click must not also select the hub's region.
+  await page.mouse.move(pivot.x, pivot.y);
+  await page.mouse.click(pivot.x, pivot.y);
   const count = page.getByRole('textbox', { name: 'Pattern count' });
   await expect(count).toBeVisible();
   await count.fill('4');
@@ -303,4 +306,10 @@ test('Circular pattern turns an entity about a picked circle’s centre', async 
     expect(Number(copy.centerX) - cx).toBeCloseTo(expected[index]![0]!, 6);
     expect(Number(copy.centerY) - cy).toBeCloseTo(expected[index]![1]!, 6);
   }
+  // The pivot click was the tool's: it left no hub region selected behind.
+  await page.getByRole('button', { name: 'Finish Sketch' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Sketch 01 finished.'
+  );
+  await expect(page.getByText('closed profile selected')).toHaveCount(0);
 });

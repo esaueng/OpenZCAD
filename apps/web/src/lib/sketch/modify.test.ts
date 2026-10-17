@@ -1272,6 +1272,41 @@ describe('Patterns', () => {
     ).toMatchObject({ status: 'commands' });
   });
 
+  it('defers to the profile classifier for duplicates its buckets merge', () => {
+    // The copy sits 1.2e-6 off a 45° line — outside the 1e-6 tolerance as a
+    // distance — but each coordinate moves 0.85e-6 and stays in the same
+    // rounding bucket, so the profile builder would call it a duplicate.
+    const x0 = 0.4e-6;
+    const y0 = -0.4e-6;
+    const d = 0.85e-6;
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: x0, y1: y0, x2: x0 + 4, y2: y0 + 4 },
+      {
+        objectKind: 'line',
+        x1: x0 - d,
+        y1: y0 + d - 10,
+        x2: x0 - d + 4,
+        y2: y0 + d - 6
+      },
+      { objectKind: 'line', x1: 20, y1: 0, x2: 20, y2: 10 }
+    ]);
+    expect(
+      planSketchLinearPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[1]!,
+        ids[2]!,
+        10,
+        2,
+        resolve
+      )
+    ).toEqual({
+      status: 'refuse',
+      reason: 'The result would lie on top of geometry already in the sketch.'
+    });
+  });
+
   it('refuses fractional, too small and too large counts, and zero spacing', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },

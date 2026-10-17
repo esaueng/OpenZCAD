@@ -13,7 +13,10 @@
  * understands, so the next solve moves them together.
  */
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
-import { geometryTolerance } from '@openzcad/geometry';
+import {
+  computeSketchProfileAnalysis,
+  geometryTolerance
+} from '@openzcad/geometry';
 import {
   createId,
   toEntityId,
@@ -1353,7 +1356,10 @@ export function planSketchMirror(
         'The mirror image would overlap part of its source. Trim the entity at the mirror line first.'
     };
   }
-  if (landsOnExisting(document, sketch, sourceId, [image], resolve, tol)) {
+  if (
+    landsOnExisting(document, sketch, sourceId, [image], resolve, tol) ||
+    profileClash(document, sketch, [curveObject(image, data)], resolve)
+  ) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
   const id = sourceId as EntityId;
@@ -1574,6 +1580,46 @@ function landsOnExisting(
   );
 }
 
+/**
+ * The profile builder's own verdict: run its classifier over the sketch with
+ * the new objects added and look for a duplicate or overlap it would report
+ * against one of them. The checks above explain the common cases; this one
+ * makes sure nothing they approximate slips through (its coordinate-bucket
+ * duplicate keys, for one). Construction objects are skipped by the
+ * classifier, so they never clash.
+ */
+function profileClash(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  added: readonly SketchObjectData[],
+  resolve: Resolve
+): boolean {
+  const newIds = added.map((_, index) => `modify-result-${index}`);
+  const objects = [
+    ...sketch.objectIds.flatMap((objectId) => {
+      const data = sketchObject(document, sketch, objectId);
+      return data ? [{ id: String(objectId), data }] : [];
+    }),
+    ...added.map((data, index) => ({ id: newIds[index]!, data }))
+  ];
+  try {
+    const { diagnostics } = computeSketchProfileAnalysis(
+      objects,
+      (value) => resolve(value) ?? Number.NaN
+    );
+    return diagnostics.some(
+      (diagnostic) =>
+        (diagnostic.code === 'duplicate-entity' ||
+          diagnostic.code === 'overlapping-segments') &&
+        diagnostic.sourceEntityIds.some((id) => newIds.includes(id))
+    );
+  } catch {
+    // A sketch the classifier cannot analyse is refused elsewhere; this
+    // check only adds refusals it can prove.
+    return false;
+  }
+}
+
 const LANDS_ON_EXISTING =
   'The result would lie on top of geometry already in the sketch.';
 
@@ -1755,7 +1801,15 @@ export function planSketchLinearPattern(
         'Some instances would overlap others. Use a spacing at least as long as the entity along the direction.'
     };
   }
-  if (landsOnExisting(document, sketch, sourceId, copies, resolve, tol)) {
+  if (
+    landsOnExisting(document, sketch, sourceId, copies, resolve, tol) ||
+    profileClash(
+      document,
+      sketch,
+      copies.map((copy) => curveObject(copy, source.data)),
+      resolve
+    )
+  ) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
   return {
@@ -1857,7 +1911,15 @@ export function planSketchCircularPattern(
         'Some instances would overlap others. Change the count or the angle, or move the pivot off the entity.'
     };
   }
-  if (landsOnExisting(document, sketch, sourceId, copies, resolve, tol)) {
+  if (
+    landsOnExisting(document, sketch, sourceId, copies, resolve, tol) ||
+    profileClash(
+      document,
+      sketch,
+      copies.map((copy) => curveObject(copy, source.data)),
+      resolve
+    )
+  ) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
   return {
