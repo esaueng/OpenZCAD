@@ -22,6 +22,7 @@ import {
   planSketchLinearPattern,
   planSketchMirror,
   planSketchTrim,
+  settleOptionalRelations,
   type SketchModifyPlan
 } from '../apps/web/src/lib/sketch/modify';
 
@@ -63,9 +64,17 @@ function sketchWith(objects: SketchObjectData[]) {
     manager.execute(
       commandFactories.addSketchConstraint({ sketchId, constraint })
     );
-  const commit = (plan: SketchModifyPlan) => {
+  /** Commit a plan the way the app does, optional relations settled. */
+  const commit = async (plan: SketchModifyPlan) => {
     if (plan.status !== 'commands') throw new Error(plan.reason);
-    manager.execute(composeCommands(plan.label, plan.commands));
+    const commands = await settleOptionalRelations(
+      manager.document,
+      sketchId,
+      plan.commands,
+      plan.optional ?? [],
+      (document, id) => adapter.solveSketch(document, id)
+    );
+    manager.execute(composeCommands(plan.label, commands));
   };
   const solve = () => adapter.solveSketch(manager.document, sketchId);
   return { manager, sketchId, ids, sketch, constrain, commit, solve };
@@ -81,6 +90,7 @@ function expectGood(outcome: SketchSolveOutcome) {
   expect(outcome.converged).toBe(true);
   expect(outcome.rolledBack).toBe(false);
   expect(['solved', 'underConstrained']).toContain(outcome.classification);
+  expect(outcome.dof.rank).toBe(outcome.dof.numEquations);
 }
 
 const lock = (
@@ -114,7 +124,7 @@ describe('S05 modify tools on the pinned kernel', () => {
     fixture.constrain(lock(axis, 'start', 0, -10));
     fixture.constrain(lock(axis, 'end', 0, 10));
     for (const source of [line, arc]) {
-      fixture.commit(
+      await fixture.commit(
         planSketchMirror(
           fixture.manager.document,
           fixture.sketch(),
@@ -166,7 +176,7 @@ describe('S05 modify tools on the pinned kernel', () => {
     const [axis, line] = fixture.ids as [string, string];
     fixture.constrain(lock(axis, 'start', 0, -10));
     fixture.constrain(lock(axis, 'end', 0, 10));
-    fixture.commit(
+    await fixture.commit(
       planSketchMirror(
         fixture.manager.document,
         fixture.sketch(),
@@ -207,7 +217,7 @@ describe('S05 modify tools on the pinned kernel', () => {
       { objectKind: 'line', x1: 20, y1: -5, x2: 20, y2: 5 }
     ]);
     const [target, left, right] = fixture.ids as [string, string, string];
-    fixture.commit(
+    await fixture.commit(
       planSketchTrim(
         fixture.manager.document,
         fixture.sketch(),
@@ -261,7 +271,7 @@ describe('S05 modify tools on the pinned kernel', () => {
       objectId: circle as EntityId,
       value: 5
     });
-    fixture.commit(
+    await fixture.commit(
       planSketchTrim(
         fixture.manager.document,
         fixture.sketch(),
@@ -284,7 +294,7 @@ describe('S05 modify tools on the pinned kernel', () => {
       { objectKind: 'line', x1: 20, y1: 0, x2: 20, y2: 4 }
     ]);
     const [circle, direction, bar] = fixture.ids as [string, string, string];
-    fixture.commit(
+    await fixture.commit(
       planSketchLinearPattern(
         fixture.manager.document,
         fixture.sketch(),
@@ -296,7 +306,7 @@ describe('S05 modify tools on the pinned kernel', () => {
         resolve
       )
     );
-    fixture.commit(
+    await fixture.commit(
       planSketchCircularPattern(
         fixture.manager.document,
         fixture.sketch(),
@@ -335,5 +345,218 @@ describe('S05 modify tools on the pinned kernel', () => {
         6
       );
     }
+  });
+});
+
+describe('S05 Mirror holds an on-axis joint only when the solver needs it', () => {
+  type Fixture = ReturnType<typeof sketchWith>;
+  const point = (objectId: string, name: 'start' | 'end' | 'center') => ({
+    objectId: objectId as EntityId,
+    point: name
+  });
+  const pointOns = (fixture: Fixture) =>
+    (fixture.sketch().constraints ?? []).filter(
+      (constraint) => constraint.data.constraintKind === 'point-on-object'
+    ).length;
+  const lockAxis = (fixture: Fixture, axis: string) => {
+    fixture.constrain(lock(axis, 'start', 0, -10));
+    fixture.constrain(lock(axis, 'end', 0, 10));
+  };
+
+  // The axis is x = 0 from y = -10 to 10; the source's start sits on it.
+  const cases: {
+    name: string;
+    objects?: SketchObjectData[];
+    setup: (fixture: Fixture, axis: string, source: string) => void;
+    /** Which object to mirror, when not the line from (0, 2). */
+    mirrored?: number;
+    added: number;
+  }[] = [
+    {
+      name: 'an axis fixed by vertical and a length, with the point locked',
+      setup: (fixture, axis, source) => {
+        fixture.constrain({
+          constraintKind: 'vertical',
+          objectId: axis as EntityId
+        });
+        fixture.constrain(lock(axis, 'start', 0, -10));
+        fixture.constrain({
+          constraintKind: 'distance',
+          a: point(axis, 'start'),
+          b: point(axis, 'end'),
+          value: 20
+        });
+        fixture.constrain(lock(source, 'start', 0, 2));
+      },
+      added: 0
+    },
+    {
+      name: 'an axis fixed by an angle to a locked line, with the point locked',
+      objects: [{ objectKind: 'line', x1: -5, y1: -10, x2: 5, y2: -10 }],
+      setup: (fixture, axis, source) => {
+        const reference = fixture.ids[2]!;
+        fixture.constrain(lock(reference, 'start', -5, -10));
+        fixture.constrain(lock(reference, 'end', 5, -10));
+        fixture.constrain(lock(axis, 'start', 0, -10));
+        fixture.constrain({
+          constraintKind: 'angle',
+          a: reference as EntityId,
+          b: axis as EntityId,
+          valueDeg: 90
+        });
+        fixture.constrain({
+          constraintKind: 'distance',
+          a: point(axis, 'start'),
+          b: point(axis, 'end'),
+          value: 20
+        });
+        fixture.constrain(lock(source, 'start', 0, 2));
+      },
+      added: 0
+    },
+    {
+      name: 'a point already held on the axis',
+      setup: (fixture, axis, source) => {
+        fixture.constrain({
+          constraintKind: 'point-on-object',
+          point: point(source, 'start'),
+          objectId: axis as EntityId
+        });
+      },
+      added: 0
+    },
+    {
+      name: 'a point held at the axis midpoint',
+      objects: [{ objectKind: 'line', x1: 0, y1: 0, x2: 6, y2: 5 }],
+      setup: (fixture, axis) => {
+        fixture.constrain({
+          constraintKind: 'midpoint',
+          point: point(fixture.ids[2]!, 'start'),
+          line: axis as EntityId
+        });
+      },
+      mirrored: 2,
+      added: 0
+    },
+    {
+      name: 'a point joined to an axis end',
+      objects: [{ objectKind: 'line', x1: 0, y1: 10, x2: 6, y2: 5 }],
+      setup: (fixture, axis) => {
+        fixture.constrain({
+          constraintKind: 'coincident',
+          a: point(fixture.ids[2]!, 'start'),
+          b: point(axis, 'end')
+        });
+      },
+      mirrored: 2,
+      added: 0
+    },
+    {
+      name: 'a point held through a coincident neighbour',
+      objects: [{ objectKind: 'line', x1: -3, y1: 6, x2: 0, y2: 2 }],
+      setup: (fixture, axis, source) => {
+        const neighbour = fixture.ids[2]!;
+        fixture.constrain({
+          constraintKind: 'coincident',
+          a: point(source, 'start'),
+          b: point(neighbour, 'end')
+        });
+        fixture.constrain({
+          constraintKind: 'point-on-object',
+          point: point(neighbour, 'end'),
+          objectId: axis as EntityId
+        });
+      },
+      added: 0
+    },
+    {
+      name: 'a locked point on a locked axis',
+      setup: (fixture, axis, source) => {
+        lockAxis(fixture, axis);
+        fixture.constrain(lock(source, 'start', 0, 2));
+      },
+      added: 0
+    },
+    {
+      name: 'a locked point on a free axis',
+      setup: (fixture, _axis, source) => {
+        fixture.constrain(lock(source, 'start', 0, 2));
+      },
+      added: 1
+    },
+    {
+      name: 'a free point on a locked axis',
+      setup: (fixture, axis) => lockAxis(fixture, axis),
+      added: 1
+    }
+  ];
+
+  for (const { name, objects = [], setup, mirrored = 1, added } of cases) {
+    it(`${added ? 'adds' : 'skips'} the axis hold for ${name}`, async () => {
+      const fixture = sketchWith([
+        { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+        { objectKind: 'line', x1: 0, y1: 2, x2: 6, y2: 5 },
+        ...objects
+      ]);
+      const axis = fixture.ids[0]!;
+      const source = fixture.ids[mirrored]!;
+      setup(fixture, axis, fixture.ids[1]!);
+      expectGood(await fixture.solve());
+      const before = pointOns(fixture);
+      await fixture.commit(
+        planSketchMirror(
+          fixture.manager.document,
+          fixture.sketch(),
+          fixture.sketchId,
+          source,
+          axis,
+          resolve
+        )
+      );
+      expect(pointOns(fixture) - before).toBe(added);
+      expectGood(await fixture.solve());
+    });
+  }
+
+  it('settles each end of an arc on the axis separately', async () => {
+    // Where a radius-5 circle about (2, 0) crosses x = 0.
+    const ON_AXIS_DEG = (Math.atan2(Math.sqrt(21), -2) * 180) / Math.PI;
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      // Centred off the axis: a semicircle's chord is a diameter, where an
+      // equal radius stops fixing the image's centre and loses rank.
+      {
+        objectKind: 'arc',
+        centerX: 2,
+        centerY: 0,
+        radius: 5,
+        startAngleDeg: -ON_AXIS_DEG,
+        endAngleDeg: ON_AXIS_DEG
+      }
+    ]);
+    const [axis, arc] = fixture.ids as [string, string];
+    lockAxis(fixture, axis);
+    fixture.constrain({
+      constraintKind: 'point-on-object',
+      point: point(arc, 'start'),
+      objectId: axis as EntityId
+    });
+    expectGood(await fixture.solve());
+    await fixture.commit(
+      planSketchMirror(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        arc,
+        axis,
+        resolve
+      )
+    );
+    // The held start needs nothing more; the free end gets its hold.
+    const holds = (fixture.sketch().constraints ?? []).flatMap(({ data }) =>
+      data.constraintKind === 'point-on-object' ? [data.point.point] : []
+    );
+    expect(holds).toEqual(['start', 'end']);
+    expectGood(await fixture.solve());
   });
 });

@@ -862,6 +862,8 @@ describe('driving a modify tool end to end through its host', () => {
       disarm: () => log.push('disarm'),
       runOperation: async (operation) =>
         withAdapter((adapter) => adapter.sketchPlanarOperation(operation)),
+      solveSketch: async (document, sketchId) =>
+        withAdapter((adapter) => adapter.solveSketch(document, sketchId)),
       commit: async (sketchId, commands, label) => {
         applied.push({ commands, label });
         return true;
