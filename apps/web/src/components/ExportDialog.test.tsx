@@ -58,6 +58,42 @@ function exportOptions() {
 }
 
 describe('ExportDialog', () => {
+  it('offers hidden bodies as an explicit choice and refuses an empty export (ZC-199)', async () => {
+    const user = userEvent.setup();
+    const onIncludeHiddenChange = vi.fn();
+    const dialog = renderDialog({
+      scopeLabel: 'all bodies (2, 1 hidden)',
+      hiddenBodies: 1,
+      includeHidden: true,
+      onIncludeHiddenChange
+    });
+    expect(
+      screen.getByText(/Exports all bodies \(2, 1 hidden\)/)
+    ).toBeVisible();
+    const box = screen.getByRole('checkbox', { name: 'Include 1 hidden body' });
+    expect(box).toBeChecked();
+    await user.click(box);
+    expect(onIncludeHiddenChange).toHaveBeenCalledWith(false);
+    // Everything visible was hidden: the dialog stays to undo the choice,
+    // but there is nothing to write.
+    dialog.rerender({
+      scopeLabel: 'visible bodies (0, 1 hidden left out)',
+      bodies: [],
+      includeHidden: false
+    });
+    expect(
+      screen.getByRole('checkbox', { name: 'Include 1 hidden body' })
+    ).not.toBeChecked();
+    expect(screen.getByRole('button', { name: /^Export 3MF/ })).toBeDisabled();
+    // Nothing to check either.
+    expect(screen.getByRole('button', { name: /watertight/i })).toBeDisabled();
+  });
+
+  it('shows no hidden-body choice when nothing is hidden', () => {
+    renderDialog();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
   it('exports 3MF at the standard preset by default', async () => {
     const user = userEvent.setup();
     const props = renderDialog();

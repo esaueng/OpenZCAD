@@ -34,6 +34,11 @@ import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
 import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
+import {
+  exportScope,
+  exportScopeLabel,
+  type ExportScope
+} from './lib/exportScope';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
@@ -5936,15 +5941,13 @@ export function App() {
         : new Set<FeatureId>(),
     [doc, featureAttribution]
   );
-  const selectedBodyExportable = Boolean(
-    selectedBody &&
-    !selectedBody.consumed &&
-    selectedBody.exportableStep &&
-    !failedHistoryBodies.has(selectedBody.bodyId)
-  );
-  const { exportBodyIds, exportWithheldMessage } = useMemo<{
+  // Viewport-hidden bodies export unless this is switched off; the dialog
+  // reports the count either way, so the choice is never silent.
+  const [exportIncludesHidden, setExportIncludesHidden] = useState(true);
+  const { exportBodyIds, exportWithheldMessage, exportScopeInfo } = useMemo<{
     exportBodyIds: BodyId[];
     exportWithheldMessage: string | null;
+    exportScopeInfo: ExportScope | null;
   }>(() => {
     if (
       !doc ||
@@ -5952,51 +5955,58 @@ export function App() {
       currentFaceGeometryPreview !== null ||
       (tweakMode && parameterModelError)
     ) {
-      return { exportBodyIds: [], exportWithheldMessage: null };
+      return {
+        exportBodyIds: [],
+        exportWithheldMessage: null,
+        exportScopeInfo: null
+      };
     }
     const bodyName = (bodyId: BodyId) =>
       doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId;
-    const exportable = (body: GeometryBodyRepresentation) =>
-      body.exportableStep &&
-      !body.consumed &&
-      !parameterHiddenBodyIds.has(body.bodyId);
-    if (selectedBody && exportable(selectedBody)) {
-      const withheld = failedHistoryBodies.get(selectedBody.bodyId);
-      return withheld
-        ? {
-            exportBodyIds: [],
-            exportWithheldMessage: withheldExportMessage([withheld], bodyName)
-          }
-        : {
-            exportBodyIds: [selectedBody.bodyId],
-            exportWithheldMessage: null
-          };
-    }
-    const candidates = Object.values(doc.derived.bodyRepresentations).filter(
-      exportable
+    const scope = exportScope(
+      Object.values(doc.derived.bodyRepresentations).map((body) => ({
+        bodyId: body.bodyId,
+        exportable:
+          body.exportableStep &&
+          !body.consumed &&
+          !parameterHiddenBodyIds.has(body.bodyId),
+        hidden: localHiddenBodyIds.has(body.bodyId),
+        withheld: failedHistoryBodies.has(body.bodyId)
+      })),
+      selectedBody?.bodyId ?? null,
+      exportIncludesHidden
     );
+    const withheld = scope.withheldIds.flatMap((bodyId) => {
+      const entry = failedHistoryBodies.get(bodyId as BodyId);
+      return entry ? [entry] : [];
+    });
     return {
-      exportBodyIds: candidates
-        .filter((body) => !failedHistoryBodies.has(body.bodyId))
-        .map((body) => body.bodyId),
-      exportWithheldMessage: withheldExportMessage(
-        candidates.flatMap((body) => {
-          const withheld = failedHistoryBodies.get(body.bodyId);
-          return withheld ? [withheld] : [];
-        }),
-        bodyName
-      )
+      exportBodyIds: scope.bodyIds as BodyId[],
+      exportWithheldMessage: withheldExportMessage(withheld, bodyName),
+      exportScopeInfo: scope
     };
   }, [
     failedHistoryBodies,
     doc,
     selectedBody,
     parameterHiddenBodyIds,
+    localHiddenBodyIds,
+    exportIncludesHidden,
     tweakMode,
     parameterModelError,
     currentGeometrySnapshot,
     currentFaceGeometryPreview
   ]);
+  // What the one-click STEP controls name: the selected body, or the
+  // all-bodies scope whenever hidden bodies are in it or left out of it.
+  const exportControlScope =
+    exportScopeInfo?.selection && selectedBody
+      ? selectedBody.name
+      : exportScopeInfo &&
+          (exportScopeInfo.hiddenIncluded > 0 ||
+            exportScopeInfo.hiddenExcluded > 0)
+        ? exportScopeLabel(exportScopeInfo)
+        : null;
 
   /**
    * What the current selection is, and the figure that goes with it.
@@ -12062,7 +12072,12 @@ export function App() {
         });
         return;
       }
-      const bodies = countLabel(exportBodyIds.length, 'body', 'bodies');
+      const hiddenNote = exportScopeInfo?.hiddenIncluded
+        ? ` (${exportScopeInfo.hiddenIncluded} hidden)`
+        : exportScopeInfo?.hiddenExcluded
+          ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
+          : '';
+      const bodies = `${countLabel(exportBodyIds.length, 'body', 'bodies')}${hiddenNote}`;
       const outcome =
         produced.warnings > 0
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
@@ -20279,9 +20294,7 @@ export function App() {
             !parameterEditPending &&
             !parameterDraftActive
           }
-          exportScope={
-            selectedBodyExportable && selectedBody ? selectedBody.name : null
-          }
+          exportScope={exportControlScope}
           exportWithheld={exportWithheldMessage}
           saveState={presentedSaveState}
           saveToAccount={
@@ -20394,9 +20407,7 @@ export function App() {
               !parameterDraftActive &&
               !parameterModelError
             }
-            exportScope={
-              selectedBodyExportable && selectedBody ? selectedBody.name : null
-            }
+            exportScope={exportControlScope}
             exportWithheld={exportWithheldMessage}
             onPreviewParameter={handlePreviewParameter}
             onSetParameter={(name, expression) =>
@@ -21981,19 +21992,39 @@ export function App() {
                 onClose={() => setAccountConflict(null)}
               />
             )}
-          {meshExportOpen && doc && exportBodyIds.length > 0 && (
+          {meshExportOpen &&
+            doc &&
+            // Stays open while hidden bodies are switched off, even when
+            // nothing visible is left, so the choice can be undone here.
+            (exportBodyIds.length > 0 ||
+              (exportScopeInfo?.hiddenExcluded ?? 0) > 0) && (
             <ExportDialog
               scopeLabel={
-                selectedBodyExportable && selectedBody
+                exportScopeInfo?.selection && selectedBody
                   ? selectedBody.name
-                  : `all bodies (${exportBodyIds.length})`
+                  : exportScopeInfo
+                    ? exportScopeLabel(exportScopeInfo)
+                    : `all bodies (${exportBodyIds.length})`
               }
+              hiddenBodies={
+                exportScopeInfo && !exportScopeInfo.selection
+                  ? exportScopeInfo.hiddenIncluded +
+                    exportScopeInfo.hiddenExcluded
+                  : 0
+              }
+              includeHidden={exportIncludesHidden}
+              onIncludeHiddenChange={setExportIncludesHidden}
               bodies={exportBodyIds.map((bodyId) => ({
                 bodyId,
                 name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
               }))}
               revision={doc.version}
-              onClose={() => setMeshExportOpen(false)}
+              onClose={() => {
+                setMeshExportOpen(false);
+                // Leaving with every body hidden and left out would leave no
+                // export to reopen this dialog from; hidden bodies come back.
+                if (exportBodyIds.length === 0) setExportIncludesHidden(true);
+              }}
               onExport={handleExportMesh}
               onCheckQuality={handleCheckMeshQuality}
             />
