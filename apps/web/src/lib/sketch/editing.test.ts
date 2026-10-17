@@ -1,6 +1,23 @@
-import { describe, expect, it } from 'vitest';
-import type { SketchId } from '@openzcad/shared';
-import { sketchEditRaceRefusal, type SketchEditSession } from './editing';
+import { describe, expect, it, vi } from 'vitest';
+import { commandFactories } from '@openzcad/command-system';
+import {
+  addSketchFeature,
+  addSketchObjects,
+  createProjectDocument,
+  extrudeSketch,
+  findSketch
+} from '@openzcad/document-core';
+import {
+  toUserId,
+  type ProjectDocument,
+  type SketchId
+} from '@openzcad/shared';
+import { FeatureBuildError } from '../featureValidation';
+import {
+  checkSketchEdit,
+  sketchEditRaceRefusal,
+  type SketchEditSession
+} from './editing';
 import { sketchEntityEditTarget } from './editTarget';
 
 const SKETCH_ID = 'sketch_race' as SketchId;
@@ -144,5 +161,111 @@ describe('sketchEntityEditTarget', () => {
         'entity_a'
       )
     ).toBeNull();
+  });
+});
+
+describe('checkSketchEdit for a delete', () => {
+  function sketchWithLine(extrude: boolean) {
+    const start = createProjectDocument('Delete', toUserId('user_delete'));
+    const sketched = addSketchFeature(start, {
+      name: 'Profile',
+      plane: 'XY',
+      offset: 0,
+      object: {
+        objectKind: 'rectangle',
+        width: 20,
+        height: 12,
+        centerX: 0,
+        centerY: 0
+      }
+    });
+    const lined = addSketchObjects(sketched.document, {
+      sketchId: sketched.sketchId,
+      objects: [{ objectKind: 'line', x1: 30, y1: 0, x2: 40, y2: 0 }]
+    });
+    const document = extrude
+      ? extrudeSketch(lined.document, {
+          name: 'Block',
+          sketchId: sketched.sketchId,
+          distance: 5
+        }).document
+      : lined.document;
+    return {
+      document,
+      sketchId: sketched.sketchId,
+      lineId: lined.objectNodeIds[0]!
+    };
+  }
+
+  function deleteCommand(sketchId: SketchId, objectId: string) {
+    return commandFactories.deleteSketchObject({
+      sketchId,
+      objectId: objectId as never
+    });
+  }
+
+  it('refuses a delete that leaves a dependent feature without its body', async () => {
+    const { document, sketchId, lineId } = sketchWithLine(true);
+    const derive = vi.fn(
+      async (next: ProjectDocument) =>
+        ({ ...next.derived, warnings: [], bodyRepresentations: {} }) as never
+    );
+    const check = checkSketchEdit(
+      document,
+      sketchId,
+      [deleteCommand(sketchId, lineId)],
+      derive
+    );
+    await expect(check).rejects.toBeInstanceOf(FeatureBuildError);
+    await expect(check).rejects.toThrow(
+      /^Block: .*The sketch edit was not saved\.$/
+    );
+    // The candidate it rebuilt is the document without the line.
+    const candidate = derive.mock.calls[0]![0];
+    expect(
+      findSketch(candidate, sketchId)!.objectIds.includes(lineId as never)
+    ).toBe(false);
+    // The base document is untouched.
+    expect(
+      findSketch(document, sketchId)!.objectIds.includes(lineId as never)
+    ).toBe(true);
+  });
+
+  it('commits a delete the dependents survive, and skips the rebuild when nothing depends on the sketch', async () => {
+    const dependent = sketchWithLine(true);
+    const derive = vi.fn(async (next: ProjectDocument) => {
+      const block = Object.keys(next.nodes).find(
+        (id) =>
+          next.nodes[id]?.kind === 'feature' &&
+          (next.nodes[id] as { name: string }).name === 'Block'
+      )!;
+      const bodyId = (next.nodes[block] as { bodyId: string }).bodyId;
+      return {
+        ...next.derived,
+        warnings: [],
+        bodyRepresentations: { [bodyId]: {} }
+      } as never;
+    });
+    await expect(
+      checkSketchEdit(
+        dependent.document,
+        dependent.sketchId,
+        [deleteCommand(dependent.sketchId, dependent.lineId)],
+        derive
+      )
+    ).resolves.toBeDefined();
+    expect(derive).toHaveBeenCalledTimes(1);
+
+    const alone = sketchWithLine(false);
+    const unused = vi.fn();
+    await expect(
+      checkSketchEdit(
+        alone.document,
+        alone.sketchId,
+        [deleteCommand(alone.sketchId, alone.lineId)],
+        unused
+      )
+    ).resolves.toBeUndefined();
+    expect(unused).not.toHaveBeenCalled();
   });
 });
