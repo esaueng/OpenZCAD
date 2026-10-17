@@ -13,6 +13,7 @@ import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import {
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
+  type BodyId,
   type BodyRepresentation,
   type FeatureNode,
   type FeatureId,
@@ -381,8 +382,8 @@ describe('Sidebar', () => {
     );
     renderSidebar({
       features: [
-        feature(1, { bodyId: 'body-1' }),
-        feature(2, { bodyId: 'body-2' })
+        feature(1, { bodyId: 'body-1' as BodyId }),
+        feature(2, { bodyId: 'body-2' as BodyId })
       ],
       representations: { 'body-1': bodies[0]!, 'body-2': bodies[1]! },
       onConfigureToggle: vi.fn()
