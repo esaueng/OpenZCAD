@@ -29,7 +29,11 @@ export type PendingConstraintKind =
   | 'midpoint'
   | 'radius'
   | 'distance'
-  | 'angle';
+  | 'angle'
+  | 'symmetric'
+  | 'point-on-object'
+  | 'lock'
+  | 'disconnect';
 
 export type DrivingDimensionKind = Extract<
   PendingConstraintKind,
@@ -44,13 +48,15 @@ export interface ConstraintToolSpec {
   kind: PendingConstraintKind;
   label: string;
   /** How many picks complete the constraint. */
-  picks: 1 | 2;
+  picks: 1 | 2 | 3;
   /** What each pick consumes, in order. */
   pickKinds:
     | readonly ['object']
+    | readonly ['point']
     | readonly ['object', 'object']
     | readonly ['point', 'point']
-    | readonly ['point', 'object'];
+    | readonly ['point', 'object']
+    | readonly ['point', 'point', 'object'];
   /** A completed pick sequence waits for a canvas placement before entry. */
   placement?: true;
   /** Instruction shown while the tool is armed. */
@@ -143,6 +149,34 @@ export const CONSTRAINT_TOOL_SPECS: readonly ConstraintToolSpec[] = [
     pickKinds: ['object', 'object'],
     placement: true,
     hint: 'Click two lines, then place the angle value.'
+  },
+  {
+    kind: 'symmetric',
+    label: 'Symmetric',
+    picks: 3,
+    pickKinds: ['point', 'point', 'object'],
+    hint: 'Click two snap points, then the line they mirror about.'
+  },
+  {
+    kind: 'point-on-object',
+    label: 'Point on curve',
+    picks: 2,
+    pickKinds: ['point', 'object'],
+    hint: 'Click a snap point, then the line, circle or arc it should lie on.'
+  },
+  {
+    kind: 'lock',
+    label: 'Lock',
+    picks: 1,
+    pickKinds: ['point'],
+    hint: 'Click a snap point to lock it where it is; click a locked point to unlock it.'
+  },
+  {
+    kind: 'disconnect',
+    label: 'Disconnect',
+    picks: 1,
+    pickKinds: ['point'],
+    hint: 'Click a joined point to remove its coincident, midpoint and on-curve relations.'
   }
 ] as const;
 
@@ -308,7 +342,56 @@ export function refusePick(
       return data.objectKind === 'line'
         ? null
         : 'An angle dimension applies to two lines.';
+    case 'symmetric': {
+      if (existing.length === 2) {
+        if (data.objectKind !== 'line') {
+          return 'The symmetry axis must be a line.';
+        }
+        return existing.some((entry) => entry.objectId === pick.objectId)
+          ? 'The axis cannot be a line whose point it mirrors.'
+          : null;
+      }
+      return pointPickRefusal(data, pick, 'Symmetric');
+    }
+    case 'point-on-object': {
+      if (existing.length === 0) {
+        return pointPickRefusal(data, pick, 'Point on curve');
+      }
+      if (
+        data.objectKind !== 'line' &&
+        data.objectKind !== 'circle' &&
+        data.objectKind !== 'arc'
+      ) {
+        return 'A point can lie on a line, circle or arc.';
+      }
+      return existing[0]?.objectId === pick.objectId
+        ? 'The point and the curve must be different objects.'
+        : null;
+    }
+    case 'lock':
+    case 'disconnect':
+      return pointPickRefusal(data, pick, constraintToolSpec(kind).label);
   }
+}
+
+/** A snap point the schema can address: line ends, arc points, circle centers. */
+function pointPickRefusal(
+  data: SketchObjectData,
+  pick: ConstraintPick,
+  label: string
+): string | null {
+  if (data.objectKind === 'line' || data.objectKind === 'arc') {
+    return pick.kind === 'point' &&
+      (data.objectKind === 'arc' || pick.point !== 'center')
+      ? null
+      : 'A line contributes its start or end point.';
+  }
+  if (data.objectKind === 'circle') {
+    return pick.kind === 'point' && pick.point === 'center'
+      ? null
+      : 'A circle contributes only its center point.';
+  }
+  return `${label} applies to line and arc points and circle centers.`;
 }
 
 /**
@@ -322,7 +405,8 @@ export function buildConstraint(
   sketch: SketchNode,
   kind: PendingConstraintKind,
   picks: readonly ConstraintPick[],
-  value?: number | string
+  value?: number | string,
+  resolve?: ResolveParam
 ): BuildConstraintResult {
   const spec = constraintToolSpec(kind);
   if (picks.length !== spec.picks) {
@@ -437,7 +521,99 @@ export function buildConstraint(
         }
       };
     }
+    case 'symmetric': {
+      const [a, b, axis] = picks;
+      if (
+        a?.kind !== 'point' ||
+        b?.kind !== 'point' ||
+        axis?.kind !== 'object'
+      ) {
+        return { error: 'Symmetric needs two snap points and a line.' };
+      }
+      return {
+        data: {
+          constraintKind: 'symmetric',
+          a: { objectId: a.objectId as EntityId, point: a.point },
+          b: { objectId: b.objectId as EntityId, point: b.point },
+          axis: axis.objectId as EntityId
+        }
+      };
+    }
+    case 'point-on-object': {
+      const [point, target] = picks;
+      if (point?.kind !== 'point' || target?.kind !== 'object') {
+        return { error: 'Point on curve needs a snap point, then a curve.' };
+      }
+      return {
+        data: {
+          constraintKind: 'point-on-object',
+          point: { objectId: point.objectId as EntityId, point: point.point },
+          objectId: target.objectId as EntityId
+        }
+      };
+    }
+    case 'lock': {
+      const pick = picks[0]!;
+      const at = resolve
+        ? pointPosition(document, sketch, pick, resolve)
+        : null;
+      if (pick.kind !== 'point' || !at) {
+        return { error: 'Lock needs a snap point with a resolvable position.' };
+      }
+      return {
+        data: {
+          constraintKind: 'lock',
+          point: { objectId: pick.objectId as EntityId, point: pick.point },
+          x: at.x,
+          y: at.y
+        }
+      };
+    }
+    case 'disconnect':
+      return { error: 'Disconnect removes relations; it adds none.' };
   }
+}
+
+/** Ids of the lock constraints holding one point. */
+export function lockConstraintIds(
+  sketch: SketchNode,
+  ref: SketchPointRef
+): string[] {
+  return (sketch.constraints ?? [])
+    .filter(
+      ({ data }) =>
+        data.constraintKind === 'lock' &&
+        data.point.objectId === ref.objectId &&
+        data.point.point === ref.point
+    )
+    .map(({ constraintId }) => constraintId);
+}
+
+/**
+ * Ids of the relations that join one point to other geometry: coincidences
+ * naming it on either side, a midpoint it sits on, and a curve it lies on.
+ * Disconnect removes exactly these, leaving dimensions, locks and the
+ * relations of every other point alone.
+ */
+export function disconnectConstraintIds(
+  sketch: SketchNode,
+  ref: SketchPointRef
+): string[] {
+  const at = (point: SketchPointRef) =>
+    point.objectId === ref.objectId && point.point === ref.point;
+  return (sketch.constraints ?? [])
+    .filter(({ data }) => {
+      switch (data.constraintKind) {
+        case 'coincident':
+          return at(data.a) || at(data.b);
+        case 'midpoint':
+        case 'point-on-object':
+          return at(data.point);
+        default:
+          return false;
+      }
+    })
+    .map(({ constraintId }) => constraintId);
 }
 
 export type MeasureDimensionResult = { value: number } | { error: string };
@@ -580,6 +756,12 @@ export function describeConstraint(
       return `Radius ${String(data.value)} · ${nameOf(data.objectId)}`;
     case 'angle':
       return `Angle ${String(data.valueDeg)}° · ${nameOf(data.a)} ∠ ${nameOf(data.b)}`;
+    case 'symmetric':
+      return `Symmetric · ${nameOf(data.a.objectId)}.${data.a.point} ↔ ${nameOf(data.b.objectId)}.${data.b.point} about ${nameOf(data.axis)}`;
+    case 'point-on-object':
+      return `Point on curve · ${nameOf(data.point.objectId)}.${data.point.point} on ${nameOf(data.objectId)}`;
+    case 'lock':
+      return `Lock · ${nameOf(data.point.objectId)}.${data.point.point}`;
   }
 }
 
@@ -663,6 +845,16 @@ export function constraintReferencesObject(
       return data.objectId === objectId;
     case 'midpoint':
       return refs(data.point) === objectId || data.line === objectId;
+    case 'symmetric':
+      return (
+        refs(data.a) === objectId ||
+        refs(data.b) === objectId ||
+        data.axis === objectId
+      );
+    case 'point-on-object':
+      return refs(data.point) === objectId || data.objectId === objectId;
+    case 'lock':
+      return refs(data.point) === objectId;
     default:
       return refs(data.a) === objectId || refs(data.b) === objectId;
   }

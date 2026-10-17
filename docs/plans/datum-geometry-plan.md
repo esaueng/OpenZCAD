@@ -1,6 +1,11 @@
 # R01 — Offset Plane and Midplane
 
 **Design baseline:** 2026-10-16, canonical document schema v17.
+
+> **Schema note (2026-10-17):** v18 is now taken by the S07 sketch
+> relations (#705). Read this plan's v17 → v18 bump as v18 → v19, and its
+> "pre-v18" documents as pre-v19; the migration content is unchanged.
+
 This revision replaces the earlier canonical-offset-only first slice.
 [ROADMAP.md](../../ROADMAP.md#r01) owns delivery status. This document proposes
 contracts and acceptance evidence; it adds no runtime capability or schema bump.

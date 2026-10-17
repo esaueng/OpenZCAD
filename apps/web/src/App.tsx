@@ -206,7 +206,9 @@ import {
   constraintToolsForObject,
   constraintToolSpec,
   describeConstraint,
+  disconnectConstraintIds,
   fullyDefinedIds,
+  lockConstraintIds,
   measureDrivingDimension,
   planConstraintFromSelection,
   refusePick,
@@ -14030,7 +14032,55 @@ export function App() {
       );
       return true;
     }
-    const built = buildConstraint(doc, editingSketchNode, pending.kind, picks);
+    if (pending.kind === 'lock' || pending.kind === 'disconnect') {
+      const point = picks[0]!;
+      const ref = {
+        objectId: point.objectId as EntityId,
+        point: point.kind === 'point' ? point.point : 'center'
+      } as const;
+      // A second Lock on a locked point unlocks it; Disconnect only removes.
+      const removals =
+        pending.kind === 'lock'
+          ? lockConstraintIds(editingSketchNode, ref)
+          : disconnectConstraintIds(editingSketchNode, ref);
+      if (removals.length > 0) {
+        const verb = pending.kind === 'lock' ? 'Unlock point' : 'Disconnect point';
+        if (
+          executeTransaction(
+            verb,
+            removals.map((constraintId) =>
+              commandFactories.deleteSketchConstraint({
+                sketchId: editingSketchNode.sketchId,
+                constraintId: toSketchConstraintId(constraintId)
+              })
+            )
+          )
+        ) {
+          setSketchSolveStatus(null);
+          setStatus(
+            pending.kind === 'lock'
+              ? 'Point unlocked.'
+              : `Disconnected · removed ${removals.length} relation${removals.length === 1 ? '' : 's'}.`
+          );
+        }
+        dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+        return true;
+      }
+      if (pending.kind === 'disconnect') {
+        setStatus('That point has no coincident, midpoint or on-curve relation.');
+        dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+        return true;
+      }
+    }
+    const built = buildConstraint(
+      doc,
+      editingSketchNode,
+      pending.kind,
+      picks,
+      undefined,
+      (value) =>
+        evalParamValue(value, parameterScope.scope, doc.units) ?? undefined
+    );
     if ('error' in built) {
       setStatus(built.error);
     } else if (
