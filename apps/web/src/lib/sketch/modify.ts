@@ -330,8 +330,12 @@ export function curveCrossings(
     const d1 = sub(first.b, first.a);
     const d2 = sub(second.b, second.a);
     const denom = cross(d1, d2);
-    const scale = Math.max(Math.hypot(d1.x, d1.y), Math.hypot(d2.x, d2.y), 1);
-    if (Math.abs(denom) <= scale * scale * 1e-12) {
+    // `denom` is |d1|·|d2|·sin θ: parallel is a test on the angle alone,
+    // so a long target and a short cutter are judged fairly.
+    if (
+      Math.abs(denom) <=
+      Math.hypot(d1.x, d1.y) * Math.hypot(d2.x, d2.y) * 1e-12
+    ) {
       return [];
     }
     const delta = sub(second.a, first.a);

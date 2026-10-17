@@ -893,6 +893,33 @@ describe('Trim', () => {
     ).toEqual({ [near]: target, [far]: piece });
   });
 
+  it('finds a shallow crossing between a long target and a short cutter', () => {
+    // A 1e6 guide crossed by a 1-unit guide at 5e-7 rad.
+    const angle = 5e-7;
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 1e6, y2: 0, construction: true },
+      {
+        objectKind: 'line',
+        x1: 500000 - 0.5 * Math.cos(angle),
+        y1: -0.5 * Math.sin(angle),
+        x2: 500000 + 0.5 * Math.cos(angle),
+        y2: 0.5 * Math.sin(angle),
+        construction: true
+      }
+    ]);
+    commit(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 900000, y: 0 },
+        resolve
+      )
+    );
+    expect((object(ids[0]!) as { x2: number }).x2).toBeCloseTo(500000, 3);
+  });
+
   it('refuses a circle only one curve touches', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },
