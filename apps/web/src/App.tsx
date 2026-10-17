@@ -34,13 +34,6 @@ import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
 import { featureHistory } from './lib/featureHistory';
-import {
-  MAX_SAVED_VIEWS,
-  deleteSavedView,
-  loadSavedViews,
-  saveView,
-  type SavedView
-} from './lib/savedViews';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
@@ -7711,45 +7704,31 @@ export function App() {
     setViewRequest({ view, nonce: ++viewNonceRef.current });
   }
 
-  // Saved views: per project, on this device (see lib/savedViews).
-  const [savedViewList, setSavedViewList] = useState<SavedView[]>([]);
-  const savedViewsProjectId = doc?.projectId ?? null;
-  useEffect(() => {
-    setSavedViewList(
-      savedViewsProjectId ? loadSavedViews(savedViewsProjectId) : []
-    );
-  }, [savedViewsProjectId]);
+  // Saved views: per project, on this device. The list and its storage live
+  // in the lazily loaded panel; the entry chunk has no room for them.
   const savedViewsControl = doc
     ? {
-        views: savedViewList,
-        saveDisabledReason:
-          savedViewList.length >= MAX_SAVED_VIEWS
-            ? `A project keeps up to ${MAX_SAVED_VIEWS} saved views. Delete one to save another.`
-            : null,
-        onSave() {
+        projectId: doc.projectId,
+        capture() {
           const snapshot = projectViewSnapshot();
-          if (!snapshot) {
-            setStatus('Move the view once, then save it.');
-            return;
-          }
-          const result = saveView(doc.projectId, {
-            camera: snapshot.camera,
-            projection,
-            displayMode: viewerSettings.displayMode,
-            ...(viewerSettings.sectionView
-              ? { sectionView: viewerSettings.sectionView }
-              : {})
-          });
-          if (!result.ok) {
-            setStatus(result.reason);
-            return;
-          }
-          setSavedViewList(result.views);
-          setStatus(`Saved ${result.view.name}.`);
+          return snapshot
+            ? {
+                camera: snapshot.camera,
+                projection,
+                displayMode: viewerSettings.displayMode,
+                ...(viewerSettings.sectionView
+                  ? { sectionView: viewerSettings.sectionView }
+                  : {})
+              }
+            : null;
         },
-        onApply(viewId: string) {
-          const view = savedViewList.find((entry) => entry.id === viewId);
-          if (!view) return;
+        onApply(view: {
+          name: string;
+          camera: ViewportCameraState;
+          projection: typeof projection;
+          displayMode: DisplayMode;
+          sectionView?: SectionViewSettings;
+        }) {
           setProjection(view.projection);
           setViewerSettings((current) => {
             const { sectionView: _previous, ...rest } = current;
@@ -7762,11 +7741,7 @@ export function App() {
           requestView({ pose: view.camera, projection: view.projection });
           setStatus(`${view.name}.`);
         },
-        onDelete(viewId: string) {
-          const name = savedViewList.find((entry) => entry.id === viewId)?.name;
-          setSavedViewList(deleteSavedView(doc.projectId, viewId));
-          setStatus(name ? `Deleted ${name}.` : 'Deleted the saved view.');
-        }
+        onStatus: setStatus
       }
     : undefined;
 
