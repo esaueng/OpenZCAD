@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   addSketchFeature,
@@ -19,6 +19,7 @@ import {
 } from '@openzcad/shared';
 import {
   affectedFeatureTargets,
+  planReorder,
   reorderFeatureTargets,
   reorderRefusal
 } from './affectedFeatureTargets';
@@ -484,5 +485,72 @@ describe('affected feature targets', () => {
     expect(
       reorderRefusal(reopened(failure.message), candidate, mark!.featureId, 0)
     ).toBeNull();
+  });
+
+  describe('reorder routing', () => {
+    const plate = addPrimitiveFeature(
+      createProjectDocument('Reorder routing', toUserId('user_affected')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 4 }
+      }
+    );
+    const document = addPrimitiveFeature(plate, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 8, height: 8, depth: 8 }
+    });
+    const block = listFeaturesInOrder(document)[1]!.featureId;
+    const gates = (overrides: Partial<Parameters<typeof planReorder>[3]>) => ({
+      orderGate: vi.fn(),
+      canEdit: vi.fn(() => true),
+      geometryReady: vi.fn(() => true),
+      ...overrides
+    });
+
+    it('refuses a reorder without edit rights before anything rebuilds', () => {
+      const checks = gates({ canEdit: vi.fn(() => false) });
+      expect(planReorder(document, block, 0, checks)).toEqual({
+        kind: 'blocked'
+      });
+      expect(checks.canEdit).toHaveBeenCalledTimes(1);
+      // Neither the readiness check nor a rebuild is reached.
+      expect(checks.geometryReady).not.toHaveBeenCalled();
+    });
+
+    it('waits for the current version rather than a stale projection', () => {
+      const checks = gates({ geometryReady: vi.fn(() => false) });
+      expect(planReorder(document, block, 0, checks)).toEqual({
+        kind: 'pending'
+      });
+      expect(checks.geometryReady).toHaveBeenCalledWith(document);
+    });
+
+    it('validates a permitted reorder once the projection is current', () => {
+      const plan = planReorder(document, block, 0, gates({}));
+      expect(plan.kind).toBe('validate');
+      expect(
+        plan.kind === 'validate' &&
+          plan.targets.map((target) => target.featureName)
+      ).toEqual(['Block', 'Plate']);
+    });
+
+    it('leaves no-op and order-gate refusals to the command', () => {
+      const refused = gates({
+        orderGate: vi.fn(() => {
+          throw new Error('Cannot reorder');
+        })
+      });
+      expect(planReorder(document, block, 0, refused)).toEqual({
+        kind: 'direct'
+      });
+      expect(refused.canEdit).not.toHaveBeenCalled();
+      const noop = gates({});
+      expect(planReorder(document, block, 1, noop)).toEqual({
+        kind: 'direct'
+      });
+      expect(noop.orderGate).not.toHaveBeenCalled();
+    });
   });
 });

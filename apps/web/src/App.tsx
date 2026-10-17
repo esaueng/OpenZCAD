@@ -1260,7 +1260,7 @@ import { PatternProgress } from './components/PatternProgress';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
-  reorderFeatureTargets,
+  planReorder,
   reorderRefusal,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
@@ -17373,23 +17373,15 @@ export function App() {
     const label = name ? `Reorder ${name}` : 'Reorder feature';
     const command = commandFactories.moveFeature({ featureId, toIndex }, label);
     const base = doc;
-    let targets = doc ? reorderFeatureTargets(doc, featureId, toIndex) : [];
-    try {
-      if (doc && targets.length > 0) command.validate(doc);
-    } catch {
-      targets = []; // The order gate's own refusal, reported as before.
-    }
-    if (targets.length === 0) {
-      executeCommand(command);
-      return;
-    }
-    if (!ensureCanEdit(`reorder ${name ?? 'this feature'}`)) return;
-    // The comparison needs the exact projection of this very version; a
-    // rebuild still pending after an undo or resume describes another model.
-    if (!geometry.isReadyFor(base)) {
+    const plan = planReorder(base, featureId, toIndex, {
+      orderGate: (document) => command.validate(document),
+      canEdit: () => ensureCanEdit(`reorder ${name ?? 'this feature'}`),
+      geometryReady: (document) => geometry.isReadyFor(document)
+    });
+    if (plan.kind === 'direct') executeCommand(command);
+    if (plan.kind === 'pending')
       setStatus('Exact geometry is still rebuilding. Reorder once it finishes.');
-      return;
-    }
+    if (plan.kind !== 'validate') return;
     let failed = '';
     const attribution =
       featureAttribution && featureAttribution.derived === base?.derived

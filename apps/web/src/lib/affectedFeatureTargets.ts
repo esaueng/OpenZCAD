@@ -246,6 +246,49 @@ export function reorderFeatureTargets(
     .sort((a, b) => position.get(a.featureId)! - position.get(b.featureId)!);
 }
 
+/** How a History reorder proceeds; see {@link planReorder}. */
+export type ReorderPlan =
+  /** Nothing to rebuild, or refused by the order gate: commit as a command. */
+  | { kind: 'direct' }
+  /** The edit guard refused it; nothing rebuilds and nothing runs. */
+  | { kind: 'blocked' }
+  /** The current version's exact rebuild has not landed yet. */
+  | { kind: 'pending' }
+  | { kind: 'validate'; targets: AffectedFeatureTarget[] };
+
+/**
+ * Routes a History reorder before anything is rebuilt. A reorder that needs
+ * the exact preflight must pass the edit guard first — otherwise a read-only
+ * session waits out a rebuild only to be refused at commit — and must wait
+ * for the current version's own projection, because the comparison in
+ * {@link reorderRefusal} against a stale one blames the move for failures it
+ * did not cause.
+ */
+export function planReorder(
+  document: ProjectDocument | null,
+  featureId: FeatureId,
+  toIndex: number,
+  gates: {
+    /** The command's own order gate; throws for an illegal order. */
+    orderGate(document: ProjectDocument): void;
+    canEdit(): boolean;
+    geometryReady(document: ProjectDocument): boolean;
+  }
+): ReorderPlan {
+  const targets = document
+    ? reorderFeatureTargets(document, featureId, toIndex)
+    : [];
+  if (!document || targets.length === 0) return { kind: 'direct' };
+  try {
+    gates.orderGate(document);
+  } catch {
+    return { kind: 'direct' }; // Reported by the command, as before.
+  }
+  if (!gates.canEdit()) return { kind: 'blocked' };
+  if (!gates.geometryReady(document)) return { kind: 'pending' };
+  return { kind: 'validate', targets };
+}
+
 /**
  * The first feature from the moved span onward that the reordered rebuild
  * refuses and the current model does not, as a refusal naming it.
