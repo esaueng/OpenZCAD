@@ -1250,6 +1250,28 @@ describe('Patterns', () => {
     ).toMatchObject({ status: 'commands' });
   });
 
+  it('compares construction copies at their own scale, not the profile’s', () => {
+    // A 2e10 profile line would put the profile tolerance near 2; a small
+    // construction line patterned 1 unit sideways is still distinct.
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: -1e10, y1: 50, x2: 1e10, y2: 50 },
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0, construction: true },
+      { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 1 }
+    ]);
+    expect(
+      planSketchLinearPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[1]!,
+        ids[2]!,
+        1,
+        2,
+        resolve
+      )
+    ).toMatchObject({ status: 'commands' });
+  });
+
   it('refuses fractional, too small and too large counts, and zero spacing', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },

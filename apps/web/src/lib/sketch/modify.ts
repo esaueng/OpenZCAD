@@ -1328,12 +1328,11 @@ export function planSketchMirror(
       sweep: source.sweep
     };
   }
-  // Construction results never reach the profile builder, so they do not
-  // widen its scale.
-  const tol = profileTolerance(
+  const tol = resultTolerance(
     document,
     sketch,
-    data.construction ? [] : [image],
+    [image],
+    Boolean(data.construction),
     resolve
   );
   if (sameCurve(source, image, tol)) {
@@ -1486,12 +1485,7 @@ function profileTolerance(
   added: readonly Curve2[],
   resolve: Resolve
 ): number {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  let radius = 0;
-  const curves = [
+  return toleranceFor([
     // The profile builder drops construction geometry before it measures
     // the model, so a far-off guide must not loosen the tolerance here.
     ...sketch.objectIds.flatMap((objectId) => {
@@ -1499,7 +1493,16 @@ function profileTolerance(
       return data && !data.construction ? cutterCurves(data, resolve) : [];
     }),
     ...added
-  ];
+  ]);
+}
+
+/** `geometryTolerance` at the scale of these curves' bounding extent. */
+function toleranceFor(curves: readonly Curve2[]): number {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let radius = 0;
   for (const curve of curves) {
     const boxes =
       curve.kind === 'line'
@@ -1521,6 +1524,24 @@ function profileTolerance(
   const span = Number.isFinite(minX) ? Math.max(maxX - minX, maxY - minY) : 0;
   const scale = Math.max(span, radius, 1);
   return Math.max(geometryTolerance(scale), Number.EPSILON * scale * 16);
+}
+
+/**
+ * The tolerance a tool's result is compared with. Profile geometry is
+ * judged as the profile builder will judge it. Construction results never
+ * reach the profile builder and are only checked for exact duplicates, so
+ * they use the fixed on-curve slack, unaffected by any sketch's scale.
+ */
+function resultTolerance(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  added: readonly Curve2[],
+  construction: boolean,
+  resolve: Resolve
+): number {
+  return construction
+    ? ON_CURVE
+    : profileTolerance(document, sketch, added, resolve);
 }
 
 /**
@@ -1713,10 +1734,11 @@ export function planSketchLinearPattern(
       )
     );
   }
-  const tol = profileTolerance(
+  const tol = resultTolerance(
     document,
     sketch,
-    source.data.construction ? [] : copies,
+    copies,
+    Boolean(source.data.construction),
     resolve
   );
   if (
@@ -1814,10 +1836,11 @@ export function planSketchCircularPattern(
   }
   // A line through the pivot lands back on itself after half a turn, so
   // an even count would stack duplicates that break profiles.
-  const tol = profileTolerance(
+  const tol = resultTolerance(
     document,
     sketch,
-    source.data.construction ? [] : copies,
+    copies,
+    Boolean(source.data.construction),
     resolve
   );
   if (
