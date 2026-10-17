@@ -8,6 +8,10 @@ import {
   Slice,
   Undo2
 } from 'lucide-react';
+import {
+  SavedViewsSection,
+  type SavedViewsSectionProps
+} from './SavedViewsSection';
 import { VIEW_LABELS } from '@openzcad/viewport';
 import type {
   ProjectionMode,
@@ -63,6 +67,8 @@ interface ViewerToolbarProps {
    */
   onMeasure?(next: boolean): void;
   onView(view: StandardView): void;
+  /** The project's saved views, listed under the standard view tiles. */
+  savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
   /** Switches the section view on (at the last plane used) or off. */
@@ -126,6 +132,7 @@ export function ViewerToolbar({
   measuring = false,
   onMeasure,
   onView,
+  savedViews,
   onCycleDisplayMode,
   onToggleProjection,
   onToggleSection,
@@ -505,6 +512,16 @@ export function ViewerToolbar({
                 ) : null}
               </button>
             ))}
+            {savedViews && (
+              <SavedViewsSection
+                {...savedViews}
+                onApply={(viewId) => {
+                  savedViews.onApply(viewId);
+                  setViewsOpen(false);
+                  triggerRef.current?.focus();
+                }}
+              />
+            )}
           </div>
         )}
       </div>

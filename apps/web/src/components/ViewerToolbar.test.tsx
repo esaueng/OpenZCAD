@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ViewerToolbar } from './ViewerToolbar';
+import { saveView } from '../lib/savedViews';
 import type { SectionOutlineState } from '../lib/sectionOutline';
 import type { ViewerSettings } from '@openzcad/viewport';
 
@@ -362,6 +363,67 @@ describe('the section button and its panel', () => {
 });
 
 describe('the standard views flyout', () => {
+  it('lists saved views under the tiles: go to one, delete one, save another (ZC-115)', () => {
+    localStorage.clear();
+    const noop = () => undefined;
+    const pose = {
+      camera: {
+        position: [1, 2, 3] as [number, number, number],
+        target: [0, 0, 0] as [number, number, number],
+        orthographicZoom: 1
+      },
+      projection: 'perspective' as const,
+      displayMode: 'shaded' as const
+    };
+    saveView('proj_toolbar', pose, { id: 'a' });
+    saveView('proj_toolbar', pose, { id: 'b' });
+    const onApply = vi.fn();
+    const onStatus = vi.fn();
+    const capture = vi.fn(() => pose);
+    render(
+      <ViewerToolbar
+        settings={{ ...settings, sectionView: undefined }}
+        projection="perspective"
+        canUndo={false}
+        canRedo={false}
+        sectionRange={null}
+        onUndo={noop}
+        onRedo={noop}
+        onToggleGrid={noop}
+        onFit={noop}
+        onView={noop}
+        onCycleDisplayMode={noop}
+        onToggleProjection={noop}
+        onToggleSection={noop}
+        onSectionPlane={noop}
+        onSectionOffset={noop}
+        onSectionCommit={noop}
+        onExportSectionDxf={noop}
+        sectionOutline={{ kind: 'clipping' }}
+        units="mm"
+        savedViews={{ projectId: 'proj_toolbar', capture, onApply, onStatus }}
+      />
+    );
+    const trigger = screen.getByRole('button', { name: 'Standard views' });
+    fireEvent.click(trigger);
+    const saved = () =>
+      within(screen.getByRole('group', { name: 'Saved views' }));
+    fireEvent.click(saved().getByRole('button', { name: 'Delete View 2' }));
+    expect(onStatus).toHaveBeenLastCalledWith('Deleted View 2.');
+    expect(saved().queryByRole('button', { name: 'Go to View 2' })).toBeNull();
+    fireEvent.click(saved().getByRole('button', { name: /Save view/ }));
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(onStatus).toHaveBeenLastCalledWith('Saved View 2.');
+    // Going to a view closes the panel and returns the keyboard.
+    fireEvent.click(saved().getByRole('button', { name: 'Go to View 1' }));
+    expect(onApply).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'a', name: 'View 1' })
+    );
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(document.activeElement).toBe(trigger);
+    localStorage.clear();
+  });
+
   it('hands the keyboard back to its button once a view is chosen', () => {
     // The chosen tile unmounted with the panel and focus fell to <body>.
     const onView = vi.fn();

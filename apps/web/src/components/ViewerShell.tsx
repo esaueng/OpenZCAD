@@ -30,9 +30,11 @@ import type {
   SketchOverlay,
   ViewerSettings,
   ViewTarget,
+  ViewRequestTarget,
   WheelDevice
 } from '@openzcad/viewport';
 import { ViewerToolbar } from './ViewerToolbar';
+import type { SavedViewsSectionProps } from './SavedViewsSection';
 import {
   measurementAnnotationsOnScreen,
   sectionOutlineFor,
@@ -128,7 +130,7 @@ interface ViewerShellProps {
   settings: ViewerSettings;
   fitSignal: number;
   autoFrame?: AutoFrameRequest | null;
-  viewRequest: { view: ViewTarget; nonce: number } | null;
+  viewRequest: { view: ViewRequestTarget; nonce: number } | null;
   normalToFaceRequest: NormalToFaceRequest | null;
   units: string;
   editableBodyIds: string[];
@@ -307,6 +309,8 @@ interface ViewerShellProps {
   measuring?: boolean;
   onMeasure?(next: boolean): void;
   onView(view: ViewTarget): void;
+  /** The project's saved views, shown in the Standard views panel. */
+  savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
   sectionRange: { min: number; max: number } | null;
@@ -429,6 +433,7 @@ export function ViewerShell({
   measuring = false,
   onMeasure,
   onView,
+  savedViews,
   onCycleDisplayMode,
   onToggleProjection,
   sectionRange,
@@ -485,6 +490,7 @@ export function ViewerShell({
       measuring={measuring}
       {...(onMeasure ? { onMeasure } : {})}
       onView={onView}
+      {...(savedViews ? { savedViews } : {})}
       onCycleDisplayMode={onCycleDisplayMode}
       onToggleProjection={onToggleProjection}
       sectionRange={sectionRange}

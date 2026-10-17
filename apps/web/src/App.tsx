@@ -636,7 +636,7 @@ import type {
   DisplayMode,
   PickDetail,
   SketchOverlay,
-  ViewTarget
+  ViewRequestTarget
 } from '@openzcad/viewport/types';
 import type {
   MovePreview,
@@ -2621,7 +2621,7 @@ export function App() {
     kind: 'clipping'
   });
   const [viewRequest, setViewRequest] = useState<{
-    view: ViewTarget;
+    view: ViewRequestTarget;
     nonce: number;
   } | null>(null);
   const [normalToFaceRequest, setNormalToFaceRequest] =
@@ -7716,9 +7716,53 @@ export function App() {
     }
   }
 
-  function requestView(view: ViewTarget) {
+  function requestView(view: ViewRequestTarget) {
     setViewRequest({ view, nonce: ++viewNonceRef.current });
   }
+
+  // Saved views: per project, on this device. The list and its storage live
+  // in the lazily loaded panel; the entry chunk has no room for them.
+  const savedViewsControl = doc
+    ? {
+        projectId: doc.projectId,
+        capture() {
+          const snapshot = projectViewSnapshot();
+          return snapshot
+            ? {
+                camera: snapshot.camera,
+                projection,
+                displayMode: viewerSettings.displayMode,
+                ...(viewerSettings.sectionView
+                  ? { sectionView: viewerSettings.sectionView }
+                  : {})
+              }
+            : null;
+        },
+        onApply(view: {
+          name: string;
+          camera: ViewportCameraState;
+          projection: typeof projection;
+          displayMode: DisplayMode;
+          sectionView?: SectionViewSettings;
+        }) {
+          setProjection(view.projection);
+          // The exact section on screen belongs to the cut being replaced.
+          clearSectionOutline();
+          setViewerSettings((current) => {
+            const { sectionView: _previous, ...rest } = current;
+            return {
+              ...rest,
+              displayMode: view.displayMode,
+              ...(view.sectionView ? { sectionView: view.sectionView } : {})
+            };
+          });
+          requestView({ pose: view.camera, projection: view.projection });
+          if (view.sectionView) void requestExactSection(view.sectionView);
+          setStatus(`${view.name}.`);
+        },
+        onStatus: setStatus
+      }
+    : undefined;
 
   function requestNormalToSelectedFace() {
     if (!normalToFaceTarget) {
@@ -10012,6 +10056,11 @@ export function App() {
     setProjects((current) =>
       current.filter((project) => !destroyed.has(project.projectId))
     );
+    if (destroyed.size > 0) {
+      void import('./lib/savedViews').then(({ forgetSavedViews }) =>
+        destroyed.forEach((projectId) => forgetSavedViews(projectId))
+      );
+    }
     const failed = outcomes.find((outcome) => outcome.failure !== undefined);
     if (failed) {
       throw failed.failure;
@@ -20312,6 +20361,7 @@ export function App() {
               }))
             }
             onView={requestView}
+            {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
           />
@@ -20804,6 +20854,7 @@ export function App() {
             measuring={measuring}
             onMeasure={toggleMeasure}
             onView={requestView}
+            {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
             sectionRange={

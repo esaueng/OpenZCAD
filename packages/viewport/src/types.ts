@@ -6,6 +6,8 @@
  * below into commands.
  */
 
+import type { ViewportCameraState } from './camera/CameraController';
+
 export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 
 export type StandardView =
@@ -22,6 +24,17 @@ export type CubeCorner = readonly [1 | -1, 1 | -1, 1 | -1];
  * needs to refer to.
  */
 export type ViewTarget = StandardView | { corner: CubeCorner };
+
+/**
+ * What a view request can ask the camera for: a standard direction, or a
+ * saved pose to glide to and then hold exactly, orthographic zoom included.
+ */
+export type ViewRequestTarget =
+  | ViewTarget
+  | {
+      pose: ViewportCameraState;
+      projection: ProjectionMode;
+    };
 
 export type ProjectionMode = 'perspective' | 'orthographic';
 
