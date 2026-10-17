@@ -43,9 +43,11 @@ export function exportScope(
   return {
     bodyIds: kept.filter((body) => !body.withheld).map((body) => body.bodyId),
     hiddenIncluded: kept.filter((body) => body.hidden && !body.withheld).length,
-    hiddenExcluded:
-      exportable.filter((body) => body.hidden).length -
-      kept.filter((body) => body.hidden).length,
+    // Withheld bodies count on neither side: including hidden bodies can
+    // never add one, so it must not read as left out either.
+    hiddenExcluded: exportable.filter(
+      (body) => body.hidden && !body.withheld && !kept.includes(body)
+    ).length,
     withheldIds: kept
       .filter((body) => body.withheld)
       .map((body) => body.bodyId),

@@ -36,10 +36,10 @@ describe('exportScope (ZC-199)', () => {
   it('leaves hidden bodies out when asked, and counts them', () => {
     const scope = exportScope(model, null, false);
     expect(scope.bodyIds).toEqual(['a', 'c']);
-    expect(scope.hiddenExcluded).toBe(2);
+    expect(scope.hiddenExcluded).toBe(1);
     expect(scope.withheldIds).toEqual([]);
     expect(exportScopeLabel(scope)).toBe(
-      'visible bodies (2, 2 hidden left out)'
+      'visible bodies (2, 1 hidden left out)'
     );
   });
 
@@ -54,6 +54,19 @@ describe('exportScope (ZC-199)', () => {
     });
     // A selection that cannot export falls back to the whole model.
     expect(exportScope(model, 'd', true).selection).toBe(false);
+  });
+
+  it('never counts a withheld hidden body as left out', () => {
+    // 'e' is hidden and withheld: including hidden bodies cannot add it.
+    const scope = exportScope(model, null, false);
+    expect(scope.hiddenExcluded).toBe(1);
+    const onlyWithheld = exportScope(
+      [body('a'), body('e', { hidden: true, withheld: true })],
+      null,
+      false
+    );
+    expect(onlyWithheld.hiddenExcluded).toBe(0);
+    expect(exportScopeLabel(onlyWithheld)).toBe('all bodies (1)');
   });
 
   it('labels a model with nothing hidden plainly', () => {

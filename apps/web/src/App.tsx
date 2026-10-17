@@ -5925,12 +5925,6 @@ export function App() {
         : new Set<FeatureId>(),
     [doc, featureAttribution]
   );
-  const selectedBodyExportable = Boolean(
-    selectedBody &&
-    !selectedBody.consumed &&
-    selectedBody.exportableStep &&
-    !failedHistoryBodies.has(selectedBody.bodyId)
-  );
   // Viewport-hidden bodies export unless this is switched off; the dialog
   // reports the count either way, so the choice is never silent.
   const [exportIncludesHidden, setExportIncludesHidden] = useState(true);
@@ -5987,6 +5981,16 @@ export function App() {
     currentGeometrySnapshot,
     currentFaceGeometryPreview
   ]);
+  // What the one-click STEP controls name: the selected body, or the
+  // all-bodies scope whenever hidden bodies are in it or left out of it.
+  const exportControlScope =
+    exportScopeInfo?.selection && selectedBody
+      ? selectedBody.name
+      : exportScopeInfo &&
+          (exportScopeInfo.hiddenIncluded > 0 ||
+            exportScopeInfo.hiddenExcluded > 0)
+        ? exportScopeLabel(exportScopeInfo)
+        : null;
 
   /**
    * What the current selection is, and the figure that goes with it.
@@ -12005,7 +12009,9 @@ export function App() {
       }
       const hiddenNote = exportScopeInfo?.hiddenIncluded
         ? ` (${exportScopeInfo.hiddenIncluded} hidden)`
-        : '';
+        : exportScopeInfo?.hiddenExcluded
+          ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
+          : '';
       const bodies = `${countLabel(exportBodyIds.length, 'body', 'bodies')}${hiddenNote}`;
       const outcome =
         produced.warnings > 0
@@ -20140,9 +20146,7 @@ export function App() {
             !parameterEditPending &&
             !parameterDraftActive
           }
-          exportScope={
-            selectedBodyExportable && selectedBody ? selectedBody.name : null
-          }
+          exportScope={exportControlScope}
           exportWithheld={exportWithheldMessage}
           saveState={presentedSaveState}
           saveToAccount={
@@ -20254,9 +20258,7 @@ export function App() {
               !parameterDraftActive &&
               !parameterModelError
             }
-            exportScope={
-              selectedBodyExportable && selectedBody ? selectedBody.name : null
-            }
+            exportScope={exportControlScope}
             exportWithheld={exportWithheldMessage}
             onPreviewParameter={handlePreviewParameter}
             onSetParameter={(name, expression) =>
@@ -21867,7 +21869,12 @@ export function App() {
                 name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
               }))}
               revision={doc.version}
-              onClose={() => setMeshExportOpen(false)}
+              onClose={() => {
+                setMeshExportOpen(false);
+                // Leaving with every body hidden and left out would leave no
+                // export to reopen this dialog from; hidden bodies come back.
+                if (exportBodyIds.length === 0) setExportIncludesHidden(true);
+              }}
               onExport={handleExportMesh}
               onCheckQuality={handleCheckMeshQuality}
             />
