@@ -1340,7 +1340,9 @@ export function planSketchMirror(
   }
   // A line crossing the axis off-centre, or an arc centred on it with an
   // uneven sweep, reflects onto part of itself.
-  if (curvesOverlap(source, image)) {
+  // Construction geometry never bounds a profile, so only an exact
+  // duplicate (refused above) matters for it.
+  if (!data.construction && curvesOverlap(source, image)) {
     return {
       status: 'refuse',
       reason:

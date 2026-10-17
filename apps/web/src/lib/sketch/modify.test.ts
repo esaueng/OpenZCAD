@@ -853,6 +853,23 @@ describe('Mirror', () => {
     }
   });
 
+  it('lets a construction mirror overlap part of its source', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: -10, y1: 0, x2: 10, y2: 0 },
+      { objectKind: 'line', x1: 5, y1: -2, x2: 5, y2: 6, construction: true }
+    ]);
+    expect(
+      planSketchMirror(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[1]!,
+        ids[0]!,
+        resolve
+      )
+    ).toMatchObject({ status: 'commands' });
+  });
+
   it('refuses a full-sweep arc mirrored about a line through its centre', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
