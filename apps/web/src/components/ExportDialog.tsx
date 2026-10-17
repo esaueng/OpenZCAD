@@ -363,7 +363,7 @@ export function ExportDialog({
             <button
               type="button"
               className="secondary"
-              disabled={deflection === null}
+              disabled={deflection === null || bodies.length === 0}
               aria-disabled={phase !== 'idle' ? true : undefined}
               // Named outright: the visible words sit in a width-reserving
               // grid beside an icon slot, and a reader that did not descend

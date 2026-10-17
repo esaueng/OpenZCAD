@@ -85,6 +85,8 @@ describe('ExportDialog', () => {
       screen.getByRole('checkbox', { name: 'Include 1 hidden body' })
     ).not.toBeChecked();
     expect(screen.getByRole('button', { name: /^Export 3MF/ })).toBeDisabled();
+    // Nothing to check either.
+    expect(screen.getByRole('button', { name: /watertight/i })).toBeDisabled();
   });
 
   it('shows no hidden-body choice when nothing is hidden', () => {
