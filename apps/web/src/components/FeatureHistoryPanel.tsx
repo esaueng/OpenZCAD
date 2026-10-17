@@ -7,6 +7,7 @@ import {
   type FeatureNode
 } from '@openzcad/shared';
 import { featureHistory } from '../lib/featureHistory';
+import { datumPlaneDescription } from '../lib/datumPlanes';
 import {
   refusingWarning,
   type FeatureBuildError
@@ -14,6 +15,8 @@ import {
 
 interface Props {
   document: ProjectDocument;
+  /** Parameter values, to state a datum's offset as a number. */
+  scope?: Record<string, number>;
   selectedId: string | null;
   failure: FeatureBuildError | null;
   onSelect(id: string): void;
@@ -22,6 +25,7 @@ interface Props {
 
 export function FeatureHistoryPanel({
   document,
+  scope = {},
   selectedId,
   failure,
   onSelect,
@@ -79,9 +83,16 @@ export function FeatureHistoryPanel({
           ? 'Needs repair'
           : null;
   const showsUses = parents.length > 0 || missing.length > 0;
+  // A datum's definition is its source: said in words, beside what it uses.
+  const datumSource = selected
+    ? datumPlaneDescription(document, selected, scope, document.units)
+    : null;
   const hasDetails =
     selected !== undefined &&
-    (status !== null || showsUses || downstream.length > 0);
+    (status !== null ||
+      showsUses ||
+      downstream.length > 0 ||
+      datumSource !== null);
   // Rollback status and Resume live at the top of the History list itself.
   // A standalone feature with nothing to report draws no block at all: four
   // lines saying its name, that it was built and that nothing relates to it
@@ -118,6 +129,7 @@ export function FeatureHistoryPanel({
       {selected && hasDetails && (
         <div>
           {status && <p>{status}</p>}
+          {datumSource && <p>Plane: {datumSource}</p>}
           {warning && <p role="alert">{warning}</p>}
           {missing.length > 0 && (
             <p role="alert">

@@ -286,6 +286,8 @@ type SketchMoveEvent = Extract<
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { PlaneId, SketchObjectData } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
+import { buildDatumPlaneRig, type DatumPlaneRig } from './viewer/datumPlaneRig';
+import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
 import { sketchValueResolver } from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
 import {
@@ -865,6 +867,11 @@ export interface ModelViewerProps {
   holeGhost?: HoleGhost | null;
   /** The solid the open primitive card would create, drawn before Create. */
   primitiveGhost?: PrimitiveGhost | null;
+  /**
+   * Committed R01 datum planes, drawn on the frames the exact build resolved.
+   * Hidden, suppressed and unresolved datums are simply absent.
+   */
+  datumPlanes?: readonly DatumPlaneDisplay[];
   /**
    * What measuring the hovered target would report, for the preview chip.
    * Null when measuring is off or the pick has nothing honest to say.
@@ -1751,6 +1758,7 @@ export function ModelViewer({
   planePickerArmed,
   holeGhost = null,
   primitiveGhost = null,
+  datumPlanes,
   planePickerOffset,
   onPickPlane,
   onMeasurePreview,
@@ -1941,6 +1949,7 @@ export function ModelViewer({
   onPickPlaneRef.current = onPickPlane;
   const planePickerOffsetRef = useRef(planePickerOffset);
   planePickerOffsetRef.current = planePickerOffset;
+  const datumPlaneRigRef = useRef<DatumPlaneRig | null>(null);
   const planePickerRigRef = useRef<ReturnType<
     typeof buildPlanePickerRig
   > | null>(null);
@@ -5008,6 +5017,28 @@ export function ModelViewer({
       const distance = Math.max(camera.position.distanceTo(point), 0.001);
       return (
         (2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) /
+        height
+      );
+    }
+
+    const depthForward = new THREE.Vector3();
+    const depthOffset = new THREE.Vector3();
+    /**
+     * World units per screen pixel at `point`, measured from its depth along
+     * the camera's forward axis: what perspective projection actually scales
+     * by. Euclidean distance overstates it off-axis, so a plane at the edge of
+     * the view drew larger than one at its centre.
+     */
+    function worldPerPixelAtDepth(point: THREE.Vector3): number {
+      if (context.projection === 'orthographic') return worldPerPixelAt(point);
+      const height = Math.max(renderer.domElement.clientHeight, 1);
+      camera.getWorldDirection(depthForward);
+      const depth = Math.max(
+        depthOffset.subVectors(point, camera.position).dot(depthForward),
+        0.001
+      );
+      return (
+        (2 * depth * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) /
         height
       );
     }
@@ -8440,6 +8471,7 @@ export function ModelViewer({
 
       // Ghost planes hold their screen size, so they stay a target rather
       // than a backdrop as the camera dollies.
+      datumPlaneRigRef.current?.setScale(worldPerPixelAtDepth);
       const planePicker = planePickerRigRef.current;
       if (planePicker) {
         // Scale first: the offset is expressed in world units and has to be
@@ -10668,6 +10700,45 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [planePickerArmed]);
+
+  // Committed datum planes (viewer/datumPlaneRig), rebuilt when the set,
+  // a frame or the selection changes; the render loop keeps their size.
+  const datumPlaneKey = JSON.stringify(
+    (datumPlanes ?? []).map(({ featureId, frame, selected }) => ({
+      featureId,
+      frame,
+      selected
+    }))
+  );
+  useEffect(() => {
+    const context = contextRef.current;
+    const planes = JSON.parse(datumPlaneKey) as DatumPlaneDisplay[];
+    if (!context || planes.length === 0) {
+      return;
+    }
+    const rig = buildDatumPlaneRig(planes);
+    rig.setScale(() => 0.05);
+    context.scene.add(rig.group);
+    datumPlaneRigRef.current = rig;
+    const canvas = context.renderer.domElement;
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      canvas.dataset.e2eDatumPlanes = JSON.stringify(
+        planes.map(({ featureId, frame }) => ({
+          featureId,
+          origin: frame.origin,
+          normal: frame.normal
+        }))
+      );
+    }
+    context.requestRender();
+    return () => {
+      context.scene.remove(rig.group);
+      rig.dispose();
+      if (datumPlaneRigRef.current === rig) datumPlaneRigRef.current = null;
+      delete canvas.dataset.e2eDatumPlanes;
+      context.requestRender();
+    };
+  }, [datumPlaneKey]);
 
   // The open Hole card's bore (viewer/holeGhostRig): an opening on the entry
   // face and a barrel that is a faint ghost inside the body, so it reads as a

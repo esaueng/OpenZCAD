@@ -78,6 +78,7 @@ import {
   addSketchConstraint,
   addSketchFeature,
   addSketchObjects,
+  addDatumPlane,
   addSplitFeature,
   appendRevision,
   attachDerivedState,
@@ -89,6 +90,7 @@ import {
   createParameterIds,
   createSketchFeatureIds,
   createSplitFeatureIds,
+  type DatumPlaneInput,
   deleteFeature,
   deleteParameter,
   deleteSketchConstraint,
@@ -176,6 +178,7 @@ import {
   updateFeature,
   updateSketch,
   updateSketchObject,
+  validateDatumPlaneDefinition,
   validateModelingPlane
 } from '@openzcad/document-core';
 import {
@@ -218,6 +221,7 @@ export type CommandKind =
   | 'feature.transform'
   | 'feature.mirror'
   | 'feature.split'
+  | 'feature.datum-plane'
   | 'feature.hole'
   | 'feature.shell'
   | 'feature.solid-offset'
@@ -1461,6 +1465,19 @@ export const commandFactories = {
       withIds,
       (document) => addSplitFeature(document, withIds).document,
       (document) => validateSplitInput(document, withIds)
+    );
+  },
+  addDatumPlane(payload: DatumPlaneInput): CommandDefinition<DatumPlaneInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createFeatureOnlyIds() };
+    return makeCommand(
+      'feature.datum-plane',
+      payload.definition.kind === 'midplane'
+        ? 'Add midplane'
+        : 'Add offset plane',
+      withIds,
+      (document) => addDatumPlane(document, withIds).document,
+      (document) =>
+        validateDatumPlaneDefinition(document, withIds.definition, null)
     );
   },
   holeBody(payload: HoleInput): CommandDefinition<HoleInput> {
@@ -3348,6 +3365,9 @@ export function replayCommands(
         break;
       case 'feature.split':
         next = addSplitFeature(next, command.payload as SplitInput).document;
+        break;
+      case 'feature.datum-plane':
+        next = addDatumPlane(next, command.payload as DatumPlaneInput).document;
         break;
       case 'feature.hole':
         next = holeBody(next, command.payload as HoleInput).document;

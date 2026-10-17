@@ -1,6 +1,24 @@
 import { listFeaturesInOrder } from '@openzcad/document-core';
-import type { FeatureId, FeatureNode, ProjectDocument } from '@openzcad/shared';
-import { modelingFeatureIsEditable } from './modelingOperations';
+import type {
+  FeatureId,
+  FeatureKind,
+  FeatureNode,
+  ProjectDocument
+} from '@openzcad/shared';
+import {
+  modelingFeatureIsEditable,
+  type EditableModelingKind
+} from './modelingOperations';
+
+/**
+ * Feature kinds whose card is their creation card, reopened to edit: the
+ * modeling operations, and the R01 datum plane, whose tool id is its kind.
+ */
+export function featureOpensEditCard(
+  kind: FeatureKind
+): kind is EditableModelingKind | 'datum-plane' {
+  return kind === 'datum-plane' || modelingFeatureIsEditable(kind);
+}
 
 export interface HistoryEditorRequest {
   projectId: ProjectDocument['projectId'];
@@ -25,7 +43,7 @@ export function resolveHistoryEditorFeature(
   request: HistoryEditorRequest
 ): FeatureNode | null {
   const feature = resolveHistoryFeature(document, request);
-  return feature && modelingFeatureIsEditable(feature.data.featureKind)
+  return feature && featureOpensEditCard(feature.data.featureKind)
     ? feature
     : null;
 }

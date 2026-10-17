@@ -27,6 +27,7 @@ import {
   PenLine,
   RotateCw,
   Search,
+  SquareDashed,
   Torus
 } from 'lucide-react';
 import {
@@ -72,6 +73,8 @@ function featureIcon(feature: FeatureNode) {
       return <Combine size={size} aria-hidden="true" />;
     case 'transform':
       return <Move3d size={size} aria-hidden="true" />;
+    case 'datum-plane':
+      return <SquareDashed size={size} aria-hidden="true" />;
     default:
       return <FileBox size={size} aria-hidden="true" />;
   }

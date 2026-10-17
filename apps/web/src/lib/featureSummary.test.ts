@@ -30,6 +30,19 @@ describe('featureValueSummary', () => {
     );
   });
 
+  it('summarises a datum offset as a length, unit suffix and all', () => {
+    const datum = feature({
+      featureKind: 'datum-plane',
+      definition: {
+        kind: 'offset',
+        source: { type: 'canonical', plane: 'XY', offset: 0 },
+        offset: '1 in',
+        reverseNormal: true
+      }
+    });
+    expect(featureValueSummary(datum, {}, 'mm')).toBe('25.4 mm flipped');
+  });
+
   it('shows nothing rather than a guess when a value does not evaluate', () => {
     const fillet = feature({ featureKind: 'fillet', radius: 'missing_param' });
     expect(featureValueSummary(fillet, {}, 'mm')).toBeNull();
