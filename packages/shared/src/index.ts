@@ -2312,9 +2312,23 @@ export interface EditAnalysisRequest {
   faceHashes: number[];
 }
 
+/** A resolved world frame: right-handed, u × v = normal. */
+export interface DatumFrame {
+  origin: Vector3;
+  u: Vector3;
+  v: Vector3;
+  normal: Vector3;
+}
+
 export interface DerivedState {
   editAnalysis?: EditAnalysisRequest;
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
+  /**
+   * R01: each datum plane's frame as the exact build resolved it at its own
+   * history position, so the browser places datum-attached sketches exactly
+   * as the kernel did. A datum that failed or is suppressed is absent.
+   */
+  datumFrames?: Record<FeatureId, DatumFrame>;
   exportableBodyIds: BodyId[];
   warnings: string[];
   updatedAt: string;

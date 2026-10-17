@@ -409,6 +409,28 @@ describe('R01 datum planes in the exact build', () => {
     expect(box.max.x).toBeCloseTo(60, 6);
   });
 
+  it('publishes each resolved datum frame in the derived state', async () => {
+    const planed = withDatum(blank(), {
+      kind: 'offset',
+      source: xy(),
+      offset: 10,
+      reverseNormal: true
+    });
+    const derived = await adapter.syncDocument(planed.document);
+    const frame = derived.datumFrames?.[planed.featureId];
+    expect(frame?.origin.z).toBeCloseTo(10, 9);
+    expect(frame?.normal.z).toBeCloseTo(-1, 9);
+    // A suppressed datum has no frame to publish.
+    const node = listFeaturesInOrder(planed.document).at(-1)!;
+    const suppressed = await adapter.syncDocument(
+      setNodeMetadata(planed.document, {
+        nodeId: node.id,
+        metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+      })
+    );
+    expect(suppressed.datumFrames?.[planed.featureId]).toBeUndefined();
+  });
+
   it('moves every consumer when the datum is edited, through the cache', async () => {
     const planed = withDatum(blank(), {
       kind: 'offset',
