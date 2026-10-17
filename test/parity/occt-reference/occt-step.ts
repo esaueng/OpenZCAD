@@ -1143,6 +1143,11 @@ export class OcctStepKernelAdapter {
       snapshot: {
         sourceArea: planeRef.sourceArea,
         sourceCenter: planeRef.sourceCenter,
+        // Anchor where production does: on the area centroid when the ref
+        // records one (always, for a datum face source).
+        ...(planeRef.sourceCentroid
+          ? { sourceCentroid: planeRef.sourceCentroid }
+          : {}),
         sourceNormal: planeRef.sourceNormal,
         frame: planeRef.frame
       },

@@ -1,5 +1,6 @@
 import type {
   BodyId,
+  FacePlaneSource,
   FeatureId,
   FeatureNode,
   ProjectDocument
@@ -352,8 +353,24 @@ const KNOWN_FEATURE_KINDS: ReadonlySet<string> = new Set([
   'hole',
   'direct-edit',
   'imported-step',
-  'imported-mesh'
+  'imported-mesh',
+  'datum-plane'
 ]);
+
+/**
+ * The face sources of an R01 datum plane. A face-derived datum resolves its
+ * frame from the face's verified lineage, so it consumes face identity just
+ * as a face-attached sketch does; datum and canonical sources consume none.
+ */
+function datumFaceSources(feature: FeatureNode): FacePlaneSource[] {
+  if (feature.data.featureKind !== 'datum-plane') return [];
+  const { definition } = feature.data;
+  const sources =
+    definition.kind === 'offset' ? [definition.source] : definition.sources;
+  return sources.filter(
+    (source): source is FacePlaneSource => source.type === 'face'
+  );
+}
 
 const KNOWN_NODE_KINDS: ReadonlySet<string> = new Set([
   'project',
@@ -450,6 +467,14 @@ function persistedReferenceNamesProducer(
         if (
           data.edgeReferences?.some(
             (reference) => reference.producingFeatureId === producer
+          )
+        )
+          return true;
+        break;
+      case 'datum-plane':
+        if (
+          datumFaceSources(feature).some(
+            (source) => source.faceReference.producingFeatureId === producer
           )
         )
           return true;
@@ -571,6 +596,17 @@ export function booleanEvolutionProbeNeeded(
       return true;
     }
     if (downstream.data.featureKind === 'sketch') {
+      continue;
+    }
+    if (downstream.data.featureKind === 'datum-plane') {
+      // A datum reads a face of an existing body and produces none.
+      if (
+        datumFaceSources(downstream).some((source) =>
+          descendants.has(source.bodyId)
+        )
+      ) {
+        return true;
+      }
       continue;
     }
     const touches = consumedBodyIds(downstream).some((bodyId) =>
