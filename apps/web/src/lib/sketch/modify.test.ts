@@ -678,6 +678,62 @@ describe('Trim', () => {
     expect(object(ids[0]!)).toMatchObject({ x1: 0, x2: 1 });
   });
 
+  it('trims a full-sweep arc like a circle, across its seam', () => {
+    // A full arc with its seam at 0°, cut by a vertical chord through the
+    // centre (crossings at 90° and 270°); clicking by the seam removes the
+    // right half, so 90°–270° remains.
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 5,
+        startAngleDeg: 0,
+        endAngleDeg: 360
+      },
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 }
+    ]);
+    const plan = commit(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 5, y: 0.1 },
+        resolve
+      )
+    );
+    expect(plan.message).toBe('Trim opened the full arc.');
+    const arc = object(ids[0]!) as {
+      startAngleDeg: number;
+      endAngleDeg: number;
+    };
+    expect(arc.startAngleDeg).toBeCloseTo(90, 9);
+    expect(arc.endAngleDeg).toBeCloseTo(270, 9);
+    // One tangent touch is no segment to trim, wherever the seam is.
+    const touched = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 5,
+        startAngleDeg: 0,
+        endAngleDeg: 360
+      },
+      { objectKind: 'line', x1: -10, y1: 5, x2: 10, y2: 5 }
+    ]);
+    expect(
+      planSketchTrim(
+        touched.manager.document,
+        touched.sketch(),
+        touched.sketchId,
+        touched.ids[0]!,
+        { x: 5, y: 0 },
+        resolve
+      )
+    ).toMatchObject({ status: 'refuse' });
+  });
+
   it('refuses a circle only one curve touches', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },

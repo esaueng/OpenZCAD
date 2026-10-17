@@ -828,20 +828,26 @@ export function planSketchTrim(
   // The profile builder's tolerance, so a cutter it treats as touching the
   // target cuts here too (a guide keeps the fixed slack).
   const tol = trimTolerance(document, sketch, data, resolve);
-  const crossings = crossingsOn(document, sketch, id, curve, resolve, tol);
 
-  if (curve.kind === 'circle') {
+  // A full-sweep arc is a closed round whose seam is arbitrary: it trims
+  // like a circle, with crossings chosen round the wrap, not from the seam.
+  if (
+    curve.kind === 'circle' ||
+    (curve.kind === 'arc' && curve.sweep >= TAU - 1e-9)
+  ) {
+    const round = { kind: 'circle' as const, c: curve.c, r: curve.r };
     return trimCircle(
       sketch,
       sketchId,
       id,
-      data as CircleData,
-      curve,
-      crossings,
+      data as CircleData | ArcData,
+      round,
+      crossingsOn(document, sketch, id, round, resolve, tol),
       at,
       Math.max(PARAM_EPS * TAU, tol / curve.r)
     );
   }
+  const crossings = crossingsOn(document, sketch, id, curve, resolve, tol);
   const span = curve.kind === 'line' ? 1 : curve.sweep;
   // A crossing closer to an end than the profile builder's tolerance would
   // leave a fragment it calls degenerate, so it counts as that end.
@@ -1036,7 +1042,7 @@ function trimCircle(
   sketch: SketchNode,
   sketchId: SketchId,
   id: EntityId,
-  data: CircleData,
+  data: CircleData | ArcData,
   curve: Extract<Curve2, { kind: 'circle' }>,
   crossings: Crossing[],
   at: Point2,
@@ -1056,14 +1062,62 @@ function trimCircle(
   ) {
     distinct.pop();
   }
+  const kind = data.objectKind === 'arc' ? 'arc' : 'circle';
   if (distinct.length === 0) {
-    return deleteWhole(sketch, sketchId, id, 'circle');
+    return deleteWhole(sketch, sketchId, id, kind);
   }
   if (distinct.length === 1) {
     return {
       status: 'refuse',
-      reason:
-        'Only one curve touches that circle, so there is no segment between two crossings to trim.'
+      reason: `Only one curve touches that ${kind}, so there is no segment between two crossings to trim.`
+    };
+  }
+  const click = curveParam(curve, at);
+  // The removed segment runs counter-clockwise from the last crossing at or
+  // before the click to the first one after it, wrapping through 0.
+  const before =
+    [...distinct].reverse().find((c) => c.param <= click) ?? distinct.at(-1)!;
+  const after = distinct.find((c) => c.param > click) ?? distinct[0]!;
+  if (data.objectKind === 'arc') {
+    // Already an arc: it keeps its identity and gets new ends; whatever
+    // sat on the old seam goes with it.
+    const startRef: SketchPointRef = { objectId: id, point: 'start' };
+    const endRef: SketchPointRef = { objectId: id, point: 'end' };
+    if (
+      referenceMeasuresPoint(sketch, startRef) ||
+      referenceMeasuresPoint(sketch, endRef)
+    ) {
+      return { status: 'refuse', reason: MOVED_END_MEASURED };
+    }
+    const startDeg = toDeg(after.param);
+    const remap = remapCommands(sketch, sketchId, {
+      objectId: id,
+      points: { start: null, end: null },
+      lengthChanged: false
+    });
+    return {
+      status: 'commands',
+      label: 'Trim',
+      message: `Trim opened the full arc.${droppedNote(remap.dropped)}`,
+      commands: [
+        ...remap.release,
+        commandFactories.updateSketchObject(
+          {
+            sketchId,
+            objectId: id,
+            data: {
+              ...data,
+              startAngleDeg: startDeg,
+              endAngleDeg:
+                startDeg + toDeg(normalizeAngle(before.param - after.param))
+            }
+          },
+          'Trim sketch geometry'
+        ),
+        ...remap.restate,
+        ...pointRelation(sketchId, startRef, after.cutter),
+        ...pointRelation(sketchId, endRef, before.cutter)
+      ]
     };
   }
   if (referenceDimensionsOn(sketch, id)) {
@@ -1073,12 +1127,6 @@ function trimCircle(
         'Trimming a circle replaces it with an arc, and a reference dimension measures the circle. Delete the dimension first.'
     };
   }
-  const click = curveParam(curve, at);
-  // The removed segment runs counter-clockwise from the last crossing at or
-  // before the click to the first one after it, wrapping through 0.
-  const before =
-    [...distinct].reverse().find((c) => c.param <= click) ?? distinct.at(-1)!;
-  const after = distinct.find((c) => c.param > click) ?? distinct[0]!;
   const arcId = newEntityId();
   const arc: ArcData = withConstruction(
     {
