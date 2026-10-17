@@ -492,6 +492,16 @@ describe('HistoryTimeline', () => {
     expect(screen.getByRole('button', { name: 'Related' })).toBeDisabled();
     await user.clear(screen.getByRole('searchbox', { name: 'Find a step' }));
     expect(container.querySelectorAll('.feature-row')).toHaveLength(4);
+    // A new selection does not re-filter on its own: Related stays off
+    // until it is pressed again.
+    rerender(
+      <HistoryTimeline {...props} findOpen relatedFeatureIds={related} />
+    );
+    expect(screen.getByRole('button', { name: 'Related' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(4);
   });
 
   it('opens the feature menu from the row', async () => {

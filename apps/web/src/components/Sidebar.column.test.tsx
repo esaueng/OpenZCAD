@@ -1,6 +1,13 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -361,6 +368,37 @@ describe('Sidebar', () => {
       'aria-pressed',
       'true'
     );
+  });
+
+  it('keeps every body in the parameter toggle editor while an object search is active', async () => {
+    const bodies = ['Plate', 'Spacer'].map(
+      (name, index) =>
+        ({
+          bodyId: `body-${index + 1}`,
+          name,
+          consumed: false
+        }) as unknown as BodyRepresentation
+    );
+    renderSidebar({
+      features: [
+        feature(1, { bodyId: 'body-1' }),
+        feature(2, { bodyId: 'body-2' })
+      ],
+      representations: { 'body-1': bodies[0]!, 'body-2': bodies[1]! },
+      onConfigureToggle: vi.fn()
+    });
+    await userEvent.type(
+      screen.getByRole('searchbox', { name: 'Find an object by name' }),
+      'plate'
+    );
+    fireEvent.change(screen.getByLabelText('New parameter type'), {
+      target: { value: 'toggle' }
+    });
+    const editor = within(
+      screen.getByRole('group', { name: 'Show these bodies when on' })
+    );
+    expect(editor.getByLabelText('Plate')).toBeInTheDocument();
+    expect(editor.getByLabelText('Spacer')).toBeInTheDocument();
   });
 
   it('tracks viewport sketch selection independently of the selected history feature', () => {

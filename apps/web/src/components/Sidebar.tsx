@@ -485,7 +485,7 @@ export function Sidebar({
               onExpose={onExposeParameter}
               exposedInTweak={exposedParameterNames.has(parameter.name)}
               onDescribe={onDescribeParameter}
-              bodies={liveBodies}
+              bodies={allLiveBodies}
               onConfigureToggle={onConfigureToggle}
               table={table}
             />
@@ -494,7 +494,7 @@ export function Sidebar({
             existingNames={parameters.map((parameter) => parameter.name)}
             onSet={onSetParameter}
             onConfigureToggle={onConfigureToggle}
-            bodies={liveBodies}
+            bodies={allLiveBodies}
           />
         </div>
         {parameters.length === 0 && (

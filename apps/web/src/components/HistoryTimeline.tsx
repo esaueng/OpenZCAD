@@ -400,6 +400,12 @@ export function HistoryTimeline({
     }
   }, [findOpen]);
 
+  // Clearing the selection turns Related off for good, so the next selection
+  // does not silently re-filter behind a toggle that read as off.
+  useEffect(() => {
+    if (!relatedFeatureIds) setRelatedOnly(false);
+  }, [relatedFeatureIds]);
+
   useEffect(
     () => () => {
       if (commitTimer.current !== null) {
