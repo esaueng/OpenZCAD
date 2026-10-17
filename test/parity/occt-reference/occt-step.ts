@@ -1653,7 +1653,8 @@ export class OcctStepKernelAdapter {
                     resolveParamValue(
                       definition.offset,
                       scope,
-                      'datum plane offset'
+                      'datum plane offset',
+                      document.units
                     ),
                     definition.reverseNormal
                   )
