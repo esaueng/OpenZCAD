@@ -43,7 +43,7 @@ The audit confirms the roadmap's structural gaps: reference geometry (R01),
 sketch tools and constraints (S04, S05, S07, I01), extrude end conditions
 (F01) and drawings (D01–D03). It adds two findings. First, the pinned kernel
 already exposes most of the sketch-side primitives these rows need, so their
-remaining work is in the app. Second, it found six confirmed defects; five
+remaining work is in the app. Second, it found five confirmed defects; four
 need no schema change.
 
 ## Confirmed defects (code-read; no schema change)
@@ -51,14 +51,13 @@ need no schema change.
 Each was confirmed by reading the cited code. None has yet been reproduced in
 the running app.
 
-| ZC     | Defect                                                                                                                                                                                                                     | Location                                                            | Row     |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------- |
-| ZC-113 | Isolate overwrites `hiddenBodyIds`, and leaving isolation calls `showAllBodies()`, so bodies the user had hidden before isolating come back.                                                                               | `apps/web/src/App.tsx` `isolateBody`/`showAllBodies`                | U06     |
-| ZC-108 | `featureNeedsRepair` requires a `bodyId`, so a failed transform (which owns no body) never shows as needing repair.                                                                                                        | `apps/web/src/lib/featureRepair.ts`                                 | U06     |
-| ZC-095 | The pattern builder rounds a fractional count (`Math.round`) instead of refusing it as not a whole number.                                                                                                                 | `packages/kernel-adapter/src/exact-feature-builders.ts`             | F05     |
-| ZC-023 | Deleting a sketch entity checks only reference-dimension dependents. It skips the downstream `checkSketchEdit` preflight that entity edits run, so a dependent extrude breaks without warning.                             | `App.tsx` `handleDeleteSketchEntity`, `lib/sketch/solveEvidence.ts` | S05/U02 |
-| ZC-103 | `validateFeatureReorder` checks only producer/consumer order. It does not check the relative order of in-place modifiers on the same body, so moving a transform before a fillet on that body changes the result silently. | `apps/web/src/lib/featureHistory.ts`                                | U06     |
-| ZC-083 | `ParametricTransform3D` stores no pivot. The gizmo folds its pivot into the translation, so a later rotation edit turns the body about the world origin. Scale is also about the world origin only.                        | `packages/shared/src/index.ts` `ParametricTransform3D`              | M10     |
+| ZC     | Defect                                                                                                                                                                                              | Location                                                            | Row     |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------- |
+| ZC-113 | Isolate overwrites `hiddenBodyIds`, and leaving isolation calls `showAllBodies()`, so bodies the user had hidden before isolating come back.                                                        | `apps/web/src/App.tsx` `isolateBody`/`showAllBodies`                | U06     |
+| ZC-108 | `featureNeedsRepair` requires a `bodyId`, so a failed transform (which owns no body) never shows as needing repair.                                                                                 | `apps/web/src/lib/featureRepair.ts`                                 | U06     |
+| ZC-095 | The pattern builder rounds a fractional count (`Math.round`) instead of refusing it as not a whole number.                                                                                          | `packages/kernel-adapter/src/exact-feature-builders.ts`             | F05     |
+| ZC-023 | Deleting a sketch entity checks only reference-dimension dependents. It skips the downstream `checkSketchEdit` preflight that entity edits run, so a dependent extrude breaks without warning.      | `App.tsx` `handleDeleteSketchEntity`, `lib/sketch/solveEvidence.ts` | S05/U02 |
+| ZC-083 | `ParametricTransform3D` stores no pivot. The gizmo folds its pivot into the translation, so a later rotation edit turns the body about the world origin. Scale is also about the world origin only. | `packages/shared/src/index.ts` `ParametricTransform3D`              | M10     |
 
 ## Kernel capability already on the pin, unused by the app
 
@@ -94,12 +93,19 @@ its roadmap row with evidence.
 
 ### Stage 0 — Defect batch (P1, S)
 
-Fix the five schema-free defects above, each with a regression test: an isolate
-layer over hidden state; a failure state driven by
-`FeatureWarning.featureId`; whole-count refusal at the pattern consumer;
-delete preflight that reuses `checkSketchEdit`; a same-body modifier-order
-check in reorder validation. The transform-pivot fix needs a schema field, so
-it moves to Stage 1b.
+Fix the four schema-free defects above, each with a regression test: an
+isolate layer over hidden state; a failure state driven by
+`FeatureWarning.featureId`; whole-count refusal at pattern entry, with replay
+still rounding (older documents depend on it) but reporting an advisory; a
+delete preflight that reuses `checkSketchEdit`. The transform-pivot fix needs a
+schema field, so it moves to Stage 1b.
+
+An earlier draft listed reorder (ZC-103) as a defect. That was wrong.
+Reordering two in-place modifiers of the same body is meant to change the
+result, and the order gate correctly allows it. The real remainder is that a
+reorder commits without a downstream rebuild check. The reorder is undoable,
+and a feature it breaks shows as needing repair, but it is not refused the
+way an edit is. That preflight is a U06 follow-up, not a Stage 0 fix.
 
 ### Stage 1 — Foundations (P0/P1)
 
@@ -319,7 +325,7 @@ code paths, tests, evidence and acceptance criteria for each entry.
 | ZC-100 | History and parameters | Rename feature                        | V      | U02                                      | P3       | —                                                                                                                                                                                    |
 | ZC-101 | History and parameters | Suppress/unsuppress                   | V      | U02                                      | P3       | —                                                                                                                                                                                    |
 | ZC-102 | History and parameters | Breakpoint                            | V      | U06 (timeline groundwork) / U02          | P3       | —                                                                                                                                                                                    |
-| ZC-103 | History and parameters | Reorder                               | G      | U06                                      | P2       | Validation only checks producer order, not relative order of in-place modifiers on the same body (e.g. a transform moved before a fillet on that body changes meaning silently);…    |
+| ZC-103 | History and parameters | Reorder                               | G      | U06                                      | P2       | A reorder commits without a downstream rebuild preflight; a feature the new order breaks is not refused (undoable; shows needing repair).                                            |
 | ZC-104 | History and parameters | Duplicate step                        | M      | U06                                      | P1       | No feature duplication with new identities and reviewable copied references.                                                                                                         |
 | ZC-105 | History and parameters | Merge history                         | M      | U06                                      | P2       | No bake to an exact imported-style body, no sketch/parameter retention choice.                                                                                                       |
 | ZC-106 | History and parameters | Undo                                  | G      | U02                                      | P1       | Selection identity after undo is not restored/verified (U02 lists undo-selection findings to recheck); no boolean-specific undo test comparing body counts and exact geometry.       |

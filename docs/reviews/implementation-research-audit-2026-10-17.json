@@ -2321,8 +2321,8 @@
         "apps/web/src/components/HistoryTimeline.test.tsx (reorder interactions)"
       ],
       "evidence": "Rows reorder by drag or keyboard through one undoable command; a move placing a consumer before its body/feature/sketch producer is refused and the document is untouched.",
-      "gaps": "Validation only checks producer order, not relative order of in-place modifiers on the same body (e.g. a transform moved before a fillet on that body changes meaning silently); no browser e2e for drag reorder or the refusal message; no transform-specific case.",
-      "required_changes": "Add order checks (or an explicit warning) for in-place modifiers sharing a target body; add a Playwright drag-reorder spec including a refused move.",
+      "gaps": "A reorder commits without a downstream rebuild preflight: a feature the new order breaks (for example a fillet whose edge references no longer resolve) is not refused; it is undoable and shows as needing repair. Reordering same-body in-place modifiers legitimately changes the result and is correctly allowed. No browser e2e for drag reorder or the refusal message.",
+      "required_changes": "Run the affected features through the existing validated-transaction preflight before committing a reorder, refusing by name as edits do; add a Playwright drag-reorder spec including a refused move.",
       "dependencies": "None",
       "acceptance": "Move an independent transform past another step; a source-after-consumer move is refused without changing order.",
       "priority": "P2",
