@@ -33,7 +33,7 @@ import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
-import { featureHistory } from './lib/featureHistory';
+import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
 import {
   exportScope,
   exportScopeLabel,
@@ -211,7 +211,9 @@ import {
   constraintToolsForObject,
   constraintToolSpec,
   describeConstraint,
+  disconnectConstraintIds,
   fullyDefinedIds,
+  lockConstraintIds,
   measureDrivingDimension,
   planConstraintFromSelection,
   refusePick,
@@ -1267,6 +1269,8 @@ import { PatternProgress } from './components/PatternProgress';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
+  planReorder,
+  reorderRefusal,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
 import {
@@ -5770,6 +5774,18 @@ export function App() {
     selectedTopology
   ]);
   const selectedFeatureNodeId = selectedFeature?.id ?? null;
+  // History's Related view: the selected step's or bodies' lineage, or null
+  // with nothing selected so the toggle says why it is unavailable.
+  const historyRelatedFeatureIds = useMemo(
+    () =>
+      doc && (selectedFeature || selectedBodyIds.length > 0)
+        ? relatedFeatureIds(doc, {
+            featureId: selectedFeature?.featureId ?? null,
+            bodyIds: selectedFeature ? [] : selectedBodyIds
+          })
+        : null,
+    [doc, selectedFeature, selectedBodyIds]
+  );
   /**
    * Each opening of an edit card gets its own session. A late Apply must
    * leave a reopened card alone, even when it edits the same feature.
@@ -14043,7 +14059,55 @@ export function App() {
       );
       return true;
     }
-    const built = buildConstraint(doc, editingSketchNode, pending.kind, picks);
+    if (pending.kind === 'lock' || pending.kind === 'disconnect') {
+      const point = picks[0]!;
+      const ref = {
+        objectId: point.objectId as EntityId,
+        point: point.kind === 'point' ? point.point : 'center'
+      } as const;
+      // A second Lock on a locked point unlocks it; Disconnect only removes.
+      const removals =
+        pending.kind === 'lock'
+          ? lockConstraintIds(editingSketchNode, ref)
+          : disconnectConstraintIds(editingSketchNode, ref);
+      if (removals.length > 0) {
+        const verb = pending.kind === 'lock' ? 'Unlock point' : 'Disconnect point';
+        if (
+          executeTransaction(
+            verb,
+            removals.map((constraintId) =>
+              commandFactories.deleteSketchConstraint({
+                sketchId: editingSketchNode.sketchId,
+                constraintId: toSketchConstraintId(constraintId)
+              })
+            )
+          )
+        ) {
+          setSketchSolveStatus(null);
+          setStatus(
+            pending.kind === 'lock'
+              ? 'Point unlocked.'
+              : `Disconnected · removed ${removals.length} relation${removals.length === 1 ? '' : 's'}.`
+          );
+        }
+        dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+        return true;
+      }
+      if (pending.kind === 'disconnect') {
+        setStatus('That point has no coincident, midpoint or on-curve relation.');
+        dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+        return true;
+      }
+    }
+    const built = buildConstraint(
+      doc,
+      editingSketchNode,
+      pending.kind,
+      picks,
+      undefined,
+      (value) =>
+        evalParamValue(value, parameterScope.scope, doc.units) ?? undefined
+    );
     if ('error' in built) {
       setStatus(built.error);
     } else if (
@@ -17451,16 +17515,50 @@ export function App() {
     }
   }
 
+  /**
+   * Moves a History step, keyboard and drag alike. The order gate refuses a
+   * producer moved after its consumer at once; a legal order that leaves a
+   * later feature unbuildable is refused by name after an exact rebuild of
+   * the moved span, as a feature edit is, and the order stays as it was.
+   */
   function handleReorderFeature(featureId: FeatureId, toIndex: number) {
     const name =
       doc &&
       listFeaturesInOrder(doc).find((f) => f.featureId === featureId)?.name;
-    executeCommand(
-      commandFactories.moveFeature(
-        { featureId, toIndex },
-        name ? `Reorder ${name}` : 'Reorder feature'
-      )
-    );
+    const label = name ? `Reorder ${name}` : 'Reorder feature';
+    const command = commandFactories.moveFeature({ featureId, toIndex }, label);
+    const base = doc;
+    const plan = planReorder(base, featureId, toIndex, {
+      orderGate: (document) => command.validate(document),
+      canEdit: () => ensureCanEdit(`reorder ${name ?? 'this feature'}`),
+      geometryReady: (document) => geometry.isReadyFor(document)
+    });
+    if (plan.kind === 'direct') executeCommand(command);
+    if (plan.kind === 'pending')
+      setStatus('Exact geometry is still rebuilding. Reorder once it finishes.');
+    if (plan.kind !== 'validate') return;
+    let failed = '';
+    const attribution =
+      featureAttribution && featureAttribution.derived === base?.derived
+        ? featureAttribution.featureWarnings
+        : undefined;
+    void validatedFeature.runTransaction([command], {
+      label,
+      // Compared with the current model in `reorderRefusal`, so a failure the
+      // design already has does not block the move.
+      targets: [],
+      validateDerived: (derived) => {
+        const refusal =
+          base &&
+          reorderRefusal(base, derived, featureId, toIndex, attribution);
+        if (!refusal) return;
+        failed = `: ${refusal.featureName} would not rebuild`;
+        throw refusal;
+      },
+      validatingMessage: `Checking features after ${name ?? 'the move'}…`,
+      successMessage: commandOutcomeMessage(label),
+      onFailure: (message) => announce(`${label} not applied${failed}. ${message}`)
+    });
   }
 
   function handleToggleFeatureSuppression(feature: FeatureNode) {
@@ -19935,6 +20033,7 @@ export function App() {
       geometryPending={Boolean(
         currentGeometrySnapshot || currentFaceGeometryPreview
       )}
+      relatedFeatureIds={historyRelatedFeatureIds}
       selectedFeatureNodeId={selectedFeatureNodeId}
       selectedSketchProfileId={selectedSketchProfileId}
       hiddenBodyIds={hiddenBodyIds}

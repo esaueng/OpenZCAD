@@ -1,11 +1,19 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import {
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
+  type BodyId,
   type BodyRepresentation,
   type FeatureNode,
   type FeatureId,
@@ -325,6 +333,73 @@ describe('Sidebar', () => {
     expect(
       list.getByText('No bodies yet. Create a primitive or extrude a sketch.')
     ).toHaveAttribute('role', 'listitem');
+  });
+
+  it('finds objects by name without changing selection or the full list (ZC-126)', async () => {
+    const sketches = ['Base profile', 'Rib outline', 'Base pocket'].map(
+      (name, index) =>
+        feature(index + 1, {
+          name,
+          featureKind: 'sketch',
+          data: { featureKind: 'sketch', sketchId: `sketch-${index + 1}` }
+        } as Partial<FeatureNode>)
+    );
+    renderSidebar({ features: sketches, selectedSketchProfileId: 'sketch-2' });
+    const list = within(screen.getByRole('list', { name: 'Objects' }));
+    const field = screen.getByRole('searchbox', {
+      name: 'Find an object by name'
+    });
+    const names = () =>
+      list
+        .getAllByRole('button', { pressed: undefined })
+        .filter((button) => button.classList.contains('body-row-main'))
+        .map((button) => button.textContent);
+    expect(names()).toEqual(['Base profile', 'Rib outline', 'Base pocket']);
+    await userEvent.type(field, 'base');
+    expect(names()).toEqual(['Base profile', 'Base pocket']);
+    await userEvent.clear(field);
+    await userEvent.type(field, 'nothing');
+    expect(list.getByText('No objects match “nothing”.')).toBeInTheDocument();
+    // Escape clears the search and restores exactly the same rows, with the
+    // selection untouched.
+    await userEvent.type(field, '{Escape}');
+    expect(field).toHaveValue('');
+    expect(names()).toEqual(['Base profile', 'Rib outline', 'Base pocket']);
+    expect(list.getByRole('button', { name: 'Rib outline' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+  });
+
+  it('keeps every body in the parameter toggle editor while an object search is active', async () => {
+    const bodies = ['Plate', 'Spacer'].map(
+      (name, index) =>
+        ({
+          bodyId: `body-${index + 1}`,
+          name,
+          consumed: false
+        }) as unknown as BodyRepresentation
+    );
+    renderSidebar({
+      features: [
+        feature(1, { bodyId: 'body-1' as BodyId }),
+        feature(2, { bodyId: 'body-2' as BodyId })
+      ],
+      representations: { 'body-1': bodies[0]!, 'body-2': bodies[1]! },
+      onConfigureToggle: vi.fn()
+    });
+    await userEvent.type(
+      screen.getByRole('searchbox', { name: 'Find an object by name' }),
+      'plate'
+    );
+    fireEvent.change(screen.getByLabelText('New parameter type'), {
+      target: { value: 'toggle' }
+    });
+    const editor = within(
+      screen.getByRole('group', { name: 'Show these bodies when on' })
+    );
+    expect(editor.getByLabelText('Plate')).toBeInTheDocument();
+    expect(editor.getByLabelText('Spacer')).toBeInTheDocument();
   });
 
   it('tracks viewport sketch selection independently of the selected history feature', () => {
