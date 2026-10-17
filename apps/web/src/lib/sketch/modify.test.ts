@@ -519,6 +519,34 @@ describe('Mirror', () => {
     ]);
   });
 
+  it('reuses a relation that already holds an on-axis point on the axis', () => {
+    const { manager, sketchId, ids, sketch, commit, constrain } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      { objectKind: 'line', x1: 0, y1: 2, x2: 6, y2: 5 }
+    ]);
+    const [axis, source] = ids as [string, string];
+    constrain({
+      constraintKind: 'point-on-object',
+      point: { objectId: source as never, point: 'start' },
+      objectId: axis as never
+    });
+    commit(
+      planSketchMirror(
+        manager.document,
+        sketch(),
+        sketchId,
+        source,
+        axis,
+        resolve
+      )
+    );
+    expect(kinds(sketch().constraints ?? [])).toEqual([
+      'coincident',
+      'point-on-object',
+      'symmetric'
+    ]);
+  });
+
   it('reverses an arc’s sweep and links its ends crosswise with an equal radius', () => {
     const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
       { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },

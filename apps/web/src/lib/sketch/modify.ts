@@ -1031,12 +1031,41 @@ function sameCurve(first: Curve2, second: Curve2): boolean {
 }
 
 /**
+ * True when a relation already keeps this point on the axis line: held on
+ * it, at its midpoint, or joined to one of its ends.
+ */
+function heldOnAxis(
+  sketch: SketchNode,
+  point: SketchPointRef,
+  axisId: EntityId
+): boolean {
+  const same = (ref: SketchPointRef) =>
+    ref.objectId === point.objectId && ref.point === point.point;
+  return constraintsOf(sketch).some(({ data }) => {
+    switch (data.constraintKind) {
+      case 'point-on-object':
+        return same(data.point) && data.objectId === axisId;
+      case 'midpoint':
+        return same(data.point) && data.line === axisId;
+      case 'coincident':
+        return (
+          (same(data.a) && data.b.objectId === axisId) ||
+          (same(data.b) && data.a.objectId === axisId)
+        );
+      default:
+        return false;
+    }
+  });
+}
+
+/**
  * The relations that tie one source point to its image: symmetric about the
  * axis, or — when the point sits on the axis, where symmetry has no
  * direction — coincident plus held on the axis, which is what joins a
  * half-profile to its mirror and keeps the joint a mirror when it moves.
  */
 function mirrorLink(
+  sketch: SketchNode,
   sketchId: SketchId,
   source: SketchPointRef,
   image: SketchPointRef,
@@ -1052,11 +1081,17 @@ function mirrorLink(
   return onAxis(sourcePoint)
     ? [
         add({ constraintKind: 'coincident', a: source, b: image }),
-        add({
-          constraintKind: 'point-on-object',
-          point: source,
-          objectId: axisId
-        })
+        // A second statement of the same axis condition reads as redundant
+        // to the solver, so a point already held there keeps its relation.
+        ...(heldOnAxis(sketch, source, axisId)
+          ? []
+          : [
+              add({
+                constraintKind: 'point-on-object',
+                point: source,
+                objectId: axisId
+              })
+            ])
       ]
     : [add({ constraintKind: 'symmetric', a: source, b: image, axis: axisId })];
 }
@@ -1145,6 +1180,7 @@ export function planSketchMirror(
   if (source.kind === 'line') {
     links.push(
       ...mirrorLink(
+        sketch,
         sketchId,
         ref(id, 'start'),
         ref(imageId, 'start'),
@@ -1153,6 +1189,7 @@ export function planSketchMirror(
         onAxis
       ),
       ...mirrorLink(
+        sketch,
         sketchId,
         ref(id, 'end'),
         ref(imageId, 'end'),
@@ -1164,6 +1201,7 @@ export function planSketchMirror(
   } else if (source.kind === 'circle') {
     links.push(
       ...mirrorLink(
+        sketch,
         sketchId,
         ref(id, 'center'),
         ref(imageId, 'center'),
@@ -1178,6 +1216,7 @@ export function planSketchMirror(
     // would state the radius twice and read as redundant to the solver.
     links.push(
       ...mirrorLink(
+        sketch,
         sketchId,
         ref(id, 'start'),
         ref(imageId, 'end'),
@@ -1186,6 +1225,7 @@ export function planSketchMirror(
         onAxis
       ),
       ...mirrorLink(
+        sketch,
         sketchId,
         ref(id, 'end'),
         ref(imageId, 'start'),
