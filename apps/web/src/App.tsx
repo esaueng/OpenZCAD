@@ -17383,6 +17383,13 @@ export function App() {
       executeCommand(command);
       return;
     }
+    if (!ensureCanEdit(`reorder ${name ?? 'this feature'}`)) return;
+    // The comparison needs the exact projection of this very version; a
+    // rebuild still pending after an undo or resume describes another model.
+    if (!geometry.isReadyFor(base)) {
+      setStatus('Exact geometry is still rebuilding. Reorder once it finishes.');
+      return;
+    }
     let failed = '';
     const attribution =
       featureAttribution && featureAttribution.derived === base?.derived
