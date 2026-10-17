@@ -27,7 +27,12 @@ export type SketchReferenceAnnotationId = Brand<
 >;
 export type ShaprImportId = Brand<string, 'ShaprImportId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 17 as const;
+/**
+ * v18 adds the S07 constraint kinds (`symmetric`, `point-on-object`, `lock`).
+ * They are additive, but a v17 client would accept them and solve without
+ * them, so the bump makes older clients refuse such documents instead.
+ */
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 18 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

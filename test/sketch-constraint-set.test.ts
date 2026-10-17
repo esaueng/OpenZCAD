@@ -4,14 +4,20 @@ import {
   commandFactories,
   composeCommands
 } from '@openzcad/command-system';
-import { createProjectDocument, findSketch } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  findSketch,
+  normalizeDocument
+} from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter,
   type SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
 import {
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
+  type ProjectDocument,
   type SketchConstraintData,
   type SketchObjectData
 } from '@openzcad/shared';
@@ -300,5 +306,42 @@ describe('S07 constraint set on the pinned kernel', () => {
         (c) => c.data.constraintKind
       )
     ).toContain('coincident');
+  });
+});
+
+describe('S07 schema boundary', () => {
+  it('stamps v18, opens a v17 document unchanged and refuses a newer one', () => {
+    const { manager, ids, constrain } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }
+    ]);
+    constrain({
+      constraintKind: 'lock',
+      point: { objectId: ids[0]!, point: 'start' },
+      x: 0,
+      y: 0
+    });
+    const saved = JSON.parse(
+      JSON.stringify(manager.document)
+    ) as ProjectDocument;
+    // A v17 client compares this stamp and refuses the document, rather
+    // than solving without the lock it cannot read.
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(18);
+    expect(saved.schemaVersion).toBe(18);
+    expect(normalizeDocument(saved)).toEqual(manager.document);
+
+    const legacy = structuredClone(manager.document);
+    const sketch = findSketch(legacy, legacy.sketchOrder[0]!)!;
+    sketch.constraints = [];
+    legacy.schemaVersion = 17 as typeof legacy.schemaVersion;
+    const opened = normalizeDocument(legacy);
+    expect(opened.schemaVersion).toBe(18);
+    expect({ ...opened, schemaVersion: 17 }).toEqual(legacy);
+
+    expect(() =>
+      normalizeDocument({
+        ...saved,
+        schemaVersion: 19 as typeof saved.schemaVersion
+      })
+    ).toThrow(/Unsupported project schema \(v19\)/);
   });
 });
