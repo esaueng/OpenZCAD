@@ -57,6 +57,48 @@ describe('toggleBodyIsolation', () => {
     expect([...leave.hidden]).toEqual(['a']);
   });
 
+  it('drops the snapshot once something else replaced the hidden set', () => {
+    // Isolate with C hidden, then a view reset clears every hidden body.
+    const before = new Set(['c']);
+    const enter = toggleBodyIsolation(bodies, 'a', before, before, null);
+    const reset = new Set<string>();
+    // Isolating again starts a new session from the reset state, so leaving
+    // it does not bring back C from before the reset.
+    const again = toggleBodyIsolation(
+      bodies,
+      'a',
+      reset,
+      reset,
+      enter.isolation
+    );
+    expect(again.entered).toBe(true);
+    const leave = toggleBodyIsolation(
+      bodies,
+      'a',
+      again.hidden,
+      again.hidden,
+      again.isolation
+    );
+    expect(leave.hidden.size).toBe(0);
+  });
+
+  it('ignores a stale snapshot when the body is alone for another reason', () => {
+    const before = new Set(['c']);
+    const enter = toggleBodyIsolation(bodies, 'a', before, before, null);
+    // A restored view happens to hide every other body, but not through
+    // this isolation: its set differs from the one isolation applied.
+    const restored = new Set(['b', 'c', 'd', 'e']);
+    const leave = toggleBodyIsolation(
+      bodies,
+      'a',
+      restored,
+      restored,
+      enter.isolation
+    );
+    expect(leave.entered).toBe(false);
+    expect(leave.hidden.size).toBe(0);
+  });
+
   it('shows everything when leaving without a recorded isolation', () => {
     // A body that is alone for another reason (e.g. after a reload) has no
     // prior set to restore.
