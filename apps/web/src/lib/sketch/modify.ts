@@ -831,7 +831,9 @@ export function planSketchTrim(
     lengthChanged: curve.kind === 'line'
   });
   const kept = trimmedData(data, curve, 0, below.param);
-  const piece = trimmedData(curveObject(curve, data), curve, above.param, span);
+  // Built from the stored data, so the far end it inherits keeps any
+  // expression that drove it; only the new cut end is a number.
+  const piece = trimmedData(data, curve, above.param, span);
   // The far piece is the same curve: collinear for a line, the same circle
   // for an arc.
   const sameCurve: AnyCommand[] =

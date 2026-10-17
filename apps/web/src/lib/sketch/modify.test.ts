@@ -303,6 +303,29 @@ describe('Trim', () => {
     expect(object(ids[0]!)).toMatchObject({ x1: '0', y1: '0', x2: 20 });
   });
 
+  it('hands the far end’s expressions to the piece a split creates', () => {
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: '30', y2: '0' },
+      { objectKind: 'line', x1: 10, y1: -5, x2: 10, y2: 5 },
+      { objectKind: 'line', x1: 20, y1: -5, x2: 20, y2: 5 }
+    ]);
+    commit(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 15, y: 0 },
+        resolve
+      )
+    );
+    expect(object(sketch().objectIds.map(String).at(-1)!)).toMatchObject({
+      x1: 20,
+      x2: '30',
+      y2: '0'
+    });
+  });
+
   it('deletes an entity nothing crosses, and refuses composites', () => {
     const { manager, sketchId, ids, sketch, commit } = sketchWith([
       { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },
