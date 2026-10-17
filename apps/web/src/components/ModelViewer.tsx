@@ -5021,6 +5021,28 @@ export function ModelViewer({
       );
     }
 
+    const depthForward = new THREE.Vector3();
+    const depthOffset = new THREE.Vector3();
+    /**
+     * World units per screen pixel at `point`, measured from its depth along
+     * the camera's forward axis: what perspective projection actually scales
+     * by. Euclidean distance overstates it off-axis, so a plane at the edge of
+     * the view drew larger than one at its centre.
+     */
+    function worldPerPixelAtDepth(point: THREE.Vector3): number {
+      if (context.projection === 'orthographic') return worldPerPixelAt(point);
+      const height = Math.max(renderer.domElement.clientHeight, 1);
+      camera.getWorldDirection(depthForward);
+      const depth = Math.max(
+        depthOffset.subVectors(point, camera.position).dot(depthForward),
+        0.001
+      );
+      return (
+        (2 * depth * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) /
+        height
+      );
+    }
+
     function pickMoveGizmo(event: PointerEvent) {
       if (!movePreviewRef.current) {
         return null;
@@ -8449,7 +8471,7 @@ export function ModelViewer({
 
       // Ghost planes hold their screen size, so they stay a target rather
       // than a backdrop as the camera dollies.
-      datumPlaneRigRef.current?.setScale(worldPerPixelAt);
+      datumPlaneRigRef.current?.setScale(worldPerPixelAtDepth);
       const planePicker = planePickerRigRef.current;
       if (planePicker) {
         // Scale first: the offset is expressed in world units and has to be

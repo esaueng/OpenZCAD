@@ -9,9 +9,15 @@ import {
   toBodyId,
   toUserId,
   type FacePlaneSource,
-  type FeatureId
+  type FeatureId,
+  type ProjectDocument
 } from '@openzcad/shared';
-import { DatumPlaneCard } from './DatumPlaneForm';
+import type { CommandManager } from '@openzcad/command-system';
+import {
+  DatumPlaneCard,
+  DatumPlaneWorkspaceCard,
+  type DatumPlaneCardApp
+} from './DatumPlaneForm';
 import { ModelingOperationsForm } from './ModelingOperationsForm';
 
 const XY = { type: 'canonical', plane: 'XY', offset: 0 } as const;
@@ -204,5 +210,64 @@ describe('Split and Mirror datum picker (R01-C)', () => {
     // A principal plane replaces the datum.
     fireEvent.click(screen.getByRole('button', { name: 'Top (XY)' }));
     expect(screen.getByText('Plane origin')).toBeVisible();
+  });
+});
+
+describe('Plane workspace card commit (R01-C)', () => {
+  it('withdraws a creation still validating when the card closes', async () => {
+    const document = createProjectDocument('Cancel', toUserId('user_plane'));
+    const frame = {
+      origin: { x: 0, y: 0, z: 10 },
+      u: { x: 1, y: 0, z: 0 },
+      v: { x: 0, y: 1, z: 0 },
+      normal: { x: 0, y: 0, z: 1 }
+    };
+    const runTransaction = vi.fn(async () => 'committed' as const);
+    const app = {
+      managerRef: { current: { document } as unknown as CommandManager },
+      geometry: {
+        // Every datum in the candidate resolves.
+        syncOnce: async (candidate: ProjectDocument) => ({
+          ...candidate.derived,
+          datumFrames: Object.fromEntries(
+            candidate.featureOrder.map((id) => [id, frame])
+          )
+        })
+      },
+      validatedFeature: { runTransaction },
+      ensureCanEdit: () => true,
+      newFeatureName: (name: string) => name,
+      setStatus: vi.fn(),
+      editCardSessionRef: { current: null },
+      editSessionIsCurrent: () => true,
+      finishFeatureEdit: vi.fn(),
+      finishFeatureCreation: vi.fn(),
+      validateSelectionEdit: () => true,
+      handleDeleteFeature: vi.fn(),
+      cancelPanel: vi.fn(),
+      closeFeaturePanel: vi.fn()
+    } as unknown as DatumPlaneCardApp;
+    const view = render(
+      <DatumPlaneWorkspaceCard
+        document={document}
+        editFeature={null}
+        scope={{}}
+        selection={null}
+        editDisabledReason={null}
+        exactGeometryReady
+        app={app}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(runTransaction).toHaveBeenCalledTimes(1));
+    const options = (
+      runTransaction.mock.calls[0] as unknown as [
+        unknown,
+        { cancelled(): boolean }
+      ]
+    )[1];
+    expect(options.cancelled()).toBe(false);
+    view.unmount();
+    expect(options.cancelled()).toBe(true);
   });
 });

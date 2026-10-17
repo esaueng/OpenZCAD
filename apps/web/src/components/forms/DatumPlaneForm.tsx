@@ -437,6 +437,15 @@ export function DatumPlaneWorkspaceCard({
     featureId: FeatureId;
     baseVersion: number;
   } | null>(null);
+  // A creation committed after Cancel or Esc closed the card would land a
+  // plane the user withdrew: the commit asks whether the card is still up.
+  const open = useRef(true);
+  useEffect(() => {
+    open.current = true;
+    return () => {
+      open.current = false;
+    };
+  }, []);
   let pickedFace: DatumPlaneCardProps['pickedFace'] = null;
   if (selection?.kind === 'face') {
     const attachment = faceSketchAttachment({
@@ -532,9 +541,8 @@ export function DatumPlaneWorkspaceCard({
           submission.name
         ),
       successMessage: commandOutcomeMessage(label),
-      ...(editing
-        ? { cancelled: () => !app.editSessionIsCurrent(editing, session) }
-        : {}),
+      cancelled: () =>
+        editing ? !app.editSessionIsCurrent(editing, session) : !open.current,
       onSuccess: () =>
         editing
           ? app.finishFeatureEdit(editing, session)
