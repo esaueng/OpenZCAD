@@ -290,5 +290,32 @@ describe('Plane workspace card commit (R01-C)', () => {
     expect(options.cancelled()).toBe(true);
     view.unmount();
     expect(options.cancelled()).toBe(true);
+
+    // A newer draft typed while a commit validates withdraws the old one.
+    runTransaction.mockClear();
+    render(
+      <DatumPlaneWorkspaceCard
+        document={document}
+        editFeature={null}
+        scope={{}}
+        selection={null}
+        editDisabledReason={null}
+        exactGeometryReady
+        app={app}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(runTransaction).toHaveBeenCalledTimes(1));
+    const pending = (
+      runTransaction.mock.calls[0] as unknown as [
+        unknown,
+        { cancelled(): boolean }
+      ]
+    )[1];
+    expect(pending.cancelled()).toBe(false);
+    fireEvent.change(screen.getByLabelText('Offset'), {
+      target: { value: '12' }
+    });
+    expect(pending.cancelled()).toBe(true);
   });
 });

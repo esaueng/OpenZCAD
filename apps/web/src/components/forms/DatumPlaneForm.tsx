@@ -56,6 +56,11 @@ export interface DatumPlaneFormProps {
   onPreflight(submission: DatumPlaneSubmission): Promise<ExactPreflightResult>;
   onSubmit(submission: DatumPlaneSubmission): void;
   onCancel(): void;
+  /**
+   * Any change to the draft, so a commit already under way for the values
+   * checked before it can be withdrawn rather than land over the edit.
+   */
+  onDraftChange?(): void;
 }
 
 /**
@@ -73,7 +78,8 @@ export function DatumPlaneForm({
   unsupportedReason,
   onPreflight,
   onSubmit,
-  onCancel
+  onCancel,
+  onDraftChange
 }: DatumPlaneFormProps) {
   const [state, setState] = useState(initial);
   const [preflight, setPreflight] = useState<ExactPreflightState>({
@@ -109,6 +115,7 @@ export function DatumPlaneForm({
     // midplane's empty B once A is set (else A).
     epoch.current += 1;
     setPreflight({ status: 'idle' });
+    onDraftChange?.();
     setState((current) =>
       current.mode === 'midplane' && current.sourceA && !current.sourceB
         ? { ...current, sourceB: option.source }
@@ -126,6 +133,7 @@ export function DatumPlaneForm({
   const replace = (next: DatumPlaneFormState) => {
     epoch.current += 1;
     setPreflight({ status: 'idle' });
+    onDraftChange?.();
     setState(next);
   };
   const validation = datumFormValidation(state, scope, units);
@@ -308,6 +316,7 @@ export interface DatumPlaneCardProps {
   onPreflight: DatumPlaneFormProps['onPreflight'];
   onSubmit: DatumPlaneFormProps['onSubmit'];
   onCancel(): void;
+  onDraftChange?(): void;
 }
 
 /**
@@ -323,7 +332,8 @@ export function DatumPlaneCard({
   unsupportedReason,
   onPreflight,
   onSubmit,
-  onCancel
+  onCancel,
+  onDraftChange
 }: DatumPlaneCardProps) {
   const picked: DatumPlaneFormProps['pickedFace'] =
     pickedFace && 'reason' in pickedFace
@@ -365,6 +375,7 @@ export function DatumPlaneCard({
       onPreflight={onPreflight}
       onSubmit={onSubmit}
       onCancel={onCancel}
+      {...(onDraftChange ? { onDraftChange } : {})}
     />
   );
 }
@@ -443,6 +454,9 @@ export function DatumPlaneWorkspaceCard({
   // And a card reused for another datum (History reopening one mid-commit)
   // is not the card that asked to create this one.
   const showing = useRef<FeatureId | null>(null);
+  // Bumped by every draft change: a commit checked against an older draft is
+  // withdrawn instead of landing over the newer values.
+  const draft = useRef(0);
   showing.current = editing?.featureId ?? null;
   useEffect(() => {
     open.current = true;
@@ -531,6 +545,7 @@ export function DatumPlaneWorkspaceCard({
       return;
     }
     const session = app.editCardSessionRef.current;
+    const submittedDraft = draft.current;
     const label = checked.command.label;
     void app.validatedFeature.runTransaction([checked.command], {
       label,
@@ -546,9 +561,10 @@ export function DatumPlaneWorkspaceCard({
         ),
       successMessage: commandOutcomeMessage(label),
       cancelled: () =>
-        editing
+        draft.current !== submittedDraft ||
+        (editing
           ? !app.editSessionIsCurrent(editing, session)
-          : !open.current || showing.current !== null,
+          : !open.current || showing.current !== null),
       onSuccess: () =>
         editing
           ? app.finishFeatureEdit(editing, session)
@@ -604,6 +620,9 @@ export function DatumPlaneWorkspaceCard({
           onPreflight={preflight}
           onSubmit={submit}
           onCancel={app.cancelPanel}
+          onDraftChange={() => {
+            draft.current += 1;
+          }}
         />
       </div>
     </section>
