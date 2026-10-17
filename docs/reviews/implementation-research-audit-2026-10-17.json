@@ -2116,7 +2116,7 @@
         "test/kernel-adapter.test.ts 'scales a body uniformly through a parameter'"
       ],
       "evidence": "Dimensionless parameters work as scale factors and counts, but pattern counts are rounded silently rather than refused when fractional (polygon sides are the only 'whole' count).",
-      "gaps": "No integer requirement at pattern-count consumers; no number type.",
+      "gaps": "Pattern entry now must refuse non-whole counts (Stage 0); replay still rounds a count expression that later evaluates to a fraction, silently, because an advisory in the builder would overrun the exact chunk's 512,000-byte budget. No number parameter type.",
       "required_changes": "Mark pattern count/count2 as whole counts in PatternForm and refuse non-integers in buildPatternFeature (keep legacy docs by version gate if needed).",
       "dependencies": "None (no kernel work)",
       "acceptance": "factor = 3 drives scale and count; count = 2.5 is refused with a named message.",

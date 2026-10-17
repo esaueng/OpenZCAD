@@ -95,9 +95,12 @@ its roadmap row with evidence.
 
 Fix the four schema-free defects above, each with a regression test: an
 isolate layer over hidden state; a failure state driven by
-`FeatureWarning.featureId`; whole-count refusal at pattern entry, with replay
-still rounding (older documents depend on it) but reporting an advisory; a
-delete preflight that reuses `checkSketchEdit`. The transform-pivot fix needs a
+`FeatureWarning.featureId`; whole-count refusal at pattern entry; a delete
+preflight that reuses `checkSketchEdit`. Replay keeps rounding a count
+expression that later evaluates to a fraction, because older documents depend
+on it. Making that rounding visible as an advisory warning was built and then
+withdrawn: the lazy `exact` chunk sits within about 50 bytes of its
+512,000-byte cap, so any builder change needs headroom first (see the ledger). The transform-pivot fix needs a
 schema field, so it moves to Stage 1b.
 
 An earlier draft listed reorder (ZC-103) as a defect. That was wrong.
@@ -192,18 +195,19 @@ on curved faces, which hidden bores, centerlines and cylinder dimensions need
 
 ## Blocked and out-of-scope ledger
 
-| Entries                                             | Blocker                                                                                              | Next action                                                          |
-| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| ZC-070, 071 loft guides, periodic loft              | Pinned `loftWithOptions` reads only ruled/start/end point (Remus P-Class 7.2)                        | Remus binding for guides and closed loft; then M04 slice             |
-| ZC-086 non-uniform scale                            | `transformSolid` silently rewrites analytic carriers to NURBS (Remus B74)                            | Kernel disclosure or refusal first                                   |
-| ZC-145 hidden lines (curved)                        | `projectEdges` produces no silhouettes for curved faces                                              | Remus silhouette request; a box-only D01 slice is not blocked        |
-| ZC-144 detail view, ZC-164 drawing export           | Per-view scale field and PDF/font policy are undecided in the D01 design                             | Design decision in D01                                               |
-| ZC-046 per-entity DOF, ZC-042 projected length      | GCS reports one sketch-wide DOF; no two-point dx/dy constraint                                       | Remus GCS request, or an app emulation through construction geometry |
-| ZC-181, 189, 193–198 Parasolid, DWG, native CAD, JT | Licensed translator/SDK; I10 must choose it. **Release blocker; no licensing clearance is claimed.** | I10 qualification with an authorized corpus                          |
-| ZC-003, 210 pen/touch; ZC-175, 187 AR/USDZ          | Needs real supported devices; L02/I09 deferred                                                       | Measured demand, then a device test matrix                           |
-| ZC-135 teamspace                                    | No roadmap row; needs isolated test accounts                                                         | Product decision                                                     |
-| ZC-080 imprint, ZC-082 wrap/emboss                  | K09 / M12 deferred                                                                                   | Representation design first                                          |
-| ZC-123, 165–170, 173, 174 presentation              | L02 defers materials, decals, environments, capture and generated imagery                            | Reprioritize from demand                                             |
+| Entries                                             | Blocker                                                                                                                      | Next action                                                                           |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| ZC-070, 071 loft guides, periodic loft              | Pinned `loftWithOptions` reads only ruled/start/end point (Remus P-Class 7.2)                                                | Remus binding for guides and closed loft; then M04 slice                              |
+| ZC-095 replay advisory                              | The `exact` chunk is ~50 bytes under the 512,000-byte default budget; a fractional-count advisory in the builder overruns it | Split or trim the `exact` chunk, or an approved size exception, then add the advisory |
+| ZC-086 non-uniform scale                            | `transformSolid` silently rewrites analytic carriers to NURBS (Remus B74)                                                    | Kernel disclosure or refusal first                                                    |
+| ZC-145 hidden lines (curved)                        | `projectEdges` produces no silhouettes for curved faces                                                                      | Remus silhouette request; a box-only D01 slice is not blocked                         |
+| ZC-144 detail view, ZC-164 drawing export           | Per-view scale field and PDF/font policy are undecided in the D01 design                                                     | Design decision in D01                                                                |
+| ZC-046 per-entity DOF, ZC-042 projected length      | GCS reports one sketch-wide DOF; no two-point dx/dy constraint                                                               | Remus GCS request, or an app emulation through construction geometry                  |
+| ZC-181, 189, 193–198 Parasolid, DWG, native CAD, JT | Licensed translator/SDK; I10 must choose it. **Release blocker; no licensing clearance is claimed.**                         | I10 qualification with an authorized corpus                                           |
+| ZC-003, 210 pen/touch; ZC-175, 187 AR/USDZ          | Needs real supported devices; L02/I09 deferred                                                                               | Measured demand, then a device test matrix                                            |
+| ZC-135 teamspace                                    | No roadmap row; needs isolated test accounts                                                                                 | Product decision                                                                      |
+| ZC-080 imprint, ZC-082 wrap/emboss                  | K09 / M12 deferred                                                                                                           | Representation design first                                                           |
+| ZC-123, 165–170, 173, 174 presentation              | L02 defers materials, decals, environments, capture and generated imagery                                                    | Reprioritize from demand                                                              |
 
 ## Rights and originality boundaries
 
