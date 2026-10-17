@@ -43,6 +43,7 @@ describe('SketchPlanePrompt datum planes (R01-C)', () => {
       <SketchPlanePrompt
         document={document}
         offsetText="0"
+        datumsReady
         onOffsetTextChange={vi.fn()}
         onPickPlane={vi.fn()}
         onEnterSketch={onEnterSketch}
@@ -63,6 +64,7 @@ describe('SketchPlanePrompt datum planes (R01-C)', () => {
       <SketchPlanePrompt
         document={document}
         offsetText="5"
+        datumsReady
         onOffsetTextChange={vi.fn()}
         onPickPlane={vi.fn()}
         onEnterSketch={onEnterSketch}
@@ -74,6 +76,30 @@ describe('SketchPlanePrompt datum planes (R01-C)', () => {
     expect(datum).toHaveAttribute(
       'title',
       expect.stringContaining('Set it to 0')
+    );
+    fireEvent.click(datum);
+    expect(onEnterSketch).not.toHaveBeenCalled();
+  });
+
+  it('waits for the exact rebuild before entering a datum sketch', () => {
+    const { document } = documentWithResolvedDatum();
+    const onEnterSketch = vi.fn();
+    render(
+      <SketchPlanePrompt
+        document={document}
+        offsetText="0"
+        datumsReady={false}
+        onOffsetTextChange={vi.fn()}
+        onPickPlane={vi.fn()}
+        onEnterSketch={onEnterSketch}
+        onCancel={vi.fn()}
+      />
+    );
+    const datum = screen.getByRole('button', { name: 'Sketch on Plane 1' });
+    expect(datum).toBeDisabled();
+    expect(datum).toHaveAttribute(
+      'title',
+      'Waiting for exact geometry before sketching on Plane 1.'
     );
     fireEvent.click(datum);
     expect(onEnterSketch).not.toHaveBeenCalled();

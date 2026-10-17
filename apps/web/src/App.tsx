@@ -20996,6 +20996,7 @@ export function App() {
           <SketchPlanePrompt
             document={doc}
             offsetText={sketchPlaneOffsetText}
+            datumsReady={exactGeometryReady}
             onOffsetTextChange={setSketchPlaneOffsetText}
             onPickPlane={startSketchOnPlane}
             onEnterSketch={(plane, message) => {

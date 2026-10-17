@@ -9,6 +9,12 @@ import { PLANE_LABELS } from '../lib/model';
 export interface SketchPlanePromptProps {
   document: ProjectDocument;
   offsetText: string;
+  /**
+   * The exact projection matches this version. Until it does a datum's
+   * frame is the previous build's, and a sketch entered on it would be drawn
+   * against a plane that is about to move.
+   */
+  datumsReady: boolean;
   onOffsetTextChange(text: string): void;
   onPickPlane(plane: PlaneId): void;
   /** Enters a sketch on `plane`, saying `status` on the status line. */
@@ -28,6 +34,7 @@ export interface SketchPlanePromptProps {
 export function SketchPlanePrompt({
   document,
   offsetText,
+  datumsReady,
   onOffsetTextChange,
   onPickPlane,
   onEnterSketch,
@@ -69,11 +76,13 @@ export function SketchPlanePrompt({
               key={datum.featureId}
               type="button"
               aria-label={`Sketch on ${datum.name}`}
-              disabled={offsetBlocksDatums}
+              disabled={offsetBlocksDatums || !datumsReady}
               title={
-                offsetBlocksDatums
-                  ? `The offset applies to the principal planes only. Set it to 0 to sketch on ${datum.name}, or make an offset plane from it.`
-                  : `Sketch on the datum plane ${datum.name}`
+                !datumsReady
+                  ? `Waiting for exact geometry before sketching on ${datum.name}.`
+                  : offsetBlocksDatums
+                    ? `The offset applies to the principal planes only. Set it to 0 to sketch on ${datum.name}, or make an offset plane from it.`
+                    : `Sketch on the datum plane ${datum.name}`
               }
               onClick={() =>
                 onEnterSketch(
