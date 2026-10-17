@@ -190,7 +190,9 @@ export function datumFormStateFromFeature(
  */
 export function datumFormValidation(
   state: DatumPlaneFormState,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  /** The document's units: an offset is a length and may carry a suffix. */
+  units?: UnitSystem
 ): { kind: 'missing' | 'invalid'; reason: string } | null {
   if (!state.name.trim()) {
     return { kind: 'invalid', reason: 'Name the plane.' };
@@ -214,7 +216,11 @@ export function datumFormValidation(
     }
     return null;
   }
-  const preview = previewExpression(state.offset, scope);
+  const preview = previewExpression(
+    state.offset,
+    scope,
+    units ? { documentUnits: units, dimension: 'length' } : undefined
+  );
   if (!preview.ok || preview.value === undefined) {
     return {
       kind: 'invalid',
@@ -380,5 +386,61 @@ export function requireResolvedDatum(
   if (failure) throw new Error(failure.message);
   if (!derived.datumFrames?.[featureId]) {
     throw new Error(`${name} did not resolve to a plane.`);
+  }
+}
+
+/**
+ * The datums built, directly or through other datums, on datum `featureId`,
+ * in history order. A datum owns no body, so a body-target walk never sees
+ * one; an edit has to check their frames itself or a later midplane could
+ * go coincident behind a "validated" commit.
+ */
+export function downstreamDatumIds(
+  document: ProjectDocument,
+  featureId: FeatureId
+): FeatureId[] {
+  const affected = new Set<FeatureId>([featureId]);
+  const downstream: FeatureId[] = [];
+  let after = false;
+  for (const feature of listFeaturesInOrder(document)) {
+    if (feature.featureId === featureId) {
+      after = true;
+      continue;
+    }
+    if (!after || feature.data.featureKind !== 'datum-plane') continue;
+    const { definition } = feature.data;
+    const sources =
+      definition.kind === 'offset' ? [definition.source] : definition.sources;
+    if (
+      sources.some(
+        (source) =>
+          source.type === 'datum' && affected.has(source.datumFeatureId)
+      )
+    ) {
+      affected.add(feature.featureId);
+      downstream.push(feature.featureId);
+    }
+  }
+  return downstream;
+}
+
+/**
+ * Throws unless an edit of datum `featureId` leaves it and every downstream
+ * datum that resolved before the edit still resolved. A datum that was
+ * already broken is not the edit's fault and does not refuse it.
+ */
+export function requireResolvedDatums(
+  before: ProjectDocument,
+  derived: ProjectDocument['derived'],
+  featureId: FeatureId,
+  name: string
+): void {
+  requireResolvedDatum(derived, featureId, name);
+  for (const id of downstreamDatumIds(before, featureId)) {
+    if (!before.derived.datumFrames?.[id]) continue;
+    const datum = listFeaturesInOrder(before).find(
+      (feature) => feature.featureId === id
+    );
+    requireResolvedDatum(derived, id, datum?.name ?? 'A later plane');
   }
 }

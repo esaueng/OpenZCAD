@@ -22,10 +22,12 @@ import {
   datumPlaneDisplays,
   datumPlaneRows,
   datumSourceOptions,
+  downstreamDatumIds,
   earlierDatumPlanes,
   newDatumPlaneFormState,
   nextDatumPlaneName,
-  requireResolvedDatum
+  requireResolvedDatum,
+  requireResolvedDatums
 } from './datumPlanes';
 
 const XY = { type: 'canonical', plane: 'XY', offset: 0 } as const;
@@ -118,6 +120,14 @@ describe('Plane card state (R01-C)', () => {
       kind: 'invalid',
       reason: 'A midplane needs two different planes.'
     });
+  });
+
+  it('accepts a unit-bearing offset as a length in the document units', () => {
+    const state = { ...newDatumPlaneFormState('Plane 1', XY), offset: '1 in' };
+    expect(datumFormValidation(state, {}, 'mm')).toBeNull();
+    expect(
+      datumFormValidation({ ...state, offset: '30 deg' }, {}, 'mm')?.kind
+    ).toBe('invalid');
   });
 
   it('describes a datum by its source, in document units', () => {
@@ -250,6 +260,30 @@ describe('Plane card commands (R01-C)', () => {
         { ...document.derived, datumFrames: { [id]: frame } },
         id,
         'Lid'
+      )
+    ).not.toThrow();
+  });
+
+  it('refuses an edit that breaks a later datum built on the edited one', () => {
+    const { document, first, second } = twoDatums();
+    expect(downstreamDatumIds(document, first)).toEqual([second]);
+    const before = withFrames(document, { [first]: frame, [second]: frame });
+    // The edited plane resolves; the midplane on it no longer does.
+    expect(() =>
+      requireResolvedDatums(
+        before,
+        { ...document.derived, datumFrames: { [first]: frame } },
+        first,
+        'Plane 1'
+      )
+    ).toThrow('Plane 2 did not resolve to a plane.');
+    // A later datum that was already broken is not this edit's to answer for.
+    expect(() =>
+      requireResolvedDatums(
+        withFrames(document, { [first]: frame }),
+        { ...document.derived, datumFrames: { [first]: frame } },
+        first,
+        'Plane 1'
       )
     ).not.toThrow();
   });

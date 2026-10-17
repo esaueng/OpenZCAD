@@ -117,8 +117,9 @@ export function featureValueSummary(
     case 'datum-plane': {
       const flip = data.definition.reverseNormal ? ' flipped' : '';
       if (data.definition.kind === 'midplane') return `midplane${flip}`;
-      const offset = length(data.definition.offset);
-      return offset === null ? null : `${offset}${flip}`;
+      // A length, so a unit-bearing offset ("1 in") still summarises.
+      const offset = lengthValue(data.definition.offset);
+      return offset === null ? null : `${offset} ${unit}${flip}`;
     }
     case 'draft': {
       const angle = num(data.angleDeg);

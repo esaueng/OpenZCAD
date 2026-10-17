@@ -6,7 +6,8 @@ import type {
   FacePlaneSource,
   FeatureId,
   FeatureNode,
-  ProjectDocument
+  ProjectDocument,
+  UnitSystem
 } from '@openzcad/shared';
 import { affectedFeatureTargets } from '../../lib/affectedFeatureTargets';
 import { CARD_EYEBROWS } from '../../lib/cardEyebrows';
@@ -27,7 +28,7 @@ import {
   faceSourceOption,
   newDatumPlaneFormState,
   nextDatumPlaneName,
-  requireResolvedDatum,
+  requireResolvedDatums,
   type DatumPlaneFormState,
   type DatumPlaneSubmission,
   type DatumSourceOption
@@ -42,6 +43,8 @@ export interface DatumPlaneFormProps {
   /** Principal planes, earlier datums and any offered face, in that order. */
   sources: readonly DatumSourceOption[];
   scope: Record<string, number>;
+  /** The document's units: the offset is a length and may carry a suffix. */
+  units?: UnitSystem;
   /** The card reopens an existing datum; its button reads Apply. */
   editing?: boolean;
   /**
@@ -64,6 +67,7 @@ export function DatumPlaneForm({
   initial,
   sources,
   scope,
+  units,
   editing = false,
   pickedFace = null,
   unsupportedReason,
@@ -93,7 +97,7 @@ export function DatumPlaneForm({
     setPreflight({ status: 'idle' });
     setState(next);
   };
-  const validation = datumFormValidation(state, scope);
+  const validation = datumFormValidation(state, scope, units);
   const blocked = unsupportedReason !== undefined;
   const canCheck = validation === null && !blocked;
 
@@ -193,6 +197,9 @@ export function DatumPlaneForm({
             value={state.offset}
             scope={scope}
             optional
+            {...(units
+              ? { quantity: { documentUnits: units, dimension: 'length' } }
+              : {})}
             onChange={(offset) => replace({ ...state, offset })}
           />
         </>
@@ -320,6 +327,7 @@ export function DatumPlaneCard({
       initial={initial}
       sources={sources}
       scope={scope}
+      units={document.units}
       editing={editing !== null}
       pickedFace={picked}
       {...(unsupportedReason !== undefined ? { unsupportedReason } : {})}
@@ -436,7 +444,7 @@ export function DatumPlaneWorkspaceCard({
       const { command, featureId } = datumPlaneCommand(named, editing);
       command.validate(base);
       const derived = await app.geometry.syncOnce(command.apply(base));
-      requireResolvedDatum(derived, featureId, named.name);
+      requireResolvedDatums(base, derived, featureId, named.name);
       const latest = current();
       if (
         !latest ||
@@ -486,7 +494,12 @@ export function DatumPlaneWorkspaceCard({
       // refusal from any of them refuses the edit.
       targets: editing ? affectedFeatureTargets(base, editing.featureId) : [],
       validateDerived: (derived) =>
-        requireResolvedDatum(derived, checked.featureId, submission.name),
+        requireResolvedDatums(
+          base,
+          derived,
+          checked.featureId,
+          submission.name
+        ),
       successMessage: commandOutcomeMessage(label),
       ...(editing
         ? { cancelled: () => !app.editSessionIsCurrent(editing, session) }
