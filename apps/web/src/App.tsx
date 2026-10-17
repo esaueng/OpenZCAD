@@ -21169,6 +21169,7 @@ export function App() {
               </section>
             ) : tool === 'datum-plane' && doc ? (
               <DatumPlaneCard
+                key={modelingEditFeature?.featureId ?? 'new'}
                 document={doc}
                 editFeature={modelingEditFeature}
                 scope={parameterScope.scope}

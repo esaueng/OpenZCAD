@@ -440,6 +440,10 @@ export function DatumPlaneWorkspaceCard({
   // A creation committed after Cancel or Esc closed the card would land a
   // plane the user withdrew: the commit asks whether the card is still up.
   const open = useRef(true);
+  // And a card reused for another datum (History reopening one mid-commit)
+  // is not the card that asked to create this one.
+  const showing = useRef<FeatureId | null>(null);
+  showing.current = editing?.featureId ?? null;
   useEffect(() => {
     open.current = true;
     return () => {
@@ -542,7 +546,9 @@ export function DatumPlaneWorkspaceCard({
         ),
       successMessage: commandOutcomeMessage(label),
       cancelled: () =>
-        editing ? !app.editSessionIsCurrent(editing, session) : !open.current,
+        editing
+          ? !app.editSessionIsCurrent(editing, session)
+          : !open.current || showing.current !== null,
       onSuccess: () =>
         editing
           ? app.finishFeatureEdit(editing, session)

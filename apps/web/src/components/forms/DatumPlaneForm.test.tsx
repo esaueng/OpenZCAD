@@ -267,6 +267,27 @@ describe('Plane workspace card commit (R01-C)', () => {
       ]
     )[1];
     expect(options.cancelled()).toBe(false);
+    // Reused to edit an existing datum: no longer the card that asked.
+    const { document: withDatum, featureId } = addDatumPlane(document, {
+      name: 'Plane 9',
+      definition: {
+        kind: 'offset',
+        source: { type: 'canonical', plane: 'XY', offset: 0 },
+        offset: 3
+      }
+    });
+    view.rerender(
+      <DatumPlaneWorkspaceCard
+        document={withDatum}
+        editFeature={findFeature(withDatum, featureId)!}
+        scope={{}}
+        selection={null}
+        editDisabledReason={null}
+        exactGeometryReady
+        app={app}
+      />
+    );
+    expect(options.cancelled()).toBe(true);
     view.unmount();
     expect(options.cancelled()).toBe(true);
   });
