@@ -18,8 +18,12 @@ export interface DatumPlaneRigInput {
 
 export interface DatumPlaneRig {
   group: THREE.Group;
-  /** Keeps every quad about 160 CSS pixels across at any zoom. */
-  setScale(worldPerPixel: number): void;
+  /**
+   * Keeps every quad about 160 CSS pixels across at any zoom, each measured
+   * at its own origin: under perspective a plane far from the world origin
+   * would otherwise balloon near the camera or vanish far from it.
+   */
+  setScale(worldPerPixelAt: (point: THREE.Vector3) => number): void;
   dispose(): void;
 }
 
@@ -77,9 +81,14 @@ export function buildDatumPlaneRig(
   }
   return {
     group,
-    setScale(worldPerPixel) {
-      const size = Math.max(worldPerPixel * SCREEN_EXTENT_PX, 1e-3);
-      for (const object of scaled) object.scale.setScalar(size);
+    setScale(worldPerPixelAt) {
+      for (const object of scaled) {
+        const size = Math.max(
+          worldPerPixelAt(object.position) * SCREEN_EXTENT_PX,
+          1e-3
+        );
+        object.scale.setScalar(size);
+      }
     },
     dispose() {
       for (const item of disposables) item.dispose();

@@ -8449,7 +8449,7 @@ export function ModelViewer({
 
       // Ghost planes hold their screen size, so they stay a target rather
       // than a backdrop as the camera dollies.
-      datumPlaneRigRef.current?.setScale(worldPerPixelAt(new THREE.Vector3()));
+      datumPlaneRigRef.current?.setScale(worldPerPixelAt);
       const planePicker = planePickerRigRef.current;
       if (planePicker) {
         // Scale first: the offset is expressed in world units and has to be
@@ -10695,7 +10695,7 @@ export function ModelViewer({
       return;
     }
     const rig = buildDatumPlaneRig(planes);
-    rig.setScale(0.05);
+    rig.setScale(() => 0.05);
     context.scene.add(rig.group);
     datumPlaneRigRef.current = rig;
     const canvas = context.renderer.domElement;
