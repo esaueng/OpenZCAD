@@ -1333,6 +1333,27 @@ describe('modify tool picking', () => {
     ).toMatchObject({ status: 'value', picks: [arc, `${arc}#center`] });
   });
 
+  it('prefers the active pivot snap over a curve the click also hit', () => {
+    const { manager, ids, sketch } = sketchWith([
+      { objectKind: 'circle', centerX: 10, centerY: 0, radius: 1 },
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },
+      // A line through the hub's centre, under the same click.
+      { objectKind: 'line', x1: -8, y1: 0, x2: 8, y2: 0 }
+    ]);
+    const [source, hub, line] = ids as [string, string, string];
+    expect(
+      advanceSketchEditPick(
+        manager.document,
+        sketch(),
+        'circular-pattern',
+        [source],
+        line,
+        resolve,
+        { snapPoint: { objectId: hub, point: 'center' } }
+      )
+    ).toMatchObject({ status: 'value', picks: [source, `${hub}#center`] });
+  });
+
   it('collects a pattern’s two values before committing one transaction', async () => {
     const { manager, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
