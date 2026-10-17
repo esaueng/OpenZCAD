@@ -22,6 +22,17 @@ export function resolvedSketchPlaneBasis(
   resolveOffset: (value: ParamValue) => number,
   sketchName: string
 ): PlaneBasis {
+  if (planeRef.type === 'datum') {
+    // The frame the exact build resolved at the datum's history position;
+    // nothing on this side can re-derive it.
+    const frame = document.derived.datumFrames?.[planeRef.datumFeatureId];
+    if (!frame) {
+      throw new Error(
+        `Sketch "${sketchName}" is on a datum plane that has not resolved.`
+      );
+    }
+    return frame;
+  }
   if (planeRef.type !== 'face' || !planeRef.faceReference) {
     return frameForPlaneRef(planeRef, resolveOffset);
   }

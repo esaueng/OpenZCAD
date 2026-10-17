@@ -177,6 +177,7 @@ function* buildDocumentHistorySteps(
   const result: ExactBuildResult = resume?.initial ?? {
     shapes: new Map(),
     sketchBases: new Map(),
+    datumFrames: new Map(),
     consumed: new Set(),
     importedStepDiagnostics: new Map(),
     meshBodies: new Set(),

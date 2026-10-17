@@ -310,7 +310,7 @@ describe('S07 constraint set on the pinned kernel', () => {
 });
 
 describe('S07 schema boundary', () => {
-  it('stamps v18, opens a v17 document unchanged and refuses a newer one', () => {
+  it('stamps the current schema, opens a v17 document unchanged and refuses a newer one', () => {
     const { manager, ids, constrain } = sketchWith([
       { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }
     ]);
@@ -325,8 +325,8 @@ describe('S07 schema boundary', () => {
     ) as ProjectDocument;
     // A v17 client compares this stamp and refuses the document, rather
     // than solving without the lock it cannot read.
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(18);
-    expect(saved.schemaVersion).toBe(18);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(18);
+    expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect(normalizeDocument(saved)).toEqual(manager.document);
 
     const legacy = structuredClone(manager.document);
@@ -334,14 +334,17 @@ describe('S07 schema boundary', () => {
     sketch.constraints = [];
     legacy.schemaVersion = 17 as typeof legacy.schemaVersion;
     const opened = normalizeDocument(legacy);
-    expect(opened.schemaVersion).toBe(18);
+    expect(opened.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect({ ...opened, schemaVersion: 17 }).toEqual(legacy);
 
     expect(() =>
       normalizeDocument({
         ...saved,
-        schemaVersion: 19 as typeof saved.schemaVersion
+        schemaVersion: (PROJECT_DOCUMENT_SCHEMA_VERSION +
+          1) as typeof saved.schemaVersion
       })
-    ).toThrow(/Unsupported project schema \(v19\)/);
+    ).toThrow(
+      `Unsupported project schema (v${PROJECT_DOCUMENT_SCHEMA_VERSION + 1})`
+    );
   });
 });

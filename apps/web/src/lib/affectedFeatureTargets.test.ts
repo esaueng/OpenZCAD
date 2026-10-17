@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  addDatumPlane,
   addPrimitiveFeature,
   addSketchFeature,
+  addSplitFeature,
+  extrudeSketch,
   chamferEdges,
   createProjectDocument,
   directEditBody,
@@ -77,6 +80,62 @@ describe('affected feature targets', () => {
     expect(
       targets.every((target) => typeof target.featureId === 'string')
     ).toBe(true);
+  });
+
+  it('walks datum consumers and tolerates a later datum (R01)', () => {
+    const block = addPrimitiveFeature(
+      createProjectDocument('Datum branch', toUserId('user_affected')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 20 }
+      }
+    );
+    const blockId = block.bodyOrder[0]!;
+    const first = addDatumPlane(block, {
+      name: 'Lid plane',
+      definition: {
+        kind: 'offset',
+        source: { type: 'canonical', plane: 'XY', offset: 0 },
+        offset: 10
+      }
+    });
+    const chained = addDatumPlane(first.document, {
+      name: 'Upper plane',
+      definition: {
+        kind: 'offset',
+        source: { type: 'datum', datumFeatureId: first.featureId },
+        offset: 2
+      }
+    });
+    const sketched = addSketchFeature(chained.document, {
+      name: 'Lid sketch',
+      planeRef: { type: 'datum', datumFeatureId: chained.featureId },
+      objects: [{ objectKind: 'circle', radius: 2, centerX: 0, centerY: 0 }]
+    });
+    const padded = extrudeSketch(sketched.document, {
+      name: 'Lid pad',
+      sketchId: sketched.sketchId,
+      distance: 3
+    });
+    const split = addSplitFeature(padded.document, {
+      name: 'Halve',
+      targetBodyId: blockId,
+      plane: { type: 'datum', datumFeatureId: first.featureId }
+    });
+    const doc = split.document;
+
+    // Editing the datum reaches everything resolved through it, transitively.
+    expect(
+      affectedFeatureTargets(doc, first.featureId).map((t) => t.featureName)
+    ).toEqual(['Lid pad', 'Halve', 'Halve']);
+    // An edit upstream of a datum walks past it instead of throwing.
+    const blockFeature = listFeaturesInOrder(doc)[0]!;
+    expect(
+      affectedFeatureTargets(doc, blockFeature.featureId).map(
+        (t) => t.featureName
+      )
+    ).toEqual(['Block', 'Halve', 'Halve']);
   });
 
   it('resolves an in-place direct edit as its own source body', () => {

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
+  addDatumPlane,
   addPrimitiveFeature,
   addSketchFeature,
   booleanBodies,
@@ -222,6 +223,95 @@ describe('booleanEvolutionProbeNeeded', () => {
     ).toBe(true);
   });
 
+  // R01: a face-sourced datum resolves from the face's verified lineage, so
+  // an idle sync must not skip the probe that publishes it.
+  function datumOnFace(
+    document: ProjectDocument,
+    bodyId: BodyId,
+    producingFeatureId: FeatureId
+  ): ProjectDocument {
+    return addDatumPlane(document, {
+      name: 'Face plane',
+      definition: {
+        kind: 'offset',
+        offset: 5,
+        source: {
+          type: 'face',
+          bodyId,
+          faceHash: 1,
+          faceReference: {
+            kind: 'face',
+            producingFeatureId,
+            lineageName: 'face:top'
+          } as never,
+          sourceArea: 1,
+          sourceCenter: { x: 0, y: 0, z: 0 },
+          sourceCentroid: { x: 0, y: 0, z: 0 },
+          sourceNormal: { x: 0, y: 0, z: 1 },
+          frame: {
+            origin: { x: 0, y: 0, z: 0 },
+            xAxis: { x: 1, y: 0, z: 0 },
+            yAxis: { x: 0, y: 1, z: 0 },
+            zAxis: { x: 0, y: 0, z: 1 }
+          }
+        }
+      }
+    }).document;
+  }
+
+  it('is true when a later datum takes a face of the result', () => {
+    const { document, bodyId } = fusedPlateDocument();
+    const fuse = booleanFeatureOf(document);
+    expect(
+      booleanEvolutionProbeNeeded(
+        datumOnFace(document, bodyId, fuse.featureId),
+        fuse
+      )
+    ).toBe(true);
+  });
+
+  it('is true when a datum face source names the boolean on a carried body', () => {
+    const { document, bodyId } = fusedPlateDocument();
+    const fuse = booleanFeatureOf(document);
+    const moved = transformBody(document, {
+      name: 'Move',
+      targetBodyId: bodyId,
+      translation: { x: 5, y: 0, z: 0 }
+    });
+    expect(
+      booleanEvolutionProbeNeeded(
+        datumOnFace(moved.document, moved.bodyId, fuse.featureId),
+        fuse
+      )
+    ).toBe(true);
+  });
+
+  it('is false for a canonical datum or one on an unrelated body', () => {
+    const { document } = fusedPlateDocument();
+    const fuse = booleanFeatureOf(document);
+    const canonical = addDatumPlane(document, {
+      name: 'Lifted',
+      definition: {
+        kind: 'offset',
+        offset: 5,
+        source: { type: 'canonical', plane: 'XY', offset: 0 }
+      }
+    }).document;
+    expect(booleanEvolutionProbeNeeded(canonical, fuse)).toBe(false);
+    const other = addPrimitiveFeature(canonical, {
+      name: 'Other',
+      primitiveKind: 'box',
+      dimensions: { width: 5, height: 5, depth: 5 }
+    });
+    const otherFeature = listFeaturesInOrder(other).at(-1)!;
+    expect(
+      booleanEvolutionProbeNeeded(
+        datumOnFace(other, other.bodyOrder.at(-1)!, otherFeature.featureId),
+        fuse
+      )
+    ).toBe(false);
+  });
+
   it('is false when a later transform merely carries the result', () => {
     const { document, bodyId } = fusedPlateDocument();
     const moved = transformBody(document, {
@@ -298,7 +388,13 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
     const spy = vi.spyOn(evolutionModule, 'probeBooleanEntityEvolution');
     try {
       spy.mockClear();
-      const derived = await adapter.syncDocument(document, undefined, undefined, undefined, IDLE_SYNC);
+      const derived = await adapter.syncDocument(
+        document,
+        undefined,
+        undefined,
+        undefined,
+        IDLE_SYNC
+      );
       expect(derived.warnings).toEqual([]);
       expect(derived.bodyRepresentations[bodyId]).toBeDefined();
       expect(spy).not.toHaveBeenCalled();
@@ -316,7 +412,13 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
 
   it('runs the probe for a boolean followed by a fillet, unchanged', async () => {
     const { document, bodyId } = fusedPlateDocument();
-    const first = await adapter.syncDocument(document, undefined, undefined, undefined, IDLE_SYNC);
+    const first = await adapter.syncDocument(
+      document,
+      undefined,
+      undefined,
+      undefined,
+      IDLE_SYNC
+    );
     expect(first.warnings).toEqual([]);
     const { document: filleted, bodyId: roundedId } = filletOneEdge(
       document,
@@ -326,7 +428,13 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
     const spy = vi.spyOn(evolutionModule, 'probeBooleanEntityEvolution');
     try {
       spy.mockClear();
-      const derived = await adapter.syncDocument(filleted, undefined, undefined, undefined, IDLE_SYNC);
+      const derived = await adapter.syncDocument(
+        filleted,
+        undefined,
+        undefined,
+        undefined,
+        IDLE_SYNC
+      );
       expect(derived.warnings).toEqual([]);
       expect(derived.bodyRepresentations[roundedId]).toBeDefined();
       expect(spy.mock.calls.length).toBeGreaterThan(0);
@@ -353,7 +461,13 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
       const spy = vi.spyOn(evolutionModule, 'probeBooleanEntityEvolution');
       try {
         spy.mockClear();
-        const first = await caching.syncDocument(document, undefined, undefined, undefined, IDLE_SYNC);
+        const first = await caching.syncDocument(
+          document,
+          undefined,
+          undefined,
+          undefined,
+          IDLE_SYNC
+        );
         expect(first.warnings).toEqual([]);
         expect(spy).not.toHaveBeenCalled();
         const { document: filleted, bodyId: roundedId } = filletOneEdge(
@@ -362,7 +476,13 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
           bodyId
         );
         spy.mockClear();
-        const second = await caching.syncDocument(filleted, undefined, undefined, undefined, IDLE_SYNC);
+        const second = await caching.syncDocument(
+          filleted,
+          undefined,
+          undefined,
+          undefined,
+          IDLE_SYNC
+        );
         expect(second.warnings).toEqual([]);
         expect(second.bodyRepresentations[roundedId]).toBeDefined();
         expect(spy.mock.calls.length).toBeGreaterThan(0);
@@ -379,7 +499,13 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
     const spy = vi.spyOn(evolutionModule, 'probeBooleanEntityEvolution');
     try {
       spy.mockClear();
-      const carrierDerived = await adapter.syncDocument(document, undefined, undefined, undefined, IDLE_SYNC);
+      const carrierDerived = await adapter.syncDocument(
+        document,
+        undefined,
+        undefined,
+        undefined,
+        IDLE_SYNC
+      );
       expect(carrierDerived.warnings).toEqual([]);
       const carrierBody = carrierDerived.bodyRepresentations[bodyId]!;
       expect(carrierBody, 'pocket body').toBeDefined();
@@ -427,7 +553,13 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
         positionAnchor: 'centroid'
       });
       spy.mockClear();
-      const holed = await adapter.syncDocument(bored.document, undefined, undefined, undefined, IDLE_SYNC);
+      const holed = await adapter.syncDocument(
+        bored.document,
+        undefined,
+        undefined,
+        undefined,
+        IDLE_SYNC
+      );
       expect(holed.warnings).toEqual([]);
       expect(
         spy.mock.calls.length,
@@ -462,7 +594,13 @@ describe('lazy boolean evolution probe', { timeout: 120_000 }, () => {
         edgeHashes: [recordedEdgeHash],
         size: 1
       });
-      const finished = await adapter.syncDocument(rounded.document, undefined, undefined, undefined, IDLE_SYNC);
+      const finished = await adapter.syncDocument(
+        rounded.document,
+        undefined,
+        undefined,
+        undefined,
+        IDLE_SYNC
+      );
       expect(finished.warnings).toEqual([]);
       const eased = finished.bodyRepresentations[rounded.bodyId]!;
       expect(eased, 'fillet body').toBeDefined();

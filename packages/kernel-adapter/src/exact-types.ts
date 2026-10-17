@@ -45,6 +45,12 @@ export interface ImportedStepDiagnostics {
 export interface ExactBuildResult {
   shapes: Map<BodyId, ExactShape>;
   sketchBases: Map<SketchId, PlaneBasis>;
+  /**
+   * R01 datum frames, each resolved once at its own history position. Every
+   * later sketch, Split and Mirror reads it here; a datum that failed is
+   * absent, and its consumers refuse by name rather than guess a plane.
+   */
+  datumFrames: Map<FeatureId, PlaneBasis>;
   consumed: Set<BodyId>;
   /**
    * Per-body import validation, recorded where the import happens rather than
