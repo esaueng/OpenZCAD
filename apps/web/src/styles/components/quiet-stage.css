@@ -2243,14 +2243,9 @@ button.command-rail:disabled {
   --lane-end: calc(var(--rail-w) * 2 + var(--island-gap) * 3);
 }
 
-/* Sixteen relations stand taller than the instrument rail, so they share its
-   foot rather than its head: the rail's own placement already keeps its foot
-   clear of the bottom-right corner, and the extra height rises into the empty
-   band beside the top islands. Hung from the head, the column ran onto the
-   view cube in an 800px window. */
 .instrument-rail > .sketch-relations {
   position: absolute;
-  bottom: 0;
+  top: 0;
   right: calc(100% + var(--island-gap));
   width: var(--rail-w);
   box-sizing: border-box;
@@ -2269,23 +2264,69 @@ button.command-rail:disabled {
   display: contents;
 }
 
-/* A window too short for the relations in one column (from 760px the column
-   would rise into the top islands) wraps them into a second column, outboard
-   of the first so the order still starts beside the instrument rail, no
-   taller than the instrument rail and never past the bottom-right corner.
-   A scroller would clip the names that stand outside the rail's edge;
-   wrapping keeps every relation in view. Two columns leave the inner one no
-   room for its names (see below), so they hide here; each relation's tooltip
-   and accessible name still name it. The right lane steps left by the second
-   column. */
-@media (max-height: 760px) {
-  .workspace.column-layout .viewer-area:has(.sketch-relations) {
-    --lane-end: calc(var(--rail-w) * 2 + 32px + var(--island-gap) * 3);
-  }
+/* The point relations fold into one slot whose flyout opens beside the
+   rail, as the rail's own names do, rather than lengthening the column. */
+.sketch-relation-slot.sketch-point-relations-anchor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
 
+.sketch-point-relations {
+  position: absolute;
+  top: 0;
+  right: calc(100% + var(--island-gap));
+  display: grid;
+  gap: 2px;
+  min-width: 160px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+}
+
+.sketch-point-relation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.sketch-point-relation:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.sketch-point-relation.active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+}
+
+.sketch-point-relation:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* A window too short for the relations in one column (Angle fell off the
+   bottom at 390px) packs them a little tighter and, if they still do not
+   fit, wraps them into a second column, outboard of the first so the order
+   still starts beside the instrument rail. A scroller would clip the names
+   that stand outside the rail's edge; wrapping keeps every relation in
+   view. Under 540px the second column is certain, so the right lane steps
+   left by it. */
+@media (max-height: 600px) {
   .instrument-rail > .sketch-relations {
-    top: 0;
-    bottom: auto;
     display: grid;
     grid-auto-flow: column;
     grid-template-rows: repeat(auto-fill, 30px);
@@ -2294,16 +2335,7 @@ button.command-rail:disabled {
     width: auto;
     padding: 5px 4px;
     direction: rtl;
-    max-height: min(
-      100%,
-      calc(
-        100vh - var(--stage-top) - var(--island-gap) * 2 - var(--stage-corner-h)
-      )
-    );
-  }
-
-  .instrument-rail > .sketch-relations .sketch-relation-name {
-    display: none;
+    max-height: calc((100vh - var(--stage-top) - var(--island-gap) + 100%) / 2);
   }
 
   .instrument-rail > .sketch-relations .sketch-relation {

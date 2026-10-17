@@ -7,6 +7,7 @@ import {
   type ReactNode
 } from 'react';
 import {
+  Crosshair,
   CircleDot,
   Construction,
   Diameter,
@@ -846,11 +847,10 @@ export function SketchToolRail({
   );
 }
 
-/** Relations dividers: before the positional group, the dimensions and the point relations. */
+/** Relations dividers: before the positional group and the dimensions. */
 const RELATION_GROUP_STARTS = new Set<SketchConstraintToolKind>([
   'concentric',
-  'radius',
-  'symmetric'
+  'radius'
 ]);
 
 interface SketchRelationsRailProps {
@@ -879,6 +879,18 @@ interface SketchRelationsRailProps {
  * rail reads as "what you can do with this" without rearranging itself.
  * A relation that does not fit is greyed and says why.
  */
+/**
+ * The point relations share one rail slot: four more icons ran the relations
+ * column onto the view cube and over the canvas. They are point-first picks,
+ * so a selected entity never fits them and nothing is lost by folding them.
+ */
+const POINT_RELATIONS = new Set<SketchConstraintToolKind>([
+  'symmetric',
+  'point-on-object',
+  'lock',
+  'disconnect'
+]);
+
 export function SketchRelationsRail({
   canConstrain,
   pendingConstraint,
@@ -887,6 +899,65 @@ export function SketchRelationsRail({
   onSelectionConstraintTool
 }: SketchRelationsRailProps) {
   const reasonId = useId();
+  const groupId = useId();
+  const [pointsOpen, setPointsOpen] = useState(false);
+  const pointArmed =
+    pendingConstraint !== null && POINT_RELATIONS.has(pendingConstraint.kind);
+
+  function relation(
+    { kind, label, hint }: (typeof CONSTRAINT_TOOL_SPECS)[number],
+    inGroup: boolean
+  ) {
+    const Icon = CONSTRAINT_ICONS[kind];
+    const armed = pendingConstraint?.kind === kind;
+    const fits = !selection || selection.fitting.includes(kind);
+    const reason = !canConstrain
+      ? 'Draw an entity first.'
+      : fits
+        ? null
+        : `Does not apply to ${/^[aeiou]/i.test(selection.kind) ? 'an' : 'a'} ${selection.kind}.`;
+    const named = armed || Boolean(selection && fits && canConstrain);
+    return (
+      <span key={kind} className="sketch-relation-slot">
+        {!inGroup && RELATION_GROUP_STARTS.has(kind) && (
+          <span className="sketch-relations-divider" aria-hidden="true" />
+        )}
+        <Tooltip label={label} description={reason ?? hint}>
+          <button
+            type="button"
+            className={`${inGroup ? 'sketch-point-relation' : 'sketch-relation'}${armed ? ' active' : ''}`}
+            aria-pressed={armed}
+            aria-label={label}
+            aria-describedby={reason ? `${reasonId}-${kind}` : undefined}
+            // An armed relation can always be put down again.
+            disabled={reason !== null && !armed}
+            onClick={() => {
+              if (inGroup) setPointsOpen(false);
+              if (selection && !armed) onSelectionConstraintTool(kind);
+              else onConstraintTool(armed ? null : kind);
+            }}
+          >
+            <Icon size={16} aria-hidden="true" />
+            {inGroup ? (
+              <span aria-hidden="true">{label}</span>
+            ) : (
+              named && (
+                <span className="sketch-relation-name" aria-hidden="true">
+                  {label}
+                </span>
+              )
+            )}
+            {reason && (
+              <span id={`${reasonId}-${kind}`} className="visually-hidden">
+                {reason}
+              </span>
+            )}
+          </button>
+        </Tooltip>
+      </span>
+    );
+  }
+
   return (
     <div
       className="sketch-relations"
@@ -894,52 +965,48 @@ export function SketchRelationsRail({
       aria-label="Relations"
       aria-orientation="vertical"
     >
-      {CONSTRAINT_TOOL_SPECS.map(({ kind, label, hint }) => {
-        const Icon = CONSTRAINT_ICONS[kind];
-        const armed = pendingConstraint?.kind === kind;
-        const fits = !selection || selection.fitting.includes(kind);
-        const reason = !canConstrain
-          ? 'Draw an entity first.'
-          : fits
-            ? null
-            : `Does not apply to ${/^[aeiou]/i.test(selection.kind) ? 'an' : 'a'} ${selection.kind}.`;
-        const named = armed || Boolean(selection && fits && canConstrain);
-        return (
-          <span key={kind} className="sketch-relation-slot">
-            {RELATION_GROUP_STARTS.has(kind) && (
-              <span className="sketch-relations-divider" aria-hidden="true" />
-            )}
-            <Tooltip label={label} description={reason ?? hint}>
-              <button
-                type="button"
-                className={`sketch-relation${armed ? ' active' : ''}`}
-                aria-pressed={armed}
-                aria-label={label}
-                aria-describedby={reason ? `${reasonId}-${kind}` : undefined}
-                // An armed relation can always be put down again.
-                disabled={reason !== null && !armed}
-                onClick={() =>
-                  selection && !armed
-                    ? onSelectionConstraintTool(kind)
-                    : onConstraintTool(armed ? null : kind)
-                }
-              >
-                <Icon size={16} aria-hidden="true" />
-                {named && (
-                  <span className="sketch-relation-name" aria-hidden="true">
-                    {label}
-                  </span>
-                )}
-                {reason && (
-                  <span id={`${reasonId}-${kind}`} className="visually-hidden">
-                    {reason}
-                  </span>
-                )}
-              </button>
-            </Tooltip>
-          </span>
-        );
-      })}
+      {CONSTRAINT_TOOL_SPECS.filter(
+        ({ kind }) => !POINT_RELATIONS.has(kind)
+      ).map((spec) => relation(spec, false))}
+      <span
+        className="sketch-relation-slot sketch-point-relations-anchor"
+        // Escape closes the flyout from the toggle as well as from inside.
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && pointsOpen) {
+            event.stopPropagation();
+            setPointsOpen(false);
+          }
+        }}
+      >
+        <span className="sketch-relations-divider" aria-hidden="true" />
+        <Tooltip
+          label="Point relations"
+          description="Symmetric, point on curve, lock and disconnect"
+        >
+          <button
+            type="button"
+            className={`sketch-relation${pointArmed ? ' active' : ''}`}
+            aria-label="Point relations"
+            aria-expanded={pointsOpen}
+            aria-controls={pointsOpen ? groupId : undefined}
+            onClick={() => setPointsOpen((open) => !open)}
+          >
+            <Crosshair size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+        {pointsOpen && (
+          <div
+            id={groupId}
+            className="sketch-point-relations"
+            role="group"
+            aria-label="Point relations"
+          >
+            {CONSTRAINT_TOOL_SPECS.filter(({ kind }) =>
+              POINT_RELATIONS.has(kind)
+            ).map((spec) => relation(spec, true))}
+          </div>
+        )}
+      </span>
     </div>
   );
 }

@@ -56,12 +56,26 @@ test('point relations arm from the rail and act on snap-point picks', async ({
   const status = page.getByRole('contentinfo');
   const tool = (name: string) =>
     relations.getByRole('button', { name, exact: true });
+  // The point relations share one rail slot and open in a flyout.
+  const pointTool = async (name: string) => {
+    const group = relations.getByRole('button', {
+      name: 'Point relations',
+      exact: true
+    });
+    await group.click();
+    await expect(group).toHaveAttribute('aria-expanded', 'true');
+    await relations
+      .getByRole('group', { name: 'Point relations' })
+      .getByRole('button', { name, exact: true })
+      .click();
+    await expect(group).toHaveAttribute('aria-expanded', 'false');
+  };
 
-  await tool('Lock').click();
+  await pointTool('Lock');
   await page.mouse.click(p0.x, p0.y);
   await expect(status).toContainText('Lock constraint added');
 
-  await tool('Lock').click();
+  await pointTool('Lock');
   await page.mouse.click(p0.x, p0.y);
   await expect(status).toContainText('Point unlocked.');
 
@@ -70,19 +84,19 @@ test('point relations arm from the rail and act on snap-point picks', async ({
   await page.mouse.click(p2.x, p2.y);
   await expect(status).toContainText('Coincident constraint added');
 
-  await tool('Disconnect').click();
+  await pointTool('Disconnect');
   await page.mouse.click(p1.x, p1.y);
   await expect(status).toContainText('Disconnected · removed 1 relation.');
 
   // Nothing joins p0 now, so a second Disconnect there explains itself.
-  await tool('Disconnect').click();
+  await pointTool('Disconnect');
   await page.mouse.click(p0.x, p0.y);
   await expect(status).toContainText(
     'That point has no coincident, midpoint or on-curve relation.'
   );
 
   // Point on curve: the free end p3, then the first segment.
-  await tool('Point on curve').click();
+  await pointTool('Point on curve');
   await page.mouse.click(p3.x, p3.y);
   await expect(status).toContainText('Point on curve: pick 2 of 2.');
   await page.mouse.click((p0.x + p1.x) / 2, (p0.y + p1.y) / 2);

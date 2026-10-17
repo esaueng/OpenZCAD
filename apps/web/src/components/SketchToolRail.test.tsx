@@ -646,11 +646,51 @@ describe('SketchRelationsRail', () => {
     const names = Array.from(rail.querySelectorAll('button')).map((button) =>
       button.getAttribute('aria-label')
     );
-    expect(names).toEqual(CONSTRAINT_TOOL_SPECS.map(({ label }) => label));
+    // The point relations fold into one slot, last in the column.
+    const points = ['Symmetric', 'Point on curve', 'Lock', 'Disconnect'];
+    expect(names).toEqual([
+      ...CONSTRAINT_TOOL_SPECS.map(({ label }) => label).filter(
+        (label) => !points.includes(label)
+      ),
+      'Point relations'
+    ]);
     for (const name of names) {
       expect(screen.getByRole('button', { name: name! })).toBeEnabled();
     }
     expect(container.querySelector('.sketch-relation-name')).toBeNull();
+  });
+
+  it('opens the point relations in a flyout and arms one from it', async () => {
+    const user = userEvent.setup();
+    const onConstraintTool = vi.fn();
+    const { rerender, props } = renderRelations({ onConstraintTool });
+    const group = screen.getByRole('button', { name: 'Point relations' });
+    expect(group).toHaveAttribute('aria-expanded', 'false');
+    await user.click(group);
+    const flyout = within(
+      screen.getByRole('group', { name: 'Point relations' })
+    );
+    expect(
+      flyout.getAllByRole('button').map((b) => b.getAttribute('aria-label'))
+    ).toEqual(['Symmetric', 'Point on curve', 'Lock', 'Disconnect']);
+    await user.click(flyout.getByRole('button', { name: 'Lock' }));
+    expect(onConstraintTool).toHaveBeenLastCalledWith('lock');
+    // Arming closes the flyout; the slot reads armed while a point
+    // relation collects its picks.
+    expect(group).toHaveAttribute('aria-expanded', 'false');
+    rerender(
+      <SketchRelationsRail
+        {...props}
+        pendingConstraint={{ kind: 'lock', picks: [] }}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Point relations' })).toHaveClass(
+      'active'
+    );
+    // Escape inside the flyout closes it.
+    await user.click(screen.getByRole('button', { name: 'Point relations' }));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('group', { name: 'Point relations' })).toBeNull();
   });
 
   it('arms a relation and disarms it on a second click', async () => {
