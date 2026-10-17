@@ -839,6 +839,60 @@ describe('Trim', () => {
     });
   });
 
+  it('moves a point held on the far side of a split onto the new piece', () => {
+    const { manager, sketchId, ids, sketch, commit, constrain } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 30, y2: 0 },
+      { objectKind: 'line', x1: 10, y1: -5, x2: 10, y2: 5 },
+      { objectKind: 'line', x1: 20, y1: -5, x2: 20, y2: 5 },
+      // Two free lines whose start points rest on the target: one on each
+      // side of the span the trim removes.
+      { objectKind: 'line', x1: 5, y1: 0, x2: 5, y2: -8 },
+      { objectKind: 'line', x1: 25, y1: 0, x2: 25, y2: -8 }
+    ]);
+    const [target, , , near, far] = ids as [
+      string,
+      string,
+      string,
+      string,
+      string
+    ];
+    for (const leg of [near, far]) {
+      constrain({
+        constraintKind: 'point-on-object',
+        point: { objectId: leg as never, point: 'start' },
+        objectId: target as never
+      });
+    }
+    commit(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        target,
+        { x: 15, y: 0 },
+        resolve
+      )
+    );
+    const piece = sketch().objectIds.map(String).at(-1)!;
+    const holds = (sketch().constraints ?? [])
+      .map((c) => c.data)
+      .filter(
+        (
+          data
+        ): data is Extract<
+          typeof data,
+          { constraintKind: 'point-on-object' }
+        > =>
+          data.constraintKind === 'point-on-object' &&
+          (data.point.objectId === near || data.point.objectId === far)
+      );
+    expect(
+      Object.fromEntries(
+        holds.map((data) => [data.point.objectId, data.objectId])
+      )
+    ).toEqual({ [near]: target, [far]: piece });
+  });
+
   it('refuses a circle only one curve touches', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },

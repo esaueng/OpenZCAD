@@ -524,6 +524,11 @@ interface RemapPlan {
   points: Partial<Record<PointName, SketchPointRef | null>>;
   replacement?: EntityId;
   lengthChanged: boolean;
+  /**
+   * Which piece a point held on the trimmed entity now belongs to, after a
+   * split; the entity itself when absent.
+   */
+  homeFor?: (point: SketchPointRef) => EntityId;
 }
 
 function remapConstraint(
@@ -562,9 +567,14 @@ function remapConstraint(
     }
     case 'point-on-object': {
       const point = mapRef(data.point);
-      return point
-        ? { ...data, point, objectId: mapObject(data.objectId) }
-        : null;
+      if (!point) {
+        return null;
+      }
+      const objectId =
+        data.objectId === id && plan.homeFor
+          ? plan.homeFor(data.point)
+          : mapObject(data.objectId);
+      return { ...data, point, objectId };
     }
     case 'midpoint': {
       if (data.line === id && plan.lengthChanged) {
@@ -606,6 +616,31 @@ function remapConstraint(
       return { ...data, a: side(data.a), b: side(data.b), at };
     }
   }
+}
+
+/** Where a constraint point sits now, or null when it does not evaluate. */
+function pointPosition(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  ref: SketchPointRef,
+  resolve: Resolve
+): Point2 | null {
+  const data = sketchObject(document, sketch, ref.objectId);
+  const curve = data ? evaluateCurve(data, resolve) : null;
+  if (!curve) {
+    return null;
+  }
+  if (curve.kind === 'line') {
+    return ref.point === 'start'
+      ? curve.a
+      : ref.point === 'end'
+        ? curve.b
+        : null;
+  }
+  if (ref.point === 'center' || curve.kind === 'circle') {
+    return curve.c;
+  }
+  return pointOnCurve(curve, ref.point === 'start' ? 0 : curve.sweep);
 }
 
 function referencesObject(
@@ -959,7 +994,18 @@ export function planSketchTrim(
   const remap = remapCommands(sketch, sketchId, {
     objectId: id,
     points: { end: pieceEnd },
-    lengthChanged: curve.kind === 'line'
+    lengthChanged: curve.kind === 'line',
+    // A point held on the curve follows the piece it sits beside: the far
+    // piece past the removed span, the kept one otherwise.
+    homeFor: (point) => {
+      const at = pointPosition(document, sketch, point, resolve);
+      if (!at) {
+        return id;
+      }
+      const param = curveParam(curve, at);
+      const inSpan = curve.kind === 'line' || param <= span + eps;
+      return inSpan && param > (below.param + above.param) / 2 ? pieceId : id;
+    }
   });
   const kept = trimmedData(data, curve, 0, below.param, resolve);
   // Built from the stored data, so the far end it inherits keeps any
