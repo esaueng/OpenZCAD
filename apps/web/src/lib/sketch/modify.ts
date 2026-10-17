@@ -13,6 +13,7 @@
  * understands, so the next solve moves them together.
  */
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import { geometryTolerance } from '@openzcad/geometry';
 import {
   createId,
   toEntityId,
@@ -1042,8 +1043,8 @@ function reflect(point: Point2, a: Point2, u: Point2): Point2 {
   };
 }
 
-function sameCurve(first: Curve2, second: Curve2): boolean {
-  const near = (p: Point2, q: Point2) => distance(p, q) <= ON_CURVE;
+function sameCurve(first: Curve2, second: Curve2, tol = ON_CURVE): boolean {
+  const near = (p: Point2, q: Point2) => distance(p, q) <= tol;
   if (first.kind === 'line' && second.kind === 'line') {
     return (
       (near(first.a, second.a) && near(first.b, second.b)) ||
@@ -1053,7 +1054,7 @@ function sameCurve(first: Curve2, second: Curve2): boolean {
   if (first.kind === 'line' || second.kind === 'line') {
     return false;
   }
-  if (!near(first.c, second.c) || Math.abs(first.r - second.r) > ON_CURVE) {
+  if (!near(first.c, second.c) || Math.abs(first.r - second.r) > tol) {
     return false;
   }
   // A full sweep is the whole circle wherever its seam sits.
@@ -1079,8 +1080,8 @@ function sameCurve(first: Curve2, second: Curve2): boolean {
  * lines whose spans overlap, or co-circular arcs whose sweeps overlap.
  * Touching end to end is fine; overlapping makes the profile ambiguous.
  */
-function curvesOverlap(first: Curve2, second: Curve2): boolean {
-  if (sameCurve(first, second)) {
+function curvesOverlap(first: Curve2, second: Curve2, tol = ON_CURVE): boolean {
+  if (sameCurve(first, second, tol)) {
     return true;
   }
   if (first.kind === 'line' && second.kind === 'line') {
@@ -1088,14 +1089,13 @@ function curvesOverlap(first: Curve2, second: Curve2): boolean {
     const length = Math.hypot(d.x, d.y);
     const u = { x: d.x / length, y: d.y / length };
     const off = (p: Point2) => Math.abs(cross(sub(p, first.a), u));
-    if (off(second.a) > ON_CURVE || off(second.b) > ON_CURVE) {
+    if (off(second.a) > tol || off(second.b) > tol) {
       return false;
     }
     const t1 = dot(sub(second.a, first.a), u);
     const t2 = dot(sub(second.b, first.a), u);
     return (
-      Math.min(length, Math.max(t1, t2)) - Math.max(0, Math.min(t1, t2)) >
-      ON_CURVE
+      Math.min(length, Math.max(t1, t2)) - Math.max(0, Math.min(t1, t2)) > tol
     );
   }
   if (first.kind !== 'arc' || second.kind !== 'arc') {
@@ -1103,19 +1103,16 @@ function curvesOverlap(first: Curve2, second: Curve2): boolean {
     return (
       first.kind !== 'line' &&
       second.kind !== 'line' &&
-      distance(first.c, second.c) <= ON_CURVE &&
-      Math.abs(first.r - second.r) <= ON_CURVE
+      distance(first.c, second.c) <= tol &&
+      Math.abs(first.r - second.r) <= tol
     );
   }
-  if (
-    distance(first.c, second.c) > ON_CURVE ||
-    Math.abs(first.r - second.r) > ON_CURVE
-  ) {
+  if (distance(first.c, second.c) > tol || Math.abs(first.r - second.r) > tol) {
     return false;
   }
   // Sweep overlap on the circle: does either arc's interior start inside
   // the other?
-  const slack = ON_CURVE / first.r;
+  const slack = tol / first.r;
   const inside = (arc: typeof first, angle: number) => {
     const offset = normalizeAngle(angle - arc.start);
     return offset > slack && offset < arc.sweep - slack;
@@ -1331,7 +1328,8 @@ export function planSketchMirror(
       sweep: source.sweep
     };
   }
-  if (sameCurve(source, image)) {
+  const tol = profileTolerance(document, sketch, [image], resolve);
+  if (sameCurve(source, image, tol)) {
     return {
       status: 'refuse',
       reason:
@@ -1342,14 +1340,14 @@ export function planSketchMirror(
   // uneven sweep, reflects onto part of itself.
   // Construction geometry never bounds a profile, so only an exact
   // duplicate (refused above) matters for it.
-  if (!data.construction && curvesOverlap(source, image)) {
+  if (!data.construction && curvesOverlap(source, image, tol)) {
     return {
       status: 'refuse',
       reason:
         'The mirror image would overlap part of its source. Trim the entity at the mirror line first.'
     };
   }
-  if (landsOnExisting(document, sketch, sourceId, [image], resolve)) {
+  if (landsOnExisting(document, sketch, sourceId, [image], resolve, tol)) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
   const id = sourceId as EntityId;
@@ -1469,6 +1467,54 @@ function transformCurve(
 }
 
 /**
+ * The tolerance the profile builder will judge the result with: its
+ * scale-aware geometry tolerance over every curve in the sketch, the new
+ * ones included (`modelScaleFor` and `geometryTolerance` in
+ * packages/geometry). A tighter check here would pass geometry the profile
+ * builder then rejects as overlapping.
+ */
+function profileTolerance(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  added: readonly Curve2[],
+  resolve: Resolve
+): number {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let radius = 0;
+  const curves = [
+    ...sketch.objectIds.flatMap((objectId) => {
+      const data = sketchObject(document, sketch, objectId);
+      return data ? cutterCurves(data, resolve) : [];
+    }),
+    ...added
+  ];
+  for (const curve of curves) {
+    const boxes =
+      curve.kind === 'line'
+        ? [curve.a, curve.b]
+        : [
+            { x: curve.c.x - curve.r, y: curve.c.y - curve.r },
+            { x: curve.c.x + curve.r, y: curve.c.y + curve.r }
+          ];
+    for (const p of boxes) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    if (curve.kind !== 'line') {
+      radius = Math.max(radius, curve.r);
+    }
+  }
+  const span = Number.isFinite(minX) ? Math.max(maxX - minX, maxY - minY) : 0;
+  const scale = Math.max(span, radius, 1);
+  return Math.max(geometryTolerance(scale), Number.EPSILON * scale * 16);
+}
+
+/**
  * True when any new profile curve would overlap profile geometry already in
  * the sketch other than its source, which the profile builder would then reject as a
  * duplicate or an overlapping segment.
@@ -1478,7 +1524,8 @@ function landsOnExisting(
   sketch: SketchNode,
   sourceId: string,
   curves: readonly Curve2[],
-  resolve: Resolve
+  resolve: Resolve,
+  tol: number
 ): boolean {
   // Construction geometry never bounds a profile, so a construction copy
   // may sit on anything and anything may sit on a construction guide.
@@ -1493,7 +1540,7 @@ function landsOnExisting(
     return data && !data.construction ? cutterCurves(data, resolve) : [];
   });
   return curves.some((curve) =>
-    existing.some((other) => curvesOverlap(other, curve))
+    existing.some((other) => curvesOverlap(other, curve, tol))
   );
 }
 
@@ -1508,12 +1555,13 @@ const LANDS_ON_EXISTING =
 function instancesOverlap(
   source: Curve2,
   copies: Curve2[],
-  construction: boolean
+  construction: boolean,
+  tol: number
 ): boolean {
   const clash = construction ? sameCurve : curvesOverlap;
   const placed = [source, ...copies];
   return placed.some((curve, index) =>
-    placed.slice(0, index).some((earlier) => clash(earlier, curve))
+    placed.slice(0, index).some((earlier) => clash(earlier, curve, tol))
   );
 }
 
@@ -1656,8 +1704,14 @@ export function planSketchLinearPattern(
       )
     );
   }
+  const tol = profileTolerance(document, sketch, copies, resolve);
   if (
-    instancesOverlap(source.curve, copies, Boolean(source.data.construction))
+    instancesOverlap(
+      source.curve,
+      copies,
+      Boolean(source.data.construction),
+      tol
+    )
   ) {
     return {
       status: 'refuse',
@@ -1665,7 +1719,7 @@ export function planSketchLinearPattern(
         'Some instances would overlap others. Use a spacing at least as long as the entity along the direction.'
     };
   }
-  if (landsOnExisting(document, sketch, sourceId, copies, resolve)) {
+  if (landsOnExisting(document, sketch, sourceId, copies, resolve, tol)) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
   return {
@@ -1746,8 +1800,14 @@ export function planSketchCircularPattern(
   }
   // A line through the pivot lands back on itself after half a turn, so
   // an even count would stack duplicates that break profiles.
+  const tol = profileTolerance(document, sketch, copies, resolve);
   if (
-    instancesOverlap(source.curve, copies, Boolean(source.data.construction))
+    instancesOverlap(
+      source.curve,
+      copies,
+      Boolean(source.data.construction),
+      tol
+    )
   ) {
     return {
       status: 'refuse',
@@ -1755,7 +1815,7 @@ export function planSketchCircularPattern(
         'Some instances would overlap others. Change the count or the angle, or move the pivot off the entity.'
     };
   }
-  if (landsOnExisting(document, sketch, sourceId, copies, resolve)) {
+  if (landsOnExisting(document, sketch, sourceId, copies, resolve, tol)) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
   return {

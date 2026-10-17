@@ -1167,6 +1167,31 @@ describe('Patterns', () => {
     expect(plan(2)).toMatchObject({ status: 'commands' });
   });
 
+  it('judges overlap with the profile builder’s tolerance, not a tighter one', () => {
+    // A copy 5e-7 off the existing line: distinct at 1e-7, one line to the
+    // profile builder's 1e-6.
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+      { objectKind: 'line', x1: 0, y1: 10, x2: 0, y2: 0 },
+      { objectKind: 'line', x1: 0, y1: 5.0000005, x2: 4, y2: 5.0000005 }
+    ]);
+    expect(
+      planSketchLinearPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        ids[1]!,
+        -5,
+        2,
+        resolve
+      )
+    ).toEqual({
+      status: 'refuse',
+      reason: 'The result would lie on top of geometry already in the sketch.'
+    });
+  });
+
   it('refuses fractional, too small and too large counts, and zero spacing', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
@@ -1471,6 +1496,23 @@ describe('modify tool picking', () => {
         { snapPoint: { objectId: hub, point: 'center' } }
       )
     ).toMatchObject({ status: 'value', picks: [source, `${hub}#center`] });
+  });
+
+  it('lets a line be its own linear-pattern direction', () => {
+    const { manager, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 }
+    ]);
+    const line = ids[0]!;
+    expect(
+      advanceSketchEditPick(
+        manager.document,
+        sketch(),
+        'linear-pattern',
+        [line],
+        line,
+        resolve
+      )
+    ).toMatchObject({ status: 'value', picks: [line, line], initial: 4 });
   });
 
   it('collects a pattern’s two values before committing one transaction', async () => {

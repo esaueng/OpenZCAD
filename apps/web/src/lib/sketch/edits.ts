@@ -178,10 +178,15 @@ export function refuseEditPick(
   if (existing.length >= spec.picks) {
     return `${spec.label} already has all of its picks.`;
   }
-  // A circular pattern may turn an entity about its own snapped end.
+  // A circular pattern may turn an entity about its own snapped end, and a
+  // line may run a linear pattern along itself.
   if (
     existing.includes(objectId) &&
-    !(kind === 'circular-pattern' && existing.length === 1 && pivotSnapped)
+    !(
+      existing.length === 1 &&
+      ((kind === 'circular-pattern' && pivotSnapped) ||
+        kind === 'linear-pattern')
+    )
   ) {
     return 'That entity is already part of this operation.';
   }
