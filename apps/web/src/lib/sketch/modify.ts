@@ -258,8 +258,7 @@ function lineCircleCrossings(
   a: Point2,
   b: Point2,
   c: Point2,
-  r: number,
-  tol = ON_CURVE
+  r: number
 ): Point2[] {
   const d = sub(b, a);
   const f = sub(a, c);
@@ -270,13 +269,13 @@ function lineCircleCrossings(
   const qb = 2 * dot(f, d);
   const qc = dot(f, f) - r * r;
   let disc = qb * qb - 4 * qa * qc;
-  // A tangent touch rounds either side of zero; within the on-curve slack it
-  // is one crossing at the foot of the perpendicular.
-  const foot = -qb / (2 * qa);
-  const footPoint = { x: a.x + d.x * foot, y: a.y + d.y * foot };
-  if (Math.abs(distance(footPoint, c) - r) <= tol) {
-    disc = Math.max(disc, 0);
+  // Only floating-point noise is forgiven: an exact tangent can round a
+  // hair negative. A real radial gap, however small, is no crossing — the
+  // profile builder's segment/arc intersection drops it the same way.
+  if (disc < 0 && disc >= -1e-12 * (qb * qb + Math.abs(4 * qa * qc))) {
+    disc = 0;
   }
+  const foot = -qb / (2 * qa);
   if (disc < 0) {
     return [];
   }
@@ -345,7 +344,7 @@ export function curveCrossings(
       Exclude<Curve2, { kind: 'line' }>
     ];
     const [lineTol, roundTol] = lineFirst ? [tol, secondTol] : [secondTol, tol];
-    return lineCircleCrossings(line.a, line.b, round.c, round.r, touch).filter(
+    return lineCircleCrossings(line.a, line.b, round.c, round.r).filter(
       (point) =>
         withinSegment(line.a, line.b, point, lineTol) &&
         withinArc(round, point, roundTol)

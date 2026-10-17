@@ -614,6 +614,27 @@ describe('Trim', () => {
     });
   });
 
+  it('does not cut at a circle the line only nearly touches', () => {
+    // 5e-7 clear of a radius-5 circle: inside the profile tolerance as a
+    // gap, but no intersection to the profile builder.
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: -10, y1: 5.0000005, x2: 10, y2: 5.0000005 },
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }
+    ]);
+    expect(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 5, y: 5 },
+        resolve
+      )
+    ).toMatchObject({
+      message: 'Trim removed the whole line: nothing crosses it.'
+    });
+  });
+
   it('treats a crossing within the profile tolerance of an end as that end', () => {
     // The vertical crosses 5e-7 from the line's start: cutting there would
     // leave a fragment the profile builder calls degenerate.
