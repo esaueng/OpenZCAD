@@ -1,5 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Camera, Grid3x3, Maximize2, Ruler } from 'lucide-react';
+import {
+  SavedViewsSection,
+  type SavedViewsSectionProps
+} from './SavedViewsSection';
 import { VIEW_LABELS } from '@openzcad/viewport';
 import type {
   ProjectionMode,
@@ -35,6 +39,8 @@ interface ViewModeBarProps {
   onFit(): void;
   onToggleGrid(): void;
   onView(view: StandardView): void;
+  /** The project's saved views, listed under the standard view tiles. */
+  savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
 }
@@ -56,6 +62,7 @@ export function ViewModeBar({
   onFit,
   onToggleGrid,
   onView,
+  savedViews,
   onCycleDisplayMode,
   onToggleProjection
 }: ViewModeBarProps) {
@@ -175,6 +182,16 @@ export function ViewModeBar({
                 </button>
               );
             })}
+            {savedViews && (
+              <SavedViewsSection
+                {...savedViews}
+                onApply={(viewId) => {
+                  savedViews.onApply(viewId);
+                  setViewsOpen(false);
+                  triggerRef.current?.focus();
+                }}
+              />
+            )}
           </div>
         )}
       </div>

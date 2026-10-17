@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ViewerToolbar } from './ViewerToolbar';
 import type { SectionOutlineState } from '../lib/sectionOutline';
@@ -362,6 +362,75 @@ describe('the section button and its panel', () => {
 });
 
 describe('the standard views flyout', () => {
+  it('lists saved views under the tiles: go to one, delete one, save another (ZC-115)', () => {
+    const noop = () => undefined;
+    const onApply = vi.fn();
+    const onDelete = vi.fn();
+    const onSave = vi.fn();
+    const props = {
+      settings: { ...settings, sectionView: undefined },
+      projection: 'perspective' as const,
+      canUndo: false,
+      canRedo: false,
+      sectionRange: null,
+      onUndo: noop,
+      onRedo: noop,
+      onToggleGrid: noop,
+      onFit: noop,
+      onView: noop,
+      onCycleDisplayMode: noop,
+      onToggleProjection: noop,
+      onToggleSection: noop,
+      onSectionPlane: noop,
+      onSectionOffset: noop,
+      onSectionCommit: noop,
+      onExportSectionDxf: noop,
+      sectionOutline: { kind: 'clipping' } as const,
+      units: 'mm' as const
+    };
+    const { rerender } = render(
+      <ViewerToolbar
+        {...props}
+        savedViews={{
+          views: [
+            { id: 'a', name: 'View 1' },
+            { id: 'b', name: 'View 2' }
+          ],
+          onApply,
+          onDelete,
+          onSave
+        }}
+      />
+    );
+    const trigger = screen.getByRole('button', { name: 'Standard views' });
+    fireEvent.click(trigger);
+    const saved = within(screen.getByRole('group', { name: 'Saved views' }));
+    fireEvent.click(saved.getByRole('button', { name: 'Delete View 2' }));
+    expect(onDelete).toHaveBeenCalledWith('b');
+    fireEvent.click(saved.getByRole('button', { name: /Save view/ }));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    // Going to a view closes the panel and returns the keyboard.
+    fireEvent.click(saved.getByRole('button', { name: 'Go to View 1' }));
+    expect(onApply).toHaveBeenCalledWith('a');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(document.activeElement).toBe(trigger);
+    // At the limit the save button says why it is unavailable.
+    rerender(
+      <ViewerToolbar
+        {...props}
+        savedViews={{
+          views: [{ id: 'a', name: 'View 1' }],
+          saveDisabledReason: 'Full.',
+          onApply,
+          onDelete,
+          onSave
+        }}
+      />
+    );
+    fireEvent.click(trigger);
+    expect(screen.getByRole('button', { name: /Save view/ })).toBeDisabled();
+  });
+
   it('hands the keyboard back to its button once a view is chosen', () => {
     // The chosen tile unmounted with the panel and focus fell to <body>.
     const onView = vi.fn();

@@ -34,6 +34,13 @@ import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
 import { failedFeatureIds } from './lib/featureRepair';
 import { featureHistory } from './lib/featureHistory';
+import {
+  MAX_SAVED_VIEWS,
+  deleteSavedView,
+  loadSavedViews,
+  saveView,
+  type SavedView
+} from './lib/savedViews';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
@@ -634,7 +641,7 @@ import type {
   DisplayMode,
   PickDetail,
   SketchOverlay,
-  ViewTarget
+  ViewRequestTarget
 } from '@openzcad/viewport/types';
 import type {
   MovePreview,
@@ -2617,7 +2624,7 @@ export function App() {
     kind: 'clipping'
   });
   const [viewRequest, setViewRequest] = useState<{
-    view: ViewTarget;
+    view: ViewRequestTarget;
     nonce: number;
   } | null>(null);
   const [normalToFaceRequest, setNormalToFaceRequest] =
@@ -7700,9 +7707,68 @@ export function App() {
     }
   }
 
-  function requestView(view: ViewTarget) {
+  function requestView(view: ViewRequestTarget) {
     setViewRequest({ view, nonce: ++viewNonceRef.current });
   }
+
+  // Saved views: per project, on this device (see lib/savedViews).
+  const [savedViewList, setSavedViewList] = useState<SavedView[]>([]);
+  const savedViewsProjectId = doc?.projectId ?? null;
+  useEffect(() => {
+    setSavedViewList(
+      savedViewsProjectId ? loadSavedViews(savedViewsProjectId) : []
+    );
+  }, [savedViewsProjectId]);
+  const savedViewsControl = doc
+    ? {
+        views: savedViewList,
+        saveDisabledReason:
+          savedViewList.length >= MAX_SAVED_VIEWS
+            ? `A project keeps up to ${MAX_SAVED_VIEWS} saved views. Delete one to save another.`
+            : null,
+        onSave() {
+          const snapshot = projectViewSnapshot();
+          if (!snapshot) {
+            setStatus('Move the view once, then save it.');
+            return;
+          }
+          const result = saveView(doc.projectId, {
+            camera: snapshot.camera,
+            projection,
+            displayMode: viewerSettings.displayMode,
+            ...(viewerSettings.sectionView
+              ? { sectionView: viewerSettings.sectionView }
+              : {})
+          });
+          if (!result.ok) {
+            setStatus(result.reason);
+            return;
+          }
+          setSavedViewList(result.views);
+          setStatus(`Saved ${result.view.name}.`);
+        },
+        onApply(viewId: string) {
+          const view = savedViewList.find((entry) => entry.id === viewId);
+          if (!view) return;
+          setProjection(view.projection);
+          setViewerSettings((current) => {
+            const { sectionView: _previous, ...rest } = current;
+            return {
+              ...rest,
+              displayMode: view.displayMode,
+              ...(view.sectionView ? { sectionView: view.sectionView } : {})
+            };
+          });
+          requestView({ pose: view.camera, projection: view.projection });
+          setStatus(`${view.name}.`);
+        },
+        onDelete(viewId: string) {
+          const name = savedViewList.find((entry) => entry.id === viewId)?.name;
+          setSavedViewList(deleteSavedView(doc.projectId, viewId));
+          setStatus(name ? `Deleted ${name}.` : 'Deleted the saved view.');
+        }
+      }
+    : undefined;
 
   function requestNormalToSelectedFace() {
     if (!normalToFaceTarget) {
@@ -20213,6 +20279,7 @@ export function App() {
               }))
             }
             onView={requestView}
+            {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
           />
@@ -20705,6 +20772,7 @@ export function App() {
             measuring={measuring}
             onMeasure={toggleMeasure}
             onView={requestView}
+            {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
             sectionRange={

@@ -164,7 +164,7 @@ import {
   type SnapResolution,
   type ProjectionMode,
   type SketchOverlay,
-  type ViewTarget,
+  type ViewRequestTarget,
   type ViewerBodyMaterial,
   type ViewerSettings,
   type FatLineResolution,
@@ -677,7 +677,7 @@ export interface ModelViewerProps {
    */
   autoFrame?: AutoFrameRequest | null;
   /** Set to move the camera to a view target; nonce forces re-runs. */
-  viewRequest: { view: ViewTarget; nonce: number } | null;
+  viewRequest: { view: ViewRequestTarget; nonce: number } | null;
   /** Set to centre and frame an exact planar face; nonce forces re-runs. */
   normalToFaceRequest: NormalToFaceRequest | null;
   units: string;
@@ -995,6 +995,8 @@ export interface SceneContext {
   ): void;
   /** The durable pose to persist for this project. */
   captureView(): ViewportCameraState;
+  /** Holds an exact durable pose, orthographic zoom included. */
+  restoreView(state: ViewportCameraState, projection: ProjectionMode): void;
   /** Invalidates the viewport and schedules a render if it is idle. */
   requestRender(): void;
   renderer: THREE.WebGLRenderer;
@@ -1641,8 +1643,27 @@ function startRequestedView(
   // first body. Otherwise that body's automatic fit can cancel this glide.
   context.hasFitCamera = true;
   const { camera, controls } = context;
+  const target = request.view;
+  if (typeof target === 'object' && 'pose' in target) {
+    // A saved view glides to its pose, then holds it exactly: the tween
+    // moves position and target, and the restore lands the orthographic
+    // zoom the glide does not carry.
+    const [px, py, pz] = target.pose.position;
+    const [tx, ty, tz] = target.pose.target;
+    context.startCameraTween(
+      {
+        position: new THREE.Vector3(px, py, pz),
+        target: new THREE.Vector3(tx, ty, tz),
+        near: camera.near,
+        far: camera.far
+      },
+      () => context.restoreView(target.pose, target.projection),
+      { ease: viewJumpEase }
+    );
+    return;
+  }
   const distance = Math.max(camera.position.distanceTo(controls.target), 1);
-  const direction = viewDirectionFor(request.view);
+  const direction = viewDirectionFor(target);
   context.startCameraTween(
     {
       position: controls.target.clone().addScaledVector(direction, distance),
@@ -2500,6 +2521,7 @@ export function ModelViewer({
       startCameraTween: (pose, onComplete, glide) =>
         cameraRig.startTween(pose, onComplete, glide),
       captureView: () => cameraRig.capture(),
+      restoreView: (state, mode) => cameraRig.restore(state, mode),
       requestRender,
       renderer,
       labelRenderer,
