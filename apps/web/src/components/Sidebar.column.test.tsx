@@ -327,6 +327,42 @@ describe('Sidebar', () => {
     ).toHaveAttribute('role', 'listitem');
   });
 
+  it('finds objects by name without changing selection or the full list (ZC-126)', async () => {
+    const sketches = ['Base profile', 'Rib outline', 'Base pocket'].map(
+      (name, index) =>
+        feature(index + 1, {
+          name,
+          featureKind: 'sketch',
+          data: { featureKind: 'sketch', sketchId: `sketch-${index + 1}` }
+        } as Partial<FeatureNode>)
+    );
+    renderSidebar({ features: sketches, selectedSketchProfileId: 'sketch-2' });
+    const list = within(screen.getByRole('list', { name: 'Objects' }));
+    const field = screen.getByRole('searchbox', {
+      name: 'Find an object by name'
+    });
+    const names = () =>
+      list
+        .getAllByRole('button', { pressed: undefined })
+        .filter((button) => button.classList.contains('body-row-main'))
+        .map((button) => button.textContent);
+    expect(names()).toEqual(['Base profile', 'Rib outline', 'Base pocket']);
+    await userEvent.type(field, 'base');
+    expect(names()).toEqual(['Base profile', 'Base pocket']);
+    await userEvent.clear(field);
+    await userEvent.type(field, 'nothing');
+    expect(list.getByText('No objects match “nothing”.')).toBeInTheDocument();
+    // Escape clears the search and restores exactly the same rows, with the
+    // selection untouched.
+    await userEvent.type(field, '{Escape}');
+    expect(field).toHaveValue('');
+    expect(names()).toEqual(['Base profile', 'Rib outline', 'Base pocket']);
+    expect(list.getByRole('button', { name: 'Rib outline' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+  });
+
   it('tracks viewport sketch selection independently of the selected history feature', () => {
     const sketches = [1, 2].map((index) =>
       feature(index, {

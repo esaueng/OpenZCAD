@@ -112,6 +112,11 @@ export interface HistoryTimelineProps {
   representations: Record<string, BodyRepresentation>;
   /** Features the current rebuild reported as failed or refused. */
   failedFeatureIds?: ReadonlySet<FeatureId>;
+  /**
+   * The steps related to the current selection, or null with nothing
+   * selected. The find bar's Related toggle keeps only these rows.
+   */
+  relatedFeatureIds?: ReadonlySet<FeatureId> | null;
   geometryPending?: boolean;
   selectedFeatureNodeId: string | null;
   hiddenBodyIds: ReadonlySet<string>;
@@ -316,6 +321,7 @@ export function HistoryTimeline({
   features,
   representations,
   failedFeatureIds,
+  relatedFeatureIds = null,
   geometryPending = false,
   selectedFeatureNodeId,
   hiddenBodyIds,
@@ -338,6 +344,7 @@ export function HistoryTimeline({
   const [renamingId, setRenamingId] = useState<FeatureId | null>(null);
   const [dropFeatureId, setDropFeatureId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [relatedOnly, setRelatedOnly] = useState(false);
   // Where the handle sits while it is being dragged or stepped from the
   // keyboard, before that position is committed to the document.
   const [previewEnd, setPreviewEnd] = useState<number | null>(null);
@@ -369,6 +376,9 @@ export function HistoryTimeline({
   const pausedCount = features.filter(isFeatureRollbackSuppressed).length;
 
   const needle = findOpen ? query.trim().toLowerCase() : '';
+  // Related narrows to the selection's lineage; it reads as off whenever
+  // nothing is selected, so clearing the selection never empties the list.
+  const related = findOpen && relatedOnly ? relatedFeatureIds : null;
   const summaries = features.map((feature) =>
     featureValueSummary(feature, parameterValues, units)
   );
@@ -376,15 +386,17 @@ export function HistoryTimeline({
     .map((feature, index) => ({ feature, index }))
     .filter(
       ({ feature, index }) =>
-        !needle ||
-        feature.name.toLowerCase().includes(needle) ||
-        (summaries[index] ?? '').toLowerCase().includes(needle)
+        (!related || related.has(feature.featureId)) &&
+        (!needle ||
+          feature.name.toLowerCase().includes(needle) ||
+          (summaries[index] ?? '').toLowerCase().includes(needle))
     );
-  const filtering = needle.length > 0;
+  const filtering = needle.length > 0 || related !== null;
 
   useEffect(() => {
     if (!findOpen) {
       setQuery('');
+      setRelatedOnly(false);
     }
   }, [findOpen]);
 
@@ -671,7 +683,9 @@ export function HistoryTimeline({
         </div>
       )}
       {findOpen && (
-        <label className="history-find">
+        // A div, not a label: the Related button sits inside, and a wrapping
+        // label folds its own text into the button's name.
+        <div className="history-find">
           <Search size={12} aria-hidden="true" />
           <input
             type="search"
@@ -699,7 +713,21 @@ export function HistoryTimeline({
               {visible.length} of {features.length}
             </small>
           )}
-        </label>
+          <button
+            type="button"
+            className="history-find-related"
+            aria-pressed={related !== null}
+            disabled={!relatedFeatureIds}
+            title={
+              relatedFeatureIds
+                ? 'Show only the steps the selection was built from and the steps built on it'
+                : 'Select a step or a body to show its related steps'
+            }
+            onClick={() => setRelatedOnly((on) => !on)}
+          >
+            Related
+          </button>
+        </div>
       )}
       <div
         ref={listRef}
@@ -715,7 +743,11 @@ export function HistoryTimeline({
           </p>
         )}
         {filtering && visible.length === 0 && (
-          <p className="muted sidebar-hint">No steps match “{query.trim()}”.</p>
+          <p className="muted sidebar-hint">
+            {needle
+              ? `No ${related ? 'related ' : ''}steps match “${query.trim()}”.`
+              : 'No steps relate to the selection.'}
+          </p>
         )}
         {features.length > 0 && (
           <>

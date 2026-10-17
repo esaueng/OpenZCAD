@@ -463,6 +463,37 @@ describe('HistoryTimeline', () => {
     expect(props.onCloseFind).toHaveBeenCalledTimes(1);
   });
 
+  it('narrows to the steps related to the selection, alongside the text filter', async () => {
+    const user = userEvent.setup();
+    const related = new Set([
+      'feature-1',
+      'feature-3',
+      'feature-4'
+    ] as FeatureId[]);
+    const { container, rerender, props } = renderTimeline({
+      findOpen: true,
+      relatedFeatureIds: related
+    });
+    const toggle = screen.getByRole('button', { name: 'Related' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(3);
+    expect(screen.getByText('3 of 4')).toBeInTheDocument();
+    // The two filters combine.
+    await user.type(
+      screen.getByRole('searchbox', { name: 'Find a step' }),
+      'Feature 4'
+    );
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(1);
+    // Clearing the selection disables the toggle and restores every row
+    // the text filter allows, rather than emptying the list.
+    rerender(<HistoryTimeline {...props} findOpen relatedFeatureIds={null} />);
+    expect(screen.getByRole('button', { name: 'Related' })).toBeDisabled();
+    await user.clear(screen.getByRole('searchbox', { name: 'Find a step' }));
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(4);
+  });
+
   it('opens the feature menu from the row', async () => {
     const user = userEvent.setup();
     const { props } = renderTimeline();
