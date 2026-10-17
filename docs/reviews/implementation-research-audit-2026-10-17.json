@@ -26,7 +26,6 @@
       "required_changes": "Add a unit test for the 3-4-5 case and the committed line's length/angle readout; optionally add Length/Angle derived fields to the entity editor.",
       "dependencies": "None",
       "acceptance": "Line (0,0)-(30,40) commits with length 50 in document units; a sub-tolerance segment creates no entity and no history step.",
-      "priority": "P2",
       "effort": "S",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -51,7 +50,6 @@
       "required_changes": "Add 3-point (endpoint-endpoint-curvature) and tangent-from-endpoint arc modes, an arc-length readout, and a direction rule (or flip control) so reversed picks keep the intended side; add unit tests.",
       "dependencies": "S08 for tangent-from-endpoint inference",
       "acceptance": "A radius-10 semicircle reports length 10*pi; picking its endpoints in either order with the same third point gives the same arc; each mode has unit and browser coverage.",
-      "priority": "P1",
       "effort": "M",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -70,7 +68,6 @@
       "required_changes": "First a product decision and a ROADMAP row; then Pointer Events (pointerType 'pen') stroke capture that resolves to an explicit line or arc object through the existing commit path, with Escape leaving no partial curve.",
       "dependencies": "Product decision (no owning row); a supported pen device and human input for acceptance",
       "acceptance": "With a real pen, alternating line/arc strokes resolve to line/arc objects; cancelling leaves nothing; mouse behaviour unchanged.",
-      "priority": "P3",
       "effort": "M",
       "family": "Sketch",
       "research_status": "PLATFORM_NOT_TESTED"
@@ -91,7 +88,6 @@
       "required_changes": "Add an additive schema version with a spline objectKind (fit points plus a stated parameterisation), a region/profile path through the kernel interpolation, an editable point list, and migrations. Constraints stay on endpoints until B75 lands.",
       "dependencies": "I01; Remus B75 for spline solver entities (Pinned Remus 8ef16f90 (packages/kernel-adapter/package.json:22) has interpolatePoints/makeNurbsEdge); S04 for point identity",
       "acceptance": "The interpolation residual at every fit point is <=1e-9 model units; editing a fit point keeps the entity id and any endpoint constraint; save/reopen round-trips.",
-      "priority": "P2",
       "effort": "L",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -111,7 +107,6 @@
       "required_changes": "Add a schema entity with degree, control points, a clamped knot vector and optional weights; draw the control polygon as construction; persist and migrate; feed regions through makeNurbsEdge.",
       "dependencies": "I01; Remus B75 for solver support; Pinned Remus 8ef16f90 (packages/kernel-adapter/package.json:22)",
       "acceptance": "Moving an interior control point keeps a clamped curve's endpoints fixed; degree and knots survive reopen bit-exactly.",
-      "priority": "P2",
       "effort": "L",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -138,7 +133,6 @@
       "required_changes": "Deliver the S04 typed corner/edge refs (or explicit decomposition to lines with constraints); add a test for area and perimeter.",
       "dependencies": "S04 design/schema review",
       "acceptance": "Corners (0,0)/(20,12) give a closed profile with area 240 and perimeter 64; after S04, corners are constrainable and survive replay.",
-      "priority": "P1",
       "effort": "M",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -162,7 +156,6 @@
       "required_changes": "Add a centre-anchored rectangle mode (strip like the circle-type strip) and a unit test for the corner/centre invariants.",
       "dependencies": "S06 (drawing modes), S04 for corner identity",
       "acceptance": "Centre (5,7), 20x12 gives corners (-5,1)/(15,13); a width edit keeps the centre bit-exact.",
-      "priority": "P2",
       "effort": "S",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -181,7 +174,6 @@
       "required_changes": "Either add a rotation to the rectangle schema (additive migration) or emit four constrained lines (perpendicular + coincident) from a base segment and width; refuse a collinear third point; add tests.",
       "dependencies": "S04 composite identity decision",
       "acceptance": "A 3-4-5 base with width 2 gives perpendicular edges and area 10; a collinear third input creates nothing.",
-      "priority": "P2",
       "effort": "M",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -209,7 +201,6 @@
       "required_changes": "Add a diameter display/edit policy (setting or per-dimension toggle) that maps onto the radius constraint, plus tests.",
       "dependencies": "S02 (reference dimensions currently cover radius only)",
       "acceptance": "Radius 5 gives area 25*pi; entering diameter 12 stores radius 6 and displays the diameter label.",
-      "priority": "P2",
       "effort": "S",
       "family": "Sketch",
       "research_status": "ATTEMPTED_UNVERIFIED"
@@ -228,7 +219,6 @@
       "required_changes": "Add an ellipse objectKind (centre, semi-axes, rotation), a centre+axis+axis tool, regions through makeEllipseEdge, and GCS registration through gcsAddEllipse.",
       "dependencies": "I01; Pinned Remus 8ef16f90 (packages/kernel-adapter/package.json:22) exposes ellipse GCS and edges",
       "acceptance": "Semi-axes 8 and 3 give area 24*pi exactly; swapping the axes with a 90 degree rotation gives the same locus.",
-      "priority": "P2",
       "effort": "M",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -254,7 +244,6 @@
       "required_changes": "Add a polygon mode to the sketch rail (presets plus editable sides), label the field as circumradius, add the side-length test, and fix the stale hint.",
       "dependencies": "S04 for vertex identity",
       "acceptance": "A hexagon with circumradius 10 has side 10; changing sides keeps the centre and circumradius; created from the viewport.",
-      "priority": "P2",
       "effort": "S",
       "family": "Sketch",
       "research_status": "ATTEMPTED_UNVERIFIED"
@@ -282,7 +271,6 @@
       "required_changes": "None required; optionally an explicit 'convert to geometry' action.",
       "dependencies": "None",
       "acceptance": "Text with counters extrudes into one solid per glyph with through-holes; an unavailable face gives a named refusal, not a silent substitute.",
-      "priority": "P3",
       "effort": "S",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -299,7 +287,6 @@
       "required_changes": "Ship a detached-copy projection first (project edges/sketch curves to line/arc objects), then linked mode with source identity and explicit re-pick repair per I01.",
       "dependencies": "I01; K05/K06 topology identity for linked mode; Pinned Remus 8ef16f90 (packages/kernel-adapter/package.json:22) has projectCurvesOntoSketchPlane",
       "acceptance": "Projecting a 20x12 rectangle from a parallel plane yields a 20x12 profile; in linked mode a source width edit updates it; in detached mode it does not; deleting the source shows a named broken reference.",
-      "priority": "P2",
       "effort": "L",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -318,7 +305,6 @@
       "required_changes": "Add a single-entity offset: a parallel line (with an extension policy), concentric arc/circle radius r±d, and a refusal when the radius would reach <=0.",
       "dependencies": "S05; S04 for composite edges",
       "acceptance": "Offsetting a radius-5 circle by +1/-1 gives radii 6/4; -5 is refused with no document change; undo is one step.",
-      "priority": "P1",
       "effort": "S",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -342,7 +328,6 @@
       "required_changes": "Expose a join choice (miter default or toggle), accept open chains and arc-containing loops, and add an e2e for the Modify group.",
       "dependencies": "S05",
       "acceptance": "A 20x12 rectangle offset outward by 1 with a miter gives exactly 22x14; with the arc join, the corners are radius-1 arcs; one undo removes it.",
-      "priority": "P1",
       "effort": "S",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -366,7 +351,6 @@
       "required_changes": "Add a selection-set transform (numeric dx/dy, angle about a pivot) that rewrites endpoints as one transaction and re-solves or refuses with the conflicting constraints.",
       "dependencies": "S03 conflict reporting; S04 for composites",
       "acceptance": "Translating a three-line triangle by (10,5), rotating it 90 degrees, then applying the inverse restores its coordinates within 1e-9, with closure kept.",
-      "priority": "P2",
       "effort": "M",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -383,7 +367,6 @@
       "required_changes": "Add a selection scale about a pivot (uniform), refuse 0 or non-finite factors, and handle expression-driven fields and driving constraints explicitly (refuse or rescale).",
       "dependencies": "S03 for constraint conflicts; needs a row (S05 extension)",
       "acceptance": "A circle of diameter 6 scaled 1.5 has diameter 9; factor 0 is refused with no change.",
-      "priority": "P3",
       "effort": "S",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -400,7 +383,6 @@
       "required_changes": "Implement count/spacing (or total) copies as one transaction, then a pattern relation that links the instances to the source until deleted.",
       "dependencies": "S05; S04 for composites",
       "acceptance": "Three circles at 12 mm spacing span 24 mm; editing the spacing moves all copies; deleting the relation leaves free copies.",
-      "priority": "P1",
       "effort": "M",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -417,7 +399,6 @@
       "required_changes": "Implement an angular pattern about an in-plane centre that separates the spacing angle from the total sweep and skips the duplicate seam instance at 360 degrees.",
       "dependencies": "S05",
       "acceptance": "Four instances at 90 degree spacing fill a full turn with exactly four entities (no seam duplicate).",
-      "priority": "P1",
       "effort": "M",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -434,7 +415,6 @@
       "required_changes": "Define the policy first: in-plane rotation about the normal (covered by ZC-016) versus refusing out-of-plane axes or creating a new sketch support.",
       "dependencies": "Design decision; R01 if a new support plane is created",
       "acceptance": "Rotating an in-plane line 30 degrees about the plane normal is exact; an out-of-plane axis is refused by name or lands on a declared new sketch.",
-      "priority": "P3",
       "effort": "M",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -451,7 +431,6 @@
       "required_changes": "Reflect the selected line/arc/circle across a picked sketch line as one transaction, keeping the source, then optionally add S07 symmetric constraints.",
       "dependencies": "S05; S07 for persistent symmetry",
       "acceptance": "Reflecting (3,4) across x=0 gives (-3,4); reflecting twice gives the original coordinates; the entity count doubles per the keep-source policy.",
-      "priority": "P1",
       "effort": "S",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -468,7 +447,6 @@
       "required_changes": "Implement trim on line/arc/circle using the existing exact crossings (circle becomes an arc), rewriting constraints that still apply and refusing or explaining ones that do not.",
       "dependencies": "S05; S03 for dependent-failure messages",
       "acceptance": "A circle crossed by a line trims only the picked arc interval; one undo restores the circle and its constraints.",
-      "priority": "P1",
       "effort": "M",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -492,7 +470,6 @@
       "required_changes": "Route delete through the downstream preflight (warn or offer, never silently break), add a regression test (profile opens, extrude reports unresolved, undo restores), and support multi-select delete.",
       "dependencies": "U02 owned prompt/outcome path",
       "acceptance": "Deleting one edge of a line rectangle opens the profile; the dependent extrude shows a named unresolved state; one undo restores the edge, constraints and extrude.",
-      "priority": "P1",
       "effort": "S",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -517,7 +494,6 @@
       "required_changes": "Add a construction toggle for the selected entities (one undoable updateSketchObject) and a regression test for profile loss and undo.",
       "dependencies": "None",
       "acceptance": "Toggling one edge of a closed line loop to construction removes that extrudable profile; undo restores it; the flag round-trips through save/reopen.",
-      "priority": "P1",
       "effort": "S",
       "family": "Sketch",
       "research_status": "EXECUTED_CURRENT"
@@ -542,7 +518,6 @@
       "required_changes": "None for the line case. Extend pick targets to composite edges with S04.",
       "dependencies": "S04 for rectangle/polygon edges.",
       "acceptance": "Two free lines solve parallel with |cross| below 1e-8 after normalization, either declaration order.",
-      "priority": "P3",
       "effort": "S",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -567,7 +542,6 @@
       "required_changes": "Add a regression: perpendicular pair plus a driving length, change the length, re-solve, assert dot product ~0 and the length.",
       "dependencies": "None.",
       "acceptance": "Dot product of normalized directions < 1e-8 after the initial solve and after a driving-length edit.",
-      "priority": "P2",
       "effort": "S",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -592,7 +566,6 @@
       "required_changes": "Allow arc picks in the Tangent tool, choosing the contact endpoint (`at`) or a pointOnArc contact; add arc-arc (kernel tangentArcArc) and circle-circle (distance of centres = r1±r2 or kernel extension); document and test the contact-domain policy.",
       "dependencies": "Remus pin 8ef16f90 (packages/kernel-adapter/package.json) already parses symmetric, symmetricAboutPoint, fixX, fixY, pointLineDistance, pointOnCircle, pointOnArc, tangentArcArc, arcLength (crates/wasm/src/bindings/gcs_sketch.rs:140-249); gcsAddPoint takes a fixed flag. Circle-circle tangency has no native kernel constraint (emulate via centre distance).",
       "acceptance": "Line tangent to radius-5 circle has centre distance 5; a line tangent to an arc touches within the arc's trimmed sweep (contact point on the arc), tested separately from the circle case; arc-arc tangency solves.",
-      "priority": "P2",
       "effort": "M",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -617,7 +590,6 @@
       "required_changes": "Add point-on-curve coincidence variants to the schema and tool; add drag-onto-point creation (S07); add a plain two-line coincident + driver-edit residual test.",
       "dependencies": "Remus pin 8ef16f90 (packages/kernel-adapter/package.json) already parses symmetric, symmetricAboutPoint, fixX, fixY, pointLineDistance, pointOnCircle, pointOnArc, tangentArcArc, arcLength (crates/wasm/src/bindings/gcs_sketch.rs:140-249); gcsAddPoint takes a fixed flag.",
       "acceptance": "Joined endpoints stay within 1e-9 after a driving edit; a point constrained onto a line/circle stays on it after the driver moves.",
-      "priority": "P2",
       "effort": "M",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -640,7 +612,6 @@
       "required_changes": "Add a regression with a driving length edit; decide and implement arc midpoint (on-arc, not chord) or refuse with a specific sentence.",
       "dependencies": "Arc midpoint has no native kernel constraint; emulate (equal arc-length halves or angle bisector).",
       "acceptance": "Point bound to (0,0)-(20,0) solves to (10,0); after the length is driven to 30 from a fixed start it is at (15,0).",
-      "priority": "P2",
       "effort": "S",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -662,7 +633,6 @@
       "required_changes": "Add a test: concentric radii 3 and 6, drive one radius, assert the other unchanged; add arc-circle/arc-arc oracles.",
       "dependencies": "None.",
       "acceptance": "Radii 3 and 6 share a centre within 1e-9; driving one radius to 4 leaves the other at 6.",
-      "priority": "P3",
       "effort": "S",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -686,7 +656,6 @@
       "required_changes": "None.",
       "dependencies": "None.",
       "acceptance": "Endpoint y equal within 1e-8 after solve, independent of view.",
-      "priority": "P3",
       "effort": "S",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -709,7 +678,6 @@
       "required_changes": "Add a solve oracle mirroring horizontal; add a face-sketch move/re-anchor case asserting local x equality.",
       "dependencies": "None.",
       "acceptance": "Endpoint x equal within 1e-8 after solve and after the sketch's support plane moves.",
-      "priority": "P3",
       "effort": "S",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -732,7 +700,6 @@
       "required_changes": "Add a circle/arc equal-radius solve test.",
       "dependencies": "None.",
       "acceptance": "Segments of 25 and 20 solve to equal length; a line+circle pick is refused with a reason.",
-      "priority": "P3",
       "effort": "S",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -752,7 +719,6 @@
       "required_changes": "Add `symmetric` (point pair + line axis; line pairs as endpoint pairs) to SketchConstraintData with document validation and migration-safe optional field, a CONSTRAINT_TOOL_SPECS entry, the kernel `symmetric` mapping, residual diagnostics and undo tests.",
       "dependencies": "Remus pin 8ef16f90 (packages/kernel-adapter/package.json) already parses symmetric, symmetricAboutPoint, fixX, fixY, pointLineDistance, pointOnCircle, pointOnArc, tangentArcArc, arcLength (crates/wasm/src/bindings/gcs_sketch.rs:140-249); gcsAddPoint takes a fixed flag (Symmetric is native: no kernel work).",
       "acceptance": "(3,4) and (-3,4) mirrored about x=0 remain mirrored after a driver move; a non-line axis is refused with a sentence; undo restores.",
-      "priority": "P1",
       "effort": "M",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -774,7 +740,6 @@
       "required_changes": "Add a Disconnect action that, for a picked point, deletes only coincident/midpoint constraints referencing it in one transaction; regression that other constraints survive and undo restores them.",
       "dependencies": "S04 for rectangle/polygon corners (composite objects have no separable point identity).",
       "acceptance": "Disconnect joined endpoints, move one independently, verify only the coincident/midpoint relations on that point were removed and undo restores them.",
-      "priority": "P1",
       "effort": "S",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -794,7 +759,6 @@
       "required_changes": "Add a `fixed` constraint (point or whole entity) mapped to kernel fixX/fixY (or gcsAddPoint fixed=true), a Lock tool entry, distinct locked styling, and solve tests that unrelated edits cannot move a locked line.",
       "dependencies": "Remus pin 8ef16f90 (packages/kernel-adapter/package.json) already parses symmetric, symmetricAboutPoint, fixX, fixY, pointLineDistance, pointOnCircle, pointOnArc, tangentArcArc, arcLength (crates/wasm/src/bindings/gcs_sketch.rs:140-249); gcsAddPoint takes a fixed flag.",
       "acceptance": "A locked line keeps its endpoints exactly when other geometry is driven; a conflicting dimension against it refuses and preserves the prior solve.",
-      "priority": "P1",
       "effort": "M",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -811,7 +775,6 @@
       "required_changes": "Unlock = delete the specific fix constraint(s) on the selection in one transaction; test a horizontal+locked line becomes movable but stays horizontal.",
       "dependencies": "ZC-036.",
       "acceptance": "Unlocking a horizontal locked line lets it move while it stays horizontal.",
-      "priority": "P1",
       "effort": "S",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -833,7 +796,6 @@
       "required_changes": "On commit of a drawn entity, translate the active snap/axis lock into constraints behind a setting (off = connected endpoints/midpoints only); tag them so they show in the constraint list and can be deleted; test on/off comparison.",
       "dependencies": "S07 (lock/coincident variants), ZC-039 relation display.",
       "acceptance": "Draw a near-horizontal line with inference on: a horizontal constraint exists after commit; with it off: none; both cases visible in the constraint list.",
-      "priority": "P2",
       "effort": "M",
       "family": "Constraints",
       "research_status": "ATTEMPTED_UNVERIFIED"
@@ -853,7 +815,6 @@
       "required_changes": "Add per-constraint viewport glyphs (CSS2D like dimension labels) with a viewer preference (always/selection/off) that never touches document or solve input; test that toggling leaves constraints and solve evidence unchanged.",
       "dependencies": "None.",
       "acceptance": "Hide relation glyphs, drive a dimension, show them: the same constraint ids are present and still solve.",
-      "priority": "P2",
       "effort": "M",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -876,7 +837,6 @@
       "required_changes": "Add a viewer preference filtering label rendering only; test hide -> regenerate/reopen -> expression and geometry intact.",
       "dependencies": "None.",
       "acceptance": "Hide a driving dimension, re-solve and reopen: its expression and effect remain and showing it restores the same label.",
-      "priority": "P3",
       "effort": "S",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -895,7 +855,6 @@
       "required_changes": "During the one-shot solve that applies a new relation, temporarily fix the anchored pick's points (gcsAddPoint fixed or transient fixX/fixY) per a first/last setting, then solve without them for persistence; test Equal both orders.",
       "dependencies": "Remus pin 8ef16f90 (packages/kernel-adapter/package.json) already parses symmetric, symmetricAboutPoint, fixX, fixY, pointLineDistance, pointOnCircle, pointOnArc, tangentArcArc, arcLength (crates/wasm/src/bindings/gcs_sketch.rs:140-249); gcsAddPoint takes a fixed flag (fixed points available).",
       "acceptance": "Equal on circles d10 then d6 with 'first' keeps 10; with 'last' keeps 6; reversed order flips the outcome predictably.",
-      "priority": "P2",
       "effort": "M",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -921,7 +880,6 @@
       "required_changes": "Add a distance-type field (absolute/horizontal/vertical) for driving and reference distances; map H/V driving via a kernel dx/dy constraint or helper construction; add point-line distance via kernel pointLineDistance.",
       "dependencies": "Pin has pointLineDistance and fixX/fixY but no two-point dx/dy constraint; H/V driving needs a Remus constraint or an emulation.",
       "acceptance": "A 30-40-50 diagonal reports 50 absolute and 30 horizontal; driving the horizontal type changes only the x-projection.",
-      "priority": "P1",
       "effort": "M",
       "family": "Constraints",
       "research_status": "EXECUTED_PRIOR"
@@ -944,7 +902,6 @@
       "required_changes": "Add an arc sweep driving dimension and reference type; map via kernel constraint or emulation (helper radial lines with angle).",
       "dependencies": "Pin has no arc-sweep/arc-angle constraint (arcLength only); needs a Remus constraint or helper-line emulation.",
       "acceptance": "Driving an arc's sweep from 180 to 120 degrees solves; '10 mm' in that field is refused.",
-      "priority": "P2",
       "effort": "M",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -968,7 +925,6 @@
       "required_changes": "Optional: explicit test that label formatting precision does not change stored radius.",
       "dependencies": "None.",
       "acceptance": "Radius 10 -> 8 solves exactly and survives undo/redo/reopen.",
-      "priority": "P3",
       "effort": "S",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -988,7 +944,6 @@
       "required_changes": "Add a diameter presentation of the radius constraint (store radius = expr/2 or a diameter kind) plus a display preference; test 10 -> 12 diameter gives radius 6 and the formula survives reopen.",
       "dependencies": "None (kernel circleRadius suffices).",
       "acceptance": "Driving diameter 10 -> 12 sets radius 6; the diameter expression survives save/reopen.",
-      "priority": "P2",
       "effort": "S",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -1013,7 +968,6 @@
       "required_changes": "Per-entity colouring once the kernel reports per-entity freedom; add a locked state with S07.",
       "dependencies": "BLOCKED part: per-entity DOF/freedom evidence from the Remus GCS (not in pin 8ef16f90 gcsDof); S07 for lock.",
       "acceptance": "A free line, a horizontal line, a fully-dimensioned anchored line and a conflicting line show four distinct states agreeing across pill, list and viewport.",
-      "priority": "P1",
       "effort": "M",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -1040,7 +994,6 @@
       "required_changes": "None beyond kernel-side attribution.",
       "dependencies": "Richer conflict sets need Remus diagnostics.",
       "acceptance": "Adding Parallel to a perpendicular pair is refused; prior relation and geometry are unchanged; the message is actionable.",
-      "priority": "P3",
       "effort": "S",
       "family": "Constraints",
       "research_status": "EXECUTED_CURRENT"
@@ -1061,7 +1014,6 @@
       "required_changes": "Implement R01-A..C from datum-geometry-plan.md: datum node + v18 migration, offset-plane resolver over canonical/datum/planar-face sources, Sketch/Split/Mirror consumers, U06 listing, explicit repair.",
       "dependencies": "R01 design (ready); K05 verified face references for face sources; U06 for listing.",
       "acceptance": "Offset from XY by 10 lies at z=10; edit offset/source, undo/redo, reopen; sketch on it and split a box with it; deleting the source face leaves a named broken reference, no proximity rebind.",
-      "priority": "P1",
       "effort": "L",
       "family": "Planes",
       "research_status": "EXECUTED_CURRENT"
@@ -1081,7 +1033,6 @@
       "required_changes": "Add midplane constructor on the R01 datum node (parallel sources only per design), with refusal for non-parallel/coincident pairs.",
       "dependencies": "ZC-048 infrastructure (same R01 slice); K05 face references.",
       "acceptance": "Faces z=0 and z=10 give plane z=5; moving one source to z=20 moves it to z=10; non-parallel pair refuses by name; sketch/split/mirror consumers work after reopen.",
-      "priority": "P1",
       "effort": "S",
       "family": "Planes",
       "research_status": "EXECUTED_CURRENT"
@@ -1101,7 +1052,6 @@
       "required_changes": "After the first R01 plane release, add this constructor as its own slice with a degeneracy refusal and consumer tests.",
       "dependencies": "R01 datum node from ZC-048; S08/M13 notable-point picks for vertex sources.",
       "acceptance": "Points (0,0,0),(1,0,0),(0,1,0) give normal +-Z through origin; collinear/coincident points refuse; vertex-source edits move the plane.",
-      "priority": "P2",
       "effort": "M",
       "family": "Planes",
       "research_status": "EXECUTED_CURRENT"
@@ -1121,7 +1071,6 @@
       "required_changes": "After the first R01 plane release, add this constructor as its own slice with a degeneracy refusal and consumer tests.",
       "dependencies": "R01 datum node; exact edge evaluation (tangent at parameter) over trimmed domains (K06) for curved edges.",
       "acceptance": "On a straight edge at t=0.5 the plane contains the edge midpoint with normal = edge tangent; on an arc the normal equals the analytic tangent at the parameter; parameter edits and edge deletion handled.",
-      "priority": "P2",
       "effort": "M",
       "family": "Planes",
       "research_status": "EXECUTED_CURRENT"
@@ -1141,7 +1090,6 @@
       "required_changes": "After the first R01 plane release, add this constructor as its own slice with a degeneracy refusal and consumer tests.",
       "dependencies": "R01 datum node; K05 edge references; K06 for curved edges.",
       "acceptance": "Plane through a chosen point with normal parallel to the edge direction; point off-edge and degenerate edges handled; alternate point positions tested.",
-      "priority": "P2",
       "effort": "M",
       "family": "Planes",
       "research_status": "EXECUTED_CURRENT"
@@ -1161,7 +1109,6 @@
       "required_changes": "After the first R01 plane release, add this constructor as its own slice with a degeneracy refusal and consumer tests.",
       "dependencies": "R01 datum node; K05 edge+face references.",
       "acceptance": "Plane containing a straight edge rotated by angle a from a reference face; a=0 equals the face plane, a=90 is perpendicular; curved edge refuses.",
-      "priority": "P2",
       "effort": "M",
       "family": "Planes",
       "research_status": "EXECUTED_CURRENT"
@@ -1181,7 +1128,6 @@
       "required_changes": "After the first R01 plane release, add this constructor as its own slice with a degeneracy refusal and consumer tests.",
       "dependencies": "R01 datum node (shares Offset Plane resolver); notable-point picks (S08/M13).",
       "acceptance": "Plane through a picked point with the face normal; moving the point/face updates it; non-planar face refuses.",
-      "priority": "P2",
       "effort": "S",
       "family": "Planes",
       "research_status": "EXECUTED_CURRENT"
@@ -1202,7 +1148,6 @@
       "required_changes": "Add an axis datum kind on the R01 node, then extend Revolve axis, circular pattern and Transform rotate (M10) to accept a datum or edge axis.",
       "dependencies": "R01 datum node; S08/M13 notable points; M10 rotate-about-axis and M02 circular-pattern consumers.",
       "acceptance": "Points (0,0,0),(0,0,10) give a unit +Z axis through origin, display length independent; coincident points refuse; rotate/pattern about it.",
-      "priority": "P2",
       "effort": "M",
       "family": "Axes",
       "research_status": "EXECUTED_CURRENT"
@@ -1223,7 +1168,6 @@
       "required_changes": "Add an axis datum kind on the R01 node, then extend Revolve axis, circular pattern and Transform rotate (M10) to accept a datum or edge axis.",
       "dependencies": "R01 datum planes (ZC-048) first.",
       "acceptance": "XZ and YZ planes give the Z axis; parallel planes refuse; plane edits move the axis.",
-      "priority": "P2",
       "effort": "M",
       "family": "Axes",
       "research_status": "EXECUTED_CURRENT"
@@ -1244,7 +1188,6 @@
       "required_changes": "Add an axis datum kind on the R01 node, then extend Revolve axis, circular pattern and Transform rotate (M10) to accept a datum or edge axis.",
       "dependencies": "R01; K05 face references; exact cylinder/cone axis already published in face geometry.",
       "acceptance": "Axis of r=5 cylinder at (3,4,0) is a unit Z line through (3,4); the cone variant matches the cone apex axis; radius edits keep the axis, face deletion breaks it explicitly.",
-      "priority": "P2",
       "effort": "M",
       "family": "Axes",
       "research_status": "EXECUTED_CURRENT"
@@ -1265,7 +1208,6 @@
       "required_changes": "Add an axis datum kind on the R01 node, then extend Revolve axis, circular pattern and Transform rotate (M10) to accept a datum or edge axis.",
       "dependencies": "R01; K05 edge references.",
       "acceptance": "Straight edge gives the normalised edge direction through its start; a curved edge refuses; edge edits update the axis.",
-      "priority": "P2",
       "effort": "M",
       "family": "Axes",
       "research_status": "EXECUTED_CURRENT"
@@ -1286,7 +1228,6 @@
       "required_changes": "Add an axis datum kind on the R01 node, then extend Revolve axis, circular pattern and Transform rotate (M10) to accept a datum or edge axis.",
       "dependencies": "R01; notable-point picks.",
       "acceptance": "Planar face normal through the picked point; non-planar face refuses or uses the surface normal at that point per design.",
-      "priority": "P2",
       "effort": "M",
       "family": "Axes",
       "research_status": "EXECUTED_CURRENT"
@@ -1317,7 +1258,6 @@
       "required_changes": "Add an 'intersect' ExtrudeOperation (exact intersect boolean against the stored target) with preview and refusal for an empty result.",
       "dependencies": "F01 owns intent extension; U01 override badge.",
       "acceptance": "20x12 region by 10 gives 2400 mm3; Intersect against a 20x12x5 overlap gives the shared volume; open profile refuses visibly.",
-      "priority": "P2",
       "effort": "S",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1341,7 +1281,6 @@
       "required_changes": "None required; optionally label symmetric as total thickness in the card.",
       "dependencies": "",
       "acceptance": "Symmetric 10 (total) and two-sided 5+5 both give span [-5,5] and 2400 mm3 for a 20x12 region.",
-      "priority": "P3",
       "effort": "S",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1361,7 +1300,6 @@
       "required_changes": "Add endCondition 'to-face' with a v5 face (or R01 datum) reference and optional offset; derive the span from the exact target plane at replay; refuse a missing/non-reached target by name.",
       "dependencies": "K05 verified face references; R01 for datum-plane targets.",
       "acceptance": "Extrude from z=0 to plane z=20 ends at z=20; moving the target to z=25 updates the body; deleting the target is a named refusal.",
-      "priority": "P1",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1383,7 +1321,6 @@
       "required_changes": "Implement endCondition 'through-all' + throughAllSide per the qualification doc (cut, one explicit target), then a multi-target slice with an explicit result-body policy.",
       "dependencies": "Design and kernel probe ready; multi-target needs a result-body policy decision.",
       "acceptance": "Circle cut through-all pierces the target with no fixed depth; target edits re-derive the span; then two separated blocks both pierced in one feature.",
-      "priority": "P1",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1403,7 +1340,6 @@
       "required_changes": "Add optional draftAngleDeg (per side) to extrude, built as exact extrude followed by the pinned draft on the generated side faces with the sketch plane as neutral; qualify against frustum closed forms.",
       "dependencies": "No tapered-extrude binding on the pin (compose with draft/draftJournaled); F01 slice.",
       "acceptance": "20 mm wide region extruded 5 mm at 5 deg gives cap width 19.1251 and frustum volume; angle edit and undo/reopen agree.",
-      "priority": "P2",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1430,7 +1366,6 @@
       "required_changes": "None for the acceptance case; broader curved healing remains M07.",
       "dependencies": "K05/K08 for wider families.",
       "acceptance": "Box thickness 10 set to 12 becomes 12; offset +2 moves only the chosen face by 2; undo/redo/reopen agree.",
-      "priority": "P3",
       "effort": "S",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1457,7 +1392,6 @@
       "required_changes": "None for the acceptance case; tangent-chain selection waits on B72.",
       "dependencies": "Remus B72 for chain query/continuity.",
       "acceptance": "One convex 12 mm edge at r=0.5 removes (1-pi/4)*0.25*12 mm3; oversized radius refuses recoverably with a buildable suggestion.",
-      "priority": "P3",
       "effort": "S",
       "family": "Solids",
       "research_status": "EXECUTED_PRIOR"
@@ -1482,7 +1416,6 @@
       "required_changes": "None for the acceptance case.",
       "dependencies": "Remus B72 for tangent chains.",
       "acceptance": "1 mm chamfer on a convex edge yields one planar face and the closed-form volume loss; excessive distance refuses recoverably.",
-      "priority": "P3",
       "effort": "S",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1507,7 +1440,6 @@
       "required_changes": "None for the acceptance case.",
       "dependencies": "",
       "acceptance": "25x10x12 box, top open, 1 mm wall gives 976 mm3; thickness 6 refuses recoverably.",
-      "priority": "P3",
       "effort": "S",
       "family": "Solids",
       "research_status": "EXECUTED_PRIOR"
@@ -1532,7 +1464,6 @@
       "required_changes": "Accept planar body faces as loft sections via verified face references; add the non-similar-rectangle prismatoid oracle test.",
       "dependencies": "K05 face references for face sections.",
       "acceptance": "20x12 at z=0 to 10x8 at z=20 ruled gives 3066.67 mm3, valid closed solid; section edits replay; face-sourced sections work.",
-      "priority": "P2",
       "effort": "S",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1552,7 +1483,6 @@
       "required_changes": "When Remus P-Class 7.2 binds loft guides/correspondence, add optional guides and connection-point mapping to the loft FeatureData with refusal for invalid guides.",
       "dependencies": "Remus P-Class 7.2 (loft guide curves, vertex correspondence) binding.",
       "acceptance": "Loft with one guide edge stays valid and passes through the guide; guide/profile edits replay; an off-profile guide refuses.",
-      "priority": "P3",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1572,7 +1502,6 @@
       "required_changes": "Expose a periodic toggle once the kernel binds it; refuse fewer than three sections.",
       "dependencies": "Remus P-Class 7.2 periodic loft binding.",
       "acceptance": "Four r=2 sections on a r=15 route close into a ring solid; Off leaves an open U; volume approaches the torus 2*pi^2*15*4 as sections increase.",
-      "priority": "P3",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1595,7 +1524,6 @@
       "required_changes": "Allow a sketch line or straight model edge as axis (the pinned revolve takes any origin/direction), add stored new/add/cut intent, and test axis-crossing refusal.",
       "dependencies": "F01 (intent), R01 (datum axis), K05 (edge reference).",
       "acceptance": "Annulus r=2..5, h=10 gives 210*pi full and 105*pi half; axis crossing the profile refuses; Join/Cut stored; undo/reopen.",
-      "priority": "P1",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1620,7 +1548,6 @@
       "required_changes": "Wait for an exact or tolerance-reporting helical sweep; optionally expose elevation inside Revolve once exact.",
       "dependencies": "Remus 7.1 exact helix sweep.",
       "acceptance": "360 deg with 20 mm elevation yields an exact helical solid whose volume matches the profile area times helix length within stated tolerance; reopen/export agree.",
-      "priority": "P3",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1645,7 +1572,6 @@
       "required_changes": "Add a volume assertion for the straight circle sweep; qualify sweepWithOptions corner/scale/contact modes before exposure; add the versioned exact arc route via revolve.",
       "dependencies": "Remus P-Class 7.1 for twist and qualified options.",
       "acceptance": "Circle r=2 along 20 mm gives 80*pi mm3 exact; bent and self-intersecting paths each give a qualified result or a named refusal.",
-      "priority": "P2",
       "effort": "S",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1674,7 +1600,6 @@
       "required_changes": "Add the cube-pair closed-form tests (1750/750/250, plus tangent intersect); store a keep none/all/target/tool choice in the feature and allow target/tool re-pick and swap.",
       "dependencies": "M11 (keep originals is app-side copy-first per kernel roadmap); K05 evolution on kept bodies.",
       "acceptance": "Overlapping cubes give 1750 mm3; shared-face pair is one solid; source bodies consumed or kept per stored choice; disjoint refuses.",
-      "priority": "P2",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1703,7 +1628,6 @@
       "required_changes": "Add the cube-pair closed-form tests (1750/750/250, plus tangent intersect); store a keep none/all/target/tool choice in the feature and allow target/tool re-pick and swap.",
       "dependencies": "M11 (keep originals is app-side copy-first per kernel roadmap); K05 evolution on kept bodies.",
       "acceptance": "A-B of the cube pair gives 750, B-A 750 on the other side; swap and keep-originals stored in the feature; undo restores inputs.",
-      "priority": "P2",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1732,7 +1656,6 @@
       "required_changes": "Add the cube-pair closed-form tests (1750/750/250, plus tangent intersect); store a keep none/all/target/tool choice in the feature and allow target/tool re-pick and swap.",
       "dependencies": "M11 (keep originals is app-side copy-first per kernel roadmap); K05 evolution on kept bodies.",
       "acceptance": "Cube pair gives 250 mm3; disjoint and face-tangent pairs give explicit named outcomes; sources kept or consumed per stored choice.",
-      "priority": "P2",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1754,7 +1677,6 @@
       "required_changes": "Add keep-original stored choice; accept R01 datum planes and body faces as tools; multi-tool split per M11.",
       "dependencies": "R01 datum planes; Remus P-Class 4.3 for sheet/face tools.",
       "acceptance": "10 mm cube split at z=5 gives two 500 mm3 bodies summing to 1000; keep-original retains the source; tool edits replay.",
-      "priority": "P2",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1771,7 +1693,6 @@
       "required_changes": "Add a bounded 'replace-face' direct-edit for one planar face onto a parallel/planar target via replaceSurfaceJournaled with journaled lineage; refuse other target types by name.",
       "dependencies": "Planar subset on the pin; general extend/trim needs Remus P-Class 6.1 + 7.4.",
       "acceptance": "Upper cap trimmed to a lower parallel plane gives a valid closed solid with the expected height/volume; non-planar targets refuse; no silent target substitution.",
-      "priority": "P2",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1788,7 +1709,6 @@
       "required_changes": "None until K09/I01 are scheduled; then design imprint as a topology-subdividing feature distinct from sketch projection.",
       "dependencies": "K09 Deferred; Remus P-Class 4.5/7.4 (pin has imprint and projectEdges, unqualified for this use).",
       "acceptance": "Project one straight edge onto a planar face: new boundary edges with stable identities, volume unchanged.",
-      "priority": "P3",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1807,7 +1727,6 @@
       "required_changes": "Add 'offset face loop into sketch': read the planar face boundary into a face-attached sketch, offset with offsetWire2DWithJoin, store a linked/unlinked source reference.",
       "dependencies": "K05 face references; S04 composite identity for linked edits.",
       "acceptance": "Offset a planar face loop by 1 mm creates a new sketch loop 1 mm outside, the solid unchanged; source edit updates a linked loop.",
-      "priority": "P2",
       "effort": "M",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1826,7 +1745,6 @@
       "required_changes": "None until M12 is scheduled; design the representation and qualify the kernel path first.",
       "dependencies": "M12 Deferred; Remus B73 after 7.4; K07/K09.",
       "acceptance": "A 2D shape wrapped onto a cylinder keeps arc length, has the set depth, handles the seam, and refuses invalid targets.",
-      "priority": "P3",
       "effort": "L",
       "family": "Solids",
       "research_status": "EXECUTED_CURRENT"
@@ -1853,7 +1771,6 @@
       "required_changes": "Store an explicit pivot/frame on the transform feature (schema bump) or persist the composed pivot so edits are pivot-stable; add bounds round-trip test (translate +5 Z, then -5) and a pivot rotation test; flag failed bodyless features in History.",
       "dependencies": "U01 gizmo contract; schema version bump for pivot field",
       "acceptance": "Translate +5 mm in Z then inverse restores exact bbox; rotate 90 deg about a declared pivot lands at the analytic position; editing rotation keeps the pivot.",
-      "priority": "P2",
       "effort": "M",
       "family": "Transform",
       "research_status": "EXECUTED_CURRENT"
@@ -1873,7 +1790,6 @@
       "required_changes": "Add an optional copy mode to transform features producing a new bodyId (new-body like mirror), with explicit policy (separate step vs linked); expose in Move overlay and TransformForm; record source/copy roles for U06.",
       "dependencies": "U06 role naming (original/independent copy/linked instance)",
       "acceptance": "Scale with Copy produces exactly two bodies; editing source follows the stored policy; undo/redo/reopen preserve both identities.",
-      "priority": "P2",
       "effort": "M",
       "family": "Transform",
       "research_status": "EXECUTED_CURRENT"
@@ -1897,7 +1813,6 @@
       "required_changes": "Add a scale pivot (body centre/picked point) stored in the feature; add inverse-scale bounds test (10 mm cube x2 then x0.5).",
       "dependencies": "Same pivot field as ZC-083",
       "acceptance": "10 mm cube scaled 2 about its centre gives 20 mm edges, volume 8000, centre unchanged; inverse restores exact bounds.",
-      "priority": "P2",
       "effort": "S",
       "family": "Transform",
       "research_status": "EXECUTED_CURRENT"
@@ -1916,7 +1831,6 @@
       "required_changes": "After the kernel path qualifies: add (sx,sy,sz)+frame to the transform schema, refuse zero/negative factors, report lost topology references explicitly.",
       "dependencies": "Remus B74 (affine/non-uniform transform with lineage, C8) per ROADMAP M10",
       "acceptance": "(2,3,4) on a 10 mm cube gives 20x30x40, volume 24000; zero factor refused without model change.",
-      "priority": "P3",
       "effort": "L",
       "family": "Transform",
       "research_status": "EXECUTED_CURRENT"
@@ -1940,7 +1854,6 @@
       "required_changes": "Add a two-point pick to the Move overlay that writes the difference vector into the existing translation fields; add a vector/bounds test.",
       "dependencies": "S08 guidepoints for notable-point snapping (optional)",
       "acceptance": "Picking (1,2,3) then (11,7,1) stores (10,5,-2); inverse restores bounds.",
-      "priority": "P2",
       "effort": "S",
       "family": "Transform",
       "research_status": "EXECUTED_CURRENT"
@@ -1966,7 +1879,6 @@
       "required_changes": "Add spacing|extent mode and optional third axis; refuse non-integer counts; per-instance suppression per M02.",
       "dependencies": "K05 for stable references on feature patterns",
       "acceptance": "Count 4 spacing 10 gives offsets 0..30; extent 30 with count 4 gives the same; count 2.5 refused.",
-      "priority": "P2",
       "effort": "M",
       "family": "Transform",
       "research_status": "EXECUTED_CURRENT"
@@ -1989,7 +1901,6 @@
       "required_changes": "Add axis origin/direction (and later datum/edge axis refs), spacing-vs-total mode, and an orientation flag that translates instances along the arc without rotating.",
       "dependencies": "R01 for datum axes; edge-axis pick needs no kernel work",
       "acceptance": "Four instances about an offset axis at 0/90/180/270; preserved-orientation mode keeps instance rotation identical to the source.",
-      "priority": "P2",
       "effort": "M",
       "family": "Transform",
       "research_status": "EXECUTED_CURRENT"
@@ -2008,7 +1919,6 @@
       "required_changes": "Add an axis-angle transform mode referencing a cylinder/cone axis or linear edge (ADR-011 reference, fail-closed on loss) with a copy flag; datum axes when R01 lands.",
       "dependencies": "R01 for datum axes; ADR-011 topology references for edge/cylinder axes",
       "acceptance": "(10,0,0) rotated 90 deg about +Z reaches (0,10,0); undo and reopen preserve it; a deleted axis source leaves a named broken reference.",
-      "priority": "P2",
       "effort": "M",
       "family": "Transform",
       "research_status": "EXECUTED_CURRENT"
@@ -2025,7 +1935,6 @@
       "required_changes": "Add an Align command that computes a rigid transform from a source face/edge/axis to a target face/plane/axis and writes a normal transform feature (no persistent mate), with flip and offset.",
       "dependencies": "R01 for plane/axis targets; U01 gizmo adjustment",
       "acceptance": "Align two planar caps: coincident supports, opposing normals, flip toggles; re-edit under declared (non-mate) policy.",
-      "priority": "P2",
       "effort": "L",
       "family": "Transform",
       "research_status": "EXECUTED_CURRENT"
@@ -2050,7 +1959,6 @@
       "required_changes": "Store keep-original choice in the feature per M11; add a signed-bounds regression.",
       "dependencies": "K05 evolution probe on kept bodies (M11)",
       "acceptance": "Reflect across z=0: source and copy have opposite signed z bounds and equal volume; keep=none replaces the source.",
-      "priority": "P2",
       "effort": "S",
       "family": "Transform",
       "research_status": "EXECUTED_CURRENT"
@@ -2077,7 +1985,6 @@
       "required_changes": "Add an optional unit type to ParameterNode (schema v18) and carry dimensions through the scope so typed parameters combine with suffixed literals.",
       "dependencies": "Schema migration; F05",
       "acceptance": "wall = 1 mm drives shell; edit to 2 mm regenerates; 'wall + 1 mm' = 2 mm; reopen preserves type.",
-      "priority": "P1",
       "effort": "M",
       "family": "History and parameters",
       "research_status": "EXECUTED_PRIOR"
@@ -2098,7 +2005,6 @@
       "required_changes": "Same typed-parameter schema as ZC-093; typed fields (FieldQuantity) validate parameter dimension.",
       "dependencies": "ZC-093 schema change",
       "acceptance": "tilt = 30 deg drives a rotation/draft; using tilt in a length field is refused without model change.",
-      "priority": "P1",
       "effort": "S",
       "family": "History and parameters",
       "research_status": "EXECUTED_CURRENT"
@@ -2120,7 +2026,6 @@
       "required_changes": "Mark pattern count/count2 as whole counts in PatternForm and refuse non-integers in buildPatternFeature (keep legacy docs by version gate if needed).",
       "dependencies": "None (no kernel work)",
       "acceptance": "factor = 3 drives scale and count; count = 2.5 is refused with a named message.",
-      "priority": "P1",
       "effort": "S",
       "family": "History and parameters",
       "research_status": "EXECUTED_CURRENT"
@@ -2148,7 +2053,6 @@
       "required_changes": "Typed parameters (ZC-093); explicit cycle detection naming the loop; finish remaining unit threading.",
       "dependencies": "ZC-093 schema change",
       "acceptance": "5 mm + 2 cm = 25 mm across preview/commit/undo/reopen; 5 mm + 2 deg refused without geometry change; a<->b cycle refused naming both.",
-      "priority": "P1",
       "effort": "M",
       "family": "History and parameters",
       "research_status": "EXECUTED_PRIOR"
@@ -2175,7 +2079,6 @@
       "required_changes": "None for modeling; add drawing invalidation under D01.",
       "dependencies": "D01 for drawing staleness",
       "acceptance": "Change extrusion draft, cancel then commit; body regenerates; undo and reopen agree.",
-      "priority": "P3",
       "effort": "S",
       "family": "History and parameters",
       "research_status": "EXECUTED_CURRENT"
@@ -2202,7 +2105,6 @@
       "required_changes": "One shared re-pick control per stored role on each card, with compatibility validation and an e2e for a split tool swap.",
       "dependencies": "R01 for datum-plane supports",
       "acceptance": "Replace a split plane with another compatible support; a missing support stays unresolved and named.",
-      "priority": "P1",
       "effort": "M",
       "family": "History and parameters",
       "research_status": "EXECUTED_CURRENT"
@@ -2225,7 +2127,6 @@
       "required_changes": "Compute ancestors/descendants of the selected body/face's producing feature via featureHistory parents and filter the timeline view-only; clearing restores order unchanged.",
       "dependencies": "None",
       "acceptance": "Select a generated body: only its ancestry shows; clearing restores all rows with order and document unchanged.",
-      "priority": "P1",
       "effort": "S",
       "family": "History and parameters",
       "research_status": "EXECUTED_CURRENT"
@@ -2249,7 +2150,6 @@
       "required_changes": "",
       "dependencies": "",
       "acceptance": "Rename Extrude 01 to Base, edit downstream and reopen without lost links.",
-      "priority": "P3",
       "effort": "S",
       "family": "History and parameters",
       "research_status": "EXECUTED_CURRENT"
@@ -2275,7 +2175,6 @@
       "required_changes": "",
       "dependencies": "",
       "acceptance": "Suppress a fillet then restore; edge refs, radius and downstream state recover.",
-      "priority": "P3",
       "effort": "S",
       "family": "History and parameters",
       "research_status": "EXECUTED_PRIOR"
@@ -2300,7 +2199,6 @@
       "required_changes": "",
       "dependencies": "",
       "acceptance": "Insert after an extrusion: later steps disappear; remove it and they return.",
-      "priority": "P3",
       "effort": "S",
       "family": "History and parameters",
       "research_status": "EXECUTED_CURRENT"
@@ -2325,7 +2223,6 @@
       "required_changes": "Run the affected features through the existing validated-transaction preflight before committing a reorder, refusing by name as edits do; add a Playwright drag-reorder spec including a refused move.",
       "dependencies": "None",
       "acceptance": "Move an independent transform past another step; a source-after-consumer move is refused without changing order.",
-      "priority": "P2",
       "effort": "S",
       "family": "History and parameters",
       "research_status": "ATTEMPTED_UNVERIFIED"
@@ -2344,7 +2241,6 @@
       "required_changes": "Add a feature.duplicate command for supported kinds (transform, pattern, mirror, primitives first) creating fresh feature/body ids, copying references verbatim, and refusing unsupported kinds by name.",
       "dependencies": "None",
       "acceptance": "Duplicate a transform: exactly one extra operation; unsupported kinds show an explicit refused state.",
-      "priority": "P1",
       "effort": "M",
       "family": "History and parameters",
       "research_status": "UI_INSPECTED"
@@ -2361,7 +2257,6 @@
       "required_changes": "Bake the prefix to a STEP-backed imported body (existing imported-step path) with keep/delete sketches and parameters, one undoable transaction, irreversible-confirm dialog.",
       "dependencies": "Exact STEP export/import round trip (existing); source artifact storage",
       "acceptance": "On a disposable copy: geometry equal before/after, chosen assets retained, undo restores the full history.",
-      "priority": "P2",
       "effort": "L",
       "family": "History and parameters",
       "research_status": "EXECUTED_CURRENT"
@@ -2385,7 +2280,6 @@
       "required_changes": "Restore or validate selection against restored ids; add a boolean undo regression asserting body count and volume.",
       "dependencies": "None",
       "acceptance": "Undo a boolean: original body count, volumes and selectable ids return.",
-      "priority": "P1",
       "effort": "S",
       "family": "History and parameters",
       "research_status": "EXECUTED_CURRENT"
@@ -2409,7 +2303,6 @@
       "required_changes": "",
       "dependencies": "",
       "acceptance": "Redo after undo yields identical bounds/volume and feature ids; new edit clears redo.",
-      "priority": "P3",
       "effort": "S",
       "family": "History and parameters",
       "research_status": "EXECUTED_CURRENT"
@@ -2430,11 +2323,10 @@
         "test/direct-edit-face-repair.test.ts"
       ],
       "evidence": "Failed features show 'needs repair' with the kernel diagnostic and open for explicit re-pick; references never silently rebind.",
-      "gaps": "Bodyless features (transform) never flag 'needs repair' because featureNeedsRepair needs a bodyId; the failing role/source is not named uniformly; uniform re-pick per role is U06 open.",
+      "gaps": "The compact History timeline badge ignored warning-backed failures: featureNeedsRepair needs a bodyId, so a failed transform looked healthy in the list (the selected-feature detail panel already showed Needs repair). The failing role/source is not named uniformly.",
       "required_changes": "Drive the failed state from FeatureWarning.featureId as well as missing bodies; name the failing input role.",
       "dependencies": "None",
       "acceptance": "Delete a support: dependent (including a Move) shows failed with the named role; replace it explicitly and the model regenerates.",
-      "priority": "P1",
       "effort": "S",
       "family": "History and parameters",
       "research_status": "EXECUTED_CURRENT"
@@ -2463,7 +2355,6 @@
       "required_changes": "None in source; complete L01 live evidence.",
       "dependencies": "L01 deployment verification",
       "acceptance": "Save, close, reopen and rebuild a full fixture; interrupted save keeps the last valid document.",
-      "priority": "P3",
       "effort": "S",
       "family": "History and parameters",
       "research_status": "EXECUTED_CURRENT"
@@ -2493,7 +2384,6 @@
       "required_changes": "Finish M13 slices; add a regression for hidden/consumed original bodies vs selected-body volume/area.",
       "dependencies": "None beyond existing exact topology queries.",
       "acceptance": "Box 10x20x12 reports 2400 mm3 / 1120 mm2 exact; hiding or consuming the original after a boolean leaves the selected body's values unchanged.",
-      "priority": "P2",
       "effort": "M",
       "family": "Inspection",
       "research_status": "EXECUTED_CURRENT"
@@ -2522,7 +2412,6 @@
       "required_changes": "Add an e2e: pin body volume, edit extrude distance, assert new value; delete source, assert unresolved state.",
       "dependencies": "",
       "acceptance": "Pinned volume refreshes after an extrude edit; deleting the source shows unresolved, not the old number.",
-      "priority": "P2",
       "effort": "S",
       "family": "Inspection",
       "research_status": "EXECUTED_CURRENT"
@@ -2551,7 +2440,6 @@
       "required_changes": "M08 slices in roadmap order; add a volume-unchanged assertion to the section e2e.",
       "dependencies": "Datum planes from R01 for arbitrary planes.",
       "acceptance": "Midplane cut shows caps; switching off leaves body count and exact volume identical.",
-      "priority": "P2",
       "effort": "M",
       "family": "Inspection",
       "research_status": "EXECUTED_CURRENT"
@@ -2573,7 +2461,6 @@
       "required_changes": "Model isolation as a separate transient set (isolatedIds) composed with persistent hidden state; exit restores the prior state; extend to selection sets; add unit + e2e regression.",
       "dependencies": "None (UI state only).",
       "acceptance": "Hide a body/sketch, isolate another body, exit: the first item is still hidden; export scope unchanged.",
-      "priority": "P1",
       "effort": "S",
       "family": "Inspection",
       "research_status": "EXECUTED_CURRENT"
@@ -2600,7 +2487,6 @@
       "required_changes": "U05: complete the ⌘1-7 view set and keymap test.",
       "dependencies": "",
       "acceptance": "Top view looks along model -Z with +Y up; repeated changes leave document unchanged.",
-      "priority": "P1",
       "effort": "S",
       "family": "Inspection",
       "research_status": "EXECUTED_CURRENT"
@@ -2619,7 +2505,6 @@
       "required_changes": "Add a project-scoped saved-views store (sibling store, not document content, to avoid divergence), UI in the view rail, restore through CameraController glides.",
       "dependencies": "Section state from M08 to include section in saved views.",
       "acceptance": "Save two poses, reload, restore each with target/projection per contract.",
-      "priority": "P1",
       "effort": "M",
       "family": "Inspection",
       "research_status": "EXECUTED_CURRENT"
@@ -2643,7 +2528,6 @@
       "required_changes": "U07 FOV slider; add an assertion that bbox/scale indicator and target are invariant across projection toggles.",
       "dependencies": "",
       "acceptance": "Parallel edges stay parallel in ortho; toggling leaves target and exact bounds unchanged.",
-      "priority": "P1",
       "effort": "S",
       "family": "Inspection",
       "research_status": "EXECUTED_CURRENT"
@@ -2669,7 +2553,6 @@
       "required_changes": "Optional: grid plane/spacing setting; add an invariance assertion.",
       "dependencies": "",
       "acceptance": "Changing grid visibility and zoom leaves stored distances unchanged.",
-      "priority": "P3",
       "effort": "S",
       "family": "Inspection",
       "research_status": "EXECUTED_CURRENT"
@@ -2697,7 +2580,6 @@
       "required_changes": "Global display-precision preference with a test proving stored values are untouched.",
       "dependencies": "",
       "acceptance": "25.4 mm displays 1 in; lowering precision leaves stored geometry/expressions bit-identical.",
-      "priority": "P2",
       "effort": "S",
       "family": "Inspection",
       "research_status": "EXECUTED_CURRENT"
@@ -2724,7 +2606,6 @@
       "required_changes": "Add a regression proving snap commits coordinates only; decide whether to offer explicit relation creation on snap.",
       "dependencies": "S03 constraint feedback decisions.",
       "acceptance": "Hover endpoint, accept snap: sketch has no new constraint unless the user chose one.",
-      "priority": "P2",
       "effort": "S",
       "family": "Inspection",
       "research_status": "ATTEMPTED_UNVERIFIED"
@@ -2750,7 +2631,6 @@
       "required_changes": "Add e2e invariance case; U07 hidden edges/silhouettes.",
       "dependencies": "",
       "acceptance": "Switching modes on one body leaves exact measures and exported STEP byte-identical.",
-      "priority": "P2",
       "effort": "S",
       "family": "Inspection",
       "research_status": "EXECUTED_CURRENT"
@@ -2772,7 +2652,6 @@
       "required_changes": "Add an x-ray display mode (transparent materials + depth-relaxed edge overlay) and a select-through pick filter.",
       "dependencies": "",
       "acceptance": "Select a rear edge in X-ray; return to shaded with visibility unchanged.",
-      "priority": "P1",
       "effort": "M",
       "family": "Inspection",
       "research_status": "EXECUTED_PRIOR"
@@ -2789,7 +2668,6 @@
       "required_changes": "Zebra/normal display overlays (mesh-only, no kernel); curvature map needs kernel curvature evaluation.",
       "dependencies": "Kernel curvature query for exact curvature maps; zebra does not need kernel work.",
       "acceptance": "Plane shows zero curvature, sphere 1/r everywhere, cylinder 1/r and 0 principal curvatures.",
-      "priority": "P2",
       "effort": "L",
       "family": "Inspection",
       "research_status": "EXECUTED_CURRENT"
@@ -2808,7 +2686,6 @@
       "required_changes": "When L02 is selected: canvas-only offscreen render with options and metadata.",
       "dependencies": "L02 selection.",
       "acceptance": "Captured image has the requested resolution and no UI chrome.",
-      "priority": "P3",
       "effort": "M",
       "family": "Inspection",
       "research_status": "EXECUTED_CURRENT"
@@ -2836,7 +2713,6 @@
       "required_changes": "Add an e2e choosing a sketch over a coincident face from the pick list and checking the command card.",
       "dependencies": "",
       "acceptance": "Choosing the sketch entry selects the sketch identity and offers only sketch-compatible commands.",
-      "priority": "P1",
       "effort": "S",
       "family": "Items and projects",
       "research_status": "EXECUTED_CURRENT"
@@ -2859,7 +2735,6 @@
       "required_changes": "Extend box select to edges/faces/sketch entities honouring the selection filter; add Tab/B/F/E keys.",
       "dependencies": "",
       "acceptance": "Partially crossed edge selected only in crossing mode; fully contained curves in both.",
-      "priority": "P1",
       "effort": "M",
       "family": "Items and projects",
       "research_status": "EXECUTED_CURRENT"
@@ -2883,7 +2758,6 @@
       "required_changes": "Add name search to Objects with a clear-restores-all regression.",
       "dependencies": "",
       "acceptance": "Search two similarly named bodies, clear: all items return unchanged.",
-      "priority": "P1",
       "effort": "S",
       "family": "Items and projects",
       "research_status": "EXECUTED_CURRENT"
@@ -2910,7 +2784,6 @@
       "required_changes": "Add a body.rename command (label only) and a reopen regression with a dependent boolean.",
       "dependencies": "Drawings (D01) for the drawing half of the acceptance.",
       "acceptance": "Rename a body used in a boolean; dependency survives reopen.",
-      "priority": "P1",
       "effort": "S",
       "family": "Items and projects",
       "research_status": "EXECUTED_CURRENT"
@@ -2927,7 +2800,6 @@
       "required_changes": "Add an organization layer (non-geometric) with undoable transactions.",
       "dependencies": "I02 for STEP hierarchy as folders.",
       "acceptance": "Move a body between folders and undo; placement and references unchanged.",
-      "priority": "P1",
       "effort": "M",
       "family": "Items and projects",
       "research_status": "EXECUTED_CURRENT"
@@ -2953,7 +2825,6 @@
       "required_changes": "Persist sketch visibility with body visibility; add the acceptance e2e; fix isolate layering.",
       "dependencies": "ZC-113 fix.",
       "acceptance": "Hide overlapping sketch, select face, restore sketch: constraints intact; state survives reload.",
-      "priority": "P1",
       "effort": "S",
       "family": "Items and projects",
       "research_status": "EXECUTED_CURRENT"
@@ -2977,7 +2848,6 @@
       "required_changes": "",
       "dependencies": "",
       "acceptance": "Rename and reopen: same project id, no extra project.",
-      "priority": "P3",
       "effort": "S",
       "family": "Items and projects",
       "research_status": "EXECUTED_CURRENT"
@@ -3001,7 +2871,6 @@
       "required_changes": "",
       "dependencies": "",
       "acceptance": "New project with one body contains nothing from another project.",
-      "priority": "P3",
       "effort": "S",
       "family": "Items and projects",
       "research_status": "EXECUTED_CURRENT"
@@ -3027,7 +2896,6 @@
       "required_changes": "",
       "dependencies": "",
       "acceptance": "Edit the duplicate; source unchanged.",
-      "priority": "P3",
       "effort": "S",
       "family": "Items and projects",
       "research_status": "EXECUTED_CURRENT"
@@ -3056,7 +2924,6 @@
       "required_changes": "",
       "dependencies": "L01 live checks need deployed build + credentials.",
       "acceptance": "Failed save shows actual durable state.",
-      "priority": "P2",
       "effort": "S",
       "family": "Items and projects",
       "research_status": "EXECUTED_CURRENT"
@@ -3081,7 +2948,6 @@
       "required_changes": "",
       "dependencies": "L03 selection.",
       "acceptance": "Restore a prior version; the current version remains recoverable.",
-      "priority": "P3",
       "effort": "S",
       "family": "Items and projects",
       "research_status": "EXECUTED_CURRENT"
@@ -3098,7 +2964,6 @@
       "required_changes": "Product decision on whether ZCAD needs team spaces, then a design proposal and ROADMAP row.",
       "dependencies": "Maintainer product decision; test accounts for live acceptance.",
       "acceptance": "Nonmember is denied; cleanup removes no personal projects.",
-      "priority": "P3",
       "effort": "L",
       "family": "Items and projects",
       "research_status": "UI_INSPECTED"
@@ -3126,7 +2991,6 @@
       "required_changes": "",
       "dependencies": "L01 needs a named deployed build and authorized credentials.",
       "acceptance": "Offline edit + reconnect conflict keeps both versions recoverable.",
-      "priority": "P2",
       "effort": "S",
       "family": "Items and projects",
       "research_status": "EXECUTED_CURRENT"
@@ -3152,7 +3016,6 @@
       "required_changes": "Add optional expiry and a pinned-revision mode for review links.",
       "dependencies": "Live acceptance needs authorization.",
       "acceptance": "Revoked URL no longer grants access; expired link refused; snapshot stays fixed after owner edits.",
-      "priority": "P3",
       "effort": "M",
       "family": "Items and projects",
       "research_status": "UI_INSPECTED"
@@ -3178,7 +3041,6 @@
       "required_changes": "",
       "dependencies": "Authorized test accounts for live acceptance.",
       "acceptance": "Every role tested and revoked without deleting the project.",
-      "priority": "P2",
       "effort": "S",
       "family": "Items and projects",
       "research_status": "UI_INSPECTED"
@@ -3198,7 +3060,6 @@
       "required_changes": "Design acceptance slices 1-4: add a versioned drawing section to ProjectDocument (schema bump, normalizer fails closed on future drawing schema), round-trip through withoutDerivedProjection and IndexedDB, resolve the exact checkpoint via loadLocalSaveState, and a create-drawing command producing front/top/right/iso views.",
       "dependencies": "Schema bump must sequence with R01's proposed v17->v18 migration; remus-wasm BrepKernel.projectEdges (pin 8ef16f90, crates/operations/src/projection.rs) - not called anywhere in OpenZCAD.",
       "acceptance": "Four-view sheet from a 20x12x10 box stores source body ids and the checkpoint/revision/version fence; reload reproduces it; a pruned checkpoint shows a named stale state.",
-      "priority": "P2",
       "effort": "L",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3215,7 +3076,6 @@
       "required_changes": "Extend the DrawingSheet type with projectionAngle ('first'|'third') that drives projected-view placement, broaden paper sizes, implement the shared page transform (page = centerMm + uv*scale*unitToMm) used by preview and PDF.",
       "dependencies": "ZC-139 sheet model; design decision on projection-angle placement rule.",
       "acceptance": "Switching first/third angle swaps top/right placement only; 1:1 vs 2:1 doubles page spans exactly while measured dimensions keep true model values.",
-      "priority": "P2",
       "effort": "M",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3237,7 +3097,6 @@
       "required_changes": "Projection service per design slice 3 (one projectEdges call per source solid, bounded deflection, surface kernel refusal), plus the box/drilled-plate bounds and iso known-run oracle test in-repo; add remaining orthographic frames.",
       "dependencies": "ZC-139; custom/datum frames later via R01.",
       "acceptance": "Front view of a 20x10x6 box has bounds [0,-10,20,0] within 1e-6; scale change does not rerun geometry or alter model bounds.",
-      "priority": "P2",
       "effort": "M",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3254,7 +3113,6 @@
       "required_changes": "Add a parentViewId + alignment axis to view records, derive frame from the base frame and projection angle, keep alignment on drag, and show a named state for a missing source body.",
       "dependencies": "ZC-141, ZC-140 projection angle.",
       "acceptance": "Moving the base view moves its projected views along the aligned axis only; deleting a source body shows a named dependency state rather than stale lines.",
-      "priority": "P2",
       "effort": "M",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3278,7 +3136,6 @@
       "required_changes": "Section view = split body by the section plane, projectEdges on the retained half plus exact section curves for the cut face, hatch region, place along the arrow direction, regenerate on update; failure keeps the sheet valid with a named refusal.",
       "dependencies": "D01 (ZC-139/141), M08 arbitrary planes, R01 for datum-defined cuts.",
       "acceptance": "A box cut through its centre yields a section view whose cut outline matches exact section bounds; editing depth and updating regenerates it; a failed cut leaves the sheet intact.",
-      "priority": "P3",
       "effort": "L",
       "family": "Drawings",
       "research_status": "ATTEMPTED_UNVERIFIED"
@@ -3295,7 +3152,6 @@
       "required_changes": "Approve the per-view scale override design (absent override = sheet scale), then implement 2D clipping of the parent view's projected runs and a linked callout.",
       "dependencies": "Design decision: per-view scale override (D01 later slice); ZC-141; D03.",
       "acceptance": "Cropping a known corner at 2x the parent scale keeps true dimensions; source edit plus Update regenerates the detail.",
-      "priority": "P3",
       "effort": "M",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3317,7 +3173,6 @@
       "required_changes": "Remus: add silhouette/contour curves of curved faces to projection output (classified visible/hidden like edges). OpenZCAD: per-view hiddenLines flag, dashed hidden class in preview and PDF/DXF linetype.",
       "dependencies": "Kernel capability: silhouette generation in project_edges (Remus); ZC-141.",
       "acceptance": "Blind-hole fixture: enabling hidden lines in the front view shows two dashed bore walls and a dashed bottom; the adjacent view stays without them; export carries the hidden linetype.",
-      "priority": "P2",
       "effort": "L",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3337,7 +3192,6 @@
       "required_changes": "Add a sheet annotation record (source reference to edge identity + view id + page placement + format), compute true model length (not page length), persist through reopen, stale-mark on rebind.",
       "dependencies": "ZC-139/141; design decision on projected-run identity; S01/S02 semantics.",
       "acceptance": "A 20 mm edge stays labelled 20 at 4:1; placement and formatting survive offline reopen; after rebind the label updates or shows stale before PDF export.",
-      "priority": "P2",
       "effort": "M",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3354,7 +3208,6 @@
       "required_changes": "Vertex references through the same identity scheme as ZC-146; aligned plus horizontal/vertical component modes.",
       "dependencies": "ZC-146 annotation model.",
       "acceptance": "Points separated by (3,4) give aligned 5, horizontal 3, vertical 4.",
-      "priority": "P2",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3371,7 +3224,6 @@
       "required_changes": "Define and implement perpendicular distance with explicit segment/support semantics.",
       "dependencies": "ZC-146.",
       "acceptance": "Point (3,4) to x-axis gives 4; semantics for points beyond the segment are explicit.",
-      "priority": "P3",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3388,7 +3240,6 @@
       "required_changes": "Parallel line distance with refusal or explicit mode switch for non-parallel picks.",
       "dependencies": "ZC-146; ZC-145 kernel silhouettes for curved-body references.",
       "acceptance": "Lines y=0 and y=12 dimension 12; non-parallel selection refuses or switches explicitly.",
-      "priority": "P2",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3405,7 +3256,6 @@
       "required_changes": "Reference the source circular edge's analytic parameters and compute included angle in model space.",
       "dependencies": "ZC-146 identity scheme.",
       "acceptance": "A 120-degree arc stays 120 at any sheet scale and after a radius edit.",
-      "priority": "P3",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3422,7 +3272,6 @@
       "required_changes": "Three vertex references with middle as vertex; refuse coincident rays.",
       "dependencies": "ZC-147.",
       "acceptance": "(1,0),(0,0),(0,1) gives 90; coincident rays refused.",
-      "priority": "P3",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3439,7 +3288,6 @@
       "required_changes": "Two line references with persisted quadrant selection.",
       "dependencies": "ZC-146.",
       "acceptance": "Perpendicular edges give 90; a 30/150 pair keeps the chosen side after view movement.",
-      "priority": "P3",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3456,7 +3304,6 @@
       "required_changes": "Radius annotation that requires an analytic circle edge (refuse splines by name) with a source-bound leader.",
       "dependencies": "ZC-146 identity scheme.",
       "acceptance": "A radius-8 arc shows R8; a spline is refused rather than treated as an arc.",
-      "priority": "P2",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3473,7 +3320,6 @@
       "required_changes": "Diameter variant of ZC-153 updating on source radius change.",
       "dependencies": "ZC-153.",
       "acceptance": "A radius-6 circle shows diameter 12 and updates after a radius edit.",
-      "priority": "P2",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3492,7 +3338,6 @@
       "required_changes": "Min/max distance between circular references with a toggle.",
       "dependencies": "ZC-153.",
       "acceptance": "Radius-2 circles 10 apart give minimum 6 and maximum 14.",
-      "priority": "P3",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3509,7 +3354,6 @@
       "required_changes": "Store nominal measured value separately from a tolerance record; render and export it; retain through Update.",
       "dependencies": "ZC-146.",
       "acceptance": "20 mm +/-0.1 displays correctly and survives export and source update without changing geometry.",
-      "priority": "P2",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3526,7 +3370,6 @@
       "required_changes": "Associative centerline records from two line references (then point/circular constructors), regenerated on Update.",
       "dependencies": "ZC-146; ZC-145 for silhouette references.",
       "acceptance": "Bisecting y=0 and y=12 gives y=6 and follows a separation edit after Update.",
-      "priority": "P2",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3543,7 +3386,6 @@
       "required_changes": "Center mark bound to an analytic circle edge centre; usable as a dimension reference.",
       "dependencies": "ZC-153.",
       "acceptance": "Mark on an R5 circle follows a moved centre after Update.",
-      "priority": "P2",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3560,7 +3402,6 @@
       "required_changes": "Intersection of two line references' infinite supports, recomputed on Update; usable as a dimension reference.",
       "dependencies": "ZC-146.",
       "acceptance": "Extensions of x=0 and y=0 intersect at origin and recompute when a line moves.",
-      "priority": "P3",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3577,7 +3418,6 @@
       "required_changes": "Note record with text, placement and optional attachment; undoable; exported as PDF text under the pending font policy.",
       "dependencies": "ZC-139; PDF font decision (ZC-164).",
       "acceptance": "A note can be edited, moved, undone, reopened and exported without clipping.",
-      "priority": "P2",
       "effort": "S",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3594,7 +3434,6 @@
       "required_changes": "Image record stored as a project blob with aspect-locked resize and PDF embedding; strip metadata.",
       "dependencies": "ZC-139; ZC-164 PDF writer; blob storage policy.",
       "acceptance": "A synthetic checkerboard resizes without distortion and exports at its declared bounds.",
-      "priority": "P3",
       "effort": "M",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3611,7 +3450,6 @@
       "required_changes": "Title-block layout set with auto-filled fields that stop updating once edited; no account or unrelated project metadata.",
       "dependencies": "ZC-139, ZC-140.",
       "acceptance": "Set title/revision, change sheet size and export; fields refill until edited and no private metadata appears.",
-      "priority": "P2",
       "effort": "M",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3628,7 +3466,6 @@
       "required_changes": "Implement stale detection against the checkpoint fence, an explicit Update/rebind that reprojects views and re-resolves annotation references, and a named invalid state with repair.",
       "dependencies": "ZC-139..ZC-146; stable topology identity across edits (ADR-011 fingerprints).",
       "acceptance": "Changing draft 0->5 degrees shows the sheet stale; Update changes the bound width dimension to 19.13 mm while keeping tolerance and note.",
-      "priority": "P2",
       "effort": "M",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3648,7 +3485,6 @@
       "required_changes": "Decide the PDF writer (bounded vector writer, fonts), serialize the shared transformed line records with fixed-mm paper and line weights, byte-stable reload-then-export test; extend io-dxf with layers/linetypes/text for drawing DXF (D04).",
       "dependencies": "Design decision: PDF dependency and font policy; ZC-141/145 line records.",
       "acceptance": "An A3 sheet exports as a single 420x297 mm page with correct line weights, text and dimensions, byte-stable across reload, with no private metadata.",
-      "priority": "P2",
       "effort": "M",
       "family": "Drawings",
       "research_status": "EXECUTED_CURRENT"
@@ -3669,7 +3505,6 @@
       "required_changes": "If L02 is selected: add a presentation-only material reference on bodies/face scopes stored outside exact geometry, a curated licensed preset library and a drag-onto-body/face interaction.",
       "dependencies": "L02 selection from measured demand; licensed/redistributable material assets; U06 item scope for face references; K05 stable face identity.",
       "acceptance": "Assign a preset to one body, edit another body and reopen offline: exact volume unchanged, material scope persists and is explicit.",
-      "priority": "P3",
       "effort": "M",
       "family": "Visualization",
       "research_status": "EXECUTED_CURRENT"
@@ -3689,7 +3524,6 @@
       "required_changes": "Only within a later L02 slice: sRGB colour + roughness/metalness/opacity on the preset record with reset.",
       "dependencies": "L02; ZC-165 material record.",
       "acceptance": "Set known sRGB colour and roughness, save/reopen, reset restores preset; geometry unchanged.",
-      "priority": "P3",
       "effort": "S",
       "family": "Visualization",
       "research_status": "EXECUTED_CURRENT"
@@ -3706,7 +3540,6 @@
       "required_changes": "Would need per-body mapping frame and UV generation over tessellation; only after textured presets exist.",
       "dependencies": "ZC-165/166; L02.",
       "acceptance": "Rotate a directional texture 90 degrees; mapping follows body move per declared rule.",
-      "priority": "P3",
       "effort": "M",
       "family": "Visualization",
       "research_status": "EXECUTED_CURRENT"
@@ -3723,7 +3556,6 @@
       "required_changes": "None unless roadmap decision changes; would reuse I05 image artifact storage.",
       "dependencies": "Roadmap decision to reverse L02 exclusion; I05 image artifacts.",
       "acceptance": "Place a synthetic grid on a planar face with explicit scale/alpha; exports declare decal loss.",
-      "priority": "P3",
       "effort": "L",
       "family": "Visualization",
       "research_status": "ATTEMPTED_UNVERIFIED"
@@ -3743,7 +3575,6 @@
       "required_changes": "L02 slice: one or more licensed environments with rotation/elevation/intensity persisted per project view state.",
       "dependencies": "L02; licensed HDR assets (RoomEnvironment is procedural and needs no licence).",
       "acceptance": "Switch between two environments, restore one: identical render state, geometry unchanged.",
-      "priority": "P3",
       "effort": "M",
       "family": "Visualization",
       "research_status": "EXECUTED_CURRENT"
@@ -3763,7 +3594,6 @@
       "required_changes": "Expose light rotation/elevation/intensity and shadow/ground toggles as persisted view state; reuse configureKeyLightShadow.",
       "dependencies": "L02.",
       "acceptance": "Rotate light by a known angle, toggle shadows and ground, reopen: render state restored.",
-      "priority": "P3",
       "effort": "S",
       "family": "Visualization",
       "research_status": "EXECUTED_CURRENT"
@@ -3784,7 +3614,6 @@
       "required_changes": "Add a bounded vertical-FOV setting next to Projection, keep framing via existing fit math (scene.ts uses camera.fov), persist in app settings.",
       "dependencies": "None blocking; no roadmap row - add under L02 or U-series.",
       "acceptance": "Change 45 to 66 degrees: model bounds unchanged, Fit frames identically under fixed pose, value survives reload.",
-      "priority": "P3",
       "effort": "S",
       "family": "Visualization",
       "research_status": "EXECUTED_CURRENT"
@@ -3801,7 +3630,6 @@
       "required_changes": "Optional bokeh pass in a capture-only render path with explicit off state; keep out of the interactive viewport.",
       "dependencies": "Render capture (ZC-173) first; bundle budget check (scripts/report-bundle-sizes.mjs).",
       "acceptance": "Focus front of two separated objects, rear blurs; move focus and the sharp region reverses.",
-      "priority": "P3",
       "effort": "M",
       "family": "Visualization",
       "research_status": "EXECUTED_CURRENT"
@@ -3824,7 +3652,6 @@
       "required_changes": "Reuse the thumbnail offscreen renderer to write PNG at declared resolution without UI overlays.",
       "dependencies": "L02; shares work with ZC-192.",
       "acceptance": "Capture a synthetic scene: declared pixel size, alpha contract, no panels/labels/project names.",
-      "priority": "P3",
       "effort": "S",
       "family": "Visualization",
       "research_status": "EXECUTED_CURRENT"
@@ -3841,7 +3668,6 @@
       "required_changes": "None unless the decision changes; would need provider disclosure, cost and data-boundary UI.",
       "dependencies": "Product decision; provider terms.",
       "acceptance": "Authorized synthetic input only; cancellation and failure never touch CAD geometry.",
-      "priority": "P3",
       "effort": "L",
       "family": "Visualization",
       "research_status": "EXECUTED_CURRENT"
@@ -3858,7 +3684,6 @@
       "required_changes": "After I09: USDZ with physical scale and verify in AR Quick Look on a device.",
       "dependencies": "I09; Apple device for verification.",
       "acceptance": "Place a known 100 mm reference on supported hardware and confirm scale/orientation.",
-      "priority": "P3",
       "effort": "M",
       "family": "Visualization",
       "research_status": "PLATFORM_NOT_TESTED"
@@ -3875,7 +3700,6 @@
       "required_changes": "Add a reference-image item (artifact-backed, not in document body) with plane/face attachment, explicit physical width (no pixel-to-mm inference), aspect lock, opacity; strip EXIF metadata.",
       "dependencies": "U06 items; artifact storage; pdf.js rasterizer.",
       "acceptance": "Insert a synthetic 100-pixel ruler, set 10 mm width, height follows aspect, opacity persists across reload, EXIF stripped.",
-      "priority": "P2",
       "effort": "M",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -3912,7 +3736,6 @@
       "required_changes": "Add DXF sketch import (D04) and SVG (I07); add explicit unit interpretation for unitless meshes; I02 metadata/hierarchy.",
       "dependencies": "D04, I07, I02, U06.",
       "acceptance": "Import original solid and sketch fixtures; counts, bounds and analytic dimensions match manifests; unitless import asks for units.",
-      "priority": "P1",
       "effort": "M",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -3933,7 +3756,6 @@
       "required_changes": "Implement AS01 slice 1: insert another project's bodies as one import step with remapped IDs, a grouping node (U06), explicit copy (not live link) semantics and asset ownership transfer.",
       "dependencies": "AS01 design (source identity, copy vs link); U06 nested groups; import-source blob ownership.",
       "acceptance": "Insert a synthetic project into another: no ID collisions, one undoable import step, history boundary explicit, assets owned by target, reload survives.",
-      "priority": "P2",
       "effort": "M",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -3955,7 +3777,6 @@
       "required_changes": "Optional: add a Playwright export->reimport spec comparing parameters and units.",
       "dependencies": "None.",
       "acceptance": "Export, reimport into clean storage: parameters, references, units and history equal; damaged file refused.",
-      "priority": "P3",
       "effort": "S",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -3988,7 +3809,6 @@
       "required_changes": "I02 metadata/hierarchy mapping with semantic round-trip fixtures; AP selection only with a qualified writer (Remus); I04 options.",
       "dependencies": "Remus writer support for names/colours/AP242; U06 groups.",
       "acceptance": "Export two named, coloured bodies; reimport keeps names, colours, count, bounds, volume and units; malformed file refused by name.",
-      "priority": "P1",
       "effort": "M",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4007,7 +3827,6 @@
       "required_changes": "Complete I10 qualification (licence terms, cost, execution location, fidelity evidence) before any integration.",
       "dependencies": "I10 licensing decision; Remus O5.6.",
       "acceptance": "Original known-dimension .x_t corpus: bounds, units, analytic surfaces, multi-body placement per direction.",
-      "priority": "P3",
       "effort": "L",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4024,7 +3843,6 @@
       "required_changes": "Decide precise subset, expose import/export through existing STEP-style job, classify open/unsupported geometry, add export/reimport fixtures.",
       "dependencies": "Remus O5.7 qualification; K01/K03.",
       "acceptance": "Original IGES corpus: solids/trimmed surfaces, units, multi-body, malformed refusal, export/reimport volume and bounds.",
-      "priority": "P3",
       "effort": "L",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4056,7 +3874,6 @@
       "required_changes": "Add explicit unit interpretation on STL import and optional export unit; angular tolerance (see ZC-200).",
       "dependencies": "I04.",
       "acceptance": "Known-dimension STL corpus: bounds, triangle count, units choice honoured; malformed refusal.",
-      "priority": "P1",
       "effort": "S",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4080,7 +3897,6 @@
       "required_changes": "Per-object bodies on import; write names/colours on export; add 3MF export->reimport fixture.",
       "dependencies": "I04 colours; U06.",
       "acceptance": "Export two bodies; reimport yields two objects with declared unit, bounds and names.",
-      "priority": "P2",
       "effort": "S",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4100,7 +3916,6 @@
       "required_changes": "Unit interpretation prompt; MTL colour export; round-trip fixture.",
       "dependencies": "I04.",
       "acceptance": "OBJ corpus: bounds, units interpretation, colours where declared.",
-      "priority": "P2",
       "effort": "S",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4120,7 +3935,6 @@
       "required_changes": "Add PBR base colour per body on export; optionally per-body nodes.",
       "dependencies": "I04; ZC-165 if materials ever exist.",
       "acceptance": "GLB corpus: bounds in metres, orientation, per-body nodes and colours.",
-      "priority": "P2",
       "effort": "S",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4137,7 +3951,6 @@
       "required_changes": "Select a writer and package policy; reuse GLB mm->m conversion.",
       "dependencies": "I09; I04; Apple device for Quick Look.",
       "acceptance": "100 mm reference opens at scale and orientation in AR Quick Look.",
-      "priority": "P3",
       "effort": "M",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4165,7 +3978,6 @@
       "required_changes": "Wire sketch DXF menu entry; implement bounded DXF import (lines, polylines, arcs, circles, ellipses, Beziers) with $INSUNITS and named drops; independent reparse in tests.",
       "dependencies": "D04; D01 for drawing views.",
       "acceptance": "DXF corpus: import radius-5 circle at declared mm units, export/reparse entity counts and coordinates; malformed refused.",
-      "priority": "P1",
       "effort": "M",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4182,7 +3994,6 @@
       "required_changes": "Licensing decision and translator selection first; then whole-sketch/drawing export reusing the DXF entity model.",
       "dependencies": "Licensed DWG SDK decision (I10-style qualification); D04/D01.",
       "acceptance": "DWG corpus: entities, units and reimport verified with an independent reader.",
-      "priority": "P3",
       "effort": "L",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4199,7 +4010,6 @@
       "required_changes": "Reuse D04 sketch extraction for export with physical width/height in mm and declared curve approximation; bounded, script-free SVG import.",
       "dependencies": "D04 shared sketch extraction; I01 for additional curve entities.",
       "acceptance": "Export a sketch with arc/rectangle: viewBox in mm, reimport matches; scripts/external refs ignored.",
-      "priority": "P2",
       "effort": "M",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4216,7 +4026,6 @@
       "required_changes": "Implement D01 sheet/view model and a PDF writer at physical page size; I05 first-page raster import.",
       "dependencies": "D01, D02, I05.",
       "acceptance": "Four-view ISO A3 sheet PDF at 420x297 mm, scale correct, annotations visible.",
-      "priority": "P2",
       "effort": "L",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4233,7 +4042,6 @@
       "required_changes": "Add Export image (PNG) from the offscreen thumbnail renderer with resolution, transparent background option and no overlays/metadata.",
       "dependencies": "Bundle budget; shares ZC-173.",
       "acceptance": "PNG at declared size, alpha 0 background when transparent, no UI chrome or project names.",
-      "priority": "P3",
       "effort": "S",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4250,7 +4058,6 @@
       "required_changes": "Complete I10 licensing/fidelity qualification, then part-first import via STEP bridge.",
       "dependencies": "I10 licence; I02/U06/AS01.",
       "acceptance": "Original part corpus with known dimensions; missing external parts refuse.",
-      "priority": "P3",
       "effort": "L",
       "family": "Import and export",
       "research_status": "DOCUMENTED_ONLY"
@@ -4267,7 +4074,6 @@
       "required_changes": "I10 decision; format detection distinguishing Creo .prt.",
       "dependencies": "I10 licence; AS01.",
       "acceptance": "Known-dimension NX corpus, version bounds.",
-      "priority": "P3",
       "effort": "L",
       "family": "Import and export",
       "research_status": "DOCUMENTED_ONLY"
@@ -4284,7 +4090,6 @@
       "required_changes": "I10 decision.",
       "dependencies": "I10 licence; AS01.",
       "acceptance": "Known-dimension CATPart/CATProduct corpus.",
-      "priority": "P3",
       "effort": "L",
       "family": "Import and export",
       "research_status": "DOCUMENTED_ONLY"
@@ -4301,7 +4106,6 @@
       "required_changes": "I10 decision; versioned filename handling.",
       "dependencies": "I10 licence; AS01.",
       "acceptance": "Known-dimension Creo corpus.",
-      "priority": "P3",
       "effort": "L",
       "family": "Import and export",
       "research_status": "DOCUMENTED_ONLY"
@@ -4318,7 +4122,6 @@
       "required_changes": "I10 decision.",
       "dependencies": "I10 licence; K09 sheets.",
       "acceptance": "Known-dimension par/psm/asm corpus.",
-      "priority": "P3",
       "effort": "L",
       "family": "Import and export",
       "research_status": "DOCUMENTED_ONLY"
@@ -4335,7 +4138,6 @@
       "required_changes": "I10 decision; classify precise vs tessellated.",
       "dependencies": "I10 licence.",
       "acceptance": "JT corpus with precise and mesh-only parts classified.",
-      "priority": "P3",
       "effort": "L",
       "family": "Import and export",
       "research_status": "UI_INSPECTED"
@@ -4358,7 +4160,6 @@
       "required_changes": "Add an export scope control (selection / visible / all incl. hidden) shown in STEP and mesh dialogs; test each policy with reimport body counts.",
       "dependencies": "I04.",
       "acceptance": "Hide one of two bodies; export with each policy; reimport body count matches.",
-      "priority": "P1",
       "effort": "S",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4383,7 +4184,6 @@
       "required_changes": "Add angular tolerance (if kernel exposes it) and a test tessellating an R10 cylinder at two tolerances asserting deviation <= tolerance and monotonic triangle counts.",
       "dependencies": "Remus tessellation parameters.",
       "acceptance": "R10 cylinder at 0.1 and 0.01 mm: measured deviation within tolerance, triangle count grows.",
-      "priority": "P1",
       "effort": "S",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4411,7 +4211,6 @@
       "required_changes": "Explicit unit prompt for unitless imports; export unit option where the format carries units; 25.4 mm -> 1 in round-trip test for STEP.",
       "dependencies": "I04; D04 for DXF units.",
       "acceptance": "25.4 mm reference round-trips as 1 inch where supported; unitless import requires an intentional choice.",
-      "priority": "P1",
       "effort": "S",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4440,7 +4239,6 @@
       "required_changes": "Write a loss-contract table per format and a shared round-trip harness comparing body count, validity, bounds, volume, units and metadata.",
       "dependencies": "I02 for metadata.",
       "acceptance": "Each neutral format: body count, topology validity, bounds, volume, units and supported metadata equal after export/reimport; history loss stated.",
-      "priority": "P1",
       "effort": "M",
       "family": "Import and export",
       "research_status": "EXECUTED_CURRENT"
@@ -4464,7 +4262,6 @@
       "required_changes": "U05: abbreviations, recents, selection-aware filtering; command-contract case for search vs hotkey equivalence.",
       "dependencies": "",
       "acceptance": "Find Extrude by text, run, cancel, rerun by shortcut: equivalent state.",
-      "priority": "P1",
       "effort": "M",
       "family": "Command and input",
       "research_status": "EXECUTED_PRIOR"
@@ -4491,7 +4288,6 @@
       "required_changes": "U05 keymap with full coverage and a table test.",
       "dependencies": "",
       "acceptance": "Letter in a text field never starts a command; outside it opens the tool.",
-      "priority": "P1",
       "effort": "M",
       "family": "Command and input",
       "research_status": "EXECUTED_CURRENT"
@@ -4508,7 +4304,6 @@
       "required_changes": "Central keymap registry, settings UI, persisted overrides in app settings, conflict resolution.",
       "dependencies": "ZC-204 keymap registry first.",
       "acceptance": "Assign two commands to one chord, resolve, reload, restore defaults.",
-      "priority": "P1",
       "effort": "M",
       "family": "Command and input",
       "research_status": "EXECUTED_CURRENT"
@@ -4533,7 +4328,6 @@
       "required_changes": "U07: named preset mappings on top of bindings.ts plus invariance test.",
       "dependencies": "",
       "acceptance": "Switching presets changes only input mapping.",
-      "priority": "P1",
       "effort": "S",
       "family": "Command and input",
       "research_status": "EXECUTED_CURRENT"
@@ -4559,7 +4353,6 @@
       "required_changes": "None unless localization is chosen; keep id-based identity.",
       "dependencies": "Product decision on localization.",
       "acceptance": "Operation keeps one name from creation through history edit.",
-      "priority": "P3",
       "effort": "S",
       "family": "Command and input",
       "research_status": "EXECUTED_CURRENT"
@@ -4586,7 +4379,6 @@
       "required_changes": "Finish U03 non-colour cues (icons/patterns) for selection, conflict and constraint state.",
       "dependencies": "",
       "acceptance": "Both themes legible for focus, selection and conflicts; preference restored.",
-      "priority": "P1",
       "effort": "S",
       "family": "Command and input",
       "research_status": "EXECUTED_CURRENT"
@@ -4615,7 +4407,6 @@
       "required_changes": "",
       "dependencies": "",
       "acceptance": "Create, box-select, orbit, edit with each device; cancel works, no double commits.",
-      "priority": "P2",
       "effort": "S",
       "family": "Command and input",
       "research_status": "EXECUTED_CURRENT"
@@ -4634,7 +4425,6 @@
       "required_changes": "When L02 is selected: touch gesture router and palm rejection.",
       "dependencies": "Real tablet/pen hardware (also BLOCKED for acceptance).",
       "acceptance": "Creation and selection with palm contact on supported hardware.",
-      "priority": "P3",
       "effort": "L",
       "family": "Command and input",
       "research_status": "PLATFORM_NOT_TESTED"
@@ -4663,7 +4453,6 @@
       "required_changes": "Add an axe-style scan to e2e and a keyboard-only numeric operation with live-region assertions.",
       "dependencies": "Screen reader verification needs manual AT run.",
       "acceptance": "Numeric op by keyboard; labels reflect active field.",
-      "priority": "P1",
       "effort": "M",
       "family": "Command and input",
       "research_status": "EXECUTED_CURRENT"
