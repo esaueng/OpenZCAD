@@ -592,6 +592,28 @@ describe('Trim', () => {
     expect(object(ids[0]!)).toMatchObject({ x1: 0, x2: 5 });
   });
 
+  it('keeps a construction cutter’s own ends exact in a large sketch', () => {
+    // A 2e10 profile line makes the profile tolerance ~2; a guide stopping
+    // 1 unit short of the target must still not cut it.
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },
+      { objectKind: 'line', x1: 5, y1: 1, x2: 5, y2: 5, construction: true },
+      { objectKind: 'line', x1: -1e10, y1: 50, x2: 1e10, y2: 50 }
+    ]);
+    expect(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 8, y: 0 },
+        resolve
+      )
+    ).toMatchObject({
+      message: 'Trim removed the whole line: nothing crosses it.'
+    });
+  });
+
   it('treats a crossing within the profile tolerance of an end as that end', () => {
     // The vertical crosses 5e-7 from the line's start: cutting there would
     // leave a fragment the profile builder calls degenerate.

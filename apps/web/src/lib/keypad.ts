@@ -193,9 +193,12 @@ export function evaluateKeypadInput(
   scope: Record<string, number>,
   dimensionMode?: DimensionMode
 ): KeypadEvaluation {
-  const explicitMode = dimensionModeForInput(raw, scope);
-  const effectiveMode = explicitMode ?? dimensionMode;
-  const trimmed = stripDimensionPrefix(raw, scope);
+  // A count has no radial notation: Ø or R is not stripped (and halved),
+  // so it reads as the invalid input it is.
+  const count = entryUnit === 'count';
+  const explicitMode = count ? undefined : dimensionModeForInput(raw, scope);
+  const effectiveMode = count ? undefined : (explicitMode ?? dimensionMode);
+  const trimmed = count ? raw.trim() : stripDimensionPrefix(raw, scope);
   if (trimmed.length === 0) {
     return { ok: false, isExpression: false, error: 'required' };
   }

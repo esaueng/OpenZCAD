@@ -315,9 +315,13 @@ function circleCircleCrossings(
 export function curveCrossings(
   first: Curve2,
   second: Curve2,
-  /** How far apart two curves may be and still touch, in model units. */
-  tol = ON_CURVE
+  /** How far past its ends `first` may still touch, in model units. */
+  tol = ON_CURVE,
+  /** The same for `second`, which may sit at another scale (a guide). */
+  secondTol = tol
 ): Point2[] {
+  // Where the two curves meet is judged at the tighter of the two.
+  const touch = Math.min(tol, secondTol);
   if (first.kind === 'line' && second.kind === 'line') {
     const d1 = sub(first.b, first.a);
     const d2 = sub(second.b, second.a);
@@ -330,18 +334,21 @@ export function curveCrossings(
     const t = cross(delta, d2) / denom;
     const point = { x: first.a.x + d1.x * t, y: first.a.y + d1.y * t };
     return withinSegment(first.a, first.b, point, tol) &&
-      withinSegment(second.a, second.b, point, tol)
+      withinSegment(second.a, second.b, point, secondTol)
       ? [point]
       : [];
   }
   if (first.kind === 'line' || second.kind === 'line') {
-    const [line, round] = (
-      first.kind === 'line' ? [first, second] : [second, first]
-    ) as [Extract<Curve2, { kind: 'line' }>, Exclude<Curve2, { kind: 'line' }>];
-    return lineCircleCrossings(line.a, line.b, round.c, round.r, tol).filter(
+    const lineFirst = first.kind === 'line';
+    const [line, round] = (lineFirst ? [first, second] : [second, first]) as [
+      Extract<Curve2, { kind: 'line' }>,
+      Exclude<Curve2, { kind: 'line' }>
+    ];
+    const [lineTol, roundTol] = lineFirst ? [tol, secondTol] : [secondTol, tol];
+    return lineCircleCrossings(line.a, line.b, round.c, round.r, touch).filter(
       (point) =>
-        withinSegment(line.a, line.b, point, tol) &&
-        withinArc(round, point, tol)
+        withinSegment(line.a, line.b, point, lineTol) &&
+        withinArc(round, point, roundTol)
     );
   }
   return circleCircleCrossings(
@@ -349,9 +356,10 @@ export function curveCrossings(
     first.r,
     second.c,
     second.r,
-    tol
+    touch
   ).filter(
-    (point) => withinArc(first, point, tol) && withinArc(second, point, tol)
+    (point) =>
+      withinArc(first, point, tol) && withinArc(second, point, secondTol)
   );
 }
 
@@ -695,6 +703,7 @@ function crossingsOn(
   resolve: Resolve,
   tol: number
 ): Crossing[] {
+  const profileTol = profileTolerance(document, sketch, [], resolve);
   const crossings: Crossing[] = [];
   for (const objectId of sketch.objectIds) {
     if (objectId === targetId) {
@@ -709,7 +718,14 @@ function crossingsOn(
       data.objectKind === 'arc' ||
       data.objectKind === 'circle';
     for (const cutter of cutterCurves(data, resolve)) {
-      for (const point of curveCrossings(target, cutter, tol)) {
+      // A construction cutter keeps the fixed slack: it is not part of the
+      // profile scale, so a scaled tolerance would reach past its ends.
+      for (const point of curveCrossings(
+        target,
+        cutter,
+        tol,
+        data.construction ? ON_CURVE : profileTol
+      )) {
         crossings.push({
           param: curveParam(target, point),
           cutter: constrainable ? objectId : null
