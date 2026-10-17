@@ -1031,9 +1031,10 @@ function sameCurve(first: Curve2, second: Curve2): boolean {
 }
 
 /**
- * The relation that ties one source point to its image: symmetric about the
+ * The relations that tie one source point to its image: symmetric about the
  * axis, or — when the point sits on the axis, where symmetry has no
- * direction — coincident, which is what joins a half-profile to its mirror.
+ * direction — coincident plus held on the axis, which is what joins a
+ * half-profile to its mirror and keeps the joint a mirror when it moves.
  */
 function mirrorLink(
   sketchId: SketchId,
@@ -1042,16 +1043,22 @@ function mirrorLink(
   sourcePoint: Point2,
   axisId: EntityId,
   onAxis: (point: Point2) => boolean
-): AnyCommand {
-  return commandFactories.addSketchConstraint(
-    {
-      sketchId,
-      constraint: onAxis(sourcePoint)
-        ? { constraintKind: 'coincident', a: source, b: image }
-        : { constraintKind: 'symmetric', a: source, b: image, axis: axisId }
-    },
-    'Mirror about the line'
-  );
+): AnyCommand[] {
+  const add = (constraint: SketchConstraintData) =>
+    commandFactories.addSketchConstraint(
+      { sketchId, constraint },
+      'Mirror about the line'
+    );
+  return onAxis(sourcePoint)
+    ? [
+        add({ constraintKind: 'coincident', a: source, b: image }),
+        add({
+          constraintKind: 'point-on-object',
+          point: source,
+          objectId: axisId
+        })
+      ]
+    : [add({ constraintKind: 'symmetric', a: source, b: image, axis: axisId })];
 }
 
 /**
@@ -1137,7 +1144,7 @@ export function planSketchMirror(
   const links: AnyCommand[] = [];
   if (source.kind === 'line') {
     links.push(
-      mirrorLink(
+      ...mirrorLink(
         sketchId,
         ref(id, 'start'),
         ref(imageId, 'start'),
@@ -1145,7 +1152,7 @@ export function planSketchMirror(
         axisEntity,
         onAxis
       ),
-      mirrorLink(
+      ...mirrorLink(
         sketchId,
         ref(id, 'end'),
         ref(imageId, 'end'),
@@ -1156,7 +1163,7 @@ export function planSketchMirror(
     );
   } else if (source.kind === 'circle') {
     links.push(
-      mirrorLink(
+      ...mirrorLink(
         sketchId,
         ref(id, 'center'),
         ref(imageId, 'center'),
@@ -1170,7 +1177,7 @@ export function planSketchMirror(
     // (five equations for its five freedoms); mirroring the centre as well
     // would state the radius twice and read as redundant to the solver.
     links.push(
-      mirrorLink(
+      ...mirrorLink(
         sketchId,
         ref(id, 'start'),
         ref(imageId, 'end'),
@@ -1178,7 +1185,7 @@ export function planSketchMirror(
         axisEntity,
         onAxis
       ),
-      mirrorLink(
+      ...mirrorLink(
         sketchId,
         ref(id, 'end'),
         ref(imageId, 'start'),
@@ -1425,7 +1432,10 @@ export function planSketchCircularPattern(
   const stepRad =
     ((full ? 360 / count : totalDeg / (count - 1)) * Math.PI) / 180;
   if (
-    source.curve.kind !== 'line' &&
+    // A partial arc about its own centre still sweeps new quadrants; only
+    // a full round turns onto itself.
+    (source.curve.kind === 'circle' ||
+      (source.curve.kind === 'arc' && source.curve.sweep >= TAU - 1e-9)) &&
     distance(source.curve.c, pivot) <= ON_CURVE
   ) {
     return {

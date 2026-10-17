@@ -506,6 +506,11 @@ describe('Mirror', () => {
         b: { objectId: image, point: 'start' }
       },
       {
+        constraintKind: 'point-on-object',
+        point: { objectId: source, point: 'start' },
+        objectId: axis
+      },
+      {
         constraintKind: 'symmetric',
         a: { objectId: source, point: 'end' },
         b: { objectId: image, point: 'end' },
@@ -756,6 +761,37 @@ describe('Patterns', () => {
       });
     }
     expect(plan(3)).toMatchObject({ status: 'commands' });
+  });
+
+  it('turns a partial arc about its own centre into distinct quadrants', () => {
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 5,
+        startAngleDeg: 0,
+        endAngleDeg: 90
+      }
+    ]);
+    commit(
+      planSketchCircularPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 0, y: 0 },
+        4,
+        360,
+        resolve
+      )
+    );
+    const copies = sketch().objectIds.map(String).slice(1);
+    expect(
+      copies.map((id) =>
+        Math.round((object(id) as { startAngleDeg: number }).startAngleDeg)
+      )
+    ).toEqual([90, 180, 270]);
   });
 
   it('refuses a round centred on the pivot', () => {

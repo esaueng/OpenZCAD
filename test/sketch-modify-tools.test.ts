@@ -158,6 +158,48 @@ describe('S05 modify tools on the pinned kernel', () => {
     expect(imageArc.centerY).toBeCloseTo(sourceArc.centerY!, 6);
   });
 
+  it('a mirrored end that starts on the axis stays on it, joined to its image', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      { objectKind: 'line', x1: 0, y1: 2, x2: 6, y2: 5 }
+    ]);
+    const [axis, line] = fixture.ids as [string, string];
+    fixture.constrain(lock(axis, 'start', 0, -10));
+    fixture.constrain(lock(axis, 'end', 0, 10));
+    fixture.commit(
+      planSketchMirror(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        line,
+        axis,
+        resolve
+      )
+    );
+    const image = fixture.sketch().objectIds.map(String).at(-1)!;
+    // Move the free end and lengthen the source: the joint must slide
+    // along the axis rather than leave it with its image.
+    fixture.constrain(lock(line, 'end', 7, 8));
+    fixture.constrain({
+      constraintKind: 'distance',
+      a: { objectId: line as EntityId, point: 'start' },
+      b: { objectId: line as EntityId, point: 'end' },
+      value: 10
+    });
+    const outcome = await fixture.solve();
+    expectGood(outcome);
+    const source = solved(outcome, line);
+    const mirrored = solved(outcome, image);
+    expect(source.x1).toBeCloseTo(0, 6);
+    expect(
+      Math.hypot(source.x2! - source.x1!, source.y2! - source.y1!)
+    ).toBeCloseTo(10, 6);
+    expect(mirrored.x1).toBeCloseTo(0, 6);
+    expect(mirrored.y1).toBeCloseTo(source.y1!, 6);
+    expect(mirrored.x2).toBeCloseTo(-7, 6);
+    expect(mirrored.y2).toBeCloseTo(8, 6);
+  });
+
   it('a split line stays one straight line whose cut ends ride their cutters', async () => {
     const fixture = sketchWith([
       { objectKind: 'line', x1: 0, y1: 0, x2: 30, y2: 0 },
