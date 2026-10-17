@@ -33,6 +33,10 @@ export function SketchPlanePrompt({
   onEnterSketch,
   onCancel
 }: SketchPlanePromptProps) {
+  // A datum reference holds no offset of its own, so a typed offset would be
+  // dropped without a word: datum buttons wait until it is back to zero.
+  const offset = Number(offsetText);
+  const offsetBlocksDatums = offsetText.trim() !== '' && offset !== 0;
   return (
     <div className="sketch-plane-prompt" role="status">
       <span>
@@ -65,7 +69,12 @@ export function SketchPlanePrompt({
               key={datum.featureId}
               type="button"
               aria-label={`Sketch on ${datum.name}`}
-              title={`Sketch on the datum plane ${datum.name}`}
+              disabled={offsetBlocksDatums}
+              title={
+                offsetBlocksDatums
+                  ? `The offset applies to the principal planes only. Set it to 0 to sketch on ${datum.name}, or make an offset plane from it.`
+                  : `Sketch on the datum plane ${datum.name}`
+              }
               onClick={() =>
                 onEnterSketch(
                   { type: 'datum', datumFeatureId: datum.featureId },

@@ -125,7 +125,27 @@ describe('Plane card (R01-C)', () => {
     );
     // A new plane starts on the face the user had picked.
     expect(screen.getByLabelText('Offset from')).toHaveDisplayValue(
-      'Picked face'
+      'Picked face 1'
+    );
+    // In Midplane, a second face picked with the card open becomes plane B
+    // and the first stays on offer as A.
+    fireEvent.click(screen.getByRole('button', { name: 'Midplane' }));
+    view.rerender(
+      <DatumPlaneCard
+        document={document}
+        editing={null}
+        scope={{}}
+        pickedFace={{ ...face, faceHash: 8 }}
+        onPreflight={vi.fn()}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByLabelText('Plane A')).toHaveDisplayValue(
+      'Picked face 1'
+    );
+    expect(screen.getByLabelText('Plane B')).toHaveDisplayValue(
+      'Picked face 2'
     );
     view.unmount();
     render(

@@ -12565,6 +12565,12 @@ export function App() {
     if (handleMeasurementPick(selection, additive, detail)) {
       return;
     }
+    // The Plane card asks for faces: a face click is its next source pick,
+    // not a selection that closes the card it was waiting for.
+    if (tool === 'datum-plane' && selection.kind === 'face') {
+      setSelectedTopology(selection);
+      return;
+    }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
     if (

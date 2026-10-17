@@ -86,12 +86,43 @@ export function DatumPlaneForm({
     },
     []
   );
-  const options =
+  // Every face picked while the card is open stays on offer, numbered in
+  // pick order, so a midplane can take two faces picked one after the other.
+  const [pickedFaces, setPickedFaces] = useState<DatumSourceOption[]>(() =>
     pickedFace && 'option' in pickedFace
-      ? sources.some((option) => option.key === pickedFace.option.key)
-        ? sources
-        : [...sources, pickedFace.option]
-      : sources;
+      ? [{ ...pickedFace.option, label: `${pickedFace.option.label} 1` }]
+      : []
+  );
+  const latestPick =
+    pickedFace && 'option' in pickedFace ? pickedFace.option : null;
+  const seenPick = useRef(latestPick?.key ?? null);
+  useEffect(() => {
+    if (!latestPick || latestPick.key === seenPick.current) return;
+    seenPick.current = latestPick.key;
+    const known = pickedFaces.find((face) => face.key === latestPick.key);
+    const option = known ?? {
+      ...latestPick,
+      label: `${latestPick.label} ${pickedFaces.length + 1}`
+    };
+    if (!known) setPickedFaces((faces) => [...faces, option]);
+    // A pick fills the slot the card is asking for: the offset source, or a
+    // midplane's empty B once A is set (else A).
+    epoch.current += 1;
+    setPreflight({ status: 'idle' });
+    setState((current) =>
+      current.mode === 'midplane' && current.sourceA && !current.sourceB
+        ? { ...current, sourceB: option.source }
+        : { ...current, sourceA: option.source }
+    );
+    // Only a new pick acts; the list and state it reads are this render's.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestPick?.key]);
+  const options = [
+    ...sources,
+    ...pickedFaces.filter(
+      (face) => !sources.some((option) => option.key === face.key)
+    )
+  ];
   const replace = (next: DatumPlaneFormState) => {
     epoch.current += 1;
     setPreflight({ status: 'idle' });
