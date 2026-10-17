@@ -920,6 +920,53 @@ describe('Trim', () => {
     expect((object(ids[0]!) as { x2: number }).x2).toBeCloseTo(500000, 3);
   });
 
+  it('ignores a cutter the profile builder discards as degenerate', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },
+      { objectKind: 'line', x1: 5, y1: -2.5e-7, x2: 5, y2: 2.5e-7 }
+    ]);
+    expect(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 8, y: 0 },
+        resolve
+      )
+    ).toMatchObject({
+      message: 'Trim removed the whole line: nothing crosses it.'
+    });
+  });
+
+  it('uses the profile builder’s parallel cutoff between tiny profile lines', () => {
+    // Two 3e-6 lines crossing at 0.1 rad: |denom| ≈ 9e-13 < (1e-6)², so the
+    // profile builder sees no crossing, and Trim must not either.
+    const a = 0.1;
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 3e-6, y2: 0 },
+      {
+        objectKind: 'line',
+        x1: 1.5e-6 - 1.5e-6 * Math.cos(a),
+        y1: -1.5e-6 * Math.sin(a),
+        x2: 1.5e-6 + 1.5e-6 * Math.cos(a),
+        y2: 1.5e-6 * Math.sin(a)
+      }
+    ]);
+    expect(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 2.5e-6, y: 0 },
+        resolve
+      )
+    ).toMatchObject({
+      message: 'Trim removed the whole line: nothing crosses it.'
+    });
+  });
+
   it('refuses a circle only one curve touches', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },

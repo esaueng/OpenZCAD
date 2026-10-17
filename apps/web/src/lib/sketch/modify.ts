@@ -322,7 +322,12 @@ export function curveCrossings(
   /** How far past its ends `first` may still touch, in model units. */
   tol = ON_CURVE,
   /** The same for `second`, which may sit at another scale (a guide). */
-  secondTol = tol
+  secondTol = tol,
+  /**
+   * Both curves are profile geometry, judged at this tolerance by the
+   * profile builder; its parallel cutoff then applies as well.
+   */
+  profileTol?: number
 ): Point2[] {
   // Where the two curves meet is judged at the tighter of the two.
   const touch = Math.min(tol, secondTol);
@@ -330,11 +335,14 @@ export function curveCrossings(
     const d1 = sub(first.b, first.a);
     const d2 = sub(second.b, second.a);
     const denom = cross(d1, d2);
-    // `denom` is |d1|·|d2|·sin θ: parallel is a test on the angle alone,
-    // so a long target and a short cutter are judged fairly.
+    // `denom` is |d1|·|d2|·sin θ: parallel is a test on the angle, so a
+    // long target and a short cutter are judged fairly. Between two profile
+    // curves the profile builder's own cutoff (`segSegIntersections`,
+    // |denom| < tol²) applies too, so tiny segments agree with it.
     if (
       Math.abs(denom) <=
-      Math.hypot(d1.x, d1.y) * Math.hypot(d2.x, d2.y) * 1e-12
+        Math.hypot(d1.x, d1.y) * Math.hypot(d2.x, d2.y) * 1e-12 ||
+      (profileTol !== undefined && Math.abs(denom) < profileTol * profileTol)
     ) {
       return [];
     }
@@ -740,6 +748,30 @@ interface Crossing {
   cutter: EntityId | null;
 }
 
+/** Entities the profile classifier rejects outright, by id. */
+function profileExcluded(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  resolve: Resolve
+): Set<string> {
+  const objects = sketch.objectIds.flatMap((objectId) => {
+    const data = sketchObject(document, sketch, objectId);
+    return data ? [{ id: String(objectId), data }] : [];
+  });
+  try {
+    return new Set(
+      computeSketchProfileAnalysis(
+        objects,
+        (value) => resolve(value) ?? Number.NaN
+      )
+        .diagnostics.filter((diagnostic) => diagnostic.severity === 'error')
+        .flatMap((diagnostic) => diagnostic.sourceEntityIds)
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 function crossingsOn(
   document: ProjectDocument,
   sketch: SketchNode,
@@ -751,6 +783,7 @@ function crossingsOn(
   targetConstruction: boolean
 ): Crossing[] {
   const profileTol = profileTolerance(document, sketch, [], resolve);
+  const excluded = profileExcluded(document, sketch, resolve);
   const crossings: Crossing[] = [];
   for (const objectId of sketch.objectIds) {
     if (objectId === targetId) {
@@ -760,10 +793,16 @@ function crossingsOn(
     if (!data) {
       continue;
     }
+    // Profile geometry the profile builder discards (degenerate, duplicate,
+    // overlapping, self-crossing) bounds nothing, so it cuts nothing either.
+    if (!data.construction && excluded.has(String(objectId))) {
+      continue;
+    }
     const constrainable =
       data.objectKind === 'line' ||
       data.objectKind === 'arc' ||
       data.objectKind === 'circle';
+    const profilePair = !data.construction && !targetConstruction;
     for (const cutter of cutterCurves(data, resolve)) {
       // A construction cutter keeps the fixed slack: it is not part of the
       // profile scale, so a scaled tolerance would reach past its ends.
@@ -773,7 +812,8 @@ function crossingsOn(
         tol,
         // A construction target never meets profile analysis, so neither
         // side of the pair gets the profile-scaled bound.
-        data.construction || targetConstruction ? ON_CURVE : profileTol
+        profilePair ? profileTol : ON_CURVE,
+        profilePair ? profileTol : undefined
       )) {
         crossings.push({
           param: curveParam(target, point),
