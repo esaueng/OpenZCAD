@@ -594,8 +594,14 @@ function remapCommands(
     }
     if (next) {
       restate.push(
+        // The same identity, so a placed dimension label stays where the
+        // user put it.
         commandFactories.addSketchConstraint(
-          { sketchId, constraint: next },
+          {
+            sketchId,
+            constraint: next,
+            ids: { constraintId: constraint.constraintId }
+          },
           'Restate trimmed geometry'
         )
       );

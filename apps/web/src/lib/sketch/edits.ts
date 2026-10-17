@@ -916,6 +916,11 @@ export function advanceSketchEditPick(
   context: SketchEditPickContext = {}
 ): SketchEditPickOutcome {
   const spec = sketchEditToolSpec(kind);
+  // A centre is not on its drawn curve, so a pivot snapped to one arrives
+  // with no hit object; the snap names it instead.
+  if (!objectId && kind === 'circular-pattern' && existing.length === 1) {
+    objectId = context.snapPoint?.objectId ?? null;
+  }
   if (!objectId || (kind === 'trim' && !context.at)) {
     return { status: 'hint', message: spec.hint };
   }

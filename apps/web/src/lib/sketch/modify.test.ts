@@ -415,6 +415,7 @@ describe('Trim', () => {
       objectId: circle as never,
       value: 5
     });
+    const radiusId = sketch().constraints!.at(-1)!.constraintId;
     constrain({
       constraintKind: 'tangent',
       a: other as never,
@@ -464,6 +465,12 @@ describe('Trim', () => {
         }
       ])
     );
+    // Restated relations keep their identity, so placed labels stay put.
+    expect(
+      (sketch().constraints ?? []).find(
+        (c) => c.data.constraintKind === 'radius'
+      )!.constraintId
+    ).toBe(radiusId);
     // The point-free tangent cannot name a contact point on the new arc.
     expect(constraints.some((c) => c.constraintKind === 'tangent')).toBe(false);
   });
@@ -1299,6 +1306,31 @@ describe('modify tool picking', () => {
       label: 'Pattern count',
       unitKind: 'count'
     });
+  });
+
+  it('takes a circular pivot from a centre snap that hit no curve', () => {
+    const { manager, ids, sketch } = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 5,
+        startAngleDeg: 0,
+        endAngleDeg: 90
+      }
+    ]);
+    const arc = ids[0]!;
+    expect(
+      advanceSketchEditPick(
+        manager.document,
+        sketch(),
+        'circular-pattern',
+        [arc],
+        null,
+        resolve,
+        { snapPoint: { objectId: arc, point: 'center' } }
+      )
+    ).toMatchObject({ status: 'value', picks: [arc, `${arc}#center`] });
   });
 
   it('collects a pattern’s two values before committing one transaction', async () => {
