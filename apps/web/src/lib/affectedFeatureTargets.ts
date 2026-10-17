@@ -4,6 +4,7 @@ import {
   type BodyId,
   type FeatureId,
   type FeatureKind,
+  type FeatureWarning,
   type ProjectDocument,
   type SketchId
 } from '@openzcad/shared';
@@ -258,7 +259,13 @@ export function reorderRefusal(
   document: ProjectDocument,
   derived: ProjectDocument['derived'],
   featureId: FeatureId,
-  toIndex: number
+  toIndex: number,
+  /**
+   * Attribution for `document.derived`, which the saved document does not
+   * carry. Without it a warning counts as a prior failure only when no other
+   * feature shares its name, so a healthy namesake is still checked.
+   */
+  beforeWarnings?: readonly FeatureWarning[]
 ): FeatureBuildError | null {
   const features = listFeaturesInOrder(document);
   const from = features.findIndex((feature) => feature.featureId === featureId);
@@ -273,17 +280,23 @@ export function reorderRefusal(
     ]);
   }
   const before = document.derived;
+  const named = new Map<string, number>();
+  for (const feature of features)
+    named.set(feature.name, (named.get(feature.name) ?? 0) + 1);
+  const failedBefore = (feature: (typeof features)[number]): boolean =>
+    beforeWarnings
+      ? Boolean(
+          refusingWarningDetail(
+            feature.name,
+            before?.warnings ?? [],
+            beforeWarnings,
+            feature.featureId
+          )
+        )
+      : named.get(feature.name) === 1 &&
+        Boolean(refusingWarningDetail(feature.name, before?.warnings ?? []));
   for (const feature of reordered.slice(Math.min(from, toIndex))) {
-    if (
-      isFeatureSuppressed(feature) ||
-      refusingWarningDetail(
-        feature.name,
-        before?.warnings ?? [],
-        before?.featureWarnings,
-        feature.featureId
-      )
-    )
-      continue;
+    if (isFeatureSuppressed(feature) || failedBefore(feature)) continue;
     const rejection = validatedFeatureRejection({
       featureName: feature.name,
       featureId: feature.featureId,

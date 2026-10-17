@@ -377,4 +377,60 @@ describe('affected feature targets', () => {
       message: 'The operation did not produce its result body.'
     });
   });
+
+  it('judges prior failures by identity, not a shared name', () => {
+    const first = addPrimitiveFeature(
+      createProjectDocument('Namesakes', toUserId('user_affected')),
+      {
+        name: 'Twin',
+        primitiveKind: 'box',
+        dimensions: { width: 8, height: 8, depth: 8 }
+      }
+    );
+    const document = addPrimitiveFeature(first, {
+      name: 'Twin',
+      primitiveKind: 'box',
+      dimensions: { width: 4, height: 4, depth: 4 }
+    });
+    const [failing, healthy] = listFeaturesInOrder(document);
+    const warning = (feature: typeof failing) => ({
+      featureId: feature!.featureId,
+      featureName: 'Twin',
+      message: 'Feature "Twin": Box dimensions must be positive.',
+      kind: 'build-failed' as const
+    });
+    const bodies = Object.fromEntries(
+      document.bodyOrder.map((bodyId) => [bodyId, {}])
+    ) as unknown as ProjectDocument['derived']['bodyRepresentations'];
+    const before = {
+      ...document,
+      derived: {
+        ...document.derived,
+        bodyRepresentations: bodies,
+        warnings: [warning(failing).message]
+      }
+    };
+    const candidate: ProjectDocument['derived'] = {
+      ...before.derived,
+      warnings: [warning(failing).message, warning(healthy).message],
+      featureWarnings: [warning(failing), warning(healthy)]
+    };
+
+    // The saved model's warning names "Twin" without saying which one. With
+    // the session's attribution, only the first is a prior failure; without
+    // it, neither namesake can be assumed to have failed.
+    for (const prior of [[warning(failing)], undefined])
+      expect(
+        reorderRefusal(before, candidate, healthy!.featureId, 0, prior)
+      ).toMatchObject({ featureId: healthy!.featureId });
+    expect(
+      reorderRefusal(
+        before,
+        { ...candidate, featureWarnings: [warning(failing)] },
+        healthy!.featureId,
+        0,
+        [warning(failing)]
+      )
+    ).toBeNull();
+  });
 });

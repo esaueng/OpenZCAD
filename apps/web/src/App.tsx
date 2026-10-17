@@ -17384,13 +17384,19 @@ export function App() {
       return;
     }
     let failed = '';
+    const attribution =
+      featureAttribution && featureAttribution.derived === base?.derived
+        ? featureAttribution.featureWarnings
+        : undefined;
     void validatedFeature.runTransaction([command], {
       label,
       // Compared with the current model in `reorderRefusal`, so a failure the
       // design already has does not block the move.
       targets: [],
       validateDerived: (derived) => {
-        const refusal = base && reorderRefusal(base, derived, featureId, toIndex);
+        const refusal =
+          base &&
+          reorderRefusal(base, derived, featureId, toIndex, attribution);
         if (!refusal) return;
         failed = `: ${refusal.featureName} would not rebuild`;
         throw refusal;
