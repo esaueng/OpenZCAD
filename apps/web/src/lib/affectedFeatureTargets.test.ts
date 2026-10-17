@@ -433,4 +433,56 @@ describe('affected feature targets', () => {
       )
     ).toBeNull();
   });
+
+  it('does not take an unattributed advisory for a prior failure', () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Advisory', toUserId('user_affected')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 8, height: 8, depth: 2 }
+      }
+    );
+    const sketched = addSketchFeature(document, {
+      name: 'Mark',
+      plane: 'XY',
+      offset: 2,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 }
+    }).document;
+    const [plate, mark] = listFeaturesInOrder(sketched);
+    const bodyRepresentations = {
+      [sketched.bodyOrder[0]!]: {}
+    } as unknown as ProjectDocument['derived']['bodyRepresentations'];
+    const failure = {
+      featureId: plate!.featureId,
+      featureName: 'Plate',
+      message: 'Feature "Plate": Box dimensions must be positive.',
+      kind: 'build-failed' as const
+    };
+    const candidate: ProjectDocument['derived'] = {
+      ...sketched.derived,
+      bodyRepresentations,
+      warnings: [failure.message],
+      featureWarnings: [failure]
+    };
+    const reopened = (warning: string) => ({
+      ...sketched,
+      derived: { ...candidate, featureWarnings: undefined, warnings: [warning] }
+    });
+
+    // A saved advisory under the same prefix is not the failure the
+    // candidate reports, so the move is still refused.
+    expect(
+      reorderRefusal(
+        reopened('Feature "Plate": Curves came back faceted.'),
+        candidate,
+        mark!.featureId,
+        0
+      )
+    ).toMatchObject({ featureId: plate!.featureId });
+    // The identical failure is one the model already had.
+    expect(
+      reorderRefusal(reopened(failure.message), candidate, mark!.featureId, 0)
+    ).toBeNull();
+  });
 });

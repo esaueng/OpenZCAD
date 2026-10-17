@@ -262,8 +262,8 @@ export function reorderRefusal(
   toIndex: number,
   /**
    * Attribution for `document.derived`, which the saved document does not
-   * carry. Without it a warning counts as a prior failure only when no other
-   * feature shares its name, so a healthy namesake is still checked.
+   * carry. Without it only the candidate's exact failure warning, on a feature
+   * no other shares its name with, counts as a prior failure.
    */
   beforeWarnings?: readonly FeatureWarning[]
 ): FeatureBuildError | null {
@@ -283,6 +283,21 @@ export function reorderRefusal(
   const named = new Map<string, number>();
   for (const feature of features)
     named.set(feature.name, (named.get(feature.name) ?? 0) + 1);
+  // Without typed attribution a saved warning cannot say whether it was a
+  // failure or an advisory, so only the exact failure the candidate reports,
+  // on a uniquely named feature, counts as one the model already had.
+  const candidateFailures = (feature: (typeof features)[number]): string[] =>
+    derived.featureWarnings
+      ? derived.featureWarnings
+          .filter(
+            (entry) =>
+              entry.featureId === feature.featureId &&
+              (entry.kind === 'build-failed' || entry.kind === 'refusal')
+          )
+          .map((entry) => entry.message)
+      : derived.warnings.filter((warning) =>
+          warning.startsWith(`Feature "${feature.name}":`)
+        );
   const failedBefore = (feature: (typeof features)[number]): boolean =>
     beforeWarnings
       ? Boolean(
@@ -294,9 +309,11 @@ export function reorderRefusal(
           )
         )
       : named.get(feature.name) === 1 &&
-        Boolean(refusingWarningDetail(feature.name, before?.warnings ?? []));
+        candidateFailures(feature).some((message) =>
+          (before?.warnings ?? []).includes(message)
+        );
   for (const feature of reordered.slice(Math.min(from, toIndex))) {
-    if (isFeatureSuppressed(feature) || failedBefore(feature)) continue;
+    if (isFeatureSuppressed(feature)) continue;
     const rejection = validatedFeatureRejection({
       featureName: feature.name,
       featureId: feature.featureId,
@@ -309,7 +326,7 @@ export function reorderRefusal(
       ),
       documentMoved: false
     });
-    if (rejection) {
+    if (rejection && !failedBefore(feature)) {
       return new FeatureBuildError(
         rejection.message,
         feature.featureId,
