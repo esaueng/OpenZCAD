@@ -1136,8 +1136,10 @@ function heldOnAxis(
   point: SketchPointRef,
   axisId: EntityId
 ): boolean {
-  const same = (ref: SketchPointRef) =>
-    ref.objectId === point.objectId && ref.point === point.point;
+  // Everything joined to the point by coincidences is the same point to
+  // the solver, so a relation on any of them already holds it.
+  const joined = coincidentComponent(sketch, point);
+  const same = (ref: SketchPointRef) => joined.has(pointKey(ref));
   const fixed = fixedPoints(sketch);
   const isFixed = (ref: SketchPointRef) => fixed.has(pointKey(ref));
   // A fixed point on a fixed axis already satisfies the axis condition, so
@@ -1150,21 +1152,45 @@ function heldOnAxis(
   ) {
     return true;
   }
-  return constraintsOf(sketch).some(({ data }) => {
-    switch (data.constraintKind) {
-      case 'point-on-object':
-        return same(data.point) && data.objectId === axisId;
-      case 'midpoint':
-        return same(data.point) && data.line === axisId;
-      case 'coincident':
-        return (
-          (same(data.a) && data.b.objectId === axisId) ||
-          (same(data.b) && data.a.objectId === axisId)
-        );
-      default:
-        return false;
+  return (
+    constraintsOf(sketch).some(({ data }) => {
+      switch (data.constraintKind) {
+        case 'point-on-object':
+          return same(data.point) && data.objectId === axisId;
+        case 'midpoint':
+          return same(data.point) && data.line === axisId;
+        default:
+          return false;
+      }
+    }) ||
+    // Joined to an axis end.
+    [...joined].some((key) => key.startsWith(`${axisId}:`))
+  );
+}
+
+/** The point and every point a chain of coincidences joins it to. */
+function coincidentComponent(
+  sketch: SketchNode,
+  point: SketchPointRef
+): Set<string> {
+  const component = new Set([pointKey(point)]);
+  const joins = constraintsOf(sketch).flatMap(({ data }) =>
+    data.constraintKind === 'coincident'
+      ? [[pointKey(data.a), pointKey(data.b)] as const]
+      : []
+  );
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [a, b] of joins) {
+      if (component.has(a) !== component.has(b)) {
+        component.add(a);
+        component.add(b);
+        grew = true;
+      }
     }
-  });
+  }
+  return component;
 }
 
 function pointKey(ref: SketchPointRef): string {

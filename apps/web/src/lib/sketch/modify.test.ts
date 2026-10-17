@@ -647,6 +647,41 @@ describe('Mirror', () => {
     ]);
   });
 
+  it('reuses an axis relation held through a coincident neighbour', () => {
+    const { manager, sketchId, ids, sketch, commit, constrain } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      { objectKind: 'line', x1: 0, y1: 2, x2: 6, y2: 5 },
+      { objectKind: 'line', x1: -3, y1: 6, x2: 0, y2: 2 }
+    ]);
+    const [axis, source, neighbour] = ids as [string, string, string];
+    constrain({
+      constraintKind: 'coincident',
+      a: { objectId: source as never, point: 'start' },
+      b: { objectId: neighbour as never, point: 'end' }
+    });
+    constrain({
+      constraintKind: 'point-on-object',
+      point: { objectId: neighbour as never, point: 'end' },
+      objectId: axis as never
+    });
+    commit(
+      planSketchMirror(
+        manager.document,
+        sketch(),
+        sketchId,
+        source,
+        axis,
+        resolve
+      )
+    );
+    expect(kinds(sketch().constraints ?? [])).toEqual([
+      'coincident',
+      'coincident',
+      'point-on-object',
+      'symmetric'
+    ]);
+  });
+
   it('ties a locked on-axis point to the axis unless the axis is locked too', () => {
     const fixture = () => {
       const made = sketchWith([
