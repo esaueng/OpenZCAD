@@ -227,25 +227,30 @@ function distance(a: Point2, b: Point2): number {
 }
 
 /** True when `point` (already on the curve's circle) lies inside the arc. */
-function withinArc(curve: Curve2, point: Point2): boolean {
+function withinArc(curve: Curve2, point: Point2, tol = ON_CURVE): boolean {
   if (curve.kind !== 'arc') {
     return true;
   }
   const offset = normalizeAngle(
     Math.atan2(point.y - curve.c.y, point.x - curve.c.x) - curve.start
   );
-  const slack = ON_CURVE / curve.r;
+  const slack = tol / curve.r;
   return offset <= curve.sweep + slack || offset >= TAU - slack;
 }
 
-function withinSegment(a: Point2, b: Point2, point: Point2): boolean {
+function withinSegment(
+  a: Point2,
+  b: Point2,
+  point: Point2,
+  tol = ON_CURVE
+): boolean {
   const ab = sub(b, a);
   const length = Math.hypot(ab.x, ab.y);
   if (length === 0) {
     return false;
   }
   const t = dot(sub(point, a), ab) / (length * length);
-  const slack = ON_CURVE / length;
+  const slack = tol / length;
   return t >= -slack && t <= 1 + slack;
 }
 
@@ -253,7 +258,8 @@ function lineCircleCrossings(
   a: Point2,
   b: Point2,
   c: Point2,
-  r: number
+  r: number,
+  tol = ON_CURVE
 ): Point2[] {
   const d = sub(b, a);
   const f = sub(a, c);
@@ -268,7 +274,7 @@ function lineCircleCrossings(
   // is one crossing at the foot of the perpendicular.
   const foot = -qb / (2 * qa);
   const footPoint = { x: a.x + d.x * foot, y: a.y + d.y * foot };
-  if (Math.abs(distance(footPoint, c) - r) <= ON_CURVE) {
+  if (Math.abs(distance(footPoint, c) - r) <= tol) {
     disc = Math.max(disc, 0);
   }
   if (disc < 0) {
@@ -284,10 +290,11 @@ function circleCircleCrossings(
   c1: Point2,
   r1: number,
   c2: Point2,
-  r2: number
+  r2: number,
+  tol = ON_CURVE
 ): Point2[] {
   const d = distance(c1, c2);
-  if (d === 0 || d > r1 + r2 + ON_CURVE || d < Math.abs(r1 - r2) - ON_CURVE) {
+  if (d === 0 || d > r1 + r2 + tol || d < Math.abs(r1 - r2) - tol) {
     return [];
   }
   const along = (d * d + r1 * r1 - r2 * r2) / (2 * d);
@@ -295,7 +302,7 @@ function circleCircleCrossings(
   const ux = (c2.x - c1.x) / d;
   const uy = (c2.y - c1.y) / d;
   const mid = { x: c1.x + ux * along, y: c1.y + uy * along };
-  if (h <= ON_CURVE) {
+  if (h <= tol) {
     return [mid];
   }
   return [
@@ -305,7 +312,12 @@ function circleCircleCrossings(
 }
 
 /** Points where two curves cross or touch, bounded to both curves. */
-export function curveCrossings(first: Curve2, second: Curve2): Point2[] {
+export function curveCrossings(
+  first: Curve2,
+  second: Curve2,
+  /** How far apart two curves may be and still touch, in model units. */
+  tol = ON_CURVE
+): Point2[] {
   if (first.kind === 'line' && second.kind === 'line') {
     const d1 = sub(first.b, first.a);
     const d2 = sub(second.b, second.a);
@@ -317,8 +329,8 @@ export function curveCrossings(first: Curve2, second: Curve2): Point2[] {
     const delta = sub(second.a, first.a);
     const t = cross(delta, d2) / denom;
     const point = { x: first.a.x + d1.x * t, y: first.a.y + d1.y * t };
-    return withinSegment(first.a, first.b, point) &&
-      withinSegment(second.a, second.b, point)
+    return withinSegment(first.a, first.b, point, tol) &&
+      withinSegment(second.a, second.b, point, tol)
       ? [point]
       : [];
   }
@@ -326,12 +338,20 @@ export function curveCrossings(first: Curve2, second: Curve2): Point2[] {
     const [line, round] = (
       first.kind === 'line' ? [first, second] : [second, first]
     ) as [Extract<Curve2, { kind: 'line' }>, Exclude<Curve2, { kind: 'line' }>];
-    return lineCircleCrossings(line.a, line.b, round.c, round.r).filter(
-      (point) => withinSegment(line.a, line.b, point) && withinArc(round, point)
+    return lineCircleCrossings(line.a, line.b, round.c, round.r, tol).filter(
+      (point) =>
+        withinSegment(line.a, line.b, point, tol) &&
+        withinArc(round, point, tol)
     );
   }
-  return circleCircleCrossings(first.c, first.r, second.c, second.r).filter(
-    (point) => withinArc(first, point) && withinArc(second, point)
+  return circleCircleCrossings(
+    first.c,
+    first.r,
+    second.c,
+    second.r,
+    tol
+  ).filter(
+    (point) => withinArc(first, point, tol) && withinArc(second, point, tol)
   );
 }
 
@@ -672,7 +692,8 @@ function crossingsOn(
   sketch: SketchNode,
   targetId: EntityId,
   target: Curve2,
-  resolve: Resolve
+  resolve: Resolve,
+  tol: number
 ): Crossing[] {
   const crossings: Crossing[] = [];
   for (const objectId of sketch.objectIds) {
@@ -688,7 +709,7 @@ function crossingsOn(
       data.objectKind === 'arc' ||
       data.objectKind === 'circle';
     for (const cutter of cutterCurves(data, resolve)) {
-      for (const point of curveCrossings(target, cutter)) {
+      for (const point of curveCrossings(target, cutter, tol)) {
         crossings.push({
           param: curveParam(target, point),
           cutter: constrainable ? objectId : null
@@ -789,7 +810,10 @@ export function planSketchTrim(
     };
   }
   const id = objectId as EntityId;
-  const crossings = crossingsOn(document, sketch, id, curve, resolve);
+  // The profile builder's tolerance, so a cutter it treats as touching the
+  // target cuts here too (a guide keeps the fixed slack).
+  const tol = trimTolerance(document, sketch, data, resolve);
+  const crossings = crossingsOn(document, sketch, id, curve, resolve, tol);
 
   if (curve.kind === 'circle') {
     return trimCircle(
@@ -800,16 +824,12 @@ export function planSketchTrim(
       curve,
       crossings,
       at,
-      Math.max(
-        PARAM_EPS * TAU,
-        trimTolerance(document, sketch, data, resolve) / curve.r
-      )
+      Math.max(PARAM_EPS * TAU, tol / curve.r)
     );
   }
   const span = curve.kind === 'line' ? 1 : curve.sweep;
   // A crossing closer to an end than the profile builder's tolerance would
   // leave a fragment it calls degenerate, so it counts as that end.
-  const tol = trimTolerance(document, sketch, data, resolve);
   const eps =
     curve.kind === 'line'
       ? Math.max(PARAM_EPS, tol / distance(curve.a, curve.b))

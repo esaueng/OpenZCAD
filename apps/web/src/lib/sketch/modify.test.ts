@@ -572,6 +572,26 @@ describe('Trim', () => {
     expect(arc.endAngleDeg).toBe(500);
   });
 
+  it('cuts at a cutter that stops within the profile tolerance', () => {
+    // The vertical ends 5e-7 short of the line; the profile builder still
+    // joins them at its 1e-6 tolerance, so Trim must cut there.
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },
+      { objectKind: 'line', x1: 5, y1: 5e-7, x2: 5, y2: 5 }
+    ]);
+    commit(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 8, y: 0 },
+        resolve
+      )
+    );
+    expect(object(ids[0]!)).toMatchObject({ x1: 0, x2: 5 });
+  });
+
   it('treats a crossing within the profile tolerance of an end as that end', () => {
     // The vertical crosses 5e-7 from the line's start: cutting there would
     // leave a fragment the profile builder calls degenerate.
