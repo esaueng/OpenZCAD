@@ -47,15 +47,30 @@ function readAll(storage: StorageLike | null): Record<string, SavedView[]> {
   }
 }
 
+const isVector = (value: unknown): boolean =>
+  Array.isArray(value) &&
+  value.length === 3 &&
+  value.every((n) => typeof n === 'number' && Number.isFinite(n));
+
+const isPositive = (value: unknown): boolean =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0;
+
+/**
+ * A malformed entry would hand the camera NaN transforms and leave the
+ * viewport unusable, so anything short of finite three-number vectors and a
+ * finite positive zoom is dropped rather than offered.
+ */
 function isSavedView(value: unknown): value is SavedView {
   const view = value as SavedView | null;
   return Boolean(
     view &&
     typeof view.id === 'string' &&
     typeof view.name === 'string' &&
-    Array.isArray(view.camera?.position) &&
-    Array.isArray(view.camera?.target) &&
-    typeof view.camera?.orthographicZoom === 'number' &&
+    isVector(view.camera?.position) &&
+    isVector(view.camera?.target) &&
+    isPositive(view.camera?.orthographicZoom) &&
+    (view.camera.orthographicHalfHeight === undefined ||
+      isPositive(view.camera.orthographicHalfHeight)) &&
     (view.projection === 'perspective' || view.projection === 'orthographic')
   );
 }

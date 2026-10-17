@@ -86,6 +86,37 @@ describe('saved views (ZC-115)', () => {
       })
     );
     expect(loadSavedViews('p1', storage).map((v) => v.id)).toEqual(['a']);
+    // Vectors and zoom that would give the camera NaN transforms are dropped.
+    const valid = { ...pose(1), name: 'View 1', savedAt: 1 };
+    storage.setItem(
+      SAVED_VIEWS_STORAGE_KEY,
+      JSON.stringify({
+        p1: [
+          {
+            ...valid,
+            id: 'short',
+            camera: { ...valid.camera, position: [1, 2] }
+          },
+          {
+            ...valid,
+            id: 'text',
+            camera: { ...valid.camera, target: ['0', 0, 0] }
+          },
+          {
+            ...valid,
+            id: 'zero',
+            camera: { ...valid.camera, orthographicZoom: 0 }
+          },
+          {
+            ...valid,
+            id: 'inf',
+            camera: { ...valid.camera, orthographicZoom: null }
+          },
+          { ...valid, id: 'ok' }
+        ]
+      })
+    );
+    expect(loadSavedViews('p1', storage).map((v) => v.id)).toEqual(['ok']);
     expect(saveView('p1', pose(1), { storage: null })).toMatchObject({
       ok: false
     });
