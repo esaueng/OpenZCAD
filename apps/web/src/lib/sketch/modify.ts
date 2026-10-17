@@ -1122,8 +1122,8 @@ function curvesOverlap(first: Curve2, second: Curve2): boolean {
 
 /**
  * True when a relation already keeps this point on the axis line: held on
- * it, at its midpoint, or joined to one of its ends — or locked, where it
- * already sits on the axis and any further equation on it is redundant.
+ * it, at its midpoint, or joined to one of its ends — or locked on an axis
+ * whose ends are locked too, where any further equation is redundant.
  */
 function heldOnAxis(
   sketch: SketchNode,
@@ -1132,6 +1132,14 @@ function heldOnAxis(
 ): boolean {
   const same = (ref: SketchPointRef) =>
     ref.objectId === point.objectId && ref.point === point.point;
+  const axisLocked = (['start', 'end'] as const).every((end) =>
+    constraintsOf(sketch).some(
+      ({ data }) =>
+        data.constraintKind === 'lock' &&
+        data.point.objectId === axisId &&
+        data.point.point === end
+    )
+  );
   return constraintsOf(sketch).some(({ data }) => {
     switch (data.constraintKind) {
       case 'point-on-object':
@@ -1139,7 +1147,9 @@ function heldOnAxis(
       case 'midpoint':
         return same(data.point) && data.line === axisId;
       case 'lock':
-        return same(data.point);
+        // Only redundant when the axis cannot move either; with a free axis
+        // the relation is what keeps the axis through the locked joint.
+        return same(data.point) && axisLocked;
       case 'coincident':
         return (
           (same(data.a) && data.b.objectId === axisId) ||

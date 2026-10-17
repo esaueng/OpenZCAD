@@ -640,30 +640,56 @@ describe('Mirror', () => {
     ]);
   });
 
-  it('adds no axis relation to a locked on-axis point', () => {
-    const { manager, sketchId, ids, sketch, commit, constrain } = sketchWith([
-      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
-      { objectKind: 'line', x1: 0, y1: 2, x2: 6, y2: 5 }
-    ]);
-    const [axis, source] = ids as [string, string];
-    constrain({
-      constraintKind: 'lock',
-      point: { objectId: source as never, point: 'start' },
-      x: 0,
-      y: 2
-    });
-    commit(
-      planSketchMirror(
-        manager.document,
-        sketch(),
-        sketchId,
-        source,
-        axis,
-        resolve
-      )
-    );
-    expect(kinds(sketch().constraints ?? [])).toEqual([
+  it('ties a locked on-axis point to the axis unless the axis is locked too', () => {
+    const fixture = () => {
+      const made = sketchWith([
+        { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+        { objectKind: 'line', x1: 0, y1: 2, x2: 6, y2: 5 }
+      ]);
+      made.constrain({
+        constraintKind: 'lock',
+        point: { objectId: made.ids[1] as never, point: 'start' },
+        x: 0,
+        y: 2
+      });
+      return made;
+    };
+    const mirrorKinds = (made: ReturnType<typeof fixture>) => {
+      made.commit(
+        planSketchMirror(
+          made.manager.document,
+          made.sketch(),
+          made.sketchId,
+          made.ids[1]!,
+          made.ids[0]!,
+          resolve
+        )
+      );
+      return kinds(made.sketch().constraints ?? []);
+    };
+    // A movable axis still needs the relation to stay through the joint.
+    expect(mirrorKinds(fixture())).toEqual([
       'coincident',
+      'lock',
+      'point-on-object',
+      'symmetric'
+    ]);
+    const fixed = fixture();
+    for (const [point, y] of [
+      ['start', -10],
+      ['end', 10]
+    ] as const) {
+      fixed.constrain({
+        constraintKind: 'lock',
+        point: { objectId: fixed.ids[0] as never, point },
+        x: 0,
+        y
+      });
+    }
+    expect(mirrorKinds(fixed)).toEqual([
+      'coincident',
+      'lock',
+      'lock',
       'lock',
       'symmetric'
     ]);
