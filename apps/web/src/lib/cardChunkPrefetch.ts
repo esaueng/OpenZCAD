@@ -22,7 +22,10 @@ export const COMMAND_CARD_CHUNKS: readonly (() => Promise<unknown>)[] = [
   () => import('../components/forms/ModelingOperationsForm'),
   // The region Extrude editor and the selection's direct edits.
   () => import('../components/ToolCard'),
-  () => import('../components/MoveOverlay')
+  () => import('../components/MoveOverlay'),
+  // The Sketch tool's plane chooser and the Plane card.
+  () => import('../components/SketchPlanePrompt'),
+  () => import('../components/forms/DatumPlaneForm')
 ];
 
 /** Long enough for the workspace's own first frames to go first. */

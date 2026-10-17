@@ -18,7 +18,11 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import { CommandManager, commandFactories } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandFactories,
+  replayCommands
+} from '@openzcad/command-system';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
@@ -476,5 +480,42 @@ describe('R01 datum planes in the exact build', () => {
       /datum plane "Lid plane" because it is unavailable/
     );
     expect(derived.bodyRepresentations[padded.bodyId]).toBeUndefined();
+  });
+});
+
+describe('feature.datum-plane command (R01-C)', () => {
+  it('replays a Plane card commit to the same datum id and definition', () => {
+    const manager = new CommandManager(blank('Datum replay'));
+    const command = commandFactories.addDatumPlane({
+      name: 'Lid plane',
+      definition: { kind: 'offset', source: xy(), offset: 'lid' }
+    });
+    manager.execute(command);
+    const featureId = command.payload.ids!.featureId;
+    const replayed = replayCommands(blank('Datum replay'), [
+      command.serialize()
+    ]);
+    const feature = listFeaturesInOrder(replayed).find(
+      (candidate) => candidate.featureId === featureId
+    );
+    expect(feature?.name).toBe('Lid plane');
+    expect(feature?.data).toEqual({
+      featureKind: 'datum-plane',
+      definition: { kind: 'offset', source: xy(), offset: 'lid' }
+    });
+  });
+
+  it('refuses a definition that names a datum not yet in history', () => {
+    const command = commandFactories.addDatumPlane({
+      name: 'Orphan',
+      definition: {
+        kind: 'offset',
+        source: datum('feat_missing' as FeatureId),
+        offset: 1
+      }
+    });
+    expect(() => command.validate(blank())).toThrow(
+      'No datum plane feat_missing exists.'
+    );
   });
 });

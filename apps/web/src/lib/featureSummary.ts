@@ -114,6 +114,12 @@ export function featureValueSummary(
       return length(data.thickness);
     case 'solid-offset':
       return length(data.distance);
+    case 'datum-plane': {
+      const flip = data.definition.reverseNormal ? ' flipped' : '';
+      if (data.definition.kind === 'midplane') return `midplane${flip}`;
+      const offset = length(data.definition.offset);
+      return offset === null ? null : `${offset}${flip}`;
+    }
     case 'draft': {
       const angle = num(data.angleDeg);
       return angle === null ? null : `${angle}°`;

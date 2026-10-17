@@ -5,7 +5,8 @@ import {
   type FormEvent,
   type ReactNode
 } from 'react';
-import type { BodyId } from '@openzcad/shared';
+import type { BodyId, FeatureId, ProjectDocument } from '@openzcad/shared';
+import { earlierDatumPlanes } from '../../lib/datumPlaneDisplay';
 import { ExprInput } from '../ExprInput';
 import { previewExpression } from '../../lib/model';
 import type { BodyOption } from './FeatureForms';
@@ -48,6 +49,17 @@ export interface ModelingOperationsFormProps {
   faceOptions?: ModelingFaceOption[];
   profileOptions?: ModelingProfileOption[];
   pathOptions?: ModelingPathOption[];
+  /**
+   * R01 datum planes Mirror and Split may use instead of numbers: the
+   * resolved datums earlier than the feature (all of them for a new one).
+   */
+  datumOptions?: readonly { featureId: FeatureId; label: string }[];
+  /**
+   * Or the document to list them from, with the feature they must precede
+   * (null for a new one); used when `datumOptions` is absent.
+   */
+  datumDocument?: ProjectDocument | null;
+  datumBefore?: FeatureId | null;
   initialTarget?: BodyId;
   initial?: ModelingOperationFormState;
   /** The form reopens an existing feature; the submit reads Apply, not Create. */
@@ -360,9 +372,12 @@ const PRINCIPAL_PLANES: readonly {
 
 function PlaneChips({
   normal,
+  datumSelected = false,
   onChoose
 }: {
   normal: { x: string; y: string; z: string };
+  /** A datum plane is chosen instead, so no principal plane is. */
+  datumSelected?: boolean;
   onChoose(normal: { x: string; y: string; z: string }): void;
 }) {
   return (
@@ -371,6 +386,7 @@ function PlaneChips({
       <div className="plane-chips" role="group" aria-label="Principal planes">
         {PRINCIPAL_PLANES.map((plane) => {
           const active =
+            !datumSelected &&
             Number(normal.x) === Number(plane.normal.x) &&
             Number(normal.y) === Number(plane.normal.y) &&
             Number(normal.z) === Number(plane.normal.z);
@@ -524,6 +540,9 @@ export function ModelingOperationsForm({
   faceOptions = [],
   profileOptions = [],
   pathOptions = [],
+  datumOptions: givenDatumOptions,
+  datumDocument = null,
+  datumBefore = null,
   initialTarget,
   editing = false,
   initial,
@@ -540,6 +559,15 @@ export function ModelingOperationsForm({
 }: ModelingOperationsFormProps) {
   const defaultTarget =
     initialTarget ?? bodies.find((body) => !body.consumed)?.bodyId ?? '';
+  const datumOptions =
+    givenDatumOptions ??
+    (datumDocument && (operation === 'mirror' || operation === 'split')
+      ? earlierDatumPlanes(datumDocument, datumBefore)
+          .filter(
+            (datum) => datumDocument.derived.datumFrames?.[datum.featureId]
+          )
+          .map((datum) => ({ featureId: datum.featureId, label: datum.name }))
+      : []);
   const [state, setState] = useState<ModelingOperationFormState>(() =>
     initialState(operation, defaultTarget, profileOptions, pathOptions, initial)
   );
@@ -1131,26 +1159,80 @@ export function ModelingOperationsForm({
         <>
           <PlaneChips
             normal={state.value.normal}
-            onChoose={(normal) =>
-              replaceState({ ...state, value: { ...state.value, normal } })
-            }
+            datumSelected={state.value.datumFeatureId !== undefined}
+            onChoose={(normal) => {
+              const { datumFeatureId: _datum, ...value } = state.value;
+              replaceState({ ...state, value: { ...value, normal } });
+            }}
           />
-          <VectorFields
-            legend="Plane origin"
-            value={state.value.origin}
-            scope={scope}
-            onChange={(origin) =>
-              replaceState({ ...state, value: { ...state.value, origin } })
-            }
-          />
-          <VectorFields
-            legend="Plane normal"
-            value={state.value.normal}
-            scope={scope}
-            onChange={(normal) =>
-              replaceState({ ...state, value: { ...state.value, normal } })
-            }
-          />
+          {datumOptions.length > 0 ||
+          state.value.datumFeatureId !== undefined ? (
+            <div className="field">
+              <span>Datum plane</span>
+              <div
+                className="plane-chips"
+                role="group"
+                aria-label="Datum planes"
+              >
+                {datumOptions.map((datum) => (
+                  <button
+                    key={datum.featureId}
+                    type="button"
+                    className="plane-chip"
+                    aria-pressed={
+                      state.value.datumFeatureId === datum.featureId
+                    }
+                    onClick={() =>
+                      replaceState({
+                        ...state,
+                        value: {
+                          ...state.value,
+                          datumFeatureId: datum.featureId
+                        }
+                      })
+                    }
+                  >
+                    {datum.label}
+                  </button>
+                ))}
+                {state.value.datumFeatureId !== undefined &&
+                !datumOptions.some(
+                  (datum) => datum.featureId === state.value.datumFeatureId
+                ) ? (
+                  // Kept by id, never re-derived: an edited feature whose
+                  // datum no longer resolves still says what it was built on.
+                  <button
+                    type="button"
+                    className="plane-chip"
+                    aria-pressed
+                    disabled
+                  >
+                    Unavailable datum
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {state.value.datumFeatureId === undefined ? (
+            <>
+              <VectorFields
+                legend="Plane origin"
+                value={state.value.origin}
+                scope={scope}
+                onChange={(origin) =>
+                  replaceState({ ...state, value: { ...state.value, origin } })
+                }
+              />
+              <VectorFields
+                legend="Plane normal"
+                value={state.value.normal}
+                scope={scope}
+                onChange={(normal) =>
+                  replaceState({ ...state, value: { ...state.value, normal } })
+                }
+              />
+            </>
+          ) : null}
           <p className="muted">
             {state.operation === 'mirror'
               ? 'The original remains; Mirror creates a separate copy without fusion.'
