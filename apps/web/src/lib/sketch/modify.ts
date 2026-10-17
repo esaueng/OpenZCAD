@@ -1353,8 +1353,8 @@ function transformCurve(
 }
 
 /**
- * True when any new curve would overlap geometry already in the sketch
- * other than its source, which the profile builder would then reject as a
+ * True when any new profile curve would overlap profile geometry already in
+ * the sketch other than its source, which the profile builder would then reject as a
  * duplicate or an overlapping segment.
  */
 function landsOnExisting(
@@ -1364,12 +1364,17 @@ function landsOnExisting(
   curves: readonly Curve2[],
   resolve: Resolve
 ): boolean {
+  // Construction geometry never bounds a profile, so a construction copy
+  // may sit on anything and anything may sit on a construction guide.
+  if (sketchObject(document, sketch, sourceId)?.construction) {
+    return false;
+  }
   const existing = sketch.objectIds.flatMap((objectId) => {
     if (objectId === sourceId) {
       return [];
     }
     const data = sketchObject(document, sketch, objectId);
-    return data ? cutterCurves(data, resolve) : [];
+    return data && !data.construction ? cutterCurves(data, resolve) : [];
   });
   return curves.some((curve) =>
     existing.some((other) => curvesOverlap(other, curve))

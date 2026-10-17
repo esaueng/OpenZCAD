@@ -716,6 +716,57 @@ describe('Mirror', () => {
     ).toEqual(refusal);
   });
 
+  it('lets mirror and pattern copies lie on construction guides', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      { objectKind: 'circle', centerX: 4, centerY: 0, radius: 1 },
+      {
+        objectKind: 'circle',
+        centerX: -4,
+        centerY: 0,
+        radius: 1,
+        construction: true
+      },
+      { objectKind: 'line', x1: 4, y1: 0, x2: 12, y2: 0 },
+      // A construction source may land on profile geometry.
+      {
+        objectKind: 'circle',
+        centerX: 20,
+        centerY: 0,
+        radius: 1,
+        construction: true
+      },
+      { objectKind: 'circle', centerX: -20, centerY: 0, radius: 1 }
+    ]);
+    const [axis, circle, , , guide] = ids as [
+      string,
+      string,
+      string,
+      string,
+      string
+    ];
+    expect(
+      planSketchMirror(
+        manager.document,
+        sketch(),
+        sketchId,
+        circle,
+        axis,
+        resolve
+      )
+    ).toMatchObject({ status: 'commands' });
+    expect(
+      planSketchMirror(
+        manager.document,
+        sketch(),
+        sketchId,
+        guide,
+        axis,
+        resolve
+      )
+    ).toMatchObject({ status: 'commands' });
+  });
+
   it('refuses an entity that is its own mirror image, and a non-line mirror', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
