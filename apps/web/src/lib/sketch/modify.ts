@@ -422,7 +422,13 @@ function curveObject(
   if (curve.kind === 'line') {
     return withConstruction(lineObject(curve.a, curve.b), source);
   }
-  if (curve.kind === 'circle') {
+  // A full-sweep copy is written as the circle it is. The solver keeps an
+  // arc's two ends as separate points, so a new 360° arc's seam could open
+  // on the next solve; a circle has no seam to open.
+  if (
+    curve.kind === 'circle' ||
+    (curve.kind === 'arc' && curve.sweep >= TAU - 1e-9)
+  ) {
     return withConstruction<CircleData>(
       {
         objectKind: 'circle',
@@ -1498,12 +1504,8 @@ export function planSketchMirror(
   if (landsOnExisting(document, sketch, sourceId, [image], resolve, tol)) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
-  const clash = profileClash(
-    document,
-    sketch,
-    [curveObject(image, data)],
-    resolve
-  );
+  const imageObject = curveObject(image, data);
+  const clash = profileClash(document, sketch, [imageObject], resolve);
   if (clash) {
     return { status: 'refuse', reason: clash };
   }
@@ -1589,12 +1591,12 @@ export function planSketchMirror(
   return {
     status: 'commands',
     label: 'Mirror',
-    message: `Mirror added a linked ${source.kind}.`,
+    message: `Mirror added a linked ${imageObject.objectKind}.`,
     commands: [
       commandFactories.addSketchObjects(
         {
           sketchId,
-          objects: [curveObject(image, data)],
+          objects: [imageObject],
           ids: { objectNodeIds: [imageId] }
         },
         'Mirror sketch geometry'
@@ -1992,7 +1994,7 @@ export function planSketchLinearPattern(
   return {
     status: 'commands',
     label: 'Linear pattern',
-    message: `Linear pattern added ${count - 1} linked ${source.curve.kind}${count - 1 === 1 ? '' : 's'}.`,
+    message: `Linear pattern added ${count - 1} linked ${curveObject(copies[0]!, source.data).objectKind}${count - 1 === 1 ? '' : 's'}.`,
     commands: patternCommands(
       sketchId,
       sourceId as EntityId,
@@ -2103,7 +2105,7 @@ export function planSketchCircularPattern(
   return {
     status: 'commands',
     label: 'Circular pattern',
-    message: `Circular pattern added ${count - 1} linked ${source.curve.kind}${count - 1 === 1 ? '' : 's'}.`,
+    message: `Circular pattern added ${count - 1} linked ${curveObject(copies[0]!, source.data).objectKind}${count - 1 === 1 ? '' : 's'}.`,
     commands: patternCommands(
       sketchId,
       sourceId as EntityId,

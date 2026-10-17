@@ -1084,42 +1084,7 @@ describe('Mirror', () => {
     ).toMatchObject({ status: 'commands' });
   });
 
-  it('links a full-sweep arc’s image through its centre, like a circle', () => {
-    const { manager, sketchId, ids, sketch, commit } = sketchWith([
-      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
-      {
-        objectKind: 'arc',
-        centerX: 5,
-        centerY: 2,
-        radius: 1,
-        startAngleDeg: 30,
-        endAngleDeg: 390
-      }
-    ]);
-    const [axis, source] = ids as [string, string];
-    commit(
-      planSketchMirror(
-        manager.document,
-        sketch(),
-        sketchId,
-        source,
-        axis,
-        resolve
-      )
-    );
-    const image = sketch().objectIds.map(String).at(-1)!;
-    expect((sketch().constraints ?? []).map((c) => c.data)).toEqual([
-      {
-        constraintKind: 'symmetric',
-        a: { objectId: source, point: 'center' },
-        b: { objectId: image, point: 'center' },
-        axis
-      },
-      { constraintKind: 'equal', a: source, b: image }
-    ]);
-  });
-
-  it('writes a full-sweep image one turn past its start, as the profile builder reads it', () => {
+  it('mirrors a full-sweep arc as a circle linked through its centre', () => {
     const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
       { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
       {
@@ -1131,21 +1096,30 @@ describe('Mirror', () => {
         endAngleDeg: 390
       }
     ]);
-    commit(
+    const [axis, source] = ids as [string, string];
+    const plan = commit(
       planSketchMirror(
         manager.document,
         sketch(),
         sketchId,
-        ids[1]!,
-        ids[0]!,
+        source,
+        axis,
         resolve
       )
     );
-    const image = object(sketch().objectIds.map(String).at(-1)!) as {
-      startAngleDeg: number;
-      endAngleDeg: number;
-    };
-    expect(image.endAngleDeg - image.startAngleDeg).toBeCloseTo(360, 9);
+    expect(plan.message).toBe('Mirror added a linked circle.');
+    const image = sketch().objectIds.map(String).at(-1)!;
+    // A circle has no seam the next solve could open.
+    expect(object(image)).toMatchObject({ objectKind: 'circle', radius: 1 });
+    expect((sketch().constraints ?? []).map((c) => c.data)).toEqual([
+      {
+        constraintKind: 'symmetric',
+        a: { objectId: source, point: 'center' },
+        b: { objectId: image, point: 'center' },
+        axis
+      },
+      { constraintKind: 'equal', a: source, b: image }
+    ]);
   });
 
   it('refuses a full-sweep arc mirrored about a line through its centre', () => {
