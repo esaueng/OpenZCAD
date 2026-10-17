@@ -10042,6 +10042,11 @@ export function App() {
     setProjects((current) =>
       current.filter((project) => !destroyed.has(project.projectId))
     );
+    if (destroyed.size > 0) {
+      void import('./lib/savedViews').then(({ forgetSavedViews }) =>
+        destroyed.forEach((projectId) => forgetSavedViews(projectId))
+      );
+    }
     const failed = outcomes.find((outcome) => outcome.failure !== undefined);
     if (failed) {
       throw failed.failure;

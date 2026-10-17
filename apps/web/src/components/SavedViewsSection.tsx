@@ -68,7 +68,14 @@ export function SavedViewsSection({
             className="saved-views-delete"
             aria-label={`Delete ${view.name}`}
             onClick={() => {
-              setViews(deleteSavedView(projectId, view.id));
+              const remaining = deleteSavedView(projectId, view.id);
+              if (!remaining) {
+                onStatus(
+                  `Could not delete ${view.name}: this browser is not saving views.`
+                );
+                return;
+              }
+              setViews(remaining);
               onStatus(`Deleted ${view.name}.`);
             }}
           >

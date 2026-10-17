@@ -55,6 +55,25 @@ const isVector = (value: unknown): boolean =>
 const isPositive = (value: unknown): boolean =>
   typeof value === 'number' && Number.isFinite(value) && value > 0;
 
+const DISPLAY_MODES: readonly unknown[] = [
+  'shaded-edges',
+  'shaded',
+  'wireframe'
+];
+const SECTION_PLANES: readonly unknown[] = ['XY', 'XZ', 'YZ'];
+
+/** Absent, or a canonical plane at a finite offset. */
+const isSection = (value: unknown): boolean => {
+  if (value === undefined) return true;
+  const section = value as SectionViewSettings | null;
+  return Boolean(
+    section &&
+    SECTION_PLANES.includes(section.plane) &&
+    typeof section.offset === 'number' &&
+    Number.isFinite(section.offset)
+  );
+};
+
 /**
  * A malformed entry would hand the camera NaN transforms and leave the
  * viewport unusable, so anything short of finite three-number vectors and a
@@ -71,7 +90,9 @@ function isSavedView(value: unknown): value is SavedView {
     isPositive(view.camera?.orthographicZoom) &&
     (view.camera.orthographicHalfHeight === undefined ||
       isPositive(view.camera.orthographicHalfHeight)) &&
-    (view.projection === 'perspective' || view.projection === 'orthographic')
+    (view.projection === 'perspective' || view.projection === 'orthographic') &&
+    DISPLAY_MODES.includes(view.displayMode) &&
+    isSection(view.sectionView)
   );
 }
 
@@ -134,14 +155,22 @@ export function saveView(
     : { ok: false, reason: 'This browser is not keeping saved views.' };
 }
 
+/** The remaining views, or null when the browser refused the write. */
 export function deleteSavedView(
   projectId: string,
   viewId: string,
   storage: StorageLike | null = defaultStorage()
-): SavedView[] {
+): SavedView[] | null {
   const views = loadSavedViews(projectId, storage).filter(
     (view) => view.id !== viewId
   );
-  write(projectId, views, storage);
-  return views;
+  return write(projectId, views, storage) ? views : null;
+}
+
+/** A permanently deleted project takes its saved views with it. */
+export function forgetSavedViews(
+  projectId: string,
+  storage: StorageLike | null = defaultStorage()
+): void {
+  if (readAll(storage)[projectId]) write(projectId, [], storage);
 }

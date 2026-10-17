@@ -3,6 +3,7 @@ import {
   MAX_SAVED_VIEWS,
   SAVED_VIEWS_STORAGE_KEY,
   deleteSavedView,
+  forgetSavedViews,
   loadSavedViews,
   saveView
 } from './savedViews';
@@ -32,7 +33,7 @@ describe('saved views (ZC-115)', () => {
     const first = saveView('p1', pose(1), { storage, now: 10, id: 'a' });
     const second = saveView(
       'p1',
-      { ...pose(2), sectionView: { plane: 'xy', offset: 4 } as never },
+      { ...pose(2), sectionView: { plane: 'XY', offset: 4 } },
       { storage, now: 20, id: 'b' }
     );
     expect(first.ok && first.view.name).toBe('View 1');
@@ -41,7 +42,7 @@ describe('saved views (ZC-115)', () => {
       { ...pose(1), id: 'a', name: 'View 1', savedAt: 10 },
       {
         ...pose(2),
-        sectionView: { plane: 'xy', offset: 4 },
+        sectionView: { plane: 'XY', offset: 4 },
         id: 'b',
         name: 'View 2',
         savedAt: 20
@@ -55,7 +56,7 @@ describe('saved views (ZC-115)', () => {
     const storage = memoryStorage();
     saveView('p1', pose(1), { storage, id: 'a' });
     saveView('p1', pose(2), { storage, id: 'b' });
-    expect(deleteSavedView('p1', 'a', storage).map((v) => v.name)).toEqual([
+    expect(deleteSavedView('p1', 'a', storage)?.map((v) => v.name)).toEqual([
       'View 2'
     ]);
     const again = saveView('p1', pose(3), { storage, id: 'c' });
@@ -120,5 +121,55 @@ describe('saved views (ZC-115)', () => {
     expect(saveView('p1', pose(1), { storage: null })).toMatchObject({
       ok: false
     });
+  });
+});
+
+describe('saved view upkeep', () => {
+  it('drops entries with an unknown display mode or a malformed section', () => {
+    const storage = memoryStorage();
+    const valid = { ...pose(1), name: 'View 1', savedAt: 1 };
+    storage.setItem(
+      SAVED_VIEWS_STORAGE_KEY,
+      JSON.stringify({
+        p1: [
+          { ...valid, id: 'mode', displayMode: 'xray' },
+          { ...valid, id: 'plane', sectionView: { plane: 'xy', offset: 1 } },
+          {
+            ...valid,
+            id: 'offset',
+            sectionView: { plane: 'XY', offset: null }
+          },
+          { ...valid, id: 'cut', sectionView: { plane: 'YZ', offset: -2.5 } },
+          { ...valid, id: 'plain' }
+        ]
+      })
+    );
+    expect(loadSavedViews('p1', storage).map((v) => v.id)).toEqual([
+      'cut',
+      'plain'
+    ]);
+  });
+
+  it('reports a refused delete and keeps the stored list', () => {
+    const storage = memoryStorage();
+    saveView('p1', pose(1), { storage, id: 'a' });
+    const refusing = {
+      getItem: storage.getItem,
+      setItem: () => {
+        throw new Error('quota');
+      }
+    };
+    expect(deleteSavedView('p1', 'a', refusing)).toBeNull();
+    expect(loadSavedViews('p1', storage).map((v) => v.id)).toEqual(['a']);
+  });
+
+  it('forgets every view of a permanently deleted project only', () => {
+    const storage = memoryStorage();
+    saveView('p1', pose(1), { storage });
+    saveView('p2', pose(2), { storage });
+    forgetSavedViews('p1', storage);
+    expect(loadSavedViews('p1', storage)).toEqual([]);
+    expect(loadSavedViews('p2', storage)).toHaveLength(1);
+    expect(storage.data.get(SAVED_VIEWS_STORAGE_KEY)).not.toContain('"p1"');
   });
 });
