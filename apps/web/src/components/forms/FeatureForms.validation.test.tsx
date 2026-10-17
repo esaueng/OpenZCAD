@@ -103,7 +103,15 @@ describe('values the geometry refuses are refused in the form', () => {
     );
     const count = field('Count');
     fireEvent.change(count, { target: { value: '1' } });
-    expect(count).toHaveAccessibleDescription('Must be from 2 to 100.');
+    expect(count).toHaveAccessibleDescription(
+      'Must be a whole number from 2 to 100.'
+    );
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+    // A fractional count used to be accepted and silently rounded.
+    fireEvent.change(count, { target: { value: '4.5' } });
+    expect(count).toHaveAccessibleDescription(
+      'Must be a whole number from 2 to 100.'
+    );
     expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
     fireEvent.change(count, { target: { value: '4' } });
     expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
