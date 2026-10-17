@@ -767,6 +767,59 @@ describe('Trim', () => {
     ).toEqual({ status: 'refuse', reason });
   });
 
+  it('keeps profile cutters exact against a construction target in a large sketch', () => {
+    // A 2e10 profile line puts the profile tolerance near 2; a profile
+    // cutter stopping 1 unit short of the guide must not cut it.
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0, construction: true },
+      { objectKind: 'line', x1: 5, y1: 1, x2: 5, y2: 5 },
+      { objectKind: 'line', x1: -1e10, y1: 50, x2: 1e10, y2: 50 }
+    ]);
+    expect(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 8, y: 0 },
+        resolve
+      )
+    ).toMatchObject({
+      message: 'Trim removed the whole line: nothing crosses it.'
+    });
+  });
+
+  it('bounds an arc cutter by its angle, not a scaled length', () => {
+    // Scale 1e8 gives a 0.01 profile tolerance, ~0.002 rad on a radius-5
+    // arc; the line crosses the arc's circle 0.001 rad past its end.
+    const past = (90 + (0.001 * 180) / Math.PI) * (Math.PI / 180);
+    const x = 5 * Math.cos(past);
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: x, y1: 0, x2: x, y2: 10 },
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 5,
+        startAngleDeg: 0,
+        endAngleDeg: 90
+      },
+      { objectKind: 'line', x1: -5e7, y1: 50, x2: 5e7, y2: 50 }
+    ]);
+    expect(
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x, y: 2 },
+        resolve
+      )
+    ).toMatchObject({
+      message: 'Trim removed the whole line: nothing crosses it.'
+    });
+  });
+
   it('refuses a circle only one curve touches', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },

@@ -56,6 +56,8 @@ const TAU = Math.PI * 2;
 const ON_CURVE = 1e-7;
 /** Parameter slack for "this crossing is the entity's own end". */
 const PARAM_EPS = 1e-9;
+/** Radians an arc end may be overshot and still count, as the profile builder allows. */
+const ARC_END_SLACK = 1e-9;
 
 /** The most copies one pattern makes, so a typo cannot flood the sketch. */
 export const MAX_PATTERN_COUNT = 100;
@@ -227,15 +229,16 @@ function distance(a: Point2, b: Point2): number {
 }
 
 /** True when `point` (already on the curve's circle) lies inside the arc. */
-function withinArc(curve: Curve2, point: Point2, tol = ON_CURVE): boolean {
+function withinArc(curve: Curve2, point: Point2): boolean {
   if (curve.kind !== 'arc') {
     return true;
   }
   const offset = normalizeAngle(
     Math.atan2(point.y - curve.c.y, point.x - curve.c.x) - curve.start
   );
-  const slack = tol / curve.r;
-  return offset <= curve.sweep + slack || offset >= TAU - slack;
+  // The profile builder's own angular slack (`arcOffsetsOnArc`), not a
+  // length over the radius: a scaled tolerance would reach past the ends.
+  return offset <= curve.sweep + ARC_END_SLACK || offset >= TAU - ARC_END_SLACK;
 }
 
 function withinSegment(
@@ -343,11 +346,10 @@ export function curveCrossings(
       Extract<Curve2, { kind: 'line' }>,
       Exclude<Curve2, { kind: 'line' }>
     ];
-    const [lineTol, roundTol] = lineFirst ? [tol, secondTol] : [secondTol, tol];
+    const lineTol = lineFirst ? tol : secondTol;
     return lineCircleCrossings(line.a, line.b, round.c, round.r).filter(
       (point) =>
-        withinSegment(line.a, line.b, point, lineTol) &&
-        withinArc(round, point, roundTol)
+        withinSegment(line.a, line.b, point, lineTol) && withinArc(round, point)
     );
   }
   return circleCircleCrossings(
@@ -356,10 +358,7 @@ export function curveCrossings(
     second.c,
     second.r,
     touch
-  ).filter(
-    (point) =>
-      withinArc(first, point, tol) && withinArc(second, point, secondTol)
-  );
+  ).filter((point) => withinArc(first, point) && withinArc(second, point));
 }
 
 /** Where a point sits along a curve: 0…1 on a line, radians on a round. */
@@ -706,7 +705,9 @@ function crossingsOn(
   targetId: EntityId,
   target: Curve2,
   resolve: Resolve,
-  tol: number
+  tol: number,
+  /** The target is construction geometry, outside profile analysis. */
+  targetConstruction: boolean
 ): Crossing[] {
   const profileTol = profileTolerance(document, sketch, [], resolve);
   const crossings: Crossing[] = [];
@@ -729,7 +730,9 @@ function crossingsOn(
         target,
         cutter,
         tol,
-        data.construction ? ON_CURVE : profileTol
+        // A construction target never meets profile analysis, so neither
+        // side of the pair gets the profile-scaled bound.
+        data.construction || targetConstruction ? ON_CURVE : profileTol
       )) {
         crossings.push({
           param: curveParam(target, point),
@@ -852,12 +855,28 @@ export function planSketchTrim(
       id,
       data as CircleData | ArcData,
       round,
-      crossingsOn(document, sketch, id, round, resolve, tol),
+      crossingsOn(
+        document,
+        sketch,
+        id,
+        round,
+        resolve,
+        tol,
+        Boolean(data.construction)
+      ),
       at,
       Math.max(PARAM_EPS * TAU, tol / curve.r)
     );
   }
-  const crossings = crossingsOn(document, sketch, id, curve, resolve, tol);
+  const crossings = crossingsOn(
+    document,
+    sketch,
+    id,
+    curve,
+    resolve,
+    tol,
+    Boolean(data.construction)
+  );
   const span = curve.kind === 'line' ? 1 : curve.sweep;
   // A crossing closer to an end than the profile builder's tolerance would
   // leave a fragment it calls degenerate, so it counts as that end.
