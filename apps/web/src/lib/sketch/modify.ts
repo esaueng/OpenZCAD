@@ -406,6 +406,27 @@ function referenceDimensionsOn(
   });
 }
 
+/**
+ * True when a reference distance measures this point. A trim that moves or
+ * re-homes the point would leave the dimension silently measuring something
+ * else, so those trims are refused instead.
+ */
+function referenceMeasuresPoint(
+  sketch: SketchNode,
+  ref: SketchPointRef
+): boolean {
+  return (sketch.referenceDimensions ?? []).some(
+    ({ data }) =>
+      data.dimensionKind === 'distance' &&
+      [data.a, data.b].some(
+        (point) => point.objectId === ref.objectId && point.point === ref.point
+      )
+  );
+}
+
+const MOVED_END_MEASURED =
+  'A reference dimension measures the end this trim would move. Delete the dimension first.';
+
 // ---------------------------------------------------------------------------
 // Constraint remapping
 
@@ -737,6 +758,9 @@ export function planSketchTrim(
     const keepStart = Boolean(below);
     const cut = (below ?? above)!;
     const moved = keepStart ? 'end' : 'start';
+    if (referenceMeasuresPoint(sketch, keepStart ? endRef : startRef)) {
+      return { status: 'refuse', reason: MOVED_END_MEASURED };
+    }
     const updated = trimmedData(
       data,
       curve,
@@ -766,6 +790,9 @@ export function planSketchTrim(
 
   // A middle cut: the entity keeps [start, below]; a new piece takes
   // [above, end], and everything on the old end moves with it.
+  if (referenceMeasuresPoint(sketch, endRef)) {
+    return { status: 'refuse', reason: MOVED_END_MEASURED };
+  }
   const pieceId = newEntityId();
   const pieceEnd: SketchPointRef = { objectId: pieceId, point: 'end' };
   const pieceStart: SketchPointRef = { objectId: pieceId, point: 'start' };
@@ -1422,6 +1449,20 @@ export function planSketchCircularPattern(
         angle
       )
     );
+  }
+  // A line through the pivot lands back on itself after half a turn, so
+  // an even count would stack duplicates that break profiles.
+  const placed = [source.curve, ...copies];
+  if (
+    placed.some((curve, index) =>
+      placed.slice(0, index).some((earlier) => sameCurve(earlier, curve))
+    )
+  ) {
+    return {
+      status: 'refuse',
+      reason:
+        'Some instances would land exactly on others. Change the count or the angle, or move the pivot off the entity.'
+    };
   }
   return {
     status: 'commands',

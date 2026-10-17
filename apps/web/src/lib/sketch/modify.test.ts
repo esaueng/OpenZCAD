@@ -251,6 +251,40 @@ describe('Trim', () => {
     expectClose(object(ids.target), { x1: 10, y1: 0, x2: 20, y2: 0 });
   });
 
+  it('refuses a trim that would move an end a reference dimension measures', () => {
+    const { manager, sketchId, sketch, ...ids } = crossed();
+    manager.execute(
+      commandFactories.addSketchReferenceDimension({
+        sketchId,
+        data: {
+          dimensionKind: 'distance',
+          a: { objectId: ids.target as never, point: 'end' },
+          b: { objectId: ids.tail as never, point: 'end' }
+        }
+      })
+    );
+    const trim = (x: number) =>
+      planSketchTrim(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids.target,
+        { x, y: 0 },
+        resolve
+      );
+    const refusal = {
+      status: 'refuse',
+      reason:
+        'A reference dimension measures the end this trim would move. Delete the dimension first.'
+    };
+    // Splitting would hand the measured end to a new piece; shortening from
+    // that side would move it.
+    expect(trim(15)).toEqual(refusal);
+    expect(trim(25)).toEqual(refusal);
+    // The start end is not measured, so trimming there still works.
+    expect(trim(5)).toMatchObject({ status: 'commands' });
+  });
+
   it('keeps expressions on the end it did not move', () => {
     const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
       { objectKind: 'line', x1: '0', y1: '0', x2: 30, y2: 0 },
@@ -696,6 +730,32 @@ describe('Patterns', () => {
       startAngleDeg: 90,
       endAngleDeg: 180
     });
+  });
+
+  it('refuses a pattern whose instances land on each other', () => {
+    // A line through the pivot maps onto itself after half a turn.
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: -4, y1: 0, x2: 4, y2: 0 }
+    ]);
+    const plan = (count: number) =>
+      planSketchCircularPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 0, y: 0 },
+        count,
+        360,
+        resolve
+      );
+    for (const count of [2, 4]) {
+      expect(plan(count)).toEqual({
+        status: 'refuse',
+        reason:
+          'Some instances would land exactly on others. Change the count or the angle, or move the pivot off the entity.'
+      });
+    }
+    expect(plan(3)).toMatchObject({ status: 'commands' });
   });
 
   it('refuses a round centred on the pivot', () => {
