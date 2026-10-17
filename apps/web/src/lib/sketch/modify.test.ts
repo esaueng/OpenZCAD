@@ -1222,6 +1222,34 @@ describe('Patterns', () => {
     ).toMatchObject({ status: 'commands' });
   });
 
+  it('leaves generated construction copies out of the tolerance scale', () => {
+    // A 2e10 guide patterned 1 unit sideways: scaled by its own copies the
+    // tolerance would reach ~2 and call the copy a duplicate.
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      {
+        objectKind: 'line',
+        x1: -1e10,
+        y1: 0,
+        x2: 1e10,
+        y2: 0,
+        construction: true
+      },
+      { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 1 }
+    ]);
+    expect(
+      planSketchLinearPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        ids[1]!,
+        1,
+        2,
+        resolve
+      )
+    ).toMatchObject({ status: 'commands' });
+  });
+
   it('refuses fractional, too small and too large counts, and zero spacing', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },

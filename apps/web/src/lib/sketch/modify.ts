@@ -1328,7 +1328,14 @@ export function planSketchMirror(
       sweep: source.sweep
     };
   }
-  const tol = profileTolerance(document, sketch, [image], resolve);
+  // Construction results never reach the profile builder, so they do not
+  // widen its scale.
+  const tol = profileTolerance(
+    document,
+    sketch,
+    data.construction ? [] : [image],
+    resolve
+  );
   if (sameCurve(source, image, tol)) {
     return {
       status: 'refuse',
@@ -1706,7 +1713,12 @@ export function planSketchLinearPattern(
       )
     );
   }
-  const tol = profileTolerance(document, sketch, copies, resolve);
+  const tol = profileTolerance(
+    document,
+    sketch,
+    source.data.construction ? [] : copies,
+    resolve
+  );
   if (
     instancesOverlap(
       source.curve,
@@ -1802,7 +1814,12 @@ export function planSketchCircularPattern(
   }
   // A line through the pivot lands back on itself after half a turn, so
   // an even count would stack duplicates that break profiles.
-  const tol = profileTolerance(document, sketch, copies, resolve);
+  const tol = profileTolerance(
+    document,
+    sketch,
+    source.data.construction ? [] : copies,
+    resolve
+  );
   if (
     instancesOverlap(
       source.curve,
