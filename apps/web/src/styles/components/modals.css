@@ -539,7 +539,8 @@
   font-size: var(--fs-sm);
 }
 
-.export-dialog-custom input {
+/* The deviation field only: the hidden-body checkbox shares the row style. */
+.export-dialog-custom input[type='number'] {
   width: 90px;
 }
 
