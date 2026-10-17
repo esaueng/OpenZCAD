@@ -31,6 +31,8 @@ import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
 import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
+import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
+import { failedFeatureIds } from './lib/featureRepair';
 import { featureHistory } from './lib/featureHistory';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
@@ -2491,6 +2493,11 @@ export function App() {
     () => new Set<string>([...localHiddenBodyIds, ...parameterHiddenBodyIds]),
     [localHiddenBodyIds, parameterHiddenBodyIds]
   );
+  // Not persisted: isolation is a temporary view, and a reload shows the
+  // user's own hidden set.
+  const [bodyIsolation, setBodyIsolation] = useState<
+    (BodyIsolation & { projectId: string }) | null
+  >(null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   const [faceGeometryPreview, setFaceGeometryPreview] = useState<{
     document: ProjectDocument;
@@ -5906,6 +5913,15 @@ export function App() {
         : new Map<BodyId, WithheldExportBody>(),
     [doc, featureAttribution]
   );
+  // Rows named "needs repair" for failures that leave every body standing,
+  // such as a transform whose target survives its own failure.
+  const failedHistoryFeatureIds = useMemo(
+    () =>
+      doc && featureAttribution?.derived === doc.derived
+        ? failedFeatureIds(featureAttribution.featureWarnings)
+        : new Set<FeatureId>(),
+    [doc, featureAttribution]
+  );
   const selectedBodyExportable = Boolean(
     selectedBody &&
     !selectedBody.consumed &&
@@ -8025,26 +8041,46 @@ export function App() {
   }
 
   function showAllBodies() {
+    setBodyIsolation(null);
     setHiddenBodyIds(new Set());
     setStatus('All bodies visible.');
   }
 
   /**
    * Hides every part except one. Running it again on the part already alone on
-   * screen brings the rest back, so the same control both enters and leaves the
-   * isolated view rather than stranding someone with everything hidden.
+   * screen leaves isolation, so the same control both enters and leaves the
+   * isolated view. Leaving restores the bodies hidden before isolating rather
+   * than showing everything.
    */
   function isolateBody(bodyId: string) {
-    const others = partBodies.filter((body) => body.bodyId !== bodyId);
-    const alreadyAlone = others.every((body) => hiddenBodyIds.has(body.bodyId));
-    if (alreadyAlone) {
-      showAllBodies();
+    const isolation =
+      bodyIsolation && bodyIsolation.projectId === doc?.projectId
+        ? bodyIsolation
+        : null;
+    const step = toggleBodyIsolation(
+      partBodies.map((body) => body.bodyId),
+      bodyId,
+      hiddenBodyIds,
+      localHiddenBodyIds,
+      isolation
+    );
+    setHiddenBodyIds(step.hidden);
+    setBodyIsolation(
+      step.isolation && doc
+        ? { ...step.isolation, projectId: doc.projectId }
+        : null
+    );
+    if (!step.entered) {
+      setStatus(
+        step.hidden.size === 0
+          ? 'All bodies visible.'
+          : `Left isolation · ${step.hidden.size} previously hidden ${step.hidden.size === 1 ? 'body stays' : 'bodies stay'} hidden.`
+      );
       return;
     }
-    setHiddenBodyIds(new Set(others.map((body) => body.bodyId)));
     const name = partBodies.find((body) => body.bodyId === bodyId)?.name;
     setStatus(
-      `Showing ${name ?? 'one body'} only · ${others.length} hidden. Isolate again to show all.`
+      `Showing ${name ?? 'one body'} only · ${partBodies.length - 1} hidden. Isolate again to leave.`
     );
   }
 
@@ -13571,21 +13607,63 @@ export function App() {
       setStatus(refusal);
       return;
     }
+    const base = managerRef.current?.document;
+    if (!base || sketchSolving || geometryBusy) return;
+    const sketchId = interaction.session.sketchId as SketchId;
+    const objectId = interaction.session.selectedObjectId as EntityId;
+    const command = commandFactories.deleteSketchObject(
+      { sketchId, objectId },
+      'Delete sketch entity'
+    );
     setSketchDiagnosticPoints([]);
+    const source = listFeaturesInOrder(base).find(
+      (feature) =>
+        feature.data.featureKind === 'sketch' &&
+        feature.data.sketchId === sketchId
+    );
     if (
-      executeCommand(
-        commandFactories.deleteSketchObject(
-          {
-            sketchId: interaction.session.sketchId as SketchId,
-            objectId: interaction.session.selectedObjectId as EntityId
-          },
-          'Delete sketch entity'
-        )
-      )
+      !source ||
+      affectedFeatureTargets(base, source.featureId).length === 0
     ) {
-      dispatchInteraction({ type: 'sketch-select-object', objectId: null });
-      setStatus('Deleted sketch entity.');
+      if (executeCommand(command)) {
+        dispatchInteraction({ type: 'sketch-select-object', objectId: null });
+        setStatus('Deleted sketch entity.');
+      }
+      return;
     }
+    setSketchEditError(null);
+    setSketchSolving(true);
+    // A delete is an edit: features built on this sketch rebuild first, and
+    // one that would break refuses the delete by name instead of silently
+    // losing its profile.
+    void commitSketchEdit(
+      base,
+      sketchId,
+      [command],
+      'Delete sketch entity',
+      objectId
+    )
+      .then((committed) => {
+        if (!committed) return;
+        dispatchInteraction({ type: 'sketch-select-object', objectId: null });
+        setStatus('Deleted sketch entity.');
+      })
+      .catch((error: unknown) => {
+        if (error instanceof FeatureBuildError) {
+          recordHistoryFailure(error, base);
+        }
+        const message = errorMessage(
+          error,
+          'The sketch entity could not be deleted.'
+        );
+        if (
+          interactionRef.current.mode === 'sketch' &&
+          interactionRef.current.session.sketchId === sketchId
+        )
+          setSketchEditError(message);
+        setStatus(message);
+      })
+      .finally(() => setSketchSolving(false));
   }
 
   // ---------------------------------------------------------------------
@@ -19874,6 +19952,7 @@ export function App() {
       parameterMinimums={doc ? parameterMinimums(doc) : {}}
       features={features}
       representations={representations}
+      failedFeatureIds={failedHistoryFeatureIds}
       geometryPending={Boolean(
         currentGeometrySnapshot || currentFaceGeometryPreview
       )}

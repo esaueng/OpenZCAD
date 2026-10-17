@@ -110,6 +110,8 @@ export function findRollbackMarkerIndex(
 export interface HistoryTimelineProps {
   features: FeatureNode[];
   representations: Record<string, BodyRepresentation>;
+  /** Features the current rebuild reported as failed or refused. */
+  failedFeatureIds?: ReadonlySet<FeatureId>;
   geometryPending?: boolean;
   selectedFeatureNodeId: string | null;
   hiddenBodyIds: ReadonlySet<string>;
@@ -313,6 +315,7 @@ function holdMultiClickToRow(row: HTMLElement) {
 export function HistoryTimeline({
   features,
   representations,
+  failedFeatureIds,
   geometryPending = false,
   selectedFeatureNodeId,
   hiddenBodyIds,
@@ -742,7 +745,8 @@ export function HistoryTimeline({
               ? hiddenBodyIds.has(feature.bodyId)
               : false;
           const failed =
-            !geometryPending && featureNeedsRepair(feature, representations);
+            !geometryPending &&
+            featureNeedsRepair(feature, representations, failedFeatureIds);
           const selected = selectedFeatureNodeId === feature.id;
           const value = manual
             ? 'suppressed'

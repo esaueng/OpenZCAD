@@ -113,6 +113,7 @@ interface SidebarProps {
   parameterValues: Record<string, number>;
   features: FeatureNode[];
   representations: Record<string, BodyRepresentation>;
+  failedFeatureIds?: ReadonlySet<FeatureId>;
   geometryPending?: boolean;
   selectedFeatureNodeId: string | null;
   selectedSketchProfileId: string | null;
@@ -224,6 +225,7 @@ export function Sidebar({
   parameterMinimums,
   features,
   representations,
+  failedFeatureIds,
   geometryPending = false,
   selectedFeatureNodeId,
   selectedSketchProfileId,
@@ -633,6 +635,7 @@ export function Sidebar({
         <HistoryTimeline
           features={features}
           representations={representations}
+          failedFeatureIds={failedFeatureIds}
           geometryPending={geometryPending}
           selectedFeatureNodeId={selectedFeatureNodeId}
           hiddenBodyIds={hiddenBodyIds}

@@ -1,19 +1,48 @@
 import { isFeatureSuppressed } from '@openzcad/shared';
-import type { FeatureId, FeatureNode } from '@openzcad/shared';
+import type { FeatureId, FeatureNode, FeatureWarning } from '@openzcad/shared';
+
+/**
+ * Features the rebuild could not build, or refused, by the typed warning
+ * record. Advisory and suppressed warnings are not failures.
+ */
+export function failedFeatureIds(
+  warnings: readonly FeatureWarning[] | undefined
+): Set<FeatureId> {
+  return new Set(
+    (warnings ?? [])
+      .filter(
+        (warning) =>
+          warning.kind === 'build-failed' || warning.kind === 'refusal'
+      )
+      .map((warning) => warning.featureId)
+  );
+}
 
 /**
  * The history row's "needs repair": a feature that should build a body and
- * did not. Suppressed features build nothing on purpose, and a sketch never
- * owns a body, so neither counts.
+ * did not, or one the rebuild reported as failed. The second case covers
+ * features that own no body — a transform edits its target in place, so the
+ * target still exists when the transform fails. Suppressed features build
+ * nothing on purpose, and a sketch never owns a body, so neither counts.
  */
 export function featureNeedsRepair(
-  feature: Pick<FeatureNode, 'metadata' | 'bodyId' | 'featureKind'>,
-  representations: Readonly<Record<string, unknown>>
+  feature: Pick<FeatureNode, 'metadata' | 'bodyId' | 'featureKind'> & {
+    featureId?: FeatureId;
+  },
+  representations: Readonly<Record<string, unknown>>,
+  failed?: ReadonlySet<FeatureId>
 ): boolean {
+  if (isFeatureSuppressed(feature) || feature.featureKind === 'sketch') {
+    return false;
+  }
+  if (
+    feature.featureId !== undefined &&
+    failed?.has(feature.featureId) === true
+  ) {
+    return true;
+  }
   return (
-    !isFeatureSuppressed(feature) &&
     feature.bodyId !== undefined &&
-    feature.featureKind !== 'sketch' &&
     representations[feature.bodyId] === undefined
   );
 }
