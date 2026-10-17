@@ -101,6 +101,13 @@ const FORMAT_OPTIONS: {
 export interface ExportDialogProps {
   /** What the export will contain, e.g. a body name or "all bodies (2)". */
   scopeLabel: string;
+  /**
+   * Bodies hidden in the viewport that an all-bodies export could write.
+   * Above zero the dialog offers the choice; a selection export passes 0.
+   */
+  hiddenBodies?: number;
+  includeHidden?: boolean;
+  onIncludeHiddenChange?(include: boolean): void;
   /** Bodies in the export, for naming printability rows. */
   bodies: ExportDialogBody[];
   /**
@@ -128,6 +135,9 @@ export interface ExportDialogProps {
  */
 export function ExportDialog({
   scopeLabel,
+  hiddenBodies = 0,
+  includeHidden = true,
+  onIncludeHiddenChange,
   bodies,
   revision,
   onClose,
@@ -264,6 +274,16 @@ export function ExportDialog({
             ? 'in meters, the unit glTF defines.'
             : 'in millimeters, ready for slicing.'}
         </p>
+        {hiddenBodies > 0 && onIncludeHiddenChange && (
+          <label className="export-dialog-custom">
+            <input
+              type="checkbox"
+              checked={includeHidden}
+              onChange={(event) => onIncludeHiddenChange(event.target.checked)}
+            />
+            Include {countLabel(hiddenBodies, 'hidden body', 'hidden bodies')}
+          </label>
+        )}
 
         <fieldset className="export-dialog-group">
           <legend>Format</legend>
@@ -422,7 +442,9 @@ export function ExportDialog({
           <button
             type="button"
             className="primary"
-            disabled={deflection === null || phase !== 'idle'}
+            disabled={
+              deflection === null || phase !== 'idle' || bodies.length === 0
+            }
             onClick={runExport}
           >
             <Download size={13} aria-hidden="true" />
