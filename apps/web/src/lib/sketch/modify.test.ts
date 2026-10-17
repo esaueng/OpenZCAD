@@ -1192,6 +1192,36 @@ describe('Patterns', () => {
     });
   });
 
+  it('leaves construction geometry out of the tolerance scale', () => {
+    // A 2e6-long guide would raise the tolerance to 2e-4 and merge a copy
+    // 5e-5 off the existing line; the profile builder never sees the guide.
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+      { objectKind: 'line', x1: 0, y1: 10, x2: 0, y2: 0 },
+      { objectKind: 'line', x1: 0, y1: 5.00005, x2: 4, y2: 5.00005 },
+      {
+        objectKind: 'line',
+        x1: -1e6,
+        y1: 50,
+        x2: 1e6,
+        y2: 50,
+        construction: true
+      }
+    ]);
+    expect(
+      planSketchLinearPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        ids[1]!,
+        -5,
+        2,
+        resolve
+      )
+    ).toMatchObject({ status: 'commands' });
+  });
+
   it('refuses fractional, too small and too large counts, and zero spacing', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },

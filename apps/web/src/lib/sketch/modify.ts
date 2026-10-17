@@ -1485,9 +1485,11 @@ function profileTolerance(
   let maxY = -Infinity;
   let radius = 0;
   const curves = [
+    // The profile builder drops construction geometry before it measures
+    // the model, so a far-off guide must not loosen the tolerance here.
     ...sketch.objectIds.flatMap((objectId) => {
       const data = sketchObject(document, sketch, objectId);
-      return data ? cutterCurves(data, resolve) : [];
+      return data && !data.construction ? cutterCurves(data, resolve) : [];
     }),
     ...added
   ];
