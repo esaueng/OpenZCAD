@@ -17,7 +17,10 @@ import {
   type ProjectDocument,
   type SketchId
 } from '@openzcad/shared';
-import { affectedFeatureTargets } from './affectedFeatureTargets';
+import {
+  affectedFeatureTargets,
+  reorderFeatureTargets
+} from './affectedFeatureTargets';
 
 describe('affected feature targets', () => {
   it('walks only the downstream body ancestry of the edited primitive', () => {
@@ -220,5 +223,61 @@ describe('affected feature targets', () => {
       { featureName: 'Mounting hole', resultBodyId: hole.bodyId },
       { featureName: 'Soften hole rim', resultBodyId: softened.bodyId }
     ]);
+  });
+
+  it('targets the moved span and its downstream, in the new order', () => {
+    const first = addPrimitiveFeature(
+      createProjectDocument('Reorder span', toUserId('user_affected')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 4 }
+      }
+    );
+    const plateBodyId = first.bodyOrder[0]!;
+    const moved = transformBody(first, {
+      name: 'Lift plate',
+      targetBodyId: plateBodyId,
+      translation: { x: 0, y: 0, z: 5 }
+    }).document;
+    const second = addPrimitiveFeature(moved, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 8, height: 8, depth: 8 }
+    });
+    const blockBodyId = second.bodyOrder[1]!;
+    const filleted = filletEdges(second, {
+      name: 'Block fillet',
+      targetBodyId: blockBodyId,
+      edgeHashes: [11],
+      size: 1
+    });
+    const document = filleted.document;
+    const id = (name: string) =>
+      listFeaturesInOrder(document).find((feature) => feature.name === name)!
+        .featureId;
+    const names = (
+      targets: ReturnType<typeof reorderFeatureTargets>
+    ): string[] => targets.map((target) => target.featureName);
+
+    // Lift plate (1) moves below Block (2): the plate before the span replays
+    // unchanged, the fillet only depends on Block, and the refusal must name
+    // whatever runs first in the new order.
+    expect(names(reorderFeatureTargets(document, id('Lift plate'), 2))).toEqual(
+      ['Block', 'Lift plate', 'Block fillet']
+    );
+    // Moving Block to the top drags the whole plate branch into the span.
+    expect(names(reorderFeatureTargets(document, id('Block'), 0))).toEqual([
+      'Block',
+      'Plate',
+      'Lift plate',
+      'Block fillet'
+    ]);
+    expect(
+      reorderFeatureTargets(document, id('Block'), 0).at(-1)?.resultBodyId
+    ).toBe(filleted.bodyId);
+    // A no-op or out-of-range move rebuilds nothing.
+    expect(reorderFeatureTargets(document, id('Block'), 2)).toEqual([]);
+    expect(reorderFeatureTargets(document, id('Block'), 9)).toEqual([]);
   });
 });

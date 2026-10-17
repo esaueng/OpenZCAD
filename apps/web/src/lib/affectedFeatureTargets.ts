@@ -203,3 +203,39 @@ export function affectedFeatureTargets(
 
   return targets;
 }
+
+/**
+ * Result features a history reorder can change, earliest in the new order
+ * first, so a refusal names the first feature the move breaks.
+ *
+ * Everything before min(from, to) replays exactly as it did; every feature in
+ * the moved span runs against a different input, and so does whatever builds
+ * on one of them. Empty when the move is a no-op or touches nothing that
+ * builds a body (a lone sketch moved past an unrelated feature).
+ */
+export function reorderFeatureTargets(
+  document: ProjectDocument,
+  featureId: FeatureId,
+  toIndex: number
+): AffectedFeatureTarget[] {
+  const features = listFeaturesInOrder(document);
+  const from = features.findIndex((feature) => feature.featureId === featureId);
+  if (from < 0 || toIndex === from || toIndex < 0 || toIndex >= features.length)
+    return [];
+  const reordered = [...features];
+  reordered.splice(toIndex, 0, ...reordered.splice(from, 1));
+  const position = new Map(
+    reordered.map((feature, index) => [feature.featureId, index])
+  );
+  const seen = new Set<string>();
+  return features
+    .slice(Math.min(from, toIndex), Math.max(from, toIndex) + 1)
+    .flatMap((feature) => affectedFeatureTargets(document, feature.featureId))
+    .filter(({ featureId: id, resultBodyId }) => {
+      const key = `${id}\u0000${resultBodyId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => position.get(a.featureId)! - position.get(b.featureId)!);
+}

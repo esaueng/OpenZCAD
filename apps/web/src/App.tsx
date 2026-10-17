@@ -1260,6 +1260,7 @@ import { PatternProgress } from './components/PatternProgress';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
+  reorderFeatureTargets,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
 import {
@@ -17358,16 +17359,37 @@ export function App() {
     }
   }
 
+  /**
+   * Moves a History step, keyboard and drag alike. The order gate refuses a
+   * producer moved after its consumer at once; a legal order that leaves a
+   * later feature unbuildable is refused by name after an exact rebuild of
+   * the moved span, as a feature edit is, and the order stays as it was.
+   */
   function handleReorderFeature(featureId: FeatureId, toIndex: number) {
     const name =
       doc &&
       listFeaturesInOrder(doc).find((f) => f.featureId === featureId)?.name;
-    executeCommand(
-      commandFactories.moveFeature(
-        { featureId, toIndex },
-        name ? `Reorder ${name}` : 'Reorder feature'
-      )
-    );
+    const label = name ? `Reorder ${name}` : 'Reorder feature';
+    const command = commandFactories.moveFeature({ featureId, toIndex }, label);
+    let targets = doc ? reorderFeatureTargets(doc, featureId, toIndex) : [];
+    try {
+      if (doc && targets.length > 0) command.validate(doc);
+    } catch {
+      targets = []; // The order gate's own refusal, reported as before.
+    }
+    if (targets.length === 0) {
+      executeCommand(command);
+      return;
+    }
+    let failed = '';
+    void validatedFeature.runTransaction([command], {
+      label,
+      targets,
+      validatingMessage: `Checking features after ${name ?? 'the move'}…`,
+      successMessage: commandOutcomeMessage(label),
+      onTargetRefused: (featureName) => (failed = `: ${featureName} would not rebuild`),
+      onFailure: (message) => announce(`${label} not applied${failed}. ${message}`)
+    });
   }
 
   function handleToggleFeatureSuppression(feature: FeatureNode) {
