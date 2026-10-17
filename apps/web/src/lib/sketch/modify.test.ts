@@ -734,6 +734,39 @@ describe('Trim', () => {
     ).toMatchObject({ status: 'refuse' });
   });
 
+  it('refuses a click exactly on a crossing', () => {
+    const reason =
+      'That click is on a crossing. Click the part of the curve you want to remove.';
+    const line = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },
+      { objectKind: 'line', x1: 4, y1: -5, x2: 4, y2: 5 }
+    ]);
+    expect(
+      planSketchTrim(
+        line.manager.document,
+        line.sketch(),
+        line.sketchId,
+        line.ids[0]!,
+        { x: 4, y: 0 },
+        resolve
+      )
+    ).toEqual({ status: 'refuse', reason });
+    const circle = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 }
+    ]);
+    expect(
+      planSketchTrim(
+        circle.manager.document,
+        circle.sketch(),
+        circle.sketchId,
+        circle.ids[0]!,
+        { x: 0, y: 5 },
+        resolve
+      )
+    ).toEqual({ status: 'refuse', reason });
+  });
+
   it('refuses a circle only one curve touches', () => {
     const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },

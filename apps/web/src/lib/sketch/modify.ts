@@ -769,6 +769,10 @@ function droppedNote(dropped: number): string {
     : ` Dropped ${dropped} relation${dropped === 1 ? '' : 's'} on the removed part.`;
 }
 
+/** A click on a crossing names no segment: both sides end there. */
+const ON_CROSSING =
+  'That click is on a crossing. Click the part of the curve you want to remove.';
+
 function deleteWhole(
   sketch: SketchNode,
   sketchId: SketchId,
@@ -871,6 +875,9 @@ export function planSketchTrim(
         : 0
       : Math.min(Math.max(raw, 0), span);
   const inside = crossings.filter((c) => c.param > eps && c.param < span - eps);
+  if (inside.some((c) => Math.abs(c.param - clickParam) <= eps)) {
+    return { status: 'refuse', reason: ON_CROSSING };
+  }
   const below = inside
     .filter((c) => c.param < clickParam)
     .sort((a, b) => b.param - a.param)[0];
@@ -1079,6 +1086,14 @@ function trimCircle(
     };
   }
   const click = curveParam(curve, at);
+  if (
+    distinct.some((c) => {
+      const gap = Math.abs(c.param - click);
+      return Math.min(gap, TAU - gap) <= eps;
+    })
+  ) {
+    return { status: 'refuse', reason: ON_CROSSING };
+  }
   // The removed segment runs counter-clockwise from the last crossing at or
   // before the click to the first one after it, wrapping through 0.
   const before =
