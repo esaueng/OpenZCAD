@@ -7,7 +7,11 @@ import {
   type ProjectDocument,
   type SketchId
 } from '@openzcad/shared';
-import { FeatureBuildError, refusingWarningDetail } from './featureValidation';
+import {
+  FeatureBuildError,
+  refusingWarningDetail,
+  validatedFeatureRejection
+} from './featureValidation';
 
 // Every FeatureKind must be handled in the downstream walk below. The check is
 // structural (not behavioral): hole was once missing here, so downstream hole
@@ -243,11 +247,12 @@ export function reorderFeatureTargets(
 
 /**
  * The first feature from the moved span onward that the reordered rebuild
- * fails and the current model does not, as a refusal naming it.
+ * refuses and the current model does not, as a refusal naming it.
  *
- * {@link reorderFeatureTargets} covers result bodies. A feature with no result
- * body of its own — a face-attached sketch nothing builds on yet — would
- * otherwise fail to attach behind a commit that checked only bodies.
+ * Every feature is compared with the current model, so a failure the design
+ * already has does not block an otherwise valid reorder. Features with no
+ * result body — a face-attached sketch nothing builds on yet — are checked
+ * by their own warnings; the rest also need every result body to exist.
  */
 export function reorderRefusal(
   document: ProjectDocument,
@@ -260,26 +265,40 @@ export function reorderRefusal(
   if (from < 0) return null;
   const reordered = [...features];
   reordered.splice(toIndex, 0, ...reordered.splice(from, 1));
+  const bodies = new Map<FeatureId, BodyId[]>();
+  for (const target of reorderFeatureTargets(document, featureId, toIndex)) {
+    bodies.set(target.featureId, [
+      ...(bodies.get(target.featureId) ?? []),
+      target.resultBodyId
+    ]);
+  }
   const before = document.derived;
   for (const feature of reordered.slice(Math.min(from, toIndex))) {
-    if (isFeatureSuppressed(feature)) continue;
-    const failure = refusingWarningDetail(
-      feature.name,
-      derived.warnings,
-      derived.featureWarnings,
-      feature.featureId
-    );
     if (
-      failure &&
-      !refusingWarningDetail(
+      isFeatureSuppressed(feature) ||
+      refusingWarningDetail(
         feature.name,
         before?.warnings ?? [],
         before?.featureWarnings,
         feature.featureId
       )
-    ) {
+    )
+      continue;
+    const rejection = validatedFeatureRejection({
+      featureName: feature.name,
+      featureId: feature.featureId,
+      warnings: derived.warnings,
+      ...(derived.featureWarnings
+        ? { featureWarnings: derived.featureWarnings }
+        : {}),
+      bodyPresent: (bodies.get(feature.featureId) ?? []).every((bodyId) =>
+        Boolean(derived.bodyRepresentations[bodyId])
+      ),
+      documentMoved: false
+    });
+    if (rejection) {
       return new FeatureBuildError(
-        failure.reason,
+        rejection.message,
         feature.featureId,
         feature.name
       );

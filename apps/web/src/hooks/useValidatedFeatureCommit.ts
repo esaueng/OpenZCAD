@@ -173,8 +173,6 @@ export interface ValidatedFeatureTransactionRunOptions {
   targets: readonly ValidatedFeatureTarget[];
   /** Additional exact checks for edits whose result is a history state. */
   validateDerived?(derived: ProjectDocument['derived']): void;
-  /** Names the target the rebuild refused, just before `onFailure`. */
-  onTargetRefused?(featureName: string): void;
   onFailure?(message: string): void;
   validatingMessage?: string;
   successMessage: string;
@@ -268,7 +266,6 @@ export function useValidatedFeatureCommit(
   async function validateAndCommit(input: {
     targets: readonly ValidatedFeatureTarget[];
     validateDerived?(derived: ProjectDocument['derived']): void;
-    onTargetRefused?(featureName: string): void;
     successMessage: string | (() => string);
     validatingMessage?: string;
     revalidateOnDocumentMove?: boolean;
@@ -374,7 +371,6 @@ export function useValidatedFeatureCommit(
           documentMoved
         });
         if (rejection) {
-          input.onTargetRefused?.(target.featureName);
           throw new FeatureBuildError(
             rejection.message,
             target.featureId,
@@ -508,7 +504,6 @@ export function useValidatedFeatureCommit(
       return validateAndCommit({
         targets: runOptions.targets,
         validateDerived: runOptions.validateDerived,
-        onTargetRefused: runOptions.onTargetRefused,
         onFailure: runOptions.onFailure,
         validatingMessage: runOptions.validatingMessage,
         successMessage: runOptions.successMessage,

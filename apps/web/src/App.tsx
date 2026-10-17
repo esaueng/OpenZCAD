@@ -17386,16 +17386,17 @@ export function App() {
     let failed = '';
     void validatedFeature.runTransaction([command], {
       label,
-      targets,
-      validatingMessage: `Checking features after ${name ?? 'the move'}…`,
-      successMessage: commandOutcomeMessage(label),
-      onTargetRefused: (featureName) => (failed = `: ${featureName} would not rebuild`),
+      // Compared with the current model in `reorderRefusal`, so a failure the
+      // design already has does not block the move.
+      targets: [],
       validateDerived: (derived) => {
         const refusal = base && reorderRefusal(base, derived, featureId, toIndex);
         if (!refusal) return;
         failed = `: ${refusal.featureName} would not rebuild`;
         throw refusal;
       },
+      validatingMessage: `Checking features after ${name ?? 'the move'}…`,
+      successMessage: commandOutcomeMessage(label),
       onFailure: (message) => announce(`${label} not applied${failed}. ${message}`)
     });
   }

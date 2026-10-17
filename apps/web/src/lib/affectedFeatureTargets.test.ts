@@ -282,7 +282,7 @@ describe('affected feature targets', () => {
     expect(reorderFeatureTargets(document, id('Block'), 9)).toEqual([]);
   });
 
-  it('refuses a reorder that newly fails a feature with no result body', () => {
+  it('refuses only failures the reorder introduces', () => {
     const block = addPrimitiveFeature(
       createProjectDocument('Reorder sketch', toUserId('user_affected')),
       {
@@ -310,10 +310,17 @@ describe('affected feature targets', () => {
       message: 'Feature "Top sketch": The attachment face no longer exists.',
       kind: 'build-failed' as const
     };
+    const blockBodyId = sketched.bodyOrder[0]!;
     const derived = (
-      featureWarnings: (typeof failed)[]
+      featureWarnings: (typeof failed)[],
+      blockBuilt = true
     ): ProjectDocument['derived'] => ({
       ...sketched.derived,
+      bodyRepresentations: blockBuilt
+        ? ({
+            [blockBodyId]: {}
+          } as unknown as ProjectDocument['derived']['bodyRepresentations'])
+        : {},
       warnings: featureWarnings.map((warning) => warning.message),
       featureWarnings
     });
@@ -343,5 +350,31 @@ describe('affected feature targets', () => {
         1
       )
     ).toBeNull();
+    // The same holds for a body feature: a Block that already fails does not
+    // block the move, but one the move breaks is refused by name.
+    const blockFailed = {
+      featureId: blockFeature!.featureId,
+      featureName: 'Block',
+      message: 'Feature "Block": Box dimensions must be positive.',
+      kind: 'build-failed' as const
+    };
+    const brokenBlock = {
+      ...sketched,
+      derived: derived([blockFailed], false)
+    };
+    expect(
+      reorderRefusal(
+        brokenBlock,
+        derived([blockFailed], false),
+        sketch!.featureId,
+        0
+      )
+    ).toBeNull();
+    expect(
+      reorderRefusal(sketched, derived([], false), sketch!.featureId, 0)
+    ).toMatchObject({
+      featureName: 'Block',
+      message: 'The operation did not produce its result body.'
+    });
   });
 });
