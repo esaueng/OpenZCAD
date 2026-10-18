@@ -603,7 +603,7 @@ import {
   displayObjectsWithTextBudget
 } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
-import { CommandBar, type PaletteCommand } from './components/CommandBar';
+import type { PaletteCommand } from './components/CommandBar';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
@@ -795,6 +795,30 @@ const LazyMeasurementDock = lazyWithStaleChunkNotice(() =>
     default: module.MeasurementDock
   }))
 );
+// The search-and-ask bar belongs to the workspace alone; lazy, its command
+// parser and list stay off the entry chunk the start screen loads with,
+// which runs at its budget. Until it arrives the bar's own empty frame holds
+// its place, so the notice lane stacked on it does not move.
+const LazyCommandBar = lazyWithStaleChunkNotice(() =>
+  import('./components/CommandBar').then((module) => ({
+    default: module.CommandBar
+  }))
+);
+function CommandBar(props: ComponentProps<typeof LazyCommandBar>) {
+  return (
+    <ErrorBoundary label="Search bar">
+      <Suspense
+        fallback={
+          <div className="command-bar-row">
+            <div className="command-bar" />
+          </div>
+        }
+      >
+        <LazyCommandBar {...props} />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
 // The "?" control reference opens only on request; lazy, it also takes its
 // keyboard/pointer reference tables off the entry chunk.
 const LazyShortcutsOverlay = lazyWithStaleChunkNotice(() =>
@@ -15299,6 +15323,9 @@ export function App() {
       distance,
       symmetric: regionExtrudeSettings.current?.symmetric ?? false,
       backDistance: regionExtrudeSettings.current?.backDistance ?? 0,
+      // The form sends a side only with a through-all extent.
+      endCondition: regionExtrudeSettings.current?.endCondition,
+      throughAllSide: regionExtrudeSettings.current?.throughAllSide,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     };
   }
