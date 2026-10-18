@@ -106,3 +106,78 @@ test('switches a blind cut to through all and back through undo', async ({
   await expect(page.getByLabel('Extent')).toHaveValue('blind');
   await expect(panel).toContainText('15700', { timeout: 30_000 });
 });
+
+test('creates a cut through all straight from a sketch', async ({ page }) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  let document = createProjectDocument(
+    'Through-all create',
+    toUserId('user_e2e')
+  );
+  document = addPrimitiveFeature(document, {
+    name: 'Plate',
+    primitiveKind: 'box',
+    dimensions: { width: 40, height: 40, depth: 10 }
+  });
+  document = addSketchFeature(document, {
+    name: 'Slot sketch',
+    plane: 'XY',
+    offset: 10,
+    objects: [
+      {
+        objectKind: 'rectangle',
+        width: 10,
+        height: 10,
+        centerX: 20,
+        centerY: 20
+      }
+    ]
+  }).document;
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'POST'
+      ? route.fulfill({
+          status: 201,
+          json: {
+            project: {
+              projectId: document.projectId,
+              name: document.name,
+              revisionCount: 1,
+              updatedAt: new Date().toISOString()
+            },
+            document
+          }
+        })
+      : route.fulfill({ json: { projects: [] } })
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(document.name);
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+    'data-e2e-rendered-bodies',
+    '1',
+    { timeout: 30_000 }
+  );
+
+  await page.locator('.feature-row-main', { hasText: 'Slot sketch' }).click();
+  await page.keyboard.press('e');
+  const card = page.getByRole('region', { name: 'Extrude operation' });
+  await page
+    .getByRole('combobox', { name: 'Extrude operation', exact: true })
+    .selectOption('cut');
+  await card.getByLabel('Extent').selectOption('through-all');
+  await card.getByLabel('Through-all direction').selectOption('backward');
+  // No distance was typed: through all needs none.
+  await card.getByRole('button', { name: 'Create', exact: true }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Cut the region through all of the target.',
+    { timeout: 30_000 }
+  );
+  await expectBodyCount(page, 1);
+  const cut = page.locator('.feature-row-main', { hasText: 'Extrude' });
+  await cut.click();
+  await expect(page.locator('.panel-body')).toContainText('15000', {
+    timeout: 30_000
+  });
+  await expect(page.getByLabel('Extent')).toHaveValue('through-all');
+});
