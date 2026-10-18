@@ -6,9 +6,9 @@ of F01. It does not add an end-condition field or UI.
 > **Implemented (2026-10-18, schema v20).** `endCondition` ships as
 > `'blind' | 'through-all'` only; the other values listed below stay design
 > intent until their slices land, so a document cannot carry an end
-> condition no build implements. The first UI offers Through all when
-> editing an existing explicit cut; choosing it at creation, where the cut
-> target is still inferred, is a later slice. The OCCT parity reference
+> condition no build implements. The UI offers Through all whenever Cut is
+> chosen explicitly, when creating or editing; never while the operation
+> is still inferred, because through-all needs its one target. The OCCT parity reference
 > refuses a through-all feature rather than replaying its dormant distance. The implementation PR
 must update the F01 row in [ROADMAP.md](../../ROADMAP.md#f01) with the schema,
 history, and browser evidence described here.

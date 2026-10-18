@@ -78,6 +78,16 @@ describe('regionExtrudeOutcome', () => {
     const resolvedAs = (operation: 'new-body' | 'add' | 'cut') => ({
       inference: { operation }
     });
+    expect(
+      regionExtrudeOutcome(
+        {
+          ...resolvedAs('cut'),
+          command: { payload: { endCondition: 'through-all' } }
+        },
+        1,
+        'mm'
+      )
+    ).toBe('Cut the region through all of the target.');
     expect(regionExtrudeOutcome(resolvedAs('new-body'), 10, 'mm')).toBe(
       'Extruded region by 10 mm as a new body.'
     );
