@@ -442,11 +442,14 @@ function lwVertices(entity: DxfEntity): Vertex[] {
       bulged = true;
     }
   }
-  const declared = entity.groups.find((pair) => pair.code === 90);
+  // The vertex count (90) is how a truncated list is told apart from a
+  // short one, so exactly one, matching what was read, is required.
+  const declared = entity.groups.filter((pair) => pair.code === 90);
   if (
     pendingX !== null ||
     vertices.some((v) => !Number.isFinite(v.x + v.y + v.bulge)) ||
-    (declared !== undefined && dxfNumber(declared.value) !== vertices.length)
+    declared.length !== 1 ||
+    dxfNumber(declared[0]!.value) !== vertices.length
   ) {
     // A truncated vertex list would import as a different outline.
     throw incompleteVertices();

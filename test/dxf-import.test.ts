@@ -1116,6 +1116,32 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     }
   });
 
+  it('requires exactly one LWPOLYLINE vertex count', () => {
+    const square = [
+      '10',
+      '0',
+      '20',
+      '0',
+      '10',
+      '1',
+      '20',
+      '0',
+      '10',
+      '1',
+      '20',
+      '1'
+    ];
+    for (const counts of [[], ['90', '3', '90', '3']]) {
+      expect(() =>
+        importDxfSketch(dxf(['0', 'LWPOLYLINE', ...counts, ...square]), 'mm')
+      ).toThrow('incomplete or unusable vertex list');
+    }
+    expect(
+      importDxfSketch(dxf(['0', 'LWPOLYLINE', '90', '3', ...square]), 'mm')
+        .objects
+    ).toHaveLength(2);
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',
