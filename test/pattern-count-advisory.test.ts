@@ -57,6 +57,14 @@ describe('pattern count advisory (ZC-095)', () => {
     expect(bbox.max.x - bbox.min.x).toBeCloseTo(12, 6);
   });
 
+  it('keeps the fraction visible when it is too small for six digits', async () => {
+    const row = pattern('4.000002', 'seats / 2');
+    const derived = await adapter.syncDocument(row.document);
+    expect(derived.warnings).toEqual([
+      'Feature "Row": Pattern count evaluates to 2.000001, not a whole number; it was rounded to 2.'
+    ]);
+  });
+
   it('stays silent for a whole evaluated count', async () => {
     const row = pattern('6', 'seats / 2');
     const derived = await adapter.syncDocument(row.document);

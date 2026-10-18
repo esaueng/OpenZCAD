@@ -2420,10 +2420,14 @@ function buildPatternFeature(
     const raw = resolveParamValue(value, scope, label, ctx.document.units);
     const rounded = Math.round(raw);
     if (Math.abs(raw - rounded) > 1e-9) {
+      // Six digits reads well, but must not round away the very fraction
+      // being reported ("evaluates to 2 … rounded to 2").
+      const short = Number(raw.toPrecision(6));
+      const shown = short === rounded ? Number(raw.toPrecision(15)) : short;
       raiseFeatureWarning(
         result,
         feature,
-        `Pattern ${label} evaluates to ${Number(raw.toPrecision(6))}, not a whole number; it was rounded to ${rounded}.`,
+        `Pattern ${label} evaluates to ${shown}, not a whole number; it was rounded to ${rounded}.`,
         'advisory'
       );
     }
