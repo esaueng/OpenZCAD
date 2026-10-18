@@ -2548,16 +2548,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             topology: {
               faces: withSyncReadMemo(readMemo, () =>
                 projection.faceGroups.map((group) => {
-                  const hash = topologyHashOfWitness(
-                    'face',
-                    faceWitnessOf(kernel, group.handle)
-                  );
+                  const witness = faceWitnessOf(kernel, group.handle);
+                  const hash = topologyHashOfWitness('face', witness);
                   return {
                     topologyId: `face:${hash}`,
                     hash,
                     triangleStart: group.triangleStart,
                     triangleCount: group.triangleCount,
-                    geometry: measureFaceGeometry(kernel, group.handle)
+                    // NURBS area integration is completion metadata, not a
+                    // display requirement. Picks are held for this snapshot.
+                    geometry:
+                      witness.surfaceType === 'bspline'
+                        ? undefined
+                        : measureFaceGeometry(kernel, group.handle)
                   };
                 })
               ),

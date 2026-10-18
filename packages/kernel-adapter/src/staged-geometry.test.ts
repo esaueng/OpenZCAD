@@ -103,6 +103,12 @@ describe('validated geometry before analysis', () => {
             expect(geometry.topology).toBe('pending');
             expect(previewBody.topology?.faces.length).toBeGreaterThan(0);
             expect(previewBody.topology?.edges).toEqual([]);
+            if (!supported)
+              expect(
+                previewBody.topology?.faces.some(
+                  (face) => face.geometry === undefined
+                )
+              ).toBe(true);
           }
           const full = await adapter.syncDocument(candidate);
           if (supported) expect(recognition).toHaveBeenCalled();
