@@ -33,12 +33,16 @@ const CHECK = process.argv.includes('--check');
 // into: a budget only reports something when its edge is somewhere the code
 // can actually reach.
 //
-// 2026-10-18: raised to 512 KiB (524,288 bytes) at the maintainer's
-// direction. Main had grown back to within ~100 bytes of the 500 KiB edge,
-// so two unrelated features merging together (#718 and the F01 through-all
-// cut) failed the queue on 81 bytes. The entry and exact chunks get the same
-// 12 KiB of room; the next real growth should still come with a split.
-const DEFAULT_RAW_BUDGET = 512 * 1024;
+// 2026-10-18: raised to 1 MiB at the maintainer's direction. First-load time
+// is not the priority for this app; speed once loaded and not loading again
+// are. Splitting UI out of the entry chunk to stay under a tight edge trades
+// the other way: each split is a fetch the first time a tool opens, and a
+// deploy mid-session can leave it pointing at a chunk that no longer exists
+// (see `staleChunk.ts`). Main had grown back to within ~100 bytes of the old
+// 500 KiB edge, failing the queue on 81 bytes. 1 MiB stays a tripwire for a
+// runaway (an accidental large dependency, the kernel in the launcher)
+// rather than a reason to split UI; the kernel WASM keeps its own policy.
+const DEFAULT_RAW_BUDGET = 1024 * 1024;
 const APPROVED_LAZY_ASSETS = [
   {
     pattern: /^assets\/occt-wasm-.*\.wasm$/,
