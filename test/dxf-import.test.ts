@@ -1333,6 +1333,26 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(late.endAngleDeg - late.startAngleDeg).toBeCloseTo(350, 9);
   });
 
+  it('refuses a near-full arc whose gap a turn would round away', () => {
+    const text = dxf([
+      '0',
+      'ARC',
+      '10',
+      '0',
+      '20',
+      '0',
+      '40',
+      '1e15',
+      '50',
+      '1e-14',
+      '51',
+      '-1e-14'
+    ]);
+    expect(() => importDxfSketch(text, 'mm')).toThrow(
+      'would close into a full turn'
+    );
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',

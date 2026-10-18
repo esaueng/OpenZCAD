@@ -332,9 +332,14 @@ function ccwArc(
       'This DXF has an arc too short to represent: its sweep rounds to zero.'
     );
   }
-  if (distinctEnds && end - start >= 360) {
+  // Coincident ends were refused above, so a sweep that is now a whole turn
+  // means the turn added to straddle zero rounded the gap away (both ends
+  // too close to 0 for 360 to keep their digits): refuse, never close it.
+  if (end - start >= 360) {
     throw new DxfImportError(
-      'This DXF has a polyline bulge too extreme to convert exactly.'
+      distinctEnds
+        ? 'This DXF has a polyline bulge too extreme to convert exactly.'
+        : 'This DXF has an arc whose gap is too small to represent: it would close into a full turn.'
     );
   }
   return {
