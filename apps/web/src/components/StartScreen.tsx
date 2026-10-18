@@ -442,7 +442,13 @@ export function StartScreen({
   };
   // Filters narrow the Parts shelf only; Archive and Trash are short lists.
   const filterable = shelf === 'active';
-  const activeFilter: ShelfFilter = filterable ? filter : 'all';
+  // "This device only" means something only against an account listing;
+  // signed out, or with the listing unreachable, it would hide every part.
+  const activeFilter: ShelfFilter =
+    !filterable ||
+    (filter === 'local' && !(signedIn && accountProjectListReached))
+      ? 'all'
+      : filter;
   const filterCounts = Object.fromEntries(
     SHELF_FILTERS.map((entry) => [
       entry.id,

@@ -861,6 +861,26 @@ describe('StartScreen shelf filters, order and layout', () => {
     ).toBeNull();
   });
 
+  it('drops the device-only filter when there is no account to compare against', () => {
+    const props = startScreenProps({ projects, cloudProjectIds: new Set() });
+    const { rerender } = render(<StartScreen {...props} />);
+    fireEvent.click(
+      within(screen.getByRole('group', { name: 'Show parts' })).getByRole(
+        'button',
+        { name: /This device only/ }
+      )
+    );
+    expect(tileNames()).toHaveLength(projects.length);
+    rerender(<StartScreen {...props} signedIn={false} />);
+    expect(tileNames()).toHaveLength(projects.length);
+    expect(
+      within(screen.getByRole('group', { name: 'Show parts' })).getByRole(
+        'button',
+        { name: /^All/ }
+      )
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('shows an original with its recovery copies from the tile', () => {
     renderStartScreen({ projects });
     fireEvent.click(
