@@ -503,6 +503,52 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     );
   });
 
+  it('refuses an arc whose sweep rounds to zero', () => {
+    const text = dxf([
+      '0',
+      'ARC',
+      '10',
+      '0',
+      '20',
+      '0',
+      '40',
+      '1',
+      '50',
+      '0',
+      '51',
+      '4e-10'
+    ]);
+    expect(() => importDxfSketch(text, 'mm')).toThrow(
+      'its sweep rounds to zero'
+    );
+  });
+
+  it('refuses a zero-length LINE instead of quietly dropping it', () => {
+    const text = dxf([
+      '0',
+      'LINE',
+      '10',
+      '0',
+      '20',
+      '0',
+      '11',
+      '5',
+      '21',
+      '0',
+      '0',
+      'LINE',
+      '10',
+      '1',
+      '20',
+      '1',
+      '11',
+      '1',
+      '21',
+      '1'
+    ]);
+    expect(() => importDxfSketch(text, 'mm')).toThrow('endpoints coincide');
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',

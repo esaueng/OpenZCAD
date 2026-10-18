@@ -233,6 +233,11 @@ function ccwArc(
   if (end <= start) end += 360;
   start = Math.round(start * 1e9) / 1e9;
   end = Math.round(end * 1e9) / 1e9;
+  if (!(end > start)) {
+    throw new DxfImportError(
+      'This DXF has an arc too short to represent: its sweep rounds to zero.'
+    );
+  }
   return {
     objectKind: 'arc',
     centerX,
@@ -407,7 +412,14 @@ export function importDxfSketch(
           { x: number(entity, 11), y: number(entity, 21) },
           0
         );
-        if (line) add(line);
+        // A polyline's repeated vertex is harmless to skip; a LINE that is
+        // nothing but a point is a drawing the sketch cannot reproduce.
+        if (!line) {
+          throw new DxfImportError(
+            'This DXF is malformed: it has a LINE whose endpoints coincide.'
+          );
+        }
+        add(line);
         break;
       }
       case 'CIRCLE':
