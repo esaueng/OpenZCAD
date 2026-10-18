@@ -567,6 +567,23 @@ describe('new typed-parameter misuse', () => {
   });
 });
 
+describe('stored quantities at the mutation boundary', () => {
+  it('refuses an unknown type from an untyped payload', () => {
+    const document = setParameter(blank(), { name: 'w', expression: '1' });
+    const payload = {
+      name: 'w',
+      expression: '1',
+      quantity: 'mass'
+    } as unknown as Parameters<typeof setParameter>[1];
+    expect(() => setParameter(document, payload)).toThrow(
+      'Parameter "w" cannot take the unknown type "mass".'
+    );
+    expect(() => setParameter(blank(), { ...payload, name: 'fresh' })).toThrow(
+      /unknown type "mass"/
+    );
+  });
+});
+
 describe('stored quantities at load', () => {
   it('refuses a document whose parameter has an unknown type', () => {
     const document = setParameter(blank(), { name: 'w', expression: '1' });

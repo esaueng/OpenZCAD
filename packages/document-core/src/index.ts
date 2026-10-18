@@ -2999,6 +2999,17 @@ export function setParameter(
   if (input.expression.trim().length === 0) {
     throw new Error('Parameter expression must not be empty.');
   }
+  // A replayed or API payload is not type-checked: refuse a type this client
+  // does not know before it is stored and the document can no longer load.
+  if (
+    input.quantity !== undefined &&
+    input.quantity !== null &&
+    !(KNOWN_PARAMETER_KINDS as readonly unknown[]).includes(input.quantity)
+  ) {
+    throw new Error(
+      `Parameter "${name}" cannot take the unknown type ${JSON.stringify(input.quantity)}.`
+    );
+  }
   const next = cloneDocument(document);
   const parameters = listParameters(next);
   const existing = parameters.find((parameter) => parameter.name === name);
