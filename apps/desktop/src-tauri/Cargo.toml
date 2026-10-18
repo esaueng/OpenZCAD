@@ -41,3 +41,7 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+# GTK 0.18 cannot use GLib 0.20; keep the upstream iterator fix on every 0.18 path.
+[patch.crates-io]
+glib = { path = "vendor/glib" }

@@ -1,6 +1,8 @@
 name: Dependency audit
 on:
   pull_request: {}
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   schedule:
@@ -32,3 +34,13 @@ jobs:
           persist-credentials: false
       - run: cargo install cargo-audit --locked --version 0.22.2
       - run: cargo audit --file apps/desktop/src-tauri/Cargo.lock
+      - name: Verify desktop GLib backport resolution
+        run: |
+          cargo metadata --locked --format-version 1 --manifest-path apps/desktop/src-tauri/Cargo.toml |
+            jq -e '[.packages[] | select(.name == "glib" and .version == "0.18.5")] |
+              length == 1 and (.[0].source == null) and
+              (.[0].manifest_path | endswith("/src-tauri/vendor/glib/Cargo.toml"))'
+      - name: Install GLib regression test prerequisites
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev pkg-config
+      - name: Run optimized GLib iterator regression
+        run: cargo test --release --locked --manifest-path apps/desktop/glib-regression/Cargo.toml
