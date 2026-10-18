@@ -190,3 +190,193 @@ describe('on/off parameter controls', () => {
     expect(onSet).not.toHaveBeenCalled();
   });
 });
+
+describe('ParameterRow type picker (F05)', () => {
+  it('sets the quantity and shows a refusal', async () => {
+    const onSetQuantity = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        'Feature "Block" uses "width": expected a length.'
+      );
+    render(
+      <ParameterRow
+        parameter={parameter('80')}
+        value={80}
+        onSet={vi.fn()}
+        onSetQuantity={onSetQuantity}
+      />
+    );
+    const picker = screen.getByLabelText('Type of width');
+    expect(picker).toHaveValue('unitless');
+    fireEvent.change(picker, { target: { value: 'length' } });
+    expect(onSetQuantity).toHaveBeenLastCalledWith('width', 'length');
+    fireEvent.change(picker, { target: { value: 'angle' } });
+    expect(onSetQuantity).toHaveBeenLastCalledWith('width', 'angle');
+    expect(
+      await screen.findByText(/uses "width": expected a length/)
+    ).toBeInTheDocument();
+  });
+
+  it('clears a refusal on the next choice and ignores a superseded answer', async () => {
+    let answerFirst: (value: string | null) => void = () => {};
+    const onSetQuantity = vi
+      .fn()
+      .mockResolvedValueOnce('No: Feature "Block" uses "width".')
+      .mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (answerFirst = resolve))
+      )
+      .mockResolvedValueOnce(null);
+    render(
+      <ParameterRow
+        parameter={parameter('80')}
+        value={80}
+        onSet={vi.fn()}
+        onSetQuantity={onSetQuantity}
+      />
+    );
+    const picker = screen.getByLabelText('Type of width');
+    fireEvent.change(picker, { target: { value: 'angle' } });
+    expect(await screen.findByText(/No: Feature "Block"/)).toBeInTheDocument();
+    // A new choice clears it at once.
+    fireEvent.change(picker, { target: { value: 'number' } });
+    expect(screen.queryByText(/No: Feature "Block"/)).toBeNull();
+    // A later choice lands first; the slow refusal of the earlier one is
+    // stale and never shows.
+    fireEvent.change(picker, { target: { value: 'length' } });
+    await Promise.resolve();
+    answerFirst('Late refusal');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText('Late refusal')).toBeNull();
+  });
+
+  it('drops a refusal and an in-flight answer when undo retypes it', async () => {
+    let answer: (value: string | null) => void = () => {};
+    const onSetQuantity = vi
+      .fn()
+      .mockResolvedValueOnce('No: Feature "Block" uses "width".')
+      .mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (answer = resolve))
+      );
+    const props = {
+      value: 80,
+      onSet: vi.fn(),
+      onSetQuantity,
+      table: 'width:=80'
+    };
+    const { rerender } = render(
+      <ParameterRow parameter={parameter('80')} {...props} />
+    );
+    const picker = screen.getByLabelText('Type of width');
+    fireEvent.change(picker, { target: { value: 'angle' } });
+    expect(await screen.findByText(/No: Feature "Block"/)).toBeInTheDocument();
+    // Undo or a collaborator types it as a length; no expression changed.
+    const typed = { ...parameter('80'), quantity: 'length' as const };
+    rerender(<ParameterRow parameter={typed} {...props} />);
+    expect(screen.queryByText(/No: Feature "Block"/)).toBeNull();
+    expect(picker).toHaveValue('length');
+    // A choice in flight across a retype answers the old type: ignored.
+    fireEvent.change(picker, { target: { value: 'number' } });
+    rerender(
+      <ParameterRow
+        parameter={{ ...typed, quantity: 'angle' as const }}
+        {...props}
+      />
+    );
+    answer('Late refusal');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText('Late refusal')).toBeNull();
+  });
+
+  it('carries an expression draft into a retype instead of dropping it', async () => {
+    let answerExpression: (value: string | null) => void = () => {};
+    const onSet = vi.fn(
+      () =>
+        new Promise<string | null>((resolve) => (answerExpression = resolve))
+    );
+    const onSetQuantity = vi.fn().mockResolvedValue(null);
+    render(
+      <ParameterRow
+        parameter={parameter('80')}
+        value={80}
+        onSet={onSet}
+        onSetQuantity={onSetQuantity}
+      />
+    );
+    const field = screen.getByDisplayValue('80');
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '90' } });
+    // Choosing a type blurs the field first: its commit starts...
+    fireEvent.blur(field);
+    expect(onSet).toHaveBeenCalledWith('width', '90');
+    // ...and the retype carries the draft rather than the stored 80.
+    fireEvent.change(screen.getByLabelText('Type of width'), {
+      target: { value: 'length' }
+    });
+    expect(onSetQuantity).toHaveBeenLastCalledWith('width', 'length', '90');
+    // The superseded expression commit's answer is dropped.
+    answerExpression('Superseded by a newer edit.');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText('Superseded by a newer edit.')).toBeNull();
+  });
+
+  it('renders a stored type it does not know without crashing', () => {
+    render(
+      <ParameterRow
+        parameter={
+          { ...parameter('80'), quantity: 'mass' } as unknown as ParameterNode
+        }
+        value={80}
+        onSet={vi.fn()}
+        onSetQuantity={vi.fn()}
+      />
+    );
+    expect(screen.getByLabelText('Type of width')).toHaveAttribute(
+      'title',
+      'width is a mass'
+    );
+  });
+
+  it('offers a suggestion on a unitless parameter without applying it', () => {
+    const onSetQuantity = vi.fn();
+    render(
+      <ParameterRow
+        parameter={parameter('80')}
+        value={80}
+        onSet={vi.fn()}
+        onSetQuantity={onSetQuantity}
+        suggestedQuantity="length"
+      />
+    );
+    const picker = screen.getByLabelText('Type of width');
+    expect(picker).toHaveValue('unitless');
+    expect(picker).toHaveClass('suggested');
+    expect(picker).toHaveAttribute(
+      'title',
+      'width is unitless; its uses suggest a length'
+    );
+    expect(screen.getByRole('option', { name: 'Length' })).toHaveTextContent(
+      'len'
+    );
+    expect(onSetQuantity).not.toHaveBeenCalled();
+  });
+
+  it('clears to unitless with null and is absent where retyping is not offered', () => {
+    const onSetQuantity = vi.fn();
+    const typed = { ...parameter('80'), quantity: 'length' } as ParameterNode;
+    const { rerender } = render(
+      <ParameterRow
+        parameter={typed}
+        value={80}
+        onSet={vi.fn()}
+        onSetQuantity={onSetQuantity}
+      />
+    );
+    const picker = screen.getByLabelText('Type of width');
+    expect(picker).toHaveValue('length');
+    fireEvent.change(picker, { target: { value: 'unitless' } });
+    expect(onSetQuantity).toHaveBeenLastCalledWith('width', null);
+    rerender(<ParameterRow parameter={typed} value={80} onSet={vi.fn()} />);
+    expect(screen.queryByLabelText('Type of width')).toBeNull();
+  });
+});

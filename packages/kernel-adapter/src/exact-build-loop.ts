@@ -7,6 +7,7 @@ import {
 } from './exact-cancellation';
 import {
   getParameterScope,
+  typedParameterMisuse,
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import {
@@ -177,6 +178,14 @@ function* buildDocumentHistorySteps(
   deferredDirectEditFeatureId?: FeatureId
 ): Generator<void, ExactBuildResult> {
   const { scope, errors } = getParameterScope(document);
+  // F05: a feature fed a typed parameter as the wrong quantity (a length as
+  // a revolve angle) is refused by name rather than built from the number.
+  const misuse = new Map<string, string>();
+  for (const entry of typedParameterMisuse(document)) {
+    if (entry.featureId && !misuse.has(entry.featureId)) {
+      misuse.set(entry.featureId, entry.message);
+    }
+  }
   const result: ExactBuildResult = resume?.initial ?? {
     shapes: new Map(),
     sketchBases: new Map(),
@@ -247,6 +256,8 @@ function* buildDocumentHistorySteps(
         continue;
       }
       try {
+        const wrongQuantity = misuse.get(feature.featureId);
+        if (wrongQuantity) throw new Error(wrongQuantity);
         if (!primitiveReuse?.restore(index, feature, result)) {
           buildFeature(ctx, feature);
           primitiveReuse?.store(index, feature, result);
