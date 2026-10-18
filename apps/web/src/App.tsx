@@ -17958,6 +17958,8 @@ export function App() {
     }
     setTool(null);
     clearSelection();
+    // One re-pick at a time: the click goes to whichever was asked for last.
+    setDatumRepair(null);
     setFaceRepair(repair);
     const bodyName =
       representations[repair.targetBodyId]?.name ?? 'the edited body';
@@ -18096,6 +18098,7 @@ export function App() {
                 if (!ensureCanEdit('repair a feature')) return;
                 setTool(null);
                 clearSelection();
+                setFaceRepair(null);
                 setDatumRepair(feature);
                 setStatus(
                   `Re-pick the face for "${feature.name}": click a planar face · Esc cancels.`
