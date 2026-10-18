@@ -14,6 +14,7 @@ import {
   suggestParameterQuantities,
   suggestParameterQuantity
 } from './index';
+import { rewriteNodeExpressions } from './parameter-expressions';
 
 /**
  * F05 Stage 1a (schema v21): a parameter may say what it measures. A typed
@@ -177,6 +178,14 @@ describe('named cycles', () => {
     );
   });
 
+  it('does not read a name in call position as a self-reference', () => {
+    let document = setParameter(blank(), { name: 'foo', expression: '1' });
+    document = setParameter(document, { name: 'foo', expression: 'foo(1)' });
+    const { errors } = getParameterScope(document);
+    expect(errors.join('\n')).not.toMatch(/refers back to itself/);
+    expect(errors.join('\n')).toMatch(/foo/);
+  });
+
   it('handles a long broken chain in linear time without deep recursion', () => {
     // 20,000 parameters, each reading the next, the last an unknown name:
     // none is a cycle, and none may cost a walk of the whole chain.
@@ -308,5 +317,32 @@ describe('suggested quantities', () => {
     });
     // `0.01 m` is metres, not the parameter `m`: nothing reads it.
     expect(suggestParameterQuantities(document).m).toBeUndefined();
+  });
+});
+
+describe('raw-radians fields', () => {
+  it('admits only a unitless value into a countersink angle', () => {
+    const seen: Record<string, unknown> = {};
+    rewriteNodeExpressions(
+      {
+        kind: 'feature',
+        data: {
+          featureKind: 'direct-edit',
+          operation: {
+            kind: 'resize-imported-countersink',
+            boreDiameter: 'bore',
+            sinkDiameter: 'sink',
+            angleRadians: 'tilt'
+          }
+        }
+      } as unknown as Parameters<typeof rewriteNodeExpressions>[0],
+      (expression, dimension) => {
+        seen[expression] = dimension;
+        return expression;
+      }
+    );
+    // A typed angle (degrees) or length would be read as radians.
+    expect(seen.tilt).toBe('number');
+    expect(seen.bore).toBe('length');
   });
 });
