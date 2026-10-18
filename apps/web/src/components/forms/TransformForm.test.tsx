@@ -126,3 +126,41 @@ describe('Move pivot (M10)', () => {
     expect(onSubmit.mock.calls[0]![0]).not.toHaveProperty('pivot');
   });
 });
+
+describe('Move edit card field types (F05)', () => {
+  it('reads moves and the pivot as lengths and turns as angles', () => {
+    const onSubmit = vi.fn();
+    render(
+      <TransformForm
+        scope={{}}
+        bodies={[{ bodyId: 'body-1' as BodyId, name: 'Box', consumed: false }]}
+        units="mm"
+        initial={{
+          name: 'Move',
+          targetBodyId: 'body-1' as BodyId,
+          translation: zero,
+          rotationDeg: zero
+        }}
+        submitLabel="Apply"
+        onSubmit={onSubmit}
+      />
+    );
+    const apply = screen.getByRole('button', { name: 'Apply' });
+    const pivotX = screen.getByLabelText('Pivot X in mm');
+    // A length with its unit is a length here...
+    fireEvent.change(pivotX, { target: { value: '10 mm' } });
+    expect(apply).toBeEnabled();
+    // ...and an angle is not, though it evaluates to a number.
+    fireEvent.change(pivotX, { target: { value: '30 deg' } });
+    expect(apply).toBeDisabled();
+    fireEvent.change(pivotX, { target: { value: '1 cm' } });
+    fireEvent.change(screen.getByLabelText('Rotate Z in degrees'), {
+      target: { value: '1 rad' }
+    });
+    expect(apply).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('Move X in mm'), {
+      target: { value: '30 deg' }
+    });
+    expect(apply).toBeDisabled();
+  });
+});
