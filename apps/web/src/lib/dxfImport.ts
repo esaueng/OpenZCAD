@@ -575,8 +575,15 @@ export function importDxfSketch(
           index += 1;
           vertexEntities.push(entities[index]!);
         }
-        // 3D polylines (8) and meshes (16, 64) are not 2D sketch geometry.
-        if ((flags & (8 | 16 | 64)) !== 0) {
+        // 3D polylines (8) and meshes (16, 64) are not 2D sketch geometry,
+        // and neither are their records when the parent flag is missing:
+        // VERTEX 32 is a 3D vertex, 64 a mesh vertex, 128 a polyface one.
+        if (
+          (flags & (8 | 16 | 64)) !== 0 ||
+          vertexEntities.some(
+            (vertex) => (number(vertex, 70, 0) & (32 | 64 | 128)) !== 0
+          )
+        ) {
           count(refused, 'POLYLINE (3D or mesh)');
           break;
         }

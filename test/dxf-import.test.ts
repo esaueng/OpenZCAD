@@ -1074,6 +1074,48 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     );
   });
 
+  it('refuses a POLYLINE whose vertices are 3D or mesh records', () => {
+    for (const flag of ['32', '64', '128']) {
+      const result = importDxfSketch(
+        dxf([
+          '0',
+          'POLYLINE',
+          '70',
+          '0',
+          '0',
+          'VERTEX',
+          '10',
+          '0',
+          '20',
+          '0',
+          '70',
+          flag,
+          '0',
+          'VERTEX',
+          '10',
+          '5',
+          '20',
+          '0',
+          '70',
+          flag,
+          '0',
+          'SEQEND',
+          '0',
+          'CIRCLE',
+          '10',
+          '0',
+          '20',
+          '0',
+          '40',
+          '1'
+        ]),
+        'mm'
+      );
+      expect(result.objects).toHaveLength(1);
+      expect(result.refused).toEqual({ 'POLYLINE (3D or mesh)': 1 });
+    }
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',
