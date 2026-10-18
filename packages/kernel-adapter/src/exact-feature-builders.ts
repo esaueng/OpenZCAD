@@ -2420,10 +2420,17 @@ function buildPatternFeature(
     const raw = resolveParamValue(value, scope, label, ctx.document.units);
     const rounded = Math.round(raw);
     if (Math.abs(raw - rounded) > 1e-9) {
-      // Six digits reads well, but must not round away the very fraction
-      // being reported ("evaluates to 2 … rounded to 2").
-      const short = Number(raw.toPrecision(6));
-      const shown = short === rounded ? Number(raw.toPrecision(15)) : short;
+      // Six digits reads well, but the shown value must stay fractional and
+      // on the same side of the rounding threshold as `raw`: 2.000001 must
+      // not read as 2, nor 2.4999999 as 2.5 "rounded to 2".
+      let shown = raw;
+      for (let digits = 6; digits <= 15; digits += 1) {
+        const candidate = Number(raw.toPrecision(digits));
+        if (candidate !== rounded && Math.round(candidate) === rounded) {
+          shown = candidate;
+          break;
+        }
+      }
       raiseFeatureWarning(
         result,
         feature,

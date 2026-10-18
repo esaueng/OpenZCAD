@@ -65,6 +65,14 @@ describe('pattern count advisory (ZC-095)', () => {
     ]);
   });
 
+  it('never shows a value on the other side of the rounding threshold', async () => {
+    const row = pattern('4.9999998', 'seats / 2');
+    const derived = await adapter.syncDocument(row.document);
+    expect(derived.warnings).toEqual([
+      'Feature "Row": Pattern count evaluates to 2.4999999, not a whole number; it was rounded to 2.'
+    ]);
+  });
+
   it('stays silent for a whole evaluated count', async () => {
     const row = pattern('6', 'seats / 2');
     const derived = await adapter.syncDocument(row.document);
