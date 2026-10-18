@@ -312,6 +312,35 @@ describe('F01 through-all: exact build', () => {
     );
   });
 
+  it('refuses a profile moved off the target footprint instead of cutting nothing', async () => {
+    const { document, blockId } = block(10);
+    const sketched = addSketchFeature(document, {
+      name: 'Off sketch',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        {
+          objectKind: 'rectangle',
+          width: 4,
+          height: 4,
+          centerX: 60,
+          centerY: 10
+        }
+      ]
+    });
+    const result = extrudeSketch(sketched.document, {
+      name: 'Off cut',
+      sketchId: sketched.sketchId,
+      distance: 2,
+      operation: 'cut',
+      targetBodyId: blockId,
+      endCondition: 'through-all',
+      throughAllSide: 'forward'
+    });
+    const derived = await adapter.syncDocument(result.document);
+    expect(derived.warnings.join('\n')).toMatch(/no longer overlaps/);
+    expect(derived.bodyRepresentations[result.bodyId]).toBeUndefined();
+  });
+
   it('refuses a side that misses the target, naming it', async () => {
     const { document, blockId } = block(10);
     const result = cut(document, blockId, 'backward', 0);

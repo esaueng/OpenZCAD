@@ -579,24 +579,27 @@ function buildExtrudeFeature(
       feature.bodyId,
       feature.name
     );
+    // A through-all tool carries empty travel from a possibly distant sketch
+    // plane, so its own size says nothing about this target's scale: both
+    // the overlap check and the remove-everything guard below are measured
+    // against the target alone, or a thin distant target reads as untouched.
+    const throughAllTolerance =
+      data.endCondition === 'through-all'
+        ? extrudeVolumeTolerance(targetBody, targetBody)
+        : undefined;
     const sharedVolume = sharedShapeVolume(
       kernel,
       target,
       extrusion,
       targetBody,
-      extrusionBody
+      extrusionBody,
+      throughAllTolerance
     );
     // A cut needs shared material: with none there is nothing to remove, and
-    // that can be settled before doing any work. Not for through-all: its
-    // span is derived from this target (a side that misses it already
-    // refused), and the long empty travel from a distant sketch plane can
-    // swamp the overlap measurement's tolerance on a thin target. The cut's
-    // own exact refusal still stands.
-    if (
-      operation === 'cut' &&
-      data.endCondition !== 'through-all' &&
-      sharedVolume <= 0
-    ) {
+    // that can be settled before doing any work. That holds for through-all
+    // too, whose span covers the target along the normal but not a profile
+    // moved off the target's footprint.
+    if (operation === 'cut' && sharedVolume <= 0) {
       // Wording unchanged on purpose: `isMeasuredZeroOverlap` in the web app
       // matches this sentence to tell a measured zero-overlap candidate from
       // a kernel refusal.
@@ -731,13 +734,9 @@ function buildExtrudeFeature(
         }
       }
     };
-    // A through-all tool carries empty travel from a possibly distant sketch
-    // plane, so its own size says nothing about this target's scale; measure
-    // the guard against the target alone.
     const removalTolerance =
-      data.endCondition === 'through-all'
-        ? extrudeVolumeTolerance(targetBody, targetBody)
-        : extrudeVolumeTolerance(targetBody, extrusionBody);
+      throughAllTolerance ??
+      extrudeVolumeTolerance(targetBody, extrusionBody);
     if (operation === 'cut' && resultBody.volume <= removalTolerance) {
       throw new Error(
         `Stored cut extrusion would remove all of ${targetBody.name}; operation was not changed.`
