@@ -11,7 +11,13 @@ import {
   datumPlaneDisplays
 } from '../lib/datumPlaneDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
-import { useMemo, useRef, type MutableRefObject, type ReactNode } from 'react';
+import {
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type ReactNode
+} from 'react';
 import {
   ModelViewer,
   type BodyAppearancePreview,
@@ -500,10 +506,13 @@ export function ViewerShell({
           hiddenDatumIds ?? new Set()
         )
       : null;
-  const datumHandleKey = datumHandle ? JSON.stringify(datumHandle) : '';
-  // The pin keeps its last value between gestures on one target, so each
-  // commit sends only what this gesture added to the card's Offset.
-  const datumCommitted = useRef({ key: '', value: 0 });
+  // Every datum gesture starts a fresh pin at zero: the gesture count is
+  // part of the target, so a release (accepted, refused or back at zero)
+  // rebuilds the rig and no gesture carries the last one's value.
+  const [datumGesture, setDatumGesture] = useState(0);
+  const datumHandleKey = datumHandle
+    ? JSON.stringify({ ...datumHandle, gesture: datumGesture })
+    : '';
   const datumOffsetTarget = useMemo<OffsetHandleTarget | null>(() => {
     if (!datumHandleKey) return null;
     const handle = JSON.parse(datumHandleKey) as NonNullable<
@@ -634,13 +643,8 @@ export function ViewerShell({
         onOffsetPreview={datumOffsetTarget ? () => {} : onOffsetPreview}
         onOffsetCommit={(value) => {
           if (!datumHandle || !onDatumOffsetDrag) return onOffsetCommit(value);
-          if (datumCommitted.current.key !== datumHandleKey) {
-            datumCommitted.current = { key: datumHandleKey, value: 0 };
-          }
-          const delta = value - datumCommitted.current.value;
-          const accepted = onDatumOffsetDrag(delta * datumHandle.sense);
-          if (accepted) datumCommitted.current.value = value;
-          return accepted;
+          setDatumGesture((gesture) => gesture + 1);
+          return onDatumOffsetDrag(value * datumHandle.sense);
         }}
         onOffsetCancel={onOffsetCancel}
         offsetPreviewInvalid={offsetPreviewInvalid}

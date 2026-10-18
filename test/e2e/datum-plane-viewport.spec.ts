@@ -99,10 +99,22 @@ test('drags a selected datum plane along its normal and picks it in the viewport
   const first = Number(await offset.inputValue());
   // A second gesture adds only its own distance, not the pin's running
   // total: dragging back 2 lands near first − 2.
-  const again = await canvas.evaluate((element) => ({
-    x: Number(element.dataset.e2eHandleX),
-    y: Number(element.dataset.e2eHandleY)
-  }));
+  // Each release rebuilds the pin at zero; read it once it has settled.
+  const pinAt = () =>
+    canvas.evaluate((element) => ({
+      x: Number(element.dataset.e2eHandleX),
+      y: Number(element.dataset.e2eHandleY)
+    }));
+  let again = await pinAt();
+  await expect
+    .poll(async () => {
+      await page.waitForTimeout(150);
+      const next = await pinAt();
+      const settled = next.x === again.x && next.y === again.y;
+      again = next;
+      return settled && Number.isFinite(next.x);
+    })
+    .toBe(true);
   await page.mouse.move(bounds.x + again.x, bounds.y + again.y);
   await page.mouse.down();
   await page.mouse.move(
