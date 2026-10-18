@@ -410,6 +410,55 @@ describe('DXF geometry that is not on Top is refused, never flattened', () => {
   });
 });
 
+describe('DXF inputs that would corrupt the sketch refuse by name', () => {
+  it('refuses coordinates that overflow when converted into the document units', () => {
+    const text = dxf(['0', 'CIRCLE', '10', '1e308', '20', '0', '40', '1'], 1);
+    expect(() => importDxfSketch(text, 'mm')).toThrow(
+      'This DXF has coordinates too large to convert into the document units.'
+    );
+  });
+
+  it.each([
+    [
+      'fewer vertices than group 90 declares',
+      ['90', '3', '70', '0', '10', '0', '20', '0', '10', '1', '20', '0']
+    ],
+    [
+      'a trailing X with no Y',
+      [
+        '90',
+        '2',
+        '70',
+        '0',
+        '10',
+        '0',
+        '20',
+        '0',
+        '10',
+        '1',
+        '20',
+        '0',
+        '10',
+        '5'
+      ]
+    ]
+  ])('refuses a LWPOLYLINE with %s', (_label, groups) => {
+    expect(() =>
+      importDxfSketch(dxf(['0', 'LWPOLYLINE', ...groups]), 'mm')
+    ).toThrow('a LWPOLYLINE has an incomplete or unusable vertex list');
+  });
+
+  it('stops one huge polyline at the curve cap with the named refusal', () => {
+    const count = 150_000;
+    const groups = ['90', String(count), '70', '0'];
+    for (let i = 0; i < count; i += 1)
+      groups.push('10', String(i), '20', String(i % 2));
+    expect(() =>
+      importDxfSketch(dxf(['0', 'LWPOLYLINE', ...groups]), 'mm')
+    ).toThrow(/more than 2000 curves/);
+  });
+});
+
 describe('DXF sketch import plan', () => {
   const doc = (units: 'mm' | 'inch' = 'mm') =>
     createProjectDocument('DXF', toUserId('user_dxf'), units);

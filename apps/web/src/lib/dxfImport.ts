@@ -254,16 +254,19 @@ interface Vertex {
   bulge: number;
 }
 
-function polylineObjects(vertices: Vertex[], closed: boolean) {
-  const objects: SketchObjectData[] = [];
+/** Emits a polyline's segments one by one, so a cap can stop it early. */
+function polylineObjects(
+  vertices: Vertex[],
+  closed: boolean,
+  add: (object: SketchObjectData) => void
+): void {
   const count = closed ? vertices.length : vertices.length - 1;
   for (let index = 0; index < count; index += 1) {
     const from = vertices[index]!;
     const to = vertices[(index + 1) % vertices.length]!;
     const piece = segment(from, to, from.bulge);
-    if (piece) objects.push(piece);
+    if (piece) add(piece);
   }
-  return objects;
 }
 
 /** LWPOLYLINE vertices: each 10/20 pair, with any 42 bulge that follows. */
@@ -279,9 +282,15 @@ function lwVertices(entity: DxfEntity): Vertex[] {
       vertices.at(-1)!.bulge = Number(pair.value);
     }
   }
-  if (vertices.some((v) => !Number.isFinite(v.x + v.y + v.bulge))) {
+  const declared = entity.groups.find((pair) => pair.code === 90);
+  if (
+    pendingX !== null ||
+    vertices.some((v) => !Number.isFinite(v.x + v.y + v.bulge)) ||
+    (declared !== undefined && Number(declared.value) !== vertices.length)
+  ) {
+    // A truncated vertex list would import as a different outline.
     throw new DxfImportError(
-      'This DXF is malformed: a LWPOLYLINE has an unusable vertex.'
+      'This DXF is malformed: a LWPOLYLINE has an incomplete or unusable vertex list.'
     );
   }
   return vertices;
@@ -315,13 +324,32 @@ export function importDxfSketch(
   const sourceMm = known ? known.mm : UNIT_TO_MM[unitless];
   const scale = sourceMm / UNIT_TO_MM[documentUnits];
   // `|| 0` folds -0 to 0, so stored coordinates never carry a signed zero.
-  const s = (value: number) => Math.round(value * scale * 1e9) / 1e9 || 0;
+  const s = (value: number) => {
+    const scaled = Math.round(value * scale * 1e9) / 1e9 || 0;
+    if (!Number.isFinite(scaled)) {
+      throw new DxfImportError(
+        'This DXF has coordinates too large to convert into the document units.'
+      );
+    }
+    return scaled;
+  };
 
   const objects: SketchObjectData[] = [];
   const dropped: Record<string, number> = {};
   const refused: Record<string, number> = {};
   const count = (into: Record<string, number>, type: string) => {
     into[type] = (into[type] ?? 0) + 1;
+  };
+
+  // Checked per curve, so one huge polyline stops at the cap instead of
+  // building every segment first.
+  const add = (object: SketchObjectData) => {
+    if (objects.length >= MAX_DXF_SKETCH_OBJECTS) {
+      throw new DxfImportError(
+        `This DXF has more than ${MAX_DXF_SKETCH_OBJECTS} curves; a sketch takes at most that many.`
+      );
+    }
+    objects.push(object);
   };
 
   const entities = entitiesOf(entitiesSection);
@@ -343,11 +371,11 @@ export function importDxfSketch(
           { x: number(entity, 11), y: number(entity, 21) },
           0
         );
-        if (line) objects.push(line);
+        if (line) add(line);
         break;
       }
       case 'CIRCLE':
-        objects.push({
+        add({
           objectKind: 'circle',
           centerX: number(entity, 10),
           centerY: number(entity, 20),
@@ -355,7 +383,7 @@ export function importDxfSketch(
         });
         break;
       case 'ARC':
-        objects.push(
+        add(
           ccwArc(
             number(entity, 10),
             number(entity, 20),
@@ -366,11 +394,10 @@ export function importDxfSketch(
         );
         break;
       case 'LWPOLYLINE':
-        objects.push(
-          ...polylineObjects(
-            lwVertices(entity),
-            (number(entity, 70, 0) & 1) === 1
-          )
+        polylineObjects(
+          lwVertices(entity),
+          (number(entity, 70, 0) & 1) === 1,
+          add
         );
         break;
       case 'POLYLINE': {
@@ -401,17 +428,12 @@ export function importDxfSketch(
           y: number(vertex, 20),
           bulge: number(vertex, 42, 0)
         }));
-        objects.push(...polylineObjects(vertices, (flags & 1) === 1));
+        polylineObjects(vertices, (flags & 1) === 1, add);
         break;
       }
       default:
         // ELLIPSE, SPLINE, 3DFACE, REGION, … have no exact sketch object.
         count(refused, entity.type);
-    }
-    if (objects.length > MAX_DXF_SKETCH_OBJECTS) {
-      throw new DxfImportError(
-        `This DXF has more than ${MAX_DXF_SKETCH_OBJECTS} curves; a sketch takes at most that many.`
-      );
     }
   }
 
