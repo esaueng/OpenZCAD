@@ -403,6 +403,18 @@ export type CadPatchOperation =
       datum: CadDatumRef;
     }
   | {
+      /**
+       * Cuts a body in two at a datum plane. `localId` names the half the
+       * plane normal points toward, `secondLocalId` the other half.
+       */
+      kind: 'add_datum_split';
+      name: string;
+      localId?: LocalBodyId;
+      secondLocalId?: LocalBodyId;
+      targetBodyId: BodyRef;
+      datum: CadDatumRef;
+    }
+  | {
       kind: 'add_edge_modifier';
       name: string;
       localId?: LocalBodyId;
@@ -2138,6 +2150,7 @@ export const AI_CAD_OPERATION_CAPABILITIES = {
   add_datum_plane: { enabled: true, reason: null },
   add_datum_sketch: { enabled: true, reason: null },
   add_datum_mirror: { enabled: true, reason: null },
+  add_datum_split: { enabled: true, reason: null },
   recognized_imported_feature: {
     enabled: true,
     reason: null
@@ -2713,6 +2726,30 @@ export const CAD_PATCH_JSON_SCHEMA = {
               datum: datumRefSchema
             },
             required: ['kind', 'name', 'localId', 'targetBodyId', 'datum']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', const: 'add_datum_split' },
+              name: { type: 'string' },
+              localId: localIdSchema,
+              secondLocalId: {
+                ...localIdSchema,
+                description:
+                  'Alias for the half on the side opposite the datum normal, or null.'
+              },
+              targetBodyId: bodyRefSchema,
+              datum: datumRefSchema
+            },
+            required: [
+              'kind',
+              'name',
+              'localId',
+              'secondLocalId',
+              'targetBodyId',
+              'datum'
+            ]
           },
           {
             type: 'object',
@@ -4308,6 +4345,29 @@ export function parseCadPatchProposal(
         );
         declareBodyLocalId(operation, declared, declaredBodies);
         break;
+      case 'add_datum_split':
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string' ||
+          (operation.secondLocalId !== undefined &&
+            operation.secondLocalId !== null &&
+            typeof operation.secondLocalId !== 'string')
+        ) {
+          throw new Error('Invalid add_datum_split operation.');
+        }
+        requireDatumRef(operation.datum, declaredDatums, 'add_datum_split');
+        requireBodyRef(
+          operation.targetBodyId,
+          declaredBodies,
+          'add_datum_split targetBodyId'
+        );
+        declareBodyLocalId(operation, declared, declaredBodies);
+        declareBodyLocalId(
+          { localId: operation.secondLocalId },
+          declared,
+          declaredBodies
+        );
+        break;
       case 'add_edge_modifier': {
         const edgeSelector = operation.edgeSelector;
         const stagedSelector =
@@ -4938,6 +4998,7 @@ export function validateCadPatchProposalAgainstDigest(
       }
       case 'add_datum_sketch':
       case 'add_datum_mirror':
+      case 'add_datum_split':
         requireDigestDatum(digest, operation.datum, operation.kind);
         break;
       case 'add_face_sketch': {
@@ -5055,6 +5116,8 @@ export function describeCadPatchOperation(
       return `Create sketch ${operation.name} on datum ${operation.datum}`;
     case 'add_datum_mirror':
       return `Mirror body ${operation.targetBodyId} across datum ${operation.datum} as ${operation.name}`;
+    case 'add_datum_split':
+      return `Split body ${operation.targetBodyId} at datum ${operation.datum} as ${operation.name}`;
     case 'add_edge_modifier':
       return `${operation.modifier} ${
         operation.edgeSelector === 'all-feature-edges'

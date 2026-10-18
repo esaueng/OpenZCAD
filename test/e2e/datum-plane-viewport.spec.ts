@@ -94,6 +94,10 @@ test('drags a selected datum plane along its normal and picks it in the viewport
     bounds.y + handle.y + handle.dy * handle.pixelsPerUnit * 5,
     { steps: 6 }
   );
+  // The plane follows the pin while the drag is still under way.
+  await expect
+    .poll(async () => (await drawnDatums(canvas))[0]?.origin.z)
+    .toBeGreaterThan(17);
   await page.mouse.up();
   // The drag fills the open Plane card's Offset; Apply commits it.
   const offset = page.getByLabel('Offset', { exact: true });
@@ -133,10 +137,22 @@ test('drags a selected datum plane along its normal and picks it in the viewport
   const dragged = Number(await offset.inputValue());
   // Back about 2 from the first drag, not first + (first − 15) − 2.
   expect(dragged).toBeGreaterThan(first - 3);
-  // A draft that is no longer a plain-number Offset withdraws the pin: a
-  // Midplane has no Offset, and an expression is not dragged.
+  // Released, the plane stays where the card's Offset says, ahead of Apply,
+  // and a typed Offset moves it too.
+  await expect
+    .poll(async () => (await drawnDatums(canvas))[0]?.origin.z)
+    .toBeCloseTo(dragged, 6);
+  await offset.fill('25');
+  await expect
+    .poll(async () => (await drawnDatums(canvas))[0]?.origin.z)
+    .toBeCloseTo(25, 6);
+  // A draft that changes more than the distance disarms the pin and shows
+  // the built plane: a Midplane, or an Offset that is an expression.
   await page.getByRole('button', { name: 'Midplane', exact: true }).click();
   await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /\d/);
+  await expect
+    .poll(async () => (await drawnDatums(canvas))[0]?.origin.z)
+    .toBeCloseTo(15, 6);
   await page.getByRole('button', { name: 'Offset plane', exact: true }).click();
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /\d/);
   await offset.fill('lid + 1');

@@ -2051,12 +2051,26 @@ export function App() {
     useState<StaleDirectEditFaceRepair | null>(null);
   /** The open Plane card's handler for a drag of its datum's handle. */
   const datumOffsetDragRef = useRef<((delta: number) => void) | null>(null);
+  /** The open Plane card's draft Offset, drawn ahead of its Apply. */
+  const [datumOffsetDraft, setDatumOffsetDraft] = useState<number | null>(
+    null
+  );
   /** Whether the open Plane card's draft can take a drag: a numeric offset. */
   const [datumDragAvailable, setDatumDragAvailable] = useState(false);
   /** The open Plane card's exact entry for its datum's handle. */
   const datumOffsetEntryRef = useRef<(() => boolean) | null>(null);
   /** R01: an offset datum whose source face is being re-picked. */
-  const [datumRepair, setDatumRepair] = useState<FeatureNode | null>(null);
+  /**
+   * R01: a datum whose source face is being re-picked. `both` re-picks a
+   * midplane's two faces in turn (A, then B) and commits them as one edit;
+   * `first` holds the A pick while B is awaited.
+   */
+  const [datumRepair, setDatumRepair] = useState<{
+    feature: FeatureNode;
+    slot: 0 | 1;
+    both?: boolean;
+    first?: TopologySelection;
+  } | null>(null);
   const [formFacePickTarget, setFormFacePickTarget] = useState<BodyId | null>(
     null
   );
@@ -12589,27 +12603,51 @@ export function App() {
     if (datumRepair && !measuring && tool === null && !modelingLocked) {
       const base = managerRef.current?.document;
       if (!selection || !base) return;
-      const repair = datumRepair;
+      const { feature: repair, slot, both, first } = datumRepair;
       const attempt = datumRepairAttempt.current;
       const withdrawn = () => datumRepairAttempt.current !== attempt;
-      void import('./lib/datumPlanes').then(({ datumFaceRepairEdit }) => {
-        if (withdrawn()) return;
-        try {
-          const edit = datumFaceRepairEdit(base, repair.featureId, selection);
-          void validatedFeature.runTransaction([edit.command], {
-            label: edit.label,
-            cancelled: withdrawn,
-            targets: affectedFeatureTargets(base, repair.featureId),
-            validateDerived: edit.validateDerived,
-            successMessage: `"${repair.name}" follows the re-picked face.`,
-            onSuccess: () => setDatumRepair(null),
-            // Stay armed: the next click can try another face.
-            onFailure: setStatus
-          });
-        } catch (error) {
-          setStatus(errorMessage(error, 'That face cannot carry this plane.'));
+      void import('./lib/datumPlanes').then(
+        ({ datumFaceRepairEdit, datumFaceSourceFromPick }) => {
+          if (withdrawn()) return;
+          try {
+            if (both && !first) {
+              // Check face A now, so a bad pick is refused where it was made.
+              datumFaceSourceFromPick(base, repair.name, selection);
+              setDatumRepair({
+                feature: repair,
+                slot: 0,
+                both,
+                first: selection
+              });
+              setStatus(
+                `Face A taken · now click face B for "${repair.name}" · Esc cancels.`
+              );
+              return;
+            }
+            const edit = first
+              ? datumFaceRepairEdit(base, repair.featureId, first, 0, selection)
+              : datumFaceRepairEdit(base, repair.featureId, selection, slot);
+            void validatedFeature.runTransaction([edit.command], {
+              label: edit.label,
+              cancelled: withdrawn,
+              targets: affectedFeatureTargets(base, repair.featureId),
+              validateDerived: edit.validateDerived,
+              successMessage: `"${repair.name}" follows the re-picked face.`,
+              onSuccess: () => setDatumRepair(null),
+              // Stay armed: the next click can try another face (both faces
+              // again, from A, when the pair was refused).
+              onFailure: (message) => {
+                setStatus(message);
+                if (first) {
+                  setDatumRepair({ feature: repair, slot: 0, both: true });
+                }
+              }
+            });
+          } catch (error) {
+            setStatus(errorMessage(error, 'That face cannot carry this plane.'));
+          }
         }
-      });
+      );
       return;
     }
     // A form that collects faces owns every viewport pick while it is open:
@@ -18157,13 +18195,12 @@ export function App() {
             }
           ]
         : []),
-      // R01: an offset plane whose source face no longer resolves. Only the
-      // build's own "cannot attach" failure proves that; a datum still
-      // rebuilding, or failing for another reason (a bad offset
+      // R01: a datum on a face that no longer resolves: one entry per face
+      // source (a midplane names A or B, since either may be the lost one).
+      // Only the build's own "cannot attach" failure proves the loss; a
+      // datum still rebuilding, or failing for another reason (a bad offset
       // expression), is not something a new face could fix.
       ...(feature.data.featureKind === 'datum-plane' &&
-      feature.data.definition.kind === 'offset' &&
-      feature.data.definition.source.type === 'face' &&
       !isFeatureSuppressed(feature) &&
       !doc?.derived.datumFrames?.[feature.featureId] &&
       datumFaceAttachFailed(
@@ -18172,25 +18209,65 @@ export function App() {
           ? featureAttribution.featureWarnings
           : []
       )
-        ? [
-            {
-              item: {
-                id: 'repair-datum-face',
-                label: 'Re-pick source face…',
-                icon: <Crosshair size={13} aria-hidden="true" />
-              },
-              run: () => {
-                if (!ensureCanEdit('repair a feature')) return;
-                setTool(null);
-                clearSelection();
-                setFaceRepair(null);
-                setDatumRepair(feature);
-                setStatus(
-                  `Re-pick the face for "${feature.name}": click a planar face · Esc cancels.`
-                );
+        ? (feature.data.definition.kind === 'offset'
+            ? [feature.data.definition.source]
+            : feature.data.definition.sources
+          ).flatMap((source, index) => {
+            if (source.type !== 'face') return [];
+            const slot = index as 0 | 1;
+            const midplane =
+              feature.data.featureKind === 'datum-plane' &&
+              feature.data.definition.kind === 'midplane';
+            const which = midplane ? ` ${slot === 0 ? 'A' : 'B'}` : '';
+            return [
+              {
+                item: {
+                  id: `repair-datum-face${midplane ? `-${slot}` : ''}`,
+                  label: `Re-pick source face${which}…`,
+                  icon: <Crosshair size={13} aria-hidden="true" />
+                },
+                run: () => {
+                  if (!ensureCanEdit('repair a feature')) return;
+                  setTool(null);
+                  clearSelection();
+                  setFaceRepair(null);
+                  setDatumRepair({ feature, slot });
+                  setStatus(
+                    `Re-pick ${midplane ? `face${which}` : 'the face'} for "${feature.name}": click a planar face · Esc cancels.`
+                  );
+                }
               }
-            }
-          ]
+            ];
+          })
+          .concat(
+            // Both of a midplane's faces lost (a deleted body held them):
+            // either alone still leaves the plane unresolved, so pick both.
+            feature.data.featureKind === 'datum-plane' &&
+              feature.data.definition.kind === 'midplane' &&
+              feature.data.definition.sources.every(
+                (source) => source.type === 'face'
+              )
+              ? [
+                  {
+                    item: {
+                      id: 'repair-datum-faces-both',
+                      label: 'Re-pick both source faces…',
+                      icon: <Crosshair size={13} aria-hidden="true" />
+                    },
+                    run: () => {
+                      if (!ensureCanEdit('repair a feature')) return;
+                      setTool(null);
+                      clearSelection();
+                      setFaceRepair(null);
+                      setDatumRepair({ feature, slot: 0, both: true });
+                      setStatus(
+                        `Re-pick both faces for "${feature.name}": click face A, then face B · Esc cancels.`
+                      );
+                    }
+                  }
+                ]
+              : []
+          )
         : []),
       ...(bodyId && body && !body.consumed
         ? [
@@ -20811,6 +20888,12 @@ export function App() {
                   }
                 : undefined
             }
+            datumOffsetDraft={
+              tool === 'datum-plane' &&
+              modelingEditFeature?.data.featureKind === 'datum-plane'
+                ? datumOffsetDraft
+                : null
+            }
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
@@ -21393,6 +21476,7 @@ export function App() {
                   cancelPanel,
                   closeFeaturePanel,
                   datumOffsetDragRef,
+                  setDatumOffsetDraft,
                   datumOffsetEntryRef,
                   setDatumDragAvailable
                 }}

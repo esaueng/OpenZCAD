@@ -89,6 +89,23 @@ export function datumOffsetHandle(
   };
 }
 
+/** A frame moved `distance` along its own normal: a plane drawn ahead of its edit. */
+export function shiftedDatumFrame(
+  frame: DatumFrame,
+  distance: number
+): DatumFrame {
+  if (distance === 0) return frame;
+  const { origin, normal } = frame;
+  return {
+    ...frame,
+    origin: {
+      x: origin.x + normal.x * distance,
+      y: origin.y + normal.y * distance,
+      z: origin.z + normal.z * distance
+    }
+  };
+}
+
 /**
  * True when the build reports that this datum's source face could not be
  * attached: the one failure a re-picked face can repair. A datum still

@@ -2128,6 +2128,7 @@ function assertOperationExpressions(
       sketchObjects(operation.name, operation.objects);
       break;
     case 'add_datum_mirror':
+    case 'add_datum_split':
       break;
     case 'add_shell':
       assertEvaluableExpression(
@@ -2912,6 +2913,20 @@ export function commandsForCadPatch(
         const datumFeatureId = resolveDatum(operation.datum);
         scope.declare(operation.localId, ids.bodyId);
         return commandFactories.mirrorBody({
+          name: operation.name,
+          targetBodyId,
+          plane: { type: 'datum', datumFeatureId },
+          ids
+        });
+      }
+      case 'add_datum_split': {
+        const ids = createSplitFeatureIds();
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        const datumFeatureId = resolveDatum(operation.datum);
+        scope.declare(operation.localId, ids.bodyId);
+        scope.declare(operation.secondLocalId, ids.secondBodyId);
+        scope.consume([targetBodyId], 'split');
+        return commandFactories.splitBody({
           name: operation.name,
           targetBodyId,
           plane: { type: 'datum', datumFeatureId },
