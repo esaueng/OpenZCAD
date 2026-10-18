@@ -2954,7 +2954,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           cancellation,
           onGeometryReady,
           yieldControl,
-          geometryOnly
+          geometryOnly,
+          deferTopology
         );
       }
       throw error;
