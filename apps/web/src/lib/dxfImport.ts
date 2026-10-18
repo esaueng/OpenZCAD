@@ -199,7 +199,7 @@ const Z_CODES = new Set([30, 31, 38]);
 
 function onZeroElevation(entity: DxfEntity): boolean {
   return entity.groups.every(
-    (pair) => !Z_CODES.has(pair.code) || Math.abs(dxfNumber(pair.value)) < 1e-9
+    (pair) => !Z_CODES.has(pair.code) || dxfNumber(pair.value) === 0
   );
 }
 
@@ -491,8 +491,15 @@ export function importDxfSketch(
         }
         // Curve- (2) and spline-fitted (4) polylines describe a smooth
         // curve their vertices only approximate; joining them with straight
-        // segments would change the outline.
-        if ((flags & (2 | 4)) !== 0) {
+        // segments would change the outline. Also inspect the vertices when
+        // the parent flags are missing: 1 is curve-fit generated, 8 is
+        // spline-fit generated, and 16 is a spline frame control point.
+        if (
+          (flags & (2 | 4)) !== 0 ||
+          vertexEntities.some(
+            (vertex) => (number(vertex, 70, 0) & (1 | 8 | 16)) !== 0
+          )
+        ) {
           count(refused, 'POLYLINE (curve-fit or spline-fit)');
           break;
         }

@@ -317,6 +317,172 @@ describe('DXF sketch import (D04)', () => {
 });
 
 describe('DXF geometry that is not on Top is refused, never flattened', () => {
+  const line = ['0', 'LINE', '10', '0', '20', '0', '11', '1', '21', '0'];
+  const circle = ['0', 'CIRCLE', '10', '0', '20', '0', '40', '1'];
+  const arc = [
+    '0',
+    'ARC',
+    '10',
+    '0',
+    '20',
+    '0',
+    '40',
+    '1',
+    '50',
+    '0',
+    '51',
+    '90'
+  ];
+  const lwPolyline = [
+    '0',
+    'LWPOLYLINE',
+    '90',
+    '2',
+    '10',
+    '0',
+    '20',
+    '0',
+    '10',
+    '1',
+    '20',
+    '0'
+  ];
+  const vertex = ['0', 'VERTEX', '10', '0', '20', '0'];
+  const endVertex = ['0', 'VERTEX', '10', '1', '20', '0'];
+
+  it.each([
+    ['LINE start Z', 'LINE', (z: string) => [...line, '30', z]],
+    ['LINE end Z', 'LINE', (z: string) => [...line, '31', z]],
+    ['CIRCLE Z', 'CIRCLE', (z: string) => [...circle, '30', z]],
+    ['ARC Z', 'ARC', (z: string) => [...arc, '30', z]],
+    [
+      'LWPOLYLINE elevation',
+      'LWPOLYLINE',
+      (z: string) => [...lwPolyline, '38', z]
+    ],
+    [
+      'POLYLINE elevation',
+      'POLYLINE',
+      (z: string) => [
+        '0',
+        'POLYLINE',
+        '30',
+        z,
+        ...vertex,
+        ...endVertex,
+        '0',
+        'SEQEND'
+      ]
+    ],
+    [
+      'first VERTEX Z',
+      'POLYLINE',
+      (z: string) => [
+        '0',
+        'POLYLINE',
+        ...vertex,
+        '30',
+        z,
+        ...endVertex,
+        '0',
+        'SEQEND'
+      ]
+    ],
+    [
+      'last VERTEX Z',
+      'POLYLINE',
+      (z: string) => [
+        '0',
+        'POLYLINE',
+        ...vertex,
+        ...endVertex,
+        '30',
+        z,
+        '0',
+        'SEQEND'
+      ]
+    ]
+  ] as const)(
+    'refuses nonzero %s without losing the next entity',
+    (_label, type, entity) => {
+      for (const z of ['2', '-2', '5e-10', '-5e-10']) {
+        const result = importDxfSketch(dxf([...entity(z), ...line]), 'mm');
+        expect(result.objects).toEqual([
+          { objectKind: 'line', x1: 0, y1: 0, x2: 1, y2: 0 }
+        ]);
+        expect(result.refused).toEqual({ [`${type} off the XY plane`]: 1 });
+        expect(result.dropped).toEqual({});
+      }
+      for (const z of ['0', '-0']) {
+        const result = importDxfSketch(dxf(entity(z)), 'mm');
+        expect(result.objects).toHaveLength(1);
+        expect(result.refused).toEqual({});
+      }
+    }
+  );
+
+  it.each([2, 4, 3, 5, 6])(
+    'refuses fitted POLYLINE flags %i before expanding vertices',
+    (flags) => {
+      const result = importDxfSketch(
+        dxf([
+          '0',
+          'POLYLINE',
+          '70',
+          String(flags),
+          ...vertex,
+          ...endVertex,
+          '0',
+          'SEQEND',
+          ...line
+        ]),
+        'mm'
+      );
+      expect(result.objects).toEqual([
+        { objectKind: 'line', x1: 0, y1: 0, x2: 1, y2: 0 }
+      ]);
+      expect(result.refused).toEqual({
+        'POLYLINE (curve-fit or spline-fit)': 1
+      });
+    }
+  );
+
+  it.each([1, 8, 16, 9, 18])(
+    'refuses fitted VERTEX flags %i even without parent fit flags',
+    (flags) => {
+      for (const parentFlags of [[], ['70', '0']]) {
+        // The fitted vertex comes last: no earlier segment may be imported.
+        const result = importDxfSketch(
+          dxf([
+            '0',
+            'POLYLINE',
+            ...parentFlags,
+            ...vertex,
+            ...endVertex,
+            '0',
+            'VERTEX',
+            '10',
+            '2',
+            '20',
+            '1',
+            '70',
+            String(flags),
+            '0',
+            'SEQEND',
+            ...line
+          ]),
+          'mm'
+        );
+        expect(result.objects).toEqual([
+          { objectKind: 'line', x1: 0, y1: 0, x2: 1, y2: 0 }
+        ]);
+        expect(result.refused).toEqual({
+          'POLYLINE (curve-fit or spline-fit)': 1
+        });
+      }
+    }
+  );
+
   it('refuses elevated and fitted entities and keeps what lies on z = 0', () => {
     const at = (code: string, value: string) => [code, value];
     const text = dxf(
@@ -392,23 +558,27 @@ describe('DXF geometry that is not on Top is refused, never flattened', () => {
   });
 
   it.each(['CIRCLE', 'ARC'])('refuses a %s with no positive radius', (type) => {
-    const text = dxf([
-      '0',
-      type,
-      '10',
-      '0',
-      '20',
-      '0',
-      '40',
-      '0',
-      '50',
-      '0',
-      '51',
-      '90'
-    ]);
-    expect(() => importDxfSketch(text, 'mm')).toThrow(
-      `This DXF is malformed: a ${type} has a radius of 0.`
-    );
+    for (const value of ['0', '-0', '-2', '-5e-10']) {
+      const text = dxf([
+        ...line,
+        '0',
+        type,
+        '10',
+        '0',
+        '20',
+        '0',
+        '40',
+        value,
+        '50',
+        '0',
+        '51',
+        '90'
+      ]);
+      expect(() => importDxfSketch(text, 'mm')).toThrow(DxfImportError);
+      expect(() => importDxfSketch(text, 'mm')).toThrow(
+        `This DXF is malformed: a ${type} has a radius of ${Number(value)}.`
+      );
+    }
   });
 });
 
