@@ -1073,29 +1073,57 @@
 
 /* ── Cloud card: update notice ───────────────────────────── */
 
-/* A newer build is out: said in the accent, with the action beside it, as a
-   pill above the cloud card. */
+/* A newer build is out: one quiet line above the cloud card — a dot, the
+   news, and a text action. A failed download says more, so its sentence
+   wraps and the dot turns to the warning colour. */
 .start-update {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--sp-2);
-  min-height: 26px;
-  padding: 3px 3px 3px 10px;
+  min-height: 28px;
+  padding-left: 10px;
   color: var(--color-text);
-  font-size: var(--fs-xs);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+}
+
+.start-update-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+
+.start-update.is-failure .start-update-dot {
+  align-self: flex-start;
+  margin-top: 6px;
+  background: var(--color-warning);
+}
+
+.start-update-text {
+  flex: 1;
+  min-width: 0;
 }
 
 .start-update button {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
   min-height: 0;
-  height: 24px;
+  height: 28px;
   padding: 0 8px;
-  font-size: var(--fs-xs);
+  color: var(--color-accent);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  background: transparent;
+  border: 0;
   border-radius: var(--radius-sm);
+}
+
+.start-update button:hover {
+  background: var(--color-accent-dim);
 }
 
 /* Discovery keeps the library layout; unknown data is never an empty shelf
