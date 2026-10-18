@@ -29,6 +29,7 @@ export function extrudeEditCommand(
   if (value.choice.operation !== 'new-body' && !value.choice.targetBodyId) {
     throw new Error('Select a target body for this extrusion.');
   }
+  const throughAll = value.endCondition === 'through-all';
   return commandFactories.updateFeature(
     {
       featureId: feature.featureId,
@@ -42,8 +43,18 @@ export function extrudeEditCommand(
         targetBodyId:
           value.choice.operation === 'new-body'
             ? undefined
-            : value.choice.targetBodyId
-      }
+            : value.choice.targetBodyId,
+        ...(throughAll
+          ? {
+              endCondition: 'through-all' as const,
+              throughAllSide: value.throughAllSide ?? 'forward'
+            }
+          : {})
+      },
+      // Blind is the absent extent; a stale side must not outlive it.
+      ...(!throughAll && feature.data.endCondition !== undefined
+        ? { clearData: ['endCondition', 'throughAllSide'] }
+        : {})
     },
     `Edit ${value.name}`
   );

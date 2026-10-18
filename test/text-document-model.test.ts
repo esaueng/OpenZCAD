@@ -633,7 +633,7 @@ describe('existing documents are unaffected', () => {
     // rewriting legacy embedded triangles. v18 adds the additive symmetric,
     // point-on-object and lock constraint kinds. None needs a legacy node
     // migration.
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(19);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(20);
     // Nothing but the version stamp moves.
     expect({ ...migrated, schemaVersion: 6 }).toEqual(legacy);
   });

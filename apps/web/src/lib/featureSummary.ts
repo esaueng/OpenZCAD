@@ -73,6 +73,11 @@ export function featureValueSummary(
       return null;
     }
     case 'extrude': {
+      if (data.endCondition === 'through-all') {
+        return data.throughAllSide === 'both'
+          ? 'Through all, both sides'
+          : 'Through all';
+      }
       const distance = lengthValue(data.distance);
       if (distance === null) {
         return null;

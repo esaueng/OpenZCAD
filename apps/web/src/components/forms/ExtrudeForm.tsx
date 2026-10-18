@@ -1,9 +1,18 @@
-import { useEffect, useRef, useState, type MutableRefObject } from 'react';
+import {
+  Suspense,
+  lazy,
+  useEffect,
+  useRef,
+  useState,
+  type MutableRefObject
+} from 'react';
 import { coerceParamValue } from '@openzcad/document-core';
 import type {
   BodyId,
+  ExtrudeEndCondition,
   ParamValue,
   SketchId,
+  ThroughAllSide,
   UnitSystem
 } from '@openzcad/shared';
 import type { ExtrudeChoice } from '../../lib/extrudeInference';
@@ -18,7 +27,15 @@ export interface ExtrudeFormValue {
   symmetric: boolean;
   backDistance: ParamValue;
   choice: ExtrudeChoice;
+  /**
+   * F01: `through-all` is offered for an existing explicit cut only. Absent
+   * reads as blind, which is all the create path ever sends.
+   */
+  endCondition?: ExtrudeEndCondition;
+  throughAllSide?: ThroughAllSide;
 }
+
+const ExtrudeExtentControls = lazy(() => import('./ExtrudeExtentControls'));
 
 interface ExtrudeFormProps {
   scope: Record<string, number>;
@@ -33,6 +50,8 @@ interface ExtrudeFormProps {
     backDistance?: ParamValue;
     operation?: ExtrudeChoice['operation'];
     targetBodyId?: BodyId;
+    endCondition?: ExtrudeEndCondition;
+    throughAllSide?: ThroughAllSide;
   };
   creating?: boolean;
   profileCount?: number;
@@ -97,8 +116,14 @@ export function ExtrudeForm({
     choice: {
       operation: initial.operation ?? (creating ? 'automatic' : 'new-body'),
       ...(initial.targetBodyId ? { targetBodyId: initial.targetBodyId } : {})
-    }
+    },
+    endCondition: initial.endCondition ?? 'blind',
+    throughAllSide: initial.throughAllSide ?? 'forward'
   }));
+  // Through all needs one explicit cut target, so it is offered when editing
+  // a cut, not while the operation is still being inferred.
+  const offersThroughAll = !creating && draft.choice.operation === 'cut';
+  const throughAll = offersThroughAll && draft.endCondition === 'through-all';
   // A new extrude opens at zero until the user drags or types a distance, so
   // the zero-distance error waits for that edit (or an attempt to submit)
   // rather than greeting the card in red. Create stays disabled either way.
@@ -114,22 +139,43 @@ export function ExtrudeForm({
     const targetRequired =
       next.choice.operation === 'add' || next.choice.operation === 'cut';
     const targetBodyId = targetRequired ? next.choice.targetBodyId : undefined;
+    const nextThroughAll =
+      !creating &&
+      next.choice.operation === 'cut' &&
+      next.endCondition === 'through-all';
     if (
       !next.name.trim() ||
-      !d.ok ||
-      d.value === undefined ||
-      d.value === 0 ||
-      (!next.symmetric && (!b.ok || b.value === undefined || b.value < 0)) ||
+      // Through all ignores the distance; it is kept only for switching
+      // back to blind, so it cannot block Apply.
+      (!nextThroughAll &&
+        (!d.ok ||
+          d.value === undefined ||
+          d.value === 0 ||
+          (!next.symmetric &&
+            (!b.ok || b.value === undefined || b.value < 0)))) ||
       (targetRequired && !bodies.some((body) => body.bodyId === targetBodyId))
     )
       return null;
+    return formValue(next);
+  }
+
+  function formValue(next: typeof draft): ExtrudeFormValue {
+    const nextThroughAll =
+      !creating &&
+      next.choice.operation === 'cut' &&
+      next.endCondition === 'through-all';
     return {
       name: next.name.trim(),
       sketchId: initial.sketchId,
       distance: coerceParamValue(next.distance),
-      symmetric: next.symmetric,
-      backDistance: next.symmetric ? 0 : coerceParamValue(next.backDistance),
-      choice: next.choice
+      symmetric: nextThroughAll ? false : next.symmetric,
+      backDistance:
+        nextThroughAll || next.symmetric
+          ? 0
+          : coerceParamValue(next.backDistance),
+      choice: next.choice,
+      endCondition: nextThroughAll ? 'through-all' : 'blind',
+      throughAllSide: next.throughAllSide
     };
   }
 
@@ -137,14 +183,7 @@ export function ExtrudeForm({
     const next = { ...draft, ...patch };
     if (patch.distance !== undefined) setDistanceEdited(true);
     setDraft(next);
-    onDraft?.({
-      name: next.name.trim(),
-      sketchId: initial.sketchId,
-      distance: coerceParamValue(next.distance),
-      symmetric: next.symmetric,
-      backDistance: next.symmetric ? 0 : coerceParamValue(next.backDistance),
-      choice: next.choice
-    });
+    onDraft?.(formValue(next));
     onPreview?.(valueFor(next));
   }
   const updateDistance = useRef((value: ParamValue) =>
@@ -211,64 +250,81 @@ export function ExtrudeForm({
           allowAutomatic={creating}
           onChange={(choice) => change({ choice })}
         />
-        <ExprInput
-          label="Distance"
-          value={draft.distance}
-          scope={scope}
-          quantity={quantity}
-          onChange={(distance) => change({ distance })}
-          error={
-            distanceEdited && distance.ok && distance.value === 0
-              ? 'Distance cannot be zero — a zero-distance extrude builds no solid.'
-              : undefined
-          }
-        />
-        {!distanceEdited && distance.ok && distance.value === 0 ? (
-          // Before the first edit the zero is the starting value, not a
-          // mistake, so it is not shown in red; but a dim Create with no
-          // reason anywhere read as a broken button.
-          <p className="muted">
-            Enter a distance other than 0, or drag the arrow, to enable{' '}
-            {submitLabel}.
-          </p>
+        {offersThroughAll ? (
+          <Suspense fallback={null}>
+            <ExtrudeExtentControls
+              endCondition={draft.endCondition}
+              throughAllSide={draft.throughAllSide}
+              onChange={change}
+            />
+          </Suspense>
         ) : null}
-        <button
-          type="button"
-          className="secondary"
-          onClick={() => change({ distance: reversedDistance(draft.distance) })}
-        >
-          Reverse direction
-        </button>
-        <label className="field extrude-symmetry">
-          <input
-            type="checkbox"
-            checked={draft.symmetric}
-            onChange={(event) => change({ symmetric: event.target.checked })}
-          />
-          <span>Symmetric about the sketch plane</span>
-        </label>
-        {!draft.symmetric && (
-          <ExprInput
-            label="Back distance"
-            value={draft.backDistance}
-            scope={scope}
-            quantity={quantity}
-            onChange={(backDistance) => change({ backDistance })}
-            error={
-              back.ok && back.value !== undefined && back.value < 0
-                ? 'Back distance cannot be negative.'
-                : undefined
-            }
-          />
-        )}
-        {/* Direction is the distance's sign, and Reverse is the one control
+        {throughAll ? null : (
+          <>
+            <ExprInput
+              label="Distance"
+              value={draft.distance}
+              scope={scope}
+              quantity={quantity}
+              onChange={(distance) => change({ distance })}
+              error={
+                distanceEdited && distance.ok && distance.value === 0
+                  ? 'Distance cannot be zero — a zero-distance extrude builds no solid.'
+                  : undefined
+              }
+            />
+            {!distanceEdited && distance.ok && distance.value === 0 ? (
+              // Before the first edit the zero is the starting value, not a
+              // mistake, so it is not shown in red; but a dim Create with no
+              // reason anywhere read as a broken button.
+              <p className="muted">
+                Enter a distance other than 0, or drag the arrow, to enable{' '}
+                {submitLabel}.
+              </p>
+            ) : null}
+            <button
+              type="button"
+              className="secondary"
+              onClick={() =>
+                change({ distance: reversedDistance(draft.distance) })
+              }
+            >
+              Reverse direction
+            </button>
+            <label className="field extrude-symmetry">
+              <input
+                type="checkbox"
+                checked={draft.symmetric}
+                onChange={(event) =>
+                  change({ symmetric: event.target.checked })
+                }
+              />
+              <span>Symmetric about the sketch plane</span>
+            </label>
+            {!draft.symmetric && (
+              <ExprInput
+                label="Back distance"
+                value={draft.backDistance}
+                scope={scope}
+                quantity={quantity}
+                onChange={(backDistance) => change({ backDistance })}
+                error={
+                  back.ok && back.value !== undefined && back.value < 0
+                    ? 'Back distance cannot be negative.'
+                    : undefined
+                }
+              />
+            )}
+            {/* Direction is the distance's sign, and Reverse is the one control
             that flips it. A third way, "Distance…", opened the viewport's
             exact-entry keypad for the same number this field already holds
             (the value chip and typing a digit still open that keypad). */}
-        <p className="muted">
-          Negative distance reverses the extrusion. Drag or type to preview;{' '}
-          {submitLabel} saves the result.
-        </p>
+            <p className="muted">
+              Negative distance reverses the extrusion. Drag or type to preview;{' '}
+              {submitLabel} saves the result.
+            </p>
+          </>
+        )}
       </fieldset>
       <div className="form-actions">
         <button

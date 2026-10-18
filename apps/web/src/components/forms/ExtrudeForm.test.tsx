@@ -200,6 +200,87 @@ describe('shared extrusion editor', () => {
   });
 });
 
+describe('through-all extent (F01)', () => {
+  it('offers Through all only for an existing cut and submits its side, not a distance', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const { rerender } = render(
+      <ExtrudeForm {...base} onSubmit={onSubmit} onCancel={vi.fn()} />
+    );
+    // New body: no extent choice.
+    expect(screen.queryByLabelText('Extent')).toBeNull();
+    await user.selectOptions(
+      screen.getByLabelText('Stored extrude operation'),
+      'cut'
+    );
+    await user.selectOptions(
+      await screen.findByLabelText('Extent'),
+      'through-all'
+    );
+    // The distance controls give way to a direction.
+    expect(screen.queryByRole('textbox', { name: 'Distance' })).toBeNull();
+    await user.selectOptions(
+      screen.getByLabelText('Through-all direction'),
+      'both'
+    );
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        endCondition: 'through-all',
+        throughAllSide: 'both',
+        symmetric: false,
+        backDistance: 0,
+        choice: { operation: 'cut', targetBodyId: 'plate' }
+      })
+    );
+    // Creating never offers it: the cut target is still being inferred.
+    rerender(
+      <ExtrudeForm
+        {...base}
+        key="create"
+        creating
+        initial={{
+          ...initial,
+          operation: 'cut',
+          targetBodyId: bodies[0]!.bodyId
+        }}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.queryByLabelText('Extent')).toBeNull();
+  });
+
+  it('reopens a through-all cut as such and returns to blind with its distance', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <ExtrudeForm
+        {...base}
+        initial={{
+          ...initial,
+          operation: 'cut',
+          targetBodyId: bodies[0]!.bodyId,
+          endCondition: 'through-all',
+          throughAllSide: 'backward'
+        }}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(await screen.findByLabelText('Extent')).toHaveValue('through-all');
+    expect(screen.getByLabelText('Through-all direction')).toHaveValue(
+      'backward'
+    );
+    await user.selectOptions(screen.getByLabelText('Extent'), 'blind');
+    expect(screen.getByRole('textbox', { name: 'Distance' })).toHaveValue('-8');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ endCondition: 'blind', distance: -8 })
+    );
+  });
+});
+
 describe('zero-distance extrude', () => {
   it('says why Create is disabled before the first edit, then turns red only after one', async () => {
     const user = userEvent.setup();

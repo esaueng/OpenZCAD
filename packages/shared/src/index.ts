@@ -34,12 +34,19 @@ export type ShaprImportId = Brand<string, 'ShaprImportId'>;
  *
  * v19 adds R01 datum planes: the `datum-plane` feature kind and the datum
  * references sketches, Split and Mirror can hold in place of a numeric plane.
+ *
+ * v20 adds the F01 through-all extrude end condition (`endCondition`,
+ * `throughAllSide`). A v19 client would replay such a cut at its stale blind
+ * distance, so the bump makes it refuse the document instead.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 19 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 20 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
+/** F01 extrude extents; to-face/to-next/offset-from-face are later slices. */
+export type ExtrudeEndCondition = 'blind' | 'through-all';
+export type ThroughAllSide = 'forward' | 'backward' | 'both';
 export type PlaneId = 'XY' | 'XZ' | 'YZ';
 /** See `SketchPlaneRef`'s `basisRevision`; absent means revision 1. */
 export type CanonicalPlaneBasisRevision = 2;
@@ -921,6 +928,17 @@ export type FeatureData =
       operation?: ExtrudeOperation;
       /** Required for stored add/cut operations and absent for new-body. */
       targetBodyId?: BodyId;
+      /**
+       * F01 (schema v20): how far the extrusion reaches. Absent is `blind`,
+       * the `distance`/`symmetric`/`backDistance` extrude every older document
+       * stores. `through-all` cuts through the whole target along the sketch
+       * normal: the span is recomputed from the target at the feature's
+       * history position on every rebuild and never stored, and `distance`
+       * is kept only so switching back to blind restores it.
+       */
+      endCondition?: ExtrudeEndCondition;
+      /** Required with `through-all`; which side(s) of the sketch plane. */
+      throughAllSide?: ThroughAllSide;
       /**
        * When present, extrudes one detected closed region of the sketch
        * instead of the whole profile. Resolution fails closed: if neither the
