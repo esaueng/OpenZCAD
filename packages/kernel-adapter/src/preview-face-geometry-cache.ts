@@ -6,24 +6,43 @@ import { quantizeCoordinate } from './topology-fingerprint';
 /** Entries kept before the cache starts over; a few drags' worth of faces. */
 const DEFAULT_CAPACITY = 8192;
 
+/** The kernel reads that identify a face's measurement inputs. */
+export type FaceShapeKernel = Pick<
+  RemusKernel,
+  | 'getFaceVertices'
+  | 'getVertexPosition'
+  | 'getFaceEdges'
+  | 'getAnalyticSurfaceParams'
+  | 'getFaceNormal'
+  | 'getSurfaceDomain'
+>;
+
 /**
  * Face measurements reused across the frames of a drag preview.
  *
  * Moving one face reshapes only that face and its neighbours, yet every
  * preview frame measured every face again: on the 160-face hammer holder,
  * area integration alone was about 60 ms of a 230 ms frame. A face is reused
- * only when its exact shape inputs match: its ADR-011 witness (surface,
- * analytic parameters, perimeter and vertex centroid), its edge count, every
- * vertex position, and the raw analytic parameters of surfaces the witness
- * does not describe. All are quantized at the geometry tolerance the
- * witnesses already use. B-spline faces are never measured by the preview.
+ * only when every input its measurement reads matches: its ADR-011 witness
+ * (surface, perimeter and vertex centroid), its edge count and vertex
+ * positions, and the oriented values the witness canonicalizes away: the
+ * raw analytic parameters, the parameter domain and a plane's oriented
+ * normal. Two coincident faces of opposite orientation therefore never share
+ * an entry. Positions are quantized at the geometry tolerance the witnesses
+ * already use. B-spline faces are never measured by the preview.
  */
 export class PreviewFaceGeometryCache {
   private readonly entries = new Map<string, FaceGeometry | undefined>();
   hits = 0;
   misses = 0;
 
-  constructor(private readonly capacity = DEFAULT_CAPACITY) {}
+  constructor(
+    private readonly capacity = DEFAULT_CAPACITY,
+    private readonly measureFace: (
+      kernel: RemusKernel,
+      face: number
+    ) => FaceGeometry | undefined = measureFaceGeometry
+  ) {}
 
   measure(
     kernel: RemusKernel,
@@ -37,7 +56,7 @@ export class PreviewFaceGeometryCache {
       return structuredClone(this.entries.get(key));
     }
     this.misses += 1;
-    const geometry = measureFaceGeometry(kernel, face);
+    const geometry = this.measureFace(kernel, face);
     if (this.entries.size >= this.capacity) this.entries.clear();
     this.entries.set(key, structuredClone(geometry));
     return geometry;
@@ -48,26 +67,32 @@ export class PreviewFaceGeometryCache {
   }
 }
 
-function faceShapeKey(
-  kernel: RemusKernel,
+/** A kernel read for the key; a refused read is itself part of the key. */
+function read(value: () => ArrayLike<number> | string): string {
+  try {
+    const result = value();
+    return typeof result === 'string' ? result : Array.from(result).join(',');
+  } catch {
+    return 'unavailable';
+  }
+}
+
+export function faceShapeKey(
+  kernel: FaceShapeKernel,
   face: number,
   witness: FaceWitnessV1
 ): string {
   const vertices = Array.from(kernel.getFaceVertices(face), (vertex) =>
     Array.from(kernel.getVertexPosition(vertex), quantizeCoordinate).join(',')
   ).sort();
-  let parameters = '';
-  if (witness.analytic.kind === 'none') {
-    try {
-      parameters = kernel.getAnalyticSurfaceParams(face);
-    } catch {
-      parameters = 'unavailable';
-    }
-  }
   return [
     JSON.stringify(witness),
     kernel.getFaceEdges(face).length,
     vertices.join(';'),
-    parameters
+    read(() => kernel.getAnalyticSurfaceParams(face)),
+    read(() => kernel.getSurfaceDomain(face)),
+    witness.surfaceType === 'plane'
+      ? read(() => kernel.getFaceNormal(face))
+      : ''
   ].join('|');
 }
