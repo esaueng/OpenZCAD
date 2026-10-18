@@ -2413,9 +2413,23 @@ function buildPatternFeature(
   if (!target) {
     throw new Error('Pattern target is unavailable.');
   }
-  const count = Math.round(
-    resolveParamValue(data.count, scope, 'count', ctx.document.units)
-  );
+  // Entry refuses a fractional count, but an expression can still evaluate
+  // to one later (`n / 2` after `n` changes). The build keeps rounding, as
+  // documents already rely on it, and says so instead of doing it silently.
+  const wholeCount = (value: ParamValue, label: string): number => {
+    const raw = resolveParamValue(value, scope, label, ctx.document.units);
+    const rounded = Math.round(raw);
+    if (Math.abs(raw - rounded) > 1e-9) {
+      raiseFeatureWarning(
+        result,
+        feature,
+        `Pattern ${label} evaluates to ${Number(raw.toPrecision(6))}, not a whole number; it was rounded to ${rounded}.`,
+        'advisory'
+      );
+    }
+    return rounded;
+  };
+  const count = wholeCount(data.count, 'count');
   if (count < 2 || count > 100) {
     throw new Error('Pattern count must be between 2 and 100.');
   }
@@ -2423,14 +2437,9 @@ function buildPatternFeature(
   // the total rather than per axis.
   const count2 =
     data.patternKind === 'grid'
-      ? Math.round(
-          resolveParamValue(
-            data.count2 ?? data.count,
-            scope,
-            'count 2',
-            ctx.document.units
-          )
-        )
+      ? data.count2 === undefined
+        ? count
+        : wholeCount(data.count2, 'count 2')
       : 1;
   if (data.patternKind === 'grid' && (count2 < 2 || count2 > 100)) {
     throw new Error('Pattern count must be between 2 and 100.');
