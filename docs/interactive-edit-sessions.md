@@ -1,6 +1,6 @@
 # Interactive edit sessions (H02 / W02)
 
-Face dragging now requests a disposable mesh with `topology: 'pending'`.
+Planar face dragging now requests a disposable mesh with `topology: 'pending'`.
 The exact operation, recorded-face identity guards, analytic-carrier census,
 B-rep validation, import diagnostics and strict union closure gates still run.
 Display face ranges and analytic dimensions keep the dragged highlight current;
@@ -10,6 +10,9 @@ suspended until complete topology arrives. Only output naming
 for a terminal planar face offset is deferred; its separate history digest
 forces normal replay before a commit, downstream operation or export can use
 that result. Ordinary `previewGeometry` callers retain complete topology.
+Radius and hole gestures also retain their owned cylinder semantics and complete picking
+topology while streaming; the lighter publication is enabled for planar
+push/pull, where edge recognition is not needed for the current gesture.
 
 The display path retains completed measurement's spline-refined bounds and
 the existing held-deflection policy, consumes owned

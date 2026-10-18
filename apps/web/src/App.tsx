@@ -3148,9 +3148,11 @@ export function App() {
         };
       },
       derive: async (candidate, signal) => {
+        // Radius/hole gestures read the owned cylinder semantics while they
+        // stream. Keep their complete picking topology until that contract
+        // can be prepared independently from recognition.
         const derived = await geometry.previewGeometry(candidate.document, {
-          signal,
-          deferTopology: true
+          signal
         });
         const rejection = offsetPreviewRejection({
           ...candidate,
