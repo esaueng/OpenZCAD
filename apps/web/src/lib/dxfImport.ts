@@ -296,7 +296,7 @@ function hiddenLayers(tables: Pair[] | undefined): Set<string> {
       ((integerFlags(layer, 70) & 1) !== 0 ||
         (color !== undefined && dxfNumber(color.value) < 0))
     ) {
-      hidden.add(name);
+      hidden.add(name.toUpperCase());
     }
     layer = null;
   };
@@ -802,7 +802,8 @@ export function importDxfSketch(
     }
     // On a layer that is off or frozen, it is as hidden as group 60 = 1.
     const layerName = singleGroup(entity, 8)?.value ?? '0';
-    if (hidden.has(layerName)) {
+    // Layer names keep their case but compare without it.
+    if (hidden.has(layerName.toUpperCase())) {
       count(dropped, `${entity.type} (hidden layer)`);
       continue;
     }
@@ -966,6 +967,25 @@ function scaleObject(s: (value: number) => number) {
         const { centerX: cx, centerY: cy, radius: r } = curve;
         if (cx + r === cx || cx - r === cx || cy + r === cy || cy - r === cy) {
           throw degenerate();
+        }
+        // An arc's ends are rebuilt from centre, radius and angles; far from
+        // the origin they can collapse together even when the radius
+        // survives. The rebuilt chord must match the one the sweep implies.
+        if (curve.objectKind === 'arc') {
+          const toRadians = Math.PI / 180;
+          const start = Number(curve.startAngleDeg) * toRadians;
+          const end = Number(curve.endAngleDeg) * toRadians;
+          const point = (angle: number) => ({
+            x: cx + r * Math.cos(angle),
+            y: cy + r * Math.sin(angle)
+          });
+          const a = point(start);
+          const b = point(end);
+          const rebuilt = Math.hypot(b.x - a.x, b.y - a.y);
+          const expected = 2 * r * Math.abs(Math.sin((end - start) / 2));
+          if (!(Math.abs(rebuilt - expected) <= 1e-6 * expected)) {
+            throw degenerate();
+          }
         }
         return curve;
       }

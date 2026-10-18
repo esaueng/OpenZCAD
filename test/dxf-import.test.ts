@@ -2033,7 +2033,7 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
       '0',
       'LINE',
       '8',
-      'OFF',
+      'off',
       '10',
       '0',
       '20',
@@ -2070,6 +2070,26 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
       expect.objectContaining({ objectKind: 'circle' })
     ]);
     expect(result.dropped).toEqual({ 'LINE (hidden layer)': 2 });
+  });
+
+  it('refuses an arc whose ends collapse beside a far-off centre', () => {
+    const text = dxf([
+      '0',
+      'ARC',
+      '10',
+      '1e100',
+      '20',
+      '1e100',
+      '40',
+      '1e90',
+      '50',
+      '0',
+      '51',
+      '1.1459e-7'
+    ]);
+    expect(() => importDxfSketch(text, 'mm')).toThrow(
+      'geometry too small to represent'
+    );
   });
 
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
