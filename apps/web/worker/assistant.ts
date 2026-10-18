@@ -237,6 +237,8 @@ interface ProposalInput {
   digest: CadDocumentDigest;
   history?: readonly AssistantHistoryTurn[];
   attachments?: readonly AssistantAttachment[];
+  /** Operation kinds the requesting client can parse, when it says. */
+  operations?: readonly string[];
 }
 
 export interface AssistantStatus {
@@ -407,6 +409,41 @@ const ROLLOUT_OPERATION_FLAGS = [
   ['add_datum_sketch', 'AI_PATCH_DATUM_PLANE_ENABLED'],
   ['add_datum_mirror', 'AI_PATCH_DATUM_PLANE_ENABLED']
 ] as const;
+
+/**
+ * Operations added after clients began declaring what they can parse. A
+ * request without that declaration comes from a tab loaded before then, whose
+ * parser rejects these, so it is never offered them.
+ */
+const NEGOTIATED_OPERATIONS: ReadonlySet<string> = new Set([
+  'add_datum_plane',
+  'add_datum_sketch',
+  'add_datum_mirror'
+]);
+
+/**
+ * The deployment's flags as one request may use them: a rollout flag stays
+ * on only when the requesting client can parse every operation it gates.
+ * Prompt and schema both read flags, so narrowing them here keeps the two in
+ * step without threading a second rule through each.
+ */
+export function assistantEnvForClient(
+  env: CloudflareEnv,
+  clientOperations: readonly string[] | undefined
+): CloudflareEnv {
+  const known = clientOperations ? new Set(clientOperations) : undefined;
+  const supported = (operation: string) =>
+    known ? known.has(operation) : !NEGOTIATED_OPERATIONS.has(operation);
+  const withdrawn = new Set(
+    ROLLOUT_OPERATION_FLAGS.filter(([operation]) => !supported(operation)).map(
+      ([, flag]) => flag
+    )
+  );
+  if (withdrawn.size === 0) return env;
+  const narrowed = { ...env } as Record<string, unknown>;
+  for (const flag of withdrawn) narrowed[flag] = 'false';
+  return narrowed;
+}
 
 /**
  * Rollout flags on a single PROPERTY of an operation that is already
@@ -1000,6 +1037,7 @@ export async function streamAssistantProposal(
   safetyIdentifier?: string,
   runtime?: AssistantRuntimeConfig
 ): Promise<Response> {
+  env = assistantEnvForClient(env, input.operations);
   const provider = runtime?.provider ?? providerFor(env);
   const model = runtime?.model ?? modelFor(env, provider);
   const requestId = crypto.randomUUID();

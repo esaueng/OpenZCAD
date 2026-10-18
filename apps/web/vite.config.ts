@@ -11,6 +11,7 @@ import {
 } from './src/lib/assistant/pdfjsAssets';
 import { resolveSourceCommit } from './build/sourceCommit';
 import { remusTranslatorRetry } from './build/remusTranslatorRetry';
+import { lazyChunkPrefetch } from './build/lazyChunkPrefetch';
 import {
   FONT_ASSET_BASE,
   FONT_FAMILIES
@@ -270,7 +271,8 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     remusTranslatorRetry(),
     pdfjsAssets(),
     textFontAssets(),
-    buildMetadata(commit, remus)
+    buildMetadata(commit, remus),
+    lazyChunkPrefetch()
   );
 
   const nodeMajor = Number.parseInt(

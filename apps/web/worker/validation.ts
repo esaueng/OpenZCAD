@@ -102,6 +102,11 @@ export interface AssistantProposalRequest {
    * retry can reach a different provider than the one that just failed.
    */
   retryAttempt: 0 | 1;
+  /**
+   * Operation kinds the requesting client can parse. Absent from clients
+   * built before negotiation existed; see `assistantEnvForClient`.
+   */
+  operations?: readonly string[];
 }
 
 function badRequest(message: string): HttpError {
@@ -662,11 +667,24 @@ export function parseAssistantProposalRequest(
   ) {
     throw badRequest('"retryAttempt" must be 0 or 1.');
   }
+  const operations = record.operations;
+  if (
+    operations !== undefined &&
+    (!Array.isArray(operations) ||
+      operations.length > 200 ||
+      !operations.every(
+        (kind) =>
+          typeof kind === 'string' && kind.length > 0 && kind.length <= 64
+      ))
+  ) {
+    throw badRequest('"operations" must be a list of operation kinds.');
+  }
   return {
     prompt,
     digest: digest as unknown as CadDocumentDigest,
     history: parseAssistantHistory(record.history),
     attachments: parseAssistantAttachments(record.attachments),
-    retryAttempt: record.retryAttempt === 1 ? 1 : 0
+    retryAttempt: record.retryAttempt === 1 ? 1 : 0,
+    ...(operations ? { operations: operations as string[] } : {})
   };
 }

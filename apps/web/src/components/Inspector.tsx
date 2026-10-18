@@ -1759,7 +1759,15 @@ export function Inspector(props: InspectorProps) {
               ? { backDistance: data.backDistance }
               : {}),
             operation: data.operation,
-            targetBodyId: data.targetBodyId
+            targetBodyId: data.targetBodyId,
+            ...(data.endCondition === 'through-all'
+              ? {
+                  endCondition: 'through-all' as const,
+                  ...(data.throughAllSide
+                    ? { throughAllSide: data.throughAllSide }
+                    : {})
+                }
+              : {})
           }}
           submitLabel="Apply"
           disabled={props.extrudeBusy}

@@ -8,8 +8,10 @@ import { type FaceEvolutionPayloadV1, type RemusKernel } from './remus-runtime';
 import {
   findSketch,
   listFeaturesInOrder,
-  resolveParamValue
+  resolveParamValue,
+  validateExtrudeExtent
 } from '@openzcad/document-core';
+import { throughAllSpan, unionBounds } from './through-all';
 import {
   geometryTolerance,
   midDatumPlane,
@@ -445,17 +447,122 @@ function buildPrimitiveFeature(
   }
 }
 
+/**
+ * The region where two bodies' bounding boxes meet, as a body for scaling a
+ * volume tolerance: its box and box volume bound any overlap of the two.
+ * Disjoint boxes give an empty region (and a vanishing tolerance).
+ */
+function boundsOverlapBody(
+  a: Pick<ExtrudeInferenceBody, 'bbox'>,
+  b: Pick<ExtrudeInferenceBody, 'bbox'>
+): Pick<ExtrudeInferenceBody, 'volume' | 'bbox'> {
+  const min = {
+    x: Math.max(a.bbox.min.x, b.bbox.min.x),
+    y: Math.max(a.bbox.min.y, b.bbox.min.y),
+    z: Math.max(a.bbox.min.z, b.bbox.min.z)
+  };
+  const max = {
+    x: Math.max(min.x, Math.min(a.bbox.max.x, b.bbox.max.x)),
+    y: Math.max(min.y, Math.min(a.bbox.max.y, b.bbox.max.y)),
+    z: Math.max(min.z, Math.min(a.bbox.max.z, b.bbox.max.z))
+  };
+  return {
+    volume: (max.x - min.x) * (max.y - min.y) * (max.z - min.z),
+    bbox: { min, max }
+  };
+}
+
+function overlapRegionTolerance(
+  a: Pick<ExtrudeInferenceBody, 'bbox'>,
+  b: Pick<ExtrudeInferenceBody, 'bbox'>
+): number {
+  const region = boundsOverlapBody(a, b);
+  return extrudeVolumeTolerance(region, region);
+}
+
+/**
+ * F01: the blind extrude a through-all cut stands for at this history
+ * position. The span comes from the target's exact bounds projected on the
+ * resolved sketch normal (`throughAllSpan`), so moving or resizing the target
+ * moves the cut with it; a missing, consumed or mesh target, or one the
+ * chosen side does not reach, refuses here by name.
+ */
+function throughAllSweepFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'extrude'>
+): FeatureNode {
+  const { kernel, document, result } = ctx;
+  validateExtrudeExtent(data);
+  const targetBodyId = data.targetBodyId!;
+  const targetName = bodyName(document, targetBodyId);
+  if (result.consumed.has(targetBodyId)) {
+    throw new Error(`Through-all target ${targetName} was already consumed.`);
+  }
+  if (result.meshBodies.has(targetBodyId)) {
+    throw meshBooleanUnsupportedError(targetName);
+  }
+  const target = result.shapes.get(targetBodyId);
+  if (!target) {
+    throw new Error(`Through-all target ${targetName} is unavailable.`);
+  }
+  const basis = result.sketchBases.get(data.sketchId);
+  if (!basis) {
+    throw new Error('Through-all sketch plane did not resolve.');
+  }
+  const side = data.throughAllSide!;
+  let span: { forward: number; backward: number };
+  try {
+    span = throughAllSpan(
+      unionBounds(target.solids.map((solid) => kernel.boundingBox(solid))),
+      basis.origin,
+      basis.normal,
+      side
+    );
+  } catch (error) {
+    throw new Error(
+      `${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')} (target ${targetName}, side ${side}).`,
+      { cause: error }
+    );
+  }
+  const { forward, backward } = span;
+  const extent =
+    forward > 0 && backward > 0
+      ? { distance: forward, backDistance: backward }
+      : forward > 0
+        ? { distance: forward }
+        : { distance: -backward };
+  const {
+    symmetric: _symmetric,
+    backDistance: _backDistance,
+    endCondition: _endCondition,
+    throughAllSide: _throughAllSide,
+    ...rest
+  } = data;
+  return { ...feature, data: { ...rest, ...extent } };
+}
+
 function buildExtrudeFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
   data: FeatureDataOf<'extrude'>
 ): void {
   const { kernel, document, scope, result } = ctx;
+  // Every stored extent, blind included: an unknown end condition or a
+  // stray side must fail closed, not rebuild at the dormant distance.
+  validateExtrudeExtent(data);
   if (feature.bodyId) {
+    // A through-all cut sweeps a derived blind span; everything after this
+    // point (the overlap check, the boolean, the coplanar retry) treats it as
+    // the ordinary cut it then is. The stored feature is never rewritten.
+    const sweepFeature =
+      data.endCondition === 'through-all'
+        ? throughAllSweepFeature(ctx, feature, data)
+        : feature;
     const extrusion = buildSweep(
       kernel,
       document,
-      feature,
+      sweepFeature,
       scope,
       result.sketchBases,
       (message) => raiseFeatureWarning(result, feature, message, 'advisory')
@@ -503,15 +610,25 @@ function buildExtrudeFeature(
       feature.bodyId,
       feature.name
     );
+    // A through-all tool carries empty travel from a possibly distant sketch
+    // plane, so neither its size nor the whole target's is the scale of the
+    // cut. The overlap can only lie where the two bounding boxes meet, so it
+    // is measured against that region (a small hole in a big block is a thin
+    // column, not the block); the remove-everything guard below is measured
+    // against the target, whose remainder it judges.
+    const throughAll = data.endCondition === 'through-all';
     const sharedVolume = sharedShapeVolume(
       kernel,
       target,
       extrusion,
       targetBody,
-      extrusionBody
+      extrusionBody,
+      throughAll ? overlapRegionTolerance(targetBody, extrusionBody) : undefined
     );
     // A cut needs shared material: with none there is nothing to remove, and
-    // that can be settled before doing any work.
+    // that can be settled before doing any work. That holds for through-all
+    // too, whose span covers the target along the normal but not a profile
+    // moved off the target's footprint.
     if (operation === 'cut' && sharedVolume <= 0) {
       // Wording unchanged on purpose: `isMeasuredZeroOverlap` in the web app
       // matches this sentence to tell a measured zero-overlap candidate from
@@ -579,7 +696,7 @@ function buildExtrudeFeature(
         () =>
           piercedExtrudeTool(
             ctx,
-            feature,
+            sweepFeature,
             target.solids,
             extrusion.solids,
             operation
@@ -595,7 +712,7 @@ function buildExtrudeFeature(
       if (combined.tool === extrusion) {
         const pierced = piercedExtrudeTool(
           ctx,
-          feature,
+          sweepFeature,
           target.solids,
           extrusion.solids,
           operation
@@ -647,10 +764,10 @@ function buildExtrudeFeature(
         }
       }
     };
-    if (
-      operation === 'cut' &&
-      resultBody.volume <= extrudeVolumeTolerance(targetBody, extrusionBody)
-    ) {
+    const removalTolerance = throughAll
+      ? extrudeVolumeTolerance(targetBody, targetBody)
+      : extrudeVolumeTolerance(targetBody, extrusionBody);
+    if (operation === 'cut' && resultBody.volume <= removalTolerance) {
       throw new Error(
         `Stored cut extrusion would remove all of ${targetBody.name}; operation was not changed.`
       );

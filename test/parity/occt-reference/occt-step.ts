@@ -1530,6 +1530,16 @@ export class OcctStepKernelAdapter {
             break;
           case 'extrude':
           case 'revolve':
+            if (
+              feature.data.featureKind === 'extrude' &&
+              feature.data.endCondition === 'through-all'
+            ) {
+              // Not modelled here: refusing beats silently replaying the
+              // stale blind distance and reporting a false parity match.
+              throw new Error(
+                'The OCCT parity reference does not model through-all extrudes.'
+              );
+            }
             if (feature.bodyId) {
               const shape = this.buildSweep(
                 document,
