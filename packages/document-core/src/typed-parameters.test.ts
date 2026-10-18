@@ -10,6 +10,7 @@ import {
   listParameters,
   newTypedParameterMisuse,
   normalizeDocument,
+  renameNode,
   parameterKindsOf,
   parameterQuantityRefusal,
   setParameter,
@@ -376,6 +377,25 @@ describe('new typed-parameter misuse', () => {
     expect(newTypedParameterMisuse(document, before)).toMatch(/tilt/);
     expect(newTypedParameterMisuse(before, before)).toBeNull();
     expect(newTypedParameterMisuse(before, after)).toMatch(/tilt/);
+  });
+
+  it('does not count a renamed holder as a new misuse', () => {
+    const document = setParameter(blank(), {
+      name: 'tilt',
+      expression: '30',
+      quantity: 'angle'
+    });
+    const before = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 'tilt', depth: 10 }
+    });
+    const node = Object.values(before.nodes).find(
+      (entry) => entry.kind === 'feature' && entry.name === 'Block'
+    )!;
+    const after = renameNode(before, { nodeId: node.id, name: 'Renamed' });
+    expect(newTypedParameterMisuse(document, before)).toMatch(/tilt/);
+    expect(newTypedParameterMisuse(before, after)).toBeNull();
   });
 
   it('keeps an existing misuse its identity when an earlier field changes', () => {

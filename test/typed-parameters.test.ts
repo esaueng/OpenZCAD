@@ -170,3 +170,30 @@ describe('typed parameters through the exact build (F05)', () => {
     ).toMatchObject({ quantity: 'length' });
   });
 });
+
+describe('Tweak undo and parameter types', () => {
+  it('keeps a retype out of Tweak undo while a value edit stays in it', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Tweak retype', toUserId('user_f05_tweak'))
+    );
+    manager.execute(
+      commandFactories.setParameter({ name: 'w', expression: '10' })
+    );
+    expect(manager.undoIsParameterOnly).toBe(true);
+    // Retyping is a Build edit: Tweak hides the picker, so undo there may
+    // not retype either.
+    manager.execute(
+      commandFactories.setParameter({
+        name: 'w',
+        expression: '10',
+        quantity: 'length'
+      })
+    );
+    expect(manager.undoIsParameterOnly).toBe(false);
+    expect(manager.canUndoIn(true)).toBe(false);
+    manager.execute(
+      commandFactories.setParameter({ name: 'w', expression: '12' })
+    );
+    expect(manager.canUndoIn(true)).toBe(true);
+  });
+});

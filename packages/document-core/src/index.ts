@@ -5468,6 +5468,11 @@ export interface TypedParameterMisuse {
    * comparisons between documents key on this, not on the message.
    */
   occurrence: string;
+  /**
+   * The stored expression and the complaint, without the holder's label: a
+   * rename changes the message but not the misuse.
+   */
+  detail: string;
   message: string;
 }
 
@@ -5520,10 +5525,13 @@ export function typedParameterMisuse(
         );
         if (dimension) requireFieldDimension(result, dimension);
       } catch (error) {
+        const reason =
+          error instanceof Error ? error.message : 'it no longer evaluates.';
         misuse.push({
           featureId: owner(node),
           occurrence: `${node.id}:${(paths ??= objectPaths(node)).get(site.container) ?? '?'}.${site.key}`,
-          message: `${referenceLabel(node)} uses "${expression}": ${error instanceof Error ? error.message : 'it no longer evaluates.'}`
+          detail: `${expression}\u0000${reason}`,
+          message: `${referenceLabel(node)} uses "${expression}": ${reason}`
         });
       }
       return expression;
@@ -5544,9 +5552,10 @@ export function newTypedParameterMisuse(
   const found = typedParameterMisuse(after);
   if (found.length === 0) return null;
   // Same field, same expression, same complaint: an occurrence the edit did
-  // not introduce. Keyed per node and field, as labels and messages repeat.
+  // not introduce. Keyed per node and field, as labels and messages repeat,
+  // and without the label, which a rename changes.
   const key = (entry: TypedParameterMisuse) =>
-    `${entry.occurrence}\u0000${entry.message}`;
+    `${entry.occurrence}\u0000${entry.detail}`;
   const known = new Set(typedParameterMisuse(before).map(key));
   return found.find((entry) => !known.has(key(entry)))?.message ?? null;
 }

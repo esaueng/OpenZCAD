@@ -3143,6 +3143,18 @@ export function commandsForCadPatch(
   return commands;
 }
 
+/**
+ * The kind an undo entry records for a command. A `parameter.set` that sets
+ * a type (F05) records `parameter.retype`: Tweak turns values and hides the
+ * type picker, so its undo and redo must not retype a parameter either.
+ */
+function historyCommandKind(entry: SerializedCommand): string {
+  return entry.kind === 'parameter.set' &&
+    (entry.payload as ParameterSetInput | undefined)?.quantity !== undefined
+    ? 'parameter.retype'
+    : entry.kind;
+}
+
 function parameterOnly(kinds: string[] | null): boolean {
   return !!kinds?.length && kinds.every((kind) => kind === 'parameter.set');
 }
@@ -3241,7 +3253,7 @@ export class CommandManager {
       next,
       command.label,
       this.actorUserId,
-      serializedLeaves(command).map((entry) => entry.kind)
+      serializedLeaves(command).map(historyCommandKind)
     );
     assertDocumentTextBudget(recorded);
     this.document = recorded;
@@ -3340,7 +3352,7 @@ export class CommandManager {
       next,
       label,
       this.actorUserId,
-      serialized.map((entry) => entry.kind)
+      serialized.map(historyCommandKind)
     );
     assertDocumentTextBudget(recorded);
     this.document = recorded;
