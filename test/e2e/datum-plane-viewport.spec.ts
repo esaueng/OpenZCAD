@@ -219,6 +219,16 @@ test('drags a selected datum plane along its normal and picks it in the viewport
       .getByRole('heading', { name: 'Plane' })
   ).toBeVisible();
   await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /\d/);
+  // While a card is open it owns viewport clicks: clicking the old plane
+  // does not swap the new plane's draft for the old plane's editor.
+  const draftName = page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByLabel('Name', { exact: true });
+  const newName = await draftName.inputValue();
+  expect(newName).not.toBe('Lid plane');
+  await page.mouse.click(bounds.x + pin.x, bounds.y + pin.y);
+  await page.waitForTimeout(500);
+  await expect(draftName).toHaveValue(newName);
   await page.keyboard.press('Escape');
 
   // One undo restores the plane's offset.

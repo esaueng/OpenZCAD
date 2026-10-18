@@ -20768,8 +20768,15 @@ export function App() {
             onPickPlane={startSketchOnPlane}
             // A face re-pick or a measurement owns every viewport click; a
             // datum must not open its card over one still armed.
+            // Only a free viewport selects a datum by clicking it: an open
+            // tool or card (Hole, Shell, a Plane draft…), a sketch, a
+            // re-pick or Measure owns the click and keeps its draft.
             onPickDatum={
-              faceRepair || datumRepair || measuring
+              faceRepair ||
+              datumRepair ||
+              measuring ||
+              tool !== null ||
+              interaction.mode === 'sketch'
                 ? undefined
                 : (featureId) => {
                     const node =
