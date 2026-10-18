@@ -298,27 +298,35 @@ function ccwArc(
   distinctEnds = false
 ): SketchObjectData {
   // Angles keep the file's full precision: on a large radius even a 1e-9°
-  // step moves an endpoint off the geometry it should meet.
-  const turn = (degrees: number) => {
-    // Add a turn only to a negative angle: (a + 360) % 360 would cost a
-    // small positive angle most of its digits.
-    const angle = degrees % 360;
-    if (angle >= 0) return angle;
-    const wrapped = angle + 360;
-    return wrapped === 360 ? 0 : wrapped;
-  };
-  const start = turn(startDeg);
-  let end = turn(endDeg);
+  // step moves an endpoint off the geometry it should meet. `%` is exact,
+  // and a whole turn is only added to an angle it does not round: the usual
+  // start in [0, 360) with end above it whenever that is exact, else the
+  // turn goes on the other angle, so a tiny angle (positive or negative) is
+  // never rounded into 0 or 360.
+  let start = startDeg % 360;
+  let end = endDeg % 360;
   // Coincident ends are a zero sweep, never a whole turn: DXF draws a full
   // circle as a CIRCLE, and an ARC from 45° to 45° has no extent.
-  if (end === start || end === start + 360 || end + 360 === start) {
+  if ((end - start) % 360 === 0) {
     throw new DxfImportError(
       distinctEnds
         ? 'This DXF has a polyline bulge too extreme to convert exactly.'
         : 'This DXF has an arc too short to represent: its sweep rounds to zero.'
     );
   }
-  if (end < start) end += 360;
+  const exact = (angle: number, turn: number) => angle + turn - turn === angle;
+  if (start < 0 && exact(start, 360) && exact(end, 360)) {
+    start += 360;
+    end += 360;
+  }
+  while (end - start <= 0) {
+    if (exact(end, 360) || !exact(start, -360)) end += 360;
+    else start -= 360;
+  }
+  while (end - start > 360) {
+    if (exact(end, -360) || !exact(start, 360)) end -= 360;
+    else start += 360;
+  }
   if (!(end > start)) {
     throw new DxfImportError(
       'This DXF has an arc too short to represent: its sweep rounds to zero.'

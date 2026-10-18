@@ -1304,6 +1304,35 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     }
   });
 
+  it('keeps a tiny negative arc angle instead of wrapping it to 0', () => {
+    const arc = (start: string, end: string) =>
+      importDxfSketch(
+        dxf([
+          '0',
+          'ARC',
+          '10',
+          '0',
+          '20',
+          '0',
+          '40',
+          '1e15',
+          '50',
+          start,
+          '51',
+          end
+        ]),
+        'mm'
+      ).objects[0] as unknown as { startAngleDeg: number; endAngleDeg: number };
+    expect(arc('-1e-14', '90')).toMatchObject({
+      startAngleDeg: -1e-14,
+      endAngleDeg: 90
+    });
+    // A tiny negative end keeps its digits too; the turn goes on the start.
+    const late = arc('10', '-1e-14');
+    expect(late.endAngleDeg).toBe(-1e-14);
+    expect(late.endAngleDeg - late.startAngleDeg).toBeCloseTo(350, 9);
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',
