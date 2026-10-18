@@ -20695,9 +20695,12 @@ export function App() {
               if (node) handleSelectFeatureFromTree(node.id, false);
             }}
             // A selected datum opens its Plane card; the handle feeds the
-            // card's Offset field, and the card's own Apply commits it.
+            // card's Offset field, and the card's own Apply commits it. Only
+            // while that card edits this datum: a card creating a new plane
+            // must not take the old selection's drag as its own Offset.
             onDatumOffsetDrag={
-              tool === 'datum-plane'
+              tool === 'datum-plane' &&
+              modelingEditFeature?.data.featureKind === 'datum-plane'
                 ? (delta) => {
                     const apply = datumOffsetDragRef.current;
                     apply?.(delta);

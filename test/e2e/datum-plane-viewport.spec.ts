@@ -127,6 +127,18 @@ test('drags a selected datum plane along its normal and picks it in the viewport
     page.locator('.feature-row', { hasText: 'Lid plane' })
   ).toHaveClass(/selected/);
 
+  // Starting a new plane from the Plane tool keeps the old selection but is
+  // not editing it: its pin must not arm, or a drag would fill the new
+  // plane's Offset.
+  await page.getByRole('button', { name: /^Plane — / }).click();
+  await expect(
+    page
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('heading', { name: 'Plane' })
+  ).toBeVisible();
+  await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /\d/);
+  await page.keyboard.press('Escape');
+
   // One undo restores the plane's offset.
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
