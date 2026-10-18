@@ -1,0 +1,484 @@
+import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import { newCanonicalPlaneRef } from '@openzcad/geometry';
+import {
+  UNIT_TO_MM,
+  type ProjectDocument,
+  type SketchObjectData,
+  type UnitSystem
+} from '@openzcad/shared';
+
+/**
+ * DXF sketch import (D04): an ASCII DXF's 2D geometry becomes one sketch's
+ * lines, arcs and circles, scaled into the document's units. What a sketch
+ * cannot hold is reported by entity type, never approximated: annotations and
+ * blocks are dropped, curves the sketch has no object for are refused.
+ *
+ * Loaded only by the import that needs it, so none of it rides in the entry
+ * chunk.
+ */
+
+/** A file with more entities than this is refused rather than half-read. */
+export const MAX_DXF_SKETCH_OBJECTS = 2000;
+/** Larger files are refused before parsing (about 2,000 curves is ~1 MB). */
+export const MAX_DXF_IMPORT_BYTES = 20 * 1024 * 1024;
+
+/** `$INSUNITS` codes the importer understands, in millimetres per unit. */
+const INSUNITS_TO_MM: Readonly<Record<number, { mm: number; name: string }>> = {
+  1: { mm: 25.4, name: 'inches' },
+  2: { mm: 304.8, name: 'feet' },
+  4: { mm: 1, name: 'millimetres' },
+  5: { mm: 10, name: 'centimetres' },
+  6: { mm: 1000, name: 'metres' },
+  8: { mm: 0.0000254, name: 'microinches' },
+  9: { mm: 0.0254, name: 'mils' },
+  10: { mm: 914.4, name: 'yards' },
+  13: { mm: 0.001, name: 'microns' },
+  14: { mm: 100, name: 'decimetres' }
+};
+
+/** Annotation and organisation entities a sketch has no place for. */
+const DROPPED = new Set([
+  'TEXT',
+  'MTEXT',
+  'DIMENSION',
+  'LEADER',
+  'MLEADER',
+  'HATCH',
+  'INSERT',
+  'POINT',
+  'SOLID',
+  'TRACE',
+  'ATTDEF',
+  'ATTRIB',
+  'VIEWPORT',
+  'IMAGE',
+  'WIPEOUT',
+  'TOLERANCE'
+]);
+
+export class DxfImportError extends Error {
+  override name = 'DxfImportError';
+}
+
+interface Pair {
+  code: number;
+  value: string;
+}
+
+type DxfEntity = { type: string; groups: Pair[] };
+
+export interface DxfSketchImport {
+  objects: SketchObjectData[];
+  /** How the file's units were read; null when it declared none. */
+  sourceUnit: string | null;
+  /** Annotation and block entities left out, by type. */
+  dropped: Record<string, number>;
+  /** Geometry the sketch cannot represent exactly, by type. */
+  refused: Record<string, number>;
+}
+
+/** The file's group-code/value pairs; a malformed pair refuses the file. */
+function readPairs(text: string): Pair[] {
+  if (text.startsWith('AutoCAD Binary DXF')) {
+    throw new DxfImportError(
+      'This is a binary DXF; save it as ASCII DXF and import that.'
+    );
+  }
+  const lines = text.split(/\r\n|\r|\n/);
+  const pairs: Pair[] = [];
+  for (let index = 0; index + 1 < lines.length; index += 2) {
+    const codeText = lines[index]!.trim();
+    if (codeText === '' && index + 2 >= lines.length) break;
+    const code = Number(codeText);
+    if (!/^-?\d+$/.test(codeText) || !Number.isInteger(code)) {
+      throw new DxfImportError(
+        `This DXF is malformed: line ${index + 1} should be a group code.`
+      );
+    }
+    pairs.push({ code, value: lines[index + 1]!.trim() });
+  }
+  return pairs;
+}
+
+/** The section named `name`, as the pairs between its header and ENDSEC. */
+function section(pairs: Pair[], name: string): Pair[] | null {
+  for (let index = 0; index + 1 < pairs.length; index += 1) {
+    if (
+      pairs[index]!.code === 0 &&
+      pairs[index]!.value === 'SECTION' &&
+      pairs[index + 1]!.code === 2 &&
+      pairs[index + 1]!.value === name
+    ) {
+      const end = pairs.findIndex(
+        (pair, at) => at > index && pair.code === 0 && pair.value === 'ENDSEC'
+      );
+      if (end < 0) {
+        throw new DxfImportError(
+          `This DXF is malformed: its ${name} section never ends.`
+        );
+      }
+      return pairs.slice(index + 2, end);
+    }
+  }
+  return null;
+}
+
+function entitiesOf(pairs: Pair[]): DxfEntity[] {
+  const entities: DxfEntity[] = [];
+  for (const pair of pairs) {
+    if (pair.code === 0) entities.push({ type: pair.value, groups: [] });
+    else entities.at(-1)?.groups.push(pair);
+  }
+  return entities;
+}
+
+function insUnits(pairs: Pair[]): number | null {
+  const header = section(pairs, 'HEADER');
+  if (!header) return null;
+  const at = header.findIndex(
+    (pair) => pair.code === 9 && pair.value === '$INSUNITS'
+  );
+  if (at < 0) return null;
+  const value = header[at + 1];
+  return value && value.code === 70 ? Number(value.value) : null;
+}
+
+function number(entity: DxfEntity, code: number, fallback?: number): number {
+  const found = entity.groups.find((pair) => pair.code === code);
+  const value = found ? Number(found.value) : fallback;
+  if (value === undefined || !Number.isFinite(value)) {
+    throw new DxfImportError(
+      `This DXF is malformed: a ${entity.type} has no usable group ${code}.`
+    );
+  }
+  return value;
+}
+
+/** True unless the entity's extrusion direction tilts it off the XY plane. */
+function inXyPlane(entity: DxfEntity): boolean {
+  const z = entity.groups.find((pair) => pair.code === 230);
+  const x = entity.groups.find((pair) => pair.code === 210);
+  const y = entity.groups.find((pair) => pair.code === 220);
+  if (!z && !x && !y) return true;
+  return (
+    Math.abs(Number(x?.value ?? 0)) < 1e-9 &&
+    Math.abs(Number(y?.value ?? 0)) < 1e-9 &&
+    Number(z?.value ?? 1) > 0
+  );
+}
+
+/** Arc angles with end − start in (0, 360], the sketch's CCW convention. */
+function ccwArc(
+  centerX: number,
+  centerY: number,
+  radius: number,
+  startDeg: number,
+  endDeg: number
+): SketchObjectData {
+  let start = ((startDeg % 360) + 360) % 360;
+  let end = ((endDeg % 360) + 360) % 360;
+  if (end <= start) end += 360;
+  start = Math.round(start * 1e9) / 1e9;
+  end = Math.round(end * 1e9) / 1e9;
+  return {
+    objectKind: 'arc',
+    centerX,
+    centerY,
+    radius,
+    startAngleDeg: start,
+    endAngleDeg: end
+  };
+}
+
+/** One polyline segment, a straight line or the arc its bulge describes. */
+function segment(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  bulge: number
+): SketchObjectData | null {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const chord = Math.hypot(dx, dy);
+  if (chord < 1e-12) return null;
+  if (Math.abs(bulge) < 1e-12) {
+    return { objectKind: 'line', x1: from.x, y1: from.y, x2: to.x, y2: to.y };
+  }
+  // bulge = tan(θ/4), positive counter-clockwise from `from` to `to`.
+  const theta = 4 * Math.atan(bulge);
+  const radius = Math.abs(chord / (2 * Math.sin(theta / 2)));
+  const midX = (from.x + to.x) / 2;
+  const midY = (from.y + to.y) / 2;
+  // Distance from the chord midpoint to the centre, signed toward the left
+  // of from→to for a CCW (positive) bulge.
+  const apothem = chord / 2 / Math.tan(theta / 2);
+  const centerX = midX - (dy / chord) * apothem;
+  const centerY = midY + (dx / chord) * apothem;
+  const angle = (point: { x: number; y: number }) =>
+    (Math.atan2(point.y - centerY, point.x - centerX) * 180) / Math.PI;
+  return bulge > 0
+    ? ccwArc(centerX, centerY, radius, angle(from), angle(to))
+    : ccwArc(centerX, centerY, radius, angle(to), angle(from));
+}
+
+interface Vertex {
+  x: number;
+  y: number;
+  bulge: number;
+}
+
+function polylineObjects(vertices: Vertex[], closed: boolean) {
+  const objects: SketchObjectData[] = [];
+  const count = closed ? vertices.length : vertices.length - 1;
+  for (let index = 0; index < count; index += 1) {
+    const from = vertices[index]!;
+    const to = vertices[(index + 1) % vertices.length]!;
+    const piece = segment(from, to, from.bulge);
+    if (piece) objects.push(piece);
+  }
+  return objects;
+}
+
+/** LWPOLYLINE vertices: each 10/20 pair, with any 42 bulge that follows. */
+function lwVertices(entity: DxfEntity): Vertex[] {
+  const vertices: Vertex[] = [];
+  let pendingX: number | null = null;
+  for (const pair of entity.groups) {
+    if (pair.code === 10) pendingX = Number(pair.value);
+    else if (pair.code === 20 && pendingX !== null) {
+      vertices.push({ x: pendingX, y: Number(pair.value), bulge: 0 });
+      pendingX = null;
+    } else if (pair.code === 42 && vertices.length > 0) {
+      vertices.at(-1)!.bulge = Number(pair.value);
+    }
+  }
+  if (vertices.some((v) => !Number.isFinite(v.x + v.y + v.bulge))) {
+    throw new DxfImportError(
+      'This DXF is malformed: a LWPOLYLINE has an unusable vertex.'
+    );
+  }
+  return vertices;
+}
+
+/**
+ * Reads an ASCII DXF and lowers its 2D geometry to sketch objects in the
+ * document's units. `unitless` is how a file that declares no units is read
+ * (its drawing units taken as these).
+ */
+export function importDxfSketch(
+  text: string,
+  documentUnits: UnitSystem,
+  unitless: UnitSystem = documentUnits
+): DxfSketchImport {
+  if (text.length > MAX_DXF_IMPORT_BYTES) {
+    throw new DxfImportError('This DXF is larger than 20 MB; split it first.');
+  }
+  const pairs = readPairs(text);
+  const entitiesSection = section(pairs, 'ENTITIES');
+  if (!entitiesSection) {
+    throw new DxfImportError('This DXF has no ENTITIES section to import.');
+  }
+  const unitCode = insUnits(pairs);
+  const known = unitCode !== null ? INSUNITS_TO_MM[unitCode] : undefined;
+  if (unitCode !== null && unitCode !== 0 && !known) {
+    throw new DxfImportError(
+      `This DXF uses a unit OpenZCAD cannot read ($INSUNITS ${unitCode}).`
+    );
+  }
+  const sourceMm = known ? known.mm : UNIT_TO_MM[unitless];
+  const scale = sourceMm / UNIT_TO_MM[documentUnits];
+  // `|| 0` folds -0 to 0, so stored coordinates never carry a signed zero.
+  const s = (value: number) => Math.round(value * scale * 1e9) / 1e9 || 0;
+
+  const objects: SketchObjectData[] = [];
+  const dropped: Record<string, number> = {};
+  const refused: Record<string, number> = {};
+  const count = (into: Record<string, number>, type: string) => {
+    into[type] = (into[type] ?? 0) + 1;
+  };
+
+  const entities = entitiesOf(entitiesSection);
+  for (let index = 0; index < entities.length; index += 1) {
+    const entity = entities[index]!;
+    if (entity.type === 'SEQEND' || entity.type === 'VERTEX') continue;
+    if (DROPPED.has(entity.type)) {
+      count(dropped, entity.type);
+      continue;
+    }
+    if (!inXyPlane(entity)) {
+      count(refused, `${entity.type} off the XY plane`);
+      continue;
+    }
+    switch (entity.type) {
+      case 'LINE': {
+        const line = segment(
+          { x: number(entity, 10), y: number(entity, 20) },
+          { x: number(entity, 11), y: number(entity, 21) },
+          0
+        );
+        if (line) objects.push(line);
+        break;
+      }
+      case 'CIRCLE':
+        objects.push({
+          objectKind: 'circle',
+          centerX: number(entity, 10),
+          centerY: number(entity, 20),
+          radius: number(entity, 40)
+        });
+        break;
+      case 'ARC':
+        objects.push(
+          ccwArc(
+            number(entity, 10),
+            number(entity, 20),
+            number(entity, 40),
+            number(entity, 50),
+            number(entity, 51)
+          )
+        );
+        break;
+      case 'LWPOLYLINE':
+        objects.push(
+          ...polylineObjects(
+            lwVertices(entity),
+            (number(entity, 70, 0) & 1) === 1
+          )
+        );
+        break;
+      case 'POLYLINE': {
+        const flags = number(entity, 70, 0);
+        // 3D polylines (8), meshes (16, 64) are not 2D sketch geometry.
+        if ((flags & (8 | 16 | 64)) !== 0) {
+          count(refused, 'POLYLINE (3D or mesh)');
+          while (entities[index + 1]?.type === 'VERTEX') index += 1;
+          break;
+        }
+        const vertices: Vertex[] = [];
+        while (entities[index + 1]?.type === 'VERTEX') {
+          index += 1;
+          const vertex = entities[index]!;
+          vertices.push({
+            x: number(vertex, 10),
+            y: number(vertex, 20),
+            bulge: number(vertex, 42, 0)
+          });
+        }
+        objects.push(...polylineObjects(vertices, (flags & 1) === 1));
+        break;
+      }
+      default:
+        // ELLIPSE, SPLINE, 3DFACE, REGION, … have no exact sketch object.
+        count(refused, entity.type);
+    }
+    if (objects.length > MAX_DXF_SKETCH_OBJECTS) {
+      throw new DxfImportError(
+        `This DXF has more than ${MAX_DXF_SKETCH_OBJECTS} curves; a sketch takes at most that many.`
+      );
+    }
+  }
+
+  const scaled = objects.map(scaleObject(s));
+  return {
+    objects: scaled,
+    sourceUnit: known ? known.name : null,
+    dropped,
+    refused
+  };
+}
+
+function scaleObject(s: (value: number) => number) {
+  return (object: SketchObjectData): SketchObjectData => {
+    switch (object.objectKind) {
+      case 'line':
+        return {
+          ...object,
+          x1: s(Number(object.x1)),
+          y1: s(Number(object.y1)),
+          x2: s(Number(object.x2)),
+          y2: s(Number(object.y2))
+        };
+      case 'circle':
+        return {
+          ...object,
+          centerX: s(Number(object.centerX)),
+          centerY: s(Number(object.centerY)),
+          radius: s(Number(object.radius))
+        };
+      case 'arc':
+        return {
+          ...object,
+          centerX: s(Number(object.centerX)),
+          centerY: s(Number(object.centerY)),
+          radius: s(Number(object.radius))
+        };
+      default:
+        return object;
+    }
+  };
+}
+
+/** "3 TEXT, 1 HATCH" for a status line; empty when there is nothing. */
+export function describeDxfCounts(counts: Record<string, number>): string {
+  return Object.entries(counts)
+    .map(([type, n]) => `${n} ${type}`)
+    .join(', ');
+}
+
+/**
+ * What importing `fileName` commits: one undoable sketch on Top (XY) named
+ * after the file, and the status line that says what was read, converted and
+ * left out. Throws a {@link DxfImportError} when nothing in the file is
+ * sketch geometry.
+ */
+export function dxfSketchImportPlan(
+  document: ProjectDocument,
+  fileName: string,
+  text: string,
+  nameFeature: (name: string) => string
+): { command: AnyCommand; status: string } {
+  const result = importDxfSketch(text, document.units);
+  const left = [
+    describeDxfCounts(result.dropped),
+    describeDxfCounts(result.refused)
+  ]
+    .filter(Boolean)
+    .join(', ');
+  if (result.objects.length === 0) {
+    throw new DxfImportError(
+      `${fileName} has no lines, arcs, circles or polylines to sketch${left ? ` (only ${left})` : ''}.`
+    );
+  }
+  const name = nameFeature(fileName.replace(/\.dxf$/i, '') || 'DXF sketch');
+  const units = result.sourceUnit
+    ? result.sourceUnit === unitName(document.units)
+      ? ''
+      : `, converted from ${result.sourceUnit}`
+    : `; it declares no units, so they were read as ${unitName(document.units)}`;
+  const parts = [
+    result.dropped && Object.keys(result.dropped).length
+      ? `left out ${describeDxfCounts(result.dropped)}`
+      : '',
+    Object.keys(result.refused).length
+      ? `could not sketch ${describeDxfCounts(result.refused)}`
+      : ''
+  ].filter(Boolean);
+  const curves = result.objects.length;
+  return {
+    command: commandFactories.addSketch({
+      name,
+      planeRef: newCanonicalPlaneRef('XY', 0),
+      objects: result.objects
+    }),
+    status: `Imported ${curves} ${curves === 1 ? 'curve' : 'curves'} from ${fileName} as sketch "${name}"${units}${parts.length ? ` · ${parts.join('; ')}` : ''}.`
+  };
+}
+
+function unitName(units: UnitSystem): string {
+  return units === 'inch'
+    ? 'inches'
+    : units === 'mm'
+      ? 'millimetres'
+      : units === 'cm'
+        ? 'centimetres'
+        : 'metres';
+}

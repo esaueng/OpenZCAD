@@ -10936,6 +10936,25 @@ export function App() {
       );
       return;
     }
+    if (lowerName.endsWith('.dxf')) {
+      try {
+        const [{ dxfSketchImportPlan }, text] = await Promise.all([
+          import('./lib/dxfImport'),
+          file.text()
+        ]);
+        if (managerRef.current !== importManager) return;
+        const plan = dxfSketchImportPlan(
+          importManager.document,
+          file.name,
+          text,
+          newFeatureName
+        );
+        if (executeCommand(plan.command)) setStatus(plan.status);
+      } catch (error) {
+        setStatus(errorMessage(error, `Could not import ${file.name}.`));
+      }
+      return;
+    }
     if (!/\.(?:stl|step|stp|3mf|obj|glb|ply)$/i.test(file.name)) {
       setStatus(`Unsupported import format: ${file.name}`);
       return;
@@ -21747,7 +21766,7 @@ export function App() {
           <input
             ref={importInputRef}
             type="file"
-            accept=".fcstd,.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply"
+            accept=".fcstd,.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf"
             multiple
             style={{ display: 'none' }}
             onChange={(event: ChangeEvent<HTMLInputElement>) => {

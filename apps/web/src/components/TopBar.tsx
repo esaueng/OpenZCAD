@@ -632,7 +632,7 @@ export function TopBar({
               <button
                 type="button"
                 className="topbar-menu-item"
-                title="Import FreeCAD (.FCStd), STEP, a mesh file (STL, 3MF, OBJ, GLB, PLY), or a paired Shapr3D project and STEP"
+                title="Import FreeCAD (.FCStd), STEP, a mesh file (STL, 3MF, OBJ, GLB, PLY), a DXF drawing as a sketch, or a paired Shapr3D project and STEP"
                 // The format list stays in its title: in the name it made
                 // this item answer to "STEP" beside Export STEP.
                 aria-label="Import CAD files…"
@@ -640,13 +640,13 @@ export function TopBar({
               >
                 <Upload size={13} aria-hidden="true" />
                 <span>Import CAD files…</span>
-                <small>FreeCAD · STEP · STL · 3MF · OBJ · GLB · PLY</small>
+                <small>FreeCAD · STEP · STL · 3MF · OBJ · GLB · PLY · DXF</small>
               </button>
               <input
                 ref={importInputRef}
                 type="file"
                 aria-label="Import FreeCAD, STEP or a mesh file…"
-                accept=".fcstd,.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply"
+                accept=".fcstd,.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf"
                 multiple
                 hidden
                 onChange={(event: ChangeEvent<HTMLInputElement>) => {
