@@ -14,6 +14,7 @@ import type {
 } from '@openzcad/shared';
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
+import { datumFaceAttachFailed } from './lib/datumPlaneDisplay';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
 import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
 import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
@@ -2048,6 +2049,14 @@ export function App() {
    */
   const [faceRepair, setFaceRepair] =
     useState<StaleDirectEditFaceRepair | null>(null);
+  /** The open Plane card's handler for a drag of its datum's handle. */
+  const datumOffsetDragRef = useRef<((delta: number) => void) | null>(null);
+  /** Whether the open Plane card's draft can take a drag: a numeric offset. */
+  const [datumDragAvailable, setDatumDragAvailable] = useState(false);
+  /** The open Plane card's exact entry for its datum's handle. */
+  const datumOffsetEntryRef = useRef<(() => boolean) | null>(null);
+  /** R01: an offset datum whose source face is being re-picked. */
+  const [datumRepair, setDatumRepair] = useState<FeatureNode | null>(null);
   const [formFacePickTarget, setFormFacePickTarget] = useState<BodyId | null>(
     null
   );
@@ -4532,6 +4541,7 @@ export function App() {
     // An armed face re-pick names a feature by id; a different project's
     // features must never satisfy it.
     setFaceRepair(null);
+    setDatumRepair(null);
     // Nor may an armed edge or face operation, or a delete awaiting its
     // confirm: a "Fillet · Ready" chip from the last project read as a
     // command the new, empty one was somehow in the middle of.
@@ -12555,6 +12565,32 @@ export function App() {
       handleFaceRepairPick(selection);
       return;
     }
+    if (datumRepair && !measuring && tool === null && !modelingLocked) {
+      const base = managerRef.current?.document;
+      if (!selection || !base) return;
+      const repair = datumRepair;
+      const attempt = datumRepairAttempt.current;
+      const withdrawn = () => datumRepairAttempt.current !== attempt;
+      void import('./lib/datumPlanes').then(({ datumFaceRepairEdit }) => {
+        if (withdrawn()) return;
+        try {
+          const edit = datumFaceRepairEdit(base, repair.featureId, selection);
+          void validatedFeature.runTransaction([edit.command], {
+            label: edit.label,
+            cancelled: withdrawn,
+            targets: affectedFeatureTargets(base, repair.featureId),
+            validateDerived: edit.validateDerived,
+            successMessage: `"${repair.name}" follows the re-picked face.`,
+            onSuccess: () => setDatumRepair(null),
+            // Stay armed: the next click can try another face.
+            onFailure: setStatus
+          });
+        } catch (error) {
+          setStatus(errorMessage(error, 'That face cannot carry this plane.'));
+        }
+      });
+      return;
+    }
     // A form that collects faces owns every viewport pick while it is open:
     // the click fills its face field instead of arming a drag handle and
     // replacing the form with the Offset Face card.
@@ -17958,6 +17994,8 @@ export function App() {
     }
     setTool(null);
     clearSelection();
+    // One re-pick at a time: the click goes to whichever was asked for last.
+    setDatumRepair(null);
     setFaceRepair(repair);
     const bodyName =
       representations[repair.targetBodyId]?.name ?? 'the edited body';
@@ -17965,6 +18003,25 @@ export function App() {
       `Re-pick the face for "${repair.featureName}": click the ${faceRepairPickHint(repair)} on ${bodyName} · Esc cancels.`
     );
   }
+
+  // A datum re-pick yields to any mode that takes viewport clicks over:
+  // Measure, a tool, a sketch or a locked workspace (View or Tweak). Each
+  // arm or disarm also moves the attempt counter, which withdraws an edit
+  // still being checked.
+  const datumRepairAttempt = useRef(0);
+  useEffect(() => {
+    datumRepairAttempt.current += 1;
+  }, [datumRepair]);
+  useEffect(() => {
+    if (
+      measuring ||
+      tool !== null ||
+      modelingLocked ||
+      interaction.mode === 'sketch'
+    ) {
+      setDatumRepair(null);
+    }
+  }, [measuring, tool, modelingLocked, interaction.mode]);
 
   /**
    * Consumes a viewport pick while a face re-pick is armed. A pick that
@@ -18076,6 +18133,41 @@ export function App() {
                 icon: <Crosshair size={13} aria-hidden="true" />
               },
               run: () => armFaceRepair(repair)
+            }
+          ]
+        : []),
+      // R01: an offset plane whose source face no longer resolves. Only the
+      // build's own "cannot attach" failure proves that; a datum still
+      // rebuilding, or failing for another reason (a bad offset
+      // expression), is not something a new face could fix.
+      ...(feature.data.featureKind === 'datum-plane' &&
+      feature.data.definition.kind === 'offset' &&
+      feature.data.definition.source.type === 'face' &&
+      !isFeatureSuppressed(feature) &&
+      !doc?.derived.datumFrames?.[feature.featureId] &&
+      datumFaceAttachFailed(
+        feature,
+        doc && featureAttribution?.derived === doc.derived
+          ? featureAttribution.featureWarnings
+          : []
+      )
+        ? [
+            {
+              item: {
+                id: 'repair-datum-face',
+                label: 'Re-pick source face…',
+                icon: <Crosshair size={13} aria-hidden="true" />
+              },
+              run: () => {
+                if (!ensureCanEdit('repair a feature')) return;
+                setTool(null);
+                clearSelection();
+                setFaceRepair(null);
+                setDatumRepair(feature);
+                setStatus(
+                  `Re-pick the face for "${feature.name}": click a planar face · Esc cancels.`
+                );
+              }
             }
           ]
         : []),
@@ -18494,9 +18586,10 @@ export function App() {
             }
             return;
           }
-          if (faceRepair) {
+          if (faceRepair || datumRepair) {
             event.preventDefault();
             setFaceRepair(null);
+            setDatumRepair(null);
             setStatus('Face re-pick canceled · the feature is unchanged.');
             return;
           }
@@ -20664,6 +20757,40 @@ export function App() {
               tool && PRIMITIVE_TOOLS.includes(tool) ? primitiveGhost : null
             }
             onPickPlane={startSketchOnPlane}
+            // A face re-pick or a measurement owns every viewport click; a
+            // datum must not open its card over one still armed.
+            // Only a free viewport selects a datum by clicking it: an open
+            // tool or card (Hole, Shell, a Plane draft…), a sketch, a
+            // re-pick or Measure owns the click and keeps its draft.
+            onPickDatum={
+              faceRepair ||
+              datumRepair ||
+              measuring ||
+              tool !== null ||
+              interaction.mode === 'sketch'
+                ? undefined
+                : (featureId) => {
+                    const node =
+                      doc && findFeature(doc, featureId as FeatureId);
+                    if (node) handleSelectFeatureFromTree(node.id, false);
+                  }
+            }
+            // A selected datum opens its Plane card; the handle feeds the
+            // card's Offset field, and the card's own Apply commits it. Only
+            // while that card edits this datum: a card creating a new plane
+            // must not take the old selection's drag as its own Offset.
+            onDatumOffsetDrag={
+              tool === 'datum-plane' &&
+              modelingEditFeature?.data.featureKind === 'datum-plane' &&
+              datumDragAvailable
+                ? (delta) => {
+                    const apply = datumOffsetDragRef.current;
+                    apply?.(delta);
+                    return Boolean(apply);
+                  }
+                : undefined
+            }
+            onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
             modeOverlay={
@@ -21243,7 +21370,10 @@ export function App() {
                   validateSelectionEdit,
                   handleDeleteFeature,
                   cancelPanel,
-                  closeFeaturePanel
+                  closeFeaturePanel,
+                  datumOffsetDragRef,
+                  datumOffsetEntryRef,
+                  setDatumDragAvailable
                 }}
               />
             ) : (

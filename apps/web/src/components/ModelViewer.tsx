@@ -860,6 +860,8 @@ export interface ModelViewerProps {
   planePickerOffset: number;
   /** A ghost plane was clicked. */
   onPickPlane(plane: PlaneId): void;
+  /** A datum plane was clicked where nothing in the model was under it. */
+  onPickDatum?(featureId: string): void;
   /**
    * The bore the open Hole card would drill, drawn through the body before
    * it exists. Null while no hole can be placed.
@@ -1770,6 +1772,7 @@ export function ModelViewer({
   datumPlanes,
   planePickerOffset,
   onPickPlane,
+  onPickDatum,
   onMeasurePreview,
   regionHandle,
   sketchMode,
@@ -1956,6 +1959,8 @@ export function ModelViewer({
   onMeasurePreviewRef.current = onMeasurePreview;
   const onPickPlaneRef = useRef(onPickPlane);
   onPickPlaneRef.current = onPickPlane;
+  const onPickDatumRef = useRef(onPickDatum);
+  onPickDatumRef.current = onPickDatum;
   const planePickerOffsetRef = useRef(planePickerOffset);
   planePickerOffsetRef.current = planePickerOffset;
   const datumPlaneRigRef = useRef<DatumPlaneRig | null>(null);
@@ -4958,6 +4963,22 @@ export function ModelViewer({
         planePickerRigRef.current?.setHover(null);
         onPickPlaneRef.current(ghost.plane);
         return;
+      }
+      // A datum plane is chosen only where nothing in the model is under
+      // the pointer: its quad is translucent and often passes through the
+      // part, so it must never steal a click meant for a face behind it.
+      if (!result && onPickDatumRef.current) {
+        const datum = datumPlaneRigRef.current;
+        if (datum) {
+          picker.setRayFromEvent(event);
+          const hit = picker.intersect(datum.targets(), false)[0];
+          const featureId = hit?.object.userData.datumFeatureId as
+            string | undefined;
+          if (featureId) {
+            onPickDatumRef.current(featureId);
+            return;
+          }
+        }
       }
       if (result?.region) {
         onSelectRegionRef.current(result.region, {

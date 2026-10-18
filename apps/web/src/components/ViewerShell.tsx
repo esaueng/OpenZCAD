@@ -6,9 +6,18 @@ import type {
 } from '@openzcad/shared';
 import type { HoleGhost } from '../lib/holeGhost';
 import type { PrimitiveGhost } from '../lib/primitiveGhost';
-import { datumPlaneDisplays } from '../lib/datumPlaneDisplay';
+import {
+  datumOffsetHandle,
+  datumPlaneDisplays
+} from '../lib/datumPlaneDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
-import { useMemo, useRef, type MutableRefObject, type ReactNode } from 'react';
+import {
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type ReactNode
+} from 'react';
 import {
   ModelViewer,
   type BodyAppearancePreview,
@@ -292,6 +301,15 @@ interface ViewerShellProps {
   /** The selected or edited feature, drawn highlighted when it is a datum. */
   selectedFeatureId?: FeatureId | null;
   onPickPlane(plane: PlaneId): void;
+  onPickDatum?(featureId: string): void;
+  /**
+   * A drag of the selected datum's handle, as a change to its stored offset
+   * (already signed for a reversed datum). The handle arms only when this is
+   * set and no other offset handle is.
+   */
+  onDatumOffsetDrag?(delta: number): boolean;
+  /** Exact entry for the selected datum's handle: focuses the card's Offset. */
+  onDatumOffsetEntry?(): boolean;
   /** What measuring the hovered target would report; null when measure is off. */
   onMeasurePreview?:
     | ((
@@ -437,6 +455,9 @@ export function ViewerShell({
   hiddenDatumIds,
   selectedFeatureId = null,
   onPickPlane,
+  onPickDatum,
+  onDatumOffsetDrag,
+  onDatumOffsetEntry,
   onMeasurePreview,
   regionHandle,
   onSelectSketchProfile,
@@ -477,6 +498,37 @@ export function ViewerShell({
   /** Kernel section geometry for the resting plane; null while dragging. */
   const exactSection: ExactSectionRegionDisplay[] | null =
     drawnSection.kind === 'exact' ? drawnSection.regions : null;
+  // R01: a selected offset datum gets the same pin face offsets use. It
+  // yields to any armed offset handle, and its target is memoized on the
+  // values it shows so the rig is not rebuilt on every render.
+  const datumHandle =
+    datumDocument && onDatumOffsetDrag && !offsetHandle
+      ? datumOffsetHandle(
+          datumDocument,
+          selectedFeatureId,
+          hiddenDatumIds ?? new Set()
+        )
+      : null;
+  // Every datum gesture starts a fresh pin at zero: the gesture count is
+  // part of the target, so a release (accepted, refused or back at zero)
+  // rebuilds the rig and no gesture carries the last one's value.
+  const [datumGesture, setDatumGesture] = useState(0);
+  const datumHandleKey = datumHandle
+    ? JSON.stringify({ ...datumHandle, gesture: datumGesture })
+    : '';
+  const datumOffsetTarget = useMemo<OffsetHandleTarget | null>(() => {
+    if (!datumHandleKey) return null;
+    const handle = JSON.parse(datumHandleKey) as NonNullable<
+      typeof datumHandle
+    >;
+    return {
+      bodyId: '',
+      topologyId: '',
+      point: handle.point,
+      normal: handle.normal,
+      initialValue: 0
+    };
+  }, [datumHandleKey]);
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
   const sketchGridReadoutRef = useRef<SketchGridReadoutSink | null>(null);
@@ -590,13 +642,21 @@ export function ViewerShell({
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
         onBoxSelect={onBoxSelect}
-        offsetHandle={offsetHandle}
-        onOffsetPreview={onOffsetPreview}
-        onOffsetCommit={onOffsetCommit}
+        offsetHandle={offsetHandle ?? datumOffsetTarget}
+        onOffsetPreview={datumOffsetTarget ? () => {} : onOffsetPreview}
+        onOffsetCommit={(value) => {
+          if (!datumHandle || !onDatumOffsetDrag) return onOffsetCommit(value);
+          setDatumGesture((gesture) => gesture + 1);
+          return onDatumOffsetDrag(value * datumHandle.sense);
+        }}
         onOffsetCancel={onOffsetCancel}
         offsetPreviewInvalid={offsetPreviewInvalid}
         previewDeferred={previewDeferred}
-        onOpenOffsetKeypad={onOpenOffsetKeypad}
+        onOpenOffsetKeypad={
+          datumOffsetTarget && !offsetHandle
+            ? () => onDatumOffsetEntry?.() ?? false
+            : onOpenOffsetKeypad
+        }
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}
         moveValuesSetterRef={moveValuesSetterRef}
@@ -646,6 +706,7 @@ export function ViewerShell({
             : []
         }
         onPickPlane={onPickPlane}
+        onPickDatum={onPickDatum}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}

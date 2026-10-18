@@ -11,11 +11,15 @@ import {
   toUserId,
   type DatumFrame,
   type FeatureId,
+  type FeatureNode,
+  type FeatureWarning,
   type ProjectDocument
 } from '@openzcad/shared';
+import { datumFaceAttachFailed, datumOffsetHandle } from './datumPlaneDisplay';
 import {
   buildDatumPlaneDefinition,
   datumFormStateFromFeature,
+  datumFaceRepairEdit,
   datumFormValidation,
   datumPlaneCommand,
   datumPlaneDescription,
@@ -345,5 +349,107 @@ describe('Plane card commands (R01-C)', () => {
       'Plane 2',
       'Split'
     ]);
+  });
+});
+
+describe('datum viewport handle and repair (R01)', () => {
+  it("offers a face re-pick only for the build's own attach failure", () => {
+    const feature = {
+      featureId: 'feature_lid' as FeatureId,
+      name: 'Lid plane'
+    } as FeatureNode;
+    const warning = (featureId: string, message: string): FeatureWarning => ({
+      featureId: featureId as FeatureId,
+      featureName: 'Lid plane',
+      message,
+      kind: 'build-failed'
+    });
+    const lost =
+      'Feature "Lid plane": Datum plane "Lid plane" cannot attach because source body body_x is unavailable at the datum\'s history position.';
+    expect(datumFaceAttachFailed(feature, [warning('feature_lid', lost)])).toBe(
+      true
+    );
+    expect(
+      datumFaceAttachFailed(feature, [
+        warning(
+          'feature_lid',
+          'Feature "Lid plane": Datum plane "Lid plane" cannot attach to source feature "Block": the attached face was deleted or no longer exists.'
+        )
+      ])
+    ).toBe(true);
+    // Still rebuilding (no warning) or failing for another reason: no.
+    expect(datumFaceAttachFailed(feature, [])).toBe(false);
+    expect(
+      datumFaceAttachFailed(feature, [
+        warning(
+          'feature_lid',
+          'Feature "Lid plane": datum plane offset: Unknown identifier "nope" in expression.'
+        )
+      ])
+    ).toBe(false);
+    // A same-named datum's attach failure belongs to that datum, not this.
+    expect(
+      datumFaceAttachFailed(feature, [warning('feature_twin', lost)])
+    ).toBe(false);
+  });
+
+  const offsetDatum = (offset: number | string, reverseNormal = false) => {
+    const empty = createProjectDocument('Handle', toUserId('user_handle'));
+    const added = addDatumPlane(empty, {
+      name: 'Lid plane',
+      definition: {
+        kind: 'offset',
+        source: XY,
+        offset,
+        ...(reverseNormal ? { reverseNormal: true } : {})
+      }
+    });
+    return {
+      document: withFrames(added.document, { [added.featureId]: frame }),
+      featureId: added.featureId
+    };
+  };
+
+  it('offers a handle only for a shown offset datum with a literal offset', () => {
+    const { document, featureId } = offsetDatum(10);
+    expect(datumOffsetHandle(document, featureId, new Set())).toEqual({
+      featureId,
+      point: frame.origin,
+      normal: frame.normal,
+      offset: 10,
+      sense: 1
+    });
+    expect(datumOffsetHandle(document, featureId, new Set([featureId]))).toBe(
+      null
+    );
+    expect(datumOffsetHandle(document, null, new Set())).toBe(null);
+    const reversed = offsetDatum(10, true);
+    expect(
+      datumOffsetHandle(reversed.document, reversed.featureId, new Set())?.sense
+    ).toBe(-1);
+    // An expression-driven datum still has a pin (the card decides from its
+    // live draft whether a drag may land); its stored offset is not a number.
+    const driven = offsetDatum('lid_z');
+    expect(
+      datumOffsetHandle(driven.document, driven.featureId, new Set())
+    ).toMatchObject({ offset: null });
+  });
+
+  it('re-picks a source face only with a planar face it can follow', () => {
+    const { document, featureId } = offsetDatum(10);
+    expect(() =>
+      datumFaceRepairEdit(document, featureId, {
+        bodyId: 'body_x' as never,
+        kind: 'edge',
+        hash: 1
+      } as never)
+    ).toThrow('Click a planar face for "Lid plane".');
+    expect(() =>
+      datumFaceRepairEdit(document, featureId, {
+        bodyId: 'body_missing' as never,
+        kind: 'face',
+        hash: 7
+      } as never)
+    ).toThrow();
   });
 });
