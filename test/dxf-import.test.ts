@@ -1142,6 +1142,67 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     ).toHaveLength(2);
   });
 
+  it('refuses a POLYLINE with no SEQEND, or with the mesh N-closed flag', () => {
+    const vertices = [
+      '0',
+      'VERTEX',
+      '10',
+      '0',
+      '20',
+      '0',
+      '0',
+      'VERTEX',
+      '10',
+      '5',
+      '20',
+      '0'
+    ];
+    expect(() =>
+      importDxfSketch(
+        dxf([
+          '0',
+          'POLYLINE',
+          '70',
+          '0',
+          ...vertices,
+          '0',
+          'CIRCLE',
+          '10',
+          '0',
+          '20',
+          '0',
+          '40',
+          '1'
+        ]),
+        'mm'
+      )
+    ).toThrow('no SEQEND');
+    expect(() =>
+      importDxfSketch(dxf(['0', 'POLYLINE', '70', '0', ...vertices]), 'mm')
+    ).toThrow('no SEQEND');
+    const mesh = importDxfSketch(
+      dxf([
+        '0',
+        'POLYLINE',
+        '70',
+        '32',
+        ...vertices,
+        '0',
+        'SEQEND',
+        '0',
+        'CIRCLE',
+        '10',
+        '0',
+        '20',
+        '0',
+        '40',
+        '1'
+      ]),
+      'mm'
+    );
+    expect(mesh.refused).toEqual({ 'POLYLINE (3D or mesh)': 1 });
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',

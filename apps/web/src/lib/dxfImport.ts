@@ -578,11 +578,19 @@ export function importDxfSketch(
           index += 1;
           vertexEntities.push(entities[index]!);
         }
-        // 3D polylines (8) and meshes (16, 64) are not 2D sketch geometry,
-        // and neither are their records when the parent flag is missing:
-        // VERTEX 32 is a 3D vertex, 64 a mesh vertex, 128 a polyface one.
+        // SEQEND is what says the vertex list is complete; without it the
+        // polyline may be truncated, and would import as a shorter outline.
+        if (entities[index + 1]?.type !== 'SEQEND') {
+          throw new DxfImportError(
+            'This DXF is malformed: a POLYLINE has no SEQEND closing its vertices.'
+          );
+        }
+        // 3D polylines (8) and meshes (16, 32 closed in N, 64) are not 2D
+        // sketch geometry, and neither are their records when the parent
+        // flag is missing: VERTEX 32 is a 3D vertex, 64 a mesh vertex, 128
+        // a polyface one.
         if (
-          (flags & (8 | 16 | 64)) !== 0 ||
+          (flags & (8 | 16 | 32 | 64)) !== 0 ||
           vertexEntities.some(
             (vertex) => (number(vertex, 70, 0) & (32 | 64 | 128)) !== 0
           )
