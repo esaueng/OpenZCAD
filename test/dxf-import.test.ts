@@ -1245,6 +1245,65 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(mesh.refused).toEqual({ 'POLYLINE (3D or mesh)': 1 });
   });
 
+  it('leaves paper-space entities out of the sketch', () => {
+    const result = importDxfSketch(
+      dxf([
+        '0',
+        'LINE',
+        '67',
+        '1',
+        '10',
+        '0',
+        '20',
+        '0',
+        '11',
+        '100',
+        '21',
+        '0',
+        '0',
+        'CIRCLE',
+        '67',
+        '0',
+        '10',
+        '0',
+        '20',
+        '0',
+        '40',
+        '1'
+      ]),
+      'mm'
+    );
+    expect(result.objects).toEqual([
+      expect.objectContaining({ objectKind: 'circle' })
+    ]);
+    expect(result.dropped).toEqual({ 'LINE in paper space': 1 });
+  });
+
+  it('refuses fractional or out-of-range flag groups', () => {
+    const lw = (flags: string) =>
+      dxf([
+        '0',
+        'LWPOLYLINE',
+        '90',
+        '2',
+        '70',
+        flags,
+        '10',
+        '0',
+        '20',
+        '0',
+        '10',
+        '1',
+        '20',
+        '0'
+      ]);
+    for (const flags of ['1.5', '70000']) {
+      expect(() => importDxfSketch(lw(flags), 'mm')).toThrow(
+        'unusable group 70 value'
+      );
+    }
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',

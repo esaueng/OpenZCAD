@@ -221,6 +221,23 @@ function radius(entity: DxfEntity): number {
   return value;
 }
 
+/**
+ * An integer group (flags, space markers) as a 16-bit integer, 0 when absent.
+ * A fractional or out-of-range value refuses the file: bit masks would
+ * silently truncate it into a different flag set.
+ */
+function integerFlags(entity: DxfEntity, code: number): number {
+  const pair = entity.groups.find((candidate) => candidate.code === code);
+  if (!pair) return 0;
+  const value = dxfNumber(pair.value);
+  if (!Number.isInteger(value) || value < -32768 || value > 32767) {
+    throw new DxfImportError(
+      `This DXF is malformed: a ${entity.type} has an unusable group ${code} value.`
+    );
+  }
+  return value;
+}
+
 function number(entity: DxfEntity, code: number, fallback?: number): number {
   const found = entity.groups.find((pair) => pair.code === code);
   const value = found ? dxfNumber(found.value) : fallback;
@@ -523,6 +540,13 @@ export function importDxfSketch(
       count(dropped, entity.type);
       continue;
     }
+    // Paper space (67 = 1) holds layouts — borders, title blocks — not the
+    // part; only model space becomes sketch geometry. A paper-space POLYLINE
+    // takes its VERTEX records with it, as they are skipped above.
+    if (integerFlags(entity, 67) !== 0) {
+      count(dropped, `${entity.type} in paper space`);
+      continue;
+    }
     if (!inXyPlane(entity)) {
       count(refused, `${entity.type} off the XY plane`);
       continue;
@@ -570,12 +594,12 @@ export function importDxfSketch(
         }
         polylineObjects(
           lwVertices(entity),
-          (number(entity, 70, 0) & 1) === 1,
+          (integerFlags(entity, 70) & 1) === 1,
           add
         );
         break;
       case 'POLYLINE': {
-        const flags = number(entity, 70, 0);
+        const flags = integerFlags(entity, 70);
         const vertexEntities: DxfEntity[] = [];
         while (entities[index + 1]?.type === 'VERTEX') {
           index += 1;
@@ -595,7 +619,7 @@ export function importDxfSketch(
         if (
           (flags & (8 | 16 | 32 | 64)) !== 0 ||
           vertexEntities.some(
-            (vertex) => (number(vertex, 70, 0) & (32 | 64 | 128)) !== 0
+            (vertex) => (integerFlags(vertex, 70) & (32 | 64 | 128)) !== 0
           )
         ) {
           count(refused, 'POLYLINE (3D or mesh)');
@@ -609,7 +633,7 @@ export function importDxfSketch(
         if (
           (flags & (2 | 4)) !== 0 ||
           vertexEntities.some(
-            (vertex) => (number(vertex, 70, 0) & (1 | 8 | 16)) !== 0
+            (vertex) => (integerFlags(vertex, 70) & (1 | 8 | 16)) !== 0
           )
         ) {
           count(refused, 'POLYLINE (curve-fit or spline-fit)');
