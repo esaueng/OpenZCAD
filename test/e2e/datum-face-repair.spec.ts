@@ -157,6 +157,16 @@ test('re-picks a lost datum face, and Measure takes the click over while armed',
   await measure.click();
   await page.keyboard.press('Escape');
 
+  // Armed, then Tweak: a locked workspace disarms it, and back in Build the
+  // click is an ordinary selection.
+  await arm();
+  await page.getByRole('button', { name: 'Tweak', exact: true }).click();
+  await page.getByRole('button', { name: 'Build', exact: true }).click();
+  await page.mouse.click(point.x, point.y);
+  await page.waitForTimeout(3_000);
+  expect(await drawnDatumCount(canvas)).toBe(0);
+  await page.keyboard.press('Escape');
+
   // Armed again with nothing else in the way, the same click repairs it.
   await arm();
   await page.mouse.click(point.x, point.y);
