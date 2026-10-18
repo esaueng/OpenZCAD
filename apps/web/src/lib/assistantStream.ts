@@ -1,4 +1,5 @@
 import {
+  CAD_PATCH_OPERATION_KINDS,
   groundCadPatchProposalToSelection,
   parseCadPatchProposal,
   parseAssistantReply,
@@ -305,7 +306,8 @@ async function streamAssistantReplyAttempt(
       digest: request.digest,
       history: request.history ?? [],
       attachments: request.attachments ?? [],
-      retryAttempt
+      retryAttempt,
+      operations: CAD_PATCH_OPERATION_KINDS
     }),
     signal: options.signal
   });
