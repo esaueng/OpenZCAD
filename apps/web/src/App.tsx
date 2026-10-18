@@ -18145,7 +18145,12 @@ export function App() {
       feature.data.definition.source.type === 'face' &&
       !isFeatureSuppressed(feature) &&
       !doc?.derived.datumFrames?.[feature.featureId] &&
-      datumFaceAttachFailed(feature, warnings)
+      datumFaceAttachFailed(
+        feature,
+        doc && featureAttribution?.derived === doc.derived
+          ? featureAttribution.featureWarnings
+          : []
+      )
         ? [
             {
               item: {
