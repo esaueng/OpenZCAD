@@ -964,8 +964,15 @@ function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
   };
 }
 
-/** Same world-origin ZYX Euler transform used by the viewport move gizmo. */
-function transformMatrix(translation: Vec3, rotationDeg: Vec3): number[] {
+/**
+ * Same ZYX Euler transform the exact build uses: about the world origin, or
+ * about `pivot` (M10), the translation then becoming t + p − R·p.
+ */
+function transformMatrix(
+  translation: Vec3,
+  rotationDeg: Vec3,
+  pivot: Vec3 = { x: 0, y: 0, z: 0 }
+): number[] {
   const rx = (rotationDeg.x * Math.PI) / 180;
   const ry = (rotationDeg.y * Math.PI) / 180;
   const rz = (rotationDeg.z * Math.PI) / 180;
@@ -975,19 +982,20 @@ function transformMatrix(translation: Vec3, rotationDeg: Vec3): number[] {
   const sb = Math.sin(ry);
   const cc = Math.cos(rz);
   const sc = Math.sin(rz);
+  const r = [
+    [cc * cb, cc * sb * sa - sc * ca, cc * sb * ca + sc * sa],
+    [sc * cb, sc * sb * sa + cc * ca, sc * sb * ca - cc * sa],
+    [-sb, cb * sa, cb * ca]
+  ] as const;
+  const shift = (row: readonly [number, number, number], p: number) =>
+    p - (row[0] * pivot.x + row[1] * pivot.y + row[2] * pivot.z);
   return [
-    cc * cb,
-    cc * sb * sa - sc * ca,
-    cc * sb * ca + sc * sa,
-    translation.x,
-    sc * cb,
-    sc * sb * sa + cc * ca,
-    sc * sb * ca - cc * sa,
-    translation.y,
-    -sb,
-    cb * sa,
-    cb * ca,
-    translation.z
+    ...r[0],
+    translation.x + shift(r[0], pivot.x),
+    ...r[1],
+    translation.y + shift(r[1], pivot.y),
+    ...r[2],
+    translation.z + shift(r[2], pivot.z)
   ];
 }
 
@@ -1625,6 +1633,7 @@ export class OcctStepKernelAdapter {
             }
             const translation = feature.data.transform.translation;
             const rotation = feature.data.transform.rotationDeg;
+            const pivot = feature.data.transform.pivot;
             const matrix = transformMatrix(
               {
                 x: resolveParamValue(translation.x, scope, 'X'),
@@ -1635,6 +1644,11 @@ export class OcctStepKernelAdapter {
                 x: resolveParamValue(rotation.x, scope, 'rotate X'),
                 y: resolveParamValue(rotation.y, scope, 'rotate Y'),
                 z: resolveParamValue(rotation.z, scope, 'rotate Z')
+              },
+              pivot && {
+                x: resolveParamValue(pivot.x, scope, 'pivot X'),
+                y: resolveParamValue(pivot.y, scope, 'pivot Y'),
+                z: resolveParamValue(pivot.z, scope, 'pivot Z')
               }
             );
             const transformed = this.kernel.transform(target, matrix);

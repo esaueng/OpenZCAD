@@ -1212,8 +1212,13 @@ export interface TransformFormValue {
   targetBodyId: BodyId;
   translation: { x: ParamValue; y: ParamValue; z: ParamValue };
   rotationDeg: { x: ParamValue; y: ParamValue; z: ParamValue };
-  /** Uniform scale about the world origin; 1 means unscaled. */
+  /** Uniform scale about the pivot; 1 means unscaled. */
   scale?: ParamValue;
+  /**
+   * M10: the point rotation and scale turn about. Absent is the world
+   * origin; the Move gizmo writes the body's centre.
+   */
+  pivot?: { x: ParamValue; y: ParamValue; z: ParamValue };
 }
 
 interface TransformFormProps {
@@ -1256,7 +1261,10 @@ export function TransformForm({
     rx: paramValueText(initial?.rotationDeg.x ?? 0),
     ry: paramValueText(initial?.rotationDeg.y ?? 0),
     rz: paramValueText(initial?.rotationDeg.z ?? 0),
-    scale: paramValueText(initial?.scale ?? 1)
+    scale: paramValueText(initial?.scale ?? 1),
+    px: paramValueText(initial?.pivot?.x ?? 0),
+    py: paramValueText(initial?.pivot?.y ?? 0),
+    pz: paramValueText(initial?.pivot?.z ?? 0)
   }));
   const setValue = (key: string) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
@@ -1278,6 +1286,14 @@ export function TransformForm({
         // A literal 1 is "no scaling" and stays out of the stored feature, so
         // older documents and unscaled moves keep byte-identical data.
         const scale = coerceParamValue(values.scale ?? '1');
+        const pivot = {
+          x: coerceParamValue(values.px ?? '0'),
+          y: coerceParamValue(values.py ?? '0'),
+          z: coerceParamValue(values.pz ?? '0')
+        };
+        // A pivot at the origin is the absent pivot: stored only when it is
+        // somewhere else, so origin moves keep byte-identical data.
+        const atOrigin = pivot.x === 0 && pivot.y === 0 && pivot.z === 0;
         onSubmit({
           name: name.trim(),
           targetBodyId: target as BodyId,
@@ -1291,7 +1307,8 @@ export function TransformForm({
             y: coerceParamValue(values.ry ?? '0'),
             z: coerceParamValue(values.rz ?? '0')
           },
-          ...(scale === 1 ? {} : { scale })
+          ...(scale === 1 ? {} : { scale }),
+          ...(atOrigin ? {} : { pivot })
         });
       }}
       onCancel={onCancel}
@@ -1345,6 +1362,20 @@ export function TransformForm({
         onChange={setValue('scale')}
         error={scaleError}
       />
+      {/* Rotation and scale turn about this point; the gizmo fills it with
+          the body's centre, and 0, 0, 0 is the world origin. */}
+      <div className="field-triple">
+        {TRANSFORM_AXES.map((axis) => (
+          <ExprInput
+            key={`p${axis}`}
+            label={`p${axis.toUpperCase()}`}
+            ariaLabel={`Pivot ${axis.toUpperCase()}${units ? ` in ${units}` : ''}`}
+            value={values[`p${axis}`] ?? ''}
+            scope={scope}
+            onChange={setValue(`p${axis}`)}
+          />
+        ))}
+      </div>
     </FormShell>
   );
 }

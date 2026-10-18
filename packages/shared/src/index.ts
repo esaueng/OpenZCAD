@@ -43,8 +43,13 @@ export type ShaprImportId = Brand<string, 'ShaprImportId'>;
  * carries its dimension into expressions (`width + 5 mm`), which a v20 client
  * would refuse or read as a bare number, so the bump makes it refuse such a
  * document. Absent stays the unitless parameter every older document holds.
+ *
+ * v22 adds the M10 transform pivot (`ParametricTransform3D.pivot`): rotation
+ * and scale turn about it rather than the world origin. A v21 client would
+ * turn such a Move about the origin and move the body elsewhere, so the bump
+ * makes it refuse the document instead.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 21 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 22 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -228,13 +233,21 @@ export interface ParametricTransform3D {
   translation: ParametricVector3;
   rotationDeg: ParametricVector3;
   /**
-   * Uniform scale factor about the world origin, applied before rotation and
+   * Uniform scale factor about the pivot, applied before rotation and
    * translation. Absent means 1 (no scaling); the rebuild rejects values that
    * do not resolve to a positive finite number. Uniform only: the exact
    * kernel preserves analytic surfaces under conformal maps, and a
    * non-uniform factor would silently degrade cylinders to NURBS.
    */
   scale?: ParamValue;
+  /**
+   * M10 (schema v22): the point rotation and scale turn about, in document
+   * units; the translation then moves the result. Absent is the world origin,
+   * as every older document stores it. The Move gizmo writes the body's
+   * centre here, so a later edit to its rotation still turns the body in
+   * place rather than about the origin.
+   */
+  pivot?: ParametricVector3;
 }
 
 /** Parametric plane used by exact mirror features. */

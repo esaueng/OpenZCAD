@@ -1,0 +1,58 @@
+import { test, expect, stubApi } from './openzcad-fixtures';
+
+/**
+ * M10: a Move made with the gizmo stores the body's centre as its pivot, the
+ * numeric edit card shows it, and an edit to the rotation keeps it — the
+ * gizmo and the form write one state.
+ */
+test('a gizmo rotation stores its pivot, and editing the angle keeps it', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Pivot');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Width (X)').fill('40');
+  await inspector.getByLabel('Depth (Y)').fill('20');
+  await inspector.getByLabel('Height (Z)').fill('10');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  await page.keyboard.press('m');
+  const overlay = page.getByRole('form', { name: 'Move controls' });
+  await expect(overlay).toBeVisible();
+  await overlay.getByLabel('Move X in mm').fill('12');
+  await overlay.getByLabel('Rotate Z in degrees').fill('45');
+  await overlay.getByRole('button', { name: /Apply move/ }).click();
+  await expect(overlay).toBeHidden();
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+
+  const pivotX = inspector.getByRole('textbox', { name: 'Pivot X in mm' });
+  const pivotY = inspector.getByRole('textbox', { name: 'Pivot Y in mm' });
+  const open = async () => {
+    await page.locator('.feature-row-main', { hasText: 'Move' }).click();
+    await expect(pivotX).toBeVisible();
+  };
+  await open();
+  // The block's centre, not a pivot folded into the translation.
+  const centre = [await pivotX.inputValue(), await pivotY.inputValue()];
+  expect(centre.map(Number).some((value) => value !== 0)).toBe(true);
+  await expect(
+    inspector.getByRole('textbox', { name: 'Move X in mm' })
+  ).toHaveValue('12');
+
+  await inspector
+    .getByRole('textbox', { name: 'Rotate Z in degrees' })
+    .fill('90');
+  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  await open();
+  await expect(
+    inspector.getByRole('textbox', { name: 'Rotate Z in degrees' })
+  ).toHaveValue('90');
+  expect([await pivotX.inputValue(), await pivotY.inputValue()]).toEqual(
+    centre
+  );
+});
