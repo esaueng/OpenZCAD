@@ -1044,7 +1044,7 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     ).toThrow(`more than ${MAX_DXF_ENTITIES} entities`);
   });
 
-  it('keeps a bulged segment on a vanishing chord, and judges length in document units', () => {
+  it('refuses a near-full bulge on a vanishing chord, and judges length in document units', () => {
     const text = dxf([
       '0',
       'LWPOLYLINE',
@@ -1069,11 +1069,9 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
       '40',
       '1'
     ]);
-    const [arc] = importDxfSketch(text, 'mm').objects as unknown as [
-      { objectKind: string; radius: number }
-    ];
-    expect(arc.objectKind).toBe('arc');
-    expect(arc.radius).toBeCloseTo(0.125, 6);
+    // Its gap is far inside the sketch's closed-circle tolerance, so it
+    // would become a circle: refused rather than closed.
+    expect(() => importDxfSketch(text, 'mm')).toThrow('bulge too extreme');
     // The same physical 5e-10 mm line imports whether it was drawn in mm or
     // in metres: the unit declaration never changes eligibility.
     const line = (length: string) => [
@@ -1651,6 +1649,28 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(() => importDxfSketch(orphan, 'mm')).toThrow(
       'data before the first entity'
     );
+  });
+
+  it('refuses an arc so near a full turn the sketch would close it', () => {
+    const arc = (end: string) =>
+      dxf([
+        '0',
+        'ARC',
+        '10',
+        '0',
+        '20',
+        '0',
+        '40',
+        '1e12',
+        '50',
+        '0',
+        '51',
+        end
+      ]);
+    expect(() => importDxfSketch(arc('359.99999999'), 'mm')).toThrow(
+      'would close into a full turn'
+    );
+    expect(importDxfSketch(arc('359.9999'), 'mm').objects).toHaveLength(1);
   });
 
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {

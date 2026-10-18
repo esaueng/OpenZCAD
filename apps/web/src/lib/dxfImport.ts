@@ -345,6 +345,9 @@ function inXyPlane(entity: DxfEntity): boolean {
   );
 }
 
+/** The region builder's closed-circle tolerance (1e-9 rad), in degrees. */
+const FULL_TURN_TOLERANCE_DEG = (1e-9 * 180) / Math.PI;
+
 /**
  * Arc angles with end − start in (0, 360], the sketch's CCW convention.
  * `distinctEnds` marks an arc through two different points, which can never
@@ -396,7 +399,9 @@ function ccwArc(
   // Coincident ends were refused above, so a sweep that is now a whole turn
   // means the turn added to straddle zero rounded the gap away (both ends
   // too close to 0 for 360 to keep their digits): refuse, never close it.
-  if (end - start >= 360) {
+  // The sketch's region builder also reads any sweep within 1e-9 rad of a
+  // turn as a closed circle, so a gap that small is refused too.
+  if (end - start >= 360 - FULL_TURN_TOLERANCE_DEG) {
     throw new DxfImportError(
       distinctEnds
         ? 'This DXF has a polyline bulge too extreme to convert exactly.'
