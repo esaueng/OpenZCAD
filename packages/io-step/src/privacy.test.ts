@@ -1,8 +1,28 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { sanitizeStepHeaderPrivacy } from './index';
 
 describe('STEP header privacy sanitization', () => {
+  it('preserves complete headers without a FILE_NAME record', () => {
+    const input = readFileSync(
+      new URL(
+        '../../../test/fixtures/step/lemon-torus-band.step',
+        import.meta.url
+      ),
+      'utf8'
+    );
+    expect(sanitizeStepHeaderPrivacy(input, 'lemon-torus-band.step')).toBe(
+      input
+    );
+    expect(
+      sanitizeStepHeaderPrivacy(
+        "HEADER;/* FILE_NAME('/private/decoy.step'); */FILE_SCHEMA(('AP214'));ENDSEC;DATA;ENDSEC;",
+        'model.step'
+      )
+    ).toContain("/* FILE_NAME('/private/decoy.step'); */");
+  });
+
   it('replaces a private FILE_NAME path without changing DATA records', () => {
     const input = [
       'ISO-10303-21;',

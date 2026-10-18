@@ -71,7 +71,7 @@ function* stepHeaderTokens(
   }
 }
 
-function stepHeaderFileNameRange(text: string): [number, number] {
+function stepHeaderFileNameRange(text: string): [number, number] | undefined {
   const tokens = stepHeaderTokens(text);
   let inHeader = false;
   let depth = 0;
@@ -88,7 +88,6 @@ function stepHeaderFileNameRange(text: string): [number, number] {
     if (depth === 0 && token.kind === 'word' && token.value === 'ENDSEC') {
       if (tokens.next().value?.value !== ';')
         throw new Error('STEP HEADER is incomplete.');
-      if (!fileName) throw new Error('STEP header has no FILE_NAME record.');
       return fileName;
     }
     if (depth === 0 && token.kind === 'word' && token.value === 'FILE_NAME') {
@@ -115,14 +114,18 @@ function stepHeaderFileNameRange(text: string): [number, number] {
 
 /**
  * Replaces the FILE_NAME path/name field in the Part 21 header before a local
- * import source can be persisted or archived. Geometry and DATA records are
+ * import source can be persisted or archived. Headers without FILE_NAME pass
+ * through unchanged. Geometry and DATA records are
  * byte-for-byte unchanged apart from the unavoidable re-encoding of text.
  */
 export function sanitizeStepHeaderPrivacy(
   text: string,
   safeFileName: string
 ): string {
-  const [quoteStart, quoteEnd] = stepHeaderFileNameRange(text);
+  const fileName = stepHeaderFileNameRange(text);
+  // A complete header without FILE_NAME has no filename field to sanitize.
+  if (!fileName) return text;
+  const [quoteStart, quoteEnd] = fileName;
   const baseName = safeFileName.replaceAll('\\', '/').split('/').at(-1) ?? '';
   const safeBaseName = [...baseName]
     .map((character) => {
