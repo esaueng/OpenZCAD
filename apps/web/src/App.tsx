@@ -12569,7 +12569,7 @@ export function App() {
       handleFaceRepairPick(selection);
       return;
     }
-    if (datumRepair && !measuring && tool === null) {
+    if (datumRepair && !measuring && tool === null && !modelingLocked) {
       const base = managerRef.current?.document;
       if (!selection || !base) return;
       const { feature: repair, slot } = datumRepair;
@@ -18014,8 +18014,9 @@ export function App() {
   }
 
   // A datum re-pick yields to any mode that takes viewport clicks over:
-  // Measure, a tool, a sketch or View mode. Each arm or disarm also moves
-  // the attempt counter, which withdraws an edit still being checked.
+  // Measure, a tool, a sketch or a locked workspace (View or Tweak). Each
+  // arm or disarm also moves the attempt counter, which withdraws an edit
+  // still being checked.
   const datumRepairAttempt = useRef(0);
   useEffect(() => {
     datumRepairAttempt.current += 1;
@@ -18024,12 +18025,12 @@ export function App() {
     if (
       measuring ||
       tool !== null ||
-      viewMode ||
+      modelingLocked ||
       interaction.mode === 'sketch'
     ) {
       setDatumRepair(null);
     }
-  }, [measuring, tool, viewMode, interaction.mode]);
+  }, [measuring, tool, modelingLocked, interaction.mode]);
 
   /**
    * Consumes a viewport pick while a face re-pick is armed. A pick that
