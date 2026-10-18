@@ -3149,10 +3149,21 @@ export function commandsForCadPatch(
  * type picker, so its undo and redo must not retype a parameter either.
  */
 function historyCommandKind(entry: SerializedCommand): string {
-  return entry.kind === 'parameter.set' &&
-    (entry.payload as ParameterSetInput | undefined)?.quantity !== undefined
-    ? 'parameter.retype'
-    : entry.kind;
+  return isParameterRetype(entry) ? 'parameter.retype' : entry.kind;
+}
+
+/**
+ * Whether a parameter command sets a type (F05). A retype is a Build edit:
+ * Tweak's guards, undo and redo admit value edits only.
+ */
+export function isParameterRetype(command: {
+  kind: string;
+  payload?: unknown;
+}): boolean {
+  return (
+    command.kind === 'parameter.set' &&
+    (command.payload as ParameterSetInput | undefined)?.quantity !== undefined
+  );
 }
 
 function parameterOnly(kinds: string[] | null): boolean {

@@ -300,6 +300,41 @@ describe('suggested quantities', () => {
     expect(Object.keys(suggestions)).toHaveLength(1 + count / 2);
   });
 
+  it('stays fast when many fields each read a wide set of unitless parameters', () => {
+    // 128 names fill an expression's 256-token cap; 500 boxes hold two such
+    // products each. Re-parsing every read per candidate took ~2 s here.
+    const count = 128;
+    let document = setParameter(blank(), { name: 'p0', expression: '1' });
+    const template = listParameters(document)[0]!;
+    const names = ['p0'];
+    for (let index = 1; index < count; index += 1) {
+      const id = `node_wide_${index}`;
+      const parameterId =
+        `parameter_wide_${index}` as typeof template.parameterId;
+      document.nodes[id] = {
+        ...template,
+        id: id as typeof template.id,
+        parameterId,
+        name: `p${index}`
+      };
+      document.parameterOrder.push(parameterId);
+      names.push(`p${index}`);
+    }
+    const product = names.join('*');
+    for (let box = 0; box < 500; box += 1) {
+      document = addPrimitiveFeature(document, {
+        name: `Block ${box}`,
+        primitiveKind: 'box',
+        dimensions: { width: product, height: product, depth: 10 }
+      });
+    }
+    const started = performance.now();
+    const suggestions = suggestParameterQuantities(document);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    // A read this wide suggests nothing rather than being re-checked per name.
+    expect(suggestions).toEqual({});
+  });
+
   it('does not suggest a quantity that would break a use', () => {
     let document = setParameter(blank(), { name: 'w', expression: '20' });
     document = addPrimitiveFeature(document, {

@@ -5560,6 +5560,9 @@ export function newTypedParameterMisuse(
   return found.find((entry) => !known.has(key(entry)))?.message ?? null;
 }
 
+/** Unitless parameters one expression may read and still be re-checked per suggestion. */
+const MAX_SUGGESTION_SHARED_READS = 16;
+
 /**
  * F05: the quantity each unitless parameter most plausibly measures, offered
  * to the owner rather than applied: what its own expression carries
@@ -5587,15 +5590,25 @@ export function suggestParameterQuantities(
       expression: string;
       dimension: ExpressionFieldDimension;
       self: string | null;
+      wide: boolean;
     }[]
   >();
+  const untyped = new Set(candidates.map((parameter) => parameter.name));
   for (const node of Object.values(document.nodes)) {
     const self = node.kind === 'parameter' ? node.name : null;
     rewriteNodeExpressions(node, (expression, dimension) => {
-      for (const name of new Set(expressionIdentifiers(expression))) {
+      const names = new Set(expressionIdentifiers(expression));
+      // Re-checking one expression per candidate it reads is quadratic in
+      // `p1 + … + pN`. Past a handful of unitless reads, typing any one alone
+      // would mix dimensions there anyway, so such a read simply suggests
+      // nothing for its candidates rather than being re-parsed N times.
+      let unitless = 0;
+      for (const name of names) if (untyped.has(name)) unitless += 1;
+      const wide = unitless > MAX_SUGGESTION_SHARED_READS;
+      for (const name of names) {
         let list = uses.get(name);
         if (!list) uses.set(name, (list = []));
-        list.push({ expression, dimension, self });
+        list.push({ expression, dimension, self, wide });
       }
       return expression;
     });
@@ -5620,6 +5633,7 @@ export function suggestParameterQuantities(
     const reads = (uses.get(target.name) ?? []).filter(
       (use) => use.self !== target.name
     );
+    if (reads.some((use) => use.wide)) continue;
     if (!suggestion) {
       const seen = new Set(reads.map((use) => use.dimension));
       seen.delete(null);

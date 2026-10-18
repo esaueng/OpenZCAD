@@ -12,7 +12,8 @@ import {
   CommandManager,
   commandFactories,
   commandsForCadPatch,
-  composeCommands
+  composeCommands,
+  isParameterRetype
 } from '@openzcad/command-system';
 import { parseCadPatchProposal } from '@openzcad/ai-contracts';
 import {
@@ -195,5 +196,22 @@ describe('Tweak undo and parameter types', () => {
       commandFactories.setParameter({ name: 'w', expression: '12' })
     );
     expect(manager.canUndoIn(true)).toBe(true);
+  });
+
+  it('names a typed parameter set as a retype for the edit guards', () => {
+    expect(
+      isParameterRetype(
+        commandFactories.setParameter({ name: 'w', expression: '1' })
+      )
+    ).toBe(false);
+    expect(
+      isParameterRetype(
+        commandFactories.setParameter({
+          name: 'w',
+          expression: '1',
+          quantity: null
+        })
+      )
+    ).toBe(true);
   });
 });

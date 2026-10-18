@@ -105,6 +105,7 @@ import {
 import {
   CommandManager,
   commandFactories,
+  isParameterRetype,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -4130,7 +4131,10 @@ export function App() {
   function ensureCanExecute(commands: AnyCommand[], action: string): boolean {
     const parametersOnly =
       commands.length > 0 &&
-      commands.every((command) => command.kind === 'parameter.set');
+      commands.every(
+        (command) =>
+          command.kind === 'parameter.set' && !isParameterRetype(command)
+      );
     return parametersOnly
       ? ensureCanEditParameters(action)
       : ensureCanEdit(action);
@@ -6685,7 +6689,10 @@ export function App() {
     if (
       !managerRef.current ||
       commands.length === 0 ||
-      !(permission === 'parameters'
+      // A retype (F05) is a Build edit even on the parameter path: Tweak
+      // hides the type picker, and a check that outlasted the switch to
+      // Tweak must not land it there.
+      !(permission === 'parameters' && !commands.some(isParameterRetype)
         ? ensureCanEditParameters('apply this parameter edit')
         : ensureCanExecute(commands, 'apply this edit'))
     ) {
