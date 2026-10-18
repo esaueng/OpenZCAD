@@ -176,6 +176,40 @@ describe('named cycles', () => {
     );
   });
 
+  it('handles a long broken chain in linear time without deep recursion', () => {
+    // 20,000 parameters, each reading the next, the last an unknown name:
+    // none is a cycle, and none may cost a walk of the whole chain.
+    const document = setParameter(blank(), { name: 'p0', expression: 'p1' });
+    const template = listParameters(document)[0]!;
+    const count = 20_000;
+    for (let index = 1; index < count; index += 1) {
+      const id = `node_chain_${index}`;
+      const parameterId =
+        `parameter_chain_${index}` as typeof template.parameterId;
+      document.nodes[id] = {
+        ...template,
+        id: id as typeof template.id,
+        parameterId,
+        name: `p${index}`,
+        expression: index === count - 1 ? 'missing + 1' : `p${index + 1}`
+      };
+      document.parameterOrder.push(parameterId);
+    }
+    const started = performance.now();
+    const { errors } = getParameterScope(document);
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(errors).toHaveLength(count);
+    expect(errors.some((error) => error.includes('refers back'))).toBe(false);
+  });
+
+  it('names a parameter that reads itself', () => {
+    let document = setParameter(blank(), { name: 'a', expression: '1' });
+    document = setParameter(document, { name: 'a', expression: 'a + 1' });
+    expect(getParameterScope(document).errors).toEqual([
+      'Parameter "a": its expression refers back to itself (a → a).'
+    ]);
+  });
+
   it('still reports a plain unknown identifier as one', () => {
     const document = setParameter(blank(), { name: 'a', expression: 'zz + 1' });
     expect(getParameterScope(document).errors).toEqual([

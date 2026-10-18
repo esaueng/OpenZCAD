@@ -3270,32 +3270,123 @@ function evaluateParameter(
 }
 
 /**
- * Names the reference cycle `name` sits on among the still-unresolved
- * parameters (`a → b → a`), or null when it is not on one.
+ * The reference cycles among the still-unresolved parameters, found in one
+ * iterative pass (Tarjan's strongly connected components), so a long chain of
+ * broken parameters costs linear time and no recursion depth. Each parameter
+ * on a cycle maps to a path that names it (`a → b → a`); a large component is
+ * named by its members rather than walked parameter by parameter.
  */
-function parameterCycle(
-  name: string,
+function parameterCycles(
   pending: ReadonlyMap<string, ParameterNode>
-): string[] | null {
-  const path: string[] = [];
-  const visiting = new Set<string>();
-  const walk = (current: string): string[] | null => {
-    if (current === name && path.length > 0) return [...path, name];
-    if (visiting.has(current)) return null;
-    visiting.add(current);
-    path.push(current);
-    const parameter = pending.get(current);
-    for (const next of parameter
-      ? expressionIdentifiers(parameter.expression)
-      : []) {
-      if (!pending.has(next)) continue;
-      const found = walk(next);
-      if (found) return found;
+): Map<string, string[]> {
+  const edges = new Map<string, string[]>();
+  for (const [name, parameter] of pending) {
+    edges.set(
+      name,
+      expressionIdentifiers(parameter.expression).filter((next) =>
+        pending.has(next)
+      )
+    );
+  }
+  const index = new Map<string, number>();
+  const low = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  const components: string[][] = [];
+  let counter = 0;
+  for (const root of edges.keys()) {
+    if (index.has(root)) continue;
+    const work: Array<{ node: string; next: number }> = [
+      { node: root, next: 0 }
+    ];
+    index.set(root, counter);
+    low.set(root, counter);
+    counter += 1;
+    stack.push(root);
+    onStack.add(root);
+    while (work.length > 0) {
+      const frame = work[work.length - 1]!;
+      const out = edges.get(frame.node)!;
+      if (frame.next < out.length) {
+        const next = out[frame.next]!;
+        frame.next += 1;
+        if (!index.has(next)) {
+          index.set(next, counter);
+          low.set(next, counter);
+          counter += 1;
+          stack.push(next);
+          onStack.add(next);
+          work.push({ node: next, next: 0 });
+        } else if (onStack.has(next)) {
+          low.set(frame.node, Math.min(low.get(frame.node)!, index.get(next)!));
+        }
+        continue;
+      }
+      work.pop();
+      const parent = work[work.length - 1];
+      if (parent) {
+        low.set(
+          parent.node,
+          Math.min(low.get(parent.node)!, low.get(frame.node)!)
+        );
+      }
+      if (low.get(frame.node) === index.get(frame.node)) {
+        const component: string[] = [];
+        let member: string;
+        do {
+          member = stack.pop()!;
+          onStack.delete(member);
+          component.push(member);
+        } while (member !== frame.node);
+        components.push(component);
+      }
     }
-    path.pop();
-    return null;
-  };
-  return walk(name);
+  }
+  const cycles = new Map<string, string[]>();
+  for (const component of components) {
+    const members = new Set(component);
+    const selfLoop =
+      component.length === 1 &&
+      edges.get(component[0]!)!.includes(component[0]!);
+    if (component.length === 1 && !selfLoop) continue;
+    for (const name of component) {
+      cycles.set(
+        name,
+        component.length <= 32
+          ? shortestCycle(name, edges, members)
+          : [name, '…', name]
+      );
+    }
+  }
+  return cycles;
+}
+
+/** The shortest path from `name` back to itself inside one small component. */
+function shortestCycle(
+  name: string,
+  edges: ReadonlyMap<string, readonly string[]>,
+  members: ReadonlySet<string>
+): string[] {
+  const previous = new Map<string, string>();
+  const queue = [name];
+  for (let head = 0; head < queue.length; head += 1) {
+    const current = queue[head]!;
+    for (const next of edges.get(current) ?? []) {
+      if (!members.has(next)) continue;
+      if (next === name) {
+        const path = [name];
+        for (let step = current; step !== name; step = previous.get(step)!) {
+          path.push(step);
+        }
+        return [name, ...path.slice(1).reverse(), name];
+      }
+      if (!previous.has(next) && next !== name) {
+        previous.set(next, current);
+        queue.push(next);
+      }
+    }
+  }
+  return [name, name];
 }
 
 /**
@@ -3334,8 +3425,9 @@ export function getParameterScope(
     }
   }
 
+  const cycles = parameterCycles(pending);
   for (const [name, parameter] of pending) {
-    const cycle = parameterCycle(name, pending);
+    const cycle = cycles.get(name);
     if (cycle) {
       errors.push(
         `Parameter "${name}": its expression refers back to itself (${cycle.join(' → ')}).`

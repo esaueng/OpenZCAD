@@ -117,6 +117,32 @@ describe('typed parameters through the exact build (F05)', () => {
     expect(derived.bodyRepresentations[blockId]).toBeUndefined();
   });
 
+  it('replays a feature when only a parameter quantity changes', async () => {
+    // A collaborator's document retypes `a` without touching any value:
+    // the cached build of the box must not be reused.
+    let document = setParameter(
+      createProjectDocument('Quantity cache', toUserId('user_f05')),
+      { name: 'a', expression: '20' }
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 'a', height: 10, depth: 10 }
+    });
+    const [blockId] = document.bodyOrder as [BodyId];
+    const first = await adapter.syncDocument(document);
+    expect(first.bodyRepresentations[blockId]).toBeDefined();
+    const retyped = structuredClone(document);
+    for (const node of Object.values(retyped.nodes)) {
+      if (node.kind === 'parameter' && node.name === 'a')
+        node.quantity = 'angle';
+    }
+    retyped.version += 1;
+    const second = await adapter.syncDocument(retyped);
+    expect(second.warnings.join('\n')).toMatch(/Feature "Block": .*uses "a"/);
+    expect(second.bodyRepresentations[blockId]).toBeUndefined();
+  });
+
   it('keeps a typed parameter typed across a proposal that renames it', () => {
     const document = setParameter(
       createProjectDocument('Rename typed', toUserId('user_f05')),
