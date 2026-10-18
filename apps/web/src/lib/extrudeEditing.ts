@@ -60,6 +60,21 @@ export function extrudeEditCommand(
   );
 }
 
+/**
+ * The magnitude an extrude edit preview is requested at. A through-all cut's
+ * stored distance is dormant (the build derives the span), so it is never
+ * resolved: a distance naming a since-deleted parameter must not block the
+ * preview of an edit that Apply accepts.
+ */
+export function extrudePreviewMagnitude(
+  value: Pick<ExtrudeFormValue, 'distance' | 'endCondition'>,
+  resolve: (distance: ExtrudeFormValue['distance']) => number
+): number {
+  return value.endCondition === 'through-all'
+    ? 1
+    : Math.abs(resolve(value.distance));
+}
+
 /** Validate at the feature's history position, not against today's live bodies. */
 export function extrudeEditTargets(
   document: ProjectDocument,

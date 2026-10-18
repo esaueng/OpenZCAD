@@ -630,6 +630,7 @@ import {
 } from './components/forms/ExtrudeForm';
 import {
   extrudeEditCommand,
+  extrudePreviewMagnitude,
   extrudeEditTargets,
   extrudePreviewError
 } from './lib/extrudeEditing';
@@ -3710,7 +3711,9 @@ export function App() {
         bodyId: feature.bodyId,
         extrude: feature.featureId
       };
-      edgeFormPreview.request(Math.abs(resolveDocumentValue(value.distance)));
+      edgeFormPreview.request(
+        extrudePreviewMagnitude(value, resolveDocumentValue)
+      );
     } catch (error) {
       setFeatureFormError(
         errorMessage(error, 'Unable to preview this extrusion.')

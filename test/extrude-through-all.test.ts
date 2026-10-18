@@ -11,7 +11,10 @@ import {
   updateFeature
 } from '@openzcad/document-core';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { extrudeEditTargets } from '../apps/web/src/lib/extrudeEditing';
+import {
+  extrudeEditTargets,
+  extrudePreviewMagnitude
+} from '../apps/web/src/lib/extrudeEditing';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -161,6 +164,26 @@ describe('F01 through-all: editing', () => {
     expect(
       extrudeEditTargets(result.document, feature).map((body) => body.bodyId)
     ).toEqual([blockId]);
+  });
+});
+
+describe('F01 through-all: edit preview', () => {
+  it('never resolves the dormant distance of a through-all edit', () => {
+    const unresolvable = () => {
+      throw new Error('Unknown identifier "gone"');
+    };
+    expect(
+      extrudePreviewMagnitude(
+        { distance: 'gone * 2', endCondition: 'through-all' },
+        unresolvable
+      )
+    ).toBe(1);
+    expect(
+      extrudePreviewMagnitude(
+        { distance: -8, endCondition: 'blind' },
+        (distance) => Number(distance)
+      )
+    ).toBe(8);
   });
 });
 
