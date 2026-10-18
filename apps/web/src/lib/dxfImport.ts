@@ -294,7 +294,7 @@ function hiddenLayers(tables: Pair[] | undefined): Set<string> {
     if (
       name !== undefined &&
       ((integerFlags(layer, 70) & 1) !== 0 ||
-        (color !== undefined && dxfNumber(color.value) < 0))
+        (color !== undefined && integerFlags(layer, 62) < 0))
     ) {
       hidden.add(name.toUpperCase());
     }
@@ -392,29 +392,31 @@ function onZeroElevation(entity: DxfEntity): boolean {
 }
 
 /**
- * True when the entity lies in the XY plane itself: no Z coordinate or
- * elevation off zero, no thickness (39) extending it out of the plane, and
- * an extrusion direction that is exactly +Z. No tolerance on the tilt: a
- * transverse component is multiplied by the coordinates, so even 1e-10 puts
- * a far point visibly off Top.
+ * How the entity's own coordinates lie on Top, or null when it is not in
+ * the XY plane: 1 when its OCS is the world's, -1 when its extrusion is
+ * exactly -Z (the arbitrary-axis rule then makes OCS x the world's -X, with
+ * y unchanged, so the drawing is mirrored in x and turns the other way).
+ * Off-plane means a Z coordinate or elevation off zero, a thickness (39)
+ * extending it, or any tilt: no tolerance, since a transverse component is
+ * multiplied by the coordinates and even 1e-10 puts a far point off Top.
  */
-function inXyPlane(entity: DxfEntity): boolean {
-  if (!onZeroElevation(entity)) return false;
+function ocsSense(entity: DxfEntity): 1 | -1 | null {
+  if (!onZeroElevation(entity)) return null;
   const thickness = singleGroup(entity, 39);
-  if (thickness && dxfNumber(thickness.value) !== 0) return false;
+  if (thickness && dxfNumber(thickness.value) !== 0) return null;
   // A LINE's endpoints are world coordinates, so with no thickness its
   // extrusion direction moves nothing; only OCS entities (circles, arcs,
   // polylines) are placed by it.
-  if (entity.type === 'LINE') return true;
+  if (entity.type === 'LINE') return 1;
   const z = singleGroup(entity, 230);
   const x = singleGroup(entity, 210);
   const y = singleGroup(entity, 220);
-  if (!z && !x && !y) return true;
-  return (
-    dxfNumber(x?.value ?? '0') === 0 &&
-    dxfNumber(y?.value ?? '0') === 0 &&
-    dxfNumber(z?.value ?? '1') > 0
-  );
+  if (!z && !x && !y) return 1;
+  if (dxfNumber(x?.value ?? '0') !== 0 || dxfNumber(y?.value ?? '0') !== 0) {
+    return null;
+  }
+  const zValue = dxfNumber(z?.value ?? '1');
+  return zValue > 0 ? 1 : zValue < 0 ? -1 : null;
 }
 
 /** The region builder's closed-circle tolerance (1e-9 rad), in degrees. */
@@ -589,6 +591,17 @@ interface Vertex {
   x: number;
   y: number;
   bulge: number;
+}
+
+/** OCS vertices on Top: a -Z polyline is mirrored in x, bulges reversed. */
+function mirrorVertices(vertices: Vertex[], sense: 1 | -1): Vertex[] {
+  return sense === 1
+    ? vertices
+    : vertices.map((vertex) => ({
+        x: -vertex.x,
+        y: vertex.y,
+        bulge: -vertex.bulge
+      }));
 }
 
 /** Emits a polyline's segments one by one, so a cap can stop it early. */
@@ -807,7 +820,8 @@ export function importDxfSketch(
       count(dropped, `${entity.type} (hidden layer)`);
       continue;
     }
-    if (!inXyPlane(entity)) {
+    const sense = ocsSense(entity);
+    if (sense === null) {
       count(refused, `${entity.type} off the XY plane`);
       continue;
     }
@@ -831,20 +845,30 @@ export function importDxfSketch(
       case 'CIRCLE':
         add({
           objectKind: 'circle',
-          centerX: number(entity, 10),
+          centerX: sense * number(entity, 10),
           centerY: number(entity, 20),
           radius: radius(entity)
         });
         break;
       case 'ARC':
+        // Seen from +Z a -Z arc is mirrored in x and runs clockwise, so its
+        // world arc goes counter-clockwise from 180 − end to 180 − start.
         add(
-          ccwArc(
-            number(entity, 10),
-            number(entity, 20),
-            radius(entity),
-            number(entity, 50),
-            number(entity, 51)
-          )
+          sense === 1
+            ? ccwArc(
+                number(entity, 10),
+                number(entity, 20),
+                radius(entity),
+                number(entity, 50),
+                number(entity, 51)
+              )
+            : ccwArc(
+                -number(entity, 10),
+                number(entity, 20),
+                radius(entity),
+                180 - number(entity, 51),
+                180 - number(entity, 50)
+              )
         );
         break;
       case 'LWPOLYLINE':
@@ -853,7 +877,7 @@ export function importDxfSketch(
           break;
         }
         polylineObjects(
-          lwVertices(entity),
+          mirrorVertices(lwVertices(entity), sense),
           (integerFlags(entity, 70) & 1) === 1,
           add
         );
@@ -902,7 +926,11 @@ export function importDxfSketch(
           y: number(vertex, 20),
           bulge: number(vertex, 42, 0)
         }));
-        polylineObjects(vertices, (flags & 1) === 1, add);
+        polylineObjects(
+          mirrorVertices(vertices, sense),
+          (flags & 1) === 1,
+          add
+        );
         break;
       }
       default:

@@ -253,11 +253,11 @@ describe('DXF sketch import (D04)', () => {
       '40',
       '1',
       '210',
-      '0',
+      '1',
       '220',
       '0',
       '230',
-      '-1',
+      '0',
       '0',
       'LINE',
       '10',
@@ -2089,6 +2089,124 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     ]);
     expect(() => importDxfSketch(text, 'mm')).toThrow(
       'geometry too small to represent'
+    );
+  });
+
+  it('places -Z OCS circles, arcs and polylines on Top, mirrored in x', () => {
+    const down = ['210', '0', '220', '0', '230', '-1'];
+    const { objects } = importDxfSketch(
+      dxf([
+        '0',
+        'CIRCLE',
+        '10',
+        '3',
+        '20',
+        '1',
+        '40',
+        '1',
+        ...down,
+        '0',
+        'ARC',
+        '10',
+        '5',
+        '20',
+        '0',
+        '40',
+        '1',
+        '50',
+        '0',
+        '51',
+        '90',
+        ...down,
+        '0',
+        'LWPOLYLINE',
+        '90',
+        '2',
+        ...down,
+        '10',
+        '0',
+        '20',
+        '10',
+        '42',
+        '1',
+        '10',
+        '2',
+        '20',
+        '10'
+      ]),
+      'mm'
+    );
+    expect(objects[0]).toMatchObject({
+      objectKind: 'circle',
+      centerX: -3,
+      centerY: 1
+    });
+    // OCS 0°→90° about -Z is world 90°→180°, centre mirrored to x = -5.
+    expect(objects[1]).toMatchObject({
+      objectKind: 'arc',
+      centerX: -5,
+      centerY: 0,
+      startAngleDeg: 90,
+      endAngleDeg: 180
+    });
+    // The bulge's ends land on the mirrored vertices (0,10) and (-2,10).
+    const arc = objects[2] as unknown as {
+      centerX: number;
+      centerY: number;
+      radius: number;
+      startAngleDeg: number;
+      endAngleDeg: number;
+    };
+    const at = (deg: number) => ({
+      x: arc.centerX + arc.radius * Math.cos((deg * Math.PI) / 180),
+      y: arc.centerY + arc.radius * Math.sin((deg * Math.PI) / 180)
+    });
+    const ends = [at(arc.startAngleDeg), at(arc.endAngleDeg)]
+      .map((point) => `${point.x.toFixed(6)},${point.y.toFixed(6)}`)
+      .sort();
+    expect(ends).toEqual(['-2.000000,10.000000', '0.000000,10.000000']);
+    // Same side of the chord as in the file: the OCS bulge dips below y=10.
+    expect(arc.centerY).toBeCloseTo(10, 9);
+    expect(at((arc.startAngleDeg + arc.endAngleDeg) / 2).y).toBeLessThan(10);
+  });
+
+  it('refuses a layer whose colour is not an integer', () => {
+    const tables = [
+      '0',
+      'SECTION',
+      '2',
+      'TABLES',
+      '0',
+      'TABLE',
+      '2',
+      'LAYER',
+      '0',
+      'LAYER',
+      '2',
+      'A',
+      '70',
+      '0',
+      '62',
+      '1.5',
+      '0',
+      'ENDTAB',
+      '0',
+      'ENDSEC'
+    ];
+    const circle = dxf([
+      '0',
+      'CIRCLE',
+      '8',
+      'A',
+      '10',
+      '0',
+      '20',
+      '0',
+      '40',
+      '1'
+    ]);
+    expect(() => importDxfSketch([...tables, circle].join('\n'), 'mm')).toThrow(
+      'a LAYER has an unusable group 62 value'
     );
   });
 
