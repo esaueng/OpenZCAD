@@ -1491,6 +1491,36 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(insert.dropped).toEqual({ INSERT: 1 });
   });
 
+  it('refuses an $INSUNITS declaration that carries two values', () => {
+    const header = [
+      '0',
+      'SECTION',
+      '2',
+      'HEADER',
+      '9',
+      '$INSUNITS',
+      '70',
+      '4',
+      '70',
+      '1',
+      '9',
+      '$MEASUREMENT',
+      '70',
+      '1',
+      '0',
+      'ENDSEC'
+    ];
+    const circle = dxf(['0', 'CIRCLE', '10', '0', '20', '0', '40', '1']);
+    expect(() => importDxfSketch([...header, circle].join('\n'), 'mm')).toThrow(
+      'its $INSUNITS declaration has no usable value'
+    );
+    // One value followed by the next variable still reads.
+    const good = header.filter((_, index) => index !== 8 && index !== 9);
+    expect(
+      importDxfSketch([...good, circle].join('\n'), 'mm').sourceUnit
+    ).not.toBeNull();
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',

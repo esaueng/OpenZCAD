@@ -215,8 +215,12 @@ function insUnits(pairs: Pair[]): number | null {
     );
   }
   // Present but damaged is not the same as absent: reading it as unitless
-  // could scale the whole drawing by the wrong factor.
-  const value = header[at + 1];
+  // could scale the whole drawing by the wrong factor. The declaration is
+  // exactly one group-70 value before the next header variable; two values
+  // (or anything else) have no single reading.
+  const next = header.findIndex((pair, index) => index > at && pair.code === 9);
+  const values = header.slice(at + 1, next < 0 ? header.length : next);
+  const value = values.length === 1 ? values[0] : undefined;
   const code = value && value.code === 70 ? dxfNumber(value.value) : NaN;
   if (!Number.isInteger(code)) {
     throw new DxfImportError(
