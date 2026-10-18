@@ -179,6 +179,30 @@ const SAMPLES: { [Kind in OperationKind]: OperationOf<Kind> } = {
     targetBodyId: '$plate',
     plane: { origin: zero, normal: { x: 1, y: 0, z: 0 } }
   },
+  add_datum_plane: {
+    kind: 'add_datum_plane',
+    name: 'Lid plane',
+    localId: 'lid',
+    definition: {
+      kind: 'offset',
+      source: { type: 'canonical', plane: 'XY', offset: 0 },
+      offset: 'box_ht'
+    }
+  },
+  add_datum_sketch: {
+    kind: 'add_datum_sketch',
+    name: 'Lid sketch',
+    localId: null,
+    datum: '$lid',
+    objects: [{ objectKind: 'circle', centerX: 0, centerY: 0, radius: 3 }]
+  },
+  add_datum_mirror: {
+    kind: 'add_datum_mirror',
+    name: 'Mirror across lid',
+    localId: null,
+    targetBodyId: '$plate',
+    datum: '$lid'
+  },
   add_shell: {
     kind: 'add_shell',
     name: 'Shell',
@@ -263,6 +287,12 @@ describe('patch operation descriptions', () => {
     );
     expect(describeOperation(SAMPLES.add_mirror)).toBe(
       'Mirror — mirror Plate across the plane through 0, 0, 0, normal 1, 0, 0'
+    );
+    expect(describeOperation(SAMPLES.add_datum_plane)).toBe(
+      'Lid plane — plane box_ht from XY'
+    );
+    expect(describeOperation(SAMPLES.add_datum_mirror)).toBe(
+      'Mirror across lid — mirror Plate across Lid'
     );
   });
 

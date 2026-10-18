@@ -149,6 +149,29 @@ export type CadFaceSketchPlaneRef = Omit<
   faceReference: FaceTopologyReferenceV5;
 };
 
+/**
+ * R01 datum plane references in a patch: an existing datum feature's id from
+ * the digest, or "$alias" naming an `add_datum_plane` earlier in the proposal.
+ */
+export type CadDatumRef = string;
+
+export type CadDatumPlaneSource =
+  | { type: 'canonical'; plane: 'XY' | 'XZ' | 'YZ'; offset: ParamValue }
+  | { type: 'datum'; datum: CadDatumRef };
+
+export type CadDatumPlaneDefinition =
+  | {
+      kind: 'offset';
+      source: CadDatumPlaneSource;
+      offset: ParamValue;
+      reverseNormal?: boolean;
+    }
+  | {
+      kind: 'midplane';
+      sources: [CadDatumPlaneSource, CadDatumPlaneSource];
+      reverseNormal?: boolean;
+    };
+
 export type CadPatchOperation =
   | {
       /** App-compiled only; the AI selects its measured candidate. */
@@ -356,6 +379,28 @@ export type CadPatchOperation =
       localId?: LocalBodyId;
       targetBodyId: BodyRef;
       distance: ParamValue;
+    }
+  | {
+      kind: 'add_datum_plane';
+      name: string;
+      /** \$alias later datum operations may use to reference this plane. */
+      localId?: LocalBodyId;
+      definition: CadDatumPlaneDefinition;
+    }
+  | {
+      kind: 'add_datum_sketch';
+      name: string;
+      /** \$alias other operations may use to reference this sketch. */
+      localId?: LocalBodyId;
+      datum: CadDatumRef;
+      objects: SketchObjectData[];
+    }
+  | {
+      kind: 'add_datum_mirror';
+      name: string;
+      localId?: LocalBodyId;
+      targetBodyId: BodyRef;
+      datum: CadDatumRef;
     }
   | {
       kind: 'add_edge_modifier';
@@ -1183,10 +1228,7 @@ export function groundCadPatchProposalToSelection(
       };
     }
 
-    if (
-      operation.kind === 'add_edge_modifier' &&
-      referencesSelectedEdges
-    ) {
+    if (operation.kind === 'add_edge_modifier' && referencesSelectedEdges) {
       if (!edgesShareBody || selectedEdgeHashes.length === 0) {
         throw new Error('AI selected edge target is ambiguous.');
       }
@@ -1750,6 +1792,73 @@ const facePlaneRefSchema = {
   ]
 } as const;
 
+const datumRefSchema = {
+  type: 'string',
+  description:
+    'A datum plane: an existing datum-plane featureId from the digest, or "$localId" naming an add_datum_plane earlier in this proposal.'
+} as const;
+
+// Flat, every field required: strict structured output cannot express "one
+// of these shapes" for a nested object without anyOf, and null is clearer.
+const datumPlaneSourceSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    type: { type: 'string', enum: ['canonical', 'datum'] },
+    plane: {
+      anyOf: [{ type: 'string', enum: ['XY', 'XZ', 'YZ'] }, { type: 'null' }],
+      description: 'The principal plane when type is "canonical", else null.'
+    },
+    offset: {
+      ...nullableScalarSchema,
+      description:
+        'Offset of the principal plane along its normal when type is "canonical", else null.'
+    },
+    datum: {
+      anyOf: [datumRefSchema, { type: 'null' }],
+      description: 'The source datum when type is "datum", else null.'
+    }
+  },
+  required: ['type', 'plane', 'offset', 'datum']
+} as const;
+
+const datumPlaneDefinitionSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    kind: { type: 'string', enum: ['offset', 'midplane'] },
+    source: {
+      anyOf: [datumPlaneSourceSchema, { type: 'null' }],
+      description:
+        'The plane an offset plane is measured from; null for a midplane.'
+    },
+    sources: {
+      anyOf: [
+        {
+          type: 'array',
+          minItems: 2,
+          maxItems: 2,
+          items: datumPlaneSourceSchema
+        },
+        { type: 'null' }
+      ],
+      description:
+        'The two parallel planes a midplane lies halfway between; null for an offset plane.'
+    },
+    offset: {
+      ...nullableScalarSchema,
+      description:
+        'Signed distance along the source normal for an offset plane; null for a midplane.'
+    },
+    reverseNormal: {
+      anyOf: [{ type: 'boolean' }, { type: 'null' }],
+      description:
+        "Flip the new plane's normal without moving it; null for false."
+    }
+  },
+  required: ['kind', 'source', 'sources', 'offset', 'reverseNormal']
+} as const;
+
 const parametricPlaneSchema = {
   type: 'object',
   additionalProperties: false,
@@ -2026,6 +2135,9 @@ export const AI_CAD_OPERATION_CAPABILITIES = {
   add_mirror: { enabled: true, reason: null },
   add_shell: { enabled: true, reason: null },
   add_solid_offset: { enabled: true, reason: null },
+  add_datum_plane: { enabled: true, reason: null },
+  add_datum_sketch: { enabled: true, reason: null },
+  add_datum_mirror: { enabled: true, reason: null },
   recognized_imported_feature: {
     enabled: true,
     reason: null
@@ -2561,6 +2673,46 @@ export const CAD_PATCH_JSON_SCHEMA = {
               distance: scalarSchema
             },
             required: ['kind', 'name', 'localId', 'targetBodyId', 'distance']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', const: 'add_datum_plane' },
+              name: { type: 'string' },
+              localId: localIdSchema,
+              definition: datumPlaneDefinitionSchema
+            },
+            required: ['kind', 'name', 'localId', 'definition']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', const: 'add_datum_sketch' },
+              name: { type: 'string' },
+              localId: localIdSchema,
+              datum: datumRefSchema,
+              objects: {
+                type: 'array',
+                minItems: 1,
+                maxItems: 24,
+                items: sketchObjectSchema
+              }
+            },
+            required: ['kind', 'name', 'localId', 'datum', 'objects']
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', const: 'add_datum_mirror' },
+              name: { type: 'string' },
+              localId: localIdSchema,
+              targetBodyId: bodyRefSchema,
+              datum: datumRefSchema
+            },
+            required: ['kind', 'name', 'localId', 'targetBodyId', 'datum']
           },
           {
             type: 'object',
@@ -3356,6 +3508,113 @@ function requireBodyRef(
   }
 }
 
+/** A datum reference: a plain feature id, or a datum alias declared earlier. */
+function requireDatumRef(
+  value: unknown,
+  declaredDatums: Set<string>,
+  label: string
+): asserts value is CadDatumRef {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`Invalid ${label} datum.`);
+  }
+  if (isLocalBodyRef(value) && !declaredDatums.has(normalizeLocalId(value))) {
+    throw new Error(
+      `${label} datum references "${value}" before an earlier add_datum_plane declares that localId.`
+    );
+  }
+}
+
+/** Strict-output datum source (every field present, nulls) to its typed form. */
+function parseDatumPlaneSource(
+  value: unknown,
+  declaredDatums: Set<string>
+): CadDatumPlaneSource {
+  const source = record(value);
+  if (source.type === 'canonical') {
+    if (
+      !['XY', 'XZ', 'YZ'].includes(String(source.plane)) ||
+      (source.datum !== null && source.datum !== undefined)
+    ) {
+      throw new Error(
+        'A canonical datum source names XY, XZ or YZ and no datum.'
+      );
+    }
+    const offset = source.offset ?? 0;
+    if (!isScalar(offset)) {
+      throw new Error('A canonical datum source offset must be a value.');
+    }
+    return {
+      type: 'canonical',
+      plane: source.plane as 'XY' | 'XZ' | 'YZ',
+      offset
+    };
+  }
+  if (source.type === 'datum') {
+    if (
+      (source.plane !== null && source.plane !== undefined) ||
+      (source.offset !== null && source.offset !== undefined)
+    ) {
+      throw new Error(
+        'A datum source names only its datum; put any distance in the offset plane.'
+      );
+    }
+    requireDatumRef(source.datum, declaredDatums, 'add_datum_plane source');
+    return { type: 'datum', datum: source.datum };
+  }
+  throw new Error('A datum plane source is "canonical" or "datum".');
+}
+
+function parseDatumPlaneDefinition(
+  value: unknown,
+  declaredDatums: Set<string>
+): CadDatumPlaneDefinition {
+  const definition = record(value);
+  const reverseNormal = definition.reverseNormal ?? false;
+  if (typeof reverseNormal !== 'boolean') {
+    throw new Error(
+      'add_datum_plane reverseNormal must be true, false or null.'
+    );
+  }
+  const flip = reverseNormal ? { reverseNormal: true } : {};
+  if (definition.kind === 'offset') {
+    if (
+      (definition.sources !== null && definition.sources !== undefined) ||
+      !isScalar(definition.offset)
+    ) {
+      throw new Error(
+        'An offset plane has one source and an offset, and no sources pair.'
+      );
+    }
+    return {
+      kind: 'offset',
+      source: parseDatumPlaneSource(definition.source, declaredDatums),
+      offset: definition.offset,
+      ...flip
+    };
+  }
+  if (definition.kind === 'midplane') {
+    if (
+      !Array.isArray(definition.sources) ||
+      definition.sources.length !== 2 ||
+      (definition.source !== null && definition.source !== undefined) ||
+      (definition.offset !== null && definition.offset !== undefined)
+    ) {
+      throw new Error(
+        'A midplane has exactly two sources, and no single source or offset.'
+      );
+    }
+    return {
+      kind: 'midplane',
+      sources: [
+        parseDatumPlaneSource(definition.sources[0], declaredDatums),
+        parseDatumPlaneSource(definition.sources[1], declaredDatums)
+      ],
+      ...flip
+    };
+  }
+  throw new Error('add_datum_plane definition kind is "offset" or "midplane".');
+}
+
 export function parseCadPatchProposal(
   value: unknown,
   digest?: CadDocumentDigest
@@ -3378,6 +3637,7 @@ export function parseCadPatchProposal(
   const declared = new Set<string>();
   const declaredBodies = new Set<string>();
   const declaredSketches = new Set<string>();
+  const declaredDatums = new Set<string>();
 
   for (const rawOperation of candidate.operations) {
     const operation = record(rawOperation);
@@ -3995,6 +4255,48 @@ export function parseCadPatchProposal(
         );
         declareBodyLocalId(operation, declared, declaredBodies);
         break;
+      case 'add_datum_plane': {
+        if (typeof operation.name !== 'string') {
+          throw new Error('Invalid add_datum_plane operation.');
+        }
+        operation.definition = parseDatumPlaneDefinition(
+          operation.definition,
+          declaredDatums
+        );
+        declareLocalId(operation, declared);
+        if (typeof operation.localId === 'string') {
+          declaredDatums.add(normalizeLocalId(operation.localId));
+        }
+        break;
+      }
+      case 'add_datum_sketch':
+        if (
+          typeof operation.name !== 'string' ||
+          !isSketchObjects(operation.objects)
+        ) {
+          throw new Error('Invalid add_datum_sketch operation.');
+        }
+        requireDatumRef(operation.datum, declaredDatums, 'add_datum_sketch');
+        declareLocalId(operation, declared);
+        if (typeof operation.localId === 'string') {
+          declaredSketches.add(normalizeLocalId(operation.localId));
+        }
+        break;
+      case 'add_datum_mirror':
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string'
+        ) {
+          throw new Error('Invalid add_datum_mirror operation.');
+        }
+        requireDatumRef(operation.datum, declaredDatums, 'add_datum_mirror');
+        requireBodyRef(
+          operation.targetBodyId,
+          declaredBodies,
+          'add_datum_mirror targetBodyId'
+        );
+        declareBodyLocalId(operation, declared, declaredBodies);
+        break;
       case 'add_edge_modifier': {
         const edgeSelector = operation.edgeSelector;
         const stagedSelector =
@@ -4201,6 +4503,26 @@ function exactDigestRecognizedOpening(
  * assistant. Structural parsing alone cannot distinguish a copied lineage
  * reference from a well-formed but stale or invented one.
  */
+/** A plain datum id must name a live datum-plane feature in the digest. */
+function requireDigestDatum(
+  digest: CadDocumentDigest,
+  datum: CadDatumRef,
+  label: string
+): void {
+  if (isLocalBodyRef(datum)) return;
+  const feature = digest.features.find(
+    (candidate) => candidate.featureId === datum
+  );
+  if (!feature || feature.featureKind !== 'datum-plane') {
+    throw new Error(
+      `${label} datum ${datum} is not a datum plane in the current digest.`
+    );
+  }
+  if (feature.suppressed) {
+    throw new Error(`${label} datum ${datum} is suppressed.`);
+  }
+}
+
 export function validateCadPatchProposalAgainstDigest(
   proposal: CadPatchProposal,
   digest: CadDocumentDigest
@@ -4592,6 +4914,21 @@ export function validateCadPatchProposalAgainstDigest(
         }
         break;
       }
+      case 'add_datum_plane': {
+        const { definition } = operation;
+        const sources =
+          definition.kind === 'offset'
+            ? [definition.source]
+            : definition.sources;
+        for (const source of sources)
+          if (source.type === 'datum')
+            requireDigestDatum(digest, source.datum, operation.kind);
+        break;
+      }
+      case 'add_datum_sketch':
+      case 'add_datum_mirror':
+        requireDigestDatum(digest, operation.datum, operation.kind);
+        break;
       case 'add_face_sketch': {
         const plane = operation.planeRef;
         const face = exactDigestFace(
@@ -4699,6 +5036,14 @@ export function describeCadPatchOperation(
       return `Shell body ${operation.targetBodyId} through ${operation.openingFaceHashes.length} face${operation.openingFaceHashes.length === 1 ? '' : 's'} at ${String(operation.thickness)}`;
     case 'add_solid_offset':
       return `Offset body ${operation.targetBodyId} outward by ${String(operation.distance)}`;
+    case 'add_datum_plane':
+      return operation.definition.kind === 'offset'
+        ? `Create offset plane ${operation.name} at ${String(operation.definition.offset)}`
+        : `Create midplane ${operation.name}`;
+    case 'add_datum_sketch':
+      return `Create sketch ${operation.name} on datum ${operation.datum}`;
+    case 'add_datum_mirror':
+      return `Mirror body ${operation.targetBodyId} across datum ${operation.datum} as ${operation.name}`;
     case 'add_edge_modifier':
       return `${operation.modifier} ${
         operation.edgeSelector === 'all-feature-edges'

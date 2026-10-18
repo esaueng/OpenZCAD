@@ -374,7 +374,9 @@ describe('assistant integration', () => {
 
   it('accepts a 512000-byte digest and rejects one byte more', () => {
     const digest = { ...input.digest, warnings: [''] };
-    const baseBytes = new TextEncoder().encode(JSON.stringify(digest)).byteLength;
+    const baseBytes = new TextEncoder().encode(
+      JSON.stringify(digest)
+    ).byteLength;
     digest.warnings = ['x'.repeat(512_000 - baseBytes)];
     expect(() =>
       parseAssistantProposalRequest({ prompt: 'Model this', digest })
@@ -949,6 +951,48 @@ describe('assistant integration', () => {
     expect(schema).not.toContain('"const":"add_direct_edit"');
     expect(schema).not.toContain('"const":"add_shell"');
     expect(schema).not.toContain('"const":"add_solid_offset"');
+    // R01 datum operations stay dark until their one flag is set.
+    expect(schema).not.toContain('"const":"add_datum_plane"');
+    expect(schema).not.toContain('"const":"add_datum_sketch"');
+    expect(schema).not.toContain('"const":"add_datum_mirror"');
+  });
+
+  it('exposes all three datum-plane operations together behind one flag', async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await streamAssistantProposal(
+      input,
+      {
+        AI_PROVIDER: 'responses-compatible',
+        AI_API_KEY: 'key',
+        AI_BASE_URL: 'https://models.example.test/v1/responses',
+        AI_PATCH_DATUM_PLANE_ENABLED: 'true'
+      },
+      'user_test'
+    );
+    const request = JSON.parse(fetchMock.mock.calls[0]![1]?.body as string) as {
+      instructions: string;
+      text: { format: { schema: unknown } };
+    };
+    const enabledLine = request.instructions
+      .split('\n')
+      .find((line) => line.includes('enabled for this deployment'))!;
+    for (const kind of [
+      'add_datum_plane',
+      'add_datum_sketch',
+      'add_datum_mirror'
+    ]) {
+      expect(enabledLine).toContain(`\`${kind}\``);
+      expect(JSON.stringify(request.text.format.schema)).toContain(
+        `"const":"${kind}"`
+      );
+    }
+    expect(enabledLine).not.toContain('`add_mirror`');
   });
 
   it('prunes a rollout-flagged operation FIELD without withdrawing the operation', async () => {
@@ -1885,6 +1929,7 @@ describe('assistant integration', () => {
       'AI_PATCH_MIRROR_ENABLED',
       'AI_PATCH_SHELL_ENABLED',
       'AI_PATCH_SOLID_OFFSET_ENABLED',
+      'AI_PATCH_DATUM_PLANE_ENABLED',
       'AI_PATCH_PARTIAL_REVOLVE_ENABLED'
     ] as const;
 
