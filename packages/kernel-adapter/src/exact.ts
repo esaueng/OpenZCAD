@@ -2766,6 +2766,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ),
         warnings: build.warnings,
         updatedAt: nowIso(),
+        ...(build.datumFrames.size > 0
+          ? { datumFrames: Object.fromEntries(build.datumFrames) }
+          : {}),
         ...(build.faceReferenceRepairs?.length
           ? { faceReferenceRepairs: build.faceReferenceRepairs }
           : {}),

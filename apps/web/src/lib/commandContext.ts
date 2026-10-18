@@ -98,7 +98,7 @@ const CONTEXTS: Record<
     // callout, which already offers the preferred one; the rail lights no
     // second primary beside it.
     primary: null,
-    applies: ['sketch', 'hole', 'draft', 'thicken', 'shell']
+    applies: ['sketch', 'datum-plane', 'hole', 'draft', 'thicken', 'shell']
   },
   edges: { primary: 'fillet', applies: ['fillet', 'chamfer'] },
   region: {

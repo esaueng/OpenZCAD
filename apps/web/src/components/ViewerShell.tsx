@@ -1,7 +1,12 @@
 import type { ParameterPreviewBody } from '../lib/parameterVisualPreview';
-import type { SketchDimensionIdentity } from '@openzcad/shared';
+import type {
+  FeatureId,
+  ProjectDocument,
+  SketchDimensionIdentity
+} from '@openzcad/shared';
 import type { HoleGhost } from '../lib/holeGhost';
 import type { PrimitiveGhost } from '../lib/primitiveGhost';
+import { datumPlaneDisplays } from '../lib/datumPlaneDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
 import { useMemo, useRef, type MutableRefObject, type ReactNode } from 'react';
 import {
@@ -280,6 +285,12 @@ interface ViewerShellProps {
   holeGhost?: HoleGhost | null;
   /** The open primitive card's solid, drawn before Create. */
   primitiveGhost?: PrimitiveGhost | null;
+  /** The document whose resolved R01 datum planes the viewport draws. */
+  datumDocument?: ProjectDocument | null;
+  /** Datum planes hidden by their eye toggle. */
+  hiddenDatumIds?: ReadonlySet<string>;
+  /** The selected or edited feature, drawn highlighted when it is a datum. */
+  selectedFeatureId?: FeatureId | null;
   onPickPlane(plane: PlaneId): void;
   /** What measuring the hovered target would report; null when measure is off. */
   onMeasurePreview?:
@@ -422,6 +433,9 @@ export function ViewerShell({
   planePickerOffset,
   holeGhost = null,
   primitiveGhost = null,
+  datumDocument = null,
+  hiddenDatumIds,
+  selectedFeatureId = null,
   onPickPlane,
   onMeasurePreview,
   regionHandle,
@@ -622,6 +636,15 @@ export function ViewerShell({
         planePickerOffset={planePickerOffset}
         holeGhost={holeGhost}
         primitiveGhost={primitiveGhost}
+        datumPlanes={
+          datumDocument
+            ? datumPlaneDisplays(
+                datumDocument,
+                hiddenDatumIds ?? new Set(),
+                selectedFeatureId
+              )
+            : []
+        }
         onPickPlane={onPickPlane}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}

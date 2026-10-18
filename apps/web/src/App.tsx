@@ -63,7 +63,8 @@ import {
   useRef,
   useState,
   type ChangeEvent,
-  type ComponentProps
+  type ComponentProps,
+  type JSXElementConstructor
 } from 'react';
 import { ExportDialogBoundary } from './components/ExportDialogBoundary';
 import {
@@ -337,7 +338,6 @@ import {
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
 import { modalHoldsKeyboard, useModalFocus } from './lib/useModalFocus';
 import {
-  PLANE_LABELS,
   downloadText,
   evalParamValue,
   exportFileStem,
@@ -737,18 +737,27 @@ const stepImportRun = () => import('./lib/stepImportRun');
 const extrudeInference = () => import('./lib/extrudeInference');
 
 // The touch keypad is needed only when a numeric field requests it.
+/**
+ * A lazily loaded component that draws nothing until its chunk arrives. One
+ * helper instead of a hand-written Suspense wrapper per component: each of
+ * those cost the entry chunk its own copy of the same few lines.
+ */
+function withSuspense<P extends object>(Lazy: JSXElementConstructor<P>) {
+  return function Suspended(props: P) {
+    return (
+      <Suspense fallback={null}>
+        <Lazy {...props} />
+      </Suspense>
+    );
+  };
+}
+
 const LazyNumericKeypad = lazyWithStaleChunkNotice(() =>
   import('./components/NumericKeypad').then((module) => ({
     default: module.NumericKeypad
   }))
 );
-function NumericKeypad(props: ComponentProps<typeof LazyNumericKeypad>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyNumericKeypad {...props} />
-    </Suspense>
-  );
-}
+const NumericKeypad = withSuspense(LazyNumericKeypad);
 
 const LazyViewerShell = lazyWithStaleChunkNotice(() =>
   import('./components/ViewerShell').then((module) => ({
@@ -792,13 +801,7 @@ const LazyShortcutsOverlay = lazyWithStaleChunkNotice(() =>
     default: module.ShortcutsOverlay
   }))
 );
-function ShortcutsOverlay(props: ComponentProps<typeof LazyShortcutsOverlay>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyShortcutsOverlay {...props} />
-    </Suspense>
-  );
-}
+const ShortcutsOverlay = withSuspense(LazyShortcutsOverlay);
 // Operation help is only needed after the user starts a modeling action.
 const LazyToolCard = lazyWithStaleChunkNotice(() =>
   import('./components/ToolCard').then((module) => ({
@@ -851,13 +854,7 @@ const LazySketchWorkflow = lazyWithStaleChunkNotice(() =>
     default: module.SketchWorkflow
   }))
 );
-function SketchWorkflow(props: ComponentProps<typeof LazySketchWorkflow>) {
-  return (
-    <Suspense fallback={null}>
-      <LazySketchWorkflow {...props} />
-    </Suspense>
-  );
-}
+const SketchWorkflow = withSuspense(LazySketchWorkflow);
 // The command card is the first thing the column shows, but its chunk is
 // small and fetched with the workspace: keeping the component (and the
 // selection-to-context rules it carries) out of the entry chunk is what
@@ -999,14 +996,18 @@ const LazyModelingOperationsForm = lazyWithStaleChunkNotice(() =>
     default: module.ModelingOperationsForm
   }))
 );
+const LazySketchPlanePrompt = lazyWithStaleChunkNotice(() =>
+  import('./components/SketchPlanePrompt').then((module) => ({
+    default: module.SketchPlanePrompt
+  }))
+);
+const LazyDatumPlaneCard = lazyWithStaleChunkNotice(() =>
+  import('./components/forms/DatumPlaneForm').then((module) => ({
+    default: module.DatumPlaneWorkspaceCard
+  }))
+);
 
-function AssistantPanel(props: ComponentProps<typeof LazyAssistantPanel>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyAssistantPanel {...props} />
-    </Suspense>
-  );
-}
+const AssistantPanel = withSuspense(LazyAssistantPanel);
 
 function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
   return (
@@ -1022,127 +1023,31 @@ function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
   );
 }
 
-function MeasurementDock(props: ComponentProps<typeof LazyMeasurementDock>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyMeasurementDock {...props} />
-    </Suspense>
-  );
-}
+const MeasurementDock = withSuspense(LazyMeasurementDock);
 
-function CommandCard(props: ComponentProps<typeof LazyCommandCard>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyCommandCard {...props} />
-    </Suspense>
-  );
-}
+const CommandCard = withSuspense(LazyCommandCard);
 
-function WorkspaceTour(props: ComponentProps<typeof LazyWorkspaceTour>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyWorkspaceTour {...props} />
-    </Suspense>
-  );
-}
+const WorkspaceTour = withSuspense(LazyWorkspaceTour);
 
-function SketchToolRail(props: ComponentProps<typeof LazySketchToolRail>) {
-  return (
-    <Suspense fallback={null}>
-      <LazySketchToolRail {...props} />
-    </Suspense>
-  );
-}
+const SketchToolRail = withSuspense(LazySketchToolRail);
 
-function SketchReferenceDimensions(
-  props: ComponentProps<typeof LazySketchReferenceDimensions>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazySketchReferenceDimensions {...props} />
-    </Suspense>
-  );
-}
+const SketchReferenceDimensions = withSuspense(LazySketchReferenceDimensions);
 
-function SketchRelationsRail(
-  props: ComponentProps<typeof LazySketchRelationsRail>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazySketchRelationsRail {...props} />
-    </Suspense>
-  );
-}
+const SketchRelationsRail = withSuspense(LazySketchRelationsRail);
 
-function ResumeSessionDialog(
-  props: ComponentProps<typeof LazyResumeSessionDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyResumeSessionDialog {...props} />
-    </Suspense>
-  );
-}
+const ResumeSessionDialog = withSuspense(LazyResumeSessionDialog);
 
-function SaveRevisionDialog(
-  props: ComponentProps<typeof LazySaveRevisionDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazySaveRevisionDialog {...props} />
-    </Suspense>
-  );
-}
+const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
 
-function DeleteFeatureDialog(
-  props: ComponentProps<typeof LazyDeleteFeatureDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyDeleteFeatureDialog {...props} />
-    </Suspense>
-  );
-}
+const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
 
-function SuppressFeatureDialog(
-  props: ComponentProps<typeof LazySuppressFeatureDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazySuppressFeatureDialog {...props} />
-    </Suspense>
-  );
-}
+const SuppressFeatureDialog = withSuspense(LazySuppressFeatureDialog);
 
-function UnappliedCardDialog(
-  props: ComponentProps<typeof LazyUnappliedCardDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyUnappliedCardDialog {...props} />
-    </Suspense>
-  );
-}
+const UnappliedCardDialog = withSuspense(LazyUnappliedCardDialog);
 
-function ProjectConflictDialog(
-  props: ComponentProps<typeof LazyProjectConflictDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyProjectConflictDialog {...props} />
-    </Suspense>
-  );
-}
+const ProjectConflictDialog = withSuspense(LazyProjectConflictDialog);
 
-function SketchEntityEditor(
-  props: ComponentProps<typeof LazySketchEntityEditor>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazySketchEntityEditor {...props} />
-    </Suspense>
-  );
-}
+const SketchEntityEditor = withSuspense(LazySketchEntityEditor);
 
 function SketchTextCard(props: ComponentProps<typeof LazySketchTextCard>) {
   return (
@@ -1159,23 +1064,9 @@ function SketchTextCard(props: ComponentProps<typeof LazySketchTextCard>) {
   );
 }
 
-function SettingsPage(props: ComponentProps<typeof LazySettingsPage>) {
-  return (
-    <Suspense fallback={null}>
-      <LazySettingsPage {...props} />
-    </Suspense>
-  );
-}
+const SettingsPage = withSuspense(LazySettingsPage);
 
-function ProjectSharingDialog(
-  props: ComponentProps<typeof LazyProjectSharingDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyProjectSharingDialog {...props} />
-    </Suspense>
-  );
-}
+const ProjectSharingDialog = withSuspense(LazyProjectSharingDialog);
 
 function ExportDialog(props: ComponentProps<typeof LazyExportDialog>) {
   return (
@@ -1187,15 +1078,7 @@ function ExportDialog(props: ComponentProps<typeof LazyExportDialog>) {
   );
 }
 
-function ShaprImportDialog(
-  props: ComponentProps<typeof LazyShaprImportDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyShaprImportDialog {...props} />
-    </Suspense>
-  );
-}
+const ShaprImportDialog = withSuspense(LazyShaprImportDialog);
 
 function Inspector(props: ComponentProps<typeof LazyInspector>) {
   return (
@@ -1205,15 +1088,11 @@ function Inspector(props: ComponentProps<typeof LazyInspector>) {
   );
 }
 
-function ModelingOperationsForm(
-  props: ComponentProps<typeof LazyModelingOperationsForm>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyModelingOperationsForm {...props} />
-    </Suspense>
-  );
-}
+const ModelingOperationsForm = withSuspense(LazyModelingOperationsForm);
+
+const SketchPlanePrompt = withSuspense(LazySketchPlanePrompt);
+
+const DatumPlaneCard = withSuspense(LazyDatumPlaneCard);
 import {
   chooseProjectDocument,
   projectsHaveSameRebuildInputs,
@@ -1320,6 +1199,7 @@ import {
   type MoveSelectionRequest
 } from './lib/moveSelectionTransition';
 import {
+  featureOpensEditCard,
   resolveHistoryEditorFeature,
   resolveHistoryFeature,
   type HistoryEditorRequest
@@ -7177,9 +7057,8 @@ export function App() {
         setStatus('This history feature is no longer available to edit.');
         return;
       }
-      if (modelingFeatureIsEditable(feature.data.featureKind)) {
-        const nextTool = (feature.data as EditableModelingFeatureData)
-          .featureKind;
+      if (featureOpensEditCard(feature.data.featureKind)) {
+        const nextTool = feature.data.featureKind;
         const reason = toolDisabledReason(nextTool, availability);
         if (reason) {
           setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
@@ -7214,7 +7093,10 @@ export function App() {
       setStatus('This history feature is no longer available to edit.');
       return;
     }
-    const data = feature?.data as EditableModelingFeatureData | undefined;
+    const data = feature?.data as
+      | EditableModelingFeatureData
+      | Extract<FeatureNode['data'], { featureKind: 'datum-plane' }>
+      | undefined;
     const nextTool = data?.featureKind ?? request.tool;
     const reason = toolDisabledReason(nextTool, availability);
     if (reason) {
@@ -7399,7 +7281,7 @@ export function App() {
    */
   /** Opens a history feature in the modeling form it was created with. */
   function openModelingFeatureEditor(feature: FeatureNode) {
-    if (!modelingFeatureIsEditable(feature.data.featureKind)) return;
+    if (!featureOpensEditCard(feature.data.featureKind)) return;
     const data = feature.data as EditableModelingFeatureData;
     const reason = toolDisabledReason(data.featureKind, availability);
     if (reason) {
@@ -8005,6 +7887,10 @@ export function App() {
   const [sketchVisibilityOverrides, setSketchVisibilityOverrides] = useState<
     Record<string, boolean>
   >({});
+  /** Datum planes hidden by their eye toggle: view state, as sketches' is. */
+  const [hiddenDatumIds, setHiddenDatumIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
 
   /** Sketches referenced by any feature: extrude/revolve, loft sections, sweep profile + path. */
   const consumedSketchIds = useMemo(() => {
@@ -12682,6 +12568,12 @@ export function App() {
     if (handleMeasurementPick(selection, additive, detail)) {
       return;
     }
+    // The Plane card asks for faces: a face click is its next source pick,
+    // not a selection that closes the card it was waiting for.
+    if (tool === 'datum-plane' && selection.kind === 'face') {
+      setSelectedTopology(selection);
+      return;
+    }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
     if (
@@ -17284,8 +17176,8 @@ export function App() {
       return;
     }
     if (moveHasUnappliedChange(movePreview)) {
-      if (modelingFeatureIsEditable(node.data.featureKind)) {
-        const nextTool = (node.data as EditableModelingFeatureData).featureKind;
+      if (featureOpensEditCard(node.data.featureKind)) {
+        const nextTool = node.data.featureKind;
         const reason = toolDisabledReason(nextTool, availability);
         if (reason) {
           setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
@@ -17423,12 +17315,12 @@ export function App() {
     // in front of it. Last, so the form's target body wins the selection.
     if (
       node?.kind === 'feature' &&
-      modelingFeatureIsEditable(node.data.featureKind)
+      featureOpensEditCard(node.data.featureKind)
     ) {
       // This navigation has already settled its Move choice. Launch directly
       // so the render's old preview cannot queue the same question again.
       completeToolSwitch({
-        tool: (node.data as EditableModelingFeatureData).featureKind,
+        tool: node.data.featureKind,
         historyFeature: {
           projectId: current.projectId,
           featureId: node.featureId
@@ -20104,10 +19996,14 @@ export function App() {
       selectedSketchProfileId={selectedSketchProfileId}
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
+      document={doc}
+      hiddenDatumIds={hiddenDatumIds}
+      onHiddenDatumIdsChange={setHiddenDatumIds}
       warnings={diagnostics}
       historyDetails={
         <FeatureHistoryPanel
           document={doc}
+          scope={parameterScope.scope}
           selectedId={selectedFeatureNodeId}
           failure={
             historyFailure?.projectId === doc.projectId &&
@@ -20727,6 +20623,11 @@ export function App() {
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
             planePickerArmed={!modelingLocked && tool === 'sketch'}
+            datumDocument={doc}
+            hiddenDatumIds={hiddenDatumIds}
+            selectedFeatureId={
+              (modelingEditFeature ?? selectedFeature)?.featureId ?? null
+            }
             planePickerOffset={sketchPlaneOffset}
             holeGhost={holePreviewState?.ghost ?? null}
             primitiveGhost={
@@ -21115,53 +21016,22 @@ export function App() {
             liveSnapRef={moveSnapSetterRef}
           />
         ) : tool === 'sketch' ? (
-          // The plane chooser is a command card like any other. It floated
-          // over the viewport's top edge, where the mode toggle and, at
-          // 1024 px, the project name drew over its title and its ×.
-          <div className="sketch-plane-prompt" role="status">
-            <span>
-              <strong>Pick a sketch plane</strong>
-              <small>
-                Click a planar face on the model, or start on a principal plane.
-              </small>
-            </span>
-            <label className="sketch-plane-offset">
-              <span>Offset</span>
-              <input
-                type="number"
-                step="any"
-                value={sketchPlaneOffsetText}
-                aria-label="Sketch plane offset"
-                onChange={(event) =>
-                  setSketchPlaneOffsetText(event.target.value)
-                }
-              />
-              <span className="sketch-plane-offset-units">{doc.units}</span>
-            </label>
-            <span className="sketch-plane-buttons">
-              {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
-                <button
-                  key={plane}
-                  type="button"
-                  onClick={() => startSketchOnPlane(plane)}
-                >
-                  {PLANE_LABELS[plane]}
-                </button>
-              ))}
-              <button
-                type="button"
-                className="sketch-plane-dismiss"
-                aria-label="Cancel sketch"
-                title="Cancel sketch (Esc)"
-                onClick={() => {
-                  cancelPanel();
-                  setStatus('Sketch canceled · no plane was chosen.');
-                }}
-              >
-                ×
-              </button>
-            </span>
-          </div>
+          <SketchPlanePrompt
+            document={doc}
+            offsetText={sketchPlaneOffsetText}
+            datumsReady={exactGeometryReady}
+            onOffsetTextChange={setSketchPlaneOffsetText}
+            onPickPlane={startSketchOnPlane}
+            onEnterSketch={(plane, message) => {
+              dispatchInteraction({ type: 'enter-sketch', plane });
+              setTool(null);
+              setStatus(message, { sticky: true });
+            }}
+            onCancel={() => {
+              cancelPanel();
+              setStatus('Sketch canceled · no plane was chosen.');
+            }}
+          />
         ) : tool === null &&
           selectedProfiles.length > 0 &&
           selectedSketchProfileName ? (
@@ -21259,6 +21129,8 @@ export function App() {
                       faceOptions={modelingOperationFaces}
                       profileOptions={modelingFormProfiles}
                       pathOptions={modelingFormPaths}
+                      datumDocument={doc}
+                      datumBefore={modelingEditFeature?.featureId ?? null}
                       initialTarget={modelingTargetBodyId ?? undefined}
                       viewportFacePick={viewportFormFacePick}
                       unsupportedReason={modelingUnsupportedReason ?? undefined}
@@ -21318,6 +21190,32 @@ export function App() {
                   )}
                 </div>
               </section>
+            ) : tool === 'datum-plane' && doc ? (
+              <DatumPlaneCard
+                key={modelingEditFeature?.featureId ?? 'new'}
+                document={doc}
+                editFeature={modelingEditFeature}
+                scope={parameterScope.scope}
+                selection={selectedTopology}
+                editDisabledReason={editDisabledReason}
+                exactGeometryReady={exactGeometryReady}
+                app={{
+                  managerRef,
+                  geometry,
+                  validatedFeature,
+                  ensureCanEdit,
+                  newFeatureName,
+                  setStatus,
+                  editCardSessionRef,
+                  editSessionIsCurrent,
+                  finishFeatureEdit,
+                  finishFeatureCreation,
+                  validateSelectionEdit,
+                  handleDeleteFeature,
+                  cancelPanel,
+                  closeFeaturePanel
+                }}
+              />
             ) : (
               <Inspector
                 tool={tool}

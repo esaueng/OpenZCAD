@@ -15,7 +15,8 @@ import {
   Move3d,
   PenLine,
   RotateCw,
-  Search
+  Search,
+  SquareDashed
 } from 'lucide-react';
 import type {
   BodyId,
@@ -24,8 +25,10 @@ import type {
   FeatureNode,
   ParameterNode,
   ProjectCheckpoint,
+  ProjectDocument,
   UnitSystem
 } from '@openzcad/shared';
+import { datumPlaneRows } from '../lib/datumPlanes';
 import type { PanelState, SidebarSectionId } from '../lib/panelState';
 import {
   findRollbackMarkerIndex,
@@ -122,6 +125,14 @@ interface SidebarProps {
   hiddenBodyIds: ReadonlySet<string>;
   /** Sketches currently hidden — consumed by default, or by the eye toggle. */
   hiddenSketchIds: ReadonlySet<string>;
+  /**
+   * The open document, for its R01 datum plane rows (source and dependents).
+   * Absent, Items lists no planes.
+   */
+  document?: ProjectDocument;
+  /** Datum planes hidden by their eye toggle: view state, as sketches' is. */
+  hiddenDatumIds?: ReadonlySet<string>;
+  onHiddenDatumIdsChange?(hidden: ReadonlySet<string>): void;
   warnings: DiagnosticRow[];
   historyDetails?: ReactNode;
   checkpoints: ProjectCheckpoint[];
@@ -234,6 +245,9 @@ export function Sidebar({
   selectedBodyIds,
   hiddenBodyIds,
   hiddenSketchIds,
+  document,
+  hiddenDatumIds,
+  onHiddenDatumIdsChange,
   warnings,
   historyDetails,
   checkpoints,
@@ -354,12 +368,17 @@ export function Sidebar({
   const matchingBodies = bodies.filter((body) => matchesObject(body.name));
   const liveBodies = matchingBodies.filter((body) => !body.consumed);
   const consumedBodies = matchingBodies.filter((body) => body.consumed);
-  const showBodies = objectFilter !== 'sketches';
-  const showSketches = objectFilter !== 'bodies';
-  const objectCount = allLiveBodies.length + allSketches.length;
+  const allPlanes = document ? datumPlaneRows(document, parameterValues) : [];
+  const planes = allPlanes.filter((plane) => matchesObject(plane.name));
+  const showBodies = objectFilter === 'all' || objectFilter === 'bodies';
+  const showSketches = objectFilter === 'all' || objectFilter === 'sketches';
+  const showPlanes = objectFilter === 'all' || objectFilter === 'planes';
+  const objectCount =
+    allLiveBodies.length + allSketches.length + allPlanes.length;
   const filteredCount =
     (showBodies ? matchingBodies.length : 0) +
-    (showSketches ? sketches.length : 0);
+    (showSketches ? sketches.length : 0) +
+    (showPlanes ? planes.length : 0);
 
   function renderBodyRow(body: BodyRepresentation) {
     const hidden = hiddenBodyIds.has(body.bodyId);
@@ -522,6 +541,7 @@ export function Sidebar({
             <option value="all">All objects</option>
             <option value="bodies">Bodies</option>
             <option value="sketches">Sketches</option>
+            <option value="planes">Planes</option>
           </select>
         </div>
         <div className="object-filter">
@@ -555,7 +575,9 @@ export function Sidebar({
                   ? 'No objects yet. Create a body or sketch to get started.'
                   : objectFilter === 'bodies'
                     ? 'No bodies yet. Create a primitive or extrude a sketch.'
-                    : 'No sketches yet. Start a sketch on a plane or face.'}
+                    : objectFilter === 'planes'
+                      ? 'No planes yet. Use Plane to offset one from a plane or face.'
+                      : 'No sketches yet. Start a sketch on a plane or face.'}
             </p>
           )}
           {showBodies && liveBodies.map(renderBodyRow)}
@@ -607,6 +629,75 @@ export function Sidebar({
                       <Eye size={12} aria-hidden="true" />
                     )}
                   </button>
+                </div>
+              );
+            })}
+          {showPlanes &&
+            planes.map((plane) => {
+              const hidden = hiddenDatumIds?.has(plane.featureId) ?? false;
+              const selected = selectedFeatureNodeId === plane.nodeId;
+              const used =
+                plane.dependents.length === 0
+                  ? 'Not used yet'
+                  : `Used by ${plane.dependents.join(', ')}`;
+              return (
+                <div
+                  key={plane.nodeId}
+                  className={`object-row${selected ? ' selected' : ''}${hidden ? ' hidden-body' : ''}`}
+                  role="listitem"
+                >
+                  <button
+                    type="button"
+                    className="body-row-main"
+                    aria-pressed={selected}
+                    aria-description={`${plane.description ?? 'Datum plane'}. ${used}.`}
+                    title={`${plane.name} — ${plane.description ?? 'datum plane'} · ${used}`}
+                    onClick={() => onSelectFeature(plane.nodeId)}
+                  >
+                    <span className="feature-icon">
+                      <SquareDashed size={13} aria-hidden="true" />
+                    </span>
+                    <span className="feature-name">{plane.name}</span>
+                    {plane.suppressed ? (
+                      <span className="feature-flag">suppressed</span>
+                    ) : !plane.resolved && !geometryPending ? (
+                      <span className="feature-flag error">unresolved</span>
+                    ) : plane.dependents.length > 0 ? (
+                      <span className="feature-flag">
+                        {plane.dependents.length} use
+                        {plane.dependents.length === 1 ? '' : 's'}
+                      </span>
+                    ) : null}
+                  </button>
+                  {onHiddenDatumIdsChange ? (
+                    <button
+                      type="button"
+                      className={`row-visibility${hidden ? ' is-hidden' : ''}`}
+                      title={
+                        hidden
+                          ? `Show plane ${plane.name}`
+                          : `Hide plane ${plane.name}`
+                      }
+                      aria-label={
+                        hidden
+                          ? `Show plane ${plane.name}`
+                          : `Hide plane ${plane.name}`
+                      }
+                      aria-pressed={hidden}
+                      onClick={() => {
+                        const next = new Set(hiddenDatumIds);
+                        if (hidden) next.delete(plane.featureId);
+                        else next.add(plane.featureId);
+                        onHiddenDatumIdsChange(next);
+                      }}
+                    >
+                      {hidden ? (
+                        <EyeOff size={12} aria-hidden="true" />
+                      ) : (
+                        <Eye size={12} aria-hidden="true" />
+                      )}
+                    </button>
+                  ) : null}
                 </div>
               );
             })}

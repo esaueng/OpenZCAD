@@ -10,11 +10,19 @@ import {
   listFeaturesInOrder,
   resolveParamValue
 } from '@openzcad/document-core';
-import { geometryTolerance, type Vec3 } from '@openzcad/geometry';
+import {
+  geometryTolerance,
+  midDatumPlane,
+  offsetDatumPlane,
+  type Vec3
+} from '@openzcad/geometry';
 import {
   FULL_REVOLVE_ANGLE_DEG,
   UNIT_TO_MM,
+  isDatumPlaneRef,
+  type DatumPlaneSource,
   type FeatureNode,
+  type ModelingPlaneReference,
   type ParamValue
 } from '@openzcad/shared';
 import type { ExactShape, ImportedStepDiagnostics } from './exact-types';
@@ -179,6 +187,7 @@ import {
   buildLoft,
   buildProfileSweep,
   buildHelicalSweep,
+  resolvePlaneRefAtHistory,
   resolveSketchBasisAtHistory
 } from './exact-profile-builders';
 import { applyDirectEdit } from './exact-direct-edit-ops';
@@ -819,12 +828,88 @@ function buildTransformFeature(
   );
 }
 
+/**
+ * A Mirror or Split plane as a world point and unit normal (null when the
+ * stored normal is degenerate). An R01 datum reads the frame its own feature
+ * resolved earlier in this build and refuses by name when it is unavailable.
+ */
+function resolveOperationPlane(
+  ctx: FeatureBuildContext,
+  plane: ModelingPlaneReference,
+  label: 'mirror' | 'split'
+): { planePoint: Vec3; planeNormal: Vec3 | null } {
+  if (isDatumPlaneRef(plane)) {
+    const frame = resolvePlaneRefAtHistory(
+      ctx.kernel,
+      ctx.document,
+      plane,
+      { kind: label === 'mirror' ? 'Mirror' : 'Split', name: label },
+      ctx.result,
+      ctx.scope
+    );
+    return { planePoint: frame.origin, planeNormal: frame.normal };
+  }
+  const value = (raw: ParamValue, name: string) =>
+    resolveParamValue(raw, ctx.scope, `${label} ${name}`, ctx.document.units);
+  return {
+    planePoint: {
+      x: value(plane.origin.x, 'origin X'),
+      y: value(plane.origin.y, 'origin Y'),
+      z: value(plane.origin.z, 'origin Z')
+    },
+    planeNormal: normalized({
+      x: value(plane.normal.x, 'normal X'),
+      y: value(plane.normal.y, 'normal Y'),
+      z: value(plane.normal.z, 'normal Z')
+    })
+  };
+}
+
+/**
+ * R01: resolves a datum plane's frame once at its history position, for every
+ * later sketch, Mirror and Split to read. It makes no body.
+ */
+function buildDatumPlaneFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'datum-plane'>
+): void {
+  const { definition } = data;
+  const source = (planeRef: DatumPlaneSource) =>
+    resolvePlaneRefAtHistory(
+      ctx.kernel,
+      ctx.document,
+      planeRef,
+      { kind: 'Datum plane', name: feature.name },
+      ctx.result,
+      ctx.scope
+    );
+  const frame =
+    definition.kind === 'offset'
+      ? offsetDatumPlane(
+          source(definition.source),
+          resolveParamValue(
+            definition.offset,
+            ctx.scope,
+            'datum plane offset',
+            ctx.document.units
+          ),
+          definition.reverseNormal
+        )
+      : midDatumPlane(
+          source(definition.sources[0]),
+          source(definition.sources[1]),
+          definition.reverseNormal
+        );
+  ctx.result.datumFrames.set(feature.featureId, frame);
+}
+
 function buildMirrorFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
   data: FeatureDataOf<'mirror'>
 ): void {
-  const { kernel, scope, result } = ctx;
+  const { kernel, result } = ctx;
   if (!feature.bodyId) {
     throw new Error('Mirror has no result body.');
   }
@@ -832,43 +917,11 @@ function buildMirrorFeature(
   if (!target) {
     throw new Error('Mirror target is unavailable.');
   }
-  const origin = data.plane.origin;
-  const rawNormal = data.plane.normal;
-  const planePoint = {
-    x: resolveParamValue(
-      origin.x,
-      scope,
-      'mirror origin X',
-      ctx.document.units
-    ),
-    y: resolveParamValue(
-      origin.y,
-      scope,
-      'mirror origin Y',
-      ctx.document.units
-    ),
-    z: resolveParamValue(origin.z, scope, 'mirror origin Z', ctx.document.units)
-  };
-  const planeNormal = normalized({
-    x: resolveParamValue(
-      rawNormal.x,
-      scope,
-      'mirror normal X',
-      ctx.document.units
-    ),
-    y: resolveParamValue(
-      rawNormal.y,
-      scope,
-      'mirror normal Y',
-      ctx.document.units
-    ),
-    z: resolveParamValue(
-      rawNormal.z,
-      scope,
-      'mirror normal Z',
-      ctx.document.units
-    )
-  });
+  const { planePoint, planeNormal } = resolveOperationPlane(
+    ctx,
+    data.plane,
+    'mirror'
+  );
   if (!planeNormal) {
     throw new Error('Mirror plane normal must be finite and non-zero.');
   }
@@ -1078,7 +1131,7 @@ function buildSplitFeature(
   feature: FeatureNode,
   data: FeatureDataOf<'split'>
 ): void {
-  const { kernel, scope, result } = ctx;
+  const { kernel, result } = ctx;
   if (!feature.bodyId) {
     throw new Error('Split has no result body.');
   }
@@ -1086,33 +1139,11 @@ function buildSplitFeature(
   if (!target) {
     throw new Error('Split target is unavailable.');
   }
-  const origin = data.plane.origin;
-  const rawNormal = data.plane.normal;
-  const planePoint = {
-    x: resolveParamValue(origin.x, scope, 'split origin X', ctx.document.units),
-    y: resolveParamValue(origin.y, scope, 'split origin Y', ctx.document.units),
-    z: resolveParamValue(origin.z, scope, 'split origin Z', ctx.document.units)
-  };
-  const planeNormal = normalized({
-    x: resolveParamValue(
-      rawNormal.x,
-      scope,
-      'split normal X',
-      ctx.document.units
-    ),
-    y: resolveParamValue(
-      rawNormal.y,
-      scope,
-      'split normal Y',
-      ctx.document.units
-    ),
-    z: resolveParamValue(
-      rawNormal.z,
-      scope,
-      'split normal Z',
-      ctx.document.units
-    )
-  });
+  const { planePoint, planeNormal } = resolveOperationPlane(
+    ctx,
+    data.plane,
+    'split'
+  );
   if (!planeNormal) {
     throw new Error('Split plane normal must be finite and non-zero.');
   }
@@ -2712,6 +2743,9 @@ export function buildFeature(
       break;
     case 'pattern':
       buildPatternFeature(ctx, feature, feature.data);
+      break;
+    case 'datum-plane':
+      buildDatumPlaneFeature(ctx, feature, feature.data);
       break;
   }
 }
