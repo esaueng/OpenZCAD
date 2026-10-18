@@ -23,10 +23,43 @@ export function constantRigidTransform(
       y: value(input.y),
       z: value(input.z)
     });
-    const result = {
-      translation: vector(transform.translation),
-      rotationDeg: vector(transform.rotationDeg)
-    };
+    const rotationDeg = vector(transform.rotationDeg);
+    const translation = vector(transform.translation);
+    // M10: a pivot is folded into the equivalent origin-based translation,
+    // t + p − R·p, exactly as the exact build does, so a copy placed from
+    // this transform lands where the measured body is. A pivot that is not a
+    // constant (a parameter) is not a fixed placement and throws below.
+    if (transform.pivot) {
+      const pivot = vector(transform.pivot);
+      const toRadians = Math.PI / 180;
+      const [ca, sa] = [
+        Math.cos(rotationDeg.x * toRadians),
+        Math.sin(rotationDeg.x * toRadians)
+      ];
+      const [cb, sb] = [
+        Math.cos(rotationDeg.y * toRadians),
+        Math.sin(rotationDeg.y * toRadians)
+      ];
+      const [cc, sc] = [
+        Math.cos(rotationDeg.z * toRadians),
+        Math.sin(rotationDeg.z * toRadians)
+      ];
+      const rotated = {
+        x:
+          cc * cb * pivot.x +
+          (cc * sb * sa - sc * ca) * pivot.y +
+          (cc * sb * ca + sc * sa) * pivot.z,
+        y:
+          sc * cb * pivot.x +
+          (sc * sb * sa + cc * ca) * pivot.y +
+          (sc * sb * ca - cc * sa) * pivot.z,
+        z: -sb * pivot.x + cb * sa * pivot.y + cb * ca * pivot.z
+      };
+      translation.x += pivot.x - rotated.x;
+      translation.y += pivot.y - rotated.y;
+      translation.z += pivot.z - rotated.z;
+    }
+    const result = { translation, rotationDeg };
     return [
       ...Object.values(result.translation),
       ...Object.values(result.rotationDeg)
