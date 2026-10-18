@@ -1044,7 +1044,7 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     ).toThrow(`more than ${MAX_DXF_ENTITIES} entities`);
   });
 
-  it('refuses a bulged segment on a vanishing chord instead of dropping it', () => {
+  it('keeps a bulged segment on a vanishing chord, and judges length in document units', () => {
     const text = dxf([
       '0',
       'LWPOLYLINE',
@@ -1069,9 +1069,51 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
       '40',
       '1'
     ]);
-    expect(() => importDxfSketch(text, 'mm')).toThrow(
-      'segment too short to represent'
-    );
+    const [arc] = importDxfSketch(text, 'mm').objects as unknown as [
+      { objectKind: string; radius: number }
+    ];
+    expect(arc.objectKind).toBe('arc');
+    expect(arc.radius).toBeCloseTo(0.125, 6);
+    // The same physical 5e-10 mm line imports whether it was drawn in mm or
+    // in metres: the unit declaration never changes eligibility.
+    const line = (length: string) => [
+      '0',
+      'LINE',
+      '10',
+      '0',
+      '20',
+      '0',
+      '11',
+      length,
+      '21',
+      '0'
+    ];
+    const inMm = importDxfSketch(dxf(line('5e-10'), 4), 'mm').objects[0];
+    const inM = importDxfSketch(dxf(line('5e-13'), 6), 'mm').objects[0];
+    expect(inMm).toMatchObject({ x2: 5e-10 });
+    expect((inM as unknown as { x2: number }).x2).toBeCloseTo(5e-10, 20);
+    // A bulge on a repeated vertex still refuses.
+    expect(() =>
+      importDxfSketch(
+        dxf([
+          '0',
+          'LWPOLYLINE',
+          '90',
+          '2',
+          '10',
+          '1',
+          '20',
+          '1',
+          '42',
+          '1',
+          '10',
+          '1',
+          '20',
+          '1'
+        ]),
+        'mm'
+      )
+    ).toThrow('segment too short to represent');
   });
 
   it('refuses a POLYLINE whose vertices are 3D or mesh records', () => {

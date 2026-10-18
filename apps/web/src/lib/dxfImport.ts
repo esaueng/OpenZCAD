@@ -345,9 +345,12 @@ function segment(
   const chord = Math.hypot(dx, dy);
   if (!Number.isFinite(chord)) throw tooLarge();
   // Only a repeated vertex with no bulge is harmlessly skipped; a bulge on
-  // it, or a chord too short to build, has a meaning the sketch would lose.
+  // it has a meaning the sketch would lose. No length threshold applies
+  // here, in the drawing's own units: whether geometry is too small is
+  // decided once it is in the document's units, so a unit declaration
+  // never changes what imports.
   if (chord === 0 && bulge === 0) return null;
-  if (chord < 1e-12) {
+  if (chord === 0) {
     throw new DxfImportError(
       'This DXF has a segment too short to represent exactly.'
     );
