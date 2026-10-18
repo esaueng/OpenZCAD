@@ -488,6 +488,43 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     ).toThrow('a LWPOLYLINE has an incomplete or unusable vertex list');
   });
 
+  it('keeps small geometry exact when fine units scale into a large document unit', () => {
+    const text = dxf(['0', 'CIRCLE', '10', '1', '20', '0', '40', '1'], 8);
+    expect(importDxfSketch(text, 'm').objects[0]).toMatchObject({
+      centerX: 2.54e-8,
+      radius: 2.54e-8
+    });
+  });
+
+  it('refuses a curve that converts to nothing rather than a zero radius', () => {
+    const text = dxf(['0', 'CIRCLE', '10', '0', '20', '0', '40', '1e-10']);
+    expect(() => importDxfSketch(text, 'mm')).toThrow(
+      'geometry too small to represent'
+    );
+  });
+
+  it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
+    const header = [
+      '0',
+      'SECTION',
+      '2',
+      'HEADER',
+      '9',
+      '$INSUNITS',
+      '71',
+      '1',
+      '0',
+      'ENDSEC'
+    ];
+    const text = [
+      ...header,
+      dxf(['0', 'CIRCLE', '10', '0', '20', '0', '40', '1'])
+    ].join('\n');
+    expect(() => importDxfSketch(text, 'mm')).toThrow(
+      'its $INSUNITS declaration has no usable value'
+    );
+  });
+
   it('refuses a blank number instead of reading it as 0', () => {
     expect(() =>
       importDxfSketch(

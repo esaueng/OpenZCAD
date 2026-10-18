@@ -156,8 +156,16 @@ function insUnits(pairs: Pair[]): number | null {
     (pair) => pair.code === 9 && pair.value === '$INSUNITS'
   );
   if (at < 0) return null;
+  // Present but damaged is not the same as absent: reading it as unitless
+  // could scale the whole drawing by the wrong factor.
   const value = header[at + 1];
-  return value && value.code === 70 ? dxfNumber(value.value) : null;
+  const code = value && value.code === 70 ? dxfNumber(value.value) : NaN;
+  if (!Number.isInteger(code)) {
+    throw new DxfImportError(
+      'This DXF is malformed: its $INSUNITS declaration has no usable value.'
+    );
+  }
+  return code;
 }
 
 /** A radius: finite and strictly positive, or the file is malformed. */
@@ -348,7 +356,12 @@ export function importDxfSketch(
   const scale = sourceMm / UNIT_TO_MM[documentUnits];
   // `|| 0` folds -0 to 0, so stored coordinates never carry a signed zero.
   const s = (value: number) => {
-    const scaled = Math.round(value * scale * 1e9) / 1e9 || 0;
+    // Trig noise (cos 90° = 6e-17) is cleared in the drawing's own units,
+    // where 1e-9 is below any drafting precision; the conversion then keeps
+    // twelve significant digits, so fine units into a large document unit
+    // never round small geometry to zero.
+    const drawn = Math.round(value * 1e9) / 1e9;
+    const scaled = Number((drawn * scale).toPrecision(12)) || 0;
     if (!Number.isFinite(scaled)) {
       throw new DxfImportError(
         'This DXF has coordinates too large to convert into the document units.'
@@ -470,30 +483,34 @@ export function importDxfSketch(
 }
 
 function scaleObject(s: (value: number) => number) {
+  const degenerate = () =>
+    new DxfImportError(
+      'This DXF has geometry too small to represent in the document units.'
+    );
   return (object: SketchObjectData): SketchObjectData => {
     switch (object.objectKind) {
-      case 'line':
-        return {
+      case 'line': {
+        const line = {
           ...object,
           x1: s(Number(object.x1)),
           y1: s(Number(object.y1)),
           x2: s(Number(object.x2)),
           y2: s(Number(object.y2))
         };
+        if (line.x1 === line.x2 && line.y1 === line.y2) throw degenerate();
+        return line;
+      }
       case 'circle':
-        return {
+      case 'arc': {
+        const curve = {
           ...object,
           centerX: s(Number(object.centerX)),
           centerY: s(Number(object.centerY)),
           radius: s(Number(object.radius))
         };
-      case 'arc':
-        return {
-          ...object,
-          centerX: s(Number(object.centerX)),
-          centerY: s(Number(object.centerY)),
-          radius: s(Number(object.radius))
-        };
+        if (!(curve.radius > 0)) throw degenerate();
+        return curve;
+      }
       default:
         return object;
     }
