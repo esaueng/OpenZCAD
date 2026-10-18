@@ -143,6 +143,17 @@ function insUnits(pairs: Pair[]): number | null {
   return value && value.code === 70 ? Number(value.value) : null;
 }
 
+/** A radius: finite and strictly positive, or the file is malformed. */
+function radius(entity: DxfEntity): number {
+  const value = number(entity, 40);
+  if (!(value > 0)) {
+    throw new DxfImportError(
+      `This DXF is malformed: a ${entity.type} has a radius of ${value}.`
+    );
+  }
+  return value;
+}
+
 function number(entity: DxfEntity, code: number, fallback?: number): number {
   const found = entity.groups.find((pair) => pair.code === code);
   const value = found ? Number(found.value) : fallback;
@@ -154,8 +165,25 @@ function number(entity: DxfEntity, code: number, fallback?: number): number {
   return value;
 }
 
-/** True unless the entity's extrusion direction tilts it off the XY plane. */
+/**
+ * Z coordinates and elevations: LINE's 30/31, CIRCLE/ARC/POLYLINE/VERTEX 30,
+ * LWPOLYLINE 38. Anything off z = 0 would be flattened onto Top, so it is
+ * refused instead.
+ */
+const Z_CODES = new Set([30, 31, 38]);
+
+function onZeroElevation(entity: DxfEntity): boolean {
+  return entity.groups.every(
+    (pair) => !Z_CODES.has(pair.code) || Math.abs(Number(pair.value)) < 1e-9
+  );
+}
+
+/**
+ * True when the entity lies in the XY plane itself: no tilting extrusion
+ * direction and no Z coordinate or elevation off zero.
+ */
 function inXyPlane(entity: DxfEntity): boolean {
+  if (!onZeroElevation(entity)) return false;
   const z = entity.groups.find((pair) => pair.code === 230);
   const x = entity.groups.find((pair) => pair.code === 210);
   const y = entity.groups.find((pair) => pair.code === 220);
@@ -323,7 +351,7 @@ export function importDxfSketch(
           objectKind: 'circle',
           centerX: number(entity, 10),
           centerY: number(entity, 20),
-          radius: number(entity, 40)
+          radius: radius(entity)
         });
         break;
       case 'ARC':
@@ -331,7 +359,7 @@ export function importDxfSketch(
           ccwArc(
             number(entity, 10),
             number(entity, 20),
-            number(entity, 40),
+            radius(entity),
             number(entity, 50),
             number(entity, 51)
           )
@@ -347,22 +375,32 @@ export function importDxfSketch(
         break;
       case 'POLYLINE': {
         const flags = number(entity, 70, 0);
-        // 3D polylines (8), meshes (16, 64) are not 2D sketch geometry.
-        if ((flags & (8 | 16 | 64)) !== 0) {
-          count(refused, 'POLYLINE (3D or mesh)');
-          while (entities[index + 1]?.type === 'VERTEX') index += 1;
-          break;
-        }
-        const vertices: Vertex[] = [];
+        const vertexEntities: DxfEntity[] = [];
         while (entities[index + 1]?.type === 'VERTEX') {
           index += 1;
-          const vertex = entities[index]!;
-          vertices.push({
-            x: number(vertex, 10),
-            y: number(vertex, 20),
-            bulge: number(vertex, 42, 0)
-          });
+          vertexEntities.push(entities[index]!);
         }
+        // 3D polylines (8) and meshes (16, 64) are not 2D sketch geometry.
+        if ((flags & (8 | 16 | 64)) !== 0) {
+          count(refused, 'POLYLINE (3D or mesh)');
+          break;
+        }
+        // Curve- (2) and spline-fitted (4) polylines describe a smooth
+        // curve their vertices only approximate; joining them with straight
+        // segments would change the outline.
+        if ((flags & (2 | 4)) !== 0) {
+          count(refused, 'POLYLINE (curve-fit or spline-fit)');
+          break;
+        }
+        if (!vertexEntities.every(onZeroElevation)) {
+          count(refused, 'POLYLINE off the XY plane');
+          break;
+        }
+        const vertices: Vertex[] = vertexEntities.map((vertex) => ({
+          x: number(vertex, 10),
+          y: number(vertex, 20),
+          bulge: number(vertex, 42, 0)
+        }));
         objects.push(...polylineObjects(vertices, (flags & 1) === 1));
         break;
       }

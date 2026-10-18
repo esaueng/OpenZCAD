@@ -314,6 +314,102 @@ describe('DXF sketch import (D04)', () => {
   });
 });
 
+describe('DXF geometry that is not on Top is refused, never flattened', () => {
+  it('refuses elevated and fitted entities and keeps what lies on z = 0', () => {
+    const at = (code: string, value: string) => [code, value];
+    const text = dxf(
+      [
+        // On the XY plane: kept.
+        ['0', 'LINE'],
+        at('10', '0'),
+        at('20', '0'),
+        at('30', '0'),
+        at('11', '1'),
+        at('21', '0'),
+        at('31', '0'),
+        // A LINE rising off the plane.
+        ['0', 'LINE'],
+        at('10', '0'),
+        at('20', '0'),
+        at('30', '0'),
+        at('11', '1'),
+        at('21', '0'),
+        at('31', '5'),
+        // A CIRCLE at elevation 2.
+        ['0', 'CIRCLE'],
+        at('10', '0'),
+        at('20', '0'),
+        at('30', '2'),
+        at('40', '1'),
+        // An LWPOLYLINE with elevation 3.
+        ['0', 'LWPOLYLINE'],
+        at('90', '2'),
+        at('70', '0'),
+        at('38', '3'),
+        at('10', '0'),
+        at('20', '0'),
+        at('10', '1'),
+        at('20', '1'),
+        // A curve-fitted classic POLYLINE and its vertices.
+        ['0', 'POLYLINE'],
+        at('66', '1'),
+        at('70', '2'),
+        ['0', 'VERTEX'],
+        at('10', '0'),
+        at('20', '0'),
+        ['0', 'VERTEX'],
+        at('10', '1'),
+        at('20', '1'),
+        ['0', 'SEQEND'],
+        // A flat-flagged POLYLINE whose vertex sits at z = 4.
+        ['0', 'POLYLINE'],
+        at('66', '1'),
+        at('70', '0'),
+        ['0', 'VERTEX'],
+        at('10', '0'),
+        at('20', '0'),
+        at('30', '0'),
+        ['0', 'VERTEX'],
+        at('10', '1'),
+        at('20', '1'),
+        at('30', '4'),
+        ['0', 'SEQEND']
+      ].flat()
+    );
+    const result = importDxfSketch(text, 'mm');
+    expect(result.objects).toEqual([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 1, y2: 0 }
+    ]);
+    expect(result.refused).toEqual({
+      'LINE off the XY plane': 1,
+      'CIRCLE off the XY plane': 1,
+      'LWPOLYLINE off the XY plane': 1,
+      'POLYLINE (curve-fit or spline-fit)': 1,
+      'POLYLINE off the XY plane': 1
+    });
+  });
+
+  it.each(['CIRCLE', 'ARC'])('refuses a %s with no positive radius', (type) => {
+    const text = dxf([
+      '0',
+      type,
+      '10',
+      '0',
+      '20',
+      '0',
+      '40',
+      '0',
+      '50',
+      '0',
+      '51',
+      '90'
+    ]);
+    expect(() => importDxfSketch(text, 'mm')).toThrow(
+      `This DXF is malformed: a ${type} has a radius of 0.`
+    );
+  });
+});
+
 describe('DXF sketch import plan', () => {
   const doc = (units: 'mm' | 'inch' = 'mm') =>
     createProjectDocument('DXF', toUserId('user_dxf'), units);
