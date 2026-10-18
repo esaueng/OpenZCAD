@@ -879,7 +879,7 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     );
   });
 
-  it('keeps a tiny nonzero bulge an arc rather than flattening it to a line', () => {
+  it('refuses a tiny nonzero bulge rather than flattening it or opening gaps', () => {
     const text = dxf([
       '0',
       'LWPOLYLINE',
@@ -896,11 +896,11 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
       '20',
       '0'
     ]);
-    const [arc] = importDxfSketch(text, 'mm').objects as unknown as [
-      { objectKind: string; radius: number }
-    ];
-    expect(arc.objectKind).toBe('arc');
-    expect(arc.radius).toBeCloseTo(5e17, -5);
+    // Its centre is so far away that stored angles could not rebuild the
+    // ends: refused rather than imported with gaps.
+    expect(() => importDxfSketch(text, 'mm')).toThrow(
+      'could not keep its endpoints'
+    );
   });
 
   it('refuses entities with thickness or any tilt as off the XY plane', () => {
@@ -1593,6 +1593,63 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     const far = dxf(['0', 'CIRCLE', '10', '1e60', '20', '1e60', '40', '1']);
     expect(() => importDxfSketch(far, 'mm')).toThrow(
       'geometry too small to represent'
+    );
+  });
+
+  it('refuses a section cut short, and data before the first entity', () => {
+    const cut = [
+      '0',
+      'SECTION',
+      '2',
+      'ENTITIES',
+      '0',
+      'CIRCLE',
+      '10',
+      '0',
+      '20',
+      '0',
+      '40',
+      '1',
+      '0',
+      'SECTION',
+      '2',
+      'OBJECTS',
+      '0',
+      'ENDSEC',
+      '0',
+      'EOF'
+    ].join('\n');
+    expect(() => importDxfSketch(cut, 'mm')).toThrow(
+      'its ENTITIES section never ends'
+    );
+    const orphan = [
+      '0',
+      'SECTION',
+      '2',
+      'ENTITIES',
+      '10',
+      '0',
+      '20',
+      '0',
+      '11',
+      '5',
+      '21',
+      '0',
+      '0',
+      'CIRCLE',
+      '10',
+      '0',
+      '20',
+      '0',
+      '40',
+      '1',
+      '0',
+      'ENDSEC',
+      '0',
+      'EOF'
+    ].join('\n');
+    expect(() => importDxfSketch(orphan, 'mm')).toThrow(
+      'data before the first entity'
     );
   });
 

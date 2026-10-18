@@ -175,10 +175,17 @@ function section(pairs: Pair[], name: string): Pair[] | null {
           `This DXF is malformed: it has two ${name} sections.`
         );
       }
+      // The section's own ENDSEC, not a later section's: meeting another
+      // SECTION or EOF first means this one was cut short.
       const end = pairs.findIndex(
-        (pair, at) => at > index && pair.code === 0 && pair.value === 'ENDSEC'
+        (pair, at) =>
+          at > index + 1 &&
+          pair.code === 0 &&
+          (pair.value === 'ENDSEC' ||
+            pair.value === 'SECTION' ||
+            pair.value === 'EOF')
       );
-      if (end < 0) {
+      if (end < 0 || pairs[end]!.value !== 'ENDSEC') {
         throw new DxfImportError(
           `This DXF is malformed: its ${name} section never ends.`
         );
@@ -200,7 +207,17 @@ function entitiesOf(pairs: Pair[]): DxfEntity[] {
         );
       }
       entities.push({ type: pair.value, groups: [] });
-    } else entities.at(-1)?.groups.push(pair);
+    } else {
+      // Every record opens with group 0; groups before the first one are
+      // what is left of an entity whose marker was lost.
+      const current = entities.at(-1);
+      if (!current) {
+        throw new DxfImportError(
+          'This DXF is malformed: its ENTITIES section has data before the first entity.'
+        );
+      }
+      current.groups.push(pair);
+    }
   }
   return entities;
 }
@@ -453,6 +470,34 @@ function segment(
   const centerY = midY + (dx / chord) * apothem;
   const angle = (point: { x: number; y: number }) =>
     (Math.atan2(point.y - centerY, point.x - centerX) * 180) / Math.PI;
+  // The sketch keeps an arc as centre, radius and angles, and rebuilds its
+  // ends from those. A very shallow bulge puts the centre so far away that
+  // the angles cannot hold the ends: refuse rather than open a gap where
+  // this segment met its neighbours.
+  const tolerance =
+    1e-9 *
+    Math.max(
+      1,
+      Math.abs(from.x),
+      Math.abs(from.y),
+      Math.abs(to.x),
+      Math.abs(to.y)
+    );
+  for (const point of [from, to]) {
+    const radians = (angle(point) * Math.PI) / 180;
+    const rebuilt = {
+      x: centerX + radius * Math.cos(radians),
+      y: centerY + radius * Math.sin(radians)
+    };
+    if (
+      !(Math.abs(rebuilt.x - point.x) <= tolerance) ||
+      !(Math.abs(rebuilt.y - point.y) <= tolerance)
+    ) {
+      throw new DxfImportError(
+        'This DXF has a polyline bulge too extreme to convert exactly: an arc could not keep its endpoints.'
+      );
+    }
+  }
   return bulge > 0
     ? ccwArc(centerX, centerY, radius, angle(from), angle(to), true)
     : ccwArc(centerX, centerY, radius, angle(to), angle(from), true);
