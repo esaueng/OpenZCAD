@@ -998,6 +998,28 @@
   box-shadow: var(--shadow-2);
 }
 
+/* Keep the lazy fallback in the same right-hand slot as the loaded rail.
+   Its six 30px controls, divider, gaps and padding occupy 209px. */
+.workspace.column-layout .view-tools-loading {
+  min-height: 209px;
+  justify-content: center;
+}
+
+/* Offline guidance is readable beside the compact rail, never squeezed into it. */
+.view-tools-loading > span:not(.workspace-loading-ring) {
+  position: absolute;
+  top: 0;
+  right: calc(100% + var(--island-gap));
+  width: min(220px, calc(100vw - var(--rail-w) - var(--island-gap) * 3));
+  box-sizing: border-box;
+  padding: var(--sp-3);
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+}
+
 .workspace.column-layout .view-mode-button,
 .workspace.column-layout .view-mode-button.wide {
   width: 30px;

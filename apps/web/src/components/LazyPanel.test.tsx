@@ -6,6 +6,37 @@ import { createLazyPanel } from './LazyPanel';
 describe('lazy panels', () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it('keeps View tools in its rail while loading and retains offline guidance', async () => {
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    let finish!: (module: { default: () => React.JSX.Element }) => void;
+    const Tools = createLazyPanel<object>(
+      'View tools',
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      'view-tools'
+    );
+    render(<Tools />);
+    const status = await screen.findByRole('status');
+    expect(status).toHaveClass('view-mode-bar', 'view-tools-loading');
+    expect(status).not.toHaveClass('error-boundary');
+    expect(status).toHaveTextContent('Loading view tools…');
+    online.mockReturnValue(false);
+    act(() => {
+      window.dispatchEvent(new Event('offline'));
+    });
+    expect(status).toHaveTextContent('View tools is not loaded yet.');
+    expect(status).toHaveTextContent(
+      'Connect to the internet to load this panel.'
+    );
+    await act(async () =>
+      finish({ default: () => <p>View controls ready</p> })
+    );
+    expect(screen.getByText('View controls ready')).toBeTruthy();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
   it('waits offline and reconnects without losing workspace state or starting duplicate downloads', async () => {
     const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
     const load = vi
