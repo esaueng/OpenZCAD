@@ -1239,7 +1239,8 @@ export function applyDirectEdit(
   target: ExactShape,
   operation: DirectEditOperation,
   scope: Record<string, number>,
-  producingFeatureId?: FeatureId
+  producingFeatureId?: FeatureId,
+  deferOutputLineage = false
 ): ExactShape {
   assertDirectEditOperation(operation);
   if (operation.kind === 'offset-face' && target.solids.length > 1) {
@@ -1443,7 +1444,9 @@ export function applyDirectEdit(
       getSolidFaces: (body: number) => kernel.getSolidFaces(body),
       getSurfaceType: (handle: number) => surfaceTypeOf(kernel, handle)
     };
-    const sourceCandidates = topologyCandidatesForSolid(kernel, solid);
+    const sourceCandidates = deferOutputLineage
+      ? []
+      : topologyCandidatesForSolid(kernel, solid);
     const sourceCensus = censusOfSolids(faceCensus, [solid]);
     const analytic = tryExactAnalyticCylinderCapOffset(
       kernel,
@@ -1470,6 +1473,9 @@ export function applyDirectEdit(
     if (facetFallback) {
       throw new Error(facetFallback);
     }
+    // The exact operation, recorded-face guards, validation and analytic
+    // carrier census above still run. Only naming the disposable output waits.
+    if (deferOutputLineage) return { solids: [output] };
     const lineage = moved.relation
       ? deriveRemusMoveFacesDirectEditLineage({
           source: target.lineage,
@@ -1575,9 +1581,7 @@ export function applyDirectEdit(
           .flatMap((relation) => relation.results)
           .filter((handle) => {
             const geometry = measureFaceGeometry(kernel, handle);
-            return (
-              geometry?.surfaceType === operation.surfaceClass
-            );
+            return geometry?.surfaceType === operation.surfaceClass;
           })
       );
       lineage = createRemusModifierEvolutionLineage({

@@ -31,11 +31,13 @@ function boxes(count = 1) {
 
 describe('validated geometry before analysis', () => {
   it.each([
-    ['e-analytic-fillet-plate.step', true],
-    ['e-nurbs-fillet-plate.step', false]
+    ['e-analytic-fillet-plate.step', true, false],
+    ['e-nurbs-fillet-plate.step', false, false],
+    ['e-analytic-fillet-plate.step', true, true],
+    ['e-nurbs-fillet-plate.step', false, true]
   ] as const)(
-    'previews %s without recognition and preserves the fresh full verdict',
-    async (filename, supported) => {
+    'previews %s (supported=%s, deferred topology=%s) and preserves the fresh full verdict',
+    async (filename, supported, deferTopology) => {
       const adapter = await createExactKernelAdapter();
       const fresh = await createExactKernelAdapter();
       const imported = importStepBody(
@@ -45,10 +47,7 @@ describe('validated geometry before analysis', () => {
           sourceName: filename,
           artifactId: 'artifact_preview_plate',
           stepText: readFileSync(
-            new URL(
-              `../../../test/parity/corpus/${filename}`,
-              import.meta.url
-            ),
+            new URL(`../../../test/parity/corpus/${filename}`, import.meta.url),
             'utf8'
           )
         }
@@ -87,7 +86,9 @@ describe('validated geometry before analysis', () => {
           'recognizeFeatures'
         );
         try {
-          const geometry = await adapter.previewGeometry(candidate);
+          const geometry = await adapter.previewGeometry(candidate, {
+            deferTopology
+          });
           expect(geometry.warnings).toEqual(
             supported
               ? []
@@ -98,6 +99,11 @@ describe('validated geometry before analysis', () => {
           expect(recognition).not.toHaveBeenCalled();
           const previewBody = geometry.bodyRepresentations[imported.bodyId]!;
           expect('volume' in previewBody).toBe(false);
+          if (deferTopology) {
+            expect(geometry.topology).toBe('pending');
+            expect(previewBody.topology?.faces.length).toBeGreaterThan(0);
+            expect(previewBody.topology?.edges).toEqual([]);
+          }
           const full = await adapter.syncDocument(candidate);
           if (supported) expect(recognition).toHaveBeenCalled();
           const independent = await fresh.syncDocument(candidate);

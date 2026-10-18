@@ -15,7 +15,10 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { growingHolderPreview } from './growingHolderPreview';
-import { parameterVisualPreview } from './parameterVisualPreview';
+import {
+  parameterVisualPreview,
+  prepareParameterEditSession
+} from './parameterVisualPreview';
 import { patternBody } from '@openzcad/document-core';
 import { ParameterPreviewController } from '../components/viewer/parameterPreviewController';
 
@@ -126,6 +129,38 @@ const changeWidth = (doc: ProjectDocument, width: number) =>
   setParameter(doc, { name: 'opening_width', expression: String(width) });
 
 describe('matrix parameter preview', () => {
+  it('prepares once, retains source mesh ownership, and refuses changed structure or STEP payloads', () => {
+    const { doc } = fixture();
+    const session = prepareParameterEditSession(doc)!;
+    for (const width of [47, 51, 44, 46]) {
+      const next = changeWidth(doc, width);
+      const preview = session.preview(next, true)!;
+      expect(preview).toEqual(parameterVisualPreview(doc, next, true));
+      expect(preview[0]!.parts[0]!.mesh).toBe(
+        doc.derived.bodyRepresentations[preview[0]!.parts[0]!.key as BodyId]!
+          .mesh
+      );
+    }
+    const next = changeWidth(doc, 50);
+    const imported = Object.values(next.nodes).find(
+      (node) =>
+        node.kind === 'feature' && node.data.featureKind === 'imported-step'
+    )!;
+    if (
+      imported.kind !== 'feature' ||
+      imported.data.featureKind !== 'imported-step'
+    )
+      throw new Error('missing import');
+    imported.data.stepText = 'different source';
+    expect(session.preview(next)).toBeNull();
+    expect(
+      session.preview({ ...changeWidth(doc, 50), units: 'inch' })
+    ).toBeNull();
+    expect(session.preview(changeWidth(doc, 1))).toBeNull();
+    const structural = changeWidth(doc, 50);
+    structural.nodes[structural.rootNodeId]!.name = 'Structural edit';
+    expect(session.preview(structural)).toBeNull();
+  });
   it.each(['x', 'y', 'z'] as const)(
     'matches the established preview along %s without copying buffers',
     (axis) => {

@@ -27,16 +27,21 @@ does not cap process RSS. See the [edit-pipeline qualification](plans/edit-pipel
   adapter truncates its table and handle ownership in lockstep. Handles can have
   gaps and need not match table positions. A change in a gap invalidates the next checkpoint.
 - When the suffix contains only audited builders that preserve their input
-  solids, unchanged primitives
+  solids, unchanged primitives and audited immutable construction branches
   can retain their current exact handles. The adapter discards later checkpoints
   without restoring topology, clones the prefix's JS state, and reconstructs the
   suffix from cached primitive results and changed builders. Each cache entry is
   guarded by the complete feature/order/suppression/resolved-parameter digest.
-  Dependent sketches, extrusions, revolutions, transforms, booleans, fillets,
-  chamfers, patterns and direct edits still replay against current operands;
+  Successful intersections and transforms may reuse their latest outputs only
+  when exact operand handles, lineage, origin flags and full digests match, with
+  no warning, repair or other build-state side effects. At most 64 feature
+  entries live in the same arena; every actual restore retires their tail. See
+  [interactive edit sessions](interactive-edit-sessions.md). Other dependent
+  builders still replay against current operands;
   their presence no longer retires unrelated primitives. Unaudited feature
   kinds in the suffix use ordinary prefix replay.
-  Telemetry reports `independent-reuse` and `reusedPrimitives` separately from
+  Telemetry reports `independent-reuse`, `reusedPrimitives` and
+  `reusedPreparedFeatures` separately from
   restored prefixes and executed builders; cached shapes remain within one
   kernel lifetime and are pruned after any actual restore.
 - The adapter counts features replayed after a restore across sync, export and

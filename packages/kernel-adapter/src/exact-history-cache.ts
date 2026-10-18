@@ -521,6 +521,8 @@ export interface RebuildCacheEvent {
   restored: number;
   /** Independent primitive features kept in the current kernel after the prefix. */
   reusedPrimitives?: number;
+  /** Audited immutable transform/carving branches reused in the same arena. */
+  reusedPreparedFeatures?: number;
   /** Bodies tessellated and measured by this sync. */
   remeasured: number;
   /** Bodies whose measurement was served from the per-body cache. */

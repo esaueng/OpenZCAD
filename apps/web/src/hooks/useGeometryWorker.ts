@@ -169,7 +169,7 @@ export interface GeometryWorkerApi {
   /** Exact display/validation only; cannot be used as an authoritative commit. */
   previewGeometry(
     document: ProjectDocument,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; deferTopology?: boolean }
   ): Promise<GeometryReadyState>;
   /**
    * `onState` receives this request's own lifecycle states (kernel load,
@@ -983,7 +983,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         worker.postMessage({
           type: 'preview-geometry',
           requestId,
-          document: documentForRebuild(document)
+          document: documentForRebuild(document),
+          ...(options?.deferTopology ? { deferTopology: true } : {})
         });
       });
     },

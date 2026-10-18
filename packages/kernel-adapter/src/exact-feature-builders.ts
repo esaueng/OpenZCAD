@@ -259,16 +259,26 @@ function buildDirectEditFeature(
   if (!target) {
     throw new Error('Direct-edit target is unavailable.');
   }
-  const repair = !data.operation.faceReference
-    ? faceReferenceRepairCandidate(kernel, target, data.operation.faceHash)
-    : null;
+  const deferOutputLineage =
+    ctx.deferredDirectEditFeatureId === feature.featureId &&
+    data.operation.kind === 'offset-face' &&
+    target.solids.length === 1;
+  const repair =
+    !deferOutputLineage && !data.operation.faceReference
+      ? faceReferenceRepairCandidate(kernel, target, data.operation.faceHash)
+      : null;
   const edited = applyDirectEdit(
     kernel,
     target,
     data.operation,
     scope,
-    feature.featureId
+    feature.featureId,
+    deferOutputLineage
   );
+  if (deferOutputLineage) {
+    result.shapes.set(data.targetBodyId, edited);
+    return;
+  }
   const targetBodyId = data.targetBodyId;
   const producer = listFeaturesInOrder(document).find(
     (candidate) => candidate.bodyId === targetBodyId

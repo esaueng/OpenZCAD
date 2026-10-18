@@ -25,7 +25,7 @@ import {
 } from './lib/parameterEdit';
 import type {
   ParameterPreviewBody,
-  parameterVisualPreview
+  prepareParameterEditSession
 } from './lib/parameterVisualPreview';
 import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
@@ -2822,7 +2822,7 @@ export function App() {
   const [parameterPreviewBase, setParameterPreviewBase] =
     useState<ProjectDocument | null>(null);
   const [makeParameterPreview, setMakeParameterPreview] = useState<
-    typeof parameterVisualPreview | null
+    typeof prepareParameterEditSession | null
   >(null);
   useEffect(() => {
     if (!parameterPreviewBase || makeParameterPreview) return;
@@ -2830,7 +2830,7 @@ export function App() {
     void import('./lib/parameterVisualPreview')
       .then((module) => {
         if (!disposed)
-          setMakeParameterPreview(() => module.parameterVisualPreview);
+          setMakeParameterPreview(() => module.prepareParameterEditSession);
       })
       .catch(() => {
         // Exact rebuilding remains available without a preview.
@@ -3149,7 +3149,8 @@ export function App() {
       },
       derive: async (candidate, signal) => {
         const derived = await geometry.previewGeometry(candidate.document, {
-          signal
+          signal,
+          deferTopology: true
         });
         const rejection = offsetPreviewRejection({
           ...candidate,
@@ -3223,7 +3224,8 @@ export function App() {
           throw new Error(candidate.preflightRejection);
         }
         const derived = await geometry.previewGeometry(candidate.document, {
-          signal
+          signal,
+          deferTopology: true
         });
         const live = managerRef.current;
         const documentMoved =
@@ -5481,6 +5483,10 @@ export function App() {
   // document swap, again when the worker result landed) for identical
   // geometry.
   const liveBodyRepresentations = doc?.derived.bodyRepresentations ?? null;
+  const parameterPreviewSession = useMemo(
+    () => makeParameterPreview?.(parameterPreviewBase) ?? null,
+    [makeParameterPreview, parameterPreviewBase]
+  );
   const parameterPreview = useMemo(
     () =>
       !previewDoc &&
@@ -5488,19 +5494,15 @@ export function App() {
       parameterCandidate !== null &&
       parameterCandidate.base.projectId === doc?.projectId &&
       parameterCandidate?.base.version === doc?.version
-        ? (makeParameterPreview?.(
-            parameterPreviewBase,
-            parameterCandidate.document
-          ) ?? null)
+        ? (parameterPreviewSession?.preview(parameterCandidate.document) ?? null)
         : !previewDoc &&
             !exactGeometryReady &&
             geometry.state.phase !== 'failed'
-          ? (makeParameterPreview?.(parameterPreviewBase, doc, true) ?? null)
+          ? (parameterPreviewSession?.preview(doc, true) ?? null)
           : null,
     [
-      makeParameterPreview,
+      parameterPreviewSession,
       parameterCandidate,
-      parameterPreviewBase,
       doc,
       previewDoc,
       exactGeometryReady,
@@ -20802,7 +20804,10 @@ export function App() {
             projection={projection}
             orientationRef={orientationRef}
             onSelectTopology={handleSelectTopologyFromViewer}
-            topologyPicksHeld={currentGeometrySnapshot !== null}
+            topologyPicksHeld={
+              currentGeometrySnapshot !== null ||
+              currentFaceGeometryPreview?.geometry.topology === 'pending'
+            }
             onSelectEdgeChain={handleSelectEdgeChainFromViewer}
             selectionFilter={selectionFilter}
             onBoxSelect={handleBoxSelectFromViewer}
