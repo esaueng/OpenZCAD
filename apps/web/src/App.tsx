@@ -767,10 +767,13 @@ const LazyViewerShell = lazyWithStaleChunkNotice(() =>
 );
 const ViewModeBar = createLazyPanel<
   ComponentProps<typeof ViewModeBarComponent>
->('View tools', () =>
-  import('./components/ViewModeBar').then((module) => ({
-    default: module.ViewModeBar
-  }))
+>(
+  'View tools',
+  () =>
+    import('./components/ViewModeBar').then((module) => ({
+      default: module.ViewModeBar
+    })),
+  'view-tools'
 );
 // The Move panel is needed only once a Move starts; lazy, its fields stay
 // off the entry chunk, which runs at its budget. Its own boundary keeps a
@@ -1038,8 +1041,9 @@ function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
   return (
     <Suspense
       fallback={
-        <div className="viewer-shell" role="status" aria-live="polite">
-          Loading 3D viewport…
+        <div className="viewer-shell viewport-loading" role="status">
+          <span className="workspace-loading-ring spin" aria-hidden="true" />
+          <span>Loading 3D viewport…</span>
         </div>
       }
     >
