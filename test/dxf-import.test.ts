@@ -1563,6 +1563,39 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(result.objects[0]).toMatchObject({ centerX: 25.4, radius: 12.7 });
   });
 
+  it('refuses a polyline that draws nothing', () => {
+    const lw = (groups: string[]) =>
+      dxf([
+        '0',
+        'LWPOLYLINE',
+        ...groups,
+        '0',
+        'CIRCLE',
+        '10',
+        '0',
+        '20',
+        '0',
+        '40',
+        '1'
+      ]);
+    for (const groups of [
+      ['90', '0'],
+      ['90', '1', '10', '1', '20', '1'],
+      ['90', '2', '10', '1', '20', '1', '10', '1', '20', '1']
+    ]) {
+      expect(() => importDxfSketch(lw(groups), 'mm')).toThrow(
+        'a polyline with nothing to draw'
+      );
+    }
+  });
+
+  it("refuses a radius that vanishes in its centre's precision", () => {
+    const far = dxf(['0', 'CIRCLE', '10', '1e60', '20', '1e60', '40', '1']);
+    expect(() => importDxfSketch(far, 'mm')).toThrow(
+      'geometry too small to represent'
+    );
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',

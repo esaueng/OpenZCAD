@@ -471,11 +471,22 @@ function polylineObjects(
   add: (object: SketchObjectData) => void
 ): void {
   const count = closed ? vertices.length : vertices.length - 1;
+  let emitted = 0;
   for (let index = 0; index < count; index += 1) {
     const from = vertices[index]!;
     const to = vertices[(index + 1) % vertices.length]!;
     const piece = segment(from, to, from.bulge);
-    if (piece) add(piece);
+    if (piece) {
+      add(piece);
+      emitted += 1;
+    }
+  }
+  // Empty, a single vertex, or every vertex in one place: the polyline
+  // draws nothing, which is not something to leave out without a word.
+  if (emitted === 0) {
+    throw new DxfImportError(
+      'This DXF has a polyline with nothing to draw: no two distinct vertices.'
+    );
   }
 }
 
@@ -776,6 +787,12 @@ function scaleObject(s: (value: number) => number) {
           radius: s(Number(object.radius))
         };
         if (!(curve.radius > 0)) throw degenerate();
+        // Far from the origin a small radius can vanish in the centre's
+        // precision (1e100 + 1 === 1e100): the curve would have no extent.
+        const { centerX: cx, centerY: cy, radius: r } = curve;
+        if (cx + r === cx || cx - r === cx || cy + r === cy || cy - r === cy) {
+          throw degenerate();
+        }
         return curve;
       }
       default:
