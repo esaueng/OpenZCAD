@@ -6,19 +6,31 @@ import {
 } from './lazyChunkPrefetch';
 
 describe('lazy chunk prefetch list', () => {
-  it('lists on-demand chunks and their CSS, never entries, assets or workers', () => {
+  it('lists what dynamic imports reach, with CSS and static deps, never entries or URL workers', () => {
     const files = lazyChunkFiles({
       'assets/index-a.js': {
         type: 'chunk',
         fileName: 'assets/index-a.js',
-        isEntry: true
+        isEntry: true,
+        imports: ['assets/react-r.js'],
+        dynamicImports: [
+          'assets/Export-b.js',
+          'assets/meshImportWorkerClient-m.js'
+        ]
       },
+      'assets/react-r.js': { type: 'chunk', fileName: 'assets/react-r.js' },
       'assets/Export-b.js': {
         type: 'chunk',
         fileName: 'assets/Export-b.js',
+        imports: ['assets/shared-s.js', 'assets/index-a.js'],
         viteMetadata: { importedCss: new Set(['assets/Export-b.css']) }
       },
-      'assets/three-c.js': { type: 'chunk', fileName: 'assets/three-c.js' },
+      'assets/shared-s.js': { type: 'chunk', fileName: 'assets/shared-s.js' },
+      'assets/meshImportWorkerClient-m.js': {
+        type: 'chunk',
+        fileName: 'assets/meshImportWorkerClient-m.js'
+      },
+      // Started by URL, never imported: not something the page can preload.
       'assets/pdf.worker.min-d.js': {
         type: 'chunk',
         fileName: 'assets/pdf.worker.min-d.js'
@@ -26,16 +38,13 @@ describe('lazy chunk prefetch list', () => {
       'assets/geometryWorker-e.js': {
         type: 'asset',
         fileName: 'assets/geometryWorker-e.js'
-      },
-      'assets/remus_wasm_bg-f.wasm': {
-        type: 'asset',
-        fileName: 'assets/remus_wasm_bg-f.wasm'
       }
     });
     expect(files).toEqual([
       'assets/Export-b.css',
       'assets/Export-b.js',
-      'assets/three-c.js'
+      'assets/meshImportWorkerClient-m.js',
+      'assets/shared-s.js'
     ]);
   });
 

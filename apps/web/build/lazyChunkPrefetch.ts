@@ -7,25 +7,41 @@ interface BundleEntry {
   type: 'chunk' | 'asset';
   fileName: string;
   isEntry?: boolean;
+  imports?: string[];
+  dynamicImports?: string[];
   viteMetadata?: { importedCss?: Set<string> };
 }
 
 /**
- * Every main-thread chunk the app loads on demand, with its CSS. Entry
- * chunks already load with the page. Worker scripts are left out: most are
- * separate builds that reach this bundle only as assets, and the one that is
- * a chunk (the 1.2 MB pdf.js worker, for PDF attachments only) runs in a
- * worker, where a module preload on the page does nothing for it.
+ * Every main-thread chunk the app loads on demand, with its CSS: the targets
+ * of a dynamic `import()` anywhere in the bundle, plus the chunks those import
+ * statically. Read from the import graph, not file names, so a worker started
+ * by URL (the 1.2 MB pdf.js worker; worker bundles are assets anyway) is left
+ * out while main-thread modules such as `meshImportWorkerClient` stay in.
+ * Entry chunks already load with the page.
  */
-const WORKER_SCRIPT = /worker/i;
-
 export function lazyChunkFiles(bundle: Record<string, BundleEntry>): string[] {
+  const chunks = new Map(
+    Object.values(bundle)
+      .filter((entry) => entry.type === 'chunk')
+      .map((entry) => [entry.fileName, entry])
+  );
+  const pending = [...chunks.values()].flatMap(
+    (entry) => entry.dynamicImports ?? []
+  );
+  const reached = new Set<string>();
+  while (pending.length > 0) {
+    const fileName = pending.pop()!;
+    const entry = chunks.get(fileName);
+    if (!entry || entry.isEntry || reached.has(fileName)) continue;
+    reached.add(fileName);
+    pending.push(...(entry.imports ?? []));
+  }
   const files = new Set<string>();
-  for (const entry of Object.values(bundle)) {
-    if (entry.type !== 'chunk' || entry.isEntry) continue;
-    if (WORKER_SCRIPT.test(entry.fileName)) continue;
-    files.add(entry.fileName);
-    for (const css of entry.viteMetadata?.importedCss ?? []) files.add(css);
+  for (const fileName of reached) {
+    files.add(fileName);
+    for (const css of chunks.get(fileName)!.viteMetadata?.importedCss ?? [])
+      files.add(css);
   }
   return [...files].sort();
 }
