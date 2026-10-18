@@ -808,6 +808,116 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     );
   });
 
+  it('refuses a tiny nonzero bulge rather than flattening it to a line', () => {
+    const text = dxf([
+      '0',
+      'LWPOLYLINE',
+      '90',
+      '2',
+      '10',
+      '0',
+      '20',
+      '0',
+      '42',
+      '5e-13',
+      '10',
+      '1000000',
+      '20',
+      '0'
+    ]);
+    expect(() => importDxfSketch(text, 'mm')).toThrow('bulge too extreme');
+  });
+
+  it('refuses entities with thickness or any tilt as off the XY plane', () => {
+    const result = importDxfSketch(
+      dxf([
+        '0',
+        'CIRCLE',
+        '10',
+        '0',
+        '20',
+        '0',
+        '40',
+        '1',
+        '39',
+        '5',
+        '0',
+        'CIRCLE',
+        '10',
+        '1e12',
+        '20',
+        '0',
+        '40',
+        '1',
+        '210',
+        '5e-10',
+        '220',
+        '0',
+        '230',
+        '1',
+        '0',
+        'CIRCLE',
+        '10',
+        '0',
+        '20',
+        '0',
+        '40',
+        '2',
+        '39',
+        '0',
+        '210',
+        '0',
+        '220',
+        '0',
+        '230',
+        '1'
+      ]),
+      'mm'
+    );
+    expect(result.objects).toHaveLength(1);
+    expect(result.refused).toEqual({ 'CIRCLE off the XY plane': 2 });
+  });
+
+  it('refuses a zero-sweep ARC rather than turning it into a full turn', () => {
+    const text = dxf([
+      '0',
+      'ARC',
+      '10',
+      '0',
+      '20',
+      '0',
+      '40',
+      '1',
+      '50',
+      '45',
+      '51',
+      '405'
+    ]);
+    expect(() => importDxfSketch(text, 'mm')).toThrow(
+      'its sweep rounds to zero'
+    );
+  });
+
+  it('keeps large coordinates exact through unit conversion', () => {
+    const big = dxf([
+      '0',
+      'CIRCLE',
+      '10',
+      '1000000000001234',
+      '20',
+      '0',
+      '40',
+      '1'
+    ]);
+    expect(importDxfSketch(big, 'mm').objects[0]).toMatchObject({
+      centerX: 1000000000001234
+    });
+    const metres = importDxfSketch(big, 'm', 'mm').objects[0] as {
+      centerX: number;
+    };
+    expect(metres.centerX).toBeCloseTo(1000000000001.234, 3);
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',

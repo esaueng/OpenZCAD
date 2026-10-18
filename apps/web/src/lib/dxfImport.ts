@@ -204,18 +204,23 @@ function onZeroElevation(entity: DxfEntity): boolean {
 }
 
 /**
- * True when the entity lies in the XY plane itself: no tilting extrusion
- * direction and no Z coordinate or elevation off zero.
+ * True when the entity lies in the XY plane itself: no Z coordinate or
+ * elevation off zero, no thickness (39) extending it out of the plane, and
+ * an extrusion direction that is exactly +Z. No tolerance on the tilt: a
+ * transverse component is multiplied by the coordinates, so even 1e-10 puts
+ * a far point visibly off Top.
  */
 function inXyPlane(entity: DxfEntity): boolean {
   if (!onZeroElevation(entity)) return false;
+  const thickness = entity.groups.find((pair) => pair.code === 39);
+  if (thickness && dxfNumber(thickness.value) !== 0) return false;
   const z = entity.groups.find((pair) => pair.code === 230);
   const x = entity.groups.find((pair) => pair.code === 210);
   const y = entity.groups.find((pair) => pair.code === 220);
   if (!z && !x && !y) return true;
   return (
-    Math.abs(dxfNumber(x?.value ?? '0')) < 1e-9 &&
-    Math.abs(dxfNumber(y?.value ?? '0')) < 1e-9 &&
+    dxfNumber(x?.value ?? '0') === 0 &&
+    dxfNumber(y?.value ?? '0') === 0 &&
     dxfNumber(z?.value ?? '1') > 0
   );
 }
@@ -233,11 +238,18 @@ function ccwArc(
   endDeg: number,
   distinctEnds = false
 ): SketchObjectData {
-  let start = ((startDeg % 360) + 360) % 360;
-  let end = ((endDeg % 360) + 360) % 360;
-  if (end <= start) end += 360;
-  start = Math.round(start * 1e9) / 1e9;
-  end = Math.round(end * 1e9) / 1e9;
+  const start = Math.round((((startDeg % 360) + 360) % 360) * 1e9) / 1e9;
+  let end = Math.round((((endDeg % 360) + 360) % 360) * 1e9) / 1e9;
+  // Coincident ends are a zero sweep, never a whole turn: DXF draws a full
+  // circle as a CIRCLE, and an ARC from 45° to 45° has no extent.
+  if (end === start || end === start + 360 || end + 360 === start) {
+    throw new DxfImportError(
+      distinctEnds
+        ? 'This DXF has a polyline bulge too extreme to convert exactly.'
+        : 'This DXF has an arc too short to represent: its sweep rounds to zero.'
+    );
+  }
+  if (end < start) end += 360;
   if (!(end > start)) {
     throw new DxfImportError(
       'This DXF has an arc too short to represent: its sweep rounds to zero.'
@@ -268,7 +280,10 @@ function segment(
   const dy = to.y - from.y;
   const chord = Math.hypot(dx, dy);
   if (chord < 1e-12) return null;
-  if (Math.abs(bulge) < 1e-12) {
+  // Only an exact zero is straight: a tiny bulge across a long chord still
+  // bows by a real distance, and one whose sweep is too small to store
+  // refuses in ccwArc rather than flattening.
+  if (bulge === 0) {
     return { objectKind: 'line', x1: from.x, y1: from.y, x2: to.x, y2: to.y };
   }
   // bulge = tan(θ/4), positive counter-clockwise from `from` to `to`. The
@@ -383,15 +398,18 @@ export function importDxfSketch(
     );
   }
   const sourceMm = known ? known.mm : UNIT_TO_MM[unitless];
-  const scale = sourceMm / UNIT_TO_MM[documentUnits];
+  const documentMm = UNIT_TO_MM[documentUnits];
   // `|| 0` folds -0 to 0, so stored coordinates never carry a signed zero.
   const s = (value: number) => {
     // Trig noise (cos 90° = 6e-17) is cleared in the drawing's own units,
-    // where 1e-9 is below any drafting precision; the conversion then keeps
-    // twelve significant digits, so fine units into a large document unit
-    // never round small geometry to zero.
-    const drawn = Math.round(value * 1e9) / 1e9;
-    const scaled = Number((drawn * scale).toPrecision(12)) || 0;
+    // where 1e-9 is below any drafting precision; past 1e6 there is no
+    // fraction that fine left in a double to clean. The conversion itself is
+    // kept as the full double: rounding to fixed digits would either drop
+    // small geometry or move large coordinates.
+    const drawn = Math.abs(value) < 1e6 ? Math.round(value * 1e9) / 1e9 : value;
+    // Multiply by the source unit and divide by the document one, rather
+    // than by their ratio: 25.4 mm then lands on exactly 1 inch.
+    const scaled = (drawn * sourceMm) / documentMm || 0;
     if (!Number.isFinite(scaled)) {
       throw new DxfImportError(
         'This DXF has coordinates too large to convert into the document units.'
