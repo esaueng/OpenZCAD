@@ -482,15 +482,11 @@ export function importDxfSketch(
   const documentMm = UNIT_TO_MM[documentUnits];
   // `|| 0` folds -0 to 0, so stored coordinates never carry a signed zero.
   const s = (value: number) => {
-    // Trig noise (cos 90° = 6e-17) is cleared in the drawing's own units,
-    // where 1e-9 is below any drafting precision; past 1e6 there is no
-    // fraction that fine left in a double to clean. The conversion itself is
-    // kept as the full double: rounding to fixed digits would either drop
-    // small geometry or move large coordinates.
-    const drawn = Math.abs(value) < 1e6 ? Math.round(value * 1e9) / 1e9 : value;
-    // Multiply by the source unit and divide by the document one, rather
-    // than by their ratio: 25.4 mm then lands on exactly 1 inch.
-    const scaled = (drawn * sourceMm) / documentMm || 0;
+    // No rounding of any kind: every value is converted the same way, so
+    // an arc endpoint that met a line in the file still meets it. Multiply
+    // by the source unit and divide by the document one, rather than by
+    // their ratio, so 25.4 mm lands on exactly 1 inch.
+    const scaled = (value * sourceMm) / documentMm || 0;
     if (!(Math.abs(scaled) <= MAX_COORDINATE)) throw tooLarge();
     return scaled;
   };

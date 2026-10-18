@@ -669,10 +669,60 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
   });
 
   it('refuses a curve that converts to nothing rather than a zero radius', () => {
-    const text = dxf(['0', 'CIRCLE', '10', '0', '20', '0', '40', '1e-10']);
-    expect(() => importDxfSketch(text, 'mm')).toThrow(
+    // A small radius is kept exactly; only one that underflows to zero in
+    // the document units refuses.
+    const small = dxf(['0', 'CIRCLE', '10', '0', '20', '0', '40', '1e-10']);
+    expect(importDxfSketch(small, 'mm').objects[0]).toMatchObject({
+      radius: 1e-10
+    });
+    const underflow = dxf(
+      ['0', 'CIRCLE', '10', '0', '20', '0', '40', '1e-320'],
+      8
+    );
+    expect(() => importDxfSketch(underflow, 'm')).toThrow(
       'geometry too small to represent'
     );
+  });
+
+  it('converts an arc and the line it meets the same way, leaving no gap', () => {
+    // A quarter arc of radius 0.1234567 m ending on (0, 0.1234567), and a
+    // line from there, in a metre drawing imported into millimetres.
+    const r = '0.1234567';
+    const { objects } = importDxfSketch(
+      dxf(
+        [
+          '0',
+          'ARC',
+          '10',
+          '0',
+          '20',
+          '0',
+          '40',
+          r,
+          '50',
+          '0',
+          '51',
+          '90',
+          '0',
+          'LINE',
+          '10',
+          '0',
+          '20',
+          r,
+          '11',
+          '-1',
+          '21',
+          r
+        ],
+        6
+      ),
+      'mm'
+    );
+    const [arc, line] = objects as unknown as [
+      { centerY: number; radius: number },
+      { y1: number }
+    ];
+    expect(arc.centerY + arc.radius).toBe(line.y1);
   });
 
   it('keeps a tiny ARC sweep and a large-radius endpoint at full precision', () => {
