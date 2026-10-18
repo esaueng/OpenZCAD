@@ -5510,8 +5510,9 @@ export function typedParameterMisuse(
     return null;
   };
   const misuse: TypedParameterMisuse[] = [];
+  // Parameters too: `length = later` typed a length is a misuse once `later`
+  // is an angle, though the scope reports it only as a failed parameter.
   for (const node of Object.values(document.nodes)) {
-    if (node.kind === 'parameter') continue;
     let paths: WeakMap<object, string> | null = null;
     rewriteNodeExpressions(node, (expression, dimension, site) => {
       if (!expressionIdentifiers(expression).some((name) => typed.has(name))) {

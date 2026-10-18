@@ -172,6 +172,32 @@ describe('typed parameters through the exact build (F05)', () => {
   });
 });
 
+describe('typed parameters at transaction end', () => {
+  it('refuses a transaction whose end state mistypes a parameter', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Typed end state', toUserId('user_f05_end'))
+    );
+    const before = manager.document;
+    // `length` reads `later` before it exists; the second command makes it
+    // an angle, so the length parameter ends up holding an angle.
+    expect(() =>
+      manager.runTransaction('Add both', [
+        commandFactories.setParameter({
+          name: 'length',
+          expression: 'later',
+          quantity: 'length'
+        }),
+        commandFactories.setParameter({
+          name: 'later',
+          expression: '30',
+          quantity: 'angle'
+        })
+      ])
+    ).toThrow(/Parameter "length" uses "later"/);
+    expect(manager.document).toBe(before);
+  });
+});
+
 describe('Tweak undo and parameter types', () => {
   it('keeps a retype out of Tweak undo while a value edit stays in it', () => {
     const manager = new CommandManager(

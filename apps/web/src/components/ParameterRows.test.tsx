@@ -288,6 +288,38 @@ describe('ParameterRow type picker (F05)', () => {
     expect(screen.queryByText('Late refusal')).toBeNull();
   });
 
+  it('carries an expression draft into a retype instead of dropping it', async () => {
+    let answerExpression: (value: string | null) => void = () => {};
+    const onSet = vi.fn(
+      () =>
+        new Promise<string | null>((resolve) => (answerExpression = resolve))
+    );
+    const onSetQuantity = vi.fn().mockResolvedValue(null);
+    render(
+      <ParameterRow
+        parameter={parameter('80')}
+        value={80}
+        onSet={onSet}
+        onSetQuantity={onSetQuantity}
+      />
+    );
+    const field = screen.getByDisplayValue('80');
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '90' } });
+    // Choosing a type blurs the field first: its commit starts...
+    fireEvent.blur(field);
+    expect(onSet).toHaveBeenCalledWith('width', '90');
+    // ...and the retype carries the draft rather than the stored 80.
+    fireEvent.change(screen.getByLabelText('Type of width'), {
+      target: { value: 'length' }
+    });
+    expect(onSetQuantity).toHaveBeenLastCalledWith('width', 'length', '90');
+    // The superseded expression commit's answer is dropped.
+    answerExpression('Superseded by a newer edit.');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText('Superseded by a newer edit.')).toBeNull();
+  });
+
   it('renders a stored type it does not know without crashing', () => {
     render(
       <ParameterRow

@@ -20206,10 +20206,15 @@ export function App() {
       onSetParameter={(name, expression) =>
         handleSetParameter(name, expression)
       }
-      onSetParameterQuantity={(name, quantity) => {
+      onSetParameterQuantity={(name, quantity, expression) => {
         const current = parameters.find((entry) => entry.name === name);
         return current
-          ? handleSetParameter(name, current.expression, false, quantity)
+          ? handleSetParameter(
+              name,
+              expression ?? current.expression,
+              false,
+              quantity
+            )
           : Promise.resolve(`Parameter ${name} does not exist.`);
       }}
       parameterQuantitySuggestions={parameterQuantitySuggestions}

@@ -64,7 +64,12 @@ interface ParameterRowProps extends ToggleBindingProps {
    */
   onSetQuantity?: (
     name: string,
-    quantity: ParameterKind | null
+    quantity: ParameterKind | null,
+    /**
+     * The row's expression draft when one is unsaved or still committing:
+     * the retype carries it, rather than superseding it with the stored one.
+     */
+    expression?: string
   ) => void | Promise<string | null>;
   /** A unitless parameter's likely quantity, offered but never applied. */
   suggestedQuantity?: ParameterKind | null;
@@ -129,6 +134,8 @@ export function ParameterRow({
   const latestParameter = useRef(parameter);
   latestParameter.current = parameter;
   const submission = useRef(0);
+  /** The expression a commit is still applying, for a retype to carry. */
+  const submittingExpression = useRef<string | null>(null);
   /** F05: the latest type choice; earlier answers are superseded. */
   const quantitySubmission = useRef(0);
   const [error, setError] = useState<{
@@ -221,6 +228,7 @@ export function ParameterRow({
     }
     changedByUser.current = false;
     const token = ++submission.current;
+    submittingExpression.current = trimmed;
     setError(null);
     setPending(true);
     try {
@@ -238,7 +246,10 @@ export function ParameterRow({
       });
       setExpression(latestParameter.current.expression);
     } finally {
-      if (token === submission.current) setPending(false);
+      if (token === submission.current) {
+        setPending(false);
+        submittingExpression.current = null;
+      }
     }
   }
 
@@ -389,11 +400,29 @@ export function ParameterRow({
                   // Each choice supersedes the last: its refusal clears now,
                   // and a slower answer to an earlier choice is ignored.
                   const token = ++quantitySubmission.current;
+                  // Choosing a type blurs the expression first, starting its
+                  // commit; the retype would supersede it with the stored
+                  // expression. It carries the draft instead, and the
+                  // expression commit's own answer is dropped.
+                  const draft =
+                    submittingExpression.current ??
+                    (changedByUser.current &&
+                    expression.trim() &&
+                    expression.trim() !== parameter.expression
+                      ? expression.trim()
+                      : undefined);
+                  if (draft !== undefined) {
+                    ++submission.current;
+                    submittingExpression.current = null;
+                    changedByUser.current = false;
+                    setPending(false);
+                  }
                   setError(null);
                   void (async () => {
                     const refusal = await onSetQuantity(
                       parameter.name,
-                      next === 'unitless' ? null : next
+                      next === 'unitless' ? null : next,
+                      ...(draft !== undefined ? [draft] : [])
                     );
                     if (token !== quantitySubmission.current) return;
                     setError(
