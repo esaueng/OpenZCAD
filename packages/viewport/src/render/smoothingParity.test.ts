@@ -291,6 +291,22 @@ function groupsAsFaces(geometry: THREE.BufferGeometry): BodyTopology {
   };
 }
 
+/** Exact equality without building a diff of large buffers. */
+function expectSameValues(
+  actual: ArrayLike<number>,
+  expected: ArrayLike<number>
+) {
+  expect(actual.length).toBe(expected.length);
+  for (let i = 0; i < actual.length; i += 1) {
+    if (!Object.is(actual[i], expected[i])) {
+      expect({ index: i, value: actual[i] }).toEqual({
+        index: i,
+        value: expected[i]
+      });
+    }
+  }
+}
+
 function expectIdentical(mesh: MeshGeometry, topology?: BodyTopology) {
   const actual = (createObjectForBody(body(mesh, topology)) as THREE.Mesh)
     .geometry;
@@ -298,12 +314,11 @@ function expectIdentical(mesh: MeshGeometry, topology?: BodyTopology) {
   expect(actual.getIndex()!.array.constructor).toBe(
     expected.getIndex()!.array.constructor
   );
-  expect(Array.from(actual.getIndex()!.array)).toEqual(
-    Array.from(expected.getIndex()!.array)
-  );
+  expectSameValues(actual.getIndex()!.array, expected.getIndex()!.array);
   for (const name of ['position', 'normal']) {
-    expect(Array.from(actual.getAttribute(name).array)).toEqual(
-      Array.from(expected.getAttribute(name).array)
+    expectSameValues(
+      actual.getAttribute(name).array,
+      expected.getAttribute(name).array
     );
   }
 }
@@ -357,13 +372,18 @@ describe('typed-array smoothing parity', () => {
     });
   });
 
-  it('switches to 32-bit indices where the reference does', () => {
-    const shape = new THREE.PlaneGeometry(10, 10, 300, 300);
-    const mesh = fromThree(shape);
-    expect(mesh.vertices.length / 3).toBeGreaterThan(65536);
-    expectIdentical(mesh);
-    shape.dispose();
-  });
+  // The reference implementation needs a few seconds for 90k vertices.
+  it(
+    'switches to 32-bit indices where the reference does',
+    { timeout: 60_000 },
+    () => {
+      const shape = new THREE.PlaneGeometry(10, 10, 300, 300);
+      const mesh = fromThree(shape);
+      expect(mesh.vertices.length / 3).toBeGreaterThan(65536);
+      expectIdentical(mesh);
+      shape.dispose();
+    }
+  );
 
   it('outlines a deferred-topology body along its face boundaries', () => {
     const shape = new THREE.BoxGeometry(2, 2, 2, 3, 3, 3);
