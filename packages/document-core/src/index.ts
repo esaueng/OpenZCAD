@@ -63,7 +63,9 @@ import {
   type FaceTopologyReferenceV5,
   type EntityId,
   type FeatureData,
+  type ExtrudeEndCondition,
   type ExtrudeOperation,
+  type ThroughAllSide,
   type FeatureId,
   type FeatureKind,
   type FeatureNode,
@@ -314,6 +316,9 @@ export interface ExtrudeInput {
   profile?: SketchProfileReference;
   /** Extrude one or more explicitly selected bounded cells. */
   profiles?: SketchProfileReference[];
+  /** F01: absent is blind; see the stored feature's `endCondition`. */
+  endCondition?: ExtrudeEndCondition;
+  throughAllSide?: ThroughAllSide;
   ids?: BodyFeatureIds;
 }
 
@@ -1855,6 +1860,63 @@ export function setSketchDimensionLabelPosition(
   return next;
 }
 
+/**
+ * F01 through-all, first slice: a cut through exactly one explicit target,
+ * with an explicit side. Everything else fails closed rather than guessing a
+ * target, an operation, or which side was meant.
+ */
+export function validateExtrudeExtent(data: {
+  endCondition?: unknown;
+  throughAllSide?: unknown;
+  operation?: unknown;
+  targetBodyId?: unknown;
+  symmetric?: unknown;
+  backDistance?: unknown;
+}): void {
+  // Only an absent field is blind: a stored `null` is malformed, not legacy.
+  const condition =
+    data.endCondition === undefined ? 'blind' : data.endCondition;
+  if (condition === 'blind') {
+    if (data.throughAllSide !== undefined) {
+      throw new Error('A blind extrude has no through-all side.');
+    }
+    return;
+  }
+  if (condition !== 'through-all') {
+    throw new Error(
+      `Unknown extrude end condition ${JSON.stringify(condition)}.`
+    );
+  }
+  if (data.operation !== 'cut') {
+    throw new Error('Through all is available for a cut extrusion only.');
+  }
+  if (typeof data.targetBodyId !== 'string' || !data.targetBodyId) {
+    throw new Error('A through-all cut needs one explicit target body.');
+  }
+  if (
+    typeof data.throughAllSide !== 'string' ||
+    !['forward', 'backward', 'both'].includes(data.throughAllSide)
+  ) {
+    throw new Error(
+      'A through-all cut needs a side: forward, backward or both.'
+    );
+  }
+  if (data.symmetric === true) {
+    throw new Error(
+      'A through-all cut is not symmetric; choose the side "both" instead.'
+    );
+  }
+  if (
+    data.backDistance !== undefined &&
+    data.backDistance !== 0 &&
+    data.backDistance !== '0'
+  ) {
+    throw new Error(
+      'A through-all cut has no back distance; choose the side "both" instead.'
+    );
+  }
+}
+
 export function extrudeSketch(
   document: ProjectDocument,
   input: ExtrudeInput
@@ -1864,6 +1926,7 @@ export function extrudeSketch(
       'An extrude cannot be both symmetric and two-sided; set symmetric or backDistance, not both.'
     );
   }
+  validateExtrudeExtent(input);
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();
@@ -1892,6 +1955,12 @@ export function extrudeSketch(
       ...(input.profile ? { profile: input.profile } : {}),
       ...(input.profiles && input.profiles.length > 0
         ? { profiles: input.profiles }
+        : {}),
+      ...(input.endCondition === 'through-all'
+        ? {
+            endCondition: 'through-all' as const,
+            throughAllSide: input.throughAllSide!
+          }
         : {})
     }
   };
@@ -3247,7 +3316,9 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'operation',
     'targetBodyId',
     'profile',
-    'profiles'
+    'profiles',
+    'endCondition',
+    'throughAllSide'
   ],
   revolve: ['sketchId', 'axis', 'angleDeg'],
   loft: ['sections', 'mode', 'endPoint'],
@@ -3355,6 +3426,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
 const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   Record<FeatureKind, readonly string[]>
 > = {
+  extrude: ['endCondition', 'throughAllSide'],
   loft: ['endPoint'],
   sweep: ['guide'],
   fillet: ['endRadius', 'radiusLaw'],
@@ -3419,6 +3491,9 @@ export function updateFeature(
       }
       delete data[key];
     }
+  }
+  if (feature.data.featureKind === 'extrude') {
+    validateExtrudeExtent(feature.data);
   }
   // R01: a datum may only read earlier datums, and Mirror/Split only an
   // existing earlier one, whichever path edited them.

@@ -1,73 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { RemusKernel } from './remus-runtime';
+import { throughAllSpan, type ThroughAllSpan } from './through-all';
 
 type Vec3 = { x: number; y: number; z: number };
-
-type ThroughAllSide = 'forward' | 'backward' | 'both';
-
-interface ThroughAllSpan {
-  readonly forward: number;
-  readonly backward: number;
-}
-
-function corners(bounds: readonly number[]): Vec3[] {
-  return [0, 1].flatMap((x) =>
-    [0, 1].flatMap((y) =>
-      [0, 1].map((z) => ({
-        x: bounds[x * 3]!,
-        y: bounds[y * 3 + 1]!,
-        z: bounds[z * 3 + 2]!
-      }))
-    )
-  );
-}
-
-/**
- * A through-all extent is a support-function query, not a guessed depth.
- * The target's world AABB is conservative for transformed solids, and the
- * eight-corner projection bounds every target point along the requested
- * unit sketch normal.
- */
-export function throughAllSpan(
-  bounds: readonly number[],
-  planePoint: Vec3,
-  direction: Vec3,
-  side: ThroughAllSide
-): ThroughAllSpan {
-  const magnitude = Math.hypot(direction.x, direction.y, direction.z);
-  if (!(magnitude > 1e-12) || !Number.isFinite(magnitude)) {
-    throw new Error('Through-all direction must be finite and non-zero.');
-  }
-  const unit = {
-    x: direction.x / magnitude,
-    y: direction.y / magnitude,
-    z: direction.z / magnitude
-  };
-  const projections = corners(bounds).map(
-    (point) =>
-      (point.x - planePoint.x) * unit.x +
-      (point.y - planePoint.y) * unit.y +
-      (point.z - planePoint.z) * unit.z
-  );
-  const maximum = Math.max(...projections);
-  const minimum = Math.min(...projections);
-  const forward = Math.max(0, maximum);
-  const backward = Math.max(0, -minimum);
-  if (side === 'forward' && !(forward > 1e-9)) {
-    throw new Error('Through-all has no target in the selected direction.');
-  }
-  if (side === 'backward' && !(backward > 1e-9)) {
-    throw new Error('Through-all has no target in the selected direction.');
-  }
-  if (side === 'both' && !(forward > 1e-9 || backward > 1e-9)) {
-    throw new Error('Through-all has no target on either side.');
-  }
-  return {
-    forward: side === 'backward' ? 0 : forward,
-    backward: side === 'forward' ? 0 : backward
-  };
-}
 
 function rigidTransform(angle: number, translation: Vec3): Float64Array {
   const c = Math.cos(angle);

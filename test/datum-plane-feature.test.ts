@@ -69,7 +69,7 @@ function padOn(document: ProjectDocument, planeRef: SketchPlaneRef) {
 
 describe('R01 datum planes in the document', () => {
   it('is a schema-19 feature in history that owns no body', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(19);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(19);
     const base = blank();
     const { document, featureId } = withDatum(base, {
       kind: 'offset',
@@ -86,7 +86,7 @@ describe('R01 datum planes in the document', () => {
     expect(document.bodyOrder).toEqual(base.bodyOrder);
   });
 
-  it('round-trips a v19 document and opens a v18 one unchanged', () => {
+  it('round-trips a datum document and opens a v18 one unchanged', () => {
     const planed = withDatum(blank(), {
       kind: 'offset',
       source: xy(),
@@ -95,16 +95,20 @@ describe('R01 datum planes in the document', () => {
     const saved = JSON.parse(
       JSON.stringify(planed.document)
     ) as ProjectDocument;
-    expect(saved.schemaVersion).toBe(19);
+    // Datums arrived in v19; later versions keep reading them.
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(19);
+    expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect(normalizeDocument(saved)).toEqual(planed.document);
 
-    const legacy = { ...blank(), schemaVersion: 18 as 19 };
+    type Version = typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
+    const legacy = { ...blank(), schemaVersion: 18 as Version };
     const opened = normalizeDocument(structuredClone(legacy));
-    expect(opened.schemaVersion).toBe(19);
+    expect(opened.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect({ ...opened, schemaVersion: 18 }).toEqual(legacy);
+    const newer = PROJECT_DOCUMENT_SCHEMA_VERSION + 1;
     expect(() =>
-      normalizeDocument({ ...saved, schemaVersion: 20 as 19 })
-    ).toThrow('Unsupported project schema (v20)');
+      normalizeDocument({ ...saved, schemaVersion: newer as Version })
+    ).toThrow(`Unsupported project schema (v${newer})`);
   });
 
   it('refuses sources that are not earlier datums or real planes', () => {
