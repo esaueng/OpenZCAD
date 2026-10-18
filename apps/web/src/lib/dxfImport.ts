@@ -238,8 +238,18 @@ function ccwArc(
   endDeg: number,
   distinctEnds = false
 ): SketchObjectData {
-  const start = Math.round((((startDeg % 360) + 360) % 360) * 1e9) / 1e9;
-  let end = Math.round((((endDeg % 360) + 360) % 360) * 1e9) / 1e9;
+  // Angles keep the file's full precision: on a large radius even a 1e-9°
+  // step moves an endpoint off the geometry it should meet.
+  const turn = (degrees: number) => {
+    // Add a turn only to a negative angle: (a + 360) % 360 would cost a
+    // small positive angle most of its digits.
+    const angle = degrees % 360;
+    if (angle >= 0) return angle;
+    const wrapped = angle + 360;
+    return wrapped === 360 ? 0 : wrapped;
+  };
+  const start = turn(startDeg);
+  let end = turn(endDeg);
   // Coincident ends are a zero sweep, never a whole turn: DXF draws a full
   // circle as a CIRCLE, and an ARC from 45° to 45° has no extent.
   if (end === start || end === start + 360 || end + 360 === start) {

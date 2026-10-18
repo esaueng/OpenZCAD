@@ -673,7 +673,7 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     );
   });
 
-  it('refuses an arc whose sweep rounds to zero', () => {
+  it('keeps a tiny ARC sweep and a large-radius endpoint at full precision', () => {
     const text = dxf([
       '0',
       'ARC',
@@ -688,9 +688,28 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
       '51',
       '4e-10'
     ]);
-    expect(() => importDxfSketch(text, 'mm')).toThrow(
-      'its sweep rounds to zero'
-    );
+    expect(importDxfSketch(text, 'mm').objects[0]).toMatchObject({
+      startAngleDeg: 0,
+      endAngleDeg: 4e-10
+    });
+    // Radius 1e9: a 4e-10° start is 7 mm of arc, so it is not rounded away.
+    const large = dxf([
+      '0',
+      'ARC',
+      '10',
+      '0',
+      '20',
+      '0',
+      '40',
+      '1e9',
+      '50',
+      '4e-10',
+      '51',
+      '90'
+    ]);
+    expect(importDxfSketch(large, 'mm').objects[0]).toMatchObject({
+      startAngleDeg: 4e-10
+    });
   });
 
   it('refuses a zero-length LINE instead of quietly dropping it', () => {
@@ -808,7 +827,7 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     );
   });
 
-  it('refuses a tiny nonzero bulge rather than flattening it to a line', () => {
+  it('keeps a tiny nonzero bulge an arc rather than flattening it to a line', () => {
     const text = dxf([
       '0',
       'LWPOLYLINE',
@@ -825,7 +844,11 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
       '20',
       '0'
     ]);
-    expect(() => importDxfSketch(text, 'mm')).toThrow('bulge too extreme');
+    const [arc] = importDxfSketch(text, 'mm').objects as unknown as [
+      { objectKind: string; radius: number }
+    ];
+    expect(arc.objectKind).toBe('arc');
+    expect(arc.radius).toBeCloseTo(5e17, -5);
   });
 
   it('refuses entities with thickness or any tilt as off the XY plane', () => {
