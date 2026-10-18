@@ -113,6 +113,8 @@ import {
   findParameterReferences,
   findSketch,
   getParameterScope,
+  parameterKindsOf,
+  withParameterKinds,
   type HelicalSweepInput,
   helicalSweepProfile,
   holeBody,
@@ -1793,9 +1795,8 @@ function projectedParameterScope(
   document: ProjectDocument,
   proposal: CadPatchProposal
 ): Record<string, number> {
-  const scope: Record<string, number> = {
-    ...getParameterScope(document).scope
-  };
+  const base = getParameterScope(document).scope;
+  const scope = withParameterKinds({ ...base }, parameterKindsOf(base));
   const pending = new Map<string, string>();
   for (const operation of proposal.operations) {
     if (operation.kind === 'set_parameter') {

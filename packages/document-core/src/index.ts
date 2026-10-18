@@ -7,7 +7,11 @@ export {
   repairLegacyBracketRecipe,
   BRACKET_BOSS_HEIGHT
 } from './legacy-bracket';
-import { rewriteNodeExpressions } from './parameter-expressions';
+import {
+  rewriteNodeExpressions,
+  type ExpressionFieldDimension
+} from './parameter-expressions';
+export type { ExpressionFieldDimension } from './parameter-expressions';
 import { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 export { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 import {
@@ -71,6 +75,7 @@ import {
   type FeatureNode,
   type ImportedSourceReference,
   type ParameterId,
+  type ParameterKind,
   type ParameterNode,
   type ParametricVector3,
   type ModelingPlaneReference,
@@ -592,6 +597,12 @@ export interface ShaprGuidedImportInput {
 export interface ParameterSetInput {
   name: string;
   expression: string;
+  /**
+   * F05: the parameter's quantity. Absent leaves it as it is (a new
+   * parameter is unitless); `null` clears it. A change is refused when it
+   * would break an expression that uses the parameter.
+   */
+  quantity?: ParameterKind | null;
   /** Inline definitions must refuse a name added while validation awaited. */
   addOnly?: boolean;
   ids?: ParameterIds;
@@ -2964,6 +2975,15 @@ export function setParameter(
       throw new Error('An on/off parameter must be 0 (off) or 1 (on).');
     }
     existing.expression = input.expression;
+    if (
+      input.quantity !== undefined &&
+      (input.quantity ?? undefined) !== existing.quantity
+    ) {
+      const refusal = parameterQuantityRefusal(next, name, input.quantity);
+      if (refusal) throw new Error(refusal);
+      if (input.quantity) existing.quantity = input.quantity;
+      else delete existing.quantity;
+    }
   } else {
     const { parameterId, parameterNodeId } = input.ids ?? createParameterIds();
     next.nodes[parameterNodeId] = {
@@ -2975,6 +2995,7 @@ export function setParameter(
       parameterId,
       expression: input.expression,
       value: 0,
+      ...(input.quantity ? { quantity: input.quantity } : {}),
       // Once the owner has curated Tweak, a newly-created parameter stays out
       // of that public surface until its own eye is explicitly enabled.
       ...(parameters.some((parameter) => parameter.exposed !== undefined)
@@ -2982,6 +3003,15 @@ export function setParameter(
         : {})
     };
     next.parameterOrder.push(parameterId);
+  }
+  // A typed parameter's own expression must hold its quantity: a length
+  // that evaluates to an angle is refused here rather than stored broken.
+  const typed = listParameters(next).find((entry) => entry.name === name);
+  if (typed?.quantity) {
+    const mismatch = getParameterScope(next).errors.find((error) =>
+      error.startsWith(`Parameter "${name}": Incompatible dimensions`)
+    );
+    if (mismatch) throw new Error(mismatch);
   }
   refreshParameterValues(next);
   next.version += 1;
@@ -3202,15 +3232,77 @@ export interface ParameterScopeResult {
 }
 
 /**
+ * Evaluates one parameter's expression against `scope`, checking a typed
+ * parameter (F05) against its own quantity: a length parameter may not
+ * evaluate to an angle or an area, a number may not carry units. A unitless
+ * parameter evaluates exactly as before v21.
+ */
+function evaluateParameter(
+  parameter: ParameterNode,
+  scope: Record<string, number>,
+  documentUnits: UnitSystem
+): number {
+  if (!parameter.quantity) {
+    return evaluateExpression(parameter.expression, scope, { documentUnits });
+  }
+  const result = parseExpressionQuantity(
+    parameter.expression,
+    scope,
+    documentUnits
+  );
+  if (!Number.isFinite(result.value)) {
+    throw new Error('Expression did not evaluate to a finite number.');
+  }
+  requireFieldDimension(result, parameter.quantity);
+  return result.value;
+}
+
+/**
+ * Names the reference cycle `name` sits on among the still-unresolved
+ * parameters (`a → b → a`), or null when it is not on one.
+ */
+function parameterCycle(
+  name: string,
+  pending: ReadonlyMap<string, ParameterNode>
+): string[] | null {
+  const path: string[] = [];
+  const visiting = new Set<string>();
+  const walk = (current: string): string[] | null => {
+    if (current === name && path.length > 0) return [...path, name];
+    if (visiting.has(current)) return null;
+    visiting.add(current);
+    path.push(current);
+    const parameter = pending.get(current);
+    for (const next of parameter
+      ? expressionIdentifiers(parameter.expression)
+      : []) {
+      if (!pending.has(next)) continue;
+      const found = walk(next);
+      if (found) return found;
+    }
+    path.pop();
+    return null;
+  };
+  return walk(name);
+}
+
+/**
  * Evaluates the whole parameter table. Parameters may reference each other in
  * any declaration order; evaluation iterates until a fixed point, so cycles
  * and unknown identifiers surface as per-parameter errors instead of crashes.
+ * A cycle is named as one (`a → b → a`) rather than as the unknown
+ * identifier it looks like from inside. The scope carries each typed
+ * parameter's quantity (see {@link withParameterKinds}).
  */
 export function getParameterScope(
   document: ProjectDocument
 ): ParameterScopeResult {
   const parameters = listParameters(document);
-  const scope: Record<string, number> = {};
+  const kinds: Record<string, ParameterKind> = {};
+  for (const parameter of parameters) {
+    if (parameter.quantity) kinds[parameter.name] = parameter.quantity;
+  }
+  const scope = withParameterKinds({}, kinds);
   const pending = new Map(
     parameters.map((parameter) => [parameter.name, parameter])
   );
@@ -3221,9 +3313,7 @@ export function getParameterScope(
     progressed = false;
     for (const [name, parameter] of [...pending]) {
       try {
-        scope[name] = evaluateExpression(parameter.expression, scope, {
-          documentUnits: document.units
-        });
+        scope[name] = evaluateParameter(parameter, scope, document.units);
         pending.delete(name);
         progressed = true;
       } catch {
@@ -3233,10 +3323,15 @@ export function getParameterScope(
   }
 
   for (const [name, parameter] of pending) {
+    const cycle = parameterCycle(name, pending);
+    if (cycle) {
+      errors.push(
+        `Parameter "${name}": its expression refers back to itself (${cycle.join(' → ')}).`
+      );
+      continue;
+    }
     try {
-      evaluateExpression(parameter.expression, scope, {
-        documentUnits: document.units
-      });
+      evaluateParameter(parameter, scope, document.units);
     } catch (error) {
       errors.push(
         `Parameter "${name}": ${error instanceof Error ? error.message : 'evaluation failed.'}`
@@ -4067,6 +4162,39 @@ export function getLatestBodyId(document: ProjectDocument): BodyId | undefined {
 const DEG_TO_RAD = Math.PI / 180;
 
 /**
+ * F05: the kinds of a scope's typed parameters, carried on the scope object
+ * itself under a non-enumerable symbol key. Every consumer keeps passing the
+ * same `Record<string, number>`, and keys, JSON and deep equality never see
+ * it. A copy must carry it on explicitly:
+ * `withParameterKinds({ ...scope }, parameterKindsOf(scope))`.
+ */
+const PARAMETER_KINDS = Symbol.for('openzcad.parameterKinds');
+type KindedScope = Record<string, number> & {
+  [PARAMETER_KINDS]?: Readonly<Record<string, ParameterKind>>;
+};
+
+/** Marks `scope`'s typed parameters with their kinds; returns `scope`. */
+export function withParameterKinds(
+  scope: Record<string, number>,
+  kinds: Readonly<Record<string, ParameterKind>>
+): Record<string, number> {
+  Object.defineProperty(scope, PARAMETER_KINDS, {
+    value: kinds,
+    enumerable: false,
+    configurable: true,
+    writable: true
+  });
+  return scope;
+}
+
+/** The kinds a scope carries for its typed parameters (none: all unitless). */
+export function parameterKindsOf(
+  scope: Record<string, number>
+): Readonly<Record<string, ParameterKind>> {
+  return (scope as KindedScope)[PARAMETER_KINDS] ?? {};
+}
+
+/**
  * A value moving through the expression parser: a plain number plus integer
  * exponents of length and angle. Plain numbers, scope parameters and `pi`
  * are dimensionless; unit suffixes introduce length (`mm`, `cm`, `m`,
@@ -4679,7 +4807,10 @@ function parseExpressionQuantity(
       if (value === undefined) {
         throw new Error(`Unknown identifier "${token.name}" in expression.`);
       }
-      return quantity(value);
+      // A typed parameter (F05) brings its dimension; unitless ones and any
+      // plain scope value stay dimensionless, exactly as before v21.
+      const kind = (scope as KindedScope)[PARAMETER_KINDS]?.[token.name];
+      return quantity(value, kind === 'length' ? 1 : 0, kind === 'angle' ? 1 : 0);
     }
     if (token.type === 'paren' && token.value === '(') {
       const value = parseAdditive();
@@ -4884,6 +5015,19 @@ export function evaluateFieldExpression(
   if (!Number.isFinite(value)) {
     throw new Error('Expression did not evaluate to a finite number.');
   }
+  requireFieldDimension({ value, length, angle }, dimension);
+  return value;
+}
+
+/**
+ * Refuses a result that a field of `dimension` cannot hold. Unit-free
+ * results pass every field (bare numbers are document-unit values and
+ * degrees by definition); otherwise the dimension must match exactly.
+ */
+function requireFieldDimension(
+  { length, angle }: ExpressionQuantity,
+  dimension: ExpressionDimension
+): void {
   // `length * (length - 1)` is zero exactly when the length power is 0 or 1.
   const angleField = dimension === 'angle';
   if (
@@ -4897,7 +5041,6 @@ export function evaluateFieldExpression(
       `Incompatible dimensions in expression: expected ${dimension === 'number' ? 'a number without units' : angleField ? 'an angle, not a length' : 'a length, not an angle or area'}.`
     );
   }
-  return value;
 }
 
 /**
@@ -5081,6 +5224,107 @@ export function findParameterReferences(
     }
   }
   return references;
+}
+
+/**
+ * F05: why `name` cannot take `quantity` (null clears it to unitless), or
+ * null when it can. Every stored expression that names the parameter is
+ * re-evaluated with the new quantity: a field of known dimension must still
+ * hold its kind (a length parameter in an angle field, a typed count with
+ * units), and every other expression must still be dimensionally coherent
+ * (`width + 5` once width is a length: a bare number cannot be added to a
+ * length). Parameters that read it are re-evaluated the same way.
+ */
+export function parameterQuantityRefusal(
+  document: ProjectDocument,
+  name: string,
+  quantity: ParameterKind | null
+): string | null {
+  const target = listParameters(document).find(
+    (parameter) => parameter.name === name
+  );
+  if (!target) return `Parameter "${name}" does not exist.`;
+  if (target.toggle && quantity !== null && quantity !== 'number') {
+    return 'An on/off parameter is a number (0 or 1); it cannot be a length or an angle.';
+  }
+  const candidate = cloneDocument(document);
+  const parameter = listParameters(candidate).find(
+    (entry) => entry.name === name
+  )!;
+  if (quantity) parameter.quantity = quantity;
+  else delete parameter.quantity;
+  const before = new Set(getParameterScope(document).errors);
+  const { scope, errors } = getParameterScope(candidate);
+  const fresh = errors.find((error) => !before.has(error));
+  if (fresh) return fresh;
+  for (const node of Object.values(candidate.nodes)) {
+    if (node.kind === 'parameter') continue;
+    let refusal: string | null = null;
+    rewriteNodeExpressions(node, (expression, dimension) => {
+      if (refusal || !expressionIdentifiers(expression).includes(name)) {
+        return expression;
+      }
+      try {
+        const result = parseExpressionQuantity(
+          expression,
+          scope,
+          candidate.units
+        );
+        if (dimension) requireFieldDimension(result, dimension);
+      } catch (error) {
+        refusal = `${referenceLabel(node)} uses "${expression}": ${error instanceof Error ? error.message : 'it no longer evaluates.'}`;
+      }
+      return expression;
+    });
+    if (refusal) return refusal;
+  }
+  return null;
+}
+
+/**
+ * F05: the quantity a unitless parameter most plausibly measures, offered to
+ * the owner rather than applied: what its own expression carries (`12 mm`,
+ * `30 deg`), else the one dimension every field that reads it agrees on.
+ * Null when it is already typed, the evidence disagrees or is absent, or the
+ * suggestion would break a use (see {@link parameterQuantityRefusal}).
+ */
+export function suggestParameterQuantity(
+  document: ProjectDocument,
+  name: string
+): ParameterKind | null {
+  const target = listParameters(document).find(
+    (parameter) => parameter.name === name
+  );
+  if (!target || target.quantity || target.toggle) return null;
+  const { scope } = getParameterScope(document);
+  let suggestion: ParameterKind | null = null;
+  try {
+    const own = getExpressionDimensions(target.expression, scope, {
+      documentUnits: document.units
+    });
+    if (own.length === 1 && own.angle === 0) suggestion = 'length';
+    else if (own.angle === 1 && own.length === 0) suggestion = 'angle';
+  } catch {
+    return null;
+  }
+  if (!suggestion) {
+    const seen = new Set<ExpressionFieldDimension>();
+    for (const node of Object.values(document.nodes)) {
+      if (node.kind === 'parameter' && node.name === name) continue;
+      rewriteNodeExpressions(node, (expression, dimension) => {
+        if (expressionIdentifiers(expression).includes(name)) {
+          seen.add(dimension);
+        }
+        return expression;
+      });
+    }
+    seen.delete(null);
+    if (seen.size !== 1) return null;
+    suggestion = [...seen][0] as ParameterKind;
+  }
+  return parameterQuantityRefusal(document, name, suggestion) === null
+    ? suggestion
+    : null;
 }
 
 export {

@@ -10,6 +10,7 @@ import { setAnalyticsEnabled, trackUsage, trackDetail, trackParts, trackSize, is
 import type {
   GeometryBodyRepresentation,
   GeometryReadyState,
+  ParameterKind,
   UserId
 } from '@openzcad/shared';
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
@@ -126,6 +127,7 @@ import {
   listNodesByKind,
   listExposedParameters,
   listParameters,
+  suggestParameterQuantity,
   normalizeDocument,
   normalizeDocumentHistory,
   numberedBodyName,
@@ -5178,6 +5180,18 @@ export function App() {
     [doc]
   );
   const parameters = useMemo(() => (doc ? listParameters(doc) : []), [doc]);
+  // F05: what each unitless parameter's uses suggest it measures, offered
+  // in its type picker and never applied without the owner choosing it.
+  const parameterQuantitySuggestions = useMemo(() => {
+    const suggestions: Record<string, ParameterKind> = {};
+    if (!doc) return suggestions;
+    for (const parameter of parameters) {
+      if (parameter.quantity || parameter.toggle) continue;
+      const suggestion = suggestParameterQuantity(doc, parameter.name);
+      if (suggestion) suggestions[parameter.name] = suggestion;
+    }
+    return suggestions;
+  }, [doc, parameters]);
   // What Tweak mode and a share link offer. An uncurated document offers
   // everything, so the rule lives in document-core rather than here — the
   // panel and the Build-mode toggles must never disagree about it.
@@ -14564,7 +14578,9 @@ export function App() {
   async function handleSetParameter(
     name: string,
     expression: string,
-    addOnly = false
+    addOnly = false,
+    /** F05: a new quantity for the parameter (null: unitless). */
+    quantity?: ParameterKind | null
   ): Promise<string | null> {
     const manager = managerRef.current;
     if (!manager || !ensureCanEditParameters('change this parameter')) {
@@ -14603,7 +14619,8 @@ export function App() {
       const parameterCommand = commandFactories.setParameter({
         name,
         expression,
-        ...(addOnly ? { addOnly: true } : {})
+        ...(addOnly ? { addOnly: true } : {}),
+        ...(quantity !== undefined ? { quantity } : {})
       });
       parameterCommand.validate(base);
       let prospective = parameterCommand.apply(base);
@@ -20187,6 +20204,13 @@ export function App() {
       onSetParameter={(name, expression) =>
         handleSetParameter(name, expression)
       }
+      onSetParameterQuantity={(name, quantity) => {
+        const current = parameters.find((entry) => entry.name === name);
+        return current
+          ? handleSetParameter(name, current.expression, false, quantity)
+          : Promise.resolve(`Parameter ${name} does not exist.`);
+      }}
+      parameterQuantitySuggestions={parameterQuantitySuggestions}
       onViewActivityLog={() => setActivityLogOpen(true)}
       onDeleteParameter={(name) =>
         executeCommand(commandFactories.deleteParameter({ name }))

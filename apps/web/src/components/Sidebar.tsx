@@ -23,6 +23,7 @@ import type {
   BodyRepresentation,
   FeatureId,
   FeatureNode,
+  ParameterKind,
   ParameterNode,
   ProjectCheckpoint,
   ProjectDocument,
@@ -167,6 +168,13 @@ interface SidebarProps {
     name: string,
     expression: string
   ): void | Promise<string | null>;
+  /** F05: retypes a parameter; answers with a refusal. */
+  onSetParameterQuantity?(
+    name: string,
+    quantity: ParameterKind | null
+  ): void | Promise<string | null>;
+  /** F05: each unitless parameter's suggested quantity, by name. */
+  parameterQuantitySuggestions?: Readonly<Record<string, ParameterKind>>;
   onViewActivityLog(): void;
   parameterMinimums?: Record<string, number>;
   onDeleteParameter(name: string): void;
@@ -266,6 +274,8 @@ export function Sidebar({
   units,
   onConfigureToggle,
   onSetParameter,
+  onSetParameterQuantity,
+  parameterQuantitySuggestions,
   onViewActivityLog,
   onPreviewParameter,
   onDeleteParameter,
@@ -497,6 +507,12 @@ export function Sidebar({
               value={parameterValues[parameter.name]}
               minimum={parameterMinimums?.[parameter.name]}
               onSet={onSetParameter}
+              {...(onSetParameterQuantity
+                ? { onSetQuantity: onSetParameterQuantity }
+                : {})}
+              suggestedQuantity={
+                parameterQuantitySuggestions?.[parameter.name] ?? null
+              }
               onViewDetails={onViewActivityLog}
               onPreview={onPreviewParameter}
               onDelete={onDeleteParameter}

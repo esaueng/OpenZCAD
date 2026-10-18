@@ -114,8 +114,8 @@ describe('F05 audit: dimensional rules', () => {
 
   it('refuses bare-number/length mixing without a parameter unit type', () => {
     // Scope values are untyped document-unit numbers, so `width + 5 mm`
-    // cannot be proved coherent. Typed parameters would need a schema
-    // change (see the unit-type case below); until then this refuses.
+    // cannot be proved coherent. A typed length parameter (schema v21, see
+    // typed-parameters.test.ts) makes it evaluate; an untyped one refuses.
     expect(() => evaluateExpression('5 + 3 mm', {})).toThrow(
       /Incompatible dimensions/
     );

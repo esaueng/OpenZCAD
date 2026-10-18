@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react';
-import type { BodyId, ParameterNode } from '@openzcad/shared';
+import type { BodyId, ParameterKind, ParameterNode } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 
 /**
@@ -57,7 +57,31 @@ interface ParameterRowProps extends ToggleBindingProps {
    * clears, rather than piling up beside the edits that went through.
    */
   table?: string;
+  /**
+   * F05: sets what the parameter measures (null: unitless). Absent hides the
+   * picker: Tweak turns values, it does not retype them. The promise answers
+   * with a refusal, such as a use the new quantity would break.
+   */
+  onSetQuantity?: (
+    name: string,
+    quantity: ParameterKind | null
+  ) => void | Promise<string | null>;
+  /** A unitless parameter's likely quantity, offered but never applied. */
+  suggestedQuantity?: ParameterKind | null;
 }
+
+const QUANTITY_LABELS: Record<ParameterKind | 'unitless', string> = {
+  length: 'Length',
+  angle: 'Angle',
+  number: 'Number',
+  unitless: 'Unitless'
+};
+const QUANTITY_GLYPHS: Record<ParameterKind | 'unitless', string> = {
+  length: 'len',
+  angle: '°',
+  number: '#',
+  unitless: '—'
+};
 
 /** Every name and expression in a parameter table, for `ParameterRow.table`. */
 export function parameterTable(parameters: readonly ParameterNode[]): string {
@@ -67,6 +91,8 @@ export function parameterTable(parameters: readonly ParameterNode[]): string {
 }
 
 export function ParameterRow({
+  onSetQuantity,
+  suggestedQuantity = null,
   parameter,
   value,
   onSet,
@@ -328,6 +354,48 @@ export function ParameterRow({
             className={`param-value mono ${value === undefined ? 'error' : ''}`}
           >
             {showValue ? formattedValue : ''}
+            {onSetQuantity && (
+              <select
+                className={`param-quantity${suggestedQuantity ? ' suggested' : ''}`}
+                aria-label={`Type of ${parameter.name}`}
+                title={
+                  parameter.quantity
+                    ? `${parameter.name} is a ${QUANTITY_LABELS[parameter.quantity].toLowerCase()}`
+                    : suggestedQuantity
+                      ? `${parameter.name} is unitless; its uses suggest a ${QUANTITY_LABELS[suggestedQuantity].toLowerCase()}`
+                      : `${parameter.name} is unitless`
+                }
+                value={parameter.quantity ?? 'unitless'}
+                onChange={(event) => {
+                  const next = event.target.value as ParameterKind | 'unitless';
+                  void (async () => {
+                    const refusal = await onSetQuantity(
+                      parameter.name,
+                      next === 'unitless' ? null : next
+                    );
+                    if (refusal) {
+                      setError({ message: refusal, detailsAvailable: false });
+                    }
+                  })();
+                }}
+              >
+                {(['unitless', 'length', 'angle', 'number'] as const).map(
+                  (option) => (
+                    // Glyphs only: a select is as wide as its longest option,
+                    // and the name track gives way to it. The full word is
+                    // the option's accessible name; a suggestion is shown by
+                    // colour and the picker's title.
+                    <option
+                      key={option}
+                      value={option}
+                      aria-label={QUANTITY_LABELS[option]}
+                    >
+                      {QUANTITY_GLYPHS[option]}
+                    </option>
+                  )
+                )}
+              </select>
+            )}
           </span>
         )}
         {onExpose && (

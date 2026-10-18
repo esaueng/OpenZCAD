@@ -190,3 +190,74 @@ describe('on/off parameter controls', () => {
     expect(onSet).not.toHaveBeenCalled();
   });
 });
+
+describe('ParameterRow type picker (F05)', () => {
+  it('sets the quantity and shows a refusal', async () => {
+    const onSetQuantity = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        'Feature "Block" uses "width": expected a length.'
+      );
+    render(
+      <ParameterRow
+        parameter={parameter('80')}
+        value={80}
+        onSet={vi.fn()}
+        onSetQuantity={onSetQuantity}
+      />
+    );
+    const picker = screen.getByLabelText('Type of width');
+    expect(picker).toHaveValue('unitless');
+    fireEvent.change(picker, { target: { value: 'length' } });
+    expect(onSetQuantity).toHaveBeenLastCalledWith('width', 'length');
+    fireEvent.change(picker, { target: { value: 'angle' } });
+    expect(onSetQuantity).toHaveBeenLastCalledWith('width', 'angle');
+    expect(
+      await screen.findByText(/uses "width": expected a length/)
+    ).toBeInTheDocument();
+  });
+
+  it('offers a suggestion on a unitless parameter without applying it', () => {
+    const onSetQuantity = vi.fn();
+    render(
+      <ParameterRow
+        parameter={parameter('80')}
+        value={80}
+        onSet={vi.fn()}
+        onSetQuantity={onSetQuantity}
+        suggestedQuantity="length"
+      />
+    );
+    const picker = screen.getByLabelText('Type of width');
+    expect(picker).toHaveValue('unitless');
+    expect(picker).toHaveClass('suggested');
+    expect(picker).toHaveAttribute(
+      'title',
+      'width is unitless; its uses suggest a length'
+    );
+    expect(screen.getByRole('option', { name: 'Length' })).toHaveTextContent(
+      'len'
+    );
+    expect(onSetQuantity).not.toHaveBeenCalled();
+  });
+
+  it('clears to unitless with null and is absent where retyping is not offered', () => {
+    const onSetQuantity = vi.fn();
+    const typed = { ...parameter('80'), quantity: 'length' } as ParameterNode;
+    const { rerender } = render(
+      <ParameterRow
+        parameter={typed}
+        value={80}
+        onSet={vi.fn()}
+        onSetQuantity={onSetQuantity}
+      />
+    );
+    const picker = screen.getByLabelText('Type of width');
+    expect(picker).toHaveValue('length');
+    fireEvent.change(picker, { target: { value: 'unitless' } });
+    expect(onSetQuantity).toHaveBeenLastCalledWith('width', null);
+    rerender(<ParameterRow parameter={typed} value={80} onSet={vi.fn()} />);
+    expect(screen.queryByLabelText('Type of width')).toBeNull();
+  });
+});
