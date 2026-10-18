@@ -107,6 +107,16 @@ function readPairs(text: string): Pair[] {
   return pairs;
 }
 
+/**
+ * A DXF real or integer, or NaN. Stricter than `Number`, which reads a blank
+ * value as 0 and would silently move a coordinate to the origin.
+ */
+function dxfNumber(text: string): number {
+  return /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(text.trim())
+    ? Number(text)
+    : Number.NaN;
+}
+
 /** The section named `name`, as the pairs between its header and ENDSEC. */
 function section(pairs: Pair[], name: string): Pair[] | null {
   for (let index = 0; index + 1 < pairs.length; index += 1) {
@@ -147,7 +157,7 @@ function insUnits(pairs: Pair[]): number | null {
   );
   if (at < 0) return null;
   const value = header[at + 1];
-  return value && value.code === 70 ? Number(value.value) : null;
+  return value && value.code === 70 ? dxfNumber(value.value) : null;
 }
 
 /** A radius: finite and strictly positive, or the file is malformed. */
@@ -163,7 +173,7 @@ function radius(entity: DxfEntity): number {
 
 function number(entity: DxfEntity, code: number, fallback?: number): number {
   const found = entity.groups.find((pair) => pair.code === code);
-  const value = found ? Number(found.value) : fallback;
+  const value = found ? dxfNumber(found.value) : fallback;
   if (value === undefined || !Number.isFinite(value)) {
     throw new DxfImportError(
       `This DXF is malformed: a ${entity.type} has no usable group ${code}.`
@@ -181,7 +191,7 @@ const Z_CODES = new Set([30, 31, 38]);
 
 function onZeroElevation(entity: DxfEntity): boolean {
   return entity.groups.every(
-    (pair) => !Z_CODES.has(pair.code) || Math.abs(Number(pair.value)) < 1e-9
+    (pair) => !Z_CODES.has(pair.code) || Math.abs(dxfNumber(pair.value)) < 1e-9
   );
 }
 
@@ -196,9 +206,9 @@ function inXyPlane(entity: DxfEntity): boolean {
   const y = entity.groups.find((pair) => pair.code === 220);
   if (!z && !x && !y) return true;
   return (
-    Math.abs(Number(x?.value ?? 0)) < 1e-9 &&
-    Math.abs(Number(y?.value ?? 0)) < 1e-9 &&
-    Number(z?.value ?? 1) > 0
+    Math.abs(dxfNumber(x?.value ?? '0')) < 1e-9 &&
+    Math.abs(dxfNumber(y?.value ?? '0')) < 1e-9 &&
+    dxfNumber(z?.value ?? '1') > 0
   );
 }
 
@@ -289,20 +299,20 @@ function lwVertices(entity: DxfEntity): Vertex[] {
     if (pair.code === 10) {
       // An X before the last one found its Y would re-pair the stream.
       if (pendingX !== null) throw incompleteVertices();
-      pendingX = Number(pair.value);
+      pendingX = dxfNumber(pair.value);
     } else if (pair.code === 20) {
       if (pendingX === null) throw incompleteVertices();
-      vertices.push({ x: pendingX, y: Number(pair.value), bulge: 0 });
+      vertices.push({ x: pendingX, y: dxfNumber(pair.value), bulge: 0 });
       pendingX = null;
     } else if (pair.code === 42 && vertices.length > 0) {
-      vertices.at(-1)!.bulge = Number(pair.value);
+      vertices.at(-1)!.bulge = dxfNumber(pair.value);
     }
   }
   const declared = entity.groups.find((pair) => pair.code === 90);
   if (
     pendingX !== null ||
     vertices.some((v) => !Number.isFinite(v.x + v.y + v.bulge)) ||
-    (declared !== undefined && Number(declared.value) !== vertices.length)
+    (declared !== undefined && dxfNumber(declared.value) !== vertices.length)
   ) {
     // A truncated vertex list would import as a different outline.
     throw incompleteVertices();

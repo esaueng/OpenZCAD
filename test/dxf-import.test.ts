@@ -488,6 +488,36 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     ).toThrow('a LWPOLYLINE has an incomplete or unusable vertex list');
   });
 
+  it('refuses a blank number instead of reading it as 0', () => {
+    expect(() =>
+      importDxfSketch(
+        dxf(['0', 'LINE', '10', '', '20', '0', '11', '1', '21', '1']),
+        'mm'
+      )
+    ).toThrow('This DXF is malformed: a LINE has no usable group 10.');
+    expect(() =>
+      importDxfSketch(
+        dxf([
+          '0',
+          'LWPOLYLINE',
+          '90',
+          '2',
+          '70',
+          '0',
+          '10',
+          '0',
+          '20',
+          ' ',
+          '10',
+          '1',
+          '20',
+          '1'
+        ]),
+        'mm'
+      )
+    ).toThrow('a LWPOLYLINE has an incomplete or unusable vertex list');
+  });
+
   it('refuses an oversized file by its byte size, before reading it', () => {
     expect(() => refuseOversizedDxf(MAX_DXF_IMPORT_BYTES)).not.toThrow();
     expect(() => refuseOversizedDxf(MAX_DXF_IMPORT_BYTES + 1)).toThrow(
