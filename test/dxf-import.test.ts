@@ -1419,8 +1419,13 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(() =>
       importDxfSketch([...header, dxf(circle)].join('\n'), 'mm')
     ).toThrow('declares $INSUNITS twice');
-    const twice = dxf(circle) + '\n' + dxf(circle);
+    const one = dxf(circle).replace(/\n0\nEOF\s*$/, '');
+    const twice = `${one}\n${dxf(circle)}`;
     expect(() => importDxfSketch(twice, 'mm')).toThrow('two ENTITIES sections');
+    // Two whole files pasted together also carry an EOF in the middle.
+    expect(() =>
+      importDxfSketch(`${dxf(circle)}\n${dxf(circle)}`, 'mm')
+    ).toThrow('records after EOF');
   });
 
   it('refuses VERTEX or SEQEND records with no owning POLYLINE', () => {
@@ -1731,6 +1736,40 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
       ]);
       expect(() => importDxfSketch(text, 'mm')).toThrow('67 must be 0 or 1');
     }
+  });
+
+  it('reads many sections in one pass, and refuses a nameless header or data after EOF', () => {
+    const circle = dxf(['0', 'CIRCLE', '10', '0', '20', '0', '40', '1']);
+    const many =
+      '0\nSECTION\n2\nBLOCKS\n0\nENDSEC\n'.repeat(1) +
+      Array.from(
+        { length: 100_000 },
+        (_, i) => `0\nSECTION\n2\nX${i}\n0\nENDSEC`
+      ).join('\n') +
+      '\n' +
+      circle;
+    const started = performance.now();
+    expect(importDxfSketch(many, 'mm').objects).toHaveLength(1);
+    expect(performance.now() - started).toBeLessThan(5_000);
+    const nameless = [
+      '0',
+      'SECTION',
+      '9',
+      '$ACADVER',
+      '2',
+      'HEADER',
+      '9',
+      '$INSUNITS',
+      '70',
+      '1',
+      '0',
+      'ENDSEC'
+    ].join('\n');
+    expect(() => importDxfSketch(`${nameless}\n${circle}`, 'mm')).toThrow(
+      'a SECTION has no name after it'
+    );
+    const trailing = `${circle}\n0\nLINE\n10\n0\n20\n0\n11\n5\n21\n0`;
+    expect(() => importDxfSketch(trailing, 'mm')).toThrow('records after EOF');
   });
 
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {

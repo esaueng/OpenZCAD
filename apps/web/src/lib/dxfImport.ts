@@ -158,69 +158,67 @@ function dxfNumber(text: string): number {
     : Number.NaN;
 }
 
-/** The section named `name`, as the pairs between its header and ENDSEC. */
-function section(pairs: Pair[], name: string): Pair[] | null {
-  let found: Pair[] | null = null;
-  for (let index = 0; index + 1 < pairs.length; index += 1) {
-    if (
-      pairs[index]!.code === 0 &&
-      pairs[index]!.value === 'SECTION' &&
-      pairs[index + 1]!.code === 2 &&
-      pairs[index + 1]!.value === name
-    ) {
-      // Two sections of one name (a concatenated file) have no single
-      // reading: refuse rather than take whichever comes first.
-      if (found) {
-        throw new DxfImportError(
-          `This DXF is malformed: it has two ${name} sections.`
-        );
-      }
-      // The section's own ENDSEC, not a later section's: meeting another
-      // SECTION or EOF first means this one was cut short.
-      const end = pairs.findIndex(
-        (pair, at) =>
-          at > index + 1 &&
-          pair.code === 0 &&
-          (pair.value === 'ENDSEC' ||
-            pair.value === 'SECTION' ||
-            pair.value === 'EOF')
-      );
-      if (end < 0 || pairs[end]!.value !== 'ENDSEC') {
-        throw new DxfImportError(
-          `This DXF is malformed: its ${name} section never ends.`
-        );
-      }
-      found = pairs.slice(index + 2, end);
-      index = end;
-    }
-  }
-  return found;
-}
-
 /**
- * Checks the file's outer shape: nothing but SECTION … ENDSEC blocks, then
- * EOF (or the end of the text). Records between sections are what is left
- * of a section ended too early, and would otherwise be quietly ignored.
+ * The file's sections by name, read in one forward pass that also checks the
+ * outer shape: only `0 SECTION` / `2 <name>` … `0 ENDSEC` blocks, then `0 EOF`
+ * as the last record (or the end of the text). Anything else refuses the
+ * file: a record between sections is what an early ENDSEC leaves behind, a
+ * section that meets another SECTION or EOF first was cut short, a header
+ * with no name cannot be found again, a second section of one name (a
+ * concatenated file) has no single reading, and data after EOF would be
+ * ignored.
  */
-function requireSectionedFile(pairs: Pair[]): void {
+function sectionsOf(pairs: Pair[]): Map<string, Pair[]> {
+  const sections = new Map<string, Pair[]>();
   let index = 0;
   while (index < pairs.length) {
     const pair = pairs[index]!;
-    if (pair.code === 0 && pair.value === 'EOF') return;
+    if (pair.code === 0 && pair.value === 'EOF') {
+      if (index !== pairs.length - 1) {
+        throw new DxfImportError(
+          'This DXF is malformed: it has records after EOF.'
+        );
+      }
+      break;
+    }
     if (!(pair.code === 0 && pair.value === 'SECTION')) {
       throw new DxfImportError(
         'This DXF is malformed: it has records outside any section.'
       );
     }
-    const end = pairs.findIndex(
-      (candidate, at) =>
-        at > index && candidate.code === 0 && candidate.value === 'ENDSEC'
-    );
-    if (end < 0) {
-      throw new DxfImportError('This DXF is malformed: a section never ends.');
+    const header = pairs[index + 1];
+    if (!header || header.code !== 2) {
+      throw new DxfImportError(
+        'This DXF is malformed: a SECTION has no name after it.'
+      );
     }
+    const name = header.value;
+    let end = index + 2;
+    while (
+      end < pairs.length &&
+      !(
+        pairs[end]!.code === 0 &&
+        (pairs[end]!.value === 'ENDSEC' ||
+          pairs[end]!.value === 'SECTION' ||
+          pairs[end]!.value === 'EOF')
+      )
+    ) {
+      end += 1;
+    }
+    if (end >= pairs.length || pairs[end]!.value !== 'ENDSEC') {
+      throw new DxfImportError(
+        `This DXF is malformed: its ${name} section never ends.`
+      );
+    }
+    if (sections.has(name)) {
+      throw new DxfImportError(
+        `This DXF is malformed: it has two ${name} sections.`
+      );
+    }
+    sections.set(name, pairs.slice(index + 2, end));
     index = end + 1;
   }
+  return sections;
 }
 
 function entitiesOf(pairs: Pair[]): DxfEntity[] {
@@ -248,8 +246,7 @@ function entitiesOf(pairs: Pair[]): DxfEntity[] {
   return entities;
 }
 
-function insUnits(pairs: Pair[]): number | null {
-  const header = section(pairs, 'HEADER');
+function insUnits(header: Pair[] | undefined): number | null {
   if (!header) return null;
   const isInsUnits = (pair: Pair) =>
     pair.code === 9 && pair.value === '$INSUNITS';
@@ -634,12 +631,12 @@ export function importDxfSketch(
   // The caller refuses by byte size first; this guards direct callers.
   refuseOversizedDxf(text.length);
   const pairs = readPairs(text);
-  requireSectionedFile(pairs);
-  const entitiesSection = section(pairs, 'ENTITIES');
+  const sections = sectionsOf(pairs);
+  const entitiesSection = sections.get('ENTITIES');
   if (!entitiesSection) {
     throw new DxfImportError('This DXF has no ENTITIES section to import.');
   }
-  const unitCode = insUnits(pairs);
+  const unitCode = insUnits(sections.get('HEADER'));
   const known = unitCode !== null ? INSUNITS_TO_MM[unitCode] : undefined;
   if (unitCode !== null && unitCode !== 0 && !known) {
     throw new DxfImportError(
