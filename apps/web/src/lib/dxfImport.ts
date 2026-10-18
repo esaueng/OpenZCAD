@@ -583,14 +583,47 @@ export function importDxfSketch(
   const entities = entitiesOf(entitiesSection);
   for (let index = 0; index < entities.length; index += 1) {
     const entity = entities[index]!;
-    if (entity.type === 'SEQEND' || entity.type === 'VERTEX') continue;
+    // VERTEX and SEQEND only exist inside a parent's sequence, which the
+    // parent consumes below; met on their own, the parent was lost (a
+    // truncated file) and its geometry with it.
+    if (entity.type === 'SEQEND' || entity.type === 'VERTEX') {
+      throw new DxfImportError(
+        `This DXF is malformed: a ${entity.type} has no POLYLINE owning it.`
+      );
+    }
+    // A POLYLINE owns VERTEX…SEQEND and an INSERT with attributes (66 = 1)
+    // owns ATTRIB…SEQEND; the whole sequence is taken here, whatever then
+    // happens to the parent (imported, dropped or refused).
+    const childType =
+      entity.type === 'POLYLINE'
+        ? 'VERTEX'
+        : entity.type === 'INSERT' && integerFlags(entity, 66) === 1
+          ? 'ATTRIB'
+          : null;
+    const owned: DxfEntity[] = [];
+    if (childType) {
+      while (entities[index + 1]?.type === childType) {
+        index += 1;
+        owned.push(entities[index]!);
+      }
+      // SEQEND is what says the sequence is complete; without it a
+      // polyline may be truncated, and would import as a shorter outline.
+      if (entities[index + 1]?.type !== 'SEQEND') {
+        throw new DxfImportError(
+          entity.type === 'POLYLINE'
+            ? 'This DXF is malformed: a POLYLINE has no SEQEND closing its vertices.'
+            : 'This DXF is malformed: an INSERT has no SEQEND closing its attributes.'
+        );
+      }
+      index += 1;
+    }
     if (DROPPED.has(entity.type)) {
       count(dropped, entity.type);
       continue;
     }
     // Paper space (67 = 1) holds layouts — borders, title blocks — not the
     // part; only model space becomes sketch geometry. A paper-space POLYLINE
-    // takes its VERTEX records with it, as they are skipped above.
+    // takes its VERTEX records with it, as they were consumed above.
     if (integerFlags(entity, 67) !== 0) {
       count(dropped, `${entity.type} in paper space`);
       continue;
@@ -648,18 +681,7 @@ export function importDxfSketch(
         break;
       case 'POLYLINE': {
         const flags = integerFlags(entity, 70);
-        const vertexEntities: DxfEntity[] = [];
-        while (entities[index + 1]?.type === 'VERTEX') {
-          index += 1;
-          vertexEntities.push(entities[index]!);
-        }
-        // SEQEND is what says the vertex list is complete; without it the
-        // polyline may be truncated, and would import as a shorter outline.
-        if (entities[index + 1]?.type !== 'SEQEND') {
-          throw new DxfImportError(
-            'This DXF is malformed: a POLYLINE has no SEQEND closing its vertices.'
-          );
-        }
+        const vertexEntities = owned;
         // 3D polylines (8) and meshes (16, 32 closed in N, 64) are not 2D
         // sketch geometry, and neither are their records when the parent
         // flag is missing: VERTEX 32 is a 3D vertex, 64 a mesh vertex, 128

@@ -1425,6 +1425,72 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(() => importDxfSketch(twice, 'mm')).toThrow('two ENTITIES sections');
   });
 
+  it('refuses VERTEX or SEQEND records with no owning POLYLINE', () => {
+    const orphan = dxf([
+      '0',
+      'VERTEX',
+      '10',
+      '0',
+      '20',
+      '0',
+      '0',
+      'VERTEX',
+      '10',
+      '5',
+      '20',
+      '0',
+      '0',
+      'SEQEND',
+      '0',
+      'CIRCLE',
+      '10',
+      '0',
+      '20',
+      '0',
+      '40',
+      '1'
+    ]);
+    expect(() => importDxfSketch(orphan, 'mm')).toThrow(
+      'a VERTEX has no POLYLINE owning it'
+    );
+    // An INSERT's own attribute sequence is consumed with it, not refused.
+    const insert = importDxfSketch(
+      dxf([
+        '0',
+        'INSERT',
+        '66',
+        '1',
+        '2',
+        'TITLE',
+        '10',
+        '0',
+        '20',
+        '0',
+        '0',
+        'ATTRIB',
+        '10',
+        '0',
+        '20',
+        '0',
+        '1',
+        'A',
+        '0',
+        'SEQEND',
+        '0',
+        'CIRCLE',
+        '10',
+        '0',
+        '20',
+        '0',
+        '40',
+        '1'
+      ]),
+      'mm'
+    );
+    expect(insert.objects).toHaveLength(1);
+    expect(insert.dropped).toEqual({ INSERT: 1 });
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',
