@@ -45,7 +45,7 @@ for (const width of [1440, 390]) {
     });
     const notice = page.locator('.start-update');
     await expect(notice).toContainText('Check your connection');
-    await expect(notice).not.toContainText('new version');
+    await expect(notice).not.toContainText(/new version/i);
     const reload = notice.getByRole('button', { name: 'Reload' });
     await reload.scrollIntoViewIfNeeded();
     await testInfo.attach('start-screen-download-recovery', {

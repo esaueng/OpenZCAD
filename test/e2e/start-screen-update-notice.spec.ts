@@ -28,12 +28,12 @@ for (const viewport of [
       );
       await expect(notice).toBeVisible({ timeout: 500 });
     }).toPass();
-    await expect(notice).toContainText('A new version of OpenZCAD');
+    await expect(notice).toContainText('New version ready');
 
     await expect(page.locator('.start-foot')).toHaveCount(0);
     await expect(
       page.getByRole('complementary', { name: 'Cloud sync' })
-    ).toContainText('A new version of OpenZCAD');
+    ).toContainText('New version ready');
     // On a phone the card joins the page's flow at the end, so bring it in.
     await notice.scrollIntoViewIfNeeded();
     const pill = await notice.boundingBox();

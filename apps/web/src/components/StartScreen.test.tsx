@@ -758,7 +758,7 @@ describe('StartScreen update notice', () => {
     renderStartScreen({ onReloadForLoadFailure: onReload });
     const notice = screen.getByRole('alert');
     expect(notice).toHaveTextContent('Check your connection');
-    expect(notice).not.toHaveTextContent('new version');
+    expect(notice).not.toHaveTextContent(/new version/i);
     fireEvent.click(within(notice).getByRole('button', { name: 'Reload' }));
     expect(onReload).toHaveBeenCalledOnce();
   });
@@ -800,7 +800,7 @@ describe('StartScreen update notice', () => {
       />
     );
     const notice = screen.getByRole('alert');
-    expect(notice).toHaveTextContent('A new version of OpenZCAD is available.');
+    expect(notice).toHaveTextContent('New version ready');
     fireEvent.click(within(notice).getByRole('button', { name: 'Reload' }));
     expect(onReload).toHaveBeenCalledOnce();
   });

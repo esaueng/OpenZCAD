@@ -22,6 +22,7 @@ import {
   Pin,
   Plus,
   RotateCcw,
+  RotateCw,
   Search,
   Settings,
   Trash2,
@@ -1429,18 +1430,20 @@ export function StartScreen({
         {onReloadForUpdate || onReloadForLoadFailure ? (
           // Module failures can stay cached until navigation. This action
           // outlives the toast, whether or not an update was confirmed.
-          <span className="start-update" role="alert">
-            <span>
-              {onReloadForUpdate
-                ? 'A new version of OpenZCAD is available.'
-                : STALE_CHUNK_MESSAGE}
+          <span
+            className={`start-update ${onReloadForUpdate ? 'is-update' : 'is-failure'}`}
+            role="alert"
+          >
+            <span className="start-update-dot" aria-hidden="true" />
+            <span className="start-update-text">
+              {onReloadForUpdate ? 'New version ready' : STALE_CHUNK_MESSAGE}
             </span>
             <button
               type="button"
-              className="primary"
               onClick={onReloadForUpdate ?? onReloadForLoadFailure}
             >
               Reload
+              <RotateCw size={13} aria-hidden="true" />
             </button>
           </span>
         ) : null}
