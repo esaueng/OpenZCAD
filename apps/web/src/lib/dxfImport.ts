@@ -278,6 +278,48 @@ function insUnits(header: Pair[] | undefined): number | null {
   return code;
 }
 
+/**
+ * Layers whose geometry is not shown: frozen (LAYER 70 bit 1) or off (a
+ * negative 62 colour), read from the TABLES section's LAYER table.
+ */
+function hiddenLayers(tables: Pair[] | undefined): Set<string> {
+  const hidden = new Set<string>();
+  if (!tables) return hidden;
+  let inLayers = false;
+  let layer: DxfEntity | null = null;
+  const settle = () => {
+    if (!layer) return;
+    const name = singleGroup(layer, 2)?.value;
+    const color = singleGroup(layer, 62);
+    if (
+      name !== undefined &&
+      ((integerFlags(layer, 70) & 1) !== 0 ||
+        (color !== undefined && dxfNumber(color.value) < 0))
+    ) {
+      hidden.add(name);
+    }
+    layer = null;
+  };
+  for (let index = 0; index < tables.length; index += 1) {
+    const pair = tables[index]!;
+    if (pair.code === 0) {
+      settle();
+      if (pair.value === 'TABLE') {
+        const next = tables[index + 1];
+        inLayers = next?.code === 2 && next.value === 'LAYER';
+      } else if (pair.value === 'ENDTAB') {
+        inLayers = false;
+      } else if (inLayers && pair.value === 'LAYER') {
+        layer = { type: 'LAYER', groups: [] };
+      }
+    } else if (layer) {
+      layer.groups.push(pair);
+    }
+  }
+  settle();
+  return hidden;
+}
+
 /** A radius: finite and strictly positive, or the file is malformed. */
 function radius(entity: DxfEntity): number {
   const value = number(entity, 40);
@@ -649,6 +691,7 @@ export function importDxfSketch(
     throw new DxfImportError('This DXF has no ENTITIES section to import.');
   }
   const unitCode = insUnits(sections.get('HEADER'));
+  const hidden = hiddenLayers(sections.get('TABLES'));
   const known = unitCode !== null ? INSUNITS_TO_MM[unitCode] : undefined;
   if (unitCode !== null && unitCode !== 0 && !known) {
     throw new DxfImportError(
@@ -755,6 +798,12 @@ export function importDxfSketch(
     }
     if (visibility === 1) {
       count(dropped, `${entity.type} (invisible)`);
+      continue;
+    }
+    // On a layer that is off or frozen, it is as hidden as group 60 = 1.
+    const layerName = singleGroup(entity, 8)?.value ?? '0';
+    if (hidden.has(layerName)) {
+      count(dropped, `${entity.type} (hidden layer)`);
       continue;
     }
     if (!inXyPlane(entity)) {

@@ -1988,6 +1988,90 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     ).toThrow('60 must be 0 or 1');
   });
 
+  it('leaves entities on off or frozen layers out', () => {
+    const tables = [
+      '0',
+      'SECTION',
+      '2',
+      'TABLES',
+      '0',
+      'TABLE',
+      '2',
+      'LAYER',
+      '70',
+      '3',
+      '0',
+      'LAYER',
+      '2',
+      'OFF',
+      '70',
+      '0',
+      '62',
+      '-7',
+      '0',
+      'LAYER',
+      '2',
+      'FROZEN',
+      '70',
+      '1',
+      '62',
+      '7',
+      '0',
+      'LAYER',
+      '2',
+      'PART',
+      '70',
+      '0',
+      '62',
+      '7',
+      '0',
+      'ENDTAB',
+      '0',
+      'ENDSEC'
+    ];
+    const entities = dxf([
+      '0',
+      'LINE',
+      '8',
+      'OFF',
+      '10',
+      '0',
+      '20',
+      '0',
+      '11',
+      '5',
+      '21',
+      '0',
+      '0',
+      'LINE',
+      '8',
+      'FROZEN',
+      '10',
+      '0',
+      '20',
+      '1',
+      '11',
+      '5',
+      '21',
+      '1',
+      '0',
+      'CIRCLE',
+      '8',
+      'PART',
+      '10',
+      '0',
+      '20',
+      '0',
+      '40',
+      '1'
+    ]);
+    const result = importDxfSketch([...tables, entities].join('\n'), 'mm');
+    expect(result.objects).toEqual([
+      expect.objectContaining({ objectKind: 'circle' })
+    ]);
+    expect(result.dropped).toEqual({ 'LINE (hidden layer)': 2 });
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',
