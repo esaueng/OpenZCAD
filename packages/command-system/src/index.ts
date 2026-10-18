@@ -50,7 +50,9 @@ import {
   toEntityId,
   toShaprImportId,
   type BodyId,
+  type DatumPlaneSource,
   type EntityId,
+  type FeatureId,
   type FeatureNode,
   type ParamValue,
   type ProjectDocument,
@@ -187,6 +189,7 @@ import {
   isSketchDimensionField,
   isLocalBodyRef,
   normalizeLocalId,
+  type CadDatumPlaneSource,
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
 import {
@@ -2100,6 +2103,32 @@ function assertOperationExpressions(
       vector(`${operation.name} plane.origin`, operation.plane.origin);
       vector(`${operation.name} plane.normal`, operation.plane.normal);
       break;
+    case 'add_datum_plane': {
+      const { definition } = operation;
+      if (definition.kind === 'offset')
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} offset`,
+          definition.offset,
+          documentUnits
+        );
+      const sources =
+        definition.kind === 'offset' ? [definition.source] : definition.sources;
+      for (const source of sources)
+        if (source.type === 'canonical')
+          assertEvaluableExpression(
+            scope,
+            `${operation.name} source offset`,
+            source.offset,
+            documentUnits
+          );
+      break;
+    }
+    case 'add_datum_sketch':
+      sketchObjects(operation.name, operation.objects);
+      break;
+    case 'add_datum_mirror':
+      break;
     case 'add_shell':
       assertEvaluableExpression(
         scope,
@@ -2401,6 +2430,25 @@ export function commandsForCadPatch(
       sourceArea: region.area
     };
   };
+
+  /** R01 datum planes created earlier in this proposal, by alias. */
+  const localDatums = new Map<string, FeatureId>();
+  const resolveDatum = (reference: string): FeatureId => {
+    if (isLocalBodyRef(reference)) {
+      const local = localDatums.get(normalizeLocalId(reference));
+      if (!local) {
+        throw new Error(
+          `Datum alias ${reference} is not declared by an earlier add_datum_plane.`
+        );
+      }
+      return local;
+    }
+    return reference as FeatureId;
+  };
+  const datumSource = (source: CadDatumPlaneSource): DatumPlaneSource =>
+    source.type === 'canonical'
+      ? newCanonicalPlaneRef(source.plane, source.offset)
+      : { type: 'datum', datumFeatureId: resolveDatum(source.datum) };
 
   const commandForOperation = (
     proposed: CadPatchProposal['operations'][number]
@@ -2806,6 +2854,67 @@ export function commandsForCadPatch(
           name: operation.name,
           targetBodyId,
           plane: operation.plane,
+          ids
+        });
+      }
+      case 'add_datum_plane': {
+        // Minted now so a later operation can name the datum before it runs.
+        const ids = createFeatureOnlyIds();
+        const { definition } = operation;
+        const datum = commandFactories.addDatumPlane({
+          name: operation.name,
+          definition:
+            definition.kind === 'offset'
+              ? {
+                  kind: 'offset',
+                  source: datumSource(definition.source),
+                  offset: definition.offset,
+                  ...(definition.reverseNormal ? { reverseNormal: true } : {})
+                }
+              : {
+                  kind: 'midplane',
+                  sources: [
+                    datumSource(definition.sources[0]),
+                    datumSource(definition.sources[1])
+                  ],
+                  ...(definition.reverseNormal ? { reverseNormal: true } : {})
+                },
+          ids
+        });
+        if (operation.localId) {
+          localDatums.set(normalizeLocalId(operation.localId), ids.featureId);
+        }
+        return datum;
+      }
+      case 'add_datum_sketch': {
+        const ids = createSketchFeatureIds(operation.objects.length);
+        const planeRef = {
+          type: 'datum' as const,
+          datumFeatureId: resolveDatum(operation.datum)
+        };
+        if (operation.localId) {
+          localSketches.set(normalizeLocalId(operation.localId), {
+            sketchId: ids.sketchId,
+            objects: operation.objects,
+            objectIds: [...ids.objectNodeIds]
+          });
+        }
+        return commandFactories.addSketch({
+          name: operation.name,
+          planeRef,
+          objects: operation.objects,
+          ids
+        });
+      }
+      case 'add_datum_mirror': {
+        const ids = createBodyFeatureIds();
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        const datumFeatureId = resolveDatum(operation.datum);
+        scope.declare(operation.localId, ids.bodyId);
+        return commandFactories.mirrorBody({
+          name: operation.name,
+          targetBodyId,
+          plane: { type: 'datum', datumFeatureId },
           ids
         });
       }
