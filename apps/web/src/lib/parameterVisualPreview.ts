@@ -244,7 +244,19 @@ function constructions(doc: ProjectDocument): Construction[] {
           {
             ...holder,
             result: h.text.bodyId,
-            features: constructionFeatures(doc, h.text.bodyId),
+            // The recognizer verifies every placement and the one driving
+            // translation of the text body. Those transforms follow its
+            // import producer, so the backward construction walk omits them.
+            features: new Set([
+              ...constructionFeatures(doc, h.text.bodyId),
+              ...listFeaturesInOrder(doc)
+                .filter(
+                  (feature) =>
+                    feature.data.featureKind === 'transform' &&
+                    feature.data.targetBodyId === h.text!.bodyId
+                )
+                .map((feature) => feature.featureId)
+            ]),
             parts: [{ bodyId: h.text.bodyId, move: h.text.move }]
           }
         ]
@@ -266,10 +278,11 @@ function mentions(value: unknown, names: Set<string>): boolean {
 }
 
 /** No per-vertex work: an edit allocates only a few matrices and instance records. */
-export function parameterVisualPreview(
+function previewPreparedParameter(
   base: ProjectDocument | null,
   next: ProjectDocument | null,
-  includeUnchanged = false
+  includeUnchanged: boolean,
+  prepared: PreparedParameterState
 ): ParameterVisualPreview | null {
   if (
     !base ||
@@ -280,13 +293,10 @@ export function parameterVisualPreview(
     JSON.stringify(base.bodyOrder) !== JSON.stringify(next.bodyOrder)
   )
     return null;
-  const structure = (d: ProjectDocument) =>
-    Object.values(d.nodes).filter((n) => n.kind !== 'parameter');
-  if (JSON.stringify(structure(base)) !== JSON.stringify(structure(next)))
-    return null;
-  const recipes = constructions(next);
+  if (!prepared.recipes.length || !sameStructure(next, prepared)) return null;
+  const recipes = prepared.recipes;
   if (!recipes.length) return null;
-  const before = getParameterScope(base),
+  const before = prepared.scope,
     after = getParameterScope(next);
   if (before.errors.length || after.errors.length) return null;
   const controlled = new Set(
@@ -432,4 +442,77 @@ export function parameterVisualPreview(
     return null;
   }
   return previews.length ? previews : null;
+}
+
+// STEP strings are immutable. Compare them exactly, separately from the small
+// structural key, so a slider tick does not hash/serialize megabytes of payload.
+function parameterStructure(document: ProjectDocument): string {
+  return JSON.stringify(
+    Object.values(document.nodes)
+      .filter((node) => node.kind !== 'parameter')
+      .map((node) =>
+        node.kind === 'feature' && node.data.featureKind === 'imported-step'
+          ? { ...node, data: { ...node.data, stepText: null } }
+          : node
+      )
+  );
+}
+
+interface PreparedParameterState {
+  structure: string;
+  stepTexts: Map<string, unknown>;
+  recipes: Construction[];
+  scope: ReturnType<typeof getParameterScope>;
+}
+
+function sameStructure(
+  document: ProjectDocument,
+  prepared: PreparedParameterState
+): boolean {
+  for (const [id, text] of prepared.stepTexts) {
+    const node = document.nodes[id];
+    if (
+      node?.kind !== 'feature' ||
+      node.data.featureKind !== 'imported-step' ||
+      node.data.stepText !== text
+    )
+      return false;
+  }
+  return prepared.structure === parameterStructure(document);
+}
+
+/** One gesture owns the recipe, source meshes and resolved baseline scope. */
+export function prepareParameterEditSession(base: ProjectDocument | null) {
+  if (!base) return null;
+  const prepared: PreparedParameterState = {
+    structure: parameterStructure(base),
+    stepTexts: new Map(
+      Object.values(base.nodes).flatMap((node) =>
+        node.kind === 'feature' && node.data.featureKind === 'imported-step'
+          ? [[node.id, node.data.stepText] as const]
+          : []
+      )
+    ),
+    recipes: constructions(base),
+    scope: getParameterScope(base)
+  };
+  return {
+    preview(
+      next: ProjectDocument | null,
+      includeUnchanged = false
+    ): ParameterVisualPreview | null {
+      return previewPreparedParameter(base, next, includeUnchanged, prepared);
+    }
+  };
+}
+
+/** Compatibility for one-off callers; interactive callers prepare once. */
+export function parameterVisualPreview(
+  base: ProjectDocument | null,
+  next: ProjectDocument | null,
+  includeUnchanged = false
+): ParameterVisualPreview | null {
+  return (
+    prepareParameterEditSession(base)?.preview(next, includeUnchanged) ?? null
+  );
 }

@@ -171,7 +171,9 @@ interface SidebarProps {
   /** F05: retypes a parameter; answers with a refusal. */
   onSetParameterQuantity?(
     name: string,
-    quantity: ParameterKind | null
+    quantity: ParameterKind | null,
+    /** The row's unsaved or still-committing expression draft. */
+    expression?: string
   ): void | Promise<string | null>;
   /** F05: each unitless parameter's suggested quantity, by name. */
   parameterQuantitySuggestions?: Readonly<Record<string, ParameterKind>>;

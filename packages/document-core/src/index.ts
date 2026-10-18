@@ -772,6 +772,30 @@ function withReadableHistory(document: ProjectDocument): ProjectDocument {
   return readable;
 }
 
+const KNOWN_PARAMETER_KINDS: readonly ParameterKind[] = [
+  'length',
+  'angle',
+  'number'
+];
+
+/**
+ * F05: a stored `quantity` must be one this client knows. The type union is
+ * no protection for a document from collaboration, a backup or the API, and
+ * an unknown kind would otherwise reach the scope and the Parameters panel,
+ * so it is refused like any other malformed field rather than guessed at.
+ */
+function assertParameterQuantity(node: ParameterNode): void {
+  const quantity: unknown = node.quantity;
+  if (
+    quantity !== undefined &&
+    !(KNOWN_PARAMETER_KINDS as readonly unknown[]).includes(quantity)
+  ) {
+    throw new Error(
+      `Parameter "${node.name}" has an unknown type ${JSON.stringify(quantity)}.`
+    );
+  }
+}
+
 /**
  * Fills in collections that older saved documents may lack, so loading a
  * pre-parametric document does not crash newer code paths.
@@ -789,6 +813,7 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   const document = withReadableHistory(input);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch') assertSketchReferenceDimensions(node);
+    if (node.kind === 'parameter') assertParameterQuantity(node);
   }
   const revisions = Array.isArray(document.revisions)
     ? document.revisions
@@ -2980,6 +3005,17 @@ export function setParameter(
   if (input.expression.trim().length === 0) {
     throw new Error('Parameter expression must not be empty.');
   }
+  // A replayed or API payload is not type-checked: refuse a type this client
+  // does not know before it is stored and the document can no longer load.
+  if (
+    input.quantity !== undefined &&
+    input.quantity !== null &&
+    !(KNOWN_PARAMETER_KINDS as readonly unknown[]).includes(input.quantity)
+  ) {
+    throw new Error(
+      `Parameter "${name}" cannot take the unknown type ${JSON.stringify(input.quantity)}.`
+    );
+  }
   const next = cloneDocument(document);
   const parameters = listParameters(next);
   const existing = parameters.find((parameter) => parameter.name === name);
@@ -3276,37 +3312,128 @@ function evaluateParameter(
 }
 
 /**
- * Names the reference cycle `name` sits on among the still-unresolved
- * parameters (`a → b → a`), or null when it is not on one.
+ * The reference cycles among the still-unresolved parameters, found in one
+ * iterative pass (Tarjan's strongly connected components), so a long chain of
+ * broken parameters costs linear time and no recursion depth. Each parameter
+ * on a cycle maps to a path that names it (`a → b → a`); a large component is
+ * named by its members rather than walked parameter by parameter.
  */
-function parameterCycle(
-  name: string,
+function parameterCycles(
   pending: ReadonlyMap<string, ParameterNode>
-): string[] | null {
-  const path: string[] = [];
-  const visiting = new Set<string>();
-  const walk = (current: string): string[] | null => {
-    if (current === name && path.length > 0) return [...path, name];
-    if (visiting.has(current)) return null;
-    visiting.add(current);
-    path.push(current);
-    const parameter = pending.get(current);
-    for (const next of parameter
-      ? expressionIdentifiers(parameter.expression)
-      : []) {
-      if (!pending.has(next)) continue;
-      const found = walk(next);
-      if (found) return found;
+): Map<string, string[]> {
+  const edges = new Map<string, string[]>();
+  for (const [name, parameter] of pending) {
+    edges.set(
+      name,
+      expressionIdentifiers(parameter.expression).filter((next) =>
+        pending.has(next)
+      )
+    );
+  }
+  const index = new Map<string, number>();
+  const low = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  const components: string[][] = [];
+  let counter = 0;
+  for (const root of edges.keys()) {
+    if (index.has(root)) continue;
+    const work: Array<{ node: string; next: number }> = [
+      { node: root, next: 0 }
+    ];
+    index.set(root, counter);
+    low.set(root, counter);
+    counter += 1;
+    stack.push(root);
+    onStack.add(root);
+    while (work.length > 0) {
+      const frame = work[work.length - 1]!;
+      const out = edges.get(frame.node)!;
+      if (frame.next < out.length) {
+        const next = out[frame.next]!;
+        frame.next += 1;
+        if (!index.has(next)) {
+          index.set(next, counter);
+          low.set(next, counter);
+          counter += 1;
+          stack.push(next);
+          onStack.add(next);
+          work.push({ node: next, next: 0 });
+        } else if (onStack.has(next)) {
+          low.set(frame.node, Math.min(low.get(frame.node)!, index.get(next)!));
+        }
+        continue;
+      }
+      work.pop();
+      const parent = work[work.length - 1];
+      if (parent) {
+        low.set(
+          parent.node,
+          Math.min(low.get(parent.node)!, low.get(frame.node)!)
+        );
+      }
+      if (low.get(frame.node) === index.get(frame.node)) {
+        const component: string[] = [];
+        let member: string;
+        do {
+          member = stack.pop()!;
+          onStack.delete(member);
+          component.push(member);
+        } while (member !== frame.node);
+        components.push(component);
+      }
     }
-    path.pop();
-    return null;
-  };
-  return walk(name);
+  }
+  const cycles = new Map<string, string[]>();
+  for (const component of components) {
+    const members = new Set(component);
+    const selfLoop =
+      component.length === 1 &&
+      edges.get(component[0]!)!.includes(component[0]!);
+    if (component.length === 1 && !selfLoop) continue;
+    for (const name of component) {
+      cycles.set(
+        name,
+        component.length <= 32
+          ? shortestCycle(name, edges, members)
+          : [name, '…', name]
+      );
+    }
+  }
+  return cycles;
+}
+
+/** The shortest path from `name` back to itself inside one small component. */
+function shortestCycle(
+  name: string,
+  edges: ReadonlyMap<string, readonly string[]>,
+  members: ReadonlySet<string>
+): string[] {
+  const previous = new Map<string, string>();
+  const queue = [name];
+  for (let head = 0; head < queue.length; head += 1) {
+    const current = queue[head]!;
+    for (const next of edges.get(current) ?? []) {
+      if (!members.has(next)) continue;
+      if (next === name) {
+        const path = [name];
+        for (let step = current; step !== name; step = previous.get(step)!) {
+          path.push(step);
+        }
+        return [name, ...path.slice(1).reverse(), name];
+      }
+      if (!previous.has(next) && next !== name) {
+        previous.set(next, current);
+        queue.push(next);
+      }
+    }
+  }
+  return [name, name];
 }
 
 /**
  * Evaluates the whole parameter table. Parameters may reference each other in
- * any declaration order; evaluation iterates until a fixed point, so cycles
+ * any declaration order; evaluation follows the dependency order, so cycles
  * and unknown identifiers surface as per-parameter errors instead of crashes.
  * A cycle is named as one (`a → b → a`) rather than as the unknown
  * identifier it looks like from inside. The scope carries each typed
@@ -3326,22 +3453,48 @@ export function getParameterScope(
   );
   const errors: string[] = [];
 
-  let progressed = true;
-  while (progressed && pending.size > 0) {
-    progressed = false;
-    for (const [name, parameter] of [...pending]) {
-      try {
-        scope[name] = evaluateParameter(parameter, scope, document.units);
-        pending.delete(name);
-        progressed = true;
-      } catch {
-        // Possibly depends on a parameter not yet evaluated; retry next pass.
-      }
+  // Evaluate in dependency order (Kahn): each parameter once its reads are
+  // done, so a long chain declared in reverse stays linear rather than one
+  // resolution per pass. A failure, a cycle or anything downstream of one
+  // stays pending and is reported below.
+  const waiting = new Map<string, number>();
+  const readers = new Map<string, string[]>();
+  for (const [name, parameter] of pending) {
+    const reads = new Set(
+      expressionIdentifiers(parameter.expression).filter((read) =>
+        pending.has(read)
+      )
+    );
+    waiting.set(name, reads.size);
+    for (const read of reads) {
+      let list = readers.get(read);
+      if (!list) readers.set(read, (list = []));
+      list.push(name);
+    }
+  }
+  const ready = [...pending.keys()].filter((name) => waiting.get(name) === 0);
+  while (ready.length > 0) {
+    const name = ready.pop()!;
+    try {
+      scope[name] = evaluateParameter(
+        pending.get(name)!,
+        scope,
+        document.units
+      );
+      pending.delete(name);
+    } catch {
+      // Reported below; its readers then fail on the missing name.
+    }
+    for (const reader of readers.get(name) ?? []) {
+      const left = waiting.get(reader)! - 1;
+      waiting.set(reader, left);
+      if (left === 0) ready.push(reader);
     }
   }
 
+  const cycles = parameterCycles(pending);
   for (const [name, parameter] of pending) {
-    const cycle = parameterCycle(name, pending);
+    const cycle = cycles.get(name);
     if (cycle) {
       errors.push(
         `Parameter "${name}": its expression refers back to itself (${cycle.join(' → ')}).`
@@ -5096,6 +5249,9 @@ export function getExpressionDimensions(
  * The scope variables an expression reads. Functions and constants are
  * filtered out by name; `isValidParameterName` refuses every one of them, so
  * a surviving identifier can only be a parameter reference (or a typo).
+ * A unit suffix directly after a number (`5 m`) is the parser's unit, and a
+ * name directly before `(` is always a function call (`foo(1)`), so neither
+ * is a read of a parameter that happens to share the name.
  * Unparseable input reads nothing rather than throwing — callers here are
  * auditing a document, not evaluating it.
  */
@@ -5107,11 +5263,17 @@ export function expressionIdentifiers(expression: string): string[] {
     return [];
   }
   const names: string[] = [];
-  for (const token of tokens) {
-    if (token.type === 'identifier' && !RESERVED_IDENTIFIERS.has(token.name)) {
-      names.push(token.name);
+  tokens.forEach((token, index) => {
+    if (token.type !== 'identifier' || RESERVED_IDENTIFIERS.has(token.name)) {
+      return;
     }
-  }
+    if (tokens[index - 1]?.type === 'number' && isUnitSuffix(token.name)) {
+      return;
+    }
+    const next = tokens[index + 1];
+    if (next?.type === 'paren' && next.value === '(') return;
+    names.push(token.name);
+  });
   return names;
 }
 
@@ -5153,7 +5315,9 @@ function renameIdentifierInExpression(
     if (identifierMatch) {
       const name = identifierMatch[0];
       const isUnitPosition = previousWasNumber && isUnitSuffix(name);
-      out += name === oldName && !isUnitPosition ? newName : name;
+      // A name before `(` is always a call to the parser, never a read.
+      const isCall = /^\s*\(/.test(rest.slice(name.length));
+      out += name === oldName && !isUnitPosition && !isCall ? newName : name;
       index += name.length;
       previousWasNumber = false;
       continue;
@@ -5308,9 +5472,52 @@ export function parameterQuantityRefusal(
 }
 
 /** One stored expression that uses a typed parameter in a way it cannot hold. */
+/**
+ * Every object inside `root` keyed to its property path
+ * (`data.transform.translation`). An array element with an id is named by
+ * it (`constraints[c_12]`), so removing an earlier entry renames nothing.
+ */
+function objectPaths(root: object): WeakMap<object, string> {
+  const paths = new WeakMap<object, string>();
+  const stack: [object, string][] = [[root, '']];
+  while (stack.length > 0) {
+    const [value, path] = stack.pop()!;
+    if (paths.has(value)) continue;
+    paths.set(value, path);
+    const list = Array.isArray(value);
+    for (const [key, child] of Object.entries(value)) {
+      if (!child || typeof child !== 'object') continue;
+      const { id = undefined, constraintId = undefined } = child as {
+        id?: unknown;
+        constraintId?: unknown;
+      };
+      const name = typeof id === 'string' ? id : constraintId;
+      const segment = list
+        ? `[${typeof name === 'string' ? name : key}]`
+        : path
+          ? `.${key}`
+          : key;
+      stack.push([child as object, `${path}${segment}`]);
+    }
+  }
+  return paths;
+}
+
 export interface TypedParameterMisuse {
   /** The feature that would build from it (null when none does). */
   featureId: FeatureId | null;
+  /**
+   * Which occurrence this is: the holding node and the field's property
+   * path. Labels repeat (two sketch lines with the same expression), so
+   * comparisons between documents key on this, not on the message.
+   */
+  occurrence: string;
+  /**
+   * The stored expression with parameter reads written as ids, without the
+   * holder's label: renaming the holder or a parameter changes the message
+   * but not the misuse, while editing the field does.
+   */
+  detail: string;
   message: string;
 }
 
@@ -5323,12 +5530,55 @@ export interface TypedParameterMisuse {
  * wrong quantity — whoever authored the feature (a form, the assistant, an
  * API client or an older client's document).
  */
+/**
+ * An expression with each parameter read written as that parameter's id, so
+ * renaming a parameter (which rewrites every expression reading it) leaves
+ * the form unchanged while any real edit changes it. Unit suffixes stay as
+ * written; unparseable text is returned as is.
+ */
+function renameStableExpression(
+  expression: string,
+  parameterIds: ReadonlyMap<string, string>
+): string {
+  let tokens: ExpressionToken[];
+  try {
+    tokens = tokenizeExpression(expression);
+  } catch {
+    return expression;
+  }
+  return tokens
+    .map((token, index) => {
+      if (token.type === 'number') return String(token.value);
+      if (token.type === 'comma') return ',';
+      if (token.type !== 'identifier') return token.value;
+      // A unit suffix and a call (`foo(1)`) are not parameter reads, and a
+      // rename leaves them as written.
+      const next = tokens[index + 1];
+      const notRead =
+        (tokens[index - 1]?.type === 'number' && isUnitSuffix(token.name)) ||
+        (next?.type === 'paren' && next.value === '(');
+      const id = notRead ? undefined : parameterIds.get(token.name);
+      return id ? `#${id}` : token.name;
+    })
+    .join(' ');
+}
+
 export function typedParameterMisuse(
   document: ProjectDocument
 ): TypedParameterMisuse[] {
+  const parameters = listParameters(document);
+  // Most documents type nothing: skip the whole-scope evaluation, which runs
+  // for both sides of every command.
+  if (!parameters.some((parameter) => parameter.quantity)) return [];
   const { scope } = getParameterScope(document);
-  const typed = Object.keys(parameterKindsOf(scope));
-  if (typed.length === 0) return [];
+  const typed = new Set(Object.keys(parameterKindsOf(scope)));
+  const parameterIds = new Map(
+    parameters.map((parameter) => [
+      parameter.name,
+      String(parameter.parameterId)
+    ])
+  );
+  if (typed.size === 0) return [];
   const sketchFeature = new Map<string, FeatureId>();
   for (const feature of listFeaturesInOrder(document)) {
     if (feature.data.featureKind === 'sketch') {
@@ -5348,12 +5598,12 @@ export function typedParameterMisuse(
     return null;
   };
   const misuse: TypedParameterMisuse[] = [];
+  // Parameters too: `length = later` typed a length is a misuse once `later`
+  // is an angle, though the scope reports it only as a failed parameter.
   for (const node of Object.values(document.nodes)) {
-    if (node.kind === 'parameter') continue;
-    rewriteNodeExpressions(node, (expression, dimension) => {
-      if (
-        !expressionIdentifiers(expression).some((name) => typed.includes(name))
-      ) {
+    let paths: WeakMap<object, string> | null = null;
+    rewriteNodeExpressions(node, (expression, dimension, site) => {
+      if (!expressionIdentifiers(expression).some((name) => typed.has(name))) {
         return expression;
       }
       try {
@@ -5364,9 +5614,13 @@ export function typedParameterMisuse(
         );
         if (dimension) requireFieldDimension(result, dimension);
       } catch (error) {
+        const reason =
+          error instanceof Error ? error.message : 'it no longer evaluates.';
         misuse.push({
           featureId: owner(node),
-          message: `${referenceLabel(node)} uses "${expression}": ${error instanceof Error ? error.message : 'it no longer evaluates.'}`
+          occurrence: `${node.id}:${(paths ??= objectPaths(node)).get(site.container) ?? '?'}.${site.key}`,
+          detail: renameStableExpression(expression, parameterIds),
+          message: `${referenceLabel(node)} uses "${expression}": ${reason}`
         });
       }
       return expression;
@@ -5386,56 +5640,124 @@ export function newTypedParameterMisuse(
 ): string | null {
   const found = typedParameterMisuse(after);
   if (found.length === 0) return null;
-  const known = new Set(
-    typedParameterMisuse(before).map((entry) => entry.message)
-  );
-  return found.find((entry) => !known.has(entry.message))?.message ?? null;
+  // Same field, same expression, same complaint: an occurrence the edit did
+  // not introduce. Keyed per node and field, as labels and messages repeat,
+  // and without the label, which a rename changes.
+  const key = (entry: TypedParameterMisuse) =>
+    `${entry.occurrence}\u0000${entry.detail}`;
+  const known = new Set(typedParameterMisuse(before).map(key));
+  return found.find((entry) => !known.has(key(entry)))?.message ?? null;
 }
 
+/** Unitless parameters one expression may read and still be re-checked per suggestion. */
+const MAX_SUGGESTION_SHARED_READS = 16;
+
 /**
- * F05: the quantity a unitless parameter most plausibly measures, offered to
- * the owner rather than applied: what its own expression carries (`12 mm`,
- * `30 deg`), else the one dimension every field that reads it agrees on.
- * Null when it is already typed, the evidence disagrees or is absent, or the
- * suggestion would break a use (see {@link parameterQuantityRefusal}).
+ * F05: the quantity each unitless parameter most plausibly measures, offered
+ * to the owner rather than applied: what its own expression carries
+ * (`12 mm`, `30 deg`), else the one dimension every field that reads it
+ * agrees on. A parameter is left out when it is typed or a toggle, the
+ * evidence disagrees or is absent, or the suggestion would break a use.
+ *
+ * One pass for the whole table: the scope and an index of every expression
+ * by the names it reads are built once, and each candidate re-checks only
+ * the expressions that read it, so a large document stays linear.
  */
+export function suggestParameterQuantities(
+  document: ProjectDocument
+): Record<string, ParameterKind> {
+  const parameters = listParameters(document);
+  const suggestions: Record<string, ParameterKind> = {};
+  const candidates = parameters.filter(
+    (parameter) => !parameter.quantity && !parameter.toggle
+  );
+  if (candidates.length === 0) return suggestions;
+  const { scope } = getParameterScope(document);
+  const uses = new Map<
+    string,
+    {
+      expression: string;
+      dimension: ExpressionFieldDimension;
+      self: string | null;
+      wide: boolean;
+    }[]
+  >();
+  const untyped = new Set(candidates.map((parameter) => parameter.name));
+  for (const node of Object.values(document.nodes)) {
+    const self = node.kind === 'parameter' ? node.name : null;
+    rewriteNodeExpressions(node, (expression, dimension) => {
+      const names = new Set(expressionIdentifiers(expression));
+      // Re-checking one expression per candidate it reads is quadratic in
+      // `p1 + … + pN`. Past a handful of unitless reads, typing any one alone
+      // would mix dimensions there anyway, so such a read simply suggests
+      // nothing for its candidates rather than being re-parsed N times.
+      let unitless = 0;
+      for (const name of names) if (untyped.has(name)) unitless += 1;
+      const wide = unitless > MAX_SUGGESTION_SHARED_READS;
+      for (const name of names) {
+        let list = uses.get(name);
+        if (!list) uses.set(name, (list = []));
+        list.push({ expression, dimension, self, wide });
+      }
+      return expression;
+    });
+  }
+  // One trial scope for every candidate: the candidate's kind is set for its
+  // check and removed after (candidates are untyped, so never in `kinds`).
+  const trialKinds: Record<string, ParameterKind> = {
+    ...parameterKindsOf(scope)
+  };
+  const trial = withParameterKinds({ ...scope }, trialKinds);
+  for (const target of candidates) {
+    let suggestion: ParameterKind | null = null;
+    try {
+      const own = getExpressionDimensions(target.expression, scope, {
+        documentUnits: document.units
+      });
+      if (own.length === 1 && own.angle === 0) suggestion = 'length';
+      else if (own.angle === 1 && own.length === 0) suggestion = 'angle';
+      // An area or any other dimension no type can hold: its uses must not
+      // suggest one the picker would refuse.
+      else if (own.length !== 0 || own.angle !== 0) continue;
+    } catch {
+      continue;
+    }
+    const reads = (uses.get(target.name) ?? []).filter(
+      (use) => use.self !== target.name
+    );
+    if (reads.some((use) => use.wide)) continue;
+    if (!suggestion) {
+      const seen = new Set(reads.map((use) => use.dimension));
+      seen.delete(null);
+      if (seen.size !== 1) continue;
+      suggestion = [...seen][0] as ParameterKind;
+    }
+    trialKinds[target.name] = suggestion;
+    const breaks = reads.some((use) => {
+      try {
+        const result = parseExpressionQuantity(
+          use.expression,
+          trial,
+          document.units
+        );
+        if (use.dimension) requireFieldDimension(result, use.dimension);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    delete trialKinds[target.name];
+    if (!breaks) suggestions[target.name] = suggestion;
+  }
+  return suggestions;
+}
+
+/** {@link suggestParameterQuantities} for one parameter. */
 export function suggestParameterQuantity(
   document: ProjectDocument,
   name: string
 ): ParameterKind | null {
-  const target = listParameters(document).find(
-    (parameter) => parameter.name === name
-  );
-  if (!target || target.quantity || target.toggle) return null;
-  const { scope } = getParameterScope(document);
-  let suggestion: ParameterKind | null = null;
-  try {
-    const own = getExpressionDimensions(target.expression, scope, {
-      documentUnits: document.units
-    });
-    if (own.length === 1 && own.angle === 0) suggestion = 'length';
-    else if (own.angle === 1 && own.length === 0) suggestion = 'angle';
-  } catch {
-    return null;
-  }
-  if (!suggestion) {
-    const seen = new Set<ExpressionFieldDimension>();
-    for (const node of Object.values(document.nodes)) {
-      if (node.kind === 'parameter' && node.name === name) continue;
-      rewriteNodeExpressions(node, (expression, dimension) => {
-        if (expressionIdentifiers(expression).includes(name)) {
-          seen.add(dimension);
-        }
-        return expression;
-      });
-    }
-    seen.delete(null);
-    if (seen.size !== 1) return null;
-    suggestion = [...seen][0] as ParameterKind;
-  }
-  return parameterQuantityRefusal(document, name, suggestion) === null
-    ? suggestion
-    : null;
+  return suggestParameterQuantities(document)[name] ?? null;
 }
 
 export {

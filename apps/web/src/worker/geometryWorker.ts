@@ -62,6 +62,7 @@ export type GeometryWorkerRequest =
       type: 'preview-geometry';
       document: ProjectDocument;
       requestId: string;
+      deferTopology?: boolean;
     }
   | {
       type: 'sync';
@@ -588,6 +589,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       await preloadDocumentFonts(document);
       post(stateFor('rebuilding', request, { stale: true }));
       const geometry = await exact.previewGeometry(document, {
+        deferTopology: request.deferTopology,
         cancellation: {
           isCancelled: () => cancelledRequests.has(request.requestId)
         },

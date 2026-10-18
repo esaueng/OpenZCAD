@@ -18,6 +18,7 @@ import type { useValidatedFeatureCommit } from '../../hooks/useValidatedFeatureC
 import { CardHeader } from '../CardHeader';
 import { PanelOverflow } from '../PanelOverflow';
 import { ExprInput } from '../ExprInput';
+import { evalParamValue } from '../../lib/model';
 import {
   buildDatumPlaneDefinition,
   datumFormStateFromFeature,
@@ -67,6 +68,14 @@ export interface DatumPlaneFormProps {
    */
   offsetDragRef?: { current: ((delta: number) => void) | null };
   /**
+   * How far the draft moves the opened datum, in its stored offset, while
+   * only its distance changed (a plain number), so the viewport can show the
+   * plane where Done would put it; null once the draft changes anything
+   * else. Measured from the opened offset as evaluated, so it holds for a
+   * datum committed as an expression too.
+   */
+  onOffsetDraft?(change: number | null): void;
+  /**
    * Where the form registers exact entry for the viewport handle: the pin's
    * value chip and exact-entry key focus the Offset field. False when the
    * field is not shown (a midplane).
@@ -77,6 +86,30 @@ export interface DatumPlaneFormProps {
    * is a plain number. A Midplane or an expression withdraws the handle.
    */
   onOffsetDragAvailable?(available: boolean): void;
+}
+
+/**
+ * How far a plain-number draft Offset moves the opened datum (draft minus
+ * the opened offset, evaluated), when the draft is that datum with only its
+ * distance changed; else null.
+ */
+export function datumDraftOffset(
+  initial: DatumPlaneFormState,
+  state: DatumPlaneFormState,
+  scope: Record<string, number>,
+  units?: UnitSystem
+): number | null {
+  const text = state.offset.trim();
+  const offset = text === '' ? NaN : Number(text);
+  const opened = evalParamValue(initial.offset, scope, units);
+  const sameShape =
+    state.mode === 'offset' &&
+    initial.mode === 'offset' &&
+    state.reverseNormal === initial.reverseNormal &&
+    JSON.stringify(state.sourceA) === JSON.stringify(initial.sourceA);
+  return sameShape && Number.isFinite(offset) && opened !== null
+    ? offset - opened
+    : null;
 }
 
 /**
@@ -97,10 +130,18 @@ export function DatumPlaneForm({
   onCancel,
   onDraftChange,
   offsetDragRef,
+  onOffsetDraft,
   offsetEntryRef,
   onOffsetDragAvailable
 }: DatumPlaneFormProps) {
   const [state, setState] = useState(initial);
+  const draftOffset = datumDraftOffset(initial, state, scope, units);
+  const onOffsetDraftRef = useRef(onOffsetDraft);
+  onOffsetDraftRef.current = onOffsetDraft;
+  useEffect(() => {
+    onOffsetDraftRef.current?.(draftOffset);
+  }, [draftOffset]);
+  useEffect(() => () => onOffsetDraftRef.current?.(null), []);
   const offsetText = state.offset.trim();
   const dragAvailable =
     state.mode === 'offset' &&
@@ -384,6 +425,7 @@ export interface DatumPlaneCardProps {
   onCancel(): void;
   onDraftChange?(): void;
   offsetDragRef?: DatumPlaneFormProps['offsetDragRef'];
+  onOffsetDraft?: DatumPlaneFormProps['onOffsetDraft'];
   offsetEntryRef?: DatumPlaneFormProps['offsetEntryRef'];
   onOffsetDragAvailable?: DatumPlaneFormProps['onOffsetDragAvailable'];
 }
@@ -404,6 +446,7 @@ export function DatumPlaneCard({
   onCancel,
   onDraftChange,
   offsetDragRef,
+  onOffsetDraft,
   offsetEntryRef,
   onOffsetDragAvailable
 }: DatumPlaneCardProps) {
@@ -449,6 +492,7 @@ export function DatumPlaneCard({
       onCancel={onCancel}
       {...(onDraftChange ? { onDraftChange } : {})}
       {...(offsetDragRef ? { offsetDragRef } : {})}
+      {...(onOffsetDraft ? { onOffsetDraft } : {})}
       {...(offsetEntryRef ? { offsetEntryRef } : {})}
       {...(onOffsetDragAvailable ? { onOffsetDragAvailable } : {})}
     />
@@ -488,6 +532,8 @@ export interface DatumPlaneCardApp {
   closeFeaturePanel(): void;
   /** Where the card registers its handler for a drag of the datum's handle. */
   datumOffsetDragRef?: { current: ((delta: number) => void) | null };
+  /** Where the card reports its draft Offset, for the viewport to show. */
+  setDatumOffsetDraft?(offset: number | null): void;
   /** Where the card registers exact entry for its datum's handle. */
   datumOffsetEntryRef?: { current: (() => boolean) | null };
   /** Where the card says whether its draft can take a handle drag. */
@@ -706,6 +752,9 @@ export function DatumPlaneWorkspaceCard({
           }}
           {...(app.datumOffsetDragRef
             ? { offsetDragRef: app.datumOffsetDragRef }
+            : {})}
+          {...(app.setDatumOffsetDraft
+            ? { onOffsetDraft: app.setDatumOffsetDraft }
             : {})}
           {...(app.datumOffsetEntryRef
             ? { offsetEntryRef: app.datumOffsetEntryRef }

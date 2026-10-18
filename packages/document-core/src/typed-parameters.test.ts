@@ -8,11 +8,17 @@ import {
   evaluateFieldExpression,
   getParameterScope,
   listParameters,
+  newTypedParameterMisuse,
+  normalizeDocument,
+  renameNode,
+  renameParameter,
   parameterKindsOf,
   parameterQuantityRefusal,
   setParameter,
+  suggestParameterQuantities,
   suggestParameterQuantity
 } from './index';
+import { rewriteNodeExpressions } from './parameter-expressions';
 
 /**
  * F05 Stage 1a (schema v21): a parameter may say what it measures. A typed
@@ -176,6 +182,48 @@ describe('named cycles', () => {
     );
   });
 
+  it('does not read a name in call position as a self-reference', () => {
+    let document = setParameter(blank(), { name: 'foo', expression: '1' });
+    document = setParameter(document, { name: 'foo', expression: 'foo(1)' });
+    const { errors } = getParameterScope(document);
+    expect(errors.join('\n')).not.toMatch(/refers back to itself/);
+    expect(errors.join('\n')).toMatch(/foo/);
+  });
+
+  it('handles a long broken chain in linear time without deep recursion', () => {
+    // 20,000 parameters, each reading the next, the last an unknown name:
+    // none is a cycle, and none may cost a walk of the whole chain.
+    const document = setParameter(blank(), { name: 'p0', expression: 'p1' });
+    const template = listParameters(document)[0]!;
+    const count = 20_000;
+    for (let index = 1; index < count; index += 1) {
+      const id = `node_chain_${index}`;
+      const parameterId =
+        `parameter_chain_${index}` as typeof template.parameterId;
+      document.nodes[id] = {
+        ...template,
+        id: id as typeof template.id,
+        parameterId,
+        name: `p${index}`,
+        expression: index === count - 1 ? 'missing + 1' : `p${index + 1}`
+      };
+      document.parameterOrder.push(parameterId);
+    }
+    const started = performance.now();
+    const { errors } = getParameterScope(document);
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(errors).toHaveLength(count);
+    expect(errors.some((error) => error.includes('refers back'))).toBe(false);
+  });
+
+  it('names a parameter that reads itself', () => {
+    let document = setParameter(blank(), { name: 'a', expression: '1' });
+    document = setParameter(document, { name: 'a', expression: 'a + 1' });
+    expect(getParameterScope(document).errors).toEqual([
+      'Parameter "a": its expression refers back to itself (a → a).'
+    ]);
+  });
+
   it('still reports a plain unknown identifier as one', () => {
     const document = setParameter(blank(), { name: 'a', expression: 'zz + 1' });
     expect(getParameterScope(document).errors).toEqual([
@@ -221,6 +269,86 @@ describe('suggested quantities', () => {
     expect(suggestParameterQuantity(document, 'x')).toBeNull();
   });
 
+  it('suggests for a large table in one linear pass', () => {
+    // 10,000 unitless parameters, the first used as a box width.
+    let document = setParameter(blank(), { name: 'p0', expression: '5' });
+    const template = listParameters(document)[0]!;
+    const count = 10_000;
+    for (let index = 1; index < count; index += 1) {
+      const id = `node_bulk_${index}`;
+      const parameterId =
+        `parameter_bulk_${index}` as typeof template.parameterId;
+      document.nodes[id] = {
+        ...template,
+        id: id as typeof template.id,
+        parameterId,
+        name: `p${index}`,
+        expression: index % 2 ? `${index} mm` : String(index)
+      };
+      document.parameterOrder.push(parameterId);
+    }
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 'p0', height: 10, depth: 10 }
+    });
+    const started = performance.now();
+    const suggestions = suggestParameterQuantities(document);
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(suggestions.p0).toBe('length');
+    expect(suggestions.p1).toBe('length');
+    expect(suggestions.p2).toBeUndefined();
+    expect(Object.keys(suggestions)).toHaveLength(1 + count / 2);
+  });
+
+  it('stays fast when many fields each read a wide set of unitless parameters', () => {
+    // 128 names fill an expression's 256-token cap; 500 boxes hold two such
+    // products each. Re-parsing every read per candidate took ~2 s here.
+    const count = 128;
+    let document = setParameter(blank(), { name: 'p0', expression: '1' });
+    const template = listParameters(document)[0]!;
+    const names = ['p0'];
+    for (let index = 1; index < count; index += 1) {
+      const id = `node_wide_${index}`;
+      const parameterId =
+        `parameter_wide_${index}` as typeof template.parameterId;
+      document.nodes[id] = {
+        ...template,
+        id: id as typeof template.id,
+        parameterId,
+        name: `p${index}`
+      };
+      document.parameterOrder.push(parameterId);
+      names.push(`p${index}`);
+    }
+    const product = names.join('*');
+    for (let box = 0; box < 500; box += 1) {
+      document = addPrimitiveFeature(document, {
+        name: `Block ${box}`,
+        primitiveKind: 'box',
+        dimensions: { width: product, height: product, depth: 10 }
+      });
+    }
+    const started = performance.now();
+    const suggestions = suggestParameterQuantities(document);
+    expect(performance.now() - started).toBeLessThan(1_000);
+    // A read this wide suggests nothing rather than being re-checked per name.
+    expect(suggestions).toEqual({});
+  });
+
+  it('suggests nothing for an expression no type can hold', () => {
+    let document = setParameter(blank(), {
+      name: 'area',
+      expression: '5 mm * 5 mm'
+    });
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 'area', height: 10, depth: 10 }
+    });
+    expect(suggestParameterQuantities(document).area).toBeUndefined();
+  });
+
   it('does not suggest a quantity that would break a use', () => {
     let document = setParameter(blank(), { name: 'w', expression: '20' });
     document = addPrimitiveFeature(document, {
@@ -230,5 +358,243 @@ describe('suggested quantities', () => {
     });
     // Both fields are lengths, but `w + 1` would add a bare number.
     expect(suggestParameterQuantity(document, 'w')).toBeNull();
+  });
+
+  it('does not count a unit suffix as a read of a parameter named after it', () => {
+    let document = setParameter(blank(), { name: 'm', expression: '20' });
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: '0.01 m', height: '0.02m', depth: 10 }
+    });
+    // `0.01 m` is metres, not the parameter `m`: nothing reads it.
+    expect(suggestParameterQuantities(document).m).toBeUndefined();
+  });
+});
+
+describe('raw-radians fields', () => {
+  it('admits only a unitless value into a countersink angle', () => {
+    const seen: Record<string, unknown> = {};
+    rewriteNodeExpressions(
+      {
+        kind: 'feature',
+        data: {
+          featureKind: 'direct-edit',
+          operation: {
+            kind: 'resize-imported-countersink',
+            boreDiameter: 'bore',
+            sinkDiameter: 'sink',
+            angleRadians: 'tilt'
+          }
+        }
+      } as unknown as Parameters<typeof rewriteNodeExpressions>[0],
+      (expression, dimension) => {
+        seen[expression] = dimension;
+        return expression;
+      }
+    );
+    // A typed angle (degrees) or length would be read as radians.
+    expect(seen.tilt).toBe('number');
+    expect(seen.bore).toBe('length');
+  });
+});
+
+describe('new typed-parameter misuse', () => {
+  it('tells a second identical misuse from the one already there', () => {
+    const document = setParameter(blank(), {
+      name: 'tilt',
+      expression: '30',
+      quantity: 'angle'
+    });
+    const line = {
+      objectKind: 'line' as const,
+      x1: 'tilt',
+      y1: 0,
+      x2: 10,
+      y2: 0
+    };
+    // A document from elsewhere already reads an angle as a coordinate.
+    const before = addSketchFeature(document, {
+      name: 'Profile',
+      objects: [line]
+    }).document;
+    // The same sketch name and expression again: same message, new field.
+    const after = addSketchFeature(before, {
+      name: 'Profile',
+      objects: [line]
+    }).document;
+    expect(newTypedParameterMisuse(document, before)).toMatch(/tilt/);
+    expect(newTypedParameterMisuse(before, before)).toBeNull();
+    expect(newTypedParameterMisuse(before, after)).toMatch(/tilt/);
+  });
+
+  it('does not count a renamed holder as a new misuse', () => {
+    const document = setParameter(blank(), {
+      name: 'tilt',
+      expression: '30',
+      quantity: 'angle'
+    });
+    const before = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 'tilt', depth: 10 }
+    });
+    const node = Object.values(before.nodes).find(
+      (entry) => entry.kind === 'feature' && entry.name === 'Block'
+    )!;
+    const after = renameNode(before, { nodeId: node.id, name: 'Renamed' });
+    expect(newTypedParameterMisuse(document, before)).toMatch(/tilt/);
+    expect(newTypedParameterMisuse(before, after)).toBeNull();
+  });
+
+  it('does not count a renamed parameter as a new misuse, but an edit is', () => {
+    const document = setParameter(blank(), {
+      name: 'tilt',
+      expression: '30',
+      quantity: 'angle'
+    });
+    const before = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 'tilt', depth: 10 }
+    });
+    const renamed = renameParameter(before, { name: 'tilt', newName: 'lean' });
+    expect(newTypedParameterMisuse(before, renamed)).toBeNull();
+    // A real edit of the invalid field is still a new misuse.
+    const edited = structuredClone(before);
+    const box = Object.values(edited.nodes).find(
+      (entry) => entry.kind === 'feature' && entry.name === 'Block'
+    );
+    if (box?.kind !== 'feature' || box.data.featureKind !== 'primitive') {
+      throw new Error('expected the box feature');
+    }
+    box.data.dimensions.height = 'tilt * 2';
+    expect(newTypedParameterMisuse(before, edited)).toMatch(/tilt \* 2/);
+  });
+
+  it('keeps a call-site name as written when its parameter is renamed', () => {
+    let document = setParameter(blank(), {
+      name: 'tilt',
+      expression: '30',
+      quantity: 'angle'
+    });
+    document = setParameter(document, { name: 'foo', expression: '1' });
+    const before = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 'tilt + foo(1)', depth: 10 }
+    });
+    expect(newTypedParameterMisuse(document, before)).toMatch(/tilt/);
+    // `foo(1)` is a call, untouched by the rename: no new misuse.
+    const renamed = renameParameter(before, { name: 'foo', newName: 'bar' });
+    expect(newTypedParameterMisuse(before, renamed)).toBeNull();
+  });
+
+  it('renames a read but not a same-named call in one expression', () => {
+    let document = setParameter(blank(), {
+      name: 'tilt',
+      expression: '30',
+      quantity: 'angle'
+    });
+    document = setParameter(document, { name: 'foo', expression: '1' });
+    const before = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 'tilt + foo + foo (1)', depth: 10 }
+    });
+    const renamed = renameParameter(before, { name: 'foo', newName: 'bar' });
+    const box = Object.values(renamed.nodes).find(
+      (entry) => entry.kind === 'feature' && entry.name === 'Block'
+    );
+    if (box?.kind !== 'feature' || box.data.featureKind !== 'primitive') {
+      throw new Error('expected the box feature');
+    }
+    expect(box.data.dimensions.height).toBe('tilt + bar + foo (1)');
+    expect(newTypedParameterMisuse(before, renamed)).toBeNull();
+  });
+
+  it('evaluates a long chain declared in reverse in linear time', () => {
+    const document = setParameter(blank(), { name: 'p0', expression: '1' });
+    const template = listParameters(document)[0]!;
+    const count = 20_000;
+    // Declared last-first: p19999 = p19998 + 1, …, p1 = p0 + 1, p0 = 1.
+    document.parameterOrder = [];
+    for (let index = count - 1; index >= 1; index -= 1) {
+      const id = `node_reverse_${index}`;
+      const parameterId =
+        `parameter_reverse_${index}` as typeof template.parameterId;
+      document.nodes[id] = {
+        ...template,
+        id: id as typeof template.id,
+        parameterId,
+        name: `p${index}`,
+        expression: `p${index - 1} + 1`
+      };
+      document.parameterOrder.push(parameterId);
+    }
+    document.parameterOrder.push(template.parameterId);
+    const started = performance.now();
+    const { scope, errors } = getParameterScope(document);
+    expect(performance.now() - started).toBeLessThan(2_000);
+    expect(errors).toEqual([]);
+    expect(scope[`p${count - 1}`]).toBe(count);
+  });
+
+  it('keeps an existing misuse its identity when an earlier field changes', () => {
+    const document = setParameter(blank(), {
+      name: 'tilt',
+      expression: '30',
+      quantity: 'angle'
+    });
+    const box = (width: string | number) =>
+      addPrimitiveFeature(document, {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width, height: 'tilt', depth: 10 }
+      });
+    const before = box('10');
+    const after = structuredClone(before);
+    const data = Object.values(after.nodes).find(
+      (node) => node.kind === 'feature' && node.data.featureKind === 'primitive'
+    );
+    if (data?.kind !== 'feature' || data.data.featureKind !== 'primitive') {
+      throw new Error('expected the box feature');
+    }
+    // A string width becomes a literal; the height misuse is unchanged.
+    data.data.dimensions.width = 10;
+    expect(newTypedParameterMisuse(document, before)).toMatch(/tilt/);
+    expect(newTypedParameterMisuse(before, after)).toBeNull();
+  });
+});
+
+describe('stored quantities at the mutation boundary', () => {
+  it('refuses an unknown type from an untyped payload', () => {
+    const document = setParameter(blank(), { name: 'w', expression: '1' });
+    const payload = {
+      name: 'w',
+      expression: '1',
+      quantity: 'mass'
+    } as unknown as Parameters<typeof setParameter>[1];
+    expect(() => setParameter(document, payload)).toThrow(
+      'Parameter "w" cannot take the unknown type "mass".'
+    );
+    expect(() => setParameter(blank(), { ...payload, name: 'fresh' })).toThrow(
+      /unknown type "mass"/
+    );
+  });
+});
+
+describe('stored quantities at load', () => {
+  it('refuses a document whose parameter has an unknown type', () => {
+    const document = setParameter(blank(), { name: 'w', expression: '1' });
+    const node = Object.values(document.nodes).find(
+      (entry) => entry.kind === 'parameter'
+    )!;
+    (node as unknown as { quantity: string }).quantity = 'mass';
+    expect(() => normalizeDocument(document)).toThrow(
+      'Parameter "w" has an unknown type "mass".'
+    );
+    (node as unknown as { quantity: string }).quantity = 'length';
+    expect(() => normalizeDocument(document)).not.toThrow();
   });
 });
