@@ -38,6 +38,9 @@ test.skip(!process.env.OZ_PERF, 'Performance probe; set OZ_PERF=1 to run it.');
 // On hybrid-graphics laptops Chromium renders on the integrated GPU by
 // default. OZ_FACE_DRAG_HIGH_PERF_GPU=1 asks for the discrete one instead;
 // each JSON line records the WebGL renderer either way.
+// OZ_FACE_DRAG_VIDEO=1 records each case as a video in its test-results.
+if (process.env.OZ_FACE_DRAG_VIDEO === '1')
+  test.use({ video: { mode: 'on', size: { width: 1440, height: 1000 } } });
 if (process.env.OZ_FACE_DRAG_HIGH_PERF_GPU === '1')
   test.use({ launchOptions: { args: ['--force_high_performance_gpu'] } });
 
