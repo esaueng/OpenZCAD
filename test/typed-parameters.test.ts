@@ -8,7 +8,13 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import { CommandManager, commandFactories } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandFactories,
+  commandsForCadPatch,
+  composeCommands
+} from '@openzcad/command-system';
+import { parseCadPatchProposal } from '@openzcad/ai-contracts';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
@@ -71,5 +77,70 @@ describe('typed parameters through the exact build (F05)', () => {
 
     manager.undo();
     expect(await size()).toEqual([15, 10]);
+  });
+
+  it('refuses a command that feeds a typed angle to a length field', () => {
+    const document = setParameter(
+      createProjectDocument('Misuse', toUserId('user_f05')),
+      { name: 'tilt', expression: '30', quantity: 'angle' }
+    );
+    const manager = new CommandManager(document);
+    expect(() =>
+      manager.execute(
+        commandFactories.addPrimitive({
+          name: 'Block',
+          primitiveKind: 'box',
+          dimensions: { width: 'tilt', height: 10, depth: 10 }
+        })
+      )
+    ).toThrow(/uses "tilt": .*expected a length/);
+    expect(manager.document.bodyOrder).toEqual([]);
+  });
+
+  it('refuses to build a feature that a document feeds a typed angle as a length', async () => {
+    // Authored outside the command path (an older client, the API): the
+    // build refuses the feature by name instead of building 30 mm.
+    let document = setParameter(
+      createProjectDocument('Misuse build', toUserId('user_f05')),
+      { name: 'tilt', expression: '30', quantity: 'angle' }
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 'tilt', height: 10, depth: 10 }
+    });
+    const [blockId] = document.bodyOrder as [BodyId];
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings.join('\n')).toMatch(
+      /Feature "Block": .*uses "tilt": .*expected a length/
+    );
+    expect(derived.bodyRepresentations[blockId]).toBeUndefined();
+  });
+
+  it('keeps a typed parameter typed across a proposal that renames it', () => {
+    const document = setParameter(
+      createProjectDocument('Rename typed', toUserId('user_f05')),
+      { name: 'w', expression: '10', quantity: 'length' }
+    );
+    const commands = commandsForCadPatch(
+      document,
+      parseCadPatchProposal({
+        proposalId: 'p1',
+        summary: 'Rename and use',
+        assumptions: [],
+        operations: [
+          { kind: 'rename_parameter', name: 'w', newName: 'width' },
+          { kind: 'set_parameter', name: 'outer', expression: 'width + 5 mm' }
+        ]
+      })
+    );
+    const manager = new CommandManager(document);
+    manager.execute(composeCommands('Apply proposal', commands));
+    expect(
+      manager.document.nodes &&
+        Object.values(manager.document.nodes).find(
+          (node) => node.kind === 'parameter' && node.name === 'width'
+        )
+    ).toMatchObject({ quantity: 'length' });
   });
 });

@@ -2191,7 +2191,8 @@ function datumFeaturesBefore(
   const datums = new Set<FeatureId>();
   for (const feature of listFeaturesInOrder(document)) {
     if (feature.featureId === beforeFeatureId) break;
-    if (feature.data.featureKind === 'datum-plane') datums.add(feature.featureId);
+    if (feature.data.featureKind === 'datum-plane')
+      datums.add(feature.featureId);
   }
   return datums;
 }
@@ -2222,7 +2223,11 @@ export function validateModelingPlane(
 ): void {
   if (isDatumPlaneRef(plane)) {
     requireEarlierDatum(document, plane.datumFeatureId, ownFeatureId);
-    if (Object.keys(plane).some((key) => key !== 'type' && key !== 'datumFeatureId')) {
+    if (
+      Object.keys(plane).some(
+        (key) => key !== 'type' && key !== 'datumFeatureId'
+      )
+    ) {
       throw new Error('A datum plane reference carries only the datum id.');
     }
   }
@@ -2285,7 +2290,9 @@ export function validateDatumPlaneDefinition(
           );
         }
         if (!document.bodyOrder.includes(source.bodyId)) {
-          throw new Error(`The source face's body ${source.bodyId} does not exist.`);
+          throw new Error(
+            `The source face's body ${source.bodyId} does not exist.`
+          );
         }
         break;
       default:
@@ -2324,7 +2331,9 @@ export function datumPlaneDependents(
       uses = usesDatum(data.plane);
     } else if (data.featureKind === 'sketch') {
       const planeRef = findSketch(document, data.sketchId)?.planeRef;
-      uses = planeRef?.type === 'datum' && planeRef.datumFeatureId === datumFeatureId;
+      uses =
+        planeRef?.type === 'datum' &&
+        planeRef.datumFeatureId === datumFeatureId;
     }
     if (uses) names.push(feature.name);
   }
@@ -2347,7 +2356,10 @@ export function addDatumPlane(
     revisionId: null,
     featureId,
     featureKind: 'datum-plane',
-    data: { featureKind: 'datum-plane', definition: deepClone(input.definition) }
+    data: {
+      featureKind: 'datum-plane',
+      definition: deepClone(input.definition)
+    }
   };
   next.featureOrder.push(featureId);
   attachToPart(next, featureNodeId);
@@ -3593,7 +3605,11 @@ export function updateFeature(
   // R01: a datum may only read earlier datums, and Mirror/Split only an
   // existing earlier one, whichever path edited them.
   if (feature.data.featureKind === 'datum-plane') {
-    validateDatumPlaneDefinition(next, feature.data.definition, feature.featureId);
+    validateDatumPlaneDefinition(
+      next,
+      feature.data.definition,
+      feature.featureId
+    );
   } else if (
     feature.data.featureKind === 'mirror' ||
     feature.data.featureKind === 'split'
@@ -4810,7 +4826,11 @@ function parseExpressionQuantity(
       // A typed parameter (F05) brings its dimension; unitless ones and any
       // plain scope value stay dimensionless, exactly as before v21.
       const kind = (scope as KindedScope)[PARAMETER_KINDS]?.[token.name];
-      return quantity(value, kind === 'length' ? 1 : 0, kind === 'angle' ? 1 : 0);
+      return quantity(
+        value,
+        kind === 'length' ? 1 : 0,
+        kind === 'angle' ? 1 : 0
+      );
     }
     if (token.type === 'paren' && token.value === '(') {
       const value = parseAdditive();
@@ -5279,6 +5299,91 @@ export function parameterQuantityRefusal(
     if (refusal) return refusal;
   }
   return null;
+}
+
+/** One stored expression that uses a typed parameter in a way it cannot hold. */
+export interface TypedParameterMisuse {
+  /** The feature that would build from it (null when none does). */
+  featureId: FeatureId | null;
+  message: string;
+}
+
+/**
+ * F05: every stored expression that reads a typed parameter and no longer
+ * holds its field's dimension (a length parameter as a revolve angle) or is
+ * incoherent (`width + 5` with width a length). The command boundary refuses
+ * an edit that adds one, and the exact build refuses to build the feature
+ * that holds one, so a typed parameter never reaches the kernel as the
+ * wrong quantity — whoever authored the feature (a form, the assistant, an
+ * API client or an older client's document).
+ */
+export function typedParameterMisuse(
+  document: ProjectDocument
+): TypedParameterMisuse[] {
+  const { scope } = getParameterScope(document);
+  const typed = Object.keys(parameterKindsOf(scope));
+  if (typed.length === 0) return [];
+  const sketchFeature = new Map<string, FeatureId>();
+  for (const feature of listFeaturesInOrder(document)) {
+    if (feature.data.featureKind === 'sketch') {
+      sketchFeature.set(String(feature.data.sketchId), feature.featureId);
+    }
+  }
+  const owner = (node: DocumentNode): FeatureId | null => {
+    if (node.kind === 'feature') return node.featureId;
+    if (node.kind === 'sketch')
+      return sketchFeature.get(String(node.sketchId)) ?? null;
+    if (node.kind === 'sketch-object') {
+      const parent = node.parentId ? document.nodes[node.parentId] : undefined;
+      return parent?.kind === 'sketch'
+        ? (sketchFeature.get(String(parent.sketchId)) ?? null)
+        : null;
+    }
+    return null;
+  };
+  const misuse: TypedParameterMisuse[] = [];
+  for (const node of Object.values(document.nodes)) {
+    if (node.kind === 'parameter') continue;
+    rewriteNodeExpressions(node, (expression, dimension) => {
+      if (
+        !expressionIdentifiers(expression).some((name) => typed.includes(name))
+      ) {
+        return expression;
+      }
+      try {
+        const result = parseExpressionQuantity(
+          expression,
+          scope,
+          document.units
+        );
+        if (dimension) requireFieldDimension(result, dimension);
+      } catch (error) {
+        misuse.push({
+          featureId: owner(node),
+          message: `${referenceLabel(node)} uses "${expression}": ${error instanceof Error ? error.message : 'it no longer evaluates.'}`
+        });
+      }
+      return expression;
+    });
+  }
+  return misuse;
+}
+
+/**
+ * The first typed-parameter misuse `after` has that `before` did not, or
+ * null: what a command must not introduce. Misuse already present (a document
+ * from elsewhere) does not block an unrelated edit; the build refuses it.
+ */
+export function newTypedParameterMisuse(
+  before: ProjectDocument,
+  after: ProjectDocument
+): string | null {
+  const found = typedParameterMisuse(after);
+  if (found.length === 0) return null;
+  const known = new Set(
+    typedParameterMisuse(before).map((entry) => entry.message)
+  );
+  return found.find((entry) => !known.has(entry.message))?.message ?? null;
 }
 
 /**

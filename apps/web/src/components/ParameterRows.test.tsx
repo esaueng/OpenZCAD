@@ -218,6 +218,38 @@ describe('ParameterRow type picker (F05)', () => {
     ).toBeInTheDocument();
   });
 
+  it('clears a refusal on the next choice and ignores a superseded answer', async () => {
+    let answerFirst: (value: string | null) => void = () => {};
+    const onSetQuantity = vi
+      .fn()
+      .mockResolvedValueOnce('No: Feature "Block" uses "width".')
+      .mockImplementationOnce(
+        () => new Promise<string | null>((resolve) => (answerFirst = resolve))
+      )
+      .mockResolvedValueOnce(null);
+    render(
+      <ParameterRow
+        parameter={parameter('80')}
+        value={80}
+        onSet={vi.fn()}
+        onSetQuantity={onSetQuantity}
+      />
+    );
+    const picker = screen.getByLabelText('Type of width');
+    fireEvent.change(picker, { target: { value: 'angle' } });
+    expect(await screen.findByText(/No: Feature "Block"/)).toBeInTheDocument();
+    // A new choice clears it at once.
+    fireEvent.change(picker, { target: { value: 'number' } });
+    expect(screen.queryByText(/No: Feature "Block"/)).toBeNull();
+    // A later choice lands first; the slow refusal of the earlier one is
+    // stale and never shows.
+    fireEvent.change(picker, { target: { value: 'length' } });
+    await Promise.resolve();
+    answerFirst('Late refusal');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText('Late refusal')).toBeNull();
+  });
+
   it('offers a suggestion on a unitless parameter without applying it', () => {
     const onSetQuantity = vi.fn();
     render(

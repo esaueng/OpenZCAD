@@ -205,6 +205,16 @@ describe('parameterUntouchedSince', () => {
     // Creating a parameter the moved document still lacks is also safe.
     expect(parameterUntouchedSince(base, live, 'wall')).toBe(true);
   });
+  it('refuses when the moved document retyped the parameter (F05)', () => {
+    const base = setParameter(holder(), { name: 'wall', expression: '3' });
+    const retyped = setParameter(base, {
+      name: 'wall',
+      expression: '3',
+      quantity: 'length'
+    });
+    expect(parameterUntouchedSince(base, retyped, 'wall')).toBe(false);
+    expect(parameterUntouchedSince(retyped, retyped, 'wall')).toBe(true);
+  });
   it('refuses when the moved document changed, created or removed the parameter', () => {
     const base = holder();
     expect(

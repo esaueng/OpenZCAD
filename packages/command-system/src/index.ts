@@ -55,6 +55,7 @@ import {
   type FeatureId,
   type FeatureNode,
   type ParamValue,
+  type ParameterKind,
   type ProjectDocument,
   type SerializedCommand,
   toSketchConstraintId,
@@ -113,6 +114,7 @@ import {
   findParameterReferences,
   findSketch,
   getParameterScope,
+  newTypedParameterMisuse,
   parameterKindsOf,
   withParameterKinds,
   type HelicalSweepInput,
@@ -1796,7 +1798,10 @@ function projectedParameterScope(
   proposal: CadPatchProposal
 ): Record<string, number> {
   const base = getParameterScope(document).scope;
-  const scope = withParameterKinds({ ...base }, parameterKindsOf(base));
+  // A private copy of the kinds, renamed and deleted alongside the values,
+  // so a renamed typed parameter keeps its quantity in the projection.
+  const kinds: Record<string, ParameterKind> = { ...parameterKindsOf(base) };
+  const scope = withParameterKinds({ ...base }, kinds);
   const pending = new Map<string, string>();
   for (const operation of proposal.operations) {
     if (operation.kind === 'set_parameter') {
@@ -1818,9 +1823,15 @@ function projectedParameterScope(
         scope[operation.newName] = renamedValue;
         delete scope[operation.name];
       }
+      const renamedKind = kinds[operation.name];
+      if (renamedKind !== undefined) {
+        kinds[operation.newName] = renamedKind;
+        delete kinds[operation.name];
+      }
     } else if (operation.kind === 'delete_parameter') {
       pending.delete(operation.name);
       delete scope[operation.name];
+      delete kinds[operation.name];
     }
   }
 
@@ -3222,6 +3233,7 @@ export class CommandManager {
       return this.document;
     }
     assertDocumentTextBudget(next);
+    assertNoNewTypedParameterMisuse(previous, next);
     next.commandLog.push(...serializedLeaves(command));
     next = appendRevision(next, command.label);
     const recorded = recordDocumentEdit(
@@ -3318,6 +3330,9 @@ export class CommandManager {
       return this.document;
     }
     assertDocumentTextBudget(next);
+    // Judged on the transaction's end state: a proposal may type a parameter
+    // and use it in either order.
+    assertNoNewTypedParameterMisuse(previous, next);
     next.commandLog.push(...serialized);
     next = appendRevision(next, label);
     const recorded = recordDocumentEdit(
@@ -3362,6 +3377,18 @@ export class CommandManager {
     this.document = recorded;
     return this.document;
   }
+}
+
+/**
+ * F05: refuses an edit that would make a typed parameter feed a field as the
+ * wrong quantity, whatever authored it (a form, the assistant, the API).
+ */
+function assertNoNewTypedParameterMisuse(
+  previous: ProjectDocument,
+  next: ProjectDocument
+): void {
+  const misuse = newTypedParameterMisuse(previous, next);
+  if (misuse) throw new Error(misuse);
 }
 
 export function replayCommands(

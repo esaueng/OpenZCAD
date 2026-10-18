@@ -75,8 +75,16 @@ export function parameterUntouchedSince(
   live: ProjectDocument,
   name: string
 ): boolean {
-  const expressionIn = (document: ProjectDocument) =>
-    listParameters(document).find((parameter) => parameter.name === name)
-      ?.expression ?? null;
-  return expressionIn(base) === expressionIn(live);
+  // Expression and quantity both: an undo or a collaborator may retype the
+  // parameter (F05) without touching its expression, and a retry must not
+  // overwrite that.
+  const stateIn = (document: ProjectDocument) => {
+    const parameter = listParameters(document).find(
+      (candidate) => candidate.name === name
+    );
+    return parameter
+      ? `${parameter.quantity ?? 'unitless'}\u0000${parameter.expression}`
+      : null;
+  };
+  return stateIn(base) === stateIn(live);
 }

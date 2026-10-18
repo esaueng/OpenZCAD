@@ -117,6 +117,8 @@ export function ParameterRow({
   const latestParameter = useRef(parameter);
   latestParameter.current = parameter;
   const submission = useRef(0);
+  /** F05: the latest type choice; earlier answers are superseded. */
+  const quantitySubmission = useRef(0);
   const [error, setError] = useState<{
     message: string;
     detailsAvailable: boolean;
@@ -368,14 +370,21 @@ export function ParameterRow({
                 value={parameter.quantity ?? 'unitless'}
                 onChange={(event) => {
                   const next = event.target.value as ParameterKind | 'unitless';
+                  // Each choice supersedes the last: its refusal clears now,
+                  // and a slower answer to an earlier choice is ignored.
+                  const token = ++quantitySubmission.current;
+                  setError(null);
                   void (async () => {
                     const refusal = await onSetQuantity(
                       parameter.name,
                       next === 'unitless' ? null : next
                     );
-                    if (refusal) {
-                      setError({ message: refusal, detailsAvailable: false });
-                    }
+                    if (token !== quantitySubmission.current) return;
+                    setError(
+                      refusal
+                        ? { message: refusal, detailsAvailable: false }
+                        : null
+                    );
                   })();
                 }}
               >
