@@ -4,6 +4,8 @@ import { computeSketchRegions } from '@openzcad/geometry';
 import {
   DxfImportError,
   MAX_DXF_SKETCH_OBJECTS,
+  MAX_DXF_ENTITIES,
+  MAX_DXF_PAIRS,
   describeDxfCounts,
   dxfSketchImportPlan,
   importDxfSketch,
@@ -974,6 +976,52 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
         'incomplete or unusable vertex list'
       );
     }
+  });
+
+  it('refuses filler before it expands past the pair and entity caps', () => {
+    const filler = (count: number) => '0\nX\n'.repeat(count);
+    expect(() =>
+      importDxfSketch(
+        `0\nSECTION\n2\nENTITIES\n${filler(MAX_DXF_PAIRS)}0\nENDSEC\n0\nEOF\n`,
+        'mm'
+      )
+    ).toThrow('too many entries');
+    expect(() =>
+      importDxfSketch(
+        `0\nSECTION\n2\nENTITIES\n${filler(MAX_DXF_ENTITIES + 1)}0\nENDSEC\n0\nEOF\n`,
+        'mm'
+      )
+    ).toThrow(`more than ${MAX_DXF_ENTITIES} entities`);
+  });
+
+  it('refuses a bulged segment on a vanishing chord instead of dropping it', () => {
+    const text = dxf([
+      '0',
+      'LWPOLYLINE',
+      '90',
+      '2',
+      '10',
+      '0',
+      '20',
+      '0',
+      '42',
+      '1e12',
+      '10',
+      '5e-13',
+      '20',
+      '0',
+      '0',
+      'CIRCLE',
+      '10',
+      '0',
+      '20',
+      '0',
+      '40',
+      '1'
+    ]);
+    expect(() => importDxfSketch(text, 'mm')).toThrow(
+      'segment too short to represent'
+    );
   });
 
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {

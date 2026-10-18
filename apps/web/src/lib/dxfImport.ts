@@ -22,6 +22,15 @@ export const MAX_DXF_SKETCH_OBJECTS = 2000;
 /** Larger files are refused before parsing (about 2,000 curves is ~1 MB). */
 export const MAX_DXF_IMPORT_BYTES = 20 * 1024 * 1024;
 
+/**
+ * Group-code/value pairs read before the file is refused. A dense 20 MB
+ * drawing averages well over ten bytes a pair; four-byte filler pairs would
+ * otherwise expand into millions of objects before any curve cap could fire.
+ */
+export const MAX_DXF_PAIRS = 2_000_000;
+/** Entities of any type, kept or not, in the ENTITIES section. */
+export const MAX_DXF_ENTITIES = 100_000;
+
 /** Refuses a file by its size in bytes, before anything reads it. */
 export function refuseOversizedDxf(bytes: number): void {
   if (bytes > MAX_DXF_IMPORT_BYTES) {
@@ -91,18 +100,45 @@ function readPairs(text: string): Pair[] {
       'This is a binary DXF; save it as ASCII DXF and import that.'
     );
   }
-  const lines = text.split(/\r\n|\r|\n/);
+  // Lines are read one at a time, not split up front, so the pair cap
+  // fires before the whole file has been turned into strings.
+  let position = 0;
+  let line = 0;
+  const nextLine = (): string | null => {
+    if (position > text.length) return null;
+    let end = position;
+    while (end < text.length && text[end] !== '\n' && text[end] !== '\r') {
+      end += 1;
+    }
+    const value = text.slice(position, end);
+    position = text[end] === '\r' && text[end + 1] === '\n' ? end + 2 : end + 1;
+    line += 1;
+    return value;
+  };
   const pairs: Pair[] = [];
-  for (let index = 0; index + 1 < lines.length; index += 2) {
-    const codeText = lines[index]!.trim();
-    if (codeText === '' && index + 2 >= lines.length) break;
+  for (;;) {
+    const codeLine = nextLine();
+    if (codeLine === null) break;
+    const valueLine = nextLine();
+    const codeText = codeLine.trim();
+    if (valueLine === null) {
+      if (codeText === '') break;
+      throw new DxfImportError(
+        `This DXF is malformed: line ${line} has no value after it.`
+      );
+    }
     const code = Number(codeText);
     if (!/^-?\d+$/.test(codeText) || !Number.isInteger(code)) {
       throw new DxfImportError(
-        `This DXF is malformed: line ${index + 1} should be a group code.`
+        `This DXF is malformed: line ${line - 1} should be a group code.`
       );
     }
-    pairs.push({ code, value: lines[index + 1]!.trim() });
+    if (pairs.length >= MAX_DXF_PAIRS) {
+      throw new DxfImportError(
+        'This DXF has too many entries to import; split it first.'
+      );
+    }
+    pairs.push({ code, value: valueLine.trim() });
   }
   return pairs;
 }
@@ -143,8 +179,14 @@ function section(pairs: Pair[], name: string): Pair[] | null {
 function entitiesOf(pairs: Pair[]): DxfEntity[] {
   const entities: DxfEntity[] = [];
   for (const pair of pairs) {
-    if (pair.code === 0) entities.push({ type: pair.value, groups: [] });
-    else entities.at(-1)?.groups.push(pair);
+    if (pair.code === 0) {
+      if (entities.length >= MAX_DXF_ENTITIES) {
+        throw new DxfImportError(
+          `This DXF has more than ${MAX_DXF_ENTITIES} entities; split it first.`
+        );
+      }
+      entities.push({ type: pair.value, groups: [] });
+    } else entities.at(-1)?.groups.push(pair);
   }
   return entities;
 }
@@ -302,7 +344,14 @@ function segment(
   const dy = to.y - from.y;
   const chord = Math.hypot(dx, dy);
   if (!Number.isFinite(chord)) throw tooLarge();
-  if (chord < 1e-12) return null;
+  // Only a repeated vertex with no bulge is harmlessly skipped; a bulge on
+  // it, or a chord too short to build, has a meaning the sketch would lose.
+  if (chord === 0 && bulge === 0) return null;
+  if (chord < 1e-12) {
+    throw new DxfImportError(
+      'This DXF has a segment too short to represent exactly.'
+    );
+  }
   // Only an exact zero is straight: a tiny bulge across a long chord still
   // bows by a real distance, and one whose sweep is too small to store
   // refuses in ccwArc rather than flattening.
