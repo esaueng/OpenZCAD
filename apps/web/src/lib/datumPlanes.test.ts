@@ -12,6 +12,7 @@ import {
   type DatumFrame,
   type FeatureId,
   type FeatureNode,
+  type FeatureWarning,
   type ProjectDocument
 } from '@openzcad/shared';
 import { datumFaceAttachFailed, datumOffsetHandle } from './datumPlaneDisplay';
@@ -353,28 +354,42 @@ describe('Plane card commands (R01-C)', () => {
 
 describe('datum viewport handle and repair (R01)', () => {
   it("offers a face re-pick only for the build's own attach failure", () => {
-    const feature = { name: 'Lid plane' } as FeatureNode;
+    const feature = {
+      featureId: 'feature_lid' as FeatureId,
+      name: 'Lid plane'
+    } as FeatureNode;
+    const warning = (featureId: string, message: string): FeatureWarning => ({
+      featureId: featureId as FeatureId,
+      featureName: 'Lid plane',
+      message,
+      kind: 'build-failed'
+    });
+    const lost =
+      'Feature "Lid plane": Datum plane "Lid plane" cannot attach because source body body_x is unavailable at the datum\'s history position.';
+    expect(datumFaceAttachFailed(feature, [warning('feature_lid', lost)])).toBe(
+      true
+    );
     expect(
       datumFaceAttachFailed(feature, [
-        'Feature "Lid plane": Datum plane "Lid plane" cannot attach because source body body_x is unavailable at the datum\'s history position.'
-      ])
-    ).toBe(true);
-    expect(
-      datumFaceAttachFailed(feature, [
-        'Feature "Lid plane": Datum plane "Lid plane" cannot attach to source feature "Block": the attached face was deleted or no longer exists.'
+        warning(
+          'feature_lid',
+          'Feature "Lid plane": Datum plane "Lid plane" cannot attach to source feature "Block": the attached face was deleted or no longer exists.'
+        )
       ])
     ).toBe(true);
     // Still rebuilding (no warning) or failing for another reason: no.
     expect(datumFaceAttachFailed(feature, [])).toBe(false);
     expect(
       datumFaceAttachFailed(feature, [
-        'Feature "Lid plane": datum plane offset: Unknown identifier "nope" in expression.'
+        warning(
+          'feature_lid',
+          'Feature "Lid plane": datum plane offset: Unknown identifier "nope" in expression.'
+        )
       ])
     ).toBe(false);
+    // A same-named datum's attach failure belongs to that datum, not this.
     expect(
-      datumFaceAttachFailed(feature, [
-        'Feature "Other": Datum plane "Other" cannot attach because source body body_x is unavailable.'
-      ])
+      datumFaceAttachFailed(feature, [warning('feature_twin', lost)])
     ).toBe(false);
   });
 
@@ -412,11 +427,12 @@ describe('datum viewport handle and repair (R01)', () => {
     expect(
       datumOffsetHandle(reversed.document, reversed.featureId, new Set())?.sense
     ).toBe(-1);
-    // An expression-driven offset is edited where it lives, not dragged.
+    // An expression-driven datum still has a pin (the card decides from its
+    // live draft whether a drag may land); its stored offset is not a number.
     const driven = offsetDatum('lid_z');
     expect(
       datumOffsetHandle(driven.document, driven.featureId, new Set())
-    ).toBe(null);
+    ).toMatchObject({ offset: null });
   });
 
   it('re-picks a source face only with a planar face it can follow', () => {

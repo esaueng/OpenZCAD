@@ -4,6 +4,7 @@ import {
   type DatumFrame,
   type FeatureId,
   type FeatureNode,
+  type FeatureWarning,
   type ProjectDocument
 } from '@openzcad/shared';
 
@@ -44,15 +45,16 @@ export interface DatumOffsetHandle {
   featureId: FeatureId;
   point: DatumFrame['origin'];
   normal: DatumFrame['normal'];
-  offset: number;
+  /** The stored offset when it is a plain number; null for an expression. */
+  offset: number | null;
   sense: 1 | -1;
 }
 
 /**
- * A handle for the selected datum, or null. Only an offset datum whose
- * offset is a plain number qualifies: a midplane has no distance to drag,
- * and an expression-driven offset is edited where the expression lives
- * rather than overwritten by a drag.
+ * A handle for the selected, built offset datum, or null (a midplane has no
+ * distance to drag). Whether a drag may land is the open card's call, made
+ * from its live draft: an Offset typed as a plain number can be dragged even
+ * when the committed one is an expression, and the reverse.
  */
 export function datumOffsetHandle(
   document: ProjectDocument,
@@ -71,8 +73,7 @@ export function datumOffsetHandle(
     !feature ||
     isFeatureSuppressed(feature) ||
     feature.data.featureKind !== 'datum-plane' ||
-    feature.data.definition.kind !== 'offset' ||
-    typeof feature.data.definition.offset !== 'number'
+    feature.data.definition.kind !== 'offset'
   ) {
     return null;
   }
@@ -80,7 +81,10 @@ export function datumOffsetHandle(
     featureId: selectedFeatureId,
     point: frame.origin,
     normal: frame.normal,
-    offset: feature.data.definition.offset,
+    offset:
+      typeof feature.data.definition.offset === 'number'
+        ? feature.data.definition.offset
+        : null,
     sense: feature.data.definition.reverseNormal ? -1 : 1
   };
 }
@@ -110,12 +114,13 @@ export function shiftedDatumFrame(
  */
 export function datumFaceAttachFailed(
   feature: FeatureNode,
-  warnings: readonly string[]
+  warnings: readonly FeatureWarning[]
 ): boolean {
-  return warnings.some((warning) =>
-    warning.startsWith(
-      `Feature "${feature.name}": Datum plane "${feature.name}" cannot attach`
-    )
+  // By id, not by the display text: two datums may share a name.
+  return warnings.some(
+    (warning) =>
+      warning.featureId === feature.featureId &&
+      warning.message.includes(`Datum plane "${feature.name}" cannot attach`)
   );
 }
 

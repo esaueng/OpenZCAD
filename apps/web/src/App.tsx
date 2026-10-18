@@ -18156,7 +18156,12 @@ export function App() {
       ...(feature.data.featureKind === 'datum-plane' &&
       !isFeatureSuppressed(feature) &&
       !doc?.derived.datumFrames?.[feature.featureId] &&
-      datumFaceAttachFailed(feature, warnings)
+      datumFaceAttachFailed(
+        feature,
+        doc && featureAttribution?.derived === doc.derived
+          ? featureAttribution.featureWarnings
+          : []
+      )
         ? (feature.data.definition.kind === 'offset'
             ? [feature.data.definition.source]
             : feature.data.definition.sources

@@ -310,9 +310,9 @@ interface ViewerShellProps {
    */
   onDatumOffsetDrag?(delta: number): boolean;
   /**
-   * The open Plane card's draft Offset for the selected datum (null when it
-   * is not a plain change of distance): the plane and its pin are drawn
-   * there until Apply rebuilds the datum.
+   * How far the open Plane card's draft moves the selected datum, in its
+   * stored offset (null when it is not a plain change of distance): the
+   * plane and its pin are drawn there until Apply rebuilds the datum.
    */
   datumOffsetDraft?: number | null;
   /** Exact entry for the selected datum's handle: focuses the card's Offset. */
@@ -528,7 +528,7 @@ export function ViewerShell({
   // what is drawn is always where Apply would put it.
   const draftShift =
     datumHandle && datumOffsetDraft !== null
-      ? (datumOffsetDraft - datumHandle.offset) * datumHandle.sense
+      ? datumOffsetDraft * datumHandle.sense
       : 0;
   const [datumDrag, setDatumDrag] = useState<{
     featureId: string;

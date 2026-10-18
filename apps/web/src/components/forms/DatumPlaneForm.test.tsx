@@ -373,11 +373,12 @@ describe('Plane card and the viewport handle (R01)', () => {
         onOffsetDraft={onOffsetDraft}
       />
     );
-    expect(onOffsetDraft).toHaveBeenLastCalledWith(10);
+    // Reported as the change from the opened offset (10).
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(0);
     fireEvent.change(screen.getByLabelText('Offset'), {
       target: { value: '14' }
     });
-    expect(onOffsetDraft).toHaveBeenLastCalledWith(14);
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(4);
     // An expression cannot be drawn ahead of its evaluation.
     fireEvent.change(screen.getByLabelText('Offset'), {
       target: { value: 'lid + 1' }
@@ -386,7 +387,7 @@ describe('Plane card and the viewport handle (R01)', () => {
     fireEvent.change(screen.getByLabelText('Offset'), {
       target: { value: '3' }
     });
-    expect(onOffsetDraft).toHaveBeenLastCalledWith(3);
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(-7);
     // Flipping the normal changes more than the distance.
     fireEvent.click(screen.getByLabelText('Flip normal'));
     expect(onOffsetDraft).toHaveBeenLastCalledWith(null);

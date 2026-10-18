@@ -18,6 +18,7 @@ import type { useValidatedFeatureCommit } from '../../hooks/useValidatedFeatureC
 import { CardHeader } from '../CardHeader';
 import { PanelOverflow } from '../PanelOverflow';
 import { ExprInput } from '../ExprInput';
+import { evalParamValue } from '../../lib/model';
 import {
   buildDatumPlaneDefinition,
   datumFormStateFromFeature,
@@ -67,11 +68,13 @@ export interface DatumPlaneFormProps {
    */
   offsetDragRef?: { current: ((delta: number) => void) | null };
   /**
-   * The draft's Offset while it differs from the opened datum only in its
-   * distance (a plain number), so the viewport can show the plane where Done
-   * would put it; null once the draft changes anything else.
+   * How far the draft moves the opened datum, in its stored offset, while
+   * only its distance changed (a plain number), so the viewport can show the
+   * plane where Done would put it; null once the draft changes anything
+   * else. Measured from the opened offset as evaluated, so it holds for a
+   * datum committed as an expression too.
    */
-  onOffsetDraft?(offset: number | null): void;
+  onOffsetDraft?(change: number | null): void;
   /**
    * Where the form registers exact entry for the viewport handle: the pin's
    * value chip and exact-entry key focus the Offset field. False when the
@@ -86,21 +89,27 @@ export interface DatumPlaneFormProps {
 }
 
 /**
- * The draft's plain-number Offset when the draft is the opened datum with
- * only its distance changed, else null.
+ * How far a plain-number draft Offset moves the opened datum (draft minus
+ * the opened offset, evaluated), when the draft is that datum with only its
+ * distance changed; else null.
  */
 export function datumDraftOffset(
   initial: DatumPlaneFormState,
-  state: DatumPlaneFormState
+  state: DatumPlaneFormState,
+  scope: Record<string, number>,
+  units?: UnitSystem
 ): number | null {
   const text = state.offset.trim();
   const offset = text === '' ? NaN : Number(text);
+  const opened = evalParamValue(initial.offset, scope, units);
   const sameShape =
     state.mode === 'offset' &&
     initial.mode === 'offset' &&
     state.reverseNormal === initial.reverseNormal &&
     JSON.stringify(state.sourceA) === JSON.stringify(initial.sourceA);
-  return sameShape && Number.isFinite(offset) ? offset : null;
+  return sameShape && Number.isFinite(offset) && opened !== null
+    ? offset - opened
+    : null;
 }
 
 /**
@@ -126,7 +135,7 @@ export function DatumPlaneForm({
   onOffsetDragAvailable
 }: DatumPlaneFormProps) {
   const [state, setState] = useState(initial);
-  const draftOffset = datumDraftOffset(initial, state);
+  const draftOffset = datumDraftOffset(initial, state, scope, units);
   const onOffsetDraftRef = useRef(onOffsetDraft);
   onOffsetDraftRef.current = onOffsetDraft;
   useEffect(() => {
