@@ -1772,6 +1772,74 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(() => importDxfSketch(trailing, 'mm')).toThrow('records after EOF');
   });
 
+  it('judges a bulge by its own size, not its distance from the origin', () => {
+    const shallow = (x: number) =>
+      dxf([
+        '0',
+        'LWPOLYLINE',
+        '90',
+        '2',
+        '10',
+        String(x),
+        '20',
+        '0',
+        '42',
+        '5e-13',
+        '10',
+        String(x + 1e6),
+        '20',
+        '0'
+      ]);
+    expect(() => importDxfSketch(shallow(0), 'mm')).toThrow(
+      'could not keep its endpoints'
+    );
+    expect(() => importDxfSketch(shallow(1e12), 'mm')).toThrow(
+      'could not keep its endpoints'
+    );
+    // An ordinary half-circle bulge far from the origin still imports.
+    const far = dxf([
+      '0',
+      'LWPOLYLINE',
+      '90',
+      '2',
+      '10',
+      '1e12',
+      '20',
+      '0',
+      '42',
+      '1',
+      '10',
+      String(1e12 + 10),
+      '20',
+      '0'
+    ]);
+    expect(importDxfSketch(far, 'mm').objects).toHaveLength(1);
+  });
+
+  it('keeps a flat LINE whatever its extrusion direction says', () => {
+    const line = dxf([
+      '0',
+      'LINE',
+      '10',
+      '0',
+      '20',
+      '0',
+      '11',
+      '5',
+      '21',
+      '0',
+      '210',
+      '1',
+      '220',
+      '0',
+      '230',
+      '0'
+    ]);
+    expect(importDxfSketch(line, 'mm').objects).toEqual([
+      expect.objectContaining({ objectKind: 'line', x2: 5 })
+    ]);
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',

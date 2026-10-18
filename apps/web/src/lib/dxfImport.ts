@@ -357,6 +357,10 @@ function inXyPlane(entity: DxfEntity): boolean {
   if (!onZeroElevation(entity)) return false;
   const thickness = singleGroup(entity, 39);
   if (thickness && dxfNumber(thickness.value) !== 0) return false;
+  // A LINE's endpoints are world coordinates, so with no thickness its
+  // extrusion direction moves nothing; only OCS entities (circles, arcs,
+  // polylines) are placed by it.
+  if (entity.type === 'LINE') return true;
   const z = singleGroup(entity, 230);
   const x = singleGroup(entity, 210);
   const y = singleGroup(entity, 220);
@@ -502,15 +506,20 @@ function segment(
   // ends from those. A very shallow bulge puts the centre so far away that
   // the angles cannot hold the ends: refuse rather than open a gap where
   // this segment met its neighbours.
-  const tolerance =
-    1e-9 *
-    Math.max(
-      1,
-      Math.abs(from.x),
-      Math.abs(from.y),
-      Math.abs(to.x),
-      Math.abs(to.y)
-    );
+  // The allowance is the segment's own (1e-9 of its chord), widened only to
+  // the rounding a double carries at the vertices' coordinates (never the
+  // centre's: a far centre is the very thing that loses the ends).
+  const tolerance = Math.max(
+    1e-9 * chord,
+    16 *
+      Number.EPSILON *
+      Math.max(
+        Math.abs(from.x),
+        Math.abs(from.y),
+        Math.abs(to.x),
+        Math.abs(to.y)
+      )
+  );
   for (const point of [from, to]) {
     const radians = (angle(point) * Math.PI) / 180;
     const rebuilt = {
