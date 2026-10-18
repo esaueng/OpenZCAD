@@ -26,7 +26,7 @@ import {
 } from './lib/parameterEdit';
 import type {
   ParameterPreviewBody,
-  parameterVisualPreview
+  prepareParameterEditSession
 } from './lib/parameterVisualPreview';
 import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
@@ -2845,7 +2845,7 @@ export function App() {
   const [parameterPreviewBase, setParameterPreviewBase] =
     useState<ProjectDocument | null>(null);
   const [makeParameterPreview, setMakeParameterPreview] = useState<
-    typeof parameterVisualPreview | null
+    typeof prepareParameterEditSession | null
   >(null);
   useEffect(() => {
     if (!parameterPreviewBase || makeParameterPreview) return;
@@ -2853,7 +2853,7 @@ export function App() {
     void import('./lib/parameterVisualPreview')
       .then((module) => {
         if (!disposed)
-          setMakeParameterPreview(() => module.parameterVisualPreview);
+          setMakeParameterPreview(() => module.prepareParameterEditSession);
       })
       .catch(() => {
         // Exact rebuilding remains available without a preview.
@@ -3171,6 +3171,9 @@ export function App() {
         };
       },
       derive: async (candidate, signal) => {
+        // Radius/hole gestures read the owned cylinder semantics while they
+        // stream. Keep their complete picking topology until that contract
+        // can be prepared independently from recognition.
         const derived = await geometry.previewGeometry(candidate.document, {
           signal
         });
@@ -3246,7 +3249,8 @@ export function App() {
           throw new Error(candidate.preflightRejection);
         }
         const derived = await geometry.previewGeometry(candidate.document, {
-          signal
+          signal,
+          deferTopology: true
         });
         const live = managerRef.current;
         const documentMoved =
@@ -5505,6 +5509,16 @@ export function App() {
   // document swap, again when the worker result landed) for identical
   // geometry.
   const liveBodyRepresentations = doc?.derived.bodyRepresentations ?? null;
+  // Draft input leaves the document unchanged. Reuse recognized bounds instead
+  // of inspecting embedded STEP histories again for each rendered panel.
+  const liveParameterMinimums = useMemo(
+    () => (doc ? parameterMinimums(doc) : {}),
+    [doc]
+  );
+  const parameterPreviewSession = useMemo(
+    () => makeParameterPreview?.(parameterPreviewBase) ?? null,
+    [makeParameterPreview, parameterPreviewBase]
+  );
   const parameterPreview = useMemo(
     () =>
       !previewDoc &&
@@ -5512,19 +5526,15 @@ export function App() {
       parameterCandidate !== null &&
       parameterCandidate.base.projectId === doc?.projectId &&
       parameterCandidate?.base.version === doc?.version
-        ? (makeParameterPreview?.(
-            parameterPreviewBase,
-            parameterCandidate.document
-          ) ?? null)
+        ? (parameterPreviewSession?.preview(parameterCandidate.document) ?? null)
         : !previewDoc &&
             !exactGeometryReady &&
             geometry.state.phase !== 'failed'
-          ? (makeParameterPreview?.(parameterPreviewBase, doc, true) ?? null)
+          ? (parameterPreviewSession?.preview(doc, true) ?? null)
           : null,
     [
-      makeParameterPreview,
+      parameterPreviewSession,
       parameterCandidate,
-      parameterPreviewBase,
       doc,
       previewDoc,
       exactGeometryReady,
@@ -14578,7 +14588,13 @@ export function App() {
       const command = commandFactories.setParameter({ name, expression });
       command.validate(base);
       const candidate = command.apply(base);
-      if (parameterInputError(base, candidate)) {
+      if (
+        parameterInputError(
+          base,
+          candidate,
+          base === doc ? liveParameterMinimums : undefined
+        )
+      ) {
         setParameterCandidate(null);
         return;
       }
@@ -20205,7 +20221,7 @@ export function App() {
     <Sidebar
       parameters={parameters}
       parameterValues={parameterScope.scope}
-      parameterMinimums={doc ? parameterMinimums(doc) : {}}
+      parameterMinimums={liveParameterMinimums}
       features={features}
       representations={representations}
       failedFeatureIds={failedHistoryFeatureIds}
@@ -20534,7 +20550,7 @@ export function App() {
             modelError={parameterModelError}
             parameters={exposedParameters}
             parameterValues={parameterScope.scope}
-            parameterMinimums={doc ? parameterMinimums(doc) : {}}
+            parameterMinimums={liveParameterMinimums}
             canExport={
               exportBodyIds.length > 0 &&
               !parameterEditPending &&
@@ -21033,7 +21049,10 @@ export function App() {
             projection={projection}
             orientationRef={orientationRef}
             onSelectTopology={handleSelectTopologyFromViewer}
-            topologyPicksHeld={currentGeometrySnapshot !== null}
+            topologyPicksHeld={
+              currentGeometrySnapshot !== null ||
+              currentFaceGeometryPreview?.geometry.topology === 'pending'
+            }
             onSelectEdgeChain={handleSelectEdgeChainFromViewer}
             selectionFilter={selectionFilter}
             onBoxSelect={handleBoxSelectFromViewer}

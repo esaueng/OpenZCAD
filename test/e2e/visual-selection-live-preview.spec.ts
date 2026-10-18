@@ -176,6 +176,7 @@ interface FacePreviewGate {
   previewDelayMs: number;
   heldPreview: number;
   heldFinal: number;
+  pendingTopologyReplies: number;
   releasePreview(): void;
   releaseFinal(): void;
 }
@@ -193,6 +194,7 @@ async function installFacePreviewGate(page: Page) {
       previewDelayMs: 0,
       heldPreview: 0,
       heldFinal: 0,
+      pendingTopologyReplies: 0,
       releasePreview() {
         this.holdPreview = false;
         for (const release of previews.splice(0)) release();
@@ -210,8 +212,17 @@ async function installFacePreviewGate(page: Page) {
       ...descriptor,
       set(listener: (event: MessageEvent) => void) {
         descriptor.set!.call(this, (event: MessageEvent) => {
-          const result = event.data as { type?: string; requestId?: string };
+          const result = event.data as {
+            type?: string;
+            requestId?: string;
+            geometry?: { topology?: 'pending' };
+          };
           const gate = scope.facePreviewGate;
+          if (
+            result.type === 'preview-geometry' &&
+            result.geometry?.topology === 'pending'
+          )
+            gate.pendingTopologyReplies += 1;
           if (gate.holdPreview && result.type === 'preview-geometry') {
             gate.heldPreview += 1;
             previews.push(() => listener.call(this, event));
@@ -283,6 +294,13 @@ test('shows completed exact frames while face pointer input stays ahead of the w
     { start, handle }
   );
   expect(await readAxisLength()).toBeGreaterThan(28.5);
+  expect(
+    await page.evaluate(
+      () =>
+        (window as typeof window & { facePreviewGate: FacePreviewGate })
+          .facePreviewGate.pendingTopologyReplies
+    )
+  ).toBeGreaterThan(0);
   await expect(
     page
       .getByRole('region', { name: 'Offset Face operation' })
@@ -394,7 +412,9 @@ test('reuses an exact frame on reversal and waits for complete validation on rel
   ).toContainText('Validating');
   // A released drag keeps the drawer suspended through validation; opening
   // it explicitly must still disclose the preview's incomplete analysis.
-  await page.getByRole('button', { name: 'Objects panel', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'Objects panel', exact: true })
+    .click();
   await expect(page.getByText('Preparing model details…')).toBeVisible();
   await expect(page.getByRole('contentinfo')).not.toContainText(
     'Cylinder height set to 31 mm.'

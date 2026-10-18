@@ -39,3 +39,150 @@ it('frees temporary WASM data even when the display budget refuses a projection'
   );
   expect(free).toHaveBeenCalledOnce();
 });
+
+it('holds display quality across small edits so unchanged faces retain their mesh', () => {
+  const { kernel } = fixture();
+  const tessellate = vi.spyOn(kernel, 'tessellateSolidGroupedBinary');
+  const first = projectShapeMesh(kernel, { solids: [1] }, 1024);
+  vi.spyOn(kernel, 'boundingBox').mockReturnValue(
+    Float64Array.of(0, 0, 0, 1.1, 1, 1)
+  );
+  const next = projectShapeMesh(
+    kernel,
+    { solids: [2] },
+    1024,
+    first.linearDeflections
+  );
+  expect(tessellate.mock.calls[1]!.slice(1)).toEqual(
+    tessellate.mock.calls[0]!.slice(1)
+  );
+  expect(next.linearDeflections).toEqual(first.linearDeflections);
+  vi.spyOn(kernel, 'boundingBox').mockReturnValue(
+    Float64Array.of(0, 0, 0, 2, 1, 1)
+  );
+  expect(
+    projectShapeMesh(kernel, { solids: [3] }, 1024, first.linearDeflections)
+      .linearDeflections[0]
+  ).toBeGreaterThan(first.linearDeflections[0]!);
+});
+
+it('reuses a closure proof only for the matching same-kernel, same-quality union mesh', () => {
+  const { kernel } = fixture();
+  const tessellate = vi.spyOn(kernel, 'tessellateSolidGroupedBinary');
+  const initial = projectShapeMesh(kernel, { solids: [1] }, 1024);
+  const payload = () => ({
+    kernel,
+    solid: 1,
+    linearDeflection: initial.linearDeflections[0]!,
+    angularDeflection: 0.06,
+    positions: initial.mesh.vertices.slice(),
+    indices: initial.mesh.indices.slice(),
+    faceOffsets: Uint32Array.of(0, 1),
+    bytes: 56
+  });
+  const verdicts = new Map([
+    [1, { strictErrors: 0, meshClosed: true, displayMesh: payload() }]
+  ]);
+  tessellate.mockClear();
+  expect(
+    projectShapeMesh(
+      kernel,
+      { solids: [1] },
+      1024,
+      initial.linearDeflections,
+      verdicts
+    ).closureValidated
+  ).toBe(true);
+  expect(tessellate).not.toHaveBeenCalled();
+  // The proof is consumed once. Another output has to be checked again.
+  expect(
+    projectShapeMesh(
+      kernel,
+      { solids: [1] },
+      1024,
+      initial.linearDeflections,
+      verdicts
+    ).closureValidated
+  ).toBe(false);
+  verdicts.set(1, {
+    strictErrors: 0,
+    meshClosed: true,
+    displayMesh: { ...payload(), solid: 2 }
+  });
+  expect(
+    projectShapeMesh(
+      kernel,
+      { solids: [1] },
+      1024,
+      initial.linearDeflections,
+      verdicts
+    ).closureValidated
+  ).toBe(false);
+  verdicts.set(1, {
+    strictErrors: 0,
+    meshClosed: true,
+    displayMesh: { ...payload(), angularDeflection: 0.1 }
+  });
+  expect(
+    projectShapeMesh(
+      kernel,
+      { solids: [1] },
+      1024,
+      initial.linearDeflections,
+      verdicts
+    ).closureValidated
+  ).toBe(false);
+});
+
+it('keeps spline-refined scene bounds while retaining the original display mesh', () => {
+  // A planar top at z=10 and a trimmed spline wall. The kernel's untrimmed
+  // carrier reaches 10.01, inside one ordinary 0.0124 display deflection.
+  const positions = Float32Array.of(
+    0,
+    0,
+    10,
+    62,
+    0,
+    10,
+    0,
+    50,
+    10,
+    20,
+    20,
+    8,
+    21,
+    20,
+    8,
+    20,
+    20,
+    10
+  );
+  const indices = Uint32Array.of(0, 1, 2, 3, 4, 5);
+  const free = vi.fn();
+  const tessellate = vi.fn(() => ({
+    positions: positions.slice(),
+    indices: indices.slice(),
+    faceOffsets: Uint32Array.of(0, 3, 6),
+    free
+  }));
+  const kernel = {
+    boundingBox: () => Float64Array.of(0, 0, 8, 62, 50, 10.01),
+    getSolidFaces: () => Uint32Array.of(1, 2),
+    getSurfaceType: (face: number) => (face === 1 ? 'plane' : 'bspline'),
+    tessellateSolidGroupedBinary: tessellate
+  } as unknown as RemusKernel;
+  const projection = projectShapeMesh(
+    kernel,
+    { solids: [1] },
+    1024,
+    [],
+    undefined,
+    true
+  );
+  expect(projection.bbox.max.z).toBeGreaterThanOrEqual(10);
+  expect(projection.bbox.max.z).toBeLessThan(10.005);
+  expect(projection.mesh.vertices).toEqual(positions);
+  expect(projection.mesh.indices).toEqual(indices);
+  expect(tessellate).toHaveBeenCalledTimes(2);
+  expect(free).toHaveBeenCalledTimes(2);
+});

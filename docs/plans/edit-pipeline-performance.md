@@ -26,7 +26,9 @@ Implemented contracts:
 | Checkpoints         | Immutable NURBS arrays share storage across topology clones. Admission estimates include unique topology/NURBS storage, retired slots and the next mutation copy, under a 128 MiB default in addition to 32 checkpoints and 512 replayed builders. Estimates exclude several allocations and do not cap process RSS.                                                     |
 | Observability       | Bounded revision timings cover packing, receipt, worker stages, geometry, analysis, installation and the rendered frame. Packet metrics include queue/worker/encoding time, cache work and transferred bytes. Opt-in diagnostics add accounted storage and allocated WASM pages; kernel phase traces distinguish volume, meshing, relations, restore and first mutation. |
 
-A single WASM call still blocks its worker until it returns. A separate analysis arena, browser threads, GPU modeling, trimmed-face integral reuse and general mixed-history reuse remain conditional on measurements and correctness proofs. The existing audited independent-primitive reuse remains in use. Allocated WASM pages and accounted cache bytes are separate from host/GPU memory and process peak RSS. Frame timing ends after `renderer.render`; physical display presentation is outside this probe.
+A single WASM call still blocks its worker until it returns. A separate analysis arena, browser threads, GPU modeling, trimmed-face integral reuse and general mixed-history reuse remain conditional on measurements and correctness proofs. Audited independent reuse now includes unchanged intersections and transforms;
+[interactive edit sessions](../interactive-edit-sessions.md) document the
+operand/lineage guards and lighter drag publications. Allocated WASM pages and accounted cache bytes are separate from host/GPU memory and process peak RSS. Frame timing ends after `renderer.render`; physical display presentation is outside this probe.
 
 Measured qualification (7 October 2026):
 

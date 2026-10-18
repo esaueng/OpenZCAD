@@ -56,37 +56,55 @@ export function inspectTriangleMeshClosure(
   );
   const quantize = (value: number): number =>
     Math.round(value / positionQuantization);
-  const vertexKey = (index: number): string => {
+  // Quantize each indexed vertex once, then count edges by canonical vertex
+  // ids. The old loop allocated three coordinate strings and a Set for every
+  // triangle, even though adjacent triangles name the same vertices.
+  const vertexIds = new Map<string, number>();
+  const indexedIds = new Map<number, number>();
+  const vertexId = (index: number): number => {
+    const cached = indexedIds.get(index);
+    if (cached !== undefined) return cached;
     const offset = index * 3;
-    return `${quantize(positions[offset] ?? 0)},${quantize(
+    const key = `${quantize(positions[offset] ?? 0)},${quantize(
       positions[offset + 1] ?? 0
     )},${quantize(positions[offset + 2] ?? 0)}`;
+    let id = vertexIds.get(key);
+    if (id === undefined) {
+      id = vertexIds.size;
+      vertexIds.set(key, id);
+    }
+    indexedIds.set(index, id);
+    return id;
   };
 
-  const edgeUses = new Map<string, MeshEdgeUse>();
-  let triangles = 0;
-  for (let index = 0; index + 2 < indices.length; index += 3) {
-    const vertices = [
-      vertexKey(indices[index] ?? 0),
-      vertexKey(indices[index + 1] ?? 0),
-      vertexKey(indices[index + 2] ?? 0)
-    ];
-    if (new Set(vertices).size !== 3) {
-      continue;
-    }
-    triangles += 1;
-    for (const [start, end] of [
-      [vertices[0]!, vertices[1]!],
-      [vertices[1]!, vertices[2]!],
-      [vertices[2]!, vertices[0]!]
-    ] as const) {
-      const forward = start < end;
-      const key = forward ? `${start}|${end}` : `${end}|${start}`;
-      const use = edgeUses.get(key) ?? { count: 0, directionBalance: 0 };
+  // At most indices.length distinct vertices can be visited. Keep a string
+  // fallback for arrays too large for an injective safe-integer pair key.
+  const stride = indices.length + 1;
+  const numericKeys = Number.isSafeInteger(stride * stride);
+  const edgeUses = new Map<number | string, MeshEdgeUse>();
+  const addEdge = (start: number, end: number): void => {
+    const forward = start < end;
+    const low = forward ? start : end;
+    const high = forward ? end : start;
+    const key = numericKeys ? low * stride + high : `${low}|${high}`;
+    const use = edgeUses.get(key);
+    if (use) {
       use.count += 1;
       use.directionBalance += forward ? 1 : -1;
-      edgeUses.set(key, use);
+    } else {
+      edgeUses.set(key, { count: 1, directionBalance: forward ? 1 : -1 });
     }
+  };
+  let triangles = 0;
+  for (let index = 0; index + 2 < indices.length; index += 3) {
+    const a = vertexId(indices[index] ?? 0);
+    const b = vertexId(indices[index + 1] ?? 0);
+    const c = vertexId(indices[index + 2] ?? 0);
+    if (a === b || b === c || c === a) continue;
+    triangles += 1;
+    addEdge(a, b);
+    addEdge(b, c);
+    addEdge(c, a);
   }
 
   let boundaryEdges = 0;

@@ -1,5 +1,6 @@
 import { isFeatureSuppressed, type FeatureNode } from '@openzcad/shared';
 import type { ExactBuildResult, ExactShape } from './exact-types';
+import { PreparedEditSession } from './prepared-edit-session';
 
 interface Entry {
   index: number;
@@ -46,15 +47,18 @@ function preservesPrimitiveInputs(feature: FeatureNode): boolean {
   }
 }
 
-/** Same-kernel primitive results; every actual topology restore retires its tail. */
+/** Same-kernel immutable results; every actual topology restore retires its tail. */
 export class PrimitiveBuildCache {
   private readonly entries = new Map<FeatureNode['featureId'], Entry>();
+  private readonly prepared = new PreparedEditSession();
 
   clear(): void {
+    this.prepared.clear();
     this.entries.clear();
   }
 
   prune(features: readonly FeatureNode[]): void {
+    this.prepared.prune(features);
     const present = new Set(features.map((feature) => feature.featureId));
     for (const key of this.entries.keys()) {
       if (!present.has(key)) this.entries.delete(key);
@@ -62,6 +66,7 @@ export class PrimitiveBuildCache {
   }
 
   restoredThrough(index: number): void {
+    this.prepared.restoredThrough(index);
     for (const [key, entry] of this.entries) {
       if (entry.index > index) this.entries.delete(key);
     }
@@ -84,15 +89,17 @@ export class PrimitiveBuildCache {
     startIndex: number
   ): boolean {
     const tail = features.slice(startIndex);
-    // Only primitives are reused. Dependent builders replay against this run's
-    // shapes, consumed set, sketch bases, diagnostics and references. Retaining
+    // Primitives and audited immutable branches can be reused. Other builders
+    // replay against this run's shapes, consumption, diagnostics and references. Retaining
     // the arena avoids retiring independent primitive handles just because a
     // dependent builder happens to follow them in history order.
     return (
       tail.length > 0 &&
       tail.every(preservesPrimitiveInputs) &&
-      tail.some((feature, offset) =>
-        this.matching(feature, digests[startIndex + offset]!)
+      tail.some(
+        (feature, offset) =>
+          this.matching(feature, digests[startIndex + offset]!) ||
+          this.prepared.has(feature, digests[startIndex + offset]!)
       )
     );
   }
@@ -100,10 +107,12 @@ export class PrimitiveBuildCache {
   restore(
     feature: FeatureNode,
     digest: string,
-    result: ExactBuildResult
+    result: ExactBuildResult,
+    allowReuse = true
   ): boolean {
     const entry = this.matching(feature, digest);
-    if (!entry || !feature.bodyId) return false;
+    if (!entry || !feature.bodyId || !allowReuse)
+      return this.prepared.restore(feature, digest, result, allowReuse);
     result.shapes.set(feature.bodyId, copyShape(entry.shape));
     return true;
   }
@@ -114,6 +123,7 @@ export class PrimitiveBuildCache {
     digest: string,
     result: ExactBuildResult
   ): void {
+    this.prepared.store(index, feature, digest, result);
     if (feature.data.featureKind !== 'primitive' || !feature.bodyId) return;
     const shape = result.shapes.get(feature.bodyId);
     if (shape) {
