@@ -336,6 +336,19 @@ describe('suggested quantities', () => {
     expect(suggestions).toEqual({});
   });
 
+  it('suggests nothing for an expression no type can hold', () => {
+    let document = setParameter(blank(), {
+      name: 'area',
+      expression: '5 mm * 5 mm'
+    });
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 'area', height: 10, depth: 10 }
+    });
+    expect(suggestParameterQuantities(document).area).toBeUndefined();
+  });
+
   it('does not suggest a quantity that would break a use', () => {
     let document = setParameter(blank(), { name: 'w', expression: '20' });
     document = addPrimitiveFeature(document, {
@@ -457,6 +470,24 @@ describe('new typed-parameter misuse', () => {
     }
     box.data.dimensions.height = 'tilt * 2';
     expect(newTypedParameterMisuse(before, edited)).toMatch(/tilt \* 2/);
+  });
+
+  it('keeps a call-site name as written when its parameter is renamed', () => {
+    let document = setParameter(blank(), {
+      name: 'tilt',
+      expression: '30',
+      quantity: 'angle'
+    });
+    document = setParameter(document, { name: 'foo', expression: '1' });
+    const before = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 'tilt + foo(1)', depth: 10 }
+    });
+    expect(newTypedParameterMisuse(document, before)).toMatch(/tilt/);
+    // `foo(1)` is a call, untouched by the rename: no new misuse.
+    const renamed = renameParameter(before, { name: 'foo', newName: 'bar' });
+    expect(newTypedParameterMisuse(before, renamed)).toBeNull();
   });
 
   it('keeps an existing misuse its identity when an earlier field changes', () => {

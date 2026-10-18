@@ -5507,9 +5507,13 @@ function renameStableExpression(
       if (token.type === 'number') return String(token.value);
       if (token.type === 'comma') return ',';
       if (token.type !== 'identifier') return token.value;
-      const unit =
-        tokens[index - 1]?.type === 'number' && isUnitSuffix(token.name);
-      const id = unit ? undefined : parameterIds.get(token.name);
+      // A unit suffix and a call (`foo(1)`) are not parameter reads, and a
+      // rename leaves them as written.
+      const next = tokens[index + 1];
+      const notRead =
+        (tokens[index - 1]?.type === 'number' && isUnitSuffix(token.name)) ||
+        (next?.type === 'paren' && next.value === '(');
+      const id = notRead ? undefined : parameterIds.get(token.name);
       return id ? `#${id}` : token.name;
     })
     .join(' ');
@@ -5518,10 +5522,14 @@ function renameStableExpression(
 export function typedParameterMisuse(
   document: ProjectDocument
 ): TypedParameterMisuse[] {
+  const parameters = listParameters(document);
+  // Most documents type nothing: skip the whole-scope evaluation, which runs
+  // for both sides of every command.
+  if (!parameters.some((parameter) => parameter.quantity)) return [];
   const { scope } = getParameterScope(document);
   const typed = new Set(Object.keys(parameterKindsOf(scope)));
   const parameterIds = new Map(
-    listParameters(document).map((parameter) => [
+    parameters.map((parameter) => [
       parameter.name,
       String(parameter.parameterId)
     ])
@@ -5664,6 +5672,9 @@ export function suggestParameterQuantities(
       });
       if (own.length === 1 && own.angle === 0) suggestion = 'length';
       else if (own.angle === 1 && own.length === 0) suggestion = 'angle';
+      // An area or any other dimension no type can hold: its uses must not
+      // suggest one the picker would refuse.
+      else if (own.length !== 0 || own.angle !== 0) continue;
     } catch {
       continue;
     }
