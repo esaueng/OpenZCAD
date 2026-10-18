@@ -926,6 +926,24 @@ describe('StartScreen shelf filters, order and layout', () => {
     expect(screen.getByRole('heading', { name: /Pinned/ })).toBeVisible();
   });
 
+  it('groups pinned parts by their flag, not their place in the listing', () => {
+    // A part created this session is prepended ahead of pinned ones.
+    renderStartScreen({
+      projects: [
+        part('project_new', 'New part', '2026-08-05T00:00:00.000Z'),
+        part('project_p', 'Pinned plate', '2026-07-01T00:00:00.000Z', true),
+        ...projects
+      ]
+    });
+    const pinned = screen.getByRole('heading', { name: /Pinned/ })
+      .nextElementSibling as HTMLElement;
+    expect(
+      Array.from(pinned.querySelectorAll('.start-tile-name')).map(
+        (element) => element.textContent
+      )
+    ).toEqual(['Pinned plate']);
+  });
+
   it('switches to the list layout and remembers it on this device', () => {
     localStorage.removeItem('openzcad.start.layout');
     const { unmount } = renderStartScreen({ projects });

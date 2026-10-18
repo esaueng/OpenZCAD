@@ -1052,33 +1052,34 @@ export function StartScreen({
 
   const showFilters = filterable && !loading && shelfProjects.length > 0;
   // Pinned parts head the shelf as their own group when the whole shelf is
-  // on screen; the indices stay shelf-wide, which is what reordering uses.
-  const pinnedCount = matchingProjects.filter(
+  // on screen. Partitioned by the flag, not sliced by count: a part created
+  // this session is prepended to the listing ahead of pinned ones. Each tile
+  // keeps its shelf-wide position, which is what reordering uses.
+  const pinnedProjects = matchingProjects.filter(
     (project) => projectOrganization(project).pinned
-  ).length;
+  );
+  const shelfPositions = new Map(
+    matchingProjects.map((project, index) => [project.projectId, index])
+  );
   const shelfGroups: Array<{
     label: string | null;
     projects: ProjectSummary[];
-    offset: number;
   }> =
     shelf === 'active' &&
     activeFilter === 'all' &&
     !search &&
-    pinnedCount > 0 &&
-    pinnedCount < matchingProjects.length
+    pinnedProjects.length > 0 &&
+    pinnedProjects.length < matchingProjects.length
       ? [
-          {
-            label: 'Pinned',
-            projects: matchingProjects.slice(0, pinnedCount),
-            offset: 0
-          },
+          { label: 'Pinned', projects: pinnedProjects },
           {
             label: 'Parts',
-            projects: matchingProjects.slice(pinnedCount),
-            offset: pinnedCount
+            projects: matchingProjects.filter(
+              (project) => !projectOrganization(project).pinned
+            )
           }
         ]
-      : [{ label: null, projects: matchingProjects, offset: 0 }];
+      : [{ label: null, projects: matchingProjects }];
 
   const shelfLabel =
     SHELVES.find((entry) => entry.status === shelf) ?? SHELVES[0]!;
@@ -1603,8 +1604,11 @@ export function StartScreen({
                         : 'start-tile-grid'
                     }
                   >
-                    {group.projects.map((project, index) =>
-                      renderProjectTile(project, group.offset + index)
+                    {group.projects.map((project) =>
+                      renderProjectTile(
+                        project,
+                        shelfPositions.get(project.projectId) ?? 0
+                      )
                     )}
                   </div>
                 </Fragment>
