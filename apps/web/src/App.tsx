@@ -14,6 +14,7 @@ import type {
 } from '@openzcad/shared';
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
+import { datumFaceAttachFailed } from './lib/datumPlaneDisplay';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
 import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
 import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
@@ -2054,6 +2055,8 @@ export function App() {
   const [datumOffsetDraft, setDatumOffsetDraft] = useState<number | null>(
     null
   );
+  /** Whether the open Plane card's draft can take a drag: a numeric offset. */
+  const [datumDragAvailable, setDatumDragAvailable] = useState(false);
   /** The open Plane card's exact entry for its datum's handle. */
   const datumOffsetEntryRef = useRef<(() => boolean) | null>(null);
   /** R01: an offset datum whose source face is being re-picked. */
@@ -18147,9 +18150,13 @@ export function App() {
         : []),
       // R01: a datum on a face that no longer resolves: one entry per face
       // source (a midplane names A or B, since either may be the lost one).
+      // Only the build's own "cannot attach" failure proves the loss; a
+      // datum still rebuilding, or failing for another reason (a bad offset
+      // expression), is not something a new face could fix.
       ...(feature.data.featureKind === 'datum-plane' &&
       !isFeatureSuppressed(feature) &&
-      !doc?.derived.datumFrames?.[feature.featureId]
+      !doc?.derived.datumFrames?.[feature.featureId] &&
+      datumFaceAttachFailed(feature, warnings)
         ? (feature.data.definition.kind === 'offset'
             ? [feature.data.definition.source]
             : feature.data.definition.sources
@@ -20791,7 +20798,8 @@ export function App() {
             // must not take the old selection's drag as its own Offset.
             onDatumOffsetDrag={
               tool === 'datum-plane' &&
-              modelingEditFeature?.data.featureKind === 'datum-plane'
+              modelingEditFeature?.data.featureKind === 'datum-plane' &&
+              datumDragAvailable
                 ? (delta) => {
                     const apply = datumOffsetDragRef.current;
                     apply?.(delta);
@@ -21388,7 +21396,8 @@ export function App() {
                   closeFeaturePanel,
                   datumOffsetDragRef,
                   setDatumOffsetDraft,
-                  datumOffsetEntryRef
+                  datumOffsetEntryRef,
+                  setDatumDragAvailable
                 }}
               />
             ) : (

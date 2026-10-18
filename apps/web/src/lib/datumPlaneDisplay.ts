@@ -102,6 +102,23 @@ export function shiftedDatumFrame(
   };
 }
 
+/**
+ * True when the build reports that this datum's source face could not be
+ * attached: the one failure a re-picked face can repair. A datum still
+ * rebuilding, or failing for another reason (a bad offset expression), is
+ * not.
+ */
+export function datumFaceAttachFailed(
+  feature: FeatureNode,
+  warnings: readonly string[]
+): boolean {
+  return warnings.some((warning) =>
+    warning.startsWith(
+      `Feature "${feature.name}": Datum plane "${feature.name}" cannot attach`
+    )
+  );
+}
+
 /** A datum plane as the viewport draws it: presentation only. */
 export interface DatumPlaneDisplay {
   featureId: FeatureId;

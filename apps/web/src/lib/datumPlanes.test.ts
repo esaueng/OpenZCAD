@@ -11,9 +11,10 @@ import {
   toUserId,
   type DatumFrame,
   type FeatureId,
+  type FeatureNode,
   type ProjectDocument
 } from '@openzcad/shared';
-import { datumOffsetHandle } from './datumPlaneDisplay';
+import { datumFaceAttachFailed, datumOffsetHandle } from './datumPlaneDisplay';
 import {
   buildDatumPlaneDefinition,
   datumFormStateFromFeature,
@@ -351,6 +352,32 @@ describe('Plane card commands (R01-C)', () => {
 });
 
 describe('datum viewport handle and repair (R01)', () => {
+  it("offers a face re-pick only for the build's own attach failure", () => {
+    const feature = { name: 'Lid plane' } as FeatureNode;
+    expect(
+      datumFaceAttachFailed(feature, [
+        'Feature "Lid plane": Datum plane "Lid plane" cannot attach because source body body_x is unavailable at the datum\'s history position.'
+      ])
+    ).toBe(true);
+    expect(
+      datumFaceAttachFailed(feature, [
+        'Feature "Lid plane": Datum plane "Lid plane" cannot attach to source feature "Block": the attached face was deleted or no longer exists.'
+      ])
+    ).toBe(true);
+    // Still rebuilding (no warning) or failing for another reason: no.
+    expect(datumFaceAttachFailed(feature, [])).toBe(false);
+    expect(
+      datumFaceAttachFailed(feature, [
+        'Feature "Lid plane": datum plane offset: Unknown identifier "nope" in expression.'
+      ])
+    ).toBe(false);
+    expect(
+      datumFaceAttachFailed(feature, [
+        'Feature "Other": Datum plane "Other" cannot attach because source body body_x is unavailable.'
+      ])
+    ).toBe(false);
+  });
+
   const offsetDatum = (offset: number | string, reverseNormal = false) => {
     const empty = createProjectDocument('Handle', toUserId('user_handle'));
     const added = addDatumPlane(empty, {
