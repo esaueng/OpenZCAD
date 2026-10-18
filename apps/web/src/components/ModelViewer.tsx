@@ -290,6 +290,7 @@ import { buildDatumPlaneRig, type DatumPlaneRig } from './viewer/datumPlaneRig';
 import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
 import { sketchValueResolver } from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
+import { traceFaceDrag } from '../lib/faceDragTrace';
 import {
   readWheelDeviceMemory,
   writeWheelDeviceMemory
@@ -1902,6 +1903,7 @@ export function ModelViewer({
   const geometryTraceRef = useRef(geometryTrace);
   geometryTraceRef.current = geometryTrace;
   const pendingEditFrameRef = useRef<typeof geometryTrace>(undefined);
+  const pendingTracedFrameRef = useRef(false);
   const installedEditRevisionRef = useRef<typeof geometryTrace>(undefined);
   const onBodiesDrawnElsewhereRef = useRef(onBodiesDrawnElsewhere);
   onBodiesDrawnElsewhereRef.current = onBodiesDrawnElsewhere;
@@ -7264,6 +7266,10 @@ export function ModelViewer({
             : Math.round(raw / snap) * snap;
           if (Math.abs(value - rig.value()) > 1e-9) {
             rig.setValue(value);
+            traceFaceDrag('pointer', {
+              value,
+              ms: performance.now() - event.timeStamp
+            });
             const exactOnRelease = queueOffsetBodyProxy(value, event.timeStamp);
             onOffsetPreviewRef.current(value, !exactOnRelease);
           }
@@ -8468,6 +8474,7 @@ export function ModelViewer({
     let loopWasAnimating = false;
     function animate(now: number) {
       animationFrame = null;
+      const frameStarted = performance.now();
       if (e2eCanvasHooksEnabled) {
         framesDrawn += 1;
         renderer.domElement.dataset.e2eFrames = String(framesDrawn);
@@ -8691,6 +8698,7 @@ export function ModelViewer({
       if (drawnElsewhere) {
         onBodiesDrawnElsewhereRef.current?.(drawnElsewhere);
       }
+      let renderStarted = performance.now();
       // The first draw compiles every material's shaders and uploads the
       // environment map, so it costs far more than steady-state frames.
       if (firstFrame) {
@@ -8705,8 +8713,17 @@ export function ModelViewer({
           'viewer.firstFrame.ready'
         );
       } else {
+        renderStarted = performance.now();
         renderer.render(scene, context.activeCamera);
       }
+      traceFaceDrag('frame', {
+        ms: performance.now() - frameStarted,
+        detail: {
+          presented: pendingTracedFrameRef.current ? 1 : 0,
+          renderMs: performance.now() - renderStarted
+        }
+      });
+      pendingTracedFrameRef.current = false;
       const presented = pendingEditFrameRef.current;
       if (presented) {
         pendingEditFrameRef.current = undefined;
@@ -9932,7 +9949,13 @@ export function ModelViewer({
         pendingEditFrameRef.current = revision;
       }
       measure('viewer.bodies', 'viewer.bodies:begin');
-      onGeometryPresentedRef.current?.(performance.now() - installationStarted);
+      const installationMs = performance.now() - installationStarted;
+      traceFaceDrag('install', {
+        ms: installationMs,
+        detail: { renderChanged: renderChanged ? 1 : 0 }
+      });
+      if (renderChanged) pendingTracedFrameRef.current = true;
+      onGeometryPresentedRef.current?.(installationMs);
     }
   }, [
     bodies,

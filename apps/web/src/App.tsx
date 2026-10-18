@@ -337,6 +337,7 @@ import {
 } from './lib/projectTabOwnership';
 
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
+import { traceFaceDrag } from './lib/faceDragTrace';
 import { modalHoldsKeyboard, useModalFocus } from './lib/useModalFocus';
 import {
   downloadText,
@@ -3224,13 +3225,22 @@ export function App() {
   const offsetPreview = useRef(
     new LivePreview<OffsetPreviewCandidate, GeometryReadyState>({
       build: (offset) => {
+        const buildStarted = performance.now();
         const base = managerRef.current?.document;
         const plan = base ? buildOffsetEditPlan(offset, undefined, base) : null;
         const current = interactionRef.current;
-        return base && plan && current.mode === 'face'
+        const candidate =
+          base && plan && current.mode === 'face'
+            ? plan.command.apply(base)
+            : null;
+        traceFaceDrag('request', {
+          value: offset,
+          ms: performance.now() - buildStarted
+        });
+        return base && plan && candidate && current.mode === 'face'
           ? {
               selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`,
-              document: plan.command.apply(base),
+              document: candidate,
               offset,
               bodyId: plan.bodyId,
               command: plan.command,
@@ -3288,6 +3298,7 @@ export function App() {
           setRenderedOffsetPreview(null);
           return;
         }
+        traceFaceDrag('publish', { value: preview.document.offset });
         reusableOffsetPreviewRef.current = { candidate: preview.document };
         setPreviewDoc(null);
         setFaceGeometryPreview({
@@ -3302,11 +3313,11 @@ export function App() {
         // while the hand is actually ahead of the published geometry.
         setPreviewDeferred(offsetPreview.degraded && offsetPreview.lagging);
       },
-      onFailure: ({ error, value }) =>
-        reportPreviewFailure(
-          errorMessage(error, 'Exact offset preview failed.'),
-          value
-        ),
+      onFailure: ({ error, value }) => {
+        const message = errorMessage(error, 'Exact offset preview failed.');
+        traceFaceDrag('refusal', { value, message });
+        reportPreviewFailure(message, value);
+      },
       acceptValue: (offset) =>
         Number.isFinite(offset) && Math.abs(offset) > 1e-9,
       ...(E2E_SLOW_FRAME_MS === undefined
