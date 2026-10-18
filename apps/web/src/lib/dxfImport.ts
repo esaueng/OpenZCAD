@@ -745,6 +745,18 @@ export function importDxfSketch(
       count(dropped, `${entity.type} in paper space`);
       continue;
     }
+    // 60 = 1 hides the entity (guides, alternates): left out, reported,
+    // never drawn into a profile. Only 0 and 1 mean anything.
+    const visibility = integerFlags(entity, 60);
+    if (visibility !== 0 && visibility !== 1) {
+      throw new DxfImportError(
+        `This DXF is malformed: a ${entity.type} has visibility ${visibility} (60 must be 0 or 1).`
+      );
+    }
+    if (visibility === 1) {
+      count(dropped, `${entity.type} (invisible)`);
+      continue;
+    }
     if (!inXyPlane(entity)) {
       count(refused, `${entity.type} off the XY plane`);
       continue;

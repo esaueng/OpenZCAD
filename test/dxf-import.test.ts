@@ -1948,6 +1948,46 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     );
   });
 
+  it('leaves invisible entities out, and refuses other visibility values', () => {
+    const result = importDxfSketch(
+      dxf([
+        '0',
+        'LINE',
+        '60',
+        '1',
+        '10',
+        '0',
+        '20',
+        '0',
+        '11',
+        '5',
+        '21',
+        '0',
+        '0',
+        'CIRCLE',
+        '60',
+        '0',
+        '10',
+        '0',
+        '20',
+        '0',
+        '40',
+        '1'
+      ]),
+      'mm'
+    );
+    expect(result.objects).toEqual([
+      expect.objectContaining({ objectKind: 'circle' })
+    ]);
+    expect(result.dropped).toEqual({ 'LINE (invisible)': 1 });
+    expect(() =>
+      importDxfSketch(
+        dxf(['0', 'CIRCLE', '60', '2', '10', '0', '20', '0', '40', '1']),
+        'mm'
+      )
+    ).toThrow('60 must be 0 or 1');
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',
