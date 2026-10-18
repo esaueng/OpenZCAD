@@ -807,12 +807,13 @@ export function importDxfSketch(
         // Curve- (2) and spline-fitted (4) polylines describe a smooth
         // curve their vertices only approximate; joining them with straight
         // segments would change the outline. Also inspect the vertices when
-        // the parent flags are missing: 1 is curve-fit generated, 8 is
-        // spline-fit generated, and 16 is a spline frame control point.
+        // the parent flags are missing: 1 is curve-fit generated, 2 carries
+        // a curve-fit tangent (significant even when 0), 8 is spline-fit
+        // generated, and 16 is a spline frame control point.
         if (
           (flags & (2 | 4)) !== 0 ||
           vertexEntities.some(
-            (vertex) => (integerFlags(vertex, 70) & (1 | 8 | 16)) !== 0
+            (vertex) => (integerFlags(vertex, 70) & (1 | 2 | 8 | 16)) !== 0
           )
         ) {
           count(refused, 'POLYLINE (curve-fit or spline-fit)');
