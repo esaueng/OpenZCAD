@@ -32,7 +32,13 @@ const CHECK = process.argv.includes('--check');
 // slack borrowed above is given back rather than banked as new room to grow
 // into: a budget only reports something when its edge is somewhere the code
 // can actually reach.
-const DEFAULT_RAW_BUDGET = 500 * 1024;
+//
+// 2026-10-18: raised to 512 KiB (524,288 bytes) at the maintainer's
+// direction. Main had grown back to within ~100 bytes of the 500 KiB edge,
+// so two unrelated features merging together (#718 and the F01 through-all
+// cut) failed the queue on 81 bytes. The entry and exact chunks get the same
+// 12 KiB of room; the next real growth should still come with a split.
+const DEFAULT_RAW_BUDGET = 512 * 1024;
 const APPROVED_LAZY_ASSETS = [
   {
     pattern: /^assets\/occt-wasm-.*\.wasm$/,
