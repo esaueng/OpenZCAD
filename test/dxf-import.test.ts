@@ -549,6 +549,95 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(() => importDxfSketch(text, 'mm')).toThrow('endpoints coincide');
   });
 
+  it('refuses wide polylines rather than importing only their centreline', () => {
+    const result = importDxfSketch(
+      dxf([
+        '0',
+        'LWPOLYLINE',
+        '90',
+        '2',
+        '43',
+        '0.5',
+        '10',
+        '0',
+        '20',
+        '0',
+        '10',
+        '5',
+        '20',
+        '0',
+        '0',
+        'POLYLINE',
+        '70',
+        '0',
+        '0',
+        'VERTEX',
+        '10',
+        '0',
+        '20',
+        '0',
+        '40',
+        '1',
+        '41',
+        '1',
+        '0',
+        'VERTEX',
+        '10',
+        '5',
+        '20',
+        '0',
+        '0',
+        'SEQEND',
+        '0',
+        'CIRCLE',
+        '10',
+        '0',
+        '20',
+        '0',
+        '40',
+        '1'
+      ]),
+      'mm'
+    );
+    expect(result.objects).toHaveLength(1);
+    expect(result.refused).toEqual({
+      'LWPOLYLINE with width': 1,
+      'POLYLINE with width': 1
+    });
+  });
+
+  it('keeps a near-full bulge an arc through its endpoints, or refuses it', () => {
+    const near = (bulge: string) =>
+      dxf([
+        '0',
+        'LWPOLYLINE',
+        '90',
+        '2',
+        '10',
+        '0',
+        '20',
+        '0',
+        '42',
+        bulge,
+        '10',
+        '1',
+        '20',
+        '0'
+      ]);
+    const arc = importDxfSketch(near('1000'), 'mm').objects[0] as Record<
+      string,
+      unknown
+    >;
+    expect(arc).toMatchObject({ objectKind: 'arc' });
+    expect(Number(arc.radius)).toBeCloseTo(250.00025, 6);
+    expect(Number(arc.endAngleDeg) - Number(arc.startAngleDeg)).toBeLessThan(
+      360
+    );
+    expect(() => importDxfSketch(near('1e16'), 'mm')).toThrow(
+      'bulge too extreme'
+    );
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',

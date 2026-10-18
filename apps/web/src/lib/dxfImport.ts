@@ -220,13 +220,18 @@ function inXyPlane(entity: DxfEntity): boolean {
   );
 }
 
-/** Arc angles with end − start in (0, 360], the sketch's CCW convention. */
+/**
+ * Arc angles with end − start in (0, 360], the sketch's CCW convention.
+ * `distinctEnds` marks an arc through two different points, which can never
+ * be a whole turn: a sweep that rounds to 360° has lost the gap between them.
+ */
 function ccwArc(
   centerX: number,
   centerY: number,
   radius: number,
   startDeg: number,
-  endDeg: number
+  endDeg: number,
+  distinctEnds = false
 ): SketchObjectData {
   let start = ((startDeg % 360) + 360) % 360;
   let end = ((endDeg % 360) + 360) % 360;
@@ -236,6 +241,11 @@ function ccwArc(
   if (!(end > start)) {
     throw new DxfImportError(
       'This DXF has an arc too short to represent: its sweep rounds to zero.'
+    );
+  }
+  if (distinctEnds && end - start >= 360) {
+    throw new DxfImportError(
+      'This DXF has a polyline bulge too extreme to convert exactly.'
     );
   }
   return {
@@ -261,21 +271,27 @@ function segment(
   if (Math.abs(bulge) < 1e-12) {
     return { objectKind: 'line', x1: from.x, y1: from.y, x2: to.x, y2: to.y };
   }
-  // bulge = tan(θ/4), positive counter-clockwise from `from` to `to`.
-  const theta = 4 * Math.atan(bulge);
-  const radius = Math.abs(chord / (2 * Math.sin(theta / 2)));
+  // bulge = tan(θ/4), positive counter-clockwise from `from` to `to`. The
+  // radius and apothem come straight from the bulge, not through θ: near a
+  // full turn atan saturates to π/2 and sin(θ/2) to a wrong value.
+  const radius = (chord * (1 + bulge * bulge)) / (4 * Math.abs(bulge));
   const midX = (from.x + to.x) / 2;
   const midY = (from.y + to.y) / 2;
   // Distance from the chord midpoint to the centre, signed toward the left
   // of from→to for a CCW (positive) bulge.
-  const apothem = chord / 2 / Math.tan(theta / 2);
+  const apothem = (chord * (1 - bulge * bulge)) / (4 * bulge);
+  if (!Number.isFinite(radius) || !Number.isFinite(apothem)) {
+    throw new DxfImportError(
+      'This DXF has a polyline bulge too extreme to convert exactly.'
+    );
+  }
   const centerX = midX - (dy / chord) * apothem;
   const centerY = midY + (dx / chord) * apothem;
   const angle = (point: { x: number; y: number }) =>
     (Math.atan2(point.y - centerY, point.x - centerX) * 180) / Math.PI;
   return bulge > 0
-    ? ccwArc(centerX, centerY, radius, angle(from), angle(to))
-    : ccwArc(centerX, centerY, radius, angle(to), angle(from));
+    ? ccwArc(centerX, centerY, radius, angle(from), angle(to), true)
+    : ccwArc(centerX, centerY, radius, angle(to), angle(from), true);
 }
 
 interface Vertex {
@@ -303,6 +319,15 @@ const incompleteVertices = () =>
   new DxfImportError(
     'This DXF is malformed: a LWPOLYLINE has an incomplete or unusable vertex list.'
   );
+
+/** Wide polylines (40/41 start/end, 43 constant width) draw a band, not the centreline. */
+function hasWidth(entity: DxfEntity): boolean {
+  return entity.groups.some(
+    (pair) =>
+      (pair.code === 40 || pair.code === 41 || pair.code === 43) &&
+      dxfNumber(pair.value) !== 0
+  );
+}
 
 /** LWPOLYLINE vertices: each 10/20 pair, with any 42 bulge that follows. */
 function lwVertices(entity: DxfEntity): Vertex[] {
@@ -442,6 +467,10 @@ export function importDxfSketch(
         );
         break;
       case 'LWPOLYLINE':
+        if (hasWidth(entity)) {
+          count(refused, 'LWPOLYLINE with width');
+          break;
+        }
         polylineObjects(
           lwVertices(entity),
           (number(entity, 70, 0) & 1) === 1,
@@ -465,6 +494,10 @@ export function importDxfSketch(
         // segments would change the outline.
         if ((flags & (2 | 4)) !== 0) {
           count(refused, 'POLYLINE (curve-fit or spline-fit)');
+          break;
+        }
+        if (hasWidth(entity) || vertexEntities.some(hasWidth)) {
+          count(refused, 'POLYLINE with width');
           break;
         }
         if (!vertexEntities.every(onZeroElevation)) {
