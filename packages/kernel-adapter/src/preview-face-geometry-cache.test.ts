@@ -105,4 +105,19 @@ describe('preview face geometry cache', () => {
     expect(oval?.area).toBe(102);
     expect(cache.hits).toBe(0);
   });
+
+  it('measures a face cold when its boundary cannot be read', () => {
+    const kernel: FaceShapeKernel = {
+      ...kernelWith({ 1: { normal: [0, 0, 1], curve: ellipse(10, 10) } }),
+      getFaceWires: () => {
+        throw new Error('unsupported imported boundary');
+      }
+    };
+    const { cache, measured } = recordingCache(kernel);
+    expect(cache.measure(kernel as RemusKernel, 1, witness)?.area).toBe(101);
+    expect(cache.measure(kernel as RemusKernel, 1, witness)?.area).toBe(101);
+    // Nothing unreadable is cached: each frame measures it again.
+    expect(measured).toEqual([1, 1]);
+    expect(cache.hits).toBe(0);
+  });
 });

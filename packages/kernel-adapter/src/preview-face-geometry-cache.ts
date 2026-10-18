@@ -64,7 +64,15 @@ export class PreviewFaceGeometryCache {
     face: number,
     witness: FaceWitnessV1
   ): FaceGeometry | undefined {
-    const key = faceShapeKey(kernel, face, witness);
+    let key: string;
+    try {
+      key = faceShapeKey(kernel, face, witness);
+    } catch {
+      // An unreadable boundary (an unsupported imported edge, say) only
+      // forgoes reuse: the face is measured cold, as it was before.
+      this.misses += 1;
+      return this.measureFace(kernel, face);
+    }
     // Callers decorate what they receive, so each gets its own copy.
     if (this.entries.has(key)) {
       this.hits += 1;
