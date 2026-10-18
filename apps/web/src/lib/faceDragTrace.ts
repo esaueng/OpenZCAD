@@ -11,7 +11,9 @@
  *   construction on the main thread).
  * - `reply`: the worker answered (`ms` = round trip; `detail` holds the
  *   worker's queue, kernel and posting durations).
- * - `publish`: the result for `value` was handed to React.
+ * - `publish`: the result for `value` was handed to React. A preview shown
+ *   again from the live preview's completed frame, when the drag returns to
+ *   it, has no worker reply of its own and is marked `detail.cached` = 1.
  * - `install`: the viewer installed changed bodies (`ms` = installation).
  * - `frame`: a WebGL frame was rendered (`detail.presented` = 1 for the first
  *   frame after an installation).
@@ -49,4 +51,14 @@ export function traceFaceDrag(
   const log = traceLog();
   if (!log || log.length >= MAX_EVENTS) return;
   log.push({ kind, t: performance.now(), ...fields });
+}
+
+const publishedPreviews = new WeakSet<object>();
+
+/** Records a publish of `preview`, marking a repeat of an earlier one. */
+export function traceFaceDragPublish(value: number, preview: object): void {
+  if (!faceDragTraceEnabled()) return;
+  const cached = publishedPreviews.has(preview);
+  publishedPreviews.add(preview);
+  traceFaceDrag('publish', { value, detail: { cached: cached ? 1 : 0 } });
 }

@@ -94,9 +94,18 @@ export function summarizeFaceDragTrace(
   const publishToInstalled: number[] = [];
   const installMs: number[] = [];
   const installedToFrame: number[] = [];
-  const presented: { value: number; publishAt: number; frameAt: number }[] = [];
+  const presented: {
+    value: number;
+    publishAt: number;
+    frameAt: number;
+    cached: boolean;
+  }[] = [];
   for (const publish of during.filter((event) => event.kind === 'publish')) {
-    const reply = [...replies].reverse().find((event) => event.t <= publish.t);
+    // A cached republish has no reply of its own to measure from.
+    const cached = publish.detail?.cached === 1;
+    const reply = cached
+      ? undefined
+      : [...replies].reverse().find((event) => event.t <= publish.t);
     if (reply) replyToPublish.push(publish.t - reply.t);
     const install = installs.find((event) => event.t >= publish.t);
     if (!install) continue;
@@ -113,7 +122,8 @@ export function summarizeFaceDragTrace(
     presented.push({
       value: publish.value!,
       publishAt: publish.t,
-      frameAt: frame.t
+      frameAt: frame.t,
+      cached
     });
   }
 
@@ -122,17 +132,22 @@ export function summarizeFaceDragTrace(
   const lag: { at: number; ms: number }[] = [];
   let covered = 0;
   for (const shown of presented) {
-    const request = [...requests]
-      .reverse()
-      .find(
-        (event) =>
-          event.t <= shown.publishAt && sameValue(event.value, shown.value)
-      );
-    if (!request) continue;
+    // A built value comes from the pointer event before its request; a
+    // cached republish from the event that returned to it before the publish.
+    const request = shown.cached
+      ? undefined
+      : [...requests]
+          .reverse()
+          .find(
+            (event) =>
+              event.t <= shown.publishAt && sameValue(event.value, shown.value)
+          );
+    if (!shown.cached && !request) continue;
+    const bound = request?.t ?? shown.publishAt;
     let source = -1;
     for (let index = pointers.length - 1; index >= 0; index -= 1) {
       const pointer = pointers[index]!;
-      if (pointer.t <= request.t && sameValue(pointer.value, shown.value)) {
+      if (pointer.t <= bound && sameValue(pointer.value, shown.value)) {
         source = index;
         break;
       }

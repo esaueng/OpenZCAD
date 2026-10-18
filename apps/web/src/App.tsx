@@ -337,7 +337,7 @@ import {
 } from './lib/projectTabOwnership';
 
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
-import { traceFaceDrag } from './lib/faceDragTrace';
+import { traceFaceDrag, traceFaceDragPublish } from './lib/faceDragTrace';
 import { modalHoldsKeyboard, useModalFocus } from './lib/useModalFocus';
 import {
   downloadText,
@@ -3298,7 +3298,7 @@ export function App() {
           setRenderedOffsetPreview(null);
           return;
         }
-        traceFaceDrag('publish', { value: preview.document.offset });
+        traceFaceDragPublish(preview.document.offset, preview.document);
         reusableOffsetPreviewRef.current = { candidate: preview.document };
         setPreviewDoc(null);
         setFaceGeometryPreview({

@@ -72,3 +72,27 @@ describe('face-drag trace summary', () => {
     expect(distribution([]).p95).toBeNull();
   });
 });
+
+describe('face-drag trace summary, cached republishes', () => {
+  it('times a cached republish from the move that returned to it, without a reply', () => {
+    const summary = summarizeFaceDragTrace([
+      at(0, 'pointer', { value: 1 }),
+      at(1, 'request', { value: 1 }),
+      at(30, 'reply', { ms: 29, detail: { kernelMs: 25 } }),
+      at(31, 'publish', { value: 1, detail: { cached: 0 } }),
+      at(40, 'install', { detail: { renderChanged: 1 } }),
+      at(45, 'frame', { detail: { presented: 1 } }),
+      at(50, 'pointer', { value: 2 }),
+      at(51, 'request', { value: 2 }),
+      at(200, 'pointer', { value: 1 }),
+      at(201, 'publish', { value: 1, detail: { cached: 1 } }),
+      at(210, 'install', { detail: { renderChanged: 1 } }),
+      at(220, 'frame', { detail: { presented: 1 } })
+    ]);
+    // Only the built frame has a reply to measure from.
+    expect(summary.stages.replyToPublishMs).toMatchObject({ n: 1, max: 1 });
+    expect(summary.presentedFrames).toBe(2);
+    // Pointer 1 → 45; pointers 2 and 3 are caught up by the republish at 220.
+    expect(summary.pointerToPresentedMs).toMatchObject({ n: 3, max: 170 });
+  });
+});
