@@ -34,4 +34,22 @@ describe('STEP header privacy sanitization', () => {
       'complete HEADER'
     );
   });
+  it('ignores comment and string decoys and accepts whitespace around the record', () => {
+    const input =
+      "ISO-10303-21;HEADER;/* FILE_NAME('decoy','',(),(),'','',''); */FILE_DESCRIPTION(('ENDSEC; FILE_NAME(''decoy'')'),'2;1');FILE_NAME /* gap */ ('/private/model.step','',(),(),'','','');ENDSEC;DATA;ENDSEC;";
+    const sanitized = sanitizeStepHeaderPrivacy(input, 'model.step');
+    expect(sanitized).not.toContain('/private/model.step');
+    expect(sanitized).toContain("/* FILE_NAME('decoy'");
+    expect(sanitized).toContain("FILE_NAME /* gap */ ('model.step'");
+    expect(sanitizeStepHeaderPrivacy(sanitized, 'model.step')).toBe(sanitized);
+  });
+
+  it('refuses duplicate records and incomplete comments or strings', () => {
+    for (const input of [
+      "HEADER;FILE_NAME('a');FILE_NAME('b');ENDSEC;",
+      "HEADER;/* FILE_NAME('a');ENDSEC;",
+      "HEADER;FILE_NAME('unterminated);ENDSEC;"
+    ])
+      expect(() => sanitizeStepHeaderPrivacy(input, 'x.step')).toThrow();
+  });
 });

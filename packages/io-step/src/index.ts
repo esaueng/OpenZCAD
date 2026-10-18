@@ -18,6 +18,101 @@ function stepString(value: string): string {
   return value.replaceAll("'", "''");
 }
 
+interface StepHeaderToken {
+  kind: 'word' | 'string' | 'punctuation';
+  value: string;
+  start: number;
+  end: number;
+}
+
+/** Scan only as far as HEADER's ENDSEC; comments and strings are opaque. */
+function* stepHeaderTokens(
+  text: string
+): Generator<StepHeaderToken, undefined, unknown> {
+  let index = 0;
+  while (index < text.length) {
+    if (/\s/.test(text[index]!)) {
+      index++;
+      continue;
+    }
+    if (text.startsWith('/*', index)) {
+      const end = text.indexOf('*/', index + 2);
+      if (end < 0) throw new Error('STEP header has an unterminated comment.');
+      index = end + 2;
+      continue;
+    }
+    const start = index;
+    if (text[index] === "'") {
+      index++;
+      let closed = false;
+      while (index < text.length) {
+        if (text[index++] !== "'") continue;
+        if (text[index] === "'") {
+          index++;
+          continue;
+        }
+        closed = true;
+        break;
+      }
+      if (!closed) throw new Error('STEP header has an unterminated string.');
+      yield { kind: 'string', value: '', start, end: index };
+    } else if (/[A-Za-z_]/.test(text[index]!)) {
+      while (index < text.length && /[A-Za-z_0-9]/.test(text[index]!)) index++;
+      yield {
+        kind: 'word',
+        value: text.slice(start, index).toUpperCase(),
+        start,
+        end: index
+      };
+    } else {
+      index++;
+      yield { kind: 'punctuation', value: text[start]!, start, end: index };
+    }
+  }
+}
+
+function stepHeaderFileNameRange(text: string): [number, number] {
+  const tokens = stepHeaderTokens(text);
+  let inHeader = false;
+  let depth = 0;
+  let fileName: [number, number] | undefined;
+  for (const token of tokens) {
+    if (!inHeader) {
+      if (token.kind === 'word' && token.value === 'HEADER') {
+        if (tokens.next().value?.value !== ';')
+          throw new Error('STEP HEADER is malformed.');
+        inHeader = true;
+      }
+      continue;
+    }
+    if (depth === 0 && token.kind === 'word' && token.value === 'ENDSEC') {
+      if (tokens.next().value?.value !== ';')
+        throw new Error('STEP HEADER is incomplete.');
+      if (!fileName) throw new Error('STEP header has no FILE_NAME record.');
+      return fileName;
+    }
+    if (depth === 0 && token.kind === 'word' && token.value === 'FILE_NAME') {
+      if (fileName)
+        throw new Error('STEP header has multiple FILE_NAME records.');
+      const opening = tokens.next().value;
+      const name = tokens.next().value;
+      if (opening?.value !== '(' || name?.kind !== 'string') {
+        throw new Error('STEP FILE_NAME record is malformed.');
+      }
+      fileName = [name.start, name.end - 1];
+      depth = 1;
+      continue;
+    }
+    if (token.kind === 'punctuation' && token.value === '(') depth++;
+    if (token.kind === 'punctuation' && token.value === ')') {
+      if (depth === 0)
+        throw new Error('STEP header parentheses are malformed.');
+      depth--;
+    }
+  }
+  throw new Error('STEP file has no complete HEADER section.');
+}
+
 /**
  * Replaces the FILE_NAME path/name field in the Part 21 header before a local
  * import source can be persisted or archived. Geometry and DATA records are
@@ -27,34 +122,7 @@ export function sanitizeStepHeaderPrivacy(
   text: string,
   safeFileName: string
 ): string {
-  const headerStart = text.indexOf('HEADER;');
-  const headerEnd = text.indexOf('ENDSEC;', headerStart + 7);
-  if (headerStart < 0 || headerEnd < 0) {
-    throw new Error('STEP file has no complete HEADER section.');
-  }
-  const fileNameStart = text.indexOf('FILE_NAME(', headerStart + 7);
-  if (fileNameStart < 0 || fileNameStart >= headerEnd) {
-    throw new Error('STEP header has no FILE_NAME record.');
-  }
-  const quoteStart = text.indexOf("'", fileNameStart + 'FILE_NAME('.length);
-  if (quoteStart < 0 || quoteStart >= headerEnd) {
-    throw new Error('STEP FILE_NAME record is malformed.');
-  }
-  let quoteEnd = quoteStart + 1;
-  while (quoteEnd < headerEnd) {
-    if (text[quoteEnd] !== "'") {
-      quoteEnd += 1;
-      continue;
-    }
-    if (text[quoteEnd + 1] === "'") {
-      quoteEnd += 2;
-      continue;
-    }
-    break;
-  }
-  if (quoteEnd >= headerEnd) {
-    throw new Error('STEP FILE_NAME string is unterminated.');
-  }
+  const [quoteStart, quoteEnd] = stepHeaderFileNameRange(text);
   const baseName = safeFileName.replaceAll('\\', '/').split('/').at(-1) ?? '';
   const safeBaseName = [...baseName]
     .map((character) => {
