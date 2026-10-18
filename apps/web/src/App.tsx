@@ -2060,9 +2060,16 @@ export function App() {
   /** The open Plane card's exact entry for its datum's handle. */
   const datumOffsetEntryRef = useRef<(() => boolean) | null>(null);
   /** R01: an offset datum whose source face is being re-picked. */
+  /**
+   * R01: a datum whose source face is being re-picked. `both` re-picks a
+   * midplane's two faces in turn (A, then B) and commits them as one edit;
+   * `first` holds the A pick while B is awaited.
+   */
   const [datumRepair, setDatumRepair] = useState<{
     feature: FeatureNode;
     slot: 0 | 1;
+    both?: boolean;
+    first?: TopologySelection;
   } | null>(null);
   const [formFacePickTarget, setFormFacePickTarget] = useState<BodyId | null>(
     null
@@ -12575,32 +12582,51 @@ export function App() {
     if (datumRepair && !measuring && tool === null && !modelingLocked) {
       const base = managerRef.current?.document;
       if (!selection || !base) return;
-      const { feature: repair, slot } = datumRepair;
+      const { feature: repair, slot, both, first } = datumRepair;
       const attempt = datumRepairAttempt.current;
       const withdrawn = () => datumRepairAttempt.current !== attempt;
-      void import('./lib/datumPlanes').then(({ datumFaceRepairEdit }) => {
-        if (withdrawn()) return;
-        try {
-          const edit = datumFaceRepairEdit(
-            base,
-            repair.featureId,
-            selection,
-            slot
-          );
-          void validatedFeature.runTransaction([edit.command], {
-            label: edit.label,
-            cancelled: withdrawn,
-            targets: affectedFeatureTargets(base, repair.featureId),
-            validateDerived: edit.validateDerived,
-            successMessage: `"${repair.name}" follows the re-picked face.`,
-            onSuccess: () => setDatumRepair(null),
-            // Stay armed: the next click can try another face.
-            onFailure: setStatus
-          });
-        } catch (error) {
-          setStatus(errorMessage(error, 'That face cannot carry this plane.'));
+      void import('./lib/datumPlanes').then(
+        ({ datumFaceRepairEdit, datumFaceSourceFromPick }) => {
+          if (withdrawn()) return;
+          try {
+            if (both && !first) {
+              // Check face A now, so a bad pick is refused where it was made.
+              datumFaceSourceFromPick(base, repair.name, selection);
+              setDatumRepair({
+                feature: repair,
+                slot: 0,
+                both,
+                first: selection
+              });
+              setStatus(
+                `Face A taken · now click face B for "${repair.name}" · Esc cancels.`
+              );
+              return;
+            }
+            const edit = first
+              ? datumFaceRepairEdit(base, repair.featureId, first, 0, selection)
+              : datumFaceRepairEdit(base, repair.featureId, selection, slot);
+            void validatedFeature.runTransaction([edit.command], {
+              label: edit.label,
+              cancelled: withdrawn,
+              targets: affectedFeatureTargets(base, repair.featureId),
+              validateDerived: edit.validateDerived,
+              successMessage: `"${repair.name}" follows the re-picked face.`,
+              onSuccess: () => setDatumRepair(null),
+              // Stay armed: the next click can try another face (both faces
+              // again, from A, when the pair was refused).
+              onFailure: (message) => {
+                setStatus(message);
+                if (first) {
+                  setDatumRepair({ feature: repair, slot: 0, both: true });
+                }
+              }
+            });
+          } catch (error) {
+            setStatus(errorMessage(error, 'That face cannot carry this plane.'));
+          }
         }
-      });
+      );
       return;
     }
     // A form that collects faces owns every viewport pick while it is open:
@@ -18192,6 +18218,35 @@ export function App() {
               }
             ];
           })
+          .concat(
+            // Both of a midplane's faces lost (a deleted body held them):
+            // either alone still leaves the plane unresolved, so pick both.
+            feature.data.featureKind === 'datum-plane' &&
+              feature.data.definition.kind === 'midplane' &&
+              feature.data.definition.sources.every(
+                (source) => source.type === 'face'
+              )
+              ? [
+                  {
+                    item: {
+                      id: 'repair-datum-faces-both',
+                      label: 'Re-pick both source faces…',
+                      icon: <Crosshair size={13} aria-hidden="true" />
+                    },
+                    run: () => {
+                      if (!ensureCanEdit('repair a feature')) return;
+                      setTool(null);
+                      clearSelection();
+                      setFaceRepair(null);
+                      setDatumRepair({ feature, slot: 0, both: true });
+                      setStatus(
+                        `Re-pick both faces for "${feature.name}": click face A, then face B · Esc cancels.`
+                      );
+                    }
+                  }
+                ]
+              : []
+          )
         : []),
       ...(bodyId && body && !body.consumed
         ? [
