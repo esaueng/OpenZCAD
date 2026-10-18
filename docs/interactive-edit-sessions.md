@@ -34,7 +34,7 @@ decline the approximation.
 
 The retained exact arena also reuses successful immutable intersections and
 transforms within an audited suffix. Each entry requires the full feature
-digest and identical exact operand handles, lineage and mesh/revolve flags.
+digest and identical exact operand handles, lineage, consumption and mesh/revolve flags.
 Only shape updates and monotonic consumption/origin additions are cached;
 warnings, repairs or other build-state changes disqualify it. There is one
 latest value per feature, at most 64 entries, with invalidation on restore,

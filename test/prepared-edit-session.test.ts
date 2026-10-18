@@ -148,3 +148,48 @@ it('publishes disposable meshes with pending topology and completes all metadata
     adapter.dispose();
   }
 });
+
+it('replays a fixed intersection when an earlier feature changes operand consumption', async () => {
+  let document = createProjectDocument('Consumption guard', toUserId('test'));
+  for (const width of [12, 14, 8, 16])
+    document = addPrimitiveFeature(document, {
+      name: `Box ${width}`,
+      primitiveKind: 'box',
+      dimensions: { width, height: 10, depth: 6 }
+    });
+  const [a, b, c, d] = document.bodyOrder;
+  const union = booleanBodies(document, {
+    name: 'Earlier union',
+    operation: 'union',
+    targetBodyIds: [a!, b!]
+  });
+  const unionFeature = listFeaturesInOrder(union.document).at(-1)!;
+  document = booleanBodies(union.document, {
+    name: 'Fixed intersection',
+    operation: 'intersect',
+    targetBodyIds: [a!, c!]
+  }).document;
+  const events: RebuildCacheEvent[] = [];
+  const adapter = await createExactKernelAdapter({
+    onRebuildCacheEvent: (event) => events.push(event)
+  });
+  const fresh = await createExactKernelAdapter({ historyCheckpointLimit: 0 });
+  try {
+    await adapter.syncDocument(document);
+    // The exact handles and geometry of A/C stay identical. A was consumed
+    // before the intersection in the first build, but is not in this one.
+    const changed = updateFeature(document, {
+      featureId: unionFeature.featureId,
+      data: { targetBodyIds: [b!, d!] }
+    });
+    const result = await adapter.syncDocument(changed);
+    expect(result.bodyRepresentations[a!]!.consumed).toBe(true);
+    expect(events.at(-1)?.reusedPreparedFeatures ?? 0).toBe(0);
+    expect(comparable(result)).toEqual(
+      comparable(await fresh.syncDocument(changed))
+    );
+  } finally {
+    adapter.dispose();
+    fresh.dispose();
+  }
+});

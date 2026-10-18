@@ -9,6 +9,7 @@ import { cloneBuildState } from './exact-history-cache';
 interface Input {
   bodyId: BodyId;
   shape: ExactShape;
+  consumed: boolean;
   mesh: boolean;
   partialRevolve: boolean;
 }
@@ -117,6 +118,18 @@ export class PreparedEditSession {
     const ids = targets(feature);
     if (!ids || result.warnings.length || result.featureWarnings.length)
       return false;
+    // Intersection outputs are new bodies in an audited history. Decline
+    // malformed/overwriting contexts rather than replaying relative deltas
+    // against pre-existing output metadata.
+    if (
+      feature.data.featureKind === 'boolean' &&
+      feature.bodyId &&
+      (result.shapes.has(feature.bodyId) ||
+        result.consumed.has(feature.bodyId) ||
+        result.meshBodies.has(feature.bodyId) ||
+        result.partialRevolveBodies.has(feature.bodyId))
+    )
+      return false;
     const inputs: Input[] = [];
     for (const bodyId of ids) {
       const shape = result.shapes.get(bodyId);
@@ -124,6 +137,7 @@ export class PreparedEditSession {
       inputs.push({
         bodyId,
         shape,
+        consumed: result.consumed.has(bodyId),
         mesh: result.meshBodies.has(bodyId),
         partialRevolve: result.partialRevolveBodies.has(bodyId)
       });
@@ -137,6 +151,7 @@ export class PreparedEditSession {
         const old = entry.inputs[i]!;
         return (
           input.bodyId === old.bodyId &&
+          input.consumed === old.consumed &&
           input.mesh === old.mesh &&
           input.partialRevolve === old.partialRevolve &&
           sameShape(input.shape, old.shape)
