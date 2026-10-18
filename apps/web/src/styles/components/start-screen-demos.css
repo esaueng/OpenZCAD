@@ -80,6 +80,11 @@
   line-height: 1.4;
 }
 
+/* The column's short form of the tagline; the full one is the card's. */
+.demo-card-summary {
+  display: none;
+}
+
 /* The three revisions read as a walk, top to bottom, with the connecting line
    drawn between the letters rather than as three disconnected chips. */
 .demo-card-revs {
@@ -196,17 +201,18 @@
   }
 
   .start-screen:not(.is-fresh) .demo-card-head {
-    align-items: flex-start;
-    gap: 9px;
+    align-items: center;
+    gap: 10px;
   }
 
+  /* A framed drawing of the demo's part, so each entry reads as a model. */
   .start-screen:not(.is-fresh) .demo-card-icon {
-    width: 15px;
-    height: 15px;
-    margin-top: 1px;
-    color: var(--color-text-subtle);
-    background: none;
-    border: 0;
+    width: 32px;
+    height: 32px;
+    color: var(--color-text-muted);
+    background: var(--color-bg);
+    border: var(--border-thin);
+    border-radius: var(--radius-md);
   }
 
   .start-screen:not(.is-fresh) .demo-card:hover:not(:disabled) .demo-card-icon,
@@ -220,14 +226,23 @@
 
   /* One line each: the tagline is a reminder here, not the pitch, and three
      wrapped entries would push the account readout out of a laptop window. */
-  .start-screen:not(.is-fresh) .demo-card-title strong,
   .start-screen:not(.is-fresh) .demo-card-tagline {
+    display: none;
+  }
+
+  .start-screen:not(.is-fresh) .demo-card-summary {
+    display: block;
+    color: var(--color-text-subtle);
+  }
+
+  .start-screen:not(.is-fresh) .demo-card-title strong,
+  .start-screen:not(.is-fresh) .demo-card-summary {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .start-screen:not(.is-fresh) .demo-card-tagline {
+  .start-screen:not(.is-fresh) .demo-card-summary {
     font-size: var(--fs-xs);
     line-height: 1.3;
   }

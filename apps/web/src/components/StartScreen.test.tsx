@@ -12,7 +12,7 @@ import { describeProject } from '../lib/projectProperties';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { toProjectId, type ProjectSummary } from '@openzcad/shared';
-import { formatLastEdited, StartScreen } from './StartScreen';
+import { formatLastEdited, recoveryCopyOf, StartScreen } from './StartScreen';
 
 const localProject: ProjectSummary = {
   projectId: toProjectId('project_local'),
@@ -803,5 +803,159 @@ describe('StartScreen update notice', () => {
     expect(notice).toHaveTextContent('New version ready');
     fireEvent.click(within(notice).getByRole('button', { name: 'Reload' }));
     expect(onReload).toHaveBeenCalledOnce();
+  });
+});
+
+describe('StartScreen shelf filters, order and layout', () => {
+  const part = (
+    id: string,
+    name: string,
+    updatedAt: string,
+    pinned = false
+  ): ProjectSummary => ({
+    projectId: toProjectId(id),
+    name,
+    revisionCount: 1,
+    updatedAt,
+    ...(pinned && {
+      organization: {
+        status: 'active',
+        pinned: true,
+        sortOrder: 0
+      }
+    })
+  });
+  const projects = [
+    part('project_b', 'Bracket', '2026-08-01T00:00:00.000Z'),
+    part('project_a', 'Axle', '2026-08-03T00:00:00.000Z'),
+    part('project_r', 'Bracket (Recovery)', '2026-08-02T00:00:00.000Z'),
+    part('project_c', 'Clamp', '2026-08-04T00:00:00.000Z')
+  ];
+  const tileNames = () =>
+    Array.from(document.querySelectorAll('.start-tile-name')).map(
+      (element) => element.textContent
+    );
+
+  it('names the part a recovery copy came from', () => {
+    expect(recoveryCopyOf('Bracket (Recovery)')).toBe('Bracket');
+    expect(recoveryCopyOf('Merry Llama (Recovery) (copy)')).toBe('Merry Llama');
+    expect(recoveryCopyOf('Plate (Local copy) (copy 2)')).toBe('Plate');
+    expect(recoveryCopyOf('Recovery tool')).toBeNull();
+  });
+
+  it('gathers recovery copies and conflicts under Needs attention', () => {
+    renderStartScreen({
+      projects,
+      cloudProjectIds: new Set(projects.map((entry) => entry.projectId)),
+      conflictedProjectIds: new Set([toProjectId('project_c')])
+    });
+    const filters = screen.getByRole('group', { name: 'Show parts' });
+    fireEvent.click(
+      within(filters).getByRole('button', { name: /Needs attention/ })
+    );
+    expect(tileNames().sort()).toEqual(['Bracket (Recovery)', 'Clamp']);
+    expect(screen.getByLabelText('Changed in two places')).toBeVisible();
+    // Nothing is only on this device, so that filter is not offered.
+    expect(
+      within(filters).queryByRole('button', { name: /This device only/ })
+    ).toBeNull();
+  });
+
+  it('drops the device-only filter when there is no account to compare against', () => {
+    const props = startScreenProps({ projects, cloudProjectIds: new Set() });
+    const { rerender } = render(<StartScreen {...props} />);
+    fireEvent.click(
+      within(screen.getByRole('group', { name: 'Show parts' })).getByRole(
+        'button',
+        { name: /This device only/ }
+      )
+    );
+    expect(tileNames()).toHaveLength(projects.length);
+    rerender(<StartScreen {...props} signedIn={false} />);
+    expect(tileNames()).toHaveLength(projects.length);
+    expect(
+      within(screen.getByRole('group', { name: 'Show parts' })).getByRole(
+        'button',
+        { name: /^All/ }
+      )
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('shows an original with its recovery copies from the tile', () => {
+    renderStartScreen({ projects });
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Show Bracket with its 1 recovery copy'
+      })
+    );
+    expect(screen.getByLabelText('Search parts')).toHaveValue('Bracket');
+    expect(tileNames().sort()).toEqual(['Bracket', 'Bracket (Recovery)']);
+  });
+
+  it('orders by name or last edit with pinned parts first, and stops reordering', () => {
+    renderStartScreen({
+      projects: [
+        ...projects,
+        part('project_p', 'Pinned plate', '2026-07-01T00:00:00.000Z', true)
+      ]
+    });
+    expect(
+      screen.getAllByRole('button', { name: /^Reorder / }).length
+    ).toBeGreaterThan(0);
+    fireEvent.change(screen.getByLabelText('Sort parts'), {
+      target: { value: 'name' }
+    });
+    expect(tileNames()).toEqual([
+      'Pinned plate',
+      'Axle',
+      'Bracket',
+      'Bracket (Recovery)',
+      'Clamp'
+    ]);
+    fireEvent.change(screen.getByLabelText('Sort parts'), {
+      target: { value: 'edited' }
+    });
+    expect(tileNames()).toEqual([
+      'Pinned plate',
+      'Clamp',
+      'Axle',
+      'Bracket (Recovery)',
+      'Bracket'
+    ]);
+    expect(screen.queryByRole('button', { name: /^Reorder / })).toBeNull();
+    expect(screen.getByRole('heading', { name: /Pinned/ })).toBeVisible();
+  });
+
+  it('groups pinned parts by their flag, not their place in the listing', () => {
+    // A part created this session is prepended ahead of pinned ones.
+    renderStartScreen({
+      projects: [
+        part('project_new', 'New part', '2026-08-05T00:00:00.000Z'),
+        part('project_p', 'Pinned plate', '2026-07-01T00:00:00.000Z', true),
+        ...projects
+      ]
+    });
+    const pinned = screen.getByRole('heading', { name: /Pinned/ })
+      .nextElementSibling as HTMLElement;
+    expect(
+      Array.from(pinned.querySelectorAll('.start-tile-name')).map(
+        (element) => element.textContent
+      )
+    ).toEqual(['Pinned plate']);
+  });
+
+  it('switches to the list layout and remembers it on this device', () => {
+    localStorage.removeItem('openzcad.start.layout');
+    const { unmount } = renderStartScreen({ projects });
+    const layout = screen.getByRole('group', { name: 'Layout' });
+    fireEvent.click(within(layout).getByRole('button', { name: 'List' }));
+    expect(document.querySelector('.start-tile-grid.is-list')).not.toBeNull();
+    expect(
+      within(layout).getByRole('button', { name: 'List' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    unmount();
+    renderStartScreen({ projects });
+    expect(document.querySelector('.start-tile-grid.is-list')).not.toBeNull();
+    localStorage.removeItem('openzcad.start.layout');
   });
 });

@@ -17,6 +17,8 @@ export interface DemoDefinition {
   projectId: ProjectId;
   name: string;
   tagline: string;
+  /** The tagline cut to its operations, for the narrow column list. */
+  summary?: string;
   revisions: [string, string, string];
 }
 
@@ -26,6 +28,7 @@ export const DEMO_DEFINITIONS: DemoDefinition[] = [
     projectId: toProjectId('proj_demo_mounting_bracket'),
     name: 'Demo · Mounting Bracket',
     tagline: 'L-bracket with boss and mounting holes',
+    summary: 'Boss, holes, fillet',
     revisions: [
       'A — L-bracket blank',
       'B — Boss + holes',
@@ -37,6 +40,7 @@ export const DEMO_DEFINITIONS: DemoDefinition[] = [
     projectId: toProjectId('proj_demo_pipe_flange'),
     name: 'Demo · Pipe Flange',
     tagline: 'Revolved flange with a patterned bolt circle',
+    summary: 'Revolve, bolt circle, chamfer',
     revisions: ['A — Revolved blank', 'B — Bolt circle', 'C — Rim chamfer']
   },
   {
@@ -44,6 +48,7 @@ export const DEMO_DEFINITIONS: DemoDefinition[] = [
     projectId: toProjectId('proj_demo_heat_sink'),
     name: 'Demo · Heat Sink',
     tagline: 'Extruded base with a parametric fin field',
+    summary: 'Extrude, fin field, fillets',
     revisions: ['A — Base extrusion', 'B — Fin field', 'C — Corner fillets']
   }
 ];

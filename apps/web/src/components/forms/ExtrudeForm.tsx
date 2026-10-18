@@ -112,10 +112,12 @@ export function ExtrudeForm({
     endCondition: initial.endCondition ?? 'blind',
     throughAllSide: initial.throughAllSide ?? 'forward'
   }));
-  // Through all needs one explicit cut target, so it is offered when editing
-  // a cut, not while the operation is still being inferred.
-  const offersThroughAll = !creating && draft.choice.operation === 'cut';
-  const throughAll = offersThroughAll && draft.endCondition === 'through-all';
+  // Through all needs one explicit cut target, so it is offered once Cut is
+  // chosen, never while the operation is still being inferred.
+  const offersThroughAll = draft.choice.operation === 'cut';
+  const isThroughAll = (next: typeof draft) =>
+    next.choice.operation === 'cut' && next.endCondition === 'through-all';
+  const throughAll = isThroughAll(draft);
   // A new extrude opens at zero until the user drags or types a distance, so
   // the zero-distance error waits for that edit (or an attempt to submit)
   // rather than greeting the card in red. Create stays disabled either way.
@@ -131,10 +133,7 @@ export function ExtrudeForm({
     const targetRequired =
       next.choice.operation === 'add' || next.choice.operation === 'cut';
     const targetBodyId = targetRequired ? next.choice.targetBodyId : undefined;
-    const nextThroughAll =
-      !creating &&
-      next.choice.operation === 'cut' &&
-      next.endCondition === 'through-all';
+    const nextThroughAll = isThroughAll(next);
     if (
       !next.name.trim() ||
       // Through all ignores the distance; it is kept only for switching
@@ -152,14 +151,14 @@ export function ExtrudeForm({
   }
 
   function formValue(next: typeof draft): ExtrudeFormValue {
-    const nextThroughAll =
-      !creating &&
-      next.choice.operation === 'cut' &&
-      next.endCondition === 'through-all';
+    const nextThroughAll = isThroughAll(next);
+    // A through-all cut derives its span in the build, so its distance is
+    // dormant; a create still needs it non-zero, so an untouched 0 sends 1.
+    const typed = coerceParamValue(next.distance);
     return {
       name: next.name.trim(),
       sketchId: initial.sketchId,
-      distance: coerceParamValue(next.distance),
+      distance: nextThroughAll && !typed ? 1 : typed,
       symmetric: nextThroughAll ? false : next.symmetric,
       backDistance:
         nextThroughAll || next.symmetric
@@ -167,7 +166,7 @@ export function ExtrudeForm({
           : coerceParamValue(next.backDistance),
       choice: next.choice,
       endCondition: nextThroughAll ? 'through-all' : 'blind',
-      throughAllSide: next.throughAllSide
+      ...(nextThroughAll ? { throughAllSide: next.throughAllSide } : {})
     };
   }
 

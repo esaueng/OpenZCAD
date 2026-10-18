@@ -319,10 +319,18 @@ const OUTCOME_PHRASES: Record<OperationInference['operation'], string> = {
  * sentence belongs.
  */
 export function regionExtrudeOutcome(
-  resolved: { inference: Pick<OperationInference, 'operation'> },
+  resolved: {
+    inference: Pick<OperationInference, 'operation'>;
+    command?: { payload: { endCondition?: string } };
+  },
   distance: number,
   units = ''
 ): string {
+  // A through-all cut was committed with a dormant distance; naming it would
+  // report a depth the build never used.
+  if (resolved.command?.payload.endCondition === 'through-all') {
+    return 'Cut the region through all of the target.';
+  }
   return `Extruded region by ${distance} ${units}${OUTCOME_PHRASES[resolved.inference.operation]}.`;
 }
 
