@@ -5469,8 +5469,9 @@ export interface TypedParameterMisuse {
    */
   occurrence: string;
   /**
-   * The stored expression and the complaint, without the holder's label: a
-   * rename changes the message but not the misuse.
+   * The stored expression with parameter reads written as ids, without the
+   * holder's label: renaming the holder or a parameter changes the message
+   * but not the misuse, while editing the field does.
    */
   detail: string;
   message: string;
@@ -5485,11 +5486,46 @@ export interface TypedParameterMisuse {
  * wrong quantity — whoever authored the feature (a form, the assistant, an
  * API client or an older client's document).
  */
+/**
+ * An expression with each parameter read written as that parameter's id, so
+ * renaming a parameter (which rewrites every expression reading it) leaves
+ * the form unchanged while any real edit changes it. Unit suffixes stay as
+ * written; unparseable text is returned as is.
+ */
+function renameStableExpression(
+  expression: string,
+  parameterIds: ReadonlyMap<string, string>
+): string {
+  let tokens: ExpressionToken[];
+  try {
+    tokens = tokenizeExpression(expression);
+  } catch {
+    return expression;
+  }
+  return tokens
+    .map((token, index) => {
+      if (token.type === 'number') return String(token.value);
+      if (token.type === 'comma') return ',';
+      if (token.type !== 'identifier') return token.value;
+      const unit =
+        tokens[index - 1]?.type === 'number' && isUnitSuffix(token.name);
+      const id = unit ? undefined : parameterIds.get(token.name);
+      return id ? `#${id}` : token.name;
+    })
+    .join(' ');
+}
+
 export function typedParameterMisuse(
   document: ProjectDocument
 ): TypedParameterMisuse[] {
   const { scope } = getParameterScope(document);
   const typed = new Set(Object.keys(parameterKindsOf(scope)));
+  const parameterIds = new Map(
+    listParameters(document).map((parameter) => [
+      parameter.name,
+      String(parameter.parameterId)
+    ])
+  );
   if (typed.size === 0) return [];
   const sketchFeature = new Map<string, FeatureId>();
   for (const feature of listFeaturesInOrder(document)) {
@@ -5531,7 +5567,7 @@ export function typedParameterMisuse(
         misuse.push({
           featureId: owner(node),
           occurrence: `${node.id}:${(paths ??= objectPaths(node)).get(site.container) ?? '?'}.${site.key}`,
-          detail: `${expression}\u0000${reason}`,
+          detail: renameStableExpression(expression, parameterIds),
           message: `${referenceLabel(node)} uses "${expression}": ${reason}`
         });
       }

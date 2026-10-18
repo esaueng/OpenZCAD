@@ -11,6 +11,7 @@ import {
   newTypedParameterMisuse,
   normalizeDocument,
   renameNode,
+  renameParameter,
   parameterKindsOf,
   parameterQuantityRefusal,
   setParameter,
@@ -431,6 +432,31 @@ describe('new typed-parameter misuse', () => {
     const after = renameNode(before, { nodeId: node.id, name: 'Renamed' });
     expect(newTypedParameterMisuse(document, before)).toMatch(/tilt/);
     expect(newTypedParameterMisuse(before, after)).toBeNull();
+  });
+
+  it('does not count a renamed parameter as a new misuse, but an edit is', () => {
+    const document = setParameter(blank(), {
+      name: 'tilt',
+      expression: '30',
+      quantity: 'angle'
+    });
+    const before = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 'tilt', depth: 10 }
+    });
+    const renamed = renameParameter(before, { name: 'tilt', newName: 'lean' });
+    expect(newTypedParameterMisuse(before, renamed)).toBeNull();
+    // A real edit of the invalid field is still a new misuse.
+    const edited = structuredClone(before);
+    const box = Object.values(edited.nodes).find(
+      (entry) => entry.kind === 'feature' && entry.name === 'Block'
+    );
+    if (box?.kind !== 'feature' || box.data.featureKind !== 'primitive') {
+      throw new Error('expected the box feature');
+    }
+    box.data.dimensions.height = 'tilt * 2';
+    expect(newTypedParameterMisuse(before, edited)).toMatch(/tilt \* 2/);
   });
 
   it('keeps an existing misuse its identity when an earlier field changes', () => {
