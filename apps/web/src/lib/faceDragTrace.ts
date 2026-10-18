@@ -18,13 +18,7 @@
  * - `refusal`: the preview for `value` was refused.
  */
 export type FaceDragTraceKind =
-  | 'pointer'
-  | 'request'
-  | 'reply'
-  | 'publish'
-  | 'install'
-  | 'frame'
-  | 'refusal';
+  'pointer' | 'request' | 'reply' | 'publish' | 'install' | 'frame' | 'refusal';
 
 export interface FaceDragTraceEvent {
   kind: FaceDragTraceKind;

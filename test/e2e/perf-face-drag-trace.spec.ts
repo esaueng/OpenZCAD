@@ -5,10 +5,7 @@ import {
   writeFileSync
 } from 'node:fs';
 import { dirname } from 'node:path';
-import {
-  createProjectDocument,
-  importStepBody
-} from '@openzcad/document-core';
+import { createProjectDocument, importStepBody } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { expectBodyCount, stubApi } from './openzcad-fixtures';
@@ -110,7 +107,11 @@ async function armPlanarFace(
   normal: { x: number; y: number; z: number }
 ): Promise<{ canvas: Locator; handle: Handle }> {
   if (NORMAL_OVERRIDE?.length === 3)
-    normal = { x: NORMAL_OVERRIDE[0]!, y: NORMAL_OVERRIDE[1]!, z: NORMAL_OVERRIDE[2]! };
+    normal = {
+      x: NORMAL_OVERRIDE[0]!,
+      y: NORMAL_OVERRIDE[1]!,
+      z: NORMAL_OVERRIDE[2]!
+    };
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
   await expect
@@ -282,10 +283,9 @@ async function traceDrag(
   }
   const releaseAt = await page.evaluate(() => performance.now());
   await page.mouse.up();
-  await expect(page.getByText('Checking geometry…', { exact: true })).toHaveCount(
-    0,
-    { timeout: 120_000 }
-  );
+  await expect(
+    page.getByText('Checking geometry…', { exact: true })
+  ).toHaveCount(0, { timeout: 120_000 });
   return page.evaluate((releaseAt) => {
     const scope = window as typeof window & {
       __ozFaceDragTrace: FaceDragTraceEvent[];

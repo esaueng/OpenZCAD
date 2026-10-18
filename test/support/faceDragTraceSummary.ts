@@ -94,8 +94,7 @@ export function summarizeFaceDragTrace(
   const publishToInstalled: number[] = [];
   const installMs: number[] = [];
   const installedToFrame: number[] = [];
-  const presented: { value: number; publishAt: number; frameAt: number }[] =
-    [];
+  const presented: { value: number; publishAt: number; frameAt: number }[] = [];
   for (const publish of during.filter((event) => event.kind === 'publish')) {
     const reply = [...replies].reverse().find((event) => event.t <= publish.t);
     if (reply) replyToPublish.push(publish.t - reply.t);
@@ -126,7 +125,8 @@ export function summarizeFaceDragTrace(
     const request = [...requests]
       .reverse()
       .find(
-        (event) => event.t <= shown.publishAt && sameValue(event.value, shown.value)
+        (event) =>
+          event.t <= shown.publishAt && sameValue(event.value, shown.value)
       );
     if (!request) continue;
     let source = -1;
@@ -159,8 +159,7 @@ export function summarizeFaceDragTrace(
       : presented.filter(
           (shown) => shown.frameAt >= dragStart && shown.frameAt <= dragEnd!
         ).length;
-  const durationS =
-    dragStart === undefined ? 0 : (dragEnd! - dragStart) / 1000;
+  const durationS = dragStart === undefined ? 0 : (dragEnd! - dragStart) / 1000;
 
   const afterRelease = installs.find((event) => event.t > releaseAt);
   const releaseFrame = afterRelease
@@ -184,7 +183,9 @@ export function summarizeFaceDragTrace(
     pointerToPresentedMs: distribution(lag.map((entry) => entry.ms)),
     steadyPointerToPresentedMs: distribution(
       lag
-        .filter((entry) => dragStart !== undefined && entry.at - dragStart >= 300)
+        .filter(
+          (entry) => dragStart !== undefined && entry.at - dragStart >= 300
+        )
         .map((entry) => entry.ms)
     ),
     frameIntervalMs: distribution(intervals),
@@ -193,7 +194,9 @@ export function summarizeFaceDragTrace(
       dragFrames.map((event) => event.detail?.renderMs ?? 0)
     ),
     geometryUpdatesPerSecond:
-      durationS > 0 ? Math.round((presentedDuringDrag / durationS) * 10) / 10 : null,
+      durationS > 0
+        ? Math.round((presentedDuringDrag / durationS) * 10) / 10
+        : null,
     stages: {
       buildMs: distribution(requests.map((event) => event.ms ?? 0)),
       sendMs: distribution(detail('sendMs')),
