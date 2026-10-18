@@ -11,6 +11,7 @@ import {
   parameterKindsOf,
   parameterQuantityRefusal,
   setParameter,
+  suggestParameterQuantities,
   suggestParameterQuantity
 } from './index';
 
@@ -253,6 +254,38 @@ describe('suggested quantities', () => {
       ]
     }));
     expect(suggestParameterQuantity(document, 'x')).toBeNull();
+  });
+
+  it('suggests for a large table in one linear pass', () => {
+    // 10,000 unitless parameters, the first used as a box width.
+    let document = setParameter(blank(), { name: 'p0', expression: '5' });
+    const template = listParameters(document)[0]!;
+    const count = 10_000;
+    for (let index = 1; index < count; index += 1) {
+      const id = `node_bulk_${index}`;
+      const parameterId =
+        `parameter_bulk_${index}` as typeof template.parameterId;
+      document.nodes[id] = {
+        ...template,
+        id: id as typeof template.id,
+        parameterId,
+        name: `p${index}`,
+        expression: index % 2 ? `${index} mm` : String(index)
+      };
+      document.parameterOrder.push(parameterId);
+    }
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 'p0', height: 10, depth: 10 }
+    });
+    const started = performance.now();
+    const suggestions = suggestParameterQuantities(document);
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(suggestions.p0).toBe('length');
+    expect(suggestions.p1).toBe('length');
+    expect(suggestions.p2).toBeUndefined();
+    expect(Object.keys(suggestions)).toHaveLength(1 + count / 2);
   });
 
   it('does not suggest a quantity that would break a use', () => {

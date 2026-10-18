@@ -5413,8 +5413,8 @@ export function typedParameterMisuse(
   document: ProjectDocument
 ): TypedParameterMisuse[] {
   const { scope } = getParameterScope(document);
-  const typed = Object.keys(parameterKindsOf(scope));
-  if (typed.length === 0) return [];
+  const typed = new Set(Object.keys(parameterKindsOf(scope)));
+  if (typed.size === 0) return [];
   const sketchFeature = new Map<string, FeatureId>();
   for (const feature of listFeaturesInOrder(document)) {
     if (feature.data.featureKind === 'sketch') {
@@ -5437,9 +5437,7 @@ export function typedParameterMisuse(
   for (const node of Object.values(document.nodes)) {
     if (node.kind === 'parameter') continue;
     rewriteNodeExpressions(node, (expression, dimension) => {
-      if (
-        !expressionIdentifiers(expression).some((name) => typed.includes(name))
-      ) {
+      if (!expressionIdentifiers(expression).some((name) => typed.has(name))) {
         return expression;
       }
       try {
@@ -5479,49 +5477,97 @@ export function newTypedParameterMisuse(
 }
 
 /**
- * F05: the quantity a unitless parameter most plausibly measures, offered to
- * the owner rather than applied: what its own expression carries (`12 mm`,
- * `30 deg`), else the one dimension every field that reads it agrees on.
- * Null when it is already typed, the evidence disagrees or is absent, or the
- * suggestion would break a use (see {@link parameterQuantityRefusal}).
+ * F05: the quantity each unitless parameter most plausibly measures, offered
+ * to the owner rather than applied: what its own expression carries
+ * (`12 mm`, `30 deg`), else the one dimension every field that reads it
+ * agrees on. A parameter is left out when it is typed or a toggle, the
+ * evidence disagrees or is absent, or the suggestion would break a use.
+ *
+ * One pass for the whole table: the scope and an index of every expression
+ * by the names it reads are built once, and each candidate re-checks only
+ * the expressions that read it, so a large document stays linear.
  */
+export function suggestParameterQuantities(
+  document: ProjectDocument
+): Record<string, ParameterKind> {
+  const parameters = listParameters(document);
+  const suggestions: Record<string, ParameterKind> = {};
+  const candidates = parameters.filter(
+    (parameter) => !parameter.quantity && !parameter.toggle
+  );
+  if (candidates.length === 0) return suggestions;
+  const { scope } = getParameterScope(document);
+  const uses = new Map<
+    string,
+    {
+      expression: string;
+      dimension: ExpressionFieldDimension;
+      self: string | null;
+    }[]
+  >();
+  for (const node of Object.values(document.nodes)) {
+    const self = node.kind === 'parameter' ? node.name : null;
+    rewriteNodeExpressions(node, (expression, dimension) => {
+      for (const name of new Set(expressionIdentifiers(expression))) {
+        let list = uses.get(name);
+        if (!list) uses.set(name, (list = []));
+        list.push({ expression, dimension, self });
+      }
+      return expression;
+    });
+  }
+  // One trial scope for every candidate: the candidate's kind is set for its
+  // check and removed after (candidates are untyped, so never in `kinds`).
+  const trialKinds: Record<string, ParameterKind> = {
+    ...parameterKindsOf(scope)
+  };
+  const trial = withParameterKinds({ ...scope }, trialKinds);
+  for (const target of candidates) {
+    let suggestion: ParameterKind | null = null;
+    try {
+      const own = getExpressionDimensions(target.expression, scope, {
+        documentUnits: document.units
+      });
+      if (own.length === 1 && own.angle === 0) suggestion = 'length';
+      else if (own.angle === 1 && own.length === 0) suggestion = 'angle';
+    } catch {
+      continue;
+    }
+    const reads = (uses.get(target.name) ?? []).filter(
+      (use) => use.self !== target.name
+    );
+    if (!suggestion) {
+      const seen = new Set(reads.map((use) => use.dimension));
+      seen.delete(null);
+      if (seen.size !== 1) continue;
+      suggestion = [...seen][0] as ParameterKind;
+    }
+    trialKinds[target.name] = suggestion;
+    const breaks = reads.some((use) => {
+      try {
+        const result = parseExpressionQuantity(
+          use.expression,
+          trial,
+          document.units
+        );
+        if (use.dimension) requireFieldDimension(result, use.dimension);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    delete trialKinds[target.name];
+    if (!breaks) suggestions[target.name] = suggestion;
+  }
+  return suggestions;
+}
+
+/** {@link suggestParameterQuantities} for one parameter. */
 export function suggestParameterQuantity(
   document: ProjectDocument,
   name: string
 ): ParameterKind | null {
-  const target = listParameters(document).find(
-    (parameter) => parameter.name === name
-  );
-  if (!target || target.quantity || target.toggle) return null;
-  const { scope } = getParameterScope(document);
-  let suggestion: ParameterKind | null = null;
-  try {
-    const own = getExpressionDimensions(target.expression, scope, {
-      documentUnits: document.units
-    });
-    if (own.length === 1 && own.angle === 0) suggestion = 'length';
-    else if (own.angle === 1 && own.length === 0) suggestion = 'angle';
-  } catch {
-    return null;
-  }
-  if (!suggestion) {
-    const seen = new Set<ExpressionFieldDimension>();
-    for (const node of Object.values(document.nodes)) {
-      if (node.kind === 'parameter' && node.name === name) continue;
-      rewriteNodeExpressions(node, (expression, dimension) => {
-        if (expressionIdentifiers(expression).includes(name)) {
-          seen.add(dimension);
-        }
-        return expression;
-      });
-    }
-    seen.delete(null);
-    if (seen.size !== 1) return null;
-    suggestion = [...seen][0] as ParameterKind;
-  }
-  return parameterQuantityRefusal(document, name, suggestion) === null
-    ? suggestion
-    : null;
+  return suggestParameterQuantities(document)[name] ?? null;
 }
 
 export {

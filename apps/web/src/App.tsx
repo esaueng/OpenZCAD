@@ -127,7 +127,7 @@ import {
   listNodesByKind,
   listExposedParameters,
   listParameters,
-  suggestParameterQuantity,
+  suggestParameterQuantities,
   normalizeDocument,
   normalizeDocumentHistory,
   numberedBodyName,
@@ -5182,16 +5182,11 @@ export function App() {
   const parameters = useMemo(() => (doc ? listParameters(doc) : []), [doc]);
   // F05: what each unitless parameter's uses suggest it measures, offered
   // in its type picker and never applied without the owner choosing it.
-  const parameterQuantitySuggestions = useMemo(() => {
-    const suggestions: Record<string, ParameterKind> = {};
-    if (!doc) return suggestions;
-    for (const parameter of parameters) {
-      if (parameter.quantity || parameter.toggle) continue;
-      const suggestion = suggestParameterQuantity(doc, parameter.name);
-      if (suggestion) suggestions[parameter.name] = suggestion;
-    }
-    return suggestions;
-  }, [doc, parameters]);
+  const parameterQuantitySuggestions = useMemo(
+    (): Record<string, ParameterKind> =>
+      doc ? suggestParameterQuantities(doc) : {},
+    [doc]
+  );
   // What Tweak mode and a share link offer. An uncurated document offers
   // everything, so the rule lives in document-core rather than here — the
   // panel and the Build-mode toggles must never disagree about it.
