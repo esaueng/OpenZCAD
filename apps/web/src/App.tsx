@@ -20690,10 +20690,17 @@ export function App() {
               tool && PRIMITIVE_TOOLS.includes(tool) ? primitiveGhost : null
             }
             onPickPlane={startSketchOnPlane}
-            onPickDatum={(featureId) => {
-              const node = doc && findFeature(doc, featureId as FeatureId);
-              if (node) handleSelectFeatureFromTree(node.id, false);
-            }}
+            // A face re-pick or a measurement owns every viewport click; a
+            // datum must not open its card over one still armed.
+            onPickDatum={
+              faceRepair || datumRepair || measuring
+                ? undefined
+                : (featureId) => {
+                    const node =
+                      doc && findFeature(doc, featureId as FeatureId);
+                    if (node) handleSelectFeatureFromTree(node.id, false);
+                  }
+            }
             // A selected datum opens its Plane card; the handle feeds the
             // card's Offset field, and the card's own Apply commits it. Only
             // while that card edits this datum: a card creating a new plane

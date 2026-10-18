@@ -127,6 +127,26 @@ test('drags a selected datum plane along its normal and picks it in the viewport
     page.locator('.feature-row', { hasText: 'Lid plane' })
   ).toHaveClass(/selected/);
 
+  // While measuring owns viewport clicks, the plane under the pointer is
+  // not selected.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /\d/);
+  const measure = page
+    .getByRole('button', { name: 'Measure', exact: true })
+    .first();
+  await measure.click();
+  await page.mouse.click(bounds.x + pin.x, bounds.y + pin.y);
+  await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /\d/);
+  await expect(
+    page.locator('.feature-row', { hasText: 'Lid plane' })
+  ).not.toHaveClass(/selected/);
+  await measure.click();
+  await page.mouse.click(bounds.x + pin.x, bounds.y + pin.y);
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /\d/, {
+    timeout: 30_000
+  });
+
   // Starting a new plane from the Plane tool keeps the old selection but is
   // not editing it: its pin must not arm, or a drag would fill the new
   // plane's Offset.
