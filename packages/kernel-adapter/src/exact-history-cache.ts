@@ -22,6 +22,7 @@ import {
   expressionIdentifiers,
   findSketch,
   getParameterScope,
+  parameterKindsOf,
   keyableImportedNodeData
 } from '@openzcad/document-core';
 import {
@@ -331,10 +332,14 @@ function readsParameterScope(feature: FeatureNode): boolean {
  * in feature digests so parameter-independent imports can survive an edit.
  */
 export function historyScopeDigest(document: ProjectDocument): string {
-  const { errors } = getParameterScope(document);
+  const { scope, errors } = getParameterScope(document);
   return stableJson({
     units: document.units,
     errors,
+    // F05: a quantity-only change leaves every value equal but can make a
+    // feature's use of the parameter right or wrong; no checkpoint built
+    // under the old kinds may be restored under the new ones.
+    kinds: parameterKindsOf(scope),
     bezierProfileEdges: bezierProfileEdgesEnabled()
   });
 }

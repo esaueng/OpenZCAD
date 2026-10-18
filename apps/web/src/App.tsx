@@ -10,6 +10,7 @@ import { setAnalyticsEnabled, trackUsage, trackDetail, trackParts, trackSize, is
 import type {
   GeometryBodyRepresentation,
   GeometryReadyState,
+  ParameterKind,
   UserId
 } from '@openzcad/shared';
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
@@ -104,6 +105,7 @@ import {
 import {
   CommandManager,
   commandFactories,
+  isParameterRetype,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -126,6 +128,7 @@ import {
   listNodesByKind,
   listExposedParameters,
   listParameters,
+  suggestParameterQuantities,
   normalizeDocument,
   normalizeDocumentHistory,
   numberedBodyName,
@@ -4175,7 +4178,10 @@ export function App() {
   function ensureCanExecute(commands: AnyCommand[], action: string): boolean {
     const parametersOnly =
       commands.length > 0 &&
-      commands.every((command) => command.kind === 'parameter.set');
+      commands.every(
+        (command) =>
+          command.kind === 'parameter.set' && !isParameterRetype(command)
+      );
     return parametersOnly
       ? ensureCanEditParameters(action)
       : ensureCanEdit(action);
@@ -5225,6 +5231,13 @@ export function App() {
     [doc]
   );
   const parameters = useMemo(() => (doc ? listParameters(doc) : []), [doc]);
+  // F05: what each unitless parameter's uses suggest it measures, offered
+  // in its type picker and never applied without the owner choosing it.
+  const parameterQuantitySuggestions = useMemo(
+    (): Record<string, ParameterKind> =>
+      doc ? suggestParameterQuantities(doc) : {},
+    [doc]
+  );
   // What Tweak mode and a share link offer. An uncurated document offers
   // everything, so the rule lives in document-core rather than here — the
   // panel and the Build-mode toggles must never disagree about it.
@@ -6729,7 +6742,10 @@ export function App() {
     if (
       !managerRef.current ||
       commands.length === 0 ||
-      !(permission === 'parameters'
+      // A retype (F05) is a Build edit even on the parameter path: Tweak
+      // hides the type picker, and a check that outlasted the switch to
+      // Tweak must not land it there.
+      !(permission === 'parameters' && !commands.some(isParameterRetype)
         ? ensureCanEditParameters('apply this parameter edit')
         : ensureCanExecute(commands, 'apply this edit'))
     ) {
@@ -14647,7 +14663,9 @@ export function App() {
   async function handleSetParameter(
     name: string,
     expression: string,
-    addOnly = false
+    addOnly = false,
+    /** F05: a new quantity for the parameter (null: unitless). */
+    quantity?: ParameterKind | null
   ): Promise<string | null> {
     const manager = managerRef.current;
     if (!manager || !ensureCanEditParameters('change this parameter')) {
@@ -14686,7 +14704,8 @@ export function App() {
       const parameterCommand = commandFactories.setParameter({
         name,
         expression,
-        ...(addOnly ? { addOnly: true } : {})
+        ...(addOnly ? { addOnly: true } : {}),
+        ...(quantity !== undefined ? { quantity } : {})
       });
       parameterCommand.validate(base);
       let prospective = parameterCommand.apply(base);
@@ -20309,6 +20328,18 @@ export function App() {
       onSetParameter={(name, expression) =>
         handleSetParameter(name, expression)
       }
+      onSetParameterQuantity={(name, quantity, expression) => {
+        const current = parameters.find((entry) => entry.name === name);
+        return current
+          ? handleSetParameter(
+              name,
+              expression ?? current.expression,
+              false,
+              quantity
+            )
+          : Promise.resolve(`Parameter ${name} does not exist.`);
+      }}
+      parameterQuantitySuggestions={parameterQuantitySuggestions}
       onViewActivityLog={() => setActivityLogOpen(true)}
       onDeleteParameter={(name) =>
         executeCommand(commandFactories.deleteParameter({ name }))

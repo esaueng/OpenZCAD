@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react';
-import type { BodyId, ParameterNode } from '@openzcad/shared';
+import type { BodyId, ParameterKind, ParameterNode } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 
 /**
@@ -57,16 +57,59 @@ interface ParameterRowProps extends ToggleBindingProps {
    * clears, rather than piling up beside the edits that went through.
    */
   table?: string;
+  /**
+   * F05: sets what the parameter measures (null: unitless). Absent hides the
+   * picker: Tweak turns values, it does not retype them. The promise answers
+   * with a refusal, such as a use the new quantity would break.
+   */
+  onSetQuantity?: (
+    name: string,
+    quantity: ParameterKind | null,
+    /**
+     * The row's expression draft when one is unsaved or still committing:
+     * the retype carries it, rather than superseding it with the stored one.
+     */
+    expression?: string
+  ) => void | Promise<string | null>;
+  /** A unitless parameter's likely quantity, offered but never applied. */
+  suggestedQuantity?: ParameterKind | null;
 }
 
-/** Every name and expression in a parameter table, for `ParameterRow.table`. */
+const QUANTITY_LABELS: Record<ParameterKind | 'unitless', string> = {
+  length: 'Length',
+  angle: 'Angle',
+  number: 'Number',
+  unitless: 'Unitless'
+};
+const QUANTITY_GLYPHS: Record<ParameterKind | 'unitless', string> = {
+  length: 'len',
+  angle: '°',
+  number: '#',
+  unitless: '—'
+};
+
+/**
+ * Every name, type and expression in a parameter table, for
+ * `ParameterRow.table`: a type change by undo or a collaborator is a change
+ * of table, so a refusal measured against the old type clears.
+ */
 export function parameterTable(parameters: readonly ParameterNode[]): string {
   return parameters
-    .map((parameter) => `${parameter.name}=${parameter.expression}`)
+    .map(
+      (parameter) =>
+        `${parameter.name}:${parameter.quantity ?? ''}=${parameter.expression}`
+    )
     .join('\n');
 }
 
+/** A label for a stored type; an unknown one (the loader refuses it) reads as itself. */
+function quantityLabel(quantity: string): string {
+  return (QUANTITY_LABELS[quantity as ParameterKind] ?? quantity).toLowerCase();
+}
+
 export function ParameterRow({
+  onSetQuantity,
+  suggestedQuantity = null,
   parameter,
   value,
   onSet,
@@ -91,6 +134,10 @@ export function ParameterRow({
   const latestParameter = useRef(parameter);
   latestParameter.current = parameter;
   const submission = useRef(0);
+  /** The expression a commit is still applying, for a retype to carry. */
+  const submittingExpression = useRef<string | null>(null);
+  /** F05: the latest type choice; earlier answers are superseded. */
+  const quantitySubmission = useRef(0);
   const [error, setError] = useState<{
     message: string;
     detailsAvailable: boolean;
@@ -157,9 +204,13 @@ export function ParameterRow({
     }
   }
   const [syncedTable, setSyncedTable] = useState(table);
-  if (table !== syncedTable) {
+  const [syncedQuantity, setSyncedQuantity] = useState(parameter.quantity);
+  if (table !== syncedTable || parameter.quantity !== syncedQuantity) {
     setSyncedTable(table);
+    setSyncedQuantity(parameter.quantity);
     setError(null);
+    // A type choice still in flight answers the old table: drop its reply.
+    ++quantitySubmission.current;
   }
 
   async function commit() {
@@ -177,6 +228,7 @@ export function ParameterRow({
     }
     changedByUser.current = false;
     const token = ++submission.current;
+    submittingExpression.current = trimmed;
     setError(null);
     setPending(true);
     try {
@@ -194,7 +246,10 @@ export function ParameterRow({
       });
       setExpression(latestParameter.current.expression);
     } finally {
-      if (token === submission.current) setPending(false);
+      if (token === submission.current) {
+        setPending(false);
+        submittingExpression.current = null;
+      }
     }
   }
 
@@ -328,6 +383,73 @@ export function ParameterRow({
             className={`param-value mono ${value === undefined ? 'error' : ''}`}
           >
             {showValue ? formattedValue : ''}
+            {onSetQuantity && (
+              <select
+                className={`param-quantity${suggestedQuantity ? ' suggested' : ''}`}
+                aria-label={`Type of ${parameter.name}`}
+                title={
+                  parameter.quantity
+                    ? `${parameter.name} is a ${quantityLabel(parameter.quantity)}`
+                    : suggestedQuantity
+                      ? `${parameter.name} is unitless; its uses suggest a ${quantityLabel(suggestedQuantity)}`
+                      : `${parameter.name} is unitless`
+                }
+                value={parameter.quantity ?? 'unitless'}
+                onChange={(event) => {
+                  const next = event.target.value as ParameterKind | 'unitless';
+                  // Each choice supersedes the last: its refusal clears now,
+                  // and a slower answer to an earlier choice is ignored.
+                  const token = ++quantitySubmission.current;
+                  // Choosing a type blurs the expression first, starting its
+                  // commit; the retype would supersede it with the stored
+                  // expression. It carries the draft instead, and the
+                  // expression commit's own answer is dropped.
+                  const draft =
+                    submittingExpression.current ??
+                    (changedByUser.current &&
+                    expression.trim() &&
+                    expression.trim() !== parameter.expression
+                      ? expression.trim()
+                      : undefined);
+                  if (draft !== undefined) {
+                    ++submission.current;
+                    submittingExpression.current = null;
+                    changedByUser.current = false;
+                    setPending(false);
+                  }
+                  setError(null);
+                  void (async () => {
+                    const refusal = await onSetQuantity(
+                      parameter.name,
+                      next === 'unitless' ? null : next,
+                      ...(draft !== undefined ? [draft] : [])
+                    );
+                    if (token !== quantitySubmission.current) return;
+                    setError(
+                      refusal
+                        ? { message: refusal, detailsAvailable: false }
+                        : null
+                    );
+                  })();
+                }}
+              >
+                {(['unitless', 'length', 'angle', 'number'] as const).map(
+                  (option) => (
+                    // Glyphs only: a select is as wide as its longest option,
+                    // and the name track gives way to it. The full word is
+                    // the option's accessible name; a suggestion is shown by
+                    // colour and the picker's title.
+                    <option
+                      key={option}
+                      value={option}
+                      aria-label={QUANTITY_LABELS[option]}
+                    >
+                      {QUANTITY_GLYPHS[option]}
+                    </option>
+                  )
+                )}
+              </select>
+            )}
           </span>
         )}
         {onExpose && (
