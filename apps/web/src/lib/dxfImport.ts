@@ -371,6 +371,8 @@ function hasWidth(entity: DxfEntity): boolean {
 function lwVertices(entity: DxfEntity): Vertex[] {
   const vertices: Vertex[] = [];
   let pendingX: number | null = null;
+  // Each 42 belongs to the vertex just completed, at most once.
+  let bulged = false;
   for (const pair of entity.groups) {
     if (pair.code === 10) {
       // An X before the last one found its Y would re-pair the stream.
@@ -380,8 +382,15 @@ function lwVertices(entity: DxfEntity): Vertex[] {
       if (pendingX === null) throw incompleteVertices();
       vertices.push({ x: pendingX, y: dxfNumber(pair.value), bulge: 0 });
       pendingX = null;
-    } else if (pair.code === 42 && vertices.length > 0) {
+      bulged = false;
+    } else if (pair.code === 42) {
+      // A bulge before any vertex, inside a half-read one, or a second one
+      // for the same vertex has no single meaning.
+      if (vertices.length === 0 || pendingX !== null || bulged) {
+        throw incompleteVertices();
+      }
       vertices.at(-1)!.bulge = dxfNumber(pair.value);
+      bulged = true;
     }
   }
   const declared = entity.groups.find((pair) => pair.code === 90);

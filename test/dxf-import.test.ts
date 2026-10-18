@@ -961,6 +961,21 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(() => importDxfSketch(huge, 'mm')).toThrow('coordinates too large');
   });
 
+  it('refuses LWPOLYLINE bulges that belong to no single vertex', () => {
+    const lw = (groups: string[]) =>
+      dxf(['0', 'LWPOLYLINE', '90', '2', ...groups]);
+    const cases = [
+      ['42', '1', '10', '0', '20', '0', '10', '1', '20', '0'],
+      ['10', '0', '20', '0', '42', '1', '42', '0.5', '10', '1', '20', '0'],
+      ['10', '0', '42', '1', '20', '0', '10', '1', '20', '0']
+    ];
+    for (const groups of cases) {
+      expect(() => importDxfSketch(lw(groups), 'mm')).toThrow(
+        'incomplete or unusable vertex list'
+      );
+    }
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',
