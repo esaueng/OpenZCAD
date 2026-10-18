@@ -2023,6 +2023,10 @@ export function App() {
    */
   const [faceRepair, setFaceRepair] =
     useState<StaleDirectEditFaceRepair | null>(null);
+  /** The open Plane card's handler for a drag of its datum's handle. */
+  const datumOffsetDragRef = useRef<((delta: number) => void) | null>(null);
+  /** R01: an offset datum whose source face is being re-picked. */
+  const [datumRepair, setDatumRepair] = useState<FeatureNode | null>(null);
   const [formFacePickTarget, setFormFacePickTarget] = useState<BodyId | null>(
     null
   );
@@ -4505,6 +4509,7 @@ export function App() {
     // An armed face re-pick names a feature by id; a different project's
     // features must never satisfy it.
     setFaceRepair(null);
+    setDatumRepair(null);
     // Nor may an armed edge or face operation, or a delete awaiting its
     // confirm: a "Fillet · Ready" chip from the last project read as a
     // command the new, empty one was somehow in the middle of.
@@ -12528,6 +12533,28 @@ export function App() {
       handleFaceRepairPick(selection);
       return;
     }
+    if (datumRepair) {
+      const base = managerRef.current?.document;
+      if (!selection || !base) return;
+      const repair = datumRepair;
+      void import('./lib/datumPlanes').then(({ datumFaceRepairEdit }) => {
+        try {
+          const edit = datumFaceRepairEdit(base, repair.featureId, selection);
+          void validatedFeature.runTransaction([edit.command], {
+            label: edit.label,
+            targets: affectedFeatureTargets(base, repair.featureId),
+            validateDerived: edit.validateDerived,
+            successMessage: `"${repair.name}" follows the re-picked face.`,
+            onSuccess: () => setDatumRepair(null),
+            // Stay armed: the next click can try another face.
+            onFailure: setStatus
+          });
+        } catch (error) {
+          setStatus(errorMessage(error, 'That face cannot carry this plane.'));
+        }
+      });
+      return;
+    }
     // A form that collects faces owns every viewport pick while it is open:
     // the click fills its face field instead of arming a drag handle and
     // replacing the form with the Offset Face card.
@@ -18049,6 +18076,31 @@ export function App() {
             }
           ]
         : []),
+      // R01: an offset plane on a face that no longer resolves.
+      ...(feature.data.featureKind === 'datum-plane' &&
+      feature.data.definition.kind === 'offset' &&
+      feature.data.definition.source.type === 'face' &&
+      !isFeatureSuppressed(feature) &&
+      !doc?.derived.datumFrames?.[feature.featureId]
+        ? [
+            {
+              item: {
+                id: 'repair-datum-face',
+                label: 'Re-pick source face…',
+                icon: <Crosshair size={13} aria-hidden="true" />
+              },
+              run: () => {
+                if (!ensureCanEdit('repair a feature')) return;
+                setTool(null);
+                clearSelection();
+                setDatumRepair(feature);
+                setStatus(
+                  `Re-pick the face for "${feature.name}": click a planar face · Esc cancels.`
+                );
+              }
+            }
+          ]
+        : []),
       ...(bodyId && body && !body.consumed
         ? [
             {
@@ -18464,9 +18516,10 @@ export function App() {
             }
             return;
           }
-          if (faceRepair) {
+          if (faceRepair || datumRepair) {
             event.preventDefault();
             setFaceRepair(null);
+            setDatumRepair(null);
             setStatus('Face re-pick canceled · the feature is unchanged.');
             return;
           }
@@ -20634,6 +20687,21 @@ export function App() {
               tool && PRIMITIVE_TOOLS.includes(tool) ? primitiveGhost : null
             }
             onPickPlane={startSketchOnPlane}
+            onPickDatum={(featureId) => {
+              const node = doc && findFeature(doc, featureId as FeatureId);
+              if (node) handleSelectFeatureFromTree(node.id, false);
+            }}
+            // A selected datum opens its Plane card; the handle feeds the
+            // card's Offset field, and the card's own Apply commits it.
+            onDatumOffsetDrag={
+              tool === 'datum-plane'
+                ? (delta) => {
+                    const apply = datumOffsetDragRef.current;
+                    apply?.(delta);
+                    return Boolean(apply);
+                  }
+                : undefined
+            }
             onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
             modeOverlay={
@@ -21213,7 +21281,8 @@ export function App() {
                   validateSelectionEdit,
                   handleDeleteFeature,
                   cancelPanel,
-                  closeFeaturePanel
+                  closeFeaturePanel,
+                  datumOffsetDragRef
                 }}
               />
             ) : (

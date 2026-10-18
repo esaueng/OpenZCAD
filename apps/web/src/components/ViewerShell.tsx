@@ -6,7 +6,10 @@ import type {
 } from '@openzcad/shared';
 import type { HoleGhost } from '../lib/holeGhost';
 import type { PrimitiveGhost } from '../lib/primitiveGhost';
-import { datumPlaneDisplays } from '../lib/datumPlaneDisplay';
+import {
+  datumOffsetHandle,
+  datumPlaneDisplays
+} from '../lib/datumPlaneDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
 import { useMemo, useRef, type MutableRefObject, type ReactNode } from 'react';
 import {
@@ -292,6 +295,13 @@ interface ViewerShellProps {
   /** The selected or edited feature, drawn highlighted when it is a datum. */
   selectedFeatureId?: FeatureId | null;
   onPickPlane(plane: PlaneId): void;
+  onPickDatum?(featureId: string): void;
+  /**
+   * A drag of the selected datum's handle, as a change to its stored offset
+   * (already signed for a reversed datum). The handle arms only when this is
+   * set and no other offset handle is.
+   */
+  onDatumOffsetDrag?(delta: number): boolean;
   /** What measuring the hovered target would report; null when measure is off. */
   onMeasurePreview?:
     | ((
@@ -437,6 +447,8 @@ export function ViewerShell({
   hiddenDatumIds,
   selectedFeatureId = null,
   onPickPlane,
+  onPickDatum,
+  onDatumOffsetDrag,
   onMeasurePreview,
   regionHandle,
   onSelectSketchProfile,
@@ -477,6 +489,31 @@ export function ViewerShell({
   /** Kernel section geometry for the resting plane; null while dragging. */
   const exactSection: ExactSectionRegionDisplay[] | null =
     drawnSection.kind === 'exact' ? drawnSection.regions : null;
+  // R01: a selected offset datum gets the same pin face offsets use. It
+  // yields to any armed offset handle, and its target is memoized on the
+  // values it shows so the rig is not rebuilt on every render.
+  const datumHandle =
+    datumDocument && onDatumOffsetDrag && !offsetHandle
+      ? datumOffsetHandle(
+          datumDocument,
+          selectedFeatureId,
+          hiddenDatumIds ?? new Set()
+        )
+      : null;
+  const datumHandleKey = datumHandle ? JSON.stringify(datumHandle) : '';
+  const datumOffsetTarget = useMemo<OffsetHandleTarget | null>(() => {
+    if (!datumHandleKey) return null;
+    const handle = JSON.parse(datumHandleKey) as NonNullable<
+      typeof datumHandle
+    >;
+    return {
+      bodyId: '',
+      topologyId: '',
+      point: handle.point,
+      normal: handle.normal,
+      initialValue: 0
+    };
+  }, [datumHandleKey]);
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
   const sketchGridReadoutRef = useRef<SketchGridReadoutSink | null>(null);
@@ -590,9 +627,13 @@ export function ViewerShell({
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
         onBoxSelect={onBoxSelect}
-        offsetHandle={offsetHandle}
-        onOffsetPreview={onOffsetPreview}
-        onOffsetCommit={onOffsetCommit}
+        offsetHandle={offsetHandle ?? datumOffsetTarget}
+        onOffsetPreview={datumOffsetTarget ? () => {} : onOffsetPreview}
+        onOffsetCommit={(value) =>
+          datumHandle && onDatumOffsetDrag
+            ? onDatumOffsetDrag(value * datumHandle.sense)
+            : onOffsetCommit(value)
+        }
         onOffsetCancel={onOffsetCancel}
         offsetPreviewInvalid={offsetPreviewInvalid}
         previewDeferred={previewDeferred}
@@ -646,6 +687,7 @@ export function ViewerShell({
             : []
         }
         onPickPlane={onPickPlane}
+        onPickDatum={onPickDatum}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}

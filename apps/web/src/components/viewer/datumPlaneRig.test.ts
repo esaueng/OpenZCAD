@@ -23,10 +23,33 @@ describe('buildDatumPlaneRig', () => {
       )!.scale.x;
     expect(scaleOf('near')).toBeCloseTo(160 * 0.01);
     expect(scaleOf('far')).toBeCloseTo(160 * 0.11);
-    // Presentation only: never a pick target.
-    const hits: THREE.Intersection[] = [];
-    rig.group.children[0]!.raycast(new THREE.Raycaster(), hits);
-    expect(hits).toEqual([]);
+    rig.dispose();
+  });
+
+  it('offers only its fills as pick targets, each naming its datum', () => {
+    const rig = buildDatumPlaneRig([
+      { featureId: 'lid', frame: frame(10), selected: false }
+    ]);
+    rig.setScale(() => 0.1);
+    rig.group.updateMatrixWorld(true);
+    const targets = rig.targets();
+    expect(targets).toHaveLength(1);
+    expect(targets[0]!.userData.datumFeatureId).toBe('lid');
+    // A ray straight down through the quad hits the fill…
+    const ray = new THREE.Raycaster(
+      new THREE.Vector3(0, 0, 50),
+      new THREE.Vector3(0, 0, -1)
+    );
+    const hit = ray.intersectObjects(targets, false)[0];
+    expect(hit?.object.userData.datumFeatureId).toBe('lid');
+    expect(hit?.distance).toBeCloseTo(40);
+    // …and never the border, which is not offered.
+    const border = rig.group.children.find(
+      (object) => object instanceof THREE.LineSegments
+    )!;
+    const borderHits: THREE.Intersection[] = [];
+    border.raycast(ray, borderHits);
+    expect(borderHits).toEqual([]);
     rig.dispose();
   });
 });

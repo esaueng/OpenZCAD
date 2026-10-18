@@ -35,6 +35,56 @@ export function earlierDatumPlanes(
   return datums;
 }
 
+/**
+ * The drag handle a selected offset datum offers: at its resolved origin,
+ * along its resolved normal. `sense` turns travel along that normal into the
+ * stored offset (a reversed datum's normal points against its source's).
+ */
+export interface DatumOffsetHandle {
+  featureId: FeatureId;
+  point: DatumFrame['origin'];
+  normal: DatumFrame['normal'];
+  offset: number;
+  sense: 1 | -1;
+}
+
+/**
+ * A handle for the selected datum, or null. Only an offset datum whose
+ * offset is a plain number qualifies: a midplane has no distance to drag,
+ * and an expression-driven offset is edited where the expression lives
+ * rather than overwritten by a drag.
+ */
+export function datumOffsetHandle(
+  document: ProjectDocument,
+  selectedFeatureId: FeatureId | null,
+  hidden: ReadonlySet<string>
+): DatumOffsetHandle | null {
+  if (!selectedFeatureId || hidden.has(selectedFeatureId)) return null;
+  const frame = document.derived.datumFrames?.[selectedFeatureId];
+  const feature = frame
+    ? listFeaturesInOrder(document).find(
+        (candidate) => candidate.featureId === selectedFeatureId
+      )
+    : undefined;
+  if (
+    !frame ||
+    !feature ||
+    isFeatureSuppressed(feature) ||
+    feature.data.featureKind !== 'datum-plane' ||
+    feature.data.definition.kind !== 'offset' ||
+    typeof feature.data.definition.offset !== 'number'
+  ) {
+    return null;
+  }
+  return {
+    featureId: selectedFeatureId,
+    point: frame.origin,
+    normal: frame.normal,
+    offset: feature.data.definition.offset,
+    sense: feature.data.definition.reverseNormal ? -1 : 1
+  };
+}
+
 /** A datum plane as the viewport draws it: presentation only. */
 export interface DatumPlaneDisplay {
   featureId: FeatureId;

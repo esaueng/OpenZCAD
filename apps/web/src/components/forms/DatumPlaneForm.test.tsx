@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor
+} from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import {
   addDatumPlane,
@@ -317,5 +323,38 @@ describe('Plane workspace card commit (R01-C)', () => {
       target: { value: '12' }
     });
     expect(pending.cancelled()).toBe(true);
+  });
+});
+
+describe('Plane card and the viewport handle (R01)', () => {
+  it('adds a handle drag to a plain-number offset and leaves an expression alone', () => {
+    const { document, featureId } = documentWithDatum();
+    const offsetDragRef: { current: ((delta: number) => void) | null } = {
+      current: null
+    };
+    const { unmount } = render(
+      <DatumPlaneCard
+        document={document}
+        editing={findFeature(document, featureId)!}
+        scope={{ lid: 7 }}
+        pickedFace={null}
+        onPreflight={vi.fn(async () => ({ status: 'ready' as const }))}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+        offsetDragRef={offsetDragRef}
+      />
+    );
+    expect(screen.getByLabelText('Offset')).toHaveValue('10');
+    act(() => offsetDragRef.current?.(2.5));
+    expect(screen.getByLabelText('Offset')).toHaveValue('12.5');
+    act(() => offsetDragRef.current?.(-0.25));
+    expect(screen.getByLabelText('Offset')).toHaveValue('12.25');
+    fireEvent.change(screen.getByLabelText('Offset'), {
+      target: { value: 'lid + 1' }
+    });
+    act(() => offsetDragRef.current?.(5));
+    expect(screen.getByLabelText('Offset')).toHaveValue('lid + 1');
+    unmount();
+    expect(offsetDragRef.current).toBeNull();
   });
 });

@@ -61,6 +61,11 @@ export interface DatumPlaneFormProps {
    * checked before it can be withdrawn rather than land over the edit.
    */
   onDraftChange?(): void;
+  /**
+   * Where the form registers its handler for the viewport handle: a drag adds
+   * its distance to a plain-number Offset; an expression is left alone.
+   */
+  offsetDragRef?: { current: ((delta: number) => void) | null };
 }
 
 /**
@@ -79,7 +84,8 @@ export function DatumPlaneForm({
   onPreflight,
   onSubmit,
   onCancel,
-  onDraftChange
+  onDraftChange,
+  offsetDragRef
 }: DatumPlaneFormProps) {
   const [state, setState] = useState(initial);
   const [preflight, setPreflight] = useState<ExactPreflightState>({
@@ -136,6 +142,22 @@ export function DatumPlaneForm({
     onDraftChange?.();
     setState(next);
   };
+  const dragOffset = useRef<(delta: number) => void>(() => {});
+  dragOffset.current = (delta) => {
+    const current = Number(String(state.offset).trim());
+    if (state.mode !== 'offset' || !Number.isFinite(current)) return;
+    replace({
+      ...state,
+      offset: String(Math.round((current + delta) * 1000) / 1000)
+    });
+  };
+  useEffect(() => {
+    if (!offsetDragRef) return;
+    offsetDragRef.current = (delta) => dragOffset.current(delta);
+    return () => {
+      offsetDragRef.current = null;
+    };
+  }, [offsetDragRef]);
   const validation = datumFormValidation(state, scope, units);
   const blocked = unsupportedReason !== undefined;
   const canCheck = validation === null && !blocked;
@@ -317,6 +339,7 @@ export interface DatumPlaneCardProps {
   onSubmit: DatumPlaneFormProps['onSubmit'];
   onCancel(): void;
   onDraftChange?(): void;
+  offsetDragRef?: DatumPlaneFormProps['offsetDragRef'];
 }
 
 /**
@@ -333,7 +356,8 @@ export function DatumPlaneCard({
   onPreflight,
   onSubmit,
   onCancel,
-  onDraftChange
+  onDraftChange,
+  offsetDragRef
 }: DatumPlaneCardProps) {
   const picked: DatumPlaneFormProps['pickedFace'] =
     pickedFace && 'reason' in pickedFace
@@ -376,6 +400,7 @@ export function DatumPlaneCard({
       onSubmit={onSubmit}
       onCancel={onCancel}
       {...(onDraftChange ? { onDraftChange } : {})}
+      {...(offsetDragRef ? { offsetDragRef } : {})}
     />
   );
 }
@@ -411,6 +436,8 @@ export interface DatumPlaneCardApp {
   handleDeleteFeature(featureId: FeatureId, name: string): void;
   cancelPanel(): void;
   closeFeaturePanel(): void;
+  /** Where the card registers its handler for a drag of the datum's handle. */
+  datumOffsetDragRef?: { current: ((delta: number) => void) | null };
 }
 
 export interface DatumPlaneWorkspaceCardProps {
@@ -623,6 +650,9 @@ export function DatumPlaneWorkspaceCard({
           onDraftChange={() => {
             draft.current += 1;
           }}
+          {...(app.datumOffsetDragRef
+            ? { offsetDragRef: app.datumOffsetDragRef }
+            : {})}
         />
       </div>
     </section>

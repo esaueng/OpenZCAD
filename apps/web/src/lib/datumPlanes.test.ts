@@ -13,9 +13,11 @@ import {
   type FeatureId,
   type ProjectDocument
 } from '@openzcad/shared';
+import { datumOffsetHandle } from './datumPlaneDisplay';
 import {
   buildDatumPlaneDefinition,
   datumFormStateFromFeature,
+  datumFaceRepairEdit,
   datumFormValidation,
   datumPlaneCommand,
   datumPlaneDescription,
@@ -345,5 +347,66 @@ describe('Plane card commands (R01-C)', () => {
       'Plane 2',
       'Split'
     ]);
+  });
+});
+
+describe('datum viewport handle and repair (R01)', () => {
+  const offsetDatum = (offset: number | string, reverseNormal = false) => {
+    const empty = createProjectDocument('Handle', toUserId('user_handle'));
+    const added = addDatumPlane(empty, {
+      name: 'Lid plane',
+      definition: {
+        kind: 'offset',
+        source: XY,
+        offset,
+        ...(reverseNormal ? { reverseNormal: true } : {})
+      }
+    });
+    return {
+      document: withFrames(added.document, { [added.featureId]: frame }),
+      featureId: added.featureId
+    };
+  };
+
+  it('offers a handle only for a shown offset datum with a literal offset', () => {
+    const { document, featureId } = offsetDatum(10);
+    expect(datumOffsetHandle(document, featureId, new Set())).toEqual({
+      featureId,
+      point: frame.origin,
+      normal: frame.normal,
+      offset: 10,
+      sense: 1
+    });
+    expect(datumOffsetHandle(document, featureId, new Set([featureId]))).toBe(
+      null
+    );
+    expect(datumOffsetHandle(document, null, new Set())).toBe(null);
+    const reversed = offsetDatum(10, true);
+    expect(
+      datumOffsetHandle(reversed.document, reversed.featureId, new Set())?.sense
+    ).toBe(-1);
+    // An expression-driven offset is edited where it lives, not dragged.
+    const driven = offsetDatum('lid_z');
+    expect(
+      datumOffsetHandle(driven.document, driven.featureId, new Set())
+    ).toBe(null);
+  });
+
+  it('re-picks a source face only with a planar face it can follow', () => {
+    const { document, featureId } = offsetDatum(10);
+    expect(() =>
+      datumFaceRepairEdit(document, featureId, {
+        bodyId: 'body_x' as never,
+        kind: 'edge',
+        hash: 1
+      } as never)
+    ).toThrow('Click a planar face for "Lid plane".');
+    expect(() =>
+      datumFaceRepairEdit(document, featureId, {
+        bodyId: 'body_missing' as never,
+        kind: 'face',
+        hash: 7
+      } as never)
+    ).toThrow();
   });
 });

@@ -14,6 +14,7 @@ import {
   type FeatureNode,
   type PlaneId,
   type ProjectDocument,
+  type TopologySelection,
   type UnitSystem
 } from '@openzcad/shared';
 import {
@@ -24,6 +25,7 @@ import {
 } from './model';
 import { affectedFeatureTargets } from './affectedFeatureTargets';
 import { earlierDatumPlanes } from './datumPlaneDisplay';
+import { faceSketchAttachment } from './faceSketchAttachment';
 
 export {
   datumPlaneDisplays,
@@ -451,4 +453,66 @@ export function requireResolvedDatums(
     );
     requireResolvedDatum(derived, id, datum?.name ?? 'A later plane');
   }
+}
+
+/**
+ * R01: the edit that re-attaches an offset datum whose source face no longer
+ * resolves to the face picked now. Only the source changes: distance, mode
+ * and direction are kept. Throws, in words for the status bar, when the pick
+ * cannot carry a datum (not a planar face with a rebuildable identity).
+ */
+export function datumFaceRepairEdit(
+  document: ProjectDocument,
+  featureId: FeatureId,
+  selection: TopologySelection
+): {
+  command: AnyCommand;
+  label: string;
+  validateDerived(derived: ProjectDocument['derived']): void;
+} {
+  const feature = listFeaturesInOrder(document).find(
+    (candidate) => candidate.featureId === featureId
+  );
+  if (
+    feature?.data.featureKind !== 'datum-plane' ||
+    feature.data.definition.kind !== 'offset'
+  ) {
+    throw new Error('Only an offset plane on a face can be re-picked here.');
+  }
+  if (selection.kind !== 'face') {
+    throw new Error(`Click a planar face for "${feature.name}".`);
+  }
+  const attachment = faceSketchAttachment({
+    bodyId: selection.bodyId,
+    pickedHash: selection.hash,
+    face: document.derived.bodyRepresentations[
+      selection.bodyId
+    ]?.topology?.faces.find((face) => face.hash === selection.hash)
+  });
+  if (!attachment.ok) throw new Error(attachment.reason);
+  const ref = attachment.planeRef;
+  if (ref.type !== 'face' || !ref.faceReference || !ref.sourceCentroid) {
+    throw new Error(
+      'This face has no identity a rebuild can find again, so a plane cannot follow it.'
+    );
+  }
+  const label = `Re-pick face for ${feature.name}`;
+  return {
+    label,
+    command: commandFactories.updateFeature(
+      {
+        featureId,
+        data: {
+          featureKind: 'datum-plane',
+          definition: {
+            ...feature.data.definition,
+            source: ref as FacePlaneSource
+          }
+        }
+      },
+      label
+    ),
+    validateDerived: (derived) =>
+      requireResolvedDatums(document, derived, featureId, feature.name)
+  };
 }
