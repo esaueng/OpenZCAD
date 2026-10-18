@@ -16,7 +16,8 @@ describe('workflow runner policy', () => {
       'production-health.yml': ['ubuntu-latest'],
       'update-remus.yml': ['ubuntu-latest'],
       'trusted-vps.yml': ['ubuntu-latest'],
-      'dependency-audit.yml': ['ubuntu-latest', 'ubuntu-latest']
+      'dependency-audit.yml': ['ubuntu-latest', 'ubuntu-latest'],
+      'dependency-review.yml': ['ubuntu-latest']
     };
     const workflowPaths = readdirSync(workflowDirectory)
       .filter((path) => path.endsWith('.yml') || path.endsWith('.yaml'))
