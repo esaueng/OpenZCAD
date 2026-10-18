@@ -25,6 +25,7 @@ import {
   planSketchMirror,
   planSketchTrim,
   resolvePatternPivot,
+  settleOptionalRelations,
   type SketchModifyPlan
 } from './modify';
 
@@ -1053,169 +1054,61 @@ describe('Mirror', () => {
         b: { objectId: image, point: 'start' }
       },
       {
-        constraintKind: 'point-on-object',
-        point: { objectId: source, point: 'start' },
-        objectId: axis
-      },
-      {
         constraintKind: 'symmetric',
         a: { objectId: source, point: 'end' },
         b: { objectId: image, point: 'end' },
         axis
       }
     ]);
+    // Holding the joint on the axis is left to a solve to confirm.
+    expect(plan.optional).toHaveLength(1);
+    manager.execute(composeCommands('Hold', plan.optional!));
+    expect(sketch().constraints?.at(-1)?.data).toEqual({
+      constraintKind: 'point-on-object',
+      point: { objectId: source, point: 'start' },
+      objectId: axis
+    });
   });
 
-  it('reuses a relation that already holds an on-axis point on the axis', () => {
-    const { manager, sketchId, ids, sketch, commit, constrain } = sketchWith([
+  it('keeps an optional relation only when leaving it out loses no rank', async () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
       { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
       { objectKind: 'line', x1: 0, y1: 2, x2: 6, y2: 5 }
     ]);
-    const [axis, source] = ids as [string, string];
-    constrain({
-      constraintKind: 'point-on-object',
-      point: { objectId: source as never, point: 'start' },
-      objectId: axis as never
-    });
-    commit(
-      planSketchMirror(
-        manager.document,
-        sketch(),
-        sketchId,
-        source,
-        axis,
-        resolve
-      )
+    const plan = planSketchMirror(
+      manager.document,
+      sketch(),
+      sketchId,
+      ids[1]!,
+      ids[0]!,
+      resolve
     );
-    expect(kinds(sketch().constraints ?? [])).toEqual([
-      'coincident',
-      'point-on-object',
-      'symmetric'
-    ]);
-  });
-
-  it('reuses an axis relation held through a coincident neighbour', () => {
-    const { manager, sketchId, ids, sketch, commit, constrain } = sketchWith([
-      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
-      { objectKind: 'line', x1: 0, y1: 2, x2: 6, y2: 5 },
-      { objectKind: 'line', x1: -3, y1: 6, x2: 0, y2: 2 }
-    ]);
-    const [axis, source, neighbour] = ids as [string, string, string];
-    constrain({
-      constraintKind: 'coincident',
-      a: { objectId: source as never, point: 'start' },
-      b: { objectId: neighbour as never, point: 'end' }
-    });
-    constrain({
-      constraintKind: 'point-on-object',
-      point: { objectId: neighbour as never, point: 'end' },
-      objectId: axis as never
-    });
-    commit(
-      planSketchMirror(
+    if (plan.status !== 'commands') throw new Error(plan.reason);
+    const optional = plan.optional!;
+    // A stand-in solver: the relation adds an equation and, when `ranked`,
+    // the rank to go with it.
+    const settle = (ranked: boolean | 'throws') =>
+      settleOptionalRelations(
         manager.document,
-        sketch(),
         sketchId,
-        source,
-        axis,
-        resolve
-      )
-    );
-    expect(kinds(sketch().constraints ?? [])).toEqual([
-      'coincident',
-      'coincident',
-      'point-on-object',
-      'symmetric'
-    ]);
-  });
-
-  it('ties a locked on-axis point to the axis unless the axis is locked too', () => {
-    const fixture = () => {
-      const made = sketchWith([
-        { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
-        { objectKind: 'line', x1: 0, y1: 2, x2: 6, y2: 5 }
-      ]);
-      made.constrain({
-        constraintKind: 'lock',
-        point: { objectId: made.ids[1] as never, point: 'start' },
-        x: 0,
-        y: 2
-      });
-      return made;
-    };
-    const mirrorKinds = (made: ReturnType<typeof fixture>) => {
-      made.commit(
-        planSketchMirror(
-          made.manager.document,
-          made.sketch(),
-          made.sketchId,
-          made.ids[1]!,
-          made.ids[0]!,
-          resolve
-        )
+        plan.commands,
+        optional,
+        async (document) => {
+          if (ranked === 'throws') throw new Error('no kernel here');
+          const held = (findSketch(document, sketchId)!.constraints ?? [])
+            .length;
+          return {
+            dof: {
+              numEquations: held,
+              rank: ranked ? held : 2
+            }
+          };
+        }
       );
-      return kinds(made.sketch().constraints ?? []);
-    };
-    // A movable axis still needs the relation to stay through the joint.
-    expect(mirrorKinds(fixture())).toEqual([
-      'coincident',
-      'lock',
-      'point-on-object',
-      'symmetric'
-    ]);
-    const fixed = fixture();
-    for (const [point, y] of [
-      ['start', -10],
-      ['end', 10]
-    ] as const) {
-      fixed.constrain({
-        constraintKind: 'lock',
-        point: { objectId: fixed.ids[0] as never, point },
-        x: 0,
-        y
-      });
-    }
-    expect(mirrorKinds(fixed)).toEqual([
-      'coincident',
-      'lock',
-      'lock',
-      'lock',
-      'symmetric'
-    ]);
-    // An axis fixed through coincidences with locked points counts too.
-    const joined = fixture();
-    joined.manager.execute(
-      commandFactories.addSketchObjects({
-        sketchId: joined.sketchId,
-        objects: [
-          { objectKind: 'line', x1: 0, y1: -10, x2: -5, y2: -10 },
-          { objectKind: 'line', x1: 0, y1: 10, x2: -5, y2: 10 }
-        ]
-      })
-    );
-    const [, , low, high] = joined.sketch().objectIds.map(String) as [
-      string,
-      string,
-      string,
-      string
-    ];
-    for (const [anchor, axisEnd, y] of [
-      [low, 'start', -10],
-      [high, 'end', 10]
-    ] as const) {
-      joined.constrain({
-        constraintKind: 'lock',
-        point: { objectId: anchor as never, point: 'start' },
-        x: 0,
-        y
-      });
-      joined.constrain({
-        constraintKind: 'coincident',
-        a: { objectId: joined.ids[0] as never, point: axisEnd },
-        b: { objectId: anchor as never, point: 'start' }
-      });
-    }
-    expect(mirrorKinds(joined)).not.toContain('point-on-object');
+    expect(await settle(true)).toEqual([...plan.commands, ...optional]);
+    expect(await settle(false)).toEqual(plan.commands);
+    // A solve that fails keeps the joint on the axis.
+    expect(await settle('throws')).toEqual([...plan.commands, ...optional]);
   });
 
   it('reverses an arc’s sweep and links its ends crosswise with an equal radius', () => {
@@ -2058,6 +1951,7 @@ describe('modify tool picking', () => {
         ),
       disarm: () => log.push('disarm'),
       runOperation: () => Promise.reject(new Error('no kernel here')),
+      solveSketch: () => Promise.reject(new Error('no kernel here')),
       commit: async (_sketchId, commands, label) => {
         applied.push({ commands, label });
         return true;

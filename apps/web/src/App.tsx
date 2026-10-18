@@ -14112,6 +14112,7 @@ export function App() {
         dispatchInteraction({ type: 'sketch-edit-tool', kind: null }),
       runOperation: (operation) =>
         geometry.sketchPlanarOperation(base, operation),
+      solveSketch: geometry.solveSketch,
       commit: async (sketchId, commands, label) => {
         const applied = await commitSketchEdit(base, sketchId, commands, label);
         if (applied) setSketchSolveStatus(null);

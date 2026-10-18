@@ -25,8 +25,10 @@ import {
   planSketchMirror,
   planSketchTrim,
   resolvePatternPivot,
+  settleOptionalRelations,
   type Point2,
-  type SketchModifyPlan
+  type SketchModifyPlan,
+  type SketchRankProbe
 } from './modify';
 import {
   createId,
@@ -1162,6 +1164,11 @@ export interface SketchEditHost {
   /** Put the armed tool down without asking for anything. */
   disarm(): void;
   runOperation(operation: SketchPlanarOperation): Promise<SketchPlanarResult>;
+  /** Solve a prospective document's sketch; judges optional relations. */
+  solveSketch(
+    document: ProjectDocument,
+    sketchId: SketchId
+  ): Promise<SketchRankProbe>;
   /** Apply the commands as one undoable transaction; false if it was dropped. */
   commit(
     sketchId: SketchId,
@@ -1290,7 +1297,14 @@ export async function runSketchEdit(
   host.setStatus(`Building the ${plan.label.toLowerCase()}…`);
   try {
     if (plan.status === 'commands') {
-      if (await host.commit(sketch.sketchId, plan.commands, plan.label)) {
+      const commands = await settleOptionalRelations(
+        document,
+        sketch.sketchId,
+        plan.commands,
+        plan.optional ?? [],
+        host.solveSketch
+      );
+      if (await host.commit(sketch.sketchId, commands, plan.label)) {
         host.setStatus(plan.message);
       }
       return;

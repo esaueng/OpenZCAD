@@ -12,7 +12,11 @@
  * copy is linked back to its source with relations the solver already
  * understands, so the next solve moves them together.
  */
-import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import {
+  commandFactories,
+  composeCommands,
+  type AnyCommand
+} from '@openzcad/command-system';
 import {
   boundedArcSweepDegrees,
   boundedPolygonSides,
@@ -740,6 +744,13 @@ export type SketchModifyPlan =
       label: string;
       message: string;
       commands: AnyCommand[];
+      /**
+       * Relations the tool would add unless the sketch already implies
+       * them, appended after `commands`. Only a solve can tell, so the
+       * caller keeps the ones `settleOptionalRelations` says the solver
+       * needs; committing `commands` alone drops them all.
+       */
+      optional?: AnyCommand[];
     };
 
 interface Crossing {
@@ -1398,142 +1409,108 @@ function curvesOverlap(first: Curve2, second: Curve2, tol = ON_CURVE): boolean {
 }
 
 /**
- * True when a relation already keeps this point on the axis line: held on
- * it, at its midpoint, or joined to one of its ends — or locked on an axis
- * whose ends are locked too, where any further equation is redundant.
- */
-function heldOnAxis(
-  sketch: SketchNode,
-  point: SketchPointRef,
-  axisId: EntityId
-): boolean {
-  // Everything joined to the point by coincidences is the same point to
-  // the solver, so a relation on any of them already holds it.
-  const joined = coincidentComponent(sketch, point);
-  const same = (ref: SketchPointRef) => joined.has(pointKey(ref));
-  const fixed = fixedPoints(sketch);
-  const isFixed = (ref: SketchPointRef) => fixed.has(pointKey(ref));
-  // A fixed point on a fixed axis already satisfies the axis condition, so
-  // stating it again is redundant; with a free axis the relation is what
-  // keeps the axis through the joint.
-  if (
-    isFixed(point) &&
-    isFixed({ objectId: axisId, point: 'start' }) &&
-    isFixed({ objectId: axisId, point: 'end' })
-  ) {
-    return true;
-  }
-  return (
-    constraintsOf(sketch).some(({ data }) => {
-      switch (data.constraintKind) {
-        case 'point-on-object':
-          return same(data.point) && data.objectId === axisId;
-        case 'midpoint':
-          return same(data.point) && data.line === axisId;
-        default:
-          return false;
-      }
-    }) ||
-    // Joined to an axis end.
-    [...joined].some((key) => key.startsWith(`${axisId}:`))
-  );
-}
-
-/** The point and every point a chain of coincidences joins it to. */
-function coincidentComponent(
-  sketch: SketchNode,
-  point: SketchPointRef
-): Set<string> {
-  const component = new Set([pointKey(point)]);
-  const joins = constraintsOf(sketch).flatMap(({ data }) =>
-    data.constraintKind === 'coincident'
-      ? [[pointKey(data.a), pointKey(data.b)] as const]
-      : []
-  );
-  let grew = true;
-  while (grew) {
-    grew = false;
-    for (const [a, b] of joins) {
-      if (component.has(a) !== component.has(b)) {
-        component.add(a);
-        component.add(b);
-        grew = true;
-      }
-    }
-  }
-  return component;
-}
-
-function pointKey(ref: SketchPointRef): string {
-  return `${ref.objectId}:${ref.point}`;
-}
-
-/**
- * Points with no freedom left: locked, or joined by a chain of coincidences
- * to a locked point. A sketch can fix a point in other ways (distances and
- * angles from fixed geometry); the solver still reports those as redundant,
- * this only catches the plain cases.
- */
-function fixedPoints(sketch: SketchNode): Set<string> {
-  const fixed = new Set<string>();
-  const joins: [string, string][] = [];
-  for (const { data } of constraintsOf(sketch)) {
-    if (data.constraintKind === 'lock') {
-      fixed.add(pointKey(data.point));
-    } else if (data.constraintKind === 'coincident') {
-      joins.push([pointKey(data.a), pointKey(data.b)]);
-    }
-  }
-  let grew = true;
-  while (grew) {
-    grew = false;
-    for (const [a, b] of joins) {
-      if (fixed.has(a) !== fixed.has(b)) {
-        fixed.add(a);
-        fixed.add(b);
-        grew = true;
-      }
-    }
-  }
-  return fixed;
-}
-
-/**
  * The relations that tie one source point to its image: symmetric about the
  * axis, or — when the point sits on the axis, where symmetry has no
  * direction — coincident plus held on the axis, which is what joins a
  * half-profile to its mirror and keeps the joint a mirror when it moves.
+ *
+ * The hold on the axis is optional: when the sketch already keeps the point
+ * there (a relation on it or a joined point, locks, dimensions that fix both
+ * the point and the axis) a second statement is one the solver reports as
+ * redundant. Only a solve can tell every way a sketch does that, so the
+ * caller asks one — see `settleOptionalRelations`.
  */
 function mirrorLink(
-  sketch: SketchNode,
   sketchId: SketchId,
   source: SketchPointRef,
   image: SketchPointRef,
   sourcePoint: Point2,
   axisId: EntityId,
   onAxis: (point: Point2) => boolean
-): AnyCommand[] {
+): { required: AnyCommand[]; optional: AnyCommand[] } {
   const add = (constraint: SketchConstraintData) =>
     commandFactories.addSketchConstraint(
       { sketchId, constraint },
       'Mirror about the line'
     );
   return onAxis(sourcePoint)
-    ? [
-        add({ constraintKind: 'coincident', a: source, b: image }),
-        // A second statement of the same axis condition reads as redundant
-        // to the solver, so a point already held there keeps its relation.
-        ...(heldOnAxis(sketch, source, axisId)
-          ? []
-          : [
-              add({
-                constraintKind: 'point-on-object',
-                point: source,
-                objectId: axisId
-              })
-            ])
-      ]
-    : [add({ constraintKind: 'symmetric', a: source, b: image, axis: axisId })];
+    ? {
+        required: [add({ constraintKind: 'coincident', a: source, b: image })],
+        optional: [
+          add({
+            constraintKind: 'point-on-object',
+            point: source,
+            objectId: axisId
+          })
+        ]
+      }
+    : {
+        required: [
+          add({
+            constraintKind: 'symmetric',
+            a: source,
+            b: image,
+            axis: axisId
+          })
+        ],
+        optional: []
+      };
+}
+
+/** What a solve reports that redundancy is judged from. */
+export interface SketchRankProbe {
+  dof: { numEquations: number; rank: number };
+}
+
+/**
+ * Keep each optional relation of a plan only if the solver needs it. A
+ * relation is redundant when stating it adds an equation without adding
+ * rank, so each one is dropped when leaving it out lowers the candidate's
+ * rank deficiency (equations less rank). Judging by the deficiency rather
+ * than the classification works on a sketch that is already redundant
+ * elsewhere, and never drops a relation that carries rank.
+ *
+ * A solve that fails keeps every relation: a redundant one is a status the
+ * user sees, a missing one silently stops the joint following the mirror.
+ */
+export async function settleOptionalRelations(
+  document: ProjectDocument,
+  sketchId: SketchId,
+  commands: readonly AnyCommand[],
+  optional: readonly AnyCommand[],
+  solve: (
+    document: ProjectDocument,
+    sketchId: SketchId
+  ) => Promise<SketchRankProbe>
+): Promise<AnyCommand[]> {
+  if (optional.length === 0) {
+    return [...commands];
+  }
+  const deficiency = async (candidate: readonly AnyCommand[]) => {
+    const { dof } = await solve(
+      composeCommands('Probe', [...commands, ...candidate]).apply(document),
+      sketchId
+    );
+    return dof.numEquations - dof.rank;
+  };
+  let kept = [...optional];
+  try {
+    let current = await deficiency(kept);
+    for (const relation of optional) {
+      if (current <= 0) {
+        break;
+      }
+      const without = kept.filter((command) => command !== relation);
+      const next = await deficiency(without);
+      if (next < current) {
+        kept = without;
+        current = next;
+      }
+    }
+  } catch {
+    kept = [...optional];
+  }
+  return [...commands, ...kept];
 }
 
 /**
@@ -1646,64 +1623,39 @@ export function planSketchMirror(
     point
   });
   const links: AnyCommand[] = [];
-  if (source.kind === 'line') {
-    links.push(
-      ...mirrorLink(
-        sketch,
-        sketchId,
-        ref(id, 'start'),
-        ref(imageId, 'start'),
-        source.a,
-        axisEntity,
-        onAxis
-      ),
-      ...mirrorLink(
-        sketch,
-        sketchId,
-        ref(id, 'end'),
-        ref(imageId, 'end'),
-        source.b,
-        axisEntity,
-        onAxis
-      )
+  const optional: AnyCommand[] = [];
+  const link = (
+    source: SketchPointRef,
+    image: SketchPointRef,
+    sourcePoint: Point2
+  ) => {
+    const made = mirrorLink(
+      sketchId,
+      source,
+      image,
+      sourcePoint,
+      axisEntity,
+      onAxis
     );
+    links.push(...made.required);
+    optional.push(...made.optional);
+  };
+  if (source.kind === 'line') {
+    link(ref(id, 'start'), ref(imageId, 'start'), source.a);
+    link(ref(id, 'end'), ref(imageId, 'end'), source.b);
   } else if (source.kind === 'circle' || source.sweep >= TAU - 1e-9) {
     // A full round is its centre and radius: a full-sweep arc's two ends
     // are one seam point, so mirroring them would leave the centre free.
-    links.push(
-      ...mirrorLink(
-        sketch,
-        sketchId,
-        ref(id, 'center'),
-        ref(imageId, 'center'),
-        source.c,
-        axisEntity,
-        onAxis
-      )
-    );
+    link(ref(id, 'center'), ref(imageId, 'center'), source.c);
   } else {
     // Both sweep ends mirrored plus an equal radius fix the image exactly
     // (five equations for its five freedoms); mirroring the centre as well
     // would state the radius twice and read as redundant to the solver.
-    links.push(
-      ...mirrorLink(
-        sketch,
-        sketchId,
-        ref(id, 'start'),
-        ref(imageId, 'end'),
-        pointOnCurve(source, 0),
-        axisEntity,
-        onAxis
-      ),
-      ...mirrorLink(
-        sketch,
-        sketchId,
-        ref(id, 'end'),
-        ref(imageId, 'start'),
-        pointOnCurve(source, source.sweep),
-        axisEntity,
-        onAxis
-      )
+    link(ref(id, 'start'), ref(imageId, 'end'), pointOnCurve(source, 0));
+    link(
+      ref(id, 'end'),
+      ref(imageId, 'start'),
+      pointOnCurve(source, source.sweep)
     );
   }
   if (source.kind !== 'line') {
@@ -1731,7 +1683,8 @@ export function planSketchMirror(
         'Mirror sketch geometry'
       ),
       ...links
-    ]
+    ],
+    ...(optional.length > 0 ? { optional } : {})
   };
 }
 

@@ -1245,7 +1245,8 @@ describe('an unrelated edit while a run validates', () => {
     const file = {
       name: 'Frame.step',
       checksum: 'sha256-frame',
-      bytes: 'ISO-10303-21;'
+      bytes:
+        "ISO-10303-21;\nHEADER;\nFILE_NAME('Frame.step','',(),(),'','','');\nENDSEC;\nDATA;\nENDSEC;"
     };
     const gates = [deferred<void>(), deferred<void>()];
     let derives = 0;
@@ -1442,6 +1443,7 @@ function deviceStore(
   options: {
     /** Held open to park a run inside its own storage write. */
     storing?: Promise<void>;
+    onStoreStarted?(): void;
     readiness?: LocalStorageReadiness;
     /** Rejects the write, as a storage-denied session does. */
     refuseWrite?: boolean;
@@ -1452,6 +1454,7 @@ function deviceStore(
     putSourceBlobIfAbsent: async (_source, claimOptions) => {
       // Not instant: hashing and storing up to 250 MB is the whole window the
       // commit lock has to be reserved across.
+      options.onStoreStarted?.();
       await options.storing;
       if (options.refuseWrite) {
         throw new Error('IndexedDB unavailable.');
@@ -1529,6 +1532,7 @@ function importOnce(
     ): Promise<ValidatedFeatureOutcome>;
     /** Held open to park a run inside its own storage write. */
     storing?: Promise<void>;
+    onStoreStarted?(): void;
     /** Held open to park a run inside its archive upload. */
     archiving?: Promise<void>;
     readiness?: LocalStorageReadiness;
@@ -1547,6 +1551,7 @@ function importOnce(
     contentType: 'model/step',
     store: deviceStore(deps.device, file, {
       ...(deps.storing ? { storing: deps.storing } : {}),
+      ...(deps.onStoreStarted ? { onStoreStarted: deps.onStoreStarted } : {}),
       ...(deps.readiness ? { readiness: deps.readiness } : {}),
       ...(deps.refuseWrite ? { refuseWrite: true } : {})
     }),
@@ -1680,7 +1685,8 @@ describe('the import orchestration, run rather than read', () => {
   const file = {
     name: 'Frame.step',
     checksum: 'sha256-frame',
-    bytes: 'ISO-10303-21;'
+    bytes:
+      "ISO-10303-21;\nHEADER;\nFILE_NAME('Frame.step','',(),(),'','','');\nENDSEC;\nDATA;\nENDSEC;"
   };
 
   function oneTab(device: SharedDevice) {
@@ -1827,7 +1833,7 @@ describe('the import orchestration, run rather than read', () => {
     expect(order).toEqual(['storage', 'lock']);
   });
 
-  it('reclaims the bytes of an import that broke before the kernel saw it', async () => {
+  it('never persists bytes when reading fails before sanitization', async () => {
     // Reading the file back fails — a revoked blob URL, a file the user moved
     // or unplugged mid-import. The bytes were already written by then, and no
     // verdict on them exists or ever will.
@@ -1880,10 +1886,10 @@ describe('the import orchestration, run rather than read', () => {
 
     expect(outcome?.outcome).toBe('failed');
     expect(statuses).toEqual(['The file could not be read.']);
-    // Written, then reclaimed — not merely never written.
-    expect(outcome?.sourceBlobCreated).toBe(true);
-    expect(outcome?.sourceDeleted).toBe(true);
-    expect(device.deleteRequests).toEqual([file.checksum]);
+    // Reading and sanitization must succeed before any original bytes persist.
+    expect(outcome?.sourceBlobCreated).toBe(false);
+    expect(outcome?.sourceDeleted).toBe(false);
+    expect(device.deleteRequests).toEqual([]);
     expect(device.blobs.has(file.checksum)).toBe(false);
     // The lock is free again, or the tab is finished for every later operation.
     const afterwards = result.current.reserve();
@@ -2213,7 +2219,8 @@ describe('importing the same file twice at once', () => {
   const file = {
     name: 'Frame.step',
     checksum: 'sha256-frame',
-    bytes: 'ISO-10303-21;'
+    bytes:
+      "ISO-10303-21;\nHEADER;\nFILE_NAME('Frame.step','',(),(),'','','');\nENDSEC;\nDATA;\nENDSEC;"
   };
 
   it('keeps the source blob the first import is still validating against', async () => {
@@ -2529,12 +2536,14 @@ describe('importing the same file twice at once', () => {
     const held = {
       name: 'Running.step',
       checksum: 'sha256-running',
-      bytes: 'ISO-10303-21; /* a */'
+      bytes:
+        "ISO-10303-21;\nHEADER;\nFILE_NAME('Frame.step','',(),(),'','','');\nENDSEC;\nDATA; /* a */\nENDSEC;"
     };
     const rejectedFile = {
       name: 'Retry.step',
       checksum: 'sha256-second',
-      bytes: 'ISO-10303-21; /* b */'
+      bytes:
+        "ISO-10303-21;\nHEADER;\nFILE_NAME('Frame.step','',(),(),'','','');\nENDSEC;\nDATA; /* b */\nENDSEC;"
     };
     const session = importSession(
       device,
@@ -2602,12 +2611,14 @@ describe('importing the same file twice at once', () => {
     const held = {
       name: 'Storing.step',
       checksum: 'sha256-storing',
-      bytes: 'ISO-10303-21; /* a */'
+      bytes:
+        "ISO-10303-21;\nHEADER;\nFILE_NAME('Frame.step','',(),(),'','','');\nENDSEC;\nDATA; /* a */\nENDSEC;"
     };
     const blocked = {
       name: 'Blocked.step',
       checksum: 'sha256-blocked',
-      bytes: 'ISO-10303-21; /* b */'
+      bytes:
+        "ISO-10303-21;\nHEADER;\nFILE_NAME('Frame.step','',(),(),'','','');\nENDSEC;\nDATA; /* b */\nENDSEC;"
     };
     const session = importSession(
       device,
@@ -2659,7 +2670,8 @@ describe('importing the same file twice at once', () => {
     const file = {
       name: 'Denied.step',
       checksum: 'sha256-denied',
-      bytes: 'ISO-10303-21; /* a */'
+      bytes:
+        "ISO-10303-21;\nHEADER;\nFILE_NAME('Frame.step','',(),(),'','','');\nENDSEC;\nDATA; /* a */\nENDSEC;"
     };
     const session = importSession(
       device,
@@ -2692,7 +2704,8 @@ describe('importing the same file twice at once', () => {
         {
           name: 'Later.step',
           checksum: 'sha256-later',
-          bytes: 'ISO-10303-21; /* b */'
+          bytes:
+            "ISO-10303-21;\nHEADER;\nFILE_NAME('Frame.step','',(),(),'','','');\nENDSEC;\nDATA; /* b */\nENDSEC;"
         },
         {
           ...session,
@@ -2737,7 +2750,8 @@ describe('two tabs importing one file', () => {
   const file = {
     name: 'Bracket.step',
     checksum: 'sha256-bracket',
-    bytes: 'ISO-10303-21; /* b */'
+    bytes:
+      "ISO-10303-21;\nHEADER;\nFILE_NAME('Frame.step','',(),(),'','','');\nENDSEC;\nDATA; /* b */\nENDSEC;"
   };
 
   function twoTabs() {
@@ -2942,7 +2956,8 @@ describe('what an import reports while it runs', () => {
   const file = {
     name: 'Frame.step',
     checksum: 'sha256-frame',
-    bytes: 'ISO-10303-21;'
+    bytes:
+      "ISO-10303-21;\nHEADER;\nFILE_NAME('Frame.step','',(),(),'','','');\nENDSEC;\nDATA;\nENDSEC;"
   };
 
   function recorder(): ImportProgressSink & {
@@ -3247,7 +3262,8 @@ describe('cancelling an import', () => {
   const file = {
     name: 'Frame.step',
     checksum: 'sha256-frame',
-    bytes: 'ISO-10303-21;'
+    bytes:
+      "ISO-10303-21;\nHEADER;\nFILE_NAME('Frame.step','',(),(),'','','');\nENDSEC;\nDATA;\nENDSEC;"
   };
 
   function oneTab(device: SharedDevice, derive = acceptsEverything()) {
@@ -3293,6 +3309,7 @@ describe('cancelling an import', () => {
     const { session, result, manager } = oneTab(device);
     const abort = new AbortController();
     const gate = deferred<void>();
+    const started = deferred<void>();
 
     let outcome: StepImportResult | undefined;
     await act(async () => {
@@ -3300,10 +3317,12 @@ describe('cancelling an import', () => {
         ...session,
         signal: abort.signal,
         storing: gate.promise,
+        onStoreStarted: () => started.settle(),
         run: (command, options) => result.current.run(command, options)
       });
       // Cancelled while the write is parked, so the bytes are already on the
       // device when the cancel lands — the case that leaks if this is wrong.
+      await started.promise;
       abort.abort();
       gate.settle();
       outcome = await running;
@@ -3653,7 +3672,12 @@ describe('multi-solid STEP atomic import', () => {
       let outcome: StepImportResult | undefined;
       await act(async () => {
         outcome = await runStepImport({
-          file: new File(['ISO-10303-21;'], 'two.step'),
+          file: new File(
+            [
+              "ISO-10303-21;\nHEADER;\nFILE_NAME('two.step','',(),(),'','','');\nENDSEC;\nDATA;\nENDSEC;"
+            ],
+            'two.step'
+          ),
           contentType: 'model/step',
           // A rejected middle solid must not renumber the surviving selections.
           inspectSolids: async () => [0, 2],

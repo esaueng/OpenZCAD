@@ -5,6 +5,7 @@
 import {
   isLocalBodyRef,
   normalizeLocalId,
+  type CadDatumPlaneSource,
   type CadPatchOperation
 } from '@openzcad/ai-contracts';
 import type { ParamValue } from '@openzcad/shared';
@@ -128,6 +129,20 @@ export function describeOperation(operation: CadPatchOperation): string {
       return `${operation.name} — shell ${describeBodyRef(operation.targetBodyId)} at ${value(operation.thickness)}, ${plural(operation.openingFaceHashes.length, 'open face')}`;
     case 'add_solid_offset':
       return `${operation.name} — offset ${describeBodyRef(operation.targetBodyId)} by ${value(operation.distance)}`;
+    case 'add_datum_plane': {
+      const { definition } = operation;
+      const source = (entry: CadDatumPlaneSource) =>
+        entry.type === 'canonical'
+          ? `${entry.plane}${entry.offset === 0 ? '' : ` + ${value(entry.offset)}`}`
+          : describeBodyRef(entry.datum);
+      return definition.kind === 'offset'
+        ? `${operation.name} — plane ${value(definition.offset)} from ${source(definition.source)}${definition.reverseNormal ? ', normal flipped' : ''}`
+        : `${operation.name} — midplane between ${source(definition.sources[0])} and ${source(definition.sources[1])}${definition.reverseNormal ? ', normal flipped' : ''}`;
+    }
+    case 'add_datum_sketch':
+      return `${operation.name} — sketch on ${describeBodyRef(operation.datum)}, ${plural(operation.objects.length, 'object')}`;
+    case 'add_datum_mirror':
+      return `${operation.name} — mirror ${describeBodyRef(operation.targetBodyId)} across ${describeBodyRef(operation.datum)}`;
     default: {
       // Every kind the contract allows has a line above; a new kind fails the
       // typecheck here instead of reaching a reviewer as "Unknown operation".
@@ -152,6 +167,7 @@ export function operationCreatesBody(operation: CadPatchOperation): boolean {
     operation.kind === 'add_pattern' ||
     operation.kind === 'add_multi_profile_extrude' ||
     operation.kind === 'add_mirror' ||
+    operation.kind === 'add_datum_mirror' ||
     operation.kind === 'add_shell' ||
     operation.kind === 'add_solid_offset'
   );
