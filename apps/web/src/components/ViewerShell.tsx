@@ -510,7 +510,13 @@ export function ViewerShell({
   // yields to any armed offset handle, and its target is memoized on the
   // values it shows so the rig is not rebuilt on every render.
   const datumHandle =
-    datumDocument && onDatumOffsetDrag && !offsetHandle
+    // The pin arms only while the card's draft is this datum with nothing
+    // but its distance changed: after a new source, a Midplane or an
+    // expression, a drag could not show where Apply will put the plane.
+    datumDocument &&
+    onDatumOffsetDrag &&
+    !offsetHandle &&
+    datumOffsetDraft !== null
       ? datumOffsetHandle(
           datumDocument,
           selectedFeatureId,

@@ -146,7 +146,19 @@ test('drags a selected datum plane along its normal and picks it in the viewport
   await expect
     .poll(async () => (await drawnDatums(canvas))[0]?.origin.z)
     .toBeCloseTo(25, 6);
+  // A draft that changes more than the distance disarms the pin and shows
+  // the built plane: a Midplane, or an Offset that is an expression.
+  await page.getByRole('button', { name: 'Midplane', exact: true }).click();
+  await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /\d/);
+  await expect
+    .poll(async () => (await drawnDatums(canvas))[0]?.origin.z)
+    .toBeCloseTo(15, 6);
+  await page.getByRole('button', { name: 'Offset plane', exact: true }).click();
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /\d/);
+  await offset.fill('lid + 1');
+  await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /\d/);
   await offset.fill(String(dragged));
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /\d/);
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect
     .poll(async () => (await drawnDatums(canvas))[0]?.origin.z, {
