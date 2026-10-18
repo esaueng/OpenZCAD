@@ -5406,6 +5406,12 @@ export function parameterQuantityRefusal(
 export interface TypedParameterMisuse {
   /** The feature that would build from it (null when none does). */
   featureId: FeatureId | null;
+  /**
+   * Which occurrence this is: the holding node and the field's position in
+   * its walk. Labels repeat (two sketch lines with the same expression), so
+   * comparisons between documents key on this, not on the message.
+   */
+  occurrence: string;
   message: string;
 }
 
@@ -5445,7 +5451,9 @@ export function typedParameterMisuse(
   const misuse: TypedParameterMisuse[] = [];
   for (const node of Object.values(document.nodes)) {
     if (node.kind === 'parameter') continue;
+    let field = 0;
     rewriteNodeExpressions(node, (expression, dimension) => {
+      field += 1;
       if (!expressionIdentifiers(expression).some((name) => typed.has(name))) {
         return expression;
       }
@@ -5459,6 +5467,7 @@ export function typedParameterMisuse(
       } catch (error) {
         misuse.push({
           featureId: owner(node),
+          occurrence: `${node.id}#${field}`,
           message: `${referenceLabel(node)} uses "${expression}": ${error instanceof Error ? error.message : 'it no longer evaluates.'}`
         });
       }
@@ -5479,10 +5488,12 @@ export function newTypedParameterMisuse(
 ): string | null {
   const found = typedParameterMisuse(after);
   if (found.length === 0) return null;
-  const known = new Set(
-    typedParameterMisuse(before).map((entry) => entry.message)
-  );
-  return found.find((entry) => !known.has(entry.message))?.message ?? null;
+  // Same field, same expression, same complaint: an occurrence the edit did
+  // not introduce. Keyed per node and field, as labels and messages repeat.
+  const key = (entry: TypedParameterMisuse) =>
+    `${entry.occurrence}\u0000${entry.message}`;
+  const known = new Set(typedParameterMisuse(before).map(key));
+  return found.find((entry) => !known.has(key(entry)))?.message ?? null;
 }
 
 /**

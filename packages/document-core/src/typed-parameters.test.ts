@@ -8,6 +8,7 @@ import {
   evaluateFieldExpression,
   getParameterScope,
   listParameters,
+  newTypedParameterMisuse,
   parameterKindsOf,
   parameterQuantityRefusal,
   setParameter,
@@ -344,5 +345,35 @@ describe('raw-radians fields', () => {
     // A typed angle (degrees) or length would be read as radians.
     expect(seen.tilt).toBe('number');
     expect(seen.bore).toBe('length');
+  });
+});
+
+describe('new typed-parameter misuse', () => {
+  it('tells a second identical misuse from the one already there', () => {
+    const document = setParameter(blank(), {
+      name: 'tilt',
+      expression: '30',
+      quantity: 'angle'
+    });
+    const line = {
+      objectKind: 'line' as const,
+      x1: 'tilt',
+      y1: 0,
+      x2: 10,
+      y2: 0
+    };
+    // A document from elsewhere already reads an angle as a coordinate.
+    const before = addSketchFeature(document, {
+      name: 'Profile',
+      objects: [line]
+    }).document;
+    // The same sketch name and expression again: same message, new field.
+    const after = addSketchFeature(before, {
+      name: 'Profile',
+      objects: [line]
+    }).document;
+    expect(newTypedParameterMisuse(document, before)).toMatch(/tilt/);
+    expect(newTypedParameterMisuse(before, before)).toBeNull();
+    expect(newTypedParameterMisuse(before, after)).toMatch(/tilt/);
   });
 });
