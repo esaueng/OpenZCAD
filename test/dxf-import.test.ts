@@ -918,6 +918,26 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(metres.centerX).toBeCloseTo(1000000000001.234, 3);
   });
 
+  it('refuses spans and coordinates too large to keep finite downstream', () => {
+    const overflow = dxf([
+      '0',
+      'LINE',
+      '10',
+      '-1e308',
+      '20',
+      '0',
+      '11',
+      '1e308',
+      '21',
+      '0'
+    ]);
+    expect(() => importDxfSketch(overflow, 'mm')).toThrow(
+      'coordinates too large'
+    );
+    const huge = dxf(['0', 'CIRCLE', '10', '1e200', '20', '0', '40', '1']);
+    expect(() => importDxfSketch(huge, 'mm')).toThrow('coordinates too large');
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',

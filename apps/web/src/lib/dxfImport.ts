@@ -270,6 +270,18 @@ function ccwArc(
   };
 }
 
+/**
+ * The largest coordinate an import keeps. Far past any real drawing, and far
+ * enough under the double range that spans, squares and extents built from
+ * these coordinates downstream stay finite.
+ */
+const MAX_COORDINATE = 1e100;
+
+const tooLarge = () =>
+  new DxfImportError(
+    'This DXF has coordinates too large to convert into the document units.'
+  );
+
 /** One polyline segment, a straight line or the arc its bulge describes. */
 function segment(
   from: { x: number; y: number },
@@ -279,6 +291,7 @@ function segment(
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const chord = Math.hypot(dx, dy);
+  if (!Number.isFinite(chord)) throw tooLarge();
   if (chord < 1e-12) return null;
   // Only an exact zero is straight: a tiny bulge across a long chord still
   // bows by a real distance, and one whose sweep is too small to store
@@ -410,11 +423,7 @@ export function importDxfSketch(
     // Multiply by the source unit and divide by the document one, rather
     // than by their ratio: 25.4 mm then lands on exactly 1 inch.
     const scaled = (drawn * sourceMm) / documentMm || 0;
-    if (!Number.isFinite(scaled)) {
-      throw new DxfImportError(
-        'This DXF has coordinates too large to convert into the document units.'
-      );
-    }
+    if (!(Math.abs(scaled) <= MAX_COORDINATE)) throw tooLarge();
     return scaled;
   };
 
