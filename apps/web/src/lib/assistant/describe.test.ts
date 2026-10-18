@@ -317,4 +317,10 @@ describe('patch operation descriptions', () => {
       ])
     ).toEqual({ parameters: 0, bodies: 4, edits: 1 });
   });
+
+  it('counts both halves of a datum split', () => {
+    expect(
+      summarizeOperations([SAMPLES.add_datum_plane, SAMPLES.add_datum_split])
+    ).toEqual({ parameters: 0, bodies: 2, edits: 1 });
+  });
 });

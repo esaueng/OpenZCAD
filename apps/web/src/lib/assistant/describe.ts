@@ -190,7 +190,14 @@ export function summarizeOperations(
     (totals, operation) => ({
       parameters:
         totals.parameters + (operation.kind === 'set_parameter' ? 1 : 0),
-      bodies: totals.bodies + (operationCreatesBody(operation) ? 1 : 0),
+      // A split leaves two live bodies where its target was.
+      bodies:
+        totals.bodies +
+        (operation.kind === 'add_datum_split'
+          ? 2
+          : operationCreatesBody(operation)
+            ? 1
+            : 0),
       edits:
         totals.edits +
         (operation.kind === 'set_parameter' || operationCreatesBody(operation)
