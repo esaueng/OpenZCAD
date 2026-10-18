@@ -1,5 +1,8 @@
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
-import { newCanonicalPlaneRef } from '@openzcad/geometry';
+import {
+  computeSketchProfileAnalysis,
+  newCanonicalPlaneRef
+} from '@openzcad/geometry';
 import {
   UNIT_TO_MM,
   type ProjectDocument,
@@ -842,6 +845,21 @@ export function importDxfSketch(
   }
 
   const scaled = objects.map(scaleObject(s));
+  // Last, ask the sketch itself: its region builder drops any curve it
+  // judges degenerate at this drawing's scale (a line shorter than its
+  // tolerance, an arc sweeping under 1e-9 rad). Imported, such a curve
+  // would leave a gap in its profile, so the file is refused instead.
+  const analysis = computeSketchProfileAnalysis(
+    scaled.map((data, index) => ({ id: String(index), data })),
+    (value) => Number(value)
+  );
+  if (
+    analysis.diagnostics.some((entry) => entry.code === 'degenerate-entity')
+  ) {
+    throw new DxfImportError(
+      "This DXF has a curve too small for the sketch to use at this drawing's scale."
+    );
+  }
   return {
     objects: scaled,
     sourceUnit: known ? known.name : null,

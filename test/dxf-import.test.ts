@@ -661,20 +661,24 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
   });
 
   it('keeps small geometry exact when fine units scale into a large document unit', () => {
-    const text = dxf(['0', 'CIRCLE', '10', '1', '20', '0', '40', '1'], 8);
+    // 1e5 microinches is 2.54 mm: small in metres, and kept exactly.
+    const text = dxf(
+      ['0', 'CIRCLE', '10', '100000', '20', '0', '40', '100000'],
+      8
+    );
     expect(importDxfSketch(text, 'm').objects[0]).toMatchObject({
-      centerX: 2.54e-8,
-      radius: 2.54e-8
+      centerX: 0.00254,
+      radius: 0.00254
     });
   });
 
   it('refuses a curve that converts to nothing rather than a zero radius', () => {
-    // A small radius is kept exactly; only one that underflows to zero in
-    // the document units refuses.
+    // One that underflows to zero in the document units refuses by name;
+    // one merely below the sketch's tolerance refuses as unusable.
     const small = dxf(['0', 'CIRCLE', '10', '0', '20', '0', '40', '1e-10']);
-    expect(importDxfSketch(small, 'mm').objects[0]).toMatchObject({
-      radius: 1e-10
-    });
+    expect(() => importDxfSketch(small, 'mm')).toThrow(
+      'too small for the sketch to use'
+    );
     const underflow = dxf(
       ['0', 'CIRCLE', '10', '0', '20', '0', '40', '1e-320'],
       8
@@ -725,7 +729,7 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(arc.centerY + arc.radius).toBe(line.y1);
   });
 
-  it('keeps a tiny ARC sweep and a large-radius endpoint at full precision', () => {
+  it('refuses an ARC sweep the sketch would drop, and keeps a large-radius endpoint exact', () => {
     const text = dxf([
       '0',
       'ARC',
@@ -740,10 +744,11 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
       '51',
       '4e-10'
     ]);
-    expect(importDxfSketch(text, 'mm').objects[0]).toMatchObject({
-      startAngleDeg: 0,
-      endAngleDeg: 4e-10
-    });
+    // A 4e-10° sweep is under the sketch's 1e-9 rad cutoff: its region
+    // builder would drop it, so the import refuses it instead.
+    expect(() => importDxfSketch(text, 'mm')).toThrow(
+      'too small for the sketch to use'
+    );
     // Radius 1e9: a 4e-10° start is 7 mm of arc, so it is not rounded away.
     const large = dxf([
       '0',
@@ -1086,10 +1091,17 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
       '21',
       '0'
     ];
-    const inMm = importDxfSketch(dxf(line('5e-10'), 4), 'mm').objects[0];
-    const inM = importDxfSketch(dxf(line('5e-13'), 6), 'mm').objects[0];
-    expect(inMm).toMatchObject({ x2: 5e-10 });
-    expect((inM as unknown as { x2: number }).x2).toBeCloseTo(5e-10, 20);
+    const inMm = importDxfSketch(dxf(line('0.5'), 4), 'mm').objects[0];
+    const inM = importDxfSketch(dxf(line('0.0005'), 6), 'mm').objects[0];
+    expect(inMm).toMatchObject({ x2: 0.5 });
+    expect((inM as unknown as { x2: number }).x2).toBeCloseTo(0.5, 12);
+    // Below the sketch's tolerance it refuses the same way in either unit.
+    expect(() => importDxfSketch(dxf(line('5e-10'), 4), 'mm')).toThrow(
+      'too small for the sketch to use'
+    );
+    expect(() => importDxfSketch(dxf(line('5e-13'), 6), 'mm')).toThrow(
+      'too small for the sketch to use'
+    );
     // A bulge on a repeated vertex still refuses.
     expect(() =>
       importDxfSketch(
@@ -1884,6 +1896,34 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(result.refused).toEqual({
       'POLYLINE (curve-fit or spline-fit)': 1
     });
+  });
+
+  it('refuses a line far shorter than the drawing it sits in', () => {
+    const text = dxf([
+      '0',
+      'LINE',
+      '10',
+      '0',
+      '20',
+      '0',
+      '11',
+      '1e6',
+      '21',
+      '0',
+      '0',
+      'LINE',
+      '10',
+      '0',
+      '20',
+      '1',
+      '11',
+      '1e-9',
+      '21',
+      '1'
+    ]);
+    expect(() => importDxfSketch(text, 'mm')).toThrow(
+      'too small for the sketch to use'
+    );
   });
 
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
