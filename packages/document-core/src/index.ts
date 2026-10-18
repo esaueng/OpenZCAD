@@ -3416,7 +3416,7 @@ function shortestCycle(
 
 /**
  * Evaluates the whole parameter table. Parameters may reference each other in
- * any declaration order; evaluation iterates until a fixed point, so cycles
+ * any declaration order; evaluation follows the dependency order, so cycles
  * and unknown identifiers surface as per-parameter errors instead of crashes.
  * A cycle is named as one (`a → b → a`) rather than as the unknown
  * identifier it looks like from inside. The scope carries each typed
@@ -3436,17 +3436,42 @@ export function getParameterScope(
   );
   const errors: string[] = [];
 
-  let progressed = true;
-  while (progressed && pending.size > 0) {
-    progressed = false;
-    for (const [name, parameter] of [...pending]) {
-      try {
-        scope[name] = evaluateParameter(parameter, scope, document.units);
-        pending.delete(name);
-        progressed = true;
-      } catch {
-        // Possibly depends on a parameter not yet evaluated; retry next pass.
-      }
+  // Evaluate in dependency order (Kahn): each parameter once its reads are
+  // done, so a long chain declared in reverse stays linear rather than one
+  // resolution per pass. A failure, a cycle or anything downstream of one
+  // stays pending and is reported below.
+  const waiting = new Map<string, number>();
+  const readers = new Map<string, string[]>();
+  for (const [name, parameter] of pending) {
+    const reads = new Set(
+      expressionIdentifiers(parameter.expression).filter((read) =>
+        pending.has(read)
+      )
+    );
+    waiting.set(name, reads.size);
+    for (const read of reads) {
+      let list = readers.get(read);
+      if (!list) readers.set(read, (list = []));
+      list.push(name);
+    }
+  }
+  const ready = [...pending.keys()].filter((name) => waiting.get(name) === 0);
+  while (ready.length > 0) {
+    const name = ready.pop()!;
+    try {
+      scope[name] = evaluateParameter(
+        pending.get(name)!,
+        scope,
+        document.units
+      );
+      pending.delete(name);
+    } catch {
+      // Reported below; its readers then fail on the missing name.
+    }
+    for (const reader of readers.get(name) ?? []) {
+      const left = waiting.get(reader)! - 1;
+      waiting.set(reader, left);
+      if (left === 0) ready.push(reader);
     }
   }
 
@@ -5273,7 +5298,9 @@ function renameIdentifierInExpression(
     if (identifierMatch) {
       const name = identifierMatch[0];
       const isUnitPosition = previousWasNumber && isUnitSuffix(name);
-      out += name === oldName && !isUnitPosition ? newName : name;
+      // A name before `(` is always a call to the parser, never a read.
+      const isCall = /^\s*\(/.test(rest.slice(name.length));
+      out += name === oldName && !isUnitPosition && !isCall ? newName : name;
       index += name.length;
       previousWasNumber = false;
       continue;

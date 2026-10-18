@@ -490,6 +490,56 @@ describe('new typed-parameter misuse', () => {
     expect(newTypedParameterMisuse(before, renamed)).toBeNull();
   });
 
+  it('renames a read but not a same-named call in one expression', () => {
+    let document = setParameter(blank(), {
+      name: 'tilt',
+      expression: '30',
+      quantity: 'angle'
+    });
+    document = setParameter(document, { name: 'foo', expression: '1' });
+    const before = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 'tilt + foo + foo (1)', depth: 10 }
+    });
+    const renamed = renameParameter(before, { name: 'foo', newName: 'bar' });
+    const box = Object.values(renamed.nodes).find(
+      (entry) => entry.kind === 'feature' && entry.name === 'Block'
+    );
+    if (box?.kind !== 'feature' || box.data.featureKind !== 'primitive') {
+      throw new Error('expected the box feature');
+    }
+    expect(box.data.dimensions.height).toBe('tilt + bar + foo (1)');
+    expect(newTypedParameterMisuse(before, renamed)).toBeNull();
+  });
+
+  it('evaluates a long chain declared in reverse in linear time', () => {
+    const document = setParameter(blank(), { name: 'p0', expression: '1' });
+    const template = listParameters(document)[0]!;
+    const count = 20_000;
+    // Declared last-first: p19999 = p19998 + 1, …, p1 = p0 + 1, p0 = 1.
+    document.parameterOrder = [];
+    for (let index = count - 1; index >= 1; index -= 1) {
+      const id = `node_reverse_${index}`;
+      const parameterId =
+        `parameter_reverse_${index}` as typeof template.parameterId;
+      document.nodes[id] = {
+        ...template,
+        id: id as typeof template.id,
+        parameterId,
+        name: `p${index}`,
+        expression: `p${index - 1} + 1`
+      };
+      document.parameterOrder.push(parameterId);
+    }
+    document.parameterOrder.push(template.parameterId);
+    const started = performance.now();
+    const { scope, errors } = getParameterScope(document);
+    expect(performance.now() - started).toBeLessThan(2_000);
+    expect(errors).toEqual([]);
+    expect(scope[`p${count - 1}`]).toBe(count);
+  });
+
   it('keeps an existing misuse its identity when an earlier field changes', () => {
     const document = setParameter(blank(), {
       name: 'tilt',
