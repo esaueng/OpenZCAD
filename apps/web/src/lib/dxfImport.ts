@@ -116,6 +116,7 @@ function readPairs(text: string): Pair[] {
     return value;
   };
   const pairs: Pair[] = [];
+  let read = 0;
   for (;;) {
     const codeLine = nextLine();
     if (codeLine === null) break;
@@ -133,11 +134,15 @@ function readPairs(text: string): Pair[] {
         `This DXF is malformed: line ${line - 1} should be a group code.`
       );
     }
-    if (pairs.length >= MAX_DXF_PAIRS) {
+    read += 1;
+    if (read > MAX_DXF_PAIRS) {
       throw new DxfImportError(
         'This DXF has too many entries to import; split it first.'
       );
     }
+    // 999 is a comment: counted toward the cap, never part of the structure
+    // (it may sit between $INSUNITS and its value, or SECTION and its name).
+    if (code === 999) continue;
     pairs.push({ code, value: valueLine.trim() });
   }
   return pairs;

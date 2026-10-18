@@ -1521,6 +1521,48 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     ).not.toBeNull();
   });
 
+  it('ignores 999 comment groups wherever they fall', () => {
+    const text = [
+      '999',
+      'made by a test',
+      '0',
+      'SECTION',
+      '999',
+      'units',
+      '2',
+      'HEADER',
+      '9',
+      '$INSUNITS',
+      '999',
+      'inches',
+      '70',
+      '1',
+      '0',
+      'ENDSEC',
+      '0',
+      'SECTION',
+      '2',
+      'ENTITIES',
+      '0',
+      'CIRCLE',
+      '999',
+      'a hole',
+      '10',
+      '1',
+      '20',
+      '0',
+      '40',
+      '0.5',
+      '0',
+      'ENDSEC',
+      '0',
+      'EOF'
+    ].join('\n');
+    const result = importDxfSketch(text, 'mm');
+    expect(result.sourceUnit).not.toBeNull();
+    expect(result.objects[0]).toMatchObject({ centerX: 25.4, radius: 12.7 });
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',
