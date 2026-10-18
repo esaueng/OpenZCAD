@@ -9,6 +9,7 @@ import {
   getParameterScope,
   listParameters,
   newTypedParameterMisuse,
+  normalizeDocument,
   parameterKindsOf,
   parameterQuantityRefusal,
   setParameter,
@@ -401,5 +402,20 @@ describe('new typed-parameter misuse', () => {
     data.data.dimensions.width = 10;
     expect(newTypedParameterMisuse(document, before)).toMatch(/tilt/);
     expect(newTypedParameterMisuse(before, after)).toBeNull();
+  });
+});
+
+describe('stored quantities at load', () => {
+  it('refuses a document whose parameter has an unknown type', () => {
+    const document = setParameter(blank(), { name: 'w', expression: '1' });
+    const node = Object.values(document.nodes).find(
+      (entry) => entry.kind === 'parameter'
+    )!;
+    (node as unknown as { quantity: string }).quantity = 'mass';
+    expect(() => normalizeDocument(document)).toThrow(
+      'Parameter "w" has an unknown type "mass".'
+    );
+    (node as unknown as { quantity: string }).quantity = 'length';
+    expect(() => normalizeDocument(document)).not.toThrow();
   });
 });

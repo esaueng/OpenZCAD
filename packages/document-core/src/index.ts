@@ -770,6 +770,30 @@ function withReadableHistory(document: ProjectDocument): ProjectDocument {
   return readable;
 }
 
+const KNOWN_PARAMETER_KINDS: readonly ParameterKind[] = [
+  'length',
+  'angle',
+  'number'
+];
+
+/**
+ * F05: a stored `quantity` must be one this client knows. The type union is
+ * no protection for a document from collaboration, a backup or the API, and
+ * an unknown kind would otherwise reach the scope and the Parameters panel,
+ * so it is refused like any other malformed field rather than guessed at.
+ */
+function assertParameterQuantity(node: ParameterNode): void {
+  const quantity: unknown = node.quantity;
+  if (
+    quantity !== undefined &&
+    !(KNOWN_PARAMETER_KINDS as readonly unknown[]).includes(quantity)
+  ) {
+    throw new Error(
+      `Parameter "${node.name}" has an unknown type ${JSON.stringify(quantity)}.`
+    );
+  }
+}
+
 /**
  * Fills in collections that older saved documents may lack, so loading a
  * pre-parametric document does not crash newer code paths.
@@ -787,6 +811,7 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   const document = withReadableHistory(input);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch') assertSketchReferenceDimensions(node);
+    if (node.kind === 'parameter') assertParameterQuantity(node);
   }
   const revisions = Array.isArray(document.revisions)
     ? document.revisions

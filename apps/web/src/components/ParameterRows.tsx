@@ -83,11 +83,23 @@ const QUANTITY_GLYPHS: Record<ParameterKind | 'unitless', string> = {
   unitless: '—'
 };
 
-/** Every name and expression in a parameter table, for `ParameterRow.table`. */
+/**
+ * Every name, type and expression in a parameter table, for
+ * `ParameterRow.table`: a type change by undo or a collaborator is a change
+ * of table, so a refusal measured against the old type clears.
+ */
 export function parameterTable(parameters: readonly ParameterNode[]): string {
   return parameters
-    .map((parameter) => `${parameter.name}=${parameter.expression}`)
+    .map(
+      (parameter) =>
+        `${parameter.name}:${parameter.quantity ?? ''}=${parameter.expression}`
+    )
     .join('\n');
+}
+
+/** A label for a stored type; an unknown one (the loader refuses it) reads as itself. */
+function quantityLabel(quantity: string): string {
+  return (QUANTITY_LABELS[quantity as ParameterKind] ?? quantity).toLowerCase();
 }
 
 export function ParameterRow({
@@ -185,9 +197,13 @@ export function ParameterRow({
     }
   }
   const [syncedTable, setSyncedTable] = useState(table);
-  if (table !== syncedTable) {
+  const [syncedQuantity, setSyncedQuantity] = useState(parameter.quantity);
+  if (table !== syncedTable || parameter.quantity !== syncedQuantity) {
     setSyncedTable(table);
+    setSyncedQuantity(parameter.quantity);
     setError(null);
+    // A type choice still in flight answers the old table: drop its reply.
+    ++quantitySubmission.current;
   }
 
   async function commit() {
@@ -362,9 +378,9 @@ export function ParameterRow({
                 aria-label={`Type of ${parameter.name}`}
                 title={
                   parameter.quantity
-                    ? `${parameter.name} is a ${QUANTITY_LABELS[parameter.quantity].toLowerCase()}`
+                    ? `${parameter.name} is a ${quantityLabel(parameter.quantity)}`
                     : suggestedQuantity
-                      ? `${parameter.name} is unitless; its uses suggest a ${QUANTITY_LABELS[suggestedQuantity].toLowerCase()}`
+                      ? `${parameter.name} is unitless; its uses suggest a ${quantityLabel(suggestedQuantity)}`
                       : `${parameter.name} is unitless`
                 }
                 value={parameter.quantity ?? 'unitless'}
