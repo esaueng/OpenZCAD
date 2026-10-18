@@ -89,9 +89,14 @@ export function extrudeEditTargets(
   for (const bodyId of document.bodyOrder) {
     if (unavailable.has(bodyId)) continue;
     try {
+      // The probe asks only "may this body be a target here?". A through-all
+      // extent is cut-only, so it is cleared from the probe, not the feature.
       const command = commandFactories.updateFeature({
         featureId: feature.featureId,
-        data: { operation: 'add', targetBodyId: bodyId }
+        data: { operation: 'add', targetBodyId: bodyId },
+        ...(feature.data.endCondition !== undefined
+          ? { clearData: ['endCondition', 'throughAllSide'] }
+          : {})
       });
       command.validate(document);
       const body = Object.values(document.nodes).find(

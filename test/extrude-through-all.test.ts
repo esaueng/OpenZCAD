@@ -11,6 +11,7 @@ import {
   updateFeature
 } from '@openzcad/document-core';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
+import { extrudeEditTargets } from '../apps/web/src/lib/extrudeEditing';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -152,6 +153,17 @@ describe('F01 through-all: document contract', () => {
   });
 });
 
+describe('F01 through-all: editing', () => {
+  it('still lists the cut target when a through-all cut is reopened', () => {
+    const { document, blockId } = block();
+    const result = cut(document, blockId, 'forward');
+    const feature = listFeaturesInOrder(result.document).at(-1)!;
+    expect(
+      extrudeEditTargets(result.document, feature).map((body) => body.bodyId)
+    ).toEqual([blockId]);
+  });
+});
+
 describe('F01 through-all: exact build', () => {
   let adapter: ExactKernelAdapter;
   beforeAll(async () => {
@@ -220,6 +232,30 @@ describe('F01 through-all: exact build', () => {
       /no target in the selected direction \(target Block Body, side backward\)\./
     );
     expect(derived.bodyRepresentations[result.bodyId]).toBeUndefined();
+  });
+
+  it('fails closed on a malformed stored extent instead of building blind', async () => {
+    const { document, blockId } = block(10);
+    const result = cut(document, blockId, 'forward');
+    const node = listFeaturesInOrder(result.document).at(-1)!;
+    const forged = (data: Record<string, unknown>): ProjectDocument => ({
+      ...result.document,
+      nodes: {
+        ...result.document.nodes,
+        [node.id]: { ...node, data: { ...node.data, ...data } }
+      }
+    });
+    for (const [patch, message] of [
+      [{ endCondition: 'to-next' }, /Unknown extrude end condition/],
+      [
+        { endCondition: undefined, throughAllSide: 'both' },
+        /blind extrude has no through-all side/
+      ]
+    ] as const) {
+      const derived = await adapter.syncDocument(forged(patch));
+      expect(derived.warnings.join('\n')).toMatch(message);
+      expect(derived.bodyRepresentations[result.bodyId]).toBeUndefined();
+    }
   });
 
   it('refuses when its target is gone', async () => {

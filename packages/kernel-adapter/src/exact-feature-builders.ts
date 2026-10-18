@@ -517,6 +517,9 @@ function buildExtrudeFeature(
   data: FeatureDataOf<'extrude'>
 ): void {
   const { kernel, document, scope, result } = ctx;
+  // Every stored extent, blind included: an unknown end condition or a
+  // stray side must fail closed, not rebuild at the dormant distance.
+  validateExtrudeExtent(data);
   if (feature.bodyId) {
     // A through-all cut sweeps a derived blind span; everything after this
     // point (the overlap check, the boolean, the coplanar retry) treats it as
