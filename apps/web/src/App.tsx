@@ -2050,6 +2050,8 @@ export function App() {
     useState<StaleDirectEditFaceRepair | null>(null);
   /** The open Plane card's handler for a drag of its datum's handle. */
   const datumOffsetDragRef = useRef<((delta: number) => void) | null>(null);
+  /** The open Plane card's exact entry for its datum's handle. */
+  const datumOffsetEntryRef = useRef<(() => boolean) | null>(null);
   /** R01: an offset datum whose source face is being re-picked. */
   const [datumRepair, setDatumRepair] = useState<FeatureNode | null>(null);
   const [formFacePickTarget, setFormFacePickTarget] = useState<BodyId | null>(
@@ -20767,6 +20769,7 @@ export function App() {
                   }
                 : undefined
             }
+            onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
             modeOverlay={
@@ -21347,7 +21350,8 @@ export function App() {
                   handleDeleteFeature,
                   cancelPanel,
                   closeFeaturePanel,
-                  datumOffsetDragRef
+                  datumOffsetDragRef,
+                  datumOffsetEntryRef
                 }}
               />
             ) : (

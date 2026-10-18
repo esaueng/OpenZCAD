@@ -308,6 +308,8 @@ interface ViewerShellProps {
    * set and no other offset handle is.
    */
   onDatumOffsetDrag?(delta: number): boolean;
+  /** Exact entry for the selected datum's handle: focuses the card's Offset. */
+  onDatumOffsetEntry?(): boolean;
   /** What measuring the hovered target would report; null when measure is off. */
   onMeasurePreview?:
     | ((
@@ -455,6 +457,7 @@ export function ViewerShell({
   onPickPlane,
   onPickDatum,
   onDatumOffsetDrag,
+  onDatumOffsetEntry,
   onMeasurePreview,
   regionHandle,
   onSelectSketchProfile,
@@ -649,7 +652,11 @@ export function ViewerShell({
         onOffsetCancel={onOffsetCancel}
         offsetPreviewInvalid={offsetPreviewInvalid}
         previewDeferred={previewDeferred}
-        onOpenOffsetKeypad={onOpenOffsetKeypad}
+        onOpenOffsetKeypad={
+          datumOffsetTarget && !offsetHandle
+            ? () => onDatumOffsetEntry?.() ?? false
+            : onOpenOffsetKeypad
+        }
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}
         moveValuesSetterRef={moveValuesSetterRef}
