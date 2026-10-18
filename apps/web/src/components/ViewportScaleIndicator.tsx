@@ -16,7 +16,30 @@ function cssColor(
   return styles.getPropertyValue(property).trim() || fallback;
 }
 
-function drawRule(canvas: HTMLCanvasElement, widthPx: number) {
+interface RuleColors {
+  primary: string;
+  secondary: string;
+  accent: string;
+}
+
+/**
+ * The bar is drawn straight on the stage, so it reads the stage ink, which
+ * re-themes with the stage: dark on the light stage, light on the dark.
+ */
+function readRuleColors(canvas: HTMLCanvasElement): RuleColors {
+  const styles = window.getComputedStyle(canvas);
+  return {
+    primary: cssColor(styles, '--color-stage-ink', '#ebedef'),
+    secondary: cssColor(styles, '--color-stage-ink-muted', '#9ba2ab'),
+    accent: cssColor(styles, '--color-preselect', '#81a9ff')
+  };
+}
+
+function drawRule(
+  canvas: HTMLCanvasElement,
+  widthPx: number,
+  { primary, secondary, accent }: RuleColors
+) {
   const cssWidth = Math.max(widthPx, 1);
   const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
   canvas.style.setProperty('--viewport-scale-width', `${cssWidth}px`);
@@ -30,12 +53,6 @@ function drawRule(canvas: HTMLCanvasElement, widthPx: number) {
   context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
   context.clearRect(0, 0, cssWidth, BAR_HEIGHT_PX);
 
-  // The bar is drawn straight on the stage, so it reads the stage ink, which
-  // re-themes with the stage: dark on the light stage, light on the dark.
-  const styles = window.getComputedStyle(canvas);
-  const primary = cssColor(styles, '--color-stage-ink', '#ebedef');
-  const secondary = cssColor(styles, '--color-stage-ink-muted', '#9ba2ab');
-  const accent = cssColor(styles, '--color-preselect', '#81a9ff');
   const left = 1;
   const right = Math.max(cssWidth - 1, left);
   const baselineY = 16;
@@ -82,6 +99,10 @@ export function ViewportScaleIndicator({
   const lastRenderedRef = useRef<(ViewportScale & { units: string }) | null>(
     null
   );
+  // Computed style is read once per theme: the bar redraws on every frame of
+  // a zoom or a face drag, where a style read after the frame's DOM writes
+  // forced a synchronous style recalculation each time.
+  const colorsRef = useRef<RuleColors | null>(null);
 
   useEffect(() => {
     const update = (scale: ViewportScale | null) => {
@@ -110,7 +131,8 @@ export function ViewportScaleIndicator({
         return;
       }
 
-      drawRule(canvas, scale.widthPx);
+      colorsRef.current ??= readRuleColors(canvas);
+      drawRule(canvas, scale.widthPx, colorsRef.current);
       value.value = label;
       value.textContent = label;
       root.setAttribute(
@@ -126,6 +148,7 @@ export function ViewportScaleIndicator({
     // redraw it; the label is CSS and follows on its own.
     const stopWatchingTheme = watchStageTheme(() => {
       lastRenderedRef.current = null;
+      colorsRef.current = null;
       update(lastScaleRef.current);
     });
     return () => {
