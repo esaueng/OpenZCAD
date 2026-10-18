@@ -587,8 +587,16 @@ function buildExtrudeFeature(
       extrusionBody
     );
     // A cut needs shared material: with none there is nothing to remove, and
-    // that can be settled before doing any work.
-    if (operation === 'cut' && sharedVolume <= 0) {
+    // that can be settled before doing any work. Not for through-all: its
+    // span is derived from this target (a side that misses it already
+    // refused), and the long empty travel from a distant sketch plane can
+    // swamp the overlap measurement's tolerance on a thin target. The cut's
+    // own exact refusal still stands.
+    if (
+      operation === 'cut' &&
+      data.endCondition !== 'through-all' &&
+      sharedVolume <= 0
+    ) {
       // Wording unchanged on purpose: `isMeasuredZeroOverlap` in the web app
       // matches this sentence to tell a measured zero-overlap candidate from
       // a kernel refusal.
