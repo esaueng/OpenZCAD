@@ -3508,7 +3508,32 @@ export function App() {
         ...(diagnostic.detail ? { detail: diagnostic.detail } : {})
       });
       cylinderRadiusPreview.clear();
-      offsetPreview.clear();
+      // A refusal at release can arrive before its streamed preview. Keep
+      // the last accepted shape just as an in-drag refusal does, provided
+      // it still belongs to this source revision and face selection. stop()
+      // invalidates late frames without dropping the displayed candidate.
+      const acceptedOffset = reusableOffsetPreviewRef.current?.candidate;
+      const retainOffset =
+        pending?.interaction.mode === 'face' &&
+        pending.interaction.op === 'offset-face' &&
+        acceptedOffset !== undefined &&
+        pending.document.projectId === acceptedOffset.baseProjectId &&
+        pending.document.version === acceptedOffset.baseVersion &&
+        acceptedOffset.selectionKey ===
+          `${pending.interaction.op}:${pending.interaction.target.bodyId}:${pending.interaction.target.topologyId}:${Boolean(pending.interaction.target.localFaceOffset)}` &&
+        previewSelectionIsCurrent(acceptedOffset) &&
+        !isStaleSelectionError(diagnostic);
+      if (retainOffset) {
+        offsetPreview.stop();
+      } else {
+        offsetPreview.clear();
+        if (
+          pending?.interaction.mode === 'face' &&
+          pending.interaction.op === 'offset-face'
+        ) {
+          setLastValidPreview(null);
+        }
+      }
       regionExtrudePreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;

@@ -764,6 +764,83 @@ test('keeps the last value that built when a drag is released on a refusal', asy
   expect(consoleErrors).toEqual([]);
 });
 
+test('retains the last accepted shape when release validation beats an invalid preview', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  await installFacePreviewGate(page);
+  const { chip, readAxisLength, handle, start, consoleErrors } =
+    await armChamferedTopCapOffset(page);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixelsPerUnit * 5,
+    start.y + handle.dy * handle.pixelsPerUnit * 5,
+    { steps: 1 }
+  );
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(33, 4);
+  await page.evaluate(() => {
+    (
+      window as typeof window & { facePreviewGate: FacePreviewGate }
+    ).facePreviewGate.holdPreview = true;
+  });
+  // A positive 1 mm height passes primitive preflight, but cannot retain
+  // both 1 mm chamfers. Hold that exact refusal until after mouse release,
+  // so final validation is the first place the UI learns it is invalid.
+  await page.mouse.move(
+    start.x - handle.dx * handle.pixelsPerUnit * 27,
+    start.y - handle.dy * handle.pixelsPerUnit * 27,
+    { steps: 1 }
+  );
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (window as typeof window & { facePreviewGate: FacePreviewGate })
+              .facePreviewGate.heldPreview
+        ),
+      { timeout: PREVIEW_BUDGET_MS }
+    )
+    .toBeGreaterThan(0);
+  await page.mouse.up();
+  const card = page.getByRole('region', { name: 'Offset Face operation' });
+  await expect(card).toContainText('Failed', { timeout: PREVIEW_BUDGET_MS });
+  expect(await readAxisLength()).toBeCloseTo(33, 4);
+  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await page.evaluate(() =>
+    (
+      window as typeof window & { facePreviewGate: FacePreviewGate }
+    ).facePreviewGate.releasePreview()
+  );
+  // The late, canceled refusal must not replace or clear the retained mesh.
+  await expect(chip).toHaveAttribute('data-state', 'warning');
+  expect(await readAxisLength()).toBeCloseTo(33, 4);
+  const retainedPreview = test.info().outputPath('last-valid-preview.png');
+  await page.screenshot({ path: retainedPreview });
+  await test.info().attach('last-valid-preview-after-release-refusal', {
+    path: retainedPreview,
+    contentType: 'image/png'
+  });
+  await card.getByRole('button', { name: /^Keep / }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Cylinder height set to 33 mm.',
+    { timeout: PREVIEW_BUDGET_MS }
+  );
+  await expect.poll(readAxisLength).toBeCloseTo(33, 4);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(28, 4);
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await expect
+    .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
+    .toBeCloseTo(33, 4);
+  expect(consoleErrors).toEqual([]);
+});
+
 test('clears the catching-up preview state when a degraded gesture is canceled', async ({
   page
 }) => {
