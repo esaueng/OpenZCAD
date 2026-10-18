@@ -529,19 +529,13 @@ export function ViewerShell({
     datumHandle && datumDrag?.featureId === datumHandle.featureId
       ? datumDrag.distance
       : 0;
+  // Every datum gesture starts a fresh pin at zero: the gesture count is
+  // part of the target, so a release (accepted, refused or back at zero)
+  // rebuilds the rig and no gesture carries the last one's value.
+  const [datumGesture, setDatumGesture] = useState(0);
   const datumHandleKey = datumHandle
-    ? JSON.stringify({ ...datumHandle, draftShift })
+    ? JSON.stringify({ ...datumHandle, draftShift, gesture: datumGesture })
     : '';
-  // The pin keeps its last value between gestures on one target, so each
-  // gesture counts only what it added: its preview and its commit are both
-  // measured from where the previous gesture left the pin.
-  const datumCommitted = useRef({ key: '', value: 0 });
-  const datumBaseline = () => {
-    if (datumCommitted.current.key !== datumHandleKey) {
-      datumCommitted.current = { key: datumHandleKey, value: 0 };
-    }
-    return datumCommitted.current.value;
-  };
   const datumOffsetTarget = useMemo<OffsetHandleTarget | null>(() => {
     if (!datumHandleKey) return null;
     const handle = JSON.parse(datumHandleKey) as NonNullable<
@@ -679,20 +673,19 @@ export function ViewerShell({
             ? (distance) =>
                 setDatumDrag({
                   featureId: datumHandle.featureId,
-                  distance: distance - datumBaseline()
+                  distance
                 })
             : onOffsetPreview
         }
         onOffsetCommit={(value) => {
           if (!datumHandle || !onDatumOffsetDrag) return onOffsetCommit(value);
           setDatumDrag(null);
-          const delta = value - datumBaseline();
-          const accepted = onDatumOffsetDrag(delta * datumHandle.sense);
-          if (accepted) datumCommitted.current.value = value;
-          return accepted;
+          setDatumGesture((gesture) => gesture + 1);
+          return onDatumOffsetDrag(value * datumHandle.sense);
         }}
         onOffsetCancel={() => {
           setDatumDrag(null);
+          setDatumGesture((gesture) => gesture + 1);
           onOffsetCancel();
         }}
         offsetPreviewInvalid={offsetPreviewInvalid}
