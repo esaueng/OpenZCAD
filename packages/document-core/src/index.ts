@@ -1873,7 +1873,9 @@ export function validateExtrudeExtent(data: {
   symmetric?: unknown;
   backDistance?: unknown;
 }): void {
-  const condition = data.endCondition ?? 'blind';
+  // Only an absent field is blind: a stored `null` is malformed, not legacy.
+  const condition =
+    data.endCondition === undefined ? 'blind' : data.endCondition;
   if (condition === 'blind') {
     if (data.throughAllSide !== undefined) {
       throw new Error('A blind extrude has no through-all side.');

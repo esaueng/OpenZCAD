@@ -731,10 +731,14 @@ function buildExtrudeFeature(
         }
       }
     };
-    if (
-      operation === 'cut' &&
-      resultBody.volume <= extrudeVolumeTolerance(targetBody, extrusionBody)
-    ) {
+    // A through-all tool carries empty travel from a possibly distant sketch
+    // plane, so its own size says nothing about this target's scale; measure
+    // the guard against the target alone.
+    const removalTolerance =
+      data.endCondition === 'through-all'
+        ? extrudeVolumeTolerance(targetBody, targetBody)
+        : extrudeVolumeTolerance(targetBody, extrusionBody);
+    if (operation === 'cut' && resultBody.volume <= removalTolerance) {
       throw new Error(
         `Stored cut extrusion would remove all of ${targetBody.name}; operation was not changed.`
       );

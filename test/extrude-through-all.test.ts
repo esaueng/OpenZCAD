@@ -268,6 +268,50 @@ describe('F01 through-all: exact build', () => {
     );
   });
 
+  it('keeps a small cut in a small distant target instead of calling it total removal', async () => {
+    let document = createProjectDocument(
+      'Distant chip',
+      toUserId('user_through_all')
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Chip',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 0.1 }
+    });
+    const chipId = document.bodyOrder[0]!;
+    document = transformBody(document, {
+      name: 'Lift',
+      targetBodyId: chipId,
+      translation: { x: 0, y: 0, z: 1000 }
+    }).document;
+    const sketched = addSketchFeature(document, {
+      name: 'Pin sketch',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        {
+          objectKind: 'rectangle',
+          width: 0.1,
+          height: 0.1,
+          centerX: 0.5,
+          centerY: 0.5
+        }
+      ]
+    });
+    const result = extrudeSketch(sketched.document, {
+      name: 'Pin hole',
+      sketchId: sketched.sketchId,
+      distance: 2,
+      operation: 'cut',
+      targetBodyId: chipId,
+      endCondition: 'through-all',
+      throughAllSide: 'forward'
+    });
+    expect(await volume(result.document, result.bodyId)).toBeCloseTo(
+      0.1 - 0.1 * 0.1 * 0.1,
+      9
+    );
+  });
+
   it('refuses a side that misses the target, naming it', async () => {
     const { document, blockId } = block(10);
     const result = cut(document, blockId, 'backward', 0);
@@ -291,6 +335,7 @@ describe('F01 through-all: exact build', () => {
     });
     for (const [patch, message] of [
       [{ endCondition: 'to-next' }, /Unknown extrude end condition/],
+      [{ endCondition: null }, /Unknown extrude end condition/],
       [
         { endCondition: undefined, throughAllSide: 'both' },
         /blind extrude has no through-all side/
