@@ -965,13 +965,14 @@ function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
 }
 
 /**
- * Same ZYX Euler transform the exact build uses: about the world origin, or
- * about `pivot` (M10), the translation then becoming t + p − R·p.
+ * Same ZYX Euler transform the exact build uses, L = scale·R: about the world
+ * origin, or about `pivot` (M10), the translation then becoming t + p − L·p.
  */
 function transformMatrix(
   translation: Vec3,
   rotationDeg: Vec3,
-  pivot: Vec3 = { x: 0, y: 0, z: 0 }
+  pivot: Vec3 = { x: 0, y: 0, z: 0 },
+  scaleFactor = 1
 ): number[] {
   const rx = (rotationDeg.x * Math.PI) / 180;
   const ry = (rotationDeg.y * Math.PI) / 180;
@@ -982,10 +983,11 @@ function transformMatrix(
   const sb = Math.sin(ry);
   const cc = Math.cos(rz);
   const sc = Math.sin(rz);
+  const k = scaleFactor;
   const r = [
-    [cc * cb, cc * sb * sa - sc * ca, cc * sb * ca + sc * sa],
-    [sc * cb, sc * sb * sa + cc * ca, sc * sb * ca - cc * sa],
-    [-sb, cb * sa, cb * ca]
+    [k * cc * cb, k * (cc * sb * sa - sc * ca), k * (cc * sb * ca + sc * sa)],
+    [k * sc * cb, k * (sc * sb * sa + cc * ca), k * (sc * sb * ca - cc * sa)],
+    [-k * sb, k * cb * sa, k * cb * ca]
   ] as const;
   const shift = (row: readonly [number, number, number], p: number) =>
     p - (row[0] * pivot.x + row[1] * pivot.y + row[2] * pivot.z);
@@ -1634,6 +1636,19 @@ export class OcctStepKernelAdapter {
             const translation = feature.data.transform.translation;
             const rotation = feature.data.transform.rotationDeg;
             const pivot = feature.data.transform.pivot;
+            const scaleFactor =
+              feature.data.transform.scale !== undefined
+                ? resolveParamValue(
+                    feature.data.transform.scale,
+                    scope,
+                    'scale'
+                  )
+                : 1;
+            if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
+              throw new Error(
+                'Transform scale must resolve to a positive number.'
+              );
+            }
             const matrix = transformMatrix(
               {
                 x: resolveParamValue(translation.x, scope, 'X'),
@@ -1649,7 +1664,8 @@ export class OcctStepKernelAdapter {
                 x: resolveParamValue(pivot.x, scope, 'pivot X'),
                 y: resolveParamValue(pivot.y, scope, 'pivot Y'),
                 z: resolveParamValue(pivot.z, scope, 'pivot Z')
-              }
+              },
+              scaleFactor
             );
             const transformed = this.kernel.transform(target, matrix);
             result.shapes.set(feature.data.targetBodyId, transformed);
