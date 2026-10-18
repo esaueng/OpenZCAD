@@ -14,6 +14,8 @@ export interface ContextMenuItem {
   icon?: ReactNode;
   shortcut?: string;
   disabled?: boolean;
+  /** A second line under the label, e.g. why a disabled action is unavailable. */
+  detail?: string;
   danger?: boolean;
   /** Renders a separator line above this item. */
   section?: boolean;
@@ -135,7 +137,12 @@ export function ContextMenu({
             {item.icon && (
               <span className="context-menu-icon">{item.icon}</span>
             )}
-            <span className="context-menu-label">{item.label}</span>
+            <span className="context-menu-label">
+              {item.label}
+              {item.detail && (
+                <span className="context-menu-detail">{item.detail}</span>
+              )}
+            </span>
             {item.shortcut && <kbd>{item.shortcut}</kbd>}
           </button>
         </div>

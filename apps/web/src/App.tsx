@@ -75,6 +75,7 @@ import {
   CirclePause,
   CirclePlay,
   Combine,
+  Copy,
   Crosshair,
   Download,
   Eye,
@@ -104,6 +105,8 @@ import {
 import {
   CommandManager,
   commandFactories,
+  duplicateFeatureCommands,
+  duplicateFeatureRefusal,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -17550,6 +17553,48 @@ export function App() {
     );
   }
 
+  /**
+   * U06 (ZC-104): repeats a Move, Mirror or Pattern step right after itself
+   * as one undoable edit, then opens the copy so its copied references (the
+   * same body, plane and values) can be reviewed and changed.
+   */
+  function handleDuplicateFeature(feature: FeatureNode) {
+    const owner = managerRef.current;
+    if (!owner || !ensureCanEdit(`duplicate ${feature.name}`)) return;
+    const document = owner.document;
+    let duplicate: ReturnType<typeof duplicateFeatureCommands>;
+    try {
+      duplicate = duplicateFeatureCommands(document, feature.featureId);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    const { commands, featureId: copyId, label } = duplicate;
+    const copyBodyId =
+      feature.data.featureKind === 'transform'
+        ? feature.data.targetBodyId
+        : (commands[0]!.payload as { ids: { bodyId: BodyId } }).ids.bodyId;
+    const targets = [
+      ...affectedFeatureTargets(document, feature.featureId),
+      { featureName: label, featureId: copyId, resultBodyId: copyBodyId }
+    ];
+    void validatedFeature.runTransaction(commands, {
+      label,
+      targets,
+      validatingMessage: `Checking the copy of ${feature.name}…`,
+      successMessage: `Duplicated ${feature.name}.`,
+      onSuccess: () => {
+        if (managerRef.current !== owner) return;
+        const copy = findFeature(owner.document, copyId);
+        if (copy) handleSelectFeatureFromTree(copy.id, false);
+        announce(`Duplicated ${feature.name}.`, {
+          label: 'Undo',
+          run: handleUndo
+        });
+      }
+    });
+  }
+
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     // Counted before the delete: afterwards the source is gone and the walk
     // has nothing to start from. A load-bearing delete announces its blast
@@ -18356,6 +18401,23 @@ export function App() {
                   ]
                 : [])
           ]
+        : []),
+      ...(row
+        ? (() => {
+            const refusal =
+              doc && duplicateFeatureRefusal(doc, feature.featureId);
+            return [
+              {
+                item: {
+                  id: 'duplicate',
+                  label: 'Duplicate',
+                  icon: <Copy size={13} aria-hidden="true" />,
+                  ...(refusal ? { disabled: true, detail: refusal } : {})
+                },
+                run: () => handleDuplicateFeature(feature)
+              }
+            ];
+          })()
         : []),
       {
         item: {
