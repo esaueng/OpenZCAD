@@ -133,6 +133,16 @@ test('drags a selected datum plane along its normal and picks it in the viewport
   const dragged = Number(await offset.inputValue());
   // Back about 2 from the first drag, not first + (first − 15) − 2.
   expect(dragged).toBeGreaterThan(first - 3);
+  // A draft that is no longer a plain-number Offset withdraws the pin: a
+  // Midplane has no Offset, and an expression is not dragged.
+  await page.getByRole('button', { name: 'Midplane', exact: true }).click();
+  await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /\d/);
+  await page.getByRole('button', { name: 'Offset plane', exact: true }).click();
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /\d/);
+  await offset.fill('lid + 1');
+  await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /\d/);
+  await offset.fill(String(dragged));
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /\d/);
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect
     .poll(async () => (await drawnDatums(canvas))[0]?.origin.z, {

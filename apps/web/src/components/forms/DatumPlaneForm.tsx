@@ -72,6 +72,11 @@ export interface DatumPlaneFormProps {
    * field is not shown (a midplane).
    */
   offsetEntryRef?: { current: (() => boolean) | null };
+  /**
+   * Whether the draft can take a handle drag: an Offset plane whose Offset
+   * is a plain number. A Midplane or an expression withdraws the handle.
+   */
+  onOffsetDragAvailable?(available: boolean): void;
 }
 
 /**
@@ -92,9 +97,21 @@ export function DatumPlaneForm({
   onCancel,
   onDraftChange,
   offsetDragRef,
-  offsetEntryRef
+  offsetEntryRef,
+  onOffsetDragAvailable
 }: DatumPlaneFormProps) {
   const [state, setState] = useState(initial);
+  const offsetText = state.offset.trim();
+  const dragAvailable =
+    state.mode === 'offset' &&
+    offsetText !== '' &&
+    Number.isFinite(Number(offsetText));
+  const onOffsetDragAvailableRef = useRef(onOffsetDragAvailable);
+  onOffsetDragAvailableRef.current = onOffsetDragAvailable;
+  useEffect(() => {
+    onOffsetDragAvailableRef.current?.(dragAvailable);
+  }, [dragAvailable]);
+  useEffect(() => () => onOffsetDragAvailableRef.current?.(false), []);
   const [preflight, setPreflight] = useState<ExactPreflightState>({
     status: 'idle'
   });
@@ -364,6 +381,7 @@ export interface DatumPlaneCardProps {
   onDraftChange?(): void;
   offsetDragRef?: DatumPlaneFormProps['offsetDragRef'];
   offsetEntryRef?: DatumPlaneFormProps['offsetEntryRef'];
+  onOffsetDragAvailable?: DatumPlaneFormProps['onOffsetDragAvailable'];
 }
 
 /**
@@ -382,7 +400,8 @@ export function DatumPlaneCard({
   onCancel,
   onDraftChange,
   offsetDragRef,
-  offsetEntryRef
+  offsetEntryRef,
+  onOffsetDragAvailable
 }: DatumPlaneCardProps) {
   const picked: DatumPlaneFormProps['pickedFace'] =
     pickedFace && 'reason' in pickedFace
@@ -427,6 +446,7 @@ export function DatumPlaneCard({
       {...(onDraftChange ? { onDraftChange } : {})}
       {...(offsetDragRef ? { offsetDragRef } : {})}
       {...(offsetEntryRef ? { offsetEntryRef } : {})}
+      {...(onOffsetDragAvailable ? { onOffsetDragAvailable } : {})}
     />
   );
 }
@@ -466,6 +486,8 @@ export interface DatumPlaneCardApp {
   datumOffsetDragRef?: { current: ((delta: number) => void) | null };
   /** Where the card registers exact entry for its datum's handle. */
   datumOffsetEntryRef?: { current: (() => boolean) | null };
+  /** Where the card says whether its draft can take a handle drag. */
+  setDatumDragAvailable?(available: boolean): void;
 }
 
 export interface DatumPlaneWorkspaceCardProps {
@@ -683,6 +705,9 @@ export function DatumPlaneWorkspaceCard({
             : {})}
           {...(app.datumOffsetEntryRef
             ? { offsetEntryRef: app.datumOffsetEntryRef }
+            : {})}
+          {...(app.setDatumDragAvailable
+            ? { onOffsetDragAvailable: app.setDatumDragAvailable }
             : {})}
         />
       </div>
