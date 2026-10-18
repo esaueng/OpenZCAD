@@ -95,8 +95,28 @@ test('drags a selected datum plane along its normal and picks it in the viewport
   const offset = page.getByLabel('Offset', { exact: true });
   await expect
     .poll(async () => Number(await offset.inputValue()))
-    .toBeGreaterThan(17);
+    .toBeGreaterThan(18);
+  const first = Number(await offset.inputValue());
+  // A second gesture adds only its own distance, not the pin's running
+  // total: dragging back 2 lands near first − 2.
+  const again = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY)
+  }));
+  await page.mouse.move(bounds.x + again.x, bounds.y + again.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    bounds.x + again.x - handle.dx * handle.pixelsPerUnit * 2,
+    bounds.y + again.y - handle.dy * handle.pixelsPerUnit * 2,
+    { steps: 4 }
+  );
+  await page.mouse.up();
+  await expect
+    .poll(async () => Number(await offset.inputValue()))
+    .toBeLessThan(first - 1);
   const dragged = Number(await offset.inputValue());
+  // Back about 2 from the first drag, not first + (first − 15) − 2.
+  expect(dragged).toBeGreaterThan(first - 3);
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect
     .poll(async () => (await drawnDatums(canvas))[0]?.origin.z, {

@@ -501,6 +501,9 @@ export function ViewerShell({
         )
       : null;
   const datumHandleKey = datumHandle ? JSON.stringify(datumHandle) : '';
+  // The pin keeps its last value between gestures on one target, so each
+  // commit sends only what this gesture added to the card's Offset.
+  const datumCommitted = useRef({ key: '', value: 0 });
   const datumOffsetTarget = useMemo<OffsetHandleTarget | null>(() => {
     if (!datumHandleKey) return null;
     const handle = JSON.parse(datumHandleKey) as NonNullable<
@@ -629,11 +632,16 @@ export function ViewerShell({
         onBoxSelect={onBoxSelect}
         offsetHandle={offsetHandle ?? datumOffsetTarget}
         onOffsetPreview={datumOffsetTarget ? () => {} : onOffsetPreview}
-        onOffsetCommit={(value) =>
-          datumHandle && onDatumOffsetDrag
-            ? onDatumOffsetDrag(value * datumHandle.sense)
-            : onOffsetCommit(value)
-        }
+        onOffsetCommit={(value) => {
+          if (!datumHandle || !onDatumOffsetDrag) return onOffsetCommit(value);
+          if (datumCommitted.current.key !== datumHandleKey) {
+            datumCommitted.current = { key: datumHandleKey, value: 0 };
+          }
+          const delta = value - datumCommitted.current.value;
+          const accepted = onDatumOffsetDrag(delta * datumHandle.sense);
+          if (accepted) datumCommitted.current.value = value;
+          return accepted;
+        }}
         onOffsetCancel={onOffsetCancel}
         offsetPreviewInvalid={offsetPreviewInvalid}
         previewDeferred={previewDeferred}
