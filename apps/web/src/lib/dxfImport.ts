@@ -222,12 +222,31 @@ function radius(entity: DxfEntity): number {
 }
 
 /**
+ * The one occurrence of a scalar group, or undefined when it is absent. A
+ * repeated scalar refuses the entity rather than letting the first copy win:
+ * two group-10s on a LINE, or two bulges on a VERTEX, have no single meaning.
+ */
+function singleGroup(entity: DxfEntity, code: number): Pair | undefined {
+  let found: Pair | undefined;
+  for (const pair of entity.groups) {
+    if (pair.code !== code) continue;
+    if (found) {
+      throw new DxfImportError(
+        `This DXF is malformed: a ${entity.type} repeats group ${code}.`
+      );
+    }
+    found = pair;
+  }
+  return found;
+}
+
+/**
  * An integer group (flags, space markers) as a 16-bit integer, 0 when absent.
  * A fractional or out-of-range value refuses the file: bit masks would
  * silently truncate it into a different flag set.
  */
 function integerFlags(entity: DxfEntity, code: number): number {
-  const pair = entity.groups.find((candidate) => candidate.code === code);
+  const pair = singleGroup(entity, code);
   if (!pair) return 0;
   const value = dxfNumber(pair.value);
   if (!Number.isInteger(value) || value < -32768 || value > 32767) {
@@ -239,7 +258,7 @@ function integerFlags(entity: DxfEntity, code: number): number {
 }
 
 function number(entity: DxfEntity, code: number, fallback?: number): number {
-  const found = entity.groups.find((pair) => pair.code === code);
+  const found = singleGroup(entity, code);
   const value = found ? dxfNumber(found.value) : fallback;
   if (value === undefined || !Number.isFinite(value)) {
     throw new DxfImportError(
@@ -271,11 +290,11 @@ function onZeroElevation(entity: DxfEntity): boolean {
  */
 function inXyPlane(entity: DxfEntity): boolean {
   if (!onZeroElevation(entity)) return false;
-  const thickness = entity.groups.find((pair) => pair.code === 39);
+  const thickness = singleGroup(entity, 39);
   if (thickness && dxfNumber(thickness.value) !== 0) return false;
-  const z = entity.groups.find((pair) => pair.code === 230);
-  const x = entity.groups.find((pair) => pair.code === 210);
-  const y = entity.groups.find((pair) => pair.code === 220);
+  const z = singleGroup(entity, 230);
+  const x = singleGroup(entity, 210);
+  const y = singleGroup(entity, 220);
   if (!z && !x && !y) return true;
   return (
     dxfNumber(x?.value ?? '0') === 0 &&

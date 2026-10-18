@@ -1353,6 +1353,53 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     );
   });
 
+  it('refuses an entity that repeats a scalar group', () => {
+    const line = dxf([
+      '0',
+      'LINE',
+      '10',
+      '0',
+      '10',
+      '3',
+      '20',
+      '0',
+      '11',
+      '5',
+      '21',
+      '0'
+    ]);
+    expect(() => importDxfSketch(line, 'mm')).toThrow(
+      'a LINE repeats group 10'
+    );
+    const vertex = dxf([
+      '0',
+      'POLYLINE',
+      '70',
+      '0',
+      '0',
+      'VERTEX',
+      '10',
+      '0',
+      '20',
+      '0',
+      '42',
+      '1',
+      '42',
+      '0.5',
+      '0',
+      'VERTEX',
+      '10',
+      '5',
+      '20',
+      '0',
+      '0',
+      'SEQEND'
+    ]);
+    expect(() => importDxfSketch(vertex, 'mm')).toThrow(
+      'a VERTEX repeats group 42'
+    );
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',
