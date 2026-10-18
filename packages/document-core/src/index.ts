@@ -1893,7 +1893,10 @@ export function validateExtrudeExtent(data: {
   if (typeof data.targetBodyId !== 'string' || !data.targetBodyId) {
     throw new Error('A through-all cut needs one explicit target body.');
   }
-  if (!['forward', 'backward', 'both'].includes(String(data.throughAllSide))) {
+  if (
+    typeof data.throughAllSide !== 'string' ||
+    !['forward', 'backward', 'both'].includes(data.throughAllSide)
+  ) {
     throw new Error(
       'A through-all cut needs a side: forward, backward or both.'
     );

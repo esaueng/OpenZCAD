@@ -33,6 +33,9 @@ export function throughAllSpan(
   direction: Vec3,
   side: ThroughAllSide
 ): ThroughAllSpan {
+  if (side !== 'forward' && side !== 'backward' && side !== 'both') {
+    throw new Error(`Unknown through-all side ${JSON.stringify(side)}.`);
+  }
   const magnitude = Math.hypot(direction.x, direction.y, direction.z);
   if (!(magnitude > 1e-12) || !Number.isFinite(magnitude)) {
     throw new Error('Through-all direction must be finite and non-zero.');
