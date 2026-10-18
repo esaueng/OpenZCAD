@@ -12567,11 +12567,14 @@ export function App() {
       handleFaceRepairPick(selection);
       return;
     }
-    if (datumRepair) {
+    if (datumRepair && !measuring && tool === null) {
       const base = managerRef.current?.document;
       if (!selection || !base) return;
       const { feature: repair, slot } = datumRepair;
+      const attempt = datumRepairAttempt.current;
+      const withdrawn = () => datumRepairAttempt.current !== attempt;
       void import('./lib/datumPlanes').then(({ datumFaceRepairEdit }) => {
+        if (withdrawn()) return;
         try {
           const edit = datumFaceRepairEdit(
             base,
@@ -12581,6 +12584,7 @@ export function App() {
           );
           void validatedFeature.runTransaction([edit.command], {
             label: edit.label,
+            cancelled: withdrawn,
             targets: affectedFeatureTargets(base, repair.featureId),
             validateDerived: edit.validateDerived,
             successMessage: `"${repair.name}" follows the re-picked face.`,
@@ -18006,6 +18010,24 @@ export function App() {
       `Re-pick the face for "${repair.featureName}": click the ${faceRepairPickHint(repair)} on ${bodyName} · Esc cancels.`
     );
   }
+
+  // A datum re-pick yields to any mode that takes viewport clicks over:
+  // Measure, a tool, a sketch or View mode. Each arm or disarm also moves
+  // the attempt counter, which withdraws an edit still being checked.
+  const datumRepairAttempt = useRef(0);
+  useEffect(() => {
+    datumRepairAttempt.current += 1;
+  }, [datumRepair]);
+  useEffect(() => {
+    if (
+      measuring ||
+      tool !== null ||
+      viewMode ||
+      interaction.mode === 'sketch'
+    ) {
+      setDatumRepair(null);
+    }
+  }, [measuring, tool, viewMode, interaction.mode]);
 
   /**
    * Consumes a viewport pick while a face re-pick is armed. A pick that
