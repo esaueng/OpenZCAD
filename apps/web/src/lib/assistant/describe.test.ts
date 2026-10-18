@@ -203,6 +203,13 @@ const SAMPLES: { [Kind in OperationKind]: OperationOf<Kind> } = {
     targetBodyId: '$plate',
     datum: '$lid'
   },
+  add_datum_split: {
+    kind: 'add_datum_split',
+    name: 'Split at lid',
+    localId: null,
+    targetBodyId: '$plate',
+    datum: '$lid'
+  },
   add_shell: {
     kind: 'add_shell',
     name: 'Shell',
@@ -293,6 +300,9 @@ describe('patch operation descriptions', () => {
     );
     expect(describeOperation(SAMPLES.add_datum_mirror)).toBe(
       'Mirror across lid — mirror Plate across Lid'
+    );
+    expect(describeOperation(SAMPLES.add_datum_split)).toBe(
+      'Split at lid — split Plate in two at Lid'
     );
   });
 

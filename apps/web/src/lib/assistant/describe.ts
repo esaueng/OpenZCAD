@@ -143,6 +143,8 @@ export function describeOperation(operation: CadPatchOperation): string {
       return `${operation.name} — sketch on ${describeBodyRef(operation.datum)}, ${plural(operation.objects.length, 'object')}`;
     case 'add_datum_mirror':
       return `${operation.name} — mirror ${describeBodyRef(operation.targetBodyId)} across ${describeBodyRef(operation.datum)}`;
+    case 'add_datum_split':
+      return `${operation.name} — split ${describeBodyRef(operation.targetBodyId)} in two at ${describeBodyRef(operation.datum)}`;
     default: {
       // Every kind the contract allows has a line above; a new kind fails the
       // typecheck here instead of reaching a reviewer as "Unknown operation".
@@ -168,6 +170,7 @@ export function operationCreatesBody(operation: CadPatchOperation): boolean {
     operation.kind === 'add_multi_profile_extrude' ||
     operation.kind === 'add_mirror' ||
     operation.kind === 'add_datum_mirror' ||
+    operation.kind === 'add_datum_split' ||
     operation.kind === 'add_shell' ||
     operation.kind === 'add_solid_offset'
   );

@@ -956,6 +956,7 @@ describe('assistant integration', () => {
     expect(schema).not.toContain('"const":"add_datum_plane"');
     expect(schema).not.toContain('"const":"add_datum_sketch"');
     expect(schema).not.toContain('"const":"add_datum_mirror"');
+    expect(schema).not.toContain('"const":"add_datum_split"');
   });
 
   async function datumRequest(operations?: readonly string[]) {
@@ -991,10 +992,11 @@ describe('assistant integration', () => {
   const DATUM_KINDS = [
     'add_datum_plane',
     'add_datum_sketch',
-    'add_datum_mirror'
+    'add_datum_mirror',
+    'add_datum_split'
   ];
 
-  it('exposes all three datum-plane operations together behind one flag', async () => {
+  it('exposes all four datum-plane operations together behind one flag', async () => {
     const { enabledLine, schema } = await datumRequest(
       CAD_PATCH_OPERATION_KINDS
     );

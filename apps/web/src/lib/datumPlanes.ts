@@ -456,15 +456,18 @@ export function requireResolvedDatums(
 }
 
 /**
- * R01: the edit that re-attaches an offset datum whose source face no longer
- * resolves to the face picked now. Only the source changes: distance, mode
- * and direction are kept. Throws, in words for the status bar, when the pick
- * cannot carry a datum (not a planar face with a rebuildable identity).
+ * R01: the edit that re-attaches a datum whose source face no longer
+ * resolves to the face picked now: an offset plane's source, or the chosen
+ * face (`slot` 0 for A, 1 for B) of a midplane. Only that source changes:
+ * distance, mode, the other source and direction are kept. Throws, in words
+ * for the status bar, when the pick cannot carry a datum (not a planar face
+ * with a rebuildable identity).
  */
 export function datumFaceRepairEdit(
   document: ProjectDocument,
   featureId: FeatureId,
-  selection: TopologySelection
+  selection: TopologySelection,
+  slot: 0 | 1 = 0
 ): {
   command: AnyCommand;
   label: string;
@@ -475,9 +478,9 @@ export function datumFaceRepairEdit(
   );
   if (
     feature?.data.featureKind !== 'datum-plane' ||
-    feature.data.definition.kind !== 'offset'
+    (feature.data.definition.kind === 'offset' && slot !== 0)
   ) {
-    throw new Error('Only an offset plane on a face can be re-picked here.');
+    throw new Error('Only a datum plane source can be re-picked here.');
   }
   if (selection.kind !== 'face') {
     throw new Error(`Click a planar face for "${feature.name}".`);
@@ -497,18 +500,24 @@ export function datumFaceRepairEdit(
     );
   }
   const label = `Re-pick face for ${feature.name}`;
+  const source = ref as FacePlaneSource;
+  const { definition } = feature.data;
+  const repaired: DatumPlaneDefinition =
+    definition.kind === 'offset'
+      ? { ...definition, source }
+      : {
+          ...definition,
+          sources:
+            slot === 0
+              ? [source, definition.sources[1]]
+              : [definition.sources[0], source]
+        };
   return {
     label,
     command: commandFactories.updateFeature(
       {
         featureId,
-        data: {
-          featureKind: 'datum-plane',
-          definition: {
-            ...feature.data.definition,
-            source: ref as FacePlaneSource
-          }
-        }
+        data: { featureKind: 'datum-plane', definition: repaired }
       },
       label
     ),

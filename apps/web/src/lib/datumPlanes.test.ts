@@ -408,5 +408,14 @@ describe('datum viewport handle and repair (R01)', () => {
         hash: 7
       } as never)
     ).toThrow();
+    // An offset plane has one source: there is no second face to re-pick.
+    expect(() =>
+      datumFaceRepairEdit(
+        document,
+        featureId,
+        { bodyId: 'body_x' as never, kind: 'face', hash: 1 } as never,
+        1
+      )
+    ).toThrow('Only a datum plane source can be re-picked here.');
   });
 });

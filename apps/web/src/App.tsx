@@ -2026,8 +2026,15 @@ export function App() {
     useState<StaleDirectEditFaceRepair | null>(null);
   /** The open Plane card's handler for a drag of its datum's handle. */
   const datumOffsetDragRef = useRef<((delta: number) => void) | null>(null);
+  /** The open Plane card's draft Offset, drawn ahead of its Apply. */
+  const [datumOffsetDraft, setDatumOffsetDraft] = useState<number | null>(
+    null
+  );
   /** R01: an offset datum whose source face is being re-picked. */
-  const [datumRepair, setDatumRepair] = useState<FeatureNode | null>(null);
+  const [datumRepair, setDatumRepair] = useState<{
+    feature: FeatureNode;
+    slot: 0 | 1;
+  } | null>(null);
   const [formFacePickTarget, setFormFacePickTarget] = useState<BodyId | null>(
     null
   );
@@ -12539,10 +12546,15 @@ export function App() {
     if (datumRepair) {
       const base = managerRef.current?.document;
       if (!selection || !base) return;
-      const repair = datumRepair;
+      const { feature: repair, slot } = datumRepair;
       void import('./lib/datumPlanes').then(({ datumFaceRepairEdit }) => {
         try {
-          const edit = datumFaceRepairEdit(base, repair.featureId, selection);
+          const edit = datumFaceRepairEdit(
+            base,
+            repair.featureId,
+            selection,
+            slot
+          );
           void validatedFeature.runTransaction([edit.command], {
             label: edit.label,
             targets: affectedFeatureTargets(base, repair.featureId),
@@ -18081,31 +18093,41 @@ export function App() {
             }
           ]
         : []),
-      // R01: an offset plane on a face that no longer resolves.
+      // R01: a datum on a face that no longer resolves: one entry per face
+      // source (a midplane names A or B, since either may be the lost one).
       ...(feature.data.featureKind === 'datum-plane' &&
-      feature.data.definition.kind === 'offset' &&
-      feature.data.definition.source.type === 'face' &&
       !isFeatureSuppressed(feature) &&
       !doc?.derived.datumFrames?.[feature.featureId]
-        ? [
-            {
-              item: {
-                id: 'repair-datum-face',
-                label: 'Re-pick source face…',
-                icon: <Crosshair size={13} aria-hidden="true" />
-              },
-              run: () => {
-                if (!ensureCanEdit('repair a feature')) return;
-                setTool(null);
-                clearSelection();
-                setFaceRepair(null);
-                setDatumRepair(feature);
-                setStatus(
-                  `Re-pick the face for "${feature.name}": click a planar face · Esc cancels.`
-                );
+        ? (feature.data.definition.kind === 'offset'
+            ? [feature.data.definition.source]
+            : feature.data.definition.sources
+          ).flatMap((source, index) => {
+            if (source.type !== 'face') return [];
+            const slot = index as 0 | 1;
+            const midplane =
+              feature.data.featureKind === 'datum-plane' &&
+              feature.data.definition.kind === 'midplane';
+            const which = midplane ? ` ${slot === 0 ? 'A' : 'B'}` : '';
+            return [
+              {
+                item: {
+                  id: `repair-datum-face${midplane ? `-${slot}` : ''}`,
+                  label: `Re-pick source face${which}…`,
+                  icon: <Crosshair size={13} aria-hidden="true" />
+                },
+                run: () => {
+                  if (!ensureCanEdit('repair a feature')) return;
+                  setTool(null);
+                  clearSelection();
+                  setFaceRepair(null);
+                  setDatumRepair({ feature, slot });
+                  setStatus(
+                    `Re-pick ${midplane ? `face${which}` : 'the face'} for "${feature.name}": click a planar face · Esc cancels.`
+                  );
+                }
               }
-            }
-          ]
+            ];
+          })
         : []),
       ...(bodyId && body && !body.consumed
         ? [
@@ -20718,6 +20740,12 @@ export function App() {
                   }
                 : undefined
             }
+            datumOffsetDraft={
+              tool === 'datum-plane' &&
+              modelingEditFeature?.data.featureKind === 'datum-plane'
+                ? datumOffsetDraft
+                : null
+            }
             onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
             modeOverlay={
@@ -21298,7 +21326,8 @@ export function App() {
                   handleDeleteFeature,
                   cancelPanel,
                   closeFeaturePanel,
-                  datumOffsetDragRef
+                  datumOffsetDragRef,
+                  setDatumOffsetDraft
                 }}
               />
             ) : (

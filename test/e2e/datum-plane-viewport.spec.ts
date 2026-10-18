@@ -90,6 +90,10 @@ test('drags a selected datum plane along its normal and picks it in the viewport
     bounds.y + handle.y + handle.dy * handle.pixelsPerUnit * 5,
     { steps: 6 }
   );
+  // The plane follows the pin while the drag is still under way.
+  await expect
+    .poll(async () => (await drawnDatums(canvas))[0]?.origin.z)
+    .toBeGreaterThan(17);
   await page.mouse.up();
   // The drag fills the open Plane card's Offset; Apply commits it.
   const offset = page.getByLabel('Offset', { exact: true });
@@ -97,6 +101,16 @@ test('drags a selected datum plane along its normal and picks it in the viewport
     .poll(async () => Number(await offset.inputValue()))
     .toBeGreaterThan(17);
   const dragged = Number(await offset.inputValue());
+  // Released, the plane stays where the card's Offset says, ahead of Apply,
+  // and a typed Offset moves it too.
+  await expect
+    .poll(async () => (await drawnDatums(canvas))[0]?.origin.z)
+    .toBeCloseTo(dragged, 6);
+  await offset.fill('25');
+  await expect
+    .poll(async () => (await drawnDatums(canvas))[0]?.origin.z)
+    .toBeCloseTo(25, 6);
+  await offset.fill(String(dragged));
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect
     .poll(async () => (await drawnDatums(canvas))[0]?.origin.z, {

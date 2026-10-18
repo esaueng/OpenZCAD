@@ -116,4 +116,89 @@ describe('datum face re-pick (R01)', () => {
       definition: { kind: 'offset', offset: 2, source: { bodyId: second } }
     });
   });
+
+  it("re-attaches a midplane's lost face and keeps its other source", async () => {
+    let document = createProjectDocument('Midplane', toUserId('user_repair'));
+    document = addPrimitiveFeature(document, {
+      name: 'First',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 5 }
+    });
+    const first = document.bodyOrder[0]!;
+    document = addPrimitiveFeature(document, {
+      name: 'Second',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 8 }
+    });
+    const second = document.bodyOrder[1]!;
+    document = transformBody(document, {
+      name: 'Beside',
+      targetBodyId: second,
+      translation: { x: 30, y: 0, z: 0 }
+    }).document;
+    document = await synced(document);
+    const face = topFace(document, first);
+    const attachment = faceSketchAttachment({
+      bodyId: first,
+      pickedHash: face.hash,
+      face
+    });
+    if (!attachment.ok) throw new Error(attachment.reason);
+    const floor = { type: 'canonical', plane: 'XY', offset: 0 } as const;
+    const planed = addDatumPlane(document, {
+      name: 'Middle',
+      definition: {
+        kind: 'midplane',
+        sources: [attachment.planeRef as FacePlaneSource, floor]
+      }
+    });
+    const before = await synced(planed.document);
+    expect(
+      before.derived.datumFrames?.[planed.featureId]?.origin.z
+    ).toBeCloseTo(2.5, 6);
+    const firstFeature = listFeaturesInOrder(before).find(
+      (feature) => feature.name === 'First'
+    )!;
+    const broken = await synced(
+      deleteFeature(before, { featureId: firstFeature.featureId })
+    );
+    expect(broken.derived.datumFrames?.[planed.featureId]).toBeUndefined();
+
+    const target = topFace(broken, second);
+    const pick = {
+      bodyId: second,
+      kind: 'face',
+      topologyId: target.topologyId,
+      hash: target.hash
+    } as const;
+    const edit = datumFaceRepairEdit(broken, planed.featureId, pick, 0);
+    const manager = new CommandManager(broken);
+    manager.execute(edit.command);
+    const repaired = await adapter.syncDocument(manager.document);
+    expect(() => edit.validateDerived(repaired)).not.toThrow();
+    // Halfway between the second block's top (z = 8) and XY.
+    expect(repaired.datumFrames?.[planed.featureId]?.origin.z).toBeCloseTo(
+      4,
+      6
+    );
+    expect(findFeature(manager.document, planed.featureId)!.data).toMatchObject(
+      {
+        definition: {
+          kind: 'midplane',
+          sources: [{ type: 'face', bodyId: second }, floor]
+        }
+      }
+    );
+
+    // Re-picking B onto the same face would collapse the midplane: the
+    // validated edit refuses rather than committing it.
+    const collapse = datumFaceRepairEdit(
+      manager.document,
+      planed.featureId,
+      pick,
+      1
+    );
+    const again = new CommandManager(manager.document);
+    expect(() => again.execute(collapse.command)).toThrow();
+  });
 });

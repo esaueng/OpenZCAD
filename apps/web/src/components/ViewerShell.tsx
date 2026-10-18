@@ -8,10 +8,17 @@ import type { HoleGhost } from '../lib/holeGhost';
 import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import {
   datumOffsetHandle,
-  datumPlaneDisplays
+  datumPlaneDisplays,
+  shiftedDatumFrame
 } from '../lib/datumPlaneDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
-import { useMemo, useRef, type MutableRefObject, type ReactNode } from 'react';
+import {
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type ReactNode
+} from 'react';
 import {
   ModelViewer,
   type BodyAppearancePreview,
@@ -302,6 +309,12 @@ interface ViewerShellProps {
    * set and no other offset handle is.
    */
   onDatumOffsetDrag?(delta: number): boolean;
+  /**
+   * The open Plane card's draft Offset for the selected datum (null when it
+   * is not a plain change of distance): the plane and its pin are drawn
+   * there until Apply rebuilds the datum.
+   */
+  datumOffsetDraft?: number | null;
   /** What measuring the hovered target would report; null when measure is off. */
   onMeasurePreview?:
     | ((
@@ -449,6 +462,7 @@ export function ViewerShell({
   onPickPlane,
   onPickDatum,
   onDatumOffsetDrag,
+  datumOffsetDraft = null,
   onMeasurePreview,
   regionHandle,
   onSelectSketchProfile,
@@ -500,17 +514,39 @@ export function ViewerShell({
           hiddenDatumIds ?? new Set()
         )
       : null;
-  const datumHandleKey = datumHandle ? JSON.stringify(datumHandle) : '';
+  // The plane follows its edit: the card's draft Offset moves it (and the
+  // pin) off the built frame, and a drag in progress moves it further, so
+  // what is drawn is always where Apply would put it.
+  const draftShift =
+    datumHandle && datumOffsetDraft !== null
+      ? (datumOffsetDraft - datumHandle.offset) * datumHandle.sense
+      : 0;
+  const [datumDrag, setDatumDrag] = useState<{
+    featureId: string;
+    distance: number;
+  } | null>(null);
+  const dragShift =
+    datumHandle && datumDrag?.featureId === datumHandle.featureId
+      ? datumDrag.distance
+      : 0;
+  const datumHandleKey = datumHandle
+    ? JSON.stringify({ ...datumHandle, draftShift })
+    : '';
   const datumOffsetTarget = useMemo<OffsetHandleTarget | null>(() => {
     if (!datumHandleKey) return null;
     const handle = JSON.parse(datumHandleKey) as NonNullable<
       typeof datumHandle
-    >;
+    > & { draftShift: number };
+    const { normal } = handle;
     return {
       bodyId: '',
       topologyId: '',
-      point: handle.point,
-      normal: handle.normal,
+      point: {
+        x: handle.point.x + normal.x * handle.draftShift,
+        y: handle.point.y + normal.y * handle.draftShift,
+        z: handle.point.z + normal.z * handle.draftShift
+      },
+      normal,
       initialValue: 0
     };
   }, [datumHandleKey]);
@@ -628,13 +664,21 @@ export function ViewerShell({
         selectionFilter={selectionFilter}
         onBoxSelect={onBoxSelect}
         offsetHandle={offsetHandle ?? datumOffsetTarget}
-        onOffsetPreview={datumOffsetTarget ? () => {} : onOffsetPreview}
-        onOffsetCommit={(value) =>
-          datumHandle && onDatumOffsetDrag
-            ? onDatumOffsetDrag(value * datumHandle.sense)
-            : onOffsetCommit(value)
+        onOffsetPreview={
+          datumOffsetTarget && datumHandle
+            ? (distance) =>
+                setDatumDrag({ featureId: datumHandle.featureId, distance })
+            : onOffsetPreview
         }
-        onOffsetCancel={onOffsetCancel}
+        onOffsetCommit={(value) => {
+          if (!datumHandle || !onDatumOffsetDrag) return onOffsetCommit(value);
+          setDatumDrag(null);
+          return onDatumOffsetDrag(value * datumHandle.sense);
+        }}
+        onOffsetCancel={() => {
+          setDatumDrag(null);
+          onOffsetCancel();
+        }}
         offsetPreviewInvalid={offsetPreviewInvalid}
         previewDeferred={previewDeferred}
         onOpenOffsetKeypad={onOpenOffsetKeypad}
@@ -683,6 +727,16 @@ export function ViewerShell({
                 datumDocument,
                 hiddenDatumIds ?? new Set(),
                 selectedFeatureId
+              ).map((plane) =>
+                plane.featureId === datumHandle?.featureId
+                  ? {
+                      ...plane,
+                      frame: shiftedDatumFrame(
+                        plane.frame,
+                        draftShift + dragShift
+                      )
+                    }
+                  : plane
               )
             : []
         }
