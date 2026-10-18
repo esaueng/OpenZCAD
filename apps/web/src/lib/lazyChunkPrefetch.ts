@@ -5,6 +5,12 @@
  * `staleChunk.ts`). The chunk list comes from index.html, written at build
  * time by `build/lazyChunkPrefetch.ts`. Hashed assets are cached immutably,
  * so each chunk downloads once per deploy at most.
+ *
+ * Chunks go into the HTTP cache through plain `fetch`, never `modulepreload`:
+ * a module preload that fails (offline, or the link dropping mid-batch) is
+ * kept in the document's module map, and every later `import()` of it fails
+ * until a reload. A failed fetch leaves nothing behind, and the queue waits
+ * out an offline spell rather than spending it on doomed requests.
  */
 const LIST_ID = 'oz-lazy-chunks';
 /** Chunks requested per idle slot, so the prefetch never floods the link. */
@@ -35,21 +41,25 @@ function idle(callback: () => void): void {
 
 export function prefetchLazyChunks(
   doc: Document = document,
-  base: string = import.meta.env.BASE_URL
+  base: string = import.meta.env.BASE_URL,
+  load: (href: string) => Promise<unknown> = (href) =>
+    fetch(href, { priority: 'low' }).then((response) => response.arrayBuffer())
 ): void {
   const connection = (navigator as { connection?: { saveData?: boolean } })
     .connection;
   if (connection?.saveData) return;
   const pending = lazyChunkUrls(doc, base);
   const next = () => {
-    for (const href of pending.splice(0, BATCH)) {
-      const link = doc.createElement('link');
-      link.rel = href.endsWith('.css') ? 'prefetch' : 'modulepreload';
-      link.href = href;
-      link.setAttribute('fetchpriority', 'low');
-      doc.head.append(link);
+    if (navigator.onLine === false) {
+      window.addEventListener('online', () => idle(next), { once: true });
+      return;
     }
-    if (pending.length > 0) idle(next);
+    const batch = pending.splice(0, BATCH);
+    // One batch at a time, each fully read so the response is cached; a
+    // failure is dropped (the chunk simply loads on demand later).
+    void Promise.allSettled(batch.map((href) => load(href))).then(() => {
+      if (pending.length > 0) idle(next);
+    });
   };
   idle(next);
 }

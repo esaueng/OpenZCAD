@@ -9,6 +9,7 @@ afterEach(() => {
   document.head.innerHTML = '';
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('lazy chunk prefetch', () => {
@@ -25,7 +26,7 @@ describe('lazy chunk prefetch', () => {
     expect(lazyChunkUrls(document, '/')).toEqual([]);
   });
 
-  it('adds low-priority preloads a few at a time while the page is idle', () => {
+  it('fetches into the HTTP cache a batch at a time, never touching the module map', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('requestIdleCallback', undefined);
     island(
@@ -37,24 +38,53 @@ describe('lazy chunk prefetch', () => {
         'assets/5.css'
       ])
     );
-    prefetchLazyChunks(document, '/');
-    const links = () => [...document.head.querySelectorAll('link')];
-    expect(links()).toHaveLength(0);
-    vi.advanceTimersByTime(1_000);
-    expect(links()).toHaveLength(4);
-    expect(links().every((link) => link.rel === 'modulepreload')).toBe(true);
-    expect(links()[0]!.getAttribute('fetchpriority')).toBe('low');
-    vi.advanceTimersByTime(1_000);
-    expect(links().at(-1)!.rel).toBe('prefetch');
-    expect(links()).toHaveLength(5);
+    const loaded: string[] = [];
+    prefetchLazyChunks(document, '/', (href) => {
+      loaded.push(new URL(href).pathname);
+      return href.includes('2.js')
+        ? Promise.reject(new Error('offline'))
+        : Promise.resolve();
+    });
+    expect(loaded).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(loaded).toEqual([
+      '/assets/1.js',
+      '/assets/2.js',
+      '/assets/3.js',
+      '/assets/4.js'
+    ]);
+    // A failed fetch does not stop the queue.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(loaded.at(-1)).toBe('/assets/5.css');
+    expect(document.head.querySelectorAll('link')).toHaveLength(0);
+  });
+
+  it('waits out an offline spell instead of fetching', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('requestIdleCallback', undefined);
+    let online = false;
+    vi.spyOn(navigator, 'onLine', 'get').mockImplementation(() => online);
+    island('["assets/1.js"]');
+    const loaded: string[] = [];
+    prefetchLazyChunks(document, '/', (href) => {
+      loaded.push(href);
+      return Promise.resolve();
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(loaded).toHaveLength(0);
+    online = true;
+    window.dispatchEvent(new Event('online'));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(loaded).toHaveLength(1);
   });
 
   it('respects Save-Data', () => {
     vi.useFakeTimers();
     vi.stubGlobal('navigator', { connection: { saveData: true } });
     island('["assets/1.js"]');
-    prefetchLazyChunks(document, '/');
+    const load = vi.fn(() => Promise.resolve());
+    prefetchLazyChunks(document, '/', load);
     vi.advanceTimersByTime(10_000);
-    expect(document.head.querySelectorAll('link')).toHaveLength(0);
+    expect(load).not.toHaveBeenCalled();
   });
 });
