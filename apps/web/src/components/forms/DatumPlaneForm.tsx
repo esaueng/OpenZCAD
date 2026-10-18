@@ -211,9 +211,13 @@ export function DatumPlaneForm({
   dragOffset.current = (delta) => {
     const current = Number(String(state.offset).trim());
     if (state.mode !== 'offset' || !Number.isFinite(current)) return;
+    // Only the gesture is snapped (to 0.001): the stored offset keeps every
+    // digit it had, so 0.0004 dragged by 1 is 1.0004, not 1. toPrecision
+    // just clears the float noise of the addition.
+    const step = Math.round(delta * 1000) / 1000;
     replace({
       ...state,
-      offset: String(Math.round((current + delta) * 1000) / 1000)
+      offset: String(Number((current + step).toPrecision(15)))
     });
   };
   useEffect(() => {

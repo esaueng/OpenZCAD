@@ -349,6 +349,12 @@ describe('Plane card and the viewport handle (R01)', () => {
     expect(screen.getByLabelText('Offset')).toHaveValue('12.5');
     act(() => offsetDragRef.current?.(-0.25));
     expect(screen.getByLabelText('Offset')).toHaveValue('12.25');
+    // A sub-thousandth offset keeps its digits through a drag.
+    fireEvent.change(screen.getByLabelText('Offset'), {
+      target: { value: '0.0004' }
+    });
+    act(() => offsetDragRef.current?.(1));
+    expect(screen.getByLabelText('Offset')).toHaveValue('1.0004');
     fireEvent.change(screen.getByLabelText('Offset'), {
       target: { value: 'lid + 1' }
     });
