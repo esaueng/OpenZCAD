@@ -22,6 +22,13 @@ export const MAX_DXF_SKETCH_OBJECTS = 2000;
 /** Larger files are refused before parsing (about 2,000 curves is ~1 MB). */
 export const MAX_DXF_IMPORT_BYTES = 20 * 1024 * 1024;
 
+/** Refuses a file by its size in bytes, before anything reads it. */
+export function refuseOversizedDxf(bytes: number): void {
+  if (bytes > MAX_DXF_IMPORT_BYTES) {
+    throw new DxfImportError('This DXF is larger than 20 MB; split it first.');
+  }
+}
+
 /** `$INSUNITS` codes the importer understands, in millimetres per unit. */
 const INSUNITS_TO_MM: Readonly<Record<number, { mm: number; name: string }>> = {
   1: { mm: 25.4, name: 'inches' },
@@ -269,13 +276,22 @@ function polylineObjects(
   }
 }
 
+const incompleteVertices = () =>
+  new DxfImportError(
+    'This DXF is malformed: a LWPOLYLINE has an incomplete or unusable vertex list.'
+  );
+
 /** LWPOLYLINE vertices: each 10/20 pair, with any 42 bulge that follows. */
 function lwVertices(entity: DxfEntity): Vertex[] {
   const vertices: Vertex[] = [];
   let pendingX: number | null = null;
   for (const pair of entity.groups) {
-    if (pair.code === 10) pendingX = Number(pair.value);
-    else if (pair.code === 20 && pendingX !== null) {
+    if (pair.code === 10) {
+      // An X before the last one found its Y would re-pair the stream.
+      if (pendingX !== null) throw incompleteVertices();
+      pendingX = Number(pair.value);
+    } else if (pair.code === 20) {
+      if (pendingX === null) throw incompleteVertices();
       vertices.push({ x: pendingX, y: Number(pair.value), bulge: 0 });
       pendingX = null;
     } else if (pair.code === 42 && vertices.length > 0) {
@@ -289,9 +305,7 @@ function lwVertices(entity: DxfEntity): Vertex[] {
     (declared !== undefined && Number(declared.value) !== vertices.length)
   ) {
     // A truncated vertex list would import as a different outline.
-    throw new DxfImportError(
-      'This DXF is malformed: a LWPOLYLINE has an incomplete or unusable vertex list.'
-    );
+    throw incompleteVertices();
   }
   return vertices;
 }
@@ -306,9 +320,8 @@ export function importDxfSketch(
   documentUnits: UnitSystem,
   unitless: UnitSystem = documentUnits
 ): DxfSketchImport {
-  if (text.length > MAX_DXF_IMPORT_BYTES) {
-    throw new DxfImportError('This DXF is larger than 20 MB; split it first.');
-  }
+  // The caller refuses by byte size first; this guards direct callers.
+  refuseOversizedDxf(text.length);
   const pairs = readPairs(text);
   const entitiesSection = section(pairs, 'ENTITIES');
   if (!entitiesSection) {

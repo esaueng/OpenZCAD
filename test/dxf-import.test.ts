@@ -6,7 +6,9 @@ import {
   MAX_DXF_SKETCH_OBJECTS,
   describeDxfCounts,
   dxfSketchImportPlan,
-  importDxfSketch
+  importDxfSketch,
+  MAX_DXF_IMPORT_BYTES,
+  refuseOversizedDxf
 } from '../apps/web/src/lib/dxfImport';
 import {
   createProjectDocument,
@@ -441,11 +443,56 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
         '10',
         '5'
       ]
+    ],
+    [
+      'a second X before the first found its Y',
+      [
+        '90',
+        '2',
+        '70',
+        '0',
+        '10',
+        '0',
+        '10',
+        '9',
+        '20',
+        '0',
+        '10',
+        '1',
+        '20',
+        '0'
+      ]
+    ],
+    [
+      'a Y with no X',
+      [
+        '90',
+        '2',
+        '70',
+        '0',
+        '10',
+        '0',
+        '20',
+        '0',
+        '20',
+        '7',
+        '10',
+        '1',
+        '20',
+        '0'
+      ]
     ]
   ])('refuses a LWPOLYLINE with %s', (_label, groups) => {
     expect(() =>
       importDxfSketch(dxf(['0', 'LWPOLYLINE', ...groups]), 'mm')
     ).toThrow('a LWPOLYLINE has an incomplete or unusable vertex list');
+  });
+
+  it('refuses an oversized file by its byte size, before reading it', () => {
+    expect(() => refuseOversizedDxf(MAX_DXF_IMPORT_BYTES)).not.toThrow();
+    expect(() => refuseOversizedDxf(MAX_DXF_IMPORT_BYTES + 1)).toThrow(
+      'This DXF is larger than 20 MB; split it first.'
+    );
   });
 
   it('stops one huge polyline at the curve cap with the named refusal', () => {

@@ -10938,10 +10938,12 @@ export function App() {
     }
     if (lowerName.endsWith('.dxf')) {
       try {
-        const [{ dxfSketchImportPlan }, text] = await Promise.all([
-          import('./lib/dxfImport'),
-          file.text()
-        ]);
+        const { dxfSketchImportPlan, refuseOversizedDxf } = await import(
+          './lib/dxfImport'
+        );
+        // By bytes, before the file is read into memory at all.
+        refuseOversizedDxf(file.size);
+        const text = await file.text();
         if (managerRef.current !== importManager) return;
         const plan = dxfSketchImportPlan(
           importManager.document,
