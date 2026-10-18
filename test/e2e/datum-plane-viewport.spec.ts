@@ -75,6 +75,10 @@ test('drags a selected datum plane along its normal and picks it in the viewport
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /\d/, {
     timeout: 30_000
   });
+  // The pin's value chip opens exact entry: the card's Offset field.
+  await page.getByTestId('direct-manipulation-value').click();
+  await expect(page.getByLabel('Offset', { exact: true })).toBeFocused();
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /\d/);
   const handle = await canvas.evaluate((element) => ({
     x: Number(element.dataset.e2eHandleX),
     y: Number(element.dataset.e2eHandleY),

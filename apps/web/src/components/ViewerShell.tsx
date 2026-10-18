@@ -315,6 +315,8 @@ interface ViewerShellProps {
    * there until Apply rebuilds the datum.
    */
   datumOffsetDraft?: number | null;
+  /** Exact entry for the selected datum's handle: focuses the card's Offset. */
+  onDatumOffsetEntry?(): boolean;
   /** What measuring the hovered target would report; null when measure is off. */
   onMeasurePreview?:
     | ((
@@ -463,6 +465,7 @@ export function ViewerShell({
   onPickDatum,
   onDatumOffsetDrag,
   datumOffsetDraft = null,
+  onDatumOffsetEntry,
   onMeasurePreview,
   regionHandle,
   onSelectSketchProfile,
@@ -690,7 +693,11 @@ export function ViewerShell({
         }}
         offsetPreviewInvalid={offsetPreviewInvalid}
         previewDeferred={previewDeferred}
-        onOpenOffsetKeypad={onOpenOffsetKeypad}
+        onOpenOffsetKeypad={
+          datumOffsetTarget && !offsetHandle
+            ? () => onDatumOffsetEntry?.() ?? false
+            : onOpenOffsetKeypad
+        }
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}
         moveValuesSetterRef={moveValuesSetterRef}

@@ -72,6 +72,12 @@ export interface DatumPlaneFormProps {
    * would put it; null once the draft changes anything else.
    */
   onOffsetDraft?(offset: number | null): void;
+  /**
+   * Where the form registers exact entry for the viewport handle: the pin's
+   * value chip and exact-entry key focus the Offset field. False when the
+   * field is not shown (a midplane).
+   */
+  offsetEntryRef?: { current: (() => boolean) | null };
 }
 
 /**
@@ -110,7 +116,8 @@ export function DatumPlaneForm({
   onCancel,
   onDraftChange,
   offsetDragRef,
-  onOffsetDraft
+  onOffsetDraft,
+  offsetEntryRef
 }: DatumPlaneFormProps) {
   const [state, setState] = useState(initial);
   const draftOffset = datumDraftOffset(initial, state);
@@ -190,6 +197,20 @@ export function DatumPlaneForm({
       offsetDragRef.current = null;
     };
   }, [offsetDragRef]);
+  const offsetField = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!offsetEntryRef) return;
+    offsetEntryRef.current = () => {
+      const input = offsetField.current?.querySelector('input');
+      if (!input) return false;
+      input.focus();
+      input.select();
+      return true;
+    };
+    return () => {
+      offsetEntryRef.current = null;
+    };
+  }, [offsetEntryRef]);
   const validation = datumFormValidation(state, scope, units);
   const blocked = unsupportedReason !== undefined;
   const canCheck = validation === null && !blocked;
@@ -285,16 +306,18 @@ export function DatumPlaneForm({
       {state.mode === 'offset' ? (
         <>
           {slot('sourceA', 'Offset from', 'The plane or face to offset')}
-          <ExprInput
-            label="Offset"
-            value={state.offset}
-            scope={scope}
-            optional
-            {...(units
-              ? { quantity: { documentUnits: units, dimension: 'length' } }
-              : {})}
-            onChange={(offset) => replace({ ...state, offset })}
-          />
+          <div ref={offsetField} style={{ display: 'contents' }}>
+            <ExprInput
+              label="Offset"
+              value={state.offset}
+              scope={scope}
+              optional
+              {...(units
+                ? { quantity: { documentUnits: units, dimension: 'length' } }
+                : {})}
+              onChange={(offset) => replace({ ...state, offset })}
+            />
+          </div>
         </>
       ) : (
         <>
@@ -373,6 +396,7 @@ export interface DatumPlaneCardProps {
   onDraftChange?(): void;
   offsetDragRef?: DatumPlaneFormProps['offsetDragRef'];
   onOffsetDraft?: DatumPlaneFormProps['onOffsetDraft'];
+  offsetEntryRef?: DatumPlaneFormProps['offsetEntryRef'];
 }
 
 /**
@@ -391,7 +415,8 @@ export function DatumPlaneCard({
   onCancel,
   onDraftChange,
   offsetDragRef,
-  onOffsetDraft
+  onOffsetDraft,
+  offsetEntryRef
 }: DatumPlaneCardProps) {
   const picked: DatumPlaneFormProps['pickedFace'] =
     pickedFace && 'reason' in pickedFace
@@ -436,6 +461,7 @@ export function DatumPlaneCard({
       {...(onDraftChange ? { onDraftChange } : {})}
       {...(offsetDragRef ? { offsetDragRef } : {})}
       {...(onOffsetDraft ? { onOffsetDraft } : {})}
+      {...(offsetEntryRef ? { offsetEntryRef } : {})}
     />
   );
 }
@@ -475,6 +501,8 @@ export interface DatumPlaneCardApp {
   datumOffsetDragRef?: { current: ((delta: number) => void) | null };
   /** Where the card reports its draft Offset, for the viewport to show. */
   setDatumOffsetDraft?(offset: number | null): void;
+  /** Where the card registers exact entry for its datum's handle. */
+  datumOffsetEntryRef?: { current: (() => boolean) | null };
 }
 
 export interface DatumPlaneWorkspaceCardProps {
@@ -692,6 +720,9 @@ export function DatumPlaneWorkspaceCard({
             : {})}
           {...(app.setDatumOffsetDraft
             ? { onOffsetDraft: app.setDatumOffsetDraft }
+            : {})}
+          {...(app.datumOffsetEntryRef
+            ? { offsetEntryRef: app.datumOffsetEntryRef }
             : {})}
         />
       </div>

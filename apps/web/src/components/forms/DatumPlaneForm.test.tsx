@@ -393,4 +393,31 @@ describe('Plane card and the viewport handle (R01)', () => {
     unmount();
     expect(onOffsetDraft).toHaveBeenLastCalledWith(null);
   });
+
+  it("focuses its Offset for the handle's exact entry", () => {
+    const { document, featureId } = documentWithDatum();
+    const offsetEntryRef: { current: (() => boolean) | null } = {
+      current: null
+    };
+    const { unmount } = render(
+      <DatumPlaneCard
+        document={document}
+        editing={findFeature(document, featureId)!}
+        scope={{}}
+        pickedFace={null}
+        onPreflight={vi.fn(async () => ({ status: 'ready' as const }))}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+        offsetEntryRef={offsetEntryRef}
+      />
+    );
+    let opened = false;
+    act(() => {
+      opened = offsetEntryRef.current?.() ?? false;
+    });
+    expect(opened).toBe(true);
+    expect(screen.getByLabelText('Offset')).toHaveFocus();
+    unmount();
+    expect(offsetEntryRef.current).toBeNull();
+  });
 });

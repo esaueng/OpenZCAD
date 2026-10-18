@@ -2054,6 +2054,8 @@ export function App() {
   const [datumOffsetDraft, setDatumOffsetDraft] = useState<number | null>(
     null
   );
+  /** The open Plane card's exact entry for its datum's handle. */
+  const datumOffsetEntryRef = useRef<(() => boolean) | null>(null);
   /** R01: an offset datum whose source face is being re-picked. */
   const [datumRepair, setDatumRepair] = useState<{
     feature: FeatureNode;
@@ -20795,6 +20797,7 @@ export function App() {
                 ? datumOffsetDraft
                 : null
             }
+            onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
             modeOverlay={
@@ -21376,7 +21379,8 @@ export function App() {
                   cancelPanel,
                   closeFeaturePanel,
                   datumOffsetDragRef,
-                  setDatumOffsetDraft
+                  setDatumOffsetDraft,
+                  datumOffsetEntryRef
                 }}
               />
             ) : (
