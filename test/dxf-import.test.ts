@@ -1673,6 +1673,66 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     expect(importDxfSketch(arc('359.9999'), 'mm').objects).toHaveLength(1);
   });
 
+  it('refuses records left outside a section by an early ENDSEC', () => {
+    const early = [
+      '0',
+      'SECTION',
+      '2',
+      'ENTITIES',
+      '0',
+      'CIRCLE',
+      '10',
+      '0',
+      '20',
+      '0',
+      '40',
+      '1',
+      '0',
+      'ENDSEC',
+      '0',
+      'LINE',
+      '10',
+      '0',
+      '20',
+      '0',
+      '11',
+      '5',
+      '21',
+      '0',
+      '0',
+      'EOF'
+    ].join('\n');
+    expect(() => importDxfSketch(early, 'mm')).toThrow(
+      'records outside any section'
+    );
+  });
+
+  it('refuses a space marker other than 0 or 1', () => {
+    for (const marker of ['2', '-1']) {
+      const text = dxf([
+        '0',
+        'CIRCLE',
+        '67',
+        marker,
+        '10',
+        '0',
+        '20',
+        '0',
+        '40',
+        '1',
+        '0',
+        'CIRCLE',
+        '10',
+        '5',
+        '20',
+        '0',
+        '40',
+        '1'
+      ]);
+      expect(() => importDxfSketch(text, 'mm')).toThrow('67 must be 0 or 1');
+    }
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',

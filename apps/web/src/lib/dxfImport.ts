@@ -197,6 +197,32 @@ function section(pairs: Pair[], name: string): Pair[] | null {
   return found;
 }
 
+/**
+ * Checks the file's outer shape: nothing but SECTION … ENDSEC blocks, then
+ * EOF (or the end of the text). Records between sections are what is left
+ * of a section ended too early, and would otherwise be quietly ignored.
+ */
+function requireSectionedFile(pairs: Pair[]): void {
+  let index = 0;
+  while (index < pairs.length) {
+    const pair = pairs[index]!;
+    if (pair.code === 0 && pair.value === 'EOF') return;
+    if (!(pair.code === 0 && pair.value === 'SECTION')) {
+      throw new DxfImportError(
+        'This DXF is malformed: it has records outside any section.'
+      );
+    }
+    const end = pairs.findIndex(
+      (candidate, at) =>
+        at > index && candidate.code === 0 && candidate.value === 'ENDSEC'
+    );
+    if (end < 0) {
+      throw new DxfImportError('This DXF is malformed: a section never ends.');
+    }
+    index = end + 1;
+  }
+}
+
 function entitiesOf(pairs: Pair[]): DxfEntity[] {
   const entities: DxfEntity[] = [];
   for (const pair of pairs) {
@@ -608,6 +634,7 @@ export function importDxfSketch(
   // The caller refuses by byte size first; this guards direct callers.
   refuseOversizedDxf(text.length);
   const pairs = readPairs(text);
+  requireSectionedFile(pairs);
   const entitiesSection = section(pairs, 'ENTITIES');
   if (!entitiesSection) {
     throw new DxfImportError('This DXF has no ENTITIES section to import.');
@@ -694,7 +721,13 @@ export function importDxfSketch(
     // Paper space (67 = 1) holds layouts — borders, title blocks — not the
     // part; only model space becomes sketch geometry. A paper-space POLYLINE
     // takes its VERTEX records with it, as they were consumed above.
-    if (integerFlags(entity, 67) !== 0) {
+    const space = integerFlags(entity, 67);
+    if (space !== 0 && space !== 1) {
+      throw new DxfImportError(
+        `This DXF is malformed: a ${entity.type} has space marker ${space} (67 must be 0 or 1).`
+      );
+    }
+    if (space === 1) {
       count(dropped, `${entity.type} in paper space`);
       continue;
     }
