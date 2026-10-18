@@ -201,7 +201,7 @@ describe('shared extrusion editor', () => {
 });
 
 describe('through-all extent (F01)', () => {
-  it('offers Through all only for an existing cut and submits its side, not a distance', async () => {
+  it('offers Through all once Cut is explicit and submits its side, not a distance', async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     const { rerender } = render(
@@ -233,22 +233,35 @@ describe('through-all extent (F01)', () => {
         choice: { operation: 'cut', targetBodyId: 'plate' }
       })
     );
-    // Creating never offers it: the cut target is still being inferred.
+    // Creating offers it once Cut is chosen, never while still inferring.
     rerender(
       <ExtrudeForm
         {...base}
         key="create"
         creating
-        initial={{
-          ...initial,
-          operation: 'cut',
-          targetBodyId: bodies[0]!.bodyId
-        }}
+        initial={{ ...initial, distance: 0 }}
         onSubmit={onSubmit}
         onCancel={vi.fn()}
       />
     );
     expect(screen.queryByLabelText('Extent')).toBeNull();
+    await user.selectOptions(
+      screen.getByLabelText('Extrude operation'),
+      'cut'
+    );
+    await user.selectOptions(
+      await screen.findByLabelText('Extent'),
+      'through-all'
+    );
+    // The zero starting distance does not block a through-all Create.
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        endCondition: 'through-all',
+        throughAllSide: 'forward',
+        choice: { operation: 'cut', targetBodyId: 'plate' }
+      })
+    );
   });
 
   it('reopens a through-all cut as such and returns to blind with its distance', async () => {

@@ -15284,6 +15284,9 @@ export function App() {
       distance,
       symmetric: regionExtrudeSettings.current?.symmetric ?? false,
       backDistance: regionExtrudeSettings.current?.backDistance ?? 0,
+      // The form sends a side only with a through-all extent.
+      endCondition: regionExtrudeSettings.current?.endCondition,
+      throughAllSide: regionExtrudeSettings.current?.throughAllSide,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     };
   }
