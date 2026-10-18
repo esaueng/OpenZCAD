@@ -15,6 +15,7 @@ import '@fontsource/geist-sans/latin-600.css';
 import '@fontsource/geist-mono/latin-400.css';
 import '@fontsource/geist-mono/latin-500.css';
 import { mark } from './lib/perf';
+import { loadWhenOnline } from './lib/staleChunk';
 import './theme/tokens.css';
 import './styles/app.css';
 
@@ -48,13 +49,16 @@ if (import.meta.env.VITE_E2E === '1') {
 
 mark('bundle.evaluated');
 // Prefetch every on-demand chunk once the page has settled. Not in e2e
-// builds, whose specs assert which chunks a flow loads.
+// builds, whose specs assert which chunks a flow loads. The helper itself
+// waits for a connection before it loads, and a failure is only a missed
+// optimisation: each chunk still loads on demand.
 if (import.meta.env.VITE_E2E !== '1') {
   window.addEventListener(
     'load',
     () =>
-      void import('./lib/lazyChunkPrefetch').then((m) =>
-        m.prefetchLazyChunks()
+      void loadWhenOnline(() => import('./lib/lazyChunkPrefetch')).then(
+        (m) => m.prefetchLazyChunks(),
+        () => undefined
       ),
     { once: true }
   );
