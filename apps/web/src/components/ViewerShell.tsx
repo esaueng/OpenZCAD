@@ -532,6 +532,16 @@ export function ViewerShell({
   const datumHandleKey = datumHandle
     ? JSON.stringify({ ...datumHandle, draftShift })
     : '';
+  // The pin keeps its last value between gestures on one target, so each
+  // gesture counts only what it added: its preview and its commit are both
+  // measured from where the previous gesture left the pin.
+  const datumCommitted = useRef({ key: '', value: 0 });
+  const datumBaseline = () => {
+    if (datumCommitted.current.key !== datumHandleKey) {
+      datumCommitted.current = { key: datumHandleKey, value: 0 };
+    }
+    return datumCommitted.current.value;
+  };
   const datumOffsetTarget = useMemo<OffsetHandleTarget | null>(() => {
     if (!datumHandleKey) return null;
     const handle = JSON.parse(datumHandleKey) as NonNullable<
@@ -667,13 +677,19 @@ export function ViewerShell({
         onOffsetPreview={
           datumOffsetTarget && datumHandle
             ? (distance) =>
-                setDatumDrag({ featureId: datumHandle.featureId, distance })
+                setDatumDrag({
+                  featureId: datumHandle.featureId,
+                  distance: distance - datumBaseline()
+                })
             : onOffsetPreview
         }
         onOffsetCommit={(value) => {
           if (!datumHandle || !onDatumOffsetDrag) return onOffsetCommit(value);
           setDatumDrag(null);
-          return onDatumOffsetDrag(value * datumHandle.sense);
+          const delta = value - datumBaseline();
+          const accepted = onDatumOffsetDrag(delta * datumHandle.sense);
+          if (accepted) datumCommitted.current.value = value;
+          return accepted;
         }}
         onOffsetCancel={() => {
           setDatumDrag(null);
