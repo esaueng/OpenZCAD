@@ -1400,6 +1400,31 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     );
   });
 
+  it('refuses a repeated $INSUNITS or a repeated section', () => {
+    const circle = ['0', 'CIRCLE', '10', '0', '20', '0', '40', '1'];
+    const header = [
+      '0',
+      'SECTION',
+      '2',
+      'HEADER',
+      '9',
+      '$INSUNITS',
+      '70',
+      '1',
+      '9',
+      '$INSUNITS',
+      '70',
+      '4',
+      '0',
+      'ENDSEC'
+    ];
+    expect(() =>
+      importDxfSketch([...header, dxf(circle)].join('\n'), 'mm')
+    ).toThrow('declares $INSUNITS twice');
+    const twice = dxf(circle) + '\n' + dxf(circle);
+    expect(() => importDxfSketch(twice, 'mm')).toThrow('two ENTITIES sections');
+  });
+
   it('refuses a damaged $INSUNITS rather than reading the file as unitless', () => {
     const header = [
       '0',

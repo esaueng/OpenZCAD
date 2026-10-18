@@ -155,6 +155,7 @@ function dxfNumber(text: string): number {
 
 /** The section named `name`, as the pairs between its header and ENDSEC. */
 function section(pairs: Pair[], name: string): Pair[] | null {
+  let found: Pair[] | null = null;
   for (let index = 0; index + 1 < pairs.length; index += 1) {
     if (
       pairs[index]!.code === 0 &&
@@ -162,6 +163,13 @@ function section(pairs: Pair[], name: string): Pair[] | null {
       pairs[index + 1]!.code === 2 &&
       pairs[index + 1]!.value === name
     ) {
+      // Two sections of one name (a concatenated file) have no single
+      // reading: refuse rather than take whichever comes first.
+      if (found) {
+        throw new DxfImportError(
+          `This DXF is malformed: it has two ${name} sections.`
+        );
+      }
       const end = pairs.findIndex(
         (pair, at) => at > index && pair.code === 0 && pair.value === 'ENDSEC'
       );
@@ -170,10 +178,11 @@ function section(pairs: Pair[], name: string): Pair[] | null {
           `This DXF is malformed: its ${name} section never ends.`
         );
       }
-      return pairs.slice(index + 2, end);
+      found = pairs.slice(index + 2, end);
+      index = end;
     }
   }
-  return null;
+  return found;
 }
 
 function entitiesOf(pairs: Pair[]): DxfEntity[] {
@@ -194,10 +203,17 @@ function entitiesOf(pairs: Pair[]): DxfEntity[] {
 function insUnits(pairs: Pair[]): number | null {
   const header = section(pairs, 'HEADER');
   if (!header) return null;
-  const at = header.findIndex(
-    (pair) => pair.code === 9 && pair.value === '$INSUNITS'
-  );
+  const isInsUnits = (pair: Pair) =>
+    pair.code === 9 && pair.value === '$INSUNITS';
+  const at = header.findIndex(isInsUnits);
   if (at < 0) return null;
+  // A second declaration could name a different unit; whichever came first
+  // would scale the drawing by a guess.
+  if (header.findIndex((pair, index) => index > at && isInsUnits(pair)) >= 0) {
+    throw new DxfImportError(
+      'This DXF is malformed: it declares $INSUNITS twice.'
+    );
+  }
   // Present but damaged is not the same as absent: reading it as unitless
   // could scale the whole drawing by the wrong factor.
   const value = header[at + 1];
