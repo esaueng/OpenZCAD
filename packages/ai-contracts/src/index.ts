@@ -2919,6 +2919,17 @@ const questionOptionSchema = {
  * `message` carries the preamble on a questions reply and the whole text on a
  * message reply.
  */
+/**
+ * Every operation kind this build's proposal schema, and so its parser,
+ * accepts. A client sends it with each request so the Worker never offers
+ * the model an operation the requesting tab cannot parse — a tab loaded
+ * before an operation shipped stays open across the deploy that adds it.
+ */
+export const CAD_PATCH_OPERATION_KINDS: readonly string[] =
+  CAD_PATCH_JSON_SCHEMA.properties.operations.items.anyOf.map(
+    (variant) => variant.properties.kind.const
+  );
+
 export const ASSISTANT_REPLY_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
