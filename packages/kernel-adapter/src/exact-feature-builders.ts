@@ -448,6 +448,39 @@ function buildPrimitiveFeature(
 }
 
 /**
+ * The region where two bodies' bounding boxes meet, as a body for scaling a
+ * volume tolerance: its box and box volume bound any overlap of the two.
+ * Disjoint boxes give an empty region (and a vanishing tolerance).
+ */
+function boundsOverlapBody(
+  a: Pick<ExtrudeInferenceBody, 'bbox'>,
+  b: Pick<ExtrudeInferenceBody, 'bbox'>
+): Pick<ExtrudeInferenceBody, 'volume' | 'bbox'> {
+  const min = {
+    x: Math.max(a.bbox.min.x, b.bbox.min.x),
+    y: Math.max(a.bbox.min.y, b.bbox.min.y),
+    z: Math.max(a.bbox.min.z, b.bbox.min.z)
+  };
+  const max = {
+    x: Math.max(min.x, Math.min(a.bbox.max.x, b.bbox.max.x)),
+    y: Math.max(min.y, Math.min(a.bbox.max.y, b.bbox.max.y)),
+    z: Math.max(min.z, Math.min(a.bbox.max.z, b.bbox.max.z))
+  };
+  return {
+    volume: (max.x - min.x) * (max.y - min.y) * (max.z - min.z),
+    bbox: { min, max }
+  };
+}
+
+function overlapRegionTolerance(
+  a: Pick<ExtrudeInferenceBody, 'bbox'>,
+  b: Pick<ExtrudeInferenceBody, 'bbox'>
+): number {
+  const region = boundsOverlapBody(a, b);
+  return extrudeVolumeTolerance(region, region);
+}
+
+/**
  * F01: the blind extrude a through-all cut stands for at this history
  * position. The span comes from the target's exact bounds projected on the
  * resolved sketch normal (`throughAllSpan`), so moving or resizing the target
@@ -464,9 +497,7 @@ function throughAllSweepFeature(
   const targetBodyId = data.targetBodyId!;
   const targetName = bodyName(document, targetBodyId);
   if (result.consumed.has(targetBodyId)) {
-    throw new Error(
-      `Through-all target ${targetName} was already consumed.`
-    );
+    throw new Error(`Through-all target ${targetName} was already consumed.`);
   }
   if (result.meshBodies.has(targetBodyId)) {
     throw meshBooleanUnsupportedError(targetName);
@@ -580,20 +611,19 @@ function buildExtrudeFeature(
       feature.name
     );
     // A through-all tool carries empty travel from a possibly distant sketch
-    // plane, so its own size says nothing about this target's scale: both
-    // the overlap check and the remove-everything guard below are measured
-    // against the target alone, or a thin distant target reads as untouched.
-    const throughAllTolerance =
-      data.endCondition === 'through-all'
-        ? extrudeVolumeTolerance(targetBody, targetBody)
-        : undefined;
+    // plane, so neither its size nor the whole target's is the scale of the
+    // cut. The overlap can only lie where the two bounding boxes meet, so it
+    // is measured against that region (a small hole in a big block is a thin
+    // column, not the block); the remove-everything guard below is measured
+    // against the target, whose remainder it judges.
+    const throughAll = data.endCondition === 'through-all';
     const sharedVolume = sharedShapeVolume(
       kernel,
       target,
       extrusion,
       targetBody,
       extrusionBody,
-      throughAllTolerance
+      throughAll ? overlapRegionTolerance(targetBody, extrusionBody) : undefined
     );
     // A cut needs shared material: with none there is nothing to remove, and
     // that can be settled before doing any work. That holds for through-all
@@ -734,9 +764,9 @@ function buildExtrudeFeature(
         }
       }
     };
-    const removalTolerance =
-      throughAllTolerance ??
-      extrudeVolumeTolerance(targetBody, extrusionBody);
+    const removalTolerance = throughAll
+      ? extrudeVolumeTolerance(targetBody, targetBody)
+      : extrudeVolumeTolerance(targetBody, extrusionBody);
     if (operation === 'cut' && resultBody.volume <= removalTolerance) {
       throw new Error(
         `Stored cut extrusion would remove all of ${targetBody.name}; operation was not changed.`

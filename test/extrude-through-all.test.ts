@@ -312,6 +312,45 @@ describe('F01 through-all: exact build', () => {
     );
   });
 
+  it('cuts a small hole through a large block at the cut scale', async () => {
+    let document = createProjectDocument(
+      'Large block',
+      toUserId('user_through_all')
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Big',
+      primitiveKind: 'box',
+      dimensions: { width: 1000, height: 1000, depth: 1000 }
+    });
+    const bigId = document.bodyOrder[0]!;
+    const sketched = addSketchFeature(document, {
+      name: 'Pin sketch',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        {
+          objectKind: 'rectangle',
+          width: 0.5,
+          height: 0.5,
+          centerX: 500,
+          centerY: 500
+        }
+      ]
+    });
+    const result = extrudeSketch(sketched.document, {
+      name: 'Pin hole',
+      sketchId: sketched.sketchId,
+      distance: 2,
+      operation: 'cut',
+      targetBodyId: bigId,
+      endCondition: 'through-all',
+      throughAllSide: 'forward'
+    });
+    expect(await volume(result.document, result.bodyId)).toBeCloseTo(
+      1e9 - 0.5 * 0.5 * 1000,
+      0
+    );
+  });
+
   it('refuses a profile moved off the target footprint instead of cutting nothing', async () => {
     const { document, blockId } = block(10);
     const sketched = addSketchFeature(document, {

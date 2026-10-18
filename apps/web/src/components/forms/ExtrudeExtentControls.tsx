@@ -15,10 +15,7 @@ export interface ExtrudeExtentControlsProps {
   }): void;
 }
 
-/**
- * F01's extent choice for an existing cut. A module of its own, loaded only
- * when that card opens, because the extrude editor rides in the entry chunk.
- */
+/** F01's extent choice for an explicit cut, in the extrude editor. */
 export default function ExtrudeExtentControls({
   endCondition,
   throughAllSide,

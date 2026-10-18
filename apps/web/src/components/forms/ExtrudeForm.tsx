@@ -1,11 +1,4 @@
-import {
-  Suspense,
-  lazy,
-  useEffect,
-  useRef,
-  useState,
-  type MutableRefObject
-} from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { coerceParamValue } from '@openzcad/document-core';
 import type {
   BodyId,
@@ -19,6 +12,7 @@ import type { ExtrudeChoice } from '../../lib/extrudeInference';
 import { paramValueText, previewExpression } from '../../lib/model';
 import { ExprInput } from '../ExprInput';
 import { ExtrudeControls } from '../ExtrudeControls';
+import ExtrudeExtentControls from './ExtrudeExtentControls';
 
 export interface ExtrudeFormValue {
   name: string;
@@ -34,8 +28,6 @@ export interface ExtrudeFormValue {
   endCondition?: ExtrudeEndCondition;
   throughAllSide?: ThroughAllSide;
 }
-
-const ExtrudeExtentControls = lazy(() => import('./ExtrudeExtentControls'));
 
 interface ExtrudeFormProps {
   scope: Record<string, number>;
@@ -251,13 +243,11 @@ export function ExtrudeForm({
           onChange={(choice) => change({ choice })}
         />
         {offersThroughAll ? (
-          <Suspense fallback={null}>
-            <ExtrudeExtentControls
-              endCondition={draft.endCondition}
-              throughAllSide={draft.throughAllSide}
-              onChange={change}
-            />
-          </Suspense>
+          <ExtrudeExtentControls
+            endCondition={draft.endCondition}
+            throughAllSide={draft.throughAllSide}
+            onChange={change}
+          />
         ) : null}
         {throughAll ? null : (
           <>
