@@ -1,3 +1,4 @@
+import { isTransformCopy } from '@openzcad/shared';
 import type { BodyId, BodyRepresentation, FeatureNode } from '@openzcad/shared';
 
 /**
@@ -27,8 +28,13 @@ export function createdBodiesToFrame(
   const existing = new Set(Object.values(before).map((body) => body.bodyId));
   for (const feature of features) {
     const data = feature.data;
-    // Mirror and Thicken create independent bodies and keep their sources.
-    if (data.featureKind === 'mirror' || data.featureKind === 'thicken')
+    // Mirror, Thicken and a copy (M10) create independent bodies and keep
+    // their sources.
+    if (
+      data.featureKind === 'mirror' ||
+      data.featureKind === 'thicken' ||
+      isTransformCopy(data)
+    )
       continue;
     const inputs =
       'targetBodyIds' in data

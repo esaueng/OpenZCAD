@@ -996,6 +996,13 @@ function validateModelingFeatureUpdate(
           `Transform target body ${feature.data.targetBodyId} not found.`
         );
       }
+      if (
+        feature.data.copy &&
+        feature.bodyId !== undefined &&
+        feature.data.targetBodyId === feature.bodyId
+      ) {
+        throw new Error('A copy cannot target its own body.');
+      }
       break;
     case 'direct-edit':
       validateBodyTarget(preview, feature.data.targetBodyId);
@@ -1439,10 +1446,17 @@ export const commandFactories = {
     );
   },
   transformBody(payload: TransformInput): CommandDefinition<TransformInput> {
-    const withIds = { ...payload, ids: payload.ids ?? createFeatureOnlyIds() };
+    // A copy (M10) owns a body, so its ids carry one; replay must recreate
+    // the copy under the same BodyId for later features to keep finding it.
+    const withIds = {
+      ...payload,
+      ids:
+        payload.ids ??
+        (payload.copy ? createBodyFeatureIds() : createFeatureOnlyIds())
+    };
     return makeCommand(
       'feature.transform',
-      'Transform body',
+      payload.copy ? 'Copy body' : 'Transform body',
       withIds,
       (document) => transformBody(document, withIds).document,
       (document) => {

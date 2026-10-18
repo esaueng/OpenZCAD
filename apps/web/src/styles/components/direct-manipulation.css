@@ -1672,6 +1672,17 @@
   width: auto;
 }
 
+/* M10: the Move card's copy toggle, laid out like the extrude symmetry box. */
+.transform-copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.transform-copy input {
+  width: auto;
+}
+
 /* The Extrude editor is the tallest card: it scrolls inside the lane's
    command slot rather than running under the drawer. */
 .tool-card:has(.extrude-form) {

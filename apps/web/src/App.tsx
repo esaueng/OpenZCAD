@@ -2097,6 +2097,8 @@ export function App() {
    * editable here rather than in the form this replaced.
    */
   const [moveName, setMoveName] = useState('Move');
+  /** M10: the gizmo adds a moved copy and leaves its source in place. */
+  const [moveCopy, setMoveCopy] = useState(false);
   /**
    * A committed Move whose exact rebuild is still in flight. The viewer keeps
    * the body posed at the applied transform until the recomputed meshes land,
@@ -7275,6 +7277,7 @@ export function App() {
         null;
       if (targetBodyId) {
         setMoveName('Move');
+        setMoveCopy(false);
         setSelectedBodyIds([targetBodyId]);
         setMovePreview({
           bodyId: targetBodyId,
@@ -7633,12 +7636,14 @@ export function App() {
       commandFactories.transformBody({
         // Whatever the gizmo's Name field holds, falling back to the default
         // rather than committing a feature with a blank name.
-        name: newFeatureName(moveName.trim() || 'Move'),
+        name: newFeatureName(moveName.trim() || (moveCopy ? 'Copy' : 'Move')),
         targetBodyId: preview.bodyId as BodyId,
-        ...values
+        ...values,
+        ...(moveCopy ? { copy: true } : {})
       })
     );
-    if (created) {
+    // A copy leaves its source where it was, so nothing holds the pose.
+    if (created && !moveCopy) {
       // Hold the gizmo pose on screen until the exact rebuild replaces the
       // meshes; cleared by onDerived in the same batch as the new geometry.
       setMoveCommitHold(preview);
@@ -21226,6 +21231,8 @@ export function App() {
             }
             onConfirm={confirmMove}
             onCancel={cancelPanel}
+            copy={movePreview.target === 'sketch' ? undefined : moveCopy}
+            onCopy={setMoveCopy}
             liveValuesRef={moveValuesSetterRef}
             liveSnapRef={moveSnapSetterRef}
           />
@@ -21521,8 +21528,7 @@ export function App() {
                 }}
                 onCreateTransform={(value) => {
                   const name = newFeatureName(value.name);
-                  createValidatedFeature(
-                    commandFactories.transformBody({
+                  const command = commandFactories.transformBody({
                       name,
                       targetBodyId: value.targetBodyId,
                       translation: value.translation,
@@ -21532,10 +21538,16 @@ export function App() {
                         : {}),
                       ...(value.pivot !== undefined
                         ? { pivot: value.pivot }
-                        : {})
-                    }),
+                        : {}),
+                      ...(value.copy ? { copy: true } : {})
+                    });
+                  createValidatedFeature(
+                    command,
                     name,
-                    value.targetBodyId
+                    // A copy's result is its new body; a Move's, its target.
+                    command.payload.ids && 'bodyId' in command.payload.ids
+                      ? command.payload.ids.bodyId
+                      : value.targetBodyId
                   );
                 }}
                 onPreviewEdgeModifier={previewEdgeForm}
@@ -21765,7 +21777,8 @@ export function App() {
                     ),
                     feature,
                     value.name,
-                    value.targetBodyId
+                    // A copy (M10) rebuilds its own body, not its source.
+                    feature.bodyId ?? value.targetBodyId
                   )
                 }
                 onApplyEdgeModifier={applyEdgeForm}

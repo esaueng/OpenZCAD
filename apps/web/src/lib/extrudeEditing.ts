@@ -4,7 +4,8 @@ import {
   type BodyId,
   type FeatureNode,
   type FeatureId,
-  type ProjectDocument
+  type ProjectDocument,
+  isTransformCopy
 } from '@openzcad/shared';
 import { listFeaturesInOrder } from '@openzcad/document-core';
 import { affectedFeatureTargets } from './affectedFeatureTargets';
@@ -96,7 +97,8 @@ export function extrudeEditTargets(
       earlier.bodyId &&
       earlier.bodyId !== data.targetBodyId &&
       data.featureKind !== 'mirror' &&
-      data.featureKind !== 'thicken'
+      data.featureKind !== 'thicken' &&
+      !isTransformCopy(data)
     ) {
       unavailable.add(data.targetBodyId);
     }

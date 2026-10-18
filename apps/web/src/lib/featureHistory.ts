@@ -1,5 +1,5 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
-import { isDatumPlaneRef } from '@openzcad/shared';
+import { isDatumPlaneRef, isInPlaceTransform } from '@openzcad/shared';
 import type {
   BodyId,
   DatumPlaneSource,
@@ -122,7 +122,9 @@ export function featureHistory(document: ProjectDocument) {
     parents.set(feature.featureId, inputs);
     missing.set(feature.featureId, missingInputs);
     if (feature.bodyId) bodyOwners.set(feature.bodyId, feature.featureId);
-    if (data.featureKind === 'transform' || data.featureKind === 'direct-edit')
+    // An in-place edit republishes its target; a copy (M10) owns only its
+    // own body, recorded above, and leaves the source with its producer.
+    if (isInPlaceTransform(data) || data.featureKind === 'direct-edit')
       bodyOwners.set(data.targetBodyId, feature.featureId);
     if (data.featureKind === 'split')
       bodyOwners.set(data.secondBodyId, feature.featureId);

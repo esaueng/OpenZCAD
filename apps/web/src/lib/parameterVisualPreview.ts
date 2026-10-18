@@ -11,7 +11,8 @@ import {
   type BodyRepresentation,
   type ParamValue,
   type ProjectDocument,
-  type UnitSystem
+  type UnitSystem,
+  isInPlaceTransform
 } from '@openzcad/shared';
 
 /** Viewport-owned instances. They never enter document.derived or an export. */
@@ -131,7 +132,7 @@ function legacyConstruction(doc: ProjectDocument): Construction | null {
   ] as const) {
     const d = feature.data;
     if (
-      d.featureKind !== 'transform' ||
+      !isInPlaceTransform(d) ||
       d.targetBodyId !== body ||
       d.transform.translation.x !== x ||
       d.transform.translation.y !== 0 ||

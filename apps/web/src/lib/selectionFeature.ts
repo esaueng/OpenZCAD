@@ -5,7 +5,8 @@ import {
   type BodyRepresentation,
   type FeatureNode,
   type ProjectDocument,
-  type TopologySelection
+  type TopologySelection,
+  isInPlaceTransform
 } from '@openzcad/shared';
 import { editableFilletFeature } from './interaction/filletFaceEdit';
 import {
@@ -25,7 +26,7 @@ export function bodyFeature(
         (feature) =>
           !isFeatureSuppressed(feature) &&
           (feature.bodyId === bodyId ||
-            ((feature.data.featureKind === 'transform' ||
+            ((isInPlaceTransform(feature.data) ||
               feature.data.featureKind === 'direct-edit') &&
               feature.data.targetBodyId === bodyId))
       ) ?? null

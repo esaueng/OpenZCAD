@@ -1,3 +1,4 @@
+import { isTransformCopy } from '@openzcad/shared';
 import type {
   BodyId,
   FeatureNode,
@@ -59,6 +60,8 @@ export function rigidImportedSource(
   const placement: Transform3D[] = [];
   for (const feature of features.slice(index + 1)) {
     const data = feature.data;
+    // A copy (M10) reads the source without moving it.
+    if (isTransformCopy(data)) continue;
     if (!(
       ('targetBodyId' in data && data.targetBodyId === bodyId) ||
       ('targetBodyIds' in data &&
