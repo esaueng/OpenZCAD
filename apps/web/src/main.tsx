@@ -47,6 +47,18 @@ if (import.meta.env.VITE_E2E === '1') {
 }
 
 mark('bundle.evaluated');
+// Prefetch every on-demand chunk once the page has settled. Not in e2e
+// builds, whose specs assert which chunks a flow loads.
+if (import.meta.env.VITE_E2E !== '1') {
+  window.addEventListener(
+    'load',
+    () =>
+      void import('./lib/lazyChunkPrefetch').then((m) =>
+        m.prefetchLazyChunks()
+      ),
+    { once: true }
+  );
+}
 trackUsage('workspace_opened');
 
 const rootElement = document.getElementById('root');
