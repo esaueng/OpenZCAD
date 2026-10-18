@@ -15,6 +15,7 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   toUserId,
   type BodyId,
   type FeatureId,
@@ -165,6 +166,28 @@ describe('duplicate history step (ZC-104)', () => {
     expect(await bbox(commands.document, copy.bodyId!)).toEqual(
       await bbox(commands.document, pattern.payload.ids!.bodyId)
     );
+  });
+
+  it('refuses a step past the end of history', () => {
+    const { commands, blockId } = manager();
+    const move = commandFactories.transformBody({
+      name: 'Move',
+      targetBodyId: blockId,
+      translation: { x: 10, y: 0, z: 0 }
+    });
+    commands.execute(move);
+    const node = listFeaturesInOrder(commands.document).find(
+      (feature) => feature.featureId === move.payload.ids!.featureId
+    )!;
+    commands.execute(
+      commandFactories.setNodeMetadata({
+        nodeId: node.id,
+        metadata: { [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: true }
+      })
+    );
+    expect(
+      duplicateFeatureRefusal(commands.document, move.payload.ids!.featureId)
+    ).toMatch(/past the end of history/);
   });
 
   it('refuses other kinds with a reason', () => {

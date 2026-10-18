@@ -62,7 +62,8 @@ import {
   type SketchObjectData,
   type SketchProfileReference,
   type UnitSystem,
-  isDatumPlaneRef
+  isDatumPlaneRef,
+  isFeatureRollbackSuppressed
 } from '@openzcad/shared';
 import {
   addSketchReferenceDimension,
@@ -3623,6 +3624,12 @@ export function duplicateFeatureRefusal(
     !(DUPLICABLE_KINDS as readonly string[]).includes(feature.data.featureKind)
   ) {
     return 'Duplicate covers Move, Mirror and Pattern steps only.';
+  }
+  // A copy lands right after its source. Past the end of history it would
+  // build active inside the paused tail, change the rolled-back model and
+  // split the rollback suffix, so it waits for the full history.
+  if (isFeatureRollbackSuppressed(feature)) {
+    return 'This step is past the end of history; resume full history to duplicate it.';
   }
   return null;
 }
