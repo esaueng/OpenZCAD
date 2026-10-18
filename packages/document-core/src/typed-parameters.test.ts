@@ -298,4 +298,15 @@ describe('suggested quantities', () => {
     // Both fields are lengths, but `w + 1` would add a bare number.
     expect(suggestParameterQuantity(document, 'w')).toBeNull();
   });
+
+  it('does not count a unit suffix as a read of a parameter named after it', () => {
+    let document = setParameter(blank(), { name: 'm', expression: '20' });
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: '0.01 m', height: '0.02m', depth: 10 }
+    });
+    // `0.01 m` is metres, not the parameter `m`: nothing reads it.
+    expect(suggestParameterQuantities(document).m).toBeUndefined();
+  });
 });

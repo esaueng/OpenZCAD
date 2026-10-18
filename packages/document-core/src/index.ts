@@ -5182,6 +5182,8 @@ export function getExpressionDimensions(
  * The scope variables an expression reads. Functions and constants are
  * filtered out by name; `isValidParameterName` refuses every one of them, so
  * a surviving identifier can only be a parameter reference (or a typo).
+ * A unit suffix directly after a number (`5 m`) is the parser's unit, not a
+ * read of a parameter that happens to be called `m`, so it is skipped.
  * Unparseable input reads nothing rather than throwing — callers here are
  * auditing a document, not evaluating it.
  */
@@ -5193,11 +5195,15 @@ export function expressionIdentifiers(expression: string): string[] {
     return [];
   }
   const names: string[] = [];
-  for (const token of tokens) {
-    if (token.type === 'identifier' && !RESERVED_IDENTIFIERS.has(token.name)) {
-      names.push(token.name);
+  tokens.forEach((token, index) => {
+    if (token.type !== 'identifier' || RESERVED_IDENTIFIERS.has(token.name)) {
+      return;
     }
-  }
+    if (tokens[index - 1]?.type === 'number' && isUnitSuffix(token.name)) {
+      return;
+    }
+    names.push(token.name);
+  });
   return names;
 }
 
