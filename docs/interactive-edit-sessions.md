@@ -13,6 +13,9 @@ that result. Ordinary `previewGeometry` callers retain complete topology.
 Radius and hole gestures also retain their owned cylinder semantics and complete picking
 topology while streaming; the lighter publication is enabled for planar
 push/pull, where edge recognition is not needed for the current gesture.
+Bodies with validation warnings or an unqualified strict/display projection
+use normal measurement, preserving warning/refusal attribution and the
+caller's affected-feature scope. Hidden unions retain their normal closure gate.
 
 The display path retains completed measurement's spline-refined bounds and
 the existing held-deflection policy, consumes owned

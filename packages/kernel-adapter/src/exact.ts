@@ -2457,8 +2457,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             );
           }
         };
-        if (geometryOnly && deferTopology) {
-          publishImportDiagnostics();
+        // An unqualified fast projection falls through to normal measurement,
+        // preserving its warning/refusal attribution and affected-feature scope.
+        deferredTopology: if (geometryOnly && deferTopology) {
           // Construction scaffolding is neither picked nor rendered by an
           // active drag. Its complete metadata remains in the committed base.
           const strict =
@@ -2466,6 +2467,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             feature?.data.featureKind === 'boolean' &&
             feature.data.operation === 'union' &&
             !isFeatureSuppressed(feature);
+          // Hidden unions still need the normal display-closure gate.
+          if (strict && hiddenBodies.has(bodyId)) break deferredTopology;
           for (const solid of shape.solids) {
             const verdict = strictVerdicts.get(solid);
             const relaxedErrors = kernel.validateSolidRelaxed(solid);
@@ -2473,9 +2476,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               ? (verdict?.strictErrors ?? kernel.validateSolid(solid))
               : 0;
             if (relaxedErrors !== 0 || strictErrors !== 0)
-              throw new Error(
-                `Body "${body.name}" failed exact B-rep validation.`
-              );
+              break deferredTopology;
           }
           const metadata = {
             bodyId,
@@ -2493,6 +2494,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             consumed
           };
           if (consumed || hiddenBodies.has(bodyId)) {
+            publishImportDiagnostics();
             // Validation targets include consumed construction bodies. Preserve
             // their presence and verdict without projecting invisible meshes.
             const bounds = shape.solids.map((solid) =>
@@ -2516,16 +2518,22 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             measurementDone();
             continue;
           }
-          const projection = withSyncReadMemo(readMemo, () =>
-            projectShapeMesh(
-              kernel,
-              shape,
-              32 * 1024 * 1024,
-              this.heldDisplayDeflections.get(bodyId),
-              strict ? strictVerdicts : undefined,
-              true
-            )
-          );
+          let projection: ReturnType<typeof projectShapeMesh>;
+          try {
+            projection = withSyncReadMemo(readMemo, () =>
+              projectShapeMesh(
+                kernel,
+                shape,
+                32 * 1024 * 1024,
+                this.heldDisplayDeflections.get(bodyId),
+                strict ? strictVerdicts : undefined,
+                true
+              )
+            );
+          } catch {
+            // Display admission is an optimization, not a new refusal gate.
+            break deferredTopology;
+          }
           this.heldDisplayDeflections.set(bodyId, projection.linearDeflections);
           if (
             strict &&
@@ -2537,9 +2545,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               )
             )
           )
-            throw new Error(
-              'Union produced an open, non-manifold, or inconsistently oriented result.'
-            );
+            break deferredTopology;
+          publishImportDiagnostics();
           geometryRepresentations[bodyId] = {
             ...metadata,
             mesh: projection.mesh,
