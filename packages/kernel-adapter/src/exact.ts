@@ -2516,13 +2516,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             measurementDone();
             continue;
           }
-          const projection = projectShapeMesh(
-            kernel,
-            shape,
-            32 * 1024 * 1024,
-            this.heldDisplayDeflections.get(bodyId),
-            strict ? strictVerdicts : undefined,
-            true
+          const projection = withSyncReadMemo(readMemo, () =>
+            projectShapeMesh(
+              kernel,
+              shape,
+              32 * 1024 * 1024,
+              this.heldDisplayDeflections.get(bodyId),
+              strict ? strictVerdicts : undefined,
+              true
+            )
           );
           this.heldDisplayDeflections.set(bodyId, projection.linearDeflections);
           if (

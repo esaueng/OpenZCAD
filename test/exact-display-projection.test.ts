@@ -133,3 +133,56 @@ it('reuses a closure proof only for the matching same-kernel, same-quality union
     ).closureValidated
   ).toBe(false);
 });
+
+it('keeps spline-refined scene bounds while retaining the original display mesh', () => {
+  // A planar top at z=10 and a trimmed spline wall. The kernel's untrimmed
+  // carrier reaches 10.01, inside one ordinary 0.0124 display deflection.
+  const positions = Float32Array.of(
+    0,
+    0,
+    10,
+    62,
+    0,
+    10,
+    0,
+    50,
+    10,
+    20,
+    20,
+    8,
+    21,
+    20,
+    8,
+    20,
+    20,
+    10
+  );
+  const indices = Uint32Array.of(0, 1, 2, 3, 4, 5);
+  const free = vi.fn();
+  const tessellate = vi.fn(() => ({
+    positions: positions.slice(),
+    indices: indices.slice(),
+    faceOffsets: Uint32Array.of(0, 3, 6),
+    free
+  }));
+  const kernel = {
+    boundingBox: () => Float64Array.of(0, 0, 8, 62, 50, 10.01),
+    getSolidFaces: () => Uint32Array.of(1, 2),
+    getSurfaceType: (face: number) => (face === 1 ? 'plane' : 'bspline'),
+    tessellateSolidGroupedBinary: tessellate
+  } as unknown as RemusKernel;
+  const projection = projectShapeMesh(
+    kernel,
+    { solids: [1] },
+    1024,
+    [],
+    undefined,
+    true
+  );
+  expect(projection.bbox.max.z).toBeGreaterThanOrEqual(10);
+  expect(projection.bbox.max.z).toBeLessThan(10.005);
+  expect(projection.mesh.vertices).toEqual(positions);
+  expect(projection.mesh.indices).toEqual(indices);
+  expect(tessellate).toHaveBeenCalledTimes(2);
+  expect(free).toHaveBeenCalledTimes(2);
+});

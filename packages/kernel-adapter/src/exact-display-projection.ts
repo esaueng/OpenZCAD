@@ -5,7 +5,8 @@ import {
   displayTessellationForExtents,
   heldDisplayTessellation
 } from './display-tessellation';
-import { tightenBoundsToMesh } from './exact-bounds';
+import { tightenBoundsToMesh, refineBoundsAtSplineFaces } from './exact-bounds';
+import { surfaceTypeOf } from './exact-sync-memo';
 import {
   ownedMeshPositions,
   ownedMeshIndices,
@@ -86,11 +87,17 @@ export function projectShapeMesh(
       // WASM accessors materialize arrays. Read each once before iterating.
       const sourcePositions = ownedMeshPositions(mesh);
       const sourceIndices = ownedMeshIndices(mesh);
+      let boundsFaces: { surfaceType: string }[] | undefined;
+      let faceOffsets: Uint32Array | undefined;
       if (includeFaces) {
         const handles = kernel.getSolidFaces(solid),
           offsets = ownedMeshFaceOffsets(mesh);
         if (handles.length !== offsets.length - 1)
           throw new Error('Face handles do not match tessellation groups.');
+        faceOffsets = offsets;
+        boundsFaces = Array.from(handles, (handle) => ({
+          surfaceType: surfaceTypeOf(kernel, handle)
+        }));
         for (let i = 0; i < handles.length; i++)
           faceGroups.push({
             handle: handles[i]!,
@@ -109,6 +116,32 @@ export function projectShapeMesh(
         throw new Error('Upstream display exceeds its memory budget.');
       const positions = sourcePositions;
       b = tightenBoundsToMesh(kernelBounds, positions, tess.linearDeflection);
+      if (boundsFaces && faceOffsets) {
+        // Same certification as completed measurement. A trimmed spline can
+        // leave a sub-deflection gap that ordinary mesh tightening must keep.
+        b = refineBoundsAtSplineFaces(
+          b,
+          { positions, indices: sourceIndices, faceOffsets },
+          boundsFaces,
+          tess.linearDeflection,
+          (deflection) => {
+            const fine = kernel.tessellateSolidGroupedBinary(
+              solid,
+              deflection,
+              tess.angularDeflection
+            );
+            try {
+              return {
+                positions: ownedMeshPositions(fine),
+                indices: ownedMeshIndices(fine),
+                faceOffsets: ownedMeshFaceOffsets(fine)
+              };
+            } finally {
+              fine.free();
+            }
+          }
+        );
+      }
       const shifted =
         vertexCount === 0
           ? sourceIndices

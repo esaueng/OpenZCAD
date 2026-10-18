@@ -11,7 +11,8 @@ for a terminal planar face offset is deferred; its separate history digest
 forces normal replay before a commit, downstream operation or export can use
 that result. Ordinary `previewGeometry` callers retain complete topology.
 
-The display path retains the existing held-deflection policy, consumes owned
+The display path retains completed measurement's spline-refined bounds and
+the existing held-deflection policy, consumes owned
 WASM arrays once and avoids concatenating a single solid's buffers. It can
 consume the strict union gate's same-sync mesh and closure proof only when
 kernel, solid handle and both tessellation deflections match. Compound meshes
