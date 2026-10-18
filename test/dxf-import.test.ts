@@ -1504,6 +1504,28 @@ describe('DXF inputs that would corrupt the sketch refuse by name', () => {
     );
     expect(insert.objects).toHaveLength(1);
     expect(insert.dropped).toEqual({ INSERT: 1 });
+    // An ATTRIB whose INSERT was lost is refused like an orphaned VERTEX.
+    const loose = dxf([
+      '0',
+      'ATTRIB',
+      '10',
+      '0',
+      '20',
+      '0',
+      '1',
+      'A',
+      '0',
+      'CIRCLE',
+      '10',
+      '0',
+      '20',
+      '0',
+      '40',
+      '1'
+    ]);
+    expect(() => importDxfSketch(loose, 'mm')).toThrow(
+      'an ATTRIB has no INSERT owning it'
+    );
   });
 
   it('refuses an $INSUNITS declaration that carries two values', () => {

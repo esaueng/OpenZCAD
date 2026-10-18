@@ -697,6 +697,11 @@ export function importDxfSketch(
         `This DXF is malformed: a ${entity.type} has no POLYLINE owning it.`
       );
     }
+    if (entity.type === 'ATTRIB') {
+      throw new DxfImportError(
+        'This DXF is malformed: an ATTRIB has no INSERT owning it.'
+      );
+    }
     // A POLYLINE owns VERTEX…SEQEND and an INSERT with attributes (66 = 1)
     // owns ATTRIB…SEQEND; the whole sequence is taken here, whatever then
     // happens to the parent (imported, dropped or refused).
