@@ -21,7 +21,9 @@ canonical numeric vertex pairs instead of repeated coordinate strings.
 Parameter editing prepares the recognized construction, baseline parameter
 scope and structural guard once. A tick compares immutable STEP strings
 exactly instead of serializing or hashing their full contents, then updates
-matrices over retained source meshes. The recognized lettering body's verified
+matrices over retained source meshes. Recognized parameter bounds are reused
+for rendering and pure parameter drafts against that exact base; commit
+validation still recognizes the candidate afresh. The recognized lettering body's verified
 placement transforms participate too. Previously those post-import transforms
 were mistaken for unsupported consumers, disabling the whole holder preview.
 The viewport continues to label this display as a parameter preview; it is
@@ -71,3 +73,18 @@ display-quality matching, duplicated face seams, closed/open/nonmanifold meshes
 and winding. The complex part also retains its exact carrier/radius census
 and closed mesh for inward/outward edits; reversed parameter edits restore
 volume and match independent fresh rebuilds.
+
+For a local adapter profile, use the existing opt-in harness with the public
+fixture from a Remus checkout:
+
+```sh
+OFFSET_PERF_STEP=<remus>/crates/io/tests/data/shapr3d_hammer_holder.step \
+OFFSET_PERF_PREVIEW=1 OFFSET_PERF_DEFER_TOPOLOGY=1 OFFSET_PERF_SAMPLES=20 \
+pnpm exec vitest run test/perf/offset-face-perf.test.ts
+```
+
+Leave `OFFSET_PERF_DEFER_TOPOLOGY` unset to measure the compatibility preview.
+These method-instrumented Node profiles are separate from the uninstrumented
+production-browser comparisons. `OZ_PERF=1 pnpm exec playwright test
+test/e2e/visual-selection-live-preview.spec.ts` enables the existing request,
+reply and renderer-frame probes; CI's normal runs skip those timing cases.

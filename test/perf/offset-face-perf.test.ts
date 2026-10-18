@@ -25,6 +25,8 @@
  *   OFFSET_PERF_KERNEL_PHASES=1  Drain opt-in kernel substage timings.
  *   OFFSET_PERF_PREVIEW=1 Time geometry-only previews where supported; legacy
  *                         builds use their complete-sync preview path.
+ *   OFFSET_PERF_DEFER_TOPOLOGY=1 Use the drag path with display faces and
+ *                         deferred edge topology/recognition/output naming.
  *   OFFSET_PERF_FULL=1    Also time a second edit from the same base and the
  *                         undo back to the import.
  *   OFFSET_PERF_SAMPLES  Alternating warm edits (default 0). A fresh exact
@@ -345,7 +347,9 @@ async function timedFacePreview(
   const start = performance.now();
   const result =
     typeof adapter.previewGeometry === 'function'
-      ? await adapter.previewGeometry(document)
+      ? await adapter.previewGeometry(document, {
+          deferTopology: process.env.OFFSET_PERF_DEFER_TOPOLOGY === '1'
+        })
       : await adapter.syncDocument(document, stages.listener);
   const elapsed = performance.now() - start;
   report(label, elapsed, stages.lines(), elapsed, result);

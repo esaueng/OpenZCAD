@@ -5483,6 +5483,12 @@ export function App() {
   // document swap, again when the worker result landed) for identical
   // geometry.
   const liveBodyRepresentations = doc?.derived.bodyRepresentations ?? null;
+  // Draft input leaves the document unchanged. Reuse recognized bounds instead
+  // of inspecting embedded STEP histories again for each rendered panel.
+  const liveParameterMinimums = useMemo(
+    () => (doc ? parameterMinimums(doc) : {}),
+    [doc]
+  );
   const parameterPreviewSession = useMemo(
     () => makeParameterPreview?.(parameterPreviewBase) ?? null,
     [makeParameterPreview, parameterPreviewBase]
@@ -14485,7 +14491,13 @@ export function App() {
       const command = commandFactories.setParameter({ name, expression });
       command.validate(base);
       const candidate = command.apply(base);
-      if (parameterInputError(base, candidate)) {
+      if (
+        parameterInputError(
+          base,
+          candidate,
+          base === doc ? liveParameterMinimums : undefined
+        )
+      ) {
         setParameterCandidate(null);
         return;
       }
@@ -20016,7 +20028,7 @@ export function App() {
     <Sidebar
       parameters={parameters}
       parameterValues={parameterScope.scope}
-      parameterMinimums={doc ? parameterMinimums(doc) : {}}
+      parameterMinimums={liveParameterMinimums}
       features={features}
       representations={representations}
       failedFeatureIds={failedHistoryFeatureIds}
@@ -20345,7 +20357,7 @@ export function App() {
             modelError={parameterModelError}
             parameters={exposedParameters}
             parameterValues={parameterScope.scope}
-            parameterMinimums={doc ? parameterMinimums(doc) : {}}
+            parameterMinimums={liveParameterMinimums}
             canExport={
               exportBodyIds.length > 0 &&
               !parameterEditPending &&
