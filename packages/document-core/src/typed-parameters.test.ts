@@ -376,4 +376,30 @@ describe('new typed-parameter misuse', () => {
     expect(newTypedParameterMisuse(before, before)).toBeNull();
     expect(newTypedParameterMisuse(before, after)).toMatch(/tilt/);
   });
+
+  it('keeps an existing misuse its identity when an earlier field changes', () => {
+    const document = setParameter(blank(), {
+      name: 'tilt',
+      expression: '30',
+      quantity: 'angle'
+    });
+    const box = (width: string | number) =>
+      addPrimitiveFeature(document, {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width, height: 'tilt', depth: 10 }
+      });
+    const before = box('10');
+    const after = structuredClone(before);
+    const data = Object.values(after.nodes).find(
+      (node) => node.kind === 'feature' && node.data.featureKind === 'primitive'
+    );
+    if (data?.kind !== 'feature' || data.data.featureKind !== 'primitive') {
+      throw new Error('expected the box feature');
+    }
+    // A string width becomes a literal; the height misuse is unchanged.
+    data.data.dimensions.width = 10;
+    expect(newTypedParameterMisuse(document, before)).toMatch(/tilt/);
+    expect(newTypedParameterMisuse(before, after)).toBeNull();
+  });
 });

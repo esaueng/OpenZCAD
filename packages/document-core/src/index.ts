@@ -5403,12 +5403,43 @@ export function parameterQuantityRefusal(
 }
 
 /** One stored expression that uses a typed parameter in a way it cannot hold. */
+/**
+ * Every object inside `root` keyed to its property path
+ * (`data.transform.translation`). An array element with an id is named by
+ * it (`constraints[c_12]`), so removing an earlier entry renames nothing.
+ */
+function objectPaths(root: object): WeakMap<object, string> {
+  const paths = new WeakMap<object, string>();
+  const stack: [object, string][] = [[root, '']];
+  while (stack.length > 0) {
+    const [value, path] = stack.pop()!;
+    if (paths.has(value)) continue;
+    paths.set(value, path);
+    const list = Array.isArray(value);
+    for (const [key, child] of Object.entries(value)) {
+      if (!child || typeof child !== 'object') continue;
+      const { id = undefined, constraintId = undefined } = child as {
+        id?: unknown;
+        constraintId?: unknown;
+      };
+      const name = typeof id === 'string' ? id : constraintId;
+      const segment = list
+        ? `[${typeof name === 'string' ? name : key}]`
+        : path
+          ? `.${key}`
+          : key;
+      stack.push([child as object, `${path}${segment}`]);
+    }
+  }
+  return paths;
+}
+
 export interface TypedParameterMisuse {
   /** The feature that would build from it (null when none does). */
   featureId: FeatureId | null;
   /**
-   * Which occurrence this is: the holding node and the field's position in
-   * its walk. Labels repeat (two sketch lines with the same expression), so
+   * Which occurrence this is: the holding node and the field's property
+   * path. Labels repeat (two sketch lines with the same expression), so
    * comparisons between documents key on this, not on the message.
    */
   occurrence: string;
@@ -5451,9 +5482,8 @@ export function typedParameterMisuse(
   const misuse: TypedParameterMisuse[] = [];
   for (const node of Object.values(document.nodes)) {
     if (node.kind === 'parameter') continue;
-    let field = 0;
-    rewriteNodeExpressions(node, (expression, dimension) => {
-      field += 1;
+    let paths: WeakMap<object, string> | null = null;
+    rewriteNodeExpressions(node, (expression, dimension, site) => {
       if (!expressionIdentifiers(expression).some((name) => typed.has(name))) {
         return expression;
       }
@@ -5467,7 +5497,7 @@ export function typedParameterMisuse(
       } catch (error) {
         misuse.push({
           featureId: owner(node),
-          occurrence: `${node.id}#${field}`,
+          occurrence: `${node.id}:${(paths ??= objectPaths(node)).get(site.container) ?? '?'}.${site.key}`,
           message: `${referenceLabel(node)} uses "${expression}": ${error instanceof Error ? error.message : 'it no longer evaluates.'}`
         });
       }
