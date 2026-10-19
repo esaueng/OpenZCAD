@@ -899,6 +899,29 @@ describe('content blobs', () => {
     );
   });
 
+  it('releases the plaintext source when the stream cannot start', async () => {
+    const key = EnvelopeKey.generate();
+    await encryptContentBlob(key, 'export', patternBytes(10));
+    let cancelled: unknown = null;
+    const source = new ReadableStream<Bytes>({
+      pull(controller) {
+        controller.enqueue(patternBytes(CHUNK));
+      },
+      cancel(reason) {
+        cancelled = reason;
+      }
+    });
+    // The key was already used, so creating the writer fails in `start`.
+    const encrypted = encryptContentBlobStream(key, 'export', source, {
+      compression: 'none',
+      chunkSize: CHUNK,
+      plaintextLength: CHUNK
+    });
+    await rejectsWith(collect(encrypted.envelope), 'key-reused');
+    await rejectsWith(encrypted.reference, 'key-reused');
+    expect(cancelled).toBeInstanceOf(E2eeError);
+  });
+
   it('resolves the reference only once the final chunk has been read', async () => {
     const plaintext = patternBytes(CHUNK * 3);
     const encrypted = encryptContentBlobStream(

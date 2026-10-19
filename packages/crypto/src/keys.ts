@@ -52,12 +52,13 @@ export function isP256Key(
 export async function exportPublicKey(key: CryptoKey): Promise<Bytes> {
   // Only P-256: the import helpers accept nothing else, so another curve
   // would publish a key this package can never read back.
-  if (!(
-    isP256Key(key, 'ECDH', 'public') || isP256Key(key, 'ECDSA', 'public')
-  )) {
+  if (
+    !(isP256Key(key, 'ECDH', 'public') || isP256Key(key, 'ECDSA', 'public')) ||
+    !key.extractable
+  ) {
     throw new E2eeError(
       'invalid-argument',
-      'Expected a P-256 ECDH or ECDSA public key'
+      'Expected an extractable P-256 ECDH or ECDSA public key'
     );
   }
   return new Uint8Array(await subtle().exportKey('raw', key));

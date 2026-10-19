@@ -1134,7 +1134,11 @@ export function encryptContentBlobStream(
         });
         controller.enqueue(writer.prefix);
       } catch (error) {
-        throw fail(error);
+        // A rejected start never runs `cancel`, so release the plaintext
+        // source here or its producer is left locked and running.
+        const typed = fail(error);
+        await payload.cancel(typed).catch(() => undefined);
+        throw typed;
       }
     },
     async pull(controller) {

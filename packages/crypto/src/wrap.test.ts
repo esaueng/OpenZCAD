@@ -483,6 +483,28 @@ describe('sealing to a public key', () => {
     expect((await exportPublicKey(ok.publicKey)).byteLength).toBe(65);
   });
 
+  it('refuses a non-extractable public key with a typed error', async () => {
+    const member = await generateEncryptionKeyPair();
+    const raw = await exportPublicKey(member.publicKey);
+    const fixed = await crypto.subtle.importKey(
+      'raw',
+      raw,
+      { name: 'ECDH', namedCurve: 'P-256' },
+      false,
+      []
+    );
+    await rejectsWith(exportPublicKey(fixed), 'invalid-argument');
+    await rejectsWith(
+      sealKey(fixed, PROJECT_KEY, {
+        purpose: 'project-key',
+        userId: 'u1',
+        projectId: 'p',
+        keyEpoch: 1
+      }),
+      'invalid-argument'
+    );
+  });
+
   it('exports only P-256 private keys', async () => {
     const p384 = await crypto.subtle.generateKey(
       { name: 'ECDSA', namedCurve: 'P-384' },
