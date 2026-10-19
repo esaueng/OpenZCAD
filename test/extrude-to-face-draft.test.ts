@@ -292,6 +292,26 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       ).toThrow(/would run before the body it uses exists/);
     });
 
+    it('takes a resolved-zero back distance as one-sided for to-face', async () => {
+      const lifted = ceiling(project('Zero back'), 25);
+      const target = await face(lifted.document, lifted.bodyId, -1);
+      const sketched = sketch(lifted.document);
+      const result = extrudeSketch(sketched.document, {
+        name: 'Post',
+        sketchId: sketched.sketchId,
+        distance: 1,
+        backDistance: '0 mm',
+        endCondition: 'to-face',
+        toFace: target
+      });
+      const derived = await derive(result.document);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.bodyRepresentations[result.bodyId]!.volume).toBeCloseTo(
+        400,
+        6
+      );
+    });
+
     it('switches back to blind by clearing the extent, through one undoable edit', async () => {
       const lifted = ceiling(project('Switch'), 25);
       const target = await face(lifted.document, lifted.bodyId, -1);

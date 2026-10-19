@@ -2028,6 +2028,20 @@ function isZeroParam(value: unknown): boolean {
 }
 
 /**
+ * A value that resolves to zero (`0 mm`, or a parameter at 0) is the absent
+ * default too; without a resolver only a literal zero is.
+ */
+function resolvedZero(
+  resolve: ParamZeroResolver | undefined
+): (value: unknown) => boolean {
+  return (value) =>
+    isZeroParam(value) ||
+    (resolve !== undefined &&
+      (typeof value === 'string' || typeof value === 'number') &&
+      resolve(value) === 0);
+}
+
+/**
  * F01 (v29): the structure of a `to-face` target. Whether the face still
  * resolves, is planar and is parallel to the sketch needs the exact build,
  * which refuses by name at the feature's history position.
@@ -2071,13 +2085,7 @@ function validateExtrudeDraft(
   },
   resolve?: ParamZeroResolver
 ): void {
-  // A value that resolves to zero (`0 mm`, or a parameter at 0) is the
-  // absent default; without a resolver only a literal zero is.
-  const zero = (value: unknown) =>
-    isZeroParam(value) ||
-    (resolve !== undefined &&
-      (typeof value === 'string' || typeof value === 'number') &&
-      resolve(value) === 0);
+  const zero = resolvedZero(resolve);
   const angle = data.draftAngleDeg;
   if (angle === undefined) return;
   if (typeof angle === 'number') {
@@ -2180,7 +2188,10 @@ export function validateExtrudeExtent(
       throw new Error('An extrude to a face has no through-all side.');
     }
     validateToFaceTarget(data.toFace);
-    if (data.symmetric === true || !isZeroParam(data.backDistance)) {
+    if (
+      data.symmetric === true ||
+      !resolvedZero(resolve)(data.backDistance)
+    ) {
       throw new Error(
         'An extrude to a face runs one way, from the sketch plane to the face; it is not symmetric or two-sided.'
       );
