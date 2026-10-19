@@ -26,6 +26,9 @@ import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   isInPlaceTransform,
   isTransformCopy,
+  toBodyId,
+  toEntityId,
+  toFeatureId,
   toUserId,
   type BodyId,
   type ProjectDocument
@@ -334,6 +337,29 @@ describe('transform copy (M10)', { timeout: 60_000 }, () => {
       expect(manager.document).toBe(before);
     }
   );
+
+  it('keeps opaque feature and body IDs in their separate namespaces', async () => {
+    const { manager, blockId } = block();
+    const ids = {
+      featureId: toFeatureId('copied_identity'),
+      featureNodeId: toEntityId('copied_feature_node'),
+      bodyId: toBodyId('copied_identity'),
+      bodyNodeId: toEntityId('copied_body_node')
+    };
+    manager.execute(copyCommand(blockId, { ids }));
+    expect(manager.document.bodyOrder).toEqual([blockId, ids.bodyId]);
+    const replayed = replayCommands(
+      createProjectDocument('Copy', toUserId('user_m10_copy')),
+      manager.document.commandLog
+    );
+    expect(replayed.bodyOrder).toEqual(manager.document.bodyOrder);
+    const { of } = await bodies(replayed);
+    expect(of(blockId)).toMatchObject({ min: [0, 0, 0], max: [20, 10, 10] });
+    expect(of(ids.bodyId)).toMatchObject({
+      min: [30, 0, 0],
+      max: [50, 10, 10]
+    });
+  });
 
   it('preserves explicit feature IDs and dependent copies across redo and replay', async () => {
     const { manager, blockId } = block();

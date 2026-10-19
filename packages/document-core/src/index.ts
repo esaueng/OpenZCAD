@@ -2487,7 +2487,7 @@ function transformCopyBody(
     document.featureOrder.includes(featureId) ||
     document.nodes[featureNodeId] !== undefined ||
     document.nodes[bodyNodeId] !== undefined ||
-    new Set([featureId, featureNodeId, bodyId, bodyNodeId]).size !== 4
+    featureNodeId === bodyNodeId
   ) {
     throw new Error('Copy identifiers must be new and distinct.');
   }
@@ -2512,14 +2512,20 @@ function transformCopyBody(
   const sourceFeature = source?.featureId
     ? findFeature(document, source.featureId)
     : undefined;
-  const sourceColor = chosenBodyColor(source?.metadata, sourceFeature?.featureKind);
+  const sourceColor = chosenBodyColor(
+    source?.metadata,
+    sourceFeature?.featureKind
+  );
   const sourceOpacity = source?.metadata?.[BODY_OPACITY_METADATA_KEY];
   next.nodes[bodyNodeId] = {
     id: bodyNodeId,
     kind: 'body',
     name:
       input.bodyName ??
-      numberedBodyName(document, `${derivedBodyName(document, input.targetBodyId, input.name)} copy`),
+      numberedBodyName(
+        document,
+        `${derivedBodyName(document, input.targetBodyId, input.name)} copy`
+      ),
     parentId: next.activePartId,
     revisionId: null,
     bodyId,
@@ -2529,7 +2535,9 @@ function transformCopyBody(
     exportableStep: true,
     metadata: {
       [BODY_COLOR_METADATA_KEY]: sourceColor ?? featureColor('transform'),
-      ...(sourceColor !== null ? { [BODY_COLOR_CHOSEN_METADATA_KEY]: true } : {}),
+      ...(sourceColor !== null
+        ? { [BODY_COLOR_CHOSEN_METADATA_KEY]: true }
+        : {}),
       ...(typeof sourceOpacity === 'number'
         ? { [BODY_OPACITY_METADATA_KEY]: sourceOpacity }
         : {})
