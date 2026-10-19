@@ -6,7 +6,6 @@ import {
   fromBase32,
   isUint,
   label,
-  snapshotBytes,
   toBase32,
   toDigitGroups,
   toHex,
@@ -257,8 +256,17 @@ export async function verifyScannedDeviceKey(
   devicePublicKey: Uint8Array,
   scannedHash: Uint8Array
 ): Promise<boolean> {
-  const scanned = snapshotBytes(scannedHash, 'Scanned hash');
-  return equalBytes(await publicKeyHash(devicePublicKey), scanned);
+  if (!(scannedHash instanceof Uint8Array)) {
+    throw new E2eeError(
+      'invalid-argument',
+      'Scanned hash must be a Uint8Array'
+    );
+  }
+  // A scan of the wrong length can never match; copy only a real one.
+  const scanned =
+    scannedHash.byteLength === HASH_BYTES ? copyBytes(scannedHash) : null;
+  const hash = await publicKeyHash(devicePublicKey);
+  return scanned !== null && equalBytes(hash, scanned);
 }
 
 /**
@@ -327,11 +335,14 @@ export async function verifyDeviceApprovalCommitment(
   newDeviceNonce: Uint8Array,
   commitment: Uint8Array
 ): Promise<boolean> {
-  const expected = snapshotBytes(commitment, 'Commitment');
-  return equalBytes(
-    await commitmentFor(newDevicePublicKey, newDeviceNonce),
-    expected
-  );
+  if (!(commitment instanceof Uint8Array)) {
+    throw new E2eeError('invalid-argument', 'Commitment must be a Uint8Array');
+  }
+  // A commitment of the wrong length can never match; copy only a real one.
+  const expected =
+    commitment.byteLength === HASH_BYTES ? copyBytes(commitment) : null;
+  const actual = await commitmentFor(newDevicePublicKey, newDeviceNonce);
+  return expected !== null && equalBytes(actual, expected);
 }
 
 export interface DeviceApprovalCodeInput {

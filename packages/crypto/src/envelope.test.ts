@@ -667,6 +667,22 @@ describe('decompression limits', () => {
       }),
       'limit-exceeded'
     );
+    // Empty deflate blocks inflate to nothing: a 2-byte declaration allows
+    // 2 + 1 + 1024 bytes of gzip, and anything longer is refused before
+    // decompression starts.
+    const padded = new Uint8Array(10 + 13_000 * 5);
+    padded.set([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff]);
+    for (let i = 0; i < 13_000; i += 1) {
+      padded.set([0, 0, 0, 0xff, 0xff], 10 + i * 5);
+    }
+    await rejectsWith(
+      decodePayload(padded, {
+        kind: 'thumbnail',
+        compression: 'gzip',
+        declaredLength: 2
+      }),
+      'limit-exceeded'
+    );
   });
 
   it('matches the limits it mirrors, and never the 1 GiB upload reservation', async () => {

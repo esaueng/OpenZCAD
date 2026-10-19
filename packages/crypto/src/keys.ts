@@ -163,7 +163,12 @@ export async function toEncryptionPublicKey(
 }> {
   if (key instanceof Uint8Array) {
     // One snapshot for both: the ECDH key and the HKDF salt must agree.
-    const raw = snapshotBytes(key, 'Public key');
+    const raw = snapshotBytes(
+      key,
+      'Public key',
+      P256_PUBLIC_KEY_BYTES,
+      'malformed'
+    );
     return { key: await importEncryptionPublicKey(raw), raw };
   }
   if (!isP256Key(key, 'ECDH', 'public')) {

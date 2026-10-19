@@ -456,7 +456,12 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
   ) {
     // Copies: both are read only after awaits, when the caller's arrays may
     // have changed. (A non-array key is refused when the prefix arrives.)
-    this.key = key instanceof Uint8Array ? copyBytes(key) : key;
+    // Only a key of the right size is worth copying; any other is refused
+    // when the prefix arrives, so it is passed through as given.
+    this.key =
+      key instanceof Uint8Array && key.byteLength === KEY_BYTES
+        ? copyBytes(key)
+        : key;
     this.expectedHash =
       expectedHash instanceof Uint8Array ? copyBytes(expectedHash) : null;
     this.hasher = expectedHash ? new CiphertextHasher() : null;
@@ -738,6 +743,17 @@ export async function decodePayload(
       `Plaintext is larger than the declared ${cap} bytes`
     );
   }
+  // The same compressed bound readers enforce: a stream of empty deflate
+  // blocks inflates to almost nothing but costs work and memory per byte.
+  if (
+    limits.compression === 'gzip' &&
+    payload.byteLength > maxPayloadBytes(cap)
+  ) {
+    throw new E2eeError(
+      'limit-exceeded',
+      `A gzip payload for ${cap} bytes may not exceed ${maxPayloadBytes(cap)} bytes`
+    );
+  }
   const plaintext =
     limits.compression === 'gzip'
       ? await gunzipBytes(payload, cap)
@@ -955,7 +971,8 @@ export async function encryptProjectEnvelope(
   checkEncryptSize(header.kind, plaintext.byteLength);
   // Encrypt a copy taken before the first await: an edit to the caller's
   // array meanwhile would otherwise seal bytes the header does not describe.
-  const data = snapshotBytes(plaintext, 'Plaintext');
+  // Already size-checked against the kind's ceiling above.
+  const data = snapshotBytes(plaintext, 'Plaintext', Number.MAX_SAFE_INTEGER);
   const writer = await createWriter(key, header);
   const payload =
     writer.header.compression === 'gzip' ? await gzipBytes(data) : data;

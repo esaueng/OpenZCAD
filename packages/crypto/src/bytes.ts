@@ -1,4 +1,4 @@
-import { E2eeError } from './errors';
+import { E2eeError, type E2eeErrorCode } from './errors';
 
 /** An ArrayBuffer-backed byte array, which every WebCrypto call accepts. */
 export type Bytes = Uint8Array<ArrayBuffer>;
@@ -21,9 +21,18 @@ export function copyBytes(bytes: Uint8Array): Bytes {
  * that edits or transfers its array mid-call must not change what one step
  * validated and a later step uses.
  */
-export function snapshotBytes(value: unknown, what: string): Bytes {
+export function snapshotBytes(
+  value: unknown,
+  what: string,
+  maxLength: number,
+  tooLong: E2eeErrorCode = 'invalid-argument'
+): Bytes {
   if (!(value instanceof Uint8Array)) {
     throw new E2eeError('invalid-argument', `${what} must be a Uint8Array`);
+  }
+  // Checked before copying: an untrusted, oversized value costs nothing.
+  if (value.byteLength > maxLength) {
+    throw new E2eeError(tooLong, `${what} is longer than ${maxLength} bytes`);
   }
   return copyBytes(value);
 }

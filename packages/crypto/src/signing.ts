@@ -11,7 +11,7 @@ import {
 } from './bytes';
 import { parseEnvelope } from './envelope';
 import { E2eeError } from './errors';
-import type { ProjectEnvelopeHeader } from './header';
+import { HASH_BYTES, type ProjectEnvelopeHeader } from './header';
 import { importSigningPublicKey, isP256Key } from './keys';
 import { sha256, subtle } from './primitives';
 
@@ -197,7 +197,11 @@ export async function verifyVersionChain(
   const pinned =
     options.pinnedVersionHash === undefined
       ? undefined
-      : snapshotBytes(options.pinnedVersionHash, 'pinnedVersionHash');
+      : snapshotBytes(
+          options.pinnedVersionHash,
+          'pinnedVersionHash',
+          HASH_BYTES
+        );
   // Read every envelope before the first await: headers are decoded into
   // copies and each digest call copies its input, so a caller replacing an
   // element or editing a buffer meanwhile cannot change the chain checked.

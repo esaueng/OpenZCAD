@@ -3,6 +3,7 @@ import {
   ByteWriter,
   asBytes,
   concatBytes,
+  copyBytes,
   isUint,
   label,
   snapshotBytes,
@@ -336,8 +337,22 @@ async function kwKek(
  * pending must not get a wrap made from something else.
  */
 function snapshotKek(kek: KeyMaterial): KeyMaterial {
-  return kek instanceof Uint8Array ? snapshotBytes(kek, 'Parent key') : kek;
+  // Raw parent keys are 32 bytes; any other is passed through for the KEK
+  // derivation to refuse, never copied.
+  return kek instanceof Uint8Array && kek.byteLength === KEY_BYTES
+    ? copyBytes(kek)
+    : kek;
 }
+
+/** Largest wrapped or sealed record any purpose produces. */
+const MAX_WRAP_RECORD_BYTES =
+  1 + GCM_IV_BYTES + GCM_TAG_BYTES + MAX_PRIVATE_KEY_BYTES;
+const MAX_SEAL_RECORD_BYTES =
+  1 +
+  P256_PUBLIC_KEY_BYTES +
+  GCM_IV_BYTES +
+  GCM_TAG_BYTES +
+  MAX_PRIVATE_KEY_BYTES;
 
 function snapshotContext<C extends WrapContext>(context: C): C {
   return context !== null && typeof context === 'object'
@@ -355,7 +370,7 @@ export async function wrapKeyWith(
   kek = snapshotKek(kek);
   context = snapshotContext(context);
   const encodedContext = encodeWrapContext(context);
-  secret = snapshotBytes(secret, 'Secret');
+  secret = snapshotBytes(secret, 'Secret', MAX_PRIVATE_KEY_BYTES);
   checkSecretLength(secret, context);
   if (!isPrivateKeyPurpose(context.purpose)) {
     const toWrap = await subtle().importKey(
@@ -439,7 +454,12 @@ export async function unwrapKey(
   kek = snapshotKek(kek);
   context = snapshotContext(context);
   const encodedContext = encodeWrapContext(context);
-  wrapped = snapshotBytes(wrapped, 'Wrapped key');
+  wrapped = snapshotBytes(
+    wrapped,
+    'Wrapped key',
+    MAX_WRAP_RECORD_BYTES,
+    'malformed'
+  );
   if (!isPrivateKeyPurpose(context.purpose)) {
     readWrapVersion(wrapped, WRAP_VERSION_KW);
     if (wrapped.byteLength !== KW_WRAPPED_BYTES) {
@@ -509,7 +529,7 @@ export async function wrapShareSnapshotKey(
 ): Promise<ShareSnapshotKeyWraps> {
   // One copy of every input for both wraps, so members and link visitors
   // open the same key under the context the call began with.
-  versionKey = snapshotBytes(versionKey, 'Version key');
+  versionKey = snapshotBytes(versionKey, 'Version key', KEY_BYTES);
   projectKey = snapshotKek(projectKey);
   shareKey = snapshotKek(shareKey);
   context = { ...context };
@@ -559,7 +579,7 @@ export async function sealKeyWith(
   context = snapshotContext(context);
   const aadContext = encodeWrapContext(context);
   checkSealContext(context);
-  secret = snapshotBytes(secret, 'Secret');
+  secret = snapshotBytes(secret, 'Secret', MAX_PRIVATE_KEY_BYTES);
   checkSecretLength(secret, context);
   const recipient = await toEncryptionPublicKey(recipientPublicKey);
   const ephemeralRaw = await exportPublicKey(ephemeral.publicKey);
@@ -595,9 +615,14 @@ export async function sealKey(
   // Copy caller bytes before the first await (see `snapshotBytes`).
   const recipient =
     recipientPublicKey instanceof Uint8Array
-      ? snapshotBytes(recipientPublicKey, 'Public key')
+      ? snapshotBytes(
+          recipientPublicKey,
+          'Public key',
+          P256_PUBLIC_KEY_BYTES,
+          'malformed'
+        )
       : recipientPublicKey;
-  const secretBytes = snapshotBytes(secret, 'Secret');
+  const secretBytes = snapshotBytes(secret, 'Secret', MAX_PRIVATE_KEY_BYTES);
   const ephemeral = await subtle().generateKey(
     { name: 'ECDH', namedCurve: 'P-256' },
     false,
@@ -620,7 +645,12 @@ export async function openSealedKey(
   context = snapshotContext(context);
   const aadContext = encodeWrapContext(context);
   checkSealContext(context);
-  sealed = snapshotBytes(sealed, 'Sealed key');
+  sealed = snapshotBytes(
+    sealed,
+    'Sealed key',
+    MAX_SEAL_RECORD_BYTES,
+    'malformed'
+  );
   readVersion(sealed, SEAL_VERSION_1, 'Sealed key');
   const reader = new ByteReader(sealed, 'Sealed key');
   const version = reader.bytes(1);

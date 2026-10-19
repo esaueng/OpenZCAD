@@ -324,6 +324,46 @@ describe('symmetric key wrapping', () => {
     }
   });
 
+  it('refuses an oversized record before copying it', async () => {
+    const accountKey = generateSymmetricKey();
+    const member = await generateEncryptionKeyPair();
+    const huge = new Uint8Array(16 * 1024 * 1024);
+    huge[0] = 1;
+    let copied = 0;
+    const set = vi
+      .spyOn(Uint8Array.prototype, 'set')
+      .mockImplementation(function (
+        this: Uint8Array,
+        source: ArrayLike<number>,
+        offset?: number
+      ) {
+        copied += source.length;
+        Reflect.apply(Int8Array.prototype.set, this, [source, offset]);
+      });
+    try {
+      await rejectsWith(
+        unwrapKey(accountKey, huge, {
+          purpose: 'encryption-private-key',
+          userId: 'u',
+          keyId: 'k'
+        }),
+        'malformed'
+      );
+      await rejectsWith(
+        openSealedKey(member, huge, {
+          purpose: 'project-key',
+          userId: 'u',
+          projectId: 'p',
+          keyEpoch: 1
+        }),
+        'malformed'
+      );
+    } finally {
+      set.mockRestore();
+    }
+    expect(copied).toBeLessThan(64 * 1024);
+  });
+
   it('refuses an HKDF key without deriveKey usage with a typed error', async () => {
     const bitsOnly = await crypto.subtle.importKey(
       'raw',
