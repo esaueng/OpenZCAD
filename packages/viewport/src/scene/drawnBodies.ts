@@ -55,6 +55,7 @@ export type DrawnBodyObjects = ReadonlyMap<string, THREE.Object3D>;
 export function bodyDrawnAsBuilt(object: THREE.Object3D): boolean {
   const { position, quaternion, scale } = object;
   return (
+    !object.userData.moveCopyPreview &&
     object.visible &&
     position.x === 0 &&
     position.y === 0 &&

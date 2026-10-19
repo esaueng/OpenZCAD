@@ -13,7 +13,8 @@ import {
   type ProjectDocument,
   type SketchNode,
   type SketchObjectData,
-  type Vector3
+  type Vector3,
+  isInPlaceTransform
 } from '@openzcad/shared';
 import type {
   CadPatchOperation,
@@ -307,8 +308,7 @@ function featureScopeForBodies(
     // negative half travels in the data, so either one reaches the split.
     const includedByBody =
       (feature.bodyId !== undefined && neededBodies.has(feature.bodyId)) ||
-      ((data.featureKind === 'transform' ||
-        data.featureKind === 'direct-edit') &&
+      ((isInPlaceTransform(data) || data.featureKind === 'direct-edit') &&
         neededBodies.has(data.targetBodyId)) ||
       (data.featureKind === 'split' && neededBodies.has(data.secondBodyId));
     const includedBySketch =

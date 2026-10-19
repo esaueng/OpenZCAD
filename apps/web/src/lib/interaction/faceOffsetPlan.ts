@@ -8,7 +8,7 @@ import {
   composeCommands,
   type AnyCommand
 } from '@openzcad/command-system';
-import { isFeatureSuppressed } from '@openzcad/shared';
+import { isFeatureSuppressed, isInPlaceTransform } from '@openzcad/shared';
 import type {
   BodyId,
   FaceTopology,
@@ -165,7 +165,7 @@ function shiftPrimitiveBase(
   if (
     placement &&
     !isFeatureSuppressed(placement) &&
-    placement.data.featureKind === 'transform' &&
+    isInPlaceTransform(placement.data) &&
     placement.data.targetBodyId === primitive.bodyId &&
     (placement.data.transform.scale ?? 1) === 1 &&
     Object.values(placement.data.transform.rotationDeg).every(

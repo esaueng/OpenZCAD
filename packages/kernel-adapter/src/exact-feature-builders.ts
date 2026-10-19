@@ -935,8 +935,14 @@ function buildTransformFeature(
     throw new Error('Transform scale must resolve to a positive number.');
   }
   const pivot = data.transform.pivot;
+  // M10: a copy publishes under its own body and leaves the source live and
+  // unmoved; an in-place Move republishes the source under its own id.
+  if (data.copy && !feature.bodyId) {
+    throw new Error('Copy has no result body.');
+  }
+  const resultBodyId = data.copy ? feature.bodyId! : data.targetBodyId;
   result.shapes.set(
-    data.targetBodyId,
+    resultBodyId,
     copyShapeWithVerifiedLineage(
       kernel,
       target,
@@ -964,6 +970,7 @@ function buildTransformFeature(
       )
     )
   );
+  if (data.copy) inheritMeshOrigin(result, data.targetBodyId, resultBodyId);
 }
 
 /**

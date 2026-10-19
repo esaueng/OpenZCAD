@@ -127,6 +127,108 @@ describe('Move pivot (M10)', () => {
   });
 });
 
+describe('Move copy (M10)', () => {
+  const bodies = [{ bodyId: 'body-1' as BodyId, name: 'Box', consumed: false }];
+
+  it('creates a copy when the box is ticked, and a plain Move otherwise', () => {
+    const onSubmit = vi.fn();
+    render(
+      <TransformForm
+        scope={{}}
+        bodies={bodies}
+        units="mm"
+        submitLabel="Create"
+        onSubmit={onSubmit}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(onSubmit.mock.calls[0]![0]).not.toHaveProperty('copy');
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Copy (keep the original)' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(onSubmit.mock.calls[1]![0]).toMatchObject({ copy: true });
+  });
+
+  it('names an existing copy instead of offering the toggle', () => {
+    render(
+      <TransformForm
+        scope={{}}
+        bodies={bodies}
+        units="mm"
+        initial={{
+          name: 'Copy',
+          targetBodyId: 'body-1' as BodyId,
+          translation: zero,
+          rotationDeg: zero,
+          copy: true
+        }}
+        submitLabel="Apply"
+        onSubmit={() => {}}
+      />
+    );
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(
+      screen.getByText('Copy: the source body stays in place.')
+    ).toBeTruthy();
+  });
+});
+
+describe('Move gizmo card copy (M10)', () => {
+  it('offers Copy for a body, applies a copy in place, and hides it for a sketch', () => {
+    const onCopy = vi.fn();
+    const onConfirm = vi.fn();
+    const { rerender } = render(
+      <MoveOverlay
+        bodyName="Box"
+        values={{ translation: zero, rotationDeg: zero }}
+        units="mm"
+        snap={null}
+        copy={false}
+        onCopy={onCopy}
+        onChange={() => {}}
+        onConfirm={onConfirm}
+        onCancel={() => {}}
+      />
+    );
+    // Nothing to move yet: a plain Move cannot apply.
+    expect(screen.getByRole('button', { name: 'Apply move' })).toBeDisabled();
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Copy (keep the original)' })
+    );
+    expect(onCopy).toHaveBeenCalledWith(true);
+    rerender(
+      <MoveOverlay
+        bodyName="Box"
+        values={{ translation: zero, rotationDeg: zero }}
+        units="mm"
+        snap={null}
+        copy
+        onCopy={onCopy}
+        onChange={() => {}}
+        onConfirm={onConfirm}
+        onCancel={() => {}}
+      />
+    );
+    // A copy in place is a coincident duplicate, which is a real result.
+    fireEvent.click(screen.getByRole('button', { name: 'Apply copy' }));
+    expect(onConfirm).toHaveBeenCalledOnce();
+    rerender(
+      <MoveOverlay
+        bodyName="Sketch 1"
+        values={{ translation: zero, rotationDeg: zero }}
+        units="mm"
+        snap={null}
+        hideRotation
+        onChange={() => {}}
+        onConfirm={onConfirm}
+        onCancel={() => {}}
+      />
+    );
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+});
+
 describe('Move edit card field types (F05)', () => {
   it('reads moves and the pivot as lengths and turns as angles', () => {
     const onSubmit = vi.fn();

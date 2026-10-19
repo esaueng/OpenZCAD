@@ -15,7 +15,8 @@ import {
   type ParamValue,
   type ParametricVector3,
   type PrimitiveKind,
-  type ProjectDocument
+  type ProjectDocument,
+  isInPlaceTransform
 } from '@openzcad/shared';
 
 /**
@@ -87,7 +88,8 @@ function isPlacement(
   return (
     candidate !== undefined &&
     !isFeatureSuppressed(candidate) &&
-    candidate.data.featureKind === 'transform' &&
+    // A copy (M10) is a new body, never the source's placement.
+    isInPlaceTransform(candidate.data) &&
     candidate.data.targetBodyId === bodyId &&
     (candidate.data.transform.scale ?? 1) === 1 &&
     Object.values(candidate.data.transform.rotationDeg).every(

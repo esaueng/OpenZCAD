@@ -49,6 +49,11 @@ export type ShaprImportId = Brand<string, 'ShaprImportId'>;
  * turn such a Move about the origin and move the body elsewhere, so the bump
  * makes it refuse the document instead.
  *
+ * v23 adds the M10 transform copy (`copy: true` on a transform feature, which
+ * then owns a body of its own and leaves its source live). A v22 client would
+ * move the source instead and lose the copy's body, so the bump makes it
+ * refuse the document.
+ *
  * v25 adds two R01 datum-plane definitions, `three-point` and
  * `parallel-point`, and the point sources they read (world coordinates or an
  * edge's end vertex). An older client would refuse or misread such a datum
@@ -1007,6 +1012,27 @@ export interface SketchPathReference {
   entityIds: EntityId[];
 }
 
+/**
+ * An in-place Move/Rotate/Scale: it rewrites `targetBodyId` and owns no body.
+ * A transform copy (M10, `copy: true`) is not one: it owns its own body and
+ * leaves the target untouched, so placement and in-place-edit rules that
+ * read "the transform of body X" must skip it.
+ */
+export function isInPlaceTransform(
+  data: FeatureData
+): data is Extract<FeatureData, { featureKind: 'transform' }> {
+  return data.featureKind === 'transform' && data.copy !== true;
+}
+
+/** M10: a transform that adds a moved copy and leaves its source live. */
+export function isTransformCopy(
+  data: FeatureData
+): data is Extract<FeatureData, { featureKind: 'transform' }> & {
+  copy: true;
+} {
+  return data.featureKind === 'transform' && data.copy === true;
+}
+
 export type FeatureData =
   | {
       /**
@@ -1147,6 +1173,13 @@ export type FeatureData =
       featureKind: 'transform';
       targetBodyId: BodyId;
       transform: ParametricTransform3D;
+      /**
+       * M10 (schema v23): true makes this a copy. The feature then owns its
+       * own `bodyId` (and body node), like a Mirror, and the target stays
+       * live and unmoved. Absent is the in-place Move every older document
+       * holds: it rewrites `targetBodyId` and has no body of its own.
+       */
+      copy?: true;
     }
   | {
       featureKind: 'mirror';
