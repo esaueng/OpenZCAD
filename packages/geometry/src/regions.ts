@@ -6,6 +6,23 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 import { geometryTolerance } from './tolerance';
+import {
+  ellipseAreaTerm,
+  ellipseDerivatives,
+  ellipsePoint,
+  isFullEllipse,
+  resolveEllipseGeometry,
+  resolveSplineGeometry,
+  reverseSpline,
+  splineAreaTerm,
+  splineBreakpoints,
+  splineDerivatives,
+  splineDomain,
+  splinePoint,
+  splineSubcurve,
+  type EllipseGeometry,
+  type SplineGeometry
+} from './sketch-curves';
 // Value import, and deliberately one-way: `text/sketchProfiles` imports only
 // *types* from this module, so there is no runtime cycle. It also avoids
 // `text/loader`, which is the sole `opentype.js` import site — computing
@@ -70,7 +87,43 @@ export type RegionCurve =
       /** Interior control points: one for a quadratic, two for a cubic. */
       controls: BezierControlPoints;
       sourceObjectId: string;
+    }
+  | {
+      /**
+       * A piece of an I01 ellipse (or the whole of one). Same conventions as
+       * `arc`: the loop travels from `startParam` to `endParam` (radians of
+       * the ellipse parameter, not polar angles), counter-clockwise in the
+       * parameter when `ccw`.
+       */
+      kind: 'ellipse';
+      center: Vec2Like;
+      radiusX: number;
+      radiusY: number;
+      /** Radians from the sketch x axis to the ellipse's own x axis. */
+      rotation: number;
+      startParam: number;
+      endParam: number;
+      ccw: boolean;
+      sourceObjectId: string;
+    }
+  | {
+      /**
+       * A piece of an I01 spline as an exact clamped B-spline, already
+       * oriented in the loop's direction: it starts at `a` (its first control
+       * point) and ends at `b` (its last), over the parameter range
+       * `[knots[0], knots[knots.length - 1]]`.
+       */
+      kind: 'spline';
+      a: Vec2Like;
+      b: Vec2Like;
+      degree: number;
+      knots: number[];
+      controls: Vec2Like[];
+      sourceObjectId: string;
     };
+
+export type EllipseRegionCurve = Extract<RegionCurve, { kind: 'ellipse' }>;
+export type SplineRegionCurve = Extract<RegionCurve, { kind: 'spline' }>;
 
 export type BezierRegionCurve = Extract<RegionCurve, { kind: 'bezier' }>;
 
@@ -209,7 +262,26 @@ interface ArcCurve {
   sourceObjectId: string;
 }
 
-type Curve = SegCurve | ArcCurve;
+/** An I01 ellipse; positions are parameter offsets from `ellipse.start`. */
+interface EllCurve {
+  kind: 'ell';
+  ellipse: EllipseGeometry;
+  /** Same as `ellipse.sweep`: 2π for a full ellipse. */
+  sweep: number;
+  sourceObjectId: string;
+}
+
+/** An I01 spline; positions are its own parameter in `[t0, t1]`. */
+interface SplCurve {
+  kind: 'spl';
+  spline: SplineGeometry;
+  t0: number;
+  t1: number;
+  sourceObjectId: string;
+}
+
+type Curve = SegCurve | ArcCurve | EllCurve | SplCurve;
+type ParamCurve = EllCurve | SplCurve;
 
 const TWO_PI = Math.PI * 2;
 /** Samples for a full circle when producing polylines. */
@@ -357,6 +429,22 @@ function curvesForObject(
         }
       ];
     }
+    case 'ellipse': {
+      const ellipse = resolveEllipseGeometry(data, resolve);
+      return [
+        {
+          kind: 'ell',
+          ellipse,
+          sweep: ellipse.sweep,
+          sourceObjectId: object.id
+        }
+      ];
+    }
+    case 'spline': {
+      const spline = resolveSplineGeometry(data, resolve);
+      const [t0, t1] = splineDomain(spline);
+      return [{ kind: 'spl', spline, t0, t1, sourceObjectId: object.id }];
+    }
     case 'text': {
       // Text never enters the half-edge arrangement. A word is thousands of
       // curves and this pipeline is quadratic in curve count in several
@@ -376,6 +464,13 @@ function curveEndpoints(curve: Curve): Vec2Like[] {
       { x: curve.bx, y: curve.by }
     ];
   }
+  if (curve.kind === 'ell' || curve.kind === 'spl') {
+    if (curveClosed(curve)) {
+      return [];
+    }
+    const [from, to] = curveRange(curve);
+    return [curveAt(curve, from), curveAt(curve, to)];
+  }
   if (Math.abs(curve.sweep - TWO_PI) <= 1e-9) {
     return [];
   }
@@ -394,6 +489,21 @@ function modelScaleFor(curves: Curve[]): number {
       minY = Math.min(minY, curve.ay, curve.by);
       maxX = Math.max(maxX, curve.ax, curve.bx);
       maxY = Math.max(maxY, curve.ay, curve.by);
+    } else if (curve.kind === 'ell') {
+      const reach = Math.max(curve.ellipse.radiusX, curve.ellipse.radiusY);
+      minX = Math.min(minX, curve.ellipse.center.x - reach);
+      minY = Math.min(minY, curve.ellipse.center.y - reach);
+      maxX = Math.max(maxX, curve.ellipse.center.x + reach);
+      maxY = Math.max(maxY, curve.ellipse.center.y + reach);
+      largestRadius = Math.max(largestRadius, reach);
+    } else if (curve.kind === 'spl') {
+      // The control polygon's hull contains the curve.
+      for (const control of curve.spline.controls) {
+        minX = Math.min(minX, control.x);
+        minY = Math.min(minY, control.y);
+        maxX = Math.max(maxX, control.x);
+        maxY = Math.max(maxY, control.y);
+      }
     } else {
       minX = Math.min(minX, curve.cx - curve.r);
       minY = Math.min(minY, curve.cy - curve.r);
@@ -422,6 +532,35 @@ function undirectedSegmentKey(curve: SegCurve, tolerance: number): string {
 function primitiveCurveKey(curve: Curve, tolerance: number): string {
   if (curve.kind === 'seg') {
     return undirectedSegmentKey(curve, tolerance);
+  }
+  if (curve.kind === 'ell' && isFullEllipse(curve.ellipse)) {
+    // A full ellipse is the same curve whatever its parameter origin or
+    // which radius is named first: key its centre, axes and axis direction.
+    const { radiusX, radiusY, rotation } = curve.ellipse;
+    const major = Math.max(radiusX, radiusY);
+    const minor = Math.min(radiusX, radiusY);
+    const axis =
+      ((((radiusX >= radiusY ? rotation : rotation + Math.PI / 2) % Math.PI) +
+        Math.PI) %
+        Math.PI) /
+      1e-9;
+    return [
+      'E',
+      toleranceKey(curve.ellipse.center, tolerance),
+      Math.round(major / tolerance),
+      Math.round(minor / tolerance),
+      Math.abs(major - minor) <= tolerance ? 0 : Math.round(axis)
+    ].join(':');
+  }
+  if (curve.kind === 'ell' || curve.kind === 'spl') {
+    // Direction-agnostic samples: the same curve drawn either way collides.
+    const [from, to] = curveRange(curve);
+    const samples = [0, 0.25, 0.5, 0.75, 1].map((fraction) =>
+      toleranceKey(curveAt(curve, from + (to - from) * fraction), tolerance)
+    );
+    const forward = samples.join(':');
+    const backward = [...samples].reverse().join(':');
+    return `P:${forward <= backward ? forward : backward}`;
   }
   const start = toleranceKey(arcPoint(curve, 0), tolerance);
   const end = toleranceKey(arcPoint(curve, curve.sweep), tolerance);
@@ -533,9 +672,14 @@ function resolveSketchCurves(
     const degenerate =
       curve.kind === 'seg'
         ? Math.hypot(curve.bx - curve.ax, curve.by - curve.ay) <= tolerance
-        : !Number.isFinite(curve.r) ||
-          curve.r <= tolerance ||
-          curve.sweep <= 1e-9;
+        : curve.kind === 'ell'
+          ? Math.min(curve.ellipse.radiusX, curve.ellipse.radiusY) <=
+              tolerance || curve.sweep <= 1e-9
+          : curve.kind === 'spl'
+            ? splineExtent(curve.spline) <= tolerance
+            : !Number.isFinite(curve.r) ||
+              curve.r <= tolerance ||
+              curve.sweep <= 1e-9;
     if (degenerate) {
       invalidEntityIds.add(curve.sourceObjectId);
       diagnostics.push({
@@ -625,6 +769,24 @@ function resolveSketchCurves(
     }
   }
 
+  for (const curve of curves) {
+    if (curve.kind !== 'spl' || invalidEntityIds.has(curve.sourceObjectId)) {
+      continue;
+    }
+    const crossing = splineSelfCrossing(curve, tolerance);
+    if (!crossing) {
+      continue;
+    }
+    invalidEntityIds.add(curve.sourceObjectId);
+    diagnostics.push({
+      code: 'self-intersection',
+      severity: 'error',
+      message: 'A self-intersecting sketch entity cannot bound a profile.',
+      sourceEntityIds: [curve.sourceObjectId],
+      points: [crossing]
+    });
+  }
+
   const endpoints = curves.flatMap((curve) =>
     curveEndpoints(curve).map((point) => ({
       point,
@@ -690,6 +852,368 @@ function arcPoint(arc: ArcCurve, offset: number): Vec2Like {
     x: arc.cx + Math.cos(angle) * arc.r,
     y: arc.cy + Math.sin(angle) * arc.r
   };
+}
+
+/** The position range of a curve: segment t, arc/ellipse offset, or spline parameter. */
+function curveRange(curve: Curve): [number, number] {
+  switch (curve.kind) {
+    case 'seg':
+      return [0, 1];
+    case 'arc':
+    case 'ell':
+      return [0, curve.sweep];
+    case 'spl':
+      return [curve.t0, curve.t1];
+  }
+}
+
+function curveClosed(curve: Curve): boolean {
+  switch (curve.kind) {
+    case 'seg':
+      return false;
+    case 'arc':
+    case 'ell':
+      return Math.abs(curve.sweep - TWO_PI) < 1e-9;
+    case 'spl':
+      return curve.spline.closed;
+  }
+}
+
+function curveAt(curve: Curve, position: number): Vec2Like {
+  switch (curve.kind) {
+    case 'seg':
+      return segPoint(curve, Math.min(position, 1));
+    case 'arc':
+      return arcPoint(curve, position);
+    case 'ell':
+      return ellipsePoint(curve.ellipse, curve.ellipse.start + position);
+    case 'spl':
+      return splinePoint(
+        curve.spline,
+        curve.spline.closed && position > curve.t1
+          ? position - (curve.t1 - curve.t0)
+          : position
+      );
+  }
+}
+
+function curveDerivatives(
+  curve: Curve,
+  position: number
+): { d1: Vec2Like; d2: Vec2Like } {
+  switch (curve.kind) {
+    case 'seg':
+      return {
+        d1: { x: curve.bx - curve.ax, y: curve.by - curve.ay },
+        d2: { x: 0, y: 0 }
+      };
+    case 'arc': {
+      const angle = curve.a0 + position;
+      return {
+        d1: { x: -Math.sin(angle) * curve.r, y: Math.cos(angle) * curve.r },
+        d2: { x: -Math.cos(angle) * curve.r, y: -Math.sin(angle) * curve.r }
+      };
+    }
+    case 'ell':
+      return ellipseDerivatives(curve.ellipse, curve.ellipse.start + position);
+    case 'spl':
+      return splineDerivatives(
+        curve.spline,
+        curve.spline.closed && position > curve.t1
+          ? position - (curve.t1 - curve.t0)
+          : position
+      );
+  }
+}
+
+function splineExtent(spline: SplineGeometry): number {
+  let extent = 0;
+  const first = spline.controls[0]!;
+  for (const control of spline.controls) {
+    extent = Math.max(
+      extent,
+      Math.hypot(control.x - first.x, control.y - first.y)
+    );
+  }
+  return extent;
+}
+
+/** Polyline samples of a curve with the position of each sample. */
+function curveSamples(
+  curve: Curve,
+  density = 1
+): { positions: number[]; points: Vec2Like[] } {
+  const [from, to] = curveRange(curve);
+  let steps: number;
+  if (curve.kind === 'seg') {
+    steps = 1;
+  } else if (curve.kind === 'spl') {
+    steps = Math.max(
+      8,
+      (splineBreakpoints(curve.spline).length - 1) * Math.ceil(24 * density)
+    );
+  } else {
+    steps = Math.max(
+      8,
+      Math.ceil(
+        ((to - from) / TWO_PI) * (curve.kind === 'ell' ? 128 : 64) * density
+      )
+    );
+  }
+  const positions: number[] = [];
+  const points: Vec2Like[] = [];
+  for (let index = 0; index <= steps; index += 1) {
+    const position = from + ((to - from) * index) / steps;
+    positions.push(position);
+    points.push(curveAt(curve, position));
+  }
+  return { positions, points };
+}
+
+/** Wraps a position on a closed curve back into its range; clamps otherwise. */
+function settlePosition(curve: Curve, position: number): number {
+  const [from, to] = curveRange(curve);
+  if (curveClosed(curve)) {
+    const period = to - from;
+    const wrapped = (((position - from) % period) + period) % period;
+    return from + wrapped;
+  }
+  return Math.min(Math.max(position, from), to);
+}
+
+/** Newton refinement of `A(s) = B(t)` from a seed; null when it misses. */
+function refineCrossing(
+  a: Curve,
+  b: Curve,
+  seedA: number,
+  seedB: number,
+  tolerance: number
+): { pa: number; pb: number } | null {
+  let s = seedA;
+  let t = seedB;
+  for (let iteration = 0; iteration < 32; iteration += 1) {
+    const pa = curveAt(a, s);
+    const pb = curveAt(b, t);
+    const fx = pa.x - pb.x;
+    const fy = pa.y - pb.y;
+    if (Math.hypot(fx, fy) <= tolerance * 1e-3) {
+      break;
+    }
+    const da = curveDerivatives(a, s).d1;
+    const db = curveDerivatives(b, t).d1;
+    // J = [da, -db]; solve J·[ds, dt] = -F.
+    const det = da.x * -db.y - -db.x * da.y;
+    if (Math.abs(det) < 1e-18) {
+      break;
+    }
+    const ds = (-fx * -db.y - -db.x * -fy) / det;
+    const dt = (da.x * -fy - -fx * da.y) / det;
+    s = settlePosition(a, s + ds);
+    t = settlePosition(b, t + dt);
+    if (Math.abs(ds) + Math.abs(dt) < 1e-15) {
+      break;
+    }
+  }
+  const pa = curveAt(a, s);
+  const pb = curveAt(b, t);
+  return Math.hypot(pa.x - pb.x, pa.y - pb.y) <= tolerance
+    ? { pa: s, pb: t }
+    : null;
+}
+
+/** Closest position on `curve` to `point`, refined from the nearest sample. */
+function projectOntoCurve(
+  curve: Curve,
+  samples: { positions: number[]; points: Vec2Like[] },
+  point: Vec2Like
+): { position: number; distance: number } {
+  let best = 0;
+  let bestDistance = Infinity;
+  samples.points.forEach((sample, index) => {
+    const distance = Math.hypot(sample.x - point.x, sample.y - point.y);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = index;
+    }
+  });
+  let position = samples.positions[best]!;
+  for (let iteration = 0; iteration < 24; iteration += 1) {
+    const at = curveAt(curve, position);
+    const { d1, d2 } = curveDerivatives(curve, position);
+    const ex = at.x - point.x;
+    const ey = at.y - point.y;
+    const gradient = ex * d1.x + ey * d1.y;
+    const hessian = d1.x * d1.x + d1.y * d1.y + ex * d2.x + ey * d2.y;
+    if (!(Math.abs(hessian) > 1e-300)) {
+      break;
+    }
+    const next = settlePosition(curve, position - gradient / hessian);
+    if (Math.abs(next - position) < 1e-15) {
+      position = next;
+      break;
+    }
+    position = next;
+  }
+  const at = curveAt(curve, position);
+  return { position, distance: Math.hypot(at.x - point.x, at.y - point.y) };
+}
+
+function bboxOf(a: Vec2Like, b: Vec2Like, slack: number) {
+  return {
+    minX: Math.min(a.x, b.x) - slack,
+    maxX: Math.max(a.x, b.x) + slack,
+    minY: Math.min(a.y, b.y) - slack,
+    maxY: Math.max(a.y, b.y) + slack
+  };
+}
+
+/**
+ * Crossings of two curves when either is an I01 ellipse or spline. Neither
+ * has a closed-form intersection with every other kind, so this samples both,
+ * seeds Newton from every polyline crossing, and also projects each curve's
+ * endpoints onto the other so a T-junction or a shared endpoint is found
+ * however the chords happen to fall. A tangential touch that never crosses
+ * a chord is not detected — draw a line to the tangent point instead.
+ */
+function numericIntersections(
+  a: Curve,
+  b: Curve,
+  tolerance: number
+): { pa: number; pb: number }[] {
+  const sa = curveSamples(a);
+  const sb = curveSamples(b);
+  const hits: { pa: number; pb: number; point: Vec2Like }[] = [];
+  const record = (hit: { pa: number; pb: number } | null): void => {
+    if (!hit) {
+      return;
+    }
+    const point = curveAt(a, hit.pa);
+    if (
+      hits.some(
+        (existing) =>
+          Math.hypot(existing.point.x - point.x, existing.point.y - point.y) <=
+          tolerance * 4
+      )
+    ) {
+      return;
+    }
+    hits.push({ ...hit, point });
+  };
+  const boxesB = sb.points
+    .slice(0, -1)
+    .map((point, index) => bboxOf(point, sb.points[index + 1]!, tolerance));
+  for (let i = 0; i + 1 < sa.points.length; i += 1) {
+    const a0 = sa.points[i]!;
+    const a1 = sa.points[i + 1]!;
+    const boxA = bboxOf(a0, a1, tolerance);
+    for (let j = 0; j < boxesB.length; j += 1) {
+      const boxB = boxesB[j]!;
+      if (
+        boxA.maxX < boxB.minX ||
+        boxB.maxX < boxA.minX ||
+        boxA.maxY < boxB.minY ||
+        boxB.maxY < boxA.minY
+      ) {
+        continue;
+      }
+      const b0 = sb.points[j]!;
+      const b1 = sb.points[j + 1]!;
+      const rx = a1.x - a0.x;
+      const ry = a1.y - a0.y;
+      const qx = b1.x - b0.x;
+      const qy = b1.y - b0.y;
+      const denominator = rx * qy - ry * qx;
+      if (Math.abs(denominator) < 1e-300) {
+        continue;
+      }
+      const wx = b0.x - a0.x;
+      const wy = b0.y - a0.y;
+      const r = (wx * qy - wy * qx) / denominator;
+      const q = (wx * ry - wy * rx) / denominator;
+      if (r < -0.01 || r > 1.01 || q < -0.01 || q > 1.01) {
+        continue;
+      }
+      const seedA =
+        sa.positions[i]! + (sa.positions[i + 1]! - sa.positions[i]!) * r;
+      const seedB =
+        sb.positions[j]! + (sb.positions[j + 1]! - sb.positions[j]!) * q;
+      record(refineCrossing(a, b, seedA, seedB, tolerance));
+    }
+  }
+  for (const [curve, samples, other, otherSamples, swap] of [
+    [a, sa, b, sb, false],
+    [b, sb, a, sa, true]
+  ] as const) {
+    if (curveClosed(curve)) {
+      continue;
+    }
+    const [from, to] = curveRange(curve);
+    for (const position of [from, to]) {
+      const point = curveAt(curve, position);
+      const projected = projectOntoCurve(other, otherSamples, point);
+      if (projected.distance <= tolerance) {
+        record(
+          swap
+            ? { pa: projected.position, pb: position }
+            : { pa: position, pb: projected.position }
+        );
+      }
+    }
+    void samples;
+  }
+  return hits.map(({ pa, pb }) => ({ pa, pb }));
+}
+
+/** A point where a spline crosses itself, or null. */
+function splineSelfCrossing(
+  curve: SplCurve,
+  tolerance: number
+): Vec2Like | null {
+  const { points } = curveSamples(curve, 1 / 3);
+  const count = points.length - 1;
+  for (let i = 0; i < count; i += 1) {
+    const a0 = points[i]!;
+    const a1 = points[i + 1]!;
+    const boxA = bboxOf(a0, a1, 0);
+    for (let j = i + 2; j < count; j += 1) {
+      if (curve.spline.closed && i === 0 && j === count - 1) {
+        continue;
+      }
+      const b0 = points[j]!;
+      const b1 = points[j + 1]!;
+      const boxB = bboxOf(b0, b1, 0);
+      if (
+        boxA.maxX < boxB.minX ||
+        boxB.maxX < boxA.minX ||
+        boxA.maxY < boxB.minY ||
+        boxB.maxY < boxA.minY
+      ) {
+        continue;
+      }
+      const rx = a1.x - a0.x;
+      const ry = a1.y - a0.y;
+      const qx = b1.x - b0.x;
+      const qy = b1.y - b0.y;
+      const denominator = rx * qy - ry * qx;
+      if (Math.abs(denominator) < 1e-300) {
+        continue;
+      }
+      const wx = b0.x - a0.x;
+      const wy = b0.y - a0.y;
+      const r = (wx * qy - wy * qx) / denominator;
+      const q = (wx * ry - wy * rx) / denominator;
+      if (r > 0 && r < 1 && q > 0 && q < 1) {
+        const point = { x: a0.x + rx * r, y: a0.y + ry * r };
+        // Ignore a closed spline's own seam joint.
+        if (
+          Math.hypot(point.x - points[0]!.x, point.y - points[0]!.y) > tolerance
+        ) {
+          return point;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 function segSegIntersections(
@@ -865,36 +1389,42 @@ interface NodeRecord {
 }
 
 function splitPositions(curve: Curve, cuts: number[]): SubCurve[] {
-  const isArc = curve.kind === 'arc';
-  const end = isArc ? curve.sweep : 1;
-  const closed = isArc && Math.abs(curve.sweep - TWO_PI) < 1e-9;
-  const sorted = [
-    ...new Set(cuts.map((cut) => Math.min(Math.max(cut, 0), end)))
-  ]
-    .filter((cut) => (closed ? true : cut > 1e-9 && cut < end - 1e-9))
+  const [begin, end] = curveRange(curve);
+  const period = end - begin;
+  const closed = curveClosed(curve);
+  let settled = cuts.map((cut) => Math.min(Math.max(cut, begin), end));
+  if (curve.kind === 'spl' && closed && settled.length > 0) {
+    // A spline piece is extracted by knot insertion inside the domain, so
+    // no piece may run across the seam: cut there too, and read a cut at
+    // the domain's end as the seam itself.
+    settled = [
+      begin,
+      ...settled.map((cut) => (cut >= end - 1e-9 * period ? begin : cut))
+    ];
+  }
+  const sorted = [...new Set(settled)]
+    .filter((cut) =>
+      closed ? true : cut > begin + 1e-9 * period && cut < end - 1e-9 * period
+    )
     .sort((left, right) => left - right);
   const bounds: number[] = closed
     ? sorted.length > 0
-      ? [...sorted, sorted[0]! + end]
-      : [0, end]
-    : [0, ...sorted, end];
+      ? [...sorted, sorted[0]! + period]
+      : [begin, end]
+    : [begin, ...sorted, end];
   const pieces: SubCurve[] = [];
   for (let i = 0; i + 1 < bounds.length; i += 1) {
     const from = bounds[i]!;
     const to = bounds[i + 1]!;
-    if (to - from < 1e-9) {
+    if (to - from < 1e-9 * Math.max(period, 1e-300)) {
       continue;
     }
-    const evaluate = (position: number): Vec2Like =>
-      curve.kind === 'seg'
-        ? segPoint(curve, Math.min(position, 1))
-        : arcPoint(curve, position);
     pieces.push({
       curve,
       from,
       to,
-      start: evaluate(from),
-      end: evaluate(to)
+      start: curveAt(curve, from),
+      end: curveAt(curve, to)
     });
   }
   return pieces;
@@ -926,6 +1456,11 @@ function buildSubCurves(curves: Curve[], tolerance: number): SubCurve[] {
           cuts[i]!.push(hit.offsetA);
           cuts[j]!.push(hit.offsetB);
         }
+      } else {
+        for (const hit of numericIntersections(a, b, tolerance)) {
+          cuts[i]!.push(hit.pa);
+          cuts[j]!.push(hit.pb);
+        }
       }
     }
   }
@@ -945,6 +1480,9 @@ function departure(
       : sub.curve.ay - sub.curve.by;
     return { angle: Math.atan2(dy, dx), curvature: 0 };
   }
+  if (sub.curve.kind === 'ell' || sub.curve.kind === 'spl') {
+    return paramDeparture(sub.curve, sub, forward);
+  }
   const arc = sub.curve;
   if (forward) {
     // Traveling CCW: tangent leads the radius by 90°, curving left.
@@ -961,9 +1499,55 @@ function departure(
   };
 }
 
+function paramDeparture(
+  curve: ParamCurve,
+  sub: SubCurve,
+  forward: boolean
+): { angle: number; curvature: number } {
+  const position = forward ? sub.from : sub.to;
+  let { d1, d2 } = curveDerivatives(curve, position);
+  let speed = Math.hypot(d1.x, d1.y);
+  if (speed < 1e-12) {
+    // A stationary point (a spline cusp): step inside the piece and read
+    // the direction from there.
+    const inside = forward
+      ? sub.from + (sub.to - sub.from) * 1e-6
+      : sub.to - (sub.to - sub.from) * 1e-6;
+    ({ d1, d2 } = curveDerivatives(curve, inside));
+    speed = Math.hypot(d1.x, d1.y) || 1;
+  }
+  const sign = forward ? 1 : -1;
+  const curvature = (d1.x * d2.y - d1.y * d2.x) / (speed * speed * speed);
+  return {
+    angle: Math.atan2(sign * d1.y, sign * d1.x),
+    curvature: sign * curvature
+  };
+}
+
 function sampleSub(sub: SubCurve): Vec2Like[] {
   if (sub.curve.kind === 'seg') {
     return [sub.start, sub.end];
+  }
+  if (sub.curve.kind === 'ell' || sub.curve.kind === 'spl') {
+    const [from, to] = curveRange(sub.curve);
+    const fraction = (sub.to - sub.from) / (to - from);
+    const steps =
+      sub.curve.kind === 'ell'
+        ? Math.max(2, Math.ceil(fraction * CIRCLE_POLYLINE_SEGMENTS))
+        : Math.max(
+            4,
+            Math.ceil(
+              fraction * (splineBreakpoints(sub.curve.spline).length - 1) * 12
+            )
+          );
+    const points: Vec2Like[] = [sub.start];
+    for (let i = 1; i < steps; i += 1) {
+      points.push(
+        curveAt(sub.curve, sub.from + ((sub.to - sub.from) * i) / steps)
+      );
+    }
+    points.push(sub.end);
+    return points;
   }
   const arc = sub.curve;
   const span = sub.to - sub.from;
@@ -1034,6 +1618,19 @@ interface TracedLoop {
 function loopExactArea(loopEdges: HalfEdge[]): number {
   let area = 0;
   for (const edge of loopEdges) {
+    const curve = edge.sub.curve;
+    if (curve.kind === 'ell' || curve.kind === 'spl') {
+      const term =
+        curve.kind === 'ell'
+          ? ellipseAreaTerm(
+              curve.ellipse,
+              curve.ellipse.start + edge.sub.from,
+              curve.ellipse.start + edge.sub.to
+            )
+          : splineAreaTerm(curve.spline, edge.sub.from, edge.sub.to);
+      area += edge.forward ? term : -term;
+      continue;
+    }
     const start = edge.forward ? edge.sub.start : edge.sub.end;
     const end = edge.forward ? edge.sub.end : edge.sub.start;
     area += (start.x * end.y - end.x * start.y) / 2;
@@ -1087,6 +1684,62 @@ function curveSignature(curve: RegionCurve): string {
     const canonical =
       forward.join(',') <= backward.join(',') ? forward : backward;
     return `B${curve.controls.length + 1},${canonical.join(',')}`;
+  }
+  if (curve.kind === 'spline') {
+    // Direction-canonical: the reversed piece has reversed control points
+    // and reflected knots, so compare normalized knot spacing with them.
+    const [k0, k1] = [curve.knots[0]!, curve.knots[curve.knots.length - 1]!];
+    const span = k1 - k0 || 1;
+    const forward = [
+      ...curve.knots.map((knot) => quantize((knot - k0) / span)),
+      ...curve.controls.flatMap((point) => [
+        quantize(point.x),
+        quantize(point.y)
+      ])
+    ];
+    const reversed = reverseSpline({
+      degree: curve.degree,
+      knots: curve.knots,
+      controls: curve.controls,
+      closed: false
+    });
+    const backward = [
+      ...reversed.knots.map((knot) => quantize((knot - k0) / span)),
+      ...reversed.controls.flatMap((point) => [
+        quantize(point.x),
+        quantize(point.y)
+      ])
+    ];
+    const canonical =
+      forward.join(',') <= backward.join(',') ? forward : backward;
+    return `S${curve.degree},${canonical.join(',')}`;
+  }
+  if (curve.kind === 'ellipse') {
+    const major = Math.max(curve.radiusX, curve.radiusY);
+    const minor = Math.min(curve.radiusX, curve.radiusY);
+    const axis =
+      (((curve.radiusX >= curve.radiusY
+        ? curve.rotation
+        : curve.rotation + Math.PI / 2) %
+        Math.PI) +
+        Math.PI) %
+      Math.PI;
+    const base = `${quantize(curve.center.x)},${quantize(curve.center.y)},${quantize(major)},${quantize(minor)},${quantize(major - minor < 1e-9 ? 0 : axis)}`;
+    const sweep = ellipseRegionSweep(curve);
+    if (Math.abs(Math.abs(sweep) - TWO_PI) < 1e-9) {
+      return `EC${base}`;
+    }
+    const geometry = ellipseGeometryOf(curve);
+    const pointKey = (point: Vec2Like): string =>
+      `${quantize(point.x)},${quantize(point.y)}`;
+    const ends = [
+      pointKey(ellipsePoint(geometry, curve.startParam)),
+      pointKey(ellipsePoint(geometry, curve.endParam))
+    ].sort();
+    const middle = pointKey(
+      ellipsePoint(geometry, curve.startParam + sweep / 2)
+    );
+    return `E${base},${ends.join(',')},${middle}`;
   }
   const forwardSweep = normalizeAngle(curve.endAngle - curve.startAngle);
   const span = curve.ccw
@@ -1191,12 +1844,36 @@ export function profilesShareBoundary(
   );
 }
 
+function ellipseGeometryOf(curve: EllipseRegionCurve): EllipseGeometry {
+  return {
+    center: curve.center,
+    radiusX: curve.radiusX,
+    radiusY: curve.radiusY,
+    rotation: curve.rotation,
+    start: 0,
+    sweep: TWO_PI
+  };
+}
+
+/** Signed parameter sweep of an ellipse piece in its loop's direction. */
+export function ellipseRegionSweep(curve: EllipseRegionCurve): number {
+  const forward = normalizeAngle(curve.endParam - curve.startParam);
+  return curve.ccw ? forward || TWO_PI : forward - TWO_PI || -TWO_PI;
+}
+
 function regionCurveStart(curve: RegionCurve): Vec2Like {
   // Endpoints are returned by reference, never recomputed: the whole text
   // pipeline depends on adjacent segments sharing one point object so the
   // doubles `makeWire` welds are bit-identical on both sides of a joint.
-  if (curve.kind === 'line' || curve.kind === 'bezier') {
+  if (
+    curve.kind === 'line' ||
+    curve.kind === 'bezier' ||
+    curve.kind === 'spline'
+  ) {
     return curve.a;
+  }
+  if (curve.kind === 'ellipse') {
+    return ellipsePoint(ellipseGeometryOf(curve), curve.startParam);
   }
   return {
     x: curve.center.x + Math.cos(curve.startAngle) * curve.radius,
@@ -1205,8 +1882,15 @@ function regionCurveStart(curve: RegionCurve): Vec2Like {
 }
 
 function regionCurveEnd(curve: RegionCurve): Vec2Like {
-  if (curve.kind === 'line' || curve.kind === 'bezier') {
+  if (
+    curve.kind === 'line' ||
+    curve.kind === 'bezier' ||
+    curve.kind === 'spline'
+  ) {
     return curve.b;
+  }
+  if (curve.kind === 'ellipse') {
+    return ellipsePoint(ellipseGeometryOf(curve), curve.endParam);
   }
   return {
     x: curve.center.x + Math.cos(curve.endAngle) * curve.radius,
@@ -1227,6 +1911,29 @@ function reverseRegionCurve(curve: RegionCurve): RegionCurve {
         ? [curve.controls[0]]
         : [curve.controls[1], curve.controls[0]];
     return { ...curve, a: curve.b, b: curve.a, controls };
+  }
+  if (curve.kind === 'spline') {
+    const reversed = reverseSpline({
+      degree: curve.degree,
+      knots: curve.knots,
+      controls: curve.controls,
+      closed: false
+    });
+    return {
+      ...curve,
+      a: curve.b,
+      b: curve.a,
+      knots: reversed.knots,
+      controls: reversed.controls
+    };
+  }
+  if (curve.kind === 'ellipse') {
+    return {
+      ...curve,
+      startParam: curve.endParam,
+      endParam: curve.startParam,
+      ccw: !curve.ccw
+    };
   }
   return {
     ...curve,
@@ -1330,6 +2037,33 @@ function sampleRegionCurve(curve: RegionCurve): Vec2Like[] {
     samples.push(curve.b);
     return samples;
   }
+  if (curve.kind === 'spline') {
+    const spline: SplineGeometry = {
+      degree: curve.degree,
+      knots: curve.knots,
+      controls: curve.controls,
+      closed: false
+    };
+    const [from, to] = splineDomain(spline);
+    const steps = Math.max(4, (splineBreakpoints(spline).length - 1) * 12);
+    const samples: Vec2Like[] = [curve.a];
+    for (let index = 1; index < steps; index += 1) {
+      samples.push(splinePoint(spline, from + ((to - from) * index) / steps));
+    }
+    samples.push(curve.b);
+    return samples;
+  }
+  if (curve.kind === 'ellipse') {
+    const sweep = ellipseRegionSweep(curve);
+    const steps = Math.max(
+      2,
+      Math.ceil((Math.abs(sweep) / TWO_PI) * CIRCLE_POLYLINE_SEGMENTS)
+    );
+    const geometry = ellipseGeometryOf(curve);
+    return Array.from({ length: steps + 1 }, (_, index) =>
+      ellipsePoint(geometry, curve.startParam + (sweep * index) / steps)
+    );
+  }
   const sweep = regionCurveSweep(curve);
   const steps = Math.max(
     2,
@@ -1391,6 +2125,27 @@ function exactAreaForRegionCurves(curves: RegionCurve[]): number {
   for (const curve of curves) {
     if (curve.kind === 'bezier') {
       area += bezierSignedAreaTerm(curve) / 2;
+      continue;
+    }
+    if (curve.kind === 'spline') {
+      area += splineAreaTerm(
+        {
+          degree: curve.degree,
+          knots: curve.knots,
+          controls: curve.controls,
+          closed: false
+        },
+        curve.knots[0]!,
+        curve.knots[curve.knots.length - 1]!
+      );
+      continue;
+    }
+    if (curve.kind === 'ellipse') {
+      area += ellipseAreaTerm(
+        ellipseGeometryOf(curve),
+        curve.startParam,
+        curve.startParam + ellipseRegionSweep(curve)
+      );
       continue;
     }
     const start = regionCurveStart(curve);
@@ -1807,6 +2562,40 @@ function extractSketchProfiles(
           kind: 'line',
           a: edge.forward ? sub.start : sub.end,
           b: edge.forward ? sub.end : sub.start,
+          sourceObjectId: sub.curve.sourceObjectId
+        } satisfies RegionCurve;
+      }
+      if (sub.curve.kind === 'ell') {
+        const ellipse = sub.curve.ellipse;
+        return {
+          kind: 'ellipse',
+          center: { ...ellipse.center },
+          radiusX: ellipse.radiusX,
+          radiusY: ellipse.radiusY,
+          rotation: ellipse.rotation,
+          startParam: ellipse.start + (edge.forward ? sub.from : sub.to),
+          endParam: ellipse.start + (edge.forward ? sub.to : sub.from),
+          ccw: edge.forward,
+          sourceObjectId: sub.curve.sourceObjectId
+        } satisfies RegionCurve;
+      }
+      if (sub.curve.kind === 'spl') {
+        const piece = splineSubcurve(sub.curve.spline, sub.from, sub.to);
+        const oriented = edge.forward ? piece : reverseSpline(piece);
+        const controls = oriented.controls.map((point) => ({ ...point }));
+        // The arrangement's node points, by value: the joints with the
+        // neighbouring pieces then agree exactly rather than to float noise.
+        const a = edge.forward ? sub.start : sub.end;
+        const b = edge.forward ? sub.end : sub.start;
+        controls[0] = a;
+        controls[controls.length - 1] = b;
+        return {
+          kind: 'spline',
+          a,
+          b,
+          degree: oriented.degree,
+          knots: oriented.knots,
+          controls,
           sourceObjectId: sub.curve.sourceObjectId
         } satisfies RegionCurve;
       }

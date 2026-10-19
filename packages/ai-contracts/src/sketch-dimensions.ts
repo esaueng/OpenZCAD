@@ -9,6 +9,17 @@ export const SKETCH_DIMENSION_FIELDS: Record<
   polygon: ['sides', 'radius', 'centerX', 'centerY'],
   line: ['x1', 'y1', 'x2', 'y2'],
   arc: ['centerX', 'centerY', 'radius', 'startAngleDeg', 'endAngleDeg'],
+  ellipse: [
+    'centerX',
+    'centerY',
+    'radiusX',
+    'radiusY',
+    'rotationDeg',
+    'startParamDeg',
+    'endParamDeg'
+  ],
+  // Spline points are a list, not named fields; nothing here addresses them.
+  spline: [],
   text: ['size', 'x', 'y', 'rotation']
 };
 

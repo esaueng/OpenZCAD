@@ -161,7 +161,11 @@ const COMPOSITE_REFUSALS: Partial<
     'A rectangle is one object, and its corners carry no constraints. Draw the profile as lines to modify a corner.',
   polygon:
     'A polygon is one object, and its corners carry no constraints. Draw the profile as lines to modify a corner.',
-  text: 'Text is one object with no constrainable outline points.'
+  text: 'Text is one object with no constrainable outline points.',
+  ellipse:
+    'Modify tools work on lines, arcs and circles; they do not take an ellipse yet.',
+  spline:
+    'Modify tools work on lines, arcs and circles; they do not take a spline yet.'
 };
 
 /**

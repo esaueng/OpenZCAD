@@ -18,8 +18,12 @@
 
 import { resolveParamValue } from '@openzcad/document-core';
 import {
+  ellipticalArcSweepDegrees,
+  fitSplineThrough,
+  controlSpline,
   polygonProfile,
   rectangleProfile,
+  splineDegreeOf,
   type PlaneBasis,
   type Vec2
 } from '@openzcad/geometry';
@@ -358,6 +362,119 @@ function arcEntities(
   ];
 }
 
+/**
+ * An ellipse or elliptical arc (I01) as one exact ellipse entity, its major
+ * axis on whichever radius is larger. The DXF R12 writer refuses it by
+ * name; the SVG writer draws it as elliptical-arc path commands.
+ */
+function ellipseEntities(
+  data: Extract<SketchObjectData, { objectKind: 'ellipse' }>,
+  context: SketchDxfContext,
+  objectId: string,
+  millimeterScale: number
+): DxfEntity[] {
+  const centerX = resolveScalar(data.centerX, context, 'center X', objectId);
+  const centerY = resolveScalar(data.centerY, context, 'center Y', objectId);
+  const radiusX = resolveScalar(data.radiusX, context, 'radius X', objectId);
+  const radiusY = resolveScalar(data.radiusY, context, 'radius Y', objectId);
+  const rotation =
+    (resolveScalar(data.rotationDeg, context, 'rotation', objectId) * Math.PI) /
+    180;
+  if (!(radiusX > 0) || !(radiusY > 0)) {
+    refuse(
+      'invalid-geometry',
+      `Sketch object ${objectId}: ellipse radii must be positive.`
+    );
+  }
+  let start = 0;
+  let sweep = Math.PI * 2;
+  if (data.startParamDeg !== undefined || data.endParamDeg !== undefined) {
+    if (data.startParamDeg === undefined || data.endParamDeg === undefined) {
+      refuse(
+        'invalid-geometry',
+        `Sketch object ${objectId}: an elliptical arc needs both a start and an end.`
+      );
+    }
+    const startDeg = resolveScalar(
+      data.startParamDeg!,
+      context,
+      'arc start',
+      objectId
+    );
+    const endDeg = resolveScalar(
+      data.endParamDeg!,
+      context,
+      'arc end',
+      objectId
+    );
+    try {
+      sweep = (ellipticalArcSweepDegrees(startDeg, endDeg) * Math.PI) / 180;
+    } catch (error) {
+      refuse(
+        'invalid-geometry',
+        `Sketch object ${objectId}: ${error instanceof Error ? error.message : 'invalid elliptical arc sweep'}`
+      );
+    }
+    start = (startDeg * Math.PI) / 180;
+  }
+  // Restate on the major axis: a taller-than-wide ellipse turns a quarter
+  // and its parameter shifts back by the same quarter.
+  const swap = radiusY > radiusX;
+  const major = swap ? radiusY : radiusX;
+  const minor = swap ? radiusX : radiusY;
+  const axisAngle = swap ? rotation + Math.PI / 2 : rotation;
+  const shift = swap ? -Math.PI / 2 : 0;
+  return [
+    {
+      kind: 'ellipse',
+      center: [centerX * millimeterScale, centerY * millimeterScale],
+      majorAxis: [
+        Math.cos(axisAngle) * major * millimeterScale,
+        Math.sin(axisAngle) * major * millimeterScale
+      ],
+      ratio: minor / major,
+      startParam: start + shift,
+      endParam: start + shift + sweep
+    }
+  ];
+}
+
+/** A spline (I01) as the exact B-spline region analysis and the kernel use. */
+function splineEntities(
+  data: Extract<SketchObjectData, { objectKind: 'spline' }>,
+  context: SketchDxfContext,
+  objectId: string,
+  millimeterScale: number
+): DxfEntity[] {
+  const points = data.points.map((point, index) => ({
+    x: resolveScalar(point.x, context, `spline point ${index + 1} X`, objectId),
+    y: resolveScalar(point.y, context, `spline point ${index + 1} Y`, objectId)
+  }));
+  const spline = (() => {
+    try {
+      return data.method === 'fit'
+        ? fitSplineThrough(points, data.closed === true)
+        : controlSpline(points, splineDegreeOf(data), data.closed === true);
+    } catch (error) {
+      return refuse(
+        'invalid-geometry',
+        `Sketch object ${objectId}: ${error instanceof Error ? error.message : 'the spline is not valid'}`
+      );
+    }
+  })();
+  return [
+    {
+      kind: 'spline',
+      degree: spline.degree,
+      knots: spline.knots,
+      controls: spline.controls.map(
+        (point) =>
+          [point.x * millimeterScale, point.y * millimeterScale] as const
+      )
+    }
+  ];
+}
+
 function rectangleEntities(
   data: Extract<SketchObjectData, { objectKind: 'rectangle' }>,
   context: SketchDxfContext,
@@ -485,6 +602,16 @@ export function sketchDxfEntities(input: SketchDxfInput): SketchDxfOutcome {
             ...polygonEntities(data, input, object.id, input.millimeterScale)
           );
           break;
+        case 'ellipse':
+          entities.push(
+            ...ellipseEntities(data, input, object.id, input.millimeterScale)
+          );
+          break;
+        case 'spline':
+          entities.push(
+            ...splineEntities(data, input, object.id, input.millimeterScale)
+          );
+          break;
         case 'text':
           refuse(
             'unsupported-object',
@@ -494,7 +621,7 @@ export function sketchDxfEntities(input: SketchDxfInput): SketchDxfOutcome {
         default:
           refuse(
             'unsupported-object',
-            `Sketch object ${object.id} has kind ${(data as { objectKind: string }).objectKind}; only line, circle, arc, rectangle, and polygon export.`
+            `Sketch object ${object.id} has kind ${(data as { objectKind: string }).objectKind}; only line, circle, arc, ellipse, spline, rectangle, and polygon export.`
           );
       }
     }

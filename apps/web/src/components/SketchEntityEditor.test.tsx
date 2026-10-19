@@ -989,3 +989,115 @@ describe('composite card (S04)', () => {
     expect(onResizeComposite).toHaveBeenCalledWith({ circumradius: 15 }, {});
   });
 });
+
+describe('SketchEntityEditor I01 curves', () => {
+  it('edits an elliptical arc and keeps its parameter range', async () => {
+    const next = await applyEdit(
+      {
+        objectKind: 'ellipse',
+        centerX: 0,
+        centerY: 0,
+        radiusX: 20,
+        radiusY: 8,
+        rotationDeg: 15,
+        startParamDeg: 0,
+        endParamDeg: 120,
+        construction: true
+      },
+      'Radius Y',
+      '6'
+    );
+    expect(next).toEqual({
+      objectKind: 'ellipse',
+      centerX: 0,
+      centerY: 0,
+      radiusX: 20,
+      radiusY: 6,
+      rotationDeg: 15,
+      startParamDeg: 0,
+      endParamDeg: 120,
+      construction: true
+    });
+  });
+
+  it('shows a full ellipse without arc fields and refuses a zero radius', async () => {
+    const user = userEvent.setup();
+    render(
+      <SketchEntityEditor
+        data={{
+          objectKind: 'ellipse',
+          centerX: 0,
+          centerY: 0,
+          radiusX: 20,
+          radiusY: 8,
+          rotationDeg: 0
+        }}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.queryByLabelText('Start')).not.toBeInTheDocument();
+    const field = screen.getByLabelText('Radius X');
+    await user.clear(field);
+    await user.type(field, '0');
+    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+    expect(
+      screen.getByText('Ellipse radii must be greater than zero.')
+    ).toBeInTheDocument();
+  });
+
+  it('edits one spline point and keeps the others as written', async () => {
+    const spline: SketchObjectData = {
+      objectKind: 'spline',
+      method: 'fit',
+      points: [
+        { x: 0, y: 0 },
+        { x: '20 / 2', y: 9 },
+        { x: 20, y: 0 }
+      ]
+    };
+    const next = await applyEdit(spline, 'Point 3 Y', '4');
+    // The untouched expression survives the Apply.
+    expect(next).toEqual({
+      ...spline,
+      points: [
+        { x: 0, y: 0 },
+        { x: '20 / 2', y: 9 },
+        { x: 20, y: 4 }
+      ]
+    });
+  });
+
+  it('refuses a spline point repeated in a row', async () => {
+    const user = userEvent.setup();
+    render(
+      <SketchEntityEditor
+        data={{
+          objectKind: 'spline',
+          method: 'fit',
+          points: [
+            { x: 0, y: 0 },
+            { x: 10, y: 9 },
+            { x: 20, y: 0 }
+          ]
+        }}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    for (const [label, value] of [
+      ['Point 2 X', '0'],
+      ['Point 2 Y', '0']
+    ] as const) {
+      const field = screen.getByLabelText(label);
+      await user.clear(field);
+      await user.type(field, value);
+    }
+    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+    expect(screen.getByText(/same point twice in a row/)).toBeInTheDocument();
+  });
+});

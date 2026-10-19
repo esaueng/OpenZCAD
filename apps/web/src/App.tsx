@@ -570,6 +570,8 @@ import {
   isOperationState,
   isStaleSelectionError,
   nextSketchCircleMode,
+  nextSketchCurveMode,
+  sketchCurveModeFor,
   nextSketchRectangleMode,
   DEFAULT_SKETCH_POLYGON_SIDES,
   radialFaceOperationName,
@@ -6265,9 +6267,14 @@ export function App() {
         // Open curves have no fill; region overlays render them separately.
         return [];
       }
-      if (data.objectKind === 'text') {
+      if (
+        data.objectKind === 'text' ||
+        data.objectKind === 'ellipse' ||
+        data.objectKind === 'spline'
+      ) {
         // Text has no single closed profile — it is many regions with holes,
-        // and the region overlay renders it.
+        // and the region overlay renders it. I01 curves fill through region
+        // analysis too.
         return [];
       }
       const centerX = resolve(data.centerX);
@@ -13599,6 +13606,7 @@ export function App() {
       frame,
       tool: session.tool,
       circleMode: session.circleMode,
+      curveMode: session.curveMode,
       rectangleMode: session.rectangleMode ?? 'corner',
       polygonSides: session.polygonSides ?? DEFAULT_SKETCH_POLYGON_SIDES,
       snapStep: appSettings.sketching.snapEnabled
@@ -19158,6 +19166,25 @@ export function App() {
           });
           return;
         }
+        // The ellipse and spline keys step between their tool's two types.
+        if (
+          (sketchCommand === 'sketch-ellipse' &&
+            interaction.session.tool === 'ellipse') ||
+          (sketchCommand === 'sketch-spline' &&
+            interaction.session.tool === 'spline')
+        ) {
+          event.preventDefault();
+          dispatchInteraction({
+            type: 'sketch-curve-mode',
+            mode: nextSketchCurveMode(
+              sketchCurveModeFor(
+                interaction.session.tool,
+                interaction.session.curveMode
+              )
+            )
+          });
+          return;
+        }
         // The rectangle key does the same for the rectangle's types.
         if (
           sketchCommand === 'sketch-rectangle' &&
@@ -19185,9 +19212,13 @@ export function App() {
                     ? ('rectangle' as const)
                     : sketchCommand === 'sketch-polygon'
                       ? ('polygon' as const)
-                      : sketchCommand === 'sketch-text'
-                        ? ('text' as const)
-                        : null;
+                      : sketchCommand === 'sketch-ellipse'
+                        ? ('ellipse' as const)
+                        : sketchCommand === 'sketch-spline'
+                          ? ('spline' as const)
+                          : sketchCommand === 'sketch-text'
+                            ? ('text' as const)
+                            : null;
         if (sketchTool) {
           event.preventDefault();
           dispatchInteraction({ type: 'sketch-tool', tool: sketchTool });
@@ -20789,6 +20820,10 @@ export function App() {
         }
         onPolygonSides={(sides) =>
           dispatchInteraction({ type: 'sketch-polygon-sides', sides })
+        }
+        curveMode={interaction.session.curveMode}
+        onCurveMode={(mode) =>
+          dispatchInteraction({ type: 'sketch-curve-mode', mode })
         }
         onConstruction={setSketchConstruction}
         onSettings={(sketching) => {

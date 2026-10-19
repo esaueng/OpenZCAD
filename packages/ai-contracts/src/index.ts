@@ -4678,9 +4678,15 @@ export function validateCadPatchProposalAgainstDigest(
             : null;
         if (
           !object ||
-          !['rectangle', 'circle', 'polygon', 'line', 'arc', 'text'].includes(
-            String(object.objectKind)
-          ) ||
+          ![
+            'rectangle',
+            'circle',
+            'polygon',
+            'line',
+            'arc',
+            'ellipse',
+            'text'
+          ].includes(String(object.objectKind)) ||
           !isSketchDimensionField(
             object.objectKind as SketchObjectData['objectKind'],
             operation.field

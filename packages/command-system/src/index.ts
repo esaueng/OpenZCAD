@@ -1972,16 +1972,33 @@ function assertOperationExpressions(
     'text',
     'fontFamily',
     'fontStyle',
-    'align'
+    'align',
+    // A spline's method is a word; its points are checked one by one below.
+    'method'
   ]);
   const sketchObjects = (name: string, objects: SketchObjectData[]) => {
     objects.forEach((object, index) => {
       Object.entries(object).forEach(([key, value]) => {
+        if (key === 'points' && Array.isArray(value)) {
+          (value as { x: ParamValue; y: ParamValue }[]).forEach(
+            (point, pointIndex) => {
+              for (const axis of ['x', 'y'] as const) {
+                assertEvaluableExpression(
+                  scope,
+                  `${name} objects[${index}].points[${pointIndex}].${axis}`,
+                  point[axis],
+                  documentUnits
+                );
+              }
+            }
+          );
+          return;
+        }
         if (!nonDimensionKeys.has(key) && typeof value !== 'boolean') {
           assertEvaluableExpression(
             scope,
             `${name} objects[${index}].${key}`,
-            value,
+            value as ParamValue,
             documentUnits
           );
         }

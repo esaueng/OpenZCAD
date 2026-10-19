@@ -1,6 +1,12 @@
 import {
   FRONT_FACING_XZ_BASIS,
   PLANE_BASES,
+  ellipsePoint,
+  isFullEllipse,
+  resolveEllipseGeometry,
+  resolveSplineGeometry,
+  sampleEllipse,
+  sampleSpline,
   type PlaneBasis
 } from '@openzcad/geometry';
 import type { SketchMoveHandle } from '../interaction/machine';
@@ -288,6 +294,126 @@ export function arcDimension(
     radius: Math.hypot(start.x - center.x, start.y - center.y),
     sweepDeg: (positiveSweep(startAngle, endAngle) * 180) / Math.PI
   };
+}
+
+/**
+ * The ellipse a center, one axis end and a third point define (I01): the
+ * axis end fixes `radiusX` and the rotation, and the third point's distance
+ * from that axis is `radiusY`. Null when either radius is below the
+ * smallest profile size.
+ */
+export function ellipseObjectFromPoints(
+  center: SketchPoint,
+  axisEnd: SketchPoint,
+  point: SketchPoint
+): Extract<SketchObjectData, { objectKind: 'ellipse' }> | null {
+  const dx = axisEnd.x - center.x;
+  const dy = axisEnd.y - center.y;
+  const radiusX = Math.hypot(dx, dy);
+  if (radiusX < MIN_PROFILE_SIZE) {
+    return null;
+  }
+  const radiusY =
+    Math.abs(dx * (point.y - center.y) - dy * (point.x - center.x)) / radiusX;
+  if (radiusY < MIN_PROFILE_SIZE) {
+    return null;
+  }
+  return {
+    objectKind: 'ellipse',
+    centerX: center.x,
+    centerY: center.y,
+    radiusX,
+    radiusY,
+    rotationDeg: (Math.atan2(dy, dx) * 180) / Math.PI
+  };
+}
+
+/**
+ * The ellipse parameter, in degrees, of the point on the ellipse along the
+ * ray from its centre through `point` — what an elliptical arc's start and
+ * end store.
+ */
+export function ellipseParamDegAt(
+  ellipse: Extract<SketchObjectData, { objectKind: 'ellipse' }>,
+  point: SketchPoint
+): number {
+  const rotation = (Number(ellipse.rotationDeg) * Math.PI) / 180;
+  const dx = point.x - Number(ellipse.centerX);
+  const dy = point.y - Number(ellipse.centerY);
+  const localX = dx * Math.cos(rotation) + dy * Math.sin(rotation);
+  const localY = -dx * Math.sin(rotation) + dy * Math.cos(rotation);
+  return (
+    (Math.atan2(
+      localY / Number(ellipse.radiusY),
+      localX / Number(ellipse.radiusX)
+    ) *
+      180) /
+    Math.PI
+  );
+}
+
+/**
+ * An elliptical arc on `ellipse`, counter-clockwise from the parameter at
+ * `start` to the one at `end`. Null for a sweep under one degree.
+ */
+export function ellipticalArcObject(
+  ellipse: Extract<SketchObjectData, { objectKind: 'ellipse' }>,
+  start: SketchPoint,
+  end: SketchPoint
+): Extract<SketchObjectData, { objectKind: 'ellipse' }> | null {
+  const startParamDeg = ellipseParamDegAt(ellipse, start);
+  let sweep = (ellipseParamDegAt(ellipse, end) - startParamDeg) % 360;
+  if (sweep < 0) {
+    sweep += 360;
+  }
+  if (sweep < 1 || sweep > 359) {
+    return null;
+  }
+  return { ...ellipse, startParamDeg, endParamDeg: startParamDeg + sweep };
+}
+
+/**
+ * A spline object through (fit) or pulled by (control) `points`, or null
+ * when the points cannot make one — fewer than three, or a point repeated
+ * in a row. A control spline is cubic, lowered for a short polygon.
+ */
+export function splineObjectFromPoints(
+  method: 'fit' | 'control',
+  points: readonly SketchPoint[],
+  closed: boolean
+): Extract<SketchObjectData, { objectKind: 'spline' }> | null {
+  const data: Extract<SketchObjectData, { objectKind: 'spline' }> = {
+    objectKind: 'spline',
+    method,
+    ...(method === 'control' ? { degree: 3 as const } : {}),
+    points: points.map((point) => ({ x: point.x, y: point.y })),
+    ...(closed ? { closed: true } : {})
+  };
+  try {
+    resolveSplineGeometry(data, (value) => Number(value));
+  } catch {
+    return null;
+  }
+  return data;
+}
+
+/** Display polyline of an ellipse or spline object, for in-progress previews. */
+export function curvePreviewPoints(
+  data: Extract<SketchObjectData, { objectKind: 'ellipse' | 'spline' }>
+): { points: SketchPoint[]; closed: boolean } {
+  const resolve = (value: unknown) => Number(value);
+  if (data.objectKind === 'ellipse') {
+    const ellipse = resolveEllipseGeometry(data, resolve);
+    const points = sampleEllipse(ellipse);
+    return isFullEllipse(ellipse)
+      ? { points: points.slice(0, -1), closed: true }
+      : { points, closed: false };
+  }
+  const spline = resolveSplineGeometry(data, resolve);
+  const points = sampleSpline(spline);
+  return spline.closed
+    ? { points: points.slice(0, -1), closed: true }
+    : { points, closed: false };
 }
 
 /**
@@ -678,6 +804,57 @@ export function snapTargetsForObject(
         target('center', cx, cy, 'center')
       ];
     }
+    case 'ellipse': {
+      const ellipse = resolveEllipseGeometry(data, resolve);
+      const at = (t: number) => ellipsePoint(ellipse, t);
+      if (isFullEllipse(ellipse)) {
+        // Centre and the four axis ends.
+        return [
+          target('center', ellipse.center.x, ellipse.center.y, 'center'),
+          ...[0, 0.5, 1, 1.5].map((quarter) => {
+            const point = at(quarter * Math.PI);
+            return target('quadrant', point.x, point.y);
+          })
+        ];
+      }
+      const start = at(ellipse.start);
+      const end = at(ellipse.start + ellipse.sweep);
+      const middle = at(ellipse.start + ellipse.sweep / 2);
+      // An elliptical arc's ends are snap points but not solver points: the
+      // solver holds it as its carrier ellipse, by the centre.
+      return [
+        target('endpoint', start.x, start.y),
+        target('endpoint', end.x, end.y),
+        target('midpoint', middle.x, middle.y),
+        target('center', ellipse.center.x, ellipse.center.y, 'center')
+      ];
+    }
+    case 'spline': {
+      const points = data.points.map((point) => ({
+        x: resolve(point.x),
+        y: resolve(point.y)
+      }));
+      const closed = data.closed === true;
+      const last = points.length - 1;
+      return points.flatMap((point, index) => {
+        if (
+          data.method === 'control' &&
+          (closed || (index > 0 && index < last))
+        ) {
+          // An interior control point is off the curve: nothing to snap to.
+          return [];
+        }
+        const end = !closed && (index === 0 || index === last);
+        return [
+          target(
+            'endpoint',
+            point.x,
+            point.y,
+            end ? (index === 0 ? 'start' : 'end') : undefined
+          )
+        ];
+      });
+    }
     case 'text':
       // The baseline origin is the one point that exists without parsed font
       // data, and it is the handle a user drags, so it is the snap target.
@@ -1039,6 +1216,12 @@ function positionFields(data: SketchObjectData): [string, string][] {
 
 /** True when every position field is a literal number a drag can rewrite. */
 export function sketchObjectMovable(data: SketchObjectData): boolean {
+  if (data.objectKind === 'spline') {
+    // A spline's position is all of its points.
+    return data.points.every(
+      (point) => isLiteralNumber(point.x) && isLiteralNumber(point.y)
+    );
+  }
   const record = data as unknown as Record<string, unknown>;
   return positionFields(data).every(
     ([x, y]) => isLiteralNumber(record[x]) && isLiteralNumber(record[y])
@@ -1070,6 +1253,12 @@ export function sketchObjectGrabPoint(
       case 'rectangle':
       case 'polygon':
         return { x: resolve(data.centerX), y: resolve(data.centerY) };
+      case 'ellipse':
+        // A full ellipse is closed and grabbed by its centre; an elliptical
+        // arc, like an arc, anywhere along the curve.
+        return data.startParamDeg === undefined
+          ? { x: resolve(data.centerX), y: resolve(data.centerY) }
+          : null;
       case 'text':
         return { x: resolve(data.x), y: resolve(data.y) };
       default:
@@ -1091,6 +1280,15 @@ export function translateSketchObject(
   dy: number,
   resolve: (value: unknown) => number
 ): SketchObjectData {
+  if (data.objectKind === 'spline') {
+    return {
+      ...data,
+      points: data.points.map((point) => ({
+        x: resolve(point.x) + dx,
+        y: resolve(point.y) + dy
+      }))
+    };
+  }
   const next = { ...data } as unknown as Record<string, unknown>;
   for (const [x, y] of positionFields(data)) {
     next[x] = resolve(next[x]) + dx;
@@ -1112,6 +1310,7 @@ export function placeSketchObjectGrabPoint(
     case 'circle':
     case 'rectangle':
     case 'polygon':
+    case 'ellipse':
       return { ...data, centerX: target.x, centerY: target.y };
     case 'text':
       return { ...data, x: target.x, y: target.y };
