@@ -1392,10 +1392,13 @@ export function decryptContentBlobStream(
   options: ReadOptions = {}
 ): ReadableStream<Bytes> {
   const reader = createContentBlobReader(reference, options);
+  // Read once, as just validated: the stream ends long after this returns,
+  // and the caller's reference may have changed by then.
+  const declared = reference.plaintextLength;
   const cap = plaintextCap({
     kind: reference.kind,
     compression: 'none',
-    declaredLength: reference.plaintextLength,
+    declaredLength: declared,
     maxPlaintextBytes: options.maxPlaintextBytes
   });
   // Push the envelope a record at a time, so one huge input chunk is
@@ -1464,7 +1467,7 @@ export function decryptContentBlobStream(
         }
         const next = await source.read();
         if (next.done) {
-          checkDeclaredLength(delivered, reference.plaintextLength);
+          checkDeclaredLength(delivered, declared);
           controller.close();
           return;
         }

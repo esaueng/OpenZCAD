@@ -1275,6 +1275,23 @@ describe('content blobs', () => {
     expect(reader.header?.blobId).toBe(reference.blobId);
   });
 
+  it('a stream decrypt holds the reference as passed', async () => {
+    const plaintext = patternBytes(CHUNK * 3 + 9, 6);
+    for (const compression of ['none', 'gzip'] as const) {
+      const { envelope, reference } = await encryptContentBlob(
+        EnvelopeKey.generate(),
+        'export',
+        plaintext,
+        { compression, chunkSize: CHUNK }
+      );
+      const passed = { ...reference };
+      const decrypted = decryptContentBlobStream(passed, stream([envelope]));
+      // Changed after the call returns, before the stream ends.
+      Object.assign(passed, { plaintextLength: 1 });
+      expect(await collect(decrypted)).toEqual(plaintext);
+    }
+  });
+
   it('streams in both directions, with and without gzip', async () => {
     const plaintext = patternBytes(CHUNK * 5 + 17, 1);
     for (const compression of ['none', 'gzip'] as const) {
