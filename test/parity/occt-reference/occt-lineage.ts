@@ -659,18 +659,20 @@ function transformPoint(
 
 function transformDirection(
   direction: QuantizedTopologyPoint,
-  matrix: ArrayLike<number>
+  matrix: ArrayLike<number>,
+  canonicalize = true
 ): Vec3 {
   const x = directionFromQuantized(direction[0]);
   const y = directionFromQuantized(direction[1]);
   const z = directionFromQuantized(direction[2]);
   // A scaled Move scales the linear block too; a direction stays unit.
   const scale = uniformScaleOf(matrix);
-  return canonicalDirection({
+  const transformed = {
     x: (matrix[0]! * x + matrix[1]! * y + matrix[2]! * z) / scale,
     y: (matrix[4]! * x + matrix[5]! * y + matrix[6]! * z) / scale,
     z: (matrix[8]! * x + matrix[9]! * y + matrix[10]! * z) / scale
-  });
+  };
+  return canonicalize ? canonicalDirection(transformed) : transformed;
 }
 
 /**
@@ -715,7 +717,8 @@ function transformFaceWitness(
   const scale = uniformScaleOf(matrix);
   let analytic: FaceAnalyticWitnessV1 = witness.analytic;
   if (witness.analytic.kind === 'plane') {
-    const normal = transformDirection(witness.analytic.normal, matrix);
+    // Keep the oriented normal until the plane normal and offset can flip together.
+    const normal = transformDirection(witness.analytic.normal, matrix, false);
     const translation = {
       x: matrix[3]!,
       y: matrix[7]!,

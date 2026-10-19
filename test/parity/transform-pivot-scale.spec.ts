@@ -81,9 +81,69 @@ describe('transform scale about a pivot across exact kernels', () => {
       }
     }
   );
+  it.each([90, 180, 270])(
+    'keeps every topology reference after a %i° turn and scale',
+    async (angle) => {
+      const document = addPrimitiveFeature(
+        createProjectDocument('Turned lineage', toUserId('user_m10')),
+        {
+          name: 'Block',
+          primitiveKind: 'box',
+          dimensions: { width: 20, height: 10, depth: 10 }
+        }
+      );
+      const bodyId = document.bodyOrder[0] as BodyId;
+      const moved = transformBody(document, {
+        name: 'Turn and grow',
+        targetBodyId: bodyId,
+        translation: { x: 3, y: 7, z: -2 },
+        rotationDeg: { x: 0, y: 0, z: angle },
+        pivot: { x: 10, y: 5, z: 5 },
+        scale: 2
+      }).document;
+      for (const adapter of [remus, occt]) {
+        const derived = await adapter.syncDocument(moved);
+        expect(derived.warnings).toEqual([]);
+        const body = derived.bodyRepresentations[bodyId]!;
+        expect(body.topology?.faces).toHaveLength(6);
+        expect(body.topology?.edges).toHaveLength(12);
+        expect(body.topology?.faces.every((face) => face.reference)).toBe(true);
+        expect(body.topology?.edges.every((edge) => edge.reference)).toBe(true);
+      }
+    }
+  );
 });
 
 describe('OCCT reference witnesses under a uniform scale', () => {
+  it.each([0, 3, -3])(
+    'preserves the signed plane equation with translation %i',
+    (translation) => {
+      const plane: FaceWitnessV1 = {
+        surfaceType: 'plane',
+        perimeter: quantizeCoordinate(20),
+        centroid: quantizedTopologyPoint({ x: 10, y: 0, z: 0 }),
+        analytic: canonicalPlaneWitness({ x: 1, y: 0, z: 0 }, 10),
+        closure: { u: 'open', v: 'open' }
+      };
+      const transformed = transformOcctWitness('face', plane, [
+        -2,
+        0,
+        0,
+        translation,
+        0,
+        -2,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0
+      ]);
+      expect(transformed.analytic).toEqual(
+        canonicalPlaneWitness({ x: 1, y: 0, z: 0 }, translation - 20)
+      );
+    }
+  );
   it('grows lengths, perimeters, radii and plane offsets by the scale', () => {
     // ×2 about the origin: the linear block is 2·I, no translation.
     const matrix = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0];
