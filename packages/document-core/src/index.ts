@@ -2477,6 +2477,17 @@ function transformCopyBody(
       ? input.ids
       : { ...createBodyFeatureIds(), ...input.ids };
   const { featureId, featureNodeId, bodyId, bodyNodeId } = ids;
+  if (document.bodyOrder.includes(bodyId)) {
+    throw new Error(`Copy result body ${bodyId} already exists.`);
+  }
+  if (
+    document.featureOrder.includes(featureId) ||
+    document.nodes[featureNodeId] !== undefined ||
+    document.nodes[bodyNodeId] !== undefined ||
+    new Set([featureId, featureNodeId, bodyId, bodyNodeId]).size !== 4
+  ) {
+    throw new Error('Copy identifiers must be new and distinct.');
+  }
   const next = cloneDocument(document);
   next.nodes[featureNodeId] = {
     id: featureNodeId,

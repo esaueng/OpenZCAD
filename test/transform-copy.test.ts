@@ -6,6 +6,7 @@ import {
 } from '@openzcad/command-system';
 import {
   createProjectDocument,
+  createBodyFeatureIds,
   createFeatureOnlyIds,
   findFeature,
   listFeaturesInOrder,
@@ -197,6 +198,61 @@ describe('transform copy (M10)', { timeout: 60_000 }, () => {
     manager.execute(copyCommand(blockId, { bodyName: 'Spare' }));
     expect(names(manager.document).at(-1)).toBe('Spare');
   });
+
+  it.each(['source', 'other'] as const)(
+    'refuses a copy result ID belonging to the %s body',
+    async (target) => {
+      const { manager, blockId } = block();
+      manager.execute(
+        commandFactories.addPrimitive({
+          name: 'Other block',
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 10, depth: 10 }
+        })
+      );
+      const otherId = manager.document.bodyOrder[1]!;
+      const before = manager.document;
+      const ids = {
+        ...createBodyFeatureIds(),
+        bodyId: target === 'source' ? blockId : otherId
+      };
+      expect(() => manager.execute(copyCommand(blockId, { ids }))).toThrow(
+        /Copy result body.*already exists/
+      );
+      expect(manager.document).toBe(before);
+      expect(manager.document.bodyOrder).toEqual([blockId, otherId]);
+      const { of } = await bodies(manager.document);
+      expect(of(blockId)).toMatchObject({
+        min: [0, 0, 0],
+        max: [20, 10, 10],
+        volume: 2000
+      });
+      expect(of(otherId)).toMatchObject({
+        min: [0, 0, 0],
+        max: [10, 10, 10],
+        volume: 1000
+      });
+    }
+  );
+
+  it.each(['feature', 'feature node', 'body node', 'duplicate nodes'] as const)(
+    'refuses colliding %s identifiers before changing the document',
+    (kind) => {
+      const { manager, blockId } = block();
+      const before = manager.document;
+      const ids = createBodyFeatureIds();
+      const source = listFeaturesInOrder(before)[0]!;
+      if (kind === 'feature') ids.featureId = source.featureId;
+      if (kind === 'feature node') ids.featureNodeId = source.id;
+      if (kind === 'body node')
+        ids.bodyNodeId = listNodesByKind(before, 'body')[0]!.id;
+      if (kind === 'duplicate nodes') ids.bodyNodeId = ids.featureNodeId;
+      expect(() => manager.execute(copyCommand(blockId, { ids }))).toThrow(
+        /Copy identifiers must be new and distinct/
+      );
+      expect(manager.document).toBe(before);
+    }
+  );
 
   it('preserves explicit feature IDs and dependent copies across redo and replay', async () => {
     const { manager, blockId } = block();
