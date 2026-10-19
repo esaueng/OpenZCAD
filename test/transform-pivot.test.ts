@@ -57,7 +57,7 @@ describe('transform pivot (M10)', () => {
   }
 
   it('moves +10 then −10 back to exactly where it was', async () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(23);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(25);
     const { document, blockId } = block();
     const before = await bounds(document, blockId);
     let moved = transformBody(document, {

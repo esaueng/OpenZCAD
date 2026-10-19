@@ -30,7 +30,7 @@ import {
 } from '@openzcad/shared';
 
 /**
- * R01 three-point and parallel-at-point datum planes (schema v23): the
+ * R01 three-point and parallel-at-point datum planes (schema v25): the
  * document contract, the exact build's resolution of typed and vertex point
  * sources, and the refusals for collinear, coincident and missing sources.
  */
@@ -120,9 +120,9 @@ function vertexOf(
 
 const v = (x: number, y: number, z: number): Vec3 => ({ x, y, z });
 
-describe('three-point and parallel planes in the document (v23)', () => {
-  it('is schema 23, additive, and round-trips without rewriting', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(23);
+describe('three-point and parallel planes in the document (v25)', () => {
+  it('is schema 25, additive, and round-trips without rewriting', () => {
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(25);
     const planed = withDatum(blank(), {
       kind: 'three-point',
       points: [at(0, 0, 0), at('5 + 5', 0, 0), at(0, 10, 0)]
@@ -136,7 +136,7 @@ describe('three-point and parallel planes in the document (v23)', () => {
     const saved = JSON.parse(
       JSON.stringify(parallel.document)
     ) as ProjectDocument;
-    expect(saved.schemaVersion).toBe(23);
+    expect(saved.schemaVersion).toBe(25);
     expect(normalizeDocument(saved)).toEqual(parallel.document);
 
     // A v22 document opens with its datums exactly as written.

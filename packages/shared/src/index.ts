@@ -49,13 +49,13 @@ export type ShaprImportId = Brand<string, 'ShaprImportId'>;
  * turn such a Move about the origin and move the body elsewhere, so the bump
  * makes it refuse the document instead.
  *
- * v23 adds two R01 datum-plane definitions, `three-point` and
+ * v25 adds two R01 datum-plane definitions, `three-point` and
  * `parallel-point`, and the point sources they read (world coordinates or an
- * edge's end vertex). A v22 client would refuse or misread such a datum and
- * every sketch, Split and Mirror built on it, so the bump makes it refuse the
- * document instead. Existing datums are unchanged.
+ * edge's end vertex). An older client would refuse or misread such a datum
+ * and every sketch, Split and Mirror built on it, so the bump makes it refuse
+ * the document instead. Existing datums are unchanged.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 23 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 25 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -602,7 +602,7 @@ export type DatumPlaneSource =
   | FacePlaneSource;
 
 /**
- * Schema v23: a model vertex, named as one end of an open edge whose
+ * Schema v25: a model vertex, named as one end of an open edge whose
  * schema-v5 lineage the exact build re-finds at the datum's history position.
  * `end` 0 is the end whose quantized (ADR-011) coordinates sort first by x,
  * then y, then z, which both kernels read identically; the vertex's exact
@@ -617,7 +617,7 @@ export interface EdgeVertexPointSource {
 }
 
 /**
- * Schema v23: a point a datum plane passes through: expression-capable world
+ * Schema v25: a point a datum plane passes through: expression-capable world
  * coordinates in document units, or a model vertex by reference.
  */
 export type DatumPointSource =
@@ -640,7 +640,7 @@ export type DatumPlaneDefinition =
     }
   | {
       /**
-       * Schema v23: the plane through three points. The origin is the first
+       * Schema v25: the plane through three points. The origin is the first
        * point, u points at the second, and the normal follows the right-hand
        * rule (first → second → third). Coincident or collinear points are
        * refused; no plane is guessed.
@@ -651,7 +651,7 @@ export type DatumPlaneDefinition =
     }
   | {
       /**
-       * Schema v23: the plane parallel to `source` through `point`, keeping
+       * Schema v25: the plane parallel to `source` through `point`, keeping
        * the source's axes. A point on the source gives the source itself.
        */
       kind: 'parallel-point';
