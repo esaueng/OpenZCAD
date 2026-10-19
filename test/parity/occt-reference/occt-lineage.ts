@@ -663,20 +663,33 @@ function transformDirection(
   const x = directionFromQuantized(direction[0]);
   const y = directionFromQuantized(direction[1]);
   const z = directionFromQuantized(direction[2]);
+  // A scaled Move scales the linear block too; a direction stays unit.
+  const scale = uniformScaleOf(matrix);
   return canonicalDirection({
-    x: matrix[0]! * x + matrix[1]! * y + matrix[2]! * z,
-    y: matrix[4]! * x + matrix[5]! * y + matrix[6]! * z,
-    z: matrix[8]! * x + matrix[9]! * y + matrix[10]! * z
+    x: (matrix[0]! * x + matrix[1]! * y + matrix[2]! * z) / scale,
+    y: (matrix[4]! * x + matrix[5]! * y + matrix[6]! * z) / scale,
+    z: (matrix[8]! * x + matrix[9]! * y + matrix[10]! * z) / scale
   });
+}
+
+/**
+ * The uniform scale of a similarity matrix (M10 scales a Move about its
+ * pivot): lengths, perimeters, radii and plane offsets grow by it, as the
+ * exact build's witness propagation applies them. 1 for a rigid matrix.
+ */
+function uniformScaleOf(matrix: ArrayLike<number>): number {
+  return Math.hypot(matrix[0]!, matrix[4]!, matrix[8]!);
 }
 
 function transformEdgeWitness(
   witness: EdgeWitnessV1,
   matrix: ArrayLike<number>
 ): EdgeWitnessV1 {
+  const length = Math.round(witness.length * uniformScaleOf(matrix));
   if (witness.closed) {
     return {
       ...witness,
+      length,
       center: transformPoint(witness.center, matrix),
       axis: witness.axis
         ? quantizedTopologyDirection(transformDirection(witness.axis, matrix))
@@ -688,6 +701,7 @@ function transformEdgeWitness(
     .sort(comparePoints) as [QuantizedTopologyPoint, QuantizedTopologyPoint];
   return {
     ...witness,
+    length,
     endpoints,
     midpoint: transformPoint(witness.midpoint, matrix)
   };
@@ -697,6 +711,7 @@ function transformFaceWitness(
   witness: FaceWitnessV1,
   matrix: ArrayLike<number>
 ): FaceWitnessV1 {
+  const scale = uniformScaleOf(matrix);
   let analytic: FaceAnalyticWitnessV1 = witness.analytic;
   if (witness.analytic.kind === 'plane') {
     const normal = transformDirection(witness.analytic.normal, matrix);
@@ -707,7 +722,7 @@ function transformFaceWitness(
     };
     analytic = canonicalPlaneWitness(
       normal,
-      coordinateFromQuantized(witness.analytic.offset) +
+      coordinateFromQuantized(witness.analytic.offset) * scale +
         normal.x * translation.x +
         normal.y * translation.y +
         normal.z * translation.z
@@ -722,11 +737,12 @@ function transformFaceWitness(
         z: coordinateFromQuantized(transformedFoot[2])
       },
       axis,
-      coordinateFromQuantized(witness.analytic.radius)
+      coordinateFromQuantized(witness.analytic.radius) * scale
     );
   }
   return {
     ...witness,
+    perimeter: Math.round(witness.perimeter * scale),
     centroid: witness.centroid
       ? transformPoint(witness.centroid, matrix)
       : null,
