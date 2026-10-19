@@ -552,7 +552,13 @@ comparison, which is safe only because of its commitment step.
   compromised server could keep the snapshot and the wrapped share key, and
   keep presenting the link to editors as active. So the set of active links
   lives inside the encrypted, signed document: each link's id, the hash of
-  its share key and its mode. Revoking a link writes a new version without
+  its share key and its mode. Editors may carry the set forward unchanged,
+  but only the owner may change it. Each addition is an owner-signed link
+  grant, and each revocation an owner-signed, permanent tombstone for that
+  link id, both stored with the set. Browsers accept an active set only if
+  every listed link has a valid owner grant and no tombstone they have seen.
+  A tombstone is never lifted: restoring access means a new link with a new
+  id and key. So a hostile editor cannot bring back a revoked link either. Revoking a link writes a new version without
   it. Editors' browsers republish snapshots only for links in the current
   head's active set, and never wrap a new snapshot key to a revoked share
   key. A server cannot add a link back, because it cannot write a signed
@@ -781,9 +787,12 @@ encrypts under the project key is unchanged.
   but not check that its author held an editing role in the epoch it names:
   the current tree no longer holds removed leaves or old roles. So the
   archive also keeps an epoch record for every epoch: the GroupContext (tree
-  hash, confirmed transcript hash, roles extension), the public leaf
-  credentials, and the epoch's Commit, encrypted under that epoch's exported
-  key. To verify an old version, a browser replays the records forward from
+  hash, confirmed transcript hash, roles extension), the public ratchet tree
+  needed to replay it, the epoch's Commit, and every proposal that Commit
+  applies by reference (§12.4), such as a SelfRemove or a Remove sent ahead
+  of time. A Commit holds only the hash of a referenced proposal, so without
+  the proposal itself a joiner could not replay the epoch or see who asked
+  for the change. All of it is encrypted under that epoch's exported key. To verify an old version, a browser replays the records forward from
   the newest owner-signed checkpoint. It checks each Commit against the
   confirmed transcript hash of the next record, then checks the author's
   leaf and role in the named epoch. The owner's browser signs a checkpoint of
