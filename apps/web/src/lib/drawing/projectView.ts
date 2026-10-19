@@ -60,6 +60,11 @@ export interface ViewProjection {
   bounds: { minU: number; minV: number; maxU: number; maxV: number } | null;
 }
 
+/**
+ * Cosine of the largest turn between two display triangles still treated as
+ * one smooth surface when the body publishes no B-rep faces to say so.
+ */
+const SAG_FALLBACK_SMOOTH_COS = Math.cos((15 * Math.PI) / 180);
 /** Cosine of the largest dihedral still treated as a smooth surface. */
 const SMOOTH_DIHEDRAL_COS = Math.cos((50 * Math.PI) / 180);
 
@@ -339,7 +344,7 @@ interface Polyline3 {
   points: number[];
 }
 
-interface MeshAnalysis {
+export interface MeshAnalysis {
   welded: number[];
   positions: number[];
   faceOf: Int32Array;
@@ -434,20 +439,26 @@ function smoothNeighbours(mesh: MeshAnalysis, p: number, q: number): boolean {
  * stays local: a wall a tenth of a millimetre in front of an edge still hides
  * it on a metre-long part.
  */
-function triangleSag(
+export function triangleSag(
   body: ProjectionBodyInput,
-  mesh: MeshAnalysis
+  mesh: MeshAnalysis = analyzeMesh(body, 1e-9)
 ): Float64Array {
   const sag = new Float64Array(mesh.faceOf.length);
   const { positions, vertexCount } = mesh;
   for (const [key, list] of mesh.edgeTriangles) {
     if (list.length !== 2) continue;
     const [p, q] = list as [number, number];
-    if (!smoothNeighbours(mesh, p, q)) continue;
+    // Sag belongs to one curved surface. Two faces meeting at a crease (a
+    // chamfer's 45°) are each exact planes, however shallow the angle: the
+    // B-rep face decides, and only a body without faces falls back to a
+    // tight angle.
+    const known = mesh.faceOf[p] !== -1 && mesh.faceOf[q] !== -1;
+    if (known && mesh.faceOf[p] !== mesh.faceOf[q]) continue;
     const cosine =
       mesh.normals[p * 3]! * mesh.normals[q * 3]! +
       mesh.normals[p * 3 + 1]! * mesh.normals[q * 3 + 1]! +
       mesh.normals[p * 3 + 2]! * mesh.normals[q * 3 + 2]!;
+    if (!known && cosine < SAG_FALLBACK_SMOOTH_COS) continue;
     const angle = Math.acos(Math.min(1, Math.max(-1, cosine)));
     if (angle === 0) continue;
     const a = Math.floor(key / vertexCount) * 3;

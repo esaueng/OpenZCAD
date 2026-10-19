@@ -17,6 +17,7 @@ import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import {
   gridCellsAlong,
   projectView,
+  triangleSag,
   type ViewProjection
 } from '../apps/web/src/lib/drawing/projectView';
 import { projectionBodyInput } from '../apps/web/src/lib/drawing/sheetSources';
@@ -526,5 +527,60 @@ describe('D01 occlusion grid walk', () => {
         0
       );
     }
+  });
+});
+
+describe('D01 occlusion tolerance', () => {
+  /** Two 10 mm-wide flat strips meeting along x at `degrees` of fold. */
+  function fold(degrees: number, faces?: 'one' | 'two') {
+    const a = (degrees * Math.PI) / 180;
+    const vertices = Float32Array.from([
+      0,
+      0,
+      0,
+      10,
+      0,
+      0,
+      10,
+      10,
+      0,
+      0,
+      10,
+      0,
+      0,
+      -10 * Math.cos(a),
+      10 * Math.sin(a),
+      10,
+      -10 * Math.cos(a),
+      10 * Math.sin(a)
+    ]);
+    // Strip one: 0,1,2,3 (in z = 0); strip two: 0,1 and 4,5 (folded up).
+    const indices = Uint32Array.from([0, 1, 2, 0, 2, 3, 0, 4, 5, 0, 5, 1]);
+    return triangleSag({
+      vertices,
+      indices,
+      edges: [],
+      ...(faces === 'one'
+        ? { faces: [{ triangleStart: 0, triangleCount: 4 }] }
+        : faces === 'two'
+          ? {
+              faces: [
+                { triangleStart: 0, triangleCount: 2 },
+                { triangleStart: 2, triangleCount: 2 }
+              ]
+            }
+          : {})
+    });
+  }
+
+  it('gives a crease between two planar faces no sag, however shallow', () => {
+    // A 45° chamfer meeting its neighbour: both exact planes.
+    expect([...fold(45, 'two')]).toEqual([0, 0, 0, 0]);
+    expect([...fold(10, 'two')]).toEqual([0, 0, 0, 0]);
+    // Without B-rep faces only a slight turn reads as one curved surface.
+    expect([...fold(45)]).toEqual([0, 0, 0, 0]);
+    expect(Math.max(...fold(10))).toBeGreaterThan(0);
+    // Facets of one curved face carry their chordal sag.
+    expect(Math.max(...fold(45, 'one'))).toBeGreaterThan(0);
   });
 });
