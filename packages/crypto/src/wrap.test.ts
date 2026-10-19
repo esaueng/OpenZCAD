@@ -5,7 +5,7 @@ import {
   exportPublicKey,
   generateDeviceUnlockKey,
   generateEncryptionKeyPair,
-  generateIdentityKeyPair,
+  generateSigningKeyPair,
   importEncryptionPrivateKey,
   importEncryptionPublicKey,
   importSigningPrivateKey,
@@ -153,7 +153,7 @@ describe('symmetric key wrapping', () => {
   });
 
   it('wraps the identity key only under the recovery key or a passkey', async () => {
-    const identity = await generateIdentityKeyPair();
+    const identity = await generateSigningKeyPair();
     const pkcs8 = await exportPrivateKey(identity.privateKey);
     const recovery = patternBytes(32, 0x90);
     const passkey = await importUnlockSecret(patternBytes(32, 0x70));

@@ -1,10 +1,9 @@
 /**
  * Seeded fuzzing of every parser that reads bytes the server hands back:
  * both envelope classes (structure and decryption, one-shot and
- * incremental), wrapped and sealed keys, version signatures and roster
- * entries. Whatever the input, each call either succeeds or throws an
- * `E2eeError`; never a TypeError, RangeError or a DOMException leaking out
- * of WebCrypto.
+ * incremental), wrapped and sealed keys and version signatures. Whatever
+ * the input, each call either succeeds or throws an `E2eeError`; never a
+ * TypeError, RangeError or a DOMException leaking out of WebCrypto.
  */
 import { describe, expect, it } from 'vitest';
 import { concatBytes, type Bytes } from './bytes';
@@ -18,16 +17,9 @@ import {
   parseEnvelope
 } from './envelope';
 import { E2eeError } from './errors';
-import { signContactsEntry, verifyContactsList } from './contacts';
-import { decodeDeviceListEntry, verifyDeviceList } from './devices';
-import { generateEncryptionKeyPair } from './keys';
-import {
-  decodeRosterEntry,
-  signRosterEntry,
-  verifyRosterChain
-} from './roster';
+import { generateEncryptionKeyPair, generateSigningKeyPair } from './keys';
 import { signProjectEnvelope, verifyProjectEnvelopeSignature } from './signing';
-import { TestUser, patternBytes, seededRandom } from './test-support';
+import { patternBytes, seededRandom } from './test-support';
 import {
   openSealedKey,
   sealKey,
@@ -193,12 +185,16 @@ describe('parser fuzzing', () => {
     }
   });
 
-  it('key, signature, roster, device and contacts parsing only throw E2eeError', async () => {
+  it('key and signature parsing only throw E2eeError', async () => {
     const kek = patternBytes(32, 0x01);
     const recipient = await generateEncryptionKeyPair();
-    const author = await TestUser.create('u1', ['d1', 'd2']);
-    await author.revoke('d2');
-    const wrapped = await wrapKey(kek, patternBytes(32), WRAP_CONTEXT);
+    const author = await generateSigningKeyPair();
+    const symmetric = await wrapKey(kek, patternBytes(32), WRAP_CONTEXT);
+    const privateKey = await wrapKey(kek, patternBytes(140), {
+      purpose: 'encryption-private-key',
+      userId: 'u1',
+      keyId: 'k1'
+    });
     const sealed = await sealKey(
       recipient.publicKey,
       patternBytes(32),
@@ -217,94 +213,34 @@ describe('parser fuzzing', () => {
       },
       patternBytes(10)
     );
-    const signature = await signProjectEnvelope(author.signer(), envelope);
-    const roster = await signRosterEntry(author.signer(), {
-      type: 'membership',
-      projectId: 'p',
-      sequence: 0,
-      keyEpoch: 0,
-      previousEntryHash: null,
-      members: [
-        {
-          userId: 'u1',
-          identityKeyHash: author.list.identityKeyHash,
-          role: 'owner'
-        }
-      ],
-      keyWraps: [{ userId: 'u1', sealedKey: sealed }]
-    });
-    const lists = (id: string) => (id === 'u1' ? author.list : undefined);
-    const contact = await signContactsEntry(author.identity.privateKey, {
-      ownerUserId: 'u1',
-      sequence: 0,
-      previousEntryHash: null,
-      action: 'verify',
-      contactUserId: 'u2',
-      identityKeyHash: patternBytes(32, 7),
-      deviceListHead: patternBytes(32, 8),
-      replacementKeyHash: null
-    });
-    const devices = author.chain;
+    const signature = await signProjectEnvelope(author.privateKey, envelope);
     for (let seed = 1; seed <= 400; seed += 1) {
       await onlyTypedErrors(() =>
-        unwrapKey(kek, mutate(seed, wrapped), WRAP_CONTEXT)
+        unwrapKey(kek, mutate(seed, symmetric), WRAP_CONTEXT)
+      );
+      await onlyTypedErrors(() =>
+        unwrapKey(kek, mutate(seed, privateKey), {
+          purpose: 'encryption-private-key',
+          userId: 'u1',
+          keyId: 'k1'
+        })
       );
       await onlyTypedErrors(() =>
         openSealedKey(recipient, mutate(seed, sealed), WRAP_CONTEXT)
       );
       await onlyTypedErrors(() =>
         verifyProjectEnvelopeSignature(
-          author.list,
+          author.publicKey,
           envelope,
           mutate(seed, signature)
         )
       );
       await onlyTypedErrors(() =>
         verifyProjectEnvelopeSignature(
-          author.list,
+          author.publicKey,
           mutate(seed, envelope),
           signature
         )
-      );
-      await onlyTypedErrors(() =>
-        decodeRosterEntry(mutate(seed, roster.entry))
-      );
-      await onlyTypedErrors(() =>
-        verifyRosterChain(
-          [
-            {
-              entry: mutate(seed, roster.entry),
-              signature: roster.signature,
-              signedBy: 'device'
-            },
-            {
-              entry: roster.entry,
-              signature: mutate(seed, roster.signature),
-              signedBy: seed % 2 ? 'device' : 'identity'
-            }
-          ],
-          lists
-        )
-      );
-      await onlyTypedErrors(() =>
-        decodeDeviceListEntry(mutate(seed, devices[seed % 2]!.entry))
-      );
-      await onlyTypedErrors(() =>
-        verifyContactsList(author.identity.publicKey, [
-          {
-            entry: mutate(seed, contact.entry),
-            signature: mutate(seed + 2, contact.signature)
-          }
-        ])
-      );
-      await onlyTypedErrors(() =>
-        verifyDeviceList(author.identity.publicKey, [
-          devices[0]!,
-          {
-            entry: mutate(seed, devices[1]!.entry),
-            signature: mutate(seed + 1, devices[1]!.signature)
-          }
-        ])
       );
     }
   });

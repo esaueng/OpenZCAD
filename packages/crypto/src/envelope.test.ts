@@ -786,6 +786,50 @@ describe('content blobs', () => {
     );
   });
 
+  it('settles the reference when the source fails or the consumer cancels', async () => {
+    const failing = new ReadableStream<Bytes>({
+      start(controller) {
+        controller.enqueue(patternBytes(100));
+      },
+      pull(controller) {
+        controller.error(new Error('disk read failed'));
+      }
+    });
+    const broken = encryptContentBlobStream(
+      EnvelopeKey.generate(),
+      'export',
+      failing,
+      { compression: 'none', chunkSize: CHUNK }
+    );
+    await rejectsWith(collect(broken.envelope), 'aborted');
+    await rejectsWith(broken.reference, 'aborted');
+
+    const endless = new ReadableStream<Bytes>({
+      pull(controller) {
+        controller.enqueue(patternBytes(CHUNK));
+      }
+    });
+    const cancelled = encryptContentBlobStream(
+      EnvelopeKey.generate(),
+      'export',
+      endless,
+      { compression: 'none', chunkSize: CHUNK }
+    );
+    const reader = cancelled.envelope.getReader();
+    await reader.read();
+    await reader.read();
+    await reader.cancel('upload abandoned');
+    await rejectsWith(cancelled.reference, 'aborted');
+  });
+
+  it('hashes many chunks with bounded state', async () => {
+    // 3000 chunks: the old digest list was spread into one call per blob.
+    const plaintext = patternBytes(CHUNK * 3000, 9);
+    const { envelope, reference } = await blob(plaintext);
+    expect(parseEnvelope(envelope).chunkCount).toBe(3000);
+    expect(await decryptContentBlob(reference, envelope)).toEqual(plaintext);
+  });
+
   it('a streamed blob stops at its declared size, and must reach it exactly', async () => {
     const encrypted = encryptContentBlobStream(
       EnvelopeKey.generate(),

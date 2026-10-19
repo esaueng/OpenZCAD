@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { equalBytes, type Bytes } from './bytes';
+import type { Bytes } from './bytes';
 import {
   assetDedupeHash,
   commitDeviceApproval,
@@ -25,7 +25,7 @@ import type { ProjectEnvelopeHeaderInit } from './header';
 import {
   exportPublicKey,
   generateEncryptionKeyPair,
-  generateIdentityKeyPair
+  generateSigningKeyPair
 } from './keys';
 import {
   signProjectEnvelope,
@@ -33,7 +33,7 @@ import {
   verifyVersionChain,
   versionHash
 } from './signing';
-import { TestUser, patternBytes } from './test-support';
+import { patternBytes } from './test-support';
 
 async function rejectsWith(
   promise: Promise<unknown>,
@@ -82,120 +82,109 @@ async function chainOf(length: number): Promise<Bytes[]> {
 }
 
 describe('version signatures', () => {
-  it('are made by a certified device key, with a timestamp', async () => {
-    const author = await TestUser.create('author', ['laptop']);
+  it('sign with a timestamp and verify', async () => {
+    const author = await generateSigningKeyPair();
     const envelope = await version(1, null);
     const signature = await signProjectEnvelope(
-      author.signer(),
+      author.privateKey,
       envelope,
       1_760_000_000_000
     );
+    expect(signature.byteLength).toBe(1 + 8 + 64);
     expect(
-      await verifyProjectEnvelopeSignature(author.list, envelope, signature)
-    ).toMatchObject({
-      userId: 'author',
-      deviceId: 'laptop',
-      deviceListSequence: 0,
-      signedAt: 1_760_000_000_000
-    });
+      await verifyProjectEnvelopeSignature(
+        author.publicKey,
+        envelope,
+        signature
+      )
+    ).toEqual({ signedAt: 1_760_000_000_000 });
+    expect(
+      await verifyProjectEnvelopeSignature(
+        await exportPublicKey(author.publicKey),
+        envelope,
+        signature
+      )
+    ).toEqual({ signedAt: 1_760_000_000_000 });
   });
 
-  it('cover the header and the ciphertext', async () => {
-    const author = await TestUser.create('author');
+  it('cover the header, the ciphertext and the timestamp', async () => {
+    const author = await generateSigningKeyPair();
+    const other = await generateSigningKeyPair();
     const envelope = await version(3, null);
-    const signature = await signProjectEnvelope(author.signer(), envelope);
+    const signature = await signProjectEnvelope(author.privateKey, envelope);
+    expect(
+      await verifyProjectEnvelopeSignature(other.publicKey, envelope, signature)
+    ).toBeNull();
     const changedBody = new Uint8Array(envelope);
     changedBody[changedBody.byteLength - 1]! ^= 1;
     expect(
-      await verifyProjectEnvelopeSignature(author.list, changedBody, signature)
+      await verifyProjectEnvelopeSignature(
+        author.publicKey,
+        changedBody,
+        signature
+      )
     ).toBeNull();
     const changedHeader = new Uint8Array(envelope);
     changedHeader[22]! ^= 1; // low byte of keyEpoch
     expect(
       await verifyProjectEnvelopeSignature(
-        author.list,
+        author.publicKey,
         changedHeader,
         signature
       )
     ).toBeNull();
+    const backdated = new Uint8Array(signature);
+    backdated[8]! ^= 1;
+    expect(
+      await verifyProjectEnvelopeSignature(
+        author.publicKey,
+        envelope,
+        backdated
+      )
+    ).toBeNull();
     for (const fill of [0x00, 0xff]) {
       const outOfRange = new Uint8Array(signature);
-      outOfRange.fill(fill, outOfRange.byteLength - 64);
+      outOfRange.fill(fill, 9);
       expect(
-        await verifyProjectEnvelopeSignature(author.list, envelope, outOfRange)
+        await verifyProjectEnvelopeSignature(
+          author.publicKey,
+          envelope,
+          outOfRange
+        )
       ).toBeNull();
     }
   });
 
-  it('from a revoked device count only within the cutoff', async () => {
-    const author = await TestUser.create('author', ['laptop', 'stolen']);
-    const v1 = await version(1, null);
-    const v2 = await version(2, await versionHash(v1));
-    const v3 = await version(3, await versionHash(v2));
-    const signed = await Promise.all(
-      [v1, v2, v3].map((v) => signProjectEnvelope(author.signer('stolen'), v))
-    );
-    // The revoking browser had accepted up to version 2.
-    await author.revoke('stolen', [
-      {
-        projectId: 'project-a',
-        versionHead: await versionHash(v2),
-        rosterHead: null
-      }
-    ]);
-    const history = await verifyVersionChain([v1, v2, v3]);
-    const isAncestorOrSelf = (candidate: Uint8Array, head: Uint8Array) => {
-      const at = history.findIndex((h) => equalBytes(h, candidate));
-      const headAt = history.findIndex((h) => equalBytes(h, head));
-      return at >= 0 && at <= headAt;
-    };
-    for (const [envelope, signature] of [
-      [v1, signed[0]!],
-      [v2, signed[1]!]
-    ] as const) {
-      expect(
-        await verifyProjectEnvelopeSignature(author.list, envelope, signature, {
-          isAncestorOrSelf
-        })
-      ).not.toBeNull();
-    }
-    await rejectsWith(
-      verifyProjectEnvelopeSignature(author.list, v3, signed[2]!, {
-        isAncestorOrSelf
-      }),
-      'key-revoked'
-    );
-    // Without an ancestry lookup a revoked device is always refused.
-    await rejectsWith(
-      verifyProjectEnvelopeSignature(author.list, v1, signed[0]!),
-      'key-revoked'
-    );
-  });
-
   it('refuse content blobs, malformed input and unknown versions', async () => {
-    const author = await TestUser.create('author');
+    const author = await generateSigningKeyPair();
     const envelope = await version(1, null);
-    const signature = await signProjectEnvelope(author.signer(), envelope);
+    const signature = await signProjectEnvelope(author.privateKey, envelope);
     const future = new Uint8Array(signature);
     future[0] = 2;
     await rejectsWith(
-      verifyProjectEnvelopeSignature(author.list, envelope, future),
+      verifyProjectEnvelopeSignature(author.publicKey, envelope, future),
       'unsupported-version'
     );
+    for (const bad of [signature.subarray(0, 72), new Uint8Array()]) {
+      await rejectsWith(
+        verifyProjectEnvelopeSignature(author.publicKey, envelope, bad),
+        'malformed'
+      );
+    }
     await rejectsWith(
       verifyProjectEnvelopeSignature(
-        author.list,
-        envelope,
-        signature.subarray(0, 72)
+        author.publicKey,
+        patternBytes(40),
+        signature
       ),
       'malformed'
     );
     await rejectsWith(
-      verifyProjectEnvelopeSignature(author.list, patternBytes(40), signature),
-      'malformed'
+      signProjectEnvelope(author.publicKey, envelope),
+      'invalid-argument'
     );
     await rejectsWith(
-      signProjectEnvelope(author.signer(), envelope, -1),
+      signProjectEnvelope(author.privateKey, envelope, -1),
       'invalid-argument'
     );
     const { envelope: blob } = await encryptContentBlob(
@@ -204,7 +193,7 @@ describe('version signatures', () => {
       patternBytes(5)
     );
     await rejectsWith(
-      signProjectEnvelope(author.signer(), blob),
+      signProjectEnvelope(author.privateKey, blob),
       'invalid-argument'
     );
   });
@@ -265,7 +254,7 @@ describe('codes people compare', () => {
       (await generateEncryptionKeyPair()).publicKey
     );
     const sig = await exportPublicKey(
-      (await generateIdentityKeyPair()).publicKey
+      (await generateSigningKeyPair()).publicKey
     );
     const single = await publicKeyHash(enc);
     expect(single.byteLength).toBe(32);

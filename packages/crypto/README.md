@@ -97,9 +97,10 @@ and a test pins the ceilings to the shared constants.
   key (`version-key` below).
 - **Content blobs** are authenticated by the project envelope that references
   them. Its encrypted body carries a `ContentBlobReference` for each blob:
-  the blob id, kind, random key and ciphertext hash. The ciphertext hash is
-  computed while streaming as
-  `SHA-256(label "v1 content blob hash" | SHA-256(prefix) | SHA-256(chunk 0) | …)`.
+  the blob id, kind, random key, ciphertext hash and plaintext length. The
+  ciphertext hash is computed while streaming, with bounded state however
+  many chunks the blob has: `h = SHA-256(label "v1 content blob hash")`, then
+  for the prefix and each chunk in order `h = SHA-256(h | SHA-256(part))`.
   A blob swapped in from elsewhere fails decryption or the hash; one with the
   right key but the wrong id or kind fails with `context-mismatch`.
   `checkBlobReferences` checks that the header's blob ids and the body's
@@ -111,157 +112,28 @@ and a test pins the ceilings to the shared constants.
 `encryptContentBlobStream`/`decryptContentBlobStream` helpers process large
 blobs incrementally. Streamed plaintext is unconfirmed until the stream
 closes cleanly, because only the final chunk and the hash prove that nothing
-was cut off or swapped.
+was cut off or swapped. The `reference` promise from `encryptContentBlobStream` always
+settles: it resolves when the envelope finishes, and it rejects with
+`aborted` if the source fails or the consumer cancels.
 
-## User keys and device lists
-
-Each user has three kinds of key:
-
-| Key                 | Algorithm   | Role                                                                                       | Kept                                                           |
-| ------------------- | ----------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| Identity key        | ECDSA P-256 | Signs only device-list entries; its `publicKeyHash` is the fingerprint other people verify | Wrapped by the recovery key and passkeys only (`identity-key`) |
-| Device signing keys | ECDSA P-256 | One per device; signs versions, roster entries and share snapshots                         | Never leaves its device (non-extractable by default)           |
-| Encryption key pair | ECDH P-256  | Receives project keys                                                                      | Wrapped by the account key (`encryption-private-key`)          |
-
-### Chains
-
-Device lists, contacts lists and rosters share one set of chain rules
-(`checkChain`, `checkNextLink`). Each entry carries a sequence and its
-predecessor's `chainEntryHash`, `SHA-256(label "v1 <kind> entry hash" | entry)`.
-A browser pins the newest entry it has seen and refuses a list that does not
-contain the pin, which catches both rollback and forks. Version histories
-reuse the pin rule.
-
-### Device lists
-
-A **device list** is a chain of identity-signed entries. Each entry is a full
-snapshot of the current encryption public key and every live device signing
-key:
-
-```
-"OZD" | u8 version = 1 | u32 sequence | u8 previous hash length (0 or 32) + hash | u8 length + user id
-      | 65-byte encryption key | u16 device count | devices | u16 cutoff count | cutoffs
-```
-
-Devices are sorted by id, each as `u8 length + device id | 65-byte signing
-key`. Cutoffs are sorted by project id, each as
-`u8 length + project id | 32-byte version head | u8 length (0 or 32) + roster head`.
-The identity key signs `label "v1 device list signature" | entry`
-(`u8 version | r ‖ s`). A device missing from an entry is revoked from that
-entry on and may never return. Only a revoking entry may carry cutoffs: for
-each project the user belongs to, the newest version and roster heads the
-revoking browser had accepted. `verifyDeviceList` checks the whole chain from
-sequence 0 against the identity key the viewer verified, plus an optional
-pin. It returns every device's `certifiedAt`, `revokedAt` and cutoffs, and
-every encryption key's history. Rotation orchestration is Phase 3's.
-
-### Device signatures
-
-`signWithDevice` produces
-
-```
-u8 version = 1 | u8 length + user id | u32 device-list sequence | 32-byte device key hash | u64 signedAt | r ‖ s
-```
-
-over `label "v1 <purpose> signature" | u32 subject length | subject | signer fields`,
-where the purpose is `version` or `roster`. `verifyDeviceSignature` reads the
-signer and checks it against that user's verified device list. The device must
-be certified at the sequence the signature cites. If the list has since revoked
-it, the claimed sequence and timestamp prove nothing, because the stolen device
-chose them. The signed item must then be the revocation's cutoff head for its
-project, or an ancestor of it (`checkRevocationCutoff`). The caller supplies the
-item's hash and an `isAncestorOrSelf` lookup, so the package stays
-storage-free. Anything else a revoked device signed is refused.
-
-The refusals are `key-revoked`, `authentication-failed` for an uncertified
-device, `chain-broken` when the given list is older than the signature
-claims, and `context-mismatch` for another user's list. A bad signature
-returns null.
-
-### Contacts lists
-
-Verified pins of other people's identity keys live in an identity-signed
-contacts list, not in plain settings, so a server cannot roll a pin back:
-
-```
-"OZC" | u8 version = 1 | u32 sequence | u8 previous hash length (0 or 32) + hash | u8 length + owner id
-      | u8 action (1 verify, 2 replace, 3 distrust, 4 advance) | u8 length + contact id
-      | 32-byte identity key hash | u8 length (0 or 32) + device-list head | u8 length (0 or 32) + replacement key hash
-```
-
-The identity key signs `label "v1 contacts signature" | entry`.
-
-- **Verify** pins the contact's identity key together with their current
-  device-list head. People compare `contactVerificationCode`:
-  `SHA-256(label "v1 contact verification" | identity key hash | device-list head)`,
-  shown as 40 digits, with the hash as the QR payload. A correct identity
-  paired with an old device list therefore fails the comparison.
-- **Advance** moves the pinned head forward.
-- **Replace** and **distrust** name the key currently verified for that
-  contact. After a replace, the new key is seen but not verified.
-
-`verifyContactsList` checks the chain from sequence 0 and an optional pin,
-and folds it into one pin per contact. Before a project key is wrapped to
-someone, `checkContactDeviceList` requires three things: the pin is verified,
-the device list belongs to that identity, and the list contains the pinned
-head, so it chains forward from it. It returns the encryption key to wrap to,
-and whether the pin should advance.
-
-## Versions and the roster
+## Versions and signatures
 
 - `versionHash(envelope)` is SHA-256 of a whole project envelope. The next
-  version stores it as its previous-version hash.
-- `signProjectEnvelope` is a `version` device signature over
-  `u32 prefix length | prefix | versionHash`. Share snapshots and merged
-  versions are project envelopes and sign the same way. Pass the project's
-  ancestry lookup to `verifyProjectEnvelopeSignature` to accept a since-revoked
-  device's versions within its cutoff.
-- `verifyVersionChain` checks that the envelopes link by hash with rising
-  versions in one project. Given the newest version this browser has seen, it
-  also requires the chain to contain it, which refuses rollback and forks.
-  This gives fork consistency only; the project state code is the manual
-  cross-client check.
-- **Roster entries** are typed. Only membership entries list members; the
-  others apply to the roster in force at their parent:
+  version stores it as its previous-version hash, and the header's roster
+  entry hash is carried as an opaque 32-byte value.
+- `verifyVersionChain` checks that envelopes link by hash with rising
+  versions in one project, and that they contain the newest version this
+  browser has pinned. That refuses rollback and forks.
+- `signProjectEnvelope` signs, with ECDSA P-256 / SHA-256,
+  `label "v1 version signature" | u32 prefix length | prefix | versionHash | u64 signedAt`.
+  The signature is `u8 version = 1 | u64 signedAt (Unix ms) | r ‖ s`, and
+  verification returns the signed timestamp. Which keys may sign is up to the
+  caller.
 
-  ```
-  "OZR" | u8 version = 1 | u8 type | u32 sequence | u32 key epoch | u8 previous hash length (0 or 32) + hash
-        | u8 length + project id | type fields
-  ```
-
-  | Type                | Type fields                            | Signed by                                                 | May change                                                       |
-  | ------------------- | -------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------- |
-  | 1 `membership`      | `u16 count \| members \| wraps`        | a certified device key of the owner (the roster anchor)   | members and roles; may start an epoch (+1) as it removes someone |
-  | 2 `epoch`           | `wraps`                                | a certified device key of any current member, viewers too | only the epoch (+1), wrapped to every member in force            |
-  | 3 `self-removal`    | `u8 length + removed user id \| wraps` | the departing member's device key or identity key         | removes only the signer; epoch + 1 for the rest                  |
-  | 4 `anchor-transfer` | `32-byte new identity key hash`        | the owner's old identity key                              | the anchor (owner identity); epoch unchanged                     |
-
-  Members are sorted by user id, each as
-  `u8 length + user id | 32-byte identity key hash | u8 role (1 owner, 2 editor, 3 viewer)`.
-  A membership entry lists exactly one owner, who must be the anchor. Wraps
-  are `u16 count`, then sorted by user id, each
-  `u8 length + user id | u16 length + sealed project key`.
-  `SignedRosterEntry.signedBy` says whether the signature is a `roster` device
-  signature or an identity signature, `u8 version | r ‖ s` over
-  `label "v1 roster signature" | entry`. `rosterEntryHash` is
-  `SHA-256(label "v1 roster entry hash" | entry)`, the value project envelopes
-  carry.
-
-  A removal that does not start an epoch in the same entry, which is always
-  the case for a self-removal, leaves `rotationPending` set. No version may
-  then be written until the next epoch entry, which only a remaining member's
-  device can sign. `checkVersionEpoch(state, keyEpoch)` refuses a version
-  while the rotation is pending, or under any epoch other than the one in
-  force.
-
-  `verifyRosterChain` folds the chain into a `RosterState` (members, anchor,
-  epoch, pending rotation) and enforces each type's signer and limits. Every signer's device
-  list or identity key comes from `deviceLists(userId, identityKeyHash)`, and
-  the identity must match the one the roster names. A since-revoked device
-  counts only within its roster cutoff. The chain starts at sequence 0, or at
-  a previously verified `from` state, and must contain an optional pin. The
-  `authorize` callback adds Phase 5 policy, such as refusing an anchor
-  transfer until members have verified the new identity outside OpenZCAD.
+Key management is not in this package: device lists, the signed roster and
+its entry types, contacts lists, revocation cutoffs and read modes. That code
+is parked on the `claude/e2ee-chains` branch while MLS (RFC 9420) is assessed
+as its replacement.
 
 ## Key wrapping
 
@@ -305,10 +177,9 @@ PRF input is `PASSKEY_PRF_INPUT`.
   value stored beside the blob, never inside an envelope.
 - **Key hash:** `publicKeyHash` is the full
   `SHA-256(label "v1 public key hash" | u8 key count | keys)`. Over the
-  identity key it is the user's fingerprint (`identityFingerprint`), which is
-  the key a roster records. To verify a contact, people compare
-  `contactVerificationCode`, which also covers the device-list head (see
-  Contacts lists). Nothing people compare is
+  identity key it is the user's fingerprint (`identityFingerprint`).
+  `contactVerificationCode` covers an identity key together with a 32-byte
+  device-list head hash. Nothing people compare is
   shorter than 128 bits: the comparison code is 40 digits in eight groups of
   five (132.9 bits).
 - **Project state code:**

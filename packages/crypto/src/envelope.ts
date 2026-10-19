@@ -154,25 +154,24 @@ export function envelopeBodyLength(
 }
 
 /**
- * Commits to a content blob's exact ciphertext without buffering it:
- * SHA-256(label, SHA-256(prefix), SHA-256(chunk 0), SHA-256(chunk 1), …).
+ * Commits to a content blob's exact ciphertext with bounded state, however
+ * many chunks it has: h0 = SHA-256(label), then for the prefix and each
+ * chunk in order h = SHA-256(h | SHA-256(part)). The final h is the hash.
+ * Parts are folded in strictly in order; callers await each `add`.
  */
 class CiphertextHasher {
-  private readonly digests: Promise<Bytes>[] = [];
+  private state: Promise<Bytes> = sha256(label('v1 content blob hash'));
 
-  add(bytes: Uint8Array): void {
-    const digest = sha256(bytes);
-    digest.catch(() => undefined);
-    this.digests.push(digest);
+  add(part: Uint8Array): Promise<Bytes> {
+    const next = this.state.then(async (state) =>
+      sha256(concatBytes(state, await sha256(part)))
+    );
+    this.state = next;
+    return next;
   }
 
   async finish(): Promise<Bytes> {
-    return sha256(
-      concatBytes(
-        label('v1 content blob hash'),
-        ...(await Promise.all(this.digests))
-      )
-    );
+    return copyBytes(await this.state);
   }
 }
 
@@ -201,7 +200,8 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
     private readonly key: CryptoKey
   ) {
     this.hasher = header.class === 'content' ? new CiphertextHasher() : null;
-    this.hasher?.add(prefix);
+    // Folded in before the first chunk, which awaits it.
+    this.hasher?.add(prefix).catch(() => undefined);
   }
 
   /** Encrypts every chunk that is now known not to be the last. */
@@ -264,7 +264,7 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
       chunkAad(this.prefix, index),
       chunk
     );
-    this.hasher?.add(sealed);
+    await this.hasher?.add(sealed);
     return sealed;
   }
 
@@ -392,7 +392,7 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
     const length = envelopePrefixLength(this.buffered);
     if (length === null || this.buffered.byteLength < length) return false;
     this.parsed = decodeEnvelopePrefix(this.buffered.subarray(0, length));
-    this.hasher?.add(this.parsed.prefix);
+    await this.hasher?.add(this.parsed.prefix);
     this.buffered = this.buffered.subarray(length);
     this.cryptoKey = await importChunkKey(this.key, 'decrypt');
     return true;
@@ -403,7 +403,7 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
       throw new E2eeError('limit-exceeded', 'Envelope has too many chunks');
     }
     const index = this.index;
-    this.hasher?.add(copyBytes(ciphertext));
+    await this.hasher?.add(ciphertext);
     const plaintext = await aesGcmDecrypt(
       this.cryptoKey!,
       chunkNonce(index, final),
@@ -938,7 +938,9 @@ export function encryptContentBlobStream(
       }
     })
   );
-  const payload = compression === 'gzip' ? compressStream(counted) : counted;
+  const payload = (
+    compression === 'gzip' ? compressStream(counted) : counted
+  ).getReader();
   let resolve!: (reference: ContentBlobReference) => void;
   let reject!: (error: unknown) => void;
   const reference = new Promise<ContentBlobReference>((res, rej) => {
@@ -946,36 +948,63 @@ export function encryptContentBlobStream(
     reject = rej;
   });
   reference.catch(() => undefined);
-  let writer: EnvelopeWriter<ContentBlobHeader>;
-  const guard = async (step: () => Promise<void>): Promise<void> => {
-    try {
-      await step();
-    } catch (error) {
-      reject(error);
-      throw error;
-    }
-  };
-  const envelope = payload.pipeThrough(
-    new TransformStream<Bytes, Bytes>({
-      start: (controller) =>
-        guard(async () => {
-          writer = await createContentBlobWriter(key, kind, {
-            ...options,
-            compression
+  // Every way the envelope can end settles `reference`: finishing resolves
+  // it; a writer or source error, or the consumer cancelling, rejects it.
+  const fail = (error: unknown): E2eeError => {
+    const typed =
+      error instanceof E2eeError
+        ? error
+        : new E2eeError('aborted', 'The content blob stream did not finish', {
+            cause: error
           });
-          controller.enqueue(writer.prefix);
-        }),
-      transform: (chunk, controller) =>
-        guard(async () => {
-          for (const out of await writer.write(chunk)) controller.enqueue(out);
-        }),
-      flush: (controller) =>
-        guard(async () => {
-          controller.enqueue(await writer.finish());
-          resolve(contentBlobReference(writer, key, plaintextLength));
+    reject(typed);
+    return typed;
+  };
+  let writer: EnvelopeWriter<ContentBlobHeader>;
+  const envelope = new ReadableStream<Bytes>({
+    async start(controller) {
+      try {
+        writer = await createContentBlobWriter(key, kind, {
+          ...options,
+          compression
+        });
+        controller.enqueue(writer.prefix);
+      } catch (error) {
+        throw fail(error);
+      }
+    },
+    async pull(controller) {
+      try {
+        // Read until something can be emitted: the writer holds a full
+        // chunk back until it knows whether more follows, and a pull that
+        // enqueues nothing would never be called again.
+        for (;;) {
+          const next = await payload.read();
+          if (next.done) {
+            controller.enqueue(await writer.finish());
+            controller.close();
+            resolve(contentBlobReference(writer, key, plaintextLength));
+            return;
+          }
+          const out = await writer.write(next.value);
+          for (const chunk of out) controller.enqueue(chunk);
+          if (out.length > 0) return;
+        }
+      } catch (error) {
+        const typed = fail(error);
+        await payload.cancel(typed).catch(() => undefined);
+        throw typed;
+      }
+    },
+    async cancel(reason) {
+      fail(
+        new E2eeError('aborted', 'The content blob stream was cancelled', {
+          cause: reason
         })
-    })
-  );
+      );
+      await payload.cancel(reason).catch(() => undefined);
+    }
+  });
   return { envelope, reference };
 }
 

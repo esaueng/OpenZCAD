@@ -32,27 +32,7 @@ import {
   parseEnvelope
 } from './envelope';
 import type { ProjectEnvelopeHeaderInit } from './header';
-import {
-  contactsEntryHash,
-  encodeContactsEntry,
-  isVerifiedContact,
-  verifyContactsList,
-  type ContactsListEntry
-} from './contacts';
-import {
-  deviceListEntryHash,
-  encodeDeviceListEntry,
-  readDeviceSignature,
-  verifyDeviceList,
-  type DeviceListEntry
-} from './devices';
 import { exportPublicKey } from './keys';
-import {
-  encodeRosterEntry,
-  rosterEntryHash,
-  verifyRosterChain,
-  type RosterEntry
-} from './roster';
 import { verifyProjectEnvelopeSignature, versionHash } from './signing';
 import {
   TEST_EPHEMERAL_JWK,
@@ -219,7 +199,7 @@ describe('content blob v1 vector', () => {
       `"4f5a4501000000280201000000004020373037313732373337343735373637373738373937613762376337643765376615445516ce2b93eff8eef6855a910d364aa274fbe5629127dec7a9929c1e3209b356d7d85fde4061f0df9abf811bec589adb82e0c43480bf2b9bb7994fae870c0d07db9e1b90fa29bccba73218873ebe1da07ee2684afbdc95606b37e54e8c8264e6724bb2499b526ee40194b9dcf00b33746a559e4bb1d4d91c917645"`
     );
     expect(toHex(reference.ciphertextHash)).toMatchInlineSnapshot(
-      `"675c7c82a00d3bbe33f7bae6b07fe1dac6b5b2e0a0fafd2450548e5187b1abc8"`
+      `"6e3fcddf2dc4bc22ad86890e534b80eaa12fbbc8ca1eb04bc95ada397a52d29c"`
     );
     expect(await decryptContentBlob(reference, envelope)).toEqual(PLAINTEXT);
   });
@@ -229,17 +209,14 @@ describe('content blob v1 vector', () => {
     const { prefix, chunks } = await rawDecrypt(BLOB_KEY, envelope, 64);
     expect(concatBytes(...chunks)).toEqual(PLAINTEXT);
     const body = envelope.subarray(prefix.byteLength);
-    const digests = [prefix, body.subarray(0, 80), body.subarray(80)].map(
-      async (part) =>
-        new Uint8Array(await subtle.digest('SHA-256', new Uint8Array(part)))
-    );
-    const hash = await subtle.digest(
-      'SHA-256',
-      concatBytes(
-        utf8('OpenZCAD E2EE v1 content blob hash'),
-        ...(await Promise.all(digests))
-      )
-    );
+    // h0 = SHA-256(label); h = SHA-256(h | SHA-256(part)) over the prefix
+    // and each chunk in order.
+    const sha = async (data: Uint8Array) =>
+      new Uint8Array(await subtle.digest('SHA-256', new Uint8Array(data)));
+    let hash = await sha(utf8('OpenZCAD E2EE v1 content blob hash'));
+    for (const part of [prefix, body.subarray(0, 80), body.subarray(80)]) {
+      hash = await sha(concatBytes(hash, await sha(part)));
+    }
     expect(new Uint8Array(hash)).toEqual(reference.ciphertextHash);
   });
 });
@@ -350,166 +327,21 @@ describe('seal v1 vector', () => {
   });
 });
 
-/** Fixed keys: identity, the device that signs, and the encryption key. */
-async function fixedUser() {
-  const identity = await importFixedPair(TEST_IDENTITY_JWK, 'ECDSA');
-  const device = await importFixedPair(TEST_SIGNER_JWK, 'ECDSA');
-  const encryption = await importFixedPair(TEST_RECIPIENT_JWK, 'ECDH');
-  const deviceKey = await exportPublicKey(device.publicKey);
-  const entry: DeviceListEntry = {
-    userId: 'usr_1',
-    sequence: 0,
-    previousEntryHash: null,
-    encryptionKey: await exportPublicKey(encryption.publicKey),
-    devices: [{ deviceId: 'dev_1', signingKey: deviceKey }],
-    cutoffs: []
-  };
-  return {
-    identity,
-    device,
-    deviceKeyHash: await publicKeyHash(deviceKey),
-    entry
-  };
-}
-
-async function sealedVector(): Promise<Uint8Array> {
-  return sealKeyWith(
-    (await importFixedPair(TEST_RECIPIENT_JWK, 'ECDH')).publicKey,
-    WRAPPED_SECRET,
-    {
-      purpose: 'project-key',
-      userId: 'usr_1',
-      projectId: 'prj_1',
-      keyEpoch: 1
-    },
-    await importFixedPair(TEST_EPHEMERAL_JWK, 'ECDH'),
-    queuedRandom(patternBytes(12, 0xd0))
-  );
-}
-
-async function rosterVector(): Promise<RosterEntry> {
-  const owner = await importFixedPair(TEST_IDENTITY_JWK, 'ECDSA');
-  return {
-    type: 'membership',
-    projectId: 'prj_1',
-    sequence: 0,
-    keyEpoch: 1,
-    previousEntryHash: null,
-    members: [
-      {
-        userId: 'usr_1',
-        identityKeyHash: await publicKeyHash(
-          await exportPublicKey(owner.publicKey)
-        ),
-        role: 'owner'
-      },
-      {
-        userId: 'usr_2',
-        identityKeyHash: patternBytes(32, 0xf0),
-        role: 'viewer'
-      }
-    ],
-    keyWraps: [
-      { userId: 'usr_1', sealedKey: await sealedVector() },
-      { userId: 'usr_2', sealedKey: patternBytes(16, 0x20) }
-    ]
-  };
-}
-
-const CONTACTS_ENTRY: ContactsListEntry = {
-  ownerUserId: 'usr_1',
-  sequence: 0,
-  previousEntryHash: null,
-  action: 'verify',
-  contactUserId: 'usr_2',
-  identityKeyHash: patternBytes(32, 0xf0),
-  deviceListHead: patternBytes(32, 0x40),
-  replacementKeyHash: null
-};
-
-describe('device list and signature vectors', () => {
-  // ECDSA signatures are randomized, so these are recorded signatures over
-  // the fixed inputs that must keep verifying.
-  const DEVICE_LIST_SIGNATURE =
-    '01ac20e8853739d0d11dc1eac1fdcaf044edfc8270b101ff13dba5c60b7789013252b413cb5b18decc60e9b3826ccb1f3369f905405d86b644b546878e2aba65f3';
+describe('version signature vector', () => {
+  // ECDSA signatures are randomized, so this is a recorded signature over
+  // the project envelope vector that must keep verifying.
   const VERSION_SIGNATURE =
-    '01057573725f31000000007c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b00000199c82cc0009d5012c239b88f7447fc858b1b2cd5e8c48860e201c6e3df27c5fca6c6fe7db1a59a9c778842abc982998efa3af0e295796dced3acfc8d6fc43b2336386e9d3d';
-  const CONTACTS_SIGNATURE =
-    '01581284e4a912f950041a42603fc25c254f4a9d2838eddf3bc20245babc4f7dcd4aa684669fe738ee9c47055f1c162cc39840096d731167a454975207cf41d82d';
-  const ROSTER_SIGNATURE =
-    '01057573725f31000000007c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b00000199c82cc000901194288c000452e9eb0ce597b7a849eb985d0d867e54942208b20bcc241824f2cac156338eff7d5cbe96437e0fd8d831db6d863af8fd285d7e60a14aad8a28';
+    '0100000199c82cc0007c511a62f92eac086c09e70293b7a74ae48bed3f98fb11b8159e90efa8c2c4663cc4aeec81250ef9f8efd24dd564be70853f20f9f170d803857702710be1aada';
 
-  async function verifiedList() {
-    const { identity, entry } = await fixedUser();
-    return verifyDeviceList(identity.publicKey, [
-      {
-        entry: encodeDeviceListEntry(entry),
-        signature: fromHex(DEVICE_LIST_SIGNATURE)
-      }
-    ]);
-  }
-
-  it('encodes the device-list entry and verifies its identity signature', async () => {
-    const { entry } = await fixedUser();
-    const bytes = encodeDeviceListEntry(entry);
-    expect(toHex(bytes)).toMatchInlineSnapshot(
-      `"4f5a44010000000000057573725f3104225fe504ce70d16a207f90da884b5d27f4146b46f240fa00a24cccba32a7a4272a1fbe11a064b88a822775a57aa8d5c81607729fedfe3b9812da1a925999b43a0001056465765f3104e351addbbadcbfe457247313321051979c2d07fe131aa0ba08dcfcbb62301dfcd384557ec129c023cbd4be64d2bfc3ee9c44989c47f13691b9a32832bf8625b40000"`
-    );
-    expect(toHex(await deviceListEntryHash(bytes))).toMatchInlineSnapshot(
-      `"c41e95b7a01036f7c3298e52d69ea31b02e21f292f76e559bf4d9dc48a0abb27"`
-    );
-    const list = await verifiedList();
-    expect(list.devices.map((d) => d.deviceId)).toEqual(['dev_1']);
-    expect(toHex(list.identityKeyHash)).toMatchInlineSnapshot(
-      `"c5c2ef3d0437209cec6e3da899699f29b09f738851aea7379f589b443c62cba0"`
-    );
-  });
-
-  it('verifies the recorded version signature against the device list', async () => {
-    const signature = fromHex(VERSION_SIGNATURE);
-    expect(readDeviceSignature(signature)).toMatchObject({
-      userId: 'usr_1',
-      deviceListSequence: 0,
-      signedAt: 1_760_000_000_000
-    });
+  it('verifies the recorded signature and its timestamp', async () => {
+    const signer = await importFixedPair(TEST_SIGNER_JWK, 'ECDSA');
     expect(
       await verifyProjectEnvelopeSignature(
-        await verifiedList(),
+        signer.publicKey,
         await projectVector(),
-        signature
+        fromHex(VERSION_SIGNATURE)
       )
-    ).toMatchObject({ deviceId: 'dev_1', signedAt: 1_760_000_000_000 });
-  });
-
-  it('encodes the contacts entry and verifies its recorded signature', async () => {
-    const { identity } = await fixedUser();
-    const entry = encodeContactsEntry(CONTACTS_ENTRY);
-    expect(toHex(entry)).toMatchInlineSnapshot(
-      `"4f5a43010000000000057573725f3101057573725f32f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f20404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f00"`
-    );
-    expect(toHex(await contactsEntryHash(entry))).toMatchInlineSnapshot(
-      `"a6920b80cd1bb665fbd1f6a2e0707a59356b0c9836e2de051b5a8f86e601d414"`
-    );
-    const list = await verifyContactsList(identity.publicKey, [
-      { entry, signature: fromHex(CONTACTS_SIGNATURE) }
-    ]);
-    expect(isVerifiedContact(list, 'usr_2', patternBytes(32, 0xf0))).toBe(true);
-  });
-
-  it('encodes the roster entry and verifies its recorded signature', async () => {
-    const entry = encodeRosterEntry(await rosterVector());
-    expect(toHex(entry)).toMatchInlineSnapshot(
-      `"4f5a5201010000000000000001000570726a5f310002057573725f31c5c2ef3d0437209cec6e3da899699f29b09f738851aea7379f589b443c62cba001057573725f32f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f030002057573725f31007e010482fb6c30813d84508322c122efce43026e7dcea6f0de9d961a6df375f86fa2e43f13841960e6c63aa427f8e019c41cabc8b60a6ab516b3e8eca9c754e5e8385ed0d1d2d3d4d5d6d7d8d9dadbfe59717957995a878dcf5398e698853d13a567337d4e5c7e8e0877a78da169b507307627a4e44cedc21acb64652ad48d057573725f320010202122232425262728292a2b2c2d2e2f"`
-    );
-    expect(toHex(await rosterEntryHash(entry))).toMatchInlineSnapshot(
-      `"c8bd8364cc0123186c7b48d0cf4f9cab02ef25f07659b0d27f36d56d022f9632"`
-    );
-    const list = await verifiedList();
-    const [verified] = await verifyRosterChain(
-      [{ entry, signature: fromHex(ROSTER_SIGNATURE), signedBy: 'device' }],
-      () => list
-    );
-    expect(verified?.signer.device?.deviceId).toBe('dev_1');
+    ).toEqual({ signedAt: 1_760_000_000_000 });
   });
 });
 

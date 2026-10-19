@@ -3,22 +3,6 @@
  * keys were generated for the test vectors and protect nothing.
  */
 import type { Bytes } from './bytes';
-import { publicKeyHash } from './codes';
-import {
-  signDeviceListEntry,
-  verifyDeviceList,
-  type DeviceListEntry,
-  type DeviceSigner,
-  type RevocationCutoff,
-  type SignedDeviceListEntry,
-  type VerifiedDeviceList
-} from './devices';
-import {
-  exportPublicKey,
-  generateDeviceSigningKeyPair,
-  generateEncryptionKeyPair,
-  generateIdentityKeyPair
-} from './keys';
 import type { RandomSource } from './primitives';
 
 /** Bytes `start, start+1, …` (mod 256) on every call. */
@@ -67,7 +51,7 @@ export const TEST_EPHEMERAL_JWK: FixedJwk = {
   d: 'UOiZwiJEwRoOBQdOknIS5tZdGnNzwP8pB2oatR_u-Gs'
 };
 
-/** A fixed identity key for the device-list vector. */
+/** A fixed identity key for the code vectors. */
 export const TEST_IDENTITY_JWK: FixedJwk = {
   x: 'mv7B6kH6r7HXt4KYmwnKX_W-nrsGsRIqDlF3bvwZqJQ',
   y: 'QSBhdzfch7ycvgF0bsH6RKDKTiVHWIYySYz49P3Z9qU',
@@ -104,97 +88,4 @@ export async function importFixedPair(
     )
   ]);
   return { privateKey, publicKey };
-}
-
-export interface TestDevice {
-  readonly deviceId: string;
-  readonly pair: CryptoKeyPair;
-  readonly signingKey: Bytes;
-  readonly keyHash: Bytes;
-}
-
-/** A user with an identity key, an encryption key and certified devices. */
-export class TestUser {
-  readonly chain: SignedDeviceListEntry[] = [];
-  list!: VerifiedDeviceList;
-  identityKey!: Bytes;
-  encryptionKey!: Bytes;
-  devices: TestDevice[] = [];
-
-  private constructor(
-    readonly userId: string,
-    readonly identity: CryptoKeyPair
-  ) {}
-
-  static async create(userId: string, deviceIds = ['d1']): Promise<TestUser> {
-    const user = new TestUser(userId, await generateIdentityKeyPair());
-    user.identityKey = await exportPublicKey(user.identity.publicKey);
-    user.encryptionKey = await exportPublicKey(
-      (await generateEncryptionKeyPair()).publicKey
-    );
-    for (const deviceId of deviceIds) await user.addDevice(deviceId, false);
-    await user.publish();
-    return user;
-  }
-
-  async addDevice(deviceId: string, publish = true): Promise<TestDevice> {
-    const pair = await generateDeviceSigningKeyPair();
-    const signingKey = await exportPublicKey(pair.publicKey);
-    const device = {
-      deviceId,
-      pair,
-      signingKey,
-      keyHash: await publicKeyHash(signingKey)
-    };
-    this.devices.push(device);
-    if (publish) await this.publish();
-    return device;
-  }
-
-  async revoke(
-    deviceId: string,
-    cutoffs: readonly RevocationCutoff[] = []
-  ): Promise<void> {
-    this.devices = this.devices.filter((d) => d.deviceId !== deviceId);
-    await this.publish(cutoffs);
-  }
-
-  async replaceEncryptionKey(): Promise<void> {
-    this.encryptionKey = await exportPublicKey(
-      (await generateEncryptionKeyPair()).publicKey
-    );
-    await this.publish();
-  }
-
-  /** A signer for one device, citing the newest device-list entry. */
-  signer(
-    deviceId = this.devices[0]!.deviceId,
-    device?: TestDevice
-  ): DeviceSigner {
-    const d = device ?? this.devices.find((x) => x.deviceId === deviceId)!;
-    return {
-      userId: this.userId,
-      privateKey: d.pair.privateKey,
-      deviceKeyHash: d.keyHash,
-      deviceListSequence: this.list.latestSequence
-    };
-  }
-
-  private async publish(
-    cutoffs: readonly RevocationCutoff[] = []
-  ): Promise<void> {
-    const entry: DeviceListEntry = {
-      userId: this.userId,
-      sequence: this.chain.length,
-      previousEntryHash: this.list?.latestHash ?? null,
-      encryptionKey: this.encryptionKey,
-      devices: this.devices.map(({ deviceId, signingKey }) => ({
-        deviceId,
-        signingKey
-      })),
-      cutoffs
-    };
-    this.chain.push(await signDeviceListEntry(this.identity.privateKey, entry));
-    this.list = await verifyDeviceList(this.identity.publicKey, this.chain);
-  }
 }

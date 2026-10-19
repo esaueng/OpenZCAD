@@ -17,10 +17,10 @@ export type E2eeErrorCode =
   | 'invalid-argument'
   /** An envelope key was offered for a second envelope (nonce reuse). */
   | 'key-reused'
-  /** A device key the signer's device list had revoked at that point. */
-  | 'key-revoked'
-  /** A version, roster or device-list chain does not link, or skips a pin. */
+  /** A version chain does not link, or does not contain the pin. */
   | 'chain-broken'
+  /** A stream was cancelled or its source failed before it finished. */
+  | 'aborted'
   /** A size limit was exceeded (header, chunk count, decompressed size). */
   | 'limit-exceeded'
   /** WebCrypto or CompressionStream is missing from this runtime. */

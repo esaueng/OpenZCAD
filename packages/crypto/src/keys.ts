@@ -9,9 +9,8 @@ const ECDH = { name: 'ECDH', namedCurve: 'P-256' } as const;
 const ECDSA = { name: 'ECDSA', namedCurve: 'P-256' } as const;
 
 /**
- * ECDH P-256 pair for receiving project keys; its public half is certified
- * in the device list and its private half wrapped by the account key
- * (`encryption-private-key`). Pass `extractable: false` for a
+ * ECDH P-256 pair for receiving project keys; its private half is wrapped
+ * by the account key (`encryption-private-key`). Pass `extractable: false` for a
  * device-approval pair that never needs to be wrapped.
  */
 export async function generateEncryptionKeyPair(
@@ -21,21 +20,12 @@ export async function generateEncryptionKeyPair(
 }
 
 /**
- * The long-term identity key: ECDSA P-256, extractable so it can be wrapped
- * under the recovery key and passkeys (`identity-key`). It signs only
- * device-list entries; its hash is the fingerprint other people verify.
+ * An ECDSA P-256 signing pair (identity or device key). Extractable by
+ * default so it can be wrapped (`identity-key`); pass false for a key that
+ * never leaves its device.
  */
-export async function generateIdentityKeyPair(): Promise<CryptoKeyPair> {
-  return subtle().generateKey(ECDSA, true, ['sign', 'verify']);
-}
-
-/**
- * A per-device signing key: ECDSA P-256, non-extractable by default because
- * it never leaves its device. Certified by the identity key in the device
- * list, it signs versions, roster entries and share snapshots.
- */
-export async function generateDeviceSigningKeyPair(
-  extractable = false
+export async function generateSigningKeyPair(
+  extractable = true
 ): Promise<CryptoKeyPair> {
   return subtle().generateKey(ECDSA, extractable, ['sign', 'verify']);
 }

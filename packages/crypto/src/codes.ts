@@ -68,7 +68,7 @@ function checkPublicKey(raw: Uint8Array, what = 'Public key'): void {
 /**
  * The full 256-bit hash of one or more raw public keys: a member's
  * encryption and signing keys in that order, or one device key. This is
- * what a QR code carries, what the roster records as a verified key, and,
+ * what a QR code carries, what a verified pin records, and,
  * through `formatComparisonCode`, what people compare. It is never
  * shortened: a truncated hash of a key the server can see invites grinding.
  */
@@ -109,7 +109,7 @@ export function formatComparisonCode(hash: Uint8Array): string {
 /**
  * The fingerprint people verify for a user: the hash of their long-term
  * identity key, which survives device changes and key rotation. Show
- * `code`; `hash` is the QR form and the roster's `identityKeyHash`.
+ * `code`; `hash` is the QR form and the value a verified pin records.
  */
 export async function identityFingerprint(
   identityPublicKey: Uint8Array

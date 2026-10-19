@@ -80,9 +80,8 @@ export {
   exportPrivateKey,
   exportPublicKey,
   generateDeviceUnlockKey,
-  generateDeviceSigningKeyPair,
   generateEncryptionKeyPair,
-  generateIdentityKeyPair,
+  generateSigningKeyPair,
   importEncryptionPrivateKey,
   importEncryptionPublicKey,
   importSigningPrivateKey,
@@ -110,96 +109,13 @@ export {
   type WrapPurpose
 } from './wrap';
 export {
-  chainEntryHash,
-  checkChain,
-  checkNextLink,
-  followsLink,
-  type ChainLink,
-  type ChainOptions
-} from './chain';
-export {
-  DEVICE_SIGNATURE_PURPOSES,
   SIGNATURE_VERSION_1,
-  checkRevocationCutoff,
-  currentEncryptionKey,
-  decodeDeviceListEntry,
-  deviceListEntryHash,
-  encodeDeviceListEntry,
-  findDevice,
-  isDeviceLiveAt,
-  readDeviceSignature,
-  signDeviceListEntry,
-  signWithDevice,
-  verifyDeviceList,
-  verifyDeviceSignature,
-  type AncestryLookup,
-  type CertifiedDevice,
-  type CutoffSubject,
-  type DeviceListEntry,
-  type DeviceRecord,
-  type DeviceSignatureInfo,
-  type DeviceSignatureOptions,
-  type DeviceSignaturePurpose,
-  type DeviceSigner,
-  type EncryptionKeyRecord,
-  type RevocationCutoff,
-  type SignedDeviceListEntry,
-  type VerifiedDeviceList,
-  type VerifiedDeviceSignature
-} from './devices';
-export {
   signProjectEnvelope,
   verifyProjectEnvelopeSignature,
   verifyVersionChain,
   versionHash,
-  type VersionSignatureOptions
+  type VerifiedVersionSignature
 } from './signing';
-export {
-  ROSTER_ENTRY_TYPES,
-  ROSTER_ROLES,
-  checkVersionEpoch,
-  decodeRosterEntry,
-  encodeRosterEntry,
-  rosterEntryHash,
-  signRosterEntry,
-  signRosterEntryWithIdentity,
-  verifyRosterChain,
-  type AnchorTransferEntry,
-  type EpochEntry,
-  type MembershipEntry,
-  type RosterAnchor,
-  type RosterChainOptions,
-  type RosterDeviceLists,
-  type RosterEntry,
-  type RosterEntryType,
-  type RosterKeyWrap,
-  type RosterMember,
-  type RosterRole,
-  type RosterSignatureKind,
-  type RosterSigner,
-  type RosterState,
-  type SelfRemovalEntry,
-  type SignedRosterEntry,
-  type VerifiedRosterEntry
-} from './roster';
-export {
-  CONTACT_ACTIONS,
-  checkContactDeviceList,
-  contactsEntryHash,
-  decodeContactsEntry,
-  deviceListChainsFrom,
-  encodeContactsEntry,
-  isVerifiedContact,
-  signContactsEntry,
-  verifyContactsList,
-  type ContactAction,
-  type ContactDeviceListCheck,
-  type ContactPin,
-  type ContactStatus,
-  type ContactsListEntry,
-  type SignedContactsEntry,
-  type VerifiedContactsList
-} from './contacts';
 export {
   assetDedupeHash,
   commitDeviceApproval,

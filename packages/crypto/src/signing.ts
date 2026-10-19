@@ -1,19 +1,28 @@
-import { ByteWriter, equalBytes, type Bytes } from './bytes';
-import { checkChain } from './chain';
 import {
-  signWithDevice,
-  verifyDeviceSignature,
-  type AncestryLookup,
-  type DeviceSigner,
-  type VerifiedDeviceList,
-  type VerifiedDeviceSignature
-} from './devices';
+  ByteReader,
+  ByteWriter,
+  asBytes,
+  equalBytes,
+  isUint,
+  label,
+  type Bytes
+} from './bytes';
 import { parseEnvelope } from './envelope';
 import { E2eeError } from './errors';
 import type { ProjectEnvelopeHeader } from './header';
-import { sha256 } from './primitives';
+import { importSigningPublicKey } from './keys';
+import { sha256, subtle } from './primitives';
 
-// --- Version signatures ---------------------------------------------------
+/**
+ * Version signatures and the version hash chain. Which keys may sign (device
+ * lists, rosters) is key management, which is being reassessed (MLS); this
+ * module only signs and verifies with a key the caller supplies.
+ */
+
+/** ECDSA P-256 with SHA-256; the signature is IEEE P1363 `r || s`. */
+export const SIGNATURE_VERSION_1 = 1;
+const ECDSA_SHA256 = { name: 'ECDSA', hash: 'SHA-256' } as const;
+const SIGNATURE_BYTES = 1 + 8 + 64;
 
 /**
  * The version hash: SHA-256 of a whole project envelope. The next version
@@ -37,72 +46,108 @@ function projectHeaderOf(envelope: Uint8Array): {
   return { prefix, header };
 }
 
-/** The prefix (so the plaintext header is signed as such) and the version hash. */
-async function versionSubject(envelope: Uint8Array): Promise<Bytes> {
+/**
+ * What an author signs: a label, the envelope prefix (so the plaintext
+ * header is signed as such), the version hash (so is everything else) and
+ * the author's timestamp.
+ */
+async function versionStatement(
+  envelope: Uint8Array,
+  signedAt: number
+): Promise<Bytes> {
   const { prefix } = projectHeaderOf(envelope);
   return new ByteWriter()
+    .bytes(label('v1 version signature'))
     .u32(prefix.byteLength)
     .bytes(prefix)
     .bytes(await versionHash(envelope))
+    .u64(signedAt)
     .finish();
 }
 
 /**
  * Signs a project envelope (a version, checkpoint, merged version or share
- * snapshot) with the author's certified device key.
+ * snapshot). Output: `u8 version | u64 signedAt (Unix ms) | 64-byte r || s`.
  */
 export async function signProjectEnvelope(
-  signer: DeviceSigner,
+  privateKey: CryptoKey,
   envelope: Uint8Array,
   signedAt: number = Date.now()
 ): Promise<Bytes> {
-  return signWithDevice(
-    signer,
-    'version',
-    await versionSubject(envelope),
-    signedAt
+  if (
+    privateKey?.algorithm?.name !== 'ECDSA' ||
+    privateKey.type !== 'private'
+  ) {
+    throw new E2eeError('invalid-argument', 'Expected an ECDSA private key');
+  }
+  if (!isUint(signedAt, Number.MAX_SAFE_INTEGER)) {
+    throw new E2eeError(
+      'invalid-argument',
+      'signedAt must be Unix milliseconds'
+    );
+  }
+  const rs = new Uint8Array(
+    await subtle().sign(
+      ECDSA_SHA256,
+      privateKey,
+      await versionStatement(envelope, signedAt)
+    )
   );
+  return new ByteWriter()
+    .u8(SIGNATURE_VERSION_1)
+    .u64(signedAt)
+    .bytes(rs)
+    .finish();
 }
 
-export interface VersionSignatureOptions {
-  /**
-   * The project's version ancestry. Needed only when the signing device
-   * has since been revoked: then the version must be the revocation's
-   * cutoff head for this project or one of its ancestors.
-   */
-  readonly isAncestorOrSelf?: AncestryLookup;
+export interface VerifiedVersionSignature {
+  /** The author's signed timestamp, Unix milliseconds. */
+  readonly signedAt: number;
 }
 
 /**
- * Who signed a project envelope, checked against the signer's device list
- * (read the user id first with `readDeviceSignature`). Null for an invalid
- * signature; see `verifyDeviceSignature` for the typed refusals. A revoked
- * device's signature is accepted only within its revocation cutoff.
+ * The signed timestamp when `signature` is by `publicKey` over exactly
+ * this envelope, otherwise null. Throws for a malformed signature or
+ * envelope, or an unknown version.
  */
 export async function verifyProjectEnvelopeSignature(
-  signerDevices: VerifiedDeviceList,
+  publicKey: Uint8Array | CryptoKey,
   envelope: Uint8Array,
-  signature: Uint8Array,
-  options: VersionSignatureOptions = {}
-): Promise<VerifiedDeviceSignature | null> {
-  const { header } = projectHeaderOf(envelope);
-  const lookup = options.isAncestorOrSelf;
-  return verifyDeviceSignature(
-    signerDevices,
-    'version',
-    await versionSubject(envelope),
-    signature,
-    lookup
-      ? {
-          cutoff: {
-            projectId: header.projectId,
-            head: 'version',
-            hash: await versionHash(envelope),
-            isAncestorOrSelf: lookup
-          }
-        }
-      : {}
-  );
+  signature: Uint8Array
+): Promise<VerifiedVersionSignature | null> {
+  if (!(signature instanceof Uint8Array) || signature.byteLength === 0) {
+    throw new E2eeError('malformed', 'Signature is empty');
+  }
+  if (signature[0] !== SIGNATURE_VERSION_1) {
+    throw new E2eeError(
+      'unsupported-version',
+      `Signature version ${signature[0]} is not supported`
+    );
+  }
+  if (signature.byteLength !== SIGNATURE_BYTES) {
+    throw new E2eeError('malformed', 'Signature has the wrong length');
+  }
+  const reader = new ByteReader(signature, 'Signature');
+  reader.u8();
+  const signedAt = reader.u64();
+  const rs = reader.bytes(64);
+  const key =
+    publicKey instanceof Uint8Array
+      ? await importSigningPublicKey(publicKey)
+      : publicKey;
+  if (key?.algorithm?.name !== 'ECDSA' || key.type !== 'public') {
+    throw new E2eeError('invalid-argument', 'Expected an ECDSA public key');
+  }
+  const message = await versionStatement(envelope, signedAt);
+  let valid: boolean;
+  try {
+    valid = await subtle().verify(ECDSA_SHA256, key, asBytes(rs), message);
+  } catch {
+    // Engines differ on out-of-range r or s: Node returns false, others may
+    // throw. Either way the signature is not valid.
+    valid = false;
+  }
+  return valid ? { signedAt } : null;
 }
 
 /**
@@ -117,6 +162,9 @@ export async function verifyVersionChain(
   envelopes: readonly Uint8Array[],
   options: { readonly pinnedVersionHash?: Uint8Array } = {}
 ): Promise<Bytes[]> {
+  if (envelopes.length === 0) {
+    throw new E2eeError('chain-broken', 'Version history is empty');
+  }
   const hashes: Bytes[] = [];
   let previous: ProjectEnvelopeHeader | null = null;
   for (const envelope of envelopes) {
@@ -138,18 +186,12 @@ export async function verifyVersionChain(
     previous = header;
     hashes.push(await versionHash(envelope));
   }
-  if (hashes.length === 0) {
-    throw new E2eeError('chain-broken', 'Version history is empty');
+  const pinned = options.pinnedVersionHash;
+  if (pinned && !hashes.some((hash) => equalBytes(hash, pinned))) {
+    throw new E2eeError(
+      'chain-broken',
+      'History does not contain the newest version this browser has seen'
+    );
   }
-  // Version numbers need not be consecutive, so only the pin rule is shared.
-  checkChain(
-    'Version history',
-    hashes.map((hash, sequence) => ({
-      sequence,
-      previousEntryHash: sequence === 0 ? null : hashes[sequence - 1]!,
-      hash
-    })),
-    { pinnedEntryHash: options.pinnedVersionHash, fromGenesis: false }
-  );
   return hashes;
 }
