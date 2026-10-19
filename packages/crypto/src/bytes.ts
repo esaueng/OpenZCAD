@@ -16,6 +16,18 @@ export function copyBytes(bytes: Uint8Array): Bytes {
   return out;
 }
 
+/**
+ * A private copy of caller bytes, taken before the first `await`: a caller
+ * that edits or transfers its array mid-call must not change what one step
+ * validated and a later step uses.
+ */
+export function snapshotBytes(value: unknown, what: string): Bytes {
+  if (!(value instanceof Uint8Array)) {
+    throw new E2eeError('invalid-argument', `${what} must be a Uint8Array`);
+  }
+  return copyBytes(value);
+}
+
 /** Concatenates an array of parts without spreading it into arguments. */
 export function joinBytes(parts: readonly Uint8Array[]): Bytes {
   let length = 0;

@@ -415,6 +415,29 @@ describe('codes people compare', () => {
     expect(Math.log2(10) * code.replace(/ /g, '').length).toBeGreaterThan(128);
     await rejectsWith(publicKeyHash(enc.subarray(1)), 'invalid-argument');
     await rejectsWith(publicKeyHash([]), 'invalid-argument');
+    // The bytes hashed are the bytes validated, even if the caller's array
+    // changes while the hash is pending.
+    const edited = new Uint8Array(enc);
+    const hashing = publicKeyHash([edited, sig]);
+    edited.fill(0);
+    expect(await hashing).toEqual(identity);
+    const approval = {
+      newDevicePublicKey: new Uint8Array(enc),
+      approverPublicKey: new Uint8Array(sig),
+      newDeviceNonce: patternBytes(32, 1),
+      approverNonce: patternBytes(32, 2)
+    };
+    const expected = await deviceApprovalCode({
+      newDevicePublicKey: enc,
+      approverPublicKey: sig,
+      newDeviceNonce: patternBytes(32, 1),
+      approverNonce: patternBytes(32, 2)
+    });
+    const coding = deviceApprovalCode(approval);
+    approval.newDevicePublicKey.fill(0);
+    approval.approverPublicKey.fill(0);
+    approval.newDeviceNonce.fill(0);
+    expect(await coding).toBe(expected);
     // Right shape, but not a point on the curve: nothing could import it,
     // so nothing may fingerprint or approve it either.
     const offCurve = new Uint8Array(enc);

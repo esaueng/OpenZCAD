@@ -550,6 +550,27 @@ describe('sealing to a public key', () => {
     );
   });
 
+  it('a caller editing its arrays mid-call cannot split a seal', async () => {
+    // The ECDH key and the HKDF salt must come from the same bytes: each
+    // call copies its inputs before the first await.
+    const member = await generateEncryptionKeyPair();
+    const raw = await exportPublicKey(member.publicKey);
+    const secret = new Uint8Array(PROJECT_KEY);
+    const pending = sealKey(raw, secret, CONTEXT);
+    raw.fill(0);
+    secret.fill(0);
+    const sealed = await pending;
+    const own = await exportPublicKey(member.publicKey);
+    const opening = openSealedKey(
+      { privateKey: member.privateKey, publicKey: own },
+      sealed,
+      CONTEXT
+    );
+    own.fill(0);
+    sealed.fill(0);
+    expect(await opening).toEqual(PROJECT_KEY);
+  });
+
   it('seals the account key to a device being approved', async () => {
     const device = await generateEncryptionKeyPair(false);
     expect(device.privateKey.extractable).toBe(false);

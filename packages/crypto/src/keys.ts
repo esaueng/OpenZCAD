@@ -1,4 +1,4 @@
-import { asBytes, type Bytes } from './bytes';
+import { asBytes, snapshotBytes, type Bytes } from './bytes';
 import { E2eeError } from './errors';
 import { KEY_BYTES, subtle, systemRandom } from './primitives';
 
@@ -162,7 +162,9 @@ export async function toEncryptionPublicKey(
   raw: Bytes;
 }> {
   if (key instanceof Uint8Array) {
-    return { key: await importEncryptionPublicKey(key), raw: asBytes(key) };
+    // One snapshot for both: the ECDH key and the HKDF salt must agree.
+    const raw = snapshotBytes(key, 'Public key');
+    return { key: await importEncryptionPublicKey(raw), raw };
   }
   if (!isP256Key(key, 'ECDH', 'public')) {
     throw new E2eeError('invalid-argument', 'Expected a P-256 ECDH public key');

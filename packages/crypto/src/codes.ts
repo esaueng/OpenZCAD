@@ -1,6 +1,7 @@
 import {
   ByteWriter,
   asBytes,
+  copyBytes,
   equalBytes,
   fromBase32,
   isUint,
@@ -84,12 +85,14 @@ export async function assetDedupeHash(
 /**
  * A raw key people will verify must be a real P-256 point: otherwise a
  * fingerprint or approval code could vouch for bytes that no import accepts.
- * WebCrypto checks that the point lies on the curve.
+ * WebCrypto checks that the point lies on the curve. Returns the snapshot
+ * it validated (copied before the first `await`), which is what callers
+ * hash, so a caller editing its array meanwhile cannot slip other bytes in.
  */
-async function checkPublicKey(
+async function validPublicKey(
   raw: Uint8Array,
   what = 'Public key'
-): Promise<void> {
+): Promise<Bytes> {
   const refuse = (cause?: unknown): never => {
     throw new E2eeError(
       'invalid-argument',
@@ -104,10 +107,11 @@ async function checkPublicKey(
   ) {
     refuse();
   }
+  const bytes = copyBytes(raw);
   try {
     await subtle().importKey(
       'raw',
-      asBytes(raw),
+      bytes,
       { name: 'ECDH', namedCurve: 'P-256' },
       true,
       []
@@ -115,6 +119,7 @@ async function checkPublicKey(
   } catch (cause) {
     refuse(cause);
   }
+  return bytes;
 }
 
 /**
@@ -127,7 +132,8 @@ async function checkPublicKey(
 export async function publicKeyHash(
   publicKeys: Uint8Array | readonly Uint8Array[]
 ): Promise<Bytes> {
-  const keys = publicKeys instanceof Uint8Array ? [publicKeys] : publicKeys;
+  const keys =
+    publicKeys instanceof Uint8Array ? [publicKeys] : [...publicKeys];
   if (keys.length === 0 || keys.length > 255) {
     throw new E2eeError(
       'invalid-argument',
@@ -137,10 +143,7 @@ export async function publicKeyHash(
   const writer = new ByteWriter()
     .bytes(label('v1 public key hash'))
     .u8(keys.length);
-  for (const key of keys) {
-    await checkPublicKey(key);
-    writer.bytes(key);
-  }
+  for (const key of keys) writer.bytes(await validPublicKey(key));
   return sha256(writer.finish());
 }
 
@@ -270,23 +273,25 @@ export interface DeviceApprovalCommitment {
   readonly commitment: Bytes;
 }
 
-function checkNonce(nonce: Uint8Array, what: string): void {
+/** A private copy of a 32-byte nonce. */
+function validNonce(nonce: Uint8Array, what: string): Bytes {
   if (!(nonce instanceof Uint8Array) || nonce.byteLength !== KEY_BYTES) {
     throw new E2eeError('invalid-argument', `${what} must be 32 bytes`);
   }
+  return copyBytes(nonce);
 }
 
 async function commitmentFor(
   newDevicePublicKey: Uint8Array,
   nonce: Uint8Array
 ): Promise<Bytes> {
-  await checkPublicKey(newDevicePublicKey, 'New device key');
-  checkNonce(nonce, 'New device nonce');
+  const nonceBytes = validNonce(nonce, 'New device nonce');
+  const key = await validPublicKey(newDevicePublicKey, 'New device key');
   return sha256(
     new ByteWriter()
       .bytes(label('v1 device approval commitment'))
-      .bytes(newDevicePublicKey)
-      .bytes(nonce)
+      .bytes(key)
+      .bytes(nonceBytes)
       .finish()
   );
 }
@@ -332,17 +337,22 @@ export interface DeviceApprovalCodeInput {
 export async function deviceApprovalCode(
   input: DeviceApprovalCodeInput
 ): Promise<string> {
-  await checkPublicKey(input.newDevicePublicKey, 'New device key');
-  await checkPublicKey(input.approverPublicKey, 'Approver key');
-  checkNonce(input.newDeviceNonce, 'New device nonce');
-  checkNonce(input.approverNonce, 'Approver nonce');
+  const newDeviceNonce = validNonce(input.newDeviceNonce, 'New device nonce');
+  const approverNonce = validNonce(input.approverNonce, 'Approver nonce');
+  const newDeviceKey = validPublicKey(
+    input.newDevicePublicKey,
+    'New device key'
+  );
+  const approverKey = validPublicKey(input.approverPublicKey, 'Approver key');
+  // Both keys are copied above, before anything is awaited.
+  const [newKey, approver] = await Promise.all([newDeviceKey, approverKey]);
   const digest = await sha256(
     new ByteWriter()
       .bytes(label('v1 device approval code'))
-      .bytes(input.newDevicePublicKey)
-      .bytes(input.approverPublicKey)
-      .bytes(input.newDeviceNonce)
-      .bytes(input.approverNonce)
+      .bytes(newKey)
+      .bytes(approver)
+      .bytes(newDeviceNonce)
+      .bytes(approverNonce)
       .finish()
   );
   const value = new DataView(digest.buffer).getUint32(0) % 1_000_000;

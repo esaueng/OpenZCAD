@@ -5,6 +5,7 @@ import {
   concatBytes,
   isUint,
   label,
+  snapshotBytes,
   utf8,
   type Bytes
 } from './bytes';
@@ -337,6 +338,7 @@ export async function wrapKeyWith(
   random: RandomSource
 ): Promise<Bytes> {
   const encodedContext = encodeWrapContext(context);
+  secret = snapshotBytes(secret, 'Secret');
   checkSecretLength(secret, context);
   if (!isPrivateKeyPurpose(context.purpose)) {
     const toWrap = await subtle().importKey(
@@ -418,6 +420,7 @@ export async function unwrapKey(
   context: WrapContext
 ): Promise<Bytes> {
   const encodedContext = encodeWrapContext(context);
+  wrapped = snapshotBytes(wrapped, 'Wrapped key');
   if (!isPrivateKeyPurpose(context.purpose)) {
     readWrapVersion(wrapped, WRAP_VERSION_KW);
     if (wrapped.byteLength !== KW_WRAPPED_BYTES) {
@@ -530,6 +533,7 @@ export async function sealKeyWith(
 ): Promise<Bytes> {
   const aadContext = encodeWrapContext(context);
   checkSealContext(context);
+  secret = snapshotBytes(secret, 'Secret');
   checkSecretLength(secret, context);
   const recipient = await toEncryptionPublicKey(recipientPublicKey);
   const ephemeralRaw = await exportPublicKey(ephemeral.publicKey);
@@ -561,18 +565,18 @@ export async function sealKey(
   context: SealContext
 ): Promise<Bytes> {
   checkSealContext(context);
+  // Copy caller bytes before the first await (see `snapshotBytes`).
+  const recipient =
+    recipientPublicKey instanceof Uint8Array
+      ? snapshotBytes(recipientPublicKey, 'Public key')
+      : recipientPublicKey;
+  const secretBytes = snapshotBytes(secret, 'Secret');
   const ephemeral = await subtle().generateKey(
     { name: 'ECDH', namedCurve: 'P-256' },
     false,
     ['deriveBits']
   );
-  return sealKeyWith(
-    recipientPublicKey,
-    secret,
-    context,
-    ephemeral,
-    systemRandom
-  );
+  return sealKeyWith(recipient, secretBytes, context, ephemeral, systemRandom);
 }
 
 export interface SealRecipient {
@@ -588,6 +592,7 @@ export async function openSealedKey(
 ): Promise<Bytes> {
   const aadContext = encodeWrapContext(context);
   checkSealContext(context);
+  sealed = snapshotBytes(sealed, 'Sealed key');
   readVersion(sealed, SEAL_VERSION_1, 'Sealed key');
   const reader = new ByteReader(sealed, 'Sealed key');
   const version = reader.bytes(1);
@@ -600,8 +605,11 @@ export async function openSealedKey(
       'Expected a P-256 ECDH private key'
     );
   }
-  const ephemeral = await toEncryptionPublicKey(ephemeralRaw);
-  const own = await toEncryptionPublicKey(recipient.publicKey);
+  // Both start now, so each copies its raw bytes before anything is awaited.
+  const [ephemeral, own] = await Promise.all([
+    toEncryptionPublicKey(ephemeralRaw),
+    toEncryptionPublicKey(recipient.publicKey)
+  ]);
   let kek: CryptoKey;
   try {
     kek = await sealKek(
