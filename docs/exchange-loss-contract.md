@@ -33,9 +33,11 @@ OpenZCAD project.
   and _Max facet angle_. The 20° angle is the kernel's own default and
   leaves the export unchanged. _Check watertightness_ reports the
   tessellation the file will contain: its triangle count, and the largest
-  distance from those triangles to the exact faces, measured at each curved
-  triangle's centroid and edge midpoints. Planar faces are exact. Above
-  40,000 curved triangles the check measures a stride and says _(sampled)_.
+  distance from those triangles to the exact faces. Every triangle is
+  measured at its stored float32 corners, which can sit off a tilted or
+  distant plane. Curved triangles are also measured at their centroid and
+  edge midpoints. Above 40,000 triangles the check measures a stride and
+  says _(sampled)_.
 
 ## Solid formats
 

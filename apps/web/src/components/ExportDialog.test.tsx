@@ -10,7 +10,7 @@ function measured(triangleCount: number, maxDeviation: number) {
     triangleCount,
     maxDeviation,
     sampledTriangles: triangleCount,
-    curvedTriangles: triangleCount
+    totalTriangles: triangleCount
   };
 }
 

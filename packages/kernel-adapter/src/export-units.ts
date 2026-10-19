@@ -137,12 +137,15 @@ export function declareThreeMfUnit(model: string, units: UnitSystem): string {
 export const DEVIATION_SAMPLE_TRIANGLES = 40_000;
 
 /**
- * Largest distance from the tessellation to the exact faces it stands for,
- * sampled at each triangle's centroid and edge midpoints — where a flat
- * facet strays furthest from a convex or concave carrier. Planar faces are
- * skipped: a triangle on a plane is exactly on it. Above
- * {@link DEVIATION_SAMPLE_TRIANGLES} curved triangles the check strides, and
- * says so.
+ * Largest distance from the tessellation to the exact faces it stands for.
+ * Every triangle is measured at its corners: the stored (float32) vertex
+ * positions, which on a tilted or distant plane can sit off the exact
+ * carrier by more than any chord tolerance. A triangle on a curved face is
+ * also measured at its centroid and edge midpoints, where a flat facet strays
+ * furthest from a convex or concave carrier; on a plane those interior points
+ * are interpolations of the corners and add nothing. Shared corners are
+ * measured once per face. Above {@link DEVIATION_SAMPLE_TRIANGLES} triangles
+ * the check strides, and says so.
  */
 export function measureMeshDeviation(input: {
   positions: ArrayLike<number>;
@@ -154,49 +157,64 @@ export function measureMeshDeviation(input: {
 }): {
   maxDeviation: number;
   sampledTriangles: number;
-  curvedTriangles: number;
+  totalTriangles: number;
 } {
   const { positions, indices, faceOffsets, faces } = input;
-  const curved: { face: number; start: number; end: number }[] = [];
-  let curvedTriangles = 0;
+  const groups: { face: number; start: number; end: number }[] = [];
+  let totalTriangles = 0;
   for (let group = 0; group + 1 < faceOffsets.length; group += 1) {
     const face = faces[group];
-    if (face === undefined || input.isPlanar(face)) continue;
+    if (face === undefined) continue;
     const start = faceOffsets[group]!;
     const end = faceOffsets[group + 1]!;
-    curved.push({ face, start, end });
-    curvedTriangles += (end - start) / 3;
+    groups.push({ face, start, end });
+    totalTriangles += (end - start) / 3;
   }
   const stride = Math.max(
     1,
-    Math.ceil(curvedTriangles / DEVIATION_SAMPLE_TRIANGLES)
+    Math.ceil(totalTriangles / DEVIATION_SAMPLE_TRIANGLES)
   );
   let maxDeviation = 0;
   let sampledTriangles = 0;
   let seen = 0;
-  const point = (vertex: number, axis: number) =>
-    positions[indices[vertex]! * 3 + axis]!;
-  for (const { face, start, end } of curved) {
+  const vertexAt = (corner: number) => {
+    const vertex = indices[corner]!;
+    return [
+      positions[vertex * 3]!,
+      positions[vertex * 3 + 1]!,
+      positions[vertex * 3 + 2]!
+    ] as const;
+  };
+  const measure = (x: number, y: number, z: number, face: number) => {
+    maxDeviation = Math.max(maxDeviation, input.distance(x, y, z, face));
+  };
+  for (const { face, start, end } of groups) {
+    const planar = input.isPlanar(face);
+    const measuredCorners = new Set<number>();
     for (let t = start; t + 2 < end; t += 3) {
       if (seen++ % stride !== 0) continue;
       sampledTriangles += 1;
-      const a = [point(t, 0), point(t, 1), point(t, 2)];
-      const b = [point(t + 1, 0), point(t + 1, 1), point(t + 1, 2)];
-      const c = [point(t + 2, 0), point(t + 2, 1), point(t + 2, 2)];
-      const samples = [
-        [
-          (a[0]! + b[0]! + c[0]!) / 3,
-          (a[1]! + b[1]! + c[1]!) / 3,
-          (a[2]! + b[2]! + c[2]!) / 3
-        ],
-        [(a[0]! + b[0]!) / 2, (a[1]! + b[1]!) / 2, (a[2]! + b[2]!) / 2],
-        [(b[0]! + c[0]!) / 2, (b[1]! + c[1]!) / 2, (b[2]! + c[2]!) / 2],
-        [(c[0]! + a[0]!) / 2, (c[1]! + a[1]!) / 2, (c[2]! + a[2]!) / 2]
-      ];
-      for (const [x, y, z] of samples) {
-        maxDeviation = Math.max(maxDeviation, input.distance(x!, y!, z!, face));
+      for (let corner = t; corner < t + 3; corner += 1) {
+        const vertex = indices[corner]!;
+        if (measuredCorners.has(vertex)) continue;
+        measuredCorners.add(vertex);
+        const [x, y, z] = vertexAt(corner);
+        measure(x, y, z, face);
       }
+      if (planar) continue;
+      const a = vertexAt(t);
+      const b = vertexAt(t + 1);
+      const c = vertexAt(t + 2);
+      measure(
+        (a[0] + b[0] + c[0]) / 3,
+        (a[1] + b[1] + c[1]) / 3,
+        (a[2] + b[2] + c[2]) / 3,
+        face
+      );
+      measure((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2, face);
+      measure((b[0] + c[0]) / 2, (b[1] + c[1]) / 2, (b[2] + c[2]) / 2, face);
+      measure((c[0] + a[0]) / 2, (c[1] + a[1]) / 2, (c[2] + a[2]) / 2, face);
     }
   }
-  return { maxDeviation, sampledTriangles, curvedTriangles };
+  return { maxDeviation, sampledTriangles, totalTriangles };
 }

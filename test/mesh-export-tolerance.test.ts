@@ -1,7 +1,8 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
-  createProjectDocument
+  createProjectDocument,
+  transformBody
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
@@ -133,6 +134,34 @@ describe('mesh export tolerance on an R10 cylinder', () => {
       angularTolerance: 0.35
     });
     expect(explicitDefault).toEqual(plain);
+  });
+
+  it('measures planar facets too: float32 corners of a tilted, distant plane miss it', async () => {
+    let far = addPrimitiveFeature(
+      createProjectDocument('Far plate', toUserId('user_tolerance')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 10, depth: 5 }
+      }
+    );
+    far = transformBody(far, {
+      name: 'Tilt and send far away',
+      targetBodyId: far.bodyOrder.at(-1)!,
+      rotationDeg: { x: 31, y: 17, z: 23 },
+      translation: { x: 250_000, y: -180_000, z: 90_000 }
+    }).document;
+    far = { ...far, derived: await adapter.syncDocument(far) };
+    const report = await adapter.meshQuality(
+      far,
+      [...far.derived.exportableBodyIds],
+      0.08
+    );
+    // All planes, so no chord error: what remains is float32 rounding at a
+    // quarter of a kilometre (an ulp there is 1/64 mm), and it is reported.
+    expect(report.maxDeviation).toBeGreaterThan(0);
+    expect(report.maxDeviation).toBeLessThan(0.05);
+    expect(report.bodies[0]!.sampledTriangles).toBe(12);
   });
 
   it('refuses an angle that is not a usable tolerance', async () => {

@@ -113,25 +113,62 @@ describe('measureMeshDeviation', () => {
   const positions = [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1];
   const indices = [0, 1, 2, 3, 4, 5];
 
-  it('measures curved faces at centroids and edge midpoints, and skips planes', () => {
-    const asked: number[] = [];
+  it('measures every corner, and curved faces at centroids and edge midpoints too', () => {
+    const asked: string[] = [];
     const result = measureMeshDeviation({
       positions,
       indices,
       faceOffsets: [0, 3, 6],
       faces: [7, 9],
       isPlanar: (face) => face === 7,
-      distance: (_x, _y, _z, face) => {
-        asked.push(face);
+      distance: (x, y, z, face) => {
+        asked.push(`${face}:${x},${y},${z}`);
         return 0.25;
       }
     });
-    expect(asked).toEqual([9, 9, 9, 9]);
+    // The plane: its three stored corners. The curved face: three corners,
+    // the centroid and three edge midpoints.
+    expect(asked.filter((entry) => entry.startsWith('7:'))).toEqual([
+      '7:0,0,0',
+      '7:1,0,0',
+      '7:0,1,0'
+    ]);
+    expect(asked.filter((entry) => entry.startsWith('9:'))).toHaveLength(7);
     expect(result).toEqual({
       maxDeviation: 0.25,
-      sampledTriangles: 1,
-      curvedTriangles: 1
+      sampledTriangles: 2,
+      totalTriangles: 2
     });
+  });
+
+  it('reports a planar facet whose stored corner is off its plane', () => {
+    // Float32 corners of a tilted or distant plane can miss it; skipping
+    // planes would report 0 for a file whose facets are not exact.
+    const result = measureMeshDeviation({
+      positions,
+      indices: [0, 1, 2],
+      faceOffsets: [0, 3],
+      faces: [7],
+      isPlanar: () => true,
+      distance: (x) => (x === 1 ? 0.3 : 0)
+    });
+    expect(result.maxDeviation).toBe(0.3);
+  });
+
+  it('measures a corner shared by two facets of one face once', () => {
+    let calls = 0;
+    measureMeshDeviation({
+      positions,
+      indices: [0, 1, 2, 0, 2, 3],
+      faceOffsets: [0, 6],
+      faces: [7],
+      isPlanar: () => true,
+      distance: () => {
+        calls += 1;
+        return 0;
+      }
+    });
+    expect(calls).toBe(4);
   });
 
   it('strides past the sample budget and says how many it measured', () => {
@@ -144,7 +181,7 @@ describe('measureMeshDeviation', () => {
       isPlanar: () => false,
       distance: () => 0
     });
-    expect(result.curvedTriangles).toBe(triangles);
+    expect(result.totalTriangles).toBe(triangles);
     expect(result.sampledTriangles).toBeLessThanOrEqual(
       DEVIATION_SAMPLE_TRIANGLES
     );

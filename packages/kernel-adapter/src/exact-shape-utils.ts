@@ -394,13 +394,13 @@ export interface BodyMeshQuality {
   /** Triangles the export writes for this body at the checked tolerances. */
   triangleCount: number;
   /**
-   * Largest measured distance, in millimetres, from those triangles to the
-   * exact faces they approximate (0 for an all-planar body).
+   * Largest measured distance, in millimetres, from those triangles (their
+   * stored vertices, and on curved faces their interiors) to the exact faces.
    */
   maxDeviation: number;
-  /** Curved-face triangles measured, and how many there were. */
+  /** Triangles measured, and how many there were. */
   sampledTriangles: number;
-  curvedTriangles: number;
+  totalTriangles: number;
 }
 
 export interface MeshQualityReport {

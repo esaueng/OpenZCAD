@@ -3633,7 +3633,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         let triangleCount = 0;
         let maxDeviation = 0;
         let sampledTriangles = 0;
-        let curvedTriangles = 0;
+        let totalTriangles = 0;
         // A body with no solids has nothing to print, which is a failed
         // check, not a vacuous pass.
         let watertight = shape.solids.length > 0;
@@ -3680,7 +3680,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             );
             maxDeviation = Math.max(maxDeviation, deviation.maxDeviation);
             sampledTriangles += deviation.sampledTriangles;
-            curvedTriangles += deviation.curvedTriangles;
+            totalTriangles += deviation.totalTriangles;
           } finally {
             grouped.free();
           }
@@ -3693,7 +3693,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           triangleCount,
           maxDeviation,
           sampledTriangles,
-          curvedTriangles
+          totalTriangles
         };
       });
       return {
@@ -3706,7 +3706,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ),
         maxDeviation: Math.max(0, ...bodies.map((body) => body.maxDeviation)),
         sampled: bodies.some(
-          (body) => body.sampledTriangles < body.curvedTriangles
+          (body) => body.sampledTriangles < body.totalTriangles
         )
       };
     });
