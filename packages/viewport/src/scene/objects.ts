@@ -178,15 +178,17 @@ export function applySectionPlane(
     showExact ? exact.regions.map((region) => region.bodyId) : []
   );
   const bodyColors = new Map<string, THREE.Color>();
+  const bodyOpacities = new Map<string, number>();
   for (const mesh of meshes) {
     const bodyId = findBodyId(mesh) ?? '';
     const replaced = exactBodyIds.has(bodyId);
     updateSectionCap(mesh, replaced ? null : plane);
     if (replaced && !bodyColors.has(bodyId)) {
       bodyColors.set(bodyId, mesh.material.color);
+      bodyOpacities.set(bodyId, mesh.material.opacity);
     }
   }
-  applyExactSection(root, showExact ? exact : null, bodyColors);
+  applyExactSection(root, showExact ? exact : null, bodyColors, bodyOpacities);
 }
 
 export function sketchCentroid(sketch: SketchOverlay): THREE.Vector3 {

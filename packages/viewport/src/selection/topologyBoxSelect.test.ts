@@ -203,6 +203,36 @@ describe('box selection of edges', () => {
   // The left half of the cube from above, past its front and back.
   const leftHalf = rectBetween(camera, [-16, 16, 10], [0, -16, 10]);
 
+  it.each([false, true])(
+    'takes a long visible edge crossing a narrow rectangle (reversed: %s)',
+    (reversed) => {
+      const candidate: TopologyBoxCandidate = {
+        bodyId: 'long-edge',
+        positions: [],
+        indices: [],
+        topology: {
+          faces: [],
+          edges: [
+            {
+              topologyId: 'long-edge',
+              hash: 1,
+              points: reversed
+                ? [1000, 0, 0, -1000, 0, 0]
+                : [-1000, 0, 0, 1000, 0, 0]
+            }
+          ]
+        }
+      };
+      const narrow = rectBetween(camera, [17, 2, 0], [18, -2, 0]);
+      expect(
+        ids(topologyInBox([candidate], narrow, 'crossing', options()))
+      ).toEqual(['long-edge']);
+      expect(topologyInBox([candidate], narrow, 'window', options())).toEqual(
+        []
+      );
+    }
+  );
+
   it('takes a partly covered edge only in a crossing', () => {
     const window = ids(topologyInBox([cube()], leftHalf, 'window', options()));
     const crossing = ids(

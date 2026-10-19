@@ -98,7 +98,9 @@ export function applyExactSection(
    * fill re-shades from them every frame, so the cut follows the body's
    * colour without the section being recomputed.
    */
-  bodyColors: ReadonlyMap<string, THREE.Color> = new Map()
+  bodyColors: ReadonlyMap<string, THREE.Color> = new Map(),
+  /** The body's current appearance opacity, including the X-ray multiplier. */
+  bodyOpacities: ReadonlyMap<string, number> = new Map()
 ) {
   const previous = root.getObjectByName(EXACT_SECTION);
   if (previous) {
@@ -122,9 +124,13 @@ export function applyExactSection(
       geometry.setIndex(new THREE.BufferAttribute(region.indices, 1));
       geometry.computeVertexNormals();
       const bodyColor = bodyColors.get(region.bodyId);
+      const opacity = bodyOpacities.get(region.bodyId) ?? 1;
       const fill = new THREE.MeshPhongMaterial({
         color: sectionCutColor(bodyColor),
         side: THREE.DoubleSide,
+        opacity,
+        transparent: opacity < 1,
+        depthWrite: opacity >= 1,
         // Wireframe shows outlines, and the cut surface is not one. The
         // display-mode pass writes this same flag, but it only runs when
         // the MODE changes — a section arriving into wireframe has to be

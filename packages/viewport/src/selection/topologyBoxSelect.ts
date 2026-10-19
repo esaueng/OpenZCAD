@@ -4,7 +4,6 @@ import { shouldRenderTopologyEdge } from '../scene/objects';
 import { sectionCapGeometry } from '../scene/sectionCaps';
 import {
   pointInRect,
-  segmentIntersectsRect,
   triangleIntersectsRect,
   type BoxSelectMode,
   type BoxSelectOptions,
@@ -90,6 +89,31 @@ function clipSegment(
   if (da < 0) a = a.clone().lerp(b, da / (da - db));
   else if (db < 0) b = a.clone().lerp(b, da / (da - db));
   return [a, b];
+}
+
+/** Parameter interval of a projected segment inside the drag rectangle. */
+function screenInterval(
+  a: ProjectedPoint,
+  b: ProjectedPoint,
+  rect: ScreenRect
+): [number, number] | null {
+  let from = 0;
+  let to = 1;
+  for (const [origin, delta, low, high] of [
+    [a.x, b.x - a.x, rect.left, rect.right],
+    [a.y, b.y - a.y, rect.top, rect.bottom]
+  ] as const) {
+    if (delta === 0) {
+      if (origin < low || origin > high) return null;
+      continue;
+    }
+    const first = (low - origin) / delta;
+    const second = (high - origin) / delta;
+    from = Math.max(from, Math.min(first, second));
+    to = Math.min(to, Math.max(first, second));
+    if (from > to) return null;
+  }
+  return [from, to];
 }
 
 /**
@@ -564,18 +588,19 @@ function edgeSelections(
       let touched = false;
       let visible = grid === null;
       for (const [a, b] of segments) {
-        if (a.behind || b.behind || !segmentIntersectsRect(a, b, rect)) {
-          continue;
-        }
+        if (a.behind || b.behind) continue;
+        const interval = screenInterval(a, b, rect);
+        if (!interval) continue;
         touched = true;
         if (visible) break;
-        const length = Math.hypot(b.x - a.x, b.y - a.y);
+        const [from, to] = interval;
+        const length = Math.hypot(b.x - a.x, b.y - a.y) * (to - from);
         const steps = Math.min(
           MAX_SAMPLES_PER_SEGMENT,
           Math.max(1, Math.ceil(length / grid!.cell))
         );
         for (let step = 0; step <= steps && !visible; step += 1) {
-          const t = step / steps;
+          const t = from + ((to - from) * step) / steps;
           const x = a.x + (b.x - a.x) * t;
           const y = a.y + (b.y - a.y) * t;
           if (!pointInRect({ x, y }, rect)) continue;

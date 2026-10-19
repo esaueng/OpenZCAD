@@ -48,6 +48,19 @@ function body(bodyId = 'body_1') {
 }
 
 describe('exact section geometry in the viewport', () => {
+  it.each([1, 0.6])('uses the body opacity for exact fills when X-ray is toggled (appearance: %s)', (appearance) => {
+    const { group, mesh } = body();
+    const plane = sectionClippingPlane({ plane: 'XY', offset: 1 });
+    for (const xray of [0.35, 1]) {
+      mesh.material.opacity = appearance * xray;
+      applySectionPlane(group, plane, shaded([region()]));
+      const fill = group.getObjectByName(`${EXACT_SECTION}-fill`) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhongMaterial>;
+      expect(fill.material.opacity).toBeCloseTo(appearance * xray, 12);
+      expect(fill.material.transparent).toBe(appearance * xray < 1);
+      expect(fill.material.depthWrite).toBe(appearance * xray >= 1);
+    }
+  });
+
   it('draws the cut surface and its boundary curves', () => {
     const root = new THREE.Group();
     applyExactSection(root, shaded([region()]));
