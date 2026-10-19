@@ -130,6 +130,8 @@ export type GeometryWorkerRequest =
       bodyIds: BodyId[];
       deflection: number;
       angularTolerance?: number;
+      /** The space the writer tessellates in; millimetres when unset. */
+      units?: UnitSystem;
     }
   | {
       /** Reads live mass data, restoring exact history for a stale cache hit. */
@@ -828,7 +830,12 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           document,
           request.bodyIds,
           request.deflection,
-          request.angularTolerance
+          {
+            ...(request.units ? { units: request.units } : {}),
+            ...(request.angularTolerance !== undefined
+              ? { angularTolerance: request.angularTolerance }
+              : {})
+          }
         );
         post({
           type: 'mesh-quality',

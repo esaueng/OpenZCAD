@@ -100,10 +100,34 @@ describe('mesh export tolerance on an R10 cylinder', () => {
     }
   });
 
+  it('checks in the unit the writer meshes in: an inch export is the inch-checked mesh', async () => {
+    for (const units of ['inch', 'cm'] as const) {
+      const report = await adapter.meshQuality(document, bodyIds(), 0.01, {
+        units
+      });
+      const bytes = await adapter.exportMesh(document, bodyIds(), {
+        format: 'stl-binary',
+        deflection: 0.01,
+        units
+      });
+      const facets = new DataView(
+        bytes.buffer,
+        bytes.byteOffset,
+        bytes.byteLength
+      ).getUint32(80, true);
+      expect(facets).toBe(report.triangleCount);
+      // Still millimetres: the same 0.01 mm chord, whatever unit it is in.
+      expect(report.maxDeviation).toBeGreaterThan(0.001);
+      expect(report.maxDeviation).toBeLessThanOrEqual(0.01 + 1e-5);
+    }
+  });
+
   it('adds facets for a tighter angle where the chord tolerance alone would not', async () => {
     const angle = (5 * Math.PI) / 180;
     const chordOnly = await adapter.meshQuality(document, bodyIds(), 0.1);
-    const angled = await adapter.meshQuality(document, bodyIds(), 0.1, angle);
+    const angled = await adapter.meshQuality(document, bodyIds(), 0.1, {
+      angularTolerance: angle
+    });
     expect(angled.triangleCount).toBeGreaterThan(chordOnly.triangleCount);
     expect(angled.maxDeviation).toBeLessThan(chordOnly.maxDeviation);
     // 5° per facet around a full turn is at least 72 wall segments.
@@ -162,6 +186,16 @@ describe('mesh export tolerance on an R10 cylinder', () => {
     expect(report.maxDeviation).toBeGreaterThan(0);
     expect(report.maxDeviation).toBeLessThan(0.05);
     expect(report.bodies[0]!.sampledTriangles).toBe(12);
+    // Written in inches, the float32 corners round on another grid: the
+    // check measures that file's corners, not the millimetre ones.
+    const inch = await adapter.meshQuality(
+      far,
+      [...far.derived.exportableBodyIds],
+      0.08,
+      { units: 'inch' }
+    );
+    expect(inch.maxDeviation).toBeGreaterThan(0);
+    expect(inch.maxDeviation).not.toBe(report.maxDeviation);
   });
 
   it('refuses an angle that is not a usable tolerance', async () => {
@@ -173,7 +207,9 @@ describe('mesh export tolerance on an R10 cylinder', () => {
       })
     ).rejects.toThrow(/positive/);
     await expect(
-      adapter.meshQuality(document, bodyIds(), 0.08, Math.PI)
+      adapter.meshQuality(document, bodyIds(), 0.08, {
+        angularTolerance: Math.PI
+      })
     ).rejects.toThrow(/90°/);
   });
 });

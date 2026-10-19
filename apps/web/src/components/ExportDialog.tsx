@@ -87,9 +87,7 @@ const UNIT_NAMES: Record<UnitSystem, string> = {
 };
 
 /** Formats whose numbers follow the export unit; glTF is metres by spec. */
-const UNIT_FREE_FORMATS: ReadonlySet<MeshExportDialogFormat> = new Set([
-  'glb'
-]);
+const UNIT_FREE_FORMATS: ReadonlySet<MeshExportDialogFormat> = new Set(['glb']);
 
 function formatDeviation(value: number): string {
   if (value === 0) return '0';
@@ -161,10 +159,15 @@ export interface ExportDialogProps {
     deflection: number,
     options?: { angularTolerance?: number }
   ): void;
+  /**
+   * Checks the mesh the export would write. `units` is the space its writer
+   * tessellates in: the export unit, or millimetres for glTF.
+   */
   onCheckQuality(
     deflection: number,
     options?: {
       angularTolerance?: number;
+      units?: UnitSystem;
       onProgress?(progress: ExportProgress): void;
     }
   ): Promise<MeshQualityReport>;
@@ -209,6 +212,7 @@ export function ExportDialog({
   const [report, setReport] = useState<{
     deflection: number;
     angle: AngleOption;
+    units: UnitSystem;
     scope: string;
     result: MeshQualityReport;
   } | null>(null);
@@ -250,6 +254,11 @@ export function ExportDialog({
         : null
       : presetDeflection!;
 
+  // The space the chosen writer tessellates in: glTF's root node scales a
+  // millimetre mesh, every other format meshes in the export unit itself.
+  const tessellationUnits: UnitSystem = UNIT_FREE_FORMATS.has(format)
+    ? 'mm'
+    : resolveExportUnits(exportUnits, documentUnits);
   const bodyName = (bodyId: string) =>
     bodies.find((body) => body.bodyId === bodyId)?.name ?? bodyId;
   const staleReason =
@@ -257,7 +266,9 @@ export function ExportDialog({
       ? null
       : report.scope !== scope
         ? 'scope'
-        : report.deflection !== deflection || report.angle !== angle
+        : report.deflection !== deflection ||
+            report.angle !== angle ||
+            report.units !== tessellationUnits
           ? 'quality'
           : null;
   const staleReport = staleReason !== null;
@@ -270,6 +281,7 @@ export function ExportDialog({
     // a verdict that arrives after the scope moved must read as stale.
     const checkedScope = scope;
     const checkedAngle = angle;
+    const checkedUnits = tessellationUnits;
     const angularTolerance = angularToleranceFor(checkedAngle);
     setPhase('checking');
     setProgress('preparing');
@@ -277,11 +289,13 @@ export function ExportDialog({
     try {
       const result = await onCheckQuality(deflection, {
         onProgress: setProgress,
-        ...(angularTolerance === undefined ? {} : { angularTolerance })
+        ...(angularTolerance === undefined ? {} : { angularTolerance }),
+        ...(checkedUnits === 'mm' ? {} : { units: checkedUnits })
       });
       setReport({
         deflection,
         angle: checkedAngle,
+        units: checkedUnits,
         scope: checkedScope,
         result
       });

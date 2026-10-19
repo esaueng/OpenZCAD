@@ -280,6 +280,38 @@ describe('ExportDialog', () => {
     expect(options).not.toHaveProperty('angularTolerance');
   });
 
+  it('checks in the unit the file will be meshed in, and goes stale when it changes', async () => {
+    const user = userEvent.setup();
+    const props = renderDialog({
+      exportUnits: 'inch',
+      documentUnits: 'mm',
+      onExportUnitsChange: vi.fn()
+    });
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    await waitFor(() =>
+      expect(props.onCheckQuality).toHaveBeenCalledWith(
+        0.08,
+        expect.objectContaining({ units: 'inch' })
+      )
+    );
+    await screen.findByText(/measured deviation/);
+    // Another export unit is another float32 mesh: the verdict is stale.
+    props.rerender({ exportUnits: 'cm' });
+    expect(screen.queryByText(/measured deviation/)).toBeNull();
+    expect(screen.getByText(/Quality changed/)).toBeVisible();
+    // glTF meshes in millimetres whatever the preference says.
+    await user.click(screen.getByRole('radio', { name: 'glTF (GLB)' }));
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    await waitFor(() => expect(props.onCheckQuality).toHaveBeenCalledTimes(2));
+    expect(
+      vi.mocked(props.onCheckQuality).mock.calls[1]![1]
+    ).not.toHaveProperty('units');
+  });
+
   it('marks a report stale when the facet angle changes', async () => {
     const user = userEvent.setup();
     renderDialog();

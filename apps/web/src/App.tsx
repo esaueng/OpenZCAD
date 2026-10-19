@@ -12551,6 +12551,7 @@ export function App() {
     deflection: number,
     options?: {
       angularTolerance?: number;
+      units?: UnitSystem;
       onProgress?(progress: ExportProgress): void;
     }
   ) {
@@ -12563,6 +12564,7 @@ export function App() {
       ...(options?.angularTolerance !== undefined
         ? { angularTolerance: options.angularTolerance }
         : {}),
+      ...(options?.units !== undefined ? { units: options.units } : {}),
       onState: (state) => {
         const progress = exportProgressFor(state);
         if (progress) {

@@ -207,7 +207,8 @@ export interface GeometryWorkerApi {
   /**
    * Pre-export check of the mesh the export would write: watertightness,
    * triangle count and measured deviation per body at the deflection (mm)
-   * and angular tolerance (radians) the export would use.
+   * and angular tolerance (radians) the export would use, tessellated in the
+   * unit the writer works in (`units`; millimetres when unset).
    */
   meshQuality(
     document: ProjectDocument,
@@ -215,6 +216,7 @@ export interface GeometryWorkerApi {
     deflection: number,
     options?: {
       angularTolerance?: number;
+      units?: UnitSystem;
       onState?(state: GeometryWorkerState): void;
     }
   ): Promise<MeshQualityReport>;
@@ -1092,7 +1094,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         deflection,
         ...(options?.angularTolerance !== undefined
           ? { angularTolerance: options.angularTolerance }
-          : {})
+          : {}),
+        ...(options?.units !== undefined ? { units: options.units } : {})
       });
       if (!posted.ok) {
         return Promise.reject(new Error('Geometry worker is unavailable.'));

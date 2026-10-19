@@ -671,13 +671,16 @@ export interface ExactKernelAdapter {
   /**
    * Pre-export check of the mesh the export would write: welded-mesh
    * watertightness, triangle count and the measured deviation from the
-   * exact faces, per body, at the given deflection and angular tolerance.
+   * exact faces, per body, at the given deflection (mm) and angular
+   * tolerance. `units` is the space the writer tessellates in — the export
+   * unit, or millimetres for GLB — so the float32 mesh measured is the one
+   * saved; deviations are still reported in millimetres.
    */
   meshQuality(
     document: ProjectDocument,
     bodyIds: BodyId[],
     deflection: number,
-    angularTolerance?: number
+    tolerances?: MeshExportTolerances
   ): Promise<MeshQualityReport>;
   /**
    * Solves one sketch's persisted constraints with the kernel's GCS and
@@ -3615,14 +3618,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     bodyIds: BodyId[],
     deflection: number,
-    angularTolerance?: number
+    tolerances: MeshExportTolerances = {}
   ): Promise<MeshQualityReport> {
     if (!Number.isFinite(deflection) || deflection <= 0) {
       throw new Error('Mesh quality deflection must be a positive number.');
     }
-    const angular = explicitAngularTolerance(angularTolerance);
+    const angular = explicitAngularTolerance(tolerances.angularTolerance);
+    const units = tolerances.units ?? 'mm';
+    // The writers' space: the export unit, at the deflection that is
+    // `deflection` millimetres there.
+    const unitMm = UNIT_TO_MM[units];
+    const unitDeflection = deflection / unitMm;
     return this.withExportBuild(document, (kernel, build) => {
-      const millimeterScale = UNIT_TO_MM[document.units];
+      const exportScale = exportLengthScale(document.units, units);
       const bodies: BodyMeshQuality[] = bodyIds.map((bodyId) => {
         const shape = build.shapes.get(bodyId);
         if (!shape) {
@@ -3638,17 +3646,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // check, not a vacuous pass.
         let watertight = shape.solids.length > 0;
         for (const solid of shape.solids) {
-          // Checked in the same millimetre space the export tessellates, so
-          // the verdict describes the file the user is about to write.
+          // Checked in the same space the export tessellates (scaled into
+          // the export unit before the float32 quantization the file
+          // stores), so the verdict describes the file about to be written.
           const measured =
-            millimeterScale === 1
+            exportScale === 1
               ? solid
               : kernel.copyAndTransformSolid(
                   solid,
-                  uniformScaleMatrix(millimeterScale)
+                  uniformScaleMatrix(exportScale)
                 );
           const quality = readMeshQuality(
-            kernel.meshQuality(measured, deflection, angular)
+            kernel.meshQuality(measured, unitDeflection, angular)
           );
           boundaryEdges += quality.boundaryEdges;
           nonManifoldEdges += quality.nonManifoldEdges;
@@ -3658,7 +3667,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           // assumed.
           const grouped = kernel.tessellateSolidGroupedBinary(
             measured,
-            deflection,
+            unitDeflection,
             angular
           );
           try {
@@ -3678,7 +3687,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               grouped.positions,
               grouped.indices
             );
-            maxDeviation = Math.max(maxDeviation, deviation.maxDeviation);
+            maxDeviation = Math.max(
+              maxDeviation,
+              deviation.maxDeviation * unitMm
+            );
             sampledTriangles += deviation.sampledTriangles;
             totalTriangles += deviation.totalTriangles;
           } finally {

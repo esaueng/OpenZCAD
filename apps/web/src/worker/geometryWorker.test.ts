@@ -1668,7 +1668,7 @@ describe('geometry worker rebuild coordination', () => {
       document,
       document.bodyOrder,
       0.08,
-      undefined
+      {}
     );
   });
 
