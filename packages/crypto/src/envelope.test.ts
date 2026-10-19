@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { concatBytes, type Bytes } from './bytes';
-import { gzipBytes } from './compression';
+import { gunzipBytes, gzipBytes } from './compression';
 import {
   EnvelopeKey,
   checkBlobReferences,
@@ -1029,6 +1029,48 @@ describe('content blobs', () => {
       }
       // No reference can be produced for the refused blob.
       expect(() => contentBlobReference(writer)).toThrow(E2eeError);
+    }
+  });
+
+  it('gunzipBytes refuses a limit that would disable the guard', async () => {
+    const gz = await gzipBytes(new Uint8Array(1000));
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1, 0.5]) {
+      await rejectsWith(gunzipBytes(gz, bad), 'invalid-argument');
+    }
+    expect((await gunzipBytes(gz, 1000)).byteLength).toBe(1000);
+  });
+
+  it('streams one large input chunk a few records at a time', async () => {
+    const records = 1000;
+    const encrypt = vi.spyOn(crypto.subtle, 'encrypt');
+    try {
+      const encrypted = encryptContentBlobStream(
+        EnvelopeKey.generate(),
+        'export',
+        stream([new Uint8Array(CHUNK * records)]),
+        {
+          compression: 'none',
+          chunkSize: CHUNK,
+          plaintextLength: CHUNK * records
+        }
+      );
+      const reader = encrypted.envelope.getReader();
+      await reader.read(); // prefix
+      await reader.read(); // first record
+      await reader.read();
+      // Backpressure holds: only a handful of records are encrypted ahead.
+      expect(encrypt.mock.calls.length).toBeLessThan(10);
+      let count = 2;
+      for (;;) {
+        const { done } = await reader.read();
+        if (done) break;
+        count += 1;
+      }
+      expect(count).toBe(records);
+      expect(encrypt.mock.calls.length).toBe(records);
+      await encrypted.reference;
+    } finally {
+      encrypt.mockRestore();
     }
   });
 

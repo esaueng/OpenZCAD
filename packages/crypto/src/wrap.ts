@@ -181,7 +181,10 @@ export function encodeWrapContext(context: WrapContext): Bytes {
   const record = context as unknown as Record<string, unknown>;
   const names = Object.keys(record).sort();
   const expected = ['purpose', ...Object.keys(fields)].sort();
-  if (names.join() !== expected.join()) {
+  if (
+    names.length !== expected.length ||
+    names.some((name, i) => name !== expected[i])
+  ) {
     throw new E2eeError(
       'invalid-argument',
       `A ${context.purpose} context has exactly: ${expected.join(', ')}`

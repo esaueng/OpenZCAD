@@ -1046,6 +1046,8 @@ export function encryptContentBlobStream(
     return typed;
   };
   let writer: EnvelopeWriter<ContentBlobHeader>;
+  let input: Bytes | null = null;
+  let inputOffset = 0;
   const envelope = new ReadableStream<Bytes>({
     async start(controller) {
       try {
@@ -1063,15 +1065,25 @@ export function encryptContentBlobStream(
         // Read until something can be emitted: the writer holds a full
         // chunk back until it knows whether more follows, and a pull that
         // enqueues nothing would never be called again.
+        // Feed the writer one chunk-size slice per step, so a large input
+        // chunk yields its records a few at a time under backpressure
+        // instead of all at once.
         for (;;) {
-          const next = await payload.read();
-          if (next.done) {
-            controller.enqueue(await writer.finish());
-            controller.close();
-            resolve(contentBlobReference(writer));
-            return;
+          if (!input || inputOffset >= input.byteLength) {
+            const next = await payload.read();
+            if (next.done) {
+              controller.enqueue(await writer.finish());
+              controller.close();
+              resolve(contentBlobReference(writer));
+              return;
+            }
+            input = next.value;
+            inputOffset = 0;
           }
-          const out = await writer.write(next.value);
+          const step = writer.header.chunkSize;
+          const slice = input.subarray(inputOffset, inputOffset + step);
+          inputOffset += slice.byteLength;
+          const out = await writer.write(slice);
           for (const chunk of out) controller.enqueue(chunk);
           if (out.length > 0) return;
         }

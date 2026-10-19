@@ -279,6 +279,18 @@ describe('symmetric key wrapping', () => {
     );
   });
 
+  it('refuses context keys that only collide when joined', async () => {
+    const colliding = {
+      purpose: 'account-key',
+      method: 'device',
+      'unlockId,userId': 'x'
+    };
+    await rejectsWith(
+      wrapKey(PROJECT_KEY, BLOB_KEY, colliding as unknown as WrapContext),
+      'invalid-argument'
+    );
+  });
+
   it('encodes contexts canonically regardless of property order', () => {
     const reordered = {
       versionId: '7',

@@ -1,4 +1,4 @@
-import { concatBytes, type Bytes } from './bytes';
+import { concatBytes, isUint, type Bytes } from './bytes';
 import { E2eeError } from './errors';
 
 /**
@@ -75,6 +75,14 @@ export async function gunzipStream(
   maxBytes: number
 ): Promise<Bytes> {
   requireCompressionStreams();
+  // NaN or Infinity would make every size comparison false and disable the
+  // guard; only a whole number of bytes is a limit.
+  if (!isUint(maxBytes, Number.MAX_SAFE_INTEGER)) {
+    throw new E2eeError(
+      'invalid-argument',
+      'maxBytes must be a non-negative safe integer'
+    );
+  }
   try {
     return await readAll(
       stream.pipeThrough(new DecompressionStream('gzip')),
