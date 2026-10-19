@@ -1,5 +1,10 @@
 import type { Download, Locator, Page } from '@playwright/test';
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  selectBodyFromItems
+} from './openzcad-fixtures';
 
 /**
  * D01: a drawing sheet with the four-view starter, view placement, the scale
@@ -232,4 +237,42 @@ test('refuses a drawing-only undo in the View workspace', async ({ page }) => {
   await expect(
     drawings.getByRole('application', { name: 'Sheet Sheet 1' })
   ).toBeVisible();
+});
+
+test('starts a sheet from the bodies on screen, not the export scope', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Drawing scope');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = inspectorOf(page);
+  for (const name of ['Lower', 'Upper']) {
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await inspector.getByLabel('Name').fill(name);
+    await inspector.getByRole('button', { name: /^Create/ }).click();
+    await expect(
+      page.locator('.feature-row-main', { hasText: name })
+    ).toBeVisible();
+  }
+  // Hide Upper. The export scope still includes hidden bodies by default
+  // (the mesh dialog's choice); a new drawing shows what is on screen.
+  await selectBodyFromItems(page, 'Upper');
+  await page
+    .locator('.body-row', { hasText: 'Upper' })
+    .getByRole('button', { name: /^Hide body / })
+    .click();
+  await expect(page.locator('.body-row.hidden-body')).toHaveCount(1);
+  await mode(page, 'Draw').click();
+  const drawings = page.getByRole('region', { name: 'Drawings' });
+  await drawings.getByRole('button', { name: 'New drawing sheet' }).click();
+  await drawings
+    .getByRole('application', { name: 'Sheet Sheet 1' })
+    .getByRole('button', { name: 'Front view' })
+    .click();
+  const bodies = drawings.getByRole('group', { name: 'Bodies' });
+  await expect(bodies.getByRole('checkbox', { name: /^Lower/ })).toBeChecked();
+  await expect(
+    bodies.getByRole('checkbox', { name: /^Upper/ })
+  ).not.toBeChecked();
 });

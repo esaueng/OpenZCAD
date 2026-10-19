@@ -2522,6 +2522,19 @@ export function App() {
     () => new Set<string>([...localHiddenBodyIds, ...parameterHiddenBodyIds]),
     [localHiddenBodyIds, parameterHiddenBodyIds]
   );
+  // D01: a new drawing sheet shows the live bodies on screen. Deliberately
+  // not the export scope, which follows the Build selection and the mesh
+  // dialog's include-hidden choice.
+  const drawingDefaultBodyIds = useMemo(
+    () =>
+      doc
+        ? doc.bodyOrder.filter((id) => {
+            const body = doc.derived.bodyRepresentations[id];
+            return body !== undefined && !body.consumed && !hiddenBodyIds.has(id);
+          })
+        : [],
+    [doc, hiddenBodyIds]
+  );
   // Not persisted: isolation is a temporary view, and a reload shows the
   // user's own hidden set.
   const [bodyIsolation, setBodyIsolation] = useState<
@@ -22642,7 +22655,7 @@ export function App() {
                 document={doc}
                 bodies={doc.derived.bodyRepresentations}
                 geometryPending={!geometry.isReadyFor(doc)}
-                defaultBodyIds={exportBodyIds}
+                defaultBodyIds={drawingDefaultBodyIds}
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}
                 onStatus={(message) => setStatus(message)}

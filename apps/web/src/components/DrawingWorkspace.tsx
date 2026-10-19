@@ -75,7 +75,10 @@ export interface DrawingWorkspaceProps {
    * Sheet edits keep the ready geometry, so they never set this.
    */
   geometryPending: boolean;
-  /** Bodies a new sheet draws: the live, visible ones. */
+  /**
+   * Bodies a new sheet draws: the live bodies on screen, independent of the
+   * selection and the export scope. Empty falls back to every live body.
+   */
   defaultBodyIds: BodyId[];
   /** Why drawing edits are refused, or null. */
   editDisabledReason: string | null;
