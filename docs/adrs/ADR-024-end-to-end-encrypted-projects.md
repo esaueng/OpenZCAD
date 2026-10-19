@@ -685,15 +685,22 @@ encrypts under the project key is unchanged.
   device on a project nobody else is in. It is also exactly the path a
   stolen, removed device would use to reinsert itself. Any secret the rejoin
   proves must already be known to the current members, because a pre-shared
-  key feeds the shared key schedule (§8.4). So the proof is a resumption PSK
-  (§8.6), which every member of a recent epoch derives anyway:
-  - Each of a user's devices, as it processes an epoch, stores that epoch's
-    resumption PSK on the server, wrapped under the user's current account
+  key feeds the shared key schedule (§8.4). The proof is therefore a
+  per-epoch rejoin PSK that every member of the epoch derives anyway. The
+  library spike ([PR #748](https://github.com/esaueng/OpenZCAD/pull/748)) found
+  that neither candidate library lets an external joiner present a resumption
+  PSK (§8.6), so the rejoin PSK comes from the exporter instead:
+  - In each epoch, every member derives
+    `MLS-Exporter("openzcad rejoin psk", project id, 32)`. It registers the
+    result as the external PSK with id `ozc-rejoin/<epoch>`, kept for the
+    retention window.
+  - Each of a user's devices, as it processes an epoch, also stores that
+    epoch's rejoin PSK on the server, wrapped under the user's current account
     key.
   - A device that has lost its MLS state first unlocks the account key with a
     passkey, the recovery key or approval from another device. It then fetches
-    the newest wrapped resumption PSK and sends an external Commit that
-    includes it.
+    the newest wrapped rejoin PSK and sends an external Commit that includes
+    it as an external PSK.
   - Every member's browser accepts that external Commit only if all of these
     hold:
     - **The identity is still a member.** The roles extension in the current
@@ -709,7 +716,7 @@ encrypts under the project key is unchanged.
       device revocation, and later than the identity's most recent removal
       from, or role change in, this group.
     - **The PSK is recent.** Its epoch is within the members' retention
-      window.
+      window, which the application chooses (the spike used four epochs).
   - A removed device fails twice over. Its revocation is recorded, and the
     account key was rotated when it was removed, so it can unwrap only PSKs
     from before its removal, which the epoch rule refuses.
@@ -718,8 +725,11 @@ encrypts under the project key is unchanged.
 
   A device that cannot meet these rules, for example after an absence longer
   than the retention window, is re-added by an ordinary Add from any current
-  member's browser after the same credential checks. The spike confirms that
-  the chosen library accepts PSK proposals in external Commits.
+  member's browser after the same credential checks. The spike ran all of
+  these rules in both libraries, and each refusal fired for exactly its
+  intended reason. With OpenMLS, a rejoining device whose old signing key was
+  lost needs a second Commit to remove its stale leaf. mls-rs replaces the
+  leaf in the same external Commit.
 
 - **A new dependency.** MLS needs a maintained implementation; this is not
   something to hand-write. It loads lazily, outside the entry chunk.
