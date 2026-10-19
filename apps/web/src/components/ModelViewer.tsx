@@ -280,13 +280,12 @@ import type {
   SketchTextDraft
 } from '../lib/interaction/machine';
 import {
-  centerRectangleShape,
   compositeSizeLabel,
-  cornerRectangleShape,
   dragCompositeShape,
   inscribedPolygonShape,
   isCompositeShape,
   threePointRectangleShape,
+  typedRectangleShape,
   type CompositeShape
 } from '../lib/sketch/composites';
 
@@ -6296,29 +6295,15 @@ export function ModelViewer({
           typedOther > 0
             ? typedOther
             : null;
-        const width =
-          sketchNumericKind === 'width'
-            ? value
-            : (otherValue ?? Math.abs(live.x - gesture.dragStart.x));
-        const height =
-          sketchNumericKind === 'height'
-            ? value
-            : (otherValue ?? Math.abs(live.y - gesture.dragStart.y));
-        // Keep the corner the drag is heading toward: an exact 40x20 typed
-        // while dragging up and left must not flip to down and right. A
-        // centre rectangle's typed size is the whole rectangle, centred on
-        // the press.
-        const signX = live.x < gesture.dragStart.x ? -1 : 1;
-        const signY = live.y < gesture.dragStart.y ? -1 : 1;
-        const centered = mode.rectangleMode === 'center';
-        const reach = centered ? 0.5 : 1;
-        const corner = {
-          x: gesture.dragStart.x + signX * width * reach,
-          y: gesture.dragStart.y + signY * height * reach
-        };
-        const rectangle = centered
-          ? centerRectangleShape(gesture.dragStart, corner)
-          : cornerRectangleShape(gesture.dragStart, corner);
+        const rectangle = typedRectangleShape(
+          mode.rectangleMode === 'center' ? 'center' : 'corner',
+          gesture.dragStart,
+          live,
+          {
+            width: sketchNumericKind === 'width' ? value : otherValue,
+            height: sketchNumericKind === 'height' ? value : otherValue
+          }
+        );
         if (!rectangle) {
           return false;
         }

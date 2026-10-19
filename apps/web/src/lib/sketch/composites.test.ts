@@ -21,7 +21,8 @@ import {
   inscribedPolygonShape,
   resizedPolygon,
   resizedRectangleCorners,
-  threePointRectangleShape
+  threePointRectangleShape,
+  typedRectangleShape
 } from './composites';
 
 const ids = (prefix: string, count: number) =>
@@ -49,6 +50,30 @@ describe('S04 composite shapes', () => {
     expect(shape.corners[0]).toEqual({ x: -5, y: 1 });
     expect(shape.corners[2]).toEqual({ x: 15, y: 13 });
     expect(compositeSizeLabel(shape)).toBe('20 × 12');
+  });
+
+  it('keeps the dragged size of a side that was not typed', () => {
+    const start = { x: 5, y: 7 };
+    // The pointer is 10 right of and 6 below the press.
+    const live = { x: 15, y: 1 };
+    // Centre type: the drag shows 20 × 12, so typing only the width keeps
+    // the height at 12, not the 6 from centre to pointer.
+    const center = typedRectangleShape('center', start, live, { width: 30 });
+    expect(center?.corners[0]).toEqual({ x: -10, y: 1 });
+    expect(center?.corners[2]).toEqual({ x: 20, y: 13 });
+    // Corner type: the drag shows 10 × 6, heading down and right.
+    const corner = typedRectangleShape('corner', start, live, { height: 4 });
+    expect(corner?.corners).toEqual([
+      { x: 5, y: 3 },
+      { x: 15, y: 3 },
+      { x: 15, y: 7 },
+      { x: 5, y: 7 }
+    ]);
+    // Both typed: the drag only picks the direction.
+    expect(
+      typedRectangleShape('center', start, live, { width: 4, height: 2 })
+        ?.corners[0]
+    ).toEqual({ x: 3, y: 6 });
   });
 
   it('refuses a three-point rectangle whose third point is on the first side', () => {

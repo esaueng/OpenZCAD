@@ -98,6 +98,32 @@ export function centerRectangleShape(
     : null;
 }
 
+/**
+ * A rectangle from a drag with one or both sizes typed. A typed size is the
+ * whole side; a side not typed keeps the size the drag is showing, which
+ * for a centre rectangle is twice the pointer's distance from the centre.
+ * The rectangle keeps the corner the drag is heading toward, so an exact
+ * 40 × 20 typed while dragging up and left does not flip down and right.
+ */
+export function typedRectangleShape(
+  mode: 'corner' | 'center',
+  start: CompositePoint,
+  live: CompositePoint,
+  typed: { width?: number | null; height?: number | null }
+): CompositeShape | null {
+  const span = mode === 'center' ? 2 : 1;
+  const width = typed.width ?? Math.abs(live.x - start.x) * span;
+  const height = typed.height ?? Math.abs(live.y - start.y) * span;
+  const reach = 1 / span;
+  const corner = {
+    x: start.x + (live.x < start.x ? -1 : 1) * width * reach,
+    y: start.y + (live.y < start.y ? -1 : 1) * height * reach
+  };
+  return mode === 'center'
+    ? centerRectangleShape(start, corner)
+    : cornerRectangleShape(start, corner);
+}
+
 /** Why a third point cannot finish a three-point rectangle. */
 export const THREE_POINT_COLLINEAR_REFUSAL =
   'Pick the third point off the first side: it sets the rectangle’s height.';
