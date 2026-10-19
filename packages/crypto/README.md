@@ -128,7 +128,10 @@ settles: it resolves when the envelope finishes, and it rejects with
   entry hash is carried as an opaque 32-byte value.
 - `verifyVersionChain` checks that envelopes link by hash with rising
   versions in one project, and that they contain the newest version this
-  browser has pinned. That refuses rollback and forks.
+  browser has pinned. That refuses rollback and forks. One call takes at
+  most 1,024 versions and 256 MiB (`MAX_CHAIN_ENVELOPES`, `MAX_CHAIN_BYTES`),
+  since it copies what it checks; check a longer history in overlapping
+  windows, pinning the newest hash of each.
 - `signProjectEnvelope` signs, with ECDSA P-256 / SHA-256,
   `label "v1 version signature" | u32 prefix length | prefix | versionHash | u64 signedAt`.
   The signature is `u8 version = 1 | u64 signedAt (Unix ms) | r ‖ s`, and

@@ -115,6 +115,8 @@ export {
   type WrapPurpose
 } from './wrap';
 export {
+  MAX_CHAIN_BYTES,
+  MAX_CHAIN_ENVELOPES,
   SIGNATURE_VERSION_1,
   signProjectEnvelope,
   verifyProjectEnvelopeSignature,

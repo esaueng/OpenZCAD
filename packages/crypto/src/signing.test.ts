@@ -32,6 +32,8 @@ import {
   generateSigningKeyPair
 } from './keys';
 import {
+  MAX_CHAIN_BYTES,
+  MAX_CHAIN_ENVELOPES,
   signProjectEnvelope,
   verifyProjectEnvelopeSignature,
   verifyVersionChain,
@@ -363,6 +365,39 @@ describe('version chains', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('refuses a history too large to copy before copying any of it', async () => {
+    const chain = await chainOf(2);
+    await rejectsWith(
+      verifyVersionChain(
+        Array.from({ length: MAX_CHAIN_ENVELOPES + 1 }, () => chain[0]!)
+      ),
+      'limit-exceeded'
+    );
+    // Byte totals count too; a view onto one large buffer stands in for
+    // many near-limit versions without allocating them.
+    const big = new Uint8Array(MAX_CHAIN_BYTES / 4 + 1);
+    let copied = 0;
+    const set = vi
+      .spyOn(Uint8Array.prototype, 'set')
+      .mockImplementation(function (
+        this: Uint8Array,
+        source: ArrayLike<number>,
+        offset?: number
+      ) {
+        copied += source.length;
+        Reflect.apply(Int8Array.prototype.set, this, [source, offset]);
+      });
+    try {
+      await rejectsWith(
+        verifyVersionChain([big, big, big, big]),
+        'limit-exceeded'
+      );
+    } finally {
+      set.mockRestore();
+    }
+    expect(copied).toBe(0);
   });
 
   it('refuses rollback, forks and broken links', async () => {

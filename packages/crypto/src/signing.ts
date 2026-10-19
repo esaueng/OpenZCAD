@@ -180,6 +180,14 @@ export async function verifyProjectEnvelopeSignature(
 }
 
 /**
+ * Most a single `verifyVersionChain` call takes. The call copies the
+ * history it is given, so a longer one is checked in overlapping windows:
+ * pin the newest hash of one window and pass it with the next.
+ */
+export const MAX_CHAIN_ENVELOPES = 1024;
+export const MAX_CHAIN_BYTES = 256 * 1024 * 1024;
+
+/**
  * Checks that project envelopes, oldest first, form one unbroken history:
  * each names the previous one's version hash, versions increase, and the
  * project never changes. With `pinnedVersionHash` (the newest version this
@@ -194,6 +202,26 @@ export async function verifyVersionChain(
   if (envelopes.length === 0) {
     throw new E2eeError('chain-broken', 'Version history is empty');
   }
+  // Bound the history before copying any of it.
+  if (envelopes.length > MAX_CHAIN_ENVELOPES) {
+    throw new E2eeError(
+      'limit-exceeded',
+      `Check at most ${MAX_CHAIN_ENVELOPES} versions at a time`
+    );
+  }
+  let total = 0;
+  for (const envelope of envelopes) {
+    if (!(envelope instanceof Uint8Array)) {
+      throw new E2eeError('invalid-argument', 'Envelopes must be Uint8Arrays');
+    }
+    total += envelope.byteLength;
+  }
+  if (total > MAX_CHAIN_BYTES) {
+    throw new E2eeError(
+      'limit-exceeded',
+      `Check at most ${MAX_CHAIN_BYTES} bytes of history at a time`
+    );
+  }
   const pinned =
     options.pinnedVersionHash === undefined
       ? undefined
@@ -203,17 +231,20 @@ export async function verifyVersionChain(
           HASH_BYTES
         );
   // Capture every envelope before the first await (headers decode into
-  // copies; the bodies are copied, each already bounded by the structure
-  // check), so a caller editing the list or a buffer meanwhile cannot
-  // change the chain checked. Hash them one at a time: concurrent digests
-  // would each hold another copy, and a broken link stops the work early.
-  const captured = envelopes.map((envelope) => ({
-    header: projectHeaderOf(envelope).header,
-    bytes: copyBytes(envelope)
-  }));
+  // copies; the bodies are copied, within the bound above), so a caller
+  // editing the list or a buffer meanwhile cannot change the chain
+  // checked. Hash them one at a time, releasing each copy once hashed:
+  // concurrent digests would each hold another, and a broken link stops
+  // the work early.
+  const captured: { header: ProjectEnvelopeHeader; bytes: Bytes | null }[] =
+    envelopes.map((envelope) => ({
+      header: projectHeaderOf(envelope).header,
+      bytes: copyBytes(envelope)
+    }));
   const hashes: Bytes[] = [];
   let previous: ProjectEnvelopeHeader | null = null;
-  for (const { header, bytes } of captured) {
+  for (const entry of captured) {
+    const { header } = entry;
     const before = hashes.at(-1);
     if (
       previous &&
@@ -229,6 +260,8 @@ export async function verifyVersionChain(
       );
     }
     previous = header;
+    const bytes = entry.bytes!;
+    entry.bytes = null;
     hashes.push(await versionHash(bytes));
   }
   if (pinned && !hashes.some((hash) => equalBytes(hash, pinned))) {
