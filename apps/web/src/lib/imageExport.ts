@@ -9,6 +9,12 @@ import type { ExportScope } from './exportScope';
 export const IMAGE_EXPORT_MAX_SIDE = 8192;
 /** About 40 MP: the readback alone is four bytes a pixel. */
 export const IMAGE_EXPORT_MAX_PIXELS = 40_000_000;
+/**
+ * The desktop shell refuses saves over 50 MiB. A PNG never exceeds its raw
+ * RGBA size by more than a few hundred bytes a row, so 12 MP (48 MB raw)
+ * always fits; 4K is 8.3 MP.
+ */
+export const DESKTOP_IMAGE_MAX_PIXELS = 12_000_000;
 /** Smaller than this is an icon, not an export. */
 export const IMAGE_EXPORT_MIN_SIDE = 16;
 
@@ -16,7 +22,8 @@ export const IMAGE_EXPORT_MIN_SIDE = 16;
 export function imageSizeProblem(
   width: number,
   height: number,
-  maxSide: number = IMAGE_EXPORT_MAX_SIDE
+  maxSide: number = IMAGE_EXPORT_MAX_SIDE,
+  maxPixels: number = IMAGE_EXPORT_MAX_PIXELS
 ): string | null {
   const side = Math.min(maxSide, IMAGE_EXPORT_MAX_SIDE);
   if (
@@ -29,8 +36,9 @@ export function imageSizeProblem(
   ) {
     return `Enter whole pixel sizes from ${IMAGE_EXPORT_MIN_SIDE} to ${side}.`;
   }
-  if (width * height > IMAGE_EXPORT_MAX_PIXELS) {
-    return `${width} × ${height} is over ${IMAGE_EXPORT_MAX_PIXELS / 1_000_000} megapixels; choose a smaller size.`;
+  const pixels = Math.min(maxPixels, IMAGE_EXPORT_MAX_PIXELS);
+  if (width * height > pixels) {
+    return `${width} × ${height} is over ${pixels / 1_000_000} megapixels; choose a smaller size.`;
   }
   return null;
 }
@@ -55,7 +63,13 @@ export function viewImageScope(
   }
   if (!scope) return { label: 'the current view' };
   const hidden = scope.hiddenIncluded + scope.hiddenExcluded;
-  const visible = scope.bodyIds.length - scope.hiddenIncluded;
+  // Bodies whose history step failed are withheld from mesh files, but the
+  // view still draws the visible ones, so the picture counts them.
+  const visible =
+    scope.bodyIds.length -
+    scope.hiddenIncluded +
+    scope.withheldIds.length -
+    scope.withheldHidden;
   if (visible === 0 && hidden === 0) return { label: 'the current view' };
   return {
     label:

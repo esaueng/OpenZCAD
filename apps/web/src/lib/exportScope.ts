@@ -20,6 +20,8 @@ export interface ExportScope {
   hiddenExcluded: number;
   /** Exportable bodies left out because their history step failed. */
   withheldIds: string[];
+  /** How many of `withheldIds` are hidden in the view (it still draws the rest). */
+  withheldHidden: number;
   selection: boolean;
 }
 
@@ -36,6 +38,7 @@ export function exportScope(
       hiddenIncluded: 0,
       hiddenExcluded: 0,
       withheldIds: selected.withheld ? [selected.bodyId] : [],
+      withheldHidden: selected.withheld && selected.hidden ? 1 : 0,
       selection: true
     };
   }
@@ -51,6 +54,7 @@ export function exportScope(
     withheldIds: kept
       .filter((body) => body.withheld)
       .map((body) => body.bodyId),
+    withheldHidden: kept.filter((body) => body.withheld && body.hidden).length,
     selection: false
   };
 }

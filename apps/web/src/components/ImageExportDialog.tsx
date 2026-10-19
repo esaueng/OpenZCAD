@@ -30,6 +30,8 @@ export interface ImageExportDialogProps {
   viewSize: { width: number; height: number };
   /** The largest side this device can render. */
   maxSide?: number;
+  /** The most pixels an image may have here (the desktop save is smaller). */
+  maxPixels?: number;
   /** Null while the view cannot be captured (the model is updating). */
   pngUnavailable?: string | null;
   sketches: ImageExportSketch[];
@@ -67,6 +69,7 @@ export function ImageExportDialog({
   viewScopeLabel,
   viewSize,
   maxSide = IMAGE_EXPORT_MAX_SIDE,
+  maxPixels,
   pngUnavailable = null,
   sketches,
   initialSketchId = null,
@@ -131,7 +134,12 @@ export function ImageExportDialog({
 
   const pixelWidth = Number(width);
   const pixelHeight = Number(height);
-  const sizeProblem = imageSizeProblem(pixelWidth, pixelHeight, maxSide);
+  const sizeProblem = imageSizeProblem(
+    pixelWidth,
+    pixelHeight,
+    maxSide,
+    maxPixels
+  );
   const activePreset = presets.find(
     (preset) => preset.width === pixelWidth && preset.height === pixelHeight
   )?.id;

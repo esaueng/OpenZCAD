@@ -87,6 +87,18 @@ describe('ImageExportDialog', () => {
     expect(props.onExportPng).not.toHaveBeenCalled();
   });
 
+  it('holds sizes to the pixel cap it is given', async () => {
+    const props = renderDialog({ maxPixels: 12_000_000 });
+    await userEvent.click(screen.getByRole('button', { name: /3840 × 2160/ }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    const height = screen.getByLabelText('Height (px)');
+    await userEvent.clear(height);
+    await userEvent.type(height, '4000');
+    expect(screen.getByRole('alert').textContent).toMatch(/12 megapixels/);
+    await userEvent.click(screen.getByRole('button', { name: /Export PNG/ }));
+    expect(props.onExportPng).not.toHaveBeenCalled();
+  });
+
   it('exports the chosen sketch as SVG, starting from the active one', async () => {
     const props = renderDialog({ initialSketchId: 'sketch_b', units: 'inch' });
     await userEvent.click(screen.getByRole('radio', { name: 'SVG' }));

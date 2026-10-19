@@ -41,7 +41,11 @@ import {
   exportScopeLabel,
   type ExportScope
 } from './lib/exportScope';
-import { initialImageSketchId, viewImageScope } from './lib/imageExport';
+import {
+  DESKTOP_IMAGE_MAX_PIXELS,
+  initialImageSketchId,
+  viewImageScope
+} from './lib/imageExport';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
@@ -22483,6 +22487,10 @@ export function App() {
               }
               viewSize={imageExportView}
               maxSide={imageExportView.maxSide}
+              // The desktop save refuses files over 50 MiB.
+              {...(isDesktopApp()
+                ? { maxPixels: DESKTOP_IMAGE_MAX_PIXELS }
+                : {})}
               pngUnavailable={
                 currentGeometrySnapshot !== null
                   ? 'Wait for the model to finish updating.'

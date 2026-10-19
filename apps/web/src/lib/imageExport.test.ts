@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { exportScope } from './exportScope';
 import {
+  DESKTOP_IMAGE_MAX_PIXELS,
   IMAGE_EXPORT_MAX_PIXELS,
   initialImageSketchId,
   imageSizeProblem,
@@ -26,6 +27,24 @@ describe('imageSizeProblem', () => {
     expect(imageSizeProblem(5000, 100, 4096)).toMatch(/to 4096/);
     expect(imageSizeProblem(8000, 8000)).toMatch(/megapixels/);
     expect(8000 * 8000).toBeGreaterThan(IMAGE_EXPORT_MAX_PIXELS);
+  });
+});
+
+describe('imageSizeProblem on the desktop', () => {
+  it('keeps every allowed PNG under the 50 MiB desktop save limit', () => {
+    // Raw RGBA plus a filter byte a row and deflate's stored-block overhead
+    // is the worst a PNG can be; the cap keeps that under 50 MiB.
+    const worstCase = (pixels: number, width: number) =>
+      pixels * 4 + pixels / width + Math.ceil((pixels * 4) / 65_535) * 5 + 1024;
+    expect(worstCase(DESKTOP_IMAGE_MAX_PIXELS, 16)).toBeLessThan(
+      50 * 1024 * 1024
+    );
+    expect(
+      imageSizeProblem(3840, 2160, 8192, DESKTOP_IMAGE_MAX_PIXELS)
+    ).toBeNull();
+    expect(
+      imageSizeProblem(5000, 5000, 8192, DESKTOP_IMAGE_MAX_PIXELS)
+    ).toMatch(/over 12 megapixels/);
   });
 });
 
@@ -67,6 +86,20 @@ describe('viewImageScope', () => {
     expect(viewImageScope(exportScope([body('a')], null, true), null)).toEqual({
       label: 'visible bodies (1)'
     });
+  });
+
+  it('counts a visible body withheld from mesh files: the view still draws it', () => {
+    const scope = exportScope(
+      [
+        body('a'),
+        { ...body('b'), withheld: true },
+        { ...body('c', true), withheld: true }
+      ],
+      null,
+      true
+    );
+    expect(scope.withheldHidden).toBe(1);
+    expect(viewImageScope(scope, null).label).toBe('visible bodies (2)');
   });
 
   it('names the current view when there are no bodies or no scope', () => {
