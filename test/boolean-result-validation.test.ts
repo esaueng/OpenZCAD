@@ -302,6 +302,43 @@ describe('boolean result validation', () => {
     expect(isClosedConsistentlyOrientedMesh(branching)).toBe(false);
   });
 
+  it('welds per-face duplicated vertices independently of index numbering and ignores collapsed triangles', () => {
+    for (const [scale, translation] of [
+      [1, 0],
+      [1e-7, 0],
+      [1e6, 1e9]
+    ]) {
+      const coordinates = TETRAHEDRON_INDICES.flatMap((vertex) =>
+        TETRAHEDRON_POSITIONS.slice(vertex * 3, vertex * 3 + 3).map(
+          (value) => value * scale! + translation!
+        )
+      );
+      // Every triangle has its own vertices, as grouped CAD face meshes do.
+      const reversed = Array.from({ length: 12 }, (_, i) => 11 - i);
+      const positions = reversed.flatMap((i) =>
+        coordinates.slice(i * 3, i * 3 + 3)
+      );
+      const indices = reversed; // Remap back to the original oriented faces.
+      expect(
+        inspectTriangleMeshClosure(positions, [...indices, 0, 0, 0])
+      ).toEqual({
+        boundaryEdges: 0,
+        nonManifoldEdges: 0,
+        inconsistentWindingEdges: 0,
+        triangles: 4
+      });
+      expect(
+        inspectTriangleMeshClosure(positions, indices.slice(0, 9))
+      ).toMatchObject({ boundaryEdges: 3, triangles: 3 });
+      expect(
+        inspectTriangleMeshClosure(positions, [
+          ...indices,
+          ...indices.slice(0, 3)
+        ])
+      ).toMatchObject({ nonManifoldEdges: 3, triangles: 5 });
+    }
+  });
+
   it('heals an identity copy and hands back the kernel report on it', () => {
     const unified: number[] = [];
     const matrices: Float64Array[] = [];

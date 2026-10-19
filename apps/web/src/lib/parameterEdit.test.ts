@@ -64,12 +64,14 @@ describe('parameter edit validation', () => {
   it('rejects a height below the measured limit without mutating the base', () => {
     const base = holder();
     const copy = structuredClone(base);
+    const minimums = parameterMinimums(base);
     expect(parameterMinimums(base).holder_height).toBe(56.910504);
     for (const expression of ['50', '55', '56.910503']) {
       expect(
         parameterInputError(
           base,
-          setParameter(base, { name: 'holder_height', expression })
+          setParameter(base, { name: 'holder_height', expression }),
+          minimums
         )
       ).toContain('must be at least 56.910504');
     }
@@ -77,7 +79,8 @@ describe('parameter edit validation', () => {
       expect(
         parameterInputError(
           base,
-          setParameter(base, { name: 'holder_height', expression })
+          setParameter(base, { name: 'holder_height', expression }),
+          minimums
         )
       ).toBeNull();
     expect(base).toEqual(copy);
@@ -88,7 +91,8 @@ describe('parameter edit validation', () => {
     expect(
       parameterInputError(
         base,
-        setParameter(base, { name: 'driver', expression: '55' })
+        setParameter(base, { name: 'driver', expression: '55' }),
+        parameterMinimums(base)
       )
     ).toContain('holder_height');
     base = setParameter(base, { name: 'holder_height', expression: '55' });
@@ -204,6 +208,16 @@ describe('parameterUntouchedSince', () => {
     expect(parameterUntouchedSince(base, live, 'opening_width')).toBe(true);
     // Creating a parameter the moved document still lacks is also safe.
     expect(parameterUntouchedSince(base, live, 'wall')).toBe(true);
+  });
+  it('refuses when the moved document retyped the parameter (F05)', () => {
+    const base = setParameter(holder(), { name: 'wall', expression: '3' });
+    const retyped = setParameter(base, {
+      name: 'wall',
+      expression: '3',
+      quantity: 'length'
+    });
+    expect(parameterUntouchedSince(base, retyped, 'wall')).toBe(false);
+    expect(parameterUntouchedSince(retyped, retyped, 'wall')).toBe(true);
   });
   it('refuses when the moved document changed, created or removed the parameter', () => {
     const base = holder();

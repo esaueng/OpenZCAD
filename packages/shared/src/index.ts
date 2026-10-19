@@ -34,12 +34,26 @@ export type ShaprImportId = Brand<string, 'ShaprImportId'>;
  *
  * v19 adds R01 datum planes: the `datum-plane` feature kind and the datum
  * references sketches, Split and Mirror can hold in place of a numeric plane.
+ *
+ * v20 adds the F01 through-all extrude end condition (`endCondition`,
+ * `throughAllSide`). A v19 client would replay such a cut at its stale blind
+ * distance, so the bump makes it refuse the document instead.
+ *
+ * v21 adds F05 typed parameters (`ParameterNode.quantity`). A typed parameter
+ * carries its dimension into expressions (`width + 5 mm`), which a v20 client
+ * would refuse or read as a bare number, so the bump makes it refuse such a
+ * document. Absent stays the unitless parameter every older document holds.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 19 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 21 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
+/** F05: what a typed parameter measures. Absent on a node is unitless. */
+export type ParameterKind = 'length' | 'angle' | 'number';
+/** F01 extrude extents; to-face/to-next/offset-from-face are later slices. */
+export type ExtrudeEndCondition = 'blind' | 'through-all';
+export type ThroughAllSide = 'forward' | 'backward' | 'both';
 export type PlaneId = 'XY' | 'XZ' | 'YZ';
 /** See `SketchPlaneRef`'s `basisRevision`; absent means revision 1. */
 export type CanonicalPlaneBasisRevision = 2;
@@ -456,6 +470,15 @@ export interface ParameterNode extends BaseNode {
   toggle?: { bodyIds: BodyId[] };
   expression: string;
   value: number;
+  /**
+   * F05 (schema v21): what the parameter measures. A length or angle enters
+   * expressions with that dimension, so `width + 5 mm` evaluates and a length
+   * in an angle field is refused; a number is unit-free (counts, ratios).
+   * Absent is the legacy unitless parameter: dimensionless everywhere, as in
+   * every document before v21, and never retyped without the owner's say.
+   * (Named `quantity` because `kind` is the node discriminator.)
+   */
+  quantity?: ParameterKind;
   /**
    * Offered in Tweak mode and through a share link. Absent means the row has
    * not been curated. A wholly uncurated model exposes every parameter for
@@ -921,6 +944,17 @@ export type FeatureData =
       operation?: ExtrudeOperation;
       /** Required for stored add/cut operations and absent for new-body. */
       targetBodyId?: BodyId;
+      /**
+       * F01 (schema v20): how far the extrusion reaches. Absent is `blind`,
+       * the `distance`/`symmetric`/`backDistance` extrude every older document
+       * stores. `through-all` cuts through the whole target along the sketch
+       * normal: the span is recomputed from the target at the feature's
+       * history position on every rebuild and never stored, and `distance`
+       * is kept only so switching back to blind restores it.
+       */
+      endCondition?: ExtrudeEndCondition;
+      /** Required with `through-all`; which side(s) of the sketch plane. */
+      throughAllSide?: ThroughAllSide;
       /**
        * When present, extrudes one detected closed region of the sketch
        * instead of the whole profile. Resolution fails closed: if neither the
@@ -1983,6 +2017,8 @@ export type GeometryBodyRepresentation = Omit<
  * Exact operations requiring analysis still await the completed result.
  */
 export interface GeometryReadyState {
+  /** Drag-only mesh publication: picking identities await complete topology. */
+  topology?: 'pending';
   bodyRepresentations: Record<BodyId, GeometryBodyRepresentation>;
   warnings: string[];
   /** Current build attribution; never borrowed from a completed projection. */

@@ -77,6 +77,33 @@ describe('featureValueSummary', () => {
         'mm'
       )
     ).toBe('12 mm');
+    // F01: a through-all cut shows its extent, not the dormant distance.
+    expect(
+      featureValueSummary(
+        feature({
+          featureKind: 'extrude',
+          distance: 12,
+          operation: 'cut',
+          endCondition: 'through-all',
+          throughAllSide: 'forward'
+        } as never),
+        {},
+        'mm'
+      )
+    ).toBe('Through all');
+    expect(
+      featureValueSummary(
+        feature({
+          featureKind: 'extrude',
+          distance: 12,
+          operation: 'cut',
+          endCondition: 'through-all',
+          throughAllSide: 'both'
+        } as never),
+        {},
+        'mm'
+      )
+    ).toBe('Through all, both sides');
   });
 
   it.each([

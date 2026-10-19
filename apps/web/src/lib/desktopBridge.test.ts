@@ -214,6 +214,11 @@ describe('desktop bridge', () => {
     expect(await file.text()).toBe('ISO');
   });
 
+  it('types a native DXF pick as a DXF drawing', () => {
+    const file = nativeCadFile({ name: 'plate.DXF', bytes: [48] });
+    expect(file.type).toBe('image/vnd.dxf');
+  });
+
   it('keeps cloud credentials in Rust while returning a fetch response', async () => {
     markDesktopRuntime();
     vi.mocked(invoke).mockResolvedValue({

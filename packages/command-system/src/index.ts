@@ -55,6 +55,7 @@ import {
   type FeatureId,
   type FeatureNode,
   type ParamValue,
+  type ParameterKind,
   type ProjectDocument,
   type SerializedCommand,
   toSketchConstraintId,
@@ -113,6 +114,9 @@ import {
   findParameterReferences,
   findSketch,
   getParameterScope,
+  newTypedParameterMisuse,
+  parameterKindsOf,
+  withParameterKinds,
   type HelicalSweepInput,
   helicalSweepProfile,
   holeBody,
@@ -1793,9 +1797,11 @@ function projectedParameterScope(
   document: ProjectDocument,
   proposal: CadPatchProposal
 ): Record<string, number> {
-  const scope: Record<string, number> = {
-    ...getParameterScope(document).scope
-  };
+  const base = getParameterScope(document).scope;
+  // A private copy of the kinds, renamed and deleted alongside the values,
+  // so a renamed typed parameter keeps its quantity in the projection.
+  const kinds: Record<string, ParameterKind> = { ...parameterKindsOf(base) };
+  const scope = withParameterKinds({ ...base }, kinds);
   const pending = new Map<string, string>();
   for (const operation of proposal.operations) {
     if (operation.kind === 'set_parameter') {
@@ -1817,9 +1823,15 @@ function projectedParameterScope(
         scope[operation.newName] = renamedValue;
         delete scope[operation.name];
       }
+      const renamedKind = kinds[operation.name];
+      if (renamedKind !== undefined) {
+        kinds[operation.newName] = renamedKind;
+        delete kinds[operation.name];
+      }
     } else if (operation.kind === 'delete_parameter') {
       pending.delete(operation.name);
       delete scope[operation.name];
+      delete kinds[operation.name];
     }
   }
 
@@ -2128,6 +2140,7 @@ function assertOperationExpressions(
       sketchObjects(operation.name, operation.objects);
       break;
     case 'add_datum_mirror':
+    case 'add_datum_split':
       break;
     case 'add_shell':
       assertEvaluableExpression(
@@ -2918,6 +2931,20 @@ export function commandsForCadPatch(
           ids
         });
       }
+      case 'add_datum_split': {
+        const ids = createSplitFeatureIds();
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        const datumFeatureId = resolveDatum(operation.datum);
+        scope.declare(operation.localId, ids.bodyId);
+        scope.declare(operation.secondLocalId, ids.secondBodyId);
+        scope.consume([targetBodyId], 'split');
+        return commandFactories.splitBody({
+          name: operation.name,
+          targetBodyId,
+          plane: { type: 'datum', datumFeatureId },
+          ids
+        });
+      }
       case 'add_shell': {
         if (isLocalBodyRef(operation.targetBodyId)) {
           throw new Error('add_shell cannot target same-proposal topology.');
@@ -3131,6 +3158,29 @@ export function commandsForCadPatch(
   return commands;
 }
 
+/**
+ * The kind an undo entry records for a command. A `parameter.set` that sets
+ * a type (F05) records `parameter.retype`: Tweak turns values and hides the
+ * type picker, so its undo and redo must not retype a parameter either.
+ */
+function historyCommandKind(entry: SerializedCommand): string {
+  return isParameterRetype(entry) ? 'parameter.retype' : entry.kind;
+}
+
+/**
+ * Whether a parameter command sets a type (F05). A retype is a Build edit:
+ * Tweak's guards, undo and redo admit value edits only.
+ */
+export function isParameterRetype(command: {
+  kind: string;
+  payload?: unknown;
+}): boolean {
+  return (
+    command.kind === 'parameter.set' &&
+    (command.payload as ParameterSetInput | undefined)?.quantity !== undefined
+  );
+}
+
 function parameterOnly(kinds: string[] | null): boolean {
   return !!kinds?.length && kinds.every((kind) => kind === 'parameter.set');
 }
@@ -3221,6 +3271,7 @@ export class CommandManager {
       return this.document;
     }
     assertDocumentTextBudget(next);
+    assertNoNewTypedParameterMisuse(previous, next);
     next.commandLog.push(...serializedLeaves(command));
     next = appendRevision(next, command.label);
     const recorded = recordDocumentEdit(
@@ -3228,7 +3279,7 @@ export class CommandManager {
       next,
       command.label,
       this.actorUserId,
-      serializedLeaves(command).map((entry) => entry.kind)
+      serializedLeaves(command).map(historyCommandKind)
     );
     assertDocumentTextBudget(recorded);
     this.document = recorded;
@@ -3317,6 +3368,9 @@ export class CommandManager {
       return this.document;
     }
     assertDocumentTextBudget(next);
+    // Judged on the transaction's end state: a proposal may type a parameter
+    // and use it in either order.
+    assertNoNewTypedParameterMisuse(previous, next);
     next.commandLog.push(...serialized);
     next = appendRevision(next, label);
     const recorded = recordDocumentEdit(
@@ -3324,7 +3378,7 @@ export class CommandManager {
       next,
       label,
       this.actorUserId,
-      serialized.map((entry) => entry.kind)
+      serialized.map(historyCommandKind)
     );
     assertDocumentTextBudget(recorded);
     this.document = recorded;
@@ -3361,6 +3415,18 @@ export class CommandManager {
     this.document = recorded;
     return this.document;
   }
+}
+
+/**
+ * F05: refuses an edit that would make a typed parameter feed a field as the
+ * wrong quantity, whatever authored it (a form, the assistant, the API).
+ */
+function assertNoNewTypedParameterMisuse(
+  previous: ProjectDocument,
+  next: ProjectDocument
+): void {
+  const misuse = newTypedParameterMisuse(previous, next);
+  if (misuse) throw new Error(misuse);
 }
 
 export function replayCommands(

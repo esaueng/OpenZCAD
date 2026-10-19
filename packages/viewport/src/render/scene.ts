@@ -31,34 +31,46 @@ const exactSmoothingLayouts = new WeakMap<
   ExactSmoothingLayout
 >();
 
-interface MeshFace {
-  normal: THREE.Vector3;
-  cornerAngles: [number, number, number];
-}
-
-interface MeshEdge {
-  start: number;
-  end: number;
-  faces: number[];
-}
-
-function cornerAngle(
-  center: THREE.Vector3,
-  first: THREE.Vector3,
-  second: THREE.Vector3
+/** The angle between two corner directions, as THREE.Vector3 computes it. */
+function cornerAngleOf(
+  ax: number,
+  ay: number,
+  az: number,
+  bx: number,
+  by: number,
+  bz: number
 ): number {
-  const firstDirection = first.clone().sub(center);
-  const secondDirection = second.clone().sub(center);
-  const crossLength = firstDirection.cross(secondDirection).length();
-  const dot = first.clone().sub(center).dot(second.clone().sub(center));
-  return Math.atan2(crossLength, dot);
+  const cx = ay * bz - az * by;
+  const cy = az * bx - ax * bz;
+  const cz = ax * by - ay * bx;
+  return Math.atan2(
+    Math.sqrt(cx * cx + cy * cy + cz * cz),
+    ax * bx + ay * by + az * bz
+  );
 }
+
+/**
+ * Topology-face boundaries of a mesh smoothed with complete face ranges, as
+ * segment endpoint pairs. A body whose exact edge topology is deferred (a
+ * live drag preview) outlines these instead of running a dihedral-angle
+ * pass, so it shows the same B-rep edges as the committed body, including
+ * tangent fillet boundaries.
+ */
+const topologyBoundaryOutlines = new WeakMap<
+  THREE.BufferGeometry,
+  Float32Array
+>();
 
 /**
  * Builds angle-weighted smoothing groups from triangle adjacency. Adjacent
  * triangles share a render vertex only when their dihedral angle is below the
  * CAD crease threshold, so large planar faces cannot borrow normals from their
  * side walls while cylinders and fillets remain visually smooth.
+ *
+ * Per-triangle and per-corner values live in typed arrays: a drag preview of
+ * a 125k-triangle body rebuilds this on every update, and allocating an
+ * object per corner cost over half a second there. The arithmetic and its
+ * summation order are those of the former THREE.Vector3 form.
  */
 function geometryFromMesh(
   mesh: MeshGeometry,
@@ -67,6 +79,7 @@ function geometryFromMesh(
   const sourcePositions = mesh.vertices;
   const sourceIndices = mesh.indices;
   const triangleCount = Math.floor(sourceIndices.length / 3);
+  const cornerCount = triangleCount * 3;
   const topologyFaceByTriangle = new Int32Array(triangleCount);
   topologyFaceByTriangle.fill(-1);
   for (const [topologyFaceIndex, face] of (topology?.faces ?? []).entries()) {
@@ -79,48 +92,116 @@ function geometryFromMesh(
       topologyFaceByTriangle[triangleIndex] = topologyFaceIndex;
     }
   }
-  const faces: MeshFace[] = [];
-  const edges = new Map<string, MeshEdge>();
+
+  // Per triangle: its unit normal; per corner: its interior angle.
+  const faceNormals = new Float64Array(cornerCount);
+  const cornerAngles = new Float64Array(cornerCount);
+  // Undirected edges in first-seen order. Each edge is found from its lower
+  // vertex's bucket of higher neighbours, which stays a few entries long.
+  let vertexCount = 0;
+  for (let corner = 0; corner < cornerCount; corner += 1) {
+    vertexCount = Math.max(vertexCount, sourceIndices[corner]! + 1);
+  }
+  const bucketStart = new Uint32Array(vertexCount + 1);
+  for (let corner = 0; corner < cornerCount; corner += 1) {
+    const start = sourceIndices[corner]!;
+    const end = sourceIndices[corner - (corner % 3) + ((corner + 1) % 3)]!;
+    const bucket = Math.min(start, end) + 1;
+    bucketStart[bucket] = bucketStart[bucket]! + 1;
+  }
+  for (let vertex = 0; vertex < vertexCount; vertex += 1) {
+    bucketStart[vertex + 1] = bucketStart[vertex + 1]! + bucketStart[vertex]!;
+  }
+  const bucketFill = new Uint32Array(vertexCount);
+  const bucketHigh = new Uint32Array(cornerCount);
+  const bucketSlot = new Uint32Array(cornerCount);
+  const edgeStart = new Uint32Array(cornerCount);
+  const edgeEnd = new Uint32Array(cornerCount);
+  const edgeFirstFace = new Int32Array(cornerCount);
+  const edgeSecondFace = new Int32Array(cornerCount);
+  const edgeFaceCount = new Uint32Array(cornerCount);
+  let edgeCount = 0;
 
   for (let faceIndex = 0; faceIndex < triangleCount; faceIndex += 1) {
-    const cornerOffset = faceIndex * 3;
-    const indices = [
-      sourceIndices[cornerOffset]!,
-      sourceIndices[cornerOffset + 1]!,
-      sourceIndices[cornerOffset + 2]!
-    ] as const;
-    const points = indices.map((index) =>
-      new THREE.Vector3().fromArray(sourcePositions, index * 3)
-    ) as [THREE.Vector3, THREE.Vector3, THREE.Vector3];
-    const normal = new THREE.Vector3()
-      .subVectors(points[1], points[0])
-      .cross(new THREE.Vector3().subVectors(points[2], points[0]))
-      .normalize();
-    faces.push({
-      normal,
-      cornerAngles: [
-        cornerAngle(points[0], points[1], points[2]),
-        cornerAngle(points[1], points[2], points[0]),
-        cornerAngle(points[2], points[0], points[1])
-      ]
-    });
+    const offset = faceIndex * 3;
+    const i0 = sourceIndices[offset]! * 3;
+    const i1 = sourceIndices[offset + 1]! * 3;
+    const i2 = sourceIndices[offset + 2]! * 3;
+    const p0x = sourcePositions[i0]!;
+    const p0y = sourcePositions[i0 + 1]!;
+    const p0z = sourcePositions[i0 + 2]!;
+    const p1x = sourcePositions[i1]!;
+    const p1y = sourcePositions[i1 + 1]!;
+    const p1z = sourcePositions[i1 + 2]!;
+    const p2x = sourcePositions[i2]!;
+    const p2y = sourcePositions[i2 + 1]!;
+    const p2z = sourcePositions[i2 + 2]!;
+    const ax = p1x - p0x;
+    const ay = p1y - p0y;
+    const az = p1z - p0z;
+    const bx = p2x - p0x;
+    const by = p2y - p0y;
+    const bz = p2z - p0z;
+    const nx = ay * bz - az * by;
+    const ny = az * bx - ax * bz;
+    const nz = ax * by - ay * bx;
+    const scale = 1 / (Math.sqrt(nx * nx + ny * ny + nz * nz) || 1);
+    faceNormals[offset] = nx * scale;
+    faceNormals[offset + 1] = ny * scale;
+    faceNormals[offset + 2] = nz * scale;
+    cornerAngles[offset] = cornerAngleOf(ax, ay, az, bx, by, bz);
+    cornerAngles[offset + 1] = cornerAngleOf(
+      p2x - p1x,
+      p2y - p1y,
+      p2z - p1z,
+      p0x - p1x,
+      p0y - p1y,
+      p0z - p1z
+    );
+    cornerAngles[offset + 2] = cornerAngleOf(
+      p0x - p2x,
+      p0y - p2y,
+      p0z - p2z,
+      p1x - p2x,
+      p1y - p2y,
+      p1z - p2z
+    );
 
-    for (const [start, end] of [
-      [indices[0], indices[1]],
-      [indices[1], indices[2]],
-      [indices[2], indices[0]]
-    ] as const) {
+    for (let side = 0; side < 3; side += 1) {
+      const start = sourceIndices[offset + side]!;
+      const end = sourceIndices[offset + ((side + 1) % 3)]!;
       const low = Math.min(start, end);
       const high = Math.max(start, end);
-      const key = `${low}:${high}`;
-      const edge = edges.get(key) ?? { start: low, end: high, faces: [] };
-      edge.faces.push(faceIndex);
-      edges.set(key, edge);
+      const bucket = bucketStart[low]!;
+      const filled = bucket + bucketFill[low]!;
+      let slot = -1;
+      for (let entry = bucket; entry < filled; entry += 1) {
+        if (bucketHigh[entry] === high) {
+          slot = bucketSlot[entry]!;
+          break;
+        }
+      }
+      if (slot < 0) {
+        slot = edgeCount;
+        edgeCount += 1;
+        bucketHigh[filled] = high;
+        bucketSlot[filled] = slot;
+        bucketFill[low] = bucketFill[low]! + 1;
+        edgeStart[slot] = low;
+        edgeEnd[slot] = high;
+        edgeFirstFace[slot] = faceIndex;
+      } else if (edgeFaceCount[slot] === 1) {
+        edgeSecondFace[slot] = faceIndex;
+      }
+      edgeFaceCount[slot] = edgeFaceCount[slot]! + 1;
     }
   }
 
-  const parent = sourceIndices.map((_, cornerIndex) => cornerIndex);
-  const rank = sourceIndices.map(() => 0);
+  const parent = new Int32Array(cornerCount);
+  for (let corner = 0; corner < cornerCount; corner += 1) {
+    parent[corner] = corner;
+  }
+  const rank = new Uint8Array(cornerCount);
   const find = (cornerIndex: number): number => {
     let root = cornerIndex;
     while (parent[root] !== root) {
@@ -155,99 +236,118 @@ function geometryFromMesh(
         return corner;
       }
     }
-    return null;
+    return -1;
   };
 
+  const completeTopology =
+    topology !== undefined &&
+    triangleCount > 0 &&
+    topologyFaceByTriangle.every((face) => face >= 0);
+  const boundarySlots: number[] = [];
   const creaseDot = Math.cos(CAD_CREASE_ANGLE);
-  for (const edge of edges.values()) {
+  for (let slot = 0; slot < edgeCount; slot += 1) {
     // Non-manifold edges stay creased; smoothing across more than two incident
     // faces can blend unrelated shells that merely share indexed vertices.
-    if (edge.faces.length !== 2) {
+    if (edgeFaceCount[slot] !== 2) {
+      boundarySlots.push(slot);
       continue;
     }
-    const [firstFaceIndex, secondFaceIndex] = edge.faces as [number, number];
-    const firstFace = faces[firstFaceIndex]!;
-    const secondFace = faces[secondFaceIndex]!;
-    const firstTopologyFace = topologyFaceByTriangle[firstFaceIndex]!;
-    const secondTopologyFace = topologyFaceByTriangle[secondFaceIndex]!;
+    const first = edgeFirstFace[slot]!;
+    const second = edgeSecondFace[slot]!;
+    const firstTopologyFace = topologyFaceByTriangle[first]!;
+    const secondTopologyFace = topologyFaceByTriangle[second]!;
     const hasTopologyFace = firstTopologyFace >= 0 || secondTopologyFace >= 0;
     const shouldSmooth = hasTopologyFace
       ? firstTopologyFace >= 0 && firstTopologyFace === secondTopologyFace
-      : firstFace.normal.dot(secondFace.normal) + DOT_EPSILON >= creaseDot;
+      : faceNormals[first * 3]! * faceNormals[second * 3]! +
+          faceNormals[first * 3 + 1]! * faceNormals[second * 3 + 1]! +
+          faceNormals[first * 3 + 2]! * faceNormals[second * 3 + 2]! +
+          DOT_EPSILON >=
+        creaseDot;
     if (!shouldSmooth) {
+      boundarySlots.push(slot);
       continue;
     }
-    for (const vertexIndex of [edge.start, edge.end]) {
-      const firstCorner = cornerForVertex(firstFaceIndex, vertexIndex);
-      const secondCorner = cornerForVertex(secondFaceIndex, vertexIndex);
-      if (firstCorner !== null && secondCorner !== null) {
+    for (const vertexIndex of [edgeStart[slot]!, edgeEnd[slot]!]) {
+      const firstCorner = cornerForVertex(first, vertexIndex);
+      const secondCorner = cornerForVertex(second, vertexIndex);
+      if (firstCorner >= 0 && secondCorner >= 0) {
         union(firstCorner, secondCorner);
       }
     }
   }
 
-  const normalsByGroup = new Map<number, THREE.Vector3>();
-  for (
-    let cornerIndex = 0;
-    cornerIndex < sourceIndices.length;
-    cornerIndex += 1
-  ) {
-    const root = find(cornerIndex);
-    const faceIndex = Math.floor(cornerIndex / 3);
-    const face = faces[faceIndex]!;
-    const angle = face.cornerAngles[cornerIndex % 3]!;
-    const contribution = face.normal.clone().multiplyScalar(angle);
-    const accumulated = normalsByGroup.get(root) ?? new THREE.Vector3();
-    accumulated.add(contribution);
-    normalsByGroup.set(root, accumulated);
-  }
-
-  const vertices: number[] = [];
-  const normals: number[] = [];
-  const indices: number[] = [];
-  const outputIndexByGroup = new Map<number, number>();
+  // Render vertices are numbered by each group's first corner, in corner
+  // order, and group normals accumulate in that same order.
+  const groupOfCorner = new Int32Array(cornerCount);
+  const groupOfRoot = new Int32Array(cornerCount).fill(-1);
   const renderSources: number[] = [];
-  for (
-    let cornerIndex = 0;
-    cornerIndex < sourceIndices.length;
-    cornerIndex += 1
-  ) {
-    const root = find(cornerIndex);
-    let outputIndex = outputIndexByGroup.get(root);
-    if (outputIndex === undefined) {
-      outputIndex = vertices.length / 3;
-      outputIndexByGroup.set(root, outputIndex);
-      const sourceIndex = sourceIndices[cornerIndex]!;
-      renderSources.push(sourceIndex);
-      vertices.push(
-        sourcePositions[sourceIndex * 3]!,
-        sourcePositions[sourceIndex * 3 + 1]!,
-        sourcePositions[sourceIndex * 3 + 2]!
-      );
-      const normal = normalsByGroup.get(root)!.normalize();
-      normals.push(normal.x, normal.y, normal.z);
+  for (let corner = 0; corner < cornerCount; corner += 1) {
+    const root = find(corner);
+    let group = groupOfRoot[root]!;
+    if (group < 0) {
+      group = renderSources.length;
+      groupOfRoot[root] = group;
+      renderSources.push(sourceIndices[corner]!);
     }
-    indices.push(outputIndex);
+    groupOfCorner[corner] = group;
   }
+  const groupCount = renderSources.length;
+  const sums = new Float64Array(groupCount * 3);
+  for (let corner = 0; corner < cornerCount; corner += 1) {
+    const group = groupOfCorner[corner]! * 3;
+    const face = (corner - (corner % 3)) | 0;
+    const angle = cornerAngles[corner]!;
+    sums[group] = sums[group]! + faceNormals[face]! * angle;
+    sums[group + 1] = sums[group + 1]! + faceNormals[face + 1]! * angle;
+    sums[group + 2] = sums[group + 2]! + faceNormals[face + 2]! * angle;
+  }
+  const vertices = new Float32Array(groupCount * 3);
+  const normals = new Float32Array(groupCount * 3);
+  for (let group = 0; group < groupCount; group += 1) {
+    const source = renderSources[group]! * 3;
+    vertices[group * 3] = sourcePositions[source]!;
+    vertices[group * 3 + 1] = sourcePositions[source + 1]!;
+    vertices[group * 3 + 2] = sourcePositions[source + 2]!;
+    const x = sums[group * 3]!;
+    const y = sums[group * 3 + 1]!;
+    const z = sums[group * 3 + 2]!;
+    const scale = 1 / (Math.sqrt(x * x + y * y + z * z) || 1);
+    normals[group * 3] = x * scale;
+    normals[group * 3 + 1] = y * scale;
+    normals[group * 3 + 2] = z * scale;
+  }
+  // The index width THREE chooses for a plain array of the same values.
+  const indices =
+    groupCount - 1 >= 65535
+      ? new Uint32Array(cornerCount)
+      : new Uint16Array(cornerCount);
+  indices.set(groupOfCorner);
 
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute(
-    'position',
-    new THREE.Float32BufferAttribute(vertices, 3)
-  );
-  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-  geometry.setIndex(indices);
+  geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  if (completeTopology) {
+    const outline = new Float32Array(boundarySlots.length * 6);
+    for (let i = 0; i < boundarySlots.length; i += 1) {
+      const start = edgeStart[boundarySlots[i]!]! * 3;
+      const end = edgeEnd[boundarySlots[i]!]! * 3;
+      outline[i * 6] = sourcePositions[start]!;
+      outline[i * 6 + 1] = sourcePositions[start + 1]!;
+      outline[i * 6 + 2] = sourcePositions[start + 2]!;
+      outline[i * 6 + 3] = sourcePositions[end]!;
+      outline[i * 6 + 4] = sourcePositions[end + 1]!;
+      outline[i * 6 + 5] = sourcePositions[end + 2]!;
+    }
+    topologyBoundaryOutlines.set(geometry, outline);
+  }
   const layoutBytes =
-    sourceIndices.length * 4 +
-    renderSources.length * 4 +
+    cornerCount * 4 +
+    groupCount * 4 +
     vertices.length * 8 +
     (topology?.faces.length ?? 0) * 16;
-  if (
-    topology &&
-    triangleCount > 0 &&
-    layoutBytes <= 1024 * 1024 &&
-    topologyFaceByTriangle.every((face) => face >= 0)
-  ) {
+  if (topology && completeTopology && layoutBytes <= 1024 * 1024) {
     exactSmoothingLayouts.set(geometry, {
       sourceIndices: Uint32Array.from(sourceIndices),
       sourceVertexCount: sourcePositions.length,
@@ -475,9 +575,14 @@ export function createObjectForBody(
   mesh.receiveShadow = false;
 
   if (!body.topology?.edges.length) {
-    const featureEdges = new THREE.EdgesGeometry(geometry, 24);
+    // A deferred-topology preview outlines its B-rep face boundaries; only a
+    // body without face ranges falls back to tessellated feature edges.
+    const boundary = topologyBoundaryOutlines.get(geometry);
+    const featureEdges = boundary
+      ? undefined
+      : new THREE.EdgesGeometry(geometry, 24);
     const edges = createFatLineSegments(
-      featureEdges.getAttribute('position').array,
+      boundary ?? featureEdges!.getAttribute('position').array,
       {
         color: '#0a0f16',
         linewidth: 1.4,
@@ -485,7 +590,8 @@ export function createObjectForBody(
         resolution
       }
     );
-    featureEdges.dispose();
+    featureEdges?.dispose();
+    topologyBoundaryOutlines.delete(geometry);
     edges.raycast = () => undefined; // selection picks faces, not edge lines
     edges.name = 'body-edge';
     edges.renderOrder = VIEWPORT_RENDER_ORDER.BODY_EDGE;

@@ -203,6 +203,13 @@ const SAMPLES: { [Kind in OperationKind]: OperationOf<Kind> } = {
     targetBodyId: '$plate',
     datum: '$lid'
   },
+  add_datum_split: {
+    kind: 'add_datum_split',
+    name: 'Split at lid',
+    localId: null,
+    targetBodyId: '$plate',
+    datum: '$lid'
+  },
   add_shell: {
     kind: 'add_shell',
     name: 'Shell',
@@ -294,6 +301,9 @@ describe('patch operation descriptions', () => {
     expect(describeOperation(SAMPLES.add_datum_mirror)).toBe(
       'Mirror across lid — mirror Plate across Lid'
     );
+    expect(describeOperation(SAMPLES.add_datum_split)).toBe(
+      'Split at lid — split Plate in two at Lid'
+    );
   });
 
   it('counts mirrors, shells, offsets and multi-region extrudes as solids', () => {
@@ -306,5 +316,11 @@ describe('patch operation descriptions', () => {
         SAMPLES.rename_parameter
       ])
     ).toEqual({ parameters: 0, bodies: 4, edits: 1 });
+  });
+
+  it('counts both halves of a datum split', () => {
+    expect(
+      summarizeOperations([SAMPLES.add_datum_plane, SAMPLES.add_datum_split])
+    ).toEqual({ parameters: 0, bodies: 2, edits: 1 });
   });
 });

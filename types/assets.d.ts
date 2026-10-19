@@ -14,6 +14,8 @@ interface ImportMetaEnv {
   readonly DEV: boolean;
   /** Vite's mode: "production" in builds, "development" served, "test" in Vitest. */
   readonly MODE: string;
+  /** Vite's public base: "/" on the web, "./" in the desktop bundle. */
+  readonly BASE_URL: string;
   readonly VITE_E2E?: string;
   readonly OZ_PERF?: string;
   readonly OZ_BUILD_COMMIT: string;

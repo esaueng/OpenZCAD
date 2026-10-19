@@ -826,6 +826,18 @@ describe('text built by the exact kernel', { timeout: 120_000 }, () => {
           // while still displaying 10.00 rather than the untrimmed 10.01.
           expect(body.bbox.max.z).toBeLessThan(actualTop + 0.005);
 
+          if (route === 'extrude' && operation === 'subtract') {
+            const preview = await adapter.previewGeometry(document, {
+              deferTopology: true
+            });
+            const displayed = preview.bodyRepresentations[body.bodyId]!;
+            expect(preview.warnings).toEqual(derived.warnings);
+            // The pierced spline walls must not make scene/annotation bounds
+            // jump when this exact model becomes a disposable drag preview.
+            expect(displayed.bbox).toEqual(body.bbox);
+            expect(displayed.mesh).toEqual(body.mesh);
+          }
+
           // The travel never reaches the document: the extrude still stores
           // the user's distance and no back distance.
           const extrude = Object.values(document.nodes).find(

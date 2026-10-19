@@ -279,10 +279,11 @@ describe('interactive regeneration', { timeout: 120_000 }, () => {
         expect(actual.warnings).toEqual([]);
         expect(events.at(-1)).toMatchObject({
           kind: 'independent-reuse',
-          replayed: 3,
+          replayed: 2,
+          reusedPreparedFeatures: 1,
           reusedPrimitives: 29,
-          remeasured: 3,
-          reusedMeasurements: 28
+          remeasured: 2,
+          reusedMeasurements: 29
         });
         expect(
           actual.bodyRepresentations[edited.bodyOrder.at(-1)!]!.volume

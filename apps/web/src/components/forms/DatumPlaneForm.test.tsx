@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor
+} from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import {
   addDatumPlane,
@@ -317,5 +323,108 @@ describe('Plane workspace card commit (R01-C)', () => {
       target: { value: '12' }
     });
     expect(pending.cancelled()).toBe(true);
+  });
+});
+
+describe('Plane card and the viewport handle (R01)', () => {
+  it('adds a handle drag to a plain-number offset and leaves an expression alone', () => {
+    const { document, featureId } = documentWithDatum();
+    const offsetDragRef: { current: ((delta: number) => void) | null } = {
+      current: null
+    };
+    const { unmount } = render(
+      <DatumPlaneCard
+        document={document}
+        editing={findFeature(document, featureId)!}
+        scope={{ lid: 7 }}
+        pickedFace={null}
+        onPreflight={vi.fn(async () => ({ status: 'ready' as const }))}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+        offsetDragRef={offsetDragRef}
+      />
+    );
+    expect(screen.getByLabelText('Offset')).toHaveValue('10');
+    act(() => offsetDragRef.current?.(2.5));
+    expect(screen.getByLabelText('Offset')).toHaveValue('12.5');
+    act(() => offsetDragRef.current?.(-0.25));
+    expect(screen.getByLabelText('Offset')).toHaveValue('12.25');
+    // A sub-thousandth offset keeps its digits through a drag.
+    fireEvent.change(screen.getByLabelText('Offset'), {
+      target: { value: '0.0004' }
+    });
+    act(() => offsetDragRef.current?.(1));
+    expect(screen.getByLabelText('Offset')).toHaveValue('1.0004');
+    fireEvent.change(screen.getByLabelText('Offset'), {
+      target: { value: 'lid + 1' }
+    });
+    act(() => offsetDragRef.current?.(5));
+    expect(screen.getByLabelText('Offset')).toHaveValue('lid + 1');
+    unmount();
+    expect(offsetDragRef.current).toBeNull();
+  });
+
+  it('reports the draft Offset only while distance is all that changed', () => {
+    const { document, featureId } = documentWithDatum();
+    const onOffsetDraft = vi.fn();
+    const { unmount } = render(
+      <DatumPlaneCard
+        document={document}
+        editing={findFeature(document, featureId)!}
+        scope={{ lid: 7 }}
+        pickedFace={null}
+        onPreflight={vi.fn(async () => ({ status: 'ready' as const }))}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+        onOffsetDraft={onOffsetDraft}
+      />
+    );
+    // Reported as the change from the opened offset (10).
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(0);
+    fireEvent.change(screen.getByLabelText('Offset'), {
+      target: { value: '14' }
+    });
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(4);
+    // An expression cannot be drawn ahead of its evaluation.
+    fireEvent.change(screen.getByLabelText('Offset'), {
+      target: { value: 'lid + 1' }
+    });
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(null);
+    fireEvent.change(screen.getByLabelText('Offset'), {
+      target: { value: '3' }
+    });
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(-7);
+    // Flipping the normal changes more than the distance.
+    fireEvent.click(screen.getByLabelText('Flip normal'));
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(null);
+    unmount();
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(null);
+  });
+
+  it("focuses its Offset for the handle's exact entry", () => {
+    const { document, featureId } = documentWithDatum();
+    const offsetEntryRef: { current: (() => boolean) | null } = {
+      current: null
+    };
+    const { unmount } = render(
+      <DatumPlaneCard
+        document={document}
+        editing={findFeature(document, featureId)!}
+        scope={{}}
+        pickedFace={null}
+        onPreflight={vi.fn(async () => ({ status: 'ready' as const }))}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+        offsetEntryRef={offsetEntryRef}
+      />
+    );
+    let opened = false;
+    act(() => {
+      opened = offsetEntryRef.current?.() ?? false;
+    });
+    expect(opened).toBe(true);
+    expect(screen.getByLabelText('Offset')).toHaveFocus();
+    unmount();
+    expect(offsetEntryRef.current).toBeNull();
   });
 });

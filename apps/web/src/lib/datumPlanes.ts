@@ -14,6 +14,7 @@ import {
   type FeatureNode,
   type PlaneId,
   type ProjectDocument,
+  type TopologySelection,
   type UnitSystem
 } from '@openzcad/shared';
 import {
@@ -24,6 +25,7 @@ import {
 } from './model';
 import { affectedFeatureTargets } from './affectedFeatureTargets';
 import { earlierDatumPlanes } from './datumPlaneDisplay';
+import { faceSketchAttachment } from './faceSketchAttachment';
 
 export {
   datumPlaneDisplays,
@@ -451,4 +453,97 @@ export function requireResolvedDatums(
     );
     requireResolvedDatum(derived, id, datum?.name ?? 'A later plane');
   }
+}
+
+/**
+ * R01: the edit that re-attaches a datum whose source face no longer
+ * resolves to the face picked now: an offset plane's source, or the chosen
+ * face (`slot` 0 for A, 1 for B) of a midplane. Only that source changes:
+ * distance, mode, the other source and direction are kept. Throws, in words
+ * for the status bar, when the pick cannot carry a datum (not a planar face
+ * with a rebuildable identity).
+ */
+/**
+ * The face source a pick gives a datum, or a refusal in words for the status
+ * bar: the pick must be a planar face with a rebuildable identity.
+ */
+export function datumFaceSourceFromPick(
+  document: ProjectDocument,
+  datumName: string,
+  selection: TopologySelection
+): FacePlaneSource {
+  if (selection.kind !== 'face') {
+    throw new Error(`Click a planar face for "${datumName}".`);
+  }
+  const attachment = faceSketchAttachment({
+    bodyId: selection.bodyId,
+    pickedHash: selection.hash,
+    face: document.derived.bodyRepresentations[
+      selection.bodyId
+    ]?.topology?.faces.find((face) => face.hash === selection.hash)
+  });
+  if (!attachment.ok) throw new Error(attachment.reason);
+  const ref = attachment.planeRef;
+  if (ref.type !== 'face' || !ref.faceReference || !ref.sourceCentroid) {
+    throw new Error(
+      'This face has no identity a rebuild can find again, so a plane cannot follow it.'
+    );
+  }
+  return ref as FacePlaneSource;
+}
+
+export function datumFaceRepairEdit(
+  document: ProjectDocument,
+  featureId: FeatureId,
+  selection: TopologySelection,
+  slot: 0 | 1 = 0,
+  /**
+   * A midplane whose two faces were both lost: the face picked for the
+   * other slot, so one validated edit replaces both (either alone would
+   * still leave the datum unresolved and roll back).
+   */
+  otherSelection?: TopologySelection
+): {
+  command: AnyCommand;
+  label: string;
+  validateDerived(derived: ProjectDocument['derived']): void;
+} {
+  const feature = listFeaturesInOrder(document).find(
+    (candidate) => candidate.featureId === featureId
+  );
+  if (
+    feature?.data.featureKind !== 'datum-plane' ||
+    (feature.data.definition.kind === 'offset' &&
+      (slot !== 0 || otherSelection !== undefined))
+  ) {
+    throw new Error('Only a datum plane source can be re-picked here.');
+  }
+  const source = datumFaceSourceFromPick(document, feature.name, selection);
+  const other = otherSelection
+    ? datumFaceSourceFromPick(document, feature.name, otherSelection)
+    : undefined;
+  const label = `Re-pick face for ${feature.name}`;
+  const { definition } = feature.data;
+  const repaired: DatumPlaneDefinition =
+    definition.kind === 'offset'
+      ? { ...definition, source }
+      : {
+          ...definition,
+          sources:
+            slot === 0
+              ? [source, other ?? definition.sources[1]]
+              : [other ?? definition.sources[0], source]
+        };
+  return {
+    label,
+    command: commandFactories.updateFeature(
+      {
+        featureId,
+        data: { featureKind: 'datum-plane', definition: repaired }
+      },
+      label
+    ),
+    validateDerived: (derived) =>
+      requireResolvedDatums(document, derived, featureId, feature.name)
+  };
 }

@@ -28,7 +28,7 @@ fn supported_import(path: &Path) -> bool {
         .map(|extension| {
             matches!(
                 extension.to_ascii_lowercase().as_str(),
-                "step" | "stp" | "stl"
+                "step" | "stp" | "stl" | "dxf"
             )
         })
         .unwrap_or(false)
@@ -38,7 +38,7 @@ fn supported_import(path: &Path) -> bool {
 async fn open_cad_file() -> Result<Option<NativeCadFile>, String> {
     let handle = rfd::AsyncFileDialog::new()
         .set_title("Open CAD model")
-        .add_filter("CAD models", &["step", "stp", "stl"])
+        .add_filter("CAD models", &["step", "stp", "stl", "dxf"])
         .pick_file()
         .await;
     let Some(handle) = handle else {
@@ -46,7 +46,7 @@ async fn open_cad_file() -> Result<Option<NativeCadFile>, String> {
     };
     let path = handle.path();
     if !supported_import(path) {
-        return Err("Choose a STEP, STP, or STL file.".to_string());
+        return Err("Choose a STEP, STP, STL, or DXF file.".to_string());
     }
     let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
     if metadata.len() > MAX_NATIVE_FILE_BYTES {
@@ -295,6 +295,7 @@ mod tests {
         assert!(supported_import(Path::new("part.step")));
         assert!(supported_import(Path::new("part.STP")));
         assert!(supported_import(Path::new("part.stl")));
+        assert!(supported_import(Path::new("plate.DXF")));
         assert!(!supported_import(Path::new("part.obj")));
     }
 

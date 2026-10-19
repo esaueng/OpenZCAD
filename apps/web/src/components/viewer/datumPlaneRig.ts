@@ -5,9 +5,11 @@ import type { DatumFrame } from '@openzcad/shared';
 /**
  * Scene-side rig for committed R01 datum planes: one translucent quad and
  * border per plane, laid on the frame the exact build resolved. The quad is
- * presentation only — every consumer uses the infinite plane — so it is not
- * raycast, adds nothing to the model's bounds, and holds a steady size on
- * screen rather than claiming a world extent it does not have.
+ * presentation only — every consumer uses the infinite plane — so it adds
+ * nothing to the model's bounds and holds a steady size on screen rather
+ * than claiming a world extent it does not have. The fill is a pick target
+ * only through `targets()`, which the click path asks when nothing in the
+ * model is under the pointer; no other raycast walks this group.
  */
 
 export interface DatumPlaneRigInput {
@@ -24,6 +26,8 @@ export interface DatumPlaneRig {
    * would otherwise balloon near the camera or vanish far from it.
    */
   setScale(worldPerPixelAt: (point: THREE.Vector3) => number): void;
+  /** The fill quads, carrying `userData.datumFeatureId`, for a pick ray. */
+  targets(): THREE.Object3D[];
   dispose(): void;
 }
 
@@ -42,6 +46,7 @@ export function buildDatumPlaneRig(
   const borderGeometry = new THREE.EdgesGeometry(geometry);
   const disposables: { dispose(): void }[] = [geometry, borderGeometry];
   const scaled: THREE.Object3D[] = [];
+  const fills: THREE.Mesh[] = [];
   for (const plane of planes) {
     const { origin, u, v, normal } = plane.frame;
     const basis = new THREE.Matrix4().makeBasis(
@@ -68,11 +73,12 @@ export function buildDatumPlaneRig(
     const border = new THREE.LineSegments(borderGeometry, borderMaterial);
     fill.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_FILL;
     border.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_CURVE;
+    fills.push(fill);
+    // The border is never picked; the fill is, via targets() only.
+    border.raycast = () => undefined;
     for (const object of [fill, border]) {
       object.name = `datum-plane-${plane.featureId}`;
       object.userData.datumFeatureId = plane.featureId;
-      // Presentation only: never a pick target, never in the fit bounds.
-      object.raycast = () => undefined;
       object.quaternion.setFromRotationMatrix(basis);
       object.position.set(origin.x, origin.y, origin.z);
       group.add(object);
@@ -89,6 +95,9 @@ export function buildDatumPlaneRig(
         );
         object.scale.setScalar(size);
       }
+    },
+    targets() {
+      return fills;
     },
     dispose() {
       for (const item of disposables) item.dispose();

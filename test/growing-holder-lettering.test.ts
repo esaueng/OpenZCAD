@@ -30,6 +30,7 @@ import {
 import { letteredHolder } from './support/lettered-holder';
 import { preflightCadPatch } from '../apps/web/src/lib/aiPatchPreflight';
 import { growingHolderPreview } from '../apps/web/src/lib/growingHolderPreview';
+import { prepareParameterEditSession } from '../apps/web/src/lib/parameterVisualPreview';
 import { assistantSuggestions } from '../apps/web/src/lib/assistant/suggestions';
 
 function topologyWithoutArenaHandles(topology: BodyTopology | undefined) {
@@ -194,6 +195,14 @@ async function checkLetteredHolder(moved: boolean) {
     expect(textPreview.faceCount).toBe(0);
     expect(textPreview.bbox.min.x - first.bbox.min.x).toBeCloseTo(-8, 6);
     expect(textPreview.bbox.min.y - first.bbox.min.y).toBeCloseTo(7, 6);
+    const session = prepareParameterEditSession(candidate)!;
+    const instances = session.preview(grown)!;
+    expect(instances).toHaveLength(2);
+    const textInstance = instances.find((body) => body.bodyId === textId)!;
+    expect(textInstance.parts).toHaveLength(1);
+    expect(textInstance.parts[0]!.mesh).toBe(first.mesh);
+    expect(textInstance.parts[0]!.matrix[12]).toBeCloseTo(-8, 6);
+    expect(textInstance.parts[0]!.matrix[13]).toBeCloseTo(7, 6);
     const exact = await adapter.syncDocument(grown);
     expect(exact.warnings).toEqual([]);
     expect(exact.bodyRepresentations[textId]!.bbox).toEqual(textPreview.bbox);

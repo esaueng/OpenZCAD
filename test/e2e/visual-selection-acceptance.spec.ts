@@ -572,7 +572,15 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   await expect.poll(() => readBlend(canvas, 2), REPUBLISH).toBeNull();
 
   // 5. Dragging streams monotone diameter chips and exact preview topology.
-  expect(await probeFace(canvas, 'bore')).not.toBeNull();
+  bore = await probeFace(canvas, 'bore');
+  expect(bore).not.toBeNull();
+  await expect(canvas).toHaveAttribute(
+    'data-e2e-selected-face',
+    bore!.topologyId
+  );
+  // Selection resolves before the next frame publishes the rig's hit point.
+  // A previous selection can still have nonempty handle coordinates here.
+  await settleRender(canvas);
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
   await expect(chip).toHaveText('Ø 20 mm');
   const handle = await canvas.evaluate((element) => ({
