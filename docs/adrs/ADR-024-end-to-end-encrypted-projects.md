@@ -254,8 +254,13 @@ A rotation can therefore re-wrap the new account key to every unlock method
 without knowing any method's secret: a removal authorized with one passkey
 still refreshes the recovery key's and the other passkeys' wraps. Unlocking
 uses the method's secret to open its private half, then the account key.
-The identity key stays wrapped directly under the recovery key and passkeys;
-it does not rotate on device removal.
+The identity key is wrapped the same way, to the certified public key of each
+passkey and of the recovery key, and never to a device unlock key. It does not
+rotate on device removal. When it is replaced, the browser re-wraps the new
+identity key to every surviving method's certified public key, again without
+knowing their secrets. The exposed method is the exception: it is removed and
+re-enrolled with a fresh key pair. Each method's public key is re-certified in
+the first device-list entry the new identity signs.
 
 - **Approval from an unlocked device.** A short code computed from the new
   device's public key alone would be grindable: the server sees the real key
@@ -356,7 +361,16 @@ keys and a copy of the old wraps. Rotation protects what comes after.
 ### Version integrity
 
 Each version's header carries the hash of the previous version, and its author's
-certified device key signs it. Browsers remember the newest version they have seen of each project
+certified device key signs it. The signature covers the whole envelope, not
+the header alone. It is a signature over SHA-256 of the serialized header
+followed by every chunk's ciphertext and tag, hashed incrementally while the
+envelope streams. Every member holds the project key, so anyone can decrypt
+a version and re-encrypt altered content under the same key with a valid
+tag; with the key known, a second plaintext with a matching tag is easy to
+construct. Only the signature over the ciphertext proves which member wrote
+these exact bytes. The same rule covers share snapshots, measurements, view
+state and every other signed envelope. Content blobs are bound through the
+ciphertext hash their referencing envelope records. Browsers remember the newest version they have seen of each project
 and refuse any version offered as the current head whose chain does not
 contain it. Two kinds of read are kept apart:
 
@@ -783,9 +797,13 @@ encrypts under the project key is unchanged.
       revoked, in the newest device list of that user the browser has seen.
       Removing a device signs that revocation with the identity key, as
       before, besides removing its leaf.
-    - **The PSK is fresh enough.** Its epoch is later than that user's newest
-      device revocation, and later than the identity's most recent removal
-      from, or role change in, this group.
+    - **The PSK is fresh enough.** Its epoch is later than three cutoffs:
+      that user's newest device revocation; the identity's most recent removal
+      from, or role change in, this group; and the most recent Remove of a
+      leaf carrying this same credential, recorded by every member from the
+      group's own Commits. The last cutoff needs nothing from the device list.
+      A server that withholds a device-list revocation cannot stop it, because
+      every member processed the Remove itself.
     - **The PSK is recent.** Its epoch is within the members' retention
       window, which the application chooses (the spike used four epochs).
   - A removed device fails twice over. Its revocation is recorded, and the
