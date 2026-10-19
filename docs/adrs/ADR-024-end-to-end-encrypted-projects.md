@@ -458,7 +458,12 @@ comparison, which is safe only because of its commitment step.
   it. Editors' browsers republish snapshots only for links in the current
   head's active set, and never wrap a new snapshot key to a revoked share
   key. A server cannot add a link back, because it cannot write a signed
-  version. Revocation stops future snapshots only: anything a visitor already
+  version. Revocation stops future snapshots from every browser that has accepted the
+  revocation version. A server that keeps an editor on a branch from before the
+  revocation (the permanent-fork limit under
+  [Version integrity](#version-integrity)) can still collect snapshots that
+  editor publishes, until the editor sees the revocation. The project state
+  code is the manual check for that. Revocation never recalls what was already published: anything a visitor already
   downloaded, and the last snapshot published before the revocation, stays
   readable to anyone holding the link, even if the server keeps serving it.
   The server is still asked to delete it.
