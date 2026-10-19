@@ -57,6 +57,24 @@ describe('symmetric key wrapping', () => {
     );
   });
 
+  it('wraps under the parent key and context the call began with', async () => {
+    // AES-KW derives its KEK after an await: the caller's buffers and
+    // context may change by then.
+    const kek = new Uint8Array(PROJECT_KEY);
+    const context = { ...BLOB_CONTEXT };
+    const wrapping = wrapKey(kek, BLOB_KEY, context);
+    kek.fill(0);
+    Object.assign(context, { versionId: 'other' });
+    const wrapped = await wrapping;
+    expect(await unwrapKey(PROJECT_KEY, wrapped, BLOB_CONTEXT)).toEqual(
+      BLOB_KEY
+    );
+    const unwrapKek = new Uint8Array(PROJECT_KEY);
+    const unwrapping = unwrapKey(unwrapKek, wrapped, BLOB_CONTEXT);
+    unwrapKek.fill(0);
+    expect(await unwrapping).toEqual(BLOB_KEY);
+  });
+
   it('binds every context field and the purpose', async () => {
     const wrapped = await wrapKey(PROJECT_KEY, BLOB_KEY, BLOB_CONTEXT);
     const moved: WrapContext[] = [
@@ -432,13 +450,17 @@ describe('share snapshot keys', () => {
     // The caller's array changes mid-call: both wraps still carry the key
     // as it was when the call began.
     const callerCopy = new Uint8Array(versionKey);
+    const callerShareKey = new Uint8Array(shareKey);
+    const callerContext = { ...context };
     const wrapping = wrapShareSnapshotKey(
       projectKey,
-      shareKey,
+      callerShareKey,
       callerCopy,
-      context
+      callerContext
     );
     callerCopy.fill(0);
+    callerShareKey.fill(0);
+    callerContext.shareId = 'share-2';
     const wraps = await wrapping;
     expect(wraps.forMembers[0]).toBe(2);
     expect(wraps.forLinkVisitors[0]).toBe(2);

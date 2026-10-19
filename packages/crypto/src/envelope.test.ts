@@ -1014,6 +1014,30 @@ describe('content blobs', () => {
     expect(Object.isFrozen(parseEnvelope(envelope).header)).toBe(true);
   });
 
+  it('encrypts the plaintext as it was when the call began', async () => {
+    // Writer setup awaits key import: an edit to the caller's array by then
+    // must not change what is sealed under a header built from its length.
+    for (const compression of ['none', 'gzip'] as const) {
+      const original = patternBytes(CHUNK * 3 + 7, 3);
+      const edited = new Uint8Array(original);
+      const sealing = sealProject(edited, { compression });
+      edited.fill(0);
+      expect(
+        (await decryptProjectEnvelope(KEY, await sealing)).plaintext
+      ).toEqual(original);
+      const blobInput = new Uint8Array(original);
+      const encrypting = encryptContentBlob(
+        EnvelopeKey.generate(),
+        'export',
+        blobInput,
+        { compression, chunkSize: CHUNK }
+      );
+      blobInput.fill(0);
+      const { envelope, reference } = await encrypting;
+      expect(await decryptContentBlob(reference, envelope)).toEqual(original);
+    }
+  });
+
   it('decoded header hashes cannot be rewritten through the header', async () => {
     const envelope = await sealProject(text('x'));
     const header = parseEnvelope(envelope).header as ProjectEnvelopeHeader;

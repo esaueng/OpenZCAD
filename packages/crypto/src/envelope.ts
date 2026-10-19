@@ -8,6 +8,7 @@ import {
   fromBase64Url,
   isUint,
   label,
+  snapshotBytes,
   toBase64Url,
   toHex,
   type Bytes
@@ -422,12 +423,20 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
   /** Payload limit: the caller's until the header is authenticated. */
   private maxBytes: number;
 
+  private readonly key: Uint8Array;
+  private readonly expectedHash: Uint8Array | null;
+
   constructor(
-    private readonly key: Uint8Array,
+    key: Uint8Array,
     private readonly accept: (header: EnvelopeHeader) => void,
-    private readonly expectedHash: Uint8Array | null,
+    expectedHash: Uint8Array | null,
     options: ReadOptions = {}
   ) {
+    // Copies: both are read only after awaits, when the caller's arrays may
+    // have changed. (A non-array key is refused when the prefix arrives.)
+    this.key = key instanceof Uint8Array ? copyBytes(key) : key;
+    this.expectedHash =
+      expectedHash instanceof Uint8Array ? copyBytes(expectedHash) : null;
     this.hasher = expectedHash ? new CiphertextHasher() : null;
     checkCallerLimit(options.maxPlaintextBytes);
     this.callerLimit = options.maxPlaintextBytes;
@@ -791,6 +800,9 @@ function checkEncryptSize(
   kind: ProjectEnvelopeKind | ContentBlobKind,
   length: number
 ): void {
+  if (!Object.hasOwn(PLAINTEXT_CEILINGS, kind)) {
+    throw new E2eeError('invalid-argument', `Unknown envelope kind ${kind}`);
+  }
   if (length > PLAINTEXT_CEILINGS[kind]) {
     throw new E2eeError(
       'limit-exceeded',
@@ -870,11 +882,12 @@ export async function encryptProjectEnvelope(
 ): Promise<Bytes> {
   const header = normalizeProjectHeader(init, plaintext.byteLength);
   checkEncryptSize(header.kind, plaintext.byteLength);
+  // Encrypt a copy taken before the first await: an edit to the caller's
+  // array meanwhile would otherwise seal bytes the header does not describe.
+  const data = snapshotBytes(plaintext, 'Plaintext');
   const writer = await createWriter(key, header);
   const payload =
-    writer.header.compression === 'gzip'
-      ? await gzipBytes(plaintext)
-      : plaintext;
+    writer.header.compression === 'gzip' ? await gzipBytes(data) : data;
   return sealWhole(writer, payload);
 }
 
@@ -1006,16 +1019,20 @@ export async function encryptContentBlobWith(
   options: ContentBlobOptions,
   random: RandomSource
 ): Promise<{ envelope: Bytes; reference: ContentBlobReference }> {
+  // Size-check, then copy before the first await (see encryptProjectEnvelope).
+  if (!(plaintext instanceof Uint8Array)) {
+    throw new E2eeError('invalid-argument', 'Plaintext must be a Uint8Array');
+  }
+  checkEncryptSize(kind, plaintext.byteLength);
+  const data = copyBytes(plaintext);
   const writer = await createContentBlobWriterWith(
     key,
     kind,
-    { ...options, plaintextLength: plaintext.byteLength },
+    { ...options, plaintextLength: data.byteLength },
     random
   );
   const payload =
-    writer.header.compression === 'gzip'
-      ? await gzipBytes(plaintext)
-      : plaintext;
+    writer.header.compression === 'gzip' ? await gzipBytes(data) : data;
   const envelope = await sealWhole(writer, payload);
   return {
     envelope,
@@ -1064,10 +1081,12 @@ export function createContentBlobReader(
   options: ReadOptions = {}
 ): EnvelopeReader<ContentBlobHeader> {
   checkReference(reference);
+  // The header check runs after awaits: hold the fields as checked now.
+  const checked = { ...reference };
   return new EnvelopeReader<ContentBlobHeader>(
-    reference.key,
-    acceptContent(reference),
-    reference.ciphertextHash,
+    checked.key,
+    acceptContent(checked),
+    checked.ciphertextHash,
     options
   );
 }

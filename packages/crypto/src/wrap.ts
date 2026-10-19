@@ -330,6 +330,21 @@ async function kwKek(
   );
 }
 
+/**
+ * Copies of a parent key and a context, taken before the first await: a
+ * caller that clears its key buffer or edits the context while a call is
+ * pending must not get a wrap made from something else.
+ */
+function snapshotKek(kek: KeyMaterial): KeyMaterial {
+  return kek instanceof Uint8Array ? snapshotBytes(kek, 'Parent key') : kek;
+}
+
+function snapshotContext<C extends WrapContext>(context: C): C {
+  return context !== null && typeof context === 'object'
+    ? { ...context }
+    : context;
+}
+
 /** @internal Tests inject the IV source; production uses `wrapKey`. */
 export async function wrapKeyWith(
   kek: KeyMaterial,
@@ -337,6 +352,8 @@ export async function wrapKeyWith(
   context: WrapContext,
   random: RandomSource
 ): Promise<Bytes> {
+  kek = snapshotKek(kek);
+  context = snapshotContext(context);
   const encodedContext = encodeWrapContext(context);
   secret = snapshotBytes(secret, 'Secret');
   checkSecretLength(secret, context);
@@ -419,6 +436,8 @@ export async function unwrapKey(
   wrapped: Uint8Array,
   context: WrapContext
 ): Promise<Bytes> {
+  kek = snapshotKek(kek);
+  context = snapshotContext(context);
   const encodedContext = encodeWrapContext(context);
   wrapped = snapshotBytes(wrapped, 'Wrapped key');
   if (!isPrivateKeyPurpose(context.purpose)) {
@@ -488,8 +507,12 @@ export async function wrapShareSnapshotKey(
   versionKey: Uint8Array,
   context: ShareSnapshotKeyContext
 ): Promise<ShareSnapshotKeyWraps> {
-  // One copy for both wraps, so members and link visitors open the same key.
+  // One copy of every input for both wraps, so members and link visitors
+  // open the same key under the context the call began with.
   versionKey = snapshotBytes(versionKey, 'Version key');
+  projectKey = snapshotKek(projectKey);
+  shareKey = snapshotKek(shareKey);
+  context = { ...context };
   const forMembers = await wrapKey(projectKey, versionKey, {
     purpose: 'version-key',
     projectId: context.projectId,
@@ -533,6 +556,7 @@ export async function sealKeyWith(
   ephemeral: CryptoKeyPair,
   random: RandomSource
 ): Promise<Bytes> {
+  context = snapshotContext(context);
   const aadContext = encodeWrapContext(context);
   checkSealContext(context);
   secret = snapshotBytes(secret, 'Secret');
@@ -566,6 +590,7 @@ export async function sealKey(
   secret: Uint8Array,
   context: SealContext
 ): Promise<Bytes> {
+  context = snapshotContext(context);
   checkSealContext(context);
   // Copy caller bytes before the first await (see `snapshotBytes`).
   const recipient =
@@ -592,6 +617,7 @@ export async function openSealedKey(
   sealed: Uint8Array,
   context: SealContext
 ): Promise<Bytes> {
+  context = snapshotContext(context);
   const aadContext = encodeWrapContext(context);
   checkSealContext(context);
   sealed = snapshotBytes(sealed, 'Sealed key');
