@@ -151,6 +151,10 @@ export async function verifyProjectEnvelopeSignature(
   reader.u8();
   const signedAt = reader.u64();
   const rs = reader.bytes(64);
+  // Build the statement before anything is awaited: parsing and the digest
+  // call both read the envelope now, so what is verified is what was passed.
+  const statement = versionStatement(envelope, signedAt);
+  statement.catch(() => undefined);
   const key =
     publicKey instanceof Uint8Array
       ? await importSigningPublicKey(publicKey)
@@ -163,7 +167,7 @@ export async function verifyProjectEnvelopeSignature(
       'Expected a P-256 ECDSA public key with the verify usage'
     );
   }
-  const message = await versionStatement(envelope, signedAt);
+  const message = await statement;
   let valid: boolean;
   try {
     valid = await subtle().verify(ECDSA_SHA256, key, asBytes(rs), message);
@@ -190,18 +194,19 @@ export async function verifyVersionChain(
   if (envelopes.length === 0) {
     throw new E2eeError('chain-broken', 'Version history is empty');
   }
-  // The loop awaits; a caller editing the list or the pin meanwhile must
-  // not change what is checked.
-  envelopes = [...envelopes];
   const pinned =
     options.pinnedVersionHash === undefined
       ? undefined
       : snapshotBytes(options.pinnedVersionHash, 'pinnedVersionHash');
-  const hashes: Bytes[] = [];
+  // Read every envelope before the first await: headers are decoded into
+  // copies and each digest call copies its input, so a caller replacing an
+  // element or editing a buffer meanwhile cannot change the chain checked.
+  const headers = envelopes.map((envelope) => projectHeaderOf(envelope).header);
+  const digests = envelopes.map((envelope) => versionHash(envelope));
+  const hashes = await Promise.all(digests);
   let previous: ProjectEnvelopeHeader | null = null;
-  for (const envelope of envelopes) {
-    const { header } = projectHeaderOf(envelope);
-    const before = hashes.at(-1);
+  for (const [index, header] of headers.entries()) {
+    const before = index > 0 ? hashes[index - 1] : undefined;
     if (
       previous &&
       before &&
@@ -216,7 +221,6 @@ export async function verifyVersionChain(
       );
     }
     previous = header;
-    hashes.push(await versionHash(envelope));
   }
   if (pinned && !hashes.some((hash) => equalBytes(hash, pinned))) {
     throw new E2eeError(

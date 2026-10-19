@@ -199,6 +199,22 @@ describe('version signatures', () => {
     ).not.toBeNull();
   });
 
+  it('verify the envelope as passed, even if its buffer changes mid-call', async () => {
+    const author = await generateSigningKeyPair();
+    const raw = await exportPublicKey(author.publicKey);
+    const envelope = await version(1, null);
+    const signature = await signProjectEnvelope(
+      author.privateKey,
+      envelope,
+      1_700_000_000_000
+    );
+    const buffer = new Uint8Array(envelope);
+    // The raw key form awaits an import before the statement was built.
+    const verifying = verifyProjectEnvelopeSignature(raw, buffer, signature);
+    buffer.fill(0);
+    expect(await verifying).toEqual({ signedAt: 1_700_000_000_000 });
+  });
+
   it('refuse keys on other curves with typed errors', async () => {
     const p384 = await crypto.subtle.generateKey(
       { name: 'ECDSA', namedCurve: 'P-384' },
@@ -308,6 +324,16 @@ describe('version chains', () => {
       await verifyVersionChain(chain, { pinnedVersionHash: hashes[2]! })
     ).toEqual(hashes);
     await verifyVersionChain(chain.slice(1), { pinnedVersionHash: hashes[1]! });
+  });
+
+  it('checks the chain as passed, even if a later buffer changes mid-call', async () => {
+    const chain = await chainOf(3);
+    const expected = await verifyVersionChain(chain);
+    const buffers = chain.map((envelope) => new Uint8Array(envelope));
+    const checking = verifyVersionChain(buffers);
+    buffers[2]!.fill(0);
+    buffers[1]!.fill(0);
+    expect(await checking).toEqual(expected);
   });
 
   it('refuses rollback, forks and broken links', async () => {
@@ -421,6 +447,15 @@ describe('codes people compare', () => {
     const hashing = publicKeyHash([edited, sig]);
     edited.fill(0);
     expect(await hashing).toEqual(identity);
+    // A later key swapped for another valid point while the first is still
+    // being checked must not change the hash either.
+    const other = await exportPublicKey(
+      (await generateSigningKeyPair()).publicKey
+    );
+    const later = new Uint8Array(sig);
+    const swapping = publicKeyHash([enc, later]);
+    later.set(other);
+    expect(await swapping).toEqual(identity);
     const approval = {
       newDevicePublicKey: new Uint8Array(enc),
       approverPublicKey: new Uint8Array(sig),

@@ -144,7 +144,11 @@ export async function publicKeyHash(
   const writer = new ByteWriter()
     .bytes(label('v1 public key hash'))
     .u8(keys.length);
-  for (const key of keys) writer.bytes(await validPublicKey(key));
+  // Start every validation now: each copies its key before its first
+  // await, so no key can be swapped while an earlier one is checked.
+  for (const key of await Promise.all(keys.map((key) => validPublicKey(key)))) {
+    writer.bytes(key);
+  }
   return sha256(writer.finish());
 }
 
