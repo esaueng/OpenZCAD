@@ -134,6 +134,11 @@ settles: it resolves when the envelope finishes, and it rejects with
   The signature is `u8 version = 1 | u64 signedAt (Unix ms) | r ‖ s`, and
   verification returns the signed timestamp. Which keys may sign is up to the
   caller.
+  The version hash is SHA-256 over the serialized prefix followed by every
+  chunk's ciphertext and tag. A signature over the header alone would not
+  be enough: any member holding the symmetric key can re-encrypt altered
+  content under the same header with valid tags, and a test shows such a
+  forgery fails verification.
 
 Key management is not in this package: device lists, the signed roster and
 its entry types, contacts lists, revocation cutoffs and read modes. That code

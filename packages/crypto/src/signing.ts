@@ -48,8 +48,14 @@ function projectHeaderOf(envelope: Uint8Array): {
 
 /**
  * What an author signs: a label, the envelope prefix (so the plaintext
- * header is signed as such), the version hash (so is everything else) and
- * the author's timestamp.
+ * header is signed as such), the version hash and the author's timestamp.
+ * The version hash is SHA-256 over the serialized prefix followed by every
+ * chunk's ciphertext and tag, i.e. the whole envelope. Signing the header
+ * alone would not do: any member holding the symmetric key can re-encrypt
+ * altered content under the same header with valid tags. Project envelopes
+ * are bounded (24 MiB) and complete in memory when signed, so WebCrypto's
+ * one-shot SHA-256 computes this hash; content blobs are not signed but
+ * committed to by their reference's ciphertext hash.
  */
 async function versionStatement(
   envelope: Uint8Array,

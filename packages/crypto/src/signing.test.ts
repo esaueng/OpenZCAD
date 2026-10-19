@@ -18,8 +18,11 @@ import {
 } from './codes';
 import {
   EnvelopeKey,
+  decryptProjectEnvelope,
   encryptContentBlob,
-  encryptProjectEnvelope
+  encryptProjectEnvelope,
+  envelopeKeyFromBytes,
+  parseEnvelope
 } from './envelope';
 import { E2eeError, type E2eeErrorCode } from './errors';
 import type { ProjectEnvelopeHeaderInit } from './header';
@@ -156,6 +159,44 @@ describe('version signatures', () => {
         )
       ).toBeNull();
     }
+  });
+
+  it('do not survive content re-encrypted under the same key and header', async () => {
+    // A member holding the version key re-encrypts altered content with the
+    // original header (same nonces, valid tags) and reuses the signature.
+    const author = await generateSigningKeyPair();
+    const keyBytes = patternBytes(32, 0x42);
+    const init = header(4, null, { compression: 'none' });
+    const original = await encryptProjectEnvelope(
+      envelopeKeyFromBytes(keyBytes),
+      init,
+      patternBytes(300, 1)
+    );
+    const signature = await signProjectEnvelope(author.privateKey, original);
+    const forged = await encryptProjectEnvelope(
+      envelopeKeyFromBytes(keyBytes),
+      init,
+      patternBytes(300, 2)
+    );
+    // Same header bytes, same nonces, and it decrypts: only the content differs.
+    const prefixLength = parseEnvelope(original).prefix.byteLength;
+    expect(forged.subarray(0, prefixLength)).toEqual(
+      original.subarray(0, prefixLength)
+    );
+    expect((await decryptProjectEnvelope(keyBytes, forged)).plaintext).toEqual(
+      patternBytes(300, 2)
+    );
+    // The signature covers every chunk's ciphertext and tag, so it fails.
+    expect(
+      await verifyProjectEnvelopeSignature(author.publicKey, forged, signature)
+    ).toBeNull();
+    expect(
+      await verifyProjectEnvelopeSignature(
+        author.publicKey,
+        original,
+        signature
+      )
+    ).not.toBeNull();
   });
 
   it('refuse keys on other curves with typed errors', async () => {
