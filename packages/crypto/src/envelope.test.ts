@@ -35,6 +35,7 @@ import {
   COMPRESSIONS,
   CONTENT_BLOB_KINDS,
   ENVELOPE_MAGIC,
+  MAX_ENVELOPE_CHUNKS,
   PLAINTEXT_CEILINGS,
   PROJECT_ENVELOPE_KINDS,
   encodeEnvelopePrefix,
@@ -1024,6 +1025,54 @@ describe('content blobs', () => {
     expectation.projectId = 'project-b';
     roster.fill(0);
     expect((await decrypting).plaintext).toEqual(text('x'));
+  });
+
+  it('one-shot decrypts read the envelope as passed', async () => {
+    const plaintext = patternBytes(CHUNK * 4 + 1, 7);
+    const sealed = await sealProject(plaintext);
+    const projectBuffer = new Uint8Array(sealed);
+    const opening = decryptProjectEnvelope(KEY, projectBuffer);
+    projectBuffer.fill(0);
+    expect((await opening).plaintext).toEqual(plaintext);
+    const { envelope, reference } = await encryptContentBlob(
+      EnvelopeKey.generate(),
+      'export',
+      plaintext,
+      { compression: 'none', chunkSize: CHUNK }
+    );
+    const blobBuffer = new Uint8Array(envelope);
+    const reading = decryptContentBlob(reference, blobBuffer);
+    // Transferring the buffer away detaches it here.
+    structuredClone(blobBuffer.buffer, { transfer: [blobBuffer.buffer] });
+    expect(await reading).toEqual(plaintext);
+  });
+
+  it(`refuses more than ${MAX_ENVELOPE_CHUNKS} chunks of plaintext`, async () => {
+    // Each chunk is sequential WebCrypto work: 128 MiB in 64-byte chunks
+    // would be millions of calls, so small chunks need small payloads.
+    await rejectsWith(
+      createContentBlobWriter(EnvelopeKey.generate(), 'export', {
+        compression: 'none',
+        chunkSize: 64,
+        plaintextLength: 64 * MAX_ENVELOPE_CHUNKS + 1
+      }),
+      'limit-exceeded'
+    );
+    const writer = await createContentBlobWriter(
+      EnvelopeKey.generate(),
+      'export',
+      {
+        compression: 'none',
+        chunkSize: 4096,
+        plaintextLength: 64 * MAX_ENVELOPE_CHUNKS + 1
+      }
+    );
+    // The same declaration read back with 64-byte chunks is refused too.
+    const forged = writer.prefix;
+    new DataView(forged.buffer).setUint32(11, 64);
+    expect(() => parseEnvelope(forged)).toThrow(
+      expect.objectContaining({ code: 'limit-exceeded' })
+    );
   });
 
   it('encrypts the plaintext as it was when the call began', async () => {

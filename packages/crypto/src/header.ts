@@ -24,6 +24,13 @@ export const MAX_HEADER_BYTES = 1024 * 1024;
  * as large as itself, which keeps AAD work within 16× the payload.
  */
 export const MAX_PREFIX_BYTES_ANY_CHUNK = 1024;
+/**
+ * Most chunks one envelope's declared plaintext may span. Each chunk costs
+ * an AES-GCM call and, for a content blob, two hash steps, all sequential:
+ * 128 MiB in 64-byte chunks would be millions of WebCrypto calls. At this
+ * bound a 128 MiB blob needs chunks of at least 2 KiB.
+ */
+export const MAX_ENVELOPE_CHUNKS = 65_536;
 const MAX_U32 = 0xffffffff;
 
 // The kind and compression tables give each name its wire code by
@@ -164,6 +171,14 @@ export function checkHeader(header: EnvelopeHeader, code: E2eeErrorCode): void {
   }
   if (!isUint(header.plaintextLength, Number.MAX_SAFE_INTEGER)) {
     fail(code, 'plaintextLength must be a non-negative safe integer');
+  }
+  // A gzip payload may run slightly past the plaintext; the payload bound
+  // (plaintext plus deflate overhead) keeps that within a few chunks.
+  if (header.plaintextLength > MAX_ENVELOPE_CHUNKS * header.chunkSize) {
+    fail(
+      'limit-exceeded',
+      `${header.plaintextLength} bytes in ${header.chunkSize}-byte chunks exceeds ${MAX_ENVELOPE_CHUNKS} chunks; use larger chunks`
+    );
   }
   if (header.class === 'content') {
     if (!CONTENT_BLOB_KINDS.includes(header.kind)) {

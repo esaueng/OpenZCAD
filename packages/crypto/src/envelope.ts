@@ -30,6 +30,7 @@ import {
   DEFAULT_CHUNK_SIZE,
   HASH_BYTES,
   MAX_CHUNK_SIZE,
+  MAX_HEADER_BYTES,
   checkHeader,
   decodeEnvelopePrefix,
   encodeEnvelopePrefix,
@@ -750,6 +751,44 @@ async function sealWhole(
 }
 
 /**
+ * A copy of a one-shot envelope, taken before the first await so the bytes
+ * read are the bytes passed. It never copies more than the header can
+ * legitimately use plus one record, so an oversized body costs no more
+ * than a valid one; the reader still meets the excess and fails exactly as
+ * it would on the original. A prefix that does not decode is copied only
+ * as far as the reader will look before refusing it.
+ */
+function boundedSnapshot(
+  envelope: Uint8Array,
+  maxPlaintextBytes: number | undefined
+): Bytes {
+  if (!(envelope instanceof Uint8Array)) {
+    throw new E2eeError('invalid-argument', 'Envelope must be a Uint8Array');
+  }
+  let header: EnvelopeHeader | null = null;
+  let prefixLength = 0;
+  try {
+    const length = envelopePrefixLength(envelope);
+    if (length !== null && envelope.byteLength >= length) {
+      header = decodeEnvelopePrefix(envelope.subarray(0, length)).header;
+      prefixLength = length;
+    }
+  } catch {
+    header = null; // The reader reports it from the copy.
+  }
+  const limit = header
+    ? prefixLength +
+      envelopeBodyLength(
+        payloadBound(header, maxPlaintextBytes),
+        header.chunkSize
+      ) +
+      header.chunkSize +
+      GCM_TAG_BYTES
+    : ENVELOPE_FIXED_PREFIX_BYTES + MAX_HEADER_BYTES;
+  return copyBytes(envelope.subarray(0, Math.min(envelope.byteLength, limit)));
+}
+
+/**
  * Decrypts a whole envelope into one buffer, a record at a time, without
  * keeping per-chunk arrays. The buffer is sized once the first chunk has
  * authenticated the header, to the payload that header can legitimately
@@ -761,6 +800,8 @@ async function readWhole<H extends EnvelopeHeader>(
   declaredLength: (header: H) => number,
   maxPlaintextBytes: number | undefined
 ): Promise<{ header: H; plaintext: Bytes }> {
+  // Decryption awaits between records, so read a copy taken now.
+  envelope = boundedSnapshot(envelope, maxPlaintextBytes);
   let payloadBuffer: Bytes | null = null;
   let at = 0;
   const take = (parts: readonly Bytes[]) => {
