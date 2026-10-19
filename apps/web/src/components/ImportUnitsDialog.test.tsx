@@ -44,6 +44,21 @@ describe('ImportUnitsDialog', () => {
     expect(onChoose).toHaveBeenCalledWith({ units: 'inch', remember: true });
   });
 
+  it('offers the units without sizes when the file could not be measured', () => {
+    render(
+      <ImportUnitsDialog
+        fileName="tiny.dxf"
+        extent={null}
+        documentUnits="mm"
+        initialUnit="mm"
+        onChoose={vi.fn()}
+      />
+    );
+    const inches = screen.getByRole('radio', { name: 'Inches' });
+    expect(inches).not.toHaveAttribute('aria-describedby');
+    expect(screen.queryByText(/ mm$/)).toBeNull();
+  });
+
   it('cancels the import on Cancel or Escape', async () => {
     const user = userEvent.setup();
     const onChoose = renderDialog();

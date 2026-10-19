@@ -10,8 +10,11 @@ import { useModalFocus } from '../lib/useModalFocus';
 
 export interface ImportUnitsDialogProps {
   fileName: string;
-  /** The file's own numbers: width, depth (and height for a mesh). */
-  extent: readonly number[];
+  /**
+   * The file's own numbers: width, depth (and height for a mesh); null when
+   * they could not be measured, and the choices show no sizes.
+   */
+  extent: readonly number[] | null;
   documentUnits: UnitSystem;
   /** Preselected: what the import assumed before it asked. */
   initialUnit: UnitSystem;
@@ -73,14 +76,18 @@ export function ImportUnitsDialog({
                 name="import-units"
                 value={choice}
                 aria-label={IMPORT_UNIT_LABELS[choice]}
-                aria-describedby={`import-units-size-${choice}`}
+                aria-describedby={
+                  extent ? `import-units-size-${choice}` : undefined
+                }
                 checked={units === choice}
                 onChange={() => setUnits(choice)}
               />
               <span aria-hidden="true">{IMPORT_UNIT_LABELS[choice]}</span>
-              <small id={`import-units-size-${choice}`}>
-                {describeReadingSize(extent, choice, documentUnits)}
-              </small>
+              {extent ? (
+                <small id={`import-units-size-${choice}`}>
+                  {describeReadingSize(extent, choice, documentUnits)}
+                </small>
+              ) : null}
             </label>
           ))}
         </fieldset>

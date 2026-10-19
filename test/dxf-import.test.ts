@@ -8,6 +8,7 @@ import {
   MAX_DXF_PAIRS,
   describeDxfCounts,
   dxfSketchImportPlan,
+  inspectDxfUnits,
   importDxfSketch,
   MAX_DXF_IMPORT_BYTES,
   refuseOversizedDxf
@@ -2349,13 +2350,11 @@ describe('DXF sketch import plan', () => {
 
   it('reads a unitless file in the unit the user chose, and says so', () => {
     const text = dxf(['0', 'CIRCLE', '10', '1', '20', '0', '40', '1']);
-    const asDocument = dxfSketchImportPlan(doc(), 'disc.dxf', text, (n) => n);
-    expect(asDocument.declaresUnits).toBe(false);
-    // Read in the project's units the curves are the file's own numbers,
-    // which is what sizes the unit prompt.
-    expect(asDocument.objects).toEqual([
-      expect.objectContaining({ objectKind: 'circle', centerX: 1, radius: 1 })
-    ]);
+    // The prompt is sized by the file's own numbers: a 2 × 2 disc.
+    expect(inspectDxfUnits(text)).toEqual({
+      declaresUnits: false,
+      extent: [2, 2]
+    });
     const asInches = dxfSketchImportPlan(
       doc(),
       'disc.dxf',
@@ -2377,11 +2376,43 @@ describe('DXF sketch import plan', () => {
 
   it('ignores the unitless choice for a file that states its units', () => {
     const text = dxf(['0', 'CIRCLE', '10', '0', '20', '0', '40', '1'], 1);
+    expect(inspectDxfUnits(text)).toEqual({
+      declaresUnits: true,
+      extent: null
+    });
     const plan = dxfSketchImportPlan(doc(), 'inch.dxf', text, (n) => n, 'cm');
-    expect(plan.declaresUnits).toBe(true);
     expect(plan.objects).toEqual([
       expect.objectContaining({ objectKind: 'circle', radius: 25.4 })
     ]);
+  });
+
+  it('validates a unitless file only at the reading the user chose', () => {
+    // 1e-7 drawing units: too short to keep as millimetres, a usable
+    // 0.0001 mm line as metres. Asking which must not refuse it first.
+    const text = dxf([
+      '0',
+      'LINE',
+      '10',
+      '0',
+      '20',
+      '0',
+      '11',
+      '0.0000001',
+      '21',
+      '0'
+    ]);
+    expect(() =>
+      dxfSketchImportPlan(doc(), 'tiny.dxf', text, (n) => n, 'mm')
+    ).toThrow(DxfImportError);
+    const inspection = inspectDxfUnits(text);
+    expect(inspection.declaresUnits).toBe(false);
+    // Too small to measure at its own numbers: the prompt shows no sizes.
+    expect(inspection.extent).toBeNull();
+    const plan = dxfSketchImportPlan(doc(), 'tiny.dxf', text, (n) => n, 'm');
+    expect(plan.objects).toHaveLength(1);
+    expect(
+      Number(plan.objects[0]!.objectKind === 'line' && plan.objects[0]!.x2)
+    ).toBeCloseTo(0.0001, 15);
   });
 
   it('refuses a file with nothing to sketch, saying what it had instead', () => {

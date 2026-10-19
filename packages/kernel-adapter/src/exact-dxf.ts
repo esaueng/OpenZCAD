@@ -78,7 +78,23 @@ export interface DxfPlaneFrame {
   readonly origin: Vec3;
   readonly u: Vec3;
   readonly v: Vec3;
+  /** Output units per model unit. */
   readonly scale: number;
+  /**
+   * Chord deviation for spline/ellipse polylines, in model units: always
+   * {@link POLYLINE_DEFLECTION_MM} of physical length, whatever unit the file
+   * is written in. Deriving it from `scale` would let a metre export sample a
+   * millimetre model 1000 times coarser.
+   */
+  readonly sampleDeflection: number;
+}
+
+/** The polyline chord deviation, in model units of `modelUnitMm` mm each. */
+export function dxfSampleDeflection(modelUnitMm: number): number {
+  if (!(modelUnitMm > 0) || !Number.isFinite(modelUnitMm)) {
+    throw new Error(`DXF export: invalid model unit ${modelUnitMm} mm.`);
+  }
+  return POLYLINE_DEFLECTION_MM / modelUnitMm;
 }
 
 /**
@@ -89,12 +105,19 @@ export interface DxfPlaneFrame {
 export function dxfPlaneFrame(
   normal: Vec3,
   origin: Vec3,
-  scale: number
+  scale: number,
+  modelUnitMm: number = scale
 ): DxfPlaneFrame {
   const n = unit(normal, 'plane normal');
   const pick: Vec3 = Math.abs(n[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
   const u = unit(cross(pick, n), 'plane axis');
-  return { origin, u, v: cross(n, u), scale };
+  return {
+    origin,
+    u,
+    v: cross(n, u),
+    scale,
+    sampleDeflection: dxfSampleDeflection(modelUnitMm)
+  };
 }
 
 function project(frame: DxfPlaneFrame, p: Vec3): readonly [number, number] {
@@ -113,7 +136,9 @@ function project(frame: DxfPlaneFrame, p: Vec3): readonly [number, number] {
 export function faceDxfEntities(
   kernel: DxfFaceKernel,
   face: number,
-  millimeterScale: number
+  millimeterScale: number,
+  /** Millimetres per model unit; differs from the scale for a non-mm export. */
+  modelUnitMm: number = millimeterScale
 ): DxfEntity[] {
   const surfaceType = kernel.getSurfaceType(face);
   if (surfaceType !== 'plane') {
@@ -139,7 +164,8 @@ export function faceDxfEntities(
   const frame = dxfPlaneFrame(
     [normalRaw[0]!, normalRaw[1]!, normalRaw[2]!],
     vec3At(originFlat, 0),
-    millimeterScale
+    millimeterScale,
+    modelUnitMm
   );
 
   const entities: DxfEntity[] = [];
@@ -178,8 +204,8 @@ export function edgeDxfEntities(
 
   // Ellipses, free-form splines, and open conics: span-true polyline. The
   // deflection is requested in model units so the written file's deviation
-  // is POLYLINE_DEFLECTION_MM after scaling.
-  const flat = kernel.sampleEdge(edge, POLYLINE_DEFLECTION_MM / frame.scale);
+  // is POLYLINE_DEFLECTION_MM of physical length, in any export unit.
+  const flat = kernel.sampleEdge(edge, frame.sampleDeflection);
   const points: Array<readonly [number, number]> = [];
   for (let i = 0; i * 3 < flat.length; i += 1) {
     points.push(project(frame, vec3At(flat, i)));

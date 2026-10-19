@@ -3195,7 +3195,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const entities = faceDxfEntities(
         kernel,
         faceHandle,
-        exportLengthScale(document.units, units)
+        exportLengthScale(document.units, units),
+        UNIT_TO_MM[document.units]
       );
       return writeDxf(entities, { units });
     });
@@ -3346,7 +3347,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           kernel,
           faces,
           plane,
-          exportLengthScale(document.units, units)
+          exportLengthScale(document.units, units),
+          UNIT_TO_MM[document.units]
         ),
         { units }
       );

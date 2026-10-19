@@ -11085,7 +11085,7 @@ export function App() {
   async function readUnitlessImportAs(input: {
     fileName: string;
     kind: 'mesh' | 'dxf';
-    extent: number[];
+    extent: number[] | null;
     documentUnits: UnitSystem;
   }): Promise<UnitSystem | null> {
     const units = await import('./lib/importUnits');
@@ -11206,44 +11206,37 @@ export function App() {
     }
     if (lowerName.endsWith('.dxf')) {
       try {
-        const { dxfSketchImportPlan, refuseOversizedDxf } = await import(
-          './lib/dxfImport'
-        );
+        const { dxfSketchImportPlan, inspectDxfUnits, refuseOversizedDxf } =
+          await import('./lib/dxfImport');
         // By bytes, before the file is read into memory at all.
         refuseOversizedDxf(file.size);
         const text = await file.text();
         if (managerRef.current !== importManager) return;
-        let plan = dxfSketchImportPlan(
-          importManager.document,
-          file.name,
-          text,
-          newFeatureName
-        );
-        if (!plan.declaresUnits) {
-          const { sketchObjectsExtent } = await import('./lib/importUnits');
-          const documentUnits = importManager.document.units;
-          const reading = await readUnitlessImportAs({
+        // The unit first, from the header alone; the geometry is then built
+        // and checked once, at the reading that will actually be stored.
+        const inspection = inspectDxfUnits(text);
+        let reading: UnitSystem = importManager.document.units;
+        if (!inspection.declaresUnits) {
+          const chosen = await readUnitlessImportAs({
             fileName: file.name,
             kind: 'dxf',
-            // Read in the project's units, the curves are the file's numbers.
-            extent: sketchObjectsExtent(plan.objects),
-            documentUnits
+            extent: inspection.extent,
+            documentUnits: importManager.document.units
           });
-          if (!reading) {
+          if (!chosen) {
             setStatus(`${file.name} was not imported: you cancelled it.`);
             return;
           }
           if (managerRef.current !== importManager) return;
-          if (reading !== documentUnits) {
-            plan = dxfSketchImportPlan(
-              importManager.document,
-              file.name,
-              text,
-              newFeatureName,
-              reading
-            );
-          }
+          reading = chosen;
         }
+        const plan = dxfSketchImportPlan(
+          importManager.document,
+          file.name,
+          text,
+          newFeatureName,
+          reading
+        );
         if (executeCommand(plan.command)) setStatus(plan.status);
       } catch (error) {
         setStatus(errorMessage(error, `Could not import ${file.name}.`));
