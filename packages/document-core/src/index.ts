@@ -60,6 +60,7 @@ import {
   type DatumPlaneDefinition,
   type DatumPlaneSource,
   type AxisId,
+  type BooleanKeepOriginals,
   type BooleanOperation,
   type DocumentNode,
   type DirectEditOperation,
@@ -409,6 +410,8 @@ export interface BooleanInput {
   bodyName?: string;
   operation: BooleanOperation;
   targetBodyIds: BodyId[];
+  /** M11: inputs left live beside the result; absent consumes them all. */
+  keepOriginals?: BooleanKeepOriginals;
   ids?: BodyFeatureIds;
 }
 
@@ -457,9 +460,11 @@ export interface HoleInput {
 
 export interface SplitInput {
   name: string;
-  /** Consumed: the two halves replace it. */
+  /** Consumed, unless `keepOriginal`: the two halves replace it. */
   targetBodyId: BodyId;
   plane: ModelingPlaneReference;
+  /** M11: leave the input body live beside the two halves. */
+  keepOriginal?: true;
   ids?: SplitFeatureIds;
 }
 
@@ -1896,6 +1901,70 @@ export function setSketchDimensionLabelPosition(
   return next;
 }
 
+const EXTRUDE_OPERATIONS: readonly ExtrudeOperation[] = [
+  'new-body',
+  'add',
+  'cut',
+  'intersect'
+];
+
+const BOOLEAN_KEEP_ORIGINALS: readonly BooleanKeepOriginals[] = [
+  'all',
+  'target',
+  'tools'
+];
+
+/**
+ * M11: a Boolean's `keepOriginals` is absent or one of all/target/tools, and
+ * a Split's `keepOriginal` is absent or `true`. Only an absent field is the
+ * legacy consume-everything feature: a stored `false` or `null` is malformed.
+ */
+export function validateKeepOriginals(
+  data:
+    | { featureKind: 'boolean'; keepOriginals?: unknown }
+    | { featureKind: 'split'; keepOriginal?: unknown }
+): void {
+  if (data.featureKind === 'boolean') {
+    if (
+      data.keepOriginals !== undefined &&
+      !BOOLEAN_KEEP_ORIGINALS.includes(
+        data.keepOriginals as BooleanKeepOriginals
+      )
+    ) {
+      throw new Error(
+        `Unknown Boolean keep-originals choice ${JSON.stringify(data.keepOriginals)}.`
+      );
+    }
+    return;
+  }
+  if (data.keepOriginal !== undefined && data.keepOriginal !== true) {
+    throw new Error(
+      'A split keeps its original only as `keepOriginal: true`; clear the field to consume it.'
+    );
+  }
+}
+
+/**
+ * M11: the inputs a Boolean consumes, in operand order. The target is the
+ * first body and the tools the rest; whatever is kept stays live beside the
+ * result. Absent `keepOriginals` consumes every input, as before v22.
+ */
+export function booleanConsumedBodyIds(data: {
+  targetBodyIds: readonly BodyId[];
+  keepOriginals?: BooleanKeepOriginals;
+}): BodyId[] {
+  switch (data.keepOriginals) {
+    case 'all':
+      return [];
+    case 'target':
+      return data.targetBodyIds.slice(1);
+    case 'tools':
+      return data.targetBodyIds.slice(0, 1);
+    default:
+      return [...data.targetBodyIds];
+  }
+}
+
 /**
  * F01 through-all, first slice: a cut through exactly one explicit target,
  * with an explicit side. Everything else fails closed rather than guessing a
@@ -1909,6 +1978,16 @@ export function validateExtrudeExtent(data: {
   symmetric?: unknown;
   backDistance?: unknown;
 }): void {
+  // Every caller of this check reads the operation next, and an unknown one
+  // must not fall through to whichever arm a builder happens to default to.
+  if (
+    data.operation !== undefined &&
+    !EXTRUDE_OPERATIONS.includes(data.operation as ExtrudeOperation)
+  ) {
+    throw new Error(
+      `Unknown extrude operation ${JSON.stringify(data.operation)}.`
+    );
+  }
   // Only an absent field is blind: a stored `null` is malformed, not legacy.
   const condition =
     data.endCondition === undefined ? 'blind' : data.endCondition;
@@ -2148,6 +2227,10 @@ export function booleanBodies(
   if (new Set(input.targetBodyIds).size !== input.targetBodyIds.length) {
     throw new Error('Boolean operations cannot target the same body twice.');
   }
+  validateKeepOriginals({
+    featureKind: 'boolean',
+    keepOriginals: input.keepOriginals
+  });
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();
@@ -2167,7 +2250,10 @@ export function booleanBodies(
         ? { activeWhen: input.activeWhen }
         : {}),
       operation: input.operation,
-      targetBodyIds: input.targetBodyIds
+      targetBodyIds: input.targetBodyIds,
+      ...(input.keepOriginals !== undefined
+        ? { keepOriginals: input.keepOriginals }
+        : {})
     }
   };
 
@@ -2175,11 +2261,14 @@ export function booleanBodies(
     id: bodyNodeId,
     kind: 'body',
     // A subtract's result is still the base body with material cut away, so
-    // it keeps the base body's name. A union or intersect made with a
-    // numbered name is a body of its own; one recorded without one keeps the
-    // base body's name, as it always did.
+    // it keeps the base body's name — unless the base is kept (M11), when
+    // the two would share it. A union or intersect made with a numbered name
+    // is a body of its own; one recorded without one keeps the base body's
+    // name, as it always did.
     name:
-      input.bodyName !== undefined && input.operation !== 'subtract'
+      input.bodyName !== undefined &&
+      (input.operation !== 'subtract' ||
+        !booleanConsumedBodyIds(input).includes(input.targetBodyIds[0]!))
         ? input.bodyName
         : derivedBodyName(
             document,
@@ -2563,6 +2652,10 @@ export function addSplitFeature(
   input: SplitInput
 ): { document: ProjectDocument; bodyId: BodyId; secondBodyId: BodyId } {
   validateModelingPlane(document, input.plane, null);
+  validateKeepOriginals({
+    featureKind: 'split',
+    keepOriginal: input.keepOriginal
+  });
   const next = cloneDocument(document);
   const ids = input.ids ?? createSplitFeatureIds();
   const { featureId, featureNodeId, bodyId, bodyNodeId } = ids;
@@ -2579,7 +2672,8 @@ export function addSplitFeature(
       featureKind: 'split',
       targetBodyId: input.targetBodyId,
       plane: deepClone(input.plane),
-      secondBodyId: ids.secondBodyId
+      secondBodyId: ids.secondBodyId,
+      ...(input.keepOriginal === true ? { keepOriginal: true as const } : {})
     }
   };
   const bodyNode = (
@@ -3591,12 +3685,12 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'pitch',
     'turns'
   ],
-  boolean: ['operation', 'targetBodyIds'],
+  boolean: ['operation', 'targetBodyIds', 'keepOriginals'],
   transform: ['targetBodyId', 'transform'],
   mirror: ['targetBodyId', 'plane'],
   'datum-plane': ['definition'],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
-  split: ['targetBodyId', 'plane'],
+  split: ['targetBodyId', 'plane', 'keepOriginal'],
   hole: [
     'targetBodyId',
     'faceHash',
@@ -3687,6 +3781,8 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   Record<FeatureKind, readonly string[]>
 > = {
   extrude: ['endCondition', 'throughAllSide'],
+  boolean: ['keepOriginals'],
+  split: ['keepOriginal'],
   loft: ['endPoint'],
   sweep: ['guide'],
   fillet: ['endRadius', 'radiusLaw'],
@@ -3754,6 +3850,11 @@ export function updateFeature(
   }
   if (feature.data.featureKind === 'extrude') {
     validateExtrudeExtent(feature.data);
+  } else if (
+    feature.data.featureKind === 'boolean' ||
+    feature.data.featureKind === 'split'
+  ) {
+    validateKeepOriginals(feature.data);
   }
   // R01: a datum may only read earlier datums, and Mirror/Split only an
   // existing earlier one, whichever path edited them.

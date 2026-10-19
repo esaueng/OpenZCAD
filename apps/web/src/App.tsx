@@ -21926,8 +21926,15 @@ export function App() {
                       data: {
                         featureKind: 'boolean',
                         operation: value.operation,
-                        targetBodyIds: value.targetBodyIds
-                      }
+                        targetBodyIds: value.targetBodyIds,
+                        ...(value.keepOriginals !== undefined
+                          ? { keepOriginals: value.keepOriginals }
+                          : {})
+                      },
+                      // M11: consuming every input is the absent field.
+                      ...(value.keepOriginals === undefined
+                        ? { clearData: ['keepOriginals'] }
+                        : {})
                     },
                     `Edit ${value.name}`
                   );

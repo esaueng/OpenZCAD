@@ -240,7 +240,10 @@ function suppressedScopeSource(feature: FeatureNode): BodyId | null {
           : (data.targetBodyId ?? null);
       break;
     case 'boolean':
-      source = data.targetBodyIds[0] ?? null;
+      source =
+        data.keepOriginals === 'all' || data.keepOriginals === 'target'
+          ? null
+          : (data.targetBodyIds[0] ?? null);
       break;
     case 'transform':
     case 'direct-edit':
