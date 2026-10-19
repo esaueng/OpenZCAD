@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { BodyTopology, TopologySelection } from '@openzcad/shared';
 import { shouldRenderTopologyEdge } from '../scene/objects';
+import { sectionCapGeometry } from '../scene/sectionCaps';
 import {
   pointInRect,
   segmentIntersectsRect,
@@ -44,6 +45,8 @@ export interface TopologyBoxOptions extends BoxSelectOptions {
   kind: 'face' | 'edge';
   /** X-ray: hidden faces and edges are taken too. */
   selectThrough?: boolean;
+  /** The rendered section: points with negative signed distance are clipped. */
+  clippingPlane?: THREE.Plane | null;
 }
 
 /** Cells along the rectangle's longer side, at most. */
@@ -72,6 +75,105 @@ interface ProjectedBody {
  */
 function depthKey(viewDepth: number, perspective: boolean): number {
   return perspective ? -1 / Math.max(viewDepth, 1e-9) : viewDepth;
+}
+
+/** Retain the same half-space the renderer keeps, including crossing segments. */
+function clipSegment(
+  a: THREE.Vector3,
+  b: THREE.Vector3,
+  plane?: THREE.Plane | null
+): [THREE.Vector3, THREE.Vector3] | null {
+  if (!plane) return [a, b];
+  const da = plane.distanceToPoint(a);
+  const db = plane.distanceToPoint(b);
+  if (da < 0 && db < 0) return null;
+  if (da < 0) a = a.clone().lerp(b, da / (da - db));
+  else if (db < 0) b = a.clone().lerp(b, da / (da - db));
+  return [a, b];
+}
+
+/**
+ * Clip triangles before projection and depth tests. Keep each face's range
+ * mapped to its surviving triangles; section caps only occlude and own no face.
+ */
+function clipBody(
+  candidate: TopologyBoxCandidate,
+  plane: THREE.Plane
+): TopologyBoxCandidate {
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const count = Math.floor(candidate.indices.length / 3);
+  const offsets = new Uint32Array(count + 1);
+  const vertex = (index: number) =>
+    new THREE.Vector3(
+      candidate.positions[index * 3],
+      candidate.positions[index * 3 + 1],
+      candidate.positions[index * 3 + 2]
+    );
+  const appendTriangle = (
+    a: THREE.Vector3,
+    b: THREE.Vector3,
+    c: THREE.Vector3
+  ) => {
+    for (const point of [a, b, c]) {
+      indices.push(positions.length / 3);
+      positions.push(point.x, point.y, point.z);
+    }
+  };
+  for (let triangle = 0; triangle < count; triangle += 1) {
+    const polygon = [0, 1, 2].map((corner) =>
+      vertex(candidate.indices[triangle * 3 + corner]!)
+    );
+    const kept: THREE.Vector3[] = [];
+    for (let corner = 0; corner < 3; corner += 1) {
+      const a = polygon[corner]!;
+      const b = polygon[(corner + 1) % 3]!;
+      const da = plane.distanceToPoint(a);
+      const db = plane.distanceToPoint(b);
+      if (da >= 0) kept.push(a);
+      if (da < 0 !== db < 0) kept.push(a.clone().lerp(b, da / (da - db)));
+    }
+    for (let corner = 1; corner + 1 < kept.length; corner += 1) {
+      appendTriangle(kept[0]!, kept[corner]!, kept[corner + 1]!);
+    }
+    offsets[triangle + 1] = indices.length / 3;
+  }
+  const faces = candidate.topology!.faces.map((face) => {
+    const start = offsets[Math.min(face.triangleStart, count)]!;
+    const end =
+      offsets[Math.min(face.triangleStart + face.triangleCount, count)]!;
+    return { ...face, triangleStart: start, triangleCount: end - start };
+  });
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(Array.from(candidate.positions), 3)
+  );
+  geometry.setIndex(Array.from(candidate.indices));
+  const cap = sectionCapGeometry(geometry, plane);
+  if (cap) {
+    const points = cap.getAttribute('position');
+    const capIndices = cap.index;
+    const size = capIndices?.count ?? points.count;
+    for (let index = 0; index < size; index += 3) {
+      appendTriangle(
+        ...([0, 1, 2].map((corner) =>
+          new THREE.Vector3().fromBufferAttribute(
+            points,
+            capIndices ? capIndices.getX(index + corner) : index + corner
+          )
+        ) as [THREE.Vector3, THREE.Vector3, THREE.Vector3])
+      );
+    }
+    cap.dispose();
+  }
+  geometry.dispose();
+  return {
+    ...candidate,
+    positions,
+    indices,
+    topology: { ...candidate.topology!, faces }
+  };
 }
 
 function projectBody(
@@ -431,25 +533,37 @@ function edgeSelections(
     const { candidate } = projected;
     for (const edge of candidate.topology?.edges ?? []) {
       if (!shouldRenderTopologyEdge(edge)) continue;
-      const points: (ProjectedPoint & { key: number })[] = [];
-      for (let index = 0; index + 2 < edge.points.length; index += 3) {
-        points.push(
-          project(
-            edge.points[index]!,
-            edge.points[index + 1]!,
-            edge.points[index + 2]!
-          )
+      const segments: [
+        ReturnType<typeof project>,
+        ReturnType<typeof project>
+      ][] = [];
+      for (let index = 0; index + 5 < edge.points.length; index += 3) {
+        const a = new THREE.Vector3(
+          edge.points[index],
+          edge.points[index + 1],
+          edge.points[index + 2]
         );
+        const b = new THREE.Vector3(
+          edge.points[index + 3],
+          edge.points[index + 4],
+          edge.points[index + 5]
+        );
+        const kept = clipSegment(a, b, options.clippingPlane);
+        if (kept)
+          segments.push(
+            kept.map((point) => project(point.x, point.y, point.z)) as [
+              ReturnType<typeof project>,
+              ReturnType<typeof project>
+            ]
+          );
       }
-      if (points.length < 2 || points.every((point) => point.behind)) continue;
-      const allInside = points.every(
-        (point) => !point.behind && pointInRect(point, rect)
+      if (segments.length === 0) continue;
+      const allInside = segments.every((points) =>
+        points.every((point) => !point.behind && pointInRect(point, rect))
       );
       let touched = false;
       let visible = grid === null;
-      for (let index = 0; index + 1 < points.length; index += 1) {
-        const a = points[index]!;
-        const b = points[index + 1]!;
+      for (const [a, b] of segments) {
         if (a.behind || b.behind || !segmentIntersectsRect(a, b, rect)) {
           continue;
         }
@@ -501,6 +615,11 @@ export function topologyInBox(
     (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true;
   const bodies = candidates
     .filter((candidate) => candidate.topology)
+    .map((candidate) =>
+      options.clippingPlane
+        ? clipBody(candidate, options.clippingPlane)
+        : candidate
+    )
     .map((candidate) => projectBody(candidate, options, perspective));
   let grid: DepthGrid | null = null;
   if (!options.selectThrough) {

@@ -99,6 +99,98 @@ function ids(selections: { topologyId?: string }[]) {
   return selections.map((selection) => selection.topologyId).sort();
 }
 
+describe('box selection with a section plane', () => {
+  const camera = lookingDown();
+  const rect = rectBetween(camera, [-15, 15, 0], [15, -15, 0]);
+  const clippingPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
+  const options = (kind: 'face' | 'edge', selectThrough: boolean) => ({
+    camera,
+    width: SIZE,
+    height: SIZE,
+    kind,
+    selectThrough,
+    clippingPlane
+  });
+
+  it('excludes the removed faces and edges even when selecting through', () => {
+    expect(
+      ids(topologyInBox([cube()], rect, 'crossing', options('face', true)))
+    ).toEqual([
+      'face-back',
+      'face-bottom',
+      'face-front',
+      'face-left',
+      'face-right'
+    ]);
+    expect(
+      ids(topologyInBox([cube()], rect, 'crossing', options('edge', true)))
+    ).toEqual([
+      'edge-bottom-back',
+      'edge-bottom-front',
+      'edge-bottom-left',
+      'edge-bottom-right',
+      'edge-vertical-back-left',
+      'edge-vertical-back-right',
+      'edge-vertical-front-left',
+      'edge-vertical-front-right'
+    ]);
+  });
+
+  it.each(['face', 'edge'] as const)(
+    'uses only the retained portion of a partially clipped %s',
+    (kind) => {
+      const halfPlane = new THREE.Plane(new THREE.Vector3(1, 0, 0), 0);
+      const removed = rectBetween(camera, [-15, 15, 0], [-1, -15, 0]);
+      expect(
+        topologyInBox([cube()], removed, 'crossing', {
+          ...options(kind, true),
+          clippingPlane: halfPlane
+        })
+      ).toEqual([]);
+      const kept = rectBetween(camera, [-1, 15, 10], [15, -15, 10]);
+      const selected = ids(
+        topologyInBox([cube()], kept, 'window', {
+          ...options(kind, true),
+          clippingPlane: halfPlane
+        })
+      );
+      expect(selected).toContain(
+        kind === 'face' ? 'face-top' : 'edge-top-front'
+      );
+    }
+  );
+
+  it('does not let removed triangles occlude retained topology', () => {
+    const triangle = (bodyId: string, z: number): TopologyBoxCandidate => ({
+      bodyId,
+      positions: [-10, -10, z, 10, -10, z, 0, 10, z],
+      indices: [0, 1, 2],
+      topology: {
+        faces: [
+          { topologyId: bodyId, hash: 1, triangleStart: 0, triangleCount: 1 }
+        ],
+        edges: []
+      }
+    });
+    expect(
+      ids(
+        topologyInBox(
+          [triangle('removed', 10), triangle('retained', -10)],
+          rect,
+          'crossing',
+          options('face', false)
+        )
+      )
+    ).toEqual(['retained']);
+  });
+
+  it('uses the rendered section cap to occlude faces without making the cap selectable', () => {
+    expect(
+      topologyInBox([cube()], rect, 'crossing', options('face', false))
+    ).toEqual([]);
+  });
+});
+
 describe('box selection of edges', () => {
   const camera = lookingDown();
   const options = (selectThrough = false) => ({

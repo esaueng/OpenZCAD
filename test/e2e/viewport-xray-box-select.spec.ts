@@ -205,6 +205,81 @@ test('a box takes the faces in view, and every face in X-ray', async ({
   await expect(canvas(page)).toHaveAttribute('data-e2e-focus-faces', '6');
 });
 
+test('section clipping excludes removed faces from an X-ray sweep', async ({
+  page
+}, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await createBox(page, 'Section Sweep Part');
+  await topView(page);
+  await page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: /^Orthographic projection/ })
+    .click();
+  const { minX, minY, maxX, maxY, maxZ, pad } = await boxExtent(page);
+  await page.getByRole('button', { name: /^Section view/ }).click();
+  await expect(
+    page.getByRole('slider', { name: 'Section plane offset' })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+  await setSelectionFilter(page, 'Face');
+  await xrayButton(page).click();
+  await sweep(
+    page,
+    [minX - pad, maxY + pad, maxZ],
+    [maxX + pad, minY - pad, maxZ]
+  );
+  await expect(page.getByRole('contentinfo')).toContainText(
+    '5 faces selected.'
+  );
+  await expect(canvas(page)).toHaveAttribute('data-e2e-focus-faces', '5');
+  expect(errors).toEqual([]);
+  await testInfo.attach('section-face-sweep', {
+    body: await page.screenshot(),
+    contentType: 'image/png'
+  });
+});
+
+test('changing FOV in orthographic keeps framing when returning to perspective', async ({
+  page
+}, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await createBox(page, 'Orthographic FOV Part');
+  await topView(page);
+  const projection = page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: /^Orthographic projection/ });
+  await projection.click();
+  await expect(projection).toHaveAttribute('aria-pressed', 'true');
+  const { box } = await project(page);
+  const middleY = (box!.min[1]! + box!.max[1]!) / 2;
+  const middleZ = (box!.min[2]! + box!.max[2]!) / 2;
+  const points: [number, number, number][] = [
+    [box!.min[0]!, middleY, middleZ],
+    [box!.max[0]!, middleY, middleZ]
+  ];
+  const before = (await project(page, points)).points;
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  const field = page.getByLabel('Perspective field of view');
+  await field.fill('70');
+  await field.blur();
+  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await expect(canvas(page)).toHaveAttribute('data-e2e-field-of-view', '70');
+  await page.keyboard.press('p');
+  await expect(projection).toHaveAttribute('aria-pressed', 'false');
+  const after = (await project(page, points)).points;
+  expect(
+    Math.abs(after[1]!.x - after[0]!.x - (before[1]!.x - before[0]!.x))
+  ).toBeLessThan(2);
+  expect(errors).toEqual([]);
+  await testInfo.attach('orthographic-fov-framing', {
+    body: await page.screenshot(),
+    contentType: 'image/png'
+  });
+});
+
 test('X-ray picks a rear edge and hands back the view it was over', async ({
   page
 }) => {

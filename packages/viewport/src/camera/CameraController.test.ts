@@ -1106,4 +1106,26 @@ describe('CameraController field of view', () => {
     expect(controller.projection).toBe('orthographic');
     controller.dispose();
   });
+
+  it.each([1, 2.5])(
+    'preserves orthographic framing after a FOV change and projection round trip (zoom %s)',
+    (zoom) => {
+      const { controller } = createController();
+      controller.applyProjection('orthographic');
+      controller.orthographic.zoom = zoom;
+      controller.orthographic.updateProjectionMatrix();
+      const span = Math.abs(controller.orthographic.top) / zoom;
+      controller.setFieldOfView(70);
+      expect(
+        Math.abs(controller.orthographic.top) / controller.orthographic.zoom
+      ).toBeCloseTo(span, 9);
+      controller.applyProjection('perspective');
+      expect(spanAtTarget(controller)).toBeCloseTo(span, 9);
+      controller.applyProjection('orthographic');
+      expect(
+        Math.abs(controller.orthographic.top) / controller.orthographic.zoom
+      ).toBeCloseTo(span, 9);
+      controller.dispose();
+    }
+  );
 });

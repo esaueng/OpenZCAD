@@ -665,8 +665,9 @@ export class CameraController {
         .sub(this.orbit.target)
         .normalize();
       const distance =
-        this.orthographic.position.distanceTo(this.orbit.target) /
-        Math.max(this.orthographic.zoom, 0.0001);
+        Math.abs(this.orthographic.top) /
+        (Math.max(this.orthographic.zoom, 0.0001) *
+          Math.tan(THREE.MathUtils.degToRad(this.perspective.fov / 2)));
       this.perspective.position
         .copy(this.orbit.target)
         .addScaledVector(direction, distance);

@@ -8142,7 +8142,10 @@ export function ModelViewer({
                 {
                   ...projectionOptions,
                   kind: filter,
-                  selectThrough: xrayRef.current
+                  selectThrough: xrayRef.current,
+                  clippingPlane: sectionViewRef.current
+                    ? sectionClippingPlane(sectionViewRef.current)
+                    : null
                 }
               )
             ),
