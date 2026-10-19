@@ -3,6 +3,7 @@ import {
   computeSketchProfileAnalysis,
   computeSketchRegions,
   controlSpline,
+  ellipticalArcSweepDegrees,
   fitSplineThrough,
   mergeAdjacentProfiles,
   regionLoopSignedArea,
@@ -310,6 +311,22 @@ describe('ellipse regions', () => {
     );
   });
 
+  it('refuses an elliptical arc whose range wraps to nothing (review case)', () => {
+    // start 360, end 0: a raw −360° that wraps to a zero sweep.
+    expect(() => ellipticalArcSweepDegrees(360, 0)).toThrow(/non-zero/);
+    expect(ellipticalArcSweepDegrees(0, 360)).toBe(360);
+    expect(() => ellipticalArcSweepDegrees(300, -60)).toThrow(/non-zero/);
+    expect(ellipticalArcSweepDegrees(300, 30)).toBe(90);
+    // The sketch reports it as an unusable dimension, not a silent nothing.
+    const analysis = computeSketchProfileAnalysis(
+      [ellipse(20, 8, { startParamDeg: 360, endParamDeg: 0 })],
+      resolve
+    );
+    expect(analysis.diagnostics.map((item) => item.code)).toContain(
+      'unresolved-parameter'
+    );
+  });
+
   it('flags a zero radius as degenerate and leaves no region', () => {
     const analysis = computeSketchProfileAnalysis([ellipse(0, 5)], resolve);
     expect(analysis.profiles).toHaveLength(0);
@@ -486,6 +503,140 @@ describe('spline regions', () => {
     // Both outcomes are exercised.
     expect(crossings).toBeGreaterThan(10);
     expect(crossings).toBeLessThan(110);
+  });
+
+  it('finds two crossings that fall between the same pair of samples (review case)', () => {
+    // One cubic span, x = 100t and y = 1000(t − .34)(t − .35)(t − 2): it
+    // rises above y = 0 only for t in (.34, .35), between samples at 1/3 and
+    // .375, so a fixed sampling never saw the lens it bounds with the line.
+    const cubic = (t: number) => 1000 * (t - 0.34) * (t - 0.35) * (t - 2);
+    const c0 = cubic(0);
+    // Power-basis coefficients of the cubic, then its Bézier ordinates.
+    const c3 = 1000;
+    const c2 = -1000 * (0.34 + 0.35 + 2);
+    const c1 = 1000 * (0.34 * 0.35 + 0.34 * 2 + 0.35 * 2);
+    const ordinates = [
+      c0,
+      c0 + c1 / 3,
+      c0 + (2 * c1) / 3 + c2 / 3,
+      c0 + c1 + c2 + c3
+    ];
+    const points = ordinates.map((y, index) => ({ x: (100 * index) / 3, y }));
+    const regions = computeSketchRegions(
+      [spline('control', points, false, 3), line(-50, 0, 250, 0)],
+      resolve
+    );
+    expect(regions).toHaveLength(1);
+    // Lens area: 100 · ∫ y dt over (.34, .35), integrated in closed form.
+    const antiderivative = (t: number) =>
+      1000 *
+      (t ** 4 / 4 -
+        ((0.34 + 0.35 + 2) * t ** 3) / 3 +
+        ((0.34 * 0.35 + 0.34 * 2 + 0.35 * 2) * t ** 2) / 2 -
+        0.34 * 0.35 * 2 * t);
+    const lens = 100 * (antiderivative(0.35) - antiderivative(0.34));
+    expect(regions[0]!.area).toBeCloseTo(lens, 9);
+    expect(regions[0]!.area).toBeGreaterThan(0.02);
+  });
+
+  it('keeps two distinct splines that agree at the five key samples (review case)', () => {
+    // Eight control points, clamped cubic. Perturb y by a combination of
+    // basis functions that vanishes at t = 0, ¼, ½, ¾ and 1, so the sampled
+    // duplicate key matches while the curves differ between those samples.
+    const base = Array.from({ length: 8 }, (_, index) => ({
+      x: index * 10,
+      y: index % 2 === 0 ? 0 : 6
+    }));
+    const basis = (i: number, t: number) =>
+      splinePoint(
+        controlSpline(
+          base.map((point, index) => ({ x: point.x, y: index === i ? 1 : 0 })),
+          3,
+          false
+        ),
+        t
+      ).y;
+    // δ4..δ6 chosen; solve δ1..δ3 so φ(¼) = φ(½) = φ(¾) = 0 (δ0 = δ7 = 0
+    // already pins both ends).
+    const chosen = [0, 0, 0, 0, 2, -3, 2, 0];
+    const ts = [0.25, 0.5, 0.75];
+    const m = ts.map((t) => [1, 2, 3].map((i) => basis(i, t)));
+    const rhs = ts.map(
+      (t) => -[4, 5, 6].reduce((sum, i) => sum + basis(i, t) * chosen[i]!, 0)
+    );
+    const det = (a: number[][]) =>
+      a[0]![0]! * (a[1]![1]! * a[2]![2]! - a[1]![2]! * a[2]![1]!) -
+      a[0]![1]! * (a[1]![0]! * a[2]![2]! - a[1]![2]! * a[2]![0]!) +
+      a[0]![2]! * (a[1]![0]! * a[2]![1]! - a[1]![1]! * a[2]![0]!);
+    const d = det(m);
+    for (let column = 0; column < 3; column += 1) {
+      const replaced = m.map((row, r) =>
+        row.map((value, c) => (c === column ? rhs[r]! : value))
+      );
+      chosen[column + 1] = det(replaced) / d;
+    }
+    const perturbed = base.map((point, index) => ({
+      x: point.x,
+      y: point.y + chosen[index]!
+    }));
+    const a = controlSpline(base, 3, false);
+    const b = controlSpline(perturbed, 3, false);
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      expect(splinePoint(b, t).y).toBeCloseTo(splinePoint(a, t).y, 9);
+    }
+    expect(
+      Math.abs(splinePoint(b, 0.4).y - splinePoint(a, 0.4).y)
+    ).toBeGreaterThan(0.1);
+
+    const analysis = computeSketchProfileAnalysis(
+      [
+        spline('control', base, false, 3),
+        spline('control', perturbed, false, 3)
+      ],
+      resolve
+    );
+    expect(analysis.diagnostics.map((item) => item.code)).not.toContain(
+      'duplicate-entity'
+    );
+    // The lenses between them add up to the area between the two curves.
+    const steps = 20000;
+    let between = 0;
+    for (let index = 0; index < steps; index += 1) {
+      const t0 = index / steps;
+      const t1 = (index + 1) / steps;
+      const gap = (t: number) =>
+        Math.abs(splinePoint(b, t).y - splinePoint(a, t).y);
+      between +=
+        ((gap(t0) + gap(t1)) / 2) *
+        (splinePoint(a, t1).x - splinePoint(a, t0).x);
+    }
+    const total = analysis.profiles.reduce(
+      (sum, region) => sum + region.area,
+      0
+    );
+    expect(analysis.profiles.length).toBeGreaterThanOrEqual(2);
+    expect(Math.abs(total - between) / between).toBeLessThan(1e-4);
+  });
+
+  it('still refuses a true duplicate spline, drawn either way round', () => {
+    const points = [
+      { x: 0, y: 0 },
+      { x: 10, y: 12 },
+      { x: 30, y: 9 },
+      { x: 40, y: 0 }
+    ];
+    for (const second of [points, [...points].reverse()]) {
+      const analysis = computeSketchProfileAnalysis(
+        [
+          spline('control', points, false, 3),
+          spline('control', second, false, 3)
+        ],
+        resolve
+      );
+      expect(analysis.diagnostics.map((item) => item.code)).toContain(
+        'duplicate-entity'
+      );
+    }
   });
 
   it('keeps fingerprints stable across rebuilds and object order', () => {

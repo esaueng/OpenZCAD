@@ -164,13 +164,21 @@ export function resolveEllipseGeometry(
   };
 }
 
-/** Counter-clockwise sweep from `start` to `end` in (0, 360] degrees. */
+/**
+ * Counter-clockwise sweep from `start` to `end` in (0, 360] degrees. A raw
+ * −360° wraps to nothing and is refused, as `boundedArcSweepDegrees` refuses
+ * it for a circular arc: `start` 360 and `end` 0 is no arc at all.
+ */
 export function ellipticalArcSweepDegrees(start: number, end: number): number {
   const delta = end - start;
   if (!Number.isFinite(delta) || delta === 0 || Math.abs(delta) > 360) {
     throw new Error('Elliptical arc sweep must be non-zero and at most 360°.');
   }
-  return delta < 0 ? delta + 360 : delta;
+  const sweep = delta < 0 ? delta + 360 : delta;
+  if (!(sweep > 0)) {
+    throw new Error('Elliptical arc sweep must be non-zero.');
+  }
+  return sweep;
 }
 
 function normalizeRadians(angle: number): number {
@@ -316,11 +324,7 @@ const derivativeCache = new WeakMap<
   }
 >();
 
-/** First and second derivative of a spline with respect to its parameter. */
-export function splineDerivatives(
-  spline: SplineGeometry,
-  u: number
-): { d1: CurvePoint; d2: CurvePoint } {
+function derivativesOf(spline: SplineGeometry) {
   let cached = derivativeCache.get(spline);
   if (!cached) {
     const first = derivativeCurve(spline.degree, spline.knots, spline.controls);
@@ -328,6 +332,30 @@ export function splineDerivatives(
     cached = { first, second };
     derivativeCache.set(spline, cached);
   }
+  return cached;
+}
+
+/**
+ * An upper bound on |C''(u)| over the whole spline: the largest control
+ * point of its second-derivative curve, which contains that curve by the
+ * convex-hull property. A chord over `[u0, u1]` then stays within
+ * `(u1 − u0)² / 8` times this bound of the curve.
+ */
+export function splineSecondDerivativeBound(spline: SplineGeometry): number {
+  const { second } = derivativesOf(spline);
+  let bound = 0;
+  for (const point of second.controls) {
+    bound = Math.max(bound, Math.hypot(point.x, point.y));
+  }
+  return bound;
+}
+
+/** First and second derivative of a spline with respect to its parameter. */
+export function splineDerivatives(
+  spline: SplineGeometry,
+  u: number
+): { d1: CurvePoint; d2: CurvePoint } {
+  const cached = derivativesOf(spline);
   const [start, end] = splineDomain(spline);
   const at = Math.min(Math.max(u, start), end);
   return {

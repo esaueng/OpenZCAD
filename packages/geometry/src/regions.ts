@@ -19,6 +19,7 @@ import {
   splineDerivatives,
   splineDomain,
   splinePoint,
+  splineSecondDerivativeBound,
   splineSelfIntersection,
   splineSubcurve,
   type EllipseGeometry,
@@ -667,7 +668,10 @@ function resolveSketchCurves(
     Number.EPSILON * modelScale * 16
   );
   const curves: Curve[] = [];
-  const byGeometry = new Map<string, Curve>();
+  // Keys bucket candidates. An analytic key (segment, arc, full ellipse) is
+  // exact; a sampled one (spline, elliptical arc) is confirmed against the
+  // whole curve before anything is called a duplicate.
+  const byGeometry = new Map<string, Curve[]>();
   for (const curve of rawCurves) {
     const endpoints = curveEndpoints(curve);
     const degenerate =
@@ -693,7 +697,11 @@ function resolveSketchCurves(
       continue;
     }
     const key = primitiveCurveKey(curve, tolerance);
-    const existing = byGeometry.get(key);
+    const bucket = byGeometry.get(key) ?? [];
+    const existing = bucket.find(
+      (candidate) =>
+        !key.startsWith('P:') || curvesCoincide(candidate, curve, tolerance)
+    );
     if (existing) {
       invalidEntityIds.add(existing.sourceObjectId);
       invalidEntityIds.add(curve.sourceObjectId);
@@ -706,7 +714,7 @@ function resolveSketchCurves(
       });
       continue;
     }
-    byGeometry.set(key, curve);
+    byGeometry.set(key, [...bucket, curve]);
     curves.push(curve);
   }
 
@@ -1059,22 +1067,209 @@ function projectOntoCurve(
   return { position, distance: Math.hypot(at.x - point.x, at.y - point.y) };
 }
 
-function bboxOf(a: Vec2Like, b: Vec2Like, slack: number) {
-  return {
-    minX: Math.min(a.x, b.x) - slack,
-    maxX: Math.max(a.x, b.x) + slack,
-    minY: Math.min(a.y, b.y) - slack,
-    maxY: Math.max(a.y, b.y) + slack
-  };
+/**
+ * Whether two curves with the same sampled key are the same point set: the
+ * same spline pieces forward or reversed, or failing that every point of a
+ * dense sampling of each lying on the other. Five matching samples alone
+ * are not enough — a spline with many control points can meet another at
+ * all five and still part between them.
+ */
+function curvesCoincide(a: Curve, b: Curve, tolerance: number): boolean {
+  if (a.kind === 'spl' && b.kind === 'spl') {
+    const same = (left: SplineGeometry, right: SplineGeometry): boolean =>
+      left.degree === right.degree &&
+      left.knots.length === right.knots.length &&
+      left.controls.every(
+        (point, index) =>
+          Math.hypot(
+            point.x - right.controls[index]!.x,
+            point.y - right.controls[index]!.y
+          ) <= tolerance
+      ) &&
+      left.knots.every(
+        (knot, index) => Math.abs(knot - right.knots[index]!) <= 1e-12
+      );
+    if (same(a.spline, b.spline) || same(a.spline, reverseSpline(b.spline))) {
+      return true;
+    }
+  }
+  const sa = curveSamples(a, 3);
+  const sb = curveSamples(b, 3);
+  const onOther = (
+    samples: { points: Vec2Like[] },
+    other: Curve,
+    otherSamples: { positions: number[]; points: Vec2Like[] }
+  ) =>
+    samples.points.every(
+      (point) =>
+        projectOntoCurve(other, otherSamples, point).distance <= tolerance * 4
+    );
+  return onOther(sa, b, sb) && onOther(sb, a, sa);
+}
+
+/** An upper bound on |C''| along a curve, per unit of its own position. */
+function curveSecondBound(curve: Curve): number {
+  switch (curve.kind) {
+    case 'seg':
+      return 0;
+    case 'arc':
+      return curve.r;
+    case 'ell':
+      return Math.max(curve.ellipse.radiusX, curve.ellipse.radiusY);
+    case 'spl':
+      return splineSecondDerivativeBound(curve.spline);
+  }
+}
+
+function pointSegmentDistance(
+  point: Vec2Like,
+  a: Vec2Like,
+  b: Vec2Like
+): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lengthSquared = dx * dx + dy * dy;
+  const t =
+    lengthSquared > 0
+      ? Math.min(
+          Math.max(
+            ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared,
+            0
+          ),
+          1
+        )
+      : 0;
+  return Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t));
+}
+
+/** Shortest distance between two segments; zero when they cross. */
+function chordDistance(
+  a0: Vec2Like,
+  a1: Vec2Like,
+  b0: Vec2Like,
+  b1: Vec2Like
+): number {
+  const orient = (p: Vec2Like, q: Vec2Like, r: Vec2Like) =>
+    (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  const d1 = orient(a0, a1, b0);
+  const d2 = orient(a0, a1, b1);
+  const d3 = orient(b0, b1, a0);
+  const d4 = orient(b0, b1, a1);
+  if (d1 * d2 < 0 && d3 * d4 < 0) {
+    return 0;
+  }
+  return Math.min(
+    pointSegmentDistance(a0, b0, b1),
+    pointSegmentDistance(a1, b0, b1),
+    pointSegmentDistance(b0, a0, a1),
+    pointSegmentDistance(b1, a0, a1)
+  );
+}
+
+/** Work cap for one pair's subdivision; far above any real sketch. */
+const SUBDIVISION_BUDGET = 200_000;
+
+/**
+ * Newton seeds for every transverse crossing of two curves, by recursive
+ * subdivision rather than a fixed sampling. A piece over `[t0, t1]` lies
+ * within `(t1 − t0)² / 8 · max|C''|` of its chord, so a piece's chord box
+ * grown by that bound contains it: pairs whose grown boxes miss are pruned,
+ * and the rest split, the less straight one first, until both chords are
+ * within the tolerance of their curves. Only then are the chords crossed.
+ * Two crossings between the same pair of sample points are therefore both
+ * found, which a polyline of fixed chords can miss entirely.
+ */
+function subdivisionSeeds(
+  a: Curve,
+  b: Curve,
+  tolerance: number
+): { pa: number; pb: number }[] {
+  interface Piece {
+    t0: number;
+    t1: number;
+    p0: Vec2Like;
+    p1: Vec2Like;
+    /** How far the curve may stray from the chord. */
+    bound: number;
+  }
+  const piece = (curve: Curve, m: number, t0: number, t1: number): Piece => ({
+    t0,
+    t1,
+    p0: curveAt(curve, t0),
+    p1: curveAt(curve, t1),
+    bound: ((t1 - t0) * (t1 - t0) * m) / 8
+  });
+  const ma = curveSecondBound(a);
+  const mb = curveSecondBound(b);
+  const [a0, a1] = curveRange(a);
+  const [b0, b1] = curveRange(b);
+  const flat = Math.max(tolerance, 1e-12);
+  const seeds: { pa: number; pb: number }[] = [];
+  const stack: [Piece, Piece, number][] = [
+    [piece(a, ma, a0, a1), piece(b, mb, b0, b1), 0]
+  ];
+  let budget = SUBDIVISION_BUDGET;
+  while (stack.length > 0 && budget > 0) {
+    budget -= 1;
+    const [pa, pb, depth] = stack.pop()!;
+    const growA = pa.bound + tolerance;
+    const growB = pb.bound + tolerance;
+    // Each piece lies within its bound of its chord, so chords farther
+    // apart than both bounds together cannot meet. A box test alone keeps
+    // every piece inside a long slanted line's box, however far it is from
+    // the line itself.
+    if (chordDistance(pa.p0, pa.p1, pb.p0, pb.p1) > growA + growB) {
+      continue;
+    }
+    if ((pa.bound <= flat && pb.bound <= flat) || depth >= 60) {
+      const rx = pa.p1.x - pa.p0.x;
+      const ry = pa.p1.y - pa.p0.y;
+      const qx = pb.p1.x - pb.p0.x;
+      const qy = pb.p1.y - pb.p0.y;
+      const denominator = rx * qy - ry * qx;
+      if (Math.abs(denominator) < 1e-300) {
+        continue;
+      }
+      const wx = pb.p0.x - pa.p0.x;
+      const wy = pb.p0.y - pa.p0.y;
+      const r = (wx * qy - wy * qx) / denominator;
+      const q = (wx * ry - wy * rx) / denominator;
+      const lengthA = Math.hypot(rx, ry) || 1;
+      const lengthB = Math.hypot(qx, qy) || 1;
+      const slackA = tolerance / lengthA;
+      const slackB = tolerance / lengthB;
+      if (r >= -slackA && r <= 1 + slackA && q >= -slackB && q <= 1 + slackB) {
+        seeds.push({
+          pa: pa.t0 + (pa.t1 - pa.t0) * Math.min(Math.max(r, 0), 1),
+          pb: pb.t0 + (pb.t1 - pb.t0) * Math.min(Math.max(q, 0), 1)
+        });
+      }
+      continue;
+    }
+    if (pa.bound >= pb.bound) {
+      const middle = (pa.t0 + pa.t1) / 2;
+      stack.push(
+        [piece(a, ma, pa.t0, middle), pb, depth + 1],
+        [piece(a, ma, middle, pa.t1), pb, depth + 1]
+      );
+    } else {
+      const middle = (pb.t0 + pb.t1) / 2;
+      stack.push(
+        [pa, piece(b, mb, pb.t0, middle), depth + 1],
+        [pa, piece(b, mb, middle, pb.t1), depth + 1]
+      );
+    }
+  }
+  return seeds;
 }
 
 /**
  * Crossings of two curves when either is an I01 ellipse or spline. Neither
- * has a closed-form intersection with every other kind, so this samples both,
- * seeds Newton from every polyline crossing, and also projects each curve's
- * endpoints onto the other so a T-junction or a shared endpoint is found
- * however the chords happen to fall. A tangential touch that never crosses
- * a chord is not detected — draw a line to the tangent point instead.
+ * has a closed-form intersection with every other kind, so this seeds
+ * Newton from an exhaustive subdivision of both (`subdivisionSeeds`), and
+ * also projects each curve's endpoints onto the other so a T-junction or a
+ * shared endpoint is found whatever the chords do. A tangential touch that
+ * never crosses is not detected — draw a line to the tangent point instead.
  */
 function numericIntersections(
   a: Curve,
@@ -1100,46 +1295,8 @@ function numericIntersections(
     }
     hits.push({ ...hit, point });
   };
-  const boxesB = sb.points
-    .slice(0, -1)
-    .map((point, index) => bboxOf(point, sb.points[index + 1]!, tolerance));
-  for (let i = 0; i + 1 < sa.points.length; i += 1) {
-    const a0 = sa.points[i]!;
-    const a1 = sa.points[i + 1]!;
-    const boxA = bboxOf(a0, a1, tolerance);
-    for (let j = 0; j < boxesB.length; j += 1) {
-      const boxB = boxesB[j]!;
-      if (
-        boxA.maxX < boxB.minX ||
-        boxB.maxX < boxA.minX ||
-        boxA.maxY < boxB.minY ||
-        boxB.maxY < boxA.minY
-      ) {
-        continue;
-      }
-      const b0 = sb.points[j]!;
-      const b1 = sb.points[j + 1]!;
-      const rx = a1.x - a0.x;
-      const ry = a1.y - a0.y;
-      const qx = b1.x - b0.x;
-      const qy = b1.y - b0.y;
-      const denominator = rx * qy - ry * qx;
-      if (Math.abs(denominator) < 1e-300) {
-        continue;
-      }
-      const wx = b0.x - a0.x;
-      const wy = b0.y - a0.y;
-      const r = (wx * qy - wy * qx) / denominator;
-      const q = (wx * ry - wy * rx) / denominator;
-      if (r < -0.01 || r > 1.01 || q < -0.01 || q > 1.01) {
-        continue;
-      }
-      const seedA =
-        sa.positions[i]! + (sa.positions[i + 1]! - sa.positions[i]!) * r;
-      const seedB =
-        sb.positions[j]! + (sb.positions[j + 1]! - sb.positions[j]!) * q;
-      record(refineCrossing(a, b, seedA, seedB, tolerance));
-    }
+  for (const seed of subdivisionSeeds(a, b, tolerance)) {
+    record(refineCrossing(a, b, seed.pa, seed.pb, tolerance));
   }
   for (const [curve, samples, other, otherSamples, swap] of [
     [a, sa, b, sb, false],
