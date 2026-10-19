@@ -1074,6 +1074,47 @@ describe('content blobs', () => {
     }
   });
 
+  it('decrypts one large envelope chunk a few records at a time', async () => {
+    const records = 1000;
+    const { envelope, reference } = await blob(
+      patternBytes(CHUNK * records, 4)
+    );
+    const decrypt = vi.spyOn(crypto.subtle, 'decrypt');
+    try {
+      const reader = decryptContentBlobStream(
+        reference,
+        stream([envelope])
+      ).getReader();
+      await reader.read();
+      await reader.read();
+      // Backpressure holds: only a handful of records are decrypted ahead.
+      expect(decrypt.mock.calls.length).toBeLessThan(10);
+      let total = 2 * CHUNK;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+      }
+      expect(total).toBe(CHUNK * records);
+      expect(decrypt.mock.calls.length).toBe(records);
+    } finally {
+      decrypt.mockRestore();
+    }
+  });
+
+  it('validates the key of a content blob reference up front', async () => {
+    const { reference } = await blob(patternBytes(10));
+    for (const key of [patternBytes(31), 'AAAA', undefined]) {
+      const bad = { ...reference, key } as unknown as ContentBlobReference;
+      expect(() => contentBlobReferenceToJson(bad)).toThrow(
+        expect.objectContaining({ code: 'invalid-argument' })
+      );
+      expect(() => createContentBlobReader(bad)).toThrow(
+        expect.objectContaining({ code: 'invalid-argument' })
+      );
+    }
+  });
+
   it('refuses an invalid caller limit instead of skipping the ceiling', async () => {
     const { envelope, reference } = await blob(patternBytes(100));
     for (const bad of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY]) {

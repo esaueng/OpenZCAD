@@ -165,6 +165,7 @@ UTF-8 string and type 2 a u64.
 | `encryption-private-key` | GCM    | userId, keyId                        | account key (PKCS #8 bytes)                                                  |
 | `project-key`            | KW     | userId, projectId, keyEpoch          | sealed to a member; then the member's account key                            |
 | `version-key`            | KW     | projectId, keyEpoch, kind, versionId | project key                                                                  |
+| `dedupe-secret`          | KW     | projectId, keyEpoch                  | project key: the dedupe secret, carried across epochs                        |
 | `share-key`              | KW     | projectId, keyEpoch, shareId         | project key; it never encrypts content                                       |
 | `share-version-key`      | KW     | projectId, shareId, versionId        | share key: a share snapshot's version key, for link visitors                 |
 
@@ -177,9 +178,12 @@ PRF input is `PASSKEY_PRF_INPUT`.
 
 ## Codes
 
-- **Asset de-duplication:** lowercase hex HMAC-SHA256 under
-  HKDF-SHA256(project key, empty salt, `v1 asset dedupe`). It is an index
-  value stored beside the blob, never inside an envelope.
+- **Asset de-duplication:** lowercase hex HMAC-SHA256 keyed by a random
+  per-project dedupe secret (`generateAssetDedupeSecret`,
+  `importAssetDedupeSecret`). The secret is not derived from the project key,
+  so hashes stay stable across epochs: it is carried into each new epoch
+  wrapped under that epoch's project key (`dedupe-secret`, AES-KW). The hash
+  is an index value stored beside the blob, never inside an envelope.
 - **Key hash:** `publicKeyHash` is the full
   `SHA-256(label "v1 public key hash" | u8 key count | keys)`. Over the
   identity key it is the user's fingerprint (`identityFingerprint`).

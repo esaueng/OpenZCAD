@@ -14,7 +14,7 @@ import {
   assetDedupeHash,
   commitDeviceApprovalWith,
   contactVerificationCode,
-  deriveAssetDedupeKey,
+  importAssetDedupeSecret,
   deviceApprovalCode,
   formatComparisonCode,
   formatRecoveryKey,
@@ -429,11 +429,11 @@ describe('codes vectors', () => {
     ).toMatchInlineSnapshot(
       `"J28S-54WM-JPB9-F64S-KADS-S7CY-KYGA-38N3-MJJT-D9X8-N6NA-QB5D-NTQJ-ZEYT"`
     );
-    const dedupeKey = await deriveAssetDedupeKey(patternBytes(32, 0x10));
+    const dedupeKey = await importAssetDedupeSecret(patternBytes(32, 0x10));
     expect(
       await assetDedupeHash(dedupeKey, utf8('ISO-10303-21;'))
     ).toMatchInlineSnapshot(
-      `"dced290b127ab7fb4c2083915c308a114a55fc6d8bfdeb7b3cb5786f1de724c0"`
+      `"2773f97b7a136acc8879dec921294696f276e2a87a3a8956d727420795058483"`
     );
   });
 });

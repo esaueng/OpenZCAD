@@ -15,31 +15,44 @@ import { HASH_BYTES } from './header';
 import { P256_PUBLIC_KEY_BYTES } from './keys';
 import {
   KEY_BYTES,
-  deriveHmacKey,
-  hkdfBaseKey,
   sha256,
   subtle,
   systemRandom,
-  type KeyMaterial,
   type RandomSource
 } from './primitives';
 
 // --- Asset de-duplication -------------------------------------------------
 
-/** The per-project HMAC key: HKDF-SHA256(project key, label). */
-export async function deriveAssetDedupeKey(
-  projectKey: KeyMaterial
+/**
+ * A fresh random per-project dedupe secret. It is not derived from the
+ * project key, so dedupe hashes stay stable across key epochs: carry it
+ * into each new epoch wrapped under that epoch's project key
+ * (`wrapKey`, purpose `dedupe-secret`).
+ */
+export function generateAssetDedupeSecret(): Bytes {
+  return systemRandom(KEY_BYTES);
+}
+
+/** The HMAC-SHA256 key for a project's dedupe secret (non-extractable). */
+export async function importAssetDedupeSecret(
+  secret: Uint8Array
 ): Promise<CryptoKey> {
-  return deriveHmacKey(
-    await hkdfBaseKey(projectKey, 'Project key'),
-    label('v1 asset dedupe')
+  if (!(secret instanceof Uint8Array) || secret.byteLength !== KEY_BYTES) {
+    throw new E2eeError('invalid-argument', 'A dedupe secret is 32 bytes');
+  }
+  return subtle().importKey(
+    'raw',
+    asBytes(secret),
+    { name: 'HMAC', hash: 'SHA-256', length: 256 },
+    false,
+    ['sign']
   );
 }
 
 /**
  * Lowercase hex HMAC-SHA256 of an asset's plaintext: an index value stored
  * beside the content blob, never inside an envelope. Equal content in one
- * project (and epoch) dedupes; the server cannot test for a known file.
+ * project dedupes across epochs; the server cannot test for a known file.
  */
 export async function assetDedupeHash(
   dedupeKey: CryptoKey,

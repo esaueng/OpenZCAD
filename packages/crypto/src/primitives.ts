@@ -85,24 +85,6 @@ export async function deriveAesGcmKey(
   );
 }
 
-export async function deriveHmacKey(
-  base: CryptoKey,
-  info: Uint8Array
-): Promise<CryptoKey> {
-  return subtle().deriveKey(
-    {
-      name: 'HKDF',
-      hash: 'SHA-256',
-      salt: new Uint8Array(),
-      info: asBytes(info)
-    },
-    base,
-    { name: 'HMAC', hash: 'SHA-256', length: 256 },
-    false,
-    ['sign']
-  );
-}
-
 export async function aesGcmEncrypt(
   key: CryptoKey,
   iv: Uint8Array,

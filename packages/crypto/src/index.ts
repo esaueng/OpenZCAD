@@ -119,10 +119,11 @@ export {
 } from './signing';
 export {
   assetDedupeHash,
+  generateAssetDedupeSecret,
+  importAssetDedupeSecret,
   commitDeviceApproval,
   contactVerificationCode,
   createApprovalNonce,
-  deriveAssetDedupeKey,
   deviceApprovalCode,
   formatComparisonCode,
   formatRecoveryKey,

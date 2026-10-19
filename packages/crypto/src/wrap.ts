@@ -116,6 +116,15 @@ export type WrapContext =
       readonly versionId: string;
     }
   | {
+      /**
+       * The project's dedupe secret, re-wrapped under each epoch's project
+       * key so dedupe hashes survive key rotation.
+       */
+      readonly purpose: 'dedupe-secret';
+      readonly projectId: string;
+      readonly keyEpoch: number;
+    }
+  | {
       /** A share-link key under the project key. It never encrypts content. */
       readonly purpose: 'share-key';
       readonly projectId: string;
@@ -157,6 +166,7 @@ const CONTEXT_FIELDS: Record<WrapPurpose, Record<string, FieldRule>> = {
     versionId: 'string'
   },
   'share-key': { projectId: 'string', keyEpoch: 'uint', shareId: 'string' },
+  'dedupe-secret': { projectId: 'string', keyEpoch: 'uint' },
   'share-version-key': {
     projectId: 'string',
     shareId: 'string',

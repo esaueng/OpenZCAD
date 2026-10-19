@@ -4,7 +4,8 @@ import {
   assetDedupeHash,
   commitDeviceApproval,
   createApprovalNonce,
-  deriveAssetDedupeKey,
+  generateAssetDedupeSecret,
+  importAssetDedupeSecret,
   deviceApprovalCode,
   formatComparisonCode,
   formatRecoveryKey,
@@ -33,7 +34,9 @@ import {
   verifyVersionChain,
   versionHash
 } from './signing';
+import { generateSymmetricKey } from './primitives';
 import { patternBytes } from './test-support';
+import { unwrapKey, wrapKey } from './wrap';
 
 async function rejectsWith(
   promise: Promise<unknown>,
@@ -256,14 +259,36 @@ describe('version chains', () => {
 });
 
 describe('asset de-duplication', () => {
-  it('is stable per project key and differs across keys', async () => {
+  it('is keyed by the dedupe secret and stable across epochs', async () => {
     const content = patternBytes(1000, 3);
-    const keyA = await deriveAssetDedupeKey(patternBytes(32, 1));
-    const keyB = await deriveAssetDedupeKey(patternBytes(32, 2));
-    const a1 = await assetDedupeHash(keyA, content);
-    expect(a1).toMatch(/^[0-9a-f]{64}$/);
-    expect(await assetDedupeHash(keyA, new Uint8Array(content))).toBe(a1);
-    expect(await assetDedupeHash(keyB, content)).not.toBe(a1);
+    const secret = generateAssetDedupeSecret();
+    const key = await importAssetDedupeSecret(secret);
+    expect(key.extractable).toBe(false);
+    const hash = await assetDedupeHash(key, content);
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(await assetDedupeHash(key, new Uint8Array(content))).toBe(hash);
+    // Another project's secret gives a different hash.
+    const other = await importAssetDedupeSecret(generateAssetDedupeSecret());
+    expect(await assetDedupeHash(other, content)).not.toBe(hash);
+    // Carried into a new epoch under the new project key, it hashes the same.
+    const epoch2 = generateSymmetricKey();
+    const context = {
+      purpose: 'dedupe-secret',
+      projectId: 'p',
+      keyEpoch: 2
+    } as const;
+    const carried = await unwrapKey(
+      epoch2,
+      await wrapKey(epoch2, secret, context),
+      context
+    );
+    expect(
+      await assetDedupeHash(await importAssetDedupeSecret(carried), content)
+    ).toBe(hash);
+    await rejectsWith(
+      importAssetDedupeSecret(patternBytes(31)),
+      'invalid-argument'
+    );
   });
 });
 

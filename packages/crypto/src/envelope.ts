@@ -21,6 +21,7 @@ import {
 import { E2eeError } from './errors';
 import {
   CONTENT_BLOB_KINDS,
+  ENVELOPE_FIXED_PREFIX_BYTES,
   PLAINTEXT_CEILINGS,
   DEFAULT_CHUNK_SIZE,
   HASH_BYTES,
@@ -372,6 +373,27 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
   /** The header, once the first chunk has authenticated it. */
   get header(): H | null {
     return this.verified && this.parsed ? (this.parsed.header as H) : null;
+  }
+
+  /**
+   * A good size for the next `push`: one encrypted chunk once the header is
+   * known, a small block before. Pushing at most this much keeps each call's
+   * output to about one record, so callers can honour backpressure.
+   */
+  get preferredPushBytes(): number {
+    if (this.parsed) return this.parsed.header.chunkSize + GCM_TAG_BYTES;
+    // Before the header: just enough to complete the prefix, so the first
+    // push does not also carry a run of records.
+    const have = this.buffered.byteLength;
+    if (have < ENVELOPE_FIXED_PREFIX_BYTES) {
+      return ENVELOPE_FIXED_PREFIX_BYTES - have;
+    }
+    try {
+      const length = envelopePrefixLength(this.buffered);
+      return length === null ? 1 : Math.max(1, length - have);
+    } catch {
+      return 1; // `push` reports the malformed prefix.
+    }
   }
 
   async push(bytes: Uint8Array): Promise<Bytes[]> {
@@ -834,6 +856,8 @@ function checkReference(reference: ContentBlobReference): void {
   if (
     !isEnvelopeId(reference?.blobId) ||
     !CONTENT_BLOB_KINDS.includes(reference.kind) ||
+    !(reference.key instanceof Uint8Array) ||
+    reference.key.byteLength !== KEY_BYTES ||
     !(reference.ciphertextHash instanceof Uint8Array) ||
     reference.ciphertextHash.byteLength !== HASH_BYTES ||
     !isUint(reference.plaintextLength, Number.MAX_SAFE_INTEGER)
@@ -1131,18 +1155,36 @@ export function decryptContentBlobStream(
     declaredLength: reference.plaintextLength,
     maxPlaintextBytes: options.maxPlaintextBytes
   });
-  const payloadReader = envelope
-    .pipeThrough(
-      new TransformStream<Uint8Array, Bytes>({
-        async transform(chunk, controller) {
-          for (const part of await reader.push(chunk)) controller.enqueue(part);
-        },
-        async flush(controller) {
-          for (const part of await reader.finish()) controller.enqueue(part);
+  // Push the envelope a record at a time, so one huge input chunk is
+  // decrypted under backpressure rather than all at once.
+  const envelopeReader = envelope.getReader();
+  let input: Uint8Array | null = null;
+  let inputOffset = 0;
+  const payloadReader = new ReadableStream<Bytes>({
+    async pull(controller) {
+      for (;;) {
+        if (!input || inputOffset >= input.byteLength) {
+          const next = await envelopeReader.read();
+          if (next.done) {
+            for (const part of await reader.finish()) controller.enqueue(part);
+            controller.close();
+            return;
+          }
+          input = next.value;
+          inputOffset = 0;
         }
-      })
-    )
-    .getReader();
+        const slice = input.subarray(
+          inputOffset,
+          inputOffset + reader.preferredPushBytes
+        );
+        inputOffset += slice.byteLength;
+        const out = await reader.push(slice);
+        for (const part of out) controller.enqueue(part);
+        if (out.length > 0) return;
+      }
+    },
+    cancel: (reason) => envelopeReader.cancel(reason)
+  }).getReader();
 
   let source: ReadableStreamDefaultReader<Bytes> | null = null;
   let delivered = 0;
