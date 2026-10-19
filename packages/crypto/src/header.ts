@@ -36,13 +36,15 @@ export const CONTENT_BLOB_KINDS = [
 export type ContentBlobKind = (typeof CONTENT_BLOB_KINDS)[number];
 
 /**
- * Largest plaintext each kind may decompress to, matching the server limits
- * of the plaintext design: `MAX_CLOUD_PROJECT_DOCUMENT_BYTES` (24 MiB) for
- * documents and share snapshots, `MAX_ARTIFACT_UPLOAD_BYTES` (1 GiB) for
- * imported sources, mesh payloads and exports, `MAX_THUMBNAIL_BYTES` and
- * `MAX_PROJECT_MEASUREMENT_BYTES` (512 KiB) for thumbnails and
- * measurements. View state gets 1 MiB (judgment: it holds camera and
- * saved views only). A test pins the shared constants.
+ * Largest plaintext each kind may decompress to (ADR-024, Decompression
+ * limits): `MAX_CLOUD_PROJECT_DOCUMENT_BYTES` (24 MiB) for documents and
+ * share snapshots; 128 MiB, the app's `MAX_SOURCE_IMPORT_BYTES` and
+ * `MAX_ARTIFACT_DOWNLOAD_BYTES`, for imported sources, mesh payloads and
+ * archived exports; `MAX_THUMBNAIL_BYTES` and `MAX_PROJECT_MEASUREMENT_BYTES`
+ * (512 KiB) for thumbnails and measurements. View state gets 1 MiB
+ * (judgment: camera and saved views only). `MAX_ARTIFACT_UPLOAD_BYTES`
+ * (1 GiB) is a storage reservation, never a decompression limit. A test
+ * pins these to the constants they mirror.
  */
 export const PLAINTEXT_CEILINGS: Readonly<
   Record<ProjectEnvelopeKind | ContentBlobKind, number>
@@ -51,9 +53,9 @@ export const PLAINTEXT_CEILINGS: Readonly<
   'share-snapshot': 24 * 1024 * 1024,
   measurements: 512 * 1024,
   'view-state': 1024 * 1024,
-  'import-source': 1024 * 1024 * 1024,
-  'mesh-payload': 1024 * 1024 * 1024,
-  export: 1024 * 1024 * 1024,
+  'import-source': 128 * 1024 * 1024,
+  'mesh-payload': 128 * 1024 * 1024,
+  export: 128 * 1024 * 1024,
   thumbnail: 512 * 1024
 };
 

@@ -1,8 +1,11 @@
 import { concatBytes, type Bytes } from './bytes';
 import { E2eeError } from './errors';
 
-/** Default ceiling for one decompressed payload: a guard against gzip bombs. */
-export const DEFAULT_MAX_PLAINTEXT_BYTES = 1024 * 1024 * 1024;
+/**
+ * Default ceiling for one payload when no kind ceiling applies: the largest
+ * per-kind ceiling (128 MiB), as a guard against gzip bombs.
+ */
+export const DEFAULT_MAX_PLAINTEXT_BYTES = 128 * 1024 * 1024;
 
 function requireCompressionStreams(): void {
   if (

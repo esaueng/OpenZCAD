@@ -439,6 +439,36 @@ describe('sealing to a public key', () => {
     expect(await openSealedKey(device, sealed, context)).toEqual(accountKey);
   });
 
+  it('refuses ECDH keys on other curves with typed errors', async () => {
+    const p384 = await crypto.subtle.generateKey(
+      { name: 'ECDH', namedCurve: 'P-384' },
+      false,
+      ['deriveBits']
+    );
+    await rejectsWith(
+      sealKey(p384.publicKey, PROJECT_KEY, CONTEXT),
+      'invalid-argument'
+    );
+    const member = await generateEncryptionKeyPair();
+    const sealed = await sealKey(member.publicKey, PROJECT_KEY, CONTEXT);
+    await rejectsWith(
+      openSealedKey(
+        { privateKey: p384.privateKey, publicKey: member.publicKey },
+        sealed,
+        CONTEXT
+      ),
+      'invalid-argument'
+    );
+    await rejectsWith(
+      openSealedKey(
+        { privateKey: member.privateKey, publicKey: p384.publicKey },
+        sealed,
+        CONTEXT
+      ),
+      'invalid-argument'
+    );
+  });
+
   it('rejects malformed public keys', async () => {
     const raw = await exportPublicKey(
       (await generateEncryptionKeyPair()).publicKey

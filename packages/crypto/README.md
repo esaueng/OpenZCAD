@@ -76,15 +76,17 @@ which every decrypt path uses, prevents that:
   (`PLAINTEXT_CEILINGS`). That returns `limit-exceeded`.
 - It fails with `malformed` unless the result is exactly the declared length.
 
-| Kind                                | Ceiling | Source                                |
-| ----------------------------------- | ------- | ------------------------------------- |
-| document, share snapshot            | 24 MiB  | `MAX_CLOUD_PROJECT_DOCUMENT_BYTES`    |
-| measurements                        | 512 KiB | `MAX_PROJECT_MEASUREMENT_BYTES`       |
-| view state                          | 1 MiB   | judgment: camera and saved views only |
-| thumbnail                           | 512 KiB | `MAX_THUMBNAIL_BYTES`                 |
-| import source, mesh payload, export | 1 GiB   | `MAX_ARTIFACT_UPLOAD_BYTES`           |
+| Kind                                | Ceiling | Source                                                   |
+| ----------------------------------- | ------- | -------------------------------------------------------- |
+| document, share snapshot            | 24 MiB  | `MAX_CLOUD_PROJECT_DOCUMENT_BYTES`                       |
+| measurements                        | 512 KiB | `MAX_PROJECT_MEASUREMENT_BYTES`                          |
+| view state                          | 1 MiB   | judgment: camera and saved views only                    |
+| thumbnail                           | 512 KiB | `MAX_THUMBNAIL_BYTES`                                    |
+| import source, mesh payload, export | 128 MiB | `MAX_SOURCE_IMPORT_BYTES`, `MAX_ARTIFACT_DOWNLOAD_BYTES` |
 
-Project envelopes declare their length in the header, and content blobs in
+`MAX_ARTIFACT_UPLOAD_BYTES` (1 GiB) is a storage reservation and is never a
+decompression limit. Project envelopes declare their length in the header,
+and content blobs in
 their `ContentBlobReference`. Encryption refuses anything above the ceiling,
 and a test pins the ceilings to the shared constants.
 

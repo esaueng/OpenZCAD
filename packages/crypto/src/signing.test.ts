@@ -155,6 +155,25 @@ describe('version signatures', () => {
     }
   });
 
+  it('refuse keys on other curves with typed errors', async () => {
+    const p384 = await crypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-384' },
+      false,
+      ['sign', 'verify']
+    );
+    const envelope = await version(1, null);
+    await rejectsWith(
+      signProjectEnvelope(p384.privateKey, envelope),
+      'invalid-argument'
+    );
+    const author = await generateSigningKeyPair();
+    const signature = await signProjectEnvelope(author.privateKey, envelope);
+    await rejectsWith(
+      verifyProjectEnvelopeSignature(p384.publicKey, envelope, signature),
+      'invalid-argument'
+    );
+  });
+
   it('refuse content blobs, malformed input and unknown versions', async () => {
     const author = await generateSigningKeyPair();
     const envelope = await version(1, null);

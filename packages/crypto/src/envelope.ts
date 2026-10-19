@@ -305,7 +305,7 @@ async function createWriter<H extends EnvelopeHeader>(
 // --- Reader ---------------------------------------------------------------
 
 export interface ReadOptions {
-  /** Ceiling on the payload and on the decompressed plaintext. Default 1 GiB. */
+  /** Ceiling on the payload and on the decompressed plaintext. Default 128 MiB. */
   readonly maxPlaintextBytes?: number;
 }
 
@@ -334,7 +334,11 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
     options: ReadOptions = {}
   ) {
     this.hasher = expectedHash ? new CiphertextHasher() : null;
-    this.maxBytes = options.maxPlaintextBytes ?? DEFAULT_MAX_PLAINTEXT_BYTES;
+    // The payload may be gzip of incompressible data, slightly larger than
+    // the plaintext: allow deflate's worst-case overhead on top.
+    const plaintextLimit =
+      options.maxPlaintextBytes ?? DEFAULT_MAX_PLAINTEXT_BYTES;
+    this.maxBytes = plaintextLimit + Math.ceil(plaintextLimit / 1024) + 1024;
   }
 
   /** The header, once the first chunk has authenticated it. */

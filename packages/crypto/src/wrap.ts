@@ -13,6 +13,7 @@ import { PROJECT_ENVELOPE_KINDS } from './header';
 import {
   P256_PUBLIC_KEY_BYTES,
   exportPublicKey,
+  isP256Key,
   toEncryptionPublicKey
 } from './keys';
 import {
@@ -525,6 +526,12 @@ export async function openSealedKey(
   const iv = reader.bytes(GCM_IV_BYTES);
   if (reader.remaining < GCM_TAG_BYTES + 1) {
     throw new E2eeError('malformed', 'Sealed key is truncated');
+  }
+  if (!isP256Key(recipient?.privateKey, 'ECDH', 'private')) {
+    throw new E2eeError(
+      'invalid-argument',
+      'Expected a P-256 ECDH private key'
+    );
   }
   const ephemeral = await toEncryptionPublicKey(ephemeralRaw);
   const own = await toEncryptionPublicKey(recipient.publicKey);

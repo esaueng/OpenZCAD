@@ -30,6 +30,24 @@ export async function generateSigningKeyPair(
   return subtle().generateKey(ECDSA, extractable, ['sign', 'verify']);
 }
 
+/**
+ * True for a P-256 key of the given algorithm and type. Every key format in
+ * this package is P-256: another curve would yield the wrong signature
+ * length or a native WebCrypto error instead of an `E2eeError`.
+ */
+export function isP256Key(
+  key: unknown,
+  algorithm: 'ECDH' | 'ECDSA',
+  type: KeyType
+): key is CryptoKey {
+  const k = key as CryptoKey | null | undefined;
+  return (
+    k?.algorithm?.name === algorithm &&
+    (k.algorithm as EcKeyAlgorithm).namedCurve === 'P-256' &&
+    k.type === type
+  );
+}
+
 /** The raw 65-byte public key, as published and fingerprinted. */
 export async function exportPublicKey(key: CryptoKey): Promise<Bytes> {
   if (key.type !== 'public') {
@@ -131,8 +149,8 @@ export async function toEncryptionPublicKey(
   if (key instanceof Uint8Array) {
     return { key: await importEncryptionPublicKey(key), raw: asBytes(key) };
   }
-  if (key.algorithm.name !== 'ECDH' || key.type !== 'public') {
-    throw new E2eeError('invalid-argument', 'Expected an ECDH public key');
+  if (!isP256Key(key, 'ECDH', 'public')) {
+    throw new E2eeError('invalid-argument', 'Expected a P-256 ECDH public key');
   }
   return { key, raw: await exportPublicKey(key) };
 }

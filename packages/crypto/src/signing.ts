@@ -10,7 +10,7 @@ import {
 import { parseEnvelope } from './envelope';
 import { E2eeError } from './errors';
 import type { ProjectEnvelopeHeader } from './header';
-import { importSigningPublicKey } from './keys';
+import { importSigningPublicKey, isP256Key } from './keys';
 import { sha256, subtle } from './primitives';
 
 /**
@@ -74,11 +74,11 @@ export async function signProjectEnvelope(
   envelope: Uint8Array,
   signedAt: number = Date.now()
 ): Promise<Bytes> {
-  if (
-    privateKey?.algorithm?.name !== 'ECDSA' ||
-    privateKey.type !== 'private'
-  ) {
-    throw new E2eeError('invalid-argument', 'Expected an ECDSA private key');
+  if (!isP256Key(privateKey, 'ECDSA', 'private')) {
+    throw new E2eeError(
+      'invalid-argument',
+      'Expected a P-256 ECDSA private key'
+    );
   }
   if (!isUint(signedAt, Number.MAX_SAFE_INTEGER)) {
     throw new E2eeError(
@@ -135,8 +135,11 @@ export async function verifyProjectEnvelopeSignature(
     publicKey instanceof Uint8Array
       ? await importSigningPublicKey(publicKey)
       : publicKey;
-  if (key?.algorithm?.name !== 'ECDSA' || key.type !== 'public') {
-    throw new E2eeError('invalid-argument', 'Expected an ECDSA public key');
+  if (!isP256Key(key, 'ECDSA', 'public')) {
+    throw new E2eeError(
+      'invalid-argument',
+      'Expected a P-256 ECDSA public key'
+    );
   }
   const message = await versionStatement(envelope, signedAt);
   let valid: boolean;

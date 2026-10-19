@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { concatBytes, type Bytes } from './bytes';
 import { gzipBytes } from './compression';
@@ -513,16 +514,103 @@ describe('decompression limits', () => {
     );
   });
 
-  it('matches the shared server limits', async () => {
+  it('matches the limits it mirrors, and never the 1 GiB upload reservation', async () => {
     const shared = await import('@openzcad/shared');
     expect(PLAINTEXT_CEILINGS.document).toBe(
       shared.MAX_CLOUD_PROJECT_DOCUMENT_BYTES
     );
-    expect(PLAINTEXT_CEILINGS['import-source']).toBe(
-      shared.MAX_ARTIFACT_UPLOAD_BYTES
+    expect(PLAINTEXT_CEILINGS['share-snapshot']).toBe(
+      shared.MAX_CLOUD_PROJECT_DOCUMENT_BYTES
     );
-    expect(PLAINTEXT_CEILINGS.export).toBe(shared.MAX_ARTIFACT_UPLOAD_BYTES);
     expect(PLAINTEXT_CEILINGS.thumbnail).toBe(shared.MAX_THUMBNAIL_BYTES);
+    // The app constants live in modules too heavy for this suite; read them.
+    const appConstant = (file: string, name: string): number => {
+      const source = readFileSync(
+        new URL(`../../../apps/web/${file}`, import.meta.url),
+        'utf8'
+      );
+      const match = new RegExp(`${name} = ([\\d\\s*]+);`).exec(source);
+      if (!match) throw new Error(`${name} not found in ${file}`);
+      return match[1]!
+        .split('*')
+        .reduce((product, factor) => product * Number(factor), 1);
+    };
+    const sourceLimit = appConstant(
+      'src/lib/stepImportRun.ts',
+      'MAX_SOURCE_IMPORT_BYTES'
+    );
+    expect(sourceLimit).toBe(128 * 1024 * 1024);
+    expect(
+      appConstant(
+        'src/lib/exactSourceResolver.ts',
+        'MAX_ARTIFACT_DOWNLOAD_BYTES'
+      )
+    ).toBe(sourceLimit);
+    expect(
+      appConstant(
+        'worker/projectMeasurements.ts',
+        'MAX_PROJECT_MEASUREMENT_BYTES'
+      )
+    ).toBe(PLAINTEXT_CEILINGS.measurements);
+    for (const kind of ['import-source', 'mesh-payload', 'export'] as const) {
+      expect(PLAINTEXT_CEILINGS[kind]).toBe(sourceLimit);
+    }
+    for (const ceiling of Object.values(PLAINTEXT_CEILINGS)) {
+      expect(ceiling).toBeLessThan(shared.MAX_ARTIFACT_UPLOAD_BYTES);
+    }
+  });
+
+  it('accepts gzip of incompressible data at the payload limit', async () => {
+    const random = new Uint8Array(200_000);
+    for (let at = 0; at < random.length; at += 65_536) {
+      crypto.getRandomValues(random.subarray(at, at + 65_536));
+    }
+    const { envelope, reference } = await encryptContentBlob(
+      EnvelopeKey.generate(),
+      'export',
+      random
+    );
+    expect(parseEnvelope(envelope).payloadLength).toBeGreaterThan(200_000);
+    expect(
+      await decryptContentBlob(reference, envelope, {
+        maxPlaintextBytes: 200_000
+      })
+    ).toEqual(random);
+  });
+
+  it('refuses an import source that inflates past 128 MiB', async () => {
+    const limit = PLAINTEXT_CEILINGS['import-source'];
+    // 128 MiB + 1 of zeros gzips to about 130 KiB.
+    const bomb = await gzipBytes(new Uint8Array(limit + 1));
+    const key = envelopeKeyFromBytes(patternBytes(32, 0x21));
+    const writer = await createContentBlobWriterWith(
+      key,
+      'import-source',
+      { compression: 'gzip', chunkSize: 64 * 1024 },
+      queuedRandom(patternBytes(16, 0x31))
+    );
+    const envelope = concatBytes(
+      writer.prefix,
+      ...(await writer.write(bomb)),
+      await writer.finish()
+    );
+    // A reference that admits the true size is refused before inflating…
+    expect(() => contentBlobReference(writer, key, limit + 1)).toThrow(
+      expect.objectContaining({ code: 'limit-exceeded' })
+    );
+    // …and one that claims the ceiling stops the moment output passes it.
+    const reference = contentBlobReference(writer, key, limit);
+    await rejectsWith(
+      decryptContentBlob(reference, envelope),
+      'limit-exceeded'
+    );
+    await rejectsWith(
+      decryptContentBlob(
+        { ...reference, plaintextLength: limit + 1 },
+        envelope
+      ),
+      'limit-exceeded'
+    );
   });
 });
 
