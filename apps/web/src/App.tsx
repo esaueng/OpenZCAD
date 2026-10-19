@@ -11947,12 +11947,9 @@ export function App() {
 
   /** One sketch's exact curves as an SVG at 1:1 in document units. */
   async function handleExportSketchSvg(options: SvgExportOptions) {
-    if (currentGeometrySnapshot !== null) {
-      setStatus(
-        'The model is still updating. Try exporting again when it finishes.'
-      );
-      return;
-    }
+    // No rebuild guard: the sketch is read from the saved document, and the
+    // worker queues the export behind any rebuild in flight. The dialog
+    // offers SVG while the model updates, so it must be able to deliver it.
     if (!doc) {
       return;
     }

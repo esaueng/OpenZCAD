@@ -1,6 +1,10 @@
 import * as THREE from 'three';
-import { describe, expect, it } from 'vitest';
-import { fitCameraToAspect } from './viewportImage';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  fitCameraToAspect,
+  renderViewportImage,
+  type ViewportImageScene
+} from './viewportImage';
 
 /** Where a world point lands in normalized device coordinates. */
 function ndc(camera: THREE.Camera, point: THREE.Vector3): THREE.Vector3 {
@@ -55,5 +59,141 @@ describe('fitCameraToAspect', () => {
       -36, 36, 9, -9
     ]);
     restore();
+  });
+});
+
+/**
+ * A renderer that records what the scene render saw. No GL: the capture's
+ * scope and restore logic is what is under test, not the driver.
+ */
+function stubScene() {
+  const scene = new THREE.Scene();
+  const light = new THREE.AmbientLight();
+  const bodies = new THREE.Group();
+  const sketches = new THREE.Group();
+  const gizmo = new THREE.Group();
+  const backdrop = new THREE.Group();
+  const grid = new THREE.Group();
+  const bodyA = new THREE.Mesh(
+    new THREE.BoxGeometry(),
+    new THREE.MeshStandardMaterial({ emissive: 0x112233 })
+  );
+  const bodyB = new THREE.Mesh(new THREE.BoxGeometry());
+  bodyB.visible = false; // hidden in the view
+  bodies.add(bodyA, bodyB);
+  scene.add(backdrop, grid, light, bodies, sketches, gizmo);
+  const seen: Record<string, boolean | number>[] = [];
+  const renderer = {
+    capabilities: { maxTextureSize: 4096, maxSamples: 4 },
+    toneMapping: THREE.ACESFilmicToneMapping,
+    toneMappingExposure: 1,
+    outputColorSpace: THREE.SRGBColorSpace,
+    shadowMap: { needsUpdate: false },
+    getClearColor: (color: THREE.Color) => color.set(0x0b0c0f),
+    getClearAlpha: () => 1,
+    setClearColor: vi.fn(),
+    getRenderTarget: () => null,
+    setRenderTarget: vi.fn(),
+    clear: vi.fn(),
+    render: vi.fn((object: THREE.Object3D) => {
+      if (object !== scene) return;
+      seen.push({
+        bodyA: bodyA.visible,
+        bodyB: bodyB.visible,
+        sketches: sketches.visible,
+        gizmo: gizmo.visible,
+        backdrop: backdrop.visible,
+        grid: grid.visible,
+        shadowUpdate: renderer.shadowMap.needsUpdate,
+        emissive: bodyA.material.emissive.getHex()
+      });
+    }),
+    readRenderTargetPixels: vi.fn()
+  };
+  const refreshShadowMap = vi.fn();
+  const camera = new THREE.PerspectiveCamera(40, 2, 0.1, 100);
+  const parts: ViewportImageScene = {
+    renderer: renderer as unknown as THREE.WebGLRenderer,
+    scene,
+    camera,
+    backdrop,
+    grid: [grid],
+    content: [light, bodies, sketches],
+    sketches: [sketches],
+    objectsByBodyId: new Map<string, THREE.Object3D>([
+      ['a', bodyA],
+      ['b', bodyB]
+    ]),
+    refreshShadowMap
+  };
+  return {
+    parts,
+    seen,
+    bodyA,
+    bodyB,
+    sketches,
+    gizmo,
+    renderer,
+    refreshShadowMap
+  };
+}
+
+describe('renderViewportImage', () => {
+  it('draws the view as shown, without UI, and restores everything', () => {
+    const stub = stubScene();
+    const image = renderViewportImage(stub.parts, {
+      width: 32,
+      height: 16,
+      transparent: true,
+      showGrid: false
+    });
+    expect([image.width, image.height, image.rgba.length]).toEqual([
+      32,
+      16,
+      32 * 16 * 4
+    ]);
+    expect(stub.seen).toEqual([
+      {
+        bodyA: true,
+        bodyB: false,
+        sketches: true,
+        gizmo: false,
+        backdrop: false,
+        grid: false,
+        shadowUpdate: false,
+        emissive: 0
+      }
+    ]);
+    expect(stub.bodyA.visible).toBe(true);
+    expect(stub.bodyB.visible).toBe(false);
+    expect(stub.gizmo.visible).toBe(true);
+    expect(stub.bodyA.material.emissive.getHex()).toBe(0x112233);
+    expect(stub.refreshShadowMap).not.toHaveBeenCalled();
+  });
+
+  it('draws a selected body alone, even one the view hides, with its own shadow', () => {
+    const stub = stubScene();
+    renderViewportImage(stub.parts, {
+      width: 32,
+      height: 16,
+      transparent: false,
+      showGrid: true,
+      bodyIds: ['b']
+    });
+    // The hidden selected body is drawn; the other body and the sketches
+    // are not; the shadow map is redrawn for the scoped picture.
+    expect(stub.seen[0]).toMatchObject({
+      bodyA: false,
+      bodyB: true,
+      sketches: false,
+      backdrop: true,
+      grid: true,
+      shadowUpdate: true
+    });
+    expect(stub.bodyA.visible).toBe(true);
+    expect(stub.bodyB.visible).toBe(false);
+    expect(stub.sketches.visible).toBe(true);
+    // ...and the live view rebuilds its map with every body afterwards.
+    expect(stub.refreshShadowMap).toHaveBeenCalledTimes(1);
   });
 });

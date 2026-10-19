@@ -2626,7 +2626,9 @@ export function ModelViewer({
               regionGroup,
               sketchGroup
             ],
-            objectsByBodyId
+            sketches: [regionGroup, sketchGroup],
+            objectsByBodyId,
+            refreshShadowMap
           },
           request
         );

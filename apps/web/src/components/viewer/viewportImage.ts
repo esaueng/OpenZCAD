@@ -62,7 +62,18 @@ export interface ViewportImageScene {
    * measurements, previews) is UI and is left out of the picture.
    */
   content: readonly THREE.Object3D[];
+  /**
+   * The members of `content` that draw sketches and their profile fills,
+   * left out when the request names bodies: a body export draws the body.
+   */
+  sketches: readonly THREE.Object3D[];
   objectsByBodyId: ReadonlyMap<string, THREE.Object3D>;
+  /**
+   * Marks the live viewer's frozen shadow map for a refresh. A body-scoped
+   * capture redraws that map without the other bodies, so the live view
+   * needs it rebuilt afterwards.
+   */
+  refreshShadowMap(): void;
 }
 
 /**
@@ -214,23 +225,30 @@ export function renderViewportImage(
   }
 
   const restores: Array<() => void> = [];
-  const hide = (object: THREE.Object3D, visible: boolean) => {
+  const show = (object: THREE.Object3D, visible: boolean) => {
     const was = object.visible;
-    object.visible = was && visible;
+    object.visible = visible;
     restores.push(() => {
       object.visible = was;
     });
   };
+  const hide = (object: THREE.Object3D, visible: boolean) =>
+    show(object, object.visible && visible);
+  const bodyScoped = request.bodyIds !== undefined;
   const keep = new Set(parts.content);
   for (const child of scene.children) {
     if (child === parts.backdrop) hide(child, !request.transparent);
     else if (parts.grid.includes(child)) hide(child, request.showGrid);
+    else if (bodyScoped && parts.sketches.includes(child)) hide(child, false);
     else hide(child, keep.has(child));
   }
   if (request.bodyIds) {
+    // The named bodies are drawn even if the view hides them: a selected
+    // body exports alone whatever its viewing state, as the mesh export
+    // writes it.
     const wanted = new Set(request.bodyIds);
     for (const [bodyId, object] of parts.objectsByBodyId) {
-      hide(object, wanted.has(bodyId));
+      show(object, wanted.has(bodyId));
     }
   }
   // Selection is a viewing state: its glow is not part of the part.
@@ -255,8 +273,12 @@ export function renderViewportImage(
   renderer.setClearColor(0x000000, request.transparent ? 0 : 1);
   restores.push(() => renderer.setClearColor(clearColor, clearAlpha));
   const shadowUpdate = renderer.shadowMap.needsUpdate;
+  // The live map holds every visible body's shadow. A body-scoped picture
+  // casts from its own bodies only, and the live view rebuilds afterwards.
+  if (bodyScoped) renderer.shadowMap.needsUpdate = true;
   restores.push(() => {
-    renderer.shadowMap.needsUpdate = shadowUpdate;
+    if (bodyScoped) parts.refreshShadowMap();
+    else renderer.shadowMap.needsUpdate = shadowUpdate;
   });
   const previousTarget = renderer.getRenderTarget();
   restores.push(() => renderer.setRenderTarget(previousTarget));
