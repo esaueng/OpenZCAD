@@ -772,8 +772,16 @@ encrypts under the project key is unchanged.
 - **Authorization.** MLS lets any member propose and commit (§3.2, §16.11).
   Every member's browser must reject, in commit validation, any Commit or
   proposal its sender's role does not allow. Viewers may commit only Updates
-  of their own leaves and their own removal; only the owner adds members or
-  changes roles. Rejecting commits from unauthorised senders is ordinary MLS
+  of their own leaves; only the owner adds members or changes roles. Leaving
+  is a proposal, never a Commit by the leaver, because a Commit may not remove
+  its own sender (§12.2). The departing member sends a SelfRemove proposal
+  where the chosen library supports the MLS extension for it. Otherwise it
+  sends a signed leave request as an application message and stops sending
+  content. Any remaining member's browser, viewers included, must commit the
+  removal before its next write. Policy accepts that Remove from any role,
+  because it removes only the member who asked. Until it is committed, the
+  departing member still reads new versions, as with any removal that waits
+  for an online member. Rejecting commits from unauthorised senders is ordinary MLS
   application policy, and simpler than the typed roster it replaces.
 - **Sequencing.** The Delivery Service must pick one Commit per epoch; the
   application must resolve conflicting Commits (§14). The room already
@@ -840,6 +848,17 @@ encrypts under the project key is unchanged.
     from before its removal, which the epoch rule refuses.
   - A removed member fails at the first check whatever PSK they hold. Coming
     back requires an Add from the owner.
+
+  **The last leaf.** Rejoin needs a PSK later than the removed leaf's cutoff,
+  and such a PSK exists only if some member advances the group after the
+  removal. If the device being removed is the only leaf left in a group (a
+  solo project whose one device was lost), there is no such member. So the
+  removal flow orders the steps itself: the browser performing the removal
+  first rejoins every group where the departing device is the user's last
+  leaf, using the newest wrapped PSK, which is still valid because nothing
+  has been revoked yet. It then commits the Remove of the old leaf from its
+  new leaf, and only then signs the device-list revocation. The browser doing
+  the removal always holds the account key, so it can always run these steps.
 
   A device that cannot meet these rules, for example after an absence longer
   than the retention window, is re-added by an ordinary Add from the owner, after the same credential
