@@ -51,15 +51,15 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * turn such a Move about the origin and move the body elsewhere, so the bump
  * makes it refuse the document instead.
  *
- * v23 adds S04 composite identity (`SketchNode.composites`): a rectangle or
+ * v26 adds S04 composite identity (`SketchNode.composites`): a rectangle or
  * polygon drawn in the viewport is real lines held by persisted relations,
  * and the composite record names those lines as one object with ordered
- * corners and sides. A v22 client would drop the record on its next save and
+ * corners and sides. An older client would drop the record on its next save and
  * leave four unrelated lines, so the bump makes it refuse such a document.
  * Absent means no composites: every older rectangle and polygon object loads
  * unchanged and is never decomposed.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 23 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 26 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -659,7 +659,7 @@ export interface SketchNode extends BaseNode {
    */
   referenceDimensions?: SketchReferenceDimension[];
   /**
-   * S04 composite identity (schema v23, additive): rectangles and polygons
+   * S04 composite identity (schema v26, additive): rectangles and polygons
    * drawn as lines, each named as one object. Absent means none, so every
    * earlier document replays untouched; a legacy `rectangle` or `polygon`
    * object is never rewritten into one.

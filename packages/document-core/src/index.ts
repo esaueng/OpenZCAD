@@ -871,7 +871,7 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // `constraints`, so nothing needs rewriting.
   // Schema v15 -> v16 adds the canonical-plane basis marker. Never synthesize
   // it while migrating: unmarked saved sketches must retain revision 1 geometry.
-  // Schema v22 -> v23 adds S04 sketch composites. Never synthesize one:
+  // Schema v26 adds S04 sketch composites. Never synthesize one:
   // a saved rectangle or polygon object stays the parametric object it was.
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version

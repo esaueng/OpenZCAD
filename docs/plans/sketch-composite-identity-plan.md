@@ -1,6 +1,6 @@
 # S04: Constraint-capable composite sketch identity
 
-Status: **implemented for new drawings by the decision below (schema v23).**
+Status: **implemented for new drawings by the decision below (schema v26).**
 The sections after it are the original proposal, kept as history and as the
 design for the legacy parametric objects, which this decision leaves as they
 are.
@@ -74,7 +74,7 @@ The rules:
   keep corner 1.
 * **Not geometry.** The record never enters the solver or the exact-history
   digest. The lines and relations are the geometry.
-* **Schema v23.** The bump stops a v22 client from silently dropping the
+* **Schema v26.** The bump stops an older client from silently dropping the
   record on save. `normalizeDocument` validates the record's shape and never
   synthesizes one.
 
