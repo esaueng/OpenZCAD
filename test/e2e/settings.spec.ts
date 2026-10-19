@@ -557,9 +557,7 @@ test('turns project sharing off without disabling cloud saves', async ({
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   await page.getByRole('checkbox', { name: 'Project sharing' }).uncheck();
-  await page
-    .getByRole('button', { name: 'Files & autosave', exact: true })
-    .click();
+  await page.getByRole('button', { name: 'Saving', exact: true }).click();
   await expect(
     page.getByRole('checkbox', { name: 'Cloud autosave' })
   ).toBeChecked();
@@ -594,11 +592,11 @@ test('settings restore the exact non-sensitive view after reload', async ({
   await stubApi(page);
   await page.goto('/');
   await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Shortcuts', exact: true }).click();
+  await page.getByRole('button', { name: 'Controls', exact: true }).click();
   await page.getByLabel('Find a setting').fill('mouse');
 
   await expect(
-    page.getByRole('heading', { level: 2, name: 'Controls & shortcuts' })
+    page.getByRole('heading', { level: 2, name: 'Controls', exact: true })
   ).toBeVisible();
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
   const scrollTop = await page
@@ -615,10 +613,10 @@ test('settings restore the exact non-sensitive view after reload', async ({
   await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
   await expect(page.getByLabel('Find a setting')).toHaveValue('mouse');
   await expect(
-    page.getByRole('button', { name: 'Shortcuts', exact: true })
+    page.getByRole('button', { name: 'Controls', exact: true })
   ).toHaveAttribute('aria-current', 'page');
   await expect(
-    page.getByRole('heading', { level: 2, name: 'Controls & shortcuts' })
+    page.getByRole('heading', { level: 2, name: 'Controls', exact: true })
   ).toBeVisible();
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
   const restoredScroll = await page
@@ -965,7 +963,7 @@ test('forcing mouse navigation makes a trackpad-style scroll zoom again', async 
   // in the viewport suite. What matters here is that the preference overrides
   // it — the escape hatch for hardware the classification reads wrongly.
   await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  await page.getByRole('button', { name: 'Controls', exact: true }).click();
   await page.getByLabel('Scroll wheel').selectOption('mouse');
   await page
     .getByRole('button', { name: /Back to workspace|Close settings/ })
@@ -1129,8 +1127,12 @@ test('reset settings revokes analytics consent and persists the default', async 
   });
   await consent.check();
   page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Advanced', exact: true }).click();
   await page
     .getByRole('button', { name: 'Reset settings', exact: true })
+    .click();
+  await page
+    .getByRole('button', { name: 'Privacy & data', exact: true })
     .click();
   await expect(consent).not.toBeChecked();
   await page.reload();
@@ -1200,7 +1202,7 @@ test('cloud-off suppresses analytics while keeping the saved consent revocable',
     exact: true
   });
   await consent.check();
-  await page.getByRole('button', { name: 'General', exact: true }).click();
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
   await page
     .getByRole('checkbox', { name: 'Cloud features', exact: true })
     .uncheck();

@@ -59,7 +59,7 @@ describe('controls reference', () => {
     expect(pointerItem('window-select')?.keys).toEqual(['Drag left → right']);
     expect(pointerItem('window-select')?.detail).toContain('fully enclosed');
     expect(pointerItem('crossing-select')?.detail).toContain('touched');
-    expect(pointerItem('middle-drag')?.detail).toContain('Viewport settings');
+    expect(pointerItem('middle-drag')?.detail).toContain('Navigation');
   });
 
   it('documents the View-mode keys, including M meaning two things', () => {
@@ -105,7 +105,7 @@ describe('controls reference', () => {
     ]) {
       expect(
         visibleSettingsSections({ query }).map((section) => section.id)
-      ).toContain('shortcuts');
+      ).toContain('controls');
     }
   });
 });
