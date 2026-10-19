@@ -31,8 +31,14 @@ import {
   type DrawingViewOrientation,
   type ProjectDocument
 } from '@openzcad/shared';
-import { DrawingProjectionClient } from '../lib/drawing/projectionClient';
-import type { ViewProjection } from '../lib/drawing/projectView';
+import {
+  DrawingProjectionClient,
+  type DrawingProjectionViewRequest
+} from '../lib/drawing/projectionClient';
+import type {
+  ProjectionBodyInput,
+  ViewProjection
+} from '../lib/drawing/projectView';
 import {
   composeSheetPage,
   sheetViewArea,
@@ -146,41 +152,67 @@ function useViewProjections(
   const fingerprint = status?.kind === 'ready' ? status.fingerprint : null;
   useEffect(() => {
     if (!sheet || !fingerprint || !client.current) return;
+    // Every view this pass still needs goes in one request, with each body's
+    // geometry once however many views draw it.
+    const views: DrawingProjectionViewRequest[] = [];
+    const inputs: Record<string, ProjectionBodyInput> = {};
     for (const view of sheet.views) {
       const key = projectionKey(fingerprint, view);
-      if (cache.current.has(key)) continue;
-      const inputs = view.bodyIds
-        .map((id) => bodies[id])
-        .map((body) => (body ? projectionBodyInput(body) : null))
-        .filter((input) => input !== null);
+      if (cache.current.has(key) || views.some((entry) => entry.key === key))
+        continue;
+      for (const id of view.bodyIds) {
+        const body = bodies[id];
+        const input =
+          body && !(id in inputs) ? projectionBodyInput(body) : null;
+        if (input) inputs[id] = input;
+      }
+      views.push({
+        key,
+        orientation: view.orientation,
+        hiddenLines: view.hiddenLines,
+        bodyIds: [...view.bodyIds]
+      });
       cache.current.set(key, { state: 'projecting' });
+    }
+    if (views.length > 0)
       client.current
-        .project({
-          orientation: view.orientation,
-          hiddenLines: view.hiddenLines,
-          bodies: inputs
-        })
+        .project(inputs, views)
         .then(
-          (projection) =>
-            cache.current.set(key, { state: 'ready', projection }),
+          (results) => {
+            for (const view of views) {
+              const result = results[view.key];
+              cache.current.set(
+                view.key,
+                result?.ok
+                  ? { state: 'ready', projection: result.projection }
+                  : {
+                      state: 'error',
+                      message: result?.error ?? 'Projection failed.'
+                    }
+              );
+            }
+          },
           (error: unknown) => {
-            // A client closed under the request (an unmount, or React's
-            // development remount) is not the view's failure: forget it so
-            // the next pass asks again.
-            if (error instanceof Error && error.name === 'AbortError')
-              cache.current.delete(key);
-            else
-              cache.current.set(key, {
-                state: 'error',
-                message:
-                  error instanceof Error ? error.message : 'Projection failed.'
-              });
+            for (const view of views) {
+              // A client closed under the request (an unmount, or React's
+              // development remount) is not the view's failure: forget it so
+              // the next pass asks again.
+              if (error instanceof Error && error.name === 'AbortError')
+                cache.current.delete(view.key);
+              else
+                cache.current.set(view.key, {
+                  state: 'error',
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : 'Projection failed.'
+                });
+            }
           }
         )
         .finally(() => {
           if (mounted.current) setRevision((value) => value + 1);
         });
-    }
     // Keep the cache to what this model can still use.
     for (const key of cache.current.keys())
       if (!key.startsWith(`${fingerprint}|`)) cache.current.delete(key);

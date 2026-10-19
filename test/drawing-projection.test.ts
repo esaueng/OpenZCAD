@@ -234,6 +234,29 @@ describe('D01 view projection', () => {
     }
   });
 
+  it('finds an occluder far narrower than any sampling step would', async () => {
+    // A 0.2 mm fin in front of a 400 mm bar: the fin covers 0.05% of the
+    // bar's top edge, which a fixed step of diagonal/400 (~1 mm) skipped.
+    let document = createProjectDocument('Fin', toUserId('test'));
+    const fin = box(document, 'Fin', [0.2, 2, 20], [100, 0, 0]);
+    const bar = box(fin.document, 'Bar', [400, 2, 10], [0, 10, 0]);
+    document = bar.document;
+    const result = await project(document, [fin.bodyId, bar.bodyId], 'front');
+    const covered = onLine(
+      result.hidden,
+      (u, v) => Math.abs(v - 10) < 1e-6 && u >= 100 - 1e-6 && u <= 100.2 + 1e-6
+    );
+    expect(runs(covered)).toEqual([
+      run('front', [100, 10, 10], [100.2, 10, 10])
+    ]);
+    expect(
+      onLine(
+        result.visible,
+        (u, v) => Math.abs(v - 10) < 1e-6 && u > 100.01 && u < 100.19
+      )
+    ).toEqual([]);
+  });
+
   it('lets one body hide another', async () => {
     let document = createProjectDocument('Two', toUserId('test'));
     const front = box(document, 'Front', [20, 2, 20]);

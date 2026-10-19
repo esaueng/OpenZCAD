@@ -276,7 +276,8 @@ sheet/view contract above with these recorded departures:
   silhouettes. The implementation projects in its own worker from the
   display projection instead: kernel-sampled feature-edge polylines plus
   display-mesh silhouettes of curved faces, with occlusion against every
-  body's triangles and transitions bisected. It is approximate to the display
+  body's triangles, each projected edge segment split exactly where it
+  crosses an occluding triangle's edge. It is approximate to the display
   tolerance and is labelled so in the sheet panel. `test/drawing-projection.test.ts`
   keeps the box bounds and isometric known-run oracles above and records the
   pinned kernel's gaps as a diagnostic.

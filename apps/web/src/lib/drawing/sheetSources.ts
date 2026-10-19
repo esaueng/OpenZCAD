@@ -39,7 +39,7 @@ export function projectionBodyInput(
     })),
     edges: (body.topology?.edges ?? [])
       .filter((edge) => edge.displayRole !== 'seam' && edge.points.length >= 6)
-      .map((edge) => Float64Array.from(edge.points))
+      .map((edge) => edge.points)
   };
 }
 

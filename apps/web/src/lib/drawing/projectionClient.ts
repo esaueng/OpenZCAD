@@ -1,37 +1,56 @@
 import type {
   DrawingProjectionRequest,
-  DrawingProjectionResponse
+  DrawingProjectionResponse,
+  DrawingProjectionResult,
+  DrawingProjectionViewRequest
 } from '../../worker/drawingProjectionWorker';
-import {
-  projectView,
-  type ViewProjection,
-  type ViewProjectionInput
-} from './projectView';
+import { projectView, type ProjectionBodyInput } from './projectView';
+
+export type { DrawingProjectionResult, DrawingProjectionViewRequest };
 
 /**
  * The main thread's handle on the drawing projection worker: one worker for
- * the drawing workspace's lifetime, requests answered in any order. Where
- * workers do not exist (unit tests under happy-dom), projection runs inline.
+ * the drawing workspace's lifetime. A sheet's missing views go in one
+ * request that carries each body's geometry once, so a detailed model is
+ * cloned into the worker once per pass, not once per view. Where workers do
+ * not exist (unit tests under happy-dom), projection runs inline.
  */
 export class DrawingProjectionClient {
   private worker: Worker | null = null;
   private readonly pending = new Map<
     string,
     {
-      resolve: (projection: ViewProjection) => void;
+      resolve: (results: Record<string, DrawingProjectionResult>) => void;
       reject: (error: Error) => void;
     }
   >();
 
-  project(input: ViewProjectionInput): Promise<ViewProjection> {
+  project(
+    bodies: Record<string, ProjectionBodyInput>,
+    views: DrawingProjectionViewRequest[]
+  ): Promise<Record<string, DrawingProjectionResult>> {
     if (typeof Worker === 'undefined') {
-      try {
-        return Promise.resolve(projectView(input));
-      } catch (error) {
-        return Promise.reject(
-          error instanceof Error ? error : new Error(String(error))
-        );
+      const results: Record<string, DrawingProjectionResult> = {};
+      for (const view of views) {
+        try {
+          results[view.key] = {
+            ok: true,
+            projection: projectView({
+              orientation: view.orientation,
+              hiddenLines: view.hiddenLines,
+              bodies: view.bodyIds.flatMap((id) =>
+                bodies[id] ? [bodies[id]] : []
+              )
+            })
+          };
+        } catch (error) {
+          results[view.key] = {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error)
+          };
+        }
       }
+      return Promise.resolve(results);
     }
     const worker = this.ensureWorker();
     const requestId = crypto.randomUUID();
@@ -40,7 +59,8 @@ export class DrawingProjectionClient {
       const request: DrawingProjectionRequest = {
         type: 'project',
         requestId,
-        input
+        bodies,
+        views
       };
       worker.postMessage(request);
     });
@@ -57,8 +77,7 @@ export class DrawingProjectionClient {
       const entry = this.pending.get(response.requestId);
       if (!entry) return;
       this.pending.delete(response.requestId);
-      if (response.ok) entry.resolve(response.projection);
-      else entry.reject(new Error(response.error));
+      entry.resolve(response.results);
     };
     worker.onerror = (event) => {
       event.preventDefault();

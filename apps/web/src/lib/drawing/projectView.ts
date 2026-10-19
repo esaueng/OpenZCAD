@@ -23,10 +23,11 @@ import {
  *   silhouette lines of curved faces: display-mesh edges where the surface
  *   turns from facing the camera to facing away, within one face or across a
  *   smooth (tangent) boundary.
- * - **Visibility.** A sample is hidden when any triangle of any body in the
- *   view covers it in projection and lies in front of it by more than a
- *   depth tolerance. Triangles are bucketed in a projected grid. Transitions
- *   are located by bisection, not left at the sample spacing.
+ * - **Visibility.** A projected edge segment is split wherever it crosses
+ *   the edge of a triangle it passes over; between two such crossings the
+ *   same triangles cover it, so each piece is classified once, at its middle:
+ *   hidden when a triangle of any body in the view lies in front of it by
+ *   more than a depth tolerance. No occluder is too narrow to be found.
  *
  * This is an approximation, and labelled as one: occlusion is tested against
  * the display tessellation (chordal error of its deflection) and silhouettes
@@ -58,9 +59,6 @@ export interface ViewProjection {
   bounds: { minU: number; minV: number; maxU: number; maxV: number } | null;
 }
 
-/** Steps a straight run is cut into before classification, per diagonal. */
-const SAMPLES_PER_DIAGONAL = 400;
-const BISECTION_STEPS = 14;
 /** Cosine of the largest dihedral still treated as a smooth surface. */
 const SMOOTH_DIHEDRAL_COS = Math.cos((50 * Math.PI) / 180);
 
@@ -123,6 +121,55 @@ class OcclusionGrid {
       this.size - 1,
       Math.max(0, Math.floor((v - this.minV) / this.cellV))
     );
+  }
+
+  /**
+   * Parameters in (0, 1) where segment a→b crosses the edge of a triangle
+   * it passes over, sorted. Between two of them every point is covered by
+   * the same triangles, so visibility is constant there.
+   */
+  crossings(au: number, av: number, bu: number, bv: number): number[] {
+    const du = bu - au;
+    const dv = bv - av;
+    // The cells the segment passes through, stepping a quarter cell at a
+    // time; triangles are bucketed by their bounding boxes.
+    const steps = Math.min(
+      4 * this.size * 2,
+      Math.ceil(
+        Math.max(Math.abs(du) / this.cellU, Math.abs(dv) / this.cellV) * 4
+      ) + 1
+    );
+    const seen = new Set<number>();
+    for (let k = 0; k <= steps; k += 1) {
+      const f = k / steps;
+      const cell =
+        this.cells[
+          this.row(av + dv * f) * this.size + this.column(au + du * f)
+        ]!;
+      for (const index of cell) seen.add(index);
+    }
+    const out: number[] = [];
+    const denomFloor = 1e-18;
+    for (const index of seen) {
+      const t = this.triangles[index]!;
+      const corners = [
+        [t.u0, t.v0],
+        [t.u1, t.v1],
+        [t.u2, t.v2]
+      ] as const;
+      for (let e = 0; e < 3; e += 1) {
+        const [pu, pv] = corners[e]!;
+        const [qu, qv] = corners[(e + 1) % 3]!;
+        const eu = qu - pu;
+        const ev = qv - pv;
+        const denom = du * ev - dv * eu;
+        if (Math.abs(denom) <= denomFloor) continue;
+        const s = ((pu - au) * ev - (pv - av) * eu) / denom;
+        const r = ((pu - au) * dv - (pv - av) * du) / denom;
+        if (s > 0 && s < 1 && r >= 0 && r <= 1) out.push(s);
+      }
+    }
+    return out.sort((a, b) => a - b);
   }
 
   /** True when a triangle covers (u, v) in front of `depth`. */
@@ -386,7 +433,6 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
 
   const visible: Float64Array[] = [];
   const hidden: Float64Array[] = [];
-  const step = diagonal / SAMPLES_PER_DIAGONAL;
   const emit = (points: number[], isHidden: boolean) => {
     if (points.length < 6) return;
     let length = 0;
@@ -412,81 +458,47 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   };
 
   for (const line of lines) {
-    // Densify: classification is by sub-segment midpoint. Only the line's
-    // own vertices and the visibility cuts are emitted; the samples between
-    // them are collinear with them.
-    const dense: number[] = [];
-    const keep: boolean[] = [];
-    for (let i = 0; i + 2 < line.length; i += 3) {
-      if (i > 0) {
-        const span = Math.hypot(
-          line[i]! - line[i - 3]!,
-          line[i + 1]! - line[i - 2]!,
-          line[i + 2]! - line[i - 1]!
-        );
-        const pieces = Math.min(4096, Math.ceil(span / step));
-        for (let k = 1; k < pieces; k += 1) {
-          const f = k / pieces;
-          dense.push(
-            line[i - 3]! + (line[i]! - line[i - 3]!) * f,
-            line[i - 2]! + (line[i + 1]! - line[i - 2]!) * f,
-            line[i - 1]! + (line[i + 2]! - line[i - 1]!) * f
-          );
-          keep.push(false);
-        }
-      }
-      dense.push(line[i]!, line[i + 1]!, line[i + 2]!);
-      keep.push(true);
-    }
-    const count = dense.length / 3;
+    const count = Math.floor(line.length / 3);
     if (count < 2) continue;
-    const at = (index: number, f: number) => [
-      dense[index * 3]! + (dense[index * 3 + 3]! - dense[index * 3]!) * f,
-      dense[index * 3 + 1]! +
-        (dense[index * 3 + 4]! - dense[index * 3 + 1]!) * f,
-      dense[index * 3 + 2]! +
-        (dense[index * 3 + 5]! - dense[index * 3 + 2]!) * f
+    const point = (index: number, f: number) => [
+      line[index * 3]! + (line[index * 3 + 3]! - line[index * 3]!) * f,
+      line[index * 3 + 1]! + (line[index * 3 + 4]! - line[index * 3 + 1]!) * f,
+      line[index * 3 + 2]! + (line[index * 3 + 5]! - line[index * 3 + 2]!) * f
     ];
-    const states: boolean[] = [];
+    let run: number[] = [line[0]!, line[1]!, line[2]!];
+    let state: boolean | null = null;
     for (let s = 0; s < count - 1; s += 1) {
-      const [x, y, z] = at(s, 0.5);
-      states.push(hiddenAt(x!, y!, z!));
-    }
-    let run: number[] = [dense[0]!, dense[1]!, dense[2]!];
-    const pushVertex = (index: number) => {
-      if (keep[index] || index === count - 1)
-        run.push(
-          dense[index * 3]!,
-          dense[index * 3 + 1]!,
-          dense[index * 3 + 2]!
-        );
-    };
-    for (let s = 0; s < states.length; s += 1) {
-      const next = states[s + 1];
-      if (next === undefined || next === states[s]) {
-        pushVertex(s + 1);
-        continue;
+      // Visibility can change only where the projected segment crosses an
+      // occluding triangle's edge, so those crossings split it exactly and
+      // each piece is classified once, however narrow the occluder.
+      const [au, av] = project(
+        line[s * 3]!,
+        line[s * 3 + 1]!,
+        line[s * 3 + 2]!
+      );
+      const [bu, bv] = project(
+        line[s * 3 + 3]!,
+        line[s * 3 + 4]!,
+        line[s * 3 + 5]!
+      );
+      const cuts = [0, ...grid.crossings(au, av, bu, bv), 1];
+      for (let k = 0; k + 1 < cuts.length; k += 1) {
+        const t0 = cuts[k]!;
+        const t1 = cuts[k + 1]!;
+        if (t1 - t0 <= 1e-12) continue;
+        const [x, y, z] = point(s, (t0 + t1) / 2);
+        const hidden = hiddenAt(x!, y!, z!);
+        if (state !== null && hidden !== state) {
+          const [cx, cy, cz] = point(s, t0);
+          run.push(cx!, cy!, cz!);
+          emit(run, state);
+          run = [cx!, cy!, cz!];
+        }
+        state = hidden;
       }
-      // The switch lies between this segment's midpoint and the next one's:
-      // walk the path from one to the other and bisect.
-      let lo = 0;
-      let hi = 1;
-      const point = (f: number) =>
-        f <= 0.5 ? at(s, 0.5 + f) : at(s + 1, f - 0.5);
-      for (let k = 0; k < BISECTION_STEPS; k += 1) {
-        const mid = (lo + hi) / 2;
-        const [x, y, z] = point(mid);
-        if (hiddenAt(x!, y!, z!) === states[s]) lo = mid;
-        else hi = mid;
-      }
-      const [x, y, z] = point((lo + hi) / 2);
-      if ((lo + hi) / 2 > 0.5) pushVertex(s + 1);
-      run.push(x!, y!, z!);
-      emit(run, states[s]!);
-      run = [x!, y!, z!];
-      if ((lo + hi) / 2 <= 0.5) pushVertex(s + 1);
+      run.push(line[s * 3 + 3]!, line[s * 3 + 4]!, line[s * 3 + 5]!);
     }
-    emit(run, states[states.length - 1]!);
+    if (state !== null) emit(run, state);
   }
   return {
     visible,
