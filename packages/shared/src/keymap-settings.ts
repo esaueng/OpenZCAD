@@ -74,7 +74,10 @@ export function canonicalChord(value: unknown): string | null {
   if (NAMED_KEYS.has(key)) {
     base = key;
   } else if (Array.from(key).length === 1 && key.trim() === key) {
-    base = key.toUpperCase();
+    // A letter is stored upper case, but only where that stays one
+    // character: ß upper-cases to SS, which would not parse back.
+    const upper = key.toUpperCase();
+    base = Array.from(upper).length === 1 ? upper : key;
   } else {
     return null;
   }

@@ -75,3 +75,48 @@ test('a remapped shortcut works, refuses a taken key by name and survives a relo
     reference.locator('.shortcut-row', { hasText: 'Toggle the grid' })
   ).toContainText('H');
 });
+
+test('a second key for Normal to face works while a button has focus', async ({
+  page
+}) => {
+  // Space yields to a focused button, which presses on it; a remapped key
+  // has no such claim and must still turn the view.
+  await page.addInitScript(() => {
+    if (localStorage.getItem('openzcad-app-settings:v1')) return;
+    localStorage.setItem(
+      'openzcad-app-settings:v1',
+      JSON.stringify({
+        settings: {
+          keymap: { overrides: { 'view-normal-to-face': ['Space', 'N'] } }
+        },
+        syncedRevision: null
+      })
+    );
+  });
+  await stubApi(page);
+  await createProject(page, 'Keymap normal');
+  await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByLabel('Radius', { exact: true }).fill('14');
+  await inspector.getByLabel('Height', { exact: true }).fill('28');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  const cylinder = page.locator('.feature-row-main', { hasText: 'Cylinder' });
+  await expect(cylinder).toBeVisible();
+  await cylinder.click();
+  await page.locator('.viewer-host canvas').evaluate((element) => {
+    element.dispatchEvent(
+      new CustomEvent('openzcad:e2e-select-cylinder', {
+        detail: { surface: 'cap' }
+      })
+    );
+  });
+  await expect(
+    page.getByRole('region', { name: 'Offset Face operation' })
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: /^Fit view/ }).focus();
+  await page.keyboard.press('n');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'viewing normal to face'
+  );
+});

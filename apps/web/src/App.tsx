@@ -18710,17 +18710,21 @@ export function App() {
               modelingLocked ? 'view' : 'build'
             ])
           : null;
-      const normalViewSpace =
+      const normalViewKey =
         modelCommand?.id === 'view-normal-to-face' && !event.repeat;
+      // A focused button presses on Space, so Space yields to it; any other
+      // key bound to this command has no such claim.
+      const spaceOwnedByControl =
+        chord === 'Space' && focusedControlOwnsSpace(target);
       const stableFaceSelection =
         renderedSelectedTopology?.kind === 'face' &&
         (interaction.mode === 'idle' ||
           (interaction.mode === 'face' && interaction.phase === 'armed'));
       if (
-        normalViewSpace &&
+        normalViewKey &&
         tool === null &&
         stableFaceSelection &&
-        !focusedControlOwnsSpace(target)
+        !spaceOwnedByControl
       ) {
         event.preventDefault();
         requestNormalToSelectedFace();
@@ -18948,7 +18952,7 @@ export function App() {
       // no face to turn to, so it keeps pressing the focused button.
       if (
         modelCommand &&
-        modelCommand.id !== 'view-normal-to-face' &&
+        chord !== 'Space' &&
         commandTool(modelCommand.id) === null
       ) {
         event.preventDefault();

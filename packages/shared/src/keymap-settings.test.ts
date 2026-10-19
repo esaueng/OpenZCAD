@@ -20,6 +20,20 @@ describe('canonicalChord', () => {
     expect(canonicalChord('Shift+Space')).toBe('Shift+Space');
   });
 
+  it('keeps a key whose upper case would not be one character', () => {
+    // ß upper-cases to SS; storing that would drop the binding on reload.
+    expect(canonicalChord('ß')).toBe('ß');
+    expect(canonicalChord('Ctrl+ß')).toBe('Ctrl+ß');
+    expect(canonicalChord('é')).toBe('É');
+  });
+
+  it('is stable: a canonical chord parses back to itself', () => {
+    for (const value of ['b', 'ß', 'Shift+Ctrl+z', 'Shift+?', 'Ctrl++', 'é']) {
+      const once = canonicalChord(value);
+      expect(canonicalChord(once), value).toBe(once);
+    }
+  });
+
   it('reads the plus key as a key', () => {
     expect(canonicalChord('+')).toBe('+');
     expect(canonicalChord('Ctrl++')).toBe('Ctrl++');
