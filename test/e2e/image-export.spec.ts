@@ -209,6 +209,29 @@ test('exports the view as a sized, transparent PNG and a sketch as exact SVG', a
   expect(viewBox[2]).toBeCloseTo(25.4 + 2 * 6.35 + 0.25, 6);
   expect(viewBox[3]).toBeCloseTo(12.7 + 0.25, 6);
   expect(svg).toMatch(/width="38\.35mm" height="12\.95mm"/);
+
+  // A History selection outside sketch editing must choose that sketch,
+  // rather than silently downloading the first sketch again.
+  await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
+    name: 'second-slot.dxf',
+    mimeType: 'image/vnd.dxf',
+    buffer: Buffer.from(SLOT_DXF.replace('40\r\n0.1', '40\r\n0.2'))
+  });
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Imported 5 curves from second-slot.dxf',
+    { timeout: 30_000 }
+  );
+  await page.locator('.feature-row-main', { hasText: 'second-slot' }).click();
+  dialog = await openImageExport(page);
+  await dialog.getByRole('radio', { name: 'SVG' }).check();
+  await expect(dialog.getByLabel('Sketch').locator('option:checked')).toHaveText(
+    'second-slot'
+  );
+  downloadPromise = page.waitForEvent('download');
+  await dialog.getByRole('button', { name: 'Export SVG' }).click();
+  const selectedSvg = (await readDownload(await downloadPromise)).toString('utf8');
+  expect(selectedSvg).toContain('r="5.08"');
+  expect(selectedSvg).not.toContain('r="2.54"');
 });
 
 for (const arc of [
