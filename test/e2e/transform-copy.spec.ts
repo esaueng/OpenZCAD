@@ -99,7 +99,7 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await inspector.getByRole('button', { name: 'Cancel' }).click();
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.locator('.toast-action', { hasText: 'Undo' }).click();
   await expectBodyCount(page, 3);
 });
 
