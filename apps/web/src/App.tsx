@@ -18942,15 +18942,24 @@ export function App() {
           return;
       }
 
+      // A resolved command owns its key: a remap onto a chord the browser
+      // also answers to (Ctrl+P prints) must not do both. Tools prevent it
+      // themselves below, after their refusal check; Space reaching here had
+      // no face to turn to, so it keeps pressing the focused button.
+      if (
+        modelCommand &&
+        modelCommand.id !== 'view-normal-to-face' &&
+        commandTool(modelCommand.id) === null
+      ) {
+        event.preventDefault();
+      }
       switch (modelCommand?.id) {
         case 'shortcut-reference':
-          event.preventDefault();
           setShortcutsOpen(true);
           return;
         case 'command-slash':
           // The slash is the command grammar: the field opens with it typed,
           // listing every command.
-          event.preventDefault();
           draftPrompt('/');
           return;
         case 'view-front':
@@ -18966,7 +18975,6 @@ export function App() {
           requestView('iso');
           return;
         case 'view-measure':
-          event.preventDefault();
           toggleMeasure(!measuring);
           return;
         case 'view-fit':

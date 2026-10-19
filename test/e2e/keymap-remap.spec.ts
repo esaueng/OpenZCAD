@@ -48,8 +48,25 @@ test('a remapped shortcut works, refuses a taken key by name and survives a relo
     timeout: 30_000
   });
   const reloaded = await grid.getAttribute('aria-pressed');
+  // The command owns its key: a remap onto a chord the browser also uses
+  // (Ctrl+P prints) must not do both, so the keydown is consumed.
+  await page.evaluate(() => {
+    window.addEventListener(
+      'keydown',
+      (event) => {
+        (window as { lastKeyConsumed?: boolean }).lastKeyConsumed =
+          event.defaultPrevented;
+      },
+      { once: true }
+    );
+  });
   await page.keyboard.press('h');
   await expect(grid).not.toHaveAttribute('aria-pressed', reloaded ?? '');
+  expect(
+    await page.evaluate(
+      () => (window as { lastKeyConsumed?: boolean }).lastKeyConsumed
+    )
+  ).toBe(true);
 
   // The shortcut reference shows the live binding.
   await page.keyboard.press('?');
