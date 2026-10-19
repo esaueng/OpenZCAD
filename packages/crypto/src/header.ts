@@ -400,6 +400,18 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
       compression,
       chunkSize
     };
+    // Typed arrays cannot be frozen: expose the authenticated hashes as
+    // getters that hand out copies, so no consumer can rewrite them.
+    Object.defineProperties(header, {
+      previousVersionHash: {
+        enumerable: true,
+        get: () => previousVersionHash && copyBytes(previousVersionHash)
+      },
+      rosterEntryHash: {
+        enumerable: true,
+        get: () => copyBytes(rosterEntryHash)
+      }
+    });
   } else {
     fail('malformed', 'Unknown envelope class');
   }
@@ -409,7 +421,8 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
   return {
     version: ENVELOPE_VERSION_1,
     // Frozen: readers keep slicing records by this header after exposing
-    // it, so a consumer must not be able to change its chunk size.
+    // it, so a consumer must not be able to change its chunk size; its
+    // hashes are copying getters (above) for the same reason.
     header: Object.freeze(header),
     prefix: copyBytes(prefix.subarray(0, length))
   };

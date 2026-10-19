@@ -429,12 +429,17 @@ describe('share snapshot keys', () => {
       shareId: 'share-1',
       versionId: '9'
     };
-    const wraps = await wrapShareSnapshotKey(
+    // The caller's array changes mid-call: both wraps still carry the key
+    // as it was when the call began.
+    const callerCopy = new Uint8Array(versionKey);
+    const wrapping = wrapShareSnapshotKey(
       projectKey,
       shareKey,
-      versionKey,
+      callerCopy,
       context
     );
+    callerCopy.fill(0);
+    const wraps = await wrapping;
     expect(wraps.forMembers[0]).toBe(2);
     expect(wraps.forLinkVisitors[0]).toBe(2);
     expect(

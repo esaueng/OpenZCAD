@@ -6,6 +6,7 @@ import {
   fromBase32,
   isUint,
   label,
+  snapshotBytes,
   toBase32,
   toDigitGroups,
   toHex,
@@ -189,11 +190,12 @@ export async function contactVerificationCode(
   ) {
     throw new E2eeError('invalid-argument', 'deviceListHead must be 32 bytes');
   }
+  const head = copyBytes(deviceListHead);
   const hash = await sha256(
     new ByteWriter()
       .bytes(label('v1 contact verification'))
       .bytes(await publicKeyHash(identityPublicKey))
-      .bytes(deviceListHead)
+      .bytes(head)
       .finish()
   );
   return { hash, code: formatComparisonCode(hash) };
@@ -251,7 +253,8 @@ export async function verifyScannedDeviceKey(
   devicePublicKey: Uint8Array,
   scannedHash: Uint8Array
 ): Promise<boolean> {
-  return equalBytes(await publicKeyHash(devicePublicKey), scannedHash);
+  const scanned = snapshotBytes(scannedHash, 'Scanned hash');
+  return equalBytes(await publicKeyHash(devicePublicKey), scanned);
 }
 
 /**
@@ -320,9 +323,10 @@ export async function verifyDeviceApprovalCommitment(
   newDeviceNonce: Uint8Array,
   commitment: Uint8Array
 ): Promise<boolean> {
+  const expected = snapshotBytes(commitment, 'Commitment');
   return equalBytes(
     await commitmentFor(newDevicePublicKey, newDeviceNonce),
-    commitment
+    expected
   );
 }
 
@@ -373,6 +377,9 @@ export async function formatRecoveryKey(secret: Uint8Array): Promise<string> {
   if (!(secret instanceof Uint8Array) || secret.byteLength !== KEY_BYTES) {
     throw new E2eeError('invalid-argument', 'Recovery secret must be 32 bytes');
   }
+  // Checksum and encode one copy: an edit mid-hash must not yield a key
+  // that `parseRecoveryKey` rejects.
+  secret = copyBytes(secret);
   const checksum = (await sha256(secret)).subarray(0, RECOVERY_CHECKSUM_BYTES);
   const payload = new Uint8Array(KEY_BYTES + RECOVERY_CHECKSUM_BYTES);
   payload.set(secret);

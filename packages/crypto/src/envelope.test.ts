@@ -1014,6 +1014,19 @@ describe('content blobs', () => {
     expect(Object.isFrozen(parseEnvelope(envelope).header)).toBe(true);
   });
 
+  it('decoded header hashes cannot be rewritten through the header', async () => {
+    const envelope = await sealProject(text('x'));
+    const header = parseEnvelope(envelope).header as ProjectEnvelopeHeader;
+    header.rosterEntryHash.fill(0);
+    header.previousVersionHash!.fill(0);
+    expect(header.rosterEntryHash).toEqual(HEADER.rosterEntryHash);
+    expect(header.previousVersionHash).toEqual(HEADER.previousVersionHash);
+    // The authenticated header a decrypt returns behaves the same way.
+    const { header: opened } = await decryptProjectEnvelope(KEY, envelope);
+    opened.rosterEntryHash.fill(0);
+    expect(opened.rosterEntryHash).toEqual(HEADER.rosterEntryHash);
+  });
+
   it('leaves the source unlocked when gzip is unavailable', () => {
     let cancelled = false;
     const source = new ReadableStream<Bytes>({

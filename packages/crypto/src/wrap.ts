@@ -488,6 +488,8 @@ export async function wrapShareSnapshotKey(
   versionKey: Uint8Array,
   context: ShareSnapshotKeyContext
 ): Promise<ShareSnapshotKeyWraps> {
+  // One copy for both wraps, so members and link visitors open the same key.
+  versionKey = snapshotBytes(versionKey, 'Version key');
   const forMembers = await wrapKey(projectKey, versionKey, {
     purpose: 'version-key',
     projectId: context.projectId,

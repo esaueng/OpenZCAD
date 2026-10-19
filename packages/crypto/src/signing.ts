@@ -2,9 +2,11 @@ import {
   ByteReader,
   ByteWriter,
   asBytes,
+  copyBytes,
   equalBytes,
   isUint,
   label,
+  snapshotBytes,
   type Bytes
 } from './bytes';
 import { parseEnvelope } from './envelope';
@@ -143,6 +145,8 @@ export async function verifyProjectEnvelopeSignature(
   if (signature.byteLength !== SIGNATURE_BYTES) {
     throw new E2eeError('malformed', 'Signature has the wrong length');
   }
+  // r‖s is read after awaits below; read it from a copy.
+  signature = copyBytes(signature);
   const reader = new ByteReader(signature, 'Signature');
   reader.u8();
   const signedAt = reader.u64();
@@ -186,6 +190,13 @@ export async function verifyVersionChain(
   if (envelopes.length === 0) {
     throw new E2eeError('chain-broken', 'Version history is empty');
   }
+  // The loop awaits; a caller editing the list or the pin meanwhile must
+  // not change what is checked.
+  envelopes = [...envelopes];
+  const pinned =
+    options.pinnedVersionHash === undefined
+      ? undefined
+      : snapshotBytes(options.pinnedVersionHash, 'pinnedVersionHash');
   const hashes: Bytes[] = [];
   let previous: ProjectEnvelopeHeader | null = null;
   for (const envelope of envelopes) {
@@ -207,7 +218,6 @@ export async function verifyVersionChain(
     previous = header;
     hashes.push(await versionHash(envelope));
   }
-  const pinned = options.pinnedVersionHash;
   if (pinned && !hashes.some((hash) => equalBytes(hash, pinned))) {
     throw new E2eeError(
       'chain-broken',

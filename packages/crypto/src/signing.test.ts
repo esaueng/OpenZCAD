@@ -572,6 +572,15 @@ describe('recovery keys', () => {
     expect(await parseRecoveryKey(sloppy)).toEqual(secret);
   });
 
+  it('encodes the secret as it was when formatting began', async () => {
+    const secret = patternBytes(32, 0x24);
+    const formatting = formatRecoveryKey(secret);
+    secret.fill(0);
+    expect(await parseRecoveryKey(await formatting)).toEqual(
+      patternBytes(32, 0x24)
+    );
+  });
+
   it('catches a mistyped character', async () => {
     const formatted = await formatRecoveryKey(patternBytes(32, 0x42));
     const first = formatted[0] === 'A' ? 'B' : 'A';
