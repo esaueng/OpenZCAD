@@ -61,9 +61,12 @@ Milliseconds over the 26 accepted warm ticks. The other 14 ticks were refused
    - In the base runs, allocated slots rise from 6,434 to 109,358 across the
      40 ticks: about 2,600 per tick, 96% of them retired.
    - Kernel linear memory grows by 22–26 MB over those ticks.
-   - Restoring a checkpoint leaves the slots that each frame allocated as
-     retired tombstones. Remus's `Arena` iteration and live counts are
-     O(slots), so long drags slow every later whole-arena walk.
+   - Restoring a checkpoint retires the slots each frame allocated. That is
+     by design: Remus never reuses a slot, so a stale handle cannot alias a
+     later entity.
+   - Remus's 200-tick kernel-only replay (esaueng/remus#1188) finds no tick
+     slowdown from this growth, so it costs memory rather than time.
+     Reclaiming the memory is the arena-compaction work (PERF-T06).
 5. **Inward moves past about −7.4 are refused.** That is 14 of 40 ticks. The
    kernel's message names both exact paths:
    - the blend remove/rebuild refuses the band's mixed plane/cylinder support;
