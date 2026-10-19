@@ -1377,10 +1377,12 @@ describe('geometry worker rebuild coordination', () => {
       )
     );
     // The drawing is of the same bodies the section on screen was cut from.
+    // No export unit asked for: the adapter's millimetre default.
     expect(exportSectionDxf).toHaveBeenCalledWith(
       document,
       plane,
-      document.bodyOrder
+      document.bodyOrder,
+      {}
     );
     expect(exportFaceDxf).not.toHaveBeenCalled();
   });
@@ -1409,7 +1411,12 @@ describe('geometry worker rebuild coordination', () => {
     });
 
     await vi.waitFor(() =>
-      expect(exportSectionDxf).toHaveBeenCalledWith(document, plane, undefined)
+      expect(exportSectionDxf).toHaveBeenCalledWith(
+        document,
+        plane,
+        undefined,
+        {}
+      )
     );
   });
 
@@ -1449,7 +1456,7 @@ describe('geometry worker rebuild coordination', () => {
         })
       )
     );
-    expect(exportSketchDxf).toHaveBeenCalledWith(document, sketchId);
+    expect(exportSketchDxf).toHaveBeenCalledWith(document, sketchId, {});
     expect(exportSectionDxf).not.toHaveBeenCalled();
     expect(exportFaceDxf).not.toHaveBeenCalled();
   });
@@ -1656,10 +1663,12 @@ describe('geometry worker rebuild coordination', () => {
         })
       )
     );
+    // The kernel's default facet angle: none sent.
     expect(meshQuality).toHaveBeenCalledWith(
       document,
       document.bodyOrder,
-      0.08
+      0.08,
+      undefined
     );
   });
 
