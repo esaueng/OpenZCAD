@@ -11,6 +11,7 @@ import {
 import {
   toUserId,
   type BodyId,
+  type FeatureId,
   type EdgeWitnessV1,
   type FaceWitnessV1
 } from '@openzcad/shared';
@@ -18,9 +19,11 @@ import { quantizeCoordinate } from '../../packages/kernel-adapter/src/topology-f
 import {
   canonicalCylinderWitness,
   canonicalPlaneWitness,
+  propagateRigidTransformLineage,
   quantizedTopologyPoint,
   transformOcctWitness
 } from './occt-reference/occt-lineage';
+import { topologyHashOfWitness } from '../../packages/kernel-adapter/src/topology-lineage';
 import { OcctStepKernelAdapter } from './occt-reference/occt-step';
 
 /**
@@ -121,5 +124,53 @@ describe('OCCT reference witnesses under a uniform scale', () => {
     expect(transformOcctWitness('edge', edge, matrix).length).toBe(
       quantizeCoordinate(20)
     );
+  });
+});
+
+describe('OCCT reference lineage through a scaled Move', () => {
+  it('keeps an edge whose scaled length lands one grid step off', () => {
+    // A third quantizes to 333333; ×2 of that is 666666, while the
+    // re-measured two-thirds edge quantizes to 666667.
+    const edge = (length: number, x: number): EdgeWitnessV1 => ({
+      curveType: 'line',
+      length: quantizeCoordinate(length),
+      closed: false,
+      endpoints: [
+        quantizedTopologyPoint({ x: 0, y: 0, z: 0 }),
+        quantizedTopologyPoint({ x, y: 0, z: 0 })
+      ],
+      midpoint: quantizedTopologyPoint({ x: x / 2, y: 0, z: 0 })
+    });
+    const source = edge(1 / 3, 1 / 3);
+    const measured = edge(2 / 3, 2 / 3);
+    const state = propagateRigidTransformLineage(
+      {
+        status: 'lineage',
+        diagnostics: [],
+        references: [
+          {
+            kind: 'edge',
+            producingFeatureId: 'feat_edge' as FeatureId,
+            lineageName: 'edge:third',
+            currentHash: topologyHashOfWitness('edge', source),
+            witnessVersion: 1,
+            witness: source
+          }
+        ]
+      },
+      [
+        {
+          kind: 'edge',
+          currentHash: topologyHashOfWitness('edge', measured),
+          witness: measured
+        }
+      ],
+      [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0]
+    );
+    expect(state.status).toBe('lineage');
+    expect(state.diagnostics).toEqual([]);
+    expect(state.references).toHaveLength(1);
+    // Recorded as measured, so a later exact lookup finds it.
+    expect(state.references[0]!.witness).toEqual(measured);
   });
 });

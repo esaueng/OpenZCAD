@@ -19,6 +19,7 @@ import {
   resolveTopologyReference,
   topologyHashOfWitness,
   topologyWitnessesEqual,
+  topologyWitnessesNearlyEqual,
   verifyTopologyEvolution,
   type TopologyLineageOperation,
   type TopologyResolutionCandidate,
@@ -826,8 +827,18 @@ export function propagateRigidTransformLineage(
               witness
             };
           })();
-    const matches = resultCandidates.filter((candidate) =>
-      candidateMatchesReference(candidate, expectedReference)
+    // Near-equality, as the exact build matches: the expected witness was
+    // carried through the transform in quantized space (a scaled Move
+    // rounds twice), so it can sit a grid step off the measured one.
+    // Uniqueness below keeps the band fail-closed.
+    const matches = resultCandidates.filter(
+      (candidate) =>
+        candidate.kind === expectedReference.kind &&
+        topologyWitnessesNearlyEqual(
+          candidate.kind,
+          expectedReference.witness,
+          candidate.witness
+        )
     );
     if (matches.length !== 1) {
       diagnostics.push({
@@ -879,7 +890,12 @@ export function propagateRigidTransformLineage(
       });
       continue;
     }
-    references.push(expectedReference);
+    // The reference names what was measured, so later exact lookups find it.
+    references.push({
+      ...expectedReference,
+      currentHash: match.currentHash,
+      witness: match.witness
+    } as TopologyReferenceV5);
   }
   return { status: 'lineage', references, diagnostics };
 }
