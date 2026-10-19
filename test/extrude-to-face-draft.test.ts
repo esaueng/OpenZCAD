@@ -31,6 +31,7 @@ import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
 import { affectedFeatureTargets } from '../apps/web/src/lib/affectedFeatureTargets';
 import {
   extrudeToFaceTargetFromPick,
+  extrudeHistoryDocument,
   toFaceDistanceEstimate
 } from '../apps/web/src/lib/extrudeToFace';
 import { extrudeCapAncestor } from '../apps/web/src/lib/interaction/extrudeCapAncestry';
@@ -740,6 +741,39 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
         )
       ).toBeCloseTo(40, 9);
     });
+
+    it.each([false, true])(
+      'estimates reach before a downstream transform (rotated: %s)',
+      async (rotated) => {
+        const result = await post(25);
+        const feature = listFeaturesInOrder(result.document).at(-1)!;
+        const later = commandFactories
+          .transformBody({
+            name: 'Later target move',
+            targetBodyId: result.ceilingId,
+            translation: { x: 0, y: 0, z: rotated ? 0 : 15 },
+            rotationDeg: { x: rotated ? 90 : 0, y: 0, z: 0 }
+          })
+          .apply(result.document);
+        const built = await synced(later);
+        const before = structuredClone(built);
+        const history = await synced(
+          extrudeHistoryDocument(built, feature.featureId)
+        );
+        if (feature.data.featureKind !== 'extrude') throw new Error('extrude');
+        expect(
+          toFaceDistanceEstimate(
+            history,
+            feature.data.sketchId,
+            feature.data.toFace!
+          )
+        ).toBeCloseTo(25, 9);
+        expect(
+          built.derived.bodyRepresentations[result.bodyId]!.volume
+        ).toBeCloseTo(4 * 4 * 25, 6);
+        expect(built).toEqual(before);
+      }
+    );
 
     it('refuses as unresolved when the face is no longer parallel', async () => {
       const result = await post(25);

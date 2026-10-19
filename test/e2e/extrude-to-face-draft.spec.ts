@@ -311,3 +311,45 @@ test('shows an unresolved to-face extrude and repairs it by re-picking a face', 
   );
   await expect(page.locator('.panel-body')).not.toContainText('unresolved');
 });
+
+test('editing an unchanged to-face extrude ignores later target transforms', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const ceiling = slab(
+    createProjectDocument('History-position reach', toUserId('user_e2e')),
+    'Ceiling',
+    25
+  );
+  const { target } = await faceOf(ceiling.document, ceiling.bodyId, -1);
+  const sketched = addSketchFeature(ceiling.document, {
+    name: 'Profile',
+    plane: 'XY',
+    offset: 0,
+    objects: [SQUARE]
+  });
+  const post = extrudeSketch(sketched.document, {
+    name: 'Post',
+    sketchId: sketched.sketchId,
+    distance: 1,
+    endCondition: 'to-face',
+    toFace: target
+  });
+  const later = transformBody(post.document, {
+    name: 'Later tilt',
+    targetBodyId: ceiling.bodyId,
+    translation: { x: 0, y: 0, z: 0 },
+    rotationDeg: { x: 90, y: 0, z: 0 }
+  });
+  await open(page, later.document);
+  await expectBodyCount(page, 2);
+  await page.locator('.feature-row-main', { hasText: /^Post$/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await expect(
+    inspector.getByRole('button', { name: 'Apply', exact: true })
+  ).toBeEnabled();
+  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('Edit Post');
+  await expect(inspector).toBeHidden();
+  await expectBodyCount(page, 2);
+});

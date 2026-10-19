@@ -45,6 +45,8 @@ export interface ExtrudeFormValue {
 export interface ExtrudeToFaceInfo {
   label: string;
   distance: number | null;
+  pending?: boolean;
+  problem?: string;
 }
 
 /** The host's side of the to-face pick (see `ExtrudeExtentControls`). */
@@ -176,7 +178,10 @@ export function ExtrudeForm({
   // sketch, or lying on it) is said before Apply rather than after.
   const toFaceProblem =
     toFaceInfo && toFaceInfo.distance === null
-      ? 'This face is not parallel to the sketch plane, or lies on it; pick a face parallel to the sketch.'
+      ? (toFaceInfo.problem ??
+        (toFaceInfo.pending
+          ? 'Checking the target face…'
+          : 'This face is not parallel to the sketch plane, or lies on it; pick a face parallel to the sketch.'))
       : null;
   // A new extrude opens at zero until the user drags or types a distance, so
   // the zero-distance error waits for that edit (or an attempt to submit)

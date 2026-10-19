@@ -631,6 +631,31 @@ describe('to-face extent and draft (F01, schema v29)', () => {
     } satisfies ExtrudeToFacePicking;
   }
 
+  it('waits for the exact reach before enabling Apply and names the pending check', () => {
+    render(
+      <ExtrudeForm
+        {...base}
+        initial={{ ...initial, endCondition: 'to-face', toFace: face }}
+        toFacePicking={picking({
+          describe: () => ({
+            label: 'Ceiling · face',
+            distance: null,
+            pending: true
+          })
+        })}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Checking the target face…')).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: 'Apply', exact: true })
+    ).toBeDisabled();
+    expect(
+      screen.queryByText(/This face is not parallel/)
+    ).not.toBeInTheDocument();
+  });
+
   it('offers To face for any operation, arms the pick, and submits the picked face with its reach as the dormant distance', async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();

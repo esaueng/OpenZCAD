@@ -667,6 +667,7 @@ import {
 } from './components/forms/ExtrudeForm';
 import {
   extrudeToFaceRepair,
+  extrudeHistoryDocument,
   extrudeToFaceTargetFromPick,
   toFaceDistanceEstimate,
   toFaceTargetLabel
@@ -3048,6 +3049,17 @@ export function App() {
     sharedThumbnailCapture,
     geometryBusy || Boolean(doc && geometry.state.phase !== 'ready')
   );
+  const reachProjectionBuilderRef = useRef(geometry.syncOnce);
+  reachProjectionBuilderRef.current = geometry.syncOnce;
+  const reachProjectionRequestRef = useRef<{
+    key: string;
+    promise: Promise<ProjectDocument>;
+  } | null>(null);
+  const [reachProjection, setReachProjection] = useState<{
+    key: string;
+    document: ProjectDocument | null;
+    error?: string;
+  } | null>(null);
   const parameterDraftActive =
     parameterCandidate !== null &&
     parameterCandidate.base.projectId === doc?.projectId &&
@@ -5888,6 +5900,47 @@ export function App() {
     selectedTopology
   ]);
   const selectedFeatureNodeId = selectedFeature?.id ?? null;
+  const reachFeatureId =
+    selectedFeature?.data.featureKind === 'extrude'
+      ? selectedFeature.featureId
+      : null;
+  useEffect(() => {
+    setReachProjection(null);
+    if (!doc || !reachFeatureId) {
+      reachProjectionRequestRef.current = null;
+      return;
+    }
+    let active = true;
+    const key = `${doc.projectId}:${doc.version}:${reachFeatureId}`;
+    if (reachProjectionRequestRef.current?.key !== key) {
+      const history = extrudeHistoryDocument(doc, reachFeatureId);
+      reachProjectionRequestRef.current = {
+        key,
+        promise: reachProjectionBuilderRef.current(history).then((derived) => ({
+          ...history,
+          derived
+        }))
+      };
+    }
+    void reachProjectionRequestRef.current.promise.then(
+      (document) => {
+        if (active) setReachProjection({ key, document });
+      },
+      (error: unknown) => {
+        if (active) {
+          setReachProjection({
+            key,
+            document: null,
+            error: errorMessage(error, 'Unable to check the target face.')
+          });
+        }
+      }
+    );
+    return () => {
+      active = false;
+    };
+  }, [doc, reachFeatureId]);
+
   // History's Related view: the selected step's or bodies' lineage, or null
   // with nothing selected so the toggle says why it is unavailable.
   const historyRelatedFeatureIds = useMemo(
@@ -18630,10 +18683,24 @@ export function App() {
       setterRef: kind === 'create' ? regionToFaceSetter : editToFaceSetter,
       cancel: () =>
         setToFacePick((armed) => (armed?.kind === kind ? null : armed)),
-      describe: (target) => ({
-        label: doc ? toFaceTargetLabel(doc, target) : 'face',
-        distance: doc ? toFaceDistanceEstimate(doc, sketchId, target) : null
-      }),
+      describe: (target) => {
+        const key =
+          doc && featureId
+            ? `${doc.projectId}:${doc.version}:${featureId}`
+            : null;
+        const history =
+          key && reachProjection?.key === key ? reachProjection : null;
+        const source = kind === 'edit' ? history?.document : doc;
+        return {
+          label: doc ? toFaceTargetLabel(doc, target) : 'face',
+          distance: source
+            ? toFaceDistanceEstimate(source, sketchId, target)
+            : null,
+          ...(kind === 'edit' && !source
+            ? { pending: !history?.error, problem: history?.error }
+            : {})
+        };
+      },
       onPick: () => {
         if (toFacePick?.kind === kind) {
           setToFacePick(null);

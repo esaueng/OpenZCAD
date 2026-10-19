@@ -1,3 +1,4 @@
+import { FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY } from '@openzcad/shared';
 import { commandFactories } from '@openzcad/command-system';
 import {
   findSketch,
@@ -111,6 +112,30 @@ function targetForFace(
     );
   }
   return ref as ExtrudeToFaceTarget;
+}
+
+/** Read-only replay input immediately before an existing extrusion. */
+export function extrudeHistoryDocument(
+  document: ProjectDocument,
+  featureId: FeatureId
+): ProjectDocument {
+  const features = listFeaturesInOrder(document);
+  const index = features.findIndex(
+    (feature) => feature.featureId === featureId
+  );
+  if (index < 0)
+    throw new Error('The extrusion is no longer in this document.');
+  const nodes = { ...document.nodes };
+  for (const feature of features.slice(index)) {
+    nodes[feature.id] = {
+      ...feature,
+      metadata: {
+        ...feature.metadata,
+        [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: true
+      }
+    };
+  }
+  return { ...document, nodes };
 }
 
 /**
