@@ -613,13 +613,11 @@ it.skipIf(!stepPath)(
         stages
       );
       expect(derived0.warnings).toEqual([]);
-      // The imported body is the one with the most faces; background boxes
-      // have six.
-      const bodyId = [...derived0.exportableBodyIds].sort(
-        (a, b) =>
-          (derived0.bodyRepresentations[b]?.topology?.faces.length ?? 0) -
-          (derived0.bodyRepresentations[a]?.topology?.faces.length ?? 0)
-      )[0] as BodyId;
+      // The edited body is the one the import added, not a background box.
+      const background = new Set<BodyId>(initial.bodyOrder);
+      const bodyId = derived0.exportableBodyIds.find(
+        (id) => !background.has(id)
+      ) as BodyId;
       const body0 = derived0.bodyRepresentations[bodyId]!;
       const faces = body0.topology?.faces ?? [];
       const bspline = faces.filter(
