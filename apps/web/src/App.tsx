@@ -18587,6 +18587,12 @@ export function App() {
       const chord = chordFromEvent(event);
       const target = event.target as HTMLElement | null;
       const typing = isTypingTarget(target);
+      // A focused button presses on Space and a text field types it: then
+      // Space is the control's, whatever the keymap binds it to, in every
+      // context. Number and expression fields take no spaces and pass it on.
+      if (chord === 'Space' && focusedControlOwnsSpace(target)) {
+        return;
+      }
       // A chord without Ctrl or Alt is typing while a field has focus, so a
       // global command bound to a bare key waits for the field to let go;
       // a function key types nothing and still runs.
@@ -18726,18 +18732,22 @@ export function App() {
         return;
       }
 
-      // A focused button presses on Space, so Space yields to it whatever it
-      // is bound to; any other key has no such claim.
-      const spaceOwnedByControl =
-        chord === 'Space' && focusedControlOwnsSpace(target);
       // The command the key means outside a sketch, if any. In a reading
       // workspace a tool key is still looked up, to say why it is refused.
+      const resolvedModelCommand = chord
+        ? keymap.commandFor(chord, [
+            'model',
+            modelingLocked ? 'view' : 'build'
+          ])
+        : null;
+      // From a field only Space reaches a command, and only Normal to face:
+      // a number or expression field still holding focus after a face pick
+      // takes no spaces, and turning to the face is what Space promised.
       const modelCommand =
-        chord && !typing && !spaceOwnedByControl
-          ? keymap.commandFor(chord, [
-              'model',
-              modelingLocked ? 'view' : 'build'
-            ])
+        !typing ||
+        (chord === 'Space' &&
+          resolvedModelCommand?.id === 'view-normal-to-face')
+          ? resolvedModelCommand
           : null;
       const normalViewKey =
         modelCommand?.id === 'view-normal-to-face' && !event.repeat;

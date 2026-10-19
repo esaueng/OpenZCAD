@@ -345,8 +345,10 @@ const KEY_ALIASES: Readonly<Record<string, string>> = {
 /**
  * The chord a keydown spells, in the stored grammar, or null for a bare
  * modifier or a key the grammar has no name for. Ctrl and ⌘ are one modifier,
- * as they always were here. With Alt or Ctrl held the physical letter decides,
- * since Option on a Mac turns M into µ.
+ * as they always were here. Under Alt the physical letter decides, since
+ * Option on a Mac turns M into µ; under Ctrl the layout's letter does, so
+ * AZERTY's Z (code KeyW) is still Ctrl+Z, and only a layout with no Latin
+ * letter there (Cyrillic) falls back to the physical one.
  */
 export function chordFromEvent(
   event: Pick<
@@ -365,7 +367,13 @@ export function chordFromEvent(
   let key: string;
   if (event.code === 'Space' || event.key === ' ') {
     key = 'Space';
-  } else if ((mod || event.altKey) && /^Key[A-Z]$/.test(event.code)) {
+  } else if (event.altKey && /^Key[A-Z]$/.test(event.code)) {
+    key = event.code.slice(3);
+  } else if (
+    mod &&
+    !/^[a-zA-Z]$/.test(event.key) &&
+    /^Key[A-Z]$/.test(event.code)
+  ) {
     key = event.code.slice(3);
   } else if (event.altKey && /^Digit[0-9]$/.test(event.code)) {
     key = event.code.slice(5);

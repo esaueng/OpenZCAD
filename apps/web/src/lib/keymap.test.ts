@@ -160,6 +160,10 @@ describe('chordFromEvent', () => {
     expect(
       chordFromEvent(key('Z', { ctrlKey: true, shiftKey: true }, 'KeyZ'))
     ).toBe('Ctrl+Shift+Z');
+    // Ctrl keeps the layout's letter: AZERTY's Z sits where QWERTY has W.
+    expect(chordFromEvent(key('z', { ctrlKey: true }, 'KeyW'))).toBe('Ctrl+Z');
+    // A layout with no Latin letter there falls back to the physical key.
+    expect(chordFromEvent(key('я', { ctrlKey: true }, 'KeyZ'))).toBe('Ctrl+Z');
     // Option on a Mac turns M into µ; the physical key decides.
     expect(chordFromEvent(key('µ', { altKey: true }, 'KeyM'))).toBe('Alt+M');
     expect(chordFromEvent(key('Escape'))).toBe('Escape');

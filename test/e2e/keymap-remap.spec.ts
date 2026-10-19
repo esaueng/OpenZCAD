@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import { createProject, expect, stubApi, test } from './openzcad-fixtures';
 
 test('a remapped shortcut works, refuses a taken key by name and survives a reload', async ({
@@ -74,25 +75,9 @@ test('a remapped shortcut works, refuses a taken key by name and survives a relo
   ).toContainText('H');
 });
 
-test('a second key for Normal to face works while a button has focus', async ({
-  page
-}) => {
-  // Space yields to a focused button, which presses on it; a remapped key
-  // has no such claim and must still turn the view.
-  await page.addInitScript(() => {
-    if (localStorage.getItem('openzcad-app-settings:v1')) return;
-    localStorage.setItem(
-      'openzcad-app-settings:v1',
-      JSON.stringify({
-        settings: {
-          keymap: { overrides: { 'view-normal-to-face': ['Space', 'N'] } }
-        },
-        syncedRevision: null
-      })
-    );
-  });
+async function selectCylinderCap(page: Page, name: string) {
   await stubApi(page);
-  await createProject(page, 'Keymap normal');
+  await createProject(page, name);
   await page.getByRole('button', { name: /^Cylinder \(C\)/ }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await inspector.getByLabel('Radius', { exact: true }).fill('14');
@@ -111,9 +96,51 @@ test('a second key for Normal to face works while a button has focus', async ({
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toBeVisible();
+}
 
+test('a second key for Normal to face works while a button has focus', async ({
+  page
+}) => {
+  // Space yields to a focused button, which presses on it; a remapped key
+  // has no such claim and must still turn the view.
+  await page.addInitScript(() => {
+    if (localStorage.getItem('openzcad-app-settings:v1')) return;
+    localStorage.setItem(
+      'openzcad-app-settings:v1',
+      JSON.stringify({
+        settings: {
+          keymap: { overrides: { 'view-normal-to-face': ['Space', 'N'] } }
+        },
+        syncedRevision: null
+      })
+    );
+  });
+  await selectCylinderCap(page, 'Keymap normal');
   await page.getByRole('button', { name: /^Fit view/ }).focus();
   await page.keyboard.press('n');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'viewing normal to face'
+  );
+});
+
+test('Space turns to the face from a number field that keeps focus', async ({
+  page
+}) => {
+  // A number or expression field takes no spaces, so Space still reaches
+  // Normal to face; only controls that use Space keep it.
+  await selectCylinderCap(page, 'Keymap numeric');
+  // No such field stays up after a face pick today, so one stands in: the
+  // contract is the handler's, whichever field holds focus.
+  await page.evaluate(() => {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.setAttribute('aria-label', 'Stand-in number field');
+    document.body.append(input);
+  });
+  const field = page.getByRole('spinbutton', { name: 'Stand-in number field' });
+  await field.focus();
+  await expect(field).toBeFocused();
+  await page.keyboard.press('Space');
   await expect(page.getByRole('contentinfo')).toContainText(
     'viewing normal to face'
   );
