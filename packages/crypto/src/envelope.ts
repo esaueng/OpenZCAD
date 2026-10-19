@@ -61,6 +61,10 @@ const BLOB_ID_BYTES = 16;
 let readKey: (key: EnvelopeKey) => Bytes;
 let createKey: (bytes: Uint8Array) => EnvelopeKey;
 const usedKeys = new WeakSet<EnvelopeKey>();
+// `private` is erased from the emitted JavaScript, so the constructor also
+// demands this unexported token: without it a caller could build a second
+// instance from `key.bytes` that `usedKeys` would not recognise.
+const constructionToken: unique symbol = Symbol('EnvelopeKey');
 
 /**
  * A fresh random 256-bit key that encrypts exactly one envelope. Chunk
@@ -74,18 +78,24 @@ export class EnvelopeKey {
 
   static {
     readKey = (key) => key.#bytes;
-    createKey = (bytes) => new EnvelopeKey(copyBytes(bytes));
+    createKey = (bytes) => new EnvelopeKey(constructionToken, copyBytes(bytes));
   }
 
-  private constructor(bytes: Bytes) {
-    if (bytes.byteLength !== KEY_BYTES) {
+  private constructor(token: typeof constructionToken, bytes: Bytes) {
+    if (token !== constructionToken) {
+      throw new E2eeError(
+        'invalid-argument',
+        'Create envelope keys with EnvelopeKey.generate()'
+      );
+    }
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength !== KEY_BYTES) {
       throw new E2eeError('invalid-argument', 'Envelope keys are 32 bytes');
     }
     this.#bytes = bytes;
   }
 
   static generate(): EnvelopeKey {
-    return new EnvelopeKey(systemRandom(KEY_BYTES));
+    return new EnvelopeKey(constructionToken, systemRandom(KEY_BYTES));
   }
 
   /** The raw key, to wrap under the project key or record in a reference. */

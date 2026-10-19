@@ -193,6 +193,29 @@ describe('project envelopes', () => {
     );
   });
 
+  it('refuses to construct a duplicate key outside the module', () => {
+    // `private` is compile-time only; JavaScript callers can still reach
+    // the constructor, and a duplicate would escape the reuse check.
+    const key = EnvelopeKey.generate();
+    const Ctor = EnvelopeKey as unknown as new (
+      ...args: unknown[]
+    ) => EnvelopeKey;
+    for (const args of [
+      [key.bytes],
+      [Symbol('EnvelopeKey'), key.bytes],
+      [undefined, key.bytes]
+    ]) {
+      let caught: unknown;
+      try {
+        new Ctor(...args);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(E2eeError);
+      expect((caught as E2eeError).code).toBe('invalid-argument');
+    }
+  });
+
   it('every header field is authenticated', async () => {
     const envelope = await sealProject(patternBytes(CHUNK * 3 + 10, 5));
     const { chunks } = split(envelope);
