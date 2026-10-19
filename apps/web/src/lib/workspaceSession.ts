@@ -108,6 +108,18 @@ function parseSketchVisibility(
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
+/** A recorded field of view, or nothing: a bad one reads as unrecorded. */
+function withFieldOfView(
+  value: unknown
+): Pick<ViewportCameraState, 'fieldOfView'> {
+  return typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value > 0 &&
+    value < 180
+    ? { fieldOfView: value }
+    : {};
+}
+
 function parseStoredView(value: unknown): StoredProjectView | null {
   if (!value || typeof value !== 'object') {
     return null;
@@ -140,7 +152,8 @@ function parseStoredView(value: unknown): StoredProjectView | null {
       position: [...camera.position],
       target: [...camera.target],
       orthographicZoom: camera.orthographicZoom,
-      orthographicHalfHeight: camera.orthographicHalfHeight
+      orthographicHalfHeight: camera.orthographicHalfHeight,
+      ...withFieldOfView(camera.fieldOfView)
     },
     projection: candidate.projection,
     settings: {
@@ -329,7 +342,8 @@ export function loadProjectView(
       position: [...view.camera.position],
       target: [...view.camera.target],
       orthographicZoom: view.camera.orthographicZoom,
-      orthographicHalfHeight: view.camera.orthographicHalfHeight
+      orthographicHalfHeight: view.camera.orthographicHalfHeight,
+      ...withFieldOfView(view.camera.fieldOfView)
     },
     projection: view.projection,
     settings: { ...view.settings },

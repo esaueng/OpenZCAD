@@ -1069,6 +1069,36 @@ describe('CameraController field of view', () => {
     );
   }
 
+  it('restores a pose saved at another field of view with its framing', () => {
+    const first = createController();
+    const span = spanAtTarget(first.controller);
+    const saved = first.controller.capture();
+    expect(saved.fieldOfView).toBe(45);
+    first.controller.dispose();
+
+    // The preference changed while the project was closed.
+    const { controller } = createController();
+    controller.setFieldOfView(70);
+    controller.restore(saved, 'perspective');
+    expect(controller.fieldOfView).toBe(70);
+    expect(spanAtTarget(controller)).toBeCloseTo(span, 9);
+    expect(controller.controls.target.toArray()).toEqual(saved.target);
+    controller.dispose();
+  });
+
+  it('restores a pose saved before the field of view was recorded as given', () => {
+    const first = createController();
+    const { fieldOfView: _unrecorded, ...legacy } = first.controller.capture();
+    first.controller.dispose();
+    const { controller } = createController();
+    controller.setFieldOfView(70);
+    controller.restore(legacy, 'perspective');
+    controller.perspective.position.toArray().forEach((value, axis) => {
+      expect(value).toBeCloseTo(legacy.position[axis]!, 9);
+    });
+    controller.dispose();
+  });
+
   it('keeps the framing while the depth cue changes', () => {
     const { controller, onViewChange } = createController();
     const span = spanAtTarget(controller);
@@ -1102,7 +1132,8 @@ describe('CameraController field of view', () => {
     controller.applyProjection('orthographic');
     const before = controller.capture();
     controller.setFieldOfView(70);
-    expect(controller.capture()).toEqual(before);
+    // The picture is untouched; only the recorded field of view moves.
+    expect(controller.capture()).toEqual({ ...before, fieldOfView: 70 });
     expect(controller.projection).toBe('orthographic');
     controller.dispose();
   });

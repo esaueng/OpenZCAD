@@ -77,6 +77,24 @@ describe('workspace session persistence', () => {
     expect(reloaded?.settings.xray).toBe(false);
   });
 
+  it('keeps the field of view a pose was framed at, dropping a bad one', () => {
+    const storage = new MemoryStorage();
+    saveProjectView(
+      'project-1',
+      { ...view, camera: { ...view.camera, fieldOfView: 60 } },
+      storage
+    );
+    expect(loadProjectView('project-1', storage)?.camera.fieldOfView).toBe(60);
+    saveProjectView(
+      'project-1',
+      { ...view, camera: { ...view.camera, fieldOfView: Number.NaN } },
+      storage
+    );
+    const reloaded = loadProjectView('project-1', storage);
+    expect(reloaded?.camera.position).toEqual(view.camera.position);
+    expect(reloaded?.camera).not.toHaveProperty('fieldOfView');
+  });
+
   it('keeps a project view while an explicit return home clears auto-open', () => {
     const storage = new MemoryStorage();
     rememberActiveProject('project-1', storage);

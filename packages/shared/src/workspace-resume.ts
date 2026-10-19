@@ -4,6 +4,8 @@ export interface WorkspaceResumeState {
     target: [number, number, number];
     orthographicZoom: number;
     orthographicHalfHeight?: number;
+    /** Perspective field of view the pose was framed at, in degrees. */
+    fieldOfView?: number;
   };
   projection: 'perspective' | 'orthographic';
   settings: {
@@ -105,6 +107,14 @@ export function parseWorkspaceResumeState(
       orthographicZoom: camera.orthographicZoom,
       ...(typeof camera.orthographicHalfHeight === 'number'
         ? { orthographicHalfHeight: camera.orthographicHalfHeight }
+        : {}),
+      // Optional and dropped rather than refused when unusable: an older
+      // device's state has none, and the pose is still good without it.
+      ...(typeof camera.fieldOfView === 'number' &&
+      Number.isFinite(camera.fieldOfView) &&
+      camera.fieldOfView > 0 &&
+      camera.fieldOfView < 180
+        ? { fieldOfView: camera.fieldOfView }
         : {})
     },
     projection: value.projection as WorkspaceResumeState['projection'],

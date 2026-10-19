@@ -57,6 +57,12 @@ export interface ViewportCameraState {
   orthographicZoom: number;
   /** Vertical half-size of the orthographic frustum before zoom is applied. */
   orthographicHalfHeight?: number;
+  /**
+   * The perspective field of view the pose was framed at, in degrees.
+   * Absent from poses saved before it was recorded, which read as framed at
+   * whatever field of view is current.
+   */
+  fieldOfView?: number;
 }
 
 /**
@@ -1077,7 +1083,8 @@ export class CameraController {
       position: [position.x, position.y, position.z],
       target: [target.x, target.y, target.z],
       orthographicZoom: this.orthographic.zoom,
-      orthographicHalfHeight: Math.abs(this.orthographic.top)
+      orthographicHalfHeight: Math.abs(this.orthographic.top),
+      fieldOfView: this.perspective.fov
     };
   }
 
@@ -1091,6 +1098,25 @@ export class CameraController {
     this.restoreWorldUp();
     this.perspective.position.fromArray(state.position);
     this.orbit.target.fromArray(state.target);
+    // A pose framed at another field of view (the preference changed since
+    // it was saved) is dollied as a live change would be, so it shows the
+    // same span at the target rather than appearing zoomed in or out.
+    const savedFov = state.fieldOfView;
+    if (
+      savedFov !== undefined &&
+      Number.isFinite(savedFov) &&
+      savedFov > 0 &&
+      savedFov < 180 &&
+      Math.abs(savedFov - this.perspective.fov) > 1e-9
+    ) {
+      const ratio =
+        Math.tan(THREE.MathUtils.degToRad(savedFov / 2)) /
+        Math.tan(THREE.MathUtils.degToRad(this.perspective.fov / 2));
+      this.perspective.position
+        .sub(this.orbit.target)
+        .multiplyScalar(ratio)
+        .add(this.orbit.target);
+    }
     this.perspective.lookAt(this.orbit.target);
     this.perspective.updateMatrixWorld(true);
     this.orbit.update();
