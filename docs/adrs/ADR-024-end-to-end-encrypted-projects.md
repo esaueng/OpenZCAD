@@ -875,15 +875,31 @@ encrypts under the project key is unchanged.
   exception names only the replacement.
 
   A device that cannot meet these rules, for example after an absence longer
-  than the retention window, is re-added by an ordinary Add from the owner, after the same credential
-  checks; only the owner may add leaves. The spike ran each
-  of these rules on its own in both libraries, and each refusal fired for
-  exactly its intended reason. Not yet covered: a removed device failing both
-  rules at once, the account-key rotation and the server-stored wrapped PSKs,
-  and the removal rule for a member who was removed and later re-added. Phase
-  5 tests add them. With OpenMLS, a rejoining device whose old signing key was
-  lost needs a second Commit to remove its stale leaf. mls-rs replaces the
-  leaf in the same external Commit.
+  than the retention window, comes back one of two ways:
+  - **Other members remain.** Any current member's browser may commit an Add
+    of a new leaf for an identity the roles extension already lists, with
+    that identity's existing role. It must first run the same credential
+    checks: the credential is certified, not revoked, and certified after
+    that identity's latest leaf removal. This changes no membership, so it
+    needs no owner. Adding a new identity, or changing a role, stays
+    owner-only.
+  - **The user is the only member.** If the roles extension lists only this
+    user's identity and none of their leaves can act, nobody is left to
+    commit anything. The owner's browser then performs an identity-authorized
+    group reset. It signs, with the identity key, a reset entry naming a new
+    MLS group for the project, and creates that group with its own leaf. It
+    carries over the earlier project keys from the user's account-key-wrapped
+    copies, which every accepted project keeps. Old versions stay readable,
+    and the version chain continues under the new group's epochs. A reset is
+    refused whenever the old group lists any other identity, so it cannot be
+    used to drop collaborators. The spike ran each
+    of these rules on its own in both libraries, and each refusal fired for
+    exactly its intended reason. Not yet covered: a removed device failing both
+    rules at once, the account-key rotation and the server-stored wrapped PSKs,
+    and the removal rule for a member who was removed and later re-added. Phase
+    5 tests add them. With OpenMLS, a rejoining device whose old signing key was
+    lost needs a second Commit to remove its stale leaf. mls-rs replaces the
+    leaf in the same external Commit.
 
 - **A new dependency.** MLS needs a maintained implementation; this is not
   something to hand-write. It loads lazily, outside the entry chunk.
