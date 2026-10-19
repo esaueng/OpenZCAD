@@ -1,6 +1,7 @@
 import {
   createSketchCompositeId,
   isSketchComposite,
+  sketchCompositeHelperKinds,
   sketchCompositeMemberIds,
   type EntityId,
   type ProjectDocument,
@@ -84,6 +85,14 @@ export function addSketchComposite(
     }
     if (!side && !node.data.construction) {
       throw new Error('A composite helper must be construction geometry.');
+    }
+    const helperKind = sketchCompositeHelperKinds(composite.method)[
+      index - composite.edgeIds.length
+    ];
+    if (!side && node.objectKind !== helperKind) {
+      throw new Error(
+        `This composite's helper ${index - composite.edgeIds.length + 1} must be a ${helperKind}, not a ${node.objectKind}.`
+      );
     }
   }
   const next = cloneDocument(document);

@@ -61,6 +61,14 @@ export function isSketchComposite(value: unknown): value is SketchComposite {
         : false;
   if (!methodOk || !isIdList(edgeIds)) return false;
   if (helperIds !== undefined && !isIdList(helperIds)) return false;
+  // Each method owns a fixed set of helpers, so a helper is never
+  // incidental: deleting one dissolves the record.
+  if (
+    (helperIds?.length ?? 0) !==
+    sketchCompositeHelperKinds(method as SketchComposite['method']).length
+  ) {
+    return false;
+  }
   const range = sketchCompositeSideRange(compositeKind as 'rectangle');
   if (edgeIds.length < range.min || edgeIds.length > range.max) return false;
   const members = [...edgeIds, ...(helperIds ?? [])];
@@ -73,6 +81,21 @@ export function isSketchComposite(value: unknown): value is SketchComposite {
     'helperIds'
   ]);
   return Object.keys(value).every((key) => known.has(key));
+}
+
+/**
+ * The construction helpers each method owns, in `helperIds` order: a centre
+ * rectangle's two diagonals (corner 0 to 2, then 1 to 3) and a polygon's
+ * circumcircle. The other methods own none.
+ */
+export function sketchCompositeHelperKinds(
+  method: SketchComposite['method']
+): readonly ('line' | 'circle')[] {
+  return method === 'center'
+    ? ['line', 'line']
+    : method === 'inscribed'
+      ? ['circle']
+      : [];
 }
 
 /** Every object the composite owns: its sides, then its helpers. */
@@ -199,6 +222,31 @@ function shapeLapse(
   const kind = composite.compositeKind;
   if (lengths.some((length) => length <= slack)) {
     return `A side of the ${kind} has collapsed.`;
+  }
+  const helperKinds = sketchCompositeHelperKinds(composite.method);
+  for (const [index, helperId] of (composite.helperIds ?? []).entries()) {
+    const helper = objects.get(helperId);
+    if (
+      !helper ||
+      helper.objectKind !== helperKinds[index] ||
+      !helper.construction
+    ) {
+      return helperKinds[index] === 'circle'
+        ? 'The polygon’s circumcircle is missing.'
+        : 'The rectangle’s construction diagonal is missing.';
+    }
+    if (helper.objectKind === 'line') {
+      const ends = [helper.x1, helper.y1, helper.x2, helper.y2].map(resolve);
+      const from = corners[index]!;
+      const to = corners[index + 2]!;
+      if (
+        ends.some((value) => value === undefined) ||
+        Math.hypot(ends[0]! - from.x, ends[1]! - from.y) > slack ||
+        Math.hypot(ends[2]! - to.x, ends[3]! - to.y) > slack
+      ) {
+        return 'The rectangle’s diagonals no longer meet its corners.';
+      }
+    }
   }
   if (kind === 'rectangle') {
     for (let index = 0; index < count; index += 1) {

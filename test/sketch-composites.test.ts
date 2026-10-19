@@ -475,6 +475,18 @@ describe('S04 composite drawing on the pinned kernel', () => {
       reason:
         'The polygon’s sides no longer run round its circumcircle in order.'
     });
+    // A centre rectangle's diagonal pulled off its corner.
+    const centered = draw(
+      centerRectangleShape({ x: 0, y: 0 }, { x: 10, y: 5 })
+    );
+    const box = centered.sketch().composites![0]!;
+    const drifted = new Map(centered.objects());
+    const diagonal = drifted.get(box.helperIds![0]!)!;
+    drifted.set(box.helperIds![0]!, { ...diagonal, x1: 1 } as SketchObjectData);
+    expect(resolveSketchComposite(box, drifted, resolve)).toMatchObject({
+      status: 'broken',
+      reason: 'The rectangle’s diagonals no longer meet its corners.'
+    });
     const withoutCircle = new Map(polygon.objects());
     withoutCircle.delete(square.helperIds![0]!);
     expect(

@@ -68,7 +68,7 @@ const record = (
 ): SketchComposite => ({
   compositeId: 'scmp_one' as SketchCompositeId,
   compositeKind: 'rectangle',
-  method: 'center',
+  method: helperIds ? 'center' : 'corner',
   edgeIds,
   ...(helperIds ? { helperIds } : {})
 });
@@ -156,14 +156,22 @@ describe('S04 composite records', () => {
   it('refuses members that are missing, not lines, not construction, or already grouped', () => {
     const { document, sketchId, objectIds } = square([
       line(0, 0, 4, 4),
-      { objectKind: 'circle', centerX: 2, centerY: 2, radius: 1 }
+      { objectKind: 'circle', centerX: 2, centerY: 2, radius: 1 },
+      line(4, 0, 0, 4, true),
+      {
+        objectKind: 'circle',
+        centerX: 2,
+        centerY: 2,
+        radius: 1,
+        construction: true
+      }
     ]);
     const add = (edgeIds: EntityId[], helperIds?: EntityId[]) =>
       addSketchComposite(document, {
         sketchId,
         composite: {
           compositeKind: 'rectangle',
-          method: 'corner',
+          method: helperIds ? 'center' : 'corner',
           edgeIds,
           ...(helperIds ? { helperIds } : {})
         }
@@ -175,8 +183,15 @@ describe('S04 composite records', () => {
     expect(() => add([...sides.slice(0, 3), objectIds[5]!])).toThrow(
       'sides must be lines, not a circle'
     );
-    expect(() => add(sides, [objectIds[4]!])).toThrow(
+    expect(() => add(sides, [objectIds[4]!, objectIds[4]!])).toThrow(
+      'ordered sides'
+    );
+    expect(() => add(sides, [objectIds[4]!, objectIds[5]!])).toThrow(
       'helper must be construction geometry'
+    );
+    // A centre rectangle's helpers are two diagonals, not a circle.
+    expect(() => add(sides, [objectIds[6]!, objectIds[7]!])).toThrow(
+      'helper 2 must be a line, not a circle'
     );
     expect(() => add(sides.slice(0, 3))).toThrow('ordered sides');
     const grouped = add(sides).document;
@@ -184,8 +199,8 @@ describe('S04 composite records', () => {
       addSketchComposite(grouped, {
         sketchId,
         composite: {
-          compositeKind: 'polygon',
-          method: 'inscribed',
+          compositeKind: 'rectangle',
+          method: 'three-point',
           edgeIds: sides
         }
       })
@@ -206,6 +221,16 @@ describe('S04 composite records', () => {
     refuse([record(sides.slice(0, 3))]);
     refuse([record([...sides.slice(0, 3), sides[0]!])]);
     refuse([{ ...record(sides), extra: true }]);
+    // Each method owns exactly its own helpers.
+    refuse([{ ...record(sides), method: 'center' }]);
+    refuse([{ ...record(sides), helperIds: [toEntityId('ent_h')] }]);
+    refuse([
+      {
+        ...record(sides, [toEntityId('ent_h1'), toEntityId('ent_h2')]),
+        compositeKind: 'polygon',
+        method: 'inscribed'
+      }
+    ]);
     refuse([record(sides), { ...record(sides), compositeId: 'scmp_two' }]);
     // A record whose members were edited away stays loadable: the resolver,
     // not the loader, reports it broken.
