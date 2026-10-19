@@ -218,6 +218,26 @@ describe('version signatures', () => {
     );
   });
 
+  it('refuse a private key that cannot sign with a typed error', async () => {
+    // WebCrypto never creates an ECDSA private key without `sign`, so the
+    // ways in are look-alike objects; each must fail as an E2eeError, not
+    // a native TypeError or InvalidAccessError.
+    const { privateKey } = await generateSigningKeyPair();
+    const envelope = await version(1, null);
+    for (const usages of [[], undefined, ['sign']]) {
+      const lookalike = {
+        algorithm: privateKey.algorithm,
+        type: privateKey.type,
+        extractable: false,
+        usages
+      } as unknown as CryptoKey;
+      await rejectsWith(
+        signProjectEnvelope(lookalike, envelope),
+        'invalid-argument'
+      );
+    }
+  });
+
   it('refuse a public key without the verify usage', async () => {
     // The public half of a ['sign']-only pair has no usages; verifying with
     // it would throw inside WebCrypto and read as a forged signature.

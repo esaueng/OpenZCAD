@@ -80,10 +80,14 @@ export async function signProjectEnvelope(
   envelope: Uint8Array,
   signedAt: number = Date.now()
 ): Promise<Bytes> {
-  if (!isP256Key(privateKey, 'ECDSA', 'private')) {
+  // Without the sign usage `subtle.sign` throws a native error.
+  if (
+    !isP256Key(privateKey, 'ECDSA', 'private') ||
+    !privateKey.usages?.includes('sign')
+  ) {
     throw new E2eeError(
       'invalid-argument',
-      'Expected a P-256 ECDSA private key'
+      'Expected a P-256 ECDSA private key with the sign usage'
     );
   }
   if (!isUint(signedAt, Number.MAX_SAFE_INTEGER)) {
@@ -92,13 +96,19 @@ export async function signProjectEnvelope(
       'signedAt must be Unix milliseconds'
     );
   }
-  const rs = new Uint8Array(
-    await subtle().sign(
-      ECDSA_SHA256,
-      privateKey,
-      await versionStatement(envelope, signedAt)
-    )
-  );
+  const statement = await versionStatement(envelope, signedAt);
+  let rs: Bytes;
+  try {
+    rs = new Uint8Array(
+      await subtle().sign(ECDSA_SHA256, privateKey, statement)
+    );
+  } catch (cause) {
+    // Only an object that merely looks like a P-256 signing key gets here;
+    // keep the failure an E2eeError like every other one.
+    throw new E2eeError('invalid-argument', 'The signing key cannot sign', {
+      cause
+    });
+  }
   return new ByteWriter()
     .u8(SIGNATURE_VERSION_1)
     .u64(signedAt)
@@ -143,7 +153,7 @@ export async function verifyProjectEnvelopeSignature(
       : publicKey;
   // Without the verify usage `subtle.verify` throws, which the catch below
   // would report as a bad signature rather than an unusable key.
-  if (!isP256Key(key, 'ECDSA', 'public') || !key.usages.includes('verify')) {
+  if (!isP256Key(key, 'ECDSA', 'public') || !key.usages?.includes('verify')) {
     throw new E2eeError(
       'invalid-argument',
       'Expected a P-256 ECDSA public key with the verify usage'
