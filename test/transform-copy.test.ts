@@ -18,6 +18,11 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
+  BODY_COLOR_CHOSEN_METADATA_KEY,
+  BODY_COLOR_METADATA_KEY,
+  BODY_OPACITY_METADATA_KEY,
+  DEFAULT_BODY_COLOR,
+  featureColor,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   isInPlaceTransform,
   isTransformCopy,
@@ -124,6 +129,82 @@ describe('transform copy (M10)', { timeout: 60_000 }, () => {
     expect(step.match(/MANIFOLD_SOLID_BREP/g)).toHaveLength(2);
     const copyOnly = await adapter.exportStep(document, [copyId]);
     expect(copyOnly.match(/MANIFOLD_SOLID_BREP/g)).toHaveLength(1);
+  });
+
+  it.each([
+    {
+      label: 'default',
+      color: undefined,
+      chosen: false,
+      opacity: undefined,
+      expected: DEFAULT_BODY_COLOR
+    },
+    {
+      label: 'chosen primitive-stamp',
+      color: featureColor('primitive'),
+      chosen: true,
+      opacity: undefined,
+      expected: featureColor('primitive')
+    },
+    {
+      label: 'chosen transform-stamp',
+      color: featureColor('transform'),
+      chosen: true,
+      opacity: undefined,
+      expected: featureColor('transform')
+    },
+    {
+      label: 'legacy custom',
+      color: '#214365',
+      chosen: false,
+      opacity: undefined,
+      expected: '#214365'
+    },
+    {
+      label: 'legacy transform-stamp',
+      color: featureColor('transform'),
+      chosen: false,
+      opacity: undefined,
+      expected: featureColor('transform')
+    },
+    {
+      label: 'translucent chosen',
+      color: '#214365',
+      chosen: true,
+      opacity: 0.4,
+      expected: '#214365'
+    }
+  ])(
+    'copies $label appearance',
+    async ({ color, chosen, opacity, expected }) => {
+      const { manager, blockId } = block();
+      const source = listNodesByKind(manager.document, 'body')[0]!;
+      const metadata: Record<string, string | number | boolean> = {};
+      if (color !== undefined) metadata[BODY_COLOR_METADATA_KEY] = color;
+      if (chosen) metadata[BODY_COLOR_CHOSEN_METADATA_KEY] = true;
+      if (opacity !== undefined) metadata[BODY_OPACITY_METADATA_KEY] = opacity;
+      if (Object.keys(metadata).length)
+        manager.execute(
+          commandFactories.setNodeMetadata({ nodeId: source.id, metadata })
+        );
+      manager.execute(copyCommand(blockId));
+      const copiedId = manager.document.bodyOrder[1]!;
+      const derived = await adapter.syncDocument(manager.document);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.bodyRepresentations[blockId]!.color).toBe(expected);
+      expect(derived.bodyRepresentations[copiedId]!.color).toBe(expected);
+      expect(derived.bodyRepresentations[copiedId]!.opacity).toBe(opacity);
+    }
+  );
+
+  it('keeps a copy of a default-colored copy neutral', async () => {
+    const { manager, blockId } = block();
+    manager.execute(copyCommand(blockId));
+    manager.execute(copyCommand(manager.document.bodyOrder[1]!));
+    const derived = await adapter.syncDocument(manager.document);
+    for (const id of manager.document.bodyOrder) {
+      expect(derived.bodyRepresentations[id]!.color).toBe(DEFAULT_BODY_COLOR);
+    }
   });
 
   it('rotates and scales the copy about its pivot', async () => {

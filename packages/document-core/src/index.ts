@@ -32,7 +32,10 @@ export {
 } from './document-history';
 import { isDocumentHistory } from '@openzcad/shared';
 import {
+  BODY_COLOR_CHOSEN_METADATA_KEY,
   BODY_COLOR_METADATA_KEY,
+  BODY_OPACITY_METADATA_KEY,
+  chosenBodyColor,
   MAX_CHECKPOINT_REASON_LENGTH,
   UNIT_TO_MM,
   documentNodesWithHistory,
@@ -2506,7 +2509,11 @@ function transformCopyBody(
     }
   };
   const source = findBodyNode(document, input.targetBodyId);
-  const sourceColor = source?.metadata?.[BODY_COLOR_METADATA_KEY];
+  const sourceFeature = source?.featureId
+    ? findFeature(document, source.featureId)
+    : undefined;
+  const sourceColor = chosenBodyColor(source?.metadata, sourceFeature?.featureKind);
+  const sourceOpacity = source?.metadata?.[BODY_OPACITY_METADATA_KEY];
   next.nodes[bodyNodeId] = {
     id: bodyNodeId,
     kind: 'body',
@@ -2521,10 +2528,11 @@ function transformCopyBody(
     representationSource: 'brep',
     exportableStep: true,
     metadata: {
-      color:
-        typeof sourceColor === 'string'
-          ? sourceColor
-          : featureColor('transform')
+      [BODY_COLOR_METADATA_KEY]: sourceColor ?? featureColor('transform'),
+      ...(sourceColor !== null ? { [BODY_COLOR_CHOSEN_METADATA_KEY]: true } : {}),
+      ...(typeof sourceOpacity === 'number'
+        ? { [BODY_OPACITY_METADATA_KEY]: sourceOpacity }
+        : {})
     }
   };
   next.featureOrder.push(featureId);
