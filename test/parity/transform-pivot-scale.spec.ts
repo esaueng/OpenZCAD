@@ -8,7 +8,19 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import { toUserId, type BodyId } from '@openzcad/shared';
+import {
+  toUserId,
+  type BodyId,
+  type EdgeWitnessV1,
+  type FaceWitnessV1
+} from '@openzcad/shared';
+import { quantizeCoordinate } from '../../packages/kernel-adapter/src/topology-fingerprint';
+import {
+  canonicalCylinderWitness,
+  canonicalPlaneWitness,
+  quantizedTopologyPoint,
+  transformOcctWitness
+} from './occt-reference/occt-lineage';
 import { OcctStepKernelAdapter } from './occt-reference/occt-step';
 
 /**
@@ -66,4 +78,48 @@ describe('transform scale about a pivot across exact kernels', () => {
       }
     }
   );
+});
+
+describe('OCCT reference witnesses under a uniform scale', () => {
+  it('grows lengths, perimeters, radii and plane offsets by the scale', () => {
+    // ×2 about the origin: the linear block is 2·I, no translation.
+    const matrix = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0];
+    const cylinder: FaceWitnessV1 = {
+      surfaceType: 'cylinder',
+      perimeter: quantizeCoordinate(40),
+      centroid: quantizedTopologyPoint({ x: 0, y: 0, z: 5 }),
+      analytic: canonicalCylinderWitness(
+        { x: 0, y: 0, z: 0 },
+        { x: 0, y: 0, z: 1 },
+        5
+      ),
+      closure: { u: 'closed', v: 'open' }
+    };
+    const scaled = transformOcctWitness('face', cylinder, matrix);
+    expect(scaled.perimeter).toBe(quantizeCoordinate(80));
+    expect(scaled.analytic).toEqual(
+      canonicalCylinderWitness({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, 10)
+    );
+    const plane: FaceWitnessV1 = {
+      ...cylinder,
+      surfaceType: 'plane',
+      analytic: canonicalPlaneWitness({ x: 0, y: 0, z: 1 }, 10)
+    };
+    expect(transformOcctWitness('face', plane, matrix).analytic).toEqual(
+      canonicalPlaneWitness({ x: 0, y: 0, z: 1 }, 20)
+    );
+    const edge: EdgeWitnessV1 = {
+      curveType: 'line',
+      length: quantizeCoordinate(10),
+      closed: false,
+      endpoints: [
+        quantizedTopologyPoint({ x: 0, y: 0, z: 0 }),
+        quantizedTopologyPoint({ x: 10, y: 0, z: 0 })
+      ],
+      midpoint: quantizedTopologyPoint({ x: 5, y: 0, z: 0 })
+    };
+    expect(transformOcctWitness('edge', edge, matrix).length).toBe(
+      quantizeCoordinate(20)
+    );
+  });
 });

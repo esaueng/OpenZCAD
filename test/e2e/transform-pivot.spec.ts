@@ -56,3 +56,35 @@ test('a gizmo rotation stores its pivot, and editing the angle keeps it', async 
     centre
   );
 });
+
+test('a translation-only gizmo Move still stores its pivot', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Pivot slide');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspector.getByLabel('Width (X)').fill('40');
+  await inspector.getByLabel('Depth (Y)').fill('20');
+  await inspector.getByLabel('Height (Z)').fill('10');
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  await page.keyboard.press('m');
+  const overlay = page.getByRole('form', { name: 'Move controls' });
+  await overlay.getByLabel('Move X in mm').fill('12');
+  await overlay.getByRole('button', { name: /Apply move/ }).click();
+  await expect(overlay).toBeHidden();
+
+  // A turn added later in the edit card stays about the body's centre.
+  await page.locator('.feature-row-main', { hasText: 'Move' }).click();
+  const pivotX = inspector.getByRole('textbox', { name: 'Pivot X in mm' });
+  await expect(pivotX).toBeVisible();
+  const centre = [
+    await pivotX.inputValue(),
+    await inspector.getByRole('textbox', { name: 'Pivot Y in mm' }).inputValue()
+  ];
+  expect(centre.map(Number).some((value) => value !== 0)).toBe(true);
+});

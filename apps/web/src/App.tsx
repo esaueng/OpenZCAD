@@ -7644,13 +7644,9 @@ export function App() {
       z: (body.bbox.min.z + body.bbox.max.z) / 2
     };
     // M10: rotation turns about the gizmo centre, stored as the Move's pivot
-    // so a later rotation edit still turns the body in place. A move with no
-    // rotation needs no pivot and stores none, as before.
+    // on every gizmo Move, so a rotation or scale added by a later edit still
+    // turns the body in place rather than about the world origin.
     const round = (value: number) => Math.round(value * 1000) / 1000;
-    const rotated =
-      preview.rotationDeg.x !== 0 ||
-      preview.rotationDeg.y !== 0 ||
-      preview.rotationDeg.z !== 0;
     const values = {
       translation: {
         x: round(preview.translation.x),
@@ -7662,15 +7658,11 @@ export function App() {
         y: round(preview.rotationDeg.y),
         z: round(preview.rotationDeg.z)
       },
-      ...(rotated
-        ? {
-            pivot: {
-              x: round(center.x),
-              y: round(center.y),
-              z: round(center.z)
-            }
-          }
-        : {})
+      pivot: {
+        x: round(center.x),
+        y: round(center.y),
+        z: round(center.z)
+      }
     };
     // Finite inputs can still overflow during rounding.
     if (
