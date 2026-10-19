@@ -14079,25 +14079,48 @@ export function App() {
     const sketch =
       target && base && findSketch(base, target.sketchId as SketchId);
     if (!base || !target || !sketch || sketchSolving || geometryBusy) return;
-    const { planSketchConstructionToggle } = await import('./lib/sketch/modify');
-    const plan = planSketchConstructionToggle(
-      base,
-      sketch,
-      sketch.sketchId,
-      target.objectId
-    );
-    if (plan.status === 'refuse') {
-      setStatus(plan.reason);
-    } else if (
-      await commitSketchEdit(
+    setSketchSolving(true);
+    setSketchEditError(null);
+    setSketchDiagnosticPoints([]);
+    try {
+      const { planSketchConstructionToggle } =
+        await import('./lib/sketch/modify');
+      const plan = planSketchConstructionToggle(
         base,
+        sketch,
         sketch.sketchId,
-        plan.commands,
-        plan.label,
-        target.raceObjectId
+        target.objectId
+      );
+      if (plan.status === 'refuse') {
+        setSketchEditError(plan.reason);
+        setStatus(plan.reason);
+      } else if (
+        await commitSketchEdit(
+          base,
+          sketch.sketchId,
+          plan.commands,
+          plan.label,
+          target.raceObjectId
+        )
+      ) {
+        setStatus(plan.message);
+        setSketchSolveStatus(null);
+      }
+    } catch (error) {
+      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
+      const message = errorMessage(
+        error,
+        'The construction change could not be applied.'
+      );
+      const current = sketchEntityEditTarget(interactionRef.current);
+      if (
+        current?.sketchId === target.sketchId &&
+        current.objectId === target.objectId
       )
-    ) {
-      setStatus(plan.message);
+        setSketchEditError(message);
+      setStatus(message);
+    } finally {
+      setSketchSolving(false);
     }
   }
 
