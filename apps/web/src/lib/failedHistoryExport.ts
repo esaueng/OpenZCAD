@@ -32,10 +32,12 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
     case 'boolean':
       // M11: a kept input stands on its own, unchanged, and stays exportable.
       return booleanConsumedBodyIds(data);
+    case 'transform':
+      // A copy (M10) leaves its source in place, as a Mirror does.
+      return data.copy ? [] : [data.targetBodyId];
     case 'split':
       return data.keepOriginal === true ? [] : [data.targetBodyId];
     case 'hole':
-    case 'transform':
     case 'shell':
     case 'solid-offset':
     case 'draft':

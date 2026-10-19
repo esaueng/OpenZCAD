@@ -74,6 +74,23 @@ describe('moveHasUnappliedChange', () => {
       })
     ).toBe(true);
   });
+
+  it('holds a coincident copy until it is applied or discarded', () => {
+    expect(
+      moveHasUnappliedChange({
+        translation: zero,
+        rotationDeg: zero,
+        copy: true
+      })
+    ).toBe(true);
+    expect(
+      moveHasUnappliedChange({
+        translation: zero,
+        rotationDeg: zero,
+        copy: false
+      })
+    ).toBe(false);
+  });
 });
 
 describe('movingSketchId / sketchViewShown', () => {

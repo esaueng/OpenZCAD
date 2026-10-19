@@ -4,7 +4,8 @@ import {
   type BodyId,
   type FeatureNode,
   type FeatureId,
-  type ProjectDocument
+  type ProjectDocument,
+  isTransformCopy
 } from '@openzcad/shared';
 import {
   booleanConsumedBodyIds,
@@ -103,7 +104,8 @@ export function extrudeEditTargets(
       earlier.bodyId !== data.targetBodyId &&
       data.featureKind !== 'mirror' &&
       data.featureKind !== 'thicken' &&
-      !(data.featureKind === 'split' && data.keepOriginal === true)
+      !(data.featureKind === 'split' && data.keepOriginal === true) &&
+      !isTransformCopy(data)
     ) {
       unavailable.add(data.targetBodyId);
     }

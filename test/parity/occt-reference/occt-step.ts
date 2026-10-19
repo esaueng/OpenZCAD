@@ -1730,9 +1730,15 @@ export class OcctStepKernelAdapter {
               scaleFactor
             );
             const transformed = this.kernel.transform(target, matrix);
-            result.shapes.set(feature.data.targetBodyId, transformed);
+            if (feature.data.copy && !feature.bodyId) {
+              throw new Error('Copy has no result body.');
+            }
+            const resultBodyId = feature.data.copy
+              ? feature.bodyId!
+              : feature.data.targetBodyId;
+            result.shapes.set(resultBodyId, transformed);
             result.lineages.set(
-              feature.data.targetBodyId,
+              resultBodyId,
               propagateRigidTransformLineage(
                 result.lineages.get(feature.data.targetBodyId) ??
                   hashOnlyOcctLineage('Transform source has no lineage.'),

@@ -1,3 +1,4 @@
+import { isInPlaceTransform } from '@openzcad/shared';
 import {
   constantRigidTransform,
   createBodyFeatureIds,
@@ -789,7 +790,7 @@ function translationMatches(
   translation: Record<OpeningAxis, ParamValue>
 ): boolean {
   return (
-    data.featureKind === 'transform' &&
+    isInPlaceTransform(data) &&
     data.targetBodyId === target &&
     AXES.every((axis) =>
       sameValue(data.transform.translation[axis], translation[axis])
@@ -818,7 +819,8 @@ export function growingHolderHistories(
     !!feature &&
     !feature.metadata?.suppressed &&
     !feature.metadata?.rollbackSuppressed;
-  const moves = features.filter((f) => f.data.featureKind === 'transform');
+  // Copies (M10) leave their source in place, so they are not placements.
+  const moves = features.filter((f) => isInPlaceTransform(f.data));
   /**
    * The one live transform moving `target` exactly by `translation`; `null`
    * when the translation is zero and no transform targets the body; `false`

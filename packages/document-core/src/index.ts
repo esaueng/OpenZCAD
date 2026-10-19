@@ -32,6 +32,10 @@ export {
 } from './document-history';
 import { isDocumentHistory } from '@openzcad/shared';
 import {
+  BODY_COLOR_CHOSEN_METADATA_KEY,
+  BODY_COLOR_METADATA_KEY,
+  BODY_OPACITY_METADATA_KEY,
+  chosenBodyColor,
   MAX_CHECKPOINT_REASON_LENGTH,
   UNIT_TO_MM,
   documentNodesWithHistory,
@@ -57,6 +61,7 @@ import {
   isDatumPlaneRef,
   type BodyId,
   type BodyNode,
+  type ParametricTransform3D,
   type DatumPlaneDefinition,
   type DatumPlaneSource,
   type AxisId,
@@ -424,7 +429,14 @@ export interface TransformInput {
   scale?: ParamValue;
   /** M10: rotation and scale turn about this point; omitted is the origin. */
   pivot?: ParametricVector3;
-  ids?: FeatureOnlyIds;
+  /**
+   * M10 (schema v23): add a moved copy as a new body and leave the target
+   * live. A copy needs body ids; an in-place Move needs only feature ids.
+   */
+  copy?: boolean;
+  /** Name of the copy's body; defaults to a numbered "<source> copy" name. */
+  bodyName?: string;
+  ids?: FeatureOnlyIds | BodyFeatureIds;
 }
 
 export interface MirrorInput {
@@ -2529,6 +2541,15 @@ export function transformBody(
   ) {
     throw new Error('Body transform values must be finite.');
   }
+  const transform = {
+    translation: input.translation,
+    rotationDeg: input.rotationDeg ?? { x: 0, y: 0, z: 0 },
+    ...(input.scale !== undefined ? { scale: input.scale } : {}),
+    ...(input.pivot !== undefined ? { pivot: deepClone(input.pivot) } : {})
+  };
+  if (input.copy) {
+    return transformCopyBody(document, input, transform);
+  }
   const next = cloneDocument(document);
   const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
 
@@ -2543,12 +2564,7 @@ export function transformBody(
     data: {
       featureKind: 'transform',
       targetBodyId: input.targetBodyId,
-      transform: {
-        translation: input.translation,
-        rotationDeg: input.rotationDeg ?? { x: 0, y: 0, z: 0 },
-        ...(input.scale !== undefined ? { scale: input.scale } : {}),
-        ...(input.pivot !== undefined ? { pivot: deepClone(input.pivot) } : {})
-      }
+      transform
     }
   };
 
@@ -2556,6 +2572,94 @@ export function transformBody(
   attachToPart(next, featureNodeId);
   next.version += 1;
   return { document: next, bodyId: input.targetBodyId };
+}
+
+/**
+ * M10: a Move/Rotate/Scale that adds a moved copy. Like a Mirror, the
+ * feature owns a body of its own and the target stays live and unmoved; the
+ * copy takes the source's colour so it reads as the same part, placed again.
+ */
+function transformCopyBody(
+  document: ProjectDocument,
+  input: TransformInput,
+  transform: ParametricTransform3D
+): { document: ProjectDocument; bodyId: BodyId } {
+  if (!document.bodyOrder.includes(input.targetBodyId)) {
+    throw new Error(`Copy source body ${input.targetBodyId} not found.`);
+  }
+  const ids =
+    input.ids && 'bodyId' in input.ids
+      ? input.ids
+      : { ...createBodyFeatureIds(), ...input.ids };
+  const { featureId, featureNodeId, bodyId, bodyNodeId } = ids;
+  if (document.bodyOrder.includes(bodyId)) {
+    throw new Error(`Copy result body ${bodyId} already exists.`);
+  }
+  if (
+    document.featureOrder.includes(featureId) ||
+    document.nodes[featureNodeId] !== undefined ||
+    document.nodes[bodyNodeId] !== undefined ||
+    featureNodeId === bodyNodeId
+  ) {
+    throw new Error('Copy identifiers must be new and distinct.');
+  }
+  const next = cloneDocument(document);
+  next.nodes[featureNodeId] = {
+    id: featureNodeId,
+    kind: 'feature',
+    name: input.name,
+    parentId: next.activePartId,
+    revisionId: null,
+    featureId,
+    bodyId,
+    featureKind: 'transform',
+    data: {
+      featureKind: 'transform',
+      targetBodyId: input.targetBodyId,
+      transform,
+      copy: true
+    }
+  };
+  const source = findBodyNode(document, input.targetBodyId);
+  const sourceFeature = source?.featureId
+    ? findFeature(document, source.featureId)
+    : undefined;
+  const sourceColor = chosenBodyColor(
+    source?.metadata,
+    sourceFeature?.featureKind
+  );
+  const sourceOpacity = source?.metadata?.[BODY_OPACITY_METADATA_KEY];
+  next.nodes[bodyNodeId] = {
+    id: bodyNodeId,
+    kind: 'body',
+    name:
+      input.bodyName ??
+      numberedBodyName(
+        document,
+        `${derivedBodyName(document, input.targetBodyId, input.name)} copy`
+      ),
+    parentId: next.activePartId,
+    revisionId: null,
+    bodyId,
+    featureId,
+    bodyType: 'solid',
+    representationSource: 'brep',
+    exportableStep: true,
+    metadata: {
+      [BODY_COLOR_METADATA_KEY]: sourceColor ?? featureColor('transform'),
+      ...(sourceColor !== null
+        ? { [BODY_COLOR_CHOSEN_METADATA_KEY]: true }
+        : {}),
+      ...(typeof sourceOpacity === 'number'
+        ? { [BODY_OPACITY_METADATA_KEY]: sourceOpacity }
+        : {})
+    }
+  };
+  next.featureOrder.push(featureId);
+  next.bodyOrder.push(bodyId);
+  attachToPart(next, featureNodeId, bodyNodeId);
+  next.version += 1;
+  return { document: next, bodyId };
 }
 
 /**

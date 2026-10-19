@@ -1818,7 +1818,8 @@ export function Inspector(props: InspectorProps) {
               : {}),
             ...(data.transform.pivot !== undefined
               ? { pivot: data.transform.pivot }
-              : {})
+              : {}),
+            ...(data.copy ? { copy: true } : {})
           }}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyTransform(selectedFeature, value)}
