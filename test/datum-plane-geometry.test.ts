@@ -171,6 +171,30 @@ describe('three-point datum plane', () => {
     expect(() => threePointDatumPlane(a, b, c)).toThrow(/collinear/);
   });
 
+  it('is translation-invariant: the same triangle far from the origin', () => {
+    const far = 1e12;
+    const plane = threePointDatumPlane(
+      p(far, far, far),
+      p(far + 10, far, far),
+      p(far, far + 10, far)
+    );
+    expect(plane.normal).toEqual(p(0, 0, 1));
+    expect(plane.origin).toEqual(p(far, far, far));
+    // A genuinely collinear triple out there is still refused.
+    expect(() =>
+      threePointDatumPlane(
+        p(far, far, far),
+        p(far + 10, far, far),
+        p(far + 20, far, far)
+      )
+    ).toThrow(/collinear/);
+    // And small triangles are judged by their own size, not the origin.
+    expect(
+      threePointDatumPlane(p(5e3, 0, 0), p(5e3 + 1e-3, 0, 0), p(5e3, 1e-3, 0))
+        .normal
+    ).toEqual(p(0, 0, 1));
+  });
+
   it('refuses coincident points, naming which', () => {
     expect(() =>
       threePointDatumPlane(p(1, 1, 1), p(1, 1, 1), p(0, 5, 0))

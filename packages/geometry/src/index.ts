@@ -400,8 +400,18 @@ export function threePointDatumPlane(
 ): PlaneBasis {
   const points = [first, second, third];
   points.forEach((point, index) => requirePoint(point, POINT_ROLES[index]!));
-  const tolerance = geometryTolerance(
-    Math.max(...points.map((point) => datumLength(point)))
+  // Scaled by the triangle, not its distance from the origin, so moving the
+  // same points elsewhere neither refuses nor accepts them; floored at the
+  // rounding noise the coordinates themselves carry far from the origin.
+  const span = Math.max(
+    datumLength(datumSub(second, first)),
+    datumLength(datumSub(third, first)),
+    datumLength(datumSub(third, second))
+  );
+  const magnitude = Math.max(...points.map((point) => datumLength(point)));
+  const tolerance = Math.max(
+    geometryTolerance(span),
+    magnitude * 8 * Number.EPSILON
   );
   for (const [a, b] of [
     [0, 1],
