@@ -1,8 +1,9 @@
-import { afterAll, beforeAll, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
 import { createHash } from 'node:crypto';
 import {
   addPrimitiveFeature,
+  createAdvancingSavePoint,
   importMeshBody,
   importStepBody
 } from '@openzcad/document-core';
@@ -1291,3 +1292,145 @@ for (const mode of ['inline', 'R2'] as const) {
     }
   );
 }
+
+describe('a named checkpoint the browser minted (ADR-024 Phase 1)', () => {
+  function mintedCheckpoint(document: ProjectDocument, reason: string) {
+    const minted = createAdvancingSavePoint(document, reason);
+    return {
+      document: minted,
+      checkpointReason: reason,
+      savedRevisionId: minted.revisions.at(-1)!.revisionId
+    };
+  }
+
+  it.each(['inline', 'R2'] as const)(
+    'stores it in %s exactly as sent',
+    async (mode) => {
+      const fixture = await setup(mode === 'R2' ? objectBucket() : undefined);
+      try {
+        const body = mintedCheckpoint(fixture.document, 'Before machining');
+        const response = await fixture.post(body);
+        expect(response.status).toBe(200);
+        const ack = (await response.json()) as {
+          version: number;
+          document: ProjectDocument;
+        };
+        expect(ack.version).toBe(body.document.version);
+        expect(ack.document.revisions).toEqual(body.document.revisions);
+        expect(ack.document.checkpoints).toEqual(body.document.checkpoints);
+        expect(
+          (
+            await fixture.service.listRevisions(
+              fixture.editor,
+              fixture.document.projectId
+            )
+          ).revisions.map((revision) => revision.revisionId)
+        ).toEqual([body.savedRevisionId]);
+      } finally {
+        fixture.db.close();
+      }
+    }
+  );
+
+  it('refuses a malformed save point before storing anything', async () => {
+    const fixture = await setup();
+    try {
+      const body = mintedCheckpoint(fixture.document, 'Named');
+      const response = await fixture.post({
+        ...body,
+        checkpointReason: 'Another name'
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ code: 'document-invalid' });
+      expect(fixture.storage.values.get('room:latest')).toEqual(
+        fixture.document
+      );
+      expect(
+        (
+          await fixture.service.listRevisions(
+            fixture.owner,
+            fixture.document.projectId
+          )
+        ).revisions
+      ).toHaveLength(0);
+    } finally {
+      fixture.db.close();
+    }
+  });
+
+  it('refuses a replayed revision id and keeps the save state that owns it', async () => {
+    const fixture = await setup();
+    try {
+      // Another project's stored revision: the room's own document cannot
+      // see it, only the account's revision rows can.
+      const { document: other } = await fixture.service.createProject(
+        fixture.owner,
+        { name: 'Other project' }
+      );
+      const otherSaved = await fixture.service.saveRevision(fixture.owner, {
+        projectId: other.projectId,
+        reason: 'Owned elsewhere',
+        expectedVersion: other.version,
+        document: other
+      });
+      const reused = otherSaved.revisions.at(-1)!.revisionId;
+      const body = mintedCheckpoint(fixture.document, 'Replayed');
+      const revisions = [...body.document.revisions];
+      revisions[revisions.length - 1] = {
+        ...revisions.at(-1)!,
+        revisionId: reused
+      };
+      const checkpoints = [...body.document.checkpoints];
+      checkpoints[checkpoints.length - 1] = {
+        ...checkpoints.at(-1)!,
+        revisionId: reused
+      };
+      const response = await fixture.post({
+        ...body,
+        document: { ...body.document, revisions, checkpoints },
+        savedRevisionId: reused
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ code: 'document-invalid' });
+      expect(fixture.storage.values.get('room:latest')).toEqual(
+        fixture.document
+      );
+      expect(
+        await fixture.service.loadRevision(
+          fixture.owner,
+          other.projectId,
+          reused
+        )
+      ).toEqual(otherSaved);
+    } finally {
+      fixture.db.close();
+    }
+  });
+
+  it('answers a save point minted on a superseded lineage with a conflict', async () => {
+    const fixture = await setup();
+    try {
+      const first = mintedCheckpoint(fixture.document, 'First point');
+      expect((await fixture.post(first)).status).toBe(200);
+      // A second member saved in between; this browser still minted on the
+      // version it last saw.
+      const stale = mintedCheckpoint(fixture.document, 'Second point');
+      const response = await fixture.post(stale);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        type: 'conflict',
+        document: { version: first.document.version }
+      });
+      expect(
+        (
+          await fixture.service.listRevisions(
+            fixture.owner,
+            fixture.document.projectId
+          )
+        ).revisions.map((revision) => revision.revisionId)
+      ).toEqual([first.savedRevisionId]);
+    } finally {
+      fixture.db.close();
+    }
+  });
+});

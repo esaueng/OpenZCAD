@@ -8890,7 +8890,15 @@ export function App() {
         await createLocal(localUserId);
         return;
       }
-      const response = await api.createProject({ name, units });
+      // The browser builds the new document and the account stores it as
+      // sent (ADR-024 Phase 1). The route trims the name it compares with.
+      const response = await api.createProject({
+        name: name.trim(),
+        units,
+        initialDocument: withoutDerivedProjection(
+          createProjectDocument(name.trim(), session.userId, units)
+        )
+      });
       await saveLocalProject(response.document);
       remoteVersionsRef.current.set(
         response.document.projectId,

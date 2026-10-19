@@ -4561,6 +4561,32 @@ export function createSavedRevision(
 }
 
 /**
+ * A save point that is also a new model version: the shape a live room's
+ * named checkpoint takes, since other members must see the version advance.
+ */
+export function createAdvancingSavePoint(
+  document: ProjectDocument,
+  reason: string
+): ProjectDocument {
+  return createCheckpoint(appendRevision(document, reason), reason);
+}
+
+/**
+ * The reasons {@link createSavedRevision} and {@link createAdvancingSavePoint}
+ * record for a requested reason, so a server can check a save point a browser
+ * minted without re-deriving the clamping rules.
+ */
+export function savePointReasons(reason: string): {
+  revision: string;
+  checkpoint: string;
+} {
+  return {
+    revision: boundedHistoryReason(reason),
+    checkpoint: boundedHistoryReason(reason.trim() || 'Saved')
+  };
+}
+
+/**
  * `live` carrying the save points an account echo minted that it lacks.
  *
  * An account Save checkpoints the document it was sent. When edits land while
