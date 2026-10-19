@@ -306,6 +306,64 @@ describe('renderViewportImage grid and colours', () => {
 });
 
 describe('renderViewportImage sketch selection', () => {
+  it.each([
+    { selected: true, throws: false },
+    { selected: false, throws: false },
+    { selected: true, throws: true },
+    { selected: false, throws: true }
+  ])(
+    'removes region pick decorations and restores them (selected=$selected, throws=$throws)',
+    ({ selected, throws }) => {
+      const stub = stubScene();
+      const region = new THREE.Mesh(
+        new THREE.BufferGeometry(),
+        new THREE.MeshBasicMaterial({ opacity: selected ? 0.4 : 0.2 })
+      );
+      const boundary = new THREE.Group();
+      const hiddenBoundary = new THREE.Group();
+      hiddenBoundary.visible = false;
+      const marker = new THREE.Points();
+      marker.visible = selected;
+      region.userData = {
+        region: { profileId: 'picked' },
+        regionSelected: selected,
+        regionBaseOpacity: 0.08,
+        regionBoundaries: [boundary, hiddenBoundary],
+        regionMarker: marker
+      };
+      region.material.userData.targetOpacity = region.material.opacity;
+      stub.sketches.add(region, boundary, hiddenBoundary, marker);
+      let during: unknown;
+      stub.renderer.render.mockImplementation((object: THREE.Object3D) => {
+        if (object !== stub.parts.scene) return;
+        during = {
+          opacity: region.material.opacity,
+          boundaries: [boundary.visible, hiddenBoundary.visible],
+          marker: marker.visible
+        };
+        if (throws) throw new Error('capture failed');
+      });
+      const capture = () =>
+        renderViewportImage(stub.parts, {
+          width: 16,
+          height: 16,
+          transparent: false,
+          showGrid: false
+        });
+      if (throws) expect(capture).toThrow('capture failed');
+      else capture();
+      expect(during).toEqual({
+        opacity: 0.08,
+        boundaries: [false, false],
+        marker: false
+      });
+      expect(region.material.opacity).toBe(selected ? 0.4 : 0.2);
+      expect(region.material.userData.targetOpacity).toBe(selected ? 0.4 : 0.2);
+      expect([boundary.visible, hiddenBoundary.visible]).toEqual([true, false]);
+      expect(marker.visible).toBe(selected);
+    }
+  );
+
   it('draws a selected sketch and a picked region unselected, then restores them', () => {
     const stub = stubScene();
     const curveMaterial = new THREE.LineBasicMaterial({

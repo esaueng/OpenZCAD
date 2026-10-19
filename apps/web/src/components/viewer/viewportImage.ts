@@ -151,15 +151,27 @@ function unselectSketchObject(node: THREE.Object3D): (() => void) | null {
   if (!material || Array.isArray(material)) return null;
   const style = node.userData[IMAGE_UNSELECTED_STYLE] as
     ImageUnselectedStyle | undefined;
-  // A picked profile region: its fill drops back to the sketch's idle level.
+  // Selected and hovered profiles both return to their idle fill. Their
+  // boundaries and centroid markers are pick decorations, not sketch curves.
   const region =
-    node.userData.region !== undefined && node.userData.regionSelected === true
+    node.userData.region !== undefined
       ? {
           opacity: (node.userData.regionBaseOpacity as number | undefined) ?? 0
         }
       : undefined;
   const target: ImageUnselectedStyle | undefined = style ?? region;
   if (!target) return null;
+  const decorations: THREE.Object3D[] = region
+    ? [
+        ...((node.userData.regionBoundaries as THREE.Object3D[] | undefined) ??
+          []),
+        ...((node.userData.regionMarker as THREE.Object3D | undefined)
+          ? [node.userData.regionMarker as THREE.Object3D]
+          : [])
+      ]
+    : [];
+  const decorationVisibility = decorations.map((object) => object.visible);
+  for (const object of decorations) object.visible = false;
   const was = {
     color: material.color?.clone(),
     linewidth: material.linewidth,
@@ -176,6 +188,9 @@ function unselectSketchObject(node: THREE.Object3D): (() => void) | null {
     if (was.color && material.color) material.color.copy(was.color);
     if (was.linewidth !== undefined) material.linewidth = was.linewidth;
     material.opacity = was.opacity;
+    decorations.forEach((object, index) => {
+      object.visible = decorationVisibility[index]!;
+    });
   };
 }
 
