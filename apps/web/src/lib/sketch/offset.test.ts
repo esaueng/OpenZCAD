@@ -20,6 +20,7 @@ import {
 import { planSketchConstructionToggle } from './modify';
 import {
   offsetClickSide,
+  offsetFollowsClick,
   planSketchOffset,
   resolveOffsetSource,
   type SketchOffsetPick
@@ -122,6 +123,85 @@ function rectangleFixture() {
 }
 
 describe('sketch offset: chains and joins (ZC-015)', () => {
+  it('describes an open arc-only chain as following the click, while a lone arc stays outward', () => {
+    const fixture = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 10,
+        startAngleDeg: 0,
+        endAngleDeg: 90
+      },
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 10,
+        startAngleDeg: 90,
+        endAngleDeg: 180
+      }
+    ]);
+    const source = resolveOffsetSource(
+      fixture.manager.document,
+      fixture.sketch(),
+      fixture.ids[0]!,
+      true,
+      resolve
+    );
+    if ('error' in source) throw new Error(source.error);
+    expect(offsetFollowsClick(source.source)).toBe(true);
+    const single = resolveOffsetSource(
+      fixture.manager.document,
+      fixture.sketch(),
+      fixture.ids[0]!,
+      false,
+      resolve
+    );
+    if ('error' in single) throw new Error(single.error);
+    expect(offsetFollowsClick(single.source)).toBe(false);
+    for (const side of [1, -1] as const) {
+      const { added } = fixture.commit(fixture.ids[0]!, 1, { ...MITER, side });
+      expect(added).toHaveLength(2);
+      expect(
+        added.map((object) =>
+          object.objectKind === 'arc' ? Number(object.radius) : NaN
+        )
+      ).toEqual([10 - side, 10 - side]);
+    }
+  });
+
+  it.each(['line', 'arc'] as const)(
+    'refuses clearance lost between the former samples beside a non-adjacent %s',
+    (lastKind) => {
+      const fixture = sketchWith([
+        { objectKind: 'line', x1: 0, y1: 0, x2: 100, y2: 0 },
+        { objectKind: 'line', x1: 100, y1: 0, x2: 100, y2: 10 },
+        { objectKind: 'line', x1: 100, y1: 10, x2: 10, y2: 10 },
+        lastKind === 'line'
+          ? { objectKind: 'line', x1: 10, y1: 10, x2: 10, y2: 1.5 }
+          : {
+              objectKind: 'arc',
+              centerX: 10,
+              centerY: 5.75,
+              radius: 4.25,
+              startAngleDeg: 90,
+              endAngleDeg: 300
+            }
+      ]);
+      const before = fixture.manager.document;
+      // The result's long base is at y=1. Its closest point to the final
+      // source curve is (10, 1), just 0.5 away; all five old samples miss it.
+      expect(fixture.plan(fixture.ids[0]!, 1, MITER)).toEqual({
+        status: 'refuse',
+        reason:
+          'That offset collapses through the chain. Use a smaller distance.'
+      });
+      expect(fixture.manager.document).toBe(before);
+      expect(fixture.plan(fixture.ids[0]!, 0.4, MITER).status).toBe('commands');
+    }
+  );
+
   it('offsets a 20 × 12 rectangle outward by 1 with a miter to exactly 22 × 14', () => {
     const { commit, edgeIds, manager, sketch, sketchId } = rectangleFixture();
     const { added, planned } = commit(edgeIds[0]!, 1, MITER);

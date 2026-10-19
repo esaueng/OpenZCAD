@@ -16,7 +16,7 @@
  * - with Chain off, or when nothing joins it: that one line or arc.
  *
  * Which way positive goes: outward for a closed loop, a circle and a lone
- * arc (the radius grows); for an open run with a line in it, towards the
+ * arc (the radius grows); for a multi-curve open run or a lone line, towards the
  * side of the picked curve the click landed on. A negative distance flips
  * either. A lone line keeps its length: the copy spans exactly the source.
  *
@@ -773,7 +773,7 @@ export function offsetFollowsClick(source: OffsetSource): boolean {
   return (
     source.kind === 'chain' &&
     !source.closed &&
-    source.members.some((member) => member.travel.kind === 'line')
+    (source.members.length > 1 || source.members[0]?.travel.kind === 'line')
   );
 }
 
