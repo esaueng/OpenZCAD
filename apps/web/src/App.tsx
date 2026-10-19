@@ -21911,7 +21911,6 @@ export function App() {
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
-            onToggleXray={toggleXray}
             sectionRange={
               viewerSettings.sectionView
                 ? sectionAxisRange(viewerSettings.sectionView.plane)

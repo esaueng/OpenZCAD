@@ -5,7 +5,6 @@ import {
   Maximize2,
   Redo2,
   Ruler,
-  ScanEye,
   Slice,
   Undo2
 } from 'lucide-react';
@@ -79,8 +78,6 @@ interface ViewerToolbarProps {
   savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
-  /** Absent, no X-ray button is drawn. */
-  onToggleXray?(): void;
   /** Switches the section view on (at the last plane used) or off. */
   onToggleSection(): void;
   /** Cuts on another plane; chosen inside the section panel. */
@@ -145,7 +142,6 @@ export function ViewerToolbar({
   savedViews,
   onCycleDisplayMode,
   onToggleProjection,
-  onToggleXray,
   onToggleSection,
   onSectionPlane,
   onSectionOffset,
@@ -177,7 +173,15 @@ export function ViewerToolbar({
   }
   const sectionPanelShown = sectionPanelOpen && sectionOn;
   const panelId = useId();
-  const displayModeLabel = DISPLAY_MODE_LABELS[settings.displayMode];
+  // X-ray rides over the display mode, so the mode button says when it is
+  // on. It has no rail button of its own: the rail is sized to centre on the
+  // stage (and to fit beside the cube) down to a phone's height, and another
+  // 38px lifted it off centre there. Shift+X, the command bar and the view
+  // menu reach it, and View mode's bar has room for its button.
+  const displayModeLabel = `${DISPLAY_MODE_LABELS[settings.displayMode]}${
+    settings.xray ? ' · X-ray' : ''
+  }`;
+  const xrayKey = keymap.label('view-xray');
   const sectionLabel = settings.sectionView
     ? SECTION_PLANE_LABELS[settings.sectionView.plane]
     : 'Off';
@@ -471,7 +475,9 @@ export function ViewerToolbar({
       <Tooltip
         label="Display mode"
         shortcut={keymap.label('view-display')}
-        description={`Now: ${displayModeLabel}`}
+        description={`Now: ${displayModeLabel}${
+          xrayKey ? ` · ${platformShortcutLabel(xrayKey)} for X-ray` : ''
+        }`}
       >
         <button
           type="button"
@@ -482,23 +488,6 @@ export function ViewerToolbar({
           <DisplayModeIcon mode={settings.displayMode} />
         </button>
       </Tooltip>
-      {onToggleXray && (
-        <Tooltip
-          label="X-ray"
-          shortcut={keymap.label('view-xray')}
-          description="See and pick through faces"
-        >
-          <button
-            type="button"
-            className={`rail-button ${settings.xray ? 'active' : ''}`}
-            onClick={onToggleXray}
-            aria-label={labelWithKey('X-ray', keymap.label('view-xray'))}
-            aria-pressed={settings.xray === true}
-          >
-            <ScanEye size={16} aria-hidden="true" />
-          </button>
-        </Tooltip>
-      )}
       <span className="rail-divider" aria-hidden="true" />
       <div className="rail-views-anchor" ref={anchorRef}>
         <Tooltip label="Standard views">

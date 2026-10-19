@@ -121,10 +121,35 @@ async function boxExtent(page: Page) {
   return { minX, minY, maxX, maxY, maxZ, pad, midX: (minX + maxX) / 2 };
 }
 
-const xrayButton = (page: Page) =>
+/**
+ * Toggles X-ray with its key, Shift+X, and waits for the viewport to follow.
+ * It has no button on the instrument rail (the rail must stay centred on a
+ * phone-height stage); a focused form field would keep the key, so focus
+ * leaves it first.
+ */
+async function toggleXray(page: Page) {
+  const was = await canvas(page).getAttribute('data-e2e-xray');
+  await page.evaluate(() => {
+    const active = document.activeElement;
+    if (
+      active instanceof HTMLElement &&
+      active.matches('input, textarea, select, [contenteditable]')
+    ) {
+      active.blur();
+    }
+  });
+  await page.keyboard.press('Shift+X');
+  if (was === null) {
+    await expect(canvas(page)).toHaveAttribute('data-e2e-xray', /^0\./);
+  } else {
+    await expect(canvas(page)).not.toHaveAttribute('data-e2e-xray', /.*/);
+  }
+}
+
+const displayButton = (page: Page) =>
   page
     .getByRole('toolbar', { name: 'Viewer bar' })
-    .getByRole('button', { name: /^X-ray/ });
+    .getByRole('button', { name: /^Display mode/ });
 
 test('a box takes edges by its direction, and through faces in X-ray', async ({
   page
@@ -162,8 +187,9 @@ test('a box takes edges by its direction, and through faces in X-ray', async ({
   await page.keyboard.press('Escape');
 
   // X-ray: the hidden edges are taken as well.
-  await xrayButton(page).click();
-  await expect(xrayButton(page)).toHaveAttribute('aria-pressed', 'true');
+  await toggleXray(page);
+  // The display mode button says X-ray is on.
+  await expect(displayButton(page)).toHaveAttribute('aria-label', /· X-ray$/);
   await expect(canvas(page)).toHaveAttribute('data-e2e-xray', '0.35');
   await sweep(page, middleAbove, outerLeftBelow);
   await expect(status).toContainText('8 edges selected.');
@@ -223,7 +249,7 @@ test('section clipping excludes removed faces from an X-ray sweep', async ({
   ).toBeVisible();
   await page.keyboard.press('Escape');
   await setSelectionFilter(page, 'Face');
-  await xrayButton(page).click();
+  await toggleXray(page);
   await sweep(
     page,
     [minX - pad, maxY + pad, maxZ],
@@ -292,7 +318,7 @@ test('X-ray picks a rear edge and hands back the view it was over', async ({
   const displayBefore = await display.getAttribute('aria-label');
   await setSelectionFilter(page, 'Edge');
 
-  await xrayButton(page).click();
+  await toggleXray(page);
   await expect(canvas(page)).toHaveAttribute('data-e2e-xray', '0.35');
   // An edge with the box's own faces standing in front of it.
   const rear = await locateEdge(page, { occluded: true });
@@ -305,8 +331,7 @@ test('X-ray picks a rear edge and hands back the view it was over', async ({
   );
 
   // Back to shaded: the mode, the body and the pick are as they were.
-  await xrayButton(page).click();
-  await expect(xrayButton(page)).toHaveAttribute('aria-pressed', 'false');
+  await toggleXray(page);
   await expect(canvas(page)).not.toHaveAttribute('data-e2e-xray', /.*/);
   await expect(display).toHaveAttribute('aria-label', displayBefore!);
   await expectBodyCount(page, 1);
@@ -432,7 +457,7 @@ test('X-ray keeps shaded edges after installing new body geometry', async ({
     await display.click();
   }
   await expect(display).toHaveAttribute('aria-label', /now: Shaded$/);
-  await xrayButton(page).click();
+  await toggleXray(page);
   await page.locator('.feature-row-main', { hasText: 'Box' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await inspector.getByRole('textbox', { name: 'Width (X)' }).fill('45');
@@ -482,7 +507,7 @@ for (const operation of ['Shell', 'Draft']) {
       .getByRole('button', { name: /^Orthographic projection/ })
       .click();
     await setSelectionFilter(page, 'Face');
-    await xrayButton(page).click();
+    await toggleXray(page);
     const { minX, minY, maxX, maxY, maxZ, pad } = await boxExtent(page);
     await sweep(
       page,
@@ -527,7 +552,7 @@ test('a pending Move copy follows X-ray opacity and edge styling', async ({
     count += 1
   )
     await display.click();
-  await xrayButton(page).click();
+  await toggleXray(page);
   await page.keyboard.press('m');
   const controls = page.getByRole('form', { name: 'Move controls' });
   await controls.getByLabel('Move X in mm').fill('40');
@@ -563,11 +588,11 @@ test('a pending Move copy follows X-ray opacity and edge styling', async ({
   await expect
     .poll(state)
     .toEqual({ faces: [false, false], edges: [true, true] });
-  await xrayButton(page).click();
+  await toggleXray(page);
   await expect
     .poll(state)
     .toEqual({ faces: [true, true], edges: [false, false] });
-  await xrayButton(page).click();
+  await toggleXray(page);
   await expect
     .poll(state)
     .toEqual({ faces: [false, false], edges: [true, true] });

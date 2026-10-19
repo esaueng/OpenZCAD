@@ -360,7 +360,6 @@ interface ViewerShellProps {
   savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
-  onToggleXray?(): void;
   /** Perspective field of view, degrees (Settings › Viewport). */
   fieldOfView?: number;
   /** Face opacity in X-ray, 0–1 (Settings › Viewport). */
@@ -498,7 +497,6 @@ export function ViewerShell({
   savedViews,
   onCycleDisplayMode,
   onToggleProjection,
-  onToggleXray,
   fieldOfView,
   xrayOpacity,
   sectionRange,
@@ -615,7 +613,6 @@ export function ViewerShell({
       {...(savedViews ? { savedViews } : {})}
       onCycleDisplayMode={onCycleDisplayMode}
       onToggleProjection={onToggleProjection}
-      {...(onToggleXray ? { onToggleXray } : {})}
       sectionRange={sectionRange}
       onToggleSection={onToggleSection}
       onSectionPlane={onSectionPlane}
