@@ -1,6 +1,17 @@
 import { copyImportedSources } from './copy-import-sources';
 export { copyImportedSources } from './copy-import-sources';
 import {
+  assertClientSavePoint,
+  isClientMintedProjectId,
+  SavePointRequestError
+} from './client-save-point';
+export {
+  assertClientSavePoint,
+  isClientMintedProjectId,
+  MAX_SAVE_POINT_CLOCK_SKEW_MS,
+  SavePointRequestError
+} from './client-save-point';
+import {
   copiedImportArchives,
   reconcileCopiedImportSources,
   verifyCopiedImportArchives,
@@ -349,6 +360,43 @@ export class DocumentTooLargeError extends Error {
 }
 
 /** @throws DocumentTooLargeError when the serialized document exceeds the cap. */
+/**
+ * The checks a browser-built new project gets before the account stores it
+ * (ADR-024 Phase 1): the creator owns it, it carries the requested name and an
+ * id `createId` could have minted. The id is kept — later phases bind it into
+ * the encrypted envelope — so whether it is free is the store's check.
+ */
+export function prepareInitialProjectDocument(
+  userId: UserId,
+  source: ProjectDocument,
+  name: string
+): ProjectDocument {
+  if (!isClientMintedProjectId(source.projectId)) {
+    throw new SavePointRequestError('The new project id is malformed.');
+  }
+  if (source.ownerUserId !== userId) {
+    throw new SavePointRequestError(
+      'A new project must belong to its creator.'
+    );
+  }
+  if (source.name !== name) {
+    throw new SavePointRequestError(
+      'The new project name does not match the request.'
+    );
+  }
+  const document = withoutDerivedProjection(normalizeDocument(source));
+  assertPersistableDocument(document);
+  return document;
+}
+
+/** A client-chosen project id that already names a project, anyone's. */
+export function projectIdTaken(): ProjectAdoptionError {
+  return new ProjectAdoptionError(
+    'PROJECT_ID_TAKEN',
+    'That project id is already in use. Create the project again.'
+  );
+}
+
 export function assertPersistableDocument(document: ProjectDocument): void {
   const bytes = persistedDocumentBytes(document);
   if (bytes > MAX_PERSISTED_DOCUMENT_BYTES) {
@@ -1085,7 +1133,14 @@ export class InMemoryPersistenceService implements PersistenceService {
     if (request.document) this.assertMeshSourcesNotDiscarded(request.document);
     const document = request.document
       ? this.prepareAdoption(userId, request.document, request.name)
-      : createProjectDocument(request.name, userId, request.units);
+      : request.initialDocument
+        ? this.prepareInitialDocument(
+            userId,
+            request.initialDocument,
+            request.name
+          )
+        : // A pre-Phase 1 client sends no document; kept for one release.
+          createProjectDocument(request.name, userId, request.units);
     this.assertProjectCount(userId);
     this.assertMeshSourcesNotDiscarded(document);
     this.projects.set(document.projectId, document);
@@ -1102,6 +1157,16 @@ export class InMemoryPersistenceService implements PersistenceService {
       project: this.summarize(document),
       document
     };
+  }
+
+  private prepareInitialDocument(
+    userId: UserId,
+    source: ProjectDocument,
+    name: string
+  ): ProjectDocument {
+    const document = prepareInitialProjectDocument(userId, source, name);
+    if (this.projects.has(document.projectId)) throw projectIdTaken();
+    return document;
   }
 
   private prepareAdoption(
@@ -1456,10 +1521,30 @@ export class InMemoryPersistenceService implements PersistenceService {
     ) {
       throw new ProjectNotFoundError(request.projectId);
     }
-    const document = createSavedRevision(
-      withoutDerivedProjection(normalized),
-      request.reason
-    );
+    const prepared = withoutDerivedProjection(normalized);
+    const document =
+      request.savedRevisionId === undefined
+        ? // A pre-Phase 1 client leaves the save point to the server; kept
+          // for one release.
+          createSavedRevision(prepared, request.reason)
+        : prepared;
+    if (request.savedRevisionId !== undefined) {
+      assertClientSavePoint(document, {
+        revisionId: request.savedRevisionId,
+        reason: request.reason
+      });
+      if (
+        existing.revisions.some(
+          (revision) => revision.revisionId === request.savedRevisionId
+        ) ||
+        [...this.revisions.values()].some((history) =>
+          history.some(
+            (revision) => revision.revisionId === request.savedRevisionId
+          )
+        )
+      )
+        throw new RevisionIdCollisionError();
+    }
     assertPersistableDocument(document);
     this.assertMeshSourcesNotDiscarded(document);
     if (this.projectCopyCleanupClaims.has(request.projectId))

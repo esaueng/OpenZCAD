@@ -1900,6 +1900,103 @@ describe('durable room checkpoints', () => {
     hook.unmount();
   });
 
+  it('mints the save point itself and adopts the room storing it as sent', async () => {
+    const document = createProjectDocument('Minted', toUserId('owner'));
+    const fetch = vi.fn(
+      async (_request: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(init!.body as string) as {
+          document: ProjectDocument;
+        };
+        return new Response(
+          JSON.stringify({
+            type: 'ack',
+            version: body.document.version,
+            document: body.document
+          })
+        );
+      }
+    );
+    vi.stubGlobal('fetch', fetch);
+    const hook = setup(document);
+    let saved!: ProjectDocument;
+    await act(async () => {
+      saved = await hook.result.current.saveCheckpoint(
+        document,
+        'Browser minted',
+        hook.options
+      );
+    });
+    const request = JSON.parse(
+      (fetch.mock.calls[0]![1] as RequestInit).body as string
+    ) as {
+      document: ProjectDocument;
+      checkpointReason: string;
+      savedRevisionId: string;
+    };
+    const revision = request.document.revisions.at(-1)!;
+    expect(request.savedRevisionId).toBe(revision.revisionId);
+    expect(revision.reason).toBe('Browser minted');
+    expect(request.document.version).toBe(document.version + 1);
+    expect(request.document.checkpoints.at(-1)).toMatchObject({
+      revisionId: revision.revisionId,
+      documentVersion: document.version + 1,
+      reason: 'Browser minted'
+    });
+    expect(
+      document.revisions.some(
+        (previous) => previous.revisionId === revision.revisionId
+      )
+    ).toBe(false);
+    expect(saved.revisions.at(-1)).toEqual(revision);
+    hook.unmount();
+  });
+
+  it('mints again, once, on a room that moved without changing the clicked model', async () => {
+    const document = createProjectDocument('Rebased', toUserId('owner'));
+    // Another member's save point: a newer room version, the same model.
+    const room = createCheckpoint(
+      appendRevision(document, 'Other member'),
+      'Other member'
+    );
+    const fetch = vi.fn(
+      async (_request: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(init!.body as string) as {
+          document: ProjectDocument;
+        };
+        return fetch.mock.calls.length === 1
+          ? new Response(JSON.stringify({ type: 'conflict', document: room }), {
+              status: 409
+            })
+          : new Response(
+              JSON.stringify({
+                type: 'ack',
+                version: body.document.version,
+                document: body.document
+              })
+            );
+      }
+    );
+    vi.stubGlobal('fetch', fetch);
+    const hook = setup(document);
+    let saved!: ProjectDocument;
+    await act(async () => {
+      saved = await hook.result.current.saveCheckpoint(
+        document,
+        'Mine',
+        hook.options
+      );
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const retry = JSON.parse(
+      (fetch.mock.calls[1]![1] as RequestInit).body as string
+    ) as { document: ProjectDocument; baseVersion: number };
+    expect(retry.baseVersion).toBe(room.version);
+    expect(retry.document.revisions.slice(0, -1)).toEqual(room.revisions);
+    expect(saved.checkpoints.at(-1)?.reason).toBe('Mine');
+    expect(saved.version).toBe(room.version + 1);
+    hook.unmount();
+  });
+
   it('rejects an older server that ignores checkpointReason and keeps a named local save state', async () => {
     const document = createProjectDocument('Old server', toUserId('owner'));
     vi.stubGlobal(

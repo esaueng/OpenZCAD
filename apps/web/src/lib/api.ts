@@ -38,6 +38,7 @@ import type {
   VerifyEmailLoginRequest
 } from '@openzcad/shared';
 import {
+  createSavedRevision,
   normalizeDocument,
   normalizeDocumentHistory,
   withoutDerivedProjection
@@ -329,14 +330,32 @@ export const api = {
       method: 'POST',
       body: '{}'
     }),
-  saveRevision: (payload: SaveRevisionRequest) =>
-    requestJson<ProjectDocument>(
+  /**
+   * A named save. The browser appends the save point — revision, checkpoint,
+   * ids and times — and the account checks and stores the document as sent
+   * (ADR-024 Phase 1). The reason is trimmed first because the server compares
+   * the minted records with the trimmed reason it receives.
+   */
+  saveRevision: (payload: SaveRevisionRequest) => {
+    const reason = payload.reason.trim();
+    const document =
+      payload.savedRevisionId === undefined
+        ? createSavedRevision(payload.document, reason)
+        : payload.document;
+    return requestJson<ProjectDocument>(
       `/api/projects/${encodeURIComponent(payload.projectId)}/revisions`,
       {
         method: 'POST',
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          ...payload,
+          reason,
+          document,
+          savedRevisionId:
+            payload.savedRevisionId ?? document.revisions.at(-1)!.revisionId
+        } satisfies SaveRevisionRequest)
       }
-    ),
+    );
+  },
   /**
    * The continuous-sync write. Same fencing as `saveRevision`, no history
    * entry, and only an acknowledgement comes back.

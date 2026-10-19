@@ -161,6 +161,18 @@ export interface PendingSketchEdit {
   picks: string[];
 }
 
+/** How the Offset tool closes the corner where two offsets part. */
+export type SketchOffsetJoin = 'miter' | 'round';
+
+/**
+ * The Offset tool's settings: the corner join, and whether a pick offsets
+ * the whole run of joined curves or only the picked one.
+ */
+export interface SketchOffsetOptions {
+  join: SketchOffsetJoin;
+  chain: boolean;
+}
+
 /**
  * How a selected sketch object is being dragged: `translate` by its grab
  * point (circle, rectangle and polygon centre, text baseline origin, or any
@@ -222,6 +234,8 @@ export interface SketchSessionState {
   pendingConstraint: PendingSketchConstraint | null;
   /** Armed modify tool, if any; picking routes here instead of select. */
   pendingEdit: PendingSketchEdit | null;
+  /** The Offset tool's settings; absent is a mitered chain. */
+  offsetOptions?: SketchOffsetOptions;
   /**
    * The selected object's drag-move, while the pointer holds it. Absent
    * otherwise; a release commits it and Escape cancels it, and neither
@@ -358,6 +372,7 @@ export type InteractionEvent =
     }
   | { type: 'sketch-constraint-pick'; pick: SketchConstraintPick }
   | { type: 'sketch-edit-tool'; kind: SketchEditToolKind | null }
+  | { type: 'sketch-offset-options'; options: SketchOffsetOptions }
   | { type: 'sketch-edit-pick'; objectId: string }
   | {
       type: 'sketch-move-start';
@@ -872,6 +887,15 @@ function reduceInteraction(
           pendingEdit: event.kind ? { kind: event.kind, picks: [] } : null
         }
       };
+    case 'sketch-offset-options':
+      // A setting of the tool, like the polygon's side count: it never
+      // disarms the tool or drops a pick.
+      return state.mode === 'sketch'
+        ? {
+            ...state,
+            session: { ...state.session, offsetOptions: event.options }
+          }
+        : state;
     case 'sketch-edit-pick':
       if (state.mode !== 'sketch' || !state.session.pendingEdit) {
         return state;
