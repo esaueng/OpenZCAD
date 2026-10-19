@@ -323,8 +323,17 @@ export function ExtrudeForm({
     change({
       toFace: target,
       endCondition: 'to-face',
+      // Rounded for the field, but never through zero: a reach shorter than
+      // the rounding keeps its exact value, so its sign (which side of the
+      // sketch the face is on) still reaches the commit.
       ...(reach !== null
-        ? { distance: String(Math.round(reach * 1e6) / 1e6) }
+        ? {
+            distance: String(
+              Math.round(reach * 1e6) / 1e6 === 0
+                ? reach
+                : Math.round(reach * 1e6) / 1e6
+            )
+          }
         : {})
     });
   };

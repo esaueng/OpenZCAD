@@ -82,6 +82,7 @@ import {
   type ExtrudeOperation,
   type ThroughAllSide,
   type ExtrudeToFaceTarget,
+  type FeatureWarning,
   type FeatureId,
   type FeatureKind,
   type FeatureNode,
@@ -4361,13 +4362,14 @@ export function toFaceSignedDistance(
 
 /**
  * Whether `feature` is a to-face extrude whose target face no longer
- * resolves, judged from the derived rebuild warnings (in the adapter's
- * `Feature "name": reason` convention). The feature is skipped by the
- * fail-soft replay until a re-pick replaces its `toFace`.
+ * resolves, judged from the derived per-feature warnings. Attribution is by
+ * feature id, never the display name: two extrudes may share a name. The
+ * feature is skipped by the fail-soft replay until a re-pick replaces its
+ * `toFace`.
  */
 export function extrudeToFaceUnresolved(
   feature: FeatureNode,
-  warnings: readonly string[]
+  featureWarnings: readonly FeatureWarning[]
 ): boolean {
   if (
     feature.data.featureKind !== 'extrude' ||
@@ -4375,8 +4377,12 @@ export function extrudeToFaceUnresolved(
   ) {
     return false;
   }
-  const prefix = `Feature "${feature.name}": ${EXTRUDE_TO_FACE_UNRESOLVED}`;
-  return warnings.some((entry) => entry.startsWith(prefix));
+  const reason = `: ${EXTRUDE_TO_FACE_UNRESOLVED}`;
+  return featureWarnings.some(
+    (warning) =>
+      warning.featureId === feature.featureId &&
+      warning.message.includes(reason)
+  );
 }
 
 /** Direct-edit kinds whose source pins a re-picked face can fully refresh. */

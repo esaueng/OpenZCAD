@@ -804,6 +804,25 @@ describe('to-face extent and draft (F01, schema v29)', () => {
     );
   });
 
+  it('keeps the sign of a reach shorter than the field rounding', () => {
+    const host = picking({
+      describe: () => ({ label: 'Ledge · face', distance: -2e-7 })
+    });
+    const onDraft = vi.fn();
+    render(
+      <ExtrudeForm
+        {...base}
+        toFacePicking={host}
+        onDraft={onDraft}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    act(() => host.setterRef.current?.(face));
+    const sent = onDraft.mock.lastCall![0] as { distance: ParamValue };
+    expect(Number(sent.distance)).toBeLessThan(0);
+  });
+
   it('returns to Distance when the viewport arrow is dragged', async () => {
     const distanceSetterRef: MutableRefObject<
       ((value: ParamValue) => void) | null

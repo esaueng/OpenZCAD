@@ -2496,6 +2496,12 @@ export function App() {
     derived: ProjectDocument['derived'];
     featureWarnings: readonly FeatureWarning[];
   } | null>(null);
+  /** The per-feature warnings of the derived state on screen, by id. */
+  function attributedFeatureWarnings(): readonly FeatureWarning[] {
+    return doc && featureAttribution?.derived === doc.derived
+      ? featureAttribution.featureWarnings
+      : [];
+  }
   function recordFeatureAttribution(
     committed: ProjectDocument,
     derived: ProjectDocument['derived']
@@ -18964,7 +18970,7 @@ export function App() {
           ]
         : []),
       // F01 (v29): a to-face extrude whose face no longer resolves.
-      ...(extrudeToFaceUnresolved(feature, warnings)
+      ...(extrudeToFaceUnresolved(feature, attributedFeatureWarnings())
         ? [
             {
               item: {
@@ -22681,7 +22687,10 @@ export function App() {
                     feature.data.featureKind === 'extrude'
                       ? feature.data.sketchId
                       : ('' as SketchId),
-                    extrudeToFaceUnresolved(feature, warnings),
+                    extrudeToFaceUnresolved(
+                      feature,
+                      attributedFeatureWarnings()
+                    ),
                     feature.featureId
                   )
                 }

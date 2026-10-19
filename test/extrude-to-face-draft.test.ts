@@ -583,8 +583,17 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       expect(derived.warnings.join('\n')).toMatch(
         /Feature "Post": Target face is unresolved: the body that carried the face was deleted/
       );
-      expect(extrudeToFaceUnresolved(feature, derived.warnings)).toBe(true);
+      const featureWarnings = derived.featureWarnings ?? [];
+      expect(extrudeToFaceUnresolved(feature, featureWarnings)).toBe(true);
       expect(extrudeToFaceUnresolved(feature, [])).toBe(false);
+      // Attributed by id: another to-face extrude with the same name is not
+      // reported unresolved by this one's warning.
+      expect(
+        extrudeToFaceUnresolved(
+          { ...feature, featureId: 'feat_twin' as typeof feature.featureId },
+          featureWarnings
+        )
+      ).toBe(false);
 
       // Re-pick the roof's underside: one undoable edit resolves the post.
       const repaired = await face(broken, roof.bodyId, -1);
