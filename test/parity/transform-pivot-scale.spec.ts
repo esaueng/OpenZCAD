@@ -49,7 +49,8 @@ describe('transform scale about a pivot across exact kernels', () => {
         translation: { x: 0, y: 0, z: 0 },
         rotationDeg,
         scale: 2,
-        pivot: { x: 10, y: 5, z: 5 }
+        // Suffixed, as the Move form accepts: both kernels read document units.
+        pivot: { x: '1 cm', y: '5 mm', z: '0.5 cm' }
       }).document;
       for (const adapter of [remus, occt]) {
         const derived = await adapter.syncDocument(scaled);

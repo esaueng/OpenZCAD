@@ -1641,7 +1641,8 @@ export class OcctStepKernelAdapter {
                 ? resolveParamValue(
                     feature.data.transform.scale,
                     scope,
-                    'scale'
+                    'scale',
+                    document.units
                   )
                 : 1;
             if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
@@ -1651,19 +1652,34 @@ export class OcctStepKernelAdapter {
             }
             const matrix = transformMatrix(
               {
-                x: resolveParamValue(translation.x, scope, 'X'),
-                y: resolveParamValue(translation.y, scope, 'Y'),
-                z: resolveParamValue(translation.z, scope, 'Z')
+                x: resolveParamValue(translation.x, scope, 'X', document.units),
+                y: resolveParamValue(translation.y, scope, 'Y', document.units),
+                z: resolveParamValue(translation.z, scope, 'Z', document.units)
               },
               {
-                x: resolveParamValue(rotation.x, scope, 'rotate X'),
-                y: resolveParamValue(rotation.y, scope, 'rotate Y'),
-                z: resolveParamValue(rotation.z, scope, 'rotate Z')
+                x: resolveParamValue(
+                  rotation.x,
+                  scope,
+                  'rotate X',
+                  document.units
+                ),
+                y: resolveParamValue(
+                  rotation.y,
+                  scope,
+                  'rotate Y',
+                  document.units
+                ),
+                z: resolveParamValue(
+                  rotation.z,
+                  scope,
+                  'rotate Z',
+                  document.units
+                )
               },
               pivot && {
-                x: resolveParamValue(pivot.x, scope, 'pivot X'),
-                y: resolveParamValue(pivot.y, scope, 'pivot Y'),
-                z: resolveParamValue(pivot.z, scope, 'pivot Z')
+                x: resolveParamValue(pivot.x, scope, 'pivot X', document.units),
+                y: resolveParamValue(pivot.y, scope, 'pivot Y', document.units),
+                z: resolveParamValue(pivot.z, scope, 'pivot Z', document.units)
               },
               scaleFactor
             );
