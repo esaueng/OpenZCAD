@@ -189,6 +189,7 @@ class CiphertextHasher {
  */
 export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
   private pending: Bytes = new Uint8Array();
+  private written = 0;
   private index = 0;
   private state: 'open' | 'busy' | 'closed' = 'open';
   private readonly hasher: CiphertextHasher | null;
@@ -197,7 +198,13 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
   constructor(
     readonly header: H,
     readonly prefix: Bytes,
-    private readonly key: CryptoKey
+    private readonly key: CryptoKey,
+    /**
+     * Uncompressed payloads are the plaintext, so the writer refuses any
+     * total other than the declared size. A gzip payload's plaintext size
+     * is the caller's to guarantee (the stream helper checks it).
+     */
+    private readonly enforceLength = header.compression === 'none'
   ) {
     this.hasher = header.class === 'content' ? new CiphertextHasher() : null;
     // Folded in before the first chunk, which awaits it.
@@ -207,6 +214,13 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
   /** Encrypts every chunk that is now known not to be the last. */
   async write(payload: Uint8Array): Promise<Bytes[]> {
     return this.exclusive(async () => {
+      this.written += payload.byteLength;
+      if (this.enforceLength && this.written > this.header.plaintextLength) {
+        throw new E2eeError(
+          'invalid-argument',
+          `Payload is longer than the declared ${this.header.plaintextLength} bytes`
+        );
+      }
       const size = this.header.chunkSize;
       const data = this.pending.byteLength
         ? concatBytes(this.pending, payload)
@@ -225,6 +239,12 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
   /** Encrypts the final chunk (possibly empty) and closes the writer. */
   async finish(): Promise<Bytes> {
     const last = await this.exclusive(async () => {
+      if (this.enforceLength && this.written !== this.header.plaintextLength) {
+        throw new E2eeError(
+          'invalid-argument',
+          `Payload is ${this.written} bytes, not the declared ${this.header.plaintextLength}`
+        );
+      }
       const chunk = await this.seal(this.pending, true);
       if (this.hasher) this.hash = await this.hasher.finish();
       return chunk;
@@ -294,14 +314,16 @@ const writerKeys = new WeakMap<EnvelopeWriter, EnvelopeKey>();
 
 async function createWriter<H extends EnvelopeHeader>(
   key: EnvelopeKey,
-  header: H
+  header: H,
+  enforceLength = header.compression === 'none'
 ): Promise<EnvelopeWriter<H>> {
   const prefix = encodeEnvelopePrefix(header);
   const raw = consumeKey(key);
   const writer = new EnvelopeWriter(
     header,
     prefix,
-    await importChunkKey(raw, 'encrypt')
+    await importChunkKey(raw, 'encrypt'),
+    enforceLength
   );
   writerKeys.set(writer, key);
   return writer;
@@ -341,6 +363,7 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
     this.hasher = expectedHash ? new CiphertextHasher() : null;
     // The payload may be gzip of incompressible data, slightly larger than
     // the plaintext: allow deflate's worst-case overhead on top.
+    checkCallerLimit(options.maxPlaintextBytes);
     const plaintextLimit =
       options.maxPlaintextBytes ?? DEFAULT_MAX_PLAINTEXT_BYTES;
     this.maxBytes = plaintextLimit + Math.ceil(plaintextLimit / 1024) + 1024;
@@ -470,7 +493,17 @@ export interface PayloadLimits {
  * kind's ceiling and the caller's limit. A declared size above the ceiling
  * is refused before any decompression (`limit-exceeded`).
  */
+function checkCallerLimit(limit: number | undefined): void {
+  if (limit !== undefined && !isUint(limit, Number.MAX_SAFE_INTEGER)) {
+    throw new E2eeError(
+      'invalid-argument',
+      'maxPlaintextBytes must be a non-negative safe integer'
+    );
+  }
+}
+
 export function plaintextCap(limits: PayloadLimits): number {
+  checkCallerLimit(limits.maxPlaintextBytes);
   const ceiling = Math.min(
     PLAINTEXT_CEILINGS[limits.kind],
     limits.maxPlaintextBytes ?? Number.MAX_SAFE_INTEGER
@@ -633,14 +666,15 @@ export async function encryptProjectEnvelope(
  * the header says so) under an arbitrary header, the way a hostile key
  * holder could, so decode limits can be exercised.
  */
-export async function encryptWithHeaderForTests(
+export async function encryptWithHeaderForTests<H extends EnvelopeHeader>(
   key: EnvelopeKey,
-  header: EnvelopeHeader,
+  header: H,
   payload: Uint8Array
-): Promise<Bytes> {
-  const writer = await createWriter(key, header);
+): Promise<{ envelope: Bytes; writer: EnvelopeWriter<H> }> {
+  const writer = await createWriter(key, header, false);
   const chunks = await writer.write(payload);
-  return concatBytes(writer.prefix, ...chunks, await writer.finish());
+  const envelope = concatBytes(writer.prefix, ...chunks, await writer.finish());
+  return { envelope, writer };
 }
 
 export async function decryptProjectEnvelope(

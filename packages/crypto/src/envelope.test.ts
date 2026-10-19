@@ -414,11 +414,13 @@ describe('decompression limits', () => {
     };
     return {
       key,
-      envelope: await encryptWithHeaderForTests(
-        envelopeKeyFromBytes(key),
-        header,
-        payload
-      )
+      envelope: (
+        await encryptWithHeaderForTests(
+          envelopeKeyFromBytes(key),
+          header,
+          payload
+        )
+      ).envelope
     };
   }
 
@@ -994,24 +996,60 @@ describe('content blobs', () => {
       [plaintext.byteLength - 7, 'limit-exceeded']
     ] as const) {
       for (const compression of ['none', 'gzip'] as const) {
-        const key = EnvelopeKey.generate();
-        const writer = await createContentBlobWriter(key, 'export', {
-          compression,
-          chunkSize: CHUNK,
-          plaintextLength: declared
-        });
         const payload =
           compression === 'gzip' ? await gzipBytes(plaintext) : plaintext;
-        const forged = concatBytes(
-          writer.prefix,
-          ...(await writer.write(payload)),
-          await writer.finish()
+        const { envelope: forged, writer } = await encryptWithHeaderForTests(
+          EnvelopeKey.generate(),
+          { ...header, compression, plaintextLength: declared },
+          payload
         );
         await rejectsWith(
           decryptContentBlob(contentBlobReference(writer), forged),
           code
         );
       }
+    }
+  });
+
+  it('an uncompressed writer refuses a total other than the declared size', async () => {
+    for (const written of [CHUNK - 1, CHUNK + 1]) {
+      const writer = await createContentBlobWriter(
+        EnvelopeKey.generate(),
+        'export',
+        { compression: 'none', chunkSize: CHUNK, plaintextLength: CHUNK }
+      );
+      if (written > CHUNK) {
+        await rejectsWith(
+          writer.write(patternBytes(written)),
+          'invalid-argument'
+        );
+      } else {
+        await writer.write(patternBytes(written));
+        await rejectsWith(writer.finish(), 'invalid-argument');
+      }
+      // No reference can be produced for the refused blob.
+      expect(() => contentBlobReference(writer)).toThrow(E2eeError);
+    }
+  });
+
+  it('refuses an invalid caller limit instead of skipping the ceiling', async () => {
+    const { envelope, reference } = await blob(patternBytes(100));
+    for (const bad of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY]) {
+      await rejectsWith(
+        decryptContentBlob(reference, envelope, { maxPlaintextBytes: bad }),
+        'invalid-argument'
+      );
+      await rejectsWith(
+        decryptProjectEnvelope(KEY, await sealProject(text('x')), {
+          maxPlaintextBytes: bad
+        }),
+        'invalid-argument'
+      );
+      expect(() =>
+        decryptContentBlobStream(reference, stream([envelope]), {
+          maxPlaintextBytes: bad
+        })
+      ).toThrow(expect.objectContaining({ code: 'invalid-argument' }));
     }
   });
 });

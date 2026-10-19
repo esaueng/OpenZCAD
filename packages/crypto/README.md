@@ -1,8 +1,9 @@
 # @openzcad/crypto
 
-End-to-end encryption primitives for
-[ADR-024](../../docs/adrs/ADR-024-end-to-end-encrypted-projects.md)
-(roadmap L11, Phase 2). WebCrypto and web streams only, with no
+End-to-end encryption primitives for ADR-024, end-to-end encrypted projects
+(roadmap L11, Phase 2). The ADR and its L11 roadmap row are proposed in
+[esaueng/OpenZCAD#743](https://github.com/esaueng/OpenZCAD/pull/743); this
+reference becomes a link to `docs/adrs/` once that lands. WebCrypto and web streams only, with no
 dependencies, so the same code runs in browsers, Web Workers, the Tauri
 WKWebView and Node 20+. Nothing in the application imports it yet; Phases 3–5
 wire it in.

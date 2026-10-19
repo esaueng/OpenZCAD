@@ -50,8 +50,15 @@ export function isP256Key(
 
 /** The raw 65-byte public key, as published and fingerprinted. */
 export async function exportPublicKey(key: CryptoKey): Promise<Bytes> {
-  if (key.type !== 'public') {
-    throw new E2eeError('invalid-argument', 'Expected a public key');
+  // Only P-256: the import helpers accept nothing else, so another curve
+  // would publish a key this package can never read back.
+  if (!(
+    isP256Key(key, 'ECDH', 'public') || isP256Key(key, 'ECDSA', 'public')
+  )) {
+    throw new E2eeError(
+      'invalid-argument',
+      'Expected a P-256 ECDH or ECDSA public key'
+    );
   }
   return new Uint8Array(await subtle().exportKey('raw', key));
 }
