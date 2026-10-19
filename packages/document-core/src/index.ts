@@ -3824,6 +3824,40 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   chamfer: ['angleDeg', 'distance2']
 };
 
+/**
+ * M11: once a Boolean or Split keeps its target, the target is on screen
+ * beside the result, so a result still carrying the target's name (which a
+ * consume-all subtract or split takes at creation) is renamed the way
+ * creation names it when keeping: `<feature> Body`, or `<source> (front)`.
+ * A result the user has named differently is left alone.
+ */
+function separateKeptResultName(
+  document: ProjectDocument,
+  feature: FeatureNode
+): void {
+  const data = feature.data;
+  const targetBodyId =
+    data.featureKind === 'boolean'
+      ? data.targetBodyIds[0]
+      : data.featureKind === 'split'
+        ? data.targetBodyId
+        : undefined;
+  if (
+    !targetBodyId ||
+    !feature.bodyId ||
+    !featureKeepsInputBody(data, targetBodyId)
+  ) {
+    return;
+  }
+  const target = findBodyNode(document, targetBodyId);
+  const result = findBodyNode(document, feature.bodyId);
+  if (!target || !result || result.name !== target.name) return;
+  result.name =
+    data.featureKind === 'split'
+      ? `${target.name} (front)`
+      : `${feature.name} Body`;
+}
+
 export function updateFeature(
   document: ProjectDocument,
   input: FeatureUpdateInput
@@ -3890,6 +3924,7 @@ export function updateFeature(
     feature.data.featureKind === 'split'
   ) {
     validateKeepOriginals(feature.data);
+    separateKeptResultName(next, feature);
   }
   // R01: a datum may only read earlier datums, and Mirror/Split only an
   // existing earlier one, whichever path edited them.

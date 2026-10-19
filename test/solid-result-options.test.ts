@@ -340,6 +340,44 @@ describe('Stage 4 solid options: exact build', () => {
     }
   });
 
+  it('renames a result that still carries its base name when an edit starts keeping the base', () => {
+    const { document, a, b } = cubePair();
+    const subtract = booleanBodies(document, {
+      name: 'Subtract',
+      operation: 'subtract',
+      targetBodyIds: [a, b]
+    });
+    const split = addSplitFeature(subtract.document, {
+      name: 'Split',
+      targetBodyId: b,
+      plane: {
+        origin: { x: 10, y: 0, z: 0 },
+        normal: { x: 1, y: 0, z: 0 }
+      }
+    });
+    const [subtractFeature, splitFeature] = listFeaturesInOrder(
+      split.document
+    ).slice(-2);
+    const nameOf = (doc: ProjectDocument, bodyId: BodyId) =>
+      Object.values(doc.nodes).find(
+        (node) => node.kind === 'body' && node.bodyId === bodyId
+      )!.name;
+    // Consume-all: each result takes its base's name, as before.
+    expect(nameOf(split.document, subtract.bodyId)).toBe(
+      nameOf(split.document, a)
+    );
+    let edited = updateFeature(split.document, {
+      featureId: subtractFeature!.featureId,
+      data: { featureKind: 'boolean', keepOriginals: 'target' }
+    });
+    edited = updateFeature(edited, {
+      featureId: splitFeature!.featureId,
+      data: { featureKind: 'split', keepOriginal: true }
+    });
+    expect(nameOf(edited, subtract.bodyId)).toBe('Subtract Body');
+    expect(nameOf(edited, split.bodyId)).toBe(`${nameOf(edited, b)} (front)`);
+  });
+
   it('lets a later feature consume a kept original', async () => {
     const { document, a, b } = cubePair();
     const union = booleanBodies(document, {

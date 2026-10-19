@@ -72,7 +72,15 @@ export interface AffectedFeatureTarget {
  */
 export function affectedFeatureTargets(
   document: ProjectDocument,
-  sourceFeatureId: FeatureId
+  sourceFeatureId: FeatureId,
+  options: {
+    /**
+     * Also walk the branches of a Boolean's or Split's inputs. An edit needs
+     * this (it can change which inputs are kept, M11); a failure of the
+     * feature as stored does not, since its kept inputs stand on their own.
+     */
+    inputBranches?: boolean;
+  } = {}
 ): AffectedFeatureTarget[] {
   const features = listFeaturesInOrder(document);
   const sourceIndex = features.findIndex(
@@ -106,11 +114,11 @@ export function affectedFeatureTargets(
   const affectedBodies = new Set<BodyId>(sourceBodyId ? [sourceBodyId] : []);
   // M11: editing a Boolean or Split can change which of its inputs it keeps,
   // and a later feature on an input that stops being kept loses its body.
-  // So the inputs' own downstream branches are validated too; the inputs are
+  // So an edit walks the inputs' own downstream branches too; the inputs are
   // not targets themselves, since consuming them is the edit's intent.
-  if (source.data.featureKind === 'boolean') {
+  if (options.inputBranches && source.data.featureKind === 'boolean') {
     source.data.targetBodyIds.forEach((bodyId) => affectedBodies.add(bodyId));
-  } else if (source.data.featureKind === 'split') {
+  } else if (options.inputBranches && source.data.featureKind === 'split') {
     affectedBodies.add(source.data.targetBodyId);
   }
   const affectedSketches = new Set<SketchId>(
@@ -429,12 +437,16 @@ export function editAffectedFeatureTargets(
   proposed: ProjectDocument | null,
   featureId: FeatureId
 ): AffectedFeatureTarget[] {
-  const targets = affectedFeatureTargets(base, featureId);
+  const targets = affectedFeatureTargets(base, featureId, {
+    inputBranches: true
+  });
   if (!proposed) return targets;
   const key = (target: AffectedFeatureTarget) =>
     `${target.featureId}:${target.resultBodyId}`;
   const seen = new Set(targets.map(key));
-  for (const target of affectedFeatureTargets(proposed, featureId)) {
+  for (const target of affectedFeatureTargets(proposed, featureId, {
+    inputBranches: true
+  })) {
     if (!seen.has(key(target))) {
       seen.add(key(target));
       targets.push(target);

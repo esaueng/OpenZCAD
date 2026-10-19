@@ -377,6 +377,21 @@ export function useValidatedFeatureCommit(
             target.featureName
           );
         }
+        // A consumed body's representation is still published (as
+        // construction), so presence alone cannot see a dependent whose body
+        // this edit newly consumes — a Boolean or Split that stops keeping,
+        // or newly takes, a body a later feature uses (M11).
+        if (
+          derived.bodyRepresentations[target.resultBodyId]?.consumed === true &&
+          current.derived.bodyRepresentations[target.resultBodyId]?.consumed ===
+            false
+        ) {
+          throw new FeatureBuildError(
+            `${target.featureName} would lose its body: this change consumes it.`,
+            target.featureId,
+            target.featureName
+          );
+        }
       }
       if (input.targets.length === 0 && documentMoved) {
         throw new Error('The document changed while the operation validated.');

@@ -648,7 +648,9 @@ describe('kept Boolean and Split inputs (M11)', () => {
       (feature) => feature.name === 'Union'
     )!.featureId;
     expect(
-      affectedFeatureTargets(moved, unionId).map((target) => target.featureName)
+      affectedFeatureTargets(moved, unionId, { inputBranches: true }).map(
+        (target) => target.featureName
+      )
     ).toEqual(['Union', 'Move A']);
   });
 
@@ -669,7 +671,9 @@ describe('kept Boolean and Split inputs (M11)', () => {
       (feature) => feature.name === 'Split'
     )!.featureId;
     expect(
-      affectedFeatureTargets(moved, splitId).map((target) => target.featureName)
+      affectedFeatureTargets(moved, splitId, { inputBranches: true }).map(
+        (target) => target.featureName
+      )
     ).toEqual(['Split', 'Move A']);
   });
 });
