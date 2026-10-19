@@ -121,8 +121,14 @@ blob ids. No STEP file is re-encrypted, and nothing in a copied blob names the
 source project.
 
 Asset de-duplication stays per project. It keys on an HMAC of the plaintext
-under a key derived from the project key, so the server cannot test whether a
-known file is present. The HMAC is an index column beside the blob, not part
+under a random per-project de-duplication secret, so the server cannot test
+whether a known file is present. The secret is created with the project and
+carried across key epochs inside each epoch's key archive, so routine
+rotations leave existing index rows usable. It is replaced only when someone
+loses access, since a removed member who knows it could test known files with
+the server's help. After a replacement, members' browsers re-tag old rows as
+they come to hold the plaintext, and until then a re-imported file may be
+stored once more. The HMAC is an index column beside the blob, not part
 of any envelope. A copied blob gets the destination's HMAC only when the
 copying browser has the plaintext at hand; otherwise it has no de-duplication
 entry, which affects only future de-duplication.
@@ -555,6 +561,16 @@ access only after a person has verified it. Two roster rules cover this.
   attacker holding the old owner identity signs conflicting roster entries,
   members see a fork and report it. The verified new anchor decides between
   the branches.
+- **Share links after an owner identity change.** Anonymous visitors cannot
+  verify an anchor transfer, and the old identity may be in an attacker's
+  hands. Such an attacker could certify a device under it and, with the
+  server's help, serve forged snapshots that still chain to the old owner
+  hash in the link. So replacing the owner's identity revokes every share
+  link in the project's active set and rotates their share keys. The old URLs
+  are treated as permanently untrusted, and the owner's browser lists the
+  links to reissue with the new owner hash. Visitors who keep using an old URL
+  are not protected, and the sharing dialog says so when it asks the owner to
+  send the new links.
 
 ### Epoch rotation
 
