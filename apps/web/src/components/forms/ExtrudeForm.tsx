@@ -260,7 +260,13 @@ export function ExtrudeForm({
     return {
       name: next.name.trim(),
       sketchId: initial.sketchId,
-      distance: derived && !typed ? 1 : typed,
+      // A dormant zero in any form (`0 mm`, a parameter at 0) sends 1 too.
+      distance:
+        derived &&
+        (!typed ||
+          previewExpression(next.distance, scope, quantity).value === 0)
+          ? 1
+          : typed,
       symmetric: derived ? false : next.symmetric,
       backDistance:
         derived || next.symmetric ? 0 : coerceParamValue(next.backDistance),

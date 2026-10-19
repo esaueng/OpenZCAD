@@ -4722,6 +4722,7 @@ export function App() {
     // features must never satisfy it.
     setFaceRepair(null);
     setDatumRepair(null);
+    setToFacePick(null);
     // Nor may an armed edge or face operation, or a delete awaiting its
     // confirm: a "Fillet · Ready" chip from the last project read as a
     // command the new, empty one was somehow in the middle of.
@@ -15929,9 +15930,14 @@ export function App() {
     // its dormant distance only has to be non-zero, not three decimals deep
     // (a face 0.4 mm away in a metre document is 0.0004).
     const derived = regionExtentIsDerived();
-    const rounded = derived ? distance : Math.round(distance * 1000) / 1000;
+    let rounded = derived ? distance : Math.round(distance * 1000) / 1000;
     if (rounded === 0) {
-      return;
+      if (!derived) return;
+      // A derived extent ignores the distance, so a dormant zero (`0 mm`, a
+      // parameter at 0) is stored as the same non-zero sentinel the card
+      // sends for an untouched one.
+      rounded = 1;
+      exact = 1;
     }
     const preview = reusableRegionExtrudePreview.current;
     // Read before clear(): the frame keeps running either way, and a commit
@@ -18768,11 +18774,14 @@ export function App() {
       measuring ||
       modelingLocked ||
       interaction.mode === 'sketch' ||
-      (toFacePick?.kind === 'create' && interaction.mode !== 'region')
+      (toFacePick?.kind === 'create' && interaction.mode !== 'region') ||
+      // A history-row repair yields to any tool, as a datum re-pick does;
+      // the card picks belong to the card's own tool and end with it.
+      (toFacePick?.kind === 'repair' && tool !== null)
     ) {
       setToFacePick(null);
     }
-  }, [measuring, modelingLocked, interaction.mode, toFacePick?.kind]);
+  }, [measuring, modelingLocked, interaction.mode, toFacePick?.kind, tool]);
 
   /**
    * Consumes a viewport pick while a face re-pick is armed. A pick that

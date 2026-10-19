@@ -758,6 +758,29 @@ describe('to-face extent and draft (F01, schema v29)', () => {
     expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
   });
 
+  it('sends a non-zero dormant distance for to-face, whatever zero the field holds', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <ExtrudeForm
+        {...base}
+        initial={{
+          ...initial,
+          distance: '0 mm',
+          endCondition: 'to-face',
+          toFace: face
+        }}
+        toFacePicking={picking()}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ endCondition: 'to-face', distance: 1 })
+    );
+  });
+
   it('returns to Distance when the viewport arrow is dragged', async () => {
     const distanceSetterRef: MutableRefObject<
       ((value: ParamValue) => void) | null
