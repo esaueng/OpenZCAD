@@ -144,15 +144,15 @@ structural rather than probabilistic:
 
 ### Key hierarchy
 
-| Layer               | What it is                                                                                                                                                    | Wrapped by                                                               |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| Identity key        | One long-term ECDSA P-256 pair per user; its fingerprint is what other people verify. It signs only certificates and revocations for the user's other keys    | The recovery key and passkeys only; never device keys or the account key |
-| Device signing key  | One ECDSA P-256 pair per device, non-extractable where the platform allows, certified by the identity key. Signs versions, roster entries and share snapshots | Never leaves its device                                                  |
-| Account key         | One random 256-bit key per user, never stored unwrapped                                                                                                       | Each unlock method                                                       |
-| Encryption key pair | ECDH P-256 for receiving project keys; the public half is certified by the identity key                                                                       | Account key                                                              |
-| Project key         | One random key per project, versioned by epoch                                                                                                                | Each member's encryption public key, then the member's account key       |
-| Version keys        | One random key per project envelope (document version, measurements, view state, share snapshot)                                                              | Project key                                                              |
-| Blob keys           | One random key per content blob (import source, mesh payload, thumbnail, archived export)                                                                     | Recorded inside the referencing project envelope                         |
+| Layer               | What it is                                                                                                                                                                               | Wrapped by                                                               |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Identity key        | One long-term ECDSA P-256 pair per user; its fingerprint is what other people verify. It signs only certificates and revocations for the user's other keys, and the user's contacts list | The recovery key and passkeys only; never device keys or the account key |
+| Device signing key  | One ECDSA P-256 pair per device, non-extractable where the platform allows, certified by the identity key. Signs versions, roster entries and share snapshots                            | Never leaves its device                                                  |
+| Account key         | One random 256-bit key per user, never stored unwrapped                                                                                                                                  | Each unlock method                                                       |
+| Encryption key pair | ECDH P-256 for receiving project keys; the public half is certified by the identity key                                                                                                  | Account key                                                              |
+| Project key         | One random key per project, versioned by epoch                                                                                                                                           | Each member's encryption public key, then the member's account key       |
+| Version keys        | One random key per project envelope (document version, measurements, view state, share snapshot)                                                                                         | Project key                                                              |
+| Blob keys           | One random key per content blob (import source, mesh payload, thumbnail, archived export)                                                                                                | Recorded inside the referencing project envelope                         |
 
 The identity key is kept apart so it can outlive any device. Everyday unlocking
 never touches it: a device that is stolen while unlocked holds the account
@@ -226,8 +226,15 @@ keys and a copy of the old wraps. Rotation protects what comes after.
 
 - **Removing a device** needs the identity key, so a passkey or the recovery
   key. The browser:
-  - signs a device-list entry revoking the device's signing key, so members
-    refuse its signatures on anything later than the revocation;
+  - signs a device-list entry revoking the device's signing key. The entry
+    names a cutoff for every project the user belongs to: the newest head the
+    revoking browser has accepted. A claimed parent or timestamp proves
+    nothing about when a version was really signed, because the stolen device
+    can choose both. So once a browser has seen the revocation, it accepts
+    that device's signature only on versions that are a cutoff head or one of
+    its ancestors. Everything else it signed is refused, wherever it claims to
+    sit. Revocations also cut off roster and epoch entries signed by that
+    device;
   - rotates the account key and the encryption key pair, certifying the new
     encryption key in the same entry;
   - starts a new epoch on every project the user belongs to, owned or
@@ -237,7 +244,10 @@ keys and a copy of the old wraps. Rotation protects what comes after.
     browser goes offline part-way, other members' browsers finish the job
     before their next write;
   - lists any roster changes and versions the removed device signed since it
-    was last seen in normal use, so the owner can review and undo them.
+    was last seen in normal use, so the owner can review and undo them. A
+    legitimate version the revoking browser had not yet seen falls outside the
+    cutoff. The review list shows it, and the user can re-sign it from a good
+    device.
 
   The identity key is unchanged, so members' verification still holds.
 
@@ -306,10 +316,35 @@ keys:
   and is never used to wrap a project key.
 - **Verified:** a key whose full fingerprint the user has compared with its
   owner outside OpenZCAD, by QR in person or by reading digit groups over a
-  call. The pin is stored in the user's own encrypted settings, so it carries
-  to their other devices and every later project shared with that person.
+  call. A verification carries to the user's other devices and every later
+  project shared with that person, but only through an authenticated path
+  (below).
 
 A pinned key that changes drops back to unverified, and the browser warns.
+
+**Pins must not roll back.** A server that served an older copy of the user's
+pins could revive a verified pin for a contact's key that has since been
+replaced. Pins therefore live in a contacts list, not in plain encrypted
+settings:
+
+- The contacts list is a hash-chained list of entries signed by the user's
+  identity key. Each entry verifies a contact's identity key, or records that
+  a verified key was replaced or is no longer trusted. Every device pins the
+  newest entry it has seen and refuses an older or forked list, with the same
+  rule as versions.
+- Verifying someone, and recording that their key changed, both sign a new
+  entry, so they ask for a passkey or the recovery key. Each happens once per
+  person per key. When a browser notices that a verified contact's key has
+  changed, it prompts for that signature at once. Until the user signs, the
+  browser keeps the downgrade locally and blocks wraps to that contact.
+- A device approved by another device receives the newest contacts head
+  inside the authenticated approval exchange, so it cannot be handed an older
+  list. A device enrolled with only a passkey or the recovery key starts from
+  the newest identity-signed head the server shows it. It therefore has the
+  same fork-consistency limit as everything else: a server hiding the latest
+  entry can show it an older list. To narrow that, such a device treats every
+  pin as seen, not verified, until another of the user's devices confirms the
+  head, or the user re-verifies the contact.
 
 **Codes people compare.** A truncated hash of a key the server can see invites
 offline grinding, so no fingerprint or state code is shortened below 128
@@ -365,9 +400,10 @@ fork-consistency rule as versions.
 Every project envelope names the roster entry it was written under. A browser
 accepts a version only if:
 
-- its author's device key is certified in that member's device list and not
-  revoked before the version, and the named roster entry lists that member as
-  owner or editor;
+- its author's device key is certified in that member's device list; if
+  that device has since been revoked, the version must be within the
+  revocation's cutoff for this project; and the named roster entry lists that
+  member as owner or editor;
 - that roster entry is the one in force for the version's parent, or a later
   one;
 - the entry chains to the newest roster entry the browser has seen.
@@ -395,8 +431,8 @@ Writers enforce the rotation. Before writing, a browser checks the device
 lists of every roster member. If any member has revoked a device, or replaced
 an encryption key, after the current epoch began, the browser starts a new
 epoch first and writes under it. Readers refuse a version that still uses the
-older epoch when its parent comes after a revocation they have seen.
-Versions written before the revocation stay valid. So once any member's browser
+older epoch unless it is within the cutoff of every revocation they have seen.
+Versions inside the cutoffs stay valid. So once any member's browser
 has seen a revocation, no later content is written to keys the removed device
 can open. The remaining gap is the one under
 [Version integrity](#version-integrity): a server that hides a revocation from
@@ -437,17 +473,17 @@ so the existing Vitest, parity and Playwright suites prove the behavior before
 any encryption lands. After that, encryption is a storage-format change.
 Estimates are judgment, not measurement.
 
-| Phase | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Estimate     |
-| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| 0     | This ADR and roadmap row L11. A privacy policy page is a prerequisite for any public encryption claim; OpenZCAD has none yet.                                                                                                                                                                                                                                                                                                                                                                                        | 1 PR (this)  |
-| 1     | Thin server, still plaintext: the browser creates projects, mints revisions and checkpoints, duplicates, branches and adopts, splits import assets and runs the room merge. Copy rollback and finalize compare client-supplied digests. The room conflict reply carries the base version. The server keeps size and envelope checks.                                                                                                                                                                                 | 5–6 PRs      |
-| 2     | Crypto core package: envelope v1 with algorithm versioning, project envelopes and project-free content blobs, STREAM chunk nonces with one key per envelope, AES-256-GCM, HKDF, ECDH wrapping, authenticated-data binding, chunked blobs that detect truncation, fixed test vectors and a fuzzed envelope parser.                                                                                                                                                                                                    | 1 PR         |
-| 3     | Keys and devices: identity keys, device lists and certified device signing keys, D1 key tables, setup with a required recovery key, passkey unlock, device approval by QR scan or commitment-based code comparison, desktop Keychain storage and an Encryption section in Settings with identity-key certification of devices, device removal and recovery-key replacement with the rotations they require, and the sign-out choice. Setup screens load lazily (entry budget). Playwright fixtures seed device keys. | 4–5 PRs      |
-| 4     | Encrypted projects, opt-in per account: documents, revisions, assets, names, thumbnails, measurements, view state and archived exports; the room relay; version-integrity checks. Each project records a format version so older builds say "update to open". Breaking storage and API change.                                                                                                                                                                                                                       | 2–3 PRs      |
-| 5     | Sharing: owner-signed invitations, member key wraps, share links with fragment keys, the owner-signed roster with client-side role checks, new epochs on removal, member-started epoch rotation enforced by writers, seen and verified key pins, fingerprints, and the project state code.                                                                                                                                                                                                                           | 2–3 PRs      |
-| 6     | Assistant consent on encrypted projects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | 1 PR         |
-| 7     | Migrate existing projects: each owner's browser encrypts every revision and asset, then the server deletes the plaintext, including legacy `document_json` rows and the room's retained history. Beta-only reverse path for turning encryption off. Needs its own production authorization.                                                                                                                                                                                                                          | 1–2 PRs      |
-| 8     | Default on; delete the server document pipeline and the off switch; keep a browser read path for legacy plaintext projects; update `docs/SELF_HOSTING.md`; outside review of the crypto and key flows.                                                                                                                                                                                                                                                                                                               | 1 PR, review |
+| Phase | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Estimate     |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| 0     | This ADR and roadmap row L11. A privacy policy page is a prerequisite for any public encryption claim; OpenZCAD has none yet.                                                                                                                                                                                                                                                                                                                                                                                                                                                         | 1 PR (this)  |
+| 1     | Thin server, still plaintext: the browser creates projects, mints revisions and checkpoints, duplicates, branches and adopts, splits import assets and runs the room merge. Copy rollback and finalize compare client-supplied digests. The room conflict reply carries the base version. The server keeps size and envelope checks.                                                                                                                                                                                                                                                  | 5–6 PRs      |
+| 2     | Crypto core package: envelope v1 with algorithm versioning, project envelopes and project-free content blobs, STREAM chunk nonces with one key per envelope, AES-256-GCM, HKDF, ECDH wrapping, authenticated-data binding, chunked blobs that detect truncation, fixed test vectors and a fuzzed envelope parser.                                                                                                                                                                                                                                                                     | 1 PR         |
+| 3     | Keys and devices: identity keys, device lists with per-project revocation cutoffs, identity-signed contacts lists, certified device signing keys, D1 key tables, setup with a required recovery key, passkey unlock, device approval by QR scan or commitment-based code comparison, desktop Keychain storage and an Encryption section in Settings with identity-key certification of devices, device removal and recovery-key replacement with the rotations they require, and the sign-out choice. Setup screens load lazily (entry budget). Playwright fixtures seed device keys. | 4–5 PRs      |
+| 4     | Encrypted projects, opt-in per account: documents, revisions, assets, names, thumbnails, measurements, view state and archived exports; the room relay; version-integrity checks. Each project records a format version so older builds say "update to open". Breaking storage and API change.                                                                                                                                                                                                                                                                                        | 2–3 PRs      |
+| 5     | Sharing: owner-signed invitations, member key wraps, share links with fragment keys, the owner-signed roster with client-side role checks, new epochs on removal, member-started epoch rotation enforced by writers, seen and verified key pins, fingerprints, and the project state code.                                                                                                                                                                                                                                                                                            | 2–3 PRs      |
+| 6     | Assistant consent on encrypted projects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | 1 PR         |
+| 7     | Migrate existing projects: each owner's browser encrypts every revision and asset, then the server deletes the plaintext, including legacy `document_json` rows and the room's retained history. Beta-only reverse path for turning encryption off. Needs its own production authorization.                                                                                                                                                                                                                                                                                           | 1–2 PRs      |
+| 8     | Default on; delete the server document pipeline and the off switch; keep a browser read path for legacy plaintext projects; update `docs/SELF_HOSTING.md`; outside review of the crypto and key flows.                                                                                                                                                                                                                                                                                                                                                                                | 1 PR, review |
 
 Total: 18–23 PRs.
 
