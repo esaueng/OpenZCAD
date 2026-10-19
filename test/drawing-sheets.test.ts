@@ -221,6 +221,41 @@ describe('D01 drawing section (schema v30)', () => {
     expect(drawingSetError({ sheets: [sheet(ids)] })).toBeNull();
   });
 
+  it('treats a malformed drawing snapshot in undo history like a malformed section', () => {
+    const document = boxDocument();
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.addDrawingSheet({ sheet: sheet(document.bodyOrder) })
+    );
+    const saved = JSON.parse(
+      JSON.stringify(manager.document)
+    ) as ProjectDocument;
+    const change = saved
+      .editHistory!.entries.at(-1)!
+      .changes.find((entry) => entry.field === 'drawings')!;
+    // Undo would restore this: a projected view whose base does not exist.
+    (change as { before?: unknown }).before = {
+      sheets: [
+        sheet(document.bodyOrder, [
+          view('top', document.bodyOrder, {
+            parentViewId: 'dvw_missing' as DrawingViewId
+          })
+        ])
+      ]
+    };
+    // On load the unreadable history is dropped, the document kept.
+    const opened = normalizeDocument(saved);
+    expect(opened.editHistory).toBeUndefined();
+    expect(opened.drawings).toEqual(manager.document.drawings);
+    // The account refuses to store it.
+    expect(() =>
+      parseSaveProjectDocumentRequest(
+        { projectId: saved.projectId, expectedVersion: 0, document: saved },
+        saved.projectId
+      )
+    ).toThrow(/undo history/);
+  });
+
   it('undoes, redoes and replays sheet commands', () => {
     const document = boxDocument();
     const manager = new CommandManager(document);

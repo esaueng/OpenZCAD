@@ -15,6 +15,7 @@ import {
 } from '@openzcad/shared';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import {
+  gridCellsAlong,
   projectView,
   type ViewProjection
 } from '../apps/web/src/lib/drawing/projectView';
@@ -374,6 +375,109 @@ describe('D01 view projection', () => {
       expect(sideLines).toEqual([]);
     } finally {
       kernel.free();
+    }
+  });
+});
+
+describe('D01 occlusion grid walk', () => {
+  /** Whether segment p→q meets the closed unit cell at (i, j). */
+  function meetsCell(
+    [px, py]: [number, number],
+    [qx, qy]: [number, number],
+    i: number,
+    j: number
+  ): boolean {
+    // Liang–Barsky clip against [i, i+1] × [j, j+1].
+    let t0 = 0;
+    let t1 = 1;
+    const dx = qx - px;
+    const dy = qy - py;
+    for (const [p, q] of [
+      [-dx, px - i],
+      [dx, i + 1 - px],
+      [-dy, py - j],
+      [dy, j + 1 - py]
+    ] as const) {
+      if (p === 0) {
+        if (q < 0) return false;
+        continue;
+      }
+      const r = q / p;
+      if (p < 0) t0 = Math.max(t0, r);
+      else t1 = Math.min(t1, r);
+      if (t0 > t1) return false;
+    }
+    return true;
+  }
+
+  it('visits every cell a segment touches, including clipped corners and exact diagonals', () => {
+    const size = 16;
+    let seed = 7;
+    const random = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return (seed / 2147483648) * size * 0.999;
+    };
+    const cases: [[number, number], [number, number]][] = [
+      // Clips the corner of cell (1, 1) by far less than a quarter cell.
+      [
+        [0.5, 1.999],
+        [1.001, 2.5]
+      ],
+      // Passes exactly through grid corners.
+      [
+        [0.5, 0.5],
+        [5.5, 5.5]
+      ],
+      [
+        [0, 4],
+        [4, 0]
+      ],
+      // Axis-aligned along a grid line.
+      [
+        [2, 3],
+        [9, 3]
+      ]
+    ];
+    for (let k = 0; k < 400; k += 1)
+      cases.push([
+        [random(), random()],
+        [random(), random()]
+      ]);
+    for (const [p, q] of cases) {
+      const walked = new Set(gridCellsAlong(p[0], p[1], q[0], q[1], size));
+      for (let j = 0; j < size; j += 1)
+        for (let i = 0; i < size; i += 1) {
+          // Cells the segment only grazes at a single boundary point may
+          // be skipped; anything it passes through with length must not.
+          if (!meetsCell(p, q, i, j)) continue;
+          const shrunk = meetsCellInterior(p, q, i, j);
+          if (shrunk)
+            expect(
+              walked.has(j * size + i),
+              `${JSON.stringify([p, q])} cell ${i},${j}`
+            ).toBe(true);
+        }
+    }
+
+    function meetsCellInterior(
+      a: [number, number],
+      b: [number, number],
+      i: number,
+      j: number
+    ): boolean {
+      const eps = 1e-9;
+      return meetsCell(
+        [a[0] - i, a[1] - j].map((v) => (v - eps) / (1 - 2 * eps)) as [
+          number,
+          number
+        ],
+        [b[0] - i, b[1] - j].map((v) => (v - eps) / (1 - 2 * eps)) as [
+          number,
+          number
+        ],
+        0,
+        0
+      );
     }
   });
 });

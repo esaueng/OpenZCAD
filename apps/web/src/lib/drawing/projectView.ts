@@ -75,6 +75,80 @@ interface Triangle {
   area: number;
 }
 
+/**
+ * The cells of a `size` × `size` grid that segment (x0, y0)→(x1, y1), in cell
+ * units, passes through: a supercover DDA walk. At each step it moves into
+ * the next cell across whichever boundary it reaches first, and through both
+ * neighbours when it passes exactly through a corner, so no clipped corner of
+ * a cell is skipped. Returns row-major indices, possibly repeated.
+ */
+export function gridCellsAlong(
+  rawX0: number,
+  rawY0: number,
+  rawX1: number,
+  rawY1: number,
+  size: number
+): number[] {
+  // Projected points lie inside the grid's bounds up to rounding; one on the
+  // far boundary would otherwise start the walk a cell off.
+  const inside = (value: number) =>
+    Math.min(size * (1 - 1e-12), Math.max(0, value));
+  const x0 = inside(rawX0);
+  const y0 = inside(rawY0);
+  const x1 = inside(rawX1);
+  const y1 = inside(rawY1);
+  const clamp = (value: number) => Math.min(size - 1, Math.max(0, value));
+  const out: number[] = [];
+  const add = (i: number, j: number) => {
+    if (i >= 0 && i < size && j >= 0 && j < size) out.push(j * size + i);
+  };
+  let i = clamp(Math.floor(x0));
+  let j = clamp(Math.floor(y0));
+  const iEnd = clamp(Math.floor(x1));
+  const jEnd = clamp(Math.floor(y1));
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const di = Math.sign(dx);
+  const dj = Math.sign(dy);
+  const tDeltaX = di === 0 ? Infinity : 1 / Math.abs(dx);
+  const tDeltaY = dj === 0 ? Infinity : 1 / Math.abs(dy);
+  let tMaxX =
+    di > 0
+      ? (Math.floor(x0) + 1 - x0) * tDeltaX
+      : di < 0
+        ? (x0 - Math.floor(x0)) * tDeltaX
+        : Infinity;
+  let tMaxY =
+    dj > 0
+      ? (Math.floor(y0) + 1 - y0) * tDeltaY
+      : dj < 0
+        ? (y0 - Math.floor(y0)) * tDeltaY
+        : Infinity;
+  add(i, j);
+  for (let step = 0; step < 4 * size + 4; step += 1) {
+    // The segment ends inside the current cell.
+    if (Math.min(tMaxX, tMaxY) > 1) break;
+    if (Math.abs(tMaxX - tMaxY) <= 1e-12) {
+      // Through a corner: both side cells touch the segment.
+      add(i + di, j);
+      add(i, j + dj);
+      i += di;
+      j += dj;
+      tMaxX += tDeltaX;
+      tMaxY += tDeltaY;
+    } else if (tMaxX < tMaxY) {
+      i += di;
+      tMaxX += tDeltaX;
+    } else {
+      j += dj;
+      tMaxY += tDeltaY;
+    }
+    add(i, j);
+  }
+  add(iEnd, jEnd);
+  return out;
+}
+
 class OcclusionGrid {
   private readonly cells: number[][];
   private readonly size: number;
@@ -131,23 +205,12 @@ class OcclusionGrid {
   crossings(au: number, av: number, bu: number, bv: number): number[] {
     const du = bu - au;
     const dv = bv - av;
-    // The cells the segment passes through, stepping a quarter cell at a
-    // time; triangles are bucketed by their bounding boxes.
-    const steps = Math.min(
-      4 * this.size * 2,
-      Math.ceil(
-        Math.max(Math.abs(du) / this.cellU, Math.abs(dv) / this.cellV) * 4
-      ) + 1
-    );
+    // Every cell the segment passes through, by an exact supercover walk:
+    // triangles are bucketed by their bounding boxes, so a triangle the
+    // segment crosses is in one of these cells.
     const seen = new Set<number>();
-    for (let k = 0; k <= steps; k += 1) {
-      const f = k / steps;
-      const cell =
-        this.cells[
-          this.row(av + dv * f) * this.size + this.column(au + du * f)
-        ]!;
-      for (const index of cell) seen.add(index);
-    }
+    for (const cell of this.cellsAlong(au, av, bu, bv))
+      for (const index of this.cells[cell]!) seen.add(index);
     const out: number[] = [];
     const denomFloor = 1e-18;
     for (const index of seen) {
@@ -170,6 +233,16 @@ class OcclusionGrid {
       }
     }
     return out.sort((a, b) => a - b);
+  }
+
+  private cellsAlong(au: number, av: number, bu: number, bv: number): number[] {
+    return gridCellsAlong(
+      (au - this.minU) / this.cellU,
+      (av - this.minV) / this.cellV,
+      (bu - this.minU) / this.cellU,
+      (bv - this.minV) / this.cellV,
+      this.size
+    );
   }
 
   /** True when a triangle covers (u, v) in front of `depth`. */

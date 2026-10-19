@@ -1,4 +1,5 @@
 import type { ProjectDocument, UserId } from './index';
+import { drawingSetError } from './drawings';
 
 export const MAX_UNDO_STEPS = 100;
 export const MAX_UNDO_BYTES = 8_000_000;
@@ -145,6 +146,16 @@ export function isDocumentHistory(
         )
           return false;
         if (!Object.hasOwn(change, 'before') && !Object.hasOwn(change, 'after'))
+          return false;
+        // Undo and redo restore these snapshots verbatim, so a drawing
+        // section in history must be as valid as a current one (D01).
+        if (
+          change.field === 'drawings' &&
+          (change.key !== undefined ||
+            [change.before, change.after].some(
+              (side) => side !== undefined && drawingSetError(side) !== null
+            ))
+        )
           return false;
       } else return false;
     }
