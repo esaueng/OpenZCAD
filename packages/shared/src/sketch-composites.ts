@@ -241,5 +241,16 @@ function shapeLapse(
   ) {
     return 'The polygon’s vertices are no longer on its circumcircle.';
   }
+  // Equal chords on one circle still admit a star: a pentagram's sides are
+  // equal and its vertices sit on the circle. Only the walk to the next
+  // vertex round the circle has the chord 2r·sin(π/n); a star skips some.
+  if (
+    lengths.some(
+      (length) =>
+        Math.abs(length - 2 * radius * Math.sin(Math.PI / count)) > slack
+    )
+  ) {
+    return 'The polygon’s sides no longer run round its circumcircle in order.';
+  }
   return null;
 }

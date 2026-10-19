@@ -454,6 +454,27 @@ describe('S04 composite drawing on the pinned kernel', () => {
       status: 'broken',
       reason: 'The polygon’s sides are no longer equal.'
     });
+    // A pentagram: equal sides, every vertex on the circle, centred, and
+    // still not a pentagon.
+    const pentagon = draw(
+      inscribedPolygonShape({ x: 0, y: 0 }, { x: 10, y: 0 }, 5)
+    );
+    const ring = pentagon.sketch().composites![0]!;
+    const star = new Map(pentagon.objects());
+    for (const [index, id] of ring.edgeIds.entries()) {
+      const at = (step: number) => {
+        const angle = (step * 2 * 2 * Math.PI) / 5;
+        return { x: 10 * Math.cos(angle), y: 10 * Math.sin(angle) };
+      };
+      const a = at(index);
+      const b = at(index + 1);
+      star.set(id, { objectKind: 'line', x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+    }
+    expect(resolveSketchComposite(ring, star, resolve)).toMatchObject({
+      status: 'broken',
+      reason:
+        'The polygon’s sides no longer run round its circumcircle in order.'
+    });
     const withoutCircle = new Map(polygon.objects());
     withoutCircle.delete(square.helperIds![0]!);
     expect(
