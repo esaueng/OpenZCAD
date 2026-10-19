@@ -365,6 +365,58 @@ describe('H02 unchanged measurement payload safety', { timeout: 30_000 }, () => 
     }
   );
 
+  it('preserves deferred topology after checkpoint allocation integrity recovery', async () => {
+    const adapter = await createExactKernelAdapter();
+    const fresh = await createExactKernelAdapter();
+    try {
+      const doc = document();
+      const checkpoint = RemusKernel.prototype.checkpoint;
+      const free = vi.spyOn(RemusKernel.prototype, 'free');
+      const checkpointSpy = vi.spyOn(RemusKernel.prototype, 'checkpoint');
+      checkpointSpy.mockImplementationOnce(
+        function (this: RemusKernel) {
+          const id = checkpoint.call(this);
+          // A foreign checkpoint violates allocation ownership/count and
+          // exercises the outer integrity retry, rather than a table reset.
+          checkpoint.call(this);
+          return id;
+        }
+      );
+
+      const recovered = await adapter.previewGeometry(doc, {
+        deferTopology: true
+      });
+      const failedKernel = checkpointSpy.mock.contexts[0];
+      expect(failedKernel).toBeDefined();
+      expect(
+        free.mock.contexts.filter((kernel) => kernel === failedKernel)
+      ).toHaveLength(1);
+      expect(state(adapter).historyKernel).not.toBe(failedKernel);
+      expect(recovered.topology).toBe('pending');
+      const { updatedAt: _recoveredAt, ...actual } = recovered;
+      const { updatedAt: _freshAt, ...expected } =
+        await fresh.previewGeometry(doc, { deferTopology: true });
+      expect(actual).toEqual(expected);
+      expect(recovered.warnings).toEqual([]);
+      const body = recovered.bodyRepresentations[doc.bodyOrder[0]!]!;
+      expect(body.topology?.edges).toEqual([]);
+      expect('volume' in body).toBe(false);
+
+      const completed = await adapter.syncDocument(doc);
+      expect(completed.warnings).toEqual([]);
+      expect(completed.bodyRepresentations[doc.bodyOrder[0]!]!.volume).toBe(
+        480
+      );
+      expect(
+        completed.bodyRepresentations[doc.bodyOrder[0]!]!.topology?.edges
+          .length
+      ).toBeGreaterThan(0);
+    } finally {
+      adapter.dispose();
+      fresh.dispose();
+    }
+  });
+
   it('accounts metadata/witnesses and refuses oversized retention', async () => {
     const doc = document();
     const events: RebuildCacheEvent[] = [];

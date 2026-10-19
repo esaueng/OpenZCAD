@@ -13,9 +13,16 @@ import type {
  */
 export type ExpressionFieldDimension = 'length' | 'angle' | 'number' | null;
 
+/** Where a visited expression is stored: its holding object and key. */
+export interface ExpressionFieldSite {
+  container: object;
+  key: string;
+}
+
 type Rewrite = (
   expression: string,
-  dimension: ExpressionFieldDimension
+  dimension: ExpressionFieldDimension,
+  site: ExpressionFieldSite
 ) => string;
 
 function fields<T extends object>(
@@ -26,7 +33,10 @@ function fields<T extends object>(
 ): void {
   for (const key of keys) {
     if (typeof value[key] === 'string') {
-      const next = rewrite(value[key], dimension);
+      const next = rewrite(value[key], dimension, {
+        container: value,
+        key: String(key)
+      });
       if (next !== value[key]) value[key] = next as T[keyof T];
     }
   }
@@ -58,8 +68,9 @@ function directEdit(data: DirectEditOperation, rewrite: Rewrite): void {
       return;
     case 'resize-imported-countersink':
       fields(data, ['boreDiameter', 'sinkDiameter'], rewrite, 'length');
-      // Stored in radians, so a degree-valued angle parameter has no rule here.
-      fields(data, ['angleRadians'], rewrite, null);
+      // Stored as raw radians: a typed angle (degrees) or length would be
+      // reinterpreted, so only a unitless value may drive it.
+      fields(data, ['angleRadians'], rewrite, 'number');
       return;
     case 'offset-face':
       fields(data, ['offset'], rewrite, 'length');

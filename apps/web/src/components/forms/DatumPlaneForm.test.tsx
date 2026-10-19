@@ -364,6 +364,43 @@ describe('Plane card and the viewport handle (R01)', () => {
     expect(offsetDragRef.current).toBeNull();
   });
 
+  it('reports the draft Offset only while distance is all that changed', () => {
+    const { document, featureId } = documentWithDatum();
+    const onOffsetDraft = vi.fn();
+    const { unmount } = render(
+      <DatumPlaneCard
+        document={document}
+        editing={findFeature(document, featureId)!}
+        scope={{ lid: 7 }}
+        pickedFace={null}
+        onPreflight={vi.fn(async () => ({ status: 'ready' as const }))}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+        onOffsetDraft={onOffsetDraft}
+      />
+    );
+    // Reported as the change from the opened offset (10).
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(0);
+    fireEvent.change(screen.getByLabelText('Offset'), {
+      target: { value: '14' }
+    });
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(4);
+    // An expression cannot be drawn ahead of its evaluation.
+    fireEvent.change(screen.getByLabelText('Offset'), {
+      target: { value: 'lid + 1' }
+    });
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(null);
+    fireEvent.change(screen.getByLabelText('Offset'), {
+      target: { value: '3' }
+    });
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(-7);
+    // Flipping the normal changes more than the distance.
+    fireEvent.click(screen.getByLabelText('Flip normal'));
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(null);
+    unmount();
+    expect(onOffsetDraft).toHaveBeenLastCalledWith(null);
+  });
+
   it("focuses its Offset for the handle's exact entry", () => {
     const { document, featureId } = documentWithDatum();
     const offsetEntryRef: { current: (() => boolean) | null } = {

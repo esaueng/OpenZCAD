@@ -85,6 +85,8 @@ export type StrictUnionVerdict = BooleanHelperStrictUnionVerdict;
  * One shared shape keeps the 21 builders' signatures uniform.
  */
 export interface FeatureBuildContext {
+  /** Only the terminal face drag may defer output naming for a disposable mesh. */
+  deferredDirectEditFeatureId?: FeatureId;
   kernel: RemusKernel;
   document: ProjectDocument;
   scope: Record<string, number>;
@@ -172,7 +174,8 @@ function* buildDocumentHistorySteps(
    */
   lineageDemand?: ReadonlySet<BodyId> | readonly BodyId[],
   /** See {@link FeatureBuildContext.heldDisplayDeflection}. */
-  heldDisplayDeflection?: (bodyId: BodyId) => number | undefined
+  heldDisplayDeflection?: (bodyId: BodyId) => number | undefined,
+  deferredDirectEditFeatureId?: FeatureId
 ): Generator<void, ExactBuildResult> {
   const { scope, errors } = getParameterScope(document);
   // F05: a feature fed a typed parameter as the wrong quantity (a length as
@@ -214,6 +217,7 @@ function* buildDocumentHistorySteps(
       ? undefined
       : { signal, token: new OperationCancellationToken() };
   const ctx: FeatureBuildContext = {
+    deferredDirectEditFeatureId,
     kernel,
     document,
     scope,

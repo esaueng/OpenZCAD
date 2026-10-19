@@ -11,14 +11,36 @@ function subscribeOnline(changed: () => void) {
   };
 }
 
-function LoadingPanel({ label }: { label: string }) {
+type LoadingPresentation = 'panel' | 'view-tools';
+
+function LoadingPanel({
+  label,
+  presentation
+}: {
+  label: string;
+  presentation: LoadingPresentation;
+}) {
   const online = useSyncExternalStore(
     subscribeOnline,
     () => navigator.onLine !== false
   );
   return (
-    <section className="error-boundary" role="status">
-      <strong>
+    <section
+      className={
+        presentation === 'view-tools'
+          ? 'view-mode-bar view-tools-loading'
+          : 'error-boundary'
+      }
+      role="status"
+    >
+      {presentation === 'view-tools' && (
+        <span className="workspace-loading-ring spin" aria-hidden="true" />
+      )}
+      <strong
+        className={
+          presentation === 'view-tools' ? 'visually-hidden' : undefined
+        }
+      >
         {online
           ? `Loading ${label.toLowerCase()}…`
           : `${label} is not loaded yet.`}
@@ -31,7 +53,8 @@ function LoadingPanel({ label }: { label: string }) {
 /** Download on demand, wait while offline, and contain a failed load locally. */
 export function createLazyPanel<Props extends object>(
   label: string,
-  load: () => Promise<{ default: ComponentType<Props> }>
+  load: () => Promise<{ default: ComponentType<Props> }>,
+  presentation: LoadingPresentation = 'panel'
 ): ComponentType<Props> {
   // A stable fulfilled payload also renders when reopened offline. Failed
   // browser module downloads can stay cached until navigation, so do not
@@ -40,7 +63,9 @@ export function createLazyPanel<Props extends object>(
   return function LazyPanel(props: Props) {
     return (
       <ErrorBoundary label={label}>
-        <Suspense fallback={<LoadingPanel label={label} />}>
+        <Suspense
+          fallback={<LoadingPanel label={label} presentation={presentation} />}
+        >
           <Lazy {...props} />
         </Suspense>
       </ErrorBoundary>

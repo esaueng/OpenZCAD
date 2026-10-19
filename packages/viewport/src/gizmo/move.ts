@@ -27,6 +27,8 @@ export interface MovePreview {
    * omitted from the gizmo and rotation stays zero.
    */
   target?: 'body' | 'sketch';
+  /** Preview a new body while leaving the source at its document pose. */
+  copy?: boolean;
   translation: { x: number; y: number; z: number };
   rotationDeg: { x: number; y: number; z: number };
 }
@@ -269,7 +271,12 @@ export function buildMoveGizmoParts(scale: number): THREE.Object3D[] {
     axis: MoveAxis,
     baseColor: number,
     baseOpacity: number
-  ) => ({ ...handleData(kind, axis), moveHandleVisual: true, baseColor, baseOpacity });
+  ) => ({
+    ...handleData(kind, axis),
+    moveHandleVisual: true,
+    baseColor,
+    baseOpacity
+  });
   const focusData = (kind: MoveHandleKind, axis: MoveAxis) => ({
     moveHandleFocus: true,
     kind,

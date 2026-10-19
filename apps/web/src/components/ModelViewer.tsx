@@ -139,6 +139,7 @@ import {
   tuneShadowFrustum,
   VIEWPORT_RENDER_ORDER,
   DrawnBodyReport,
+  MoveCopyPreview,
   type AxisProjection,
   type CameraPose,
   type ExactSectionRegionDisplay,
@@ -1024,6 +1025,7 @@ export interface SceneContext {
   overlayGroup: THREE.Group;
   gizmoGroup: THREE.Group;
   moveGizmoGroup: THREE.Group;
+  moveCopyPreview: MoveCopyPreview;
   /** Applies pending Move/Rotate values to the target body and the gizmo. */
   applyMovePreview(
     translation: MovePreview['translation'],
@@ -2444,6 +2446,8 @@ export function ModelViewer({
       }
     }
 
+    const moveCopyPreview = new MoveCopyPreview();
+
     function applyMovePreview(
       translation: MovePreview['translation'],
       rotationDeg: MovePreview['rotationDeg']
@@ -2468,14 +2472,27 @@ export function ModelViewer({
       } else {
         const object = context.objectsByBodyId.get(preview.bodyId);
         if (object) {
+          const body = context.renderedBodies?.find(
+            (candidate) => candidate.bodyId === preview.bodyId
+          );
+          const target = moveCopyPreview.target(object, !!preview.copy && !!body, () => {
+            const resolution = context.fatLineResolution();
+            const copy = createObjectForBody(body!, resolution);
+            const edges = createBodyEdgeOverlay(body!, resolution);
+            edges.setDisplayMode(displayModeRef.current);
+            copy.add(edges);
+            applyDisplayMode(copy, displayModeRef.current);
+            return copy;
+          });
           const final = composeMoveTransform(center, translation, rotationDeg);
-          object.rotation.copy(moveEuler(rotationDeg));
-          object.position.set(final.x, final.y, final.z);
+          target.rotation.copy(moveEuler(rotationDeg));
+          target.position.set(final.x, final.y, final.z);
           // The mesh rotates about its own origin and then translates, so the
           // callout's anchor has to take the same two steps to stay over the
           // body — adding the translation alone would drift it off under any
           // rotation.
-          poseSelectionCallout(preview.bodyId, rotationDeg, final);
+          if (preview.copy) restSelectionCallouts();
+          else poseSelectionCallout(preview.bodyId, rotationDeg, final);
           // The shadow map is frozen (`autoUpdate = false`) so camera-only
           // frames reuse it — that is where most of the render win came from.
           // A body moving under the light is one of the few things that
@@ -2553,6 +2570,7 @@ export function ModelViewer({
       overlayGroup,
       gizmoGroup,
       moveGizmoGroup,
+      moveCopyPreview,
       applyMovePreview,
       restSelectionCallouts,
       refreshShadowMap,
@@ -8929,6 +8947,7 @@ export function ModelViewer({
       // Hover slots are children of body objects, but their buffers and
       // materials belong to SelectionManager. Detach them before the body
       // tree is disposed so ownership is not crossed or disposed twice.
+      moveCopyPreview.clear();
       selection.dispose();
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
@@ -9184,6 +9203,7 @@ export function ModelViewer({
         (focusGhostBodies?.length ?? 0) > 0);
     if (bodiesChanged) mark('viewer.bodies:begin');
     if (renderChanged) {
+      context.moveCopyPreview.clear();
       // The exact worker result is authoritative. Forget the visual proxy
       // before its old Three object is disposed and replaced.
       cylinderRadiusProxyControllerRef.current?.discard();
@@ -10032,6 +10052,7 @@ export function ModelViewer({
       delete context.renderer.domElement.dataset.e2eMoveGizmoY;
     }
     if (!movePreview) {
+      context.moveCopyPreview.clear();
       applyMoveGizmoFocus(context.moveGizmoGroup, null);
       if (moveGizmoHudRef.current) {
         moveGizmoHudRef.current.hidden = true;
@@ -10077,6 +10098,7 @@ export function ModelViewer({
     }
     let center: THREE.Vector3;
     if (movePreview.target === 'sketch') {
+      context.moveCopyPreview.clear();
       const view = sketchViews.find(
         (candidate) => candidate.sketchId === movePreview.bodyId
       );

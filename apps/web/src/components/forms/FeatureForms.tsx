@@ -1234,8 +1234,12 @@ interface TransformFormProps {
   initialTarget?: BodyId;
   /** Name seeded for a new feature; edits carry `initial.name` instead. */
   defaultName?: string;
-  /** Document length units, named in the translation fields' labels. */
-  units?: string;
+  /**
+   * Document length units: named in the move and pivot labels, and the unit
+   * those fields are typed in (F05), so `10 mm` converts and an angle is
+   * refused there.
+   */
+  units?: UnitSystem;
   submitLabel: string;
   onSubmit(value: TransformFormValue): void;
   onCancel?: () => void;
@@ -1275,11 +1279,26 @@ export function TransformForm({
   const setValue = (key: string) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
 
-  const scaleError = positiveError(values.scale ?? '', scope);
+  // Moves and the pivot are lengths, turns are angles and scale is a plain
+  // factor, as the exact build reads them.
+  const length = units
+    ? ({ documentUnits: units, dimension: 'length' } as const)
+    : undefined;
+  const angle = units
+    ? ({ documentUnits: units, dimension: 'angle' } as const)
+    : undefined;
+  const number = units
+    ? ({ documentUnits: units, dimension: 'number' } as const)
+    : undefined;
+  const pick = (prefix: string) =>
+    TRANSFORM_AXES.map((axis) => values[`${prefix}${axis}`] ?? '');
+  const scaleError = positiveError(values.scale ?? '', scope, number);
   const canSubmit =
     name.trim().length > 0 &&
     target !== '' &&
-    fieldsValid(scope, Object.values(values)) &&
+    fieldsValid(scope, [...pick('t'), ...pick('p')], length) &&
+    fieldsValid(scope, pick('r'), angle) &&
+    fieldsValid(scope, [values.scale ?? ''], number) &&
     !scaleError;
 
   return (
@@ -1361,6 +1380,7 @@ export function TransformForm({
             ariaLabel={`Move ${axis.toUpperCase()}${units ? ` in ${units}` : ''}`}
             value={values[`t${axis}`] ?? ''}
             scope={scope}
+            quantity={length}
             autoFocus={index === 0}
             onChange={setValue(`t${axis}`)}
           />
@@ -1374,6 +1394,7 @@ export function TransformForm({
             ariaLabel={`Rotate ${axis.toUpperCase()} in degrees`}
             value={values[`r${axis}`] ?? ''}
             scope={scope}
+            quantity={angle}
             onChange={setValue(`r${axis}`)}
           />
         ))}
@@ -1382,6 +1403,7 @@ export function TransformForm({
         label="Scale ×"
         value={values.scale ?? ''}
         scope={scope}
+        quantity={number}
         onChange={setValue('scale')}
         error={scaleError}
       />
@@ -1395,6 +1417,7 @@ export function TransformForm({
             ariaLabel={`Pivot ${axis.toUpperCase()}${units ? ` in ${units}` : ''}`}
             value={values[`p${axis}`] ?? ''}
             scope={scope}
+            quantity={length}
             onChange={setValue(`p${axis}`)}
           />
         ))}

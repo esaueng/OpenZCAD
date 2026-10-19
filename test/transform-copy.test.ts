@@ -6,6 +6,7 @@ import {
 } from '@openzcad/command-system';
 import {
   createProjectDocument,
+  createFeatureOnlyIds,
   findFeature,
   listFeaturesInOrder,
   listNodesByKind,
@@ -175,6 +176,36 @@ describe('transform copy (M10)', { timeout: 60_000 }, () => {
       after.commandLog
     );
     expect(replayed.bodyOrder).toEqual(after.bodyOrder);
+  });
+
+  it('preserves explicit feature IDs and dependent copies across redo and replay', async () => {
+    const { manager, blockId } = block();
+    const ids = createFeatureOnlyIds();
+    const command = copyCommand(blockId, { ids });
+    expect(command.payload.ids).toMatchObject(ids);
+    manager.execute(command);
+    const copyId = manager.document.bodyOrder[1]!;
+    manager.execute(copyCommand(copyId));
+    const after = manager.document;
+    expect(findFeature(after, ids.featureId)).toMatchObject({
+      id: ids.featureNodeId,
+      bodyId: copyId
+    });
+    manager.undo();
+    manager.undo();
+    manager.redo();
+    manager.redo();
+    expect(manager.document.bodyOrder).toEqual(after.bodyOrder);
+    const replayed = replayCommands(
+      createProjectDocument('Copy', toUserId('user_m10_copy')),
+      JSON.parse(JSON.stringify(after.commandLog)) as typeof after.commandLog
+    );
+    expect(replayed.bodyOrder).toEqual(after.bodyOrder);
+    for (const document of [manager.document, replayed]) {
+      const { of } = await bodies(document);
+      expect(of(copyId).min).toEqual([30, 0, 0]);
+      expect(of(after.bodyOrder[2]!).min).toEqual([60, 0, 0]);
+    }
   });
 
   it('follows a later edit to its source, and stays put when the source moves', async () => {

@@ -12,7 +12,8 @@ import {
   CommandManager,
   commandFactories,
   commandsForCadPatch,
-  composeCommands
+  composeCommands,
+  isParameterRetype
 } from '@openzcad/command-system';
 import { parseCadPatchProposal } from '@openzcad/ai-contracts';
 import {
@@ -117,6 +118,32 @@ describe('typed parameters through the exact build (F05)', () => {
     expect(derived.bodyRepresentations[blockId]).toBeUndefined();
   });
 
+  it('replays a feature when only a parameter quantity changes', async () => {
+    // A collaborator's document retypes `a` without touching any value:
+    // the cached build of the box must not be reused.
+    let document = setParameter(
+      createProjectDocument('Quantity cache', toUserId('user_f05')),
+      { name: 'a', expression: '20' }
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 'a', height: 10, depth: 10 }
+    });
+    const [blockId] = document.bodyOrder as [BodyId];
+    const first = await adapter.syncDocument(document);
+    expect(first.bodyRepresentations[blockId]).toBeDefined();
+    const retyped = structuredClone(document);
+    for (const node of Object.values(retyped.nodes)) {
+      if (node.kind === 'parameter' && node.name === 'a')
+        node.quantity = 'angle';
+    }
+    retyped.version += 1;
+    const second = await adapter.syncDocument(retyped);
+    expect(second.warnings.join('\n')).toMatch(/Feature "Block": .*uses "a"/);
+    expect(second.bodyRepresentations[blockId]).toBeUndefined();
+  });
+
   it('keeps a typed parameter typed across a proposal that renames it', () => {
     const document = setParameter(
       createProjectDocument('Rename typed', toUserId('user_f05')),
@@ -142,5 +169,75 @@ describe('typed parameters through the exact build (F05)', () => {
           (node) => node.kind === 'parameter' && node.name === 'width'
         )
     ).toMatchObject({ quantity: 'length' });
+  });
+});
+
+describe('typed parameters at transaction end', () => {
+  it('refuses a transaction whose end state mistypes a parameter', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Typed end state', toUserId('user_f05_end'))
+    );
+    const before = manager.document;
+    // `length` reads `later` before it exists; the second command makes it
+    // an angle, so the length parameter ends up holding an angle.
+    expect(() =>
+      manager.runTransaction('Add both', [
+        commandFactories.setParameter({
+          name: 'length',
+          expression: 'later',
+          quantity: 'length'
+        }),
+        commandFactories.setParameter({
+          name: 'later',
+          expression: '30',
+          quantity: 'angle'
+        })
+      ])
+    ).toThrow(/Parameter "length" uses "later"/);
+    expect(manager.document).toBe(before);
+  });
+});
+
+describe('Tweak undo and parameter types', () => {
+  it('keeps a retype out of Tweak undo while a value edit stays in it', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Tweak retype', toUserId('user_f05_tweak'))
+    );
+    manager.execute(
+      commandFactories.setParameter({ name: 'w', expression: '10' })
+    );
+    expect(manager.undoIsParameterOnly).toBe(true);
+    // Retyping is a Build edit: Tweak hides the picker, so undo there may
+    // not retype either.
+    manager.execute(
+      commandFactories.setParameter({
+        name: 'w',
+        expression: '10',
+        quantity: 'length'
+      })
+    );
+    expect(manager.undoIsParameterOnly).toBe(false);
+    expect(manager.canUndoIn(true)).toBe(false);
+    manager.execute(
+      commandFactories.setParameter({ name: 'w', expression: '12' })
+    );
+    expect(manager.canUndoIn(true)).toBe(true);
+  });
+
+  it('names a typed parameter set as a retype for the edit guards', () => {
+    expect(
+      isParameterRetype(
+        commandFactories.setParameter({ name: 'w', expression: '1' })
+      )
+    ).toBe(false);
+    expect(
+      isParameterRetype(
+        commandFactories.setParameter({
+          name: 'w',
+          expression: '1',
+          quantity: null
+        })
+      )
+    ).toBe(true);
   });
 });

@@ -1451,8 +1451,10 @@ export const commandFactories = {
     const withIds = {
       ...payload,
       ids:
-        payload.ids ??
-        (payload.copy ? createBodyFeatureIds() : createFeatureOnlyIds())
+        payload.copy && payload.ids && !('bodyId' in payload.ids)
+          ? { ...createBodyFeatureIds(), ...payload.ids }
+          : (payload.ids ??
+            (payload.copy ? createBodyFeatureIds() : createFeatureOnlyIds()))
     };
     return makeCommand(
       'feature.transform',
@@ -2154,6 +2156,7 @@ function assertOperationExpressions(
       sketchObjects(operation.name, operation.objects);
       break;
     case 'add_datum_mirror':
+    case 'add_datum_split':
       break;
     case 'add_shell':
       assertEvaluableExpression(
@@ -2944,6 +2947,20 @@ export function commandsForCadPatch(
           ids
         });
       }
+      case 'add_datum_split': {
+        const ids = createSplitFeatureIds();
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        const datumFeatureId = resolveDatum(operation.datum);
+        scope.declare(operation.localId, ids.bodyId);
+        scope.declare(operation.secondLocalId, ids.secondBodyId);
+        scope.consume([targetBodyId], 'split');
+        return commandFactories.splitBody({
+          name: operation.name,
+          targetBodyId,
+          plane: { type: 'datum', datumFeatureId },
+          ids
+        });
+      }
       case 'add_shell': {
         if (isLocalBodyRef(operation.targetBodyId)) {
           throw new Error('add_shell cannot target same-proposal topology.');
@@ -3157,6 +3174,29 @@ export function commandsForCadPatch(
   return commands;
 }
 
+/**
+ * The kind an undo entry records for a command. A `parameter.set` that sets
+ * a type (F05) records `parameter.retype`: Tweak turns values and hides the
+ * type picker, so its undo and redo must not retype a parameter either.
+ */
+function historyCommandKind(entry: SerializedCommand): string {
+  return isParameterRetype(entry) ? 'parameter.retype' : entry.kind;
+}
+
+/**
+ * Whether a parameter command sets a type (F05). A retype is a Build edit:
+ * Tweak's guards, undo and redo admit value edits only.
+ */
+export function isParameterRetype(command: {
+  kind: string;
+  payload?: unknown;
+}): boolean {
+  return (
+    command.kind === 'parameter.set' &&
+    (command.payload as ParameterSetInput | undefined)?.quantity !== undefined
+  );
+}
+
 function parameterOnly(kinds: string[] | null): boolean {
   return !!kinds?.length && kinds.every((kind) => kind === 'parameter.set');
 }
@@ -3255,7 +3295,7 @@ export class CommandManager {
       next,
       command.label,
       this.actorUserId,
-      serializedLeaves(command).map((entry) => entry.kind)
+      serializedLeaves(command).map(historyCommandKind)
     );
     assertDocumentTextBudget(recorded);
     this.document = recorded;
@@ -3354,7 +3394,7 @@ export class CommandManager {
       next,
       label,
       this.actorUserId,
-      serialized.map((entry) => entry.kind)
+      serialized.map(historyCommandKind)
     );
     assertDocumentTextBudget(recorded);
     this.document = recorded;

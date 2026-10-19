@@ -24,6 +24,7 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await expectBodyCount(page, 1);
+  await expect(page.locator('.viewer-host canvas')).toBeVisible();
 
   await page.keyboard.press('m');
   const overlay = page.getByRole('form', { name: 'Move controls' });
@@ -32,6 +33,10 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await overlay
     .getByRole('checkbox', { name: 'Copy (keep the original)' })
     .check();
+  await expect(page.locator('.viewer-host canvas')).toBeVisible();
+  await expect(page.getByText('3D viewer could not be rendered.')).toHaveCount(
+    0
+  );
   await overlay.getByLabel('Name').fill('Copy');
   await overlay.getByRole('button', { name: 'Apply copy' }).click();
   await expect(overlay).toBeHidden();
@@ -59,9 +64,49 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expectBodyCount(page, 1);
+  await expect(page.locator('.viewer-host canvas')).toBeVisible();
   await expect(rows).toHaveCount(1);
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
   await expectBodyCount(page, 2);
   await expect(rows.filter({ hasText: /copy$/ })).toHaveCount(1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+});
+
+test('a coincident copy asks before a tool, history, measure or selection transition', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Coincident copy guard');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('button', { name: /^Create/ }).click();
+  await expectBodyCount(page, 1);
+  await page.keyboard.press('m');
+  const overlay = page.getByRole('form', { name: 'Move controls' });
+  const copy = overlay.getByRole('checkbox', {
+    name: 'Copy (keep the original)'
+  });
+  await copy.check();
+  await expect(page.locator('.viewer-host canvas')).toBeVisible();
+  const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
+  const transitions = [
+    () => page.getByRole('button', { name: /^Box \(B\)/ }).click(),
+    () => page.locator('.feature-row-main').first().click(),
+    () => page.getByRole('button', { name: 'Measure', exact: true }).click(),
+    () => page.locator('.body-row-main').first().click()
+  ];
+  for (const transition of transitions) {
+    await transition();
+    await expect(ask).toBeVisible();
+    await ask.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(copy).toBeChecked();
+    await expect(overlay.getByLabel('Move X in mm')).toHaveValue('0');
+    await expectBodyCount(page, 1);
+  }
+  await transitions[0]!();
+  await ask.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expectBodyCount(page, 2);
+  await expect(inspector).toBeVisible();
 });

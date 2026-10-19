@@ -27,12 +27,16 @@ export function parameterMinimums(
 /** A cheap refusal before any worker work, including edits to driving aliases. */
 export function parameterInputError(
   base: ProjectDocument,
-  candidate: ProjectDocument
+  candidate: ProjectDocument,
+  /** Recognized bounds from this exact base for a pure parameter draft. */
+  minimums?: Readonly<Record<string, number>>
 ): string | null {
   const before = getParameterScope(base).scope;
   const { scope, errors } = getParameterScope(candidate);
   if (errors.length) return errors[0]!;
-  for (const [name, minimum] of Object.entries(parameterMinimums(candidate))) {
+  for (const [name, minimum] of Object.entries(
+    minimums ?? parameterMinimums(candidate)
+  )) {
     if (
       before[name] !== scope[name] &&
       scope[name] !== undefined &&

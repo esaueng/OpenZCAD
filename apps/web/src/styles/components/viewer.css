@@ -12,6 +12,28 @@
   overflow: hidden;
 }
 
+/* The viewport owns the whole stage, including while its module downloads. */
+.viewport-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.workspace-loading-ring {
+  display: block;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+}
+
 .viewer-shell canvas {
   display: block;
   width: 100% !important;

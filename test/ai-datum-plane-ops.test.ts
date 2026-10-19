@@ -11,6 +11,7 @@ import {
   composeCommands
 } from '@openzcad/command-system';
 import {
+  addPrimitiveFeature,
   createProjectDocument,
   listFeaturesInOrder
 } from '@openzcad/document-core';
@@ -275,5 +276,87 @@ describe('R01-D datum operations: compiled and built', () => {
         (feature) => feature.data.featureKind === 'datum-plane'
       )
     ).toBe(false);
+  });
+
+  it('splits a body at a datum and names both halves for later operations', async () => {
+    const block = addPrimitiveFeature(
+      createProjectDocument('AI split', toUserId('user_ai_datum')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 20 }
+      }
+    );
+    const [blockId] = block.bodyOrder as [BodyId];
+    const manager = applyProposal(block, [
+      offsetPlane('Cut plane', 'cut', canonical('XY'), 8),
+      {
+        kind: 'add_datum_split',
+        name: 'Cut',
+        localId: 'top',
+        secondLocalId: 'bottom',
+        targetBodyId: blockId,
+        datum: '$cut'
+      },
+      offsetPlane('Side plane', 'side', canonical('YZ'), 30),
+      {
+        kind: 'add_datum_mirror',
+        name: 'Far bottom',
+        localId: null,
+        targetBodyId: '$bottom',
+        datum: '$side'
+      }
+    ]);
+    const split = listFeaturesInOrder(manager.document).find(
+      (feature) => feature.data.featureKind === 'split'
+    )!;
+    expect(split.data).toMatchObject({
+      targetBodyId: blockId,
+      plane: { type: 'datum' }
+    });
+    const topId = split.bodyId!;
+    const bottomId =
+      split.data.featureKind === 'split' ? split.data.secondBodyId : null;
+    const mirror = listFeaturesInOrder(manager.document).find(
+      (feature) => feature.data.featureKind === 'mirror'
+    )!;
+    expect(mirror.data).toMatchObject({ targetBodyId: bottomId });
+    const derived = await adapter.syncDocument(manager.document);
+    expect(derived.warnings).toEqual([]);
+    const z = (id: BodyId) => {
+      const { min, max } = derived.bodyRepresentations[id]!.bbox;
+      return [min.z, max.z].map((value) => Math.round(value * 1e6) / 1e6);
+    };
+    expect(z(topId)).toEqual([8, 20]);
+    expect(z(bottomId!)).toEqual([0, 8]);
+    expect(z(mirror.bodyId!)).toEqual([0, 8]);
+    expect(derived.bodyRepresentations[blockId]?.consumed).toBe(true);
+  });
+
+  it('refuses a datum split of a body the proposal already consumed', () => {
+    const block = addPrimitiveFeature(
+      createProjectDocument('AI split twice', toUserId('user_ai_datum')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 20 }
+      }
+    );
+    const [blockId] = block.bodyOrder as [BodyId];
+    const split = (name: string) => ({
+      kind: 'add_datum_split',
+      name,
+      localId: null,
+      secondLocalId: null,
+      targetBodyId: blockId,
+      datum: '$cut'
+    });
+    expect(() =>
+      applyProposal(block, [
+        offsetPlane('Cut plane', 'cut', canonical('XY'), 8),
+        split('Cut'),
+        split('Cut again')
+      ])
+    ).toThrow();
   });
 });

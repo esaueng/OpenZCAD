@@ -2063,6 +2063,8 @@ export type GeometryBodyRepresentation = Omit<
  * Exact operations requiring analysis still await the completed result.
  */
 export interface GeometryReadyState {
+  /** Drag-only mesh publication: picking identities await complete topology. */
+  topology?: 'pending';
   bodyRepresentations: Record<BodyId, GeometryBodyRepresentation>;
   warnings: string[];
   /** Current build attribution; never borrowed from a completed projection. */
