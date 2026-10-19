@@ -376,7 +376,7 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
       rosterEntryHash,
       schemaVersion,
       keyEpoch,
-      blobIds,
+      blobIds: Object.freeze(blobIds),
       compression,
       chunkSize
     };
@@ -387,7 +387,9 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
   checkHeader(header, 'malformed');
   return {
     version: ENVELOPE_VERSION_1,
-    header,
+    // Frozen: readers keep slicing records by this header after exposing
+    // it, so a consumer must not be able to change its chunk size.
+    header: Object.freeze(header),
     prefix: copyBytes(prefix.subarray(0, length))
   };
 }

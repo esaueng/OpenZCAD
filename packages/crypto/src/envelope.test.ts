@@ -883,6 +883,34 @@ describe('content blobs', () => {
     expect(Object.isFrozen(writer.header)).toBe(true);
   });
 
+  it('an authenticated reader header cannot be altered mid-read', async () => {
+    const plaintext = patternBytes(CHUNK * 4 + 3, 9);
+    const { envelope, reference } = await encryptContentBlob(
+      EnvelopeKey.generate(),
+      'export',
+      plaintext,
+      { compression: 'none', chunkSize: CHUNK }
+    );
+    const reader = createContentBlobReader(reference);
+    const out: Bytes[] = [];
+    let at = 0;
+    while (at < envelope.byteLength) {
+      const slice = envelope.subarray(at, at + reader.preferredPushBytes);
+      at += slice.byteLength;
+      out.push(...(await reader.push(slice)));
+      const header = reader.header;
+      if (header) {
+        expect(Object.isFrozen(header)).toBe(true);
+        expect(() => {
+          (header as { chunkSize: number }).chunkSize = 64;
+        }).toThrow(TypeError);
+      }
+    }
+    out.push(...(await reader.finish()));
+    expect(joinBytes(out)).toEqual(plaintext);
+    expect(Object.isFrozen(parseEnvelope(envelope).header)).toBe(true);
+  });
+
   it('a direct writer call is bounded in bytes and records', async () => {
     const plaintext = patternBytes(64 * (MAX_WRITER_WRITE_RECORDS + 10), 7);
     const writer = await createContentBlobWriter(
