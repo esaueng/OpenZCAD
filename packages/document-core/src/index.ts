@@ -4319,6 +4319,47 @@ export function updateFeature(
 export const EXTRUDE_TO_FACE_UNRESOLVED = 'Target face is unresolved:';
 
 /**
+ * How far from parallel a to-face target may lean, as the sine of the angle
+ * between its normal and the sketch normal (about 0.2 arc seconds). A face
+ * leaning more meets the profile's walls at different heights — a different
+ * extent (up to a slanted face) than this slice builds.
+ */
+export const TO_FACE_PARALLEL_SINE_LIMIT = 1e-6;
+
+type ToFacePoint = { x: number; y: number; z: number };
+
+/**
+ * The signed distance from the sketch plane to a to-face target along the
+ * unit sketch normal, or null when the face is not parallel to the sketch or
+ * lies on it. The exact build and the extrude card both decide with this, so
+ * the card never offers a face the build refuses. Normals must be unit.
+ */
+export function toFaceSignedDistance(
+  sketch: { origin: ToFacePoint; normal: ToFacePoint },
+  face: { point: ToFacePoint; normal: ToFacePoint }
+): number | null {
+  const alignment =
+    face.normal.x * sketch.normal.x +
+    face.normal.y * sketch.normal.y +
+    face.normal.z * sketch.normal.z;
+  if (
+    !Number.isFinite(alignment) ||
+    Math.sqrt(Math.max(0, 1 - alignment * alignment)) >
+      TO_FACE_PARALLEL_SINE_LIMIT
+  ) {
+    return null;
+  }
+  const distance =
+    (face.point.x - sketch.origin.x) * sketch.normal.x +
+    (face.point.y - sketch.origin.y) * sketch.normal.y +
+    (face.point.z - sketch.origin.z) * sketch.normal.z;
+  return Number.isFinite(distance) &&
+    Math.abs(distance) > 1e-9 * Math.max(1, Math.abs(distance))
+    ? distance
+    : null;
+}
+
+/**
  * Whether `feature` is a to-face extrude whose target face no longer
  * resolves, judged from the derived rebuild warnings (in the adapter's
  * `Feature "name": reason` convention). The feature is skipped by the

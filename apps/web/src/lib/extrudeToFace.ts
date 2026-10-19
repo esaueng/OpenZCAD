@@ -3,7 +3,8 @@ import {
   findSketch,
   getParameterScope,
   listFeaturesInOrder,
-  resolveParamValue
+  resolveParamValue,
+  toFaceSignedDistance
 } from '@openzcad/document-core';
 import type {
   ExtrudeToFaceTarget,
@@ -74,18 +75,11 @@ export function toFaceDistanceEstimate(
   } catch {
     return null;
   }
-  const point = target.sourceCentroid;
-  const normal = target.sourceNormal;
-  const alignment =
-    normal.x * basis.normal.x +
-    normal.y * basis.normal.y +
-    normal.z * basis.normal.z;
-  if (Math.abs(Math.abs(alignment) - 1) > 1e-6) return null;
-  const distance =
-    (point.x - basis.origin.x) * basis.normal.x +
-    (point.y - basis.origin.y) * basis.normal.y +
-    (point.z - basis.origin.z) * basis.normal.z;
-  return Math.abs(distance) > 1e-9 ? distance : null;
+  // The exact build's own test, so the card never offers a face it refuses.
+  return toFaceSignedDistance(basis, {
+    point: target.sourceCentroid,
+    normal: target.sourceNormal
+  });
 }
 
 /** "Ceiling · face", for the extrude card and the history row. */

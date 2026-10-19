@@ -1,7 +1,9 @@
 import {
   EXTRUDE_TO_FACE_UNRESOLVED,
   MAX_EXTRUDE_DRAFT_DEG,
+  TO_FACE_PARALLEL_SINE_LIMIT,
   listFeaturesInOrder,
+  toFaceSignedDistance,
   resolveParamValue
 } from '@openzcad/document-core';
 import type { PlaneBasis, Vec3 } from '@openzcad/geometry';
@@ -19,14 +21,6 @@ import { requireValidSolid } from './kernel-validation';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 
 type ExtrudeData = Extract<FeatureNode['data'], { featureKind: 'extrude' }>;
-
-/**
- * How far from parallel a to-face target may lean, as the sine of the angle
- * between its normal and the sketch normal. A face leaning more than this
- * meets the profile's walls at different heights, which is a different
- * extent (up to a slanted face) than this slice builds, so it refuses.
- */
-const PARALLEL_SINE_LIMIT = 1e-6;
 
 function dot(a: Vec3, b: Vec3): number {
   return a.x * b.x + a.y * b.y + a.z * b.z;
@@ -100,20 +94,19 @@ export function toFaceDistance(
   } catch (error) {
     throw unresolved(error instanceof Error ? error.message : String(error));
   }
+  // The same test the extrude card applies before it offers Create/Apply.
+  const distance = toFaceSignedDistance(basis, {
+    point: frame.origin,
+    normal: frame.zAxis
+  });
+  if (distance !== null) return distance;
   const alignment = dot(frame.zAxis, basis.normal);
-  if (Math.sqrt(Math.max(0, 1 - alignment * alignment)) > PARALLEL_SINE_LIMIT) {
-    throw unresolved(
-      'the face is no longer parallel to the sketch plane; pick a face parallel to the sketch.'
-    );
-  }
-  const distance = dot(sub(frame.origin, basis.origin), basis.normal);
-  const tolerance = 1e-9 * Math.max(1, Math.abs(distance));
-  if (!Number.isFinite(distance) || Math.abs(distance) <= tolerance) {
-    throw unresolved(
-      'the face lies on the sketch plane, so there is nothing to extrude.'
-    );
-  }
-  return distance;
+  throw unresolved(
+    Math.sqrt(Math.max(0, 1 - alignment * alignment)) >
+      TO_FACE_PARALLEL_SINE_LIMIT
+      ? 'the face is no longer parallel to the sketch plane; pick a face parallel to the sketch.'
+      : 'the face lies on the sketch plane, so there is nothing to extrude.'
+  );
 }
 
 /**

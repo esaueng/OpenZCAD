@@ -10,6 +10,7 @@ import {
   listFeaturesInOrder,
   normalizeDocument,
   setParameter,
+  toFaceSignedDistance,
   updateFeature
 } from '@openzcad/document-core';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
@@ -345,6 +346,34 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
           clearData: ['endCondition']
         })
       ).toThrow(/Only an extrude to a face names a target face/);
+    });
+  });
+
+  describe('shared to-face reach test', () => {
+    it('refuses a 0.05° tilt and a face on the sketch plane, as the build does', () => {
+      const sketchPlane = {
+        origin: { x: 0, y: 0, z: 0 },
+        normal: { x: 0, y: 0, z: 1 }
+      };
+      const tilt = (0.05 * Math.PI) / 180;
+      expect(
+        toFaceSignedDistance(sketchPlane, {
+          point: { x: 0, y: 0, z: 25 },
+          normal: { x: 0, y: Math.sin(tilt), z: -Math.cos(tilt) }
+        })
+      ).toBeNull();
+      expect(
+        toFaceSignedDistance(sketchPlane, {
+          point: { x: 3, y: 4, z: 0 },
+          normal: { x: 0, y: 0, z: 1 }
+        })
+      ).toBeNull();
+      expect(
+        toFaceSignedDistance(sketchPlane, {
+          point: { x: 3, y: 4, z: -12 },
+          normal: { x: 0, y: 0, z: 1 }
+        })
+      ).toBe(-12);
     });
   });
 
