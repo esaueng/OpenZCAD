@@ -31,7 +31,7 @@ Every header starts with `u8 class | u8 kind | u8 compression | u32 chunk size |
 | class            | 1 project envelope, 2 content blob                                                                                                   |
 | kind             | project: 1 document, 2 measurements, 3 view-state, 4 share-snapshot; content: 1 import-source, 2 mesh-payload, 3 thumbnail, 4 export |
 | compression      | 0 none, 1 gzip (applied before encryption; the default)                                                                              |
-| chunk size       | 64 B to 16 MiB (default 1 MiB)                                                                                                       |
+| chunk size       | 64 B to 16 MiB (default 1 MiB); at least the prefix length when the prefix exceeds 1 KiB, since every chunk's AAD carries it         |
 | plaintext length | the exact size after decompression; part of the header, so every chunk's AAD binds it                                                |
 
 A **project envelope** header continues with `u32 schema version | u32 key

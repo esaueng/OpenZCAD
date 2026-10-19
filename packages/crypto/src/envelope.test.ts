@@ -227,6 +227,36 @@ describe('project envelopes', () => {
     }
   });
 
+  it('a prefix over 1 KiB needs chunks at least as large as itself', async () => {
+    // Every chunk's AAD carries the whole prefix: a big header over tiny
+    // chunks would cost far more than the payload, so it is refused.
+    const blobIds = Array.from(
+      { length: 60 },
+      (_, i) => `blob-${String(i).padStart(24, '0')}`
+    );
+    await rejectsWith(
+      encryptProjectEnvelope(
+        EnvelopeKey.generate(),
+        { ...HEADER, blobIds, chunkSize: 64 },
+        text('x')
+      ),
+      'limit-exceeded'
+    );
+    const envelope = await encryptProjectEnvelope(
+      EnvelopeKey.generate(),
+      { ...HEADER, blobIds, chunkSize: 4096 },
+      text('x')
+    );
+    const { prefix } = split(envelope);
+    expect(prefix.byteLength).toBeGreaterThan(1024);
+    // A forged prefix claiming 64-byte chunks is refused on read too.
+    const forged = new Uint8Array(prefix);
+    new DataView(forged.buffer).setUint32(11, 64);
+    expect(() => parseEnvelope(forged)).toThrow(
+      expect.objectContaining({ code: 'limit-exceeded' })
+    );
+  });
+
   it('every header field is authenticated', async () => {
     const envelope = await sealProject(patternBytes(CHUNK * 3 + 10, 5));
     const { chunks } = split(envelope);

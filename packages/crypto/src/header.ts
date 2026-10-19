@@ -17,6 +17,13 @@ export const DEFAULT_CHUNK_SIZE = 1024 * 1024;
 export const MAX_ID_BYTES = 128;
 export const MAX_BLOB_IDS = 4096;
 export const MAX_HEADER_BYTES = 1024 * 1024;
+/**
+ * Every chunk's AAD carries the whole prefix, so a large prefix over small
+ * chunks would cost far more than the payload (a 528 KiB header over 64-byte
+ * chunks: hundreds of GiB). A prefix longer than this needs chunks at least
+ * as large as itself, which keeps AAD work within 16× the payload.
+ */
+export const MAX_PREFIX_BYTES_ANY_CHUNK = 1024;
 const MAX_U32 = 0xffffffff;
 
 // The kind and compression tables give each name its wire code by
@@ -277,12 +284,25 @@ export function encodeEnvelopePrefix(header: EnvelopeHeader): Bytes {
   if (headerBytes.byteLength > MAX_HEADER_BYTES) {
     fail('limit-exceeded', 'Envelope header is too large');
   }
+  checkPrefixFitsChunks(
+    ENVELOPE_FIXED_PREFIX_BYTES + headerBytes.byteLength,
+    header.chunkSize
+  );
   return new ByteWriter()
     .bytes(Uint8Array.from(ENVELOPE_MAGIC))
     .u8(ENVELOPE_VERSION_1)
     .u32(headerBytes.byteLength)
     .bytes(headerBytes)
     .finish();
+}
+
+function checkPrefixFitsChunks(prefixLength: number, chunkSize: number): void {
+  if (prefixLength > Math.max(chunkSize, MAX_PREFIX_BYTES_ANY_CHUNK)) {
+    fail(
+      'limit-exceeded',
+      `A ${prefixLength}-byte prefix needs chunks of at least ${prefixLength} bytes`
+    );
+  }
 }
 
 /**
@@ -385,6 +405,7 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
   }
   reader.end();
   checkHeader(header, 'malformed');
+  checkPrefixFitsChunks(length, header.chunkSize);
   return {
     version: ENVELOPE_VERSION_1,
     // Frozen: readers keep slicing records by this header after exposing
