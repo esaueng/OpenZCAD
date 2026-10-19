@@ -851,8 +851,9 @@ export function growingHolderHistories(
       (feature, index) =>
         live(feature) &&
         feature.data.featureKind === 'transform' &&
-        JSON.stringify(constantRigidTransform(feature.data.transform)) ===
-          JSON.stringify(expected[index])
+        JSON.stringify(
+          constantRigidTransform(feature.data.transform, document.units)
+        ) === JSON.stringify(expected[index])
     );
   const sourceMoves = (bodyId: BodyId) =>
     moves.filter(
@@ -909,7 +910,10 @@ export function growingHolderHistories(
     const originalMoves = sourceMoves(recipe.targetBodyId);
     const placement = originalMoves.flatMap((feature) => {
       if (!live(feature) || feature.data.featureKind !== 'transform') return [];
-      const transform = constantRigidTransform(feature.data.transform);
+      const transform = constantRigidTransform(
+        feature.data.transform,
+        document.units
+      );
       return transform ? [transform] : [];
     });
     if (placement.length !== originalMoves.length) continue;

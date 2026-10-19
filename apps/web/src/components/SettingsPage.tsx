@@ -4,6 +4,7 @@ import {
   POINTER_NAVIGATION_LABELS
 } from '@openzcad/viewport/input-bindings';
 import {
+  Fragment,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -18,7 +19,6 @@ import {
   ChevronLeft,
   CircleUserRound,
   CloudOff,
-  Command,
   Cpu,
   Database,
   Eye,
@@ -29,6 +29,7 @@ import {
   LogIn,
   LogOut,
   Mail,
+  Mouse,
   MousePointer2,
   Move3d,
   Palette,
@@ -159,14 +160,19 @@ const SECTION_ICONS: Record<SectionId, ReactNode> = {
   general: <Settings2 size={15} aria-hidden="true" />,
   appearance: <Palette size={15} aria-hidden="true" />,
   viewport: <Move3d size={15} aria-hidden="true" />,
+  controls: <Mouse size={15} aria-hidden="true" />,
   sketching: <PencilRuler size={15} aria-hidden="true" />,
-  files: <HardDrive size={15} aria-hidden="true" />,
-  assistant: <Bot size={15} aria-hidden="true" />,
+  saving: <HardDrive size={15} aria-hidden="true" />,
   account: <UserRound size={15} aria-hidden="true" />,
-  shortcuts: <Command size={15} aria-hidden="true" />,
+  assistant: <Bot size={15} aria-hidden="true" />,
   privacy: <LockKeyhole size={15} aria-hidden="true" />,
   advanced: <Cpu size={15} aria-hidden="true" />
 };
+
+/** A quiet label that splits a long settings card into named runs of rows. */
+function Subhead({ children }: { children: ReactNode }) {
+  return <h3 className="settings-subhead">{children}</h3>;
+}
 
 function Scope({ children }: { children: ReactNode }) {
   return <span className="settings-scope">{children}</span>;
@@ -649,7 +655,7 @@ export function SettingsPage({
   // Fetched only when the panel that shows it is open, and dropped on sign-out
   // so one account's totals never linger in front of another.
   useEffect(() => {
-    if (active !== 'files' || !session || !cloudFunctionsEnabled) {
+    if (active !== 'account' || !session || !cloudFunctionsEnabled) {
       setStorageUsage(null);
       return;
     }
@@ -847,23 +853,30 @@ export function SettingsPage({
             </button>
           )}
           <nav ref={navRef}>
-            {visibleSections.map((section) => (
-              <button
-                key={section.id}
-                type="button"
-                className={active === section.id ? 'active' : ''}
-                // Below 580px the label text is hidden and the icon is
-                // decorative, which would otherwise leave the button unnamed.
-                aria-label={section.label}
-                aria-current={active === section.id ? 'page' : undefined}
-                onClick={() => setActive(section.id)}
-              >
-                {SECTION_ICONS[section.id]}
-                <span>
-                  <strong>{section.label}</strong>
-                  <small>{section.detail}</small>
-                </span>
-              </button>
+            {visibleSections.map((section, index) => (
+              <Fragment key={section.id}>
+                {section.group !== visibleSections[index - 1]?.group &&
+                  (section.group ? (
+                    <p className="settings-nav-group">{section.group}</p>
+                  ) : (
+                    <hr className="settings-nav-rule" />
+                  ))}
+                <button
+                  type="button"
+                  className={active === section.id ? 'active' : ''}
+                  // Below 580px the label text is hidden and the icon is
+                  // decorative, which would otherwise leave the button unnamed.
+                  aria-label={section.label}
+                  aria-current={active === section.id ? 'page' : undefined}
+                  onClick={() => setActive(section.id)}
+                >
+                  {SECTION_ICONS[section.id]}
+                  <span>
+                    <strong>{section.label}</strong>
+                    <small>{section.detail}</small>
+                  </span>
+                </button>
+              </Fragment>
             ))}
             {visibleSections.length === 0 && (
               <p className="settings-nav-empty" role="status">
@@ -921,21 +934,6 @@ export function SettingsPage({
               intro="Choose how OpenZCAD starts and what a new project inherits. Existing document units are never reinterpreted."
             >
               <SettingRow
-                title="Reopen the last project"
-                description="Return to the most recently active model when OpenZCAD starts."
-                scope="This device"
-              >
-                <Toggle
-                  checked={settings.general.reopenLastProject}
-                  label="Reopen the last project"
-                  onChange={(reopenLastProject) =>
-                    patch({
-                      general: { ...settings.general, reopenLastProject }
-                    })
-                  }
-                />
-              </SettingRow>
-              <SettingRow
                 title="Default units"
                 description="Used only when creating a new project."
                 scope="New projects"
@@ -960,6 +958,21 @@ export function SettingsPage({
                 </select>
               </SettingRow>
               <SettingRow
+                title="Reopen the last project"
+                description="Return to the most recently active model when OpenZCAD starts."
+                scope="This device"
+              >
+                <Toggle
+                  checked={settings.general.reopenLastProject}
+                  label="Reopen the last project"
+                  onChange={(reopenLastProject) =>
+                    patch({
+                      general: { ...settings.general, reopenLastProject }
+                    })
+                  }
+                />
+              </SettingRow>
+              <SettingRow
                 title="Confirm destructive actions"
                 description="Ask before an action that discards something for good — emptying the trash, resetting preferences, removing a personal credential, or clearing an AI conversation."
                 scope="All devices"
@@ -977,23 +990,12 @@ export function SettingsPage({
                   }
                 />
               </SettingRow>
-              <SettingRow
-                title="Cloud features"
-                description="When off, OpenZCAD blocks account, sync, collaboration, artifact archive, and AI requests. Local modeling, autosave, imports, and exports keep working."
-                scope="This device"
-              >
-                <Toggle
-                  checked={cloudFunctionsEnabled}
-                  label="Cloud features"
-                  onChange={onCloudFunctionsEnabledChange}
-                />
-              </SettingRow>
             </Section>
           )}
 
           {active === 'appearance' && anyMatch && (
             <Section
-              title="Appearance & motion"
+              title="Appearance"
               intro="Keep the engineering workspace dense, readable, and predictable."
             >
               <SettingRow
@@ -1062,7 +1064,7 @@ export function SettingsPage({
           {active === 'viewport' && anyMatch && (
             <Section
               title="Viewport"
-              intro="Set defaults for new or previously unopened project views. Per-project camera state remains local."
+              intro="How new or previously unopened project views look. Per-project camera state remains local; mouse and trackpad behavior is under Controls."
             >
               <SettingRow
                 title="Projection"
@@ -1084,86 +1086,6 @@ export function SettingsPage({
                 >
                   <option value="perspective">Perspective</option>
                   <option value="orthographic">Orthographic</option>
-                </select>
-              </SettingRow>
-              <SettingRow
-                title="Show construction grid"
-                description="The grid is a viewport aid and never becomes document geometry."
-                scope="View default"
-              >
-                <Toggle
-                  checked={settings.viewport.showGrid}
-                  label="Show construction grid"
-                  onChange={(showGrid) =>
-                    patch({
-                      viewport: { ...settings.viewport, showGrid }
-                    })
-                  }
-                />
-              </SettingRow>
-              <SettingRow
-                title="Zoom toward the pointer"
-                description="Wheel zoom moves toward whatever is under the cursor, as desktop CAD does. Turn this off to zoom toward the middle of the view instead."
-                scope="Navigation"
-              >
-                <Toggle
-                  checked={settings.viewport.zoomToCursor}
-                  label="Zoom toward the pointer"
-                  onChange={(zoomToCursor) =>
-                    patch({
-                      viewport: { ...settings.viewport, zoomToCursor }
-                    })
-                  }
-                />
-              </SettingRow>
-              <SettingRow
-                title="Middle-button drag"
-                description="What dragging with the middle mouse button does. Pan matches desktop CAD; zoom is the three.js default."
-                scope="Navigation"
-              >
-                <select
-                  aria-label="Middle-button drag"
-                  value={settings.viewport.middleDrag}
-                  onChange={(event) =>
-                    patch({
-                      viewport: {
-                        ...settings.viewport,
-                        middleDrag: event.target
-                          .value as AppSettings['viewport']['middleDrag']
-                      }
-                    })
-                  }
-                >
-                  {(['pan', 'orbit', 'zoom'] as const).map((action) => (
-                    <option key={action} value={action}>
-                      {MIDDLE_DRAG_LABELS[action]}
-                    </option>
-                  ))}
-                </select>
-              </SettingRow>
-              <SettingRow
-                title="Scroll wheel"
-                description="A wheel notch zooms; two fingers on a trackpad pan and a pinch zooms. Detection zooms on any vertical scroll until a diagonal swipe or a pinch proves a trackpad, then remembers it — set it explicitly if your device is read wrongly."
-                scope="Navigation"
-              >
-                <select
-                  aria-label="Scroll wheel"
-                  value={settings.viewport.pointerNavigation}
-                  onChange={(event) =>
-                    patch({
-                      viewport: {
-                        ...settings.viewport,
-                        pointerNavigation: event.target
-                          .value as AppSettings['viewport']['pointerNavigation']
-                      }
-                    })
-                  }
-                >
-                  {(['auto', 'mouse', 'trackpad'] as const).map((mode) => (
-                    <option key={mode} value={mode}>
-                      {POINTER_NAVIGATION_LABELS[mode]}
-                    </option>
-                  ))}
                 </select>
               </SettingRow>
               <SettingRow
@@ -1189,6 +1111,21 @@ export function SettingsPage({
                   <option value="wireframe">Wireframe</option>
                 </select>
               </SettingRow>
+              <SettingRow
+                title="Show construction grid"
+                description="The grid is a viewport aid and never becomes document geometry."
+                scope="View default"
+              >
+                <Toggle
+                  checked={settings.viewport.showGrid}
+                  label="Show construction grid"
+                  onChange={(showGrid) =>
+                    patch({
+                      viewport: { ...settings.viewport, showGrid }
+                    })
+                  }
+                />
+              </SettingRow>
               <div className="settings-card-action">
                 {workspaceOpen ? null : (
                   <small className="settings-card-action-note">
@@ -1208,11 +1145,139 @@ export function SettingsPage({
             </Section>
           )}
 
+          {active === 'controls' && anyMatch && (
+            <Section
+              title="Controls"
+              intro="How your mouse, trackpad, and keyboard drive the workspace, with a complete reference for viewport navigation, selection, sketching, and direct modeling."
+              wide
+            >
+              <section className="settings-control-collection">
+                <header>
+                  <span className="settings-control-collection-icon">
+                    <Mouse size={18} aria-hidden="true" />
+                  </span>
+                  <span>
+                    <h3>Navigation</h3>
+                    <p>
+                      What the scroll wheel and middle button do in the 3D view.
+                      These apply on this device.
+                    </p>
+                  </span>
+                </header>
+                <SettingRow
+                  title="Scroll wheel"
+                  description="A wheel notch zooms; two fingers on a trackpad pan and a pinch zooms. Detection zooms on any vertical scroll until a diagonal swipe or a pinch proves a trackpad, then remembers it — set it explicitly if your device is read wrongly."
+                  scope="Navigation"
+                >
+                  <select
+                    aria-label="Scroll wheel"
+                    value={settings.viewport.pointerNavigation}
+                    onChange={(event) =>
+                      patch({
+                        viewport: {
+                          ...settings.viewport,
+                          pointerNavigation: event.target
+                            .value as AppSettings['viewport']['pointerNavigation']
+                        }
+                      })
+                    }
+                  >
+                    {(['auto', 'mouse', 'trackpad'] as const).map((mode) => (
+                      <option key={mode} value={mode}>
+                        {POINTER_NAVIGATION_LABELS[mode]}
+                      </option>
+                    ))}
+                  </select>
+                </SettingRow>
+                <SettingRow
+                  title="Middle-button drag"
+                  description="What dragging with the middle mouse button does. Pan matches desktop CAD; zoom is the three.js default."
+                  scope="Navigation"
+                >
+                  <select
+                    aria-label="Middle-button drag"
+                    value={settings.viewport.middleDrag}
+                    onChange={(event) =>
+                      patch({
+                        viewport: {
+                          ...settings.viewport,
+                          middleDrag: event.target
+                            .value as AppSettings['viewport']['middleDrag']
+                        }
+                      })
+                    }
+                  >
+                    {(['pan', 'orbit', 'zoom'] as const).map((action) => (
+                      <option key={action} value={action}>
+                        {MIDDLE_DRAG_LABELS[action]}
+                      </option>
+                    ))}
+                  </select>
+                </SettingRow>
+                <SettingRow
+                  title="Zoom toward the pointer"
+                  description="Wheel zoom moves toward whatever is under the cursor, as desktop CAD does. Turn this off to zoom toward the middle of the view instead."
+                  scope="Navigation"
+                >
+                  <Toggle
+                    checked={settings.viewport.zoomToCursor}
+                    label="Zoom toward the pointer"
+                    onChange={(zoomToCursor) =>
+                      patch({
+                        viewport: { ...settings.viewport, zoomToCursor }
+                      })
+                    }
+                  />
+                </SettingRow>
+              </section>
+              {/* One header for the keyboard half. A banner above it used to
+                  repeat the keyboard icon with its own line of guidance, so
+                  the page opened on two stacked headers. */}
+              <section className="settings-control-collection">
+                <header>
+                  <span className="settings-control-collection-icon">
+                    <Keyboard size={18} aria-hidden="true" />
+                  </span>
+                  <span>
+                    <h3>Keyboard</h3>
+                    <p>
+                      Shortcuts are grouped by the part of the workspace that
+                      owns them, and any of them can be changed. A key can mean
+                      one thing per context: in a sketch, C draws a circle; in
+                      View mode, M measures. Keys pause while you type or while
+                      Settings is open. These preferences follow your account,
+                      never a project.
+                    </p>
+                  </span>
+                </header>
+                <KeymapEditor
+                  overrides={settings.keymap.overrides}
+                  onChange={(overrides) =>
+                    onChange({ ...settings, keymap: { overrides } })
+                  }
+                />
+              </section>
+              <ControlReferenceCollection
+                icon={<Keyboard size={18} aria-hidden="true" />}
+                title="Fixed keys"
+                description="Escape always steps back, Enter confirms, Tab moves focus and Delete removes the selection; these keep one meaning everywhere and cannot be reassigned. While a command waits for a value, digits type it."
+                groups={FIXED_KEYBOARD_GROUPS}
+              />
+              <ControlReferenceCollection
+                icon={<MousePointer2 size={18} aria-hidden="true" />}
+                title="Mouse & pointer"
+                description="Directional gestures matter: selection-box behavior changes with drag direction."
+                groups={POINTER_CONTROL_GROUPS}
+              />
+            </Section>
+          )}
+
           {active === 'sketching' && anyMatch && (
             <Section
-              title="Sketching & snapping"
+              title="Sketching"
               intro="Grid placement, geometry snapping, and temporary inferencing are independent. Stored dimensions remain exact document values."
             >
+              <Subhead>Grid</Subhead>
               <SettingRow
                 title="Show sketch grid"
                 description="Display an adaptive grid on the active sketch plane."
@@ -1244,6 +1309,24 @@ export function SettingsPage({
                 />
               </SettingRow>
               <SettingRow
+                title="Linear snap"
+                description="Increment in the current document unit."
+                scope="This device"
+              >
+                <NumberSetting
+                  {...APP_SETTINGS_NUMBER_BOUNDS.linearSnap}
+                  step={0.1}
+                  value={settings.sketching.linearSnap}
+                  label="Linear snap increment"
+                  onCommit={(linearSnap) =>
+                    patch({
+                      sketching: { ...settings.sketching, linearSnap }
+                    })
+                  }
+                />
+              </SettingRow>
+              <Subhead>Snapping</Subhead>
+              <SettingRow
                 title="Geometry snapping"
                 description="Snap to exact origins, endpoints, midpoints, centers, quadrants, and intersections."
                 scope="This device"
@@ -1257,38 +1340,6 @@ export function SettingsPage({
                         ...settings.sketching,
                         geometrySnapEnabled
                       }
-                    })
-                  }
-                />
-              </SettingRow>
-              <SettingRow
-                title="Automatic inferencing"
-                description="Offer horizontal and vertical alignment while drawing. Hold Shift to suppress it temporarily."
-                scope="This device"
-              >
-                <Toggle
-                  checked={settings.sketching.inferenceEnabled}
-                  label="Automatic inferencing"
-                  onChange={(inferenceEnabled) =>
-                    patch({
-                      sketching: { ...settings.sketching, inferenceEnabled }
-                    })
-                  }
-                />
-              </SettingRow>
-              <SettingRow
-                title="Linear snap"
-                description="Increment in the current document unit."
-                scope="This device"
-              >
-                <NumberSetting
-                  {...APP_SETTINGS_NUMBER_BOUNDS.linearSnap}
-                  step={0.1}
-                  value={settings.sketching.linearSnap}
-                  label="Linear snap increment"
-                  onCommit={(linearSnap) =>
-                    patch({
-                      sketching: { ...settings.sketching, linearSnap }
                     })
                   }
                 />
@@ -1311,36 +1362,16 @@ export function SettingsPage({
                 />
               </SettingRow>
               <SettingRow
-                title="Angular snap"
-                description="Reserved for rotate and future sketch constraint tools."
-                scope="Input default"
-              >
-                <NumberSetting
-                  {...APP_SETTINGS_NUMBER_BOUNDS.angleSnap}
-                  unit="°"
-                  value={settings.sketching.angleSnap}
-                  label="Angular snap increment"
-                  onCommit={(angleSnap) =>
-                    patch({
-                      sketching: { ...settings.sketching, angleSnap }
-                    })
-                  }
-                />
-              </SettingRow>
-              <SettingRow
-                title="Direct manipulation (experimental)"
-                description="Selection-first editing: click a face to arm an offset handle and drag it on the model."
+                title="Automatic inferencing"
+                description="Offer horizontal and vertical alignment while drawing. Hold Shift to suppress it temporarily."
                 scope="This device"
               >
                 <Toggle
-                  checked={settings.experiments.directManipulation}
-                  label="Direct manipulation"
-                  onChange={(directManipulation) =>
+                  checked={settings.sketching.inferenceEnabled}
+                  label="Automatic inferencing"
+                  onChange={(inferenceEnabled) =>
                     patch({
-                      experiments: {
-                        ...settings.experiments,
-                        directManipulation
-                      }
+                      sketching: { ...settings.sketching, inferenceEnabled }
                     })
                   }
                 />
@@ -1348,10 +1379,10 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'files' && anyMatch && (
+          {active === 'saving' && anyMatch && (
             <Section
-              title="Files & autosave"
-              intro="Recovery behavior is visible here, but durability protections are not optional toggles."
+              title="Saving"
+              intro="Local saves are always on and are not an optional toggle. Cloud copies of projects your account holds are yours to tune."
             >
               <SettingRow
                 title="Local autosave"
@@ -1408,41 +1439,6 @@ export function SettingsPage({
                 <span className="settings-state">
                   {cloudFunctionsEnabled ? 'Manual' : 'Disabled'}
                 </span>
-              </SettingRow>
-              <SettingRow
-                title="Account storage"
-                description={
-                  cloudFunctionsEnabled
-                    ? storageDescription(storageUsage)
-                    : 'Account storage is not contacted while cloud features are disabled.'
-                }
-                scope="Account"
-              >
-                <span className="settings-state">
-                  {storageUsage
-                    ? formatBytes(
-                        storageUsage.documentBytes + storageUsage.revisionBytes
-                      )
-                    : '—'}
-                </span>
-              </SettingRow>
-              <SettingRow
-                title="Cloud file storage"
-                description="Stored imports and exports count toward the project owner's allowance. Existing files remain available if the account exceeds its allowance."
-                scope="Account"
-              >
-                <span className="settings-state">
-                  {storageUsage
-                    ? `${formatBytes(storageUsage.artifactBytes)} of ${formatBytes(storageUsage.artifactLimitBytes)}`
-                    : '—'}
-                </span>
-              </SettingRow>
-              <SettingRow
-                title="Exports"
-                description="Exports are generated and validated by the same browser geometry worker as the viewport."
-                scope="Exact pipeline"
-              >
-                <Box size={16} aria-hidden="true" />
               </SettingRow>
             </Section>
           )}
@@ -1762,12 +1758,18 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'account' && cloudFunctionsEnabled && anyMatch && (
+          {active === 'account' && anyMatch && (
             <Section
-              title="Account & collaboration"
+              title="Account"
               intro="The CAD workspace stays local and usable without an account. Sign in only when you want a cloud profile."
             >
-              {projectInvitationPending ? (
+              {cloudFunctionsEnabled ? null : (
+                <div className="settings-warning" role="status">
+                  Cloud features are off on this device. Turn them on to sign
+                  in, share projects, or see your storage.
+                </div>
+              )}
+              {cloudFunctionsEnabled && projectInvitationPending ? (
                 <div
                   className="settings-warning settings-sign-in-warning"
                   role={projectInvitationError ? 'alert' : 'status'}
@@ -1789,404 +1791,398 @@ export function SettingsPage({
                   </button>
                 </div>
               ) : null}
+              <Subhead>Cloud</Subhead>
               <SettingRow
-                title="Project sharing"
-                description="Allow invitations and live collaboration. Turning this off stops collaboration connections; cloud autosave remains separate."
-                scope="Account preference"
+                title="Cloud features"
+                description="When off, OpenZCAD blocks account, sync, collaboration, artifact archive, and AI requests. Local modeling, autosave, imports, and exports keep working."
+                scope="This device"
               >
                 <Toggle
-                  checked={settings.collaboration.enabled}
-                  label="Project sharing"
-                  onChange={(enabled) => patchCollaboration({ enabled })}
+                  checked={cloudFunctionsEnabled}
+                  label="Cloud features"
+                  onChange={onCloudFunctionsEnabledChange}
                 />
               </SettingRow>
-              <SettingRow
-                title="Personal information"
-                description="Names and emails start hidden for screenshots. Showing them here also shows them in project sharing until the page reloads."
-                scope="This session"
-              >
-                <PersonalInfoToggle
-                  visible={personalInfoVisible}
-                  onChange={setPersonalInfoVisible}
-                />
-              </SettingRow>
-
-              {session ? (
+              {cloudFunctionsEnabled ? (
                 <>
-                  <SettingRow
-                    title={
-                      personalInfoVisible ? session.displayName : 'Name hidden'
-                    }
-                    description={
-                      personalInfoVisible
-                        ? (session.email ?? session.userId)
-                        : 'Email hidden'
-                    }
-                    scope={
-                      session.mode === 'email-code'
-                        ? 'Email profile'
-                        : 'Development'
-                    }
-                  >
-                    <button
-                      className="secondary"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void onLogout().catch(() => undefined)}
-                    >
-                      <LogOut size={14} aria-hidden="true" />
-                      Sign out
-                    </button>
-                  </SettingRow>
-                  <SettingRow
-                    title="Membership"
-                    description={
-                      session.entitlements
-                        ? `${session.entitlements.projectLimit.toLocaleString()} cloud projects · ${formatBytes(session.entitlements.projectStorageLimitBytes)} cloud project storage · ${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit} hosted AI requests per ${session.entitlements.ai.windowSeconds / 60} minutes · ${session.entitlements.ai.costLimitUnits} weighted AI units per window · ${session.entitlements.ai.concurrencyLimit} concurrent requests. Hosted AI remains subject to service availability and deployment budgets.`
-                        : 'Membership limits are available after refreshing your account connection.'
-                    }
-                    scope="Account"
-                  >
-                    <span className="settings-state">
-                      {session.entitlements?.tier === 'premium'
-                        ? 'Premium'
-                        : 'Free'}
-                    </span>
-                  </SettingRow>
-                  {desktopAuthorizationAttempt ? (
-                    <div
-                      className={
-                        desktopAuthorizationApproved
-                          ? 'settings-warning settings-success'
-                          : 'settings-warning settings-sign-in-warning'
-                      }
-                      role="status"
-                    >
-                      <span>
-                        {desktopAuthorizationApproved
-                          ? 'OpenZCAD for macOS is connected. You can return to the app.'
-                          : 'Enter the 8-character code shown in your OpenZCAD for macOS window before connecting this cloud profile.'}
-                      </span>
-                      {!desktopAuthorizationApproved ? (
-                        <>
-                          <label className="settings-field settings-field-inline">
-                            <span>Desktop code</span>
-                            <input
-                              type="text"
-                              value={desktopAuthorizationCode}
-                              inputMode="text"
-                              autoComplete="one-time-code"
-                              maxLength={11}
-                              placeholder="ABCD1234"
-                              onChange={(event) =>
-                                onDesktopAuthorizationCodeChange(
-                                  event.currentTarget.value.toUpperCase()
-                                )
-                              }
-                            />
-                          </label>
-                          <button
-                            className="primary"
-                            type="button"
-                            disabled={
-                              busy || desktopAuthorizationCode.trim().length < 8
-                            }
-                            onClick={() =>
-                              void onApproveDesktopLogin().catch(
-                                () => undefined
-                              )
-                            }
-                          >
-                            <LogIn size={14} aria-hidden="true" />
-                            Continue in OpenZCAD
-                          </button>
-                        </>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </>
-              ) : (
-                <>
-                  <SettingRow
-                    title="Cloud profile"
-                    description="Your projects and device settings remain available locally when signed out."
-                    scope="Optional"
-                  >
-                    <CircleUserRound size={18} aria-hidden="true" />
-                  </SettingRow>
-                  {authConfigStatus === 'loading' ? (
-                    <div className="settings-warning" role="status">
-                      Checking whether email sign-in is available. Device
-                      settings and local CAD projects remain available.
-                    </div>
-                  ) : authConfigStatus === 'unavailable' ? (
-                    <div
-                      className="settings-warning settings-sign-in-warning"
-                      role="alert"
-                    >
-                      <span>
-                        Beta sign-in configuration could not be reached. Check
-                        the connection or retry; local CAD remains available.
-                      </span>
-                      <button
-                        className="secondary"
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void onRefreshAuthConfig()}
+                  <Subhead>Profile</Subhead>
+                  {session ? (
+                    <>
+                      <SettingRow
+                        title={
+                          personalInfoVisible
+                            ? session.displayName
+                            : 'Name hidden'
+                        }
+                        description={
+                          personalInfoVisible
+                            ? (session.email ?? session.userId)
+                            : 'Email hidden'
+                        }
+                        scope={
+                          session.mode === 'email-code'
+                            ? 'Email profile'
+                            : 'Development'
+                        }
                       >
-                        <RefreshCcw size={13} aria-hidden="true" />
-                        Retry
-                      </button>
-                    </div>
-                  ) : desktopApp ? (
-                    authConfig?.desktopAuthEnabled ? (
-                      <div className="settings-auth-form">
-                        <span>
-                          <strong>Sign in with your browser</strong>
-                          <small>
-                            Turnstile and the email code stay in your browser.
-                            macOS stores only the rotating refresh credential in
-                            Keychain.
-                          </small>
+                        <button
+                          className="secondary"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void onLogout().catch(() => undefined)}
+                        >
+                          <LogOut size={14} aria-hidden="true" />
+                          Sign out
+                        </button>
+                      </SettingRow>
+                      <SettingRow
+                        title="Membership"
+                        description={
+                          session.entitlements
+                            ? `${session.entitlements.projectLimit.toLocaleString()} cloud projects · ${formatBytes(session.entitlements.projectStorageLimitBytes)} cloud project storage · ${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit} hosted AI requests per ${session.entitlements.ai.windowSeconds / 60} minutes · ${session.entitlements.ai.costLimitUnits} weighted AI units per window · ${session.entitlements.ai.concurrencyLimit} concurrent requests. Hosted AI remains subject to service availability and deployment budgets.`
+                            : 'Membership limits are available after refreshing your account connection.'
+                        }
+                        scope="Account"
+                      >
+                        <span className="settings-state">
+                          {session.entitlements?.tier === 'premium'
+                            ? 'Premium'
+                            : 'Free'}
                         </span>
-                        <div className="settings-auth-controls">
-                          <button
-                            className="primary"
-                            type="button"
-                            disabled={busy}
-                            onClick={() =>
-                              void onStartDesktopLogin().catch(() => undefined)
-                            }
-                          >
-                            <LogIn size={14} aria-hidden="true" />
-                            Continue in browser
-                          </button>
+                      </SettingRow>
+                      {desktopAuthorizationAttempt ? (
+                        <div
+                          className={
+                            desktopAuthorizationApproved
+                              ? 'settings-warning settings-success'
+                              : 'settings-warning settings-sign-in-warning'
+                          }
+                          role="status"
+                        >
+                          <span>
+                            {desktopAuthorizationApproved
+                              ? 'OpenZCAD for macOS is connected. You can return to the app.'
+                              : 'Enter the 8-character code shown in your OpenZCAD for macOS window before connecting this cloud profile.'}
+                          </span>
+                          {!desktopAuthorizationApproved ? (
+                            <>
+                              <label className="settings-field settings-field-inline">
+                                <span>Desktop code</span>
+                                <input
+                                  type="text"
+                                  value={desktopAuthorizationCode}
+                                  inputMode="text"
+                                  autoComplete="one-time-code"
+                                  maxLength={11}
+                                  placeholder="ABCD1234"
+                                  onChange={(event) =>
+                                    onDesktopAuthorizationCodeChange(
+                                      event.currentTarget.value.toUpperCase()
+                                    )
+                                  }
+                                />
+                              </label>
+                              <button
+                                className="primary"
+                                type="button"
+                                disabled={
+                                  busy ||
+                                  desktopAuthorizationCode.trim().length < 8
+                                }
+                                onClick={() =>
+                                  void onApproveDesktopLogin().catch(
+                                    () => undefined
+                                  )
+                                }
+                              >
+                                <LogIn size={14} aria-hidden="true" />
+                                Continue in OpenZCAD
+                              </button>
+                            </>
+                          ) : null}
                         </div>
-                      </div>
-                    ) : (
-                      <div className="settings-warning" role="status">
-                        Desktop sign-in isn’t available on this server yet.
-                        Device settings and local CAD projects remain available.
-                      </div>
-                    )
-                  ) : authConfig?.emailCodeEnabled &&
-                    authConfig.turnstileSiteKey ? (
-                    loginChallengeId ? (
-                      <form
-                        className="settings-auth-form"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          void onVerifyLoginCode(
-                            loginChallengeId,
-                            loginCode.trim()
-                          ).catch(() => undefined);
-                        }}
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <SettingRow
+                        title="Cloud profile"
+                        description="Your projects and device settings remain available locally when signed out."
+                        scope="Optional"
                       >
-                        <span>
-                          <strong>Enter the email code</strong>
-                          <small>
-                            We sent a six-digit code to{' '}
-                            {personalInfoVisible
-                              ? loginEmail
-                              : 'your email address'}
-                            . It expires in 10 minutes.
-                          </small>
-                        </span>
-                        <div className="settings-auth-controls">
-                          <input
-                            className="mono"
-                            value={loginCode}
-                            inputMode="numeric"
-                            autoComplete="one-time-code"
-                            pattern="[0-9]{6}"
-                            aria-label="Email sign-in code"
-                            placeholder="000000"
-                            // No maxLength: it cuts a pasted " 730418" before
-                            // the digit filter runs and drops the last digit.
-                            onChange={(event) =>
-                              setLoginCode(
-                                event.target.value
-                                  .replace(/\D/g, '')
-                                  .slice(0, 6)
-                              )
-                            }
-                          />
-                          <button
-                            className="primary"
-                            type="submit"
-                            disabled={busy || loginCode.length !== 6}
-                          >
-                            <LogIn size={14} aria-hidden="true" />
-                            Sign in
-                          </button>
+                        <CircleUserRound size={18} aria-hidden="true" />
+                      </SettingRow>
+                      {authConfigStatus === 'loading' ? (
+                        <div className="settings-warning" role="status">
+                          Checking whether email sign-in is available. Device
+                          settings and local CAD projects remain available.
+                        </div>
+                      ) : authConfigStatus === 'unavailable' ? (
+                        <div
+                          className="settings-warning settings-sign-in-warning"
+                          role="alert"
+                        >
+                          <span>
+                            Beta sign-in configuration could not be reached.
+                            Check the connection or retry; local CAD remains
+                            available.
+                          </span>
                           <button
                             className="secondary"
                             type="button"
                             disabled={busy}
-                            onClick={() => {
-                              setLoginChallengeId(null);
-                              setLoginCode('');
+                            onClick={() => void onRefreshAuthConfig()}
+                          >
+                            <RefreshCcw size={13} aria-hidden="true" />
+                            Retry
+                          </button>
+                        </div>
+                      ) : desktopApp ? (
+                        authConfig?.desktopAuthEnabled ? (
+                          <div className="settings-auth-form">
+                            <span>
+                              <strong>Sign in with your browser</strong>
+                              <small>
+                                Turnstile and the email code stay in your
+                                browser. macOS stores only the rotating refresh
+                                credential in Keychain.
+                              </small>
+                            </span>
+                            <div className="settings-auth-controls">
+                              <button
+                                className="primary"
+                                type="button"
+                                disabled={busy}
+                                onClick={() =>
+                                  void onStartDesktopLogin().catch(
+                                    () => undefined
+                                  )
+                                }
+                              >
+                                <LogIn size={14} aria-hidden="true" />
+                                Continue in browser
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="settings-warning" role="status">
+                            Desktop sign-in isn’t available on this server yet.
+                            Device settings and local CAD projects remain
+                            available.
+                          </div>
+                        )
+                      ) : authConfig?.emailCodeEnabled &&
+                        authConfig.turnstileSiteKey ? (
+                        loginChallengeId ? (
+                          <form
+                            className="settings-auth-form"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              void onVerifyLoginCode(
+                                loginChallengeId,
+                                loginCode.trim()
+                              ).catch(() => undefined);
                             }}
                           >
-                            Use another email
-                          </button>
-                        </div>
-                      </form>
-                    ) : (
-                      <form
-                        className="settings-auth-form"
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          void onRequestLoginCode(
-                            loginEmail.trim(),
-                            turnstileToken
-                          )
-                            .then((response) =>
-                              setLoginChallengeId(response.challengeId)
-                            )
-                            .catch(() => undefined)
-                            .finally(() => {
-                              setTurnstileToken('');
-                              setTurnstileReset((value) => value + 1);
-                            });
-                        }}
-                      >
-                        <span>
-                          <strong>Email sign-in</strong>
-                          <small>
-                            No password required. We will send a single-use
-                            code.
-                          </small>
-                        </span>
-                        <div className="settings-auth-controls">
-                          <label>
-                            <span>Email</span>
-                            <PrivateEmailInput
-                              visible={personalInfoVisible}
-                              value={loginEmail}
-                              autoComplete="email"
-                              aria-label="Email address"
-                              placeholder="you@example.com"
-                              onChange={(event) =>
-                                setLoginEmail(event.target.value)
-                              }
-                            />
-                          </label>
-                          <TurnstileWidget
-                            siteKey={authConfig.turnstileSiteKey}
-                            resetSignal={turnstileReset}
-                            onToken={setTurnstileToken}
-                          />
-                          <button
-                            className="primary"
-                            type="submit"
-                            disabled={
-                              busy || !loginEmail.trim() || !turnstileToken
-                            }
+                            <span>
+                              <strong>Enter the email code</strong>
+                              <small>
+                                We sent a six-digit code to{' '}
+                                {personalInfoVisible
+                                  ? loginEmail
+                                  : 'your email address'}
+                                . It expires in 10 minutes.
+                              </small>
+                            </span>
+                            <div className="settings-auth-controls">
+                              <input
+                                className="mono"
+                                value={loginCode}
+                                inputMode="numeric"
+                                autoComplete="one-time-code"
+                                pattern="[0-9]{6}"
+                                aria-label="Email sign-in code"
+                                placeholder="000000"
+                                // No maxLength: it cuts a pasted " 730418" before
+                                // the digit filter runs and drops the last digit.
+                                onChange={(event) =>
+                                  setLoginCode(
+                                    event.target.value
+                                      .replace(/\D/g, '')
+                                      .slice(0, 6)
+                                  )
+                                }
+                              />
+                              <button
+                                className="primary"
+                                type="submit"
+                                disabled={busy || loginCode.length !== 6}
+                              >
+                                <LogIn size={14} aria-hidden="true" />
+                                Sign in
+                              </button>
+                              <button
+                                className="secondary"
+                                type="button"
+                                disabled={busy}
+                                onClick={() => {
+                                  setLoginChallengeId(null);
+                                  setLoginCode('');
+                                }}
+                              >
+                                Use another email
+                              </button>
+                            </div>
+                          </form>
+                        ) : (
+                          <form
+                            className="settings-auth-form"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              void onRequestLoginCode(
+                                loginEmail.trim(),
+                                turnstileToken
+                              )
+                                .then((response) =>
+                                  setLoginChallengeId(response.challengeId)
+                                )
+                                .catch(() => undefined)
+                                .finally(() => {
+                                  setTurnstileToken('');
+                                  setTurnstileReset((value) => value + 1);
+                                });
+                            }}
                           >
-                            <Mail size={14} aria-hidden="true" />
-                            Email me a code
-                          </button>
+                            <span>
+                              <strong>Email sign-in</strong>
+                              <small>
+                                No password required. We will send a single-use
+                                code.
+                              </small>
+                            </span>
+                            <div className="settings-auth-controls">
+                              <label>
+                                <span>Email</span>
+                                <PrivateEmailInput
+                                  visible={personalInfoVisible}
+                                  value={loginEmail}
+                                  autoComplete="email"
+                                  aria-label="Email address"
+                                  placeholder="you@example.com"
+                                  onChange={(event) =>
+                                    setLoginEmail(event.target.value)
+                                  }
+                                />
+                              </label>
+                              <TurnstileWidget
+                                siteKey={authConfig.turnstileSiteKey}
+                                resetSignal={turnstileReset}
+                                onToken={setTurnstileToken}
+                              />
+                              <button
+                                className="primary"
+                                type="submit"
+                                disabled={
+                                  busy || !loginEmail.trim() || !turnstileToken
+                                }
+                              >
+                                <Mail size={14} aria-hidden="true" />
+                                Email me a code
+                              </button>
+                            </div>
+                          </form>
+                        )
+                      ) : (
+                        <div className="settings-warning" role="status">
+                          Email sign-in isn’t available on this server yet.
+                          Device settings and local CAD projects remain
+                          available.
                         </div>
-                      </form>
-                    )
-                  ) : (
-                    <div className="settings-warning" role="status">
-                      Email sign-in isn’t available on this server yet. Device
-                      settings and local CAD projects remain available.
-                    </div>
+                      )}
+                    </>
                   )}
+                  <SettingRow
+                    title="Personal information"
+                    description="Names and emails start hidden for screenshots. Showing them here also shows them in project sharing until the page reloads."
+                    scope="This session"
+                  >
+                    <PersonalInfoToggle
+                      visible={personalInfoVisible}
+                      onChange={setPersonalInfoVisible}
+                    />
+                  </SettingRow>
+                  <SettingRow
+                    title="Preference synchronization"
+                    description="Non-secret preferences can follow this account; local persistence remains the offline fallback."
+                    scope="Account"
+                  >
+                    <span
+                      className={
+                        session && accountState
+                          ? 'settings-state good'
+                          : 'settings-state warning'
+                      }
+                    >
+                      {session && accountState?.synced
+                        ? 'Available'
+                        : session
+                          ? 'Ready to save'
+                          : 'Device only'}
+                    </span>
+                  </SettingRow>
+                  <Subhead>Sharing</Subhead>
+                  <SettingRow
+                    title="Project sharing"
+                    description="Allow invitations and live collaboration. Turning this off stops collaboration connections; cloud autosave remains separate."
+                    scope="Account preference"
+                  >
+                    <Toggle
+                      checked={settings.collaboration.enabled}
+                      label="Project sharing"
+                      onChange={(enabled) => patchCollaboration({ enabled })}
+                    />
+                  </SettingRow>
+                  <Subhead>Storage</Subhead>
+                  <SettingRow
+                    title="Account storage"
+                    description={
+                      cloudFunctionsEnabled
+                        ? storageDescription(storageUsage)
+                        : 'Account storage is not contacted while cloud features are disabled.'
+                    }
+                    scope="Account"
+                  >
+                    <span className="settings-state">
+                      {storageUsage
+                        ? formatBytes(
+                            storageUsage.documentBytes +
+                              storageUsage.revisionBytes
+                          )
+                        : '—'}
+                    </span>
+                  </SettingRow>
+                  <SettingRow
+                    title="Cloud file storage"
+                    description="Stored imports and exports count toward the project owner's allowance. Existing files remain available if the account exceeds its allowance."
+                    scope="Account"
+                  >
+                    <span className="settings-state">
+                      {storageUsage
+                        ? `${formatBytes(storageUsage.artifactBytes)} of ${formatBytes(storageUsage.artifactLimitBytes)}`
+                        : '—'}
+                    </span>
+                  </SettingRow>
                 </>
-              )}
-              <SettingRow
-                title="Preference synchronization"
-                description="Non-secret preferences can follow this account; local persistence remains the offline fallback."
-                scope="Account"
-              >
-                <span
-                  className={
-                    session && accountState
-                      ? 'settings-state good'
-                      : 'settings-state warning'
-                  }
-                >
-                  {session && accountState?.synced
-                    ? 'Available'
-                    : session
-                      ? 'Ready to save'
-                      : 'Device only'}
-                </span>
-              </SettingRow>
-            </Section>
-          )}
-
-          {active === 'shortcuts' && anyMatch && (
-            <Section
-              title="Controls & shortcuts"
-              intro="A complete reference for keyboard commands, viewport navigation, selection, sketching, and direct modeling."
-              wide
-            >
-              {/* One header for the keyboard half. A banner above it used to
-                  repeat the keyboard icon with its own line of guidance, so
-                  the page opened on two stacked headers. */}
-              <section className="settings-control-collection">
-                <header>
-                  <span className="settings-control-collection-icon">
-                    <Keyboard size={18} aria-hidden="true" />
-                  </span>
-                  <span>
-                    <h3>Keyboard</h3>
-                    <p>
-                      Shortcuts are grouped by the part of the workspace that
-                      owns them, and any of them can be changed. A key can mean
-                      one thing per context: in a sketch, C draws a circle; in
-                      View mode, M measures. Keys pause while you type or while
-                      Settings is open. These preferences follow your account,
-                      never a project.
-                    </p>
-                  </span>
-                </header>
-                <KeymapEditor
-                  overrides={settings.keymap.overrides}
-                  onChange={(overrides) =>
-                    onChange({ ...settings, keymap: { overrides } })
-                  }
-                />
-              </section>
-              <ControlReferenceCollection
-                icon={<Keyboard size={18} aria-hidden="true" />}
-                title="Fixed keys"
-                description="Escape always steps back, Enter confirms, Tab moves focus and Delete removes the selection; these keep one meaning everywhere and cannot be reassigned. While a command waits for a value, digits type it."
-                groups={FIXED_KEYBOARD_GROUPS}
-              />
-              <ControlReferenceCollection
-                icon={<MousePointer2 size={18} aria-hidden="true" />}
-                title="Mouse & pointer"
-                description="Directional gestures matter: selection-box behavior changes with drag direction."
-                groups={POINTER_CONTROL_GROUPS}
-              />
+              ) : null}
             </Section>
           )}
 
           {active === 'privacy' && anyMatch && (
             <Section
               title="Privacy & data"
-              intro="Reset this device's settings and permanently remove your cloud data. Local projects are managed from the Trash on the start screen, and local and cloud copies remain separate."
+              intro="Choose what leaves this device, and permanently remove your cloud data. Local projects are managed from the Trash on the start screen, and local and cloud copies remain separate."
             >
-              <SettingRow
-                title="Reset application settings"
-                description="Restore defaults on this device. Projects and their revision history are not deleted."
-                scope="This device"
-              >
-                <button
-                  className="danger-ghost"
-                  type="button"
-                  onClick={onReset}
-                >
-                  <RefreshCcw size={14} aria-hidden="true" />
-                  Reset settings
-                </button>
-              </SettingRow>
+              <Subhead>Analytics</Subhead>
               <SettingRow
                 title="Optional usage analytics"
                 description={
@@ -2204,12 +2200,30 @@ export function SettingsPage({
                   <AnalyticsConsent />
                 )}
               </SettingRow>
-              {session && !desktopApp && <SettingRow title="Cloud account statistics" description="Separately allow hourly aggregate account, owned-project, revision and known storage-byte snapshots for 30 days, across your devices. Only opted-in accounts are included. No account or project identifiers leave OpenZCAD. Includes retained trash and storage metadata, never model contents. Withdraw here at any time; published aggregates remain up to 90 days. This account-wide permission is separate from browser DNT/GPC and this device’s cloud switch." scope="This account">
-                {cloudFunctionsEnabled ? <CloudStatisticsConsent key={session.userId} accountKey={session.userId} /> : <p className="settings-card-action-note">Enable cloud features to manage this online permission. An existing grant remains active until withdrawn or its 30-day expiry.</p>}
-              </SettingRow>}
+              {session && !desktopApp && (
+                <SettingRow
+                  title="Cloud account statistics"
+                  description="Separately allow hourly aggregate account, owned-project, revision and known storage-byte snapshots for 30 days, across your devices. Only opted-in accounts are included. No account or project identifiers leave OpenZCAD. Includes retained trash and storage metadata, never model contents. Withdraw here at any time; published aggregates remain up to 90 days. This account-wide permission is separate from browser DNT/GPC and this device’s cloud switch."
+                  scope="This account"
+                >
+                  {cloudFunctionsEnabled ? (
+                    <CloudStatisticsConsent
+                      key={session.userId}
+                      accountKey={session.userId}
+                    />
+                  ) : (
+                    <p className="settings-card-action-note">
+                      Enable cloud features to manage this online permission. An
+                      existing grant remains active until withdrawn or its
+                      30-day expiry.
+                    </p>
+                  )}
+                </SettingRow>
+              )}
+              <Subhead>Your data</Subhead>
               <SettingRow
                 title="Local project data"
-                description="Local projects stay in this browser's storage. Delete them from the start screen; the cloud actions below never touch projects or settings on this device."
+                description="Local projects stay in this browser's storage. Delete them from the Trash on the start screen. The cloud deletions below never touch projects or settings on this device."
                 scope="This device"
               >
                 <ShieldCheck size={17} aria-hidden="true" />
@@ -2290,9 +2304,29 @@ export function SettingsPage({
 
           {active === 'advanced' && anyMatch && (
             <Section
-              title="Advanced & diagnostics"
-              intro="These architectural guarantees are intentionally visible and non-configurable."
+              title="Advanced"
+              intro="An editing fallback, the architectural guarantees that are intentionally visible and non-configurable, and a way back to the defaults."
             >
+              <Subhead>Editing</Subhead>
+              <SettingRow
+                title="Direct manipulation"
+                description="Selection-first editing: click a face to arm an offset handle and drag it on the model. Turn this off to fall back to the earlier editing behavior."
+                scope="This device"
+              >
+                <Toggle
+                  checked={settings.experiments.directManipulation}
+                  label="Direct manipulation"
+                  onChange={(directManipulation) =>
+                    patch({
+                      experiments: {
+                        ...settings.experiments,
+                        directManipulation
+                      }
+                    })
+                  }
+                />
+              </SettingRow>
+              <Subhead>Diagnostics</Subhead>
               <SettingRow
                 title="Geometry kernel"
                 description="Exact B-rep rebuilds and exports run in a dedicated browser worker."
@@ -2320,6 +2354,13 @@ export function SettingsPage({
                 <span className="settings-state good">History</span>
               </SettingRow>
               <SettingRow
+                title="Exports"
+                description="Exports are generated and validated by the same browser geometry worker as the viewport."
+                scope="Exact pipeline"
+              >
+                <Box size={16} aria-hidden="true" />
+              </SettingRow>
+              <SettingRow
                 title="Settings schema"
                 description="Versioned independently from the project document schema."
                 scope="Diagnostics"
@@ -2343,6 +2384,21 @@ export function SettingsPage({
                       ? 'Ready'
                       : 'Not ready'}
                 </span>
+              </SettingRow>
+              <Subhead>Reset</Subhead>
+              <SettingRow
+                title="Reset application settings"
+                description="Restore defaults on this device. Projects and their revision history are not deleted."
+                scope="This device"
+              >
+                <button
+                  className="danger-ghost"
+                  type="button"
+                  onClick={onReset}
+                >
+                  <RefreshCcw size={14} aria-hidden="true" />
+                  Reset settings
+                </button>
               </SettingRow>
             </Section>
           )}

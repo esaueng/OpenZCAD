@@ -148,7 +148,7 @@ test('disabling cloud features releases a pending invitation navigation', async 
   try {
     const settings = page.getByRole('dialog', { name: 'Settings' });
     await settings
-      .getByRole('button', { name: 'General', exact: true })
+      .getByRole('button', { name: 'Account', exact: true })
       .click();
     await settings
       .getByRole('checkbox', { name: 'Cloud features', exact: true })
@@ -313,7 +313,7 @@ test('disabling cloud during acceptance releases its busy state across reconnect
   await ownedLocalWorkspace(page);
   const invitation = await heldInvitation(page);
   const settings = page.getByRole('dialog', { name: 'Settings' });
-  await settings.getByRole('button', { name: /^General\b/ }).click();
+  await settings.getByRole('button', { name: /^Account\b/ }).click();
   const cloud = settings.getByRole('checkbox', { name: 'Cloud features' });
   try {
     await cloud.uncheck();

@@ -33,8 +33,25 @@ describe('find a setting', () => {
 
   it('still finds exports by format after the row was renamed', () => {
     for (const query of ['STEP', 'stl', 'exports']) {
-      expect(matches(query)).toContain('files');
+      expect(matches(query)).toContain('advanced');
     }
+  });
+
+  it('finds sections by the names they had before the regroup', () => {
+    expect(matches('shortcuts')).toContain('controls');
+    expect(matches('autosave')).toContain('saving');
+    expect(matches('files')).toContain('saving');
+    expect(matches('scroll wheel')).toEqual(['controls']);
+    expect(matches('reset')).toContain('advanced');
+  });
+
+  it('finds the offline switch while cloud features are off', () => {
+    expect(
+      visibleSettingsSections({
+        cloudFunctionsEnabled: false,
+        query: 'offline'
+      }).map((section) => section.id)
+    ).toEqual(['account']);
   });
 
   it('finds the optional analytics withdrawal control', () => {
@@ -56,6 +73,15 @@ describe('find a setting', () => {
       expect(ids).not.toContain('account');
       expect(ids).not.toContain('assistant');
     }
+  });
+});
+
+describe('sidebar groups', () => {
+  it('runs each group as one unbroken block, Advanced last and ungrouped', () => {
+    const groups = SETTINGS_SECTIONS.map((section) => section.group);
+    const runs = groups.filter((group, index) => group !== groups[index - 1]);
+    expect(runs).toEqual(['Workspace', 'Cloud and data', undefined]);
+    expect(SETTINGS_SECTIONS.at(-1)?.id).toBe('advanced');
   });
 });
 

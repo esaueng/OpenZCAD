@@ -11,9 +11,7 @@ test('a remapped shortcut works, refuses a taken key by name and survives a relo
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
-  await settings
-    .getByRole('button', { name: 'Shortcuts', exact: true })
-    .click();
+  await settings.getByRole('button', { name: 'Controls', exact: true }).click();
   const add = settings.getByRole('button', {
     name: 'Add a shortcut for Toggle the grid'
   });

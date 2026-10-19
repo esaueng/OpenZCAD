@@ -203,6 +203,29 @@
   color: var(--color-accent);
 }
 
+/* The sidebar's group labels: quiet captions over each run of sections, and a
+   plain rule before Advanced, which closes the list without a heading. */
+.settings-nav-group {
+  margin: var(--sp-3) 0 var(--sp-1);
+  padding-inline: var(--sp-2);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.settings-nav-group:first-child {
+  margin-top: 0;
+}
+
+.settings-nav-rule {
+  width: 100%;
+  margin: var(--sp-2) 0;
+  border: 0;
+  border-top: var(--border-thin);
+}
+
 .settings-nav-empty {
   margin: 0;
   padding: var(--sp-2) var(--sp-3);
@@ -287,6 +310,19 @@
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-lg);
+}
+
+/* Splits a long card into named runs of rows (Profile, Storage, ...). */
+.settings-subhead {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-4);
+  color: var(--color-text-subtle);
+  background: var(--color-surface-2);
+  border-bottom: var(--border-thin);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
 }
 
 .settings-cloud-delete-all {
@@ -386,11 +422,18 @@
   display: inline-flex;
 }
 
+/* The invisible checkbox covers the whole switch and sits above it. As a 1px
+   box under the knob, whether a pointer at its centre reached it depended on
+   the row's sub-pixel offset: on some rows the knob took the hit. */
 .settings-toggle input {
   position: absolute;
-  width: 1px;
-  height: 1px;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
   opacity: 0;
+  cursor: inherit;
 }
 
 .settings-toggle span {
@@ -881,6 +924,12 @@
   color: var(--color-text-muted);
 }
 
+/* Controls' navigation rows sit in a collection above the reference; the
+   next collection's top rule already closes the last one. */
+.settings-control-collection > .setting-row:last-child {
+  border-bottom: 0;
+}
+
 @media (max-width: 860px) {
   .settings-topbar-title,
   .settings-save-message,
@@ -944,7 +993,8 @@
   }
 
   .settings-search,
-  .settings-nav nav button span {
+  .settings-nav nav button span,
+  .settings-nav-group {
     display: none;
   }
 
