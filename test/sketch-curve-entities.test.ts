@@ -13,6 +13,7 @@ import {
   splineDerivatives,
   splineDomain,
   splinePoint,
+  splineSelfIntersection,
   splineSubcurve,
   type CurvePoint,
   type SketchRegionObject
@@ -408,6 +409,83 @@ describe('spline regions', () => {
       'self-intersection'
     );
     expect(analysis.profiles).toHaveLength(0);
+  });
+
+  it('finds a small loop inside one cubic span (review case)', () => {
+    // One span crossing itself near t ≈ 0.339 and t ≈ 0.428 — a loop no
+    // coarse chord sampling of the span would see.
+    const loop = [
+      { x: 6.089, y: 8.879 },
+      { x: -4.494, y: 1.869 },
+      { x: 2.642, y: 8.503 },
+      { x: 7.084, y: 5.369 }
+    ];
+    const curve = controlSpline(loop, 3, false);
+    expect(curve.knots).toEqual([0, 0, 0, 0, 1, 1, 1, 1]);
+    const crossing = splineSelfIntersection(curve, 1e-6)!;
+    expect(crossing).not.toBeNull();
+    for (const t of [0.339, 0.428]) {
+      const near = splinePoint(curve, t);
+      expect(Math.hypot(near.x - crossing.x, near.y - crossing.y)).toBeLessThan(
+        0.05
+      );
+    }
+    const analysis = computeSketchProfileAnalysis(
+      [spline('control', loop, false, 3), line(7.084, 5.369, 6.089, 8.879)],
+      resolve
+    );
+    expect(analysis.diagnostics.map((item) => item.code)).toContain(
+      'self-intersection'
+    );
+    expect(analysis.profiles).toHaveLength(0);
+  });
+
+  it('agrees with a dense ground truth on random control splines', () => {
+    // Deterministic pseudo-random polygons; the oracle is a 4000-chord
+    // polyline crossing test, far finer than any loop these can make.
+    let seed = 12345;
+    const random = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    const denseCrosses = (points: CurvePoint[]) => {
+      const n = points.length - 1;
+      for (let i = 0; i < n; i += 1) {
+        for (let j = i + 2; j < n; j += 1) {
+          const a0 = points[i]!;
+          const a1 = points[i + 1]!;
+          const b0 = points[j]!;
+          const b1 = points[j + 1]!;
+          const d =
+            (a1.x - a0.x) * (b1.y - b0.y) - (a1.y - a0.y) * (b1.x - b0.x);
+          if (d === 0) continue;
+          const r =
+            ((b0.x - a0.x) * (b1.y - b0.y) - (b0.y - a0.y) * (b1.x - b0.x)) / d;
+          const q =
+            ((b0.x - a0.x) * (a1.y - a0.y) - (b0.y - a0.y) * (a1.x - a0.x)) / d;
+          if (r > 0 && r < 1 && q > 0 && q < 1) return true;
+        }
+      }
+      return false;
+    };
+    let crossings = 0;
+    for (let trial = 0; trial < 120; trial += 1) {
+      const count = 4 + Math.floor(random() * 3);
+      const polygon = Array.from({ length: count }, () => ({
+        x: random() * 10,
+        y: random() * 10
+      }));
+      const curve = controlSpline(polygon, 3, false);
+      const dense = Array.from({ length: 4001 }, (_, index) =>
+        splinePoint(curve, index / 4000)
+      );
+      const expected = denseCrosses(dense);
+      crossings += expected ? 1 : 0;
+      expect(splineSelfIntersection(curve, 1e-6) !== null).toBe(expected);
+    }
+    // Both outcomes are exercised.
+    expect(crossings).toBeGreaterThan(10);
+    expect(crossings).toBeLessThan(110);
   });
 
   it('keeps fingerprints stable across rebuilds and object order', () => {

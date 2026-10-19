@@ -470,6 +470,219 @@ export function splineBezierSegments(spline: SplineGeometry): CurvePoint[][] {
   return segments;
 }
 
+/** One Bézier piece of a spline over the parameter range `[t0, t1]`. */
+interface BezierPiece {
+  controls: CurvePoint[];
+  t0: number;
+  t1: number;
+}
+
+function splitBezier(piece: BezierPiece): [BezierPiece, BezierPiece] {
+  const left: CurvePoint[] = [];
+  const right: CurvePoint[] = [];
+  let row = piece.controls;
+  while (row.length > 0) {
+    left.push(row[0]!);
+    right.unshift(row[row.length - 1]!);
+    row = row.slice(1).map((point, index) => ({
+      x: (row[index]!.x + point.x) / 2,
+      y: (row[index]!.y + point.y) / 2
+    }));
+  }
+  const middle = (piece.t0 + piece.t1) / 2;
+  return [
+    { controls: left, t0: piece.t0, t1: middle },
+    { controls: right, t0: middle, t1: piece.t1 }
+  ];
+}
+
+function bezierBox(piece: BezierPiece) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const point of piece.controls) {
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/** True when every control point lies within `tolerance` of the chord. */
+function bezierFlat(piece: BezierPiece, tolerance: number): boolean {
+  const a = piece.controls[0]!;
+  const b = piece.controls[piece.controls.length - 1]!;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length = Math.hypot(dx, dy);
+  return piece.controls.every((point) =>
+    length > 0
+      ? Math.abs((point.x - a.x) * dy - (point.y - a.y) * dx) / length <=
+        tolerance
+      : Math.hypot(point.x - a.x, point.y - a.y) <= tolerance
+  );
+}
+
+/** Total absolute turning of a Bézier piece's control polygon, radians. */
+function controlTurning(piece: BezierPiece): number {
+  let total = 0;
+  let previous: CurvePoint | null = null;
+  for (let index = 1; index < piece.controls.length; index += 1) {
+    const a = piece.controls[index - 1]!;
+    const b = piece.controls[index]!;
+    const edge = { x: b.x - a.x, y: b.y - a.y };
+    if (edge.x === 0 && edge.y === 0) {
+      continue;
+    }
+    if (previous) {
+      total += Math.abs(
+        Math.atan2(
+          previous.x * edge.y - previous.y * edge.x,
+          previous.x * edge.x + previous.y * edge.y
+        )
+      );
+    }
+    previous = edge;
+  }
+  return total;
+}
+
+/**
+ * A point where a spline crosses itself, or null.
+ *
+ * Exact recursive subdivision of its Bézier spans, never a fixed sampling:
+ * pieces whose control hulls cannot meet are pruned, and the rest are split
+ * at their parameter midpoint until both are flat to `tolerance`, where the
+ * two chords stand for the curve. So a loop of any size above the tolerance
+ * is found, however few knot spans carry it. Pieces that share a joint (the
+ * neighbours of a split, or a closed spline's seam) do not count their own
+ * common end as a crossing.
+ */
+export function splineSelfIntersection(
+  spline: SplineGeometry,
+  tolerance: number
+): CurvePoint | null {
+  const [start, end] = splineDomain(spline);
+  const breaks = splineBreakpoints(spline);
+  const spans: BezierPiece[] = [];
+  for (let index = 0; index + 1 < breaks.length; index += 1) {
+    spans.push({
+      controls: splineSubcurve(spline, breaks[index]!, breaks[index + 1]!)
+        .controls,
+      t0: breaks[index]!,
+      t1: breaks[index + 1]!
+    });
+  }
+  const MAX_DEPTH = 52;
+  // Which end of `a` it shares with `b`: 1 for a's end, 0 for its start.
+  const sharedEnd = (a: BezierPiece, b: BezierPiece): 0 | 1 | null =>
+    a.t1 === b.t0 || (spline.closed && a.t1 === end && b.t0 === start)
+      ? 1
+      : a.t0 === b.t1 || (spline.closed && a.t0 === start && b.t1 === end)
+        ? 0
+        : null;
+
+  const chordCrossing = (a: BezierPiece, b: BezierPiece): CurvePoint | null => {
+    const a0 = a.controls[0]!;
+    const a1 = a.controls[a.controls.length - 1]!;
+    const b0 = b.controls[0]!;
+    const b1 = b.controls[b.controls.length - 1]!;
+    const rx = a1.x - a0.x;
+    const ry = a1.y - a0.y;
+    const qx = b1.x - b0.x;
+    const qy = b1.y - b0.y;
+    const denominator = rx * qy - ry * qx;
+    if (Math.abs(denominator) < 1e-300) {
+      return null;
+    }
+    const wx = b0.x - a0.x;
+    const wy = b0.y - a0.y;
+    const r = (wx * qy - wy * qx) / denominator;
+    const q = (wx * ry - wy * rx) / denominator;
+    const joint = sharedEnd(a, b);
+    // The common end of two neighbours is a joint, not a crossing.
+    const slack = 1e-9;
+    const rLow = joint === 0 ? slack : -slack;
+    const rHigh = joint === 1 ? 1 - slack : 1 + slack;
+    const qLow = joint === 1 ? slack : -slack;
+    const qHigh = joint === 0 ? 1 - slack : 1 + slack;
+    if (r < rLow || r > rHigh || q < qLow || q > qHigh) {
+      return null;
+    }
+    return { x: a0.x + rx * r, y: a0.y + ry * r };
+  };
+
+  const pair = (
+    a: BezierPiece,
+    b: BezierPiece,
+    depth: number
+  ): CurvePoint | null => {
+    const boxA = bezierBox(a);
+    const boxB = bezierBox(b);
+    if (
+      boxA.maxX + tolerance < boxB.minX ||
+      boxB.maxX + tolerance < boxA.minX ||
+      boxA.maxY + tolerance < boxB.minY ||
+      boxB.maxY + tolerance < boxA.minY
+    ) {
+      return null;
+    }
+    const flatA = bezierFlat(a, tolerance);
+    const flatB = bezierFlat(b, tolerance);
+    if ((flatA && flatB) || depth >= MAX_DEPTH) {
+      return chordCrossing(a, b);
+    }
+    // Split the less flat piece (the longer one when both are curved).
+    const splitA =
+      !flatA &&
+      (flatB ||
+        Math.hypot(boxA.maxX - boxA.minX, boxA.maxY - boxA.minY) >=
+          Math.hypot(boxB.maxX - boxB.minX, boxB.maxY - boxB.minY));
+    if (splitA) {
+      const [left, right] = splitBezier(a);
+      return pair(left, b, depth + 1) ?? pair(right, b, depth + 1);
+    }
+    const [left, right] = splitBezier(b);
+    return pair(a, left, depth + 1) ?? pair(a, right, depth + 1);
+  };
+
+  // A piece crosses itself only through two of its own sub-pieces, and
+  // never when its control polygon turns through less than a half turn:
+  // the curve turns no more than its polygon, and a curve that turns less
+  // than π is simple.
+  const self = (piece: BezierPiece, depth: number): CurvePoint | null => {
+    if (
+      bezierFlat(piece, tolerance) ||
+      controlTurning(piece) < Math.PI ||
+      depth >= MAX_DEPTH
+    ) {
+      return null;
+    }
+    const [left, right] = splitBezier(piece);
+    return (
+      self(left, depth + 1) ??
+      self(right, depth + 1) ??
+      pair(left, right, depth + 1)
+    );
+  };
+
+  for (let i = 0; i < spans.length; i += 1) {
+    const inner = self(spans[i]!, 0);
+    if (inner) {
+      return inner;
+    }
+    for (let j = i + 1; j < spans.length; j += 1) {
+      const crossing = pair(spans[i]!, spans[j]!, 0);
+      if (crossing) {
+        return crossing;
+      }
+    }
+  }
+  return null;
+}
+
 const GAUSS_4 = [
   { x: -0.8611363115940526, w: 0.3478548451374538 },
   { x: -0.3399810435848563, w: 0.6521451548625461 },

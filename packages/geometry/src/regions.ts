@@ -19,6 +19,7 @@ import {
   splineDerivatives,
   splineDomain,
   splinePoint,
+  splineSelfIntersection,
   splineSubcurve,
   type EllipseGeometry,
   type SplineGeometry
@@ -773,7 +774,7 @@ function resolveSketchCurves(
     if (curve.kind !== 'spl' || invalidEntityIds.has(curve.sourceObjectId)) {
       continue;
     }
-    const crossing = splineSelfCrossing(curve, tolerance);
+    const crossing = splineSelfIntersection(curve.spline, tolerance);
     if (!crossing) {
       continue;
     }
@@ -1162,58 +1163,6 @@ function numericIntersections(
     void samples;
   }
   return hits.map(({ pa, pb }) => ({ pa, pb }));
-}
-
-/** A point where a spline crosses itself, or null. */
-function splineSelfCrossing(
-  curve: SplCurve,
-  tolerance: number
-): Vec2Like | null {
-  const { points } = curveSamples(curve, 1 / 3);
-  const count = points.length - 1;
-  for (let i = 0; i < count; i += 1) {
-    const a0 = points[i]!;
-    const a1 = points[i + 1]!;
-    const boxA = bboxOf(a0, a1, 0);
-    for (let j = i + 2; j < count; j += 1) {
-      if (curve.spline.closed && i === 0 && j === count - 1) {
-        continue;
-      }
-      const b0 = points[j]!;
-      const b1 = points[j + 1]!;
-      const boxB = bboxOf(b0, b1, 0);
-      if (
-        boxA.maxX < boxB.minX ||
-        boxB.maxX < boxA.minX ||
-        boxA.maxY < boxB.minY ||
-        boxB.maxY < boxA.minY
-      ) {
-        continue;
-      }
-      const rx = a1.x - a0.x;
-      const ry = a1.y - a0.y;
-      const qx = b1.x - b0.x;
-      const qy = b1.y - b0.y;
-      const denominator = rx * qy - ry * qx;
-      if (Math.abs(denominator) < 1e-300) {
-        continue;
-      }
-      const wx = b0.x - a0.x;
-      const wy = b0.y - a0.y;
-      const r = (wx * qy - wy * qx) / denominator;
-      const q = (wx * ry - wy * rx) / denominator;
-      if (r > 0 && r < 1 && q > 0 && q < 1) {
-        const point = { x: a0.x + rx * r, y: a0.y + ry * r };
-        // Ignore a closed spline's own seam joint.
-        if (
-          Math.hypot(point.x - points[0]!.x, point.y - points[0]!.y) > tolerance
-        ) {
-          return point;
-        }
-      }
-    }
-  }
-  return null;
 }
 
 function segSegIntersections(

@@ -66,6 +66,7 @@ export {
   splineDerivatives,
   splineDomain,
   splinePoint,
+  splineSelfIntersection,
   splineSubcurve,
   type CurvePoint,
   type EllipseGeometry,
