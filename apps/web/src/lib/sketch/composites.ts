@@ -653,31 +653,43 @@ const UNMOVED = 1e-9;
 // Driving sizes: an expression typed into the resize card
 
 /**
- * The commands that make each typed expression drive its size: the size's
- * existing dimension restated with the new value under the same id (so a
- * placed label stays put), or a new dimension. Plain numbers write none:
- * they move the shape once, as a drag does.
+ * The commands that bring a composite's size dimensions in line with its
+ * card. `values` holds every size the card submitted: an expression string
+ * as typed, or a plain number.
+ *
+ * - A size a dimension already drives is restated with the new value under
+ *   the same id, so a placed label stays put. Typing a plain number over a
+ *   driven size therefore keeps it dimensioned, at that number: the
+ *   parameter no longer drives it, and the solver no longer holds the old
+ *   value against the edit.
+ * - An expression on a size nothing drives adds a dimension.
+ * - A plain number on a size nothing drives writes none: it moves the shape
+ *   once, as a drag does.
  */
 export function compositeSizeCommands(
   sketchId: SketchId,
   composite: SketchComposite,
   constraints: readonly SketchConstraint[],
-  expressions: Partial<Record<SketchCompositeSizeKey, string>>,
+  values: Partial<Record<SketchCompositeSizeKey, string | number>>,
   label: string
 ): AnyCommand[] {
   const existing = sketchCompositeSizeDimensions(composite, constraints);
   const commands: AnyCommand[] = [];
-  for (const [key, text] of Object.entries(expressions) as [
+  for (const [key, raw] of Object.entries(values) as [
     SketchCompositeSizeKey,
-    string
+    string | number
   ][]) {
-    const constraint = sketchCompositeSizeDimension(
-      composite,
-      key,
-      text.trim()
-    );
-    if (!constraint) continue;
+    const value = typeof raw === 'string' ? raw.trim() : raw;
     const current = existing[key];
+    if (!current && typeof value === 'number') continue;
+    const constraint = sketchCompositeSizeDimension(composite, key, value);
+    if (!constraint) continue;
+    if (
+      current &&
+      JSON.stringify(current.data) === JSON.stringify(constraint)
+    ) {
+      continue;
+    }
     if (current) {
       commands.push(
         commandFactories.deleteSketchConstraint(

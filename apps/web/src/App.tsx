@@ -14038,12 +14038,13 @@ export function App() {
         ),
         (document, id) => geometry.solveSketch(document, id),
         `Resize ${noun}`,
-        // An expression typed into the card keeps driving its size.
+        // An expression typed into the card keeps driving its size, and a
+        // size already dimensioned takes the card's new value.
         compositeSizeCommands(
           sketchId,
           composite,
           sketch.constraints ?? [],
-          expressions,
+          { ...size, ...expressions },
           `Resize ${noun}`
         )
       );

@@ -134,7 +134,9 @@ async function resize(
   fixture: ReturnType<typeof draw>,
   corners: { x: number; y: number }[],
   circle?: { center: { x: number; y: number }; radius: number },
-  expressions: Partial<Record<'width' | 'height' | 'circumradius', string>> = {}
+  expressions: Partial<
+    Record<'width' | 'height' | 'circumradius', string | number>
+  > = {}
 ) {
   const composite = fixture.sketch().composites![0]!;
   const commands = await sketchEntitiesEditCommands(
@@ -317,6 +319,27 @@ describe('S04 composite drawing on the pinned kernel', () => {
     expect(distances.map((c) => c.constraintId)).toEqual([
       dimension!.constraintId
     ]);
+    // Typed back as a plain number, the dimension keeps its id and takes the
+    // number: the parameter no longer drives it, and the resize lands.
+    await resize(
+      fixture,
+      resizedRectangleCorners(fixture.corners(), 'corner', 25, 12)!,
+      undefined,
+      { width: 25, height: 12 }
+    );
+    expect(
+      fixture
+        .sketch()
+        .constraints!.filter((c) => c.data.constraintKind === 'distance')
+        .map((c) => [c.constraintId, (c.data as { value: unknown }).value])
+    ).toEqual([[dimension!.constraintId, 25]]);
+    expect(rectangleSize(fixture.corners()).width).toBeCloseTo(25, 9);
+    await resize(
+      fixture,
+      resizedRectangleCorners(fixture.corners(), 'corner', 30, 12)!,
+      undefined,
+      { width: 'plate' }
+    );
     // A new parameter value drives the width on the next solve.
     fixture.manager.execute(
       commandFactories.setParameter({ name: 'plate', expression: '42' })
