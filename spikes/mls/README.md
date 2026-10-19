@@ -40,6 +40,15 @@ node spikes/mls/web/run-browsers.mjs --safari
 ```
 
 `--safari-only` skips Chrome and WebKit.
+`--chromium-only` uses the Playwright Chromium installation and skips both
+Google Chrome and WebKit. Set `MLS_SPIKE_RESULTS_DIR` to a directory relative
+to the repository root (or an absolute path) for both runners to preserve a
+new qualification separately from the historical results, for example:
+
+```bash
+MLS_SPIKE_RESULTS_DIR=spikes/mls/results/review-2026-10-19 pnpm exec vitest run --config spikes/mls/harness/vitest.config.mjs
+MLS_SPIKE_RESULTS_DIR=spikes/mls/results/review-2026-10-19 node spikes/mls/web/run-browsers.mjs --chromium-only
+```
 
 `build.sh` needs Rust ≥ 1.88 with the `wasm32-unknown-unknown` target and the
 `wasm-bindgen` CLI 0.2.126. The browser runner uses installed Google Chrome

@@ -1,0 +1,219 @@
+{
+  "summary": {
+    "host": "node v24.14.0",
+    "library": "mls-rs+webcrypto",
+    "failedSteps": [],
+    "medianMs": {
+      "commitCreate": 5.97,
+      "commitProcess": 3.66,
+      "addCommitWithWelcome": 7.94,
+      "welcomeJoin": 3.83,
+      "externalCommit": 8.36
+    },
+    "samples": {
+      "commitCreate": 13,
+      "commitProcess": 57,
+      "welcomeJoin": 7
+    },
+    "sizes": {
+      "commit_path_only": 661,
+      "group_info_with_external_pub": 1329,
+      "key_package": 401,
+      "signature_secret_key": 138,
+      "state_a1_1_member": 2801,
+      "state_a1_3_members": 4319,
+      "welcome_1_joiner": 1067,
+      "welcome_4_member_group": 1722
+    },
+    "epochChecks": 26,
+    "finalEpoch": 32,
+    "persistence": [
+      {
+        "label": "mls-rs/A1",
+        "store": "memory",
+        "stateBytes": 4319,
+        "sealedBytes": 4335,
+        "keyExtractable": false,
+        "exportRefused": true,
+        "roundTripMs": 0.10927700000002005,
+        "identical": true
+      }
+    ]
+  },
+  "report": {
+    "library": "mls-rs+webcrypto",
+    "version": "0.56.0",
+    "crypto": "mls-rs-crypto-webcrypto 0.15.1 (SubtleCrypto)",
+    "cipher_suite": 2,
+    "steps": [
+      {
+        "name": "create + add A2 via Welcome",
+        "ok": true,
+        "detail": "epoch 1, 2 members agree"
+      },
+      {
+        "name": "add B1 with editor role",
+        "ok": true,
+        "detail": "epoch 2, 3 members agree"
+      },
+      {
+        "name": "Update proposal by B1, committed by A1",
+        "ok": true,
+        "detail": "epoch 3, 3 members agree"
+      },
+      {
+        "name": "timed path-only commits",
+        "ok": true,
+        "detail": "12 rounds"
+      },
+      {
+        "name": "timed Welcome joins",
+        "ok": true,
+        "detail": "epoch 25, 3 members agree"
+      },
+      {
+        "name": "policy: editor Add rejected",
+        "ok": true,
+        "detail": "both A devices rejected: MlsRulesError(AnyError(SpikeError(\"role Editor may not send proposal ProposalType(1)\")))"
+      },
+      {
+        "name": "policy: uncertified external commit rejected",
+        "ok": true,
+        "detail": "A1 rejected: IdentityProviderError(AnyError(SpikeError(\"device key is not certified for that user\")))"
+      },
+      {
+        "name": "conflicting commits, loser rebases",
+        "ok": true,
+        "detail": "from epoch 25: stale commit refused, rebased; epoch 27, 3 members agree"
+      },
+      {
+        "name": "state persisted, reloaded, commits again",
+        "ok": true,
+        "detail": "4319 B complete device state; signing key restored from sealed state; epoch 28, 3 members agree"
+      },
+      {
+        "name": "external-commit rejoin of wiped A2",
+        "ok": true,
+        "detail": "epoch 29, 3 members agree"
+      },
+      {
+        "name": "remove A2",
+        "ok": true,
+        "detail": "removal seen by A2: true; epoch 31, 2 members agree"
+      },
+      {
+        "name": "B self-removal (SelfRemove)",
+        "ok": true,
+        "detail": "SelfRemove committed; B1 processed: true; epoch 32, 1 members agree"
+      }
+    ],
+    "commit_create_ms": [
+      10.235738999999995,
+      7.062097000000023,
+      6.372693999999996,
+      5.324900999999983,
+      6.800712999999973,
+      6.4542169999999714,
+      4.506003000000021,
+      7.365640999999982,
+      5.967376999999999,
+      4.2996029999999905,
+      5.6619890000000055,
+      5.899698000000001,
+      3.546057000000019
+    ],
+    "commit_process_ms": [
+      6.99346700000001,
+      5.788829000000021,
+      4.157103000000006,
+      4.032768000000004,
+      4.066501999999986,
+      3.767616000000004,
+      3.376246000000009,
+      3.4214109999999778,
+      3.4376120000000014,
+      3.5339950000000044,
+      3.626769999999965,
+      3.7694400000000314,
+      4.098873000000026,
+      2.931756000000007,
+      3.014571999999987,
+      3.8027020000000107,
+      3.071640000000002,
+      3.750444000000016,
+      4.303379999999947,
+      3.075157000000047,
+      3.5805629999999837,
+      3.4703230000000076,
+      3.1265730000000076,
+      4.727070000000026,
+      2.756984999999986,
+      2.7517950000000155,
+      2.6626960000000395,
+      3.9776129999999625,
+      3.403297000000009,
+      4.684349999999995,
+      4.117799000000048,
+      5.957177999999999,
+      4.067583000000013,
+      3.664911000000018,
+      3.467648000000054,
+      4.1044030000000475,
+      3.956893999999977,
+      5.601664999999969,
+      3.6602430000000368,
+      3.793185000000051,
+      3.3503969999999867,
+      3.2699250000000575,
+      4.1001549999999725,
+      4.437091999999893,
+      3.9201250000000982,
+      3.9527559999999085,
+      2.911687000000029,
+      3.34417499999995,
+      2.889695999999958,
+      2.782493000000045,
+      3.8394119999999248,
+      3.5154489999999896,
+      2.84728599999994,
+      4.908773999999994,
+      4.612102999999934,
+      3.0862879999999677,
+      2.9063370000000077
+    ],
+    "add_commit_ms": [
+      14.62448999999998,
+      9.426729999999992,
+      6.733045000000004,
+      7.937882999999999,
+      7.265051000000028,
+      7.677420999999981,
+      8.018786999999975
+    ],
+    "welcome_join_ms": [
+      6.206259000000017,
+      5.412046000000004,
+      3.7351150000000075,
+      3.8306860000000142,
+      4.177871999999979,
+      3.6095169999999825,
+      3.6981349999999793
+    ],
+    "external_commit_ms": [
+      8.35852900000009
+    ],
+    "sizes": {
+      "commit_path_only": 661,
+      "group_info_with_external_pub": 1329,
+      "key_package": 401,
+      "signature_secret_key": 138,
+      "state_a1_1_member": 2801,
+      "state_a1_3_members": 4319,
+      "welcome_1_joiner": 1067,
+      "welcome_4_member_group": 1722
+    },
+    "epoch_checks": 26,
+    "exporter_sample": "4631842feb512afb",
+    "final_epoch": 32
+  }
+}

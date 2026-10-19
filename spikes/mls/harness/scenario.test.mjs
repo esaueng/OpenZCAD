@@ -1,10 +1,14 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createHooks, installWindowShim, summarize } from './hooks.mjs';
 import { installNodeWebCryptoShim } from './node-webcrypto-shim.mjs';
 
 const PKG = new URL('../pkg/', import.meta.url);
-const RESULTS = new URL('../results/', import.meta.url);
+const RESULTS = process.env.MLS_SPIKE_RESULTS_DIR
+  ? pathToFileURL(`${resolve(process.env.MLS_SPIKE_RESULTS_DIR)}/`)
+  : new URL('../results/', import.meta.url);
 const PROJECT_ID = '0f7c6a52-3d1e-4b8a-9f3e-6c2d1b0a9e87';
 const ROUNDS = Number(process.env.MLS_SPIKE_ROUNDS ?? 12);
 
@@ -60,6 +64,15 @@ describe.each(LIBRARIES)('$dir', ({ dir, name }) => {
       exportRefused: true,
       identical: true
     });
+    if (dir.startsWith('mls-rs')) {
+      const restored = report.steps.find(
+        (s) => s.name === 'state persisted, reloaded, commits again'
+      );
+      expect(restored.detail).toContain(
+        'signing key restored from sealed state'
+      );
+      expect(evidence[0].stateBytes).toBe(report.sizes.state_a1_3_members);
+    }
   });
 
   it('enforces the ADR-024 rejoin rules on external Commits', async () => {
@@ -81,5 +94,12 @@ describe.each(LIBRARIES)('$dir', ({ dir, name }) => {
       "rejoin refused: PSK from before the member's role change",
       'rejoin refused: removed member, PSK from before removal'
     ]);
+    if (dir === 'openmls') {
+      const expired = report.steps.find(
+        (s) => s.name === 'rejoin refused: PSK outside the retention window'
+      );
+      expect(expired.detail).toContain('PskError(KeyNotFound)');
+      expect(expired.detail).not.toContain('policy rejected');
+    }
   });
 });

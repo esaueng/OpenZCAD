@@ -2,16 +2,18 @@
 // Playwright WebKit, optionally collect a real Safari run, and record the
 // lazy-chunk sizes. Run from the repository root after build.sh and the
 // Vite build:
-//   node spikes/mls/web/run-browsers.mjs [--safari] [--rounds 12]
+//   node spikes/mls/web/run-browsers.mjs [--safari | --chromium-only] [--rounds 12]
 import { execFile } from 'node:child_process';
 import { readFile, readdir, writeFile, mkdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { extname, join } from 'node:path';
+import { extname, join, resolve } from 'node:path';
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 import { chromium, webkit } from '@playwright/test';
 
 const DIST = new URL('./dist/', import.meta.url).pathname;
-const RESULTS = new URL('../results/', import.meta.url).pathname;
+const RESULTS = process.env.MLS_SPIKE_RESULTS_DIR
+  ? resolve(process.env.MLS_SPIKE_RESULTS_DIR)
+  : new URL('../results/', import.meta.url).pathname;
 const args = process.argv.slice(2);
 const roundsAt = args.indexOf('--rounds');
 const ROUNDS = roundsAt >= 0 ? Number(args[roundsAt + 1]) : 12;
@@ -91,10 +93,12 @@ console.log(
 // --- Browsers -------------------------------------------------------------
 const browsers = args.includes('--safari-only')
   ? []
-  : [
-      ['chrome', () => chromium.launch({ channel: 'chrome' })],
-      ['webkit', () => webkit.launch()]
-    ];
+  : args.includes('--chromium-only')
+    ? [['chromium', () => chromium.launch()]]
+    : [
+        ['chrome', () => chromium.launch({ channel: 'chrome' })],
+        ['webkit', () => webkit.launch()]
+      ];
 for (const [name, launch] of browsers) {
   const browser = await launch();
   const page = await browser.newPage();

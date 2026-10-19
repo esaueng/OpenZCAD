@@ -448,20 +448,37 @@ struct StoredGroup {
     epochs: Vec<StoredEpoch>,
 }
 
+// Everything a fresh client needs, including the leaf signing key. These
+// bytes only leave WASM through the host's sealed persistence hook.
+#[derive(MlsSize, MlsEncode, MlsDecode)]
+struct StoredDevice {
+    group_id: Vec<u8>,
+    group: StoredGroup,
+    identity: SigningIdentity,
+    secret: SignatureSecretKey,
+}
+
 #[derive(Clone, Default)]
 struct SpikeStorage(Arc<Mutex<BTreeMap<Vec<u8>, StoredGroup>>>);
 
 const EPOCH_RETENTION: usize = 3;
 
 impl SpikeStorage {
-    fn export(&self, group_id: &[u8]) -> Option<Vec<u8>> {
-        self.0.lock().unwrap().get(group_id).map(|g| g.mls_encode_to_vec().unwrap())
+    fn export(&self, group_id: &[u8], identity: &SigningIdentity, secret: &SignatureSecretKey) -> Option<Vec<u8>> {
+        self.0.lock().unwrap().get(group_id).map(|group| StoredDevice {
+            group_id: group_id.to_vec(),
+            group: group.clone(),
+            identity: identity.clone(),
+            secret: secret.clone(),
+        }.mls_encode_to_vec().unwrap())
     }
-    fn import(group_id: &[u8], bytes: &[u8]) -> R<Self> {
+    fn import(bytes: &[u8]) -> R<(Vec<u8>, Self, SigningIdentity, SignatureSecretKey)> {
         let storage = Self::default();
-        let group = StoredGroup::mls_decode(&mut &*bytes).map_err(s)?;
-        storage.0.lock().unwrap().insert(group_id.to_vec(), group);
-        Ok(storage)
+        let mut input = bytes;
+        let stored = StoredDevice::mls_decode(&mut input).map_err(s)?;
+        if !input.is_empty() { return Err("trailing persisted device bytes".into()); }
+        storage.0.lock().unwrap().insert(stored.group_id.clone(), stored.group);
+        Ok((stored.group_id, storage, stored.identity, stored.secret))
     }
 }
 
@@ -995,30 +1012,34 @@ async fn scenario(hooks: &Hooks, report: &mut Report, project_id: &[u8], rounds:
     // 8. Persist A1 through the host (encrypted IndexedDB) and reload ------
     {
         g(&mut a1)?.write_to_storage().await.map_err(s)?;
-        let bytes = a1.storage.export(&group_id).ok_or("nothing stored")?;
+        let bytes = a1.storage.export(&group_id, &a1.identity, &a1.secret).ok_or("nothing stored")?;
         report.sizes.insert("state_a1_3_members".into(), bytes.len());
         let secret_len = a1.secret.as_bytes().len();
         report.sizes.insert("signature_secret_key".into(), secret_len);
+        let name = a1.name.clone();
+        let user = a1.user.clone();
+        // Drop the entire old client, group and signer before restoring. A
+        // successful Commit must now get its signing key from the sealed blob.
+        drop(a1);
         let restored = hooks.persist("mls-rs/A1", &bytes).await?;
-        let storage = SpikeStorage::import(&group_id, &restored)?;
+        let (restored_group_id, storage, identity, secret) = SpikeStorage::import(&restored)?;
+        let psks = SpikePsks::default();
         let client = make_client(
-            a1.identity.clone(),
-            a1.secret.clone(),
+            identity.clone(),
+            secret.clone(),
             dir.clone(),
             storage.clone(),
-            a1.psks.clone(),
+            psks.clone(),
             true,
             None,
         );
-        let group = client.load_group(&group_id).await.map_err(s)?;
-        a1.client = client;
-        a1.storage = storage;
-        a1.group = Some(group);
+        let group = client.load_group(&restored_group_id).await.map_err(s)?;
+        a1 = Device { name, user, client, secret, identity, storage, psks, saved: Vec::new(), group: Some(group) };
         let out = g(&mut a1)?.commit(vec![]).await.map_err(s)?;
         g(&mut a1)?.apply_pending_commit().await.map_err(s)?;
         deliver(hooks, report, &out.commit_message, &mut [&mut a2, &mut b1]).await?;
         let r = check_agreement(report, project_id, &[&a1, &a2, &b1]).await;
-        report.step("state persisted, reloaded, commits again", r.map(|d| format!("{} B state; {d}", bytes.len())));
+        report.step("state persisted, reloaded, commits again", r.map(|d| format!("{} B complete device state; signing key restored from sealed state; {d}", bytes.len())));
     }
 
     // 9. External-commit rejoin of A2 after its storage was wiped ----------
@@ -1086,7 +1107,7 @@ async fn scenario(hooks: &Hooks, report: &mut Report, project_id: &[u8], rounds:
 
     // Final state sizes.
     g(&mut a1)?.write_to_storage().await.map_err(s)?;
-    let bytes = a1.storage.export(&group_id).ok_or("nothing stored")?;
+    let bytes = a1.storage.export(&group_id, &a1.identity, &a1.secret).ok_or("nothing stored")?;
     report.sizes.insert("state_a1_1_member".into(), bytes.len());
     let _ = (&a1.name, &a1.user);
     Ok(())

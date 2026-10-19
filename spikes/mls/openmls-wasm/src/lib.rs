@@ -16,7 +16,7 @@ use openmls::schedule::{
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_memory_storage::MemoryStorage;
 use openmls_rust_crypto::RustCrypto;
-use openmls_traits::OpenMlsProvider;
+use openmls_traits::{storage::StorageProvider as _, OpenMlsProvider};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -933,6 +933,12 @@ fn record_psks(project_id: &[u8], devices: &mut [&mut Device]) -> R<()> {
             .map_err(s)?;
         store_psk(d, rejoin_psk(epoch), &secret)?;
         d.saved.push((epoch, secret));
+        for (old, _) in &d.saved {
+            if epoch.saturating_sub(*old) > WINDOW {
+                d.provider.storage().delete_psk(&rejoin_psk(*old)).map_err(s)?;
+            }
+        }
+        d.saved.retain(|(old, _)| epoch.saturating_sub(*old) <= WINDOW);
     }
     Ok(())
 }
@@ -1261,7 +1267,7 @@ async fn rejoin_scenario(hooks: &Hooks, report: &mut Report, project_id: &[u8]) 
         let r = try_rejoin(hooks, report, &mut a3x, newest, saved_psk(&a3, newest)?, &gi, &mut [&mut a1, &mut b1], &dir);
         report.step(
             "rejoin refused: PSK outside the retention window",
-            expect_rejected(r, "window", &["revoked", "revocation"]),
+            expect_rejected(r, "PskError(KeyNotFound)", &["policy rejected", "revoked", "revocation"]),
         );
     }
 

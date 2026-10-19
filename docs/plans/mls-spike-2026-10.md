@@ -1,6 +1,6 @@
 # MLS library spike — October 2026
 
-Roadmap: L11 (ADR-024, "MLS assessment"). Spike code: [`spikes/mls/`](../../spikes/mls/).
+Roadmap: [L11](../../ROADMAP.md#l11) ([ADR-024, PR #743](https://github.com/esaueng/OpenZCAD/pull/743), "MLS assessment"). Spike code: [`spikes/mls/`](../../spikes/mls/).
 Nothing in `apps/` or `packages/` imports it.
 
 ## Recommendation
@@ -31,7 +31,7 @@ Why:
   stale leaf only when the signature key matches. A wiped browser has lost
   that key, so another member must commit a separate Remove, which takes an
   extra epoch.
-- **Smaller state and binary.** Group state is 3.6–4.1 KB against OpenMLS's
+- **Smaller state and binary.** Complete device state is 4.0–4.4 KB against OpenMLS's
   25–30 KB. The lazy WASM is 407 KB gzip against 579 KB.
 - **Permissive licences only.** OpenMLS pulls `hpke-rs` (MPL-2.0).
 - **The risk: mls-rs has no third-party audit.** Its README says it "has not
@@ -84,6 +84,8 @@ Chrome and WebKit it is then the median of three runs. Each run has 13 Commit
 creations, about 60 Commit receptions and 7 Welcome joins. Group size is 3–4
 leaves. Safari is a single run. Safari and WebKit coarsen
 `performance.now()` to about 1 ms, so their figures are whole milliseconds.
+These are the original timing runs, before the persistence and PSK-pruning
+corrections below. They do not establish complete mls-rs restart recovery.
 
 | Median ms (create / process / Add+Welcome / join / external) | Chrome 155                  | Safari 27.0.1     | WebKit 26.6       | Node 22 (Vitest, one run)          |
 | ------------------------------------------------------------ | --------------------------- | ----------------- | ----------------- | ---------------------------------- |
@@ -91,7 +93,7 @@ leaves. Safari is a single run. Safari and WebKit coarsen
 | mls-rs + RustCrypto                                          | 4.1 / 2.1 / 5.9 / 3.6 / 8.0 | 5 / 3 / 9 / 4 / 9 | 3 / 2 / 5 / 3 / 7 | 3.9 / 2.0 / 5.8 / 3.5 / 7.7        |
 | OpenMLS + RustCrypto                                         | 4.3 / 2.3 / 5.6 / 3.9 / 7.4 | 5 / 3 / 6 / 4 / 9 | 3 / 2 / 5 / 4 / 6 | 4.2 / 2.2 / 5.5 / 3.9 / 7.3        |
 
-Every operation takes single-digit milliseconds in a Worker, so commit cost
+In those original Mac runs, every operation takes single-digit milliseconds in a Worker, so commit cost
 does not decide between the libraries. The wire sizes match because both
 libraries implement the same protocol. Approximate sizes: KeyPackage 400 B,
 path-only Commit 660 B, Welcome 1.06 KB for one joiner into two members and
@@ -117,23 +119,57 @@ libraries alone are smaller.
   WASM has. A `wasm-opt -Oz` pass was not run because the tool is not
   installed here; it usually trims WASM by 10–20%, which is an estimate.
 
-| Group state (A1, sealed blob) | 3 members  | 1 member   | Leaf signature key                       |
-| ----------------------------- | ---------- | ---------- | ---------------------------------------- |
-| mls-rs (both providers)       | 3.6–4.1 KB | 2.1–2.5 KB | 32 B raw, or 138 B PKCS#8 with WebCrypto |
-| OpenMLS                       | 25–30 KB   | 21–25 KB   | 0.8 KB stored record                     |
+| Complete device state (A1, sealed blob) | 3 members  | 1 member   | Leaf signature key, included in state    |
+| --------------------------------------- | ---------- | ---------- | ---------------------------------------- |
+| mls-rs (both providers)                 | 4.0–4.4 KB | 2.4–2.9 KB | 32 B raw, or 138 B PKCS#8 with WebCrypto |
+| OpenMLS                                 | 25–30 KB   | 21–25 KB   | 0.8 KB stored record                     |
 
 Both libraries keep three past epochs. OpenMLS stores JSON-encoded records,
 which is most of the gap.
+The complete-state figures are from the corrected Linux runs in
+[`review-2026-10-19`](../../spikes/mls/results/review-2026-10-19/).
+The original mls-rs size measurements omitted the leaf signer and are not
+complete-device storage measurements.
 
 ## IndexedDB persistence under a non-extractable key
 
-This works in Chrome, Safari and WebKit, for every variant that runs there.
 The host generates an AES-256-GCM key with `extractable: false` and confirms
 that `exportKey` throws. It seals the exported group state, using the label
 as AAD, and stores both the `CryptoKey` and the ciphertext in IndexedDB. It
 then reads both back through a fresh connection, decrypts, and hands the
 bytes to WASM. The reloaded A1 commits again, and every member agrees on the
-epoch. A Safari round trip took 14–36 ms.
+epoch. The initial mls-rs experiment reused its live device's signing key,
+so the original Safari/WebKit results proved a sealed group-state round trip,
+not recovery of a complete device after restart.
+
+The corrected mls-rs payload contains the group id, stored group and retained
+epochs, public signing identity, and leaf signing secret. The experiment
+drops the old device, client, group and signer before restoring everything
+from that payload and committing again. The corrected Node and Chromium
+runs pass for both mls-rs providers. Chromium also exercises real IndexedDB;
+Node uses the harness's encrypted in-memory store. These corrected restart
+cases have not been rerun in Safari or WebKit.
+
+## Corrections and verification (19 October)
+
+- The complete mls-rs payload now includes the leaf signer; the post-reload
+  Commit cannot borrow a private key from the discarded client.
+- OpenMLS explicitly deletes external PSKs older than `WINDOW` from its
+  `MemoryStorage` and prunes the matching saved-secret list. A removed device
+  keeps its old secret for the negative test, but active members no longer
+  have it. The outside-window Commit now fails with
+  `InvalidCommit(PskError(KeyNotFound))` before app policy. The harness checks
+  that exact refusal instead of accepting a policy-only window rejection.
+- All six Node scenarios and all three variants' main and rejoin scenarios
+  pass in Chromium 153 on Linux x86_64. The corrected group-state figures,
+  timings and bundle measurements are preserved separately in
+  [`results/review-2026-10-19`](../../spikes/mls/results/review-2026-10-19/).
+  These runs used Rust 1.98.0, wasm-bindgen 0.2.126 and Node 24.14.0 while
+  other local validation was running. Their timing values are diagnostic;
+  they do not replace the original Mac timing comparison.
+
+Use `MLS_SPIKE_RESULTS_DIR` to keep a new run separate from historical
+evidence, and `--chromium-only` when only Playwright Chromium is available.
 
 What this does not give:
 
