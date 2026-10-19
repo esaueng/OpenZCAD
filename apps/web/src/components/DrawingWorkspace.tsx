@@ -111,13 +111,16 @@ function sheetStatus(
   geometryPending: boolean
 ): SheetStatus {
   const ids = sheetBodyIds(sheet);
+  // While the model rebuilds, `bodies` may not have caught up with the
+  // document (a reload, or an undo that brings a body back): absence there
+  // is not deletion yet, so wait before calling anything missing.
+  if (geometryPending) return { kind: 'pending' };
   const missing = ids.filter((id) => !bodies[id] || bodies[id].consumed);
   if (missing.length > 0)
     return {
       kind: 'missing',
       bodyNames: missing.map((id) => bodies[id]?.name ?? 'a deleted body')
     };
-  if (geometryPending) return { kind: 'pending' };
   const fingerprint = drawingSourceFingerprint(bodies, ids);
   if (!fingerprint) return { kind: 'pending' };
   return fingerprint === sheet.source.fingerprint
@@ -1055,6 +1058,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                       checked={selectedView.bodyIds.includes(id)}
                       disabled={
                         !editable ||
+                        // Not offered for removal until the rebuild says
+                        // whether it is really gone.
+                        (props.geometryPending && !liveBodies.includes(id)) ||
                         (selectedView.bodyIds.length === 1 &&
                           selectedView.bodyIds[0] === id)
                       }
@@ -1074,7 +1080,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                     />
                     {liveBodies.includes(id)
                       ? (bodies[id]?.name ?? id)
-                      : `${bodies[id]?.name ?? 'Deleted body'} (no longer in the model)`}
+                      : props.geometryPending
+                        ? `${bodies[id]?.name ?? 'Body'} (updating…)`
+                        : `${bodies[id]?.name ?? 'Deleted body'} (no longer in the model)`}
                   </label>
                 ))}
               </fieldset>

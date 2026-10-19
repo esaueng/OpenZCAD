@@ -310,6 +310,22 @@ describe('DrawingWorkspace', () => {
     expect(command.payload).toMatchObject({ bodyIds: [bodyId] });
   });
 
+  it('waits rather than calling a body missing while the model rebuilds', async () => {
+    // Reload or undo: the document names a body the last completed geometry
+    // does not have yet.
+    const sheet = starter('v1:0000000000000000');
+    sheet.views[0]!.bodyIds = [bodyId, 'body_back' as BodyId];
+    setup({ sheet, geometryPending: true });
+    expect(screen.getByRole('status').textContent).toMatch(
+      /Waiting for the model/
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Front view' }));
+    const pending = screen.getByRole<HTMLInputElement>('checkbox', {
+      name: 'Body (updating…)'
+    });
+    expect(pending.disabled).toBe(true);
+  });
+
   it('names a body the sheet draws that is gone', () => {
     const sheet = starter('v1:0000000000000000');
     sheet.views[0]!.bodyIds = ['body_gone' as BodyId];
