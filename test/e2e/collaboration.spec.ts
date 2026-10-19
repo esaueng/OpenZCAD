@@ -1277,11 +1277,16 @@ test('publishes editor checkpoints through the room without an account revision 
       const input = route.request().postDataJSON() as {
         document: ProjectDocument;
         checkpointReason: string;
+        savedRevisionId?: string;
       };
-      const saved = createCheckpoint(
-        appendRevision(input.document, input.checkpointReason),
-        input.checkpointReason
-      );
+      // The browser mints the save point and the room stores it as sent
+      // (ADR-024 Phase 1); only a pre-Phase 1 client leaves it to the room.
+      const saved = input.savedRevisionId
+        ? input.document
+        : createCheckpoint(
+            appendRevision(input.document, input.checkpointReason),
+            input.checkpointReason
+          );
       await page.evaluate((saved) => {
         (
           window as unknown as { __checkpointDocuments: ProjectDocument[] }

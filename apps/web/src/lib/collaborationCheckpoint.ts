@@ -1,4 +1,7 @@
-import { withEchoedSavePoints } from '@openzcad/document-core';
+import {
+  createAdvancingSavePoint,
+  withEchoedSavePoints
+} from '@openzcad/document-core';
 import {
   copiedImportArchives,
   reconcileCopiedImportSources
@@ -165,28 +168,54 @@ export async function saveCollaborationCheckpoint(
       )
         authoritative = echo;
     });
-    const response = await abortableCheckpoint(
-      desktopFetch(
-        `/api/projects/${encodeURIComponent(snapshot.projectId)}/collaboration`,
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          signal: controls.controller.signal,
-          body: JSON.stringify({
-            clientId: controls.clientId,
-            leaseId: lease.leaseId,
-            baseVersion: controls.baseVersion(),
-            document: snapshot,
-            checkpointReason: label
-          })
-        }
-      ),
-      controls.controller.signal
-    );
-    const message = parseServerMessage(
-      await abortableCheckpoint(response.text(), controls.controller.signal),
-      snapshot.projectId
-    );
+    // The save point is minted here and the room only checks it (ADR-024
+    // Phase 1). Any fresh save point naming the clicked model is accepted,
+    // so a room still minting its own — an older Worker — confirms too.
+    const submit = async (
+      base: ProjectDocument,
+      baseVersion: number | null
+    ) => {
+      const minted = createAdvancingSavePoint(base, label);
+      const savedRevisionId = minted.revisions.at(-1)!.revisionId;
+      const response = await abortableCheckpoint(
+        desktopFetch(
+          `/api/projects/${encodeURIComponent(snapshot.projectId)}/collaboration`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            signal: controls.controller.signal,
+            body: JSON.stringify({
+              clientId: controls.clientId,
+              leaseId: lease.leaseId,
+              baseVersion,
+              document: minted,
+              checkpointReason: label,
+              savedRevisionId
+            })
+          }
+        ),
+        controls.controller.signal
+      );
+      const message = parseServerMessage(
+        await abortableCheckpoint(response.text(), controls.controller.signal),
+        snapshot.projectId
+      );
+      return { response, message };
+    };
+    let { response, message } = await submit(snapshot, controls.baseVersion());
+    if (
+      message?.type === 'conflict' &&
+      message.document.ownerUserId === snapshot.ownerUserId &&
+      sameCheckpointSnapshot(snapshot, message.document)
+    ) {
+      // The room moved on without changing the clicked model — another
+      // member's save point, say. Mint again on its lineage, once.
+      checkCurrent();
+      ({ response, message } = await submit(
+        message.document,
+        message.document.version
+      ));
+    }
     if (
       !response.ok ||
       message?.type !== 'ack' ||

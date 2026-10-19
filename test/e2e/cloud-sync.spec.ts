@@ -91,12 +91,24 @@ test('keeps exact geometry and undo through a save echo and reopens compatible s
     const payload = route.request().postDataJSON() as {
       document: ProjectDocument;
       reason: string;
+      savedRevisionId?: string;
     };
+    const version = payload.document.version + 1;
+    // The browser minted the save point (ADR-024 Phase 1); this echo keeps it
+    // and moves the version, which a pre-Phase 1 server did by minting.
     api.project = withoutDerivedProjection(
-      createSavedRevision(
-        { ...payload.document, version: payload.document.version + 1 },
-        payload.reason
-      )
+      payload.savedRevisionId
+        ? {
+            ...payload.document,
+            version,
+            checkpoints: payload.document.checkpoints.map(
+              (checkpoint, index) =>
+                index === payload.document.checkpoints.length - 1
+                  ? { ...checkpoint, documentVersion: version }
+                  : checkpoint
+            )
+          }
+        : createSavedRevision({ ...payload.document, version }, payload.reason)
     );
     await route.fulfill({ json: api.project });
   });
@@ -217,12 +229,16 @@ class SharedCloudProjectApi {
         const payload = route.request().postDataJSON() as {
           name: string;
           units?: UnitSystem;
+          initialDocument?: ProjectDocument;
         };
-        const document = createProjectDocument(
-          payload.name,
-          accountUserId,
-          payload.units ?? 'mm'
-        );
+        // The browser builds the new project (ADR-024 Phase 1).
+        const document =
+          payload.initialDocument ??
+          createProjectDocument(
+            payload.name,
+            accountUserId,
+            payload.units ?? 'mm'
+          );
         this.project = withoutDerivedProjection(document);
         this.measurement = null;
         return route.fulfill({

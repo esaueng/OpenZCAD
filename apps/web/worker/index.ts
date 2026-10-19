@@ -31,6 +31,7 @@ import {
   ProjectSharingError,
   RevisionConflictError,
   RevisionIdCollisionError,
+  SavePointRequestError,
   RevisionNotFoundError
 } from '@openzcad/persistence';
 import {
@@ -2071,6 +2072,9 @@ async function dispatchApiRequest(
     }
     if (error instanceof RevisionIdCollisionError) {
       return json({ error: error.message, code: 'REVISION_ID_CONFLICT' }, 409);
+    }
+    if (error instanceof SavePointRequestError) {
+      return json({ error: error.message, code: 'SAVE_POINT_INVALID' }, 400);
     }
     if (error instanceof ProjectMeasurementRequestError) {
       return json({ error: error.message }, error.status);

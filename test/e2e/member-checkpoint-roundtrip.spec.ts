@@ -160,20 +160,24 @@ function roomFixture(
             checkpointReason: string;
             leaseId: string;
             clientId: string;
+            savedRevisionId?: string;
           };
           checkpointRequested = true;
           checkpointInput = input.document;
           expect(input.leaseId).toBe('browser_checkpoint_lease');
           await gate;
-          stored = createCheckpoint(
-            appendRevision(
-              copiedImport && sourceArchived
-                ? reconcileCopiedImportSources(input.document, [archive])
-                : input.document,
-              input.checkpointReason
-            ),
-            input.checkpointReason
-          );
+          const canonical =
+            copiedImport && sourceArchived
+              ? reconcileCopiedImportSources(input.document, [archive])
+              : input.document;
+          // The browser mints the save point and the room stores it as sent
+          // (ADR-024 Phase 1); only a pre-Phase 1 client leaves it to the room.
+          stored = input.savedRevisionId
+            ? canonical
+            : createCheckpoint(
+                appendRevision(canonical, input.checkpointReason),
+                input.checkpointReason
+              );
           document = stored;
           if (ackFault) {
             await page.evaluate(

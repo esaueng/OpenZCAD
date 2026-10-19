@@ -2700,6 +2700,13 @@ export interface CreateProjectRequest {
   document?: ProjectDocument;
   /** Client can transfer local records to the returned cloud identity. */
   adoptionProtocolVersion?: 1;
+  /**
+   * A new project the browser built (ADR-024 Phase 1). The account stores it
+   * under its own id after the checks an adoption gets; unlike `document`, it
+   * keeps that id and records no device binding. Requests without it are the
+   * pre-Phase 1 contract, kept for one release: the server builds the document.
+   */
+  initialDocument?: ProjectDocument;
 }
 
 export interface CreateProjectResponse {
@@ -2758,6 +2765,13 @@ export interface SaveRevisionRequest {
   reason: string;
   expectedVersion: number;
   document: ProjectDocument;
+  /**
+   * The revision the browser appended to `document` for this save, with its
+   * checkpoint (ADR-024 Phase 1). The server checks it and stores the document
+   * as sent. Requests without it are the pre-Phase 1 contract, kept for one
+   * release: the server mints the save point itself.
+   */
+  savedRevisionId?: RevisionId;
 }
 
 /**
@@ -3269,6 +3283,9 @@ export interface ProjectEditLease {
   expiresAt: number;
 }
 
+/** The save revision reason a "Keep this device's version" choice records. */
+export const KEPT_LOCAL_VERSION_REASON = 'Kept this device’s version';
+
 export type CollaborationClientMessage =
   | {
       type: 'hello';
@@ -3286,6 +3303,12 @@ export type CollaborationClientMessage =
       leaseId?: string;
       /** Explicit user choice after preserving the other copy; fenced by baseVersion. */
       conflictResolution?: 'keep-local';
+      /**
+       * With `keep-local`: the save revision the browser appended to
+       * `document` (ADR-024 Phase 1). Without it the room mints one, the
+       * pre-Phase 1 contract kept for one release.
+       */
+      savedRevisionId?: string;
     }
   | { type: 'presence'; clientId: string; status: 'active' | 'idle' }
   | { type: 'lease-acquire'; clientId: string }
