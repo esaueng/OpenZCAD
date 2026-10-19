@@ -23,6 +23,16 @@ function rule(selector: string): string {
 }
 
 describe('settings switches', () => {
+  it('lets the invisible checkbox take every pointer hit on the switch', () => {
+    // A 1px checkbox under the knob lost the hit on rows at some sub-pixel
+    // offsets, so a click at its centre landed on the track instead.
+    const input = rule('.settings-toggle input');
+    expect(input).toMatch(/inset:\s*0/);
+    expect(input).toMatch(/z-index:\s*1/);
+    expect(input).toMatch(/width:\s*100%/);
+    expect(input).toMatch(/height:\s*100%/);
+  });
+
   it('draws the focus ring at the app-wide two pixels', () => {
     expect(rule('.settings-toggle input:focus-visible + span')).toMatch(
       /outline:\s*2px solid var\(--color-accent\)/
