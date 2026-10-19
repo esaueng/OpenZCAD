@@ -40,6 +40,9 @@
  *   OFFSET_PERF_CALLS_OUT Optional JSONL of each report's ordered kernel calls,
  *                         consecutive repeats of a method merged into one
  *                         `{ method, count, ms }` run.
+ *   OFFSET_PERF_BROADCAST=1  After the edited sync, time the app's follow-up
+ *                         broadcast sync of the same document (empty lineage
+ *                         demand).
  *   OFFSET_PERF_FULL=1    Also time a second edit from the same base and the
  *                         undo back to the import.
  *   OFFSET_PERF_SAMPLES  Alternating warm edits (default 0). A fresh exact
@@ -370,7 +373,8 @@ async function timedSync(
   adapter: ExactKernelAdapter,
   document: ProjectDocument,
   label: string,
-  stages: ReturnType<typeof stageRecorder>
+  stages: ReturnType<typeof stageRecorder>,
+  lineageDemand?: readonly BodyId[]
 ): Promise<DerivedState> {
   resetTallies();
   stages.reset();
@@ -382,6 +386,7 @@ async function timedSync(
     undefined,
     undefined,
     {
+      ...(lineageDemand ? { lineageDemand } : {}),
       onGeometryReady: (geometry) => {
         geometryReadyMs = performance.now() - start;
         console.log(
@@ -674,6 +679,17 @@ it.skipIf(!stepPath)(
         `offset ${offset} sync`,
         stages
       );
+      if (process.env.OFFSET_PERF_BROADCAST === '1') {
+        // The app commits with a full-lineage sync, then the new document
+        // version triggers a broadcast sync that carries a lineage demand.
+        await timedSync(
+          adapter,
+          edited,
+          `offset ${offset} broadcast sync`,
+          stages,
+          []
+        );
+      }
       const body1 = derived1.bodyRepresentations[bodyId]!;
       let lastDocument = edited;
       let lastDerived = derived1;
