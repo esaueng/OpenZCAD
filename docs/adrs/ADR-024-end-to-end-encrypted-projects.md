@@ -271,10 +271,17 @@ the first device-list entry the new identity signs.
   key. So the approving device asks for a passkey or the recovery key, or the
   new device certifies itself later with one. Until it is certified, a device
   can read but not write: its signatures are refused like any unknown key's.
+  A new device has two public keys, its signing key and its unlock key, and
+  both must be authenticated together; binding only one would let a server
+  swap the other. In what follows, `pk_new` means the canonical encoding
+  `H("openzcad device keys" || signing_pub || unlock_pub)`. The approving
+  device wraps the account key only to the unlock key, and requests the
+  identity certificate only for the signing key, of the exact pair that
+  `pk_new` committed to.
   - **Scan (preferred when the devices are together).** The approving device
-    scans a QR code on the new device that carries the full 256-bit hash of
-    its public key, and wraps the account key only if the hash matches the
-    key the server delivered.
+    scans a QR code on the new device that carries the full 256-bit
+    `pk_new`, and proceeds only if it matches the pair the server
+    delivered.
   - **Compare (remote).** The two devices run a commitment-based
     short-authentication-string exchange. The new device first sends a
     commitment `H(pk_new || n_new)` to a fresh random nonce. Only after it
@@ -547,6 +554,16 @@ comparison, which is safe only because of its commitment step.
   latest ciphertext; the browser merges with `mergeCollaborationDocuments`,
   moved to a shared package, and resubmits.
 - **Removing a member** starts a new project-key epoch and a new roster entry.
+- **Share links and removed access.** Anyone who could unwrap the project key
+  could also unwrap every active share key, so a removed member, or a removed
+  device, can keep reading future snapshots of links that existed before
+  the removal, just as anyone holding those URLs can. Rotating share keys on
+  every removal would break every shared URL whenever someone leaves, so it
+  is not automatic. Instead, removing a member or device lists the project's
+  active links and offers to reissue them with new share keys. Reissue is the
+  default when the removal is for a lost or stolen device, and optional
+  otherwise. Product copy states that removal protects later project
+  versions, but not later snapshots of links that were not reissued.
 - **Viewers** hold the project key, so they can decrypt, and they hold a valid
   signing key of their own. Read-only therefore cannot rest on the server
   alone, which this design treats as possibly compromised. Browsers enforce it
