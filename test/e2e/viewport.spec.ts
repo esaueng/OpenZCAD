@@ -947,7 +947,10 @@ test('the middle-button drag preference changes what a middle drag does', async 
   // moving the camera, then turns the camera around that new target.
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Controls', exact: true }).click();
-  await page.getByLabel('Middle-button drag').selectOption('orbit');
+  await page
+    .getByRole('radiogroup', { name: 'Middle-button drag' })
+    .getByRole('radio', { name: 'Orbit' })
+    .check();
   await page
     .getByRole('button', { name: /Back to workspace|Close settings/ })
     .first()

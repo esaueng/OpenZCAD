@@ -168,3 +168,51 @@ test('a sketch delete that would break a dependent extrude is refused by name', 
     )
     .toEqual(ids);
 });
+
+test('a construction toggle that would break an extrude reports the refusal and unlocks further edits', async ({
+  page
+}, testInfo) => {
+  test.setTimeout(90_000);
+  const { document, ids } = fixture();
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await open(page, document);
+  const before = await exportDocument(page);
+  const selection = page
+    .getByRole('region', { name: 'Sketch overview' })
+    .getByLabel('Selected geometry');
+  await selection.selectOption(ids[0]!);
+  const editor = page.getByRole('form', { name: 'Edit line', exact: true });
+  const toggle = editor.getByRole('button', { name: 'Construction' });
+  await toggle.click();
+  await expect(editor.getByRole('alert')).toContainText(
+    /^Block: .*The sketch edit was not saved\.$/,
+    READ_TIMEOUT
+  );
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'The sketch edit was not saved.'
+  );
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  const refused = await exportDocument(page);
+  expect(refused.nodes).toEqual(before.nodes);
+  expect(refused.commandLog).toEqual(before.commandLog);
+  expect(errors).toEqual([]);
+
+  // The failed validation must release the busy state: a spare line still
+  // becomes construction geometry, and undo restores just that valid edit.
+  await selection.selectOption(ids[4]!);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(editor.getByRole('alert')).toHaveCount(0);
+  const changed = await exportDocument(page);
+  const spare = changed.nodes[ids[4]!];
+  expect(spare?.kind === 'sketch-object' && spare.data.construction).toBe(true);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  const restored = await exportDocument(page);
+  expect(restored.nodes).toEqual(before.nodes);
+  expect(errors).toEqual([]);
+  await testInfo.attach('construction-recovery', {
+    body: await page.screenshot(),
+    contentType: 'image/png'
+  });
+});
