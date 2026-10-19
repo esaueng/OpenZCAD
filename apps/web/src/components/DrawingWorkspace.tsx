@@ -646,6 +646,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     if (move) {
       event.preventDefault();
       event.stopPropagation();
+      // A projected view moves only along its free axis; a press along the
+      // axis it shares with its base is not a move at all.
+      const base = selectedView.parentViewId
+        ? sheet.views.find((view) => view.viewId === selectedView.parentViewId)
+        : undefined;
+      const alignment = base
+        ? drawingViewAlignment(base.orientation, selectedView.orientation)
+        : null;
+      if (
+        (alignment === 'row' && move[0] === 0) ||
+        (alignment === 'column' && move[1] === 0)
+      )
+        return;
       moveView(selectedView.viewId, {
         x: selectedView.centerMm.x + move[0],
         y: selectedView.centerMm.y + move[1]

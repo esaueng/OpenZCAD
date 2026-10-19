@@ -62,7 +62,12 @@ function withDrawings(
   document: ProjectDocument,
   edit: (sheets: DrawingSheet[]) => DrawingSheet[]
 ): ProjectDocument {
-  const sheets = edit(deepClone(document.drawings?.sheets ?? []));
+  const before = document.drawings?.sheets ?? [];
+  const sheets = edit(deepClone(before));
+  // An edit that changes nothing (a projected view nudged along the axis it
+  // is locked to) returns the same document, which the command manager
+  // records as no edit at all: no version, no undo entry, no save.
+  if (JSON.stringify(sheets) === JSON.stringify(before)) return document;
   const drawings = sheets.length > 0 ? { sheets } : undefined;
   assertDrawingSet(drawings);
   const { drawings: _previous, ...rest } = document;

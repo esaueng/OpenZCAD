@@ -566,6 +566,26 @@ describe('D01 drawing section (schema v30)', () => {
       );
   });
 
+  it('records no edit when a projected view is nudged along its locked axis', () => {
+    const document = boxDocument();
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.addDrawingSheet({ sheet: sheet(document.bodyOrder) })
+    );
+    const before = manager.document;
+    // The top view shares the front's x: a sideways nudge snaps straight back.
+    const after = manager.execute(
+      commandFactories.updateDrawingView({
+        sheetId,
+        viewId: 'dvw_top' as DrawingViewId,
+        centerMm: { x: 140, y: 200 }
+      })
+    );
+    expect(after).toBe(before);
+    expect(after.version).toBe(before.version);
+    expect(manager.undoLabel).toBe(`Add drawing Sheet 1`);
+  });
+
   it('refuses a view of a body the project does not have', () => {
     const document = boxDocument();
     expect(() =>
