@@ -890,21 +890,26 @@ export function dropCoincidentHidden(
   const cellU = Math.max((maxU - minU) / cells, tolerance, 1e-12);
   const cellV = Math.max((maxV - minV) / cells, tolerance, 1e-12);
   const clamp = (value: number) => Math.min(cells - 1, Math.max(0, value));
-  const column = (u: number) => clamp(Math.floor((u - minU) / cellU));
-  const row = (v: number) => clamp(Math.floor((v - minV) / cellV));
+  // Each visible segment is filed under the cells it crosses (an exact
+  // walk, like the occlusion grid), not its whole bounding box: a long
+  // diagonal would otherwise land in every cell of a square. Lookups take
+  // each crossed cell's neighbours, which covers the tolerance band.
   const grid = new Map<number, number[]>();
   for (let s = 0; s < segments.length; s += 4) {
-    const i0 = column(Math.min(segments[s]!, segments[s + 2]!) - tolerance);
-    const i1 = column(Math.max(segments[s]!, segments[s + 2]!) + tolerance);
-    const j0 = row(Math.min(segments[s + 1]!, segments[s + 3]!) - tolerance);
-    const j1 = row(Math.max(segments[s + 1]!, segments[s + 3]!) + tolerance);
-    for (let j = j0; j <= j1; j += 1)
-      for (let i = i0; i <= i1; i += 1) {
-        const key = j * cells + i;
-        const list = grid.get(key);
-        if (list) list.push(s);
-        else grid.set(key, [s]);
-      }
+    const filed = new Set(
+      gridCellsAlong(
+        (segments[s]! - minU) / cellU,
+        (segments[s + 1]! - minV) / cellV,
+        (segments[s + 2]! - minU) / cellU,
+        (segments[s + 3]! - minV) / cellV,
+        cells
+      )
+    );
+    for (const key of filed) {
+      const list = grid.get(key);
+      if (list) list.push(s);
+      else grid.set(key, [s]);
+    }
   }
 
   /** The parts of segment p→q no collinear visible segment covers, as [t0, t1]. */
@@ -917,7 +922,8 @@ export function dropCoincidentHidden(
     const du = qu - pu;
     const dv = qv - pv;
     const length = Math.hypot(du, dv);
-    if (length <= tolerance) return [];
+    // A point is not a line; anything longer is judged by its coverage.
+    if (length === 0) return [];
     const candidates = new Set<number>();
     for (const cell of gridCellsAlong(
       (pu - minU) / cellU,
@@ -962,7 +968,10 @@ export function dropCoincidentHidden(
       at = Math.max(at, t1);
     }
     if (at < 1) gaps.push([at, 1]);
-    // A gap no longer than the tolerance is the same line, not a gap.
+    // Nothing covers it: the whole segment stays, however short.
+    if (covered.length === 0) return [[0, 1]];
+    // Between or beside coverage, a gap no longer than the tolerance is the
+    // same line, not a gap.
     return gaps.filter(([t0, t1]) => (t1 - t0) * length > tolerance);
   };
 

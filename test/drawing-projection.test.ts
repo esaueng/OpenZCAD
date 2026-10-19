@@ -650,6 +650,15 @@ describe('D01 occlusion tolerance', () => {
     expect([...kept[0]!].map((value) => +value.toFixed(6))).toEqual([
       30.1, 0, 30.4, 0
     ]);
+    // A hidden segment shorter than the tolerance is kept unless something
+    // actually covers it: another body's line elsewhere is no cover.
+    const tiny = [Float64Array.from([5, 5, 5 + 5e-7, 5])];
+    expect(
+      dropCoincidentHidden(tiny, [Float64Array.from([0, 0, 100, 0])], 1e-6)
+    ).toHaveLength(1);
+    expect(
+      dropCoincidentHidden(tiny, [Float64Array.from([0, 5, 100, 5])], 1e-6)
+    ).toEqual([]);
     // A hidden line wholly under a visible one is dropped.
     expect(
       dropCoincidentHidden(hidden, [Float64Array.from([0, 0, 100, 0])], 1e-6)

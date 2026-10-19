@@ -270,6 +270,8 @@ export const MAX_DRAWING_TEXT_LENGTH = 120;
 export const MAX_DRAWING_SHEETS = 50;
 export const MAX_DRAWING_VIEWS = 24;
 export const MAX_DRAWING_VIEW_BODIES = 256;
+/** How far a projected view may sit off its base's axis, in paper mm. */
+const ALIGNMENT_TOLERANCE_MM = 1e-6;
 /** Placement bound, in paper millimetres: generous, but finite. */
 export const MAX_DRAWING_COORDINATE_MM = 10_000;
 
@@ -448,15 +450,32 @@ export function drawingSheetError(value: unknown): string | null {
   for (const view of views.values()) {
     if (view.parentViewId === undefined) continue;
     const parent = views.get(view.parentViewId as string);
-    if (
-      !parent ||
-      parent.parentViewId !== undefined ||
-      drawingViewAlignment(
-        parent.orientation as DrawingViewOrientation,
-        view.orientation as DrawingViewOrientation
-      ) === null
-    )
+    const alignment = parent
+      ? drawingViewAlignment(
+          parent.orientation as DrawingViewOrientation,
+          view.orientation as DrawingViewOrientation
+        )
+      : null;
+    if (!parent || parent.parentViewId !== undefined || alignment === null)
       return `${where} has a projected view that cannot fold from its base.`;
+    // Aligned on the shared axis, on the side the projection angle gives
+    // it: anything else contradicts the projection the title block names.
+    const child = view.centerMm as { x: number; y: number };
+    const base = parent.centerMm as { x: number; y: number };
+    const side = projectedViewSide(
+      parent.orientation as DrawingViewOrientation,
+      view.orientation as DrawingViewOrientation,
+      value.projectionAngle
+    );
+    const [shared, free] =
+      alignment === 'row'
+        ? [child.y - base.y, child.x - base.x]
+        : [child.x - base.x, child.y - base.y];
+    if (
+      Math.abs(shared) > ALIGNMENT_TOLERANCE_MM ||
+      side * free < -ALIGNMENT_TOLERANCE_MM
+    )
+      return `${where} has a projected view out of line with its base or on the wrong side for its projection angle.`;
   }
   return null;
 }

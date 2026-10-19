@@ -96,11 +96,11 @@ function sheet(bodyIds: BodyId[], views?: DrawingView[]): DrawingSheet {
     views: views ?? [
       view('front', bodyIds, { centerMm: { x: 100, y: 100 } }),
       view('top', bodyIds, {
-        centerMm: { x: 300, y: 200 },
+        centerMm: { x: 100, y: 200 },
         parentViewId: baseId
       }),
       view('right', bodyIds, {
-        centerMm: { x: 250, y: 50 },
+        centerMm: { x: 250, y: 100 },
         parentViewId: baseId
       }),
       view('iso', bodyIds, { centerMm: { x: 300, y: 250 }, hiddenLines: false })
@@ -195,6 +195,35 @@ describe('D01 drawing section (schema v30)', () => {
         /fold/
       ],
       [{ sheets: [sheet(ids, [view('front', [])])] }, /bodies/],
+      // Third angle: a top view below the front, or off its column.
+      [
+        {
+          sheets: [
+            sheet(ids, [
+              view('front', ids),
+              view('top', ids, {
+                centerMm: { x: 100, y: 40 },
+                parentViewId: baseId
+              })
+            ])
+          ]
+        },
+        /wrong side|out of line/
+      ],
+      [
+        {
+          sheets: [
+            sheet(ids, [
+              view('front', ids),
+              view('top', ids, {
+                centerMm: { x: 130, y: 180 },
+                parentViewId: baseId
+              })
+            ])
+          ]
+        },
+        /wrong side|out of line/
+      ],
       [
         {
           sheets: [

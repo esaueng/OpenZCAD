@@ -188,6 +188,9 @@ function useViewProjections(
           (results) => {
             for (const view of views) {
               const result = results[view.key];
+              // An answer clears the transport-failure count: retries are
+              // counted per run of failures, not over the key's lifetime.
+              failures.current.delete(view.key);
               cache.current.set(
                 view.key,
                 result?.ok
@@ -228,6 +231,8 @@ function useViewProjections(
     // Keep the cache to what this model can still use.
     for (const key of cache.current.keys())
       if (!key.startsWith(`${fingerprint}|`)) cache.current.delete(key);
+    for (const key of failures.current.keys())
+      if (!key.startsWith(`${fingerprint}|`)) failures.current.delete(key);
     // `revision` re-runs this pass after each answer, which re-requests any
     // view whose request was dropped.
   }, [sheet, fingerprint, bodies, revision]);
