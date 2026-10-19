@@ -581,7 +581,8 @@ import {
 } from './lib/interaction/machine';
 import type {
   SketchEditHost,
-  SketchEditPickContext
+  SketchEditPickContext,
+  SketchOffsetPick
 } from './lib/sketch/edits';
 import {
   faceOffsetBaseline,
@@ -14071,6 +14072,35 @@ export function App() {
     }
   }
 
+  /** The selected entity to construction geometry or back, one undo step. */
+  async function handleToggleSketchConstruction() {
+    const base = managerRef.current?.document;
+    const target = sketchEntityEditTarget(interactionRef.current);
+    const sketch =
+      target && base && findSketch(base, target.sketchId as SketchId);
+    if (!base || !target || !sketch || sketchSolving || geometryBusy) return;
+    const { planSketchConstructionToggle } = await import('./lib/sketch/modify');
+    const plan = planSketchConstructionToggle(
+      base,
+      sketch,
+      sketch.sketchId,
+      target.objectId
+    );
+    if (plan.status === 'refuse') {
+      setStatus(plan.reason);
+    } else if (
+      await commitSketchEdit(
+        base,
+        sketch.sketchId,
+        plan.commands,
+        plan.label,
+        target.raceObjectId
+      )
+    ) {
+      setStatus(plan.message);
+    }
+  }
+
   function handleDeleteSketchEntity() {
     if (
       interaction.mode !== 'sketch' ||
@@ -14249,6 +14279,7 @@ export function App() {
     picks: string[];
     values?: number[];
     raws?: string[];
+    offset?: SketchOffsetPick;
     anchor?: { x: number; y: number };
     documentVersion: number;
   } | null>(null);
@@ -14716,16 +14747,20 @@ export function App() {
     clickPoint: { x: number; y: number },
     context: SketchEditPickContext
   ): boolean {
-    const pending =
-      interaction.mode === 'sketch' ? interaction.session.pendingEdit : null;
+    const session = interaction.mode === 'sketch' ? interaction.session : null;
+    const pending = session?.pendingEdit;
     if (!pending) {
       return false;
     }
     if (doc && editingSketchNode) {
       const host = sketchEditHost(doc, clickPoint);
       const sketch = editingSketchNode;
+      const offset = session?.offsetOptions;
       void import('./lib/sketch/edits').then(({ advanceSketchEdit }) =>
-        advanceSketchEdit(host, doc, sketch, pending, objectId, context)
+        advanceSketchEdit(host, doc, sketch, pending, objectId, {
+          ...context,
+          offset
+        })
       );
     }
     return true;
@@ -20639,6 +20674,7 @@ export function App() {
         void handleUpdateSketchEntity(data);
       }}
       onDelete={handleDeleteSketchEntity}
+      onToggleConstruction={() => void handleToggleSketchConstruction()}
       composite={selectedComposite}
       onResizeComposite={(size, expressions) => {
         void handleResizeSketchComposite(size, expressions);
@@ -20752,6 +20788,10 @@ export function App() {
         }
         canConstrain={Boolean(interaction.session.sketchId)}
         pendingEdit={interaction.session.pendingEdit}
+        offsetOptions={interaction.session.offsetOptions}
+        onOffsetOptions={(options) =>
+          dispatchInteraction({ type: 'sketch-offset-options', options })
+        }
         constraints={sketchConstraintItems}
         selectedObjectId={interaction.session.selectedObjectId}
         solveStatus={sketchSolveStatus}

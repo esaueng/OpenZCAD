@@ -989,3 +989,46 @@ describe('composite card (S04)', () => {
     expect(onResizeComposite).toHaveBeenCalledWith({ circumradius: 15 }, {});
   });
 });
+
+describe('the construction toggle (ZC-024)', () => {
+  it('reads the flag as pressed and asks for the toggle, not an Apply', async () => {
+    const user = userEvent.setup();
+    const onToggleConstruction = vi.fn();
+    const onApply = vi.fn();
+    const line: SketchObjectData = {
+      objectKind: 'line',
+      x1: 0,
+      y1: 0,
+      x2: 10,
+      y2: 0
+    };
+    const { rerender } = render(
+      <SketchEntityEditor
+        data={line}
+        scope={{}}
+        onApply={onApply}
+        onDelete={vi.fn()}
+        onToggleConstruction={onToggleConstruction}
+        onClose={vi.fn()}
+      />
+    );
+    const toggle = screen.getByRole('button', { name: 'Construction' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await user.click(toggle);
+    expect(onToggleConstruction).toHaveBeenCalledTimes(1);
+    expect(onApply).not.toHaveBeenCalled();
+    rerender(
+      <SketchEntityEditor
+        data={{ ...line, construction: true }}
+        scope={{}}
+        onApply={onApply}
+        onDelete={vi.fn()}
+        onToggleConstruction={onToggleConstruction}
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Construction' })
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+});

@@ -12,7 +12,7 @@ import {
 } from '@openzcad/shared';
 import type { SketchConstraintToolKind } from '../lib/interaction/machine';
 import { CONSTRAINT_ICONS } from './constraintIcons';
-import { Trash2, X } from 'lucide-react';
+import { Construction, Trash2, X } from 'lucide-react';
 import { ExprInput } from './ExprInput';
 import { previewExpression } from '../lib/model';
 import { TextObjectFields, type TextAttributes } from './TextObjectFields';
@@ -67,6 +67,11 @@ interface SketchEntityEditorProps {
   error?: string | null;
   onApply(data: SketchObjectData): void;
   onDelete(): void;
+  /**
+   * Turn the entity into construction geometry, or back (one undo step).
+   * Absent, the editor has no construction toggle.
+   */
+  onToggleConstruction?(): void;
   onClose(): void;
   /**
    * The constraints section: what the entity is already held by. Adding one
@@ -383,6 +388,7 @@ export function SketchEntityEditor({
   error,
   onApply,
   onDelete,
+  onToggleConstruction,
   onClose,
   constraints,
   onEditConstraint,
@@ -488,6 +494,23 @@ export function SketchEntityEditor({
               <Trash2 size={13} aria-hidden="true" />
               Delete
             </button>
+            {onToggleConstruction && (
+              <button
+                type="button"
+                className="secondary sketch-entity-construction"
+                aria-pressed={data.construction === true}
+                title={
+                  data.construction
+                    ? 'Make regular geometry: it bounds profiles again'
+                    : 'Make construction geometry: it solves but bounds no profile'
+                }
+                disabled={disabled}
+                onClick={onToggleConstruction}
+              >
+                <Construction size={13} aria-hidden="true" />
+                Construction
+              </button>
+            )}
             <button
               type="submit"
               className="primary"
