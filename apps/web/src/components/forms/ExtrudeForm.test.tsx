@@ -684,25 +684,57 @@ describe('to-face extent and draft (F01, schema v29)', () => {
     expect(host.cancel).toHaveBeenCalledOnce();
   });
 
-  it('says before Apply when the picked face cannot be reached from the sketch', async () => {
-    const host = picking({
-      describe: () => ({ label: 'Wall · face', distance: null })
-    });
-    render(
-      <ExtrudeForm
-        {...base}
-        initial={{ ...initial, endCondition: 'to-face', toFace: face }}
-        toFacePicking={host}
-        onSubmit={vi.fn()}
-        onCancel={vi.fn()}
-      />
-    );
-    expect(
-      screen.getByText(/not parallel to the sketch plane, or lies on it/)
-    ).toBeInTheDocument();
-    // A face the build would refuse cannot be submitted.
-    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
-  });
+  it.each([false, true])(
+    'refuses an unreachable picked face for preview and submit (creating: %s)',
+    async (creating) => {
+      const user = userEvent.setup();
+      const onSubmit = vi.fn();
+      const onPreview = vi.fn();
+      const host = picking({
+        describe: (target) => ({
+          label: 'Wall · face',
+          distance: target.faceHash === 7 ? null : 25
+        })
+      });
+      render(
+        <ExtrudeForm
+          {...base}
+          creating={creating}
+          submitLabel={creating ? 'Create' : 'Apply'}
+          initial={{
+            ...initial,
+            distance: creating ? 0 : 8,
+            endCondition: 'to-face'
+          }}
+          toFacePicking={host}
+          onSubmit={onSubmit}
+          onPreview={onPreview}
+          onCancel={vi.fn()}
+        />
+      );
+      act(() => host.setterRef.current?.(face));
+      expect(
+        screen.getByText(/not parallel to the sketch plane, or lies on it/)
+      ).toBeInTheDocument();
+      expect(onPreview).toHaveBeenLastCalledWith(null);
+      expect(
+        screen.getByRole('button', { name: creating ? 'Create' : 'Apply' })
+      ).toBeDisabled();
+      await user.click(screen.getByRole('textbox', { name: 'Name' }));
+      await user.keyboard('{Enter}');
+      expect(onSubmit).not.toHaveBeenCalled();
+
+      // Re-picking a reachable face restores both preview and submit.
+      act(() => host.setterRef.current?.({ ...face, faceHash: 8 }));
+      expect(onPreview).toHaveBeenLastCalledWith(
+        expect.objectContaining({ endCondition: 'to-face', distance: 25 })
+      );
+      await user.click(
+        screen.getByRole('button', { name: creating ? 'Create' : 'Apply' })
+      );
+      expect(onSubmit).toHaveBeenCalledOnce();
+    }
+  );
 
   it('shows the unresolved state on reopen until a re-pick replaces the face', async () => {
     const host = picking({ unresolved: true });
