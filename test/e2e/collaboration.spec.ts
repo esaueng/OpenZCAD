@@ -1477,11 +1477,19 @@ test('keeps a shared-project viewer visibly read-only', async ({ page }) => {
   );
   await expect(page.locator('.feature-row')).toHaveCount(0);
 
-  // Asking for Build outright says the same thing.
+  // The mode cycle skips the modes the role locks. Draw is not one of them:
+  // a viewer can read and export the project's drawings, but every sheet
+  // edit is refused for the same reason. The next press comes back to View.
   await page.keyboard.press('Meta+Shift+m');
-  await expect(page.getByRole('contentinfo')).toContainText(
-    'This shared project is read-only'
-  );
+  await expect(
+    workspaceMode.getByRole('button', { name: 'Draw' })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    page
+      .getByRole('region', { name: 'Drawings' })
+      .getByRole('button', { name: 'New drawing sheet' })
+  ).toBeDisabled();
+  await page.keyboard.press('Meta+Shift+m');
   await expect(
     workspaceMode.getByRole('button', { name: 'View' })
   ).toHaveAttribute('aria-pressed', 'true');
