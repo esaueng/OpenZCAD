@@ -4,7 +4,8 @@ on:
   push:
     branches: ["**"]
     tags: ["**"]
-  pull_request:
+  # No pull_request trigger: the push run already tests the same commit, and
+  # History privacy ignores pull_request requests.
   merge_group:
 
 permissions:

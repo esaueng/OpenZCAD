@@ -42,6 +42,9 @@ def evaluate(expression, github, variables):
             return names[node.id]
         if isinstance(node, ast.Attribute) and not node.attr.startswith("_"):
             value = visit(node.value)
+            if value is None:
+                # GitHub dereferences a missing object as null.
+                return None
             if not isinstance(value, dict):
                 raise ValueError("Only context fields are allowed")
             result = value.get(node.attr)
@@ -57,6 +60,8 @@ def evaluate(expression, github, variables):
             return result
         if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.Eq):
             return visit(node.left) == visit(node.comparators[0])
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.NotEq):
+            return visit(node.left) != visit(node.comparators[0])
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
             args = [visit(arg) for arg in node.args]
             if node.func.id == "fromJSON" and len(args) == 1 and isinstance(args[0], str):
@@ -189,12 +194,37 @@ class DirectFleetTests(unittest.TestCase):
             ("push", "refs/heads/feature", False),
             ("push", "refs/heads/main", True),
             ("workflow_dispatch", "refs/heads/main", True),
+            ("workflow_dispatch", "refs/heads/feature", False),
         ):
             github = dict(self.github, event_name=event, ref=ref)
             self.assertEqual(evaluate("${{ " + condition + " }}", github, self.variables), expected)
         verify = cloudflare.split("\n  verify:\n", 1)[1].split("\n  upload:\n", 1)[0]
         self.assertNotRegex(verify, r"(?m)^    if:")
         self.assertIn("wrangler deploy --dry-run", verify)
+        self.assertRegex(upload, r"(?m)^    environment: cloudflare-versions$")
+
+    def test_only_kernel_bump_label_events_rerun_or_cancel_ci(self):
+        group = re.search(r"^  group: .*?(\$\{\{.+\}\})$", CALLER, re.M)[1]
+        condition = re.search(r"^    if: (.+)$", CALLER.split("\n  checks:\n", 1)[1], re.M)[1]
+        cases = (
+            ({"action": "synchronize"}, True),
+            ({"action": "labeled", "label": {"name": "kernel-bump"}}, True),
+            ({"action": "unlabeled", "label": {"name": "kernel-bump"}}, True),
+            ({"action": "labeled", "label": {"name": "documentation"}}, False),
+            ({"action": "unlabeled", "label": {"name": "documentation"}}, False),
+        )
+        for fields, runs in cases:
+            github = copy.deepcopy(self.github)
+            github["event"].update(fields)
+            with self.subTest(event=fields):
+                self.assertIs(evaluate("${{ " + condition + " }}", github, self.variables), runs)
+                keys = {evaluate(group, dict(github, run_id=run_id), self.variables) for run_id in (201, 202)}
+                # Runs that execute share the PR's group; skipped label runs
+                # get their own so they cannot cancel the run in progress.
+                self.assertEqual(keys, {"refs/pull/7/merge"} if runs else {201, 202})
+        for event in ("merge_group", "workflow_dispatch"):
+            github = dict(self.github, event_name=event, event={})
+            self.assertIs(evaluate("${{ " + condition + " }}", github, self.variables), True)
 
     def test_no_hosted_bootstrap_and_guard_before_checkout(self):
         self.assertNotIn("select-runner.yml", TEXT)
