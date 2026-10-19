@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Camera, Grid3x3, Maximize2, Ruler, ScanEye } from 'lucide-react';
+import { Camera, Grid3x3, Maximize2, Ruler } from 'lucide-react';
 import {
   SavedViewsSection,
   type SavedViewsSectionProps
@@ -45,8 +45,6 @@ interface ViewModeBarProps {
   savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
-  /** Absent, no X-ray button is drawn. */
-  onToggleXray?(): void;
 }
 
 /**
@@ -68,15 +66,20 @@ export function ViewModeBar({
   onView,
   savedViews,
   onCycleDisplayMode,
-  onToggleProjection,
-  onToggleXray
+  onToggleProjection
 }: ViewModeBarProps) {
   const keymap = useKeymap();
   const [viewsOpen, setViewsOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const panelId = useId();
-  const displayModeLabel = DISPLAY_MODE_LABELS[settings.displayMode];
+  // X-ray rides over the display mode and has no button of its own here, as
+  // on Build's rail: the rail's height is what its loading placeholder and
+  // the stage centring are sized to. Shift+X, the command bar and the view
+  // menu reach it.
+  const displayModeLabel = `${DISPLAY_MODE_LABELS[settings.displayMode]}${
+    settings.xray ? ' · X-ray' : ''
+  }`;
   const projectionLabel = PROJECTION_LABELS[projection];
 
   useEffect(() => {
@@ -244,23 +247,6 @@ export function ViewModeBar({
           <Camera size={16} aria-hidden="true" />
         </button>
       </Tooltip>
-      {onToggleXray && (
-        <Tooltip
-          label="X-ray"
-          shortcut={keymap.label('view-xray')}
-          description="See and pick through faces"
-        >
-          <button
-            type="button"
-            className={`view-mode-button${settings.xray ? ' active' : ''}`}
-            onClick={onToggleXray}
-            aria-label={labelWithKey('X-ray', keymap.label('view-xray'))}
-            aria-pressed={settings.xray === true}
-          >
-            <ScanEye size={16} aria-hidden="true" />
-          </button>
-        </Tooltip>
-      )}
     </div>
   );
 }

@@ -295,10 +295,16 @@ test('changing FOV in orthographic keeps framing when returning to perspective',
   await expect(canvas(page)).toHaveAttribute('data-e2e-field-of-view', '70');
   await page.keyboard.press('p');
   await expect(projection).toHaveAttribute('aria-pressed', 'false');
-  const after = (await project(page, points)).points;
-  expect(
-    Math.abs(after[1]!.x - after[0]!.x - (before[1]!.x - before[0]!.x))
-  ).toBeLessThan(2);
+  // Polled: the switch lands within a few frames, and a read in the frame
+  // of the key press can still see the projection it is leaving.
+  await expect
+    .poll(async () => {
+      const after = (await project(page, points)).points;
+      return Math.abs(
+        after[1]!.x - after[0]!.x - (before[1]!.x - before[0]!.x)
+      );
+    })
+    .toBeLessThan(2);
   expect(errors).toEqual([]);
   await testInfo.attach('orthographic-fov-framing', {
     body: await page.screenshot(),
