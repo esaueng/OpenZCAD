@@ -94,7 +94,7 @@
 }
 
 .settings-topbar .secondary,
-.settings-card-action .secondary,
+.setting-control .secondary,
 .settings-token-control .secondary,
 .danger-ghost {
   min-height: 30px;
@@ -122,7 +122,7 @@
 .settings-layout {
   min-height: 0;
   display: grid;
-  grid-template-columns: 270px minmax(0, 1fr);
+  grid-template-columns: 232px minmax(0, 1fr);
 }
 
 .settings-nav {
@@ -175,11 +175,13 @@
 
 .settings-nav nav button {
   width: 100%;
+  min-height: 32px;
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;
   gap: var(--sp-2);
-  padding: 7px var(--sp-2);
+  padding: 5px var(--sp-2);
+  font-size: var(--fs-base);
   color: var(--color-text-muted);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
@@ -233,28 +235,11 @@
   font-size: var(--fs-sm);
 }
 
-.settings-nav nav button span,
-.settings-nav-status span,
-.settings-deployment-summary span,
-.settings-privacy-note span {
+.settings-nav nav button span {
   min-width: 0;
-  display: grid;
-}
-
-.settings-nav nav button strong,
-.settings-nav-status strong,
-.settings-deployment-summary strong,
-.settings-privacy-note strong {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-}
-
-.settings-nav nav button small,
-.settings-nav-status small,
-.settings-deployment-summary small,
-.settings-privacy-note small {
-  color: var(--color-text-subtle);
-  font-size: var(--fs-mini);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-nav-status {
@@ -267,6 +252,21 @@
   border-top: var(--border-thin);
 }
 
+.settings-nav-status span {
+  min-width: 0;
+  display: grid;
+}
+
+.settings-nav-status strong {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.settings-nav-status small {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
 .settings-content {
   min-width: 0;
   overflow-y: auto;
@@ -277,108 +277,139 @@
 }
 
 /* Every page sits in the same centred frame, so its left edge is the same
-   whichever page is open. A page's content keeps a reading width inside it;
+   whichever page is open. A page's groups keep a reading width inside it;
    the controls reference alone runs the full frame. Centring each page at
    its own width put the reference's left edge 140px left of the others. */
 .settings-section {
   width: min(1040px, 100%);
   margin: 0 auto;
+  display: grid;
+  gap: var(--sp-5);
 }
 
-.settings-section:not(.settings-section-wide) > .settings-card {
-  max-width: 900px;
+.settings-section:not(.settings-section-wide) > * {
+  max-width: 760px;
 }
 
 .settings-section > header {
-  margin-bottom: var(--sp-4);
+  display: grid;
+  gap: var(--sp-1);
 }
 
 .settings-section h2 {
-  margin: 0 0 var(--sp-1);
+  margin: 0;
   font-size: var(--fs-xl);
   font-weight: var(--fw-medium);
 }
 
 .settings-section > header p {
-  max-width: 720px;
   margin: 0;
   color: var(--color-text-muted);
+}
+
+/* ── Groups and rows ──
+   Every page is a run of these: an optional caption above a card, the card
+   a stack of rows. One shape everywhere is the point of the page. */
+
+.settings-group {
+  min-width: 0;
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.settings-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding-inline: var(--sp-1);
+}
+
+.settings-group-head h3 {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.settings-group-head span {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
 }
 
 .settings-card {
   overflow: hidden;
   background: var(--color-surface);
   border: var(--border-thin);
-  border-radius: var(--radius-lg);
+  border-radius: 8px;
 }
 
-/* Splits a long card into named runs of rows (Profile, Storage, ...). */
-.settings-subhead {
-  margin: 0;
-  padding: var(--sp-2) var(--sp-4);
-  color: var(--color-text-subtle);
-  background: var(--color-surface-2);
-  border-bottom: var(--border-thin);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  letter-spacing: var(--ls-eyebrow);
-  text-transform: uppercase;
+.settings-group.danger .settings-card {
+  border-color: color-mix(in srgb, var(--color-error) 40%, var(--color-border));
 }
 
-.settings-cloud-delete-all {
-  background: color-mix(in srgb, var(--color-error) 7%, transparent);
+.settings-group.danger .settings-group-head h3 {
+  color: var(--color-error-text);
 }
 
 .setting-row {
-  min-height: 68px;
+  min-height: 56px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(180px, auto);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--sp-4);
-  padding: var(--sp-3) var(--sp-4);
+  padding: 10px var(--sp-4);
   border-bottom: var(--border-thin);
 }
 
-.density-comfortable .setting-row {
-  min-height: 82px;
-  padding-block: var(--sp-4);
+.setting-row.compact {
+  min-height: 40px;
+  padding-block: 6px;
 }
 
-.setting-copy,
-.settings-long-field {
+.density-comfortable .setting-row:not(.compact) {
+  min-height: 68px;
+  padding-block: var(--sp-3);
+}
+
+.setting-copy {
   min-width: 0;
   display: grid;
-  gap: 3px;
+  gap: 2px;
 }
 
-.setting-title,
-.settings-long-field > span {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-}
-
-.setting-title strong,
-.settings-long-field strong {
+.setting-title {
   font-weight: var(--fw-medium);
 }
 
-.setting-copy small,
-.settings-long-field small {
+.setting-row.compact .setting-title {
   color: var(--color-text-muted);
-  font-size: var(--fs-xs);
+  font-weight: var(--fw-regular);
 }
 
-.settings-scope {
-  padding: 1px 5px;
-  color: var(--color-text-subtle);
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  font-weight: var(--fw-regular);
-  white-space: nowrap;
+.setting-copy small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-tight);
+}
+
+/* Long copy one click away, so a row stays one line of hint. */
+.setting-details {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.setting-details summary {
+  width: fit-content;
+  color: var(--color-accent);
+  cursor: pointer;
+}
+
+.setting-details > div {
+  max-width: 62ch;
+  margin-top: var(--sp-1);
+  line-height: var(--lh-normal);
 }
 
 .setting-control {
@@ -392,13 +423,27 @@
   min-width: 180px;
 }
 
+/* Every row draws its own bottom rule; the card's border already closes the
+   last one, so a second line there doubled it. */
+.settings-card > :last-child {
+  border-bottom: 0;
+}
+
+.settings-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
 .settings-number {
-  width: 116px;
+  width: 96px;
   font-family: var(--font-mono);
 }
 
 .settings-text-wide {
-  width: min(360px, 36vw);
+  width: min(320px, 34vw);
 }
 
 .settings-unit-input {
@@ -415,10 +460,14 @@
   min-width: 2ch;
 }
 
+/* ── Switch ──
+   Off is a grey track with the knob left, on a solid accent one with the
+   knob right: the state reads from colour and position both. */
 .settings-toggle {
   position: relative;
-  width: 36px;
-  height: 20px;
+  width: 40px;
+  height: 22px;
+  flex: none;
   display: inline-flex;
 }
 
@@ -433,15 +482,19 @@
   height: 100%;
   margin: 0;
   opacity: 0;
-  cursor: inherit;
+  cursor: pointer;
 }
 
 .settings-toggle span {
-  width: 36px;
-  height: 20px;
+  width: 40px;
+  height: 22px;
   display: block;
-  background: var(--color-border-strong);
-  border: 1px solid var(--color-border-strong);
+  background: color-mix(
+    in srgb,
+    var(--color-text-subtle) 55%,
+    var(--color-surface)
+  );
+  border: 1px solid transparent;
   border-radius: 999px;
   transition:
     background-color var(--dur-fast) var(--ease-out),
@@ -450,26 +503,34 @@
 
 .settings-toggle span::after {
   content: '';
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   position: absolute;
   top: 3px;
   left: 3px;
-  background: var(--color-text-muted);
+  background: #fff;
   border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
   transition:
     transform var(--dur-fast) var(--ease-out),
     background-color var(--dur-fast) var(--ease-out);
 }
 
+.settings-toggle input:hover:not(:disabled, :checked) + span {
+  background: color-mix(
+    in srgb,
+    var(--color-text-subtle) 70%,
+    var(--color-surface)
+  );
+}
+
 .settings-toggle input:checked + span {
-  background: var(--color-accent-dim);
+  background: var(--color-accent);
   border-color: var(--color-accent);
 }
 
 .settings-toggle input:checked + span::after {
-  background: var(--color-accent-hi);
-  transform: translateX(16px);
+  transform: translateX(18px);
 }
 
 .settings-toggle input:focus-visible + span {
@@ -495,42 +556,138 @@
   cursor: not-allowed;
 }
 
+.settings-toggle input:disabled {
+  cursor: not-allowed;
+}
+
+/* ── Segmented choice ──
+   Every option shown at once; the chosen one takes the accent, as an
+   enabled switch does. */
+.settings-segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-bg);
+  border: var(--border-thin);
+  border-radius: 7px;
+}
+
+.settings-segmented label {
+  position: relative;
+  display: inline-flex;
+}
+
+.settings-segmented input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.settings-segmented span {
+  min-width: 36px;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.settings-segmented input:hover:not(:checked, :disabled) + span {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.settings-segmented input:checked + span {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}
+
+.settings-segmented input:focus-visible + span {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.settings-segmented input:disabled + span {
+  opacity: 0.45;
+}
+
+/* ── Read-only values ── */
 .settings-state {
-  padding: 2px 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
   color: var(--color-text-muted);
   background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
+  border-radius: 999px;
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
+  white-space: nowrap;
+}
+
+.settings-state.good::before,
+.settings-state.warning::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
 }
 
 .settings-state.good {
   color: var(--color-success);
-  border-color: color-mix(in srgb, var(--color-success) 35%, transparent);
 }
 
-.settings-state.warning,
-.settings-warning {
+.settings-state.warning {
   color: var(--color-warning);
 }
 
-.settings-card-action {
-  display: flex;
-  justify-content: flex-end;
-  padding: var(--sp-3) var(--sp-4);
+/* A hint that is itself a status line keeps the pill's own size. */
+.setting-copy small .settings-state {
+  width: fit-content;
+  white-space: normal;
 }
 
-.settings-card-action.split {
+.settings-meter-figure {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-3);
-  border-bottom: var(--border-thin);
+  gap: var(--sp-2);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  white-space: nowrap;
 }
 
-.settings-card-action.split > span:last-child {
-  display: flex;
-  gap: var(--sp-2);
+.settings-meter-bar {
+  width: 96px;
+  height: 6px;
+  display: block;
+  overflow: hidden;
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: 999px;
+}
+
+.settings-meter-bar > span {
+  height: 100%;
+  display: block;
+  background: var(--color-accent);
 }
 
 .settings-token-control {
@@ -540,65 +697,99 @@
 }
 
 .settings-token-control input {
-  width: min(260px, 27vw);
+  width: min(220px, 24vw);
   font-family: var(--font-mono);
 }
 
-.settings-warning {
-  padding: var(--sp-3) var(--sp-4);
-  background: color-mix(in srgb, var(--color-warning) 7%, transparent);
-  border-bottom: var(--border-thin);
-  font-size: var(--fs-xs);
-}
-
-.settings-success {
-  color: var(--color-success);
-  background: color-mix(in srgb, var(--color-success) 7%, transparent);
-}
-
-.settings-sign-in-warning {
-  align-items: center;
+/* ── Notices ──
+   A full-width line inside a card for a state the user should know about,
+   with its action at the end. */
+.settings-notice {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--sp-3);
+  align-items: center;
   justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 10px var(--sp-4);
+  border-bottom: var(--border-thin);
+  font-size: var(--fs-sm);
 }
 
 /* The explanation takes the slack and wraps above the controls when the row
    runs out of room; the action never shrinks into its neighbour or wraps its
    own label. */
-.settings-sign-in-warning > span {
+.settings-notice > span {
   flex: 1 1 16rem;
   min-width: 0;
 }
 
-.settings-sign-in-warning > button {
+.settings-notice > button {
   flex: none;
   white-space: nowrap;
 }
 
+.settings-notice.warning {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 7%, transparent);
+}
+
+.settings-notice.success {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 7%, transparent);
+}
+
+.settings-notice.info {
+  color: var(--color-text);
+  background: var(--color-accent-dim);
+}
+
+.settings-footnote {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  padding-inline: var(--sp-1);
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+}
+
+.settings-footnote > svg {
+  flex: none;
+  color: var(--color-accent);
+}
+
+/* ── Sign-in ── */
 .settings-auth-form {
   align-items: flex-start;
   border-bottom: var(--border-thin);
   display: grid;
   gap: var(--sp-4);
-  grid-template-columns: minmax(210px, 1fr) minmax(280px, 0.85fr);
+  grid-template-columns: minmax(200px, 1fr) minmax(260px, 0.9fr);
   padding: var(--sp-4);
 }
 
 .settings-auth-form > span {
   display: grid;
-  gap: var(--sp-1);
+  gap: 2px;
+}
+
+.settings-auth-form > span strong {
+  font-weight: var(--fw-medium);
 }
 
 .settings-auth-form > span small {
   color: var(--color-text-muted);
-  line-height: 1.45;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-tight);
 }
 
 .settings-auth-controls {
   display: grid;
   gap: var(--sp-2);
+}
+
+.settings-auth-controls .settings-button-row {
+  justify-content: flex-start;
 }
 
 .settings-auth-controls label {
@@ -655,102 +846,48 @@
   white-space: nowrap;
 }
 
+.settings-field-inline {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 10rem;
+}
+
+.settings-field-inline input {
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-field-inline span {
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-medium);
+}
+
 .settings-long-field {
-  padding: var(--sp-4);
-  border-bottom: var(--border-thin);
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+}
+
+.settings-long-field strong {
+  font-weight: var(--fw-medium);
+}
+
+.settings-long-field small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
 }
 
 .settings-long-field textarea {
   height: auto;
-  min-height: 100px;
+  min-height: 88px;
   margin-top: var(--sp-2);
   resize: vertical;
 }
 
-.settings-deployment-summary,
-.settings-privacy-note {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp-3);
-  padding: var(--sp-4);
-}
-
-.settings-deployment-summary {
-  border-bottom: var(--border-thin);
-}
-
-.settings-deployment-summary > svg,
-.settings-privacy-note > svg {
-  flex: 0 0 auto;
-  color: var(--color-accent);
-}
-
-.settings-privacy-note {
-  background: var(--color-accent-dim);
-}
-
-.settings-analytics-consent {
-  min-width: 0;
-  max-width: 22rem;
-  display: grid;
-  gap: var(--sp-2);
-  overflow-wrap: anywhere;
-}
-
-.settings-analytics-consent p {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
-}
-
-.settings-control-collection + .settings-control-collection {
-  border-top: var(--border-thin);
-}
-
-.settings-control-collection > header {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp-3);
-  padding: var(--sp-4);
-  background: var(--color-surface-2);
-  border-bottom: var(--border-thin);
-}
-
-.settings-control-collection-icon {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  color: var(--color-accent);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-md);
-}
-
-.settings-control-collection > header > span:last-child {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.settings-control-collection h3,
-.settings-control-group h4 {
-  margin: 0;
-  font-weight: var(--fw-medium);
-}
-
-.settings-control-collection h3 {
-  font-size: var(--fs-md);
-}
-
-.settings-control-collection > header p,
-.settings-control-group > p {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
-}
-
+/* ── Controls reference ──
+   Keys and the action they run, two groups across the frame. */
 .settings-control-groups {
   display: grid;
   /* Wide enough for a one-line key column ("Ctrl/Cmd+Shift+Z Ctrl/Cmd+Y")
@@ -762,32 +899,15 @@
 
 .settings-control-group {
   min-width: 0;
-  padding: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
   background: var(--color-surface);
 }
 
-.settings-control-group > header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--sp-3);
-}
-
 .settings-control-group h4 {
-  color: var(--color-text);
-  font-size: var(--fs-base);
-}
-
-.settings-control-group > header > span {
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  white-space: nowrap;
-}
-
-.settings-control-group > p {
-  min-height: 34px;
-  margin-top: var(--sp-1);
+  margin: 0 0 var(--sp-1);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
 }
 
 /* The key column is as wide as the group's longest binding and every row
@@ -797,7 +917,7 @@
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
   column-gap: var(--sp-3);
-  margin: var(--sp-3) 0 0;
+  margin: 0;
 }
 
 .settings-control-row {
@@ -805,7 +925,8 @@
   display: grid;
   grid-column: 1 / -1;
   grid-template-columns: subgrid;
-  padding: 9px 0;
+  align-items: center;
+  padding: 6px 0;
   border-top: var(--border-thin);
 }
 
@@ -815,26 +936,43 @@
   margin: 0;
 }
 
+.settings-control-row dd {
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+}
+
 .settings-control-keys {
   display: flex;
   gap: 4px;
 }
 
 .settings-control-keys kbd {
-  min-width: 30px;
+  min-width: 26px;
   white-space: nowrap;
   text-align: center;
 }
 
-.settings-control-row dd {
+/* A keymap row: the action label (with its capture prompt or refusal
+   under it) on the left, its Add key / Reset buttons at the right edge. */
+.settings-control-row dd:has(> strong) {
   display: grid;
-  gap: 2px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--sp-2);
+  row-gap: 2px;
+}
+
+.settings-control-row dd:has(> strong) > small {
+  grid-column: 1;
+}
+
+.settings-control-row dd:has(> strong) > .keymap-actions {
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .settings-control-row dd strong {
-  color: var(--color-text);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
+  font-weight: var(--fw-regular);
 }
 
 .settings-control-row dd small {
@@ -843,10 +981,49 @@
   line-height: 1.4;
 }
 
+/* The keymap editor groups carry a command count beside their title. */
+.settings-control-group > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+/* Shows the reference group's per-key explanations in place. */
+.settings-details-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  color: var(--color-accent);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-mini);
+}
+
+.settings-details-toggle:hover {
+  background: var(--color-accent-dim);
+}
+
+.settings-details-toggle > svg {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.settings-details-toggle[aria-expanded='true'] > svg {
+  transform: rotate(180deg);
+}
+
+.settings-control-group > header > span {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  white-space: nowrap;
+}
+
 /* The keymap editor: the keyboard groups with each binding removable and a
-   capture button per command. */
+   capture button per command. It opens its card, so the card's own border
+   is its top edge. */
 .keymap-editor {
-  border-top: var(--border-thin);
+  min-width: 0;
 }
 
 .keymap-editor-bar {
@@ -854,14 +1031,14 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
+  padding: 10px var(--sp-4);
   border-bottom: var(--border-thin);
 }
 
 .keymap-editor-bar p {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
 }
 
 .keymap-chip {
@@ -888,8 +1065,8 @@
 .keymap-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--sp-2);
-  margin-top: var(--sp-1);
+  justify-content: flex-end;
+  gap: var(--sp-1);
 }
 
 .keymap-actions button {
@@ -904,36 +1081,15 @@
   background: var(--color-accent-dim);
 }
 
-/* Every row draws its own bottom rule; the card's border already closes the
-   last one, so a second line there doubled it. */
-.settings-card > :last-child,
-.settings-cloud-delete-all:last-child > .setting-row {
-  border-bottom: 0;
-}
-
-.settings-card-action-note {
-  margin-right: auto;
-  align-self: center;
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
-}
-
 .settings-empty {
-  width: min(900px, 100%);
+  width: min(760px, 100%);
   margin: 0 auto;
   color: var(--color-text-muted);
 }
 
-/* Controls' navigation rows sit in a collection above the reference; the
-   next collection's top rule already closes the last one. */
-.settings-control-collection > .setting-row:last-child {
-  border-bottom: 0;
-}
-
 @media (max-width: 860px) {
   .settings-topbar-title,
-  .settings-save-message,
-  .settings-topbar .secondary {
+  .settings-save-message {
     display: none;
   }
 
@@ -942,10 +1098,9 @@
   }
 
   .settings-layout {
-    grid-template-columns: 210px minmax(0, 1fr);
+    grid-template-columns: 190px minmax(0, 1fr);
   }
 
-  .settings-nav nav button small,
   .settings-nav-status {
     display: none;
   }
@@ -956,10 +1111,24 @@
 
   .setting-row {
     grid-template-columns: 1fr;
+    gap: var(--sp-2);
+  }
+
+  /* A switch stays at the end of its row however narrow: it is small, and a
+     switch below its label reads as belonging to the next row. */
+  .setting-row:has(> .setting-control > .settings-toggle:only-child),
+  .setting-row.compact {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .setting-control {
     justify-content: flex-start;
+  }
+
+  .setting-row:has(> .setting-control > .settings-toggle:only-child)
+    > .setting-control,
+  .setting-row.compact > .setting-control {
+    justify-content: flex-end;
   }
 
   .settings-text-wide,
@@ -972,20 +1141,14 @@
     flex-wrap: wrap;
   }
 
-  .settings-card-action.split,
   .settings-auth-form {
     grid-template-columns: 1fr;
-  }
-
-  .settings-card-action.split {
-    align-items: flex-start;
-    flex-direction: column;
   }
 }
 
 @media (max-width: 580px) {
   .settings-layout {
-    grid-template-columns: 64px minmax(0, 1fr);
+    grid-template-columns: 56px minmax(0, 1fr);
   }
 
   .settings-nav {
@@ -1055,7 +1218,7 @@
   }
 
   .setting-control select,
-  .setting-control input:not([type='checkbox']) {
+  .setting-control input:not([type='checkbox'], [type='radio']) {
     width: 100%;
     min-width: 0;
   }
@@ -1071,21 +1234,4 @@
   .settings-back-action {
     font-size: 0;
   }
-}
-
-.settings-field-inline {
-  display: grid;
-  gap: var(--sp-1);
-  min-width: 12rem;
-}
-
-.settings-field-inline input {
-  width: 100%;
-  min-width: 0;
-}
-
-.settings-field-inline span {
-  color: var(--color-text-muted);
-  font-size: var(--fs-mini);
-  font-weight: var(--fw-medium);
 }

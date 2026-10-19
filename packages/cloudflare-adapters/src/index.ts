@@ -39,6 +39,10 @@ import {
   RevisionConflictError,
   RevisionIdCollisionError,
   RevisionNotFoundError,
+  assertClientSavePoint,
+  prepareInitialProjectDocument,
+  SavePointRequestError,
+  projectIdTaken,
   sharedDocumentReferencesImport,
   sharedProjectSnapshotDocument,
   UPLOAD_SESSION_TTL_MS,
@@ -72,6 +76,7 @@ import {
   MAX_DOCUMENT_VERSION_ADVANCE,
   documentVersionCanAdvance,
   MAX_PROJECT_CHECKPOINTS,
+  KEPT_LOCAL_VERSION_REASON,
   MAX_CHECKPOINT_REASON_LENGTH,
   THUMBNAIL_CONTENT_TYPE,
   nowIso,
@@ -131,8 +136,7 @@ import {
 import {
   adoptProjectDocument,
   reidentifyProjectDocument,
-  appendRevision,
-  createCheckpoint,
+  createAdvancingSavePoint,
   createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
@@ -1299,7 +1303,14 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     const document = request.document
       ? await this.prepareAdoption(userId, request.document, request.name)
-      : createProjectDocument(request.name, userId, request.units);
+      : request.initialDocument
+        ? await this.prepareInitialDocument(
+            userId,
+            request.initialDocument,
+            request.name
+          )
+        : // A pre-Phase 1 client sends no document; kept for one release.
+          createProjectDocument(request.name, userId, request.units);
     try {
       return {
         project: await this.insertProject(
@@ -1324,6 +1335,51 @@ export class D1R2PersistenceService implements PersistenceService {
       }
       throw error;
     }
+  }
+
+  private async projectIdInUse(document: ProjectDocument): Promise<boolean> {
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT 1 AS taken FROM projects WHERE id = ?
+         UNION ALL
+         SELECT 1 FROM project_adoptions WHERE cloud_project_id = ?
+         LIMIT 1`
+      )
+      .bind(document.projectId, document.projectId)
+      .first<{ taken: number }>();
+    return row !== null;
+  }
+
+  private async prepareInitialDocument(
+    userId: UserId,
+    source: ProjectDocument,
+    name: string
+  ): Promise<ProjectDocument> {
+    const document = prepareInitialProjectDocument(userId, source, name);
+    this.assertDocumentCanBeStored(document);
+    if (await this.projectIdInUse(document)) throw projectIdTaken();
+    return document;
+  }
+
+  /**
+   * Refuses a client-minted revision id the store already knows: a stored
+   * revision row, or the head's newest revision. Replaying one would collide
+   * with — or, on a failed room publish, clean up — the earlier save state.
+   */
+  private async assertRevisionIdUnused(
+    projectId: string,
+    revisionId: string
+  ): Promise<void> {
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT 1 AS taken FROM revisions WHERE id = ?
+         UNION ALL
+         SELECT 1 FROM projects WHERE id = ? AND last_revision_id = ?
+         LIMIT 1`
+      )
+      .bind(revisionId, projectId, revisionId)
+      .first<{ taken: number }>();
+    if (row) throw new RevisionIdCollisionError();
   }
 
   private alreadyAdopted(projectId: string): ProjectAdoptionError {
@@ -2112,8 +2168,23 @@ export class D1R2PersistenceService implements PersistenceService {
     ) {
       throw new ProjectNotFoundError(request.projectId);
     }
+    if (request.savedRevisionId !== undefined) {
+      assertClientSavePoint(normalized, {
+        revisionId: request.savedRevisionId,
+        reason: request.reason
+      });
+      await this.assertRevisionIdUnused(
+        request.projectId,
+        request.savedRevisionId
+      );
+    }
     await this.refreshAccountQuota(access.ownerUserId);
-    const document = createSavedRevision(normalized, request.reason);
+    const document =
+      request.savedRevisionId === undefined
+        ? // A pre-Phase 1 client leaves the save point to the server; kept
+          // for one release.
+          createSavedRevision(normalized, request.reason)
+        : normalized;
     this.assertDocumentCanBeStored(document);
     const discardGuard = meshDiscardCommitGuard(document);
     const documentJson = JSON.stringify(document);
@@ -2333,6 +2404,9 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ProjectNotFoundError(saved.projectId);
     }
     this.assertDocumentCanBeStored(saved);
+    // Before any write: the failure cleanup below deletes the revision row by
+    // id, so a replayed id must never reach it.
+    await this.assertRevisionIdUnused(saved.projectId, revision.revisionId);
     const discardGuard = meshDiscardCommitGuard(saved);
     await this.refreshAccountQuota(access.ownerUserId);
     const documentJson = JSON.stringify(saved);
@@ -6766,7 +6840,11 @@ export class ProjectCollaborationRoom extends DurableObject {
         message.baseVersion,
         true,
         message.leaseId,
-        message.conflictResolution
+        message.conflictResolution,
+        message.conflictResolution === 'keep-local' &&
+          typeof message.savedRevisionId === 'string'
+          ? message.savedRevisionId
+          : undefined
       );
     }
   }
@@ -6778,7 +6856,8 @@ export class ProjectCollaborationRoom extends DurableObject {
     baseVersion: number | null,
     broadcast: boolean,
     leaseId?: string,
-    conflictResolution?: 'keep-local'
+    conflictResolution?: 'keep-local',
+    savedRevisionId?: string
   ): Promise<void> {
     await this.enqueueLeaseOperation(() =>
       this.acceptDocumentWithCurrentLease(
@@ -6788,7 +6867,8 @@ export class ProjectCollaborationRoom extends DurableObject {
         baseVersion,
         broadcast,
         leaseId,
-        conflictResolution
+        conflictResolution,
+        savedRevisionId
       )
     );
   }
@@ -6800,7 +6880,8 @@ export class ProjectCollaborationRoom extends DurableObject {
     baseVersion: number | null,
     broadcast: boolean,
     leaseId?: string,
-    conflictResolution?: 'keep-local'
+    conflictResolution?: 'keep-local',
+    savedRevisionId?: string
   ): Promise<void> {
     const connection = this.sockets.get(socket);
     if (!connection || !(await this.canAuthor(connection, leaseId, socket))) {
@@ -6838,8 +6919,21 @@ export class ProjectCollaborationRoom extends DurableObject {
       baseVersion === null ? undefined : this.documentHistory.get(baseVersion);
     const resolution =
       conflictResolution === 'keep-local'
-        ? resolveKeptCollaborationDocument(latest, document, baseVersion)
+        ? resolveKeptCollaborationDocument(
+            latest,
+            document,
+            baseVersion,
+            savedRevisionId
+          )
         : resolveCollaborationDocument(latest, document, base);
+    if (resolution.kind === 'invalid') {
+      this.send(socket, {
+        type: 'error',
+        code: 'document-invalid',
+        message: resolution.message
+      });
+      return;
+    }
     if (resolution.kind === 'same') {
       // A newly joined browser still needs confirmation of its merge base,
       // even when another browser already supplied this exact snapshot.
@@ -6867,9 +6961,17 @@ export class ProjectCollaborationRoom extends DurableObject {
       // A merge produces a document the sender never had. The broadcast below
       // skips the sender, so the merged state has to ride along on the ack or
       // the sender stays silently divergent while reporting itself synced.
+      // A kept version the browser minted rides along too: that echo is how
+      // the sender adopts it, exactly as it adopted a room-minted one.
       this.send(
         socket,
-        ackFor(resolution.document, submitted, document !== submitted)
+        ackFor(
+          resolution.document,
+          submitted,
+          document !== submitted ||
+            (conflictResolution === 'keep-local' &&
+              savedRevisionId !== undefined)
+        )
       );
       if (broadcast) {
         await this.broadcast(
@@ -7340,6 +7442,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       leaseId?: string;
       conflictResolution?: 'keep-local';
       checkpointReason?: string;
+      savedRevisionId?: string;
     };
     try {
       payload = JSON.parse(body) as typeof payload;
@@ -7354,7 +7457,12 @@ export class ProjectCollaborationRoom extends DurableObject {
       !payload.document ||
       (payload.checkpointReason !== undefined &&
         (typeof payload.checkpointReason !== 'string' ||
-          payload.checkpointReason.length > MAX_CHECKPOINT_REASON_LENGTH))
+          payload.checkpointReason.length > MAX_CHECKPOINT_REASON_LENGTH)) ||
+      (payload.savedRevisionId !== undefined &&
+        (typeof payload.savedRevisionId !== 'string' ||
+          payload.savedRevisionId.length > 256 ||
+          (payload.checkpointReason === undefined &&
+            payload.conflictResolution !== 'keep-local')))
     ) {
       return new Response('Invalid collaboration snapshot.', { status: 400 });
     }
@@ -7371,6 +7479,7 @@ export class ProjectCollaborationRoom extends DurableObject {
           leaseId?: string;
           conflictResolution?: 'keep-local';
           checkpointReason?: string;
+          savedRevisionId?: string;
         }
       )
     );
@@ -7388,6 +7497,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       leaseId?: string;
       conflictResolution?: 'keep-local';
       checkpointReason?: string;
+      savedRevisionId?: string;
     }
   ): Promise<Response> {
     if (this.erasing)
@@ -7438,7 +7548,8 @@ export class ProjectCollaborationRoom extends DurableObject {
         ? resolveKeptCollaborationDocument(
             this.latestDocument,
             document,
-            payload.baseVersion
+            payload.baseVersion,
+            payload.savedRevisionId
           )
         : resolveCollaborationDocument(
             this.latestDocument,
@@ -7447,6 +7558,12 @@ export class ProjectCollaborationRoom extends DurableObject {
               ? undefined
               : this.documentHistory.get(payload.baseVersion)
           );
+    if (resolution.kind === 'invalid') {
+      return rejectionResponse({
+        code: 'document-invalid',
+        message: resolution.message
+      });
+    }
     if (resolution.kind === 'conflict') {
       return Response.json(
         { type: 'conflict', document: resolution.document },
@@ -7472,13 +7589,36 @@ export class ProjectCollaborationRoom extends DurableObject {
           { status: 409 }
         );
       }
-      const checkpoint = createCheckpoint(
-        appendRevision(
+      let checkpoint: ProjectDocument;
+      if (payload.savedRevisionId === undefined) {
+        // A pre-Phase 1 client leaves the save point to the room; kept for
+        // one release.
+        checkpoint = createAdvancingSavePoint(
           withoutDerivedProjection(resolution.document),
           payload.checkpointReason
-        ),
-        payload.checkpointReason
-      );
+        );
+      } else {
+        // The browser appended the save point (ADR-024 Phase 1). It names the
+        // exact lineage it was minted on, so anything the room had to merge
+        // in is a conflict the browser rebases and resubmits.
+        if (resolution.document !== document) {
+          return Response.json(
+            {
+              type: 'conflict',
+              document: this.latestDocument ?? resolution.document
+            },
+            { status: 409 }
+          );
+        }
+        checkpoint = withoutDerivedProjection(document);
+        const invalid = roomSavePointError(
+          checkpoint,
+          payload.savedRevisionId,
+          payload.checkpointReason,
+          this.latestDocument
+        );
+        if (invalid) return rejectionResponse(invalid);
+      }
       const oversize =
         checkClientDocument(checkpoint) ?? checkPersistedSize(checkpoint);
       if (oversize) return rejectionResponse(oversize);
@@ -7525,6 +7665,12 @@ export class ProjectCollaborationRoom extends DurableObject {
             message: 'Project membership no longer allows editing.'
           });
         }
+        if (error instanceof RevisionIdCollisionError) {
+          return rejectionResponse({
+            code: 'document-invalid',
+            message: error.message
+          });
+        }
         return rejectionResponse({
           code: 'internal',
           message:
@@ -7564,7 +7710,13 @@ export class ProjectCollaborationRoom extends DurableObject {
       });
     }
     return Response.json(
-      ackFor(resolution.document, submitted, document !== submitted)
+      ackFor(
+        resolution.document,
+        submitted,
+        document !== submitted ||
+          (payload.conflictResolution === 'keep-local' &&
+            payload.savedRevisionId !== undefined)
+      )
     );
   }
 
@@ -7840,24 +7992,67 @@ function checkPersistedSize(
  * the sender submitted it has to travel back on the ack. A differing version is
  * exactly that signal: `accept` hands back the submitted document unchanged,
  * `same` hands back a content-identical document at the same version, and only
- * a merge mints a new version.
+ * a merge mints a new version. `echoDocument` sends it regardless: canonical
+ * sources were rewritten, or the sender adopts a kept version from the echo.
  */
 function ackFor(
   resolved: ProjectDocument,
   submitted: ProjectDocument,
-  canonicalSourcesChanged = false
+  echoDocument = false
 ): CollaborationServerMessage {
-  return resolved.version === submitted.version && !canonicalSourcesChanged
+  return resolved.version === submitted.version && !echoDocument
     ? { type: 'ack', version: resolved.version }
     : { type: 'ack', version: resolved.version, document: resolved };
 }
 
-/** An explicit recovery choice replaces only the exact room version shown. */
+/**
+ * Why the room refuses a browser-minted save point, or null. Beyond the shape
+ * checks every store makes, the id must be new to the room's current document
+ * — the account's revision rows are checked when the checkpoint is stored.
+ */
+function roomSavePointError(
+  document: ProjectDocument,
+  revisionId: string,
+  reason: string,
+  latest: ProjectDocument | null
+): CollaborationRejection | null {
+  try {
+    assertClientSavePoint(document, { revisionId, reason });
+  } catch (error) {
+    if (error instanceof SavePointRequestError)
+      return { code: 'document-invalid', message: error.message };
+    throw error;
+  }
+  const checkpointId = document.checkpoints.at(-1)?.checkpointId;
+  return latest?.revisions.some(
+    (revision) => revision.revisionId === revisionId
+  ) ||
+    latest?.checkpoints.some(
+      (checkpoint) => checkpoint.checkpointId === checkpointId
+    )
+    ? {
+        code: 'document-invalid',
+        message: new RevisionIdCollisionError().message
+      }
+    : null;
+}
+
+/**
+ * An explicit recovery choice replaces only the exact room version shown.
+ *
+ * With `savedRevisionId` the browser has already given the kept document its
+ * save revision and a version past the room's (ADR-024 Phase 1); the room only
+ * checks it. Without, it is a pre-Phase 1 client and the room mints them; that
+ * path is kept for one release.
+ */
 export function resolveKeptCollaborationDocument(
   latest: ProjectDocument | null,
   incoming: ProjectDocument,
-  expectedVersion: number | null | undefined
-): ReturnType<typeof resolveCollaborationDocument> {
+  expectedVersion: number | null | undefined,
+  savedRevisionId?: string
+):
+  | ReturnType<typeof resolveCollaborationDocument>
+  | { kind: 'invalid'; message: string } {
   if (
     !latest ||
     expectedVersion !== latest.version ||
@@ -7867,6 +8062,20 @@ export function resolveKeptCollaborationDocument(
   ) {
     return { kind: 'conflict', document: latest ?? incoming };
   }
+  if (savedRevisionId !== undefined) {
+    if (incoming.version <= latest.version) {
+      return { kind: 'conflict', document: latest };
+    }
+    const invalid = roomSavePointError(
+      incoming,
+      savedRevisionId,
+      KEPT_LOCAL_VERSION_REASON,
+      latest
+    );
+    return invalid
+      ? { kind: 'invalid', message: invalid.message }
+      : { kind: 'accept', document: incoming };
+  }
   // This is a new committed choice even if the kept document is older or has
   // an independent history. Give it a fresh save revision so subsequent edits
   // have genuine lineage; ordinary submissions still use the merge rules.
@@ -7874,7 +8083,7 @@ export function resolveKeptCollaborationDocument(
     kind: 'accept',
     document: createSavedRevision(
       { ...incoming, version: Math.max(latest.version, incoming.version) + 1 },
-      'Kept this device’s version'
+      KEPT_LOCAL_VERSION_REASON
     )
   };
 }

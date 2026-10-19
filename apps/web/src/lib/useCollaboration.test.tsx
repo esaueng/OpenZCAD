@@ -8,6 +8,7 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import {
+  KEPT_LOCAL_VERSION_REASON,
   toUserId,
   type AuthSession,
   type CollaborationServerMessage,
@@ -1289,12 +1290,25 @@ describe('useCollaboration lease ordering', () => {
     });
 
     expect(result.current.lease).toEqual(lease);
-    expect(socket.frames().at(-1)).toMatchObject({
+    const kept = socket.frames().at(-1)!;
+    expect(kept).toMatchObject({
       type: 'document',
       baseVersion: remote.version,
       leaseId: lease.leaseId,
       conflictResolution: 'keep-local',
       document: { featureOrder: local.featureOrder }
+    });
+    // The browser mints the kept version's save revision (ADR-024 Phase 1).
+    const keptDocument = kept.document as ProjectDocument;
+    const keptRevision = keptDocument.revisions.at(-1)!;
+    expect(kept.savedRevisionId).toBe(keptRevision.revisionId);
+    expect(keptRevision.reason).toBe(KEPT_LOCAL_VERSION_REASON);
+    expect(keptDocument.version).toBe(
+      Math.max(remote.version, local.version) + 1
+    );
+    expect(keptDocument.checkpoints.at(-1)).toMatchObject({
+      revisionId: keptRevision.revisionId,
+      documentVersion: keptDocument.version
     });
     expect(confirmed).not.toHaveBeenCalled();
     expect(result.current.conflict).not.toBeNull();

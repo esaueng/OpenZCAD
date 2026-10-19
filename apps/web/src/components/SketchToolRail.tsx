@@ -18,6 +18,7 @@ import {
   Grid3x3,
   Hexagon,
   Layers3,
+  Link2,
   Magnet,
   MousePointer2,
   Minus,
@@ -31,6 +32,7 @@ import {
   Square,
   SquareDashed,
   SquareDot,
+  SquareRoundCorner,
   Trash2,
   Type,
   Waypoints
@@ -49,12 +51,14 @@ import {
   type SketchRectangleMode,
   type SketchConstraintToolKind,
   type SketchEditToolKind,
+  type SketchOffsetOptions,
   type SketchToolId
 } from '../lib/interaction/machine';
 import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
 import type { SketchDefinedState } from '../lib/sketch/constraints';
 import type { ConstraintInspectionTarget } from '../lib/sketch/constraintInspection';
 import { SKETCH_EDIT_TOOL_SPECS } from '../lib/sketch/edits';
+import { DEFAULT_SKETCH_OFFSET_OPTIONS } from '../lib/sketch/offset';
 import { CONSTRAINT_ICONS } from './constraintIcons';
 import { Tooltip } from './Tooltip';
 import { useKeymap } from '../lib/keymap';
@@ -124,6 +128,9 @@ interface SketchToolRailProps {
   canConstrain: boolean;
   /** Armed modify tool, if any. */
   pendingEdit: PendingSketchEdit | null;
+  /** The Offset tool's corner join and chain setting; absent is the default. */
+  offsetOptions?: SketchOffsetOptions;
+  onOffsetOptions?(options: SketchOffsetOptions): void;
   constraints: SketchConstraintListItem[];
   selectedObjectId?: string | null;
   solveStatus: SketchSolveStatus | null;
@@ -446,6 +453,22 @@ const FOLDED_EDIT_TOOLS = new Set<SketchEditToolKind>([
   'circular-pattern'
 ]);
 
+/** Offset's corner joins, as its strip offers them. */
+const OFFSET_JOINS = [
+  {
+    join: 'miter',
+    label: 'Miter',
+    detail: 'Straight neighbours extend to a sharp corner',
+    icon: Square
+  },
+  {
+    join: 'round',
+    label: 'Round',
+    detail: 'An arc about the source corner joins the neighbours',
+    icon: SquareRoundCorner
+  }
+] as const;
+
 function circleModeSpec(mode: SketchCircleMode) {
   return CIRCLE_MODES.find((spec) => spec.mode === mode) ?? CIRCLE_MODES[0]!;
 }
@@ -567,6 +590,8 @@ export function SketchToolRail({
   onTogglePalette,
   canConstrain,
   pendingEdit,
+  offsetOptions = DEFAULT_SKETCH_OFFSET_OPTIONS,
+  onOffsetOptions,
   constraints,
   selectedObjectId,
   solveStatus,
@@ -1011,6 +1036,77 @@ export function SketchToolRail({
             ).map((spec) => editTool(spec, true))}
           </span>
         )}
+        {pendingEdit?.kind === 'offset' && !modifyOpen ? (
+          // Like the circle's types: Offset's settings ride beside its slot
+          // while it is armed, and leave with it. They apply to the next pick.
+          <span
+            className="sketch-type-strip"
+            role="group"
+            aria-label="Offset options"
+            data-rail-flyout=""
+          >
+            <span
+              className="sketch-offset-joins"
+              role="radiogroup"
+              aria-label="Offset corners"
+            >
+              {OFFSET_JOINS.map(
+                ({ join, label, detail, icon: Icon }, index) => {
+                  const checked = offsetOptions.join === join;
+                  return (
+                    <Tooltip key={join} label={label} description={detail}>
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={checked}
+                        tabIndex={checked ? 0 : -1}
+                        className={`sketch-type-tile${checked ? ' active' : ''}`}
+                        onClick={() =>
+                          onOffsetOptions?.({ ...offsetOptions, join })
+                        }
+                        onKeyDown={(event) => {
+                          const next = radioGroupKeyStep(
+                            event,
+                            OFFSET_JOINS.length,
+                            index
+                          );
+                          if (next !== null) {
+                            onOffsetOptions?.({
+                              ...offsetOptions,
+                              join: OFFSET_JOINS[next]!.join
+                            });
+                          }
+                        }}
+                      >
+                        <Icon size={16} aria-hidden="true" />
+                        <span>{label}</span>
+                      </button>
+                    </Tooltip>
+                  );
+                }
+              )}
+            </span>
+            <Tooltip
+              label="Chain"
+              description="On, a pick offsets every curve joined end to end with it. Off, only the picked curve."
+            >
+              <button
+                type="button"
+                aria-pressed={offsetOptions.chain}
+                className={`sketch-type-tile${offsetOptions.chain ? ' active' : ''}`}
+                onClick={() =>
+                  onOffsetOptions?.({
+                    ...offsetOptions,
+                    chain: !offsetOptions.chain
+                  })
+                }
+              >
+                <Link2 size={16} aria-hidden="true" />
+                <span>Chain</span>
+              </button>
+            </Tooltip>
+          </span>
+        ) : null}
       </span>
     </>
   );

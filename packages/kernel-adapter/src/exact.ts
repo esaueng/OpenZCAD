@@ -102,6 +102,7 @@ import type {
 } from './exact-types';
 export type { DxfFaceSelector } from './exact-types';
 import { diagnoseImportedSolid } from './exact-lineage-builders';
+import { releasePreparedFaceMove } from './exact-prepared-face-move';
 import {
   blendRegionKeyOfHashes,
   measureOwnedFaceGeometry,
@@ -1239,6 +1240,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       terminal.data.operation.kind === 'offset-face'
         ? terminal.featureId
         : undefined;
+    // Only a drag preview keeps a prepared face move; any other sync ends it.
+    if (!deferredDirectEditFeatureId && this.historyKernel) {
+      releasePreparedFaceMove(this.historyKernel);
+    }
 
     // The first feature whose failure would describe this device's moment
     // rather than the document. Nothing at or after it is checkpointed, so
