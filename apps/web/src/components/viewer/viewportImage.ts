@@ -121,6 +121,25 @@ export function fitCameraToAspect(
   return () => undefined;
 }
 
+/** The group ModelViewer hangs a picked face's fill and ghost in. */
+const SELECTION_OVERLAY_GROUP = 'body-selection-overlay';
+
+/**
+ * Multisampling stops at 4K (about 8.3 MP): four half-float samples cost
+ * 32 bytes a pixel before depth, already some 265 MB there, and a larger
+ * picture has the resolution to do without it.
+ */
+export const MSAA_MAX_PIXELS = 3840 * 2160;
+
+/** MSAA samples for a capture of this size. */
+export function captureSamples(
+  width: number,
+  height: number,
+  maxSamples: number
+): number {
+  return width * height <= MSAA_MAX_PIXELS ? Math.min(4, maxSamples) : 0;
+}
+
 const TONE_MAPPING_DEFINES: Partial<Record<THREE.ToneMapping, string>> = {
   [THREE.LinearToneMapping]: 'LINEAR_TONE_MAPPING',
   [THREE.ReinhardToneMapping]: 'REINHARD_TONE_MAPPING',
@@ -251,9 +270,17 @@ export function renderViewportImage(
       show(object, wanted.has(bodyId));
     }
   }
-  // Selection is a viewing state: its glow is not part of the part.
+  // Selection is a viewing state: its glow, and the face fills and ghosts
+  // hung under a body for a picked face, are not part of the part.
   for (const object of parts.objectsByBodyId.values()) {
     object.traverse((node) => {
+      if (
+        node.name === SELECTION_OVERLAY_GROUP ||
+        node.userData.selectionOverlay === true
+      ) {
+        hide(node, false);
+        return;
+      }
       const material = (node as THREE.Mesh).material as
         THREE.MeshStandardMaterial | undefined;
       if (material && 'emissive' in material && material.emissive) {
@@ -286,7 +313,7 @@ export function renderViewportImage(
 
   const scene3d = new THREE.WebGLRenderTarget(width, height, {
     type: THREE.HalfFloatType,
-    samples: Math.min(4, renderer.capabilities.maxSamples),
+    samples: captureSamples(width, height, renderer.capabilities.maxSamples),
     depthBuffer: true,
     stencilBuffer: true
   });

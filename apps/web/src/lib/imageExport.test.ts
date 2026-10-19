@@ -37,6 +37,19 @@ describe('viewImageScope', () => {
     });
   });
 
+  it('keeps a selected body whose history step failed: the view draws it', () => {
+    const scope = exportScope(
+      [body('a'), { ...body('b'), withheld: true }],
+      'b',
+      true
+    );
+    expect(scope.bodyIds).toEqual([]);
+    expect(viewImageScope(scope, 'Boss')).toEqual({
+      bodyIds: ['b'],
+      label: 'Boss'
+    });
+  });
+
   it('draws the view otherwise, counting hidden bodies as left out', () => {
     // Whatever the mesh export's include-hidden choice, the view never draws
     // a hidden body, so the image reports it as left out either way.

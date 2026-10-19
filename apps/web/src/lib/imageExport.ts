@@ -47,7 +47,9 @@ export function viewImageScope(
 ): { bodyIds?: string[]; label: string } {
   if (scope?.selection) {
     return {
-      bodyIds: scope.bodyIds,
+      // A body whose history step failed is withheld from mesh files but
+      // still drawn in the view, so the picture keeps it.
+      bodyIds: [...scope.bodyIds, ...scope.withheldIds],
       label: selectedName ?? 'the selected body'
     };
   }

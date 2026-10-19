@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  captureSamples,
   fitCameraToAspect,
   renderViewportImage,
   type ViewportImageScene
@@ -81,6 +82,14 @@ function stubScene() {
   const bodyB = new THREE.Mesh(new THREE.BoxGeometry());
   bodyB.visible = false; // hidden in the view
   bodies.add(bodyA, bodyB);
+  // A picked face's fill, hung under the body as ModelViewer does.
+  const faceOverlay = new THREE.Group();
+  faceOverlay.name = 'body-selection-overlay';
+  faceOverlay.add(new THREE.Mesh(new THREE.PlaneGeometry()));
+  bodyA.add(faceOverlay);
+  const taggedFill = new THREE.Mesh(new THREE.PlaneGeometry());
+  taggedFill.userData.selectionOverlay = true;
+  bodyA.add(taggedFill);
   scene.add(backdrop, grid, light, bodies, sketches, gizmo);
   const seen: Record<string, boolean | number>[] = [];
   const renderer = {
@@ -105,6 +114,8 @@ function stubScene() {
         backdrop: backdrop.visible,
         grid: grid.visible,
         shadowUpdate: renderer.shadowMap.needsUpdate,
+        faceOverlay: faceOverlay.visible,
+        taggedFill: taggedFill.visible,
         emissive: bodyA.material.emissive.getHex()
       });
     }),
@@ -134,6 +145,8 @@ function stubScene() {
     sketches,
     gizmo,
     renderer,
+    faceOverlay,
+    taggedFill,
     refreshShadowMap
   };
 }
@@ -161,9 +174,13 @@ describe('renderViewportImage', () => {
         backdrop: false,
         grid: false,
         shadowUpdate: false,
+        faceOverlay: false,
+        taggedFill: false,
         emissive: 0
       }
     ]);
+    expect(stub.faceOverlay.visible).toBe(true);
+    expect(stub.taggedFill.visible).toBe(true);
     expect(stub.bodyA.visible).toBe(true);
     expect(stub.bodyB.visible).toBe(false);
     expect(stub.gizmo.visible).toBe(true);
@@ -195,5 +212,14 @@ describe('renderViewportImage', () => {
     expect(stub.sketches.visible).toBe(true);
     // ...and the live view rebuilds its map with every body afterwards.
     expect(stub.refreshShadowMap).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('captureSamples', () => {
+  it('multisamples up to 4K and not above, within the GPU limit', () => {
+    expect(captureSamples(3840, 2160, 8)).toBe(4);
+    expect(captureSamples(3840, 2160, 2)).toBe(2);
+    expect(captureSamples(3841, 2160, 8)).toBe(0);
+    expect(captureSamples(8000, 5000, 8)).toBe(0);
   });
 });
