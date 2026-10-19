@@ -172,6 +172,9 @@ export function historyFeatureDigest(
     const {
       referenceDimensions: _references,
       dimensionLabelPositions: _positions,
+      // S04 composite records group lines; the lines and relations are the
+      // geometry, so grouping alone must not invalidate a cached build.
+      composites: _composites,
       ...geometrySketch
     } = sketch;
     return {

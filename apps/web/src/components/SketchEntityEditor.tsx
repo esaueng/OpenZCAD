@@ -26,8 +26,41 @@ export interface EntityConstraintItem {
   editable: boolean;
 }
 
+/**
+ * The composite the selected line is a side of (S04): what it is, which
+ * side this is, and its size as one object, which its card resizes.
+ */
+export interface SketchCompositeSummary {
+  compositeId: string;
+  kind: 'rectangle' | 'polygon';
+  /** The shape's name: "Rectangle", "Center rectangle", "Polygon"… */
+  title: string;
+  /** 1-based, in the composite's counter-clockwise order. */
+  side: number;
+  sides: number;
+  /** Width and height, or the polygon's circumradius. */
+  size: { width: number; height: number } | { circumradius: number };
+  /**
+   * Sizes a dimension already drives with an expression: the card shows the
+   * expression, not the number it measures to.
+   */
+  expressions?: Partial<Record<'width' | 'height' | 'circumradius', string>>;
+  /** What a resize holds still, said on the card. */
+  anchor: string;
+}
+
 interface SketchEntityEditorProps {
   data: SketchObjectData;
+  /** Set when the selected line is a side of a rectangle or polygon. */
+  composite?: SketchCompositeSummary | null;
+  /**
+   * `expressions` holds each field typed as an expression rather than a
+   * plain number; those sizes keep driving the shape through a dimension.
+   */
+  onResizeComposite?(
+    size: SketchCompositeSummary['size'],
+    expressions: NonNullable<SketchCompositeSummary['expressions']>
+  ): void;
   scope: Record<string, number>;
   units?: UnitSystem;
   disabled?: boolean;
@@ -353,7 +386,9 @@ export function SketchEntityEditor({
   onClose,
   constraints,
   onEditConstraint,
-  onDeleteConstraint
+  onDeleteConstraint,
+  composite,
+  onResizeComposite
 }: SketchEntityEditorProps) {
   const [values, setValues] = useState(() => initialValues(data));
   const [textAttrs, setTextAttrs] = useState<TextAttributes | null>(() =>
@@ -463,6 +498,19 @@ export function SketchEntityEditor({
           </footer>
         </fieldset>
       </form>
+      {composite && (
+        <SketchCompositeCard
+          // A new stored size is a new card: the fields start from it.
+          key={`${composite.compositeId}:${JSON.stringify(composite.size)}`}
+          composite={composite}
+          scope={scope}
+          units={units}
+          disabled={disabled}
+          onResize={(size, expressions) =>
+            onResizeComposite?.(size, expressions)
+          }
+        />
+      )}
       {constraints && constraints.length > 0 && (
         <section className="sketch-entity-constraints" aria-label="Constraints">
           <span className="eyebrow">Constraints</span>
@@ -511,5 +559,125 @@ export function SketchEntityEditor({
         </section>
       )}
     </div>
+  );
+}
+
+const formatSize = (value: number) => String(Math.round(value * 1e6) / 1e6);
+
+/** A size typed as a plain number, as opposed to an expression. */
+const PLAIN_SIZE = /^[+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i;
+
+/**
+ * The shape the selected side belongs to, resized as one object: every side
+ * and helper moves in one edit, solved together, so the shape's relations
+ * never see it half-resized. A centre rectangle keeps its centre; the
+ * others keep corner 1; a polygon keeps its centre and rotation.
+ */
+function SketchCompositeCard({
+  composite,
+  scope,
+  units,
+  disabled,
+  onResize
+}: {
+  composite: SketchCompositeSummary;
+  scope: Record<string, number>;
+  units: UnitSystem;
+  disabled: boolean;
+  onResize(
+    size: SketchCompositeSummary['size'],
+    expressions: NonNullable<SketchCompositeSummary['expressions']>
+  ): void;
+}) {
+  const fields =
+    'circumradius' in composite.size
+      ? [{ key: 'circumradius', label: 'Circumradius' }]
+      : [
+          { key: 'width', label: 'Width' },
+          { key: 'height', label: 'Height' }
+        ];
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      Object.entries(composite.size).map(([key, value]) => [
+        key,
+        composite.expressions?.[key as keyof typeof composite.expressions] ??
+          formatSize(value)
+      ])
+    )
+  );
+  const resolved = fields.map(({ key }) =>
+    previewExpression(values[key] ?? '', scope, {
+      documentUnits: units,
+      dimension: 'length'
+    })
+  );
+  const numbers = resolved.map((preview) =>
+    preview.ok ? (preview.value ?? NaN) : NaN
+  );
+  const valid = numbers.every((value) => Number.isFinite(value) && value > 0);
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!valid || disabled) return;
+    // A plain number moves the shape once, as a drag does; an expression
+    // (a parameter, say) keeps driving it.
+    const expressions = Object.fromEntries(
+      fields.flatMap(({ key }) => {
+        const text = (values[key] ?? '').trim();
+        return PLAIN_SIZE.test(text) ? [] : [[key, text]];
+      })
+    );
+    onResize(
+      'circumradius' in composite.size
+        ? { circumradius: numbers[0]! }
+        : { width: numbers[0]!, height: numbers[1]! },
+      expressions
+    );
+  }
+  return (
+    <form
+      className="sketch-entity-editor"
+      aria-label={`Resize ${composite.title.toLowerCase()}`}
+      onSubmit={submit}
+    >
+      <header>
+        <div>
+          <span className="eyebrow">
+            Side {composite.side} of {composite.sides}
+          </span>
+          <strong>{composite.title}</strong>
+        </div>
+      </header>
+      <fieldset disabled={disabled} className="sketch-entity-values">
+        <div className="sketch-entity-fields">
+          {fields.map(({ key, label }) => (
+            <ExprInput
+              key={key}
+              label={label}
+              value={values[key] ?? ''}
+              scope={scope}
+              quantity={{ documentUnits: units, dimension: 'length' }}
+              onChange={(value) =>
+                setValues((current) => ({ ...current, [key]: value }))
+              }
+            />
+          ))}
+        </div>
+        {!valid && (
+          <p className="form-error" role="alert">
+            Enter a positive size.
+          </p>
+        )}
+        <footer>
+          <span className="muted">{composite.anchor}</span>
+          <button
+            type="submit"
+            className="primary"
+            disabled={!valid || disabled}
+          >
+            Resize
+          </button>
+        </footer>
+      </fieldset>
+    </form>
   );
 }

@@ -32,6 +32,7 @@ export const CAD_OPERATIONS = [
   'sketch.constraint.add',
   'sketch.constraint.delete',
   'sketch.constraint.label-position',
+  'sketch.composite.add',
   'reference-dimension.add',
   'reference-dimension.delete',
   'reference-dimension.label-position',

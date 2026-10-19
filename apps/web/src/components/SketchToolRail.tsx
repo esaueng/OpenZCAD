@@ -15,6 +15,7 @@ import {
   Ellipsis,
   FlipHorizontal2,
   Grid3x3,
+  Hexagon,
   Layers3,
   Magnet,
   MousePointer2,
@@ -27,16 +28,19 @@ import {
   Slice,
   Square,
   SquareDashed,
+  SquareDot,
   Trash2,
   Type,
   Waypoints
 } from 'lucide-react';
-import type { AppSettings } from '@openzcad/shared';
+import { MAX_SKETCH_POLYGON_SIDES, type AppSettings } from '@openzcad/shared';
 import {
   nextSketchCircleMode,
+  nextSketchRectangleMode,
   type PendingSketchConstraint,
   type PendingSketchEdit,
   type SketchCircleMode,
+  type SketchRectangleMode,
   type SketchConstraintToolKind,
   type SketchEditToolKind,
   type SketchToolId
@@ -93,6 +97,10 @@ interface SketchToolRailProps {
   canExtrude?: boolean;
   tool: SketchToolId;
   circleMode: SketchCircleMode;
+  /** The Rectangle tool's type; absent is `corner`. */
+  rectangleMode?: SketchRectangleMode;
+  /** The Polygon tool's side count; absent is 6. */
+  polygonSides?: number;
   construction: boolean;
   settings: AppSettings['sketching'];
   units: string;
@@ -114,6 +122,8 @@ interface SketchToolRailProps {
   solving: boolean;
   onTool(tool: SketchToolId): void;
   onCircleMode(mode: SketchCircleMode): void;
+  onRectangleMode?(mode: SketchRectangleMode): void;
+  onPolygonSides?(sides: number): void;
   onConstruction(value: boolean): void;
   onSettings(settings: AppSettings['sketching']): void;
   /** The hint travels with the tool: the rail already holds the specs. */
@@ -130,7 +140,7 @@ interface SketchToolRailProps {
 }
 
 const TOOLS: {
-  id: Exclude<SketchToolId, 'circle'>;
+  id: Exclude<SketchToolId, 'circle' | 'rectangle' | 'polygon'>;
   label: string;
   /** The keymap command whose live key the tooltip names. */
   command: string;
@@ -144,12 +154,6 @@ const TOOLS: {
   },
   { id: 'line', label: 'Line', command: 'sketch-line', icon: Minus },
   { id: 'arc', label: 'Arc', command: 'sketch-arc', icon: Waypoints },
-  {
-    id: 'rectangle',
-    label: 'Rectangle',
-    command: 'sketch-rectangle',
-    icon: Square
-  },
   { id: 'text', label: 'Text', command: 'sketch-text', icon: Type }
 ];
 
@@ -209,6 +213,118 @@ const CIRCLE_MODES: {
   }
 ];
 
+/** A rectangle placed by one side's two ends and a third point. */
+function ThreePointRectangle({ size }: { size: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 15 13 4l7 6-9 11Z" />
+      <circle cx="4" cy="15" r="1" fill="currentColor" />
+      <circle cx="13" cy="4" r="1" fill="currentColor" />
+      <circle cx="20" cy="10" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+
+/**
+ * The shape slot's types: the rectangle's three, then the polygon, which is
+ * its own tool sharing the slot. Every one draws real lines held by
+ * relations and named as one object.
+ */
+const SHAPE_MODES: {
+  mode: SketchRectangleMode | 'polygon';
+  label: string;
+  tile: string;
+  detail: string;
+  icon: typeof Square | typeof ThreePointRectangle;
+}[] = [
+  {
+    mode: 'corner',
+    label: 'Rectangle',
+    tile: 'Corner',
+    detail: 'Two opposite corners',
+    icon: Square
+  },
+  {
+    mode: 'center',
+    label: 'Center rectangle',
+    tile: 'Center',
+    detail: 'Center, then a corner',
+    icon: SquareDot
+  },
+  {
+    mode: 'three-point',
+    label: 'Three-point rectangle',
+    tile: '3 points',
+    detail: 'One side, then the height',
+    icon: ThreePointRectangle
+  },
+  {
+    mode: 'polygon',
+    label: 'Polygon',
+    tile: 'Polygon',
+    detail: 'Center, then a vertex on the circumcircle',
+    icon: Hexagon
+  }
+];
+
+const MIN_POLYGON_SIDES = 3;
+
+function shapeModeSpec(mode: SketchRectangleMode | 'polygon') {
+  return SHAPE_MODES.find((spec) => spec.mode === mode) ?? SHAPE_MODES[0]!;
+}
+
+/**
+ * The polygon's side count as typed: the draft stays in the field while it
+ * is on its way to valid ("", "1" on the way to "12"), and only a whole
+ * number the document accepts is committed.
+ */
+function PolygonSidesField({
+  value,
+  onCommit
+}: {
+  value: number;
+  onCommit(value: number): void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <label className="sketch-type-sides">
+      <span>Sides</span>
+      <input
+        type="number"
+        min={MIN_POLYGON_SIDES}
+        max={MAX_SKETCH_POLYGON_SIDES}
+        step="1"
+        inputMode="numeric"
+        value={draft ?? String(value)}
+        aria-label="Polygon sides"
+        onChange={(event) => {
+          const text = event.currentTarget.value;
+          setDraft(text);
+          const next = Number(text);
+          if (
+            Number.isInteger(next) &&
+            next >= MIN_POLYGON_SIDES &&
+            next <= MAX_SKETCH_POLYGON_SIDES
+          ) {
+            onCommit(next);
+          }
+        }}
+        onBlur={() => setDraft(null)}
+      />
+    </label>
+  );
+}
+
 const EDIT_TOOL_ICONS: Record<SketchEditToolKind, typeof Minus> = {
   fillet: Radius,
   chamfer: Slice,
@@ -242,11 +358,16 @@ function circleModeSpec(mode: SketchCircleMode) {
  */
 export function sketchDrawToolLabel(
   tool: SketchToolId,
-  circleMode: SketchCircleMode
+  circleMode: SketchCircleMode,
+  rectangleMode: SketchRectangleMode = 'corner'
 ): string {
   return tool === 'circle'
     ? circleModeSpec(circleMode).label
-    : (TOOLS.find((entry) => entry.id === tool)?.label ?? tool);
+    : tool === 'rectangle'
+      ? shapeModeSpec(rectangleMode).label
+      : tool === 'polygon'
+        ? shapeModeSpec('polygon').label
+        : (TOOLS.find((entry) => entry.id === tool)?.label ?? tool);
 }
 
 /**
@@ -334,6 +455,8 @@ export function SketchToolRail({
   canExtrude = true,
   tool,
   circleMode,
+  rectangleMode = 'corner',
+  polygonSides = 6,
   construction,
   settings,
   units,
@@ -348,6 +471,8 @@ export function SketchToolRail({
   solving,
   onTool,
   onCircleMode,
+  onRectangleMode,
+  onPolygonSides,
   onConstruction,
   onSettings,
   onEditTool,
@@ -360,6 +485,8 @@ export function SketchToolRail({
 }: SketchToolRailProps) {
   const keymap = useKeymap();
   const circleKey = keymap.label('sketch-circle');
+  const rectangleKey = keymap.label('sketch-rectangle');
+  const polygonKey = keymap.label('sketch-polygon');
   // The sketch's overview and settings open beside the rail; closed until asked.
   const [paletteOpenState, setPaletteOpenState] = useState(false);
   const paletteOpen = paletteOpenProp ?? paletteOpenState;
@@ -435,6 +562,11 @@ export function SketchToolRail({
   };
   const circleSpec = circleModeSpec(circleMode);
   const CircleIcon = circleSpec.icon;
+  const shapeOn = tool === 'rectangle' || tool === 'polygon';
+  const shapeSpec = shapeModeSpec(
+    tool === 'polygon' ? 'polygon' : rectangleMode
+  );
+  const ShapeIcon = shapeSpec.icon;
   const drawTools = (
     <>
       {TOOLS.slice(0, 3).map(drawTool)}
@@ -510,6 +642,99 @@ export function SketchToolRail({
                 )}
               </button>
             </Tooltip>
+          </span>
+        ) : null}
+      </span>
+      <span className="sketch-circle-tool">
+        <Tooltip
+          label={shapeSpec.label}
+          shortcut={tool === 'polygon' ? polygonKey : rectangleKey}
+          description={
+            rectangleKey
+              ? `${platformShortcutLabel(rectangleKey)} again steps through the rectangle types`
+              : 'The type strip picks the rectangle type or the polygon'
+          }
+        >
+          <button
+            type="button"
+            className={shapeOn ? 'active' : undefined}
+            aria-pressed={shapeOn}
+            aria-label={shapeSpec.mode === 'polygon' ? 'Polygon' : 'Rectangle'}
+            onClick={() =>
+              onTool(shapeSpec.mode === 'polygon' ? 'polygon' : 'rectangle')
+            }
+          >
+            <ShapeIcon size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+        {shapeOn ? (
+          // Like the circle's strip: the types ride beside the rail while a
+          // shape tool is live, and leave with it.
+          <span
+            className="sketch-type-strip"
+            role="radiogroup"
+            aria-label="Shape type"
+            data-rail-flyout=""
+          >
+            {SHAPE_MODES.map(
+              ({ mode, label, tile, detail, icon: Icon }, index) => {
+                const checked = shapeSpec.mode === mode;
+                const choose = (
+                  choice: (typeof SHAPE_MODES)[number]['mode']
+                ) =>
+                  choice === 'polygon'
+                    ? onTool('polygon')
+                    : onRectangleMode?.(choice);
+                return (
+                  <Tooltip key={mode} label={label} description={detail}>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={checked}
+                      tabIndex={checked ? 0 : -1}
+                      className={`sketch-type-tile${checked ? ' active' : ''}`}
+                      onClick={() => choose(mode)}
+                      onKeyDown={(event) => {
+                        const next = radioGroupKeyStep(
+                          event,
+                          SHAPE_MODES.length,
+                          index
+                        );
+                        if (next !== null) {
+                          choose(SHAPE_MODES[next]!.mode);
+                        }
+                      }}
+                    >
+                      <Icon size={16} aria-hidden="true" />
+                      <span>{tile}</span>
+                    </button>
+                  </Tooltip>
+                );
+              }
+            )}
+            {tool === 'polygon' ? (
+              <PolygonSidesField
+                value={polygonSides}
+                onCommit={(sides) => onPolygonSides?.(sides)}
+              />
+            ) : (
+              <Tooltip label="Next rectangle type" shortcut={rectangleKey}>
+                <button
+                  type="button"
+                  className="sketch-type-cycle"
+                  aria-label="Next rectangle type"
+                  onClick={() =>
+                    onRectangleMode?.(nextSketchRectangleMode(rectangleMode))
+                  }
+                >
+                  {rectangleKey ? (
+                    <kbd>{platformShortcutLabel(rectangleKey)}</kbd>
+                  ) : (
+                    <RotateCw size={12} aria-hidden="true" />
+                  )}
+                </button>
+              </Tooltip>
+            )}
           </span>
         ) : null}
       </span>

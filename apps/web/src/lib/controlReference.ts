@@ -303,7 +303,14 @@ export const KEYBOARD_CONTROL_GROUPS = [
         id: 'sketch-rectangle',
         ...bound('sketch-rectangle'),
         action: 'Rectangle',
-        detail: 'Drag from one corner to the opposite corner.'
+        detail:
+          'Drag corner to corner; again steps to the center and three-point types.'
+      },
+      {
+        id: 'sketch-polygon',
+        ...bound('sketch-polygon'),
+        action: 'Polygon',
+        detail: 'Drag from the center to a vertex; the strip sets the sides.'
       },
       {
         id: 'sketch-text',

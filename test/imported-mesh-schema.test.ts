@@ -48,7 +48,7 @@ describe('reference mesh schema boundary', () => {
     const document = meshDocument('reference');
     const saved = JSON.parse(JSON.stringify(document)) as ProjectDocument;
 
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(25);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(26);
     expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect(saved.schemaVersion).toBeGreaterThan(16);
     expect(normalizeDocument(saved)).toEqual(document);

@@ -89,6 +89,7 @@ describe('keymap registry', () => {
       'sketch-arc': 'A',
       'sketch-circle': 'C',
       'sketch-rectangle': 'R',
+      'sketch-polygon': 'P',
       'sketch-text': 'T',
       'sketch-extrude': 'E'
     });
