@@ -114,7 +114,13 @@ export function updateDrawingSheet(
     if (input.name !== undefined) sheet.name = input.name.trim();
     if (input.paper) sheet.paper = { ...input.paper };
     if (input.scale) sheet.scale = { ...input.scale };
-    if (input.projectionAngle) sheet.projectionAngle = input.projectionAngle;
+    if (
+      input.projectionAngle &&
+      input.projectionAngle !== sheet.projectionAngle
+    ) {
+      sheet.projectionAngle = input.projectionAngle;
+      mirrorProjectedViews(sheet);
+    }
     if (input.source) sheet.source = { ...input.source };
     if (input.titleBlock) {
       const titleBlock: DrawingTitleBlock = { ...sheet.titleBlock };
@@ -130,6 +136,31 @@ export function updateDrawingSheet(
     }
     return sheets;
   });
+}
+
+/**
+ * First and third angle place each projected view on opposite sides of the
+ * base it folds from. Switching convention therefore mirrors every projected
+ * view across its base along their shared axis, in the same edit, so the
+ * layout never contradicts the projection named in the title block.
+ */
+function mirrorProjectedViews(sheet: DrawingSheet): void {
+  const byId = new Map(sheet.views.map((view) => [view.viewId, view]));
+  for (const view of sheet.views) {
+    const base = view.parentViewId ? byId.get(view.parentViewId) : undefined;
+    if (!base) continue;
+    const alignment = drawingViewAlignment(base.orientation, view.orientation);
+    if (alignment === 'row')
+      view.centerMm = {
+        x: 2 * base.centerMm.x - view.centerMm.x,
+        y: base.centerMm.y
+      };
+    else if (alignment === 'column')
+      view.centerMm = {
+        x: base.centerMm.x,
+        y: 2 * base.centerMm.y - view.centerMm.y
+      };
+  }
 }
 
 export function deleteDrawingSheet(
@@ -180,11 +211,18 @@ export function updateDrawingView(
   document: ProjectDocument,
   input: DrawingViewUpdateInput
 ): ProjectDocument {
-  if (input.bodyIds) assertBodiesExist(document, input.bodyIds);
   return withDrawings(document, (sheets) => {
     const sheet = sheets[sheetIndex(sheets, input.sheetId)]!;
     const view = sheet.views.find((entry) => entry.viewId === input.viewId);
     if (!view) throw new Error(`Drawing view ${input.viewId} not found.`);
+    // Only bodies the edit adds must exist: a body the model has since
+    // deleted stays in the list until the user removes it, and adding a
+    // live one beside it must not be refused because of it.
+    if (input.bodyIds)
+      assertBodiesExist(
+        document,
+        input.bodyIds.filter((id) => !view.bodyIds.includes(id))
+      );
     if (input.hiddenLines !== undefined) view.hiddenLines = input.hiddenLines;
     if (input.bodyIds) view.bodyIds = [...input.bodyIds];
     if (input.centerMm) {

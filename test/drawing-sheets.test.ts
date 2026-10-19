@@ -321,6 +321,95 @@ describe('D01 drawing section (schema v30)', () => {
     expect(views().top).toEqual({ x: 90, y: 210 });
   });
 
+  it('mirrors projected views across their base when the projection angle changes', () => {
+    const document = boxDocument();
+    const ids = document.bodyOrder;
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.addDrawingSheet({
+        sheet: sheet(ids, [
+          view('front', ids, { centerMm: { x: 100, y: 100 } }),
+          view('top', ids, {
+            centerMm: { x: 100, y: 180 },
+            parentViewId: baseId
+          }),
+          view('right', ids, {
+            centerMm: { x: 190, y: 100 },
+            parentViewId: baseId
+          }),
+          view('iso', ids, { centerMm: { x: 300, y: 250 } })
+        ])
+      })
+    );
+    const centres = () =>
+      Object.fromEntries(
+        manager.document.drawings!.sheets[0]!.views.map((entry) => [
+          entry.orientation,
+          entry.centerMm
+        ])
+      );
+    // Third angle (top above, right to the right) to first angle: the same
+    // views on the opposite sides of the front, in one edit.
+    manager.execute(
+      commandFactories.updateDrawingSheet({ sheetId, projectionAngle: 'first' })
+    );
+    expect(centres()).toEqual({
+      front: { x: 100, y: 100 },
+      top: { x: 100, y: 20 },
+      right: { x: 10, y: 100 },
+      iso: { x: 300, y: 250 }
+    });
+    manager.undo();
+    expect(centres().top).toEqual({ x: 100, y: 180 });
+    expect(manager.document.drawings!.sheets[0]!.projectionAngle).toBe('third');
+  });
+
+  it('lets a view drop, or keep beside a new one, a body the model deleted', () => {
+    const document = addPrimitiveFeature(boxDocument(), {
+      name: 'Second',
+      primitiveKind: 'box',
+      dimensions: { width: 5, height: 5, depth: 5 }
+    });
+    const [first, second] = document.bodyOrder;
+    const gone = 'body_gone' as BodyId;
+    // Saved while the body existed; the model has since lost it.
+    const stale = {
+      ...document,
+      drawings: {
+        sheets: [sheet([first!, gone], [view('front', [first!, gone])])]
+      }
+    } as ProjectDocument;
+    const manager = new CommandManager(stale);
+    manager.execute(
+      commandFactories.updateDrawingView({
+        sheetId,
+        viewId: baseId,
+        bodyIds: [first!, gone, second!]
+      })
+    );
+    manager.execute(
+      commandFactories.updateDrawingView({
+        sheetId,
+        viewId: baseId,
+        bodyIds: [first!, second!]
+      })
+    );
+    expect(manager.document.drawings!.sheets[0]!.views[0]!.bodyIds).toEqual([
+      first,
+      second
+    ]);
+    // Adding a body that does not exist is still refused.
+    expect(() =>
+      manager.execute(
+        commandFactories.updateDrawingView({
+          sheetId,
+          viewId: baseId,
+          bodyIds: [first!, gone]
+        })
+      )
+    ).toThrow(/not in this project/);
+  });
+
   it('refuses a view of a body the project does not have', () => {
     const document = boxDocument();
     expect(() =>

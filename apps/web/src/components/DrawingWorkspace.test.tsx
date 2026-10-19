@@ -203,6 +203,21 @@ describe('DrawingWorkspace', () => {
     });
   });
 
+  it('lists a deleted body in its view so it can be removed', async () => {
+    const sheet = starter('v1:0000000000000000');
+    sheet.views[0]!.bodyIds = [bodyId, 'body_gone' as BodyId];
+    const { onCommand } = setup({ sheet });
+    await userEvent.click(screen.getByRole('button', { name: 'Front view' }));
+    const gone = screen.getByRole('checkbox', {
+      name: 'Deleted body (no longer in the model)'
+    });
+    expect((gone as HTMLInputElement).checked).toBe(true);
+    await userEvent.click(gone);
+    const command = onCommand.mock.calls[0]![0];
+    expect(command.kind).toBe('drawing.view.update');
+    expect(command.payload).toMatchObject({ bodyIds: [bodyId] });
+  });
+
   it('names a body the sheet draws that is gone', () => {
     const sheet = starter('v1:0000000000000000');
     sheet.views[0]!.bodyIds = ['body_gone' as BodyId];

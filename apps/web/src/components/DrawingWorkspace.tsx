@@ -941,7 +941,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               </label>
               <fieldset className="drawing-bodies">
                 <legend>Bodies</legend>
-                {liveBodies.map((id) => (
+                {[
+                  ...liveBodies,
+                  // Bodies the view still names but the model no longer
+                  // has: listed so they can be unticked, which is how a
+                  // sheet blocked on a deleted body is repaired.
+                  ...selectedView.bodyIds.filter(
+                    (id) => !liveBodies.includes(id)
+                  )
+                ].map((id) => (
                   <label key={id} className="drawing-check">
                     <input
                       type="checkbox"
@@ -965,7 +973,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                         )
                       }
                     />
-                    {bodies[id]?.name ?? id}
+                    {liveBodies.includes(id)
+                      ? (bodies[id]?.name ?? id)
+                      : `${bodies[id]?.name ?? 'Deleted body'} (no longer in the model)`}
                   </label>
                 ))}
               </fieldset>
