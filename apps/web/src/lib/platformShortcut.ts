@@ -3,13 +3,22 @@ export interface PlatformShortcutCopy {
   glyph: string;
 }
 
-/** Platform-correct copy for the command-palette shortcut. */
+/**
+ * Platform-correct copy for the command-palette shortcut, whichever chord the
+ * user's keymap gives it; null when they left it unbound (pass null, not
+ * undefined, which reads as the default).
+ */
 export function commandPaletteShortcut(
-  platform = globalThis.navigator?.platform ?? ''
-): PlatformShortcutCopy {
-  return /Mac|iPhone|iPad|iPod/i.test(platform)
-    ? { accessible: 'Cmd+K', glyph: '⌘K' }
-    : { accessible: 'Ctrl+K', glyph: 'Ctrl+K' };
+  platform = globalThis.navigator?.platform ?? '',
+  chord: string | null = 'Ctrl+K'
+): PlatformShortcutCopy | null {
+  if (!chord) return null;
+  return {
+    accessible: /Mac|iPhone|iPad|iPod/i.test(platform)
+      ? chord.replace(/^Ctrl\+/, 'Cmd+')
+      : chord,
+    glyph: platformShortcutLabel(chord, platform)
+  };
 }
 
 // Apple's order is ⌃⌥⇧⌘; Ctrl is written for ⌘ here, so it sorts last.
@@ -31,10 +40,11 @@ export function platformShortcutLabel(
     return shortcut;
   }
   const parts = shortcut.split('+');
-  // "Ctrl++" style chords never occur; a trailing empty part means the key
-  // itself was "+", so keep it rather than dropping it.
-  const key = parts.length > 1 && parts.at(-1) === '' ? '+' : parts.at(-1)!;
-  const modifiers = new Set(parts.slice(0, -1));
+  // A trailing empty part means the key itself is "+" ("Ctrl++" splits to
+  // Ctrl, '', ''): the last two parts are the key, not a modifier.
+  const plusKey = parts.length > 1 && parts.at(-1) === '';
+  const key = plusKey ? '+' : parts.at(-1)!;
+  const modifiers = new Set(parts.slice(0, plusKey ? -2 : -1));
   if (![...modifiers].every((part) => part in MAC_MODIFIER_GLYPHS)) {
     return shortcut;
   }
@@ -46,10 +56,18 @@ export function platformShortcutLabel(
 
 /**
  * The lane's line when nothing is selected or armed. It named "Ctrl+K" on a
- * Mac while the command box beside it showed ⌘K.
+ * Mac while the command box beside it showed ⌘K. The keys are the live
+ * keymap's; a half the user unbound is left out rather than named wrongly.
  */
 export function idleWorkspaceHint(
-  platform = globalThis.navigator?.platform ?? ''
+  platform = globalThis.navigator?.platform ?? '',
+  palette: string | null = 'Ctrl+K',
+  reference: string | null = '?'
 ): string {
-  return `${platformShortcutLabel('Ctrl+K', platform)} commands · ? shortcuts`;
+  return [
+    palette && `${platformShortcutLabel(palette, platform)} commands`,
+    reference && `${platformShortcutLabel(reference, platform)} shortcuts`
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }

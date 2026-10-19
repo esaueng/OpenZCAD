@@ -77,6 +77,7 @@ import {
   type AssistantPromptKeyDetail
 } from '../../lib/assistant/promptKeys';
 import { unconfiguredAssistantMessage } from '../../lib/assistant/unconfigured';
+import { labelWithKey, useKeymap } from '../../lib/keymap';
 import { platformShortcutLabel } from '../../lib/platformShortcut';
 import { QuestionCard } from './QuestionCard';
 import { ProposalCard } from './ProposalCard';
@@ -315,6 +316,7 @@ export function AssistantPanel({
   onDraft,
   onActivity
 }: AssistantPanelProps) {
+  const hideKey = useKeymap().label('assistant-toggle');
   const [analyzedDocument, setAnalyzedDocument] =
     useState<ProjectDocument | null>(null);
   const [analysisBusy, setAnalysisBusy] = useState(false);
@@ -1683,11 +1685,12 @@ export function AssistantPanel({
             </button>
           )}
           {/* Tucks the stream away behind the prompt line: the thread is
-              kept, and ⌘J brings it back. */}
+              kept, and the assistant key (⌘J unless remapped) brings it
+              back. */}
           <button
             type="button"
             className="assistant-foot-action"
-            title={`Hide the assistant (${platformShortcutLabel('Ctrl+J')})`}
+            title={labelWithKey('Hide the assistant', hideKey)}
             aria-label="Hide the assistant"
             onClick={hideStream}
           >

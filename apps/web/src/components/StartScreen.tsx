@@ -1,5 +1,5 @@
 import { ProjectImportButton } from './ProjectImportButton';
-import { platformShortcutLabel } from '../lib/platformShortcut';
+import { labelWithKey, useKeymap } from '../lib/keymap';
 import { Fragment, lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useDissolveOnUnmount } from '../hooks/useDissolveOnUnmount';
 import {
@@ -305,6 +305,7 @@ export function StartScreen({
   loadThumbnail,
   publishThumbnail
 }: StartScreenProps) {
+  const settingsKey = useKeymap().label('app-settings');
   const [name, setName] = useState(generateCutePartName);
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
   const [query, setQuery] = useState('');
@@ -1253,7 +1254,7 @@ export function StartScreen({
             className="start-settings-button icon-button"
             type="button"
             aria-label="Open settings"
-            title={`Settings (${platformShortcutLabel('Ctrl+,')})`}
+            title={labelWithKey('Settings', settingsKey)}
             onClick={onOpenSettings}
           >
             <Settings size={16} aria-hidden="true" />

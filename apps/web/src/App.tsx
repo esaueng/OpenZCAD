@@ -378,8 +378,16 @@ import {
 } from './lib/interactionDiagnostics';
 import { KERNEL_BUILD } from './lib/kernelBuild';
 import {
+  chordFromEvent,
+  chordLeavesTypingAlone,
+  keyHint,
+  commandTool,
+  toolCommandId,
+  setActiveKeymapOverrides,
+  useKeymap
+} from './lib/keymap';
+import {
   PRIMITIVE_TOOLS,
-  SHORTCUT_TO_TOOL,
   TOOL_GROUPS,
   TOOL_META,
   toolDisabledReason,
@@ -542,7 +550,8 @@ import {
 import { ToastHost } from './components/Toast';
 import {
   commandPaletteShortcut,
-  idleWorkspaceHint
+  idleWorkspaceHint,
+  platformShortcutLabel
 } from './lib/platformShortcut';
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { LIBRARY_MODE_STATUS } from './lib/libraryStatus';
@@ -1883,6 +1892,27 @@ export function App() {
     },
     setSettingsMessage: (message) => setSettingsMessage(message)
   });
+  // Remapped keys are a preference: the workspace map, the palette and every
+  // tooltip read the one live keymap, installed before paint so no surface
+  // names a default the user replaced.
+  useLayoutEffect(() => {
+    setActiveKeymapOverrides(appSettings.keymap.overrides);
+  }, [appSettings.keymap.overrides]);
+  const keymap = useKeymap();
+  /** A command's live key as a context menu prints it; none when unbound. */
+  /** "U union · X subtract · I intersect" in the live keys; null if none. */
+  const booleanKeyHints = () =>
+    [
+      keyHint(keymap, 'tool-union', 'union'),
+      keyHint(keymap, 'tool-subtract', 'subtract'),
+      keyHint(keymap, 'tool-intersect', 'intersect')
+    ]
+      .filter(Boolean)
+      .join(' · ') || null;
+  const menuShortcut = (id: string) => {
+    const chord = keymap.label(id);
+    return chord ? platformShortcutLabel(chord) : undefined;
+  };
   // The active-project pointer is synchronous knowledge. Reading it lazily
   // lets the first render choose a stable restore surface instead of mounting
   // the launcher while IndexedDB and the optional cloud copy are still loading.
@@ -6149,7 +6179,7 @@ export function App() {
     if (selectedBodyIds.length > 1) {
       return {
         label: textLabelSegments(`${selectedBodyIds.length} bodies`),
-        detail: 'U union · X subtract · I intersect'
+        detail: booleanKeyHints() ?? 'Union, subtract or intersect them'
       };
     }
     const bodyId = selectedBodyIds[0];
@@ -12514,7 +12544,15 @@ export function App() {
     const name =
       sketchOptions.find((candidate) => candidate.sketchId === typedSketchId)
         ?.name ?? 'Profile';
-    setStatus(`${name}: closed profile selected · press E to extrude.`);
+    // In a sketch the sketch's own Extrude key takes the profile.
+    const extrudeKey = keymap.label(
+      interactionRef.current.mode === 'sketch'
+        ? 'sketch-extrude'
+        : 'tool-extrude'
+    );
+    setStatus(
+      `${name}: closed profile selected · ${extrudeKey ? `press ${platformShortcutLabel(extrudeKey)} to extrude` : 'Extrude it from the tools'}.`
+    );
   }
 
   /**
@@ -15662,11 +15700,13 @@ export function App() {
       additive: modifiers.additive || modifiers.toggle,
       group: group.map(regionTargetFor)
     });
+    // Outside a sketch the Extrude tool's key is the one that takes it.
+    const profileExtrudeKey = keymap.label('tool-extrude');
     setStatus(
       nextProfiles.length > 1
         ? `${nextProfiles.length} closed sketch profiles selected · drag any arrow to extrude them together.`
         : nextProfiles.length === 1
-          ? 'Closed sketch profile selected · press E to Extrude, or drag the arrow.'
+          ? `Closed sketch profile selected · ${profileExtrudeKey ? `press ${platformShortcutLabel(profileExtrudeKey)} to Extrude, or drag the arrow` : 'drag the arrow to extrude'}.`
           : 'Sketch profile selection cleared.'
     );
   }
@@ -18280,7 +18320,7 @@ export function App() {
             id: 'fit',
             label: 'Fit view',
             icon: <Maximize2 size={13} aria-hidden="true" />,
-            shortcut: 'F'
+            shortcut: menuShortcut('view-fit')
           },
           run: () => setFitSignal((value) => value + 1)
         },
@@ -18289,7 +18329,7 @@ export function App() {
             id: 'grid',
             label: viewerSettings.showGrid ? 'Hide grid' : 'Show grid',
             icon: <Grid3x3 size={13} aria-hidden="true" />,
-            shortcut: 'G'
+            shortcut: menuShortcut('view-grid')
           },
           run: () =>
             setViewerSettings((current) => ({
@@ -18304,7 +18344,7 @@ export function App() {
             // read as the current state.
             label: `Switch to ${projection === 'perspective' ? 'orthographic' : 'perspective'}`,
             icon: <Camera size={13} aria-hidden="true" />,
-            shortcut: 'P'
+            shortcut: menuShortcut('view-projection')
           },
           run: toggleProjection
         },
@@ -18398,7 +18438,7 @@ export function App() {
             id: 'move',
             label: 'Move / Rotate…',
             icon: <Move3d size={13} aria-hidden="true" />,
-            shortcut: 'M',
+            shortcut: menuShortcut('tool-transform'),
             section: edge
           },
           run: runCurrent((handlers) => handlers.launchTool('transform'))
@@ -18408,7 +18448,7 @@ export function App() {
             id: 'union',
             label: 'Union…',
             icon: <Combine size={13} aria-hidden="true" />,
-            shortcut: 'U',
+            shortcut: menuShortcut('tool-union'),
             disabled: viewerBodies.length < 2
           },
           run: runCurrent((handlers) => handlers.launchTool('union'))
@@ -18418,7 +18458,7 @@ export function App() {
             id: 'subtract',
             label: 'Subtract…',
             icon: <Scissors size={13} aria-hidden="true" />,
-            shortcut: 'X',
+            shortcut: menuShortcut('tool-subtract'),
             disabled: viewerBodies.length < 2
           },
           run: runCurrent((handlers) => handlers.launchTool('subtract'))
@@ -18439,7 +18479,7 @@ export function App() {
             id: 'fit',
             label: 'Fit view',
             icon: <Maximize2 size={13} aria-hidden="true" />,
-            shortcut: 'F'
+            shortcut: menuShortcut('view-fit')
           },
           run: () => setFitSignal((value) => value + 1)
         },
@@ -18847,14 +18887,32 @@ export function App() {
         return;
       }
       const meta = event.ctrlKey || event.metaKey;
+      // Every remappable key goes through the user's keymap; Escape, Enter,
+      // Delete and the arrows keep their fixed meanings below.
+      const chord = chordFromEvent(event);
+      const target = event.target as HTMLElement | null;
+      const typing = isTypingTarget(target);
+      // A focused button presses on Space and a text field types it: then
+      // Space is the control's, whatever the keymap binds it to, in every
+      // context. Number and expression fields take no spaces and pass it on.
+      if (chord === 'Space' && focusedControlOwnsSpace(target)) {
+        return;
+      }
+      // A chord without Ctrl or Alt is typing while a field has focus, so a
+      // global command bound to a bare key waits for the field to let go;
+      // a function key types nothing and still runs.
+      const global =
+        chord && (!typing || chordLeavesTypingAlone(chord))
+          ? keymap.commandFor(chord, ['global'])?.id
+          : undefined;
 
-      if (meta && event.key === ',') {
+      if (global === 'app-settings') {
         event.preventDefault();
         openSettings();
         return;
       }
 
-      if (meta && !event.shiftKey && event.key.toLowerCase() === 'j') {
+      if (global === 'assistant-toggle') {
         event.preventDefault();
         setPanelState((current) => ({
           ...current,
@@ -18863,7 +18921,7 @@ export function App() {
         return;
       }
 
-      if (meta && event.shiftKey && event.key.toLowerCase() === 'm') {
+      if (global === 'workspace-mode-cycle') {
         event.preventDefault();
         // Cycle View → Tweak → Build, skipping whatever the project locks.
         const order: readonly WorkspaceMode[] = ['view', 'tweak', 'build'];
@@ -18896,10 +18954,8 @@ export function App() {
       if (!doc) {
         return;
       }
-      const target = event.target as HTMLElement | null;
-      const typing = isTypingTarget(target);
       if (event.key === 'Escape') exactEntryQueue.cancel();
-      if (meta && event.key.toLowerCase() === 'k') {
+      if (global === 'command-palette') {
         event.preventDefault();
         setShortcutsOpen(false);
         // The log is a sheet over the prompt's lane: left open, it kept
@@ -18954,70 +19010,60 @@ export function App() {
         }
       }
 
-      const historyKey =
-        meta &&
-        (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y');
-      if (historyKey && typing) {
+      if (global === 'edit-undo' || global === 'edit-redo') {
         // Inside a text field the shortcut belongs to the field: undoing
         // the document while the user is retyping an expression would
         // rewind modeling work and leave the half-typed text in place.
-        return;
-      }
-      if (historyKey && modelingLocked) {
-        // Tweak mode locks modeling, not parameters: let the undo/redo
-        // handlers decide — they allow a parameter-only top entry and keep
-        // the refusal for anything that would revert modeling work.
+        if (typing) return;
+        // Tweak mode locks modeling, not parameters: the undo/redo handlers
+        // decide — they allow a parameter-only top entry and keep the
+        // refusal for anything that would revert modeling work.
         event.preventDefault();
-        if (event.key.toLowerCase() === 'z') {
-          if (event.shiftKey) {
-            handleRedo();
-          } else {
-            handleUndo();
-          }
-        } else {
-          handleRedo();
-        }
-        return;
-      }
-      if (meta && event.key.toLowerCase() === 'z') {
-        event.preventDefault();
-        if (event.shiftKey) {
-          handleRedo();
-        } else {
+        if (global === 'edit-undo') {
           handleUndo();
-        }
-        return;
-      }
-      if (meta && event.key.toLowerCase() === 'y') {
-        event.preventDefault();
-        handleRedo();
-        return;
-      }
-      if (meta && event.key.toLowerCase() === 's') {
-        event.preventDefault();
-        if (event.shiftKey) {
-          openSaveNameDialog();
         } else {
-          void handleSave();
+          handleRedo();
         }
+        return;
+      }
+      if (global === 'file-save') {
+        event.preventDefault();
+        void handleSave();
+        return;
+      }
+      if (global === 'file-save-named') {
+        event.preventDefault();
+        openSaveNameDialog();
         return;
       }
 
-      const normalViewSpace =
-        (event.code === 'Space' || event.key === ' ') &&
-        !event.repeat &&
-        !meta &&
-        !event.altKey &&
-        !event.shiftKey;
+      // The command the key means outside a sketch, if any. In a reading
+      // workspace a tool key is still looked up, to say why it is refused.
+      const resolvedModelCommand = chord
+        ? keymap.commandFor(chord, [
+            'model',
+            modelingLocked ? 'view' : 'build'
+          ])
+        : null;
+      // From a field only Space reaches a command, and only Normal to face:
+      // a number or expression field still holding focus after a face pick
+      // takes no spaces, and turning to the face is what Space promised.
+      const modelCommand =
+        !typing ||
+        (chord === 'Space' &&
+          resolvedModelCommand?.id === 'view-normal-to-face')
+          ? resolvedModelCommand
+          : null;
+      const normalViewKey =
+        modelCommand?.id === 'view-normal-to-face' && !event.repeat;
       const stableFaceSelection =
         renderedSelectedTopology?.kind === 'face' &&
         (interaction.mode === 'idle' ||
           (interaction.mode === 'face' && interaction.phase === 'armed'));
       if (
-        normalViewSpace &&
+        normalViewKey &&
         tool === null &&
-        stableFaceSelection &&
-        !focusedControlOwnsSpace(target)
+        stableFaceSelection
       ) {
         event.preventDefault();
         requestNormalToSelectedFace();
@@ -19030,7 +19076,7 @@ export function App() {
       // swallowing it there breaks the one key the workspace promises is
       // always a way back. Outside a sketch its first press from a field only
       // gives up the focus; see the Escape case below.
-      if ((typing && event.key !== 'Escape') || meta || event.altKey) {
+      if (typing && event.key !== 'Escape') {
         return;
       }
 
@@ -19045,23 +19091,27 @@ export function App() {
         // flow as the rail. Handle it before the sketch-tool shortcuts, whose
         // early return otherwise prevents the global E shortcut from seeing
         // this key while a sketch is active.
-        if (event.key.toLowerCase() === 'e') {
+        const sketchCommand = keymap.commandFor(chord, ['sketch'])?.id;
+        if (sketchCommand === 'sketch-extrude') {
           event.preventDefault();
           startExtrude(interaction.session.sketchId as SketchId);
           return;
         }
         if (
           (event.key === 'Delete' || event.key === 'Backspace') &&
+          !meta &&
+          !event.altKey &&
           interaction.session.selectedObjectId
         ) {
           event.preventDefault();
           handleDeleteSketchEntity();
           return;
         }
-        // C on the circle tool steps its type, the way the rail's strip does;
-        // the strip and the tool's glyph show which one is live.
+        // The circle key on the circle tool steps its type, the way the
+        // rail's strip does; the strip and the tool's glyph show which one
+        // is live.
         if (
-          event.key.toLowerCase() === 'c' &&
+          sketchCommand === 'sketch-circle' &&
           interaction.session.tool === 'circle'
         ) {
           event.preventDefault();
@@ -19071,9 +19121,9 @@ export function App() {
           });
           return;
         }
-        // R does the same for the rectangle's types.
+        // The rectangle key does the same for the rectangle's types.
         if (
-          event.key.toLowerCase() === 'r' &&
+          sketchCommand === 'sketch-rectangle' &&
           interaction.session.tool === 'rectangle'
         ) {
           event.preventDefault();
@@ -19086,19 +19136,19 @@ export function App() {
           return;
         }
         const sketchTool =
-          event.key.toLowerCase() === 'v'
+          sketchCommand === 'sketch-select'
             ? ('select' as const)
-            : event.key.toLowerCase() === 'l'
+            : sketchCommand === 'sketch-line'
               ? ('line' as const)
-              : event.key.toLowerCase() === 'a'
+              : sketchCommand === 'sketch-arc'
                 ? ('arc' as const)
-                : event.key.toLowerCase() === 'c'
+                : sketchCommand === 'sketch-circle'
                   ? ('circle' as const)
-                  : event.key.toLowerCase() === 'r'
+                  : sketchCommand === 'sketch-rectangle'
                     ? ('rectangle' as const)
-                    : event.key.toLowerCase() === 'p'
+                    : sketchCommand === 'sketch-polygon'
                       ? ('polygon' as const)
-                      : event.key.toLowerCase() === 't'
+                      : sketchCommand === 'sketch-text'
                         ? ('text' as const)
                         : null;
         if (sketchTool) {
@@ -19128,7 +19178,7 @@ export function App() {
         );
         return;
       }
-      switch (event.key) {
+      switch (meta || event.altKey ? null : event.key) {
         case 'Escape':
           if (cancelPendingRegionExtrusion()) {
             event.preventDefault();
@@ -19249,66 +19299,76 @@ export function App() {
             );
           }
           return;
-        case '?':
-          event.preventDefault();
-          setShortcutsOpen(true);
-          return;
-        case '/':
-          // The slash is the command grammar: the field opens with it typed,
-          // listing every command.
-          event.preventDefault();
-          draftPrompt('/');
-          return;
-        case '1':
-          requestView('front');
-          return;
-        case '2':
-          requestView('top');
-          return;
-        case '3':
-          requestView('right');
-          return;
-        case '4':
-          requestView('iso');
-          return;
       }
 
-      const key = event.key.toLowerCase();
-      if (key === 'm' && modelingLocked) {
+      // A resolved command owns its key: a remap onto a chord the browser
+      // also answers to (Ctrl+P prints) must not do both. Tools prevent it
+      // themselves below, after their refusal check. Only Space bound to
+      // Normal to face and finding no face to turn to is left alone: it ran
+      // nothing, and the page keeps its Space.
+      if (
+        modelCommand &&
+        !(modelCommand.id === 'view-normal-to-face' && chord === 'Space') &&
+        commandTool(modelCommand.id) === null
+      ) {
         event.preventDefault();
-        toggleMeasure(!measuring);
-        return;
       }
-      if (key === 'f') {
-        setFitSignal((value) => value + 1);
-        return;
+      switch (modelCommand?.id) {
+        case 'shortcut-reference':
+          setShortcutsOpen(true);
+          return;
+        case 'command-slash':
+          // The slash is the command grammar: the field opens with it typed,
+          // listing every command.
+          draftPrompt('/');
+          return;
+        case 'view-front':
+          requestView('front');
+          return;
+        case 'view-top':
+          requestView('top');
+          return;
+        case 'view-right':
+          requestView('right');
+          return;
+        case 'view-iso':
+          requestView('iso');
+          return;
+        case 'view-measure':
+          toggleMeasure(!measuring);
+          return;
+        case 'view-fit':
+          setFitSignal((value) => value + 1);
+          return;
+        case 'view-grid':
+          setViewerSettings((current) => ({
+            ...current,
+            showGrid: !current.showGrid
+          }));
+          return;
+        case 'view-display':
+          cycleDisplayMode();
+          return;
+        case 'view-projection':
+          toggleProjection();
+          return;
+        case 'selection-filter': {
+          // Advances from the filter in force, not from the manual one: with
+          // a tool choosing the filter those differ, and stepping from the
+          // manual slot would make the first press appear to do nothing.
+          const at = SELECTION_FILTERS.indexOf(selectionFilter);
+          setManualSelectionFilter(
+            SELECTION_FILTERS[(at + 1) % SELECTION_FILTERS.length] ?? 'any'
+          );
+          return;
+        }
       }
-      if (key === 'g') {
-        setViewerSettings((current) => ({
-          ...current,
-          showGrid: !current.showGrid
-        }));
-        return;
-      }
-      if (key === 'w') {
-        cycleDisplayMode();
-        return;
-      }
-      if (key === 'p') {
-        toggleProjection();
-        return;
-      }
-      if (key === 'q') {
-        // Advances from the filter in force, not from the manual one: with a
-        // tool choosing the filter those differ, and stepping from the manual
-        // slot would make the first press appear to do nothing.
-        const at = SELECTION_FILTERS.indexOf(selectionFilter);
-        setManualSelectionFilter(
-          SELECTION_FILTERS[(at + 1) % SELECTION_FILTERS.length] ?? 'any'
-        );
-        return;
-      }
-      const shortcutTool = SHORTCUT_TO_TOOL[key];
+      const shortcutTool = commandTool(
+        modelCommand?.id ??
+          (modelingLocked
+            ? (keymap.commandFor(chord, ['build'])?.id ?? '')
+            : '')
+      );
       if (shortcutTool && modelingLocked) {
         event.preventDefault();
         ensureCanEdit(`use ${TOOL_META[shortcutTool].label}`);
@@ -19648,7 +19708,9 @@ export function App() {
             : null) === null
     );
   const modeShortcut = (mode: WorkspaceMode) =>
-    mode === modeShortcutTarget ? 'Ctrl+Shift+M' : undefined;
+    mode === modeShortcutTarget
+      ? keymap.label('workspace-mode-cycle')
+      : undefined;
   // No two rows share a name: a repeated one is numbered.
   const paletteCommands = withDistinctLabels<PaletteCommand>([
     // Modeling tools leave the palette entirely in the reading workspaces
@@ -19663,7 +19725,7 @@ export function App() {
               id: `tool-${toolId}`,
               label: meta.label,
               group: group.label,
-              shortcut: meta.shortcut,
+              shortcut: keymap.label(toolCommandId(toolId)),
               icon: meta.icon,
               disabledReason: toolDisabledReason(toolId, availability),
               run: () => launchTool(toolId)
@@ -19677,7 +19739,7 @@ export function App() {
       label: measuring ? 'Measure: off' : 'Measure',
       group: 'View',
       keywords: ['ruler', 'distance', 'angle', 'dimension', 'inspect'],
-      ...(modelingLocked ? { shortcut: 'M' } : {}),
+      ...(modelingLocked ? { shortcut: keymap.label('view-measure') } : {}),
       icon: <Ruler size={16} aria-hidden="true" />,
       disabledReason:
         viewerBodies.length === 0
@@ -19691,7 +19753,7 @@ export function App() {
       id: 'view-front',
       label: 'Front view',
       group: 'View',
-      shortcut: '1',
+      shortcut: keymap.label('view-front'),
       icon: <Monitor size={16} aria-hidden="true" />,
       run: () => requestView('front')
     },
@@ -19699,7 +19761,7 @@ export function App() {
       id: 'view-top',
       label: 'Top view',
       group: 'View',
-      shortcut: '2',
+      shortcut: keymap.label('view-top'),
       icon: <Monitor size={16} aria-hidden="true" />,
       run: () => requestView('top')
     },
@@ -19707,7 +19769,7 @@ export function App() {
       id: 'view-right',
       label: 'Right view',
       group: 'View',
-      shortcut: '3',
+      shortcut: keymap.label('view-right'),
       icon: <Monitor size={16} aria-hidden="true" />,
       run: () => requestView('right')
     },
@@ -19715,7 +19777,7 @@ export function App() {
       id: 'view-iso',
       label: 'Isometric view',
       group: 'View',
-      shortcut: '4',
+      shortcut: keymap.label('view-iso'),
       icon: <Monitor size={16} aria-hidden="true" />,
       run: () => requestView('iso')
     },
@@ -19723,7 +19785,7 @@ export function App() {
       id: 'view-fit',
       label: 'Fit view',
       group: 'View',
-      shortcut: 'F',
+      shortcut: keymap.label('view-fit'),
       icon: <Maximize2 size={16} aria-hidden="true" />,
       run: () => setFitSignal((value) => value + 1)
     },
@@ -19731,7 +19793,7 @@ export function App() {
       id: 'view-normal-to-face',
       label: 'Normal to selected face',
       group: 'View',
-      shortcut: 'Space',
+      shortcut: keymap.label('view-normal-to-face'),
       icon: <Monitor size={16} aria-hidden="true" />,
       disabledReason:
         renderedSelectedTopology?.kind !== 'face'
@@ -19745,7 +19807,7 @@ export function App() {
       id: 'view-grid',
       label: viewerSettings.showGrid ? 'Hide grid' : 'Show grid',
       group: 'View',
-      shortcut: 'G',
+      shortcut: keymap.label('view-grid'),
       icon: <Grid3x3 size={16} aria-hidden="true" />,
       run: () =>
         setViewerSettings((current) => ({
@@ -19757,7 +19819,7 @@ export function App() {
       id: 'view-display',
       label: `Display mode: next (now ${DISPLAY_MODE_LABELS[viewerSettings.displayMode]})`,
       group: 'View',
-      shortcut: 'W',
+      shortcut: keymap.label('view-display'),
       icon: <Monitor size={16} aria-hidden="true" />,
       run: cycleDisplayMode
     },
@@ -19765,7 +19827,7 @@ export function App() {
       id: 'view-projection',
       label: `Projection: switch to ${projection === 'perspective' ? 'orthographic' : 'perspective'}`,
       group: 'View',
-      shortcut: 'P',
+      shortcut: keymap.label('view-projection'),
       icon: <Camera size={16} aria-hidden="true" />,
       run: toggleProjection
     },
@@ -19794,7 +19856,7 @@ export function App() {
       id: 'edit-undo',
       label: 'Undo',
       group: 'Edit',
-      shortcut: 'Ctrl+Z',
+      shortcut: keymap.label('edit-undo'),
       icon: <Undo2 size={16} aria-hidden="true" />,
       disabledReason: undoAvailable ? null : 'Nothing to undo',
       run: handleUndo
@@ -19803,7 +19865,7 @@ export function App() {
       id: 'edit-redo',
       label: 'Redo',
       group: 'Edit',
-      shortcut: 'Ctrl+Shift+Z',
+      shortcut: keymap.label('edit-redo'),
       icon: <Redo2 size={16} aria-hidden="true" />,
       disabledReason: redoAvailable ? null : 'Nothing to redo',
       run: handleRedo
@@ -19812,7 +19874,7 @@ export function App() {
       id: 'file-save',
       label: 'Save revision',
       group: 'File',
-      shortcut: 'Ctrl+S',
+      shortcut: keymap.label('file-save'),
       icon: <Save size={16} aria-hidden="true" />,
       run: () => void handleSave()
     },
@@ -19822,7 +19884,7 @@ export function App() {
       label: 'Save revision as…',
       group: 'File',
       keywords: ['name', 'named'],
-      shortcut: 'Ctrl+Shift+S',
+      shortcut: keymap.label('file-save-named'),
       icon: <Save size={16} aria-hidden="true" />,
       run: openSaveNameDialog
     },
@@ -19962,7 +20024,7 @@ export function App() {
       id: 'app-settings',
       label: 'Open settings',
       group: 'General',
-      shortcut: 'Ctrl+,',
+      shortcut: keymap.label('app-settings'),
       icon: <SettingsIcon size={16} aria-hidden="true" />,
       run: openSettings
     },
@@ -20048,17 +20110,30 @@ export function App() {
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
-  const idleHint = idleWorkspaceHint();
+  const idleHint = idleWorkspaceHint(
+    undefined,
+    keymap.label('command-palette') ?? null,
+    keymap.label('shortcut-reference') ?? null
+  );
+  const measureKey = keymap.label('view-measure')
+    ? platformShortcutLabel(keymap.label('view-measure')!)
+    : null;
+  const faceSelectedHint = [
+    'Face selected',
+    keyHint(keymap, 'view-normal-to-face', 'faces it head-on')
+  ]
+    .filter(Boolean)
+    .join(' — ');
   const viewModeHint = measuring
     ? measurementDraft
       ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
       : measurementMode === 'smart'
-        ? `Smart measure · pick geometry · Shift+Click totals edges · ${modelingLocked ? 'M' : 'Esc'} exits`
+        ? `Smart measure · pick geometry · Shift+Click totals edges · ${(modelingLocked && measureKey) || 'Esc'} exits`
         : measurementMode === 'distance'
           ? 'Distance · pick the first target · centers resolve automatically'
           : 'Angle · pick a straight edge, circular axis or planar face'
     : selectedTopology?.kind === 'face'
-      ? 'Face selected — Space faces it head-on'
+      ? faceSelectedHint
       : viewerBodies.length > 0
         ? 'Click a body, face, or edge · Measure records what you pick'
         : idleHint;
@@ -20075,7 +20150,15 @@ export function App() {
       ? tweakModeHint
       : (commandPromptText(interaction) ??
         (tool === 'sketch'
-          ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
+          ? [
+              'Drag to draw',
+              keyHint(keymap, 'sketch-rectangle', 'rectangle'),
+              keyHint(keymap, 'sketch-circle', 'circle'),
+              'P polygon',
+              'Enter finishes'
+            ]
+              .filter(Boolean)
+              .join(' · ')
           : tool === 'fillet' || tool === 'chamfer'
             ? selectedEdges.length > 0
               ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
@@ -20087,9 +20170,9 @@ export function App() {
               : tool
                 ? 'Enter creates · Esc cancels'
                 : selectedBodyIds.length >= 2
-                  ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
+                  ? `${selectedBodyIds.length} bodies picked${booleanKeyHints() ? ` — ${booleanKeyHints()}` : ''}`
                   : selectedTopology?.kind === 'face'
-                    ? 'Face selected — Space faces it head-on'
+                    ? faceSelectedHint
                     : selectedTopology?.kind === 'edge'
                       ? // Neither tool has a shortcut, so the rail is the only
                         // route: name it the way the rail names itself.
@@ -20805,7 +20888,10 @@ export function App() {
       }
     />
   );
-  const commandPaletteKey = commandPaletteShortcut();
+  const commandPaletteKey = commandPaletteShortcut(
+    undefined,
+    keymap.label('command-palette') ?? null
+  );
   // The sketch rail has no header: the sketch's name heads its palette
   // flyout and the status line says a sketch is open.
   const columnHeader = null;
@@ -21813,6 +21899,9 @@ export function App() {
           <ProfileQuickAction
             profileName={selectedSketchProfileName}
             profileCount={selectedProfiles.length}
+            extrudeKey={keymap.label(
+              interaction.mode === 'sketch' ? 'sketch-extrude' : 'tool-extrude'
+            )}
             onExtrude={() =>
               startExtrude(selectedProfiles[0]!.sketchId as SketchId)
             }

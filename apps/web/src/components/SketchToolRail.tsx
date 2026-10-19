@@ -51,6 +51,8 @@ import type { ConstraintInspectionTarget } from '../lib/sketch/constraintInspect
 import { SKETCH_EDIT_TOOL_SPECS } from '../lib/sketch/edits';
 import { CONSTRAINT_ICONS } from './constraintIcons';
 import { Tooltip } from './Tooltip';
+import { useKeymap } from '../lib/keymap';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 
 /** One row of the palette's constraint list, pre-rendered by App. */
 export interface SketchConstraintListItem {
@@ -140,13 +142,19 @@ interface SketchToolRailProps {
 const TOOLS: {
   id: Exclude<SketchToolId, 'circle' | 'rectangle' | 'polygon'>;
   label: string;
-  keyHint: string;
+  /** The keymap command whose live key the tooltip names. */
+  command: string;
   icon: typeof Minus;
 }[] = [
-  { id: 'select', label: 'Select', keyHint: 'V', icon: MousePointer2 },
-  { id: 'line', label: 'Line', keyHint: 'L', icon: Minus },
-  { id: 'arc', label: 'Arc', keyHint: 'A', icon: Waypoints },
-  { id: 'text', label: 'Text', keyHint: 'T', icon: Type }
+  {
+    id: 'select',
+    label: 'Select',
+    command: 'sketch-select',
+    icon: MousePointer2
+  },
+  { id: 'line', label: 'Line', command: 'sketch-line', icon: Minus },
+  { id: 'arc', label: 'Arc', command: 'sketch-arc', icon: Waypoints },
+  { id: 'text', label: 'Text', command: 'sketch-text', icon: Type }
 ];
 
 /** A circle through three points on its circumference, drawn like lucide. */
@@ -475,6 +483,10 @@ export function SketchToolRail({
   onDiagnostics,
   onExtrude
 }: SketchToolRailProps) {
+  const keymap = useKeymap();
+  const circleKey = keymap.label('sketch-circle');
+  const rectangleKey = keymap.label('sketch-rectangle');
+  const polygonKey = keymap.label('sketch-polygon');
   // The sketch's overview and settings open beside the rail; closed until asked.
   const [paletteOpenState, setPaletteOpenState] = useState(false);
   const paletteOpen = paletteOpenProp ?? paletteOpenState;
@@ -527,7 +539,7 @@ export function SketchToolRail({
   const drawTool = ({
     id,
     label,
-    keyHint,
+    command,
     icon: Icon
   }: (typeof TOOLS)[number]) => {
     // An armed modify tool picks through Select's hit-testing, so the
@@ -535,7 +547,7 @@ export function SketchToolRail({
     // rather than Select beside it as a second live tool.
     const on = tool === id && !(id === 'select' && pendingEdit);
     return (
-      <Tooltip key={id} label={label} shortcut={keyHint}>
+      <Tooltip key={id} label={label} shortcut={keymap.label(command)}>
         <button
           type="button"
           className={on ? 'active' : undefined}
@@ -561,8 +573,12 @@ export function SketchToolRail({
       <span className="sketch-circle-tool">
         <Tooltip
           label={circleSpec.label}
-          shortcut="C"
-          description="C again steps through the circle types"
+          shortcut={circleKey}
+          description={
+            circleKey
+              ? `${platformShortcutLabel(circleKey)} again steps through the circle types`
+              : 'The type strip picks the circle type'
+          }
         >
           <button
             type="button"
@@ -612,14 +628,18 @@ export function SketchToolRail({
                 </Tooltip>
               )
             )}
-            <Tooltip label="Next circle type" shortcut="C">
+            <Tooltip label="Next circle type" shortcut={circleKey}>
               <button
                 type="button"
                 className="sketch-type-cycle"
                 aria-label="Next circle type"
                 onClick={() => onCircleMode(nextSketchCircleMode(circleMode))}
               >
-                <kbd>C</kbd>
+                {circleKey ? (
+                  <kbd>{platformShortcutLabel(circleKey)}</kbd>
+                ) : (
+                  <RotateCw size={12} aria-hidden="true" />
+                )}
               </button>
             </Tooltip>
           </span>
@@ -628,8 +648,12 @@ export function SketchToolRail({
       <span className="sketch-circle-tool">
         <Tooltip
           label={shapeSpec.label}
-          shortcut={tool === 'polygon' ? 'P' : 'R'}
-          description="R again steps through the rectangle types; P draws a polygon"
+          shortcut={tool === 'polygon' ? polygonKey : rectangleKey}
+          description={
+            rectangleKey
+              ? `${platformShortcutLabel(rectangleKey)} again steps through the rectangle types`
+              : 'The type strip picks the rectangle type or the polygon'
+          }
         >
           <button
             type="button"
@@ -694,7 +718,7 @@ export function SketchToolRail({
                 onCommit={(sides) => onPolygonSides?.(sides)}
               />
             ) : (
-              <Tooltip label="Next rectangle type" shortcut="R">
+              <Tooltip label="Next rectangle type" shortcut={rectangleKey}>
                 <button
                   type="button"
                   className="sketch-type-cycle"
@@ -703,7 +727,11 @@ export function SketchToolRail({
                     onRectangleMode?.(nextSketchRectangleMode(rectangleMode))
                   }
                 >
-                  <kbd>R</kbd>
+                  {rectangleKey ? (
+                    <kbd>{platformShortcutLabel(rectangleKey)}</kbd>
+                  ) : (
+                    <RotateCw size={12} aria-hidden="true" />
+                  )}
                 </button>
               </Tooltip>
             )}
@@ -854,7 +882,7 @@ export function SketchToolRail({
       </Tooltip>
       <Tooltip
         label="Extrude"
-        shortcut="E"
+        shortcut={keymap.label('sketch-extrude')}
         description={
           canExtrude
             ? 'Extrude valid profiles'

@@ -1,9 +1,10 @@
 import { useRef } from 'react';
 import { X } from 'lucide-react';
 import {
-  KEYBOARD_CONTROL_GROUPS,
+  liveKeyboardGroups,
   POINTER_CONTROL_GROUPS
 } from '../lib/controlReference';
+import { useKeymap } from '../lib/keymap';
 import { useModalFocus } from '../lib/useModalFocus';
 
 interface ShortcutsOverlayProps {
@@ -21,6 +22,8 @@ interface ShortcutsOverlayProps {
  */
 export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  // The keys as the user has them, remaps included.
+  const keyboardGroups = liveKeyboardGroups(useKeymap());
 
   // Opened by "?" from the workspace, so nothing inside has focus yet.
   // The workspace keymap toggles and closes this sheet, so it must still
@@ -64,27 +67,25 @@ export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
           role="region"
           aria-label="Controls list"
         >
-          {[...KEYBOARD_CONTROL_GROUPS, ...POINTER_CONTROL_GROUPS].map(
-            (group) => (
-              <section key={group.title}>
-                <h3 className="section-title">{group.title}</h3>
-                <dl>
-                  {group.items.map((item) => (
-                    <div key={item.id} className="shortcut-row">
-                      <dt>
-                        <span className="shortcut-key-sequence">
-                          {item.keys.map((key) => (
-                            <kbd key={key}>{key}</kbd>
-                          ))}
-                        </span>
-                      </dt>
-                      <dd>{item.action}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </section>
-            )
-          )}
+          {[...keyboardGroups, ...POINTER_CONTROL_GROUPS].map((group) => (
+            <section key={group.title}>
+              <h3 className="section-title">{group.title}</h3>
+              <dl>
+                {group.items.map((item) => (
+                  <div key={item.id} className="shortcut-row">
+                    <dt>
+                      <span className="shortcut-key-sequence">
+                        {item.keys.length > 0
+                          ? item.keys.map((key) => <kbd key={key}>{key}</kbd>)
+                          : 'Unassigned'}
+                      </span>
+                    </dt>
+                    <dd>{item.action}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          ))}
         </div>
       </div>
     </div>

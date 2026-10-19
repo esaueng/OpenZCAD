@@ -1159,6 +1159,68 @@ describe('worker api routes', () => {
     }
   });
 
+  it('keeps stored shortcut remaps when an older client omits the keymap', async () => {
+    const remapped = structuredClone(DEFAULT_APP_SETTINGS);
+    remapped.keymap = { overrides: { 'view-grid': ['H'] } };
+    let storedSettings = structuredClone(remapped);
+    let storedRevision = 1;
+    const prepare = vi.fn((query: string) => {
+      let values: unknown[] = [];
+      const statement = {
+        bind(...next: unknown[]) {
+          values = next;
+          return statement;
+        },
+        async first() {
+          return query.includes('FROM user_settings')
+            ? {
+                settings_json: JSON.stringify(storedSettings),
+                revision: storedRevision
+              }
+            : null;
+        },
+        async run() {
+          if (query.includes('UPDATE user_settings')) {
+            storedSettings = JSON.parse(
+              String(values[0])
+            ) as typeof storedSettings;
+            storedRevision = Number(values[1]);
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        },
+        async all() {
+          return { results: [] };
+        }
+      };
+      return statement;
+    });
+    const workerEnv = { ...env, DB: { prepare } } as never;
+
+    // A tab from before remapping changes the theme and sends no keymap.
+    const { keymap: _omitted, ...legacy } = structuredClone(remapped);
+    legacy.appearance.theme = 'dark';
+    const saved = await worker.fetch(
+      patch('/api/settings', { settings: legacy, expectedRevision: 1 }),
+      workerEnv
+    );
+    expect(saved.status).toBe(200);
+    expect(storedSettings.appearance.theme).toBe('dark');
+    expect(storedSettings.keymap).toEqual({
+      overrides: { 'view-grid': ['H'] }
+    });
+
+    // An explicit empty map is a reset, and is honoured.
+    const reset = structuredClone(storedSettings);
+    reset.keymap = { overrides: {} };
+    const cleared = await worker.fetch(
+      patch('/api/settings', { settings: reset, expectedRevision: 2 }),
+      workerEnv
+    );
+    expect(cleared.status).toBe(200);
+    expect(storedSettings.keymap).toEqual({ overrides: {} });
+  });
+
   it('leaves rooms alone when a save keeps sharing off', async () => {
     const off = structuredClone(DEFAULT_APP_SETTINGS);
     off.collaboration.enabled = false;

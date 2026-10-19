@@ -51,6 +51,7 @@ describe('controls reference', () => {
   it('documents context-specific keys and directional selection gestures', () => {
     expect(keyboardItem('sketch-circle')?.keys).toEqual(['C']);
     expect(keyboardItem('sketch-rectangle')?.keys).toEqual(['R']);
+    expect(keyboardItem('sketch-polygon')?.keys).toEqual(['P']);
     expect(keyboardItem('sketch-text')?.keys).toEqual(['T']);
     // Constraint tools have no shortcuts; the reference must say so and name
     // them, or they stay tooltip-only and undiscoverable without a hover.
@@ -105,6 +106,17 @@ describe('controls reference', () => {
     ]) {
       expect(
         visibleSettingsSections({ query }).map((section) => section.id)
+      ).toContain('controls');
+    }
+  });
+});
+
+describe('shortcut remapping search', () => {
+  it('finds the keymap editor by remapping words and by any command', () => {
+    for (const query of ['remap', 'hotkey', 'fillet', 'reset all shortcuts']) {
+      expect(
+        visibleSettingsSections({ query }).map((section) => section.id),
+        query
       ).toContain('controls');
     }
   });

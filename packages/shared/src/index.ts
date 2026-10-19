@@ -7,7 +7,9 @@ export * from './imported-mesh-payload';
 export * from './sketch-reference-dimensions';
 export * from './sketch-composites';
 export * from './mass-density';
+export * from './keymap-settings';
 import type { DocumentHistory } from './document-history';
+import type { KeymapOverrides } from './keymap-settings';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
 export type ProjectId = Brand<string, 'ProjectId'>;
@@ -3106,6 +3108,14 @@ export interface AppSettings {
     /** Selection-first direct manipulation: click geometry, drag handles. */
     directManipulation: boolean;
   };
+  /**
+   * The user's shortcut remaps, by command id; a command without an entry
+   * keeps its default. A preference, never project data: the same document
+   * opens with whichever keys its reader chose.
+   */
+  keymap: {
+    overrides: KeymapOverrides;
+  };
 }
 
 export interface PanelWidthLimits {
@@ -3194,6 +3204,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   experiments: {
     directManipulation: true
+  },
+  keymap: {
+    overrides: {}
   }
 };
 
