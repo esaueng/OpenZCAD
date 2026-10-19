@@ -213,6 +213,29 @@ describe('renderViewportImage', () => {
     // ...and the live view rebuilds its map with every body afterwards.
     expect(stub.refreshShadowMap).toHaveBeenCalledTimes(1);
   });
+
+  it('leaves an uncommitted copy projection out of a selected-body image', () => {
+    const stub = stubScene();
+    const pendingCopy = new THREE.Group();
+    // Move's pending copies share the model container but have no committed
+    // body identity in objectsByBodyId.
+    stub.bodyA.parent!.add(pendingCopy);
+    const seen: boolean[] = [];
+    const render = stub.renderer.render.getMockImplementation()!;
+    stub.renderer.render.mockImplementation((object) => {
+      if (object === stub.parts.scene) seen.push(pendingCopy.visible);
+      render(object);
+    });
+    renderViewportImage(stub.parts, {
+      width: 32,
+      height: 16,
+      transparent: true,
+      showGrid: false,
+      bodyIds: ['a']
+    });
+    expect(seen).toEqual([false]);
+    expect(pendingCopy.visible).toBe(true);
+  });
 });
 
 describe('captureSamples', () => {

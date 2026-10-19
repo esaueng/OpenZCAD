@@ -269,6 +269,18 @@ export function renderViewportImage(
     for (const [bodyId, object] of parts.objectsByBodyId) {
       show(object, wanted.has(bodyId));
     }
+    // Temporary Move copies share the model container but have no committed
+    // body identity. A scoped picture keeps only registered body roots.
+    const registered = new Set(parts.objectsByBodyId.values());
+    const containers = new Set<THREE.Object3D>();
+    for (const object of registered) {
+      if (object.parent) containers.add(object.parent);
+    }
+    for (const container of containers) {
+      for (const child of container.children) {
+        if (!registered.has(child)) hide(child, false);
+      }
+    }
   }
   // Selection is a viewing state: its glow, and the face fills and ghosts
   // hung under a body for a picked face, are not part of the part.
