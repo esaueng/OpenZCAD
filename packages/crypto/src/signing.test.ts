@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Bytes } from './bytes';
 import {
   assetDedupeHash,
@@ -334,6 +334,35 @@ describe('version chains', () => {
     buffers[2]!.fill(0);
     buffers[1]!.fill(0);
     expect(await checking).toEqual(expected);
+  });
+
+  it('hashes the history one envelope at a time', async () => {
+    const chain = await chainOf(4);
+    const digest = crypto.subtle.digest.bind(crypto.subtle);
+    let inFlight = 0;
+    let peak = 0;
+    const spy = vi
+      .spyOn(crypto.subtle, 'digest')
+      .mockImplementation(async (algorithm, data) => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        try {
+          return await digest(algorithm, data);
+        } finally {
+          inFlight -= 1;
+        }
+      });
+    try {
+      await verifyVersionChain(chain);
+      expect(peak).toBe(1);
+      // A broken first link stops the work: the rest is never hashed.
+      spy.mockClear();
+      const forked = [chain[0]!, await version(2, null), ...chain.slice(2)];
+      await rejectsWith(verifyVersionChain(forked), 'chain-broken');
+      expect(spy.mock.calls.length).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('refuses rollback, forks and broken links', async () => {

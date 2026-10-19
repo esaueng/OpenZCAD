@@ -202,15 +202,19 @@ export async function verifyVersionChain(
           'pinnedVersionHash',
           HASH_BYTES
         );
-  // Read every envelope before the first await: headers are decoded into
-  // copies and each digest call copies its input, so a caller replacing an
-  // element or editing a buffer meanwhile cannot change the chain checked.
-  const headers = envelopes.map((envelope) => projectHeaderOf(envelope).header);
-  const digests = envelopes.map((envelope) => versionHash(envelope));
-  const hashes = await Promise.all(digests);
+  // Capture every envelope before the first await (headers decode into
+  // copies; the bodies are copied, each already bounded by the structure
+  // check), so a caller editing the list or a buffer meanwhile cannot
+  // change the chain checked. Hash them one at a time: concurrent digests
+  // would each hold another copy, and a broken link stops the work early.
+  const captured = envelopes.map((envelope) => ({
+    header: projectHeaderOf(envelope).header,
+    bytes: copyBytes(envelope)
+  }));
+  const hashes: Bytes[] = [];
   let previous: ProjectEnvelopeHeader | null = null;
-  for (const [index, header] of headers.entries()) {
-    const before = index > 0 ? hashes[index - 1] : undefined;
+  for (const { header, bytes } of captured) {
+    const before = hashes.at(-1);
     if (
       previous &&
       before &&
@@ -225,6 +229,7 @@ export async function verifyVersionChain(
       );
     }
     previous = header;
+    hashes.push(await versionHash(bytes));
   }
   if (pinned && !hashes.some((hash) => equalBytes(hash, pinned))) {
     throw new E2eeError(
