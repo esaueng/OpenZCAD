@@ -121,6 +121,11 @@ export function fitCameraToAspect(
   return () => undefined;
 }
 
+/** An edge batch (`BodyEdgeOverlay`) that can draw without highlights. */
+interface SuspendsHighlights {
+  suspendHighlights(): () => void;
+}
+
 /** The group ModelViewer hangs a picked face's fill and ghost in. */
 const SELECTION_OVERLAY_GROUP = 'body-selection-overlay';
 
@@ -280,6 +285,12 @@ export function renderViewportImage(
       ) {
         hide(node, false);
         return;
+      }
+      // Selected and hovered edges, face rims and a selected body's
+      // outline live in its edge batch, which knows its own tiers.
+      const edges = node as Partial<SuspendsHighlights>;
+      if (typeof edges.suspendHighlights === 'function') {
+        restores.push(edges.suspendHighlights());
       }
       const material = (node as THREE.Mesh).material as
         THREE.MeshStandardMaterial | undefined;
