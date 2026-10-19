@@ -256,11 +256,15 @@ still refreshes the recovery key's and the other passkeys' wraps. Unlocking
 uses the method's secret to open its private half, then the account key.
 The identity key is wrapped the same way, to the certified public key of each
 passkey and of the recovery key, and never to a device unlock key. It does not
-rotate on device removal. When it is replaced, the browser re-wraps the new
-identity key to every surviving method's certified public key, again without
-knowing their secrets. The exposed method is the exception: it is removed and
-re-enrolled with a fresh key pair. Each method's public key is re-certified in
-the first device-list entry the new identity signs.
+rotate on device removal. It is replaced only when it may be compromised, and
+then whoever held it could also have appended their own device or unlock
+method to the old device list. So nothing carries over automatically. The new
+identity starts a fresh device list containing only the replacing browser's
+device and a newly issued recovery key. Every other device must be approved
+again through the device-approval flow, and every passkey enrolled again.
+The browser lists the old entries, with names and dates, to help the user
+do that. Only those re-approved targets receive the new identity and account
+keys.
 
 - **Approval from an unlocked device.** A short code computed from the new
   device's public key alone would be grindable: the server sees the real key
@@ -502,9 +506,13 @@ comparison, which is safe only because of its commitment step.
   not by the owner (§12.4.3), so a former editor could build a plausible
   tree. Each link therefore carries its own **share-authority statement**:
   - The owner signs it, with a device key certified in the owner's device
-    list. It names the link id, the identity fingerprints allowed to publish
-    snapshots (the owner and current editors), a sequence number and an
-    expiry.
+    list. It names the link id, a sequence number, an expiry, and the
+    specific author credentials allowed to publish snapshots: for the owner
+    and each current editor, the fingerprints of the device signing keys
+    certified in the newest device list the owner's browser has pinned for
+    that person. When the owner's browser sees an editor revoke a device, it
+    issues a new statement without that credential, so a revoked device is
+    accepted at most until the expiry of the last statement naming it.
   - That device key must also hold a current **share delegation**: a statement
     signed directly by the owner's identity key, naming the owner devices
     allowed to sign share-authority statements, with an expiry of at most 30
@@ -519,8 +527,9 @@ comparison, which is safe only because of its commitment step.
   - The visitor's browser checks, in order: the owner hash in the link, the
     identity-signed share delegation and its expiry, that the statement's
     signing device is named in it, the statement's signature and expiry,
-    then the snapshot author's identity in the statement, and that author's
-    device list certifying the signing device. It accepts the snapshot only if every
+    then that the snapshot's signing credential is one the statement names.
+    The author's own device list is not trusted here, because a visitor has
+    no pin for it and could be shown a stale one. It accepts the snapshot only if every
     step holds.
   - Any of the owner's devices renews the statement while it is online, and
     issues a new one at once when an editor is removed or the link revoked.
