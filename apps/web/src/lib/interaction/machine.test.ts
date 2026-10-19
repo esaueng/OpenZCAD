@@ -297,6 +297,28 @@ describe('interactionReducer', () => {
     expect(state.mode === 'sketch' && state.session.tool).toBe('polygon');
   });
 
+  it("keeps Offset's settings without disarming it or dropping a pick", () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    state = interactionReducer(state, {
+      type: 'sketch-edit-tool',
+      kind: 'offset'
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-offset-options',
+      options: { join: 'round', chain: false }
+    });
+    expect(state.mode === 'sketch' && state.session.pendingEdit).toEqual({
+      kind: 'offset',
+      picks: []
+    });
+    // A setting of the tool: it outlives this arming.
+    state = interactionReducer(state, { type: 'sketch-edit-tool', kind: null });
+    expect(state.mode === 'sketch' && state.session.offsetOptions).toEqual({
+      join: 'round',
+      chain: false
+    });
+  });
+
   it('steps the circle type in the strip order, wrapping round', () => {
     expect(nextSketchCircleMode('center-radius')).toBe('two-point-diameter');
     expect(nextSketchCircleMode('two-point-diameter')).toBe('three-point');

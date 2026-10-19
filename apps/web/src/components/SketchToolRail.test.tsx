@@ -388,16 +388,21 @@ describe('SketchToolRail', () => {
         pendingEdit: { kind, picks: [] }
       });
       const rail = screen.getByRole('toolbar', { name: 'Sketch tools' });
-      const lit = Array.from(
-        rail.querySelectorAll('button[aria-pressed="true"]')
-      ).map((button) => button.getAttribute('aria-label'));
+      // A tool's own settings strip (Offset's join and Chain) is not a tool.
+      const tools = (selector: string) =>
+        Array.from(rail.querySelectorAll(selector)).filter(
+          (button) => !button.closest('[data-rail-flyout]')
+        );
+      const lit = tools('button[aria-pressed="true"]').map((button) =>
+        button.getAttribute('aria-label')
+      );
       const label = SKETCH_EDIT_TOOL_SPECS.find(
         (spec) => spec.kind === kind
       )!.label;
       // A folded tool lights the fold's toggle while the list is closed.
       const folded = kind !== 'fillet' && kind !== 'chamfer';
       expect(lit).toEqual(folded ? [] : [label]);
-      const active = rail.querySelectorAll('button.active');
+      const active = tools('button.active');
       expect(active).toHaveLength(1);
       expect(active[0]!.getAttribute('aria-label')).toBe(
         folded ? 'More modify tools' : label
@@ -649,6 +654,47 @@ describe('SketchToolRail', () => {
     await user.click(toggle);
     await user.keyboard('{Escape}');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it("rides Offset's corner join and Chain beside its slot while it is armed", async () => {
+    const user = userEvent.setup();
+    const onOffsetOptions = vi.fn();
+    const { props, rerender } = renderRail({
+      canConstrain: true,
+      pendingEdit: { kind: 'offset', picks: [] },
+      onOffsetOptions
+    });
+    const strip = screen.getByRole('group', { name: 'Offset options' });
+    const joins = within(strip).getByRole('radiogroup', {
+      name: 'Offset corners'
+    });
+    // Miter and a chain are the default.
+    expect(
+      within(joins)
+        .getAllByRole('radio')
+        .map((radio) => radio.getAttribute('aria-checked'))
+    ).toEqual(['true', 'false']);
+    await user.click(within(joins).getByRole('radio', { name: 'Round' }));
+    expect(onOffsetOptions).toHaveBeenLastCalledWith({
+      join: 'round',
+      chain: true
+    });
+    rerender(
+      <SketchToolRail
+        {...props}
+        offsetOptions={{ join: 'round', chain: true }}
+      />
+    );
+    const chain = within(strip).getByRole('button', { name: 'Chain' });
+    expect(chain).toHaveAttribute('aria-pressed', 'true');
+    await user.click(chain);
+    expect(onOffsetOptions).toHaveBeenLastCalledWith({
+      join: 'round',
+      chain: false
+    });
+    // The strip leaves with the tool.
+    rerender(<SketchToolRail {...props} pendingEdit={null} />);
+    expect(screen.queryByRole('group', { name: 'Offset options' })).toBeNull();
   });
 
   it('marks solver-named constraints as actionable conflicts', async () => {
