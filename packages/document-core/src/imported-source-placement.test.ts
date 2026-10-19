@@ -31,6 +31,27 @@ describe('fixed imported source placement', () => {
       expect(constantRigidTransform({ ...fixed, scale })).toBeNull();
   });
 
+  it('folds a constant pivot into the origin-based placement and rejects a parametric one (M10)', () => {
+    // 90° about z through (10, 5, 0): x' = 10 − (y − 5), y' = 5 + (x − 10),
+    // i.e. the same turn about the origin followed by (15, −5, 0).
+    const placed = constantRigidTransform({
+      translation: { x: 1, y: 0, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 90 },
+      pivot: { x: 10, y: 5, z: 0 }
+    })!;
+    expect(placed.rotationDeg).toEqual({ x: 0, y: 0, z: 90 });
+    expect(placed.translation.x).toBeCloseTo(16, 12);
+    expect(placed.translation.y).toBeCloseTo(-5, 12);
+    expect(placed.translation.z).toBeCloseTo(0, 12);
+    expect(
+      constantRigidTransform({
+        translation: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 90 },
+        pivot: { x: 'centre_x', y: 0, z: 0 }
+      })
+    ).toBeNull();
+  });
+
   it('isolates the selected import and rejects suppressed placement or source history', () => {
     const imported = importStepBody(
       createProjectDocument('Placement', toUserId('test')),
@@ -75,5 +96,26 @@ describe('fixed imported source placement', () => {
             imported.bodyId
           )
         ).toBeNull();
+  });
+});
+
+describe('constant placement with unit suffixes', () => {
+  it('resolves a suffixed pivot in document units and refuses a parameter', () => {
+    const turn = {
+      translation: { x: 0, y: 0, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 90 }
+    };
+    const placed = constantRigidTransform(
+      { ...turn, pivot: { x: '1 cm', y: 0, z: 0 } },
+      'mm'
+    );
+    expect(placed?.translation.x).toBeCloseTo(10, 9);
+    expect(placed?.translation.y).toBeCloseTo(-10, 9);
+    expect(
+      constantRigidTransform(
+        { ...turn, pivot: { x: 'width', y: 0, z: 0 } },
+        'mm'
+      )
+    ).toBeNull();
   });
 });

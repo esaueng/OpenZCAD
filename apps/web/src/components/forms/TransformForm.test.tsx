@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { BodyId } from '@openzcad/shared';
 import { MoveOverlay } from '../MoveOverlay';
@@ -66,5 +66,101 @@ describe('Move edit card labels (F19)', () => {
     );
     // Scale has no gizmo to match and keeps its own label.
     expect(screen.getByRole('textbox', { name: 'Scale ×' })).toHaveValue('1');
+  });
+});
+
+describe('Move pivot (M10)', () => {
+  const bodies = [{ bodyId: 'body-1' as BodyId, name: 'Box', consumed: false }];
+
+  it('keeps the pivot the gizmo wrote through an edit', () => {
+    const onSubmit = vi.fn();
+    render(
+      <TransformForm
+        scope={{}}
+        bodies={bodies}
+        units="mm"
+        initial={{
+          name: 'Move',
+          targetBodyId: 'body-1' as BodyId,
+          translation: zero,
+          rotationDeg: { x: 0, y: 0, z: 90 },
+          pivot: { x: 10, y: 5, z: 5 }
+        }}
+        submitLabel="Apply"
+        onSubmit={onSubmit}
+      />
+    );
+    expect(screen.getByRole('textbox', { name: 'Pivot X in mm' })).toHaveValue(
+      '10'
+    );
+    fireEvent.change(
+      screen.getByRole('textbox', { name: 'Rotate Z in degrees' }),
+      {
+        target: { value: '180' }
+      }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rotationDeg: { x: 0, y: 0, z: 180 },
+        pivot: { x: 10, y: 5, z: 5 }
+      })
+    );
+  });
+
+  it('stores no pivot when it is left at the origin', () => {
+    const onSubmit = vi.fn();
+    render(
+      <TransformForm
+        scope={{}}
+        bodies={bodies}
+        units="mm"
+        submitLabel="Create"
+        onSubmit={onSubmit}
+      />
+    );
+    fireEvent.change(screen.getByRole('textbox', { name: 'Move X in mm' }), {
+      target: { value: '4' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(onSubmit.mock.calls[0]![0]).not.toHaveProperty('pivot');
+  });
+});
+
+describe('Move edit card field types (F05)', () => {
+  it('reads moves and the pivot as lengths and turns as angles', () => {
+    const onSubmit = vi.fn();
+    render(
+      <TransformForm
+        scope={{}}
+        bodies={[{ bodyId: 'body-1' as BodyId, name: 'Box', consumed: false }]}
+        units="mm"
+        initial={{
+          name: 'Move',
+          targetBodyId: 'body-1' as BodyId,
+          translation: zero,
+          rotationDeg: zero
+        }}
+        submitLabel="Apply"
+        onSubmit={onSubmit}
+      />
+    );
+    const apply = screen.getByRole('button', { name: 'Apply' });
+    const pivotX = screen.getByLabelText('Pivot X in mm');
+    // A length with its unit is a length here...
+    fireEvent.change(pivotX, { target: { value: '10 mm' } });
+    expect(apply).toBeEnabled();
+    // ...and an angle is not, though it evaluates to a number.
+    fireEvent.change(pivotX, { target: { value: '30 deg' } });
+    expect(apply).toBeDisabled();
+    fireEvent.change(pivotX, { target: { value: '1 cm' } });
+    fireEvent.change(screen.getByLabelText('Rotate Z in degrees'), {
+      target: { value: '1 rad' }
+    });
+    expect(apply).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('Move X in mm'), {
+      target: { value: '30 deg' }
+    });
+    expect(apply).toBeDisabled();
   });
 });

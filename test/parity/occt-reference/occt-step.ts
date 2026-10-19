@@ -964,8 +964,16 @@ function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
   };
 }
 
-/** Same world-origin ZYX Euler transform used by the viewport move gizmo. */
-function transformMatrix(translation: Vec3, rotationDeg: Vec3): number[] {
+/**
+ * Same ZYX Euler transform the exact build uses, L = scale·R: about the world
+ * origin, or about `pivot` (M10), the translation then becoming t + p − L·p.
+ */
+function transformMatrix(
+  translation: Vec3,
+  rotationDeg: Vec3,
+  pivot: Vec3 = { x: 0, y: 0, z: 0 },
+  scaleFactor = 1
+): number[] {
   const rx = (rotationDeg.x * Math.PI) / 180;
   const ry = (rotationDeg.y * Math.PI) / 180;
   const rz = (rotationDeg.z * Math.PI) / 180;
@@ -975,19 +983,21 @@ function transformMatrix(translation: Vec3, rotationDeg: Vec3): number[] {
   const sb = Math.sin(ry);
   const cc = Math.cos(rz);
   const sc = Math.sin(rz);
+  const k = scaleFactor;
+  const r = [
+    [k * cc * cb, k * (cc * sb * sa - sc * ca), k * (cc * sb * ca + sc * sa)],
+    [k * sc * cb, k * (sc * sb * sa + cc * ca), k * (sc * sb * ca - cc * sa)],
+    [-k * sb, k * cb * sa, k * cb * ca]
+  ] as const;
+  const shift = (row: readonly [number, number, number], p: number) =>
+    p - (row[0] * pivot.x + row[1] * pivot.y + row[2] * pivot.z);
   return [
-    cc * cb,
-    cc * sb * sa - sc * ca,
-    cc * sb * ca + sc * sa,
-    translation.x,
-    sc * cb,
-    sc * sb * sa + cc * ca,
-    sc * sb * ca - cc * sa,
-    translation.y,
-    -sb,
-    cb * sa,
-    cb * ca,
-    translation.z
+    ...r[0],
+    translation.x + shift(r[0], pivot.x),
+    ...r[1],
+    translation.y + shift(r[1], pivot.y),
+    ...r[2],
+    translation.z + shift(r[2], pivot.z)
   ];
 }
 
@@ -1625,17 +1635,53 @@ export class OcctStepKernelAdapter {
             }
             const translation = feature.data.transform.translation;
             const rotation = feature.data.transform.rotationDeg;
+            const pivot = feature.data.transform.pivot;
+            const scaleFactor =
+              feature.data.transform.scale !== undefined
+                ? resolveParamValue(
+                    feature.data.transform.scale,
+                    scope,
+                    'scale',
+                    document.units
+                  )
+                : 1;
+            if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
+              throw new Error(
+                'Transform scale must resolve to a positive number.'
+              );
+            }
             const matrix = transformMatrix(
               {
-                x: resolveParamValue(translation.x, scope, 'X'),
-                y: resolveParamValue(translation.y, scope, 'Y'),
-                z: resolveParamValue(translation.z, scope, 'Z')
+                x: resolveParamValue(translation.x, scope, 'X', document.units),
+                y: resolveParamValue(translation.y, scope, 'Y', document.units),
+                z: resolveParamValue(translation.z, scope, 'Z', document.units)
               },
               {
-                x: resolveParamValue(rotation.x, scope, 'rotate X'),
-                y: resolveParamValue(rotation.y, scope, 'rotate Y'),
-                z: resolveParamValue(rotation.z, scope, 'rotate Z')
-              }
+                x: resolveParamValue(
+                  rotation.x,
+                  scope,
+                  'rotate X',
+                  document.units
+                ),
+                y: resolveParamValue(
+                  rotation.y,
+                  scope,
+                  'rotate Y',
+                  document.units
+                ),
+                z: resolveParamValue(
+                  rotation.z,
+                  scope,
+                  'rotate Z',
+                  document.units
+                )
+              },
+              pivot && {
+                x: resolveParamValue(pivot.x, scope, 'pivot X', document.units),
+                y: resolveParamValue(pivot.y, scope, 'pivot Y', document.units),
+                z: resolveParamValue(pivot.z, scope, 'pivot Z', document.units)
+              },
+              scaleFactor
             );
             const transformed = this.kernel.transform(target, matrix);
             result.shapes.set(feature.data.targetBodyId, transformed);
