@@ -289,6 +289,23 @@ describe('asset de-duplication', () => {
       importAssetDedupeSecret(patternBytes(31)),
       'invalid-argument'
     );
+    // Any HMAC key other than SHA-256 would yield an incompatible index.
+    const sha1 = await crypto.subtle.importKey(
+      'raw',
+      patternBytes(32),
+      { name: 'HMAC', hash: 'SHA-1' },
+      false,
+      ['sign']
+    );
+    await rejectsWith(assetDedupeHash(sha1, content), 'invalid-argument');
+    const verifyOnly = await crypto.subtle.importKey(
+      'raw',
+      patternBytes(32),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['verify']
+    );
+    await rejectsWith(assetDedupeHash(verifyOnly, content), 'invalid-argument');
   });
 });
 

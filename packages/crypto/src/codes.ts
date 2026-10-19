@@ -58,6 +58,19 @@ export async function assetDedupeHash(
   dedupeKey: CryptoKey,
   content: Uint8Array
 ): Promise<string> {
+  // WebCrypto uses the hash bound into the key, so a SHA-1 HMAC key would
+  // silently yield a different, incompatible index.
+  const algorithm = dedupeKey?.algorithm as HmacKeyAlgorithm | undefined;
+  if (
+    algorithm?.name !== 'HMAC' ||
+    algorithm.hash?.name !== 'SHA-256' ||
+    !dedupeKey.usages.includes('sign')
+  ) {
+    throw new E2eeError(
+      'invalid-argument',
+      'Expected an HMAC-SHA-256 signing key from importAssetDedupeSecret'
+    );
+  }
   return toHex(
     new Uint8Array(await subtle().sign('HMAC', dedupeKey, asBytes(content)))
   );

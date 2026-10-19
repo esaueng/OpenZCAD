@@ -1102,6 +1102,31 @@ describe('content blobs', () => {
     }
   });
 
+  it('cancels the source envelope stream when decryption fails', async () => {
+    const { envelope, reference } = await blob(patternBytes(CHUNK * 50));
+    const tampered = new Uint8Array(envelope);
+    tampered[parseEnvelope(envelope).prefix.byteLength]! ^= 1;
+    let cancelled: unknown = null;
+    let delivered = false;
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        // Deliver the envelope once, then stay open like a slow network.
+        if (!delivered) {
+          delivered = true;
+          controller.enqueue(tampered);
+        }
+      },
+      cancel(reason) {
+        cancelled = reason;
+      }
+    });
+    await rejectsWith(
+      collect(decryptContentBlobStream(reference, source)),
+      'authentication-failed'
+    );
+    expect(cancelled).toBeInstanceOf(E2eeError);
+  });
+
   it('validates the key of a content blob reference up front', async () => {
     const { reference } = await blob(patternBytes(10));
     for (const key of [patternBytes(31), 'AAAA', undefined]) {

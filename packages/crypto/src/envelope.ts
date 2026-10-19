@@ -1162,25 +1162,33 @@ export function decryptContentBlobStream(
   let inputOffset = 0;
   const payloadReader = new ReadableStream<Bytes>({
     async pull(controller) {
-      for (;;) {
-        if (!input || inputOffset >= input.byteLength) {
-          const next = await envelopeReader.read();
-          if (next.done) {
-            for (const part of await reader.finish()) controller.enqueue(part);
-            controller.close();
-            return;
+      try {
+        for (;;) {
+          if (!input || inputOffset >= input.byteLength) {
+            const next = await envelopeReader.read();
+            if (next.done) {
+              for (const part of await reader.finish())
+                controller.enqueue(part);
+              controller.close();
+              return;
+            }
+            input = next.value;
+            inputOffset = 0;
           }
-          input = next.value;
-          inputOffset = 0;
+          const slice = input.subarray(
+            inputOffset,
+            inputOffset + reader.preferredPushBytes
+          );
+          inputOffset += slice.byteLength;
+          const out = await reader.push(slice);
+          for (const part of out) controller.enqueue(part);
+          if (out.length > 0) return;
         }
-        const slice = input.subarray(
-          inputOffset,
-          inputOffset + reader.preferredPushBytes
-        );
-        inputOffset += slice.byteLength;
-        const out = await reader.push(slice);
-        for (const part of out) controller.enqueue(part);
-        if (out.length > 0) return;
+      } catch (error) {
+        // Release and cancel the source too: erroring this stream does not
+        // run its cancel callback, which would leave the producer running.
+        await envelopeReader.cancel(error).catch(() => undefined);
+        throw error;
       }
     },
     cancel: (reason) => envelopeReader.cancel(reason)
