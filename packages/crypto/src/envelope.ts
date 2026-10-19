@@ -364,7 +364,9 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
   private verified = false;
   private state: 'open' | 'busy' | 'closed' = 'open';
   private readonly hasher: CiphertextHasher | null;
-  private readonly maxBytes: number;
+  private readonly callerLimit: number | undefined;
+  /** Payload limit: the caller's until the header is authenticated. */
+  private maxBytes: number;
 
   constructor(
     private readonly key: Uint8Array,
@@ -374,6 +376,7 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
   ) {
     this.hasher = expectedHash ? new CiphertextHasher() : null;
     checkCallerLimit(options.maxPlaintextBytes);
+    this.callerLimit = options.maxPlaintextBytes;
     this.maxBytes = maxPayloadBytes(
       options.maxPlaintextBytes ?? DEFAULT_MAX_PLAINTEXT_BYTES
     );
@@ -478,6 +481,13 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
     if (!this.verified) {
       this.verified = true;
       this.accept(this.parsed!.header);
+      // Now that the header is authentic, hold the payload to what it can
+      // produce: a few declared bytes must not cost 128 MiB of empty
+      // deflate blocks to download, decrypt and inflate.
+      this.maxBytes = Math.min(
+        this.maxBytes,
+        payloadBound(this.parsed!.header, this.callerLimit)
+      );
     }
     this.produced += plaintext.byteLength;
     if (this.produced > this.maxBytes) {
@@ -526,6 +536,23 @@ export interface PayloadLimits {
  */
 function maxPayloadBytes(plaintextLimit: number): number {
   return plaintextLimit + Math.ceil(plaintextLimit / 1024) + 1024;
+}
+
+/**
+ * The largest payload one header can legitimately carry: exactly its
+ * plaintext cap uncompressed, the cap plus deflate overhead with gzip.
+ */
+function payloadBound(
+  header: EnvelopeHeader,
+  maxPlaintextBytes?: number
+): number {
+  const cap = plaintextCap({
+    kind: header.kind,
+    compression: header.compression,
+    declaredLength: header.plaintextLength,
+    maxPlaintextBytes
+  });
+  return header.compression === 'none' ? cap : maxPayloadBytes(cap);
 }
 
 function checkCallerLimit(limit: number | undefined): void {
@@ -647,14 +674,7 @@ async function readWhole<H extends EnvelopeHeader>(
   const take = (parts: readonly Bytes[]) => {
     if (parts.length === 0) return;
     if (!payloadBuffer) {
-      const header = reader.header!;
-      const cap = plaintextCap({
-        kind: header.kind,
-        compression: header.compression,
-        declaredLength: declaredLength(header),
-        maxPlaintextBytes
-      });
-      const bound = header.compression === 'none' ? cap : maxPayloadBytes(cap);
+      const bound = payloadBound(reader.header!, maxPlaintextBytes);
       payloadBuffer = new Uint8Array(Math.min(envelope.byteLength, bound));
     }
     for (const part of parts) {
@@ -1094,13 +1114,7 @@ export function parseEnvelope(envelope: Uint8Array): EnvelopeShape {
   const payloadLength = body - chunkCount * GCM_TAG_BYTES;
   // Refuse a body larger than its header can produce before anyone hashes
   // or decrypts it: signature and chain checks hash the whole envelope.
-  const { header } = prefix;
-  const cap = plaintextCap({
-    kind: header.kind,
-    compression: header.compression,
-    declaredLength: header.plaintextLength
-  });
-  const bound = header.compression === 'none' ? cap : maxPayloadBytes(cap);
+  const bound = payloadBound(prefix.header);
   if (payloadLength > bound) {
     throw new E2eeError(
       'limit-exceeded',

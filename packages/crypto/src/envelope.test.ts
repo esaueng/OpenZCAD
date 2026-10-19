@@ -1184,6 +1184,39 @@ describe('content blobs', () => {
     }
   });
 
+  it('a stream holds a gzip payload to what its authenticated header allows', async () => {
+    // A gzip header followed by 64 KB of empty stored deflate blocks: it
+    // inflates to nothing, so only the payload bound can stop it early.
+    const emptyBlocks = 13_000;
+    const payload = new Uint8Array(10 + emptyBlocks * 5);
+    payload.set([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 0xff]);
+    for (let i = 0; i < emptyBlocks; i += 1) {
+      payload.set([0, 0, 0, 0xff, 0xff], 10 + i * 5);
+    }
+    const { envelope: base } = await blob(text('hi'));
+    const header = parseEnvelope(base).header as ContentBlobHeader;
+    const { envelope, writer } = await encryptWithHeaderForTests(
+      EnvelopeKey.generate(),
+      { ...header, compression: 'gzip', chunkSize: 4096, plaintextLength: 2 },
+      payload
+    );
+    const decrypt = vi.spyOn(crypto.subtle, 'decrypt');
+    try {
+      await rejectsWith(
+        collect(
+          decryptContentBlobStream(
+            contentBlobReference(writer),
+            stream([envelope])
+          )
+        ),
+        'limit-exceeded'
+      );
+      expect(decrypt.mock.calls.length).toBeLessThan(4);
+    } finally {
+      decrypt.mockRestore();
+    }
+  });
+
   it('an uncompressed writer refuses a total other than the declared size', async () => {
     for (const written of [CHUNK - 1, CHUNK + 1]) {
       const writer = await createContentBlobWriter(
