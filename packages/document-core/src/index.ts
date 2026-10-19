@@ -1968,6 +1968,29 @@ export function booleanConsumedBodyIds(data: {
 }
 
 /**
+ * M11: whether this feature names `bodyId` only as an input it keeps — a
+ * Boolean that does not consume it, or a Split with `keepOriginal`. Such a
+ * feature leaves the body live and unchanged under its own id, so a
+ * classifier asking "was this body edited after it was made?" skips it.
+ */
+export function featureKeepsInputBody(
+  data: FeatureData,
+  bodyId: BodyId
+): boolean {
+  if (data.featureKind === 'boolean') {
+    return (
+      data.targetBodyIds.includes(bodyId) &&
+      !booleanConsumedBodyIds(data).includes(bodyId)
+    );
+  }
+  return (
+    data.featureKind === 'split' &&
+    data.targetBodyId === bodyId &&
+    data.keepOriginal === true
+  );
+}
+
+/**
  * F01 through-all, first slice: a cut through exactly one explicit target,
  * with an explicit side. Everything else fails closed rather than guessing a
  * target, an operation, or which side was meant.

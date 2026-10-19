@@ -416,3 +416,29 @@ export function reorderRefusal(
   }
   return null;
 }
+
+/**
+ * The targets an edit of `featureId` must validate: those of the feature as
+ * stored in `base`, then any more that the feature as `proposed` adds. An
+ * edit that points a Boolean or Split at a different input (or stops keeping
+ * one, M11) puts that input's later features at stake, and only the proposed
+ * document names the new input. The stored source stays first.
+ */
+export function editAffectedFeatureTargets(
+  base: ProjectDocument,
+  proposed: ProjectDocument | null,
+  featureId: FeatureId
+): AffectedFeatureTarget[] {
+  const targets = affectedFeatureTargets(base, featureId);
+  if (!proposed) return targets;
+  const key = (target: AffectedFeatureTarget) =>
+    `${target.featureId}:${target.resultBodyId}`;
+  const seen = new Set(targets.map(key));
+  for (const target of affectedFeatureTargets(proposed, featureId)) {
+    if (!seen.has(key(target))) {
+      seen.add(key(target));
+      targets.push(target);
+    }
+  }
+  return targets;
+}

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { parseCadPatchProposal } from '@openzcad/ai-contracts';
+import {
+  parseCadPatchProposal,
+  unmodifiedImportedSource
+} from '@openzcad/ai-contracts';
 import {
   createProjectDocument,
   evaluateExpression,
@@ -12,6 +15,7 @@ import {
   commandFactories,
   commandsForCadPatch,
   composeCommands,
+  importedOpeningCommand,
   replayCommands
 } from './index';
 
@@ -139,5 +143,79 @@ describe('imported opening recipe', () => {
       'require_one_of(1/0,46,50)'
     ])
       expect(() => evaluateExpression(expression, {})).toThrow();
+  });
+});
+
+describe('imported source kept by a Boolean or Split (M11)', () => {
+  function withTool() {
+    const { manager } = setup();
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Tool',
+        artifactId: 'tool',
+        sourceName: 'tool.step',
+        stepText: 'ISO-10303-21;'
+      })
+    );
+    const [source, tool] = manager.document.bodyOrder as [
+      (typeof manager.document.bodyOrder)[number],
+      (typeof manager.document.bodyOrder)[number]
+    ];
+    return { manager, source, tool };
+  }
+  const recipe = (targetBodyId: string) => ({
+    name: 'Opening',
+    targetBodyId: targetBodyId as never,
+    sourceWidth: 46,
+    editedWidth: 50,
+    width: 'opening_width',
+    axis: 'x' as const,
+    regions: openingRegions as never
+  });
+
+  it('stays an unmodified source and compiles its opening when kept', () => {
+    for (const [keepOriginals, kept] of [
+      ['target', true],
+      ['all', true],
+      ['tools', false],
+      [undefined, false]
+    ] as const) {
+      const { manager, source, tool } = withTool();
+      manager.execute(
+        commandFactories.booleanBodies({
+          name: 'Union',
+          operation: 'union',
+          targetBodyIds: [source, tool],
+          ...(keepOriginals ? { keepOriginals } : {})
+        })
+      );
+      expect(unmodifiedImportedSource(manager.document, source) !== null).toBe(
+        kept
+      );
+      const compile = () =>
+        importedOpeningCommand(manager.document, recipe(source));
+      if (kept) expect(compile).not.toThrow();
+      else expect(compile).toThrow(/unmodified imported source/);
+    }
+  });
+
+  it('stays an unmodified source through a Split that keeps it', () => {
+    for (const keepOriginal of [true, undefined] as const) {
+      const { manager, source } = withTool();
+      manager.execute(
+        commandFactories.splitBody({
+          name: 'Split',
+          targetBodyId: source,
+          plane: {
+            origin: { x: 0, y: 0, z: 0 },
+            normal: { x: 1, y: 0, z: 0 }
+          },
+          ...(keepOriginal ? { keepOriginal } : {})
+        })
+      );
+      expect(unmodifiedImportedSource(manager.document, source) !== null).toBe(
+        keepOriginal === true
+      );
+    }
   });
 });

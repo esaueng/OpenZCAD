@@ -8,7 +8,7 @@ import type {
   UnitSystem
 } from '@openzcad/shared';
 import {
-  booleanConsumedBodyIds,
+  featureKeepsInputBody,
   listFeaturesInOrder,
   resolveParamValue
 } from './index';
@@ -107,14 +107,8 @@ export function rigidImportedSource(
         data.targetBodyIds.includes(bodyId))
     ))
       continue;
-    // M11: a Boolean or Split that keeps this body leaves it live and
-    // unchanged under its own id, so it is no edit of the import.
-    if (
-      (data.featureKind === 'boolean' &&
-        !booleanConsumedBodyIds(data).includes(bodyId)) ||
-      (data.featureKind === 'split' && data.keepOriginal === true)
-    )
-      continue;
+    // M11: a Boolean or Split that keeps this body is no edit of the import.
+    if (featureKeepsInputBody(data, bodyId)) continue;
     if (
       data.featureKind !== 'transform' ||
       feature.metadata?.suppressed ||

@@ -14,15 +14,18 @@ import {
   holeBody,
   listFeaturesInOrder,
   sweepProfile,
-  transformBody
+  transformBody,
+  updateFeature
 } from '@openzcad/document-core';
 import {
   toUserId,
+  type BodyId,
   type ProjectDocument,
   type SketchId
 } from '@openzcad/shared';
 import {
   affectedFeatureTargets,
+  editAffectedFeatureTargets,
   planReorder,
   reorderFeatureTargets,
   reorderRefusal
@@ -668,5 +671,46 @@ describe('kept Boolean and Split inputs (M11)', () => {
     expect(
       affectedFeatureTargets(moved, splitId).map((target) => target.featureName)
     ).toEqual(['Split', 'Move A']);
+  });
+});
+
+describe('edit targets of a re-pointed Boolean (M11)', () => {
+  it('validates the later features of an input the edit newly takes', () => {
+    let document = createProjectDocument('Repoint', toUserId('user_repoint'));
+    for (const name of ['A', 'B', 'C']) {
+      document = addPrimitiveFeature(document, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      });
+    }
+    const [a, b, c] = document.bodyOrder as [BodyId, BodyId, BodyId];
+    const union = booleanBodies(document, {
+      name: 'Union',
+      operation: 'union',
+      targetBodyIds: [a, b]
+    });
+    const base = transformBody(union.document, {
+      name: 'Move C',
+      targetBodyId: c,
+      translation: { x: 20, y: 0, z: 0 }
+    }).document;
+    const unionId = listFeaturesInOrder(base).find(
+      (feature) => feature.name === 'Union'
+    )!.featureId;
+    const proposed = updateFeature(base, {
+      featureId: unionId,
+      data: { featureKind: 'boolean', targetBodyIds: [a, c] }
+    });
+    const names = (targets: { featureName: string }[]) =>
+      targets.map((target) => target.featureName);
+    expect(names(affectedFeatureTargets(base, unionId))).toEqual(['Union']);
+    expect(names(editAffectedFeatureTargets(base, proposed, unionId))).toEqual([
+      'Union',
+      'Move C'
+    ]);
+    expect(names(editAffectedFeatureTargets(base, null, unionId))).toEqual([
+      'Union'
+    ]);
   });
 });
