@@ -639,6 +639,18 @@ encrypts under the project key is unchanged.
   rejects the rest, and the loser rebases. A malicious Delivery Service can
   still delay or withhold messages (§16.9), the same limit
   [Version integrity](#version-integrity) already states.
+- **Binding versions to epochs.** A removed or downgraded member keeps the
+  old project key, so a version could claim the old authority while naming
+  the current head as its parent. Review found this hole in the custom roster
+  as well. MLS fixes the key side, because the removal Commit gives later
+  epochs keys the removed leaf never sees, but versions must use those epochs
+  too. Every project envelope names the MLS epoch it was written in and is
+  encrypted under that epoch's exported key. A version's epoch may never be
+  older than its parent's. The room accepts a new current head only under the
+  group's current epoch, and browsers check the role of the author's leaf in
+  that epoch. A late signature under old authority is then refused, wherever
+  it claims to sit. What remains is the fork-consistency limit already
+  stated: a server that hides the removal Commit from some members.
 - **Long-offline devices.** A device must process every Commit since it was
   last online, or rejoin. Rejoining uses an external Commit (§12.4.3.2), which
   policy allows only for the user's own certified devices. The same path
