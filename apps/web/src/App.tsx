@@ -17640,7 +17640,7 @@ export function App() {
     }
     const { commands, featureId: copyId, label } = duplicate;
     const copyBodyId =
-      feature.data.featureKind === 'transform'
+      feature.data.featureKind === 'transform' && feature.data.copy !== true
         ? feature.data.targetBodyId
         : (commands[0]!.payload as { ids: { bodyId: BodyId } }).ids.bodyId;
     const targets = [

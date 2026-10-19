@@ -3723,12 +3723,13 @@ export function duplicateFeatureCommands(
   let copyId: FeatureId;
   switch (data.featureKind) {
     case 'transform': {
-      const ids = createFeatureOnlyIds();
+      const ids = data.copy === true ? createBodyFeatureIds() : createFeatureOnlyIds();
       copyId = ids.featureId;
       create = commandFactories.transformBody({
         name,
         targetBodyId: data.targetBodyId,
         ...data.transform,
+        ...(data.copy === true ? { copy: true } : {}),
         ids
       });
       break;

@@ -81,6 +81,26 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await expectBodyCount(page, 3);
   await expect(rows.filter({ hasText: /copy 1$/ })).toHaveCount(1);
   await expect(rows.filter({ hasText: /copy 2$/ })).toHaveCount(1);
+
+  // History Duplicate preserves a copy's result ownership and opens it.
+  await page
+    .locator('.feature-row')
+    .filter({
+      has: page.locator('.feature-name', { hasText: /^Copy$/ })
+    })
+    .click({ button: 'right' });
+  await page
+    .getByRole('menu')
+    .getByRole('menuitem', { name: 'Duplicate' })
+    .click();
+  await expectBodyCount(page, 4);
+  await expect(
+    inspector.getByText('Copy: the source body stays in place.')
+  ).toBeVisible();
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  await inspector.getByRole('button', { name: 'Cancel' }).click();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expectBodyCount(page, 3);
 });
 
 test('a coincident copy asks before a tool, history, measure or selection transition', async ({

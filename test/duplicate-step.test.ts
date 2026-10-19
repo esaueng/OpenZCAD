@@ -110,6 +110,48 @@ describe('duplicate history step (ZC-104)', () => {
     ]);
   });
 
+  it('duplicates a transform copy without moving its source or reusing its result', async () => {
+    const { commands, blockId } = manager();
+    const move = commandFactories.transformBody({
+      name: 'Copy',
+      targetBodyId: blockId,
+      copy: true,
+      translation: { x: 20, y: 0, z: 0 }
+    });
+    commands.execute(move);
+    const originalCopy = listFeaturesInOrder(commands.document).at(-1)!;
+    const before = commands.document;
+    const duplicateId = duplicate(commands, originalCopy.featureId);
+    const result = listFeaturesInOrder(commands.document).find(
+      (feature) => feature.featureId === duplicateId
+    )!;
+    expect(result.data).toMatchObject({
+      featureKind: 'transform',
+      copy: true,
+      targetBodyId: blockId
+    });
+    expect(result.bodyId).toBeDefined();
+    expect(result.bodyId).not.toBe(originalCopy.bodyId);
+    expect(commands.document.bodyOrder).toHaveLength(3);
+    const verifyBodies = async (document: ProjectDocument) => {
+      expect(await bbox(document, blockId)).toEqual([0, 0, 0, 10, 10, 10]);
+      expect(await bbox(document, originalCopy.bodyId!)).toEqual([
+        20, 0, 0, 30, 10, 10
+      ]);
+      expect(await bbox(document, result.bodyId!)).toEqual([
+        20, 0, 0, 30, 10, 10
+      ]);
+    };
+    await verifyBodies(commands.document);
+    commands.undo();
+    expect(commands.document.bodyOrder).toEqual(before.bodyOrder);
+    commands.redo();
+    await verifyBodies(commands.document);
+    const replayed = replayCommands(blank(), commands.document.commandLog);
+    expect(replayed.bodyOrder).toEqual(commands.document.bodyOrder);
+    await verifyBodies(replayed);
+  });
+
   it('copies a Mirror as a new body reading the same body and plane', async () => {
     const { commands, blockId } = manager();
     const mirror = commandFactories.mirrorBody({
