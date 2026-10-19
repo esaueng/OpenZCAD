@@ -28,9 +28,11 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
       return data.targetBodyId ? [data.targetBodyId] : [];
     case 'boolean':
       return [...data.targetBodyIds];
+    case 'transform':
+      // A copy (M10) leaves its source in place, as a Mirror does.
+      return data.copy ? [] : [data.targetBodyId];
     case 'split':
     case 'hole':
-    case 'transform':
     case 'shell':
     case 'solid-offset':
     case 'draft':
