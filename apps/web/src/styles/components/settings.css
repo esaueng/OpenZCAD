@@ -989,6 +989,30 @@
   gap: var(--sp-3);
 }
 
+/* Shows the reference group's per-key explanations in place. */
+.settings-details-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+  color: var(--color-accent);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-mini);
+}
+
+.settings-details-toggle:hover {
+  background: var(--color-accent-dim);
+}
+
+.settings-details-toggle > svg {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.settings-details-toggle[aria-expanded='true'] > svg {
+  transform: rotate(180deg);
+}
+
 .settings-control-group > header > span {
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);

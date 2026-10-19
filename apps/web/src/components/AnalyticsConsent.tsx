@@ -69,6 +69,9 @@ export function AnalyticsConsent() {
             type="button"
             className="secondary"
             disabled={!enabled}
+            // The row title is not part of the button's name; on its own
+            // "Download" would not say what it downloads.
+            aria-label="Download diagnostic report"
             onClick={downloadDiagnosticReport}
           >
             Download

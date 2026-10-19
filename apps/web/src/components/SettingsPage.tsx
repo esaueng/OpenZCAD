@@ -6,6 +6,7 @@ import {
 import {
   Fragment,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -15,6 +16,7 @@ import {
 } from 'react';
 import {
   Bot,
+  ChevronDown,
   ChevronLeft,
   CloudOff,
   Cpu,
@@ -199,8 +201,9 @@ const FIXED_KEYBOARD_GROUPS: readonly ControlReferenceGroup[] =
 
 /**
  * The keyboard and pointer reference: keys and the action they run. Each
- * binding's longer explanation is its tooltip rather than a second line, so
- * the reference scans as a list of keys.
+ * binding's longer explanation is one Details press away rather than a
+ * second line on every row, so the reference scans as a list of keys. A
+ * tooltip alone left it out of reach by touch and by keyboard.
  */
 function ControlReferenceGroups({
   groups
@@ -210,29 +213,62 @@ function ControlReferenceGroups({
   return (
     <div className="settings-control-groups">
       {groups.map((group) => (
-        <section className="settings-control-group" key={group.id}>
-          <h4>{group.title}</h4>
-          <dl>
-            {group.items.map((item) => (
-              <div
-                className="settings-control-row"
-                key={item.id}
-                title={item.detail}
-              >
-                <dt>
-                  <span className="settings-control-keys">
-                    {item.keys.map((key) => (
-                      <kbd key={key}>{key}</kbd>
-                    ))}
-                  </span>
-                </dt>
-                <dd>{item.action}</dd>
-              </div>
-            ))}
-          </dl>
-        </section>
+        <ControlReferenceGroupCard group={group} key={group.id} />
       ))}
     </div>
+  );
+}
+
+function ControlReferenceGroupCard({
+  group
+}: {
+  group: ControlReferenceGroup;
+}) {
+  const [showDetails, setShowDetails] = useState(false);
+  const listId = useId();
+  return (
+    <section className="settings-control-group">
+      <header>
+        <h4>{group.title}</h4>
+        <button
+          type="button"
+          className="settings-details-toggle"
+          aria-expanded={showDetails}
+          aria-controls={listId}
+          // The name stays put; aria-expanded carries the state.
+          aria-label={`Details for ${group.title}`}
+          onClick={() => setShowDetails((current) => !current)}
+        >
+          Details
+          <ChevronDown size={12} aria-hidden="true" />
+        </button>
+      </header>
+      <dl id={listId}>
+        {group.items.map((item) => (
+          <div
+            className="settings-control-row"
+            key={item.id}
+            title={showDetails ? undefined : item.detail}
+          >
+            <dt>
+              <span className="settings-control-keys">
+                {item.keys.map((key) => (
+                  <kbd key={key}>{key}</kbd>
+                ))}
+              </span>
+            </dt>
+            {showDetails ? (
+              <dd>
+                <strong>{item.action}</strong>
+                <small>{item.detail}</small>
+              </dd>
+            ) : (
+              <dd>{item.action}</dd>
+            )}
+          </div>
+        ))}
+      </dl>
+    </section>
   );
 }
 

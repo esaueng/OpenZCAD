@@ -19,6 +19,7 @@ import {
   type HealthResponse
 } from '@openzcad/shared';
 import { SettingsPage } from './SettingsPage';
+import { POINTER_CONTROL_GROUPS } from '../lib/controlReference';
 import { api } from '../lib/api';
 
 // Account loads storage usage for a signed-in profile; no test reaches a server.
@@ -450,6 +451,32 @@ describe('settings controls section', () => {
   });
 });
 
+describe('settings control reference details', () => {
+  it('shows each binding’s explanation from a button, not only a tooltip', async () => {
+    const user = userEvent.setup();
+    renderSettings(null, { initialSection: 'controls' });
+
+    const pointer = POINTER_CONTROL_GROUPS[0];
+    const sample = pointer.items[0];
+    const toggle = screen.getByRole('button', {
+      name: `Details for ${pointer.title}`
+    });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(sample.detail)).toBeNull();
+
+    // Reachable by keyboard: focus it and press Enter.
+    toggle.focus();
+    await user.keyboard('{Enter}');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(sample.detail)).toBeVisible();
+    // The name does not change with the state.
+    expect(toggle).toHaveAccessibleName(`Details for ${pointer.title}`);
+
+    await user.click(toggle);
+    expect(screen.queryByText(sample.detail)).toBeNull();
+  });
+});
+
 describe('settings assistant section', () => {
   it('keeps the master toggle on the AI Assistant page while disabled', async () => {
     const user = userEvent.setup();
@@ -863,6 +890,14 @@ describe('settings privacy and data section', () => {
     });
     expect(meter).toHaveAttribute('aria-valuenow', String(5 * 1_048_576));
     expect(meter).toHaveAttribute('aria-valuetext', '5.0 MB of 100.0 MB');
+  });
+
+  it('names the diagnostic download for what it downloads', () => {
+    renderSettings(readyHealth, { initialSection: 'privacy', session });
+
+    expect(
+      screen.getByRole('button', { name: 'Download diagnostic report' })
+    ).toBeInTheDocument();
   });
 
   it('keeps the full analytics disclosure, local operations included', async () => {
