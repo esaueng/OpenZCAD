@@ -14,8 +14,8 @@ interface FakeFace {
 
 /**
  * A fake kernel whose faces share one seam vertex, one closed edge of the
- * same type and length, one plane and one domain: only what the face list
- * gives them differs.
+ * same type, one plane and one domain: only what the face list gives them
+ * differs.
  */
 function kernelWith(faces: Record<number, FakeFace>): FaceShapeKernel {
   return {
@@ -29,7 +29,6 @@ function kernelWith(faces: Record<number, FakeFace>): FaceShapeKernel {
     getWireEdges: (wire: number) => Uint32Array.from([wire]),
     isEdgeForwardInWire: () => true,
     getEdgeCurveType: () => 'ELLIPSE',
-    edgeLength: () => 62.83,
     getEdgeParamSpan: () => Float64Array.from([0, 1]),
     evaluateEdgeCurve: (edge: number, t: number) =>
       Float64Array.from(faces[edge]!.curve(t)),
@@ -91,7 +90,7 @@ describe('preview face geometry cache', () => {
   });
 
   it('keeps boundaries of equal perimeter but different shape apart', () => {
-    // Same seam vertex, curve type, length, plane and domain; the second
+    // Same seam vertex, curve type, plane and domain; the second
     // boundary is a different ellipse through the same seam point.
     const kernel = kernelWith({
       1: { normal: [0, 0, 1], curve: ellipse(10, 10) },

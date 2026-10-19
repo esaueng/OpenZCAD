@@ -19,7 +19,6 @@ export type FaceShapeKernel = Pick<
   | 'getWireEdges'
   | 'isEdgeForwardInWire'
   | 'getEdgeCurveType'
-  | 'edgeLength'
   | 'getEdgeParamSpan'
   | 'evaluateEdgeCurve'
   | 'getEdgeNurbsData'
@@ -40,11 +39,13 @@ const EDGE_SAMPLES = [0, 0.25, 0.5, 0.75, 1];
  * raw analytic parameters, the parameter domain and a plane's oriented
  * normal. Two coincident faces of opposite orientation therefore never share
  * an entry. The boundary is each wire's edges in order with their direction,
- * curve type, length, five points along the trimmed span (which pin a
- * circle or an ellipse) and any NURBS definition, so equal-perimeter curves
- * of different shape stay apart. Positions are quantized at the geometry
- * tolerance the witnesses already use. B-spline faces are never measured by
- * the preview.
+ * curve type, five points along the trimmed span and any NURBS definition, so
+ * equal-perimeter curves of different shape stay apart. Five points determine
+ * any conic (two a line, three a circle) and the NURBS definition the rest, so
+ * an edge's length adds nothing; it is not read, because integrating it for
+ * every edge of every face cost as much per frame as the measurements the
+ * cache saves. Positions are quantized at the geometry tolerance the
+ * witnesses already use. B-spline faces are never measured by the preview.
  */
 export class PreviewFaceGeometryCache {
   private readonly entries = new Map<string, FaceGeometry | undefined>();
@@ -145,7 +146,6 @@ function boundarySignature(kernel: FaceShapeKernel, face: number): string {
       return [
         kernel.isEdgeForwardInWire(edge, wire) ? '+' : '-',
         read(() => kernel.getEdgeCurveType(edge)),
-        quantizeCoordinate(kernel.edgeLength(edge)),
         samples.join(' '),
         nurbs
       ].join('/');
