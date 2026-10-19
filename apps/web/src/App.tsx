@@ -7525,6 +7525,12 @@ export function App() {
               : null
           : null;
       setViewportFormFacePick(seeded?.ok ? seeded.pick : null);
+      if (seeded?.ok && boxSelectedFaces && targetBodyId) {
+        // The card accepts one target body. Drop the wider sweep so its
+        // highlights cannot promise faces the operation will never receive.
+        setBoxFaces(null);
+        setSelectedBodyIds([targetBodyId]);
+      }
       setFormFacePickTarget(null);
     }
     // Selection is kept on purpose: booleans/move/fillet pre-fill from it.

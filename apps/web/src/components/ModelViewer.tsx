@@ -2486,6 +2486,7 @@ export function ModelViewer({
       bodyGroup,
       filter: () => selectionFilterRef.current,
       selectThrough: () => xrayRef.current,
+      clippingPlane: () => sectionViewRef.current ? sectionClippingPlane(sectionViewRef.current) : null,
       profiles: () => profilePickTargetsRef.current,
       selectionContext: () =>
         profileSelectionModeRef.current

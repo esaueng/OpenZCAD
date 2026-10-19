@@ -16,6 +16,7 @@ import {
 } from '../pick/edges';
 import { SELECTION_SEMANTICS } from './semantics';
 import { createBodyEdgeOverlay } from './edgeOverlay';
+import { applyDisplayMode } from '../scene/objects';
 
 const BODY_ID = toBodyId('body-1');
 const EDGE_REFERENCE: EdgeTopologyReferenceV5 = {
@@ -97,6 +98,16 @@ function selection(topologyId: string): TopologySelection {
 }
 
 describe('BodyEdgeOverlay', () => {
+  it('keeps X-ray batches visible through the generic shaded display pass', () => {
+    const overlay = makeOverlay();
+    const root = new THREE.Group();
+    root.add(overlay);
+    overlay.setDisplayMode('shaded');
+    overlay.setXrayView(true);
+    applyDisplayMode(root, 'shaded');
+    expect(overlay.idleEdges.visible).toBe(true);
+  });
+
   it('consolidates all renderable polylines into one idle draw batch', () => {
     const overlay = makeOverlay();
 

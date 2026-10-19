@@ -77,7 +77,7 @@ function makeService(
   filter?: SelectionFilter,
   options: Pick<
     PickServiceOptions,
-    'profiles' | 'selectionContext' | 'selectThrough'
+    'profiles' | 'selectionContext' | 'selectThrough' | 'clippingPlane'
   > = {}
 ) {
   const regionGroup = groups.regionGroup ?? new THREE.Group();
@@ -717,6 +717,39 @@ describe('X-ray select-through', () => {
       'front-face'
     );
   });
+
+  it.each([false, true])(
+    'excludes clipped faces and edges from pointer picks (X-ray: %s)',
+    (xray) => {
+      let plane: THREE.Plane | null = new THREE.Plane(
+        new THREE.Vector3(0, 0, 1),
+        -1
+      );
+      const { service } = makeService(
+        { bodyGroup: edgeBehindFace() },
+        undefined,
+        {
+          selectThrough: () => xray,
+          clippingPlane: () => plane
+        }
+      );
+      expect(service.pick(centreEvent())?.selection?.topologyId).toBe(
+        'front-face'
+      );
+      expect(
+        service.pickAll(centreEvent()).map((hit) => hit.selection?.topologyId)
+      ).toEqual(['front-face']);
+      plane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 1);
+      expect(service.pick(centreEvent())?.selection?.topologyId).toBe(
+        'edge-rear'
+      );
+      expect(
+        service.pickAll(centreEvent()).map((hit) => hit.selection?.topologyId)
+      ).toEqual(['edge-rear']);
+      plane = null;
+      expect(service.pickAll(centreEvent())).toHaveLength(2);
+    }
+  );
 
   it('takes the rear edge through the face in X-ray', () => {
     let xray = true;

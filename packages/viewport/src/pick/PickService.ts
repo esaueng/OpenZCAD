@@ -75,6 +75,8 @@ export interface PickServiceOptions {
    * the faces in front of it, and a solid no longer blocks a sketch region.
    */
   selectThrough?(): boolean;
+  /** Active world-space material clipping plane; keep its nonnegative side. */
+  clippingPlane?(): THREE.Plane | null;
 }
 
 interface TopologyUserData {
@@ -365,9 +367,11 @@ export class PickService {
   private bodyIntersections(
     raycaster: THREE.Raycaster = this.raycaster
   ): THREE.Intersection<THREE.Object3D>[] {
+    const plane = this.options.clippingPlane?.();
     return raycaster
       .intersectObjects(this.options.bodyGroup.children, true)
       .filter((hit) => {
+        if (plane && plane.distanceToPoint(hit.point) < 0) return false;
         let object: THREE.Object3D | null = hit.object;
         while (object) {
           if (!object.visible) {

@@ -415,3 +415,100 @@ test('a sketch shown by hand stays shown after a reload', async ({ page }) => {
     page.getByRole('button', { name: 'Hide sketch Profile' })
   ).toBeVisible({ timeout: 30_000 });
 });
+
+test('X-ray keeps shaded edges after installing new body geometry', async ({
+  page
+}) => {
+  await createBox(page, 'Rebuilt X-ray Part');
+  const display = page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: /^Display mode/ });
+  for (
+    let count = 0;
+    count < 3 &&
+    !/now: Shaded$/.test((await display.getAttribute('aria-label')) ?? '');
+    count += 1
+  ) {
+    await display.click();
+  }
+  await expect(display).toHaveAttribute('aria-label', /now: Shaded$/);
+  await xrayButton(page).click();
+  await page.locator('.feature-row-main', { hasText: 'Box' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByRole('textbox', { name: 'Width (X)' }).fill('45');
+  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(page.getByRole('contentinfo')).toContainText('Edited Box');
+  await expectBodyCount(page, 1);
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+  await expect
+    .poll(async () =>
+      canvas(page).evaluate(
+        (element) =>
+          new Promise<boolean[]>((resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-render-policy', {
+                detail: {
+                  resolve: (policy: {
+                    bodyEdges: { name: string; visible: boolean }[];
+                  }) =>
+                    resolve(
+                      policy.bodyEdges
+                        .filter((edge) => edge.name === 'body-edge')
+                        .map((edge) => edge.visible)
+                    )
+                }
+              })
+            );
+          })
+      )
+    )
+    .toEqual([true]);
+});
+
+for (const operation of ['Shell', 'Draft']) {
+  test(`${operation} clears faces on other bodies when seeded from a sweep`, async ({
+    page
+  }) => {
+    await createBox(page, 'Multi-body Face Sweep');
+    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+    await page
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('button', { name: /^Create/ })
+      .click();
+    await expectBodyCount(page, 2);
+    await topView(page);
+    await page
+      .getByRole('toolbar', { name: 'Viewer bar' })
+      .getByRole('button', { name: /^Orthographic projection/ })
+      .click();
+    await setSelectionFilter(page, 'Face');
+    await xrayButton(page).click();
+    const { minX, minY, maxX, maxY, maxZ, pad } = await boxExtent(page);
+    await sweep(
+      page,
+      [minX - pad, maxY + pad, maxZ],
+      [maxX + pad, minY - pad, maxZ]
+    );
+    await expect(canvas(page)).toHaveAttribute('data-e2e-focus-faces', '12');
+    await page.getByRole('button', { name: /^More tools/ }).click();
+    await page
+      .getByRole('button', { name: new RegExp(`^${operation}`) })
+      .first()
+      .click();
+    await expect(
+      page.getByRole('region', { name: 'Feature inspector' })
+    ).toBeVisible();
+    await expect(canvas(page)).not.toHaveAttribute(
+      'data-e2e-focus-faces',
+      /.*/
+    );
+    await expect
+      .poll(
+        async () =>
+          (await canvas(page).getAttribute('data-e2e-selected-bodies'))?.split(
+            ','
+          ).length
+      )
+      .toBe(1);
+  });
+}
