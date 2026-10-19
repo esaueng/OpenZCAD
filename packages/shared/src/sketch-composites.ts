@@ -306,6 +306,15 @@ function shapeLapse(
   ) {
     return 'The polygon’s sides no longer run round its circumcircle in order.';
   }
+  // The same sides walked the other way round are still a regular polygon,
+  // but corner and side indices would name different corners and sides.
+  const signedArea = corners.reduce((sum, corner, index) => {
+    const next = corners[(index + 1) % count]!;
+    return sum + corner.x * next.y - next.x * corner.y;
+  }, 0);
+  if (signedArea <= 0) {
+    return 'The polygon’s sides no longer run counter-clockwise.';
+  }
   return null;
 }
 

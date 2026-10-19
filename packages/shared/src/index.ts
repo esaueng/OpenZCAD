@@ -938,6 +938,9 @@ export type SketchCompositeKind = SketchCompositeData['compositeKind'];
  * (wrapping), counter-clockwise, so corner `i` is the start of side `i` and
  * is held to the end of side `i - 1` by a coincident relation. Corner and
  * side identity is therefore an index into this list, never a coordinate.
+ * A polygon walked clockwise resolves as broken. A rectangle that an edit
+ * has mirrored through itself still resolves: its corners keep their
+ * indices, and nothing about it depends on the direction of the walk.
  *
  * `helperIds` are construction geometry the composite owns: a centre
  * rectangle's two diagonals (whose crossing is the centre) and a polygon's

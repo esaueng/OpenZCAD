@@ -594,6 +594,27 @@ describe('S04 composite drawing on the pinned kernel', () => {
       status: 'broken',
       reason: 'The rectangle’s diagonals no longer meet its corners.'
     });
+    // The same pentagon walked clockwise: regular, but reversed.
+    const backwards = new Map(pentagon.objects());
+    for (const [index, id] of ring.edgeIds.entries()) {
+      const at = (step: number) => {
+        const angle = (-step * 2 * Math.PI) / 5;
+        return { x: 10 * Math.cos(angle), y: 10 * Math.sin(angle) };
+      };
+      const a = at(index);
+      const b = at(index + 1);
+      backwards.set(id, {
+        objectKind: 'line',
+        x1: a.x,
+        y1: a.y,
+        x2: b.x,
+        y2: b.y
+      });
+    }
+    expect(resolveSketchComposite(ring, backwards, resolve)).toMatchObject({
+      status: 'broken',
+      reason: 'The polygon’s sides no longer run counter-clockwise.'
+    });
     const withoutCircle = new Map(polygon.objects());
     withoutCircle.delete(square.helperIds![0]!);
     expect(
