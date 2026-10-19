@@ -798,11 +798,27 @@ export interface AppSettingsUpdate {
   previous: AppSettings;
 }
 
+/**
+ * Whether a settings PATCH comes from a client that predates shortcut
+ * remapping: it sends no `keymap` at all. An explicit empty map is a reset;
+ * an absent one is not knowing, and must not erase another device's keys.
+ */
+export function settingsRequestOmitsKeymap(body: unknown): boolean {
+  if (!body || typeof body !== 'object') return true;
+  const settings = (body as Record<string, unknown>).settings;
+  return (
+    !settings ||
+    typeof settings !== 'object' ||
+    !Object.prototype.hasOwnProperty.call(settings, 'keymap')
+  );
+}
+
 export async function updateAppSettings(
   userId: UserId,
   request: UpdateAppSettingsRequest,
   env: CloudflareEnv,
-  email?: string
+  email?: string,
+  options: { keepStoredKeymap?: boolean } = {}
 ): Promise<AppSettingsUpdate> {
   if (!env.DB) {
     throw new HttpError(503, 'Account settings storage is unavailable.');
@@ -815,11 +831,14 @@ export async function updateAppSettings(
     );
   }
   const nextRevision = current.revision + 1;
-  const serialized = JSON.stringify(request.settings);
+  const settings: AppSettings = options.keepStoredKeymap
+    ? { ...request.settings, keymap: current.settings.keymap }
+    : request.settings;
+  const serialized = JSON.stringify(settings);
   const timestamp = nowIso();
   if (
     assistantConnectionFingerprint(current.settings) !==
-    assistantConnectionFingerprint(request.settings)
+    assistantConnectionFingerprint(settings)
   ) {
     await clearAssistantCredentialValidation(userId, env);
   }
