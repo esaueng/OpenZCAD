@@ -63,7 +63,11 @@ It does not protect against:
 - a compromised device, or local IndexedDB copies, which stay as safe as the
   device's disk encryption;
 - deletion or withholding by someone with storage access. Encryption makes
-  tampering detectable, not impossible.
+  tampering detectable, not impossible;
+- a server that keeps members on permanently separate branches of a project,
+  or serves a stale history to a browser that has never seen the project.
+  [Version integrity](#version-integrity) gives fork consistency and a manual
+  cross-check, not an automatic guarantee.
 
 ## Decision
 
@@ -79,18 +83,39 @@ keeping the last good one.
 
 ### Envelope
 
-Each stored blob is an envelope with an algorithm version, a small plaintext
-header and AES-256-GCM ciphertext. The header holds the project id, document
-version, previous-version hash, schema version, key epoch, blob kind and the
-ids of the assets it references. The whole header is bound into the
+Every stored blob is an envelope with an algorithm version, a small plaintext
+header and AES-256-GCM ciphertext. The whole header is bound into the
 authenticated data, so changing it breaks decryption. Bodies are compressed
-before encryption. Large blobs are split into fixed-size chunks, and each
-chunk binds its index and a final-chunk flag, so a truncated or reordered
-file fails. Multipart uploads use the same chunking per part.
+before encryption. There are two envelope classes:
 
-Asset de-duplication stays per project but keys on an HMAC under a key
-derived from the project key, so the server cannot test whether a known file
-is present.
+- **Project envelopes** hold document versions, measurements, workspace view
+  state and share snapshots. Their header carries the project id, document
+  version, previous-version hash, schema version, key epoch, blob kind and the
+  ids of the content blobs the version references. They are bound to one
+  project and are never moved between projects.
+- **Content blobs** hold imported sources, mesh payloads, thumbnails and
+  archived exports. Their header carries only an immutable random blob id, the
+  blob kind and the algorithm version; no project id. Large content blobs are
+  split into fixed-size chunks, and each chunk binds the blob id, its index
+  and a final-chunk flag, so a truncated, reordered or transplanted chunk
+  fails. Multipart uploads use the same chunking per part.
+
+A content blob is authenticated by the project envelope that references it.
+That envelope records the blob id, the blob's random key and a hash of its
+ciphertext, so a blob the server swaps in from elsewhere fails to decrypt or
+fails the hash. Copying a project is then cheap for large files: the browser
+writes a new first version of the destination's project envelope, re-encrypted
+under the destination project's keys and carrying the same blob ids and keys.
+The server copies the referenced content blobs byte for byte, under the same
+blob ids. No STEP file is re-encrypted, and nothing in a copied blob names the
+source project.
+
+Asset de-duplication stays per project. It keys on an HMAC of the plaintext
+under a key derived from the project key, so the server cannot test whether a
+known file is present. The HMAC is an index column beside the blob, not part
+of any envelope. A copied blob gets the destination's HMAC only when the
+copying browser has the plaintext at hand; otherwise it has no de-duplication
+entry, which affects only future de-duplication.
 
 ### Key hierarchy
 
@@ -99,12 +124,14 @@ is present.
 | Account key   | One random 256-bit key per user, never stored unwrapped                                          | Each unlock method                                      |
 | User key pair | ECDH P-256 for receiving project keys, plus an ECDSA P-256 signing pair; public halves published | Account key                                             |
 | Project key   | One random key per project, versioned by epoch                                                   | Each member's public key, then the member's account key |
-| Blob keys     | One random key per document version, asset, thumbnail and archived export                        | Project key                                             |
+| Version keys  | One random key per project envelope (document version, measurements, view state, share snapshot) | Project key                                             |
+| Blob keys     | One random key per content blob (import source, mesh payload, thumbnail, archived export)        | Recorded inside the referencing project envelope        |
 
 Once a member accepts a project, their browser re-wraps its key under their
 own account key, so opening the project shelf needs only symmetric unwraps.
-Per-blob keys let a copy re-wrap 32-byte keys instead of re-encrypting large
-STEP files. Every wrap carries an algorithm version so a hybrid post-quantum
+Because blob keys travel inside the project envelope, a copy re-encrypts only
+the small document, never the large STEP files it references. Every wrap
+carries an algorithm version so a hybrid post-quantum
 wrap can be added without re-encrypting data; ECDH wraps are not
 quantum-resistant and CAD data can stay valuable for decades.
 
@@ -147,8 +174,32 @@ keys. Any one of these unlock methods opens the account key:
 
 Each version's header carries the hash of the previous version, and its author
 signs it. Browsers remember the newest version they have seen of each project
-and refuse an older or forked history, so the server cannot serve stale or
-divergent copies to different members undetected.
+and refuse any version whose chain does not contain it. That gives fork
+consistency, not full consistency:
+
+- **What is detected.** A browser cannot be rolled back behind what it has
+  already seen. If the server ever shows two members a forked history, then
+  as soon as either one sees a version from the other branch, its chain is
+  missing that member's last-seen version and the fork is reported. A server
+  that forks members must keep them apart forever.
+- **What is not detected.** A server that keeps members permanently apart can
+  serve each one a consistent, separately signed branch. Neither browser ever
+  sees evidence of the other. A new browser, or one whose storage was cleared,
+  has no last-seen version, so it accepts any validly signed chain, however
+  stale.
+- **Cross-client anchor.** The sharing dialog and project info show a short
+  project state code, derived from the newest version's hash, its version
+  number and the signing member's fingerprint. Members who compare codes
+  outside OpenZCAD, or a fresh browser checking against a member's code,
+  detect a split view or rollback. Each signed version also carries the
+  author's signed timestamp, so a fresh browser warns when the newest version
+  it is offered is older than the project's last recorded activity. The
+  server reports that activity in plaintext, so the warning is a heuristic.
+- **Not in scope.** An automatic cross-client mechanism (transparency log,
+  gossip over an independent channel, or authenticated checkpoint transfer
+  between members) is deferred. Product copy must not claim that the server
+  cannot fork or roll back a project. It can only claim that a member is never
+  silently moved backwards from what they have seen.
 
 Browsers pin each member's public key on first sight and warn when it changes.
 The sharing dialog shows a short key fingerprint for comparison.
@@ -214,10 +265,10 @@ Estimates are judgment, not measurement.
 | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
 | 0     | This ADR and roadmap row L11. A privacy policy page is a prerequisite for any public encryption claim; OpenZCAD has none yet.                                                                                                                                                                                                                 | 1 PR (this)  |
 | 1     | Thin server, still plaintext: the browser creates projects, mints revisions and checkpoints, duplicates, branches and adopts, splits import assets and runs the room merge. Copy rollback and finalize compare client-supplied digests. The room conflict reply carries the base version. The server keeps size and envelope checks.          | 5–6 PRs      |
-| 2     | Crypto core package: envelope v1 with algorithm versioning, AES-256-GCM, HKDF, ECDH wrapping, authenticated-data binding, chunked blobs that detect truncation, fixed test vectors and a fuzzed envelope parser.                                                                                                                              | 1 PR         |
+| 2     | Crypto core package: envelope v1 with algorithm versioning, project envelopes and project-free content blobs, AES-256-GCM, HKDF, ECDH wrapping, authenticated-data binding, chunked blobs that detect truncation, fixed test vectors and a fuzzed envelope parser.                                                                            | 1 PR         |
 | 3     | Keys and devices: D1 key tables, setup with a required recovery key, passkey unlock, key-derived device approval, desktop Keychain storage and an Encryption section in Settings with device removal, rotation, recovery-key reissue and the sign-out choice. Setup screens load lazily (entry budget). Playwright fixtures seed device keys. | 3–4 PRs      |
 | 4     | Encrypted projects, opt-in per account: documents, revisions, assets, names, thumbnails, measurements, view state and archived exports; the room relay; version-integrity checks. Each project records a format version so older builds say "update to open". Breaking storage and API change.                                                | 2–3 PRs      |
-| 5     | Sharing: owner-signed invitations, member key wraps, share links with fragment keys, new epochs on removal, key pinning and fingerprints.                                                                                                                                                                                                     | 2 PRs        |
+| 5     | Sharing: owner-signed invitations, member key wraps, share links with fragment keys, new epochs on removal, key pinning and fingerprints, and the project state code.                                                                                                                                                                         | 2 PRs        |
 | 6     | Assistant consent on encrypted projects.                                                                                                                                                                                                                                                                                                      | 1 PR         |
 | 7     | Migrate existing projects: each owner's browser encrypts every revision and asset, then the server deletes the plaintext, including legacy `document_json` rows and the room's retained history. Beta-only reverse path for turning encryption off. Needs its own production authorization.                                                   | 1–2 PRs      |
 | 8     | Default on; delete the server document pipeline and the off switch; keep a browser read path for legacy plaintext projects; update `docs/SELF_HOSTING.md`; outside review of the crypto and key flows.                                                                                                                                        | 1 PR, review |
