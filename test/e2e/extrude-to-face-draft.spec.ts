@@ -142,6 +142,55 @@ async function pointOverFace(
   throw new Error(`No viewport point selects face ${topologyId}.`);
 }
 
+for (const action of ['Cancel', 'Close panel']) {
+  test(`closing an armed extrude editor with ${action} restores viewport selection`, async ({
+    page
+  }, testInfo) => {
+    test.setTimeout(120_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const ceiling = slab(
+      createProjectDocument('Cancel face pick', toUserId('user_e2e')),
+      'Ceiling',
+      25
+    );
+    const sketched = addSketchFeature(ceiling.document, {
+      name: 'Post sketch',
+      plane: 'XY',
+      objects: [SQUARE]
+    });
+    const document = extrudeSketch(sketched.document, {
+      name: 'Post',
+      sketchId: sketched.sketchId,
+      distance: 5
+    }).document;
+    const top = await faceOf(document, ceiling.bodyId, 1);
+    const canvas = await open(page, document);
+    const point = await pointOverFace(page, canvas, top.topologyId);
+    await page.locator('.feature-row-main', { hasText: /^Post$/ }).click();
+    const form = page.getByRole('form', { name: 'Extrude settings' });
+    await form.getByLabel('Extent').selectOption('to-face');
+    await form.getByRole('button', { name: 'Pick face', exact: true }).click();
+    await expect(
+      form.getByRole('button', { name: 'Pick face', exact: true })
+    ).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: action, exact: true }).click();
+    await expect(form).toHaveCount(0);
+    const bounds = (await canvas.boundingBox())!;
+    await page.mouse.click(bounds.x + 10, bounds.y + 10);
+    await page.mouse.click(point.x, point.y);
+    await expect(canvas).toHaveAttribute(
+      'data-e2e-selected-face',
+      top.topologyId
+    );
+    expect(errors).toEqual([]);
+    await testInfo.attach('face-selection-after-close', {
+      body: await page.screenshot(),
+      contentType: 'image/png'
+    });
+  });
+}
+
 test('creates a drafted extrude up to a face picked in the viewport', async ({
   page
 }) => {
