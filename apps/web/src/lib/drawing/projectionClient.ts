@@ -12,18 +12,19 @@ export type { DrawingProjectionResult, DrawingProjectionViewRequest };
  * The main thread's handle on the drawing projection worker: one worker for
  * the drawing workspace's lifetime. A sheet's missing views go in one
  * request that carries each body's geometry once, so a detailed model is
- * cloned into the worker once per pass, not once per view. Where workers do
- * not exist (unit tests under happy-dom), projection runs inline.
+ * cloned into the worker once per pass, not once per view.
+ *
+ * Latest wins: at most one request is in the worker and one waits. A newer
+ * request replaces the waiting one, which is rejected as an abort, so
+ * switching sheets quickly never queues geometry copies or makes the sheet on
+ * screen wait behind projections nobody will see. (The worker cannot stop a
+ * batch it is already running; that one finishes.) Where workers do not
+ * exist (unit tests under happy-dom), projection runs inline.
  */
 export class DrawingProjectionClient {
   private worker: Worker | null = null;
-  private readonly pending = new Map<
-    string,
-    {
-      resolve: (results: Record<string, DrawingProjectionResult>) => void;
-      reject: (error: Error) => void;
-    }
-  >();
+  private inFlight: Pending | null = null;
+  private waiting: Pending | null = null;
 
   project(
     bodies: Record<string, ProjectionBodyInput>,
@@ -52,18 +53,32 @@ export class DrawingProjectionClient {
       }
       return Promise.resolve(results);
     }
-    const worker = this.ensureWorker();
-    const requestId = crypto.randomUUID();
     return new Promise((resolve, reject) => {
-      this.pending.set(requestId, { resolve, reject });
-      const request: DrawingProjectionRequest = {
-        type: 'project',
-        requestId,
+      const request: Pending = {
+        requestId: crypto.randomUUID(),
         bodies,
-        views
+        views,
+        resolve,
+        reject
       };
-      worker.postMessage(request);
+      if (!this.inFlight) {
+        this.send(request);
+        return;
+      }
+      this.waiting?.reject(abortError('Superseded by a newer projection.'));
+      this.waiting = request;
     });
+  }
+
+  private send(request: Pending): void {
+    this.inFlight = request;
+    const message: DrawingProjectionRequest = {
+      type: 'project',
+      requestId: request.requestId,
+      bodies: request.bodies,
+      views: request.views
+    };
+    this.ensureWorker().postMessage(message);
   }
 
   private ensureWorker(): Worker {
@@ -74,31 +89,52 @@ export class DrawingProjectionClient {
     );
     worker.onmessage = (event: MessageEvent<DrawingProjectionResponse>) => {
       const response = event.data;
-      const entry = this.pending.get(response.requestId);
-      if (!entry) return;
-      this.pending.delete(response.requestId);
+      const entry = this.inFlight;
+      if (!entry || entry.requestId !== response.requestId) return;
+      this.inFlight = null;
       entry.resolve(response.results);
+      this.next();
     };
     worker.onerror = (event) => {
       event.preventDefault();
-      this.failAll(new Error('The drawing projection worker stopped.'));
+      const entry = this.inFlight;
+      this.inFlight = null;
       worker.terminate();
       this.worker = null;
+      entry?.reject(new Error('The drawing projection worker stopped.'));
+      this.next();
     };
     this.worker = worker;
     return worker;
   }
 
-  private failAll(error: Error): void {
-    for (const entry of this.pending.values()) entry.reject(error);
-    this.pending.clear();
+  private next(): void {
+    const waiting = this.waiting;
+    this.waiting = null;
+    if (waiting) this.send(waiting);
   }
 
   dispose(): void {
-    const closed = new Error('Drawing closed.');
-    closed.name = 'AbortError';
-    this.failAll(closed);
+    const closed = abortError('Drawing closed.');
+    this.inFlight?.reject(closed);
+    this.waiting?.reject(closed);
+    this.inFlight = null;
+    this.waiting = null;
     this.worker?.terminate();
     this.worker = null;
   }
+}
+
+interface Pending {
+  requestId: string;
+  bodies: Record<string, ProjectionBodyInput>;
+  views: DrawingProjectionViewRequest[];
+  resolve: (results: Record<string, DrawingProjectionResult>) => void;
+  reject: (error: Error) => void;
+}
+
+function abortError(message: string): Error {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  return error;
 }
