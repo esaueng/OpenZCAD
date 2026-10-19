@@ -308,6 +308,40 @@ interface InspectorProps extends InspectorCallbacks {
   onPrimitiveGhostChange?(ghost: PrimitiveGhost | null): void;
 }
 
+/**
+ * Whether the History form can edit this sketch: its whole geometry is one
+ * closed parametric shape (rectangle, circle or polygon object).
+ */
+function editsAsOneClosedShape(
+  sketch: SketchNode,
+  object: SketchObjectData | null
+): boolean {
+  return (
+    sketch.objectIds.length === 1 &&
+    (object?.objectKind === 'rectangle' ||
+      object?.objectKind === 'circle' ||
+      object?.objectKind === 'polygon')
+  );
+}
+
+/** A canonical sketch the History form cannot edit as one shape. */
+function SketchGeometrySummary({ sketch }: { sketch: SketchNode }) {
+  const count = sketch.objectIds.length;
+  return (
+    <div className="sketch-attachment">
+      <div className="kv-grid">
+        <b>geometry</b>
+        <span>
+          {count} object{count === 1 ? '' : 's'}
+        </span>
+      </div>
+      <p className="muted">
+        Geometry for this sketch is edited in viewport sketch mode.
+      </p>
+    </div>
+  );
+}
+
 function SketchAttachmentSummary({
   sketch,
   onConvert
@@ -1710,6 +1744,16 @@ export function Inspector(props: InspectorProps) {
           This text sketch is malformed and cannot be edited safely.
         </p>
       );
+    } else if (
+      data.featureKind === 'sketch' &&
+      selectedSketch &&
+      selectedSketch.planeRef.type === 'canonical' &&
+      !editsAsOneClosedShape(selectedSketch, selectedSketchObject)
+    ) {
+      // The closed-shape form edits one object: on a sketch of lines (a
+      // rectangle or polygon drawn as held sides), or of several shapes,
+      // Apply would replace its first object and orphan the rest.
+      form = <SketchGeometrySummary sketch={selectedSketch} />;
     } else if (
       data.featureKind === 'sketch' &&
       selectedSketch &&

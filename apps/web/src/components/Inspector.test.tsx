@@ -14,13 +14,19 @@ import type {
   EdgeTopologyReferenceV5,
   FeatureNode,
   ProjectDocument,
+  SketchObjectData,
   TopologySelection
 } from '@openzcad/shared';
 import {
   createProjectDocument,
+  findSketch,
   listFeaturesInOrder
 } from '@openzcad/document-core';
-import { CommandManager, type AnyCommand } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandFactories,
+  type AnyCommand
+} from '@openzcad/command-system';
 import { DEFAULT_BODY_COLOR, toUserId } from '@openzcad/shared';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { MASS_DENSITY_STORAGE_KEY } from '../lib/massDensityPreference';
@@ -1417,5 +1423,82 @@ describe('direct-edit readout', () => {
     expect(within(inspector).getByText('10.123 in')).toBeVisible();
     expect(within(inspector).getByText('included angle')).toBeVisible();
     expect(within(inspector).getByText('90°')).toBeVisible();
+  });
+});
+
+describe('Inspector sketch editing (S04)', () => {
+  function sketchProps(objects: SketchObjectData[]) {
+    const manager = new CommandManager(
+      createProjectDocument('Sketches', toUserId('user_inspector'))
+    );
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Plate',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects
+      })
+    );
+    const document = manager.document;
+    const sketch = findSketch(document, document.sketchOrder[0]!)!;
+    const sketchFeature = listFeaturesInOrder(document).find(
+      (candidate) => candidate.featureKind === 'sketch'
+    )!;
+    const first = document.nodes[sketch.objectIds[0]!];
+    return makeProps({
+      document,
+      selectedFeature: sketchFeature,
+      selectedSketch: sketch,
+      selectedSketchObject: first?.kind === 'sketch-object' ? first.data : null,
+      selectedBody: null,
+      selectedTopology: null,
+      selectedBodyIds: [],
+      commandSession: null,
+      featureSelectionSource: 'pinned'
+    });
+  }
+
+  it('keeps a sketch of held lines out of the one-shape form', () => {
+    const corners = [
+      [0, 0],
+      [20, 0],
+      [20, 12],
+      [0, 12]
+    ] as const;
+    const sides: SketchObjectData[] = corners.map(([x1, y1], index) => {
+      const [x2, y2] = corners[(index + 1) % 4]!;
+      return { objectKind: 'line', x1, y1, x2, y2 };
+    });
+    const props = sketchProps(sides);
+    render(<Inspector {...props} />);
+    const inspector = screen.getByRole('region', { name: 'Feature inspector' });
+    expect(inspector).toHaveTextContent('4 objects');
+    expect(
+      within(inspector).queryByRole('button', { name: 'Apply' })
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      within(inspector).getByRole('button', { name: 'Edit sketch in viewport' })
+    );
+    expect(props.onEditSketchInViewport).toHaveBeenCalled();
+    expect(props.onApplySketch).not.toHaveBeenCalled();
+  });
+
+  it('still edits a sketch that is one parametric rectangle', () => {
+    render(
+      <Inspector
+        {...sketchProps([
+          {
+            objectKind: 'rectangle',
+            width: 20,
+            height: 12,
+            centerX: 10,
+            centerY: 6
+          }
+        ])}
+      />
+    );
+    const inspector = screen.getByRole('region', { name: 'Feature inspector' });
+    expect(
+      within(inspector).getByRole('button', { name: 'Apply' })
+    ).toBeInTheDocument();
   });
 });
