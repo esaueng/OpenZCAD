@@ -28,7 +28,7 @@ import {
 } from '@openzcad/shared';
 
 /**
- * Research-audit Stage 4 solid options (schema v23): the extrude Intersect
+ * Research-audit Stage 4 solid options (schema v24): the extrude Intersect
  * result intent (ZC-060) and keep-originals for Boolean and Split (M11,
  * ZC-075–078). Every expected volume below is an independent closed form,
  * never a recorded kernel value.
@@ -99,8 +99,8 @@ function throughBlock(): {
 }
 
 describe('Stage 4 solid options: document contract', () => {
-  it('is schema v23', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(23);
+  it('is schema v24', () => {
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(24);
   });
 
   it('stores nothing new when no option is chosen', () => {

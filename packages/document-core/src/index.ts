@@ -1949,7 +1949,7 @@ export function validateKeepOriginals(
 /**
  * M11: the inputs a Boolean consumes, in operand order. The target is the
  * first body and the tools the rest; whatever is kept stays live beside the
- * result. Absent `keepOriginals` consumes every input, as before v23.
+ * result. Absent `keepOriginals` consumes every input, as before v24.
  */
 export function booleanConsumedBodyIds(data: {
   targetBodyIds: readonly BodyId[];

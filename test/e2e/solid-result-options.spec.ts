@@ -10,7 +10,7 @@ import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import { test, expect, stubApi } from './openzcad-fixtures';
 
 /**
- * Research-audit Stage 4 (schema v23) through the real workspace: a Boolean
+ * Research-audit Stage 4 (schema v24) through the real workspace: a Boolean
  * that keeps its base body (M11) and an extrude switched to Intersect
  * (ZC-060). Volumes are the closed forms the kernel suite also asserts.
  */

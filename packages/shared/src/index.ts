@@ -49,13 +49,13 @@ export type ShaprImportId = Brand<string, 'ShaprImportId'>;
  * turn such a Move about the origin and move the body elsewhere, so the bump
  * makes it refuse the document instead.
  *
- * v23 adds the Stage 4 solid options: the extrude `intersect` result intent
+ * v24 adds the Stage 4 solid options: the extrude `intersect` result intent
  * (ZC-060) and keep-originals on Boolean (`keepOriginals`) and Split
- * (`keepOriginal`) (M11). A v22 client would rebuild an intersect extrude
+ * (`keepOriginal`) (M11). A v23 client would rebuild an intersect extrude
  * as a cut and hide bodies the feature keeps, so the bump makes it refuse
- * such a document. Every field is optional; absent is the v22 behaviour.
+ * such a document. Every field is optional; absent is the v23 behaviour.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 23 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 24 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -106,7 +106,7 @@ export type BooleanOperation = 'union' | 'subtract' | 'intersect';
 /**
  * M11: which inputs a Boolean leaves live beside its result. The target is
  * the first body (a subtract's base); the tools are the rest. Absent keeps
- * none, the consume-everything Boolean every document before v23 stores.
+ * none, the consume-everything Boolean every document before v24 stores.
  */
 export type BooleanKeepOriginals = 'all' | 'target' | 'tools';
 export type PatternKind = 'linear' | 'circular' | 'grid';
@@ -874,7 +874,7 @@ export const FULL_REVOLVE_ANGLE_DEG = 360;
 
 /**
  * Persistent result mode chosen when an extrusion is first created.
- * `intersect` (ZC-060, schema v23) keeps only the material the extrusion and
+ * `intersect` (ZC-060, schema v24) keeps only the material the extrusion and
  * its target share; it is always explicit, never inferred.
  */
 export type ExtrudeOperation = 'new-body' | 'add' | 'cut' | 'intersect';
@@ -1067,8 +1067,8 @@ export type FeatureData =
       operation: BooleanOperation;
       targetBodyIds: BodyId[];
       /**
-       * M11 (schema v23): inputs left live beside the result instead of
-       * consumed. Absent consumes every input, as before v23.
+       * M11 (schema v24): inputs left live beside the result instead of
+       * consumed. Absent consumes every input, as before v24.
        */
       keepOriginals?: BooleanKeepOriginals;
     }
@@ -1141,8 +1141,8 @@ export type FeatureData =
        */
       secondBodyId: BodyId;
       /**
-       * M11 (schema v23): leave the input body live beside the two halves.
-       * Absent consumes it, as every split before v23 did; only `true` is
+       * M11 (schema v24): leave the input body live beside the two halves.
+       * Absent consumes it, as every split before v24 did; only `true` is
        * stored, so a cleared choice is the absent field, never `false`.
        */
       keepOriginal?: true;
