@@ -17,6 +17,8 @@ import {
   encryptContentBlobStream,
   encryptContentBlobWith,
   encryptProjectEnvelope,
+  encryptWithHeaderForTests,
+  decodePayload,
   envelopeBodyLength,
   envelopeKeyFromBytes,
   parseEnvelope,
@@ -24,6 +26,7 @@ import {
 } from './envelope';
 import { E2eeError, type E2eeErrorCode } from './errors';
 import {
+  PLAINTEXT_CEILINGS,
   encodeEnvelopePrefix,
   type ContentBlobHeader,
   type ProjectEnvelopeHeader,
@@ -390,6 +393,139 @@ describe('project envelopes', () => {
   });
 });
 
+describe('decompression limits', () => {
+  /** A hostile key holder's envelope: any header over any payload. */
+  async function forged(
+    payload: Uint8Array,
+    change: Partial<ProjectEnvelopeHeader>
+  ) {
+    const key = patternBytes(32, 0x77);
+    const header = {
+      ...(parseEnvelope(await sealProject(text('x')))
+        .header as ProjectEnvelopeHeader),
+      chunkSize: 4096,
+      ...change
+    };
+    return {
+      key,
+      envelope: await encryptWithHeaderForTests(
+        envelopeKeyFromBytes(key),
+        header,
+        payload
+      )
+    };
+  }
+
+  it('records the exact plaintext size in the header', async () => {
+    const plaintext = text('{"features":[]}'.repeat(200));
+    const envelope = await sealProject(plaintext, { compression: 'gzip' });
+    const { header } = parseEnvelope(envelope);
+    expect(header).toMatchObject({ plaintextLength: plaintext.byteLength });
+  });
+
+  it('stops a compression bomb at the declared size', async () => {
+    // 64 MiB of zeros gzips to about 64 KiB; the header claims 1 KiB.
+    const bomb = await gzipBytes(new Uint8Array(64 * 1024 * 1024));
+    expect(bomb.byteLength).toBeLessThan(100_000);
+    const { key, envelope } = await forged(bomb, {
+      compression: 'gzip',
+      plaintextLength: 1024
+    });
+    await rejectsWith(decryptProjectEnvelope(key, envelope), 'limit-exceeded');
+  });
+
+  it('stops at the kind ceiling even when the header claims more', async () => {
+    const big = await gzipBytes(
+      new Uint8Array(PLAINTEXT_CEILINGS.document + 1)
+    );
+    const { key, envelope } = await forged(big, {
+      compression: 'gzip',
+      plaintextLength: PLAINTEXT_CEILINGS.document + 1
+    });
+    await rejectsWith(decryptProjectEnvelope(key, envelope), 'limit-exceeded');
+    const small = await forged(await gzipBytes(new Uint8Array(1000)), {
+      kind: 'view-state',
+      compression: 'gzip',
+      plaintextLength: PLAINTEXT_CEILINGS['view-state'] + 1
+    });
+    await rejectsWith(
+      decryptProjectEnvelope(small.key, small.envelope),
+      'limit-exceeded'
+    );
+  });
+
+  it('fails when the plaintext is shorter than declared, compressed or not', async () => {
+    for (const compression of ['gzip', 'none'] as const) {
+      const body = new Uint8Array(1000);
+      const { key, envelope } = await forged(
+        compression === 'gzip' ? await gzipBytes(body) : body,
+        { compression, plaintextLength: 1001 }
+      );
+      await rejectsWith(decryptProjectEnvelope(key, envelope), 'malformed');
+    }
+  });
+
+  it('refuses to encrypt above the kind ceiling', async () => {
+    await rejectsWith(
+      encryptProjectEnvelope(
+        EnvelopeKey.generate(),
+        { ...HEADER, kind: 'measurements', compression: 'gzip' },
+        new Uint8Array(PLAINTEXT_CEILINGS.measurements + 1)
+      ),
+      'limit-exceeded'
+    );
+    await rejectsWith(
+      encryptContentBlob(
+        EnvelopeKey.generate(),
+        'thumbnail',
+        new Uint8Array(PLAINTEXT_CEILINGS.thumbnail + 1)
+      ),
+      'limit-exceeded'
+    );
+  });
+
+  it('decodePayload is the same bounded decode, exposed', async () => {
+    const body = text('abc'.repeat(1000));
+    const gz = await gzipBytes(body);
+    expect(
+      await decodePayload(gz, {
+        kind: 'document',
+        compression: 'gzip',
+        declaredLength: body.byteLength
+      })
+    ).toEqual(body);
+    await rejectsWith(
+      decodePayload(gz, {
+        kind: 'document',
+        compression: 'gzip',
+        declaredLength: 100
+      }),
+      'limit-exceeded'
+    );
+    await rejectsWith(
+      decodePayload(gz, {
+        kind: 'document',
+        compression: 'gzip',
+        declaredLength: body.byteLength,
+        maxPlaintextBytes: 100
+      }),
+      'limit-exceeded'
+    );
+  });
+
+  it('matches the shared server limits', async () => {
+    const shared = await import('@openzcad/shared');
+    expect(PLAINTEXT_CEILINGS.document).toBe(
+      shared.MAX_CLOUD_PROJECT_DOCUMENT_BYTES
+    );
+    expect(PLAINTEXT_CEILINGS['import-source']).toBe(
+      shared.MAX_ARTIFACT_UPLOAD_BYTES
+    );
+    expect(PLAINTEXT_CEILINGS.export).toBe(shared.MAX_ARTIFACT_UPLOAD_BYTES);
+    expect(PLAINTEXT_CEILINGS.thumbnail).toBe(shared.MAX_THUMBNAIL_BYTES);
+  });
+});
+
 describe('content blobs', () => {
   const STEP = text('ISO-10303-21;\nHEADER;\n'.repeat(40));
 
@@ -593,7 +729,9 @@ describe('content blobs', () => {
       }
       parts.push(await writer.finish());
       expect(concatBytes(...parts)).toEqual(oneShot.envelope);
-      expect(contentBlobReference(writer, key)).toEqual(oneShot.reference);
+      expect(contentBlobReference(writer, key, plaintext.byteLength)).toEqual(
+        oneShot.reference
+      );
       expect(writer.encryptedLength(plaintext.byteLength)).toBe(
         oneShot.envelope.byteLength
       );
@@ -648,7 +786,7 @@ describe('content blobs', () => {
     );
   });
 
-  it('a streamed gzip payload that inflates past the limit is refused', async () => {
+  it('a streamed blob stops at its declared size, and must reach it exactly', async () => {
     const encrypted = encryptContentBlobStream(
       EnvelopeKey.generate(),
       'export',
@@ -656,17 +794,37 @@ describe('content blobs', () => {
       { chunkSize: 4096 }
     );
     const envelope = await collect(encrypted.envelope);
+    const reference = await encrypted.reference;
+    expect(reference.plaintextLength).toBe(200_000);
+    expect(
+      (await collect(decryptContentBlobStream(reference, stream([envelope]))))
+        .byteLength
+    ).toBe(200_000);
+    // A reference that declares less: inflation stops at the declared size.
     await rejectsWith(
       collect(
         decryptContentBlobStream(
-          await encrypted.reference,
-          stream([envelope]),
-          {
-            maxPlaintextBytes: 10_000
-          }
+          { ...reference, plaintextLength: 10_000 },
+          stream([envelope])
         )
       ),
       'limit-exceeded'
     );
+    // One that declares more fails once the stream ends short.
+    await rejectsWith(
+      collect(
+        decryptContentBlobStream(
+          { ...reference, plaintextLength: 200_001 },
+          stream([envelope])
+        )
+      ),
+      'malformed'
+    );
+    // A caller limit below the declared size is refused before reading.
+    expect(() =>
+      decryptContentBlobStream(reference, stream([envelope]), {
+        maxPlaintextBytes: 10_000
+      })
+    ).toThrow(expect.objectContaining({ code: 'limit-exceeded' }));
   });
 });

@@ -23,11 +23,10 @@ import { decodeDeviceListEntry, verifyDeviceList } from './devices';
 import { generateEncryptionKeyPair } from './keys';
 import {
   decodeRosterEntry,
-  signProjectEnvelope,
   signRosterEntry,
-  verifyProjectEnvelopeSignature,
   verifyRosterChain
-} from './signing';
+} from './roster';
+import { signProjectEnvelope, verifyProjectEnvelopeSignature } from './signing';
 import { TestUser, patternBytes, seededRandom } from './test-support';
 import {
   openSealedKey,
@@ -220,12 +219,17 @@ describe('parser fuzzing', () => {
     );
     const signature = await signProjectEnvelope(author.signer(), envelope);
     const roster = await signRosterEntry(author.signer(), {
+      type: 'membership',
       projectId: 'p',
       sequence: 0,
       keyEpoch: 0,
       previousEntryHash: null,
       members: [
-        { userId: 'u1', identityKeyHash: patternBytes(32), role: 'owner' }
+        {
+          userId: 'u1',
+          identityKeyHash: author.list.identityKeyHash,
+          role: 'owner'
+        }
       ],
       keyWraps: [{ userId: 'u1', sealedKey: sealed }]
     });
@@ -237,6 +241,7 @@ describe('parser fuzzing', () => {
       action: 'verify',
       contactUserId: 'u2',
       identityKeyHash: patternBytes(32, 7),
+      deviceListHead: patternBytes(32, 8),
       replacementKeyHash: null
     });
     const devices = author.chain;
@@ -267,8 +272,16 @@ describe('parser fuzzing', () => {
       await onlyTypedErrors(() =>
         verifyRosterChain(
           [
-            { entry: mutate(seed, roster.entry), signature: roster.signature },
-            { entry: roster.entry, signature: mutate(seed, roster.signature) }
+            {
+              entry: mutate(seed, roster.entry),
+              signature: roster.signature,
+              signedBy: 'device'
+            },
+            {
+              entry: roster.entry,
+              signature: mutate(seed, roster.signature),
+              signedBy: seed % 2 ? 'device' : 'identity'
+            }
           ],
           lists
         )

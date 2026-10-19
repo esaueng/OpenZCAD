@@ -118,6 +118,32 @@ export async function identityFingerprint(
   return { hash, code: formatComparisonCode(hash) };
 }
 
+/**
+ * What two people compare to verify a contact: the contact's identity key
+ * together with their current device-list head, so a server cannot pair the
+ * right identity with an old device list. Show `code`; `hash` is the QR
+ * payload. The verifier pins the head with the identity.
+ */
+export async function contactVerificationCode(
+  identityPublicKey: Uint8Array,
+  deviceListHead: Uint8Array
+): Promise<{ hash: Bytes; code: string }> {
+  if (
+    !(deviceListHead instanceof Uint8Array) ||
+    deviceListHead.byteLength !== HASH_BYTES
+  ) {
+    throw new E2eeError('invalid-argument', 'deviceListHead must be 32 bytes');
+  }
+  const hash = await sha256(
+    new ByteWriter()
+      .bytes(label('v1 contact verification'))
+      .bytes(await publicKeyHash(identityPublicKey))
+      .bytes(deviceListHead)
+      .finish()
+  );
+  return { hash, code: formatComparisonCode(hash) };
+}
+
 export interface ProjectStateInput {
   /** `versionHash` of the newest version. */
   readonly versionHash: Uint8Array;

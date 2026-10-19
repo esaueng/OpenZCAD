@@ -19,6 +19,7 @@ import {
   sealKey,
   unwrapKey,
   wrapKey,
+  wrapShareSnapshotKey,
   type WrapContext
 } from './wrap';
 
@@ -44,8 +45,10 @@ const BLOB_CONTEXT: WrapContext = {
 describe('symmetric key wrapping', () => {
   it('wraps a version key under the project key and back', async () => {
     const wrapped = await wrapKey(PROJECT_KEY, BLOB_KEY, BLOB_CONTEXT);
-    expect(wrapped[0]).toBe(1);
-    expect(wrapped.byteLength).toBe(1 + 12 + 32 + 16);
+    // AES-KW: no nonce, deterministic, 8 bytes of integrity check.
+    expect(wrapped[0]).toBe(2);
+    expect(wrapped.byteLength).toBe(1 + 32 + 8);
+    expect(await wrapKey(PROJECT_KEY, BLOB_KEY, BLOB_CONTEXT)).toEqual(wrapped);
     expect(await unwrapKey(PROJECT_KEY, wrapped, BLOB_CONTEXT)).toEqual(
       BLOB_KEY
     );
@@ -88,10 +91,17 @@ describe('symmetric key wrapping', () => {
       );
     }
     const future = new Uint8Array(wrapped);
-    future[0] = 2;
+    future[0] = 9;
     await rejectsWith(
       unwrapKey(PROJECT_KEY, future, BLOB_CONTEXT),
       'unsupported-version'
+    );
+    // The GCM format is known, but not for a symmetric key.
+    const otherFormat = new Uint8Array(wrapped);
+    otherFormat[0] = 1;
+    await rejectsWith(
+      unwrapKey(PROJECT_KEY, otherFormat, BLOB_CONTEXT),
+      'malformed'
     );
     await rejectsWith(
       unwrapKey(PROJECT_KEY, wrapped.subarray(0, 20), BLOB_CONTEXT),
@@ -176,7 +186,7 @@ describe('symmetric key wrapping', () => {
           message
         )
       ).toBe(true);
-      // The same secret's account-key KEK cannot open it.
+      // An account-key wrap is a different format and KEK altogether.
       await rejectsWith(
         unwrapKey(kek, wrapped, {
           purpose: 'account-key',
@@ -184,7 +194,7 @@ describe('symmetric key wrapping', () => {
           method,
           unlockId: 'u1'
         }),
-        'authentication-failed'
+        'malformed'
       );
     }
     // Device keys and approvals are not identity unlock methods.
@@ -279,6 +289,64 @@ describe('symmetric key wrapping', () => {
     } as const;
     expect(encodeWrapContext(reordered)).toEqual(
       encodeWrapContext(BLOB_CONTEXT)
+    );
+  });
+});
+
+describe('share snapshot keys', () => {
+  it('wraps one version key for members and for link visitors', async () => {
+    const projectKey = generateSymmetricKey();
+    const shareKey = generateSymmetricKey();
+    const versionKey = generateSymmetricKey();
+    const context = {
+      projectId: 'project-a',
+      keyEpoch: 2,
+      shareId: 'share-1',
+      versionId: '9'
+    };
+    const wraps = await wrapShareSnapshotKey(
+      projectKey,
+      shareKey,
+      versionKey,
+      context
+    );
+    expect(wraps.forMembers[0]).toBe(2);
+    expect(wraps.forLinkVisitors[0]).toBe(2);
+    expect(
+      await unwrapKey(projectKey, wraps.forMembers, {
+        purpose: 'version-key',
+        projectId: 'project-a',
+        keyEpoch: 2,
+        kind: 'share-snapshot',
+        versionId: '9'
+      })
+    ).toEqual(versionKey);
+    const visitorContext: WrapContext = {
+      purpose: 'share-version-key',
+      projectId: 'project-a',
+      shareId: 'share-1',
+      versionId: '9'
+    };
+    expect(
+      await unwrapKey(shareKey, wraps.forLinkVisitors, visitorContext)
+    ).toEqual(versionKey);
+    // A visitor's share key opens neither the member wrap nor another share.
+    await rejectsWith(
+      unwrapKey(shareKey, wraps.forMembers, {
+        purpose: 'version-key',
+        projectId: 'project-a',
+        keyEpoch: 2,
+        kind: 'share-snapshot',
+        versionId: '9'
+      }),
+      'authentication-failed'
+    );
+    await rejectsWith(
+      unwrapKey(shareKey, wraps.forLinkVisitors, {
+        ...visitorContext,
+        shareId: 'share-2'
+      }),
+      'authentication-failed'
     );
   });
 });

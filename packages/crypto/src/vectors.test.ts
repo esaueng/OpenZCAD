@@ -13,6 +13,7 @@ import { concatBytes, fromHex, toHex } from './bytes';
 import {
   assetDedupeHash,
   commitDeviceApprovalWith,
+  contactVerificationCode,
   deriveAssetDedupeKey,
   deviceApprovalCode,
   formatComparisonCode,
@@ -49,11 +50,10 @@ import { exportPublicKey } from './keys';
 import {
   encodeRosterEntry,
   rosterEntryHash,
-  verifyProjectEnvelopeSignature,
   verifyRosterChain,
-  versionHash,
   type RosterEntry
-} from './signing';
+} from './roster';
+import { verifyProjectEnvelopeSignature, versionHash } from './signing';
 import {
   TEST_EPHEMERAL_JWK,
   TEST_IDENTITY_JWK,
@@ -68,6 +68,7 @@ import {
   openSealedKey,
   sealKeyWith,
   unwrapKey,
+  wrapKey,
   wrapKeyWith,
   type WrapContext
 } from './wrap';
@@ -181,14 +182,14 @@ describe('project envelope v1 vector', () => {
   it('serializes the documented prefix', async () => {
     const { prefix } = parseEnvelope(await projectVector());
     expect(toHex(prefix)).toMatchInlineSnapshot(
-      `"4f5a450100000081010100000000400000001700000001000000000000000520a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf0570726a5f310001203730373137323733373437353736373737383739376137623763376437653766"`
+      `"4f5a4501000000890101000000004000000017000000010000000000000005000000000000005d20a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf0570726a5f310001203730373137323733373437353736373737383739376137623763376437653766"`
     );
   });
 
   it('produces the fixed ciphertext', async () => {
     const envelope = await projectVector();
     expect(toHex(envelope)).toMatchInlineSnapshot(
-      `"4f5a450100000081010100000000400000001700000001000000000000000520a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf0570726a5f31000120373037313732373337343735373637373738373937613762376337643765376641ccd0b0ef6fc2f928cdc7437d40fee9b76322365bf54059e5fdc7ecb7d17d193e3a88e669b3fc2656ad0790ada1192b897324950d5130c033c2505464400194af2dcb770072aa6c2fa9f18f0039dda00d63da358bfe9a8b630caa878e8d6b0ab4fd9d1bf92e807fc5adbfdc17d7c10433ad34dbf860635e76ede2d6ca"`
+      `"4f5a4501000000890101000000004000000017000000010000000000000005000000000000005d20a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf0570726a5f31000120373037313732373337343735373637373738373937613762376337643765376641ccd0b0ef6fc2f928cdc7437d40fee9b76322365bf54059e5fdc7ecb7d17d193e3a88e669b3fc2656ad0790ada1192b897324950d5130c033c250546440019435e3211fe04b90ed5b85d496d95cf97c0d63da358bfe9a8b630caa878e8d6b0ab4fd9d1bf92e807fc5adbfdc17243db3f74f568329a3951bbb4ad72791"`
     );
     expect(
       (await decryptProjectEnvelope(VERSION_KEY, envelope)).plaintext
@@ -205,7 +206,7 @@ describe('project envelope v1 vector', () => {
     expect(
       toHex(await versionHash(await projectVector()))
     ).toMatchInlineSnapshot(
-      `"01d308e67bd216a607a413f5d25f376bad360b059bbb7ea017352fa172416cdd"`
+      `"faf47c226f52bfdcaca387eb1518772e8b616bfd8aa676fd03b1b598fa4be587"`
     );
   });
 });
@@ -260,46 +261,64 @@ describe('wrap v1 vector', () => {
     );
   });
 
-  it('produces the fixed wrap and opens with raw WebCrypto', async () => {
-    const wrapped = await wrapKeyWith(
-      KEK,
-      WRAPPED_SECRET,
-      VERSION_CONTEXT,
-      queuedRandom(patternBytes(12, 0xc0))
-    );
+  it('produces the fixed AES-KW wrap and opens with raw WebCrypto', async () => {
+    const wrapped = await wrapKey(KEK, WRAPPED_SECRET, VERSION_CONTEXT);
     expect(toHex(wrapped)).toMatchInlineSnapshot(
-      `"01c0c1c2c3c4c5c6c7c8c9cacb7011ffbb1b6b2cd575b0385e2465b5341189ea27fc69f0ee30b60138b6219246b211010175772a917e13bbd6e37e0f70"`
+      `"02bbbd0963d86843d8312990b54c24a975feb9cbf435334efaba7d1078736e81400335de6fcee2946f"`
     );
+    // KEK = HKDF-SHA256(parent, empty salt, label | canonical context).
     const base = await subtle.importKey('raw', KEK, 'HKDF', false, [
       'deriveKey'
     ]);
-    const key = await subtle.deriveKey(
+    const kek = await subtle.deriveKey(
       {
         name: 'HKDF',
         hash: 'SHA-256',
         salt: new Uint8Array(),
-        info: utf8('OpenZCAD E2EE v1 wrap version-key')
-      },
-      base,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['decrypt']
-    );
-    const opened = await subtle.decrypt(
-      {
-        name: 'AES-GCM',
-        iv: wrapped.slice(1, 13),
-        additionalData: concatBytes(
-          Uint8Array.of(1),
+        info: concatBytes(
+          utf8('OpenZCAD E2EE v1 kw version-key'),
           encodeWrapContext(VERSION_CONTEXT)
         )
       },
-      key,
-      wrapped.slice(13)
+      base,
+      { name: 'AES-KW', length: 256 },
+      false,
+      ['unwrapKey']
     );
-    expect(new Uint8Array(opened)).toEqual(WRAPPED_SECRET);
+    const opened = await subtle.unwrapKey(
+      'raw',
+      wrapped.slice(1),
+      kek,
+      'AES-KW',
+      'AES-GCM',
+      true,
+      ['encrypt']
+    );
+    expect(new Uint8Array(await subtle.exportKey('raw', opened))).toEqual(
+      WRAPPED_SECRET
+    );
     expect(await unwrapKey(KEK, wrapped, VERSION_CONTEXT)).toEqual(
       WRAPPED_SECRET
+    );
+  });
+
+  it('produces the fixed AES-GCM private-key wrap', async () => {
+    const context: WrapContext = {
+      purpose: 'encryption-private-key',
+      userId: 'usr_1',
+      keyId: 'k1'
+    };
+    const wrapped = await wrapKeyWith(
+      KEK,
+      patternBytes(40, 0x01),
+      context,
+      queuedRandom(patternBytes(12, 0xc0))
+    );
+    expect(toHex(wrapped)).toMatchInlineSnapshot(
+      `"01c0c1c2c3c4c5c6c7c8c9cacb5e48a0622c8158b29517a3e35785d2293491c4d5dc99ebbb88365c71eecc9bbd0705c78fe77bc01a7d9625d664061e61bd0f0fe67a5a3d0b"`
+    );
+    expect(await unwrapKey(KEK, wrapped, context)).toEqual(
+      patternBytes(40, 0x01)
     );
   });
 });
@@ -369,7 +388,9 @@ async function sealedVector(): Promise<Uint8Array> {
 }
 
 async function rosterVector(): Promise<RosterEntry> {
+  const owner = await importFixedPair(TEST_IDENTITY_JWK, 'ECDSA');
   return {
+    type: 'membership',
     projectId: 'prj_1',
     sequence: 0,
     keyEpoch: 1,
@@ -377,7 +398,9 @@ async function rosterVector(): Promise<RosterEntry> {
     members: [
       {
         userId: 'usr_1',
-        identityKeyHash: patternBytes(32, 0xe0),
+        identityKeyHash: await publicKeyHash(
+          await exportPublicKey(owner.publicKey)
+        ),
         role: 'owner'
       },
       {
@@ -400,6 +423,7 @@ const CONTACTS_ENTRY: ContactsListEntry = {
   action: 'verify',
   contactUserId: 'usr_2',
   identityKeyHash: patternBytes(32, 0xf0),
+  deviceListHead: patternBytes(32, 0x40),
   replacementKeyHash: null
 };
 
@@ -409,11 +433,11 @@ describe('device list and signature vectors', () => {
   const DEVICE_LIST_SIGNATURE =
     '01ac20e8853739d0d11dc1eac1fdcaf044edfc8270b101ff13dba5c60b7789013252b413cb5b18decc60e9b3826ccb1f3369f905405d86b644b546878e2aba65f3';
   const VERSION_SIGNATURE =
-    '01057573725f31000000007c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b00000199c82cc00013f7c48bbc1ace2c15cf544d37478f73b0550cfe0876d1c75b0a89043a5d44583a46108f6fca7b66b7d5424c5635276059d0ebb89113f4a8971709646a863020';
+    '01057573725f31000000007c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b00000199c82cc0009d5012c239b88f7447fc858b1b2cd5e8c48860e201c6e3df27c5fca6c6fe7db1a59a9c778842abc982998efa3af0e295796dced3acfc8d6fc43b2336386e9d3d';
   const CONTACTS_SIGNATURE =
-    '0179a674f2cf5e8a621c08a6a9d1a142ed3cadf07ff69f0d66401148d29292fe908390e986ac95ec524ef04bf13cf4a6536fca78a212bf8ee8164d8930504d5cf2';
+    '01581284e4a912f950041a42603fc25c254f4a9d2838eddf3bc20245babc4f7dcd4aa684669fe738ee9c47055f1c162cc39840096d731167a454975207cf41d82d';
   const ROSTER_SIGNATURE =
-    '01057573725f31000000007c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b00000199c82cc000461c4d671b7539e39830354ca5af92b42ec207b41dcecc340f5c078a08f4a41cfefd9e1e0ed48ff755fe19d3725a913a1b225e25ae460c98f5a4b19436c93b38';
+    '01057573725f31000000007c48bdb0d12667c8d36fb0be229cbe23adfe9cc429f0b4820d16b8a5f84c700b00000199c82cc000901194288c000452e9eb0ce597b7a849eb985d0d867e54942208b20bcc241824f2cac156338eff7d5cbe96437e0fd8d831db6d863af8fd285d7e60a14aad8a28';
 
   async function verifiedList() {
     const { identity, entry } = await fixedUser();
@@ -461,10 +485,10 @@ describe('device list and signature vectors', () => {
     const { identity } = await fixedUser();
     const entry = encodeContactsEntry(CONTACTS_ENTRY);
     expect(toHex(entry)).toMatchInlineSnapshot(
-      `"4f5a43010000000000057573725f3101057573725f32f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f00"`
+      `"4f5a43010000000000057573725f3101057573725f32f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f20404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f00"`
     );
     expect(toHex(await contactsEntryHash(entry))).toMatchInlineSnapshot(
-      `"53742259c01120f569be5fec2c15a6c7c913e96325b810caafa6b0d9e2fffe5a"`
+      `"a6920b80cd1bb665fbd1f6a2e0707a59356b0c9836e2de051b5a8f86e601d414"`
     );
     const list = await verifyContactsList(identity.publicKey, [
       { entry, signature: fromHex(CONTACTS_SIGNATURE) }
@@ -475,17 +499,17 @@ describe('device list and signature vectors', () => {
   it('encodes the roster entry and verifies its recorded signature', async () => {
     const entry = encodeRosterEntry(await rosterVector());
     expect(toHex(entry)).toMatchInlineSnapshot(
-      `"4f5a52010000000000000001000570726a5f310002057573725f31e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff01057573725f32f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f030002057573725f31007e010482fb6c30813d84508322c122efce43026e7dcea6f0de9d961a6df375f86fa2e43f13841960e6c63aa427f8e019c41cabc8b60a6ab516b3e8eca9c754e5e8385ed0d1d2d3d4d5d6d7d8d9dadbfe59717957995a878dcf5398e698853d13a567337d4e5c7e8e0877a78da169b507307627a4e44cedc21acb64652ad48d057573725f320010202122232425262728292a2b2c2d2e2f"`
+      `"4f5a5201010000000000000001000570726a5f310002057573725f31c5c2ef3d0437209cec6e3da899699f29b09f738851aea7379f589b443c62cba001057573725f32f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f030002057573725f31007e010482fb6c30813d84508322c122efce43026e7dcea6f0de9d961a6df375f86fa2e43f13841960e6c63aa427f8e019c41cabc8b60a6ab516b3e8eca9c754e5e8385ed0d1d2d3d4d5d6d7d8d9dadbfe59717957995a878dcf5398e698853d13a567337d4e5c7e8e0877a78da169b507307627a4e44cedc21acb64652ad48d057573725f320010202122232425262728292a2b2c2d2e2f"`
     );
     expect(toHex(await rosterEntryHash(entry))).toMatchInlineSnapshot(
-      `"b46acfe9b8e6305fec6f9d7f6a2df6df9f6035063a01c07561b3d1c3fb20d7ed"`
+      `"c8bd8364cc0123186c7b48d0cf4f9cab02ef25f07659b0d27f36d56d022f9632"`
     );
     const list = await verifiedList();
     const [verified] = await verifyRosterChain(
-      [{ entry, signature: fromHex(ROSTER_SIGNATURE) }],
+      [{ entry, signature: fromHex(ROSTER_SIGNATURE), signedBy: 'device' }],
       () => list
     );
-    expect(verified?.signer.deviceId).toBe('dev_1');
+    expect(verified?.signer.device?.deviceId).toBe('dev_1');
   });
 });
 
@@ -515,6 +539,20 @@ describe('codes vectors', () => {
     );
   });
 
+  it('derives the fixed contact verification code', async () => {
+    const identity = await importFixedPair(TEST_IDENTITY_JWK, 'ECDSA');
+    const { hash, code } = await contactVerificationCode(
+      await exportPublicKey(identity.publicKey),
+      patternBytes(32, 0x40)
+    );
+    expect(toHex(hash)).toMatchInlineSnapshot(
+      `"2445255f7ec36d5af96cc407ba203bd678a08583df9fbfdc3a5d4fed2103153a"`
+    );
+    expect(code).toMatchInlineSnapshot(
+      `"91660 43329 26261 93816 97604 51675 88935 65242"`
+    );
+  });
+
   it('derives the fixed project state code', async () => {
     const { hash, code } = await projectStateCode({
       versionHash: await versionHash(await projectVector()),
@@ -522,10 +560,10 @@ describe('codes vectors', () => {
       signerKeyHash: patternBytes(32, 0xe0)
     });
     expect(toHex(hash)).toMatchInlineSnapshot(
-      `"e8d9bb4beaece5aa7cd336959c86a3d03377d04db32106947c06aa67844653c7"`
+      `"5baf7fe08f560c97c18eb904441e864d2a1c2996cfb40cfb0b10efcb7567b39f"`
     );
     expect(code).toMatchInlineSnapshot(
-      `"06094 20668 11716 59572 65205 44158 38694 81927"`
+      `"17461 04252 71970 27657 76822 67600 47465 39935"`
     );
   });
 

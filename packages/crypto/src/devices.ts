@@ -324,7 +324,7 @@ export async function deviceListEntryHash(entry: Uint8Array): Promise<Bytes> {
 }
 
 /** What the identity key signs; it signs nothing else. */
-export type IdentityStatementKind = 'device list' | 'contacts';
+export type IdentityStatementKind = 'device list' | 'contacts' | 'roster';
 
 /**
  * Identity signature over a canonical entry: `u8 version | r || s` over
@@ -421,6 +421,8 @@ export interface EncryptionKeyRecord {
 
 export interface VerifiedDeviceList {
   readonly userId: string;
+  /** The raw identity public key the list was verified against. */
+  readonly identityKey: Bytes;
   /** `publicKeyHash` of the identity key: the user's fingerprint. */
   readonly identityKeyHash: Bytes;
   readonly entries: readonly {
@@ -450,9 +452,8 @@ export async function verifyDeviceList(
   if (chain.length === 0) {
     throw new E2eeError('chain-broken', 'Device list is empty');
   }
-  const identityKeyHash = await publicKeyHash(
-    await rawPublicKey(identityPublicKey)
-  );
+  const identityKey = await rawPublicKey(identityPublicKey);
+  const identityKeyHash = await publicKeyHash(identityKey);
   const entries: { entry: DeviceListEntry; hash: Bytes }[] = [];
   const devices = new Map<string, DeviceRecord>();
   const encryptionKeys: EncryptionKeyRecord[] = [];
@@ -551,6 +552,7 @@ export async function verifyDeviceList(
   const latest = entries.at(-1)!;
   return {
     userId: latest.entry.userId,
+    identityKey,
     identityKeyHash,
     entries,
     latestSequence: latest.entry.sequence,

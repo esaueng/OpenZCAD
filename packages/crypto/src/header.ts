@@ -35,6 +35,28 @@ export const CONTENT_BLOB_KINDS = [
 ] as const;
 export type ContentBlobKind = (typeof CONTENT_BLOB_KINDS)[number];
 
+/**
+ * Largest plaintext each kind may decompress to, matching the server limits
+ * of the plaintext design: `MAX_CLOUD_PROJECT_DOCUMENT_BYTES` (24 MiB) for
+ * documents and share snapshots, `MAX_ARTIFACT_UPLOAD_BYTES` (1 GiB) for
+ * imported sources, mesh payloads and exports, `MAX_THUMBNAIL_BYTES` and
+ * `MAX_PROJECT_MEASUREMENT_BYTES` (512 KiB) for thumbnails and
+ * measurements. View state gets 1 MiB (judgment: it holds camera and
+ * saved views only). A test pins the shared constants.
+ */
+export const PLAINTEXT_CEILINGS: Readonly<
+  Record<ProjectEnvelopeKind | ContentBlobKind, number>
+> = {
+  document: 24 * 1024 * 1024,
+  'share-snapshot': 24 * 1024 * 1024,
+  measurements: 512 * 1024,
+  'view-state': 1024 * 1024,
+  'import-source': 1024 * 1024 * 1024,
+  'mesh-payload': 1024 * 1024 * 1024,
+  export: 1024 * 1024 * 1024,
+  thumbnail: 512 * 1024
+};
+
 export const COMPRESSIONS = ['none', 'gzip'] as const;
 export type Compression = (typeof COMPRESSIONS)[number];
 
@@ -51,6 +73,8 @@ export interface ProjectEnvelopeHeader extends EnvelopeFormat {
   readonly kind: ProjectEnvelopeKind;
   readonly projectId: string;
   readonly documentVersion: number;
+  /** Exact plaintext size after decompression; decryption enforces it. */
+  readonly plaintextLength: number;
   /** `versionHash` of the previous version; null for the first. */
   readonly previousVersionHash: Bytes | null;
   /** `rosterEntryHash` of the signed roster entry this version was written under. */
@@ -73,6 +97,7 @@ export type EnvelopeHeader = ProjectEnvelopeHeader | ContentBlobHeader;
 export interface ProjectEnvelopeHeaderInit extends Omit<
   ProjectEnvelopeHeader,
   | 'class'
+  | 'plaintextLength'
   | 'previousVersionHash'
   | 'rosterEntryHash'
   | 'blobIds'
@@ -138,6 +163,9 @@ export function checkHeader(header: EnvelopeHeader, code: E2eeErrorCode): void {
   if (!isUint(header.documentVersion, Number.MAX_SAFE_INTEGER)) {
     fail(code, 'documentVersion must be a non-negative safe integer');
   }
+  if (!isUint(header.plaintextLength, Number.MAX_SAFE_INTEGER)) {
+    fail(code, 'plaintextLength must be a non-negative safe integer');
+  }
   if (
     header.previousVersionHash !== null &&
     !isHash(header.previousVersionHash)
@@ -164,7 +192,8 @@ export function checkHeader(header: EnvelopeHeader, code: E2eeErrorCode): void {
 }
 
 export function normalizeProjectHeader(
-  init: ProjectEnvelopeHeaderInit
+  init: ProjectEnvelopeHeaderInit,
+  plaintextLength: number
 ): ProjectEnvelopeHeader {
   if (typeof init !== 'object' || init === null) {
     fail('invalid-argument', 'Envelope header must be an object');
@@ -174,6 +203,7 @@ export function normalizeProjectHeader(
     kind: init.kind,
     projectId: init.projectId,
     documentVersion: init.documentVersion,
+    plaintextLength,
     previousVersionHash: isHash(init.previousVersionHash)
       ? copyBytes(init.previousVersionHash)
       : init.previousVersionHash,
@@ -224,6 +254,7 @@ export function encodeEnvelopePrefix(header: EnvelopeHeader): Bytes {
       .u32(header.schemaVersion)
       .u32(header.keyEpoch)
       .u64(header.documentVersion)
+      .u64(header.plaintextLength)
       .u8(header.previousVersionHash?.byteLength ?? 0)
       .bytes(header.previousVersionHash ?? new Uint8Array())
       .bytes(header.rosterEntryHash);
@@ -313,6 +344,7 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
     const schemaVersion = reader.u32();
     const keyEpoch = reader.u32();
     const documentVersion = reader.u64();
+    const plaintextLength = reader.u64();
     const hashLength = reader.u8();
     const previousVersionHash =
       hashLength === 0 ? null : copyBytes(reader.bytes(hashLength));
@@ -327,6 +359,7 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
       kind,
       projectId,
       documentVersion,
+      plaintextLength,
       previousVersionHash,
       rosterEntryHash,
       schemaVersion,

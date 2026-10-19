@@ -1,9 +1,11 @@
 import {
   ByteWriter,
+  asBytes,
   concatBytes,
   copyBytes,
   equalBytes,
   fromBase64Url,
+  isUint,
   label,
   toBase64Url,
   toHex,
@@ -19,6 +21,7 @@ import {
 import { E2eeError } from './errors';
 import {
   CONTENT_BLOB_KINDS,
+  PLAINTEXT_CEILINGS,
   DEFAULT_CHUNK_SIZE,
   HASH_BYTES,
   checkHeader,
@@ -444,19 +447,90 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
   }
 }
 
+export interface PayloadLimits {
+  readonly kind: ProjectEnvelopeKind | ContentBlobKind;
+  readonly compression: Compression;
+  /** The exact plaintext size the header or reference declares. */
+  readonly declaredLength: number;
+  /** An extra ceiling from the caller, if lower. */
+  readonly maxPlaintextBytes?: number;
+}
+
+/**
+ * The plaintext cap for one payload: the smaller of its declared size, its
+ * kind's ceiling and the caller's limit. A declared size above the ceiling
+ * is refused before any decompression (`limit-exceeded`).
+ */
+export function plaintextCap(limits: PayloadLimits): number {
+  const ceiling = Math.min(
+    PLAINTEXT_CEILINGS[limits.kind],
+    limits.maxPlaintextBytes ?? Number.MAX_SAFE_INTEGER
+  );
+  if (limits.declaredLength > ceiling) {
+    throw new E2eeError(
+      'limit-exceeded',
+      `A ${limits.kind} may not exceed ${ceiling} bytes`
+    );
+  }
+  return limits.declaredLength;
+}
+
+function checkDeclaredLength(actual: number, declared: number): void {
+  if (actual !== declared) {
+    throw new E2eeError(
+      'malformed',
+      `Plaintext is ${actual} bytes, not the declared ${declared}`
+    );
+  }
+}
+
+/**
+ * The package's decode step for a decrypted payload: inflates gzip as a
+ * stream that stops the moment output passes the cap (`plaintextCap`), and
+ * fails unless the result is exactly the declared size. This is what keeps
+ * a small, highly compressible envelope from exhausting the browser before
+ * any validator runs.
+ */
+export async function decodePayload(
+  payload: Uint8Array,
+  limits: PayloadLimits
+): Promise<Bytes> {
+  const cap = plaintextCap(limits);
+  const plaintext =
+    limits.compression === 'gzip'
+      ? await gunzipBytes(payload, cap)
+      : asBytes(payload);
+  checkDeclaredLength(plaintext.byteLength, limits.declaredLength);
+  return plaintext;
+}
+
 async function readWhole<H extends EnvelopeHeader>(
   reader: EnvelopeReader<H>,
   envelope: Uint8Array,
+  declaredLength: (header: H) => number,
   maxPlaintextBytes: number | undefined
 ): Promise<{ header: H; plaintext: Bytes }> {
   const parts = [...(await reader.push(envelope)), ...(await reader.finish())];
   const header = reader.header!;
-  const payload = concatBytes(...parts);
-  const plaintext =
-    header.compression === 'gzip'
-      ? await gunzipBytes(payload, maxPlaintextBytes)
-      : payload;
+  const plaintext = await decodePayload(concatBytes(...parts), {
+    kind: header.kind,
+    compression: header.compression,
+    declaredLength: declaredLength(header),
+    maxPlaintextBytes
+  });
   return { header, plaintext };
+}
+
+function checkEncryptSize(
+  kind: ProjectEnvelopeKind | ContentBlobKind,
+  length: number
+): void {
+  if (length > PLAINTEXT_CEILINGS[kind]) {
+    throw new E2eeError(
+      'limit-exceeded',
+      `A ${kind} may not exceed ${PLAINTEXT_CEILINGS[kind]} bytes`
+    );
+  }
 }
 
 function mismatch(field: string): never {
@@ -528,11 +602,28 @@ export async function encryptProjectEnvelope(
   init: ProjectEnvelopeHeaderInit,
   plaintext: Uint8Array
 ): Promise<Bytes> {
-  const writer = await createWriter(key, normalizeProjectHeader(init));
+  const header = normalizeProjectHeader(init, plaintext.byteLength);
+  checkEncryptSize(header.kind, plaintext.byteLength);
+  const writer = await createWriter(key, header);
   const payload =
     writer.header.compression === 'gzip'
       ? await gzipBytes(plaintext)
       : plaintext;
+  const chunks = await writer.write(payload);
+  return concatBytes(writer.prefix, ...chunks, await writer.finish());
+}
+
+/**
+ * @internal Tests only: encrypts `payload` as given (already compressed if
+ * the header says so) under an arbitrary header, the way a hostile key
+ * holder could, so decode limits can be exercised.
+ */
+export async function encryptWithHeaderForTests(
+  key: EnvelopeKey,
+  header: EnvelopeHeader,
+  payload: Uint8Array
+): Promise<Bytes> {
+  const writer = await createWriter(key, header);
   const chunks = await writer.write(payload);
   return concatBytes(writer.prefix, ...chunks, await writer.finish());
 }
@@ -548,7 +639,12 @@ export async function decryptProjectEnvelope(
     null,
     options
   );
-  return readWhole(reader, envelope, options.maxPlaintextBytes);
+  return readWhole(
+    reader,
+    envelope,
+    (header) => header.plaintextLength,
+    options.maxPlaintextBytes
+  );
 }
 
 // --- Content blobs --------------------------------------------------------
@@ -563,6 +659,8 @@ export interface ContentBlobReference {
   readonly kind: ContentBlobKind;
   readonly key: Bytes;
   readonly ciphertextHash: Bytes;
+  /** Exact plaintext size; decryption enforces it. */
+  readonly plaintextLength: number;
 }
 
 export interface ContentBlobOptions {
@@ -602,16 +700,22 @@ export async function createContentBlobWriter(
   return createContentBlobWriterWith(key, kind, options, systemRandom);
 }
 
-/** The reference for a finished content blob writer. */
+/**
+ * The reference for a finished content blob writer. `plaintextLength` is the
+ * size before any compression the caller applied.
+ */
 export function contentBlobReference(
   writer: EnvelopeWriter<ContentBlobHeader>,
-  key: EnvelopeKey
+  key: EnvelopeKey,
+  plaintextLength: number
 ): ContentBlobReference {
+  checkEncryptSize(writer.header.kind, plaintextLength);
   return {
     blobId: writer.header.blobId,
     kind: writer.header.kind,
     key: key.bytes,
-    ciphertextHash: writer.ciphertextHash
+    ciphertextHash: writer.ciphertextHash,
+    plaintextLength
   };
 }
 
@@ -623,6 +727,7 @@ export async function encryptContentBlobWith(
   options: ContentBlobOptions,
   random: RandomSource
 ): Promise<{ envelope: Bytes; reference: ContentBlobReference }> {
+  checkEncryptSize(kind, plaintext.byteLength);
   const writer = await createContentBlobWriterWith(key, kind, options, random);
   const payload =
     writer.header.compression === 'gzip'
@@ -630,7 +735,10 @@ export async function encryptContentBlobWith(
       : plaintext;
   const chunks = await writer.write(payload);
   const envelope = concatBytes(writer.prefix, ...chunks, await writer.finish());
-  return { envelope, reference: contentBlobReference(writer, key) };
+  return {
+    envelope,
+    reference: contentBlobReference(writer, key, plaintext.byteLength)
+  };
 }
 
 /** Encrypts a whole content blob under a fresh random id. */
@@ -656,7 +764,8 @@ function checkReference(reference: ContentBlobReference): void {
     !isEnvelopeId(reference?.blobId) ||
     !CONTENT_BLOB_KINDS.includes(reference.kind) ||
     !(reference.ciphertextHash instanceof Uint8Array) ||
-    reference.ciphertextHash.byteLength !== HASH_BYTES
+    reference.ciphertextHash.byteLength !== HASH_BYTES ||
+    !isUint(reference.plaintextLength, Number.MAX_SAFE_INTEGER)
   ) {
     throw new E2eeError('invalid-argument', 'Not a content blob reference');
   }
@@ -683,8 +792,14 @@ export async function decryptContentBlob(
   options: ReadOptions = {}
 ): Promise<Bytes> {
   const reader = createContentBlobReader(reference, options);
-  return (await readWhole(reader, envelope, options.maxPlaintextBytes))
-    .plaintext;
+  return (
+    await readWhole(
+      reader,
+      envelope,
+      () => reference.plaintextLength,
+      options.maxPlaintextBytes
+    )
+  ).plaintext;
 }
 
 /**
@@ -715,6 +830,7 @@ export interface ContentBlobReferenceJson {
   readonly kind: ContentBlobKind;
   readonly key: string;
   readonly ciphertextHash: string;
+  readonly plaintextLength: number;
 }
 
 export function contentBlobReferenceToJson(
@@ -725,7 +841,8 @@ export function contentBlobReferenceToJson(
     blobId: reference.blobId,
     kind: reference.kind,
     key: toBase64Url(reference.key),
-    ciphertextHash: toBase64Url(reference.ciphertextHash)
+    ciphertextHash: toBase64Url(reference.ciphertextHash),
+    plaintextLength: reference.plaintextLength
   };
 }
 
@@ -741,9 +858,11 @@ export function contentBlobReferenceFromJson(
     blobId: record.blobId,
     kind: record.kind,
     key,
-    ciphertextHash
+    ciphertextHash,
+    plaintextLength: record.plaintextLength
   } as ContentBlobReference;
   if (
+    !isUint(reference.plaintextLength, Number.MAX_SAFE_INTEGER) ||
     !isEnvelopeId(reference.blobId) ||
     !CONTENT_BLOB_KINDS.includes(reference.kind) ||
     key.byteLength !== KEY_BYTES ||
@@ -809,8 +928,17 @@ export function encryptContentBlobStream(
   options: ContentBlobOptions = {}
 ): ContentBlobEncryptStream {
   const compression = options.compression ?? 'gzip';
-  const payload =
-    compression === 'gzip' ? compressStream(plaintext) : plaintext;
+  let plaintextLength = 0;
+  const counted = plaintext.pipeThrough(
+    new TransformStream<Bytes, Bytes>({
+      transform(chunk, controller) {
+        plaintextLength += chunk.byteLength;
+        checkEncryptSize(kind, plaintextLength);
+        controller.enqueue(chunk);
+      }
+    })
+  );
+  const payload = compression === 'gzip' ? compressStream(counted) : counted;
   let resolve!: (reference: ContentBlobReference) => void;
   let reject!: (error: unknown) => void;
   const reference = new Promise<ContentBlobReference>((res, rej) => {
@@ -844,7 +972,7 @@ export function encryptContentBlobStream(
       flush: (controller) =>
         guard(async () => {
           controller.enqueue(await writer.finish());
-          resolve(contentBlobReference(writer, key));
+          resolve(contentBlobReference(writer, key, plaintextLength));
         })
     })
   );
@@ -871,7 +999,12 @@ export function decryptContentBlobStream(
   options: ReadOptions = {}
 ): ReadableStream<Bytes> {
   const reader = createContentBlobReader(reference, options);
-  const maxBytes = options.maxPlaintextBytes ?? DEFAULT_MAX_PLAINTEXT_BYTES;
+  const cap = plaintextCap({
+    kind: reference.kind,
+    compression: 'none',
+    declaredLength: reference.plaintextLength,
+    maxPlaintextBytes: options.maxPlaintextBytes
+  });
   const payloadReader = envelope
     .pipeThrough(
       new TransformStream<Uint8Array, Bytes>({
@@ -912,14 +1045,15 @@ export function decryptContentBlobStream(
         }
         const next = await source.read();
         if (next.done) {
+          checkDeclaredLength(delivered, reference.plaintextLength);
           controller.close();
           return;
         }
         delivered += next.value.byteLength;
-        if (delivered > maxBytes) {
+        if (delivered > cap) {
           throw new E2eeError(
             'limit-exceeded',
-            `Payload is larger than ${maxBytes} bytes`
+            `Plaintext is larger than the declared ${cap} bytes`
           );
         }
         controller.enqueue(next.value);

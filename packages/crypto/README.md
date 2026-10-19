@@ -33,10 +33,12 @@ Every header starts with `u8 class | u8 kind | u8 compression | u32 chunk size`:
 | chunk size  | 64 B to 16 MiB (default 1 MiB)                                                                                                       |
 
 A **project envelope** header continues with `u32 schema version | u32 key
-epoch | u64 document version | u8 previous-version hash length (0 or 32) +
-hash | 32-byte roster entry hash | u8 length + project id | u16 count + blob
-ids (u8 length + id each)`. Ids are 1–128 bytes of printable ASCII; a project
-lists at most 4096 blob ids, without duplicates, in the order given.
+epoch | u64 document version | u64 plaintext length | u8 previous-version
+hash length (0 or 32) + hash | 32-byte roster entry hash | u8 length +
+project id | u16 count + blob ids (u8 length + id each)`. Ids are 1–128 bytes
+of printable ASCII. A project lists at most 4096 blob ids, without
+duplicates, in the order given. The plaintext length is the exact size after
+decompression.
 
 A **content blob** header continues with only `u8 length + blob id`. It names
 no project, so the server can copy it byte for byte into another project.
@@ -62,6 +64,29 @@ Changing any header byte, dropping, reordering or duplicating a chunk, cutting
 the file short, or moving a chunk or body into another envelope fails
 authentication. `parseEnvelope` checks structure without a key, which is all a
 server can do.
+
+### Decompression limits
+
+A small, highly compressible envelope from a buggy or hostile editor could
+otherwise exhaust the browser before any validator runs. `decodePayload`,
+which every decrypt path uses, prevents that:
+
+- It inflates gzip as a stream and stops the moment output passes the
+  smaller of the declared plaintext length and the kind's ceiling
+  (`PLAINTEXT_CEILINGS`). That returns `limit-exceeded`.
+- It fails with `malformed` unless the result is exactly the declared length.
+
+| Kind                                | Ceiling | Source                                |
+| ----------------------------------- | ------- | ------------------------------------- |
+| document, share snapshot            | 24 MiB  | `MAX_CLOUD_PROJECT_DOCUMENT_BYTES`    |
+| measurements                        | 512 KiB | `MAX_PROJECT_MEASUREMENT_BYTES`       |
+| view state                          | 1 MiB   | judgment: camera and saved views only |
+| thumbnail                           | 512 KiB | `MAX_THUMBNAIL_BYTES`                 |
+| import source, mesh payload, export | 1 GiB   | `MAX_ARTIFACT_UPLOAD_BYTES`           |
+
+Project envelopes declare their length in the header, and content blobs in
+their `ContentBlobReference`. Encryption refuses anything above the ceiling,
+and a test pins the ceilings to the shared constants.
 
 ### What authenticates what
 
@@ -160,16 +185,27 @@ contacts list, not in plain settings, so a server cannot roll a pin back:
 
 ```
 "OZC" | u8 version = 1 | u32 sequence | u8 previous hash length (0 or 32) + hash | u8 length + owner id
-      | u8 action (1 verify, 2 replace, 3 distrust) | u8 length + contact id | 32-byte identity key hash
-      | u8 length (0 or 32) + replacement key hash
+      | u8 action (1 verify, 2 replace, 3 distrust, 4 advance) | u8 length + contact id
+      | 32-byte identity key hash | u8 length (0 or 32) + device-list head | u8 length (0 or 32) + replacement key hash
 ```
 
-The identity key signs `label "v1 contacts signature" | entry`. A `replace`
-or `distrust` must name the key currently verified for that contact.
-`verifyContactsList` checks the chain from sequence 0 and an optional pin and
-folds it into one pin per contact: `verified`, `replaced` (the new key is
-seen, not verified) or `distrusted`. `isVerifiedContact` is the check before
-wrapping a project key to someone.
+The identity key signs `label "v1 contacts signature" | entry`.
+
+- **Verify** pins the contact's identity key together with their current
+  device-list head. People compare `contactVerificationCode`:
+  `SHA-256(label "v1 contact verification" | identity key hash | device-list head)`,
+  shown as 40 digits, with the hash as the QR payload. A correct identity
+  paired with an old device list therefore fails the comparison.
+- **Advance** moves the pinned head forward.
+- **Replace** and **distrust** name the key currently verified for that
+  contact. After a replace, the new key is seen but not verified.
+
+`verifyContactsList` checks the chain from sequence 0 and an optional pin,
+and folds it into one pin per contact. Before a project key is wrapped to
+someone, `checkContactDeviceList` requires three things: the pin is verified,
+the device list belongs to that identity, and the list contains the pinned
+head, so it chains forward from it. It returns the encryption key to wrap to,
+and whether the pin should advance.
 
 ## Versions and the roster
 
@@ -185,56 +221,82 @@ wrapping a project key to someone.
   also requires the chain to contain it, which refuses rollback and forks.
   This gives fork consistency only; the project state code is the manual
   cross-client check.
-- **Roster entries** are `roster` device signatures over a canonical entry:
+- **Roster entries** are typed. Only membership entries list members; the
+  others apply to the roster in force at their parent:
 
   ```
-  "OZR" | u8 version = 1 | u32 sequence | u32 key epoch | u8 previous hash length (0 or 32) + hash
-        | u8 length + project id | u16 member count | members | u16 wrap count | key wraps
+  "OZR" | u8 version = 1 | u8 type | u32 sequence | u32 key epoch | u8 previous hash length (0 or 32) + hash
+        | u8 length + project id | type fields
   ```
+
+  | Type                | Type fields                            | Signed by                                                 | May change                                                       |
+  | ------------------- | -------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------- |
+  | 1 `membership`      | `u16 count \| members \| wraps`        | a certified device key of the owner (the roster anchor)   | members and roles; may start an epoch (+1) as it removes someone |
+  | 2 `epoch`           | `wraps`                                | a certified device key of any current member, viewers too | only the epoch (+1), wrapped to every member in force            |
+  | 3 `self-removal`    | `u8 length + removed user id \| wraps` | the departing member's device key or identity key         | removes only the signer; epoch + 1 for the rest                  |
+  | 4 `anchor-transfer` | `32-byte new identity key hash`        | the owner's old identity key                              | the anchor (owner identity); epoch unchanged                     |
 
   Members are sorted by user id, each as
   `u8 length + user id | 32-byte identity key hash | u8 role (1 owner, 2 editor, 3 viewer)`.
-  Key wraps are sorted the same way, each as
-  `u8 length + user id | u16 length + sealed project key`. The first entry, and
-  any entry that moves the key epoch up by one, carries exactly one wrap per
-  member; other entries carry none. An entry that keeps the member list and
-  moves the epoch is an _epoch_ entry, which any member may start.
-  `rosterEntryHash` is `SHA-256(label "v1 roster entry hash" | entry)`, the
-  value project envelopes carry. `verifyRosterChain` checks each signer
-  against their device list (with the roster cutoff for a since-revoked
-  device, using the chain's own order unless a lookup is given), plus the
-  sequence, links, epoch structure and an optional pin. Who may sign which entry is Phase 5's rule, supplied through
-  the `authorize` callback.
+  A membership entry lists exactly one owner, who must be the anchor. Wraps
+  are `u16 count`, then sorted by user id, each
+  `u8 length + user id | u16 length + sealed project key`.
+  `SignedRosterEntry.signedBy` says whether the signature is a `roster` device
+  signature or an identity signature, `u8 version | r ‖ s` over
+  `label "v1 roster signature" | entry`. `rosterEntryHash` is
+  `SHA-256(label "v1 roster entry hash" | entry)`, the value project envelopes
+  carry.
+
+  A removal that does not start an epoch in the same entry, which is always
+  the case for a self-removal, leaves `rotationPending` set. No version may
+  then be written until the next epoch entry, which only a remaining member's
+  device can sign. `checkVersionEpoch(state, keyEpoch)` refuses a version
+  while the rotation is pending, or under any epoch other than the one in
+  force.
+
+  `verifyRosterChain` folds the chain into a `RosterState` (members, anchor,
+  epoch, pending rotation) and enforces each type's signer and limits. Every signer's device
+  list or identity key comes from `deviceLists(userId, identityKeyHash)`, and
+  the identity must match the one the roster names. A since-revoked device
+  counts only within its roster cutoff. The chain starts at sequence 0, or at
+  a previously verified `from` state, and must contain an optional pin. The
+  `authorize` callback adds Phase 5 policy, such as refusing an anchor
+  transfer until members have verified the new identity outside OpenZCAD.
 
 ## Key wrapping
 
-| Format  | Bytes                                                                  | Key                                                                                         | AAD                                       |
-| ------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| Wrap v1 | `u8 1 \| 12-byte random IV \| ciphertext+tag`                          | HKDF-SHA256(parent key, empty salt, `v1 wrap <purpose>`)                                    | `u8 1 \| context`                         |
-| Seal v1 | `u8 1 \| 65-byte ephemeral public key \| 12-byte IV \| ciphertext+tag` | HKDF-SHA256(ECDH(ephemeral, recipient), ephemeral key ‖ recipient key, `v1 seal <purpose>`) | `u8 1 \| ephemeral public key \| context` |
+| Format       | Bytes                                                                  | Key                                                                                         | Binding                                       |
+| ------------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| Wrap 2 (KW)  | `u8 2 \| 40-byte AES-KW output`                                        | AES-256-KW, KEK = HKDF-SHA256(parent key, empty salt, `v1 kw <purpose>` ‖ context)          | context in the KEK; RFC 3394 integrity        |
+| Wrap 1 (GCM) | `u8 1 \| 12-byte random IV \| ciphertext+tag`                          | AES-256-GCM, KEK = HKDF-SHA256(parent key, empty salt, `v1 wrap <purpose>`)                 | AAD `u8 1 \| context`                         |
+| Seal 1       | `u8 1 \| 65-byte ephemeral public key \| 12-byte IV \| ciphertext+tag` | HKDF-SHA256(ECDH(ephemeral, recipient), ephemeral key ‖ recipient key, `v1 seal <purpose>`) | AAD `u8 1 \| ephemeral public key \| context` |
 
-Wraps use AES-GCM with a fresh random 96-bit IV stored beside the ciphertext,
-which ADR-024 allows in place of AES-KW; unlike AES-KW it binds the context.
-Each purpose derives its own key-encryption key, and a parent key wraps far
-fewer than 2³² items before an epoch or rotation replaces it. Public keys are
-raw uncompressed P-256 points (65 bytes). The context is a `WrapContext`,
-encoded canonically: fields sorted by name, each as
+Symmetric 32-byte keys are wrapped with AES-KW, which takes no nonce. The
+context is bound by deriving the KEK from it, so a wrap opens only for the
+context it was made for. Private keys use AES-GCM with a fresh random 96-bit
+IV, because PKCS #8 keys are not a multiple of 8 bytes, which AES-KW
+requires. A known format used for the wrong purpose is `malformed`. Public
+keys are raw uncompressed P-256 points (65 bytes). The context is a
+`WrapContext`, encoded canonically: fields sorted by name, each as
 `u8 name length | name | u8 type | value`, where type 1 is a `u16`-length
 UTF-8 string and type 2 a u64.
 
-| Purpose                  | Fields                               | Wrapped by                                                                   |
-| ------------------------ | ------------------------------------ | ---------------------------------------------------------------------------- |
-| `account-key`            | userId, method, unlockId             | device key, passkey PRF output or recovery key; sealed to an approved device |
-| `identity-key`           | userId, method, unlockId             | recovery key or passkey PRF output only (PKCS #8 bytes)                      |
-| `encryption-private-key` | userId, keyId                        | account key (PKCS #8 bytes)                                                  |
-| `project-key`            | userId, projectId, keyEpoch          | sealed to a member; then the member's account key                            |
-| `version-key`            | projectId, keyEpoch, kind, versionId | project key                                                                  |
-| `share-key`              | projectId, keyEpoch, shareId         | project key                                                                  |
+| Purpose                  | Format | Fields                               | Wrapped by                                                                   |
+| ------------------------ | ------ | ------------------------------------ | ---------------------------------------------------------------------------- |
+| `account-key`            | KW     | userId, method, unlockId             | device key, passkey PRF output or recovery key; sealed to an approved device |
+| `identity-key`           | GCM    | userId, method, unlockId             | recovery key or passkey PRF output only (PKCS #8 bytes)                      |
+| `encryption-private-key` | GCM    | userId, keyId                        | account key (PKCS #8 bytes)                                                  |
+| `project-key`            | KW     | userId, projectId, keyEpoch          | sealed to a member; then the member's account key                            |
+| `version-key`            | KW     | projectId, keyEpoch, kind, versionId | project key                                                                  |
+| `share-key`              | KW     | projectId, keyEpoch, shareId         | project key; it never encrypts content                                       |
+| `share-version-key`      | KW     | projectId, shareId, versionId        | share key: a share snapshot's version key, for link visitors                 |
 
-Blob keys are not wrapped; they travel inside the project envelope. Unlock
-secrets are imported as non-extractable HKDF keys, so a device key in
-IndexedDB never exposes its bytes. The passkey PRF input is
-`PASSKEY_PRF_INPUT`.
+`wrapShareSnapshotKey` wraps a share snapshot's fresh version key twice:
+under the project key for members (`version-key`, kind `share-snapshot`) and
+under the share key for link visitors. Blob keys are not wrapped; they travel
+inside the project envelope. Unlock secrets are imported as non-extractable
+HKDF keys, so a device key in IndexedDB never exposes its bytes. The passkey
+PRF input is `PASSKEY_PRF_INPUT`.
 
 ## Codes
 
@@ -243,9 +305,10 @@ IndexedDB never exposes its bytes. The passkey PRF input is
   value stored beside the blob, never inside an envelope.
 - **Key hash:** `publicKeyHash` is the full
   `SHA-256(label "v1 public key hash" | u8 key count | keys)`. Over the
-  identity key it is the user's fingerprint (`identityFingerprint`): the QR
-  form, the verified key a roster records, and, through
-  `formatComparisonCode`, the code people compare. Nothing people compare is
+  identity key it is the user's fingerprint (`identityFingerprint`), which is
+  the key a roster records. To verify a contact, people compare
+  `contactVerificationCode`, which also covers the device-list head (see
+  Contacts lists). Nothing people compare is
   shorter than 128 bits: the comparison code is 40 digits in eight groups of
   five (132.9 bits).
 - **Project state code:**

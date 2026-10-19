@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  checkContactDeviceList,
   contactsEntryHash,
+  deviceListChainsFrom,
   decodeContactsEntry,
   encodeContactsEntry,
   isVerifiedContact,
@@ -10,8 +12,9 @@ import {
   type SignedContactsEntry
 } from './contacts';
 import { E2eeError, type E2eeErrorCode } from './errors';
+import { contactVerificationCode } from './codes';
 import { generateIdentityKeyPair } from './keys';
-import { patternBytes } from './test-support';
+import { TestUser, patternBytes } from './test-support';
 
 async function rejectsWith(
   promise: Promise<unknown>,
@@ -28,8 +31,15 @@ const BOB_KEY = patternBytes(32, 0x50);
 
 type Step = Pick<
   ContactsListEntry,
-  'action' | 'contactUserId' | 'identityKeyHash' | 'replacementKeyHash'
+  | 'action'
+  | 'contactUserId'
+  | 'identityKeyHash'
+  | 'deviceListHead'
+  | 'replacementKeyHash'
 >;
+
+const HEAD = patternBytes(32, 0x70);
+const LATER_HEAD = patternBytes(32, 0x90);
 
 async function build(
   identity: CryptoKeyPair,
@@ -56,6 +66,7 @@ const verify = (contactUserId: string, identityKeyHash: Uint8Array): Step => ({
   action: 'verify',
   contactUserId,
   identityKeyHash,
+  deviceListHead: HEAD,
   replacementKeyHash: null
 });
 
@@ -66,16 +77,102 @@ const STEPS: Step[] = [
     action: 'replace',
     contactUserId: 'alice',
     identityKeyHash: ALICE_KEY,
+    deviceListHead: null,
     replacementKeyHash: ALICE_NEW_KEY
   },
   {
     action: 'distrust',
     contactUserId: 'bob',
     identityKeyHash: BOB_KEY,
+    deviceListHead: null,
     replacementKeyHash: null
   },
   verify('alice', ALICE_NEW_KEY)
 ];
+
+describe('device-list heads', () => {
+  it('advance the pin for a verified contact only', async () => {
+    const identity = await generateIdentityKeyPair();
+    const advance: Step = {
+      action: 'advance',
+      contactUserId: 'alice',
+      identityKeyHash: ALICE_KEY,
+      deviceListHead: LATER_HEAD,
+      replacementKeyHash: null
+    };
+    const list = await verifyContactsList(
+      identity.publicKey,
+      await build(identity, [verify('alice', ALICE_KEY), advance])
+    );
+    expect(list.contacts[0]).toMatchObject({
+      status: 'verified',
+      deviceListHead: LATER_HEAD
+    });
+    await rejectsWith(
+      verifyContactsList(identity.publicKey, await build(identity, [advance])),
+      'chain-broken'
+    );
+  });
+
+  it('wrap only to a device list that chains from the pinned head', async () => {
+    const identity = await generateIdentityKeyPair();
+    const alice = await TestUser.create('alice', ['phone']);
+    const aliceKey = alice.list.identityKeyHash;
+    const pinnedHead = alice.list.latestHash;
+    // The live comparison covers the identity and the current head.
+    const code = await contactVerificationCode(alice.identityKey, pinnedHead);
+    expect(code.code).toMatch(/^\d{5}( \d{5}){7}$/);
+    expect(
+      (await contactVerificationCode(alice.identityKey, patternBytes(32))).code
+    ).not.toBe(code.code);
+    const contacts = await verifyContactsList(
+      identity.publicKey,
+      await build(identity, [
+        { ...verify('alice', aliceKey), deviceListHead: pinnedHead }
+      ])
+    );
+    const pin = contacts.contacts[0]!;
+    // Unchanged list: no advance, the current encryption key.
+    expect(checkContactDeviceList(pin, alice.list)).toMatchObject({
+      advanced: false,
+      encryptionKey: alice.encryptionKey
+    });
+    const oldList = alice.list;
+    // Alice removes a device and rotates her encryption key.
+    await alice.addDevice('laptop');
+    await alice.replaceEncryptionKey();
+    const checked = checkContactDeviceList(pin, alice.list);
+    expect(checked.advanced).toBe(true);
+    expect(checked.encryptionKey).toEqual(alice.encryptionKey);
+    expect(deviceListChainsFrom(alice.list, pinnedHead)).toBe(true);
+    // A pin that moved on refuses the older list the server might replay.
+    const advanced = await verifyContactsList(
+      identity.publicKey,
+      await build(identity, [
+        { ...verify('alice', aliceKey), deviceListHead: pinnedHead },
+        {
+          action: 'advance',
+          contactUserId: 'alice',
+          identityKeyHash: aliceKey,
+          deviceListHead: checked.latestHead,
+          replacementKeyHash: null
+        }
+      ])
+    );
+    await rejectsWith(
+      Promise.resolve().then(() =>
+        checkContactDeviceList(advanced.contacts[0]!, oldList)
+      ),
+      'chain-broken'
+    );
+    // Another identity's list never satisfies the pin.
+    const impostor = await TestUser.create('alice');
+    await rejectsWith(
+      Promise.resolve().then(() => checkContactDeviceList(pin, impostor.list)),
+      'context-mismatch'
+    );
+  });
+});
 
 describe('contacts list', () => {
   it('folds verifications, replacements and distrust into pins', async () => {
@@ -129,6 +226,7 @@ describe('contacts list', () => {
             action: 'replace',
             contactUserId: 'alice',
             identityKeyHash: ALICE_KEY,
+            deviceListHead: null,
             replacementKeyHash: patternBytes(32, 0x99)
           }
         ])
@@ -193,6 +291,12 @@ describe('contacts list', () => {
       },
       { ...base, identityKeyHash: patternBytes(31) },
       { ...base, sequence: 1 },
+      { ...base, deviceListHead: null },
+      { ...base, deviceListHead: patternBytes(31) },
+      {
+        ...base,
+        action: 'distrust' as const
+      },
       { ...base, action: 'pin' as never }
     ]) {
       expect(() => encodeContactsEntry(bad)).toThrow(E2eeError);

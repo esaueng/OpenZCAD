@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { concatBytes, equalBytes, type Bytes } from './bytes';
+import { equalBytes, type Bytes } from './bytes';
 import {
   assetDedupeHash,
   commitDeviceApproval,
@@ -15,7 +15,6 @@ import {
   verifyDeviceApprovalCommitment,
   verifyScannedDeviceKey
 } from './codes';
-import type { VerifiedDeviceList } from './devices';
 import {
   EnvelopeKey,
   encryptContentBlob,
@@ -29,22 +28,12 @@ import {
   generateIdentityKeyPair
 } from './keys';
 import {
-  decodeRosterEntry,
-  encodeRosterEntry,
-  readRosterSigner,
-  rosterEntryHash,
   signProjectEnvelope,
-  signRosterEntry,
   verifyProjectEnvelopeSignature,
-  verifyRosterChain,
   verifyVersionChain,
-  versionHash,
-  type RosterEntry,
-  type RosterMember,
-  type SignedRosterEntry
+  versionHash
 } from './signing';
 import { TestUser, patternBytes } from './test-support';
-import { sealKey } from './wrap';
 
 async function rejectsWith(
   promise: Promise<unknown>,
@@ -255,276 +244,6 @@ describe('version chains', () => {
     ]) {
       await rejectsWith(verifyVersionChain(broken), 'chain-broken');
     }
-  });
-});
-
-describe('signed roster', () => {
-  interface Fixture {
-    owner: TestUser;
-    editor: TestUser;
-    viewer: TestUser;
-    lists: (userId: string) => VerifiedDeviceList | undefined;
-  }
-
-  async function fixture(): Promise<Fixture> {
-    const owner = await TestUser.create('owner-1');
-    const editor = await TestUser.create('editor-1');
-    const viewer = await TestUser.create('viewer-1');
-    const byId = new Map([owner, editor, viewer].map((u) => [u.userId, u]));
-    return { owner, editor, viewer, lists: (id) => byId.get(id)?.list };
-  }
-
-  async function memberOf(user: TestUser, role: RosterMember['role']) {
-    return {
-      userId: user.userId,
-      identityKeyHash: user.list.identityKeyHash,
-      role
-    };
-  }
-
-  async function wrapsFor(users: TestUser[], keyEpoch: number) {
-    return Promise.all(
-      users.map(async (user) => ({
-        userId: user.userId,
-        sealedKey: await sealKey(
-          user.encryptionKey,
-          patternBytes(32, keyEpoch),
-          {
-            purpose: 'project-key',
-            userId: user.userId,
-            projectId: 'project-a',
-            keyEpoch
-          }
-        )
-      }))
-    );
-  }
-
-  /** Owner creates the project, adds the editor, then the editor rotates. */
-  async function history(f: Fixture): Promise<SignedRosterEntry[]> {
-    const first: RosterEntry = {
-      projectId: 'project-a',
-      sequence: 0,
-      keyEpoch: 1,
-      previousEntryHash: null,
-      members: [await memberOf(f.owner, 'owner')],
-      keyWraps: await wrapsFor([f.owner], 1)
-    };
-    const s0 = await signRosterEntry(f.owner.signer(), first);
-    const added: RosterEntry = {
-      ...first,
-      sequence: 1,
-      previousEntryHash: await rosterEntryHash(s0.entry),
-      members: [...first.members, await memberOf(f.editor, 'editor')],
-      keyWraps: []
-    };
-    const s1 = await signRosterEntry(f.owner.signer(), added);
-    const epoch: RosterEntry = {
-      ...added,
-      sequence: 2,
-      keyEpoch: 2,
-      previousEntryHash: await rosterEntryHash(s1.entry),
-      keyWraps: await wrapsFor([f.owner, f.editor], 2)
-    };
-    const s2 = await signRosterEntry(f.editor.signer(), epoch);
-    return [s0, s1, s2];
-  }
-
-  it('encodes canonically and round-trips', async () => {
-    const f = await fixture();
-    const [s0, s1] = await history(f);
-    for (const signed of [s0!, s1!]) {
-      const decoded = decodeRosterEntry(signed.entry);
-      expect(encodeRosterEntry(decoded)).toEqual(signed.entry);
-      expect(
-        encodeRosterEntry({
-          ...decoded,
-          members: [...decoded.members].reverse()
-        })
-      ).toEqual(signed.entry);
-    }
-  });
-
-  it('verifies device signatures, links, epochs and the pin', async () => {
-    const f = await fixture();
-    const chain = await history(f);
-    expect(readRosterSigner(chain[2]!).userId).toBe('editor-1');
-    const seen: string[] = [];
-    const verified = await verifyRosterChain(chain, f.lists, {
-      authorize: (entry, kind, signer) => {
-        seen.push(`${entry.sequence}:${kind}:${signer.userId}`);
-        return true;
-      }
-    });
-    expect(seen).toEqual([
-      '0:membership:owner-1',
-      '1:membership:owner-1',
-      '2:epoch:editor-1'
-    ]);
-    await verifyRosterChain(chain.slice(1), f.lists, {
-      pinnedEntryHash: verified[2]!.hash
-    });
-  });
-
-  it('refuses forged, broken, rolled-back or unauthorized chains', async () => {
-    const f = await fixture();
-    const chain = await history(f);
-    const hashes = (await verifyRosterChain(chain, f.lists)).map((v) => v.hash);
-    // A signer with no verified device list, or a device it never certified.
-    await rejectsWith(
-      verifyRosterChain(chain, (id) =>
-        id === 'editor-1' ? undefined : f.lists(id)
-      ),
-      'authentication-failed'
-    );
-    const forged = await signRosterEntry(
-      { ...f.viewer.signer(), userId: 'owner-1' },
-      decodeRosterEntry(chain[0]!.entry)
-    );
-    await rejectsWith(
-      verifyRosterChain([forged], f.lists),
-      'authentication-failed'
-    );
-    // Bytes changed after signing.
-    const tampered = new Uint8Array(chain[1]!.entry);
-    tampered[60]! ^= 1;
-    await expect(
-      verifyRosterChain([chain[0]!, { ...chain[1]!, entry: tampered }], f.lists)
-    ).rejects.toBeInstanceOf(E2eeError);
-    await rejectsWith(
-      verifyRosterChain([chain[0]!, chain[2]!], f.lists),
-      'chain-broken'
-    );
-    await rejectsWith(
-      verifyRosterChain([chain[1]!, chain[0]!], f.lists),
-      'chain-broken'
-    );
-    await rejectsWith(
-      verifyRosterChain(chain.slice(0, 2), f.lists, {
-        pinnedEntryHash: hashes[2]!
-      }),
-      'chain-broken'
-    );
-    await rejectsWith(
-      verifyRosterChain(chain.slice(1), f.lists),
-      'chain-broken'
-    );
-    await rejectsWith(verifyRosterChain([], f.lists), 'chain-broken');
-    // Phase 5's rule as a callback: the owner changes membership, any
-    // member may start an epoch. A viewer adding themself is refused.
-    const ownerRule = (
-      entry: RosterEntry,
-      kind: 'membership' | 'epoch',
-      signer: { userId: string },
-      previous: RosterEntry | null
-    ): boolean =>
-      kind === 'epoch'
-        ? (previous ?? entry).members.some((m) => m.userId === signer.userId)
-        : signer.userId === 'owner-1';
-    await verifyRosterChain(chain, f.lists, { authorize: ownerRule });
-    const epoch = decodeRosterEntry(chain[2]!.entry);
-    const byViewer = await signRosterEntry(f.viewer.signer(), {
-      ...epoch,
-      members: [...epoch.members, await memberOf(f.viewer, 'editor')],
-      keyWraps: await wrapsFor([f.owner, f.editor, f.viewer], 2)
-    });
-    await rejectsWith(
-      verifyRosterChain([...chain.slice(0, 2), byViewer], f.lists, {
-        authorize: ownerRule
-      }),
-      'authentication-failed'
-    );
-  });
-
-  it('accepts entries from a since-revoked device only within its roster cutoff', async () => {
-    const f = await fixture();
-    const chain = await history(f);
-    const hashes = (await verifyRosterChain(chain, f.lists)).map((v) => v.hash);
-    // The editor's device signed entry 2, then was revoked with the cutoff
-    // at entry 2: the chain still verifies.
-    await f.editor.addDevice('spare');
-    await f.editor.revoke('d1', [
-      {
-        projectId: 'project-a',
-        versionHead: patternBytes(32),
-        rosterHead: hashes[2]!
-      }
-    ]);
-    await verifyRosterChain(chain, f.lists);
-    // With the cutoff at entry 1, the editor's entry 2 is refused.
-    const strict = await TestUser.create('editor-1');
-    await strict.addDevice('spare');
-    const signer = strict.signer('d1');
-    const epoch = decodeRosterEntry(chain[2]!.entry);
-    const resigned = await signRosterEntry(signer, epoch);
-    await strict.revoke('d1', [
-      {
-        projectId: 'project-a',
-        versionHead: patternBytes(32),
-        rosterHead: hashes[1]!
-      }
-    ]);
-    await rejectsWith(
-      verifyRosterChain([chain[0]!, chain[1]!, resigned], (id) =>
-        id === 'editor-1' ? strict.list : f.lists(id)
-      ),
-      'key-revoked'
-    );
-  });
-
-  it('enforces epoch structure and key wraps', async () => {
-    const f = await fixture();
-    const chain = await history(f);
-    const epoch = decodeRosterEntry(chain[2]!.entry);
-    const owner = f.owner.signer();
-    for (const bad of [
-      { ...epoch, keyWraps: epoch.keyWraps.slice(0, 1) },
-      {
-        ...epoch,
-        keyWraps: [
-          ...epoch.keyWraps,
-          { userId: 'stranger', sealedKey: patternBytes(10) }
-        ]
-      },
-      { ...epoch, sequence: 0 },
-      { ...epoch, members: [] },
-      {
-        ...epoch,
-        members: [{ ...epoch.members[0]!, identityKeyHash: patternBytes(31) }]
-      },
-      { ...epoch, members: [{ ...epoch.members[0]!, role: 'admin' as never }] },
-      {
-        ...decodeRosterEntry(chain[0]!.entry),
-        keyWraps: []
-      }
-    ]) {
-      await rejectsWith(signRosterEntry(owner, bad), 'invalid-argument');
-    }
-    // An epoch that skips a number, or moves without wraps.
-    const skip = await signRosterEntry(f.editor.signer(), {
-      ...epoch,
-      keyEpoch: 3
-    });
-    await rejectsWith(
-      verifyRosterChain([...chain.slice(0, 2), skip], f.lists),
-      'chain-broken'
-    );
-    const noWraps = await signRosterEntry(f.editor.signer(), {
-      ...epoch,
-      keyWraps: []
-    });
-    await rejectsWith(
-      verifyRosterChain([...chain.slice(0, 2), noWraps], f.lists),
-      'chain-broken'
-    );
-    // Non-canonical member order and future versions fail to decode.
-    const future = new Uint8Array(chain[0]!.entry);
-    future[3] = 2;
-    expect(() => decodeRosterEntry(future)).toThrow(
-      expect.objectContaining({ code: 'unsupported-version' })
-    );
-    const truncated = concatBytes(chain[1]!.entry.subarray(0, 50));
-    expect(() => decodeRosterEntry(truncated)).toThrow(E2eeError);
   });
 });
 

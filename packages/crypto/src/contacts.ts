@@ -13,7 +13,12 @@ import {
   type ChainLink,
   type ChainOptions
 } from './chain';
-import { signIdentityStatement, verifyIdentityStatement } from './devices';
+import {
+  currentEncryptionKey,
+  signIdentityStatement,
+  verifyIdentityStatement,
+  type VerifiedDeviceList
+} from './devices';
 import { E2eeError } from './errors';
 import { HASH_BYTES, isEnvelopeId } from './header';
 
@@ -23,7 +28,12 @@ import { HASH_BYTES, isEnvelopeId } from './header';
  * rather than in encrypted settings so a server cannot roll a pin back: every
  * device pins the newest entry and refuses an older or forked list.
  */
-export const CONTACT_ACTIONS = ['verify', 'replace', 'distrust'] as const;
+export const CONTACT_ACTIONS = [
+  'verify',
+  'replace',
+  'distrust',
+  'advance'
+] as const;
 export type ContactAction = (typeof CONTACT_ACTIONS)[number];
 
 export interface ContactsListEntry {
@@ -34,7 +44,10 @@ export interface ContactsListEntry {
   /** `contactsEntryHash` of the previous entry; null for the first. */
   readonly previousEntryHash: Uint8Array | null;
   /**
-   * `verify`: the user compared and trusts `identityKeyHash`.
+   * `verify`: the user compared and trusts `identityKeyHash` together with
+   * the contact's device-list head `deviceListHead`.
+   * `advance`: the pinned device-list head moves forward to `deviceListHead`
+   * (a newer head that chains from the pinned one).
    * `replace`: the verified `identityKeyHash` was replaced by
    * `replacementKeyHash`, which stays unverified until a new `verify`.
    * `distrust`: the verified `identityKeyHash` is no longer trusted.
@@ -43,6 +56,8 @@ export interface ContactsListEntry {
   readonly contactUserId: string;
   /** Identity key hash (`identityFingerprint(...).hash`) the action is about. */
   readonly identityKeyHash: Uint8Array;
+  /** `deviceListEntryHash` of the contact's list head, for `verify` and `advance`. */
+  readonly deviceListHead: Uint8Array | null;
   /** The new key, for `replace` only; null otherwise. */
   readonly replacementKeyHash: Uint8Array | null;
 }
@@ -84,6 +99,12 @@ function checkContactsEntry(
   }
   if (!CONTACT_ACTIONS.includes(entry.action)) fail('Unknown contact action');
   if (!isHash(entry.identityKeyHash)) fail('identityKeyHash must be 32 bytes');
+  const needsHead = entry.action === 'verify' || entry.action === 'advance';
+  if (
+    needsHead ? !isHash(entry.deviceListHead) : entry.deviceListHead !== null
+  ) {
+    fail('Only verify and advance name a 32-byte device-list head');
+  }
   if (entry.action === 'replace') {
     if (
       !isHash(entry.replacementKeyHash) ||
@@ -99,8 +120,9 @@ function checkContactsEntry(
 /**
  * Canonical bytes: "OZC" | u8 version | u32 sequence | u8 previous-hash
  * length (0|32) + hash | u8 length + owner id | u8 action (1 verify,
- * 2 replace, 3 distrust) | u8 length + contact id | 32-byte identity key
- * hash | u8 length (0|32) + replacement key hash.
+ * 2 replace, 3 distrust, 4 advance) | u8 length + contact id | 32-byte
+ * identity key hash | u8 length (0|32) + device-list head | u8 length
+ * (0|32) + replacement key hash.
  */
 export function encodeContactsEntry(entry: ContactsListEntry): Bytes {
   checkContactsEntry(entry, 'invalid-argument');
@@ -116,6 +138,8 @@ export function encodeContactsEntry(entry: ContactsListEntry): Bytes {
     .u8(entry.contactUserId.length)
     .bytes(ascii.encode(entry.contactUserId))
     .bytes(entry.identityKeyHash)
+    .u8(entry.deviceListHead?.byteLength ?? 0)
+    .bytes(entry.deviceListHead ?? new Uint8Array())
     .u8(entry.replacementKeyHash?.byteLength ?? 0)
     .bytes(entry.replacementKeyHash ?? new Uint8Array())
     .finish();
@@ -144,6 +168,9 @@ export function decodeContactsEntry(bytes: Uint8Array): ContactsListEntry {
   }
   const contactUserId = asciiDecoder.decode(reader.bytes(reader.u8()));
   const identityKeyHash = copyBytes(reader.bytes(HASH_BYTES));
+  const headLength = reader.u8();
+  const deviceListHead =
+    headLength === 0 ? null : copyBytes(reader.bytes(headLength));
   const replacementLength = reader.u8();
   const replacementKeyHash =
     replacementLength === 0 ? null : copyBytes(reader.bytes(replacementLength));
@@ -155,6 +182,7 @@ export function decodeContactsEntry(bytes: Uint8Array): ContactsListEntry {
     action,
     contactUserId,
     identityKeyHash,
+    deviceListHead,
     replacementKeyHash
   };
   checkContactsEntry(entry, 'malformed');
@@ -191,6 +219,8 @@ export interface ContactPin {
   readonly status: ContactStatus;
   /** The verified key, or the key that was replaced or distrusted. */
   readonly identityKeyHash: Bytes;
+  /** For `verified`: the pinned device-list head, at least this new. */
+  readonly deviceListHead: Bytes | null;
   /** For `replaced`: the new key, seen but not verified. */
   readonly replacementKeyHash: Bytes | null;
   /** Sequence of the entry that set this state. */
@@ -208,8 +238,10 @@ export interface VerifiedContactsList {
 /**
  * Verifies a whole contacts list, oldest first, against the owner's
  * identity key: identity-signed canonical entries from sequence 0, linked
- * by hash, containing `pinnedEntryHash` when given. A `replace` or
- * `distrust` must name the key that is currently verified for that contact.
+ * by hash, containing `pinnedEntryHash` when given. An `advance`,
+ * `replace` or `distrust` must name the key currently verified for that
+ * contact. Whether an advanced head really chains forward is checked
+ * against the device list itself (`checkContactDeviceList`).
  */
 export async function verifyContactsList(
   identityPublicKey: Uint8Array | CryptoKey,
@@ -253,11 +285,14 @@ export async function verifyContactsList(
     pins.set(entry.contactUserId, {
       userId: entry.contactUserId,
       status:
-        entry.action === 'verify'
+        entry.action === 'verify' || entry.action === 'advance'
           ? 'verified'
           : entry.action === 'replace'
             ? 'replaced'
             : 'distrusted',
+      deviceListHead: entry.deviceListHead
+        ? copyBytes(entry.deviceListHead)
+        : null,
       identityKeyHash: copyBytes(entry.identityKeyHash),
       replacementKeyHash: entry.replacementKeyHash
         ? copyBytes(entry.replacementKeyHash)
@@ -286,4 +321,56 @@ export function isVerifiedContact(
     pin?.status === 'verified' &&
     equalBytes(pin.identityKeyHash, identityKeyHash)
   );
+}
+
+/** True if `list` contains `pinnedHead`, so its newest entry chains from it. */
+export function deviceListChainsFrom(
+  list: VerifiedDeviceList,
+  pinnedHead: Uint8Array
+): boolean {
+  return list.entries.some(({ hash }) => equalBytes(hash, pinnedHead));
+}
+
+export interface ContactDeviceListCheck {
+  /** The encryption key to wrap project keys to. */
+  readonly encryptionKey: Bytes;
+  /** The list's newest head: newer than the pin when `advanced`. */
+  readonly latestHead: Bytes;
+  /** True when the pin should move forward (sign an `advance` entry). */
+  readonly advanced: boolean;
+}
+
+/**
+ * The check before wrapping a project key to a verified contact: the device
+ * list belongs to the verified identity and chains forward from the pinned
+ * head, so a server cannot pair the right identity with an old list whose
+ * encryption key a removed device still holds. Throws `context-mismatch`
+ * for an unverified pin or another identity, and `chain-broken` for a list
+ * that does not contain the pinned head.
+ */
+export function checkContactDeviceList(
+  pin: ContactPin,
+  list: VerifiedDeviceList
+): ContactDeviceListCheck {
+  if (
+    pin.status !== 'verified' ||
+    pin.deviceListHead === null ||
+    !equalBytes(pin.identityKeyHash, list.identityKeyHash)
+  ) {
+    throw new E2eeError(
+      'context-mismatch',
+      `${pin.userId}'s device list is not for the verified identity`
+    );
+  }
+  if (!deviceListChainsFrom(list, pin.deviceListHead)) {
+    throw new E2eeError(
+      'chain-broken',
+      `${pin.userId}'s device list does not chain from the pinned head`
+    );
+  }
+  return {
+    encryptionKey: currentEncryptionKey(list),
+    latestHead: copyBytes(list.latestHash),
+    advanced: !equalBytes(list.latestHash, pin.deviceListHead)
+  };
 }

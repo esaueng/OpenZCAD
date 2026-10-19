@@ -1,6 +1,7 @@
 import {
   ByteReader,
   ByteWriter,
+  asBytes,
   concatBytes,
   isUint,
   label,
@@ -29,8 +30,18 @@ import {
   type RandomSource
 } from './primitives';
 
-/** Symmetric wrap: AES-256-GCM under an HKDF-SHA256 KEK, context in the AAD. */
-export const WRAP_VERSION_1 = 1;
+/**
+ * Private-key wrap: AES-256-GCM with a random IV under an HKDF-SHA256 KEK,
+ * context in the AAD. PKCS #8 keys are not a multiple of 8 bytes, so AES-KW
+ * cannot take them.
+ */
+export const WRAP_VERSION_GCM = 1;
+/**
+ * Symmetric-key wrap: AES-256-KW (RFC 3394), no nonce, under a KEK derived
+ * with HKDF-SHA256 from the parent key and the canonical context, so a wrap
+ * opens only for the context it was made for.
+ */
+export const WRAP_VERSION_KW = 2;
 /** Public-key seal: ephemeral ECDH P-256, HKDF-SHA256, AES-256-GCM. */
 export const SEAL_VERSION_1 = 1;
 
@@ -45,11 +56,17 @@ export type UnlockMethod = (typeof UNLOCK_METHODS)[number];
 export const IDENTITY_UNLOCK_METHODS = ['passkey-prf', 'recovery-key'] as const;
 export type IdentityUnlockMethod = (typeof IDENTITY_UNLOCK_METHODS)[number];
 
-/** Private keys travel as PKCS #8 bytes; symmetric keys are 32 bytes. */
+/**
+ * Private keys travel as PKCS #8 bytes under AES-GCM; every other purpose
+ * wraps a 32-byte symmetric key with AES-KW.
+ */
 const PRIVATE_KEY_PURPOSES: readonly WrapPurpose[] = [
   'identity-key',
   'encryption-private-key'
 ];
+
+const isPrivateKeyPurpose = (purpose: WrapPurpose): boolean =>
+  PRIVATE_KEY_PURPOSES.includes(purpose);
 
 /**
  * What a wrapped key is for and whose it is. Every field is bound into the
@@ -98,11 +115,21 @@ export type WrapContext =
       readonly versionId: string;
     }
   | {
-      /** A share-link key under the project key. */
+      /** A share-link key under the project key. It never encrypts content. */
       readonly purpose: 'share-key';
       readonly projectId: string;
       readonly keyEpoch: number;
       readonly shareId: string;
+    }
+  | {
+      /**
+       * A share snapshot's version key under the share key, for link
+       * visitors; members open the same key through its `version-key` wrap.
+       */
+      readonly purpose: 'share-version-key';
+      readonly projectId: string;
+      readonly shareId: string;
+      readonly versionId: string;
     };
 
 export type WrapPurpose = WrapContext['purpose'];
@@ -128,7 +155,12 @@ const CONTEXT_FIELDS: Record<WrapPurpose, Record<string, FieldRule>> = {
     kind: PROJECT_ENVELOPE_KINDS,
     versionId: 'string'
   },
-  'share-key': { projectId: 'string', keyEpoch: 'uint', shareId: 'string' }
+  'share-key': { projectId: 'string', keyEpoch: 'uint', shareId: 'string' },
+  'share-version-key': {
+    projectId: 'string',
+    shareId: 'string',
+    versionId: 'string'
+  }
 };
 
 const MAX_CONTEXT_STRING = 256;
@@ -198,7 +230,7 @@ function checkSecretLength(secret: Uint8Array, context: WrapContext): void {
   }
 }
 
-async function wrapKek(
+async function gcmKek(
   kek: KeyMaterial,
   purpose: WrapPurpose
 ): Promise<CryptoKey> {
@@ -209,6 +241,25 @@ async function wrapKek(
   );
 }
 
+async function kwKek(
+  kek: KeyMaterial,
+  context: WrapContext,
+  encodedContext: Uint8Array
+): Promise<CryptoKey> {
+  return subtle().deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new Uint8Array(),
+      info: concatBytes(label(`v1 kw ${context.purpose}`), encodedContext)
+    },
+    await hkdfBaseKey(kek, 'Wrapping key'),
+    { name: 'AES-KW', length: 256 },
+    false,
+    ['wrapKey', 'unwrapKey']
+  );
+}
+
 /** @internal Tests inject the IV source; production uses `wrapKey`. */
 export async function wrapKeyWith(
   kek: KeyMaterial,
@@ -216,14 +267,30 @@ export async function wrapKeyWith(
   context: WrapContext,
   random: RandomSource
 ): Promise<Bytes> {
-  const aadContext = encodeWrapContext(context);
+  const encodedContext = encodeWrapContext(context);
   checkSecretLength(secret, context);
+  if (!isPrivateKeyPurpose(context.purpose)) {
+    const toWrap = await subtle().importKey(
+      'raw',
+      asBytes(secret),
+      'AES-GCM',
+      true,
+      ['encrypt']
+    );
+    const wrapped = await subtle().wrapKey(
+      'raw',
+      toWrap,
+      await kwKek(kek, context, encodedContext),
+      'AES-KW'
+    );
+    return concatBytes(Uint8Array.of(WRAP_VERSION_KW), new Uint8Array(wrapped));
+  }
   const iv = random(GCM_IV_BYTES);
-  const version = Uint8Array.of(WRAP_VERSION_1);
+  const version = Uint8Array.of(WRAP_VERSION_GCM);
   const ciphertext = await aesGcmEncrypt(
-    await wrapKek(kek, context.purpose),
+    await gcmKek(kek, context.purpose),
     iv,
-    concatBytes(version, aadContext),
+    concatBytes(version, encodedContext),
     secret
   );
   return concatBytes(version, iv, ciphertext);
@@ -231,14 +298,15 @@ export async function wrapKeyWith(
 
 /**
  * Wraps a key under a long-lived parent secret: a version or share key
- * under the project key, a project key or user private key under the
- * account key, or the account key under an unlock secret. Output:
- * `u8 version, 12-byte IV, ciphertext+tag`.
+ * under the project key, a share snapshot's version key under the share
+ * key, a project key or the encryption private key under the account key,
+ * the account key under an unlock secret, or the identity key under the
+ * recovery key or a passkey.
  *
- * This is AES-256-GCM with a fresh random 96-bit IV stored beside the
- * ciphertext (ADR-024 allows it in place of AES-KW), because AES-KW cannot
- * bind the context. Each purpose derives its own KEK, and a parent key
- * wraps far fewer than 2^32 items before an epoch or rotation replaces it.
+ * Symmetric keys use AES-KW (`u8 2 | 40 bytes`), which takes no nonce; the
+ * context is bound by deriving the KEK from it. Private keys use AES-GCM
+ * with a fresh random IV (`u8 1 | 12-byte IV | ciphertext+tag`) and the
+ * context in the AAD. Each purpose derives its own KEK.
  */
 export async function wrapKey(
   kek: KeyMaterial,
@@ -249,8 +317,9 @@ export async function wrapKey(
 }
 
 function readVersion(bytes: Uint8Array, expected: number, what: string): void {
-  if (bytes.byteLength === 0)
+  if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) {
     throw new E2eeError('malformed', `${what} is empty`);
+  }
   if (bytes[0] !== expected) {
     throw new E2eeError(
       'unsupported-version',
@@ -259,13 +328,54 @@ function readVersion(bytes: Uint8Array, expected: number, what: string): void {
   }
 }
 
+/** A known wrap format used for the wrong purpose is malformed, not new. */
+function readWrapVersion(bytes: Uint8Array, expected: number): void {
+  const other =
+    expected === WRAP_VERSION_KW ? WRAP_VERSION_GCM : WRAP_VERSION_KW;
+  if (bytes instanceof Uint8Array && bytes[0] === other) {
+    throw new E2eeError(
+      'malformed',
+      'Wrapped key uses the other wrap format for this purpose'
+    );
+  }
+  readVersion(bytes, expected, 'Wrapped key');
+}
+
+const KW_WRAPPED_BYTES = 1 + KEY_BYTES + 8;
+
 export async function unwrapKey(
   kek: KeyMaterial,
   wrapped: Uint8Array,
   context: WrapContext
 ): Promise<Bytes> {
-  const aadContext = encodeWrapContext(context);
-  readVersion(wrapped, WRAP_VERSION_1, 'Wrapped key');
+  const encodedContext = encodeWrapContext(context);
+  if (!isPrivateKeyPurpose(context.purpose)) {
+    readWrapVersion(wrapped, WRAP_VERSION_KW);
+    if (wrapped.byteLength !== KW_WRAPPED_BYTES) {
+      throw new E2eeError('malformed', 'An AES-KW wrap is 41 bytes');
+    }
+    const kwKey = await kwKek(kek, context, encodedContext);
+    let key: CryptoKey;
+    try {
+      key = await subtle().unwrapKey(
+        'raw',
+        asBytes(wrapped.subarray(1)),
+        kwKey,
+        'AES-KW',
+        'AES-GCM',
+        true,
+        ['encrypt']
+      );
+    } catch (cause) {
+      throw new E2eeError(
+        'authentication-failed',
+        'Wrapped key failed authentication: wrong key, wrong context or altered bytes',
+        { cause }
+      );
+    }
+    return new Uint8Array(await subtle().exportKey('raw', key));
+  }
+  readWrapVersion(wrapped, WRAP_VERSION_GCM);
   const reader = new ByteReader(wrapped, 'Wrapped key');
   const version = reader.bytes(1);
   const iv = reader.bytes(GCM_IV_BYTES);
@@ -273,14 +383,55 @@ export async function unwrapKey(
     throw new E2eeError('malformed', 'Wrapped key is truncated');
   }
   const secret = await aesGcmDecrypt(
-    await wrapKek(kek, context.purpose),
+    await gcmKek(kek, context.purpose),
     iv,
-    concatBytes(version, aadContext),
+    concatBytes(version, encodedContext),
     reader.bytes(reader.remaining),
     'Wrapped key'
   );
   checkSecretLength(secret, context);
   return secret;
+}
+
+export interface ShareSnapshotKeyContext {
+  readonly projectId: string;
+  readonly keyEpoch: number;
+  readonly shareId: string;
+  readonly versionId: string;
+}
+
+export interface ShareSnapshotKeyWraps {
+  /** Under the project key (`version-key`), for members. */
+  readonly forMembers: Bytes;
+  /** Under the share key (`share-version-key`), for link visitors. */
+  readonly forLinkVisitors: Bytes;
+}
+
+/**
+ * Wraps a share snapshot's fresh version key twice with AES-KW: under the
+ * project key for members and under the share key for link visitors. The
+ * share key itself never encrypts content.
+ */
+export async function wrapShareSnapshotKey(
+  projectKey: KeyMaterial,
+  shareKey: KeyMaterial,
+  versionKey: Uint8Array,
+  context: ShareSnapshotKeyContext
+): Promise<ShareSnapshotKeyWraps> {
+  const forMembers = await wrapKey(projectKey, versionKey, {
+    purpose: 'version-key',
+    projectId: context.projectId,
+    keyEpoch: context.keyEpoch,
+    kind: 'share-snapshot',
+    versionId: context.versionId
+  });
+  const forLinkVisitors = await wrapKey(shareKey, versionKey, {
+    purpose: 'share-version-key',
+    projectId: context.projectId,
+    shareId: context.shareId,
+    versionId: context.versionId
+  });
+  return { forMembers, forLinkVisitors };
 }
 
 async function sealKek(
