@@ -1,0 +1,419 @@
+{
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Safari/605.1.15",
+  "results": [
+    {
+      "lib": "mls-rs",
+      "summary": {
+        "host": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Safari/605.1.15",
+        "loadMs": 32,
+        "library": "mls-rs+webcrypto",
+        "failedSteps": [
+          "aborted: CryptoProviderError(AnyError(\"HpkeError(AnyError(KemError(AnyError(KeyDerivationError))))\"))"
+        ],
+        "medianMs": {
+          "commitCreate": null,
+          "commitProcess": null,
+          "addCommitWithWelcome": null,
+          "welcomeJoin": null,
+          "externalCommit": null
+        },
+        "samples": {
+          "commitCreate": 0,
+          "commitProcess": 0,
+          "welcomeJoin": 0
+        },
+        "sizes": {
+          "key_package": 400
+        },
+        "epochChecks": 0,
+        "finalEpoch": 0,
+        "persistence": []
+      },
+      "report": {
+        "library": "mls-rs+webcrypto",
+        "version": "0.56.0",
+        "crypto": "mls-rs-crypto-webcrypto 0.15.1 (SubtleCrypto)",
+        "cipher_suite": 2,
+        "steps": [
+          {
+            "name": "aborted",
+            "ok": false,
+            "detail": "CryptoProviderError(AnyError(\"HpkeError(AnyError(KemError(AnyError(KeyDerivationError))))\"))"
+          }
+        ],
+        "commit_create_ms": [],
+        "commit_process_ms": [],
+        "add_commit_ms": [],
+        "welcome_join_ms": [],
+        "external_commit_ms": [],
+        "sizes": {
+          "key_package": 400
+        },
+        "epoch_checks": 0,
+        "exporter_sample": "",
+        "final_epoch": 0
+      },
+      "rejoin": [
+        {
+          "name": "aborted",
+          "ok": false,
+          "detail": "CryptoProviderError(AnyError(\"HpkeError(AnyError(KemError(AnyError(KeyDerivationError))))\"))"
+        }
+      ]
+    },
+    {
+      "lib": "mls-rs-rustcrypto",
+      "summary": {
+        "host": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Safari/605.1.15",
+        "loadMs": 15,
+        "library": "mls-rs+rustcrypto",
+        "failedSteps": [],
+        "medianMs": {
+          "commitCreate": 5,
+          "commitProcess": 3,
+          "addCommitWithWelcome": 9,
+          "welcomeJoin": 4,
+          "externalCommit": 9
+        },
+        "samples": {
+          "commitCreate": 13,
+          "commitProcess": 57,
+          "welcomeJoin": 7
+        },
+        "sizes": {
+          "commit_path_only": 663,
+          "group_info_with_external_pub": 1334,
+          "key_package": 404,
+          "signature_secret_key": 32,
+          "state_a1_1_member": 2327,
+          "state_a1_3_members": 3853,
+          "welcome_1_joiner": 1069,
+          "welcome_4_member_group": 1728
+        },
+        "epochChecks": 26,
+        "finalEpoch": 32,
+        "persistence": [
+          {
+            "label": "mls-rs/A1",
+            "store": "indexeddb",
+            "stateBytes": 3853,
+            "sealedBytes": 3869,
+            "keyExtractable": false,
+            "exportRefused": true,
+            "roundTripMs": 66,
+            "identical": true
+          }
+        ]
+      },
+      "report": {
+        "library": "mls-rs+rustcrypto",
+        "version": "0.56.0",
+        "crypto": "mls-rs-crypto-rustcrypto 0.22.1 (RustCrypto, compiled to WASM)",
+        "cipher_suite": 2,
+        "steps": [
+          {
+            "name": "create + add A2 via Welcome",
+            "ok": true,
+            "detail": "epoch 1, 2 members agree"
+          },
+          {
+            "name": "add B1 with editor role",
+            "ok": true,
+            "detail": "epoch 2, 3 members agree"
+          },
+          {
+            "name": "Update proposal by B1, committed by A1",
+            "ok": true,
+            "detail": "epoch 3, 3 members agree"
+          },
+          {
+            "name": "timed path-only commits",
+            "ok": true,
+            "detail": "12 rounds"
+          },
+          {
+            "name": "timed Welcome joins",
+            "ok": true,
+            "detail": "epoch 25, 3 members agree"
+          },
+          {
+            "name": "policy: editor Add rejected",
+            "ok": true,
+            "detail": "both A devices rejected: MlsRulesError(AnyError(SpikeError(\"role Editor may not send proposal ProposalType(1)\")))"
+          },
+          {
+            "name": "policy: uncertified external commit rejected",
+            "ok": true,
+            "detail": "A1 rejected: IdentityProviderError(AnyError(SpikeError(\"device key is not certified for that user\")))"
+          },
+          {
+            "name": "conflicting commits, loser rebases",
+            "ok": true,
+            "detail": "from epoch 25: stale commit refused, rebased; epoch 27, 3 members agree"
+          },
+          {
+            "name": "state persisted, reloaded, commits again",
+            "ok": true,
+            "detail": "3853 B state; epoch 28, 3 members agree"
+          },
+          {
+            "name": "external-commit rejoin of wiped A2",
+            "ok": true,
+            "detail": "epoch 29, 3 members agree"
+          },
+          {
+            "name": "remove A2",
+            "ok": true,
+            "detail": "removal seen by A2: true; epoch 31, 2 members agree"
+          },
+          {
+            "name": "B self-removal (SelfRemove)",
+            "ok": true,
+            "detail": "SelfRemove committed; B1 processed: true; epoch 32, 1 members agree"
+          }
+        ],
+        "commit_create_ms": [7, 4, 7, 4, 5, 6, 4, 5, 5, 4, 5, 5, 5],
+        "commit_process_ms": [
+          5, 4, 5, 5, 2, 2, 3, 3, 3, 2, 4, 2, 2, 1, 3, 4, 2, 2, 2, 4, 2, 3, 1,
+          2, 2, 3, 2, 4, 5, 2, 2, 5, 3, 3, 2, 5, 6, 3, 4, 5, 5, 3, 5, 5, 4, 4,
+          4, 2, 2, 2, 2, 2, 2, 2, 3, 3, 2
+        ],
+        "add_commit_ms": [9, 8, 8, 6, 11, 9, 13],
+        "welcome_join_ms": [4, 4, 4, 4, 6, 6, 4],
+        "external_commit_ms": [9],
+        "sizes": {
+          "commit_path_only": 663,
+          "group_info_with_external_pub": 1334,
+          "key_package": 404,
+          "signature_secret_key": 32,
+          "state_a1_1_member": 2327,
+          "state_a1_3_members": 3853,
+          "welcome_1_joiner": 1069,
+          "welcome_4_member_group": 1728
+        },
+        "epoch_checks": 26,
+        "exporter_sample": "7eeb9ff135697a2b",
+        "final_epoch": 32
+      },
+      "rejoin": [
+        {
+          "name": "rejoin: wiped sole member",
+          "ok": true,
+          "detail": "rejoined with PSK of epoch 1; 1 member(s); now epoch 3"
+        },
+        {
+          "name": "library: resumption PSK in an external Commit",
+          "ok": true,
+          "detail": "not possible: ExternalCommitBuilder takes only external PSK ids"
+        },
+        {
+          "name": "rejoin refused: revoked device with a fresh PSK",
+          "ok": true,
+          "detail": "A1 rejected: MlsRulesError(AnyError(SpikeError(\"credential revoked\")))"
+        },
+        {
+          "name": "rejoin refused: PSK older than the user's newest revocation",
+          "ok": true,
+          "detail": "A1 rejected: MlsRulesError(AnyError(SpikeError(\"PSK epoch 2 before newest revocation 3\")))"
+        },
+        {
+          "name": "rejoin accepted: unrevoked device, PSK inside the window",
+          "ok": true,
+          "detail": "PSK of epoch 5 at epoch 6; epoch 7, 3 members agree"
+        },
+        {
+          "name": "rejoin refused: PSK outside the retention window",
+          "ok": true,
+          "detail": "A1 rejected: MlsRulesError(AnyError(SpikeError(\"PSK epoch 7 outside the 4-epoch window (now 12)\")))"
+        },
+        {
+          "name": "rejoin refused: PSK from before the member's role change",
+          "ok": true,
+          "detail": "A1 rejected: MlsRulesError(AnyError(SpikeError(\"PSK epoch 12 before role change 13\")))"
+        },
+        {
+          "name": "rejoin refused: removed member, PSK from before removal",
+          "ok": true,
+          "detail": "A1 rejected: MlsRulesError(AnyError(SpikeError(\"identity not listed in the roles extension\")))"
+        }
+      ]
+    },
+    {
+      "lib": "openmls",
+      "summary": {
+        "host": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Safari/605.1.15",
+        "loadMs": 11,
+        "library": "openmls",
+        "failedSteps": [],
+        "medianMs": {
+          "commitCreate": 5,
+          "commitProcess": 3,
+          "addCommitWithWelcome": 6,
+          "welcomeJoin": 4,
+          "externalCommit": 9
+        },
+        "samples": {
+          "commitCreate": 13,
+          "commitProcess": 61,
+          "welcomeJoin": 7
+        },
+        "sizes": {
+          "commit_path_only": 658,
+          "group_info_with_external_pub": 1369,
+          "key_package": 395,
+          "signature_key_pair_record": 778,
+          "state_a1_1_member": 24955,
+          "state_a1_3_members": 29889,
+          "welcome_1_joiner": 1086,
+          "welcome_4_member_group": 1759
+        },
+        "epochChecks": 26,
+        "finalEpoch": 33,
+        "persistence": [
+          {
+            "label": "openmls/A1",
+            "store": "indexeddb",
+            "stateBytes": 29889,
+            "sealedBytes": 29905,
+            "keyExtractable": false,
+            "exportRefused": true,
+            "roundTripMs": 23,
+            "identical": true
+          }
+        ]
+      },
+      "report": {
+        "library": "openmls",
+        "version": "0.9.1",
+        "crypto": "openmls_rust_crypto 0.6.0 (RustCrypto, compiled to WASM)",
+        "cipher_suite": 2,
+        "steps": [
+          {
+            "name": "create + add A2 via Welcome",
+            "ok": true,
+            "detail": "epoch 1, 2 members agree"
+          },
+          {
+            "name": "add B1 with editor role",
+            "ok": true,
+            "detail": "epoch 2, 3 members agree"
+          },
+          {
+            "name": "Update proposal by B1, committed by A1",
+            "ok": true,
+            "detail": "epoch 3, 3 members agree"
+          },
+          {
+            "name": "timed path-only commits",
+            "ok": true,
+            "detail": "12 rounds"
+          },
+          {
+            "name": "timed Welcome joins",
+            "ok": true,
+            "detail": "epoch 25, 3 members agree"
+          },
+          {
+            "name": "policy: editor Add rejected",
+            "ok": true,
+            "detail": "both A devices rejected: A1 policy rejected: role Editor may not send Add"
+          },
+          {
+            "name": "policy: uncertified external commit rejected",
+            "ok": true,
+            "detail": "A1 rejected: A1 policy rejected: device key not certified for user A"
+          },
+          {
+            "name": "conflicting commits, loser rebases",
+            "ok": true,
+            "detail": "from epoch 25: stale commit refused, rebased; epoch 27, 3 members agree"
+          },
+          {
+            "name": "state persisted, reloaded, commits again",
+            "ok": true,
+            "detail": "29889 B state; epoch 28, 3 members agree"
+          },
+          {
+            "name": "external-commit rejoin of wiped A2",
+            "ok": true,
+            "detail": "stale leaf needed a separate Remove; epoch 30, 3 members agree"
+          },
+          {
+            "name": "remove A2",
+            "ok": true,
+            "detail": "A2 processed removal: true, inactive: true; epoch 32, 2 members agree"
+          },
+          {
+            "name": "B self-removal (SelfRemove)",
+            "ok": true,
+            "detail": "SelfRemove committed; B1 processed: true; epoch 33, 1 members agree"
+          }
+        ],
+        "commit_create_ms": [5, 5, 5, 4, 5, 5, 4, 5, 4, 4, 5, 5, 4],
+        "commit_process_ms": [
+          6, 4, 2, 3, 3, 3, 3, 4, 3, 3, 3, 3, 3, 4, 2, 3, 3, 3, 3, 3, 2, 3, 2,
+          3, 2, 3, 3, 5, 4, 3, 4, 5, 3, 3, 3, 5, 4, 3, 3, 3, 5, 3, 2, 3, 3, 2,
+          2, 2, 4, 2, 2, 3, 2, 4, 4, 3, 2, 2, 1, 3, 2
+        ],
+        "add_commit_ms": [6, 7, 6, 6, 7, 7, 6],
+        "welcome_join_ms": [4, 4, 5, 7, 4, 4, 4],
+        "external_commit_ms": [9],
+        "sizes": {
+          "commit_path_only": 658,
+          "group_info_with_external_pub": 1369,
+          "key_package": 395,
+          "signature_key_pair_record": 778,
+          "state_a1_1_member": 24955,
+          "state_a1_3_members": 29889,
+          "welcome_1_joiner": 1086,
+          "welcome_4_member_group": 1759
+        },
+        "epoch_checks": 26,
+        "exporter_sample": "1ada4ab0ae1edce7",
+        "final_epoch": 33
+      },
+      "rejoin": [
+        {
+          "name": "rejoin: wiped sole member",
+          "ok": true,
+          "detail": "rejoined with PSK of epoch 1; 2 leaves until the stale one was removed; now epoch 3, 1 member(s)"
+        },
+        {
+          "name": "library: resumption PSK in an external Commit",
+          "ok": true,
+          "detail": "not possible: the joiner has no resumption secrets (PskError(KeyNotFound))"
+        },
+        {
+          "name": "rejoin refused: revoked device with a fresh PSK",
+          "ok": true,
+          "detail": "A1 policy rejected: credential revoked"
+        },
+        {
+          "name": "rejoin refused: PSK older than the user's newest revocation",
+          "ok": true,
+          "detail": "A1 policy rejected: PSK epoch 2 before newest revocation 3"
+        },
+        {
+          "name": "rejoin accepted: unrevoked device, PSK inside the window",
+          "ok": true,
+          "detail": "PSK of epoch 5 at epoch 6; epoch 7, 3 members agree"
+        },
+        {
+          "name": "rejoin refused: PSK outside the retention window",
+          "ok": true,
+          "detail": "A1 policy rejected: PSK epoch 7 outside the 4-epoch window (now 12)"
+        },
+        {
+          "name": "rejoin refused: PSK from before the member's role change",
+          "ok": true,
+          "detail": "A1 policy rejected: PSK epoch 12 before role change 13"
+        },
+        {
+          "name": "rejoin refused: removed member, PSK from before removal",
+          "ok": true,
+          "detail": "A1 policy rejected: identity not listed in the roles extension"
+        }
+      ]
+    }
+  ]
+}
