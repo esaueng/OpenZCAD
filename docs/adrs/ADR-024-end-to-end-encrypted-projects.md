@@ -10,6 +10,12 @@ has started. Extends [ADR-012](ADR-012-email-code-identity.md),
 [ADR-019](ADR-019-durable-collaboration-authorization.md). Supersedes the
 server-side document handling they describe once Phase 8 lands.
 
+**Group key management is under reassessment (2026-10-19).** Review kept
+finding flaws in the custom membership and key-rotation protocol, so changes
+to it are paused. [MLS assessment](#mls-assessment) recommends replacing those
+parts with Messaging Layer Security (RFC 9420). The sections it would replace
+are marked there. Everything else in this record stands.
+
 ## Context
 
 The application does not encrypt project data itself today. Project documents
@@ -574,6 +580,101 @@ request.
 | Unrecoverable accounts?            | Accepted. There is no server-held escrow key. A user who loses every unlock method loses their cloud projects; local copies remain.                                    |
 | Turn encryption off again?         | Only during the beta, and not while a project is shared. After default-on, the exit is `.openzcad` export plus cloud deletion, which needs no plaintext server path.   |
 | Accounts that never sign in again? | Kept and encrypted on their next sign-in; product copy says encryption starts at the first sign-in after the switch. Deletion after notice is revisited at default-on. |
+
+## MLS assessment
+
+### Why
+
+The custom design covers membership, per-project epochs, member key
+distribution, device revocation, self-removal and owner hand-over. Ten review rounds each found real flaws in it: missing revocation cutoffs, rollback, key
+substitution, epoch keys chosen by a departing member, and contradictions
+between signer rules. These are exactly the problems MLS was designed and
+analysed for. RFC 9420 gives a standard group key agreement: a ratchet tree of
+members, numbered epochs, Add, Remove and Update proposals applied by a
+Commit, Welcome messages for joiners, and forward secrecy and post-compromise
+security. That replaces a protocol only this project would ever review.
+
+### How it would map
+
+Each encrypted project is one MLS group, and each device of each member is
+one leaf. A leaf's credential is the device signing key, certified by the
+user's identity key; this record's identity and contacts design acts as the
+Authentication Service MLS assumes (RFC 9420 §3, §5.3.1). The collaboration
+room is the Delivery Service, ordering handshake messages for the group. The
+per-epoch project key becomes an MLS exporter secret (label
+`openzcad project key`, context the project id). Everything this record
+encrypts under the project key is unchanged.
+
+| ADR-024 piece                                                               | With MLS                                                                                                                                                                                                                                                                        | Verdict                         |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| Project key and its epochs; [Epoch rotation](#epoch-rotation)               | MLS epochs. The project key is exported per epoch. Any member's Commit starts a new epoch, so rotation never waits for an owner                                                                                                                                                 | Replaced                        |
+| Encryption key pair; wrapping the project key to each member                | Per-leaf HPKE keys in KeyPackages and the ratchet tree. Joiners get secrets through Welcome                                                                                                                                                                                     | Replaced                        |
+| [Signed roster](#signed-roster) membership and its entry-type table         | Group membership is the ratchet tree, agreed through the GroupContext tree hash. Roles (owner, editor, viewer) move into an application GroupContext extension                                                                                                                  | Replaced; roles stay app policy |
+| Self-removal and the post-removal epoch rule                                | A Commit may not remove its own sender (§12.2), so another member commits a departing member's Remove (or a SelfRemove proposal from the MLS extensions work). The Commit's fresh path secret excludes the removed leaf, which is the rule the custom design had to add by hand | Replaced                        |
+| Device lists, revocation cutoffs, device-removal rotation                   | Removing a device is a Remove of its leaf. Application content is signed by the sender's leaf key within an epoch, so a removed leaf cannot sign for later epochs                                                                                                               | Replaced                        |
+| Owner anchor transfer                                                       | A GroupContext extension update naming the new owner, committed by the owner and accepted after members verify the new identity                                                                                                                                                 | Replaced, smaller               |
+| Project state code (key-state part)                                         | The `epoch_authenticator` (§8.7), designed for exactly this out-of-band comparison                                                                                                                                                                                              | Replaced                        |
+| Document version chain, current-head and historical reads                   | MLS orders key state, not stored documents                                                                                                                                                                                                                                      | Kept                            |
+| Identity key, contacts list, verified pins, device approval, recovery       | MLS leaves identity binding to the Authentication Service                                                                                                                                                                                                                       | Kept                            |
+| Envelopes, content blobs, nonces, decompression limits, dedupe, share links | Storage format and anonymous link access, outside MLS                                                                                                                                                                                                                           | Kept                            |
+
+### What MLS does not give, and what it adds
+
+- **History access.** MLS deletes old epoch secrets for forward secrecy. A CAD
+  project must stay readable back to its first revision, and Welcome gives a
+  joiner only the current epoch. So each epoch also stores an archive: the
+  previous project keys, encrypted under the new exporter key. That
+  deliberately trades forward secrecy for stored content, which members are
+  meant to be able to read. Post-compromise security for later content
+  remains.
+- **Authorization.** MLS lets any member propose and commit (§3.2, §16.11).
+  Every member's browser must reject, in commit validation, any Commit or
+  proposal its sender's role does not allow. Viewers may commit only Updates
+  of their own leaves and their own removal; only the owner adds members or
+  changes roles. Rejecting commits from unauthorised senders is ordinary MLS
+  application policy, and simpler than the typed roster it replaces.
+- **Sequencing.** The Delivery Service must pick one Commit per epoch; the
+  application must resolve conflicting Commits (§14). The room already
+  serializes writes, so it accepts the first valid Commit for an epoch and
+  rejects the rest, and the loser rebases. A malicious Delivery Service can
+  still delay or withhold messages (§16.9), the same limit
+  [Version integrity](#version-integrity) already states.
+- **Long-offline devices.** A device must process every Commit since it was
+  last online, or rejoin. Rejoining uses an external Commit (§12.4.3.2), which
+  policy allows only for the user's own certified devices. The same path
+  covers a device whose browser storage was cleared.
+- **A new dependency.** MLS needs a maintained implementation; this is not
+  something to hand-write. It loads lazily, outside the entry chunk.
+
+### Implementations
+
+| Library                               | Notes                                                                                                                                                                                                                     |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mls-rs` (AWS Labs, Rust, Apache-2.0) | Claims full RFC 9420 conformance and WASM builds. Its `mls-rs-crypto-webcrypto` provider runs on SubtleCrypto, which matches this record's WebCrypto-only rule. That provider's maturity and documentation need checking  |
+| OpenMLS (Rust, MIT)                   | Independent SRLabs audit (sponsored by the Sovereign Tech Agency), published 2026-05-27: eight findings, one High; seven fixed in released versions. Browser use needs wasm-bindgen glue; no browser-specific audit found |
+| `ts-mls` (TypeScript)                 | Pure TypeScript with `@hpke/core`, aimed at browsers. No independent audit found                                                                                                                                          |
+
+Cipher suite `MLS_128_DHKEMP256_AES128GCM_SHA256_P256` (0x0002) keeps every
+primitive on P-256, SHA-256 and AES-GCM, all native to WebCrypto. The
+mandatory-to-implement X25519/Ed25519 suite (0x0001) is the fallback if a
+library's P-256 path is weaker.
+
+### Recommendation
+
+Adopt MLS for group membership, epochs, member key distribution and device
+removal. Keep this record's storage format, identity and verification layer,
+recovery, share links and document version chain. Rust is already
+built in this repository for the desktop shell, and the kernel already ships
+as WASM, so a Rust WASM library adds a dependency, not a new toolchain.
+
+Before Phase 3, a one-PR spike builds a two-member, three-device group in a
+worker with `mls-rs` (WebCrypto provider) and OpenMLS. It measures lazy-chunk
+size, IndexedDB state handling, suite 0x0002 support, external rejoin,
+self-removal support and commit cost, then picks one. If adopted, the custom
+pieces marked Replaced above are removed from this record, and Phases 3 and 5
+are rewritten around MLS group operations. Phase 2 keeps only the envelope,
+nonce, wrapping, decompression, dedupe and fingerprint work. Changes to the
+custom key-management protocol stay paused until that decision.
 
 ## Delivery phases
 
