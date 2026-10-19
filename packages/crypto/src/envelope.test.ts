@@ -178,7 +178,10 @@ describe('project envelopes', () => {
       encryptContentBlob(key, 'thumbnail', text('second')),
       'key-reused'
     );
-    await rejectsWith(createContentBlobWriter(key, 'thumbnail'), 'key-reused');
+    await rejectsWith(
+      createContentBlobWriter(key, 'thumbnail', { plaintextLength: 1 }),
+      'key-reused'
+    );
     await rejectsWith(
       encryptProjectEnvelope(
         patternBytes(32) as unknown as EnvelopeKey,
@@ -204,7 +207,9 @@ describe('project envelopes', () => {
       { keyEpoch: 3 },
       { blobIds: ['blob-1'] },
       { blobIds: ['blob-2', 'blob-1'] },
-      { compression: 'gzip' }
+      { compression: 'gzip' },
+      { plaintextLength: original.plaintextLength + 1 },
+      { plaintextLength: original.plaintextLength - 1 }
     ];
     for (const change of tampered) {
       const forged = concatBytes(
@@ -582,11 +587,20 @@ describe('decompression limits', () => {
     const limit = PLAINTEXT_CEILINGS['import-source'];
     // 128 MiB + 1 of zeros gzips to about 130 KiB.
     const bomb = await gzipBytes(new Uint8Array(limit + 1));
+    // An honest writer cannot even declare it.
+    await rejectsWith(
+      createContentBlobWriter(EnvelopeKey.generate(), 'import-source', {
+        plaintextLength: limit + 1
+      }),
+      'limit-exceeded'
+    );
+    // A hostile one declares the ceiling and writes the bomb: inflation
+    // stops the moment output passes the declared size.
     const key = envelopeKeyFromBytes(patternBytes(32, 0x21));
     const writer = await createContentBlobWriterWith(
       key,
       'import-source',
-      { compression: 'gzip', chunkSize: 64 * 1024 },
+      { compression: 'gzip', chunkSize: 64 * 1024, plaintextLength: limit },
       queuedRandom(patternBytes(16, 0x31))
     );
     const envelope = concatBytes(
@@ -594,21 +608,8 @@ describe('decompression limits', () => {
       ...(await writer.write(bomb)),
       await writer.finish()
     );
-    // A reference that admits the true size is refused before inflating…
-    expect(() => contentBlobReference(writer, key, limit + 1)).toThrow(
-      expect.objectContaining({ code: 'limit-exceeded' })
-    );
-    // …and one that claims the ceiling stops the moment output passes it.
-    const reference = contentBlobReference(writer, key, limit);
     await rejectsWith(
-      decryptContentBlob(reference, envelope),
-      'limit-exceeded'
-    );
-    await rejectsWith(
-      decryptContentBlob(
-        { ...reference, plaintextLength: limit + 1 },
-        envelope
-      ),
+      decryptContentBlob(contentBlobReference(writer), envelope),
       'limit-exceeded'
     );
   });
@@ -640,7 +641,8 @@ describe('content blobs', () => {
       kind: 'import-source',
       blobId: reference.blobId,
       compression: 'none',
-      chunkSize: CHUNK
+      chunkSize: CHUNK,
+      plaintextLength: STEP.byteLength
     } satisfies ContentBlobHeader);
     expect(reference.blobId).toMatch(/^[0-9a-f]{32}$/);
     expect(reference.ciphertextHash.byteLength).toBe(32);
@@ -807,7 +809,11 @@ describe('content blobs', () => {
       const writer = await createContentBlobWriterWith(
         key,
         'export',
-        { compression: 'none', chunkSize: CHUNK },
+        {
+          compression: 'none',
+          chunkSize: CHUNK,
+          plaintextLength: plaintext.byteLength
+        },
         queuedRandom(patternBytes(16, 0x99))
       );
       expect(() => writer.ciphertextHash).toThrow(E2eeError);
@@ -817,9 +823,9 @@ describe('content blobs', () => {
       }
       parts.push(await writer.finish());
       expect(concatBytes(...parts)).toEqual(oneShot.envelope);
-      expect(contentBlobReference(writer, key, plaintext.byteLength)).toEqual(
-        oneShot.reference
-      );
+      expect(contentBlobReference(writer)).toEqual(oneShot.reference);
+      // The reference always carries the writer's own key.
+      expect(contentBlobReference(writer).key).toEqual(key.bytes);
       expect(writer.encryptedLength(plaintext.byteLength)).toBe(
         oneShot.envelope.byteLength
       );
@@ -847,7 +853,7 @@ describe('content blobs', () => {
         EnvelopeKey.generate(),
         'mesh-payload',
         stream([plaintext.subarray(0, 100), plaintext.subarray(100)]),
-        { compression, chunkSize: CHUNK }
+        { compression, chunkSize: CHUNK, plaintextLength: plaintext.byteLength }
       );
       const envelope = await collect(encrypted.envelope);
       const reference = await encrypted.reference;
@@ -887,7 +893,7 @@ describe('content blobs', () => {
       EnvelopeKey.generate(),
       'export',
       failing,
-      { compression: 'none', chunkSize: CHUNK }
+      { compression: 'none', chunkSize: CHUNK, plaintextLength: 1000 }
     );
     await rejectsWith(collect(broken.envelope), 'aborted');
     await rejectsWith(broken.reference, 'aborted');
@@ -901,7 +907,7 @@ describe('content blobs', () => {
       EnvelopeKey.generate(),
       'export',
       endless,
-      { compression: 'none', chunkSize: CHUNK }
+      { compression: 'none', chunkSize: CHUNK, plaintextLength: 1_000_000 }
     );
     const reader = cancelled.envelope.getReader();
     await reader.read();
@@ -918,21 +924,33 @@ describe('content blobs', () => {
     expect(await decryptContentBlob(reference, envelope)).toEqual(plaintext);
   });
 
-  it('a streamed blob stops at its declared size, and must reach it exactly', async () => {
+  it('a streamed blob must match its declared size, in and out', async () => {
+    const plaintext = new Uint8Array(200_000);
     const encrypted = encryptContentBlobStream(
       EnvelopeKey.generate(),
       'export',
-      stream([new Uint8Array(200_000)]),
-      { chunkSize: 4096 }
+      stream([plaintext]),
+      { chunkSize: 4096, plaintextLength: plaintext.byteLength }
     );
     const envelope = await collect(encrypted.envelope);
     const reference = await encrypted.reference;
-    expect(reference.plaintextLength).toBe(200_000);
+    expect(parseEnvelope(envelope).header.plaintextLength).toBe(200_000);
     expect(
       (await collect(decryptContentBlobStream(reference, stream([envelope]))))
         .byteLength
     ).toBe(200_000);
-    // A reference that declares less: inflation stops at the declared size.
+    // The encryptor refuses plaintext longer or shorter than declared.
+    for (const declared of [199_999, 200_001]) {
+      const wrong = encryptContentBlobStream(
+        EnvelopeKey.generate(),
+        'export',
+        stream([plaintext]),
+        { chunkSize: 4096, plaintextLength: declared }
+      );
+      await rejectsWith(collect(wrong.envelope), 'invalid-argument');
+      await rejectsWith(wrong.reference, 'invalid-argument');
+    }
+    // A reference whose size disagrees with the authenticated header.
     await rejectsWith(
       collect(
         decryptContentBlobStream(
@@ -940,17 +958,7 @@ describe('content blobs', () => {
           stream([envelope])
         )
       ),
-      'limit-exceeded'
-    );
-    // One that declares more fails once the stream ends short.
-    await rejectsWith(
-      collect(
-        decryptContentBlobStream(
-          { ...reference, plaintextLength: 200_001 },
-          stream([envelope])
-        )
-      ),
-      'malformed'
+      'context-mismatch'
     );
     // A caller limit below the declared size is refused before reading.
     expect(() =>
@@ -958,5 +966,52 @@ describe('content blobs', () => {
         maxPlaintextBytes: 10_000
       })
     ).toThrow(expect.objectContaining({ code: 'limit-exceeded' }));
+  });
+
+  it('binds the declared size into every chunk and enforces it after inflation', async () => {
+    const plaintext = patternBytes(CHUNK * 3 + 10, 2);
+    const { envelope, reference } = await blob(plaintext);
+    const { prefix } = split(envelope);
+    const header = parseEnvelope(envelope).header as ContentBlobHeader;
+    // Altering the size in the header breaks every chunk's AAD.
+    const altered = concatBytes(
+      encodeEnvelopePrefix({
+        ...header,
+        plaintextLength: header.plaintextLength + 1
+      }),
+      envelope.subarray(prefix.byteLength)
+    );
+    await rejectsWith(
+      decryptContentBlob(
+        { ...reference, plaintextLength: header.plaintextLength + 1 },
+        altered
+      ),
+      'authentication-failed'
+    );
+    // A key holder who declares the wrong size: shorter or longer output fails.
+    for (const [declared, code] of [
+      [plaintext.byteLength + 7, 'malformed'],
+      [plaintext.byteLength - 7, 'limit-exceeded']
+    ] as const) {
+      for (const compression of ['none', 'gzip'] as const) {
+        const key = EnvelopeKey.generate();
+        const writer = await createContentBlobWriter(key, 'export', {
+          compression,
+          chunkSize: CHUNK,
+          plaintextLength: declared
+        });
+        const payload =
+          compression === 'gzip' ? await gzipBytes(plaintext) : plaintext;
+        const forged = concatBytes(
+          writer.prefix,
+          ...(await writer.write(payload)),
+          await writer.finish()
+        );
+        await rejectsWith(
+          decryptContentBlob(contentBlobReference(writer), forged),
+          code
+        );
+      }
+    }
   });
 });

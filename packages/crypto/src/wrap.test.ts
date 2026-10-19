@@ -439,6 +439,21 @@ describe('sealing to a public key', () => {
     expect(await openSealedKey(device, sealed, context)).toEqual(accountKey);
   });
 
+  it('exports only P-256 private keys', async () => {
+    const p384 = await crypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-384' },
+      true,
+      ['sign', 'verify']
+    );
+    await rejectsWith(exportPrivateKey(p384.privateKey), 'invalid-argument');
+    const fixed = await generateEncryptionKeyPair(false);
+    await rejectsWith(exportPrivateKey(fixed.privateKey), 'invalid-argument');
+    const ok = await generateEncryptionKeyPair();
+    expect(
+      await importEncryptionPrivateKey(await exportPrivateKey(ok.privateKey))
+    ).toBeDefined();
+  });
+
   it('refuses ECDH keys on other curves with typed errors', async () => {
     const p384 = await crypto.subtle.generateKey(
       { name: 'ECDH', namedCurve: 'P-384' },

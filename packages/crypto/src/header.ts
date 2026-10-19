@@ -68,6 +68,11 @@ interface EnvelopeFormat {
   readonly compression: Compression;
   /** Plaintext bytes per chunk; the last chunk may be shorter. */
   readonly chunkSize: number;
+  /**
+   * Exact plaintext size after decompression. It is in the header, so every
+   * chunk's AAD binds it, and decryption fails on any other size.
+   */
+  readonly plaintextLength: number;
 }
 
 export interface ProjectEnvelopeHeader extends EnvelopeFormat {
@@ -75,8 +80,6 @@ export interface ProjectEnvelopeHeader extends EnvelopeFormat {
   readonly kind: ProjectEnvelopeKind;
   readonly projectId: string;
   readonly documentVersion: number;
-  /** Exact plaintext size after decompression; decryption enforces it. */
-  readonly plaintextLength: number;
   /** `versionHash` of the previous version; null for the first. */
   readonly previousVersionHash: Bytes | null;
   /** `rosterEntryHash` of the signed roster entry this version was written under. */
@@ -146,6 +149,9 @@ export function checkHeader(header: EnvelopeHeader, code: E2eeErrorCode): void {
   ) {
     fail(code, `chunkSize must be ${MIN_CHUNK_SIZE}..${MAX_CHUNK_SIZE}`);
   }
+  if (!isUint(header.plaintextLength, Number.MAX_SAFE_INTEGER)) {
+    fail(code, 'plaintextLength must be a non-negative safe integer');
+  }
   if (header.class === 'content') {
     if (!CONTENT_BLOB_KINDS.includes(header.kind)) {
       fail(code, 'Unknown content blob kind');
@@ -164,9 +170,6 @@ export function checkHeader(header: EnvelopeHeader, code: E2eeErrorCode): void {
   }
   if (!isUint(header.documentVersion, Number.MAX_SAFE_INTEGER)) {
     fail(code, 'documentVersion must be a non-negative safe integer');
-  }
-  if (!isUint(header.plaintextLength, Number.MAX_SAFE_INTEGER)) {
-    fail(code, 'plaintextLength must be a non-negative safe integer');
   }
   if (
     header.previousVersionHash !== null &&
@@ -248,7 +251,8 @@ export function encodeEnvelopePrefix(header: EnvelopeHeader): Bytes {
         : CONTENT_BLOB_KINDS.indexOf(header.kind) + 1
     )
     .u8(COMPRESSIONS.indexOf(header.compression))
-    .u32(header.chunkSize);
+    .u32(header.chunkSize)
+    .u64(header.plaintextLength);
   if (header.class === 'content') {
     writeId(body, header.blobId);
   } else {
@@ -256,7 +260,6 @@ export function encodeEnvelopePrefix(header: EnvelopeHeader): Bytes {
       .u32(header.schemaVersion)
       .u32(header.keyEpoch)
       .u64(header.documentVersion)
-      .u64(header.plaintextLength)
       .u8(header.previousVersionHash?.byteLength ?? 0)
       .bytes(header.previousVersionHash ?? new Uint8Array())
       .bytes(header.rosterEntryHash);
@@ -329,6 +332,7 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
   const compression = COMPRESSIONS[reader.u8()];
   if (compression === undefined) fail('malformed', 'Unknown compression');
   const chunkSize = reader.u32();
+  const plaintextLength = reader.u64();
   let header: EnvelopeHeader;
   if (classCode === CLASS_CODES.content) {
     const kind = CONTENT_BLOB_KINDS[kindCode - 1];
@@ -338,7 +342,8 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
       kind,
       blobId: readId(reader),
       compression,
-      chunkSize
+      chunkSize,
+      plaintextLength
     };
   } else if (classCode === CLASS_CODES.project) {
     const kind = PROJECT_ENVELOPE_KINDS[kindCode - 1];
@@ -346,7 +351,6 @@ export function decodeEnvelopePrefix(prefix: Uint8Array): EnvelopePrefix {
     const schemaVersion = reader.u32();
     const keyEpoch = reader.u32();
     const documentVersion = reader.u64();
-    const plaintextLength = reader.u64();
     const hashLength = reader.u8();
     const previousVersionHash =
       hashLength === 0 ? null : copyBytes(reader.bytes(hashLength));

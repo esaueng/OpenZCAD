@@ -60,6 +60,7 @@ export {
   plaintextCap,
   type ContentBlobEncryptStream,
   type ContentBlobOptions,
+  type ContentBlobWriterOptions,
   type ContentBlobReference,
   type ContentBlobReferenceJson,
   type DecryptProjectEnvelopeOptions,

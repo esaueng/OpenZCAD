@@ -96,10 +96,17 @@ export async function importSigningPublicKey(
 
 /** PKCS #8 bytes of a private key, for wrapping under the account key. */
 export async function exportPrivateKey(key: CryptoKey): Promise<Bytes> {
-  if (key.type !== 'private' || !key.extractable) {
+  // Only P-256 keys export: the import helpers accept nothing else, so any
+  // other key would wrap and persist but never come back.
+  if (
+    !(
+      isP256Key(key, 'ECDH', 'private') || isP256Key(key, 'ECDSA', 'private')
+    ) ||
+    !key.extractable
+  ) {
     throw new E2eeError(
       'invalid-argument',
-      'Expected an extractable private key'
+      'Expected an extractable P-256 ECDH or ECDSA private key'
     );
   }
   return new Uint8Array(await subtle().exportKey('pkcs8', key));

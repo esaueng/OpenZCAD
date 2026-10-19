@@ -162,14 +162,14 @@ describe('project envelope v1 vector', () => {
   it('serializes the documented prefix', async () => {
     const { prefix } = parseEnvelope(await projectVector());
     expect(toHex(prefix)).toMatchInlineSnapshot(
-      `"4f5a4501000000890101000000004000000017000000010000000000000005000000000000005d20a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf0570726a5f310001203730373137323733373437353736373737383739376137623763376437653766"`
+      `"4f5a45010000008901010000000040000000000000005d0000001700000001000000000000000520a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf0570726a5f310001203730373137323733373437353736373737383739376137623763376437653766"`
     );
   });
 
   it('produces the fixed ciphertext', async () => {
     const envelope = await projectVector();
     expect(toHex(envelope)).toMatchInlineSnapshot(
-      `"4f5a4501000000890101000000004000000017000000010000000000000005000000000000005d20a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf0570726a5f31000120373037313732373337343735373637373738373937613762376337643765376641ccd0b0ef6fc2f928cdc7437d40fee9b76322365bf54059e5fdc7ecb7d17d193e3a88e669b3fc2656ad0790ada1192b897324950d5130c033c250546440019435e3211fe04b90ed5b85d496d95cf97c0d63da358bfe9a8b630caa878e8d6b0ab4fd9d1bf92e807fc5adbfdc17243db3f74f568329a3951bbb4ad72791"`
+      `"4f5a45010000008901010000000040000000000000005d0000001700000001000000000000000520a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf0570726a5f31000120373037313732373337343735373637373738373937613762376337643765376641ccd0b0ef6fc2f928cdc7437d40fee9b76322365bf54059e5fdc7ecb7d17d193e3a88e669b3fc2656ad0790ada1192b897324950d5130c033c2505464400194ac79cc8557d0b73b6fc145fe380a6b410d63da358bfe9a8b630caa878e8d6b0ab4fd9d1bf92e807fc5adbfdc173f6d67e029e68a4601b6ec9d72a5c44d"`
     );
     expect(
       (await decryptProjectEnvelope(VERSION_KEY, envelope)).plaintext
@@ -186,7 +186,7 @@ describe('project envelope v1 vector', () => {
     expect(
       toHex(await versionHash(await projectVector()))
     ).toMatchInlineSnapshot(
-      `"faf47c226f52bfdcaca387eb1518772e8b616bfd8aa676fd03b1b598fa4be587"`
+      `"319935295d2b281ed58c71760f5936274f3bb923762e0e9c6c4f8cb7cc2e1426"`
     );
   });
 });
@@ -196,10 +196,10 @@ describe('content blob v1 vector', () => {
     const { envelope, reference } = await contentVector();
     expect(reference.blobId).toBe(toHex(BLOB_ID_RANDOM));
     expect(toHex(envelope)).toMatchInlineSnapshot(
-      `"4f5a4501000000280201000000004020373037313732373337343735373637373738373937613762376337643765376615445516ce2b93eff8eef6855a910d364aa274fbe5629127dec7a9929c1e3209b356d7d85fde4061f0df9abf811bec589adb82e0c43480bf2b9bb7994fae870c0d07db9e1b90fa29bccba73218873ebe1da07ee2684afbdc95606b37e54e8c8264e6724bb2499b526ee40194b9dcf00b33746a559e4bb1d4d91c917645"`
+      `"4f5a45010000003002010000000040000000000000005d20373037313732373337343735373637373738373937613762376337643765376615445516ce2b93eff8eef6855a910d364aa274fbe5629127dec7a9929c1e3209b356d7d85fde4061f0df9abf811bec589adb82e0c43480bf2b9bb7994fae870c3c6678cc54e1a26b1b13cffda038bb701da07ee2684afbdc95606b37e54e8c8264e6724bb2499b526ee40194b96ea6dc153d7c19ea9d129bbaee38697a"`
     );
     expect(toHex(reference.ciphertextHash)).toMatchInlineSnapshot(
-      `"6e3fcddf2dc4bc22ad86890e534b80eaa12fbbc8ca1eb04bc95ada397a52d29c"`
+      `"45cd73f5fe1e124aca36d61fcaa78d6e20a7ad2393bc43e4ddac1e1e97637483"`
     );
     expect(await decryptContentBlob(reference, envelope)).toEqual(PLAINTEXT);
   });
@@ -331,7 +331,7 @@ describe('version signature vector', () => {
   // ECDSA signatures are randomized, so this is a recorded signature over
   // the project envelope vector that must keep verifying.
   const VERSION_SIGNATURE =
-    '0100000199c82cc0007c511a62f92eac086c09e70293b7a74ae48bed3f98fb11b8159e90efa8c2c4663cc4aeec81250ef9f8efd24dd564be70853f20f9f170d803857702710be1aada';
+    '0100000199c82cc000490ad620f6a014d8a29e34a5fa46571999c909682e86ee4331409a368d23954ad4448a3983dcc657f7fcb29d6b74602bd37919179b2ed6f9206b243c54fe9464';
 
   it('verifies the recorded signature and its timestamp', async () => {
     const signer = await importFixedPair(TEST_SIGNER_JWK, 'ECDSA');
@@ -392,10 +392,10 @@ describe('codes vectors', () => {
       signerKeyHash: patternBytes(32, 0xe0)
     });
     expect(toHex(hash)).toMatchInlineSnapshot(
-      `"5baf7fe08f560c97c18eb904441e864d2a1c2996cfb40cfb0b10efcb7567b39f"`
+      `"89cf27110c7a15970ce26142a49c6fbc6a94ed9b66486317068a6b2f50fcbfc8"`
     );
     expect(code).toMatchInlineSnapshot(
-      `"17461 04252 71970 27657 76822 67600 47465 39935"`
+      `"78789 04918 71313 44369 02699 23274 65283 58344"`
     );
   });
 

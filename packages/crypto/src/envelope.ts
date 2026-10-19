@@ -289,17 +289,22 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
   }
 }
 
+/** The key each writer consumed, so a reference can only carry that key. */
+const writerKeys = new WeakMap<EnvelopeWriter, EnvelopeKey>();
+
 async function createWriter<H extends EnvelopeHeader>(
   key: EnvelopeKey,
   header: H
 ): Promise<EnvelopeWriter<H>> {
   const prefix = encodeEnvelopePrefix(header);
   const raw = consumeKey(key);
-  return new EnvelopeWriter(
+  const writer = new EnvelopeWriter(
     header,
     prefix,
     await importChunkKey(raw, 'encrypt')
   );
+  writerKeys.set(writer, key);
+  return writer;
 }
 
 // --- Reader ---------------------------------------------------------------
@@ -500,6 +505,12 @@ export async function decodePayload(
   limits: PayloadLimits
 ): Promise<Bytes> {
   const cap = plaintextCap(limits);
+  if (limits.compression === 'none' && payload.byteLength > cap) {
+    throw new E2eeError(
+      'limit-exceeded',
+      `Plaintext is larger than the declared ${cap} bytes`
+    );
+  }
   const plaintext =
     limits.compression === 'gzip'
       ? await gunzipBytes(payload, cap)
@@ -674,11 +685,20 @@ export interface ContentBlobOptions {
   readonly chunkSize?: number;
 }
 
+/**
+ * Writers and streams emit the header first, so they need the exact
+ * plaintext size (before compression) up front; the stream helper refuses
+ * plaintext that ends up longer or shorter.
+ */
+export interface ContentBlobWriterOptions extends ContentBlobOptions {
+  readonly plaintextLength: number;
+}
+
 /** @internal Tests inject the blob id source; production uses `createContentBlobWriter`. */
 export async function createContentBlobWriterWith(
   key: EnvelopeKey,
   kind: ContentBlobKind,
-  options: ContentBlobOptions,
+  options: ContentBlobWriterOptions,
   random: RandomSource
 ): Promise<EnvelopeWriter<ContentBlobHeader>> {
   const header: ContentBlobHeader = {
@@ -686,40 +706,46 @@ export async function createContentBlobWriterWith(
     kind,
     blobId: toHex(random(BLOB_ID_BYTES)),
     compression: options.compression ?? 'gzip',
-    chunkSize: options.chunkSize ?? DEFAULT_CHUNK_SIZE
+    chunkSize: options.chunkSize ?? DEFAULT_CHUNK_SIZE,
+    plaintextLength: options.plaintextLength
   };
   checkHeader(header, 'invalid-argument');
+  checkEncryptSize(kind, header.plaintextLength);
   return createWriter(key, header);
 }
 
 /**
  * Starts a content blob under a fresh random id. After `finish`, build its
- * reference with `contentBlobReference(writer, key)`.
+ * reference with `contentBlobReference(writer)`.
  */
 export async function createContentBlobWriter(
   key: EnvelopeKey,
   kind: ContentBlobKind,
-  options: ContentBlobOptions = {}
+  options: ContentBlobWriterOptions
 ): Promise<EnvelopeWriter<ContentBlobHeader>> {
   return createContentBlobWriterWith(key, kind, options, systemRandom);
 }
 
 /**
- * The reference for a finished content blob writer. `plaintextLength` is the
- * size before any compression the caller applied.
+ * The reference for a finished content blob writer, carrying the key the
+ * writer itself consumed (it cannot be paired with any other key).
  */
 export function contentBlobReference(
-  writer: EnvelopeWriter<ContentBlobHeader>,
-  key: EnvelopeKey,
-  plaintextLength: number
+  writer: EnvelopeWriter<ContentBlobHeader>
 ): ContentBlobReference {
-  checkEncryptSize(writer.header.kind, plaintextLength);
+  const key = writerKeys.get(writer);
+  if (!key || writer.header?.class !== 'content') {
+    throw new E2eeError(
+      'invalid-argument',
+      'Not a content blob writer from createContentBlobWriter'
+    );
+  }
   return {
     blobId: writer.header.blobId,
     kind: writer.header.kind,
     key: key.bytes,
     ciphertextHash: writer.ciphertextHash,
-    plaintextLength
+    plaintextLength: writer.header.plaintextLength
   };
 }
 
@@ -731,8 +757,12 @@ export async function encryptContentBlobWith(
   options: ContentBlobOptions,
   random: RandomSource
 ): Promise<{ envelope: Bytes; reference: ContentBlobReference }> {
-  checkEncryptSize(kind, plaintext.byteLength);
-  const writer = await createContentBlobWriterWith(key, kind, options, random);
+  const writer = await createContentBlobWriterWith(
+    key,
+    kind,
+    { ...options, plaintextLength: plaintext.byteLength },
+    random
+  );
   const payload =
     writer.header.compression === 'gzip'
       ? await gzipBytes(plaintext)
@@ -741,7 +771,7 @@ export async function encryptContentBlobWith(
   const envelope = concatBytes(writer.prefix, ...chunks, await writer.finish());
   return {
     envelope,
-    reference: contentBlobReference(writer, key, plaintext.byteLength)
+    reference: contentBlobReference(writer)
   };
 }
 
@@ -760,6 +790,9 @@ function acceptContent(reference: ContentBlobReference) {
     if (header.class !== 'content') mismatch('class');
     if (header.blobId !== reference.blobId) mismatch('blobId');
     if (header.kind !== reference.kind) mismatch('kind');
+    if (header.plaintextLength !== reference.plaintextLength) {
+      mismatch('plaintextLength');
+    }
   };
 }
 
@@ -800,7 +833,7 @@ export async function decryptContentBlob(
     await readWhole(
       reader,
       envelope,
-      () => reference.plaintextLength,
+      (header) => header.plaintextLength,
       options.maxPlaintextBytes
     )
   ).plaintext;
@@ -929,16 +962,30 @@ export function encryptContentBlobStream(
   key: EnvelopeKey,
   kind: ContentBlobKind,
   plaintext: ReadableStream<Bytes>,
-  options: ContentBlobOptions = {}
+  options: ContentBlobWriterOptions
 ): ContentBlobEncryptStream {
   const compression = options.compression ?? 'gzip';
-  let plaintextLength = 0;
+  const declared = options.plaintextLength;
+  let seen = 0;
   const counted = plaintext.pipeThrough(
     new TransformStream<Bytes, Bytes>({
       transform(chunk, controller) {
-        plaintextLength += chunk.byteLength;
-        checkEncryptSize(kind, plaintextLength);
+        seen += chunk.byteLength;
+        if (seen > declared) {
+          throw new E2eeError(
+            'invalid-argument',
+            `Plaintext is longer than the declared ${declared} bytes`
+          );
+        }
         controller.enqueue(chunk);
+      },
+      flush() {
+        if (seen !== declared) {
+          throw new E2eeError(
+            'invalid-argument',
+            `Plaintext is ${seen} bytes, not the declared ${declared}`
+          );
+        }
       }
     })
   );
@@ -987,7 +1034,7 @@ export function encryptContentBlobStream(
           if (next.done) {
             controller.enqueue(await writer.finish());
             controller.close();
-            resolve(contentBlobReference(writer, key, plaintextLength));
+            resolve(contentBlobReference(writer));
             return;
           }
           const out = await writer.write(next.value);

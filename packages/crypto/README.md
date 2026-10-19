@@ -23,22 +23,22 @@ Both classes share one layout:
 "OZE" (4f 5a 45) | u8 version = 1 | u32 header length | header | chunk 0 | chunk 1 | …
 ```
 
-Every header starts with `u8 class | u8 kind | u8 compression | u32 chunk size`:
+Every header starts with `u8 class | u8 kind | u8 compression | u32 chunk size | u64 plaintext length`:
 
-| Field       | Encoding                                                                                                                             |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| class       | 1 project envelope, 2 content blob                                                                                                   |
-| kind        | project: 1 document, 2 measurements, 3 view-state, 4 share-snapshot; content: 1 import-source, 2 mesh-payload, 3 thumbnail, 4 export |
-| compression | 0 none, 1 gzip (applied before encryption; the default)                                                                              |
-| chunk size  | 64 B to 16 MiB (default 1 MiB)                                                                                                       |
+| Field            | Encoding                                                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| class            | 1 project envelope, 2 content blob                                                                                                   |
+| kind             | project: 1 document, 2 measurements, 3 view-state, 4 share-snapshot; content: 1 import-source, 2 mesh-payload, 3 thumbnail, 4 export |
+| compression      | 0 none, 1 gzip (applied before encryption; the default)                                                                              |
+| chunk size       | 64 B to 16 MiB (default 1 MiB)                                                                                                       |
+| plaintext length | the exact size after decompression; part of the header, so every chunk's AAD binds it                                                |
 
 A **project envelope** header continues with `u32 schema version | u32 key
-epoch | u64 document version | u64 plaintext length | u8 previous-version
+epoch | u64 document version | u8 previous-version
 hash length (0 or 32) + hash | 32-byte roster entry hash | u8 length +
 project id | u16 count + blob ids (u8 length + id each)`. Ids are 1–128 bytes
 of printable ASCII. A project lists at most 4096 blob ids, without
-duplicates, in the order given. The plaintext length is the exact size after
-decompression.
+duplicates, in the order given.
 
 A **content blob** header continues with only `u8 length + blob id`. It names
 no project, so the server can copy it byte for byte into another project.
@@ -85,10 +85,12 @@ which every decrypt path uses, prevents that:
 | import source, mesh payload, export | 128 MiB | `MAX_SOURCE_IMPORT_BYTES`, `MAX_ARTIFACT_DOWNLOAD_BYTES` |
 
 `MAX_ARTIFACT_UPLOAD_BYTES` (1 GiB) is a storage reservation and is never a
-decompression limit. Project envelopes declare their length in the header,
-and content blobs in
-their `ContentBlobReference`. Encryption refuses anything above the ceiling,
-and a test pins the ceilings to the shared constants.
+decompression limit. Both classes declare their exact length in the header,
+and a content blob's `ContentBlobReference` must agree with it
+(`context-mismatch` otherwise). Writers and the stream encryptor take the
+size up front and refuse plaintext that ends up longer or shorter.
+Encryption refuses anything above the ceiling, and a test pins the ceilings
+to the constants they mirror.
 
 ### What authenticates what
 
