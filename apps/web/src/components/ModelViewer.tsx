@@ -237,6 +237,7 @@ import {
   curvePreviewPoints,
   ellipseObjectFromPoints,
   ellipticalArcObject,
+  splineClickAction,
   splineObjectFromPoints,
   centerInferenceSegments,
   collectSketchSnapTargets,
@@ -6528,17 +6529,17 @@ export function ModelViewer({
           0.5,
           sketchWorldPerPixel(mode.basis.origin) * mode.snapTolerancePx
         );
-        const near = (other: SketchPoint) =>
-          Math.hypot(point.x - other.x, point.y - other.y) <= reach;
-        if (points.length >= 3 && near(points[0]!)) {
+        const action = splineClickAction(points, point, reach);
+        if (action === 'close') {
           finishSketchSpline(true);
-          return;
-        }
-        if (near(points[points.length - 1]!)) {
+        } else if (action === 'finish') {
           finishSketchSpline(false);
-          return;
+        } else {
+          points.push(point);
+          if (action === 'append-and-finish') {
+            finishSketchSpline(false);
+          }
         }
-        points.push(point);
         return;
       }
       const [center, axisEnd, radiusPoint, arcStart] = points;

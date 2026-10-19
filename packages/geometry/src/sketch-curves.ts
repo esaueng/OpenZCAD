@@ -3,6 +3,7 @@ import {
   type ParamValue,
   type SketchObjectData
 } from '@openzcad/shared';
+import { geometryTolerance } from './tolerance';
 
 /**
  * I01 curve entities: the exact geometry behind the `ellipse` and `spline`
@@ -798,6 +799,26 @@ function solveDense(matrix: number[][], rhs: CurvePoint[]): CurvePoint[] {
   return out;
 }
 
+/**
+ * Refuses points that all sit on one spot (within the geometry tolerance of
+ * their scale): every curve through or pulled by them is a point, which
+ * region analysis would drop as degenerate along with every profile it
+ * bounded. Checked where a spline is built, so the entity card refuses the
+ * edit instead of applying it.
+ */
+function requireSpread(points: readonly CurvePoint[]): void {
+  const first = points[0]!;
+  let scale = 0;
+  let spread = 0;
+  for (const point of points) {
+    scale = Math.max(scale, Math.abs(point.x), Math.abs(point.y));
+    spread = Math.max(spread, Math.hypot(point.x - first.x, point.y - first.y));
+  }
+  if (!(spread > geometryTolerance(scale))) {
+    throw new Error('A spline needs at least two distinct points.');
+  }
+}
+
 /** Cumulative chord lengths normalized to [0, 1]; refuses repeated points. */
 function chordParameters(
   points: readonly CurvePoint[],
@@ -887,6 +908,7 @@ export function fitSplineThrough(
     if (points.length < 3) {
       throw new Error('A closed fit spline needs at least 3 points.');
     }
+    requireSpread(points);
     const breaks = chordParameters(points, true);
     const degree = 3;
     const matrix = periodicBasisMatrix(degree, breaks, points.length);
@@ -896,6 +918,7 @@ export function fitSplineThrough(
   if (points.length < 3) {
     throw new Error('A fit spline needs at least 3 points.');
   }
+  requireSpread(points);
   const degree = Math.min(3, points.length - 1);
   const params = chordParameters(points, false);
   const n = points.length - 1;
@@ -938,6 +961,7 @@ export function controlSpline(
   if (points.length < 3) {
     throw new Error('A control-point spline needs at least 3 points.');
   }
+  requireSpread(points);
   if (closed) {
     const degree = Math.min(requestedDegree, points.length - 1);
     const n = points.length;

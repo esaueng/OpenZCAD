@@ -10,10 +10,11 @@ import {
   type PlaneBasis
 } from '@openzcad/geometry';
 import type { SketchMoveHandle } from '../interaction/machine';
-import type {
-  SketchObjectData,
-  SketchPlaneFrame,
-  Vector3
+import {
+  MAX_SKETCH_SPLINE_POINTS,
+  type SketchObjectData,
+  type SketchPlaneFrame,
+  type Vector3
 } from '@openzcad/shared';
 
 /**
@@ -395,6 +396,33 @@ export function splineObjectFromPoints(
     return null;
   }
   return data;
+}
+
+/**
+ * What one click of the Spline tool does with the points placed so far: a
+ * click on the first point (with three already down) closes the spline, a
+ * click on the last point again finishes it open, and any other click adds
+ * a point — finishing at once when that point is the last a spline may
+ * hold, since a further one would leave a list no commit accepts.
+ */
+export function splineClickAction(
+  points: readonly SketchPoint[],
+  point: SketchPoint,
+  reach: number
+): 'close' | 'finish' | 'append' | 'append-and-finish' {
+  const near = (other: SketchPoint) =>
+    Math.hypot(point.x - other.x, point.y - other.y) <= reach;
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (first && points.length >= 3 && near(first)) {
+    return 'close';
+  }
+  if (last && near(last)) {
+    return 'finish';
+  }
+  return points.length + 1 >= MAX_SKETCH_SPLINE_POINTS
+    ? 'append-and-finish'
+    : 'append';
 }
 
 /** Display polyline of an ellipse or spline object, for in-progress previews. */

@@ -199,6 +199,26 @@ describe('spline construction', () => {
     );
   });
 
+  it('refuses a spline whose points all sit on one spot (review case)', () => {
+    const same = [
+      { x: 4, y: 4 },
+      { x: 4, y: 4 },
+      { x: 4, y: 4 }
+    ];
+    expect(() => controlSpline(same, 3, false)).toThrow(/two distinct points/);
+    expect(() => controlSpline(same, 2, true)).toThrow(/two distinct points/);
+    expect(() =>
+      resolveSplineGeometry(
+        { objectKind: 'spline', method: 'control', points: same },
+        resolve
+      )
+    ).toThrow(/two distinct points/);
+    // A repeat that still spreads is a valid control polygon.
+    expect(
+      controlSpline([same[0]!, same[1]!, { x: 9, y: 4 }], 3, false).degree
+    ).toBe(2);
+  });
+
   it('refuses repeated and too few points', () => {
     expect(() =>
       fitSplineThrough(

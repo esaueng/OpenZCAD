@@ -1070,6 +1070,35 @@ describe('SketchEntityEditor I01 curves', () => {
     });
   });
 
+  it('refuses moving every control point onto one spot (review case)', async () => {
+    const user = userEvent.setup();
+    render(
+      <SketchEntityEditor
+        data={{
+          objectKind: 'spline',
+          method: 'control',
+          degree: 3,
+          points: [
+            { x: 0, y: 0 },
+            { x: 10, y: 9 },
+            { x: 20, y: 0 }
+          ]
+        }}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    for (const label of ['Point 2 X', 'Point 2 Y', 'Point 3 X', 'Point 3 Y']) {
+      const field = screen.getByLabelText(label);
+      await user.clear(field);
+      await user.type(field, '0');
+    }
+    expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+    expect(screen.getByText(/two distinct points/)).toBeInTheDocument();
+  });
+
   it('refuses a spline point repeated in a row', async () => {
     const user = userEvent.setup();
     render(

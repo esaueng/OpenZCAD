@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { SketchObjectData } from '@openzcad/shared';
+import {
+  MAX_SKETCH_SPLINE_POINTS,
+  type SketchObjectData
+} from '@openzcad/shared';
 import {
   PLANE_BASES,
   frameForPlaneRef,
@@ -56,6 +59,7 @@ import {
   ellipseObjectFromPoints,
   ellipseParamDegAt,
   ellipticalArcObject,
+  splineClickAction,
   splineObjectFromPoints,
   sketchObjectGrabbedAlongCurve
 } from './session';
@@ -1409,6 +1413,35 @@ describe('I01 curves under the drag', () => {
         { ...spline, points: spline.points.slice(0, 2) },
         resolve
       )
+    ).toBeNull();
+  });
+});
+
+describe('the Spline tool’s clicks', () => {
+  const at = (x: number, y: number) => ({ x, y });
+  it('closes on the first point, finishes on the last, and adds otherwise', () => {
+    const placed = [at(0, 0), at(10, 5), at(20, 0)];
+    expect(splineClickAction(placed, at(0.1, 0), 0.5)).toBe('close');
+    expect(splineClickAction(placed, at(20, 0.2), 0.5)).toBe('finish');
+    expect(splineClickAction(placed, at(30, 4), 0.5)).toBe('append');
+    // Two points down: a click back on the first is not a close yet.
+    expect(splineClickAction(placed.slice(0, 2), at(0, 0), 0.5)).toBe('append');
+  });
+
+  it('finishes on the last point a spline may hold (review case)', () => {
+    const placed = Array.from(
+      { length: MAX_SKETCH_SPLINE_POINTS - 1 },
+      (_, i) => at(i * 2, i % 2)
+    );
+    expect(splineClickAction(placed, at(500, 0), 0.5)).toBe(
+      'append-and-finish'
+    );
+    expect(
+      splineObjectFromPoints('fit', [...placed, at(500, 0)], false)
+    ).not.toBeNull();
+    // One more would be refused, which is why the tool never collects it.
+    expect(
+      splineObjectFromPoints('fit', [...placed, at(500, 0), at(502, 1)], false)
     ).toBeNull();
   });
 });
