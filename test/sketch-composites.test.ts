@@ -320,19 +320,23 @@ describe('S04 composite drawing on the pinned kernel', () => {
     ).toEqual(['perpendicular', 'parallel', 'parallel']);
     // Rotation as well as position and size: five.
     expectShapeFreedom(await fixture.solve(), 5);
-    // A third point on the clockwise side still walks counter-clockwise
-    // from the first click.
+    // A third point on the clockwise side still walks counter-clockwise,
+    // and side 0 is still the picked side: width 10 along it, height 4.
     const below = threePointRectangleShape(
       { x: 0, y: 0 },
       { x: 10, y: 0 },
       { x: 3, y: -4 }
     );
     expect(isCompositeShape(below) && below.corners).toEqual([
+      { x: 10, y: 0 },
       { x: 0, y: 0 },
       { x: 0, y: -4 },
-      { x: 10, y: -4 },
-      { x: 10, y: 0 }
+      { x: 10, y: -4 }
     ]);
+    expect(isCompositeShape(below) && rectangleSize(below.corners)).toEqual({
+      width: 10,
+      height: 4
+    });
     // Resizing keeps the rotation and corner 0.
     await resize(
       fixture,
@@ -391,6 +395,74 @@ describe('S04 composite drawing on the pinned kernel', () => {
       expectShapeFreedom(await fixture.solve(), 4);
     }
   );
+
+  it('stops naming a loop a rectangle or polygon once its shape no longer holds', () => {
+    const rectangle = draw(
+      cornerRectangleShape({ x: 0, y: 0 }, { x: 20, y: 12 })
+    );
+    const composite = rectangle.sketch().composites![0]!;
+    const moved = (
+      objects: Map<string, SketchObjectData>,
+      changes: Record<
+        string,
+        Partial<Record<'x1' | 'y1' | 'x2' | 'y2', number>>
+      >
+    ) =>
+      new Map(
+        [...objects].map(([id, data]) => [
+          id,
+          { ...data, ...(changes[id] ?? {}) }
+        ])
+      );
+    const [, s1, s2] = composite.edgeIds;
+    // Corner 2 pulled off square: still a closed loop, no longer a rectangle.
+    const skewed = resolveSketchComposite(
+      composite,
+      moved(rectangle.objects(), { [s1!]: { x2: 25 }, [s2!]: { x1: 25 } }),
+      resolve
+    );
+    expect(skewed).toEqual({
+      status: 'broken',
+      reason: expect.stringContaining('no longer square') as unknown
+    });
+    // Rotated as a whole: square, but a corner rectangle is axis-aligned.
+    const turn = (x: number, y: number) => ({ x: -y, y: x });
+    const rotated = new Map(
+      [...rectangle.objects()].map(([id, data]) => {
+        const line = data as Extract<SketchObjectData, { objectKind: 'line' }>;
+        const a = turn(Number(line.x1), Number(line.y1));
+        const b = turn(Number(line.x2), Number(line.y2));
+        return [id, { ...line, x1: a.x, y1: a.y, x2: b.x, y2: b.y }];
+      })
+    );
+    expect(resolveSketchComposite(composite, rotated, resolve)).toMatchObject({
+      status: 'broken',
+      reason: 'The rectangle is no longer axis-aligned.'
+    });
+
+    const polygon = draw(
+      inscribedPolygonShape({ x: 0, y: 0 }, { x: 10, y: 0 }, 4)
+    );
+    const square = polygon.sketch().composites![0]!;
+    const [p0, p1] = square.edgeIds as [EntityId, EntityId];
+    // One vertex pushed outward: sides unequal, off the circumcircle.
+    const pushed = moved(polygon.objects(), {
+      [p0]: { x2: 0, y2: 12 },
+      [p1]: { x1: 0, y1: 12 }
+    });
+    expect(resolveSketchComposite(square, pushed, resolve)).toMatchObject({
+      status: 'broken',
+      reason: 'The polygon’s sides are no longer equal.'
+    });
+    const withoutCircle = new Map(polygon.objects());
+    withoutCircle.delete(square.helperIds![0]!);
+    expect(
+      resolveSketchComposite(square, withoutCircle, resolve)
+    ).toMatchObject({
+      status: 'broken',
+      reason: 'The polygon’s circumcircle is missing.'
+    });
+  });
 
   it('replays, reloads and undoes as one object with the same identities', () => {
     const fixture = draw(

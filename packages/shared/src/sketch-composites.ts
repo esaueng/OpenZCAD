@@ -168,5 +168,78 @@ export function resolveSketchComposite(
     x: corners.reduce((sum, corner) => sum + corner.x, 0) / corners.length,
     y: corners.reduce((sum, corner) => sum + corner.y, 0) / corners.length
   };
-  return { status: 'resolved', corners, center };
+  const lapse = shapeLapse(composite, corners, center, objects, resolve);
+  return lapse
+    ? { status: 'broken', reason: lapse }
+    : { status: 'resolved', corners, center };
+}
+
+/**
+ * Why the closed loop is no longer the shape its record names, or null.
+ * Closure alone is not enough: with its relations deleted, a rectangle can
+ * be dragged into any quadrilateral and a polygon into any loop, and a card
+ * that resizes it as a rectangle or by circumradius would misdescribe it.
+ * Tolerances are relative to the shape's size.
+ */
+function shapeLapse(
+  composite: SketchComposite,
+  corners: SketchCompositePoint[],
+  center: SketchCompositePoint,
+  objects: ReadonlyMap<string, SketchObjectData>,
+  resolve: (value: ParamValue) => number | undefined
+): string | null {
+  const count = corners.length;
+  const sides = corners.map((corner, index) => {
+    const next = corners[(index + 1) % count]!;
+    return { x: next.x - corner.x, y: next.y - corner.y };
+  });
+  const lengths = sides.map((side) => Math.hypot(side.x, side.y));
+  const scale = Math.max(...lengths);
+  const slack = Math.max(scale * 1e-6, 1e-9);
+  const kind = composite.compositeKind;
+  if (lengths.some((length) => length <= slack)) {
+    return `A side of the ${kind} has collapsed.`;
+  }
+  if (kind === 'rectangle') {
+    for (let index = 0; index < count; index += 1) {
+      const a = sides[index]!;
+      const b = sides[(index + 1) % count]!;
+      if (
+        Math.abs(a.x * b.x + a.y * b.y) / lengths[(index + 1) % count]! >
+        slack
+      ) {
+        return `The rectangle's corner ${((index + 1) % count) + 1} is no longer square.`;
+      }
+    }
+    if (
+      composite.method !== 'three-point' &&
+      (Math.abs(sides[0]!.y) > slack || Math.abs(sides[1]!.x) > slack)
+    ) {
+      return 'The rectangle is no longer axis-aligned.';
+    }
+    return null;
+  }
+  if (lengths.some((length) => Math.abs(length - lengths[0]!) > slack)) {
+    return 'The polygon’s sides are no longer equal.';
+  }
+  const circle = objects.get(composite.helperIds?.[0] ?? '');
+  if (circle?.objectKind !== 'circle') {
+    return 'The polygon’s circumcircle is missing.';
+  }
+  const [cx, cy, radius] = [circle.centerX, circle.centerY, circle.radius].map(
+    resolve
+  );
+  if (
+    cx === undefined ||
+    cy === undefined ||
+    radius === undefined ||
+    Math.hypot(cx - center.x, cy - center.y) > slack ||
+    corners.some(
+      (corner) =>
+        Math.abs(Math.hypot(corner.x - cx, corner.y - cy) - radius) > slack
+    )
+  ) {
+    return 'The polygon’s vertices are no longer on its circumcircle.';
+  }
+  return null;
 }

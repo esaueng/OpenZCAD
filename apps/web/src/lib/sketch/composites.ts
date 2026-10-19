@@ -129,10 +129,12 @@ export function threePointRectangleShape(
   const offset = { x: -u.y * height, y: u.x * height };
   const far = { x: second.x + offset.x, y: second.y + offset.y };
   const near = { x: first.x + offset.x, y: first.y + offset.y };
-  // Corner 0 is always the first click; the walk turns left so the corners
-  // stay counter-clockwise whichever side the third point fell on.
+  // Side 0 is always the picked side, so the card's Width is its length and
+  // Height the third point's distance. The walk stays counter-clockwise, so
+  // when the third point falls on the clockwise side the picked side runs
+  // second click to first and corner 0 is the second click.
   const corners =
-    height > 0 ? [first, second, far, near] : [first, near, far, second];
+    height > 0 ? [first, second, far, near] : [second, first, near, far];
   return {
     composite: { compositeKind: 'rectangle', method: 'three-point' },
     corners: corners.map((corner) => ({ x: corner.x, y: corner.y }))

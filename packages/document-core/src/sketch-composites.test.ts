@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toEntityId,
   toUserId,
   type EntityId,
@@ -261,8 +262,9 @@ describe('S04 composite records', () => {
 
   it('refuses a document from a newer schema', () => {
     const { document } = square();
+    const newer = PROJECT_DOCUMENT_SCHEMA_VERSION + 1;
     expect(() =>
-      normalizeDocument({ ...document, schemaVersion: 23 as never })
-    ).toThrow('Unsupported project schema (v23)');
+      normalizeDocument({ ...document, schemaVersion: newer as never })
+    ).toThrow(`Unsupported project schema (v${newer})`);
   });
 });
