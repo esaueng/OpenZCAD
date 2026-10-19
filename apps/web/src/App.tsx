@@ -7647,8 +7647,12 @@ export function App() {
     if (mode !== workspaceModeRef.current)
       trackUsage(mode === 'build' ? 'workflow_model' : 'workflow_setup');
     if (mode === 'view' || mode === 'tweak' || mode === 'drawing') {
-      // The sheet covers the viewport, so nothing can be measured there.
-      if (mode === 'drawing') setMeasuring(false);
+      // The sheet covers the viewport, so nothing can be measured there, and
+      // a measurement selected before would stay a hidden Delete target.
+      if (mode === 'drawing') {
+        setMeasuring(false);
+        setActiveMeasurementId(null);
+      }
       cancelDirectManipulationRef.current?.();
       cylinderRadiusPreview.clear();
       edgePreview.clear();

@@ -207,6 +207,27 @@ describe('DrawingWorkspace', () => {
     }
   });
 
+  it('keeps the keys it handles from the workspace shortcuts', async () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const { onCommand } = setup({ sheet: starter(fingerprint) });
+    const reached = vi.fn();
+    window.addEventListener('keydown', reached);
+    try {
+      await userEvent.click(screen.getByRole('button', { name: 'Front view' }));
+      screen.getByRole('application', { name: 'Sheet Sheet 1' }).focus();
+      await userEvent.keyboard('{ArrowRight}{Delete}');
+      expect(onCommand.mock.calls.map(([command]) => command.kind)).toEqual([
+        'drawing.view.update',
+        'drawing.view.delete'
+      ]);
+      expect(reached).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', reached);
+    }
+  });
+
   it('waits, rather than drawing or exporting, while the model rebuilds', () => {
     // The completed geometry still matches the sheet, but the document has
     // moved on: it is not the model to draw or export.

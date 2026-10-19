@@ -570,14 +570,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       ArrowDown: [0, -step]
     };
     const move = delta[event.key];
+    // Keys the sheet handles stop here: the workspace's window shortcuts
+    // (Delete removes a selected measurement, arrows nudge the model) must
+    // not act on the same press.
     if (move) {
       event.preventDefault();
+      event.stopPropagation();
       moveView(selectedView.viewId, {
         x: selectedView.centerMm.x + move[0],
         y: selectedView.centerMm.y + move[1]
       });
     } else if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault();
+      event.stopPropagation();
       if (
         run(
           commandFactories.deleteDrawingView({
