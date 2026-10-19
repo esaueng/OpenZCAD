@@ -2,10 +2,9 @@ name: ci
 
 on:
   pull_request:
-    # `labeled`/`unlabeled` re-run the kernel-bump guard when the
-    # `kernel-bump` label is applied or removed, without needing a push. Any
-    # other label is skipped below and gets its own concurrency group, so it
-    # neither restarts the suite nor cancels the run already in progress.
+    # Label events re-run the kernel-bump guard without needing a push.
+    # Keep the reusable caller running: skipping it replaces the latest
+    # check suite without publishing its required validate/e2e contexts.
     types: [opened, synchronize, reopened, labeled, unlabeled]
   merge_group:
     types: [checks_requested]
@@ -13,7 +12,7 @@ on:
 
 concurrency:
   # Non-PR runs must not replace a pending merge-group verdict.
-  group: ci-${{ github.event_name == 'pull_request' && (github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'kernel-bump') && github.ref || github.run_id }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -21,9 +20,6 @@ permissions:
 
 jobs:
   checks:
-    # A skipped caller reports only `checks`, never the required
-    # `checks / validate` and `checks / e2e`, so the PR keeps its last verdict.
-    if: github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'kernel-bump'
     permissions:
       contents: read
     uses: esaueng/OpenZCAD/.github/workflows/fleet-ci.yml@f593505b95dfe7f2d8efd67021d703d02b52c2c9

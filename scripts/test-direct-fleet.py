@@ -203,28 +203,20 @@ class DirectFleetTests(unittest.TestCase):
         self.assertIn("wrangler deploy --dry-run", verify)
         self.assertRegex(upload, r"(?m)^    environment: cloudflare-versions$")
 
-    def test_only_kernel_bump_label_events_rerun_or_cancel_ci(self):
+    def test_label_events_keep_required_reusable_checks(self):
         group = re.search(r"^  group: .*?(\$\{\{.+\}\})$", CALLER, re.M)[1]
-        condition = re.search(r"^    if: (.+)$", CALLER.split("\n  checks:\n", 1)[1], re.M)[1]
-        cases = (
-            ({"action": "synchronize"}, True),
-            ({"action": "labeled", "label": {"name": "kernel-bump"}}, True),
-            ({"action": "unlabeled", "label": {"name": "kernel-bump"}}, True),
-            ({"action": "labeled", "label": {"name": "documentation"}}, False),
-            ({"action": "unlabeled", "label": {"name": "documentation"}}, False),
-        )
-        for fields, runs in cases:
-            github = copy.deepcopy(self.github)
-            github["event"].update(fields)
-            with self.subTest(event=fields):
-                self.assertIs(evaluate("${{ " + condition + " }}", github, self.variables), runs)
-                keys = {evaluate(group, dict(github, run_id=run_id), self.variables) for run_id in (201, 202)}
-                # Runs that execute share the PR's group; skipped label runs
-                # get their own so they cannot cancel the run in progress.
-                self.assertEqual(keys, {"refs/pull/7/merge"} if runs else {201, 202})
-        for event in ("merge_group", "workflow_dispatch"):
-            github = dict(self.github, event_name=event, event={})
-            self.assertIs(evaluate("${{ " + condition + " }}", github, self.variables), True)
+        checks = CALLER.split("\n  checks:\n", 1)[1]
+        # Skipping the reusable caller creates a newer check suite without
+        # validate/e2e. GitHub then marks those required contexts Expected,
+        # even when an older run on the same head passed both gates.
+        self.assertNotRegex(checks, r"(?m)^    if:")
+        for action in ("labeled", "unlabeled"):
+            for label in ("kernel-bump", "documentation"):
+                github = copy.deepcopy(self.github)
+                github["event"].update(action=action, label={"name": label})
+                with self.subTest(action=action, label=label):
+                    keys = {evaluate(group, dict(github, run_id=run_id), self.variables) for run_id in (201, 202)}
+                    self.assertEqual(keys, {"refs/pull/7/merge"})
 
     def test_no_hosted_bootstrap_and_guard_before_checkout(self):
         self.assertNotIn("select-runner.yml", TEXT)
