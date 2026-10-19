@@ -3,8 +3,10 @@ name: Commit privacy
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, edited]
+  # PR branches are covered by pull_request_target; repeating the check on
+  # every branch push only queued duplicate runs.
   push:
-    branches: ["**"]
+    branches: [main]
     tags: ["**"]
   merge_group:
 
