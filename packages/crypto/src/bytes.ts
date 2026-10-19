@@ -47,7 +47,21 @@ export function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
 
 const encoder = new TextEncoder();
 
+// A lone UTF-16 surrogate; `TextEncoder` would turn each into U+FFFD.
+const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
+ * UTF-8, refusing ill-formed strings: lone surrogates would all encode as
+ * U+FFFD, so distinct values could share bytes (and a context binding).
+ */
 export function utf8(text: string): Bytes {
+  if (LONE_SURROGATE.test(text)) {
+    throw new E2eeError(
+      'invalid-argument',
+      'Text must be well-formed Unicode (no lone surrogates)'
+    );
+  }
   return encoder.encode(text);
 }
 

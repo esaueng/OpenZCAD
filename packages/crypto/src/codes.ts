@@ -81,16 +81,39 @@ export async function assetDedupeHash(
 
 // --- Key hashes and the codes people compare ------------------------------
 
-function checkPublicKey(raw: Uint8Array, what = 'Public key'): void {
+/**
+ * A raw key people will verify must be a real P-256 point: otherwise a
+ * fingerprint or approval code could vouch for bytes that no import accepts.
+ * WebCrypto checks that the point lies on the curve.
+ */
+async function checkPublicKey(
+  raw: Uint8Array,
+  what = 'Public key'
+): Promise<void> {
+  const refuse = (cause?: unknown): never => {
+    throw new E2eeError(
+      'invalid-argument',
+      `${what} must be a 65-byte uncompressed P-256 point`,
+      cause === undefined ? undefined : { cause }
+    );
+  };
   if (
     !(raw instanceof Uint8Array) ||
     raw.byteLength !== P256_PUBLIC_KEY_BYTES ||
     raw[0] !== 0x04
   ) {
-    throw new E2eeError(
-      'invalid-argument',
-      `${what} must be a 65-byte uncompressed P-256 key`
+    refuse();
+  }
+  try {
+    await subtle().importKey(
+      'raw',
+      asBytes(raw),
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      []
     );
+  } catch (cause) {
+    refuse(cause);
   }
 }
 
@@ -115,7 +138,7 @@ export async function publicKeyHash(
     .bytes(label('v1 public key hash'))
     .u8(keys.length);
   for (const key of keys) {
-    checkPublicKey(key);
+    await checkPublicKey(key);
     writer.bytes(key);
   }
   return sha256(writer.finish());
@@ -257,7 +280,7 @@ async function commitmentFor(
   newDevicePublicKey: Uint8Array,
   nonce: Uint8Array
 ): Promise<Bytes> {
-  checkPublicKey(newDevicePublicKey, 'New device key');
+  await checkPublicKey(newDevicePublicKey, 'New device key');
   checkNonce(nonce, 'New device nonce');
   return sha256(
     new ByteWriter()
@@ -309,8 +332,8 @@ export interface DeviceApprovalCodeInput {
 export async function deviceApprovalCode(
   input: DeviceApprovalCodeInput
 ): Promise<string> {
-  checkPublicKey(input.newDevicePublicKey, 'New device key');
-  checkPublicKey(input.approverPublicKey, 'Approver key');
+  await checkPublicKey(input.newDevicePublicKey, 'New device key');
+  await checkPublicKey(input.approverPublicKey, 'Approver key');
   checkNonce(input.newDeviceNonce, 'New device nonce');
   checkNonce(input.approverNonce, 'Approver nonce');
   const digest = await sha256(

@@ -415,6 +415,22 @@ describe('codes people compare', () => {
     expect(Math.log2(10) * code.replace(/ /g, '').length).toBeGreaterThan(128);
     await rejectsWith(publicKeyHash(enc.subarray(1)), 'invalid-argument');
     await rejectsWith(publicKeyHash([]), 'invalid-argument');
+    // Right shape, but not a point on the curve: nothing could import it,
+    // so nothing may fingerprint or approve it either.
+    const offCurve = new Uint8Array(enc);
+    offCurve[64]! ^= 0x01;
+    await rejectsWith(publicKeyHash(offCurve), 'invalid-argument');
+    await rejectsWith(publicKeyHash([offCurve, sig]), 'invalid-argument');
+    await rejectsWith(commitDeviceApproval(offCurve), 'invalid-argument');
+    await rejectsWith(
+      deviceApprovalCode({
+        newDevicePublicKey: enc,
+        approverPublicKey: offCurve,
+        newDeviceNonce: createApprovalNonce(),
+        approverNonce: createApprovalNonce()
+      }),
+      'invalid-argument'
+    );
     expect(() => formatComparisonCode(identity.subarray(0, 16))).toThrow(
       E2eeError
     );

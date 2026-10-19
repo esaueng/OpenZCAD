@@ -365,6 +365,31 @@ describe('symmetric key wrapping', () => {
     );
   });
 
+  it('refuses context strings that are not well-formed Unicode', async () => {
+    // TextEncoder maps every lone surrogate to U+FFFD, so these two ids
+    // would otherwise encode to the same context and open each other's wraps.
+    for (const userId of ['\uD800', '\uD801', 'a\uDC00b']) {
+      await rejectsWith(
+        wrapKey(PROJECT_KEY, BLOB_KEY, {
+          purpose: 'project-key',
+          userId,
+          projectId: 'p',
+          keyEpoch: 1
+        }),
+        'invalid-argument'
+      );
+    }
+    // A properly paired surrogate (an emoji) is fine.
+    const context: WrapContext = {
+      purpose: 'project-key',
+      userId: 'user-\uD83D\uDE00',
+      projectId: 'p',
+      keyEpoch: 1
+    };
+    const wrapped = await wrapKey(PROJECT_KEY, BLOB_KEY, context);
+    expect(await unwrapKey(PROJECT_KEY, wrapped, context)).toEqual(BLOB_KEY);
+  });
+
   it('encodes contexts canonically regardless of property order', () => {
     const reordered = {
       versionId: '7',
