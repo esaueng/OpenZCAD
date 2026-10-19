@@ -230,8 +230,12 @@ keys and a copy of the old wraps. Rotation protects what comes after.
     refuse its signatures on anything later than the revocation;
   - rotates the account key and the encryption key pair, certifying the new
     encryption key in the same entry;
-  - starts a new epoch on every project the user owns and prompts the owners
-    of shared projects to start one on theirs;
+  - starts a new epoch on every project the user belongs to, owned or
+    shared, before the removal completes (see
+    [Epoch rotation](#epoch-rotation)). The removed device cannot unwrap the
+    new project keys, because they go only to the new encryption key. If the
+    browser goes offline part-way, other members' browsers finish the job
+    before their next write;
   - lists any roster changes and versions the removed device signed since it
     was last seen in normal use, so the owner can review and undo them.
 
@@ -375,6 +379,30 @@ merged versions written after a room conflict. ADR-019's server-side role
 enforcement stays as defense in depth, and as the only enforcement on
 plaintext projects.
 
+### Epoch rotation
+
+A new project-key epoch is an entry in the roster chain that carries no
+content. It holds the new project key wrapped to the current certified
+encryption key of every member the roster lists. It is signed by a device key
+of the member who started it. Any member may start one, not only the owner,
+so a project never waits for an offline owner. Membership itself stays
+owner-only: an epoch entry cannot add, drop or change anyone. Each browser
+checks that its own wrap is present and that the wrapped set matches the
+roster. An entry that leaves someone out is reported as an attack on
+availability; it gives the starter no extra access.
+
+Writers enforce the rotation. Before writing, a browser checks the device
+lists of every roster member. If any member has revoked a device, or replaced
+an encryption key, after the current epoch began, the browser starts a new
+epoch first and writes under it. Readers refuse a version that still uses the
+older epoch when its parent comes after a revocation they have seen.
+Versions written before the revocation stay valid. So once any member's browser
+has seen a revocation, no later content is written to keys the removed device
+can open. The remaining gap is the one under
+[Version integrity](#version-integrity): a server that hides a revocation from
+everyone except the revoking browser can delay its effect on members it keeps
+apart. The revoking browser itself always rotates first.
+
 ### Plaintext metadata
 
 The server still sees account emails and display names, member lists and
@@ -416,7 +444,7 @@ Estimates are judgment, not measurement.
 | 2     | Crypto core package: envelope v1 with algorithm versioning, project envelopes and project-free content blobs, STREAM chunk nonces with one key per envelope, AES-256-GCM, HKDF, ECDH wrapping, authenticated-data binding, chunked blobs that detect truncation, fixed test vectors and a fuzzed envelope parser.                                                                                                                                                                                                    | 1 PR         |
 | 3     | Keys and devices: identity keys, device lists and certified device signing keys, D1 key tables, setup with a required recovery key, passkey unlock, device approval by QR scan or commitment-based code comparison, desktop Keychain storage and an Encryption section in Settings with identity-key certification of devices, device removal and recovery-key replacement with the rotations they require, and the sign-out choice. Setup screens load lazily (entry budget). Playwright fixtures seed device keys. | 4–5 PRs      |
 | 4     | Encrypted projects, opt-in per account: documents, revisions, assets, names, thumbnails, measurements, view state and archived exports; the room relay; version-integrity checks. Each project records a format version so older builds say "update to open". Breaking storage and API change.                                                                                                                                                                                                                       | 2–3 PRs      |
-| 5     | Sharing: owner-signed invitations, member key wraps, share links with fragment keys, the owner-signed roster with client-side role checks, new epochs on removal, seen and verified key pins, fingerprints, and the project state code.                                                                                                                                                                                                                                                                              | 2–3 PRs      |
+| 5     | Sharing: owner-signed invitations, member key wraps, share links with fragment keys, the owner-signed roster with client-side role checks, new epochs on removal, member-started epoch rotation enforced by writers, seen and verified key pins, fingerprints, and the project state code.                                                                                                                                                                                                                           | 2–3 PRs      |
 | 6     | Assistant consent on encrypted projects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | 1 PR         |
 | 7     | Migrate existing projects: each owner's browser encrypts every revision and asset, then the server deletes the plaintext, including legacy `document_json` rows and the room's retained history. Beta-only reverse path for turning encryption off. Needs its own production authorization.                                                                                                                                                                                                                          | 1–2 PRs      |
 | 8     | Default on; delete the server document pipeline and the off switch; keep a browser read path for legacy plaintext projects; update `docs/SELF_HOSTING.md`; outside review of the crypto and key flows.                                                                                                                                                                                                                                                                                                               | 1 PR, review |
