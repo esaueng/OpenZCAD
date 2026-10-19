@@ -244,6 +244,19 @@ and is then discarded from memory.
   the other methods.
 - **The recovery key:** a random 256-bit code the user must save and confirm
   during setup.
+
+Every unlock method, not only devices, is a public-key target. Each passkey
+and the recovery key has its own random ECDH P-256 key pair. The private half
+is stored wrapped under that method's secret (the passkey's PRF output, or the
+recovery key). The public half is certified in the device list, like a device
+unlock key. The account key is wrapped to each method's certified public half.
+A rotation can therefore re-wrap the new account key to every unlock method
+without knowing any method's secret: a removal authorized with one passkey
+still refreshes the recovery key's and the other passkeys' wraps. Unlocking
+uses the method's secret to open its private half, then the account key.
+The identity key stays wrapped directly under the recovery key and passkeys;
+it does not rotate on device removal.
+
 - **Approval from an unlocked device.** A short code computed from the new
   device's public key alone would be grindable: the server sees the real key
   and can generate keys offline until one matches the shortened code. The
@@ -289,9 +302,10 @@ keys and a copy of the old wraps. Rotation protects what comes after.
     device;
   - rotates the account key and the encryption key pair, certifying the new
     encryption key in the same entry. The new account key is wrapped to the
-    certified device unlock key of every surviving device, taken from the
-    newest device list (which this same browser is signing), never from a
-    key the server offers. A surviving device that was offline unwraps the
+    certified public key of every surviving device and of every remaining
+    unlock method (each passkey and the recovery key), taken from the newest
+    device list (which this same browser is signing), never from a key the
+    server offers. A surviving device that was offline unwraps the
     new account key with its own private half the next time it opens.
     Surviving devices need no re-approval, and a removed device gets no wrap;
   - starts a new epoch on every project the user belongs to, owned or
@@ -470,17 +484,32 @@ comparison, which is safe only because of its commitment step.
     list. It names the link id, the identity fingerprints allowed to publish
     snapshots (the owner and current editors), a sequence number and an
     expiry.
+  - That device key must also hold a current **share delegation**: a statement
+    signed directly by the owner's identity key, naming the owner devices
+    allowed to sign share-authority statements, with an expiry of at most 30
+    days. A visitor never has a newer device-list pin, so a server could show
+    an old device list in which a stolen owner device is still certified. The
+    identity-signed expiry is what bounds that device, not the device list.
+    Renewing the delegation needs the identity key, so a passkey touch or the
+    recovery key. The owner's browser asks for it when the owner opens
+    sharing, and in the last week before expiry. Removing an owner device
+    issues a new delegation without it at once, since removal already
+    unlocks the identity key.
   - The visitor's browser checks, in order: the owner hash in the link, the
-    owner's device list, the statement's signature and expiry, then the
-    snapshot author's identity in the statement, and that author's device
-    list certifying the signing device. It accepts the snapshot only if every
+    identity-signed share delegation and its expiry, that the statement's
+    signing device is named in it, the statement's signature and expiry,
+    then the snapshot author's identity in the statement, and that author's
+    device list certifying the signing device. It accepts the snapshot only if every
     step holds.
   - Any of the owner's devices renews the statement while it is online, and
     issues a new one at once when an editor is removed or the link revoked.
-  - A former editor can therefore publish snapshots that visitors accept only
-    until the statement they were listed in expires (seven days by default).
-    After the expiry, visitors see that the owner has not recently confirmed
-    the link. Those limits are inherent to anonymous access. "Make a copy" decrypts in the visitor's browser and saves under
+  - Two bounds follow. A former editor can publish snapshots that visitors
+    accept only until the statement they were listed in expires (seven days
+    by default). A stolen, removed owner device can sign statements that
+    visitors accept only until the last delegation naming it expires (at most
+    30 days). After either expiry, visitors see that the owner has not
+    recently confirmed the link. These limits are inherent to anonymous
+    access. "Make a copy" decrypts in the visitor's browser and saves under
     the visitor's keys, or locally.
 - **Share-link revocation is project state, not a server deletion.** A
   compromised server could keep the snapshot and the wrapped share key, and
