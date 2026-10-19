@@ -377,6 +377,95 @@ export function midDatumPlane(
   return reverseNormal ? flipped(frame) : frame;
 }
 
+function requirePoint(point: DatumVector, role: string): void {
+  if (![point.x, point.y, point.z].every(Number.isFinite)) {
+    throw new Error(`The ${role} point is not a finite position.`);
+  }
+}
+
+const POINT_ROLES = ['first', 'second', 'third'] as const;
+
+/**
+ * The plane through three points: the origin is the first, u points at the
+ * second, and the normal follows the right-hand rule (first → second →
+ * third), so counter-clockwise points seen from above give +Z. Two points
+ * closer than the linear tolerance, or a third point within it of the line
+ * through the other two, are refused; no plane is guessed.
+ */
+export function threePointDatumPlane(
+  first: DatumVector,
+  second: DatumVector,
+  third: DatumVector,
+  reverseNormal = false
+): PlaneBasis {
+  const points = [first, second, third];
+  points.forEach((point, index) => requirePoint(point, POINT_ROLES[index]!));
+  // Scaled by the triangle, not its distance from the origin, so moving the
+  // same points elsewhere neither refuses nor accepts them; floored at the
+  // rounding noise the coordinates themselves carry far from the origin.
+  const span = Math.max(
+    datumLength(datumSub(second, first)),
+    datumLength(datumSub(third, first)),
+    datumLength(datumSub(third, second))
+  );
+  const magnitude = Math.max(...points.map((point) => datumLength(point)));
+  const tolerance = Math.max(
+    geometryTolerance(span),
+    magnitude * 8 * Number.EPSILON
+  );
+  for (const [a, b] of [
+    [0, 1],
+    [0, 2],
+    [1, 2]
+  ] as const) {
+    if (datumLength(datumSub(points[b]!, points[a]!)) <= tolerance) {
+      throw new Error(
+        `A three-point plane needs three separate points; the ${POINT_ROLES[a]} and ${POINT_ROLES[b]} coincide.`
+      );
+    }
+  }
+  const along = datumSub(second, first);
+  const across = datumSub(third, first);
+  const normal = datumCross(along, across);
+  // The third point's distance from the line through the first two.
+  if (datumLength(normal) / datumLength(along) <= tolerance) {
+    throw new Error(
+      'A three-point plane needs points that are not in a line; these are collinear.'
+    );
+  }
+  const unitNormal = datumScale(normal, 1 / datumLength(normal));
+  const u = datumScale(along, 1 / datumLength(along));
+  const frame: PlaneBasis = {
+    origin: first,
+    u,
+    v: datumCross(unitNormal, u),
+    normal: unitNormal
+  };
+  return reverseNormal ? flipped(frame) : frame;
+}
+
+/**
+ * The plane parallel to `source` through `point`, keeping the source's axes
+ * and normal: the source slid along its normal until it meets the point,
+ * with the origin on the point. A point already on the source gives the
+ * source plane itself, which is valid (as a zero offset is).
+ */
+export function parallelDatumPlane(
+  source: PlaneBasis,
+  point: DatumVector,
+  reverseNormal = false
+): PlaneBasis {
+  requireFrame(source, 'source');
+  requirePoint(point, 'through');
+  const frame: PlaneBasis = {
+    origin: point,
+    u: source.u,
+    v: source.v,
+    normal: source.normal
+  };
+  return reverseNormal ? flipped(frame) : frame;
+}
+
 /**
  * Resolves a sketch plane reference to a concrete basis. This is the single
  * shared resolution path — the kernel adapter and the viewport must agree on

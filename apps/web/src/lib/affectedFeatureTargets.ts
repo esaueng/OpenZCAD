@@ -1,5 +1,7 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
 import {
+  datumPlaneSources,
+  datumPointSources,
   isDatumPlaneRef,
   isFeatureSuppressed,
   type DatumPlaneSource,
@@ -162,11 +164,14 @@ export function affectedFeatureTargets(
       }
       case 'datum-plane': {
         const { definition } = data;
-        const sources =
-          definition.kind === 'offset'
-            ? [definition.source]
-            : definition.sources;
-        if (sources.some(planeAffected)) affectedDatums.add(feature.featureId);
+        if (
+          datumPlaneSources(definition).some(planeAffected) ||
+          datumPointSources(definition).some(
+            (point) =>
+              point.type === 'edge-vertex' && affectedBodies.has(point.bodyId)
+          )
+        )
+          affectedDatums.add(feature.featureId);
         continue;
       }
       case 'extrude':

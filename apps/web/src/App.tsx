@@ -51,6 +51,7 @@ import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
 import type { FaceNamer } from './lib/faceProducerName';
 import {
+  datumPlaneSources,
   documentNodesWithHistory,
   documentTextBudgetError,
   resolveSketchComposite,
@@ -12932,9 +12933,9 @@ export function App() {
     if (handleMeasurementPick(selection, additive, detail)) {
       return;
     }
-    // The Plane card asks for faces: a face click is its next source pick,
-    // not a selection that closes the card it was waiting for.
-    if (tool === 'datum-plane' && selection.kind === 'face') {
+    // The Plane card asks for faces and edge ends: such a click is its next
+    // source pick, not a selection that closes the card it was waiting for.
+    if (tool === 'datum-plane' && selection.kind !== 'body') {
       setSelectedTopology(selection);
       return;
     }
@@ -18717,10 +18718,7 @@ export function App() {
           ? featureAttribution.featureWarnings
           : []
       )
-        ? (feature.data.definition.kind === 'offset'
-            ? [feature.data.definition.source]
-            : feature.data.definition.sources
-          ).flatMap((source, index) => {
+        ? datumPlaneSources(feature.data.definition).flatMap((source, index) => {
             if (source.type !== 'face') return [];
             const slot = index as 0 | 1;
             const midplane =
@@ -22098,6 +22096,7 @@ export function App() {
                 editFeature={modelingEditFeature}
                 scope={parameterScope.scope}
                 selection={selectedTopology}
+                pickPoint={lastPickDetailRef.current?.point ?? null}
                 editDisabledReason={editDisabledReason}
                 exactGeometryReady={exactGeometryReady}
                 app={{

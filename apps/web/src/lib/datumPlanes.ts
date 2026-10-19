@@ -4,11 +4,19 @@ import {
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
-import { newCanonicalPlaneRef } from '@openzcad/geometry';
 import {
+  GEOMETRY_LINEAR_TOLERANCE,
+  newCanonicalPlaneRef
+} from '@openzcad/geometry';
+import {
+  datumPlaneSources,
+  datumSourceBodyIds,
   isFeatureSuppressed,
+  type BodyId,
   type DatumPlaneDefinition,
   type DatumPlaneSource,
+  type DatumPointSource,
+  type EdgeVertexPointSource,
   type FacePlaneSource,
   type FeatureId,
   type FeatureNode,
@@ -41,16 +49,186 @@ export {
 
 export type DatumPlaneMode = DatumPlaneDefinition['kind'];
 
+/**
+ * A point slot as the card holds it: a picked vertex, or a position typed
+ * as three expressions (lengths in document units).
+ */
+export type DatumPointDraft =
+  | { type: 'vertex'; source: EdgeVertexPointSource }
+  | { type: 'typed'; x: string; y: string; z: string };
+
+export type DatumPointDrafts = [
+  DatumPointDraft | null,
+  DatumPointDraft | null,
+  DatumPointDraft | null
+];
+
 export interface DatumPlaneFormState {
   name: string;
   mode: DatumPlaneMode;
-  /** Source A: the offset source, or a midplane's first plane. */
+  /**
+   * Source A: the offset source, a midplane's first plane, or the plane a
+   * parallel plane copies.
+   */
   sourceA: DatumPlaneSource | null;
-  /** A midplane's second plane; ignored by an offset plane. */
+  /** A midplane's second plane; ignored by the other modes. */
   sourceB: DatumPlaneSource | null;
   /** The signed offset as typed: a number, a parameter or an expression. */
   offset: string;
+  /**
+   * The three points of a three-point plane; a parallel plane reads the
+   * first as the point it passes through.
+   */
+  points: DatumPointDrafts;
   reverseNormal: boolean;
+}
+
+/** A vertex the card can offer for a point slot. */
+export interface DatumPointOption {
+  key: string;
+  label: string;
+  source: EdgeVertexPointSource;
+}
+
+const NO_POINTS: DatumPointDrafts = [null, null, null];
+
+/** A stable identity for a vertex source, so a select can hold it. */
+export function datumVertexKey(source: EdgeVertexPointSource): string {
+  const { producingFeatureId, lineageName } = source.edgeReference;
+  return `vertex:${source.bodyId}:${producingFeatureId}:${lineageName}:${source.end}`;
+}
+
+/**
+ * Both ends of an open edge, in the order an edge-vertex source's `end`
+ * names them: the end whose quantized coordinates sort first by x, then y,
+ * then z is end 0 (the exact build reads the same integers). Positions are
+ * the stored quantized witness, good to the 1e-6 quantum, for labels and
+ * nearest-end picks only.
+ */
+export function edgeEnds(
+  witness: EdgeVertexPointSource['edgeReference']['witness']
+):
+  | [{ x: number; y: number; z: number }, { x: number; y: number; z: number }]
+  | null {
+  if (witness.closed) return null;
+  const [a, b] = witness.endpoints;
+  let order = 0;
+  for (let index = 0; index < 3 && order === 0; index += 1)
+    order = Math.sign(a[index]! - b[index]!);
+  const point = ([x, y, z]: [number, number, number]) => ({
+    x: x * GEOMETRY_LINEAR_TOLERANCE,
+    y: y * GEOMETRY_LINEAR_TOLERANCE,
+    z: z * GEOMETRY_LINEAR_TOLERANCE
+  });
+  return order <= 0 ? [point(a), point(b)] : [point(b), point(a)];
+}
+
+function formatPoint(point: { x: number; y: number; z: number }): string {
+  return `(${formatNumber(point.x)}, ${formatNumber(point.y)}, ${formatNumber(point.z)})`;
+}
+
+/**
+ * The vertex source a picked edge gives a point slot: the end nearer the
+ * click (end 0 without one), or a refusal in words for the card. The edge
+ * must be open and carry an identity a rebuild can find again.
+ */
+export function datumVertexFromEdgePick(
+  document: ProjectDocument,
+  selection: { kind: string; bodyId: BodyId; hash?: number },
+  clickPoint: { x: number; y: number; z: number } | null
+): EdgeVertexPointSource | { reason: string } {
+  const edge = document.derived.bodyRepresentations[
+    selection.bodyId
+  ]?.topology?.edges.find((candidate) => candidate.hash === selection.hash);
+  const reference = edge?.reference;
+  if (!reference) {
+    return {
+      reason:
+        'This edge has no identity a rebuild can find again, so a plane cannot pass through its ends.'
+    };
+  }
+  const ends = edgeEnds(reference.witness);
+  if (!ends) {
+    return {
+      reason: 'A closed edge has no end vertex; pick a straight or open edge.'
+    };
+  }
+  const distance = (point: { x: number; y: number; z: number }) =>
+    clickPoint
+      ? Math.hypot(
+          point.x - clickPoint.x,
+          point.y - clickPoint.y,
+          point.z - clickPoint.z
+        )
+      : 0;
+  return {
+    type: 'edge-vertex',
+    bodyId: selection.bodyId,
+    edgeReference: reference,
+    end: distance(ends[1]) < distance(ends[0]) ? 1 : 0
+  };
+}
+
+/** The option for a vertex source, labelled with where it is. */
+export function datumVertexOption(
+  document: ProjectDocument,
+  source: EdgeVertexPointSource,
+  label = 'Vertex'
+): DatumPointOption {
+  const end = edgeEnds(source.edgeReference.witness)?.[source.end];
+  const body = document.derived.bodyRepresentations[source.bodyId]?.name;
+  return {
+    key: datumVertexKey(source),
+    label: `${label}${end ? ` ${formatPoint(end)}` : ''}${body ? ` of ${body}` : ''}`,
+    source
+  };
+}
+
+/** The draft a stored point source reopens as. */
+function pointDraft(source: DatumPointSource): DatumPointDraft {
+  return source.type === 'edge-vertex'
+    ? { type: 'vertex', source }
+    : {
+        type: 'typed',
+        x: String(source.point.x),
+        y: String(source.point.y),
+        z: String(source.point.z)
+      };
+}
+
+/** The point source a draft authors. Validate first. */
+function pointSource(draft: DatumPointDraft): DatumPointSource {
+  return draft.type === 'vertex'
+    ? draft.source
+    : {
+        type: 'point',
+        point: {
+          x: coerceParamValue(draft.x.trim()),
+          y: coerceParamValue(draft.y.trim()),
+          z: coerceParamValue(draft.z.trim())
+        }
+      };
+}
+
+/** What a point is called wherever a datum's definition is described. */
+export function datumPointLabel(
+  document: ProjectDocument,
+  source: DatumPointSource,
+  scope: Record<string, number> = {},
+  units: UnitSystem = document.units
+): string {
+  if (source.type === 'edge-vertex') {
+    const body = document.derived.bodyRepresentations[source.bodyId];
+    return `a vertex of ${body?.name ?? 'a missing body'}`;
+  }
+  const axis = (value: string | number) => {
+    const resolved = evalParamValue(value, scope, {
+      documentUnits: units,
+      dimension: 'length'
+    });
+    return resolved === null ? String(value) : formatNumber(resolved);
+  };
+  return `(${axis(source.point.x)}, ${axis(source.point.y)}, ${axis(source.point.z)})`;
 }
 
 export interface DatumSourceOption {
@@ -156,6 +334,7 @@ export function newDatumPlaneFormState(
     sourceA,
     sourceB: null,
     offset: '10',
+    points: NO_POINTS,
     reverseNormal: false
   };
 }
@@ -168,23 +347,80 @@ export function datumFormStateFromFeature(
     throw new Error(`${feature.name} is not a datum plane.`);
   }
   const { definition } = feature.data;
-  return definition.kind === 'offset'
-    ? {
-        name: feature.name,
-        mode: 'offset',
+  const base: DatumPlaneFormState = {
+    name: feature.name,
+    mode: definition.kind,
+    sourceA: null,
+    sourceB: null,
+    offset: '10',
+    points: NO_POINTS,
+    reverseNormal: definition.reverseNormal === true
+  };
+  switch (definition.kind) {
+    case 'offset':
+      return {
+        ...base,
         sourceA: definition.source,
-        sourceB: null,
-        offset: String(definition.offset),
-        reverseNormal: definition.reverseNormal === true
-      }
-    : {
-        name: feature.name,
-        mode: 'midplane',
-        sourceA: definition.sources[0],
-        sourceB: definition.sources[1],
-        offset: '10',
-        reverseNormal: definition.reverseNormal === true
+        offset: String(definition.offset)
       };
+    case 'midplane':
+      return {
+        ...base,
+        sourceA: definition.sources[0],
+        sourceB: definition.sources[1]
+      };
+    case 'three-point':
+      return {
+        ...base,
+        points: definition.points.map(pointDraft) as DatumPointDrafts
+      };
+    case 'parallel-point':
+      return {
+        ...base,
+        sourceA: definition.source,
+        points: [pointDraft(definition.point), null, null]
+      };
+  }
+}
+
+const POINT_ORDINALS = ['first', 'second', 'third'] as const;
+
+/** Why a point slot cannot be used yet, or null. */
+function pointValidation(
+  draft: DatumPointDraft | null,
+  name: string,
+  scope: Record<string, number>,
+  units?: UnitSystem
+): { kind: 'missing' | 'invalid'; reason: string } | null {
+  if (!draft) {
+    return {
+      kind: 'missing',
+      reason: `Pick an edge end for the ${name} point, or type its position.`
+    };
+  }
+  if (draft.type === 'vertex') return null;
+  for (const axis of ['x', 'y', 'z'] as const) {
+    const preview = previewExpression(
+      draft[axis],
+      scope,
+      units ? { documentUnits: units, dimension: 'length' } : undefined
+    );
+    if (!preview.ok || preview.value === undefined) {
+      return {
+        kind: 'invalid',
+        reason: `The ${name} point's ${axis.toUpperCase()}: ${preview.text === 'required' ? 'enter a position' : preview.text}`
+      };
+    }
+  }
+  return null;
+}
+
+function pointDraftKey(draft: DatumPointDraft | null): string | null {
+  return draft?.type === 'vertex'
+    ? datumVertexKey(draft.source)
+    : draft
+      ? `typed:${draft.x.trim()}:${draft.y.trim()}:${draft.z.trim()}`
+      : null;
 }
 
 /**
@@ -200,14 +436,38 @@ export function datumFormValidation(
   if (!state.name.trim()) {
     return { kind: 'invalid', reason: 'Name the plane.' };
   }
+  if (state.mode === 'three-point') {
+    for (let index = 0; index < 3; index += 1) {
+      const problem = pointValidation(
+        state.points[index]!,
+        POINT_ORDINALS[index]!,
+        scope,
+        units
+      );
+      if (problem) return problem;
+    }
+    const keys = state.points.map(pointDraftKey);
+    if (new Set(keys).size < 3) {
+      return {
+        kind: 'invalid',
+        reason: 'A three-point plane needs three different points.'
+      };
+    }
+    return null;
+  }
   if (!state.sourceA) {
     return {
       kind: 'missing',
       reason:
         state.mode === 'offset'
           ? 'Choose the plane or face to offset from.'
-          : 'Choose plane A.'
+          : state.mode === 'parallel-point'
+            ? 'Choose the plane or face to run parallel to.'
+            : 'Choose plane A.'
     };
+  }
+  if (state.mode === 'parallel-point') {
+    return pointValidation(state.points[0], 'through', scope, units);
   }
   if (state.mode === 'midplane') {
     if (!state.sourceB) return { kind: 'missing', reason: 'Choose plane B.' };
@@ -240,8 +500,30 @@ export function datumFormValidation(
 export function buildDatumPlaneDefinition(
   state: DatumPlaneFormState
 ): DatumPlaneDefinition {
-  if (!state.sourceA) throw new Error('A datum plane needs a source.');
   const reverse = state.reverseNormal ? { reverseNormal: true } : {};
+  if (state.mode === 'three-point') {
+    if (state.points.some((point) => !point))
+      throw new Error('A three-point plane needs three points.');
+    return {
+      kind: 'three-point',
+      points: state.points.map((point) => pointSource(point!)) as [
+        DatumPointSource,
+        DatumPointSource,
+        DatumPointSource
+      ],
+      ...reverse
+    };
+  }
+  if (!state.sourceA) throw new Error('A datum plane needs a source.');
+  if (state.mode === 'parallel-point') {
+    if (!state.points[0]) throw new Error('A parallel plane needs a point.');
+    return {
+      kind: 'parallel-point',
+      source: state.sourceA,
+      point: pointSource(state.points[0]),
+      ...reverse
+    };
+  }
   if (state.mode === 'offset') {
     return {
       kind: 'offset',
@@ -271,6 +553,15 @@ export function datumPlaneDescription(
   if (feature.data.featureKind !== 'datum-plane') return null;
   const { definition } = feature.data;
   const flipped = definition.reverseNormal ? ', flipped' : '';
+  if (definition.kind === 'three-point') {
+    const [a, b, c] = definition.points.map((point) =>
+      datumPointLabel(document, point, scope, units)
+    );
+    return `Through ${a}, ${b} and ${c}${flipped}`;
+  }
+  if (definition.kind === 'parallel-point') {
+    return `Parallel to ${datumSourceLabel(document, definition.source)} through ${datumPointLabel(document, definition.point, scope, units)}${flipped}`;
+  }
   if (definition.kind === 'midplane') {
     const [a, b] = definition.sources;
     return `Midway between ${datumSourceLabel(document, a)} and ${datumSourceLabel(document, b)}${flipped}`;
@@ -418,14 +709,12 @@ export function downstreamDatumIds(
     }
     if (!after || feature.data.featureKind !== 'datum-plane') continue;
     const { definition } = feature.data;
-    const sources =
-      definition.kind === 'offset' ? [definition.source] : definition.sources;
     if (
-      sources.some((source) =>
-        source.type === 'datum'
-          ? affected.has(source.datumFeatureId)
-          : source.type === 'face' && affected.has(source.bodyId)
-      )
+      datumPlaneSources(definition).some(
+        (source) =>
+          source.type === 'datum' && affected.has(source.datumFeatureId)
+      ) ||
+      datumSourceBodyIds(definition).some((bodyId) => affected.has(bodyId))
     ) {
       affected.add(feature.featureId);
       downstream.push(feature.featureId);
@@ -513,7 +802,8 @@ export function datumFaceRepairEdit(
   );
   if (
     feature?.data.featureKind !== 'datum-plane' ||
-    (feature.data.definition.kind === 'offset' &&
+    feature.data.definition.kind === 'three-point' ||
+    (feature.data.definition.kind !== 'midplane' &&
       (slot !== 0 || otherSelection !== undefined))
   ) {
     throw new Error('Only a datum plane source can be re-picked here.');
@@ -525,7 +815,7 @@ export function datumFaceRepairEdit(
   const label = `Re-pick face for ${feature.name}`;
   const { definition } = feature.data;
   const repaired: DatumPlaneDefinition =
-    definition.kind === 'offset'
+    definition.kind !== 'midplane'
       ? { ...definition, source }
       : {
           ...definition,
