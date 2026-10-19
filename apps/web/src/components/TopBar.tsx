@@ -107,6 +107,8 @@ interface TopBarProps {
   onExportStep(): void;
   /** Opens the mesh export dialog (3MF / STL with quality control). */
   onOpenMeshExport(): void;
+  /** Opens the image export dialog (view PNG / sketch SVG). */
+  onOpenImageExport?(): void;
   onArchiveLocalSources(): void;
   onExportDiagnostics(): void;
   onExportInteractionLog(): void;
@@ -154,6 +156,7 @@ export function TopBar({
   onDownloadArtifact,
   onExportStep,
   onOpenMeshExport,
+  onOpenImageExport,
   onArchiveLocalSources,
   onExportDiagnostics,
   onExportInteractionLog,
@@ -260,6 +263,11 @@ export function TopBar({
   function openMeshExportFromMenu() {
     closeFileMenuForDialog();
     onOpenMeshExport();
+  }
+
+  function openImageExportFromMenu() {
+    closeFileMenuForDialog();
+    onOpenImageExport?.();
   }
 
   function beginProjectRename() {
@@ -693,6 +701,19 @@ export function TopBar({
                 <span>Export mesh…</span>
                 <small>3MF · STL · OBJ · glTF · PLY</small>
               </button>
+              {onOpenImageExport && (
+                <button
+                  type="button"
+                  className="topbar-menu-item"
+                  disabled={!projectName}
+                  title="Export the current view as a PNG, or a sketch as an exact SVG"
+                  onClick={openImageExportFromMenu}
+                >
+                  <Download size={13} aria-hidden="true" />
+                  <span>Export image…</span>
+                  <small>PNG view · SVG sketch</small>
+                </button>
+              )}
               {onExportProject && (
                 <button
                   type="button"

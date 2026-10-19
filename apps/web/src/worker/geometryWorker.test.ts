@@ -1454,6 +1454,47 @@ describe('geometry worker rebuild coordination', () => {
     expect(exportFaceDxf).not.toHaveBeenCalled();
   });
 
+  it('routes an SVG export to the sketch SVG exporter with its background', async () => {
+    const exportSketchSvg = vi.fn(async () => '<svg/>');
+    const exportSketchDxf = vi.fn(async () => 'dxf');
+    const { scope } = await installWorker(async () => derived('unused'), {
+      exportSketchSvg,
+      exportSketchDxf
+    });
+    const root = createProjectDocument('Sketch SVG', toUserId('user'));
+    const { document, sketchId } = addSketchFeature(root, {
+      name: 'Sketch',
+      plane: 'XY',
+      offset: 0,
+      object: { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }
+    });
+    post(scope, {
+      type: 'export',
+      requestId: 'svg-sketch-1',
+      document,
+      bodyIds: [],
+      format: 'svg',
+      sketchId,
+      transparent: false
+    });
+
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'export',
+          ok: true,
+          format: 'svg',
+          requestId: 'svg-sketch-1',
+          text: '<svg/>'
+        })
+      )
+    );
+    expect(exportSketchSvg).toHaveBeenCalledWith(document, sketchId, {
+      transparent: false
+    });
+    expect(exportSketchDxf).not.toHaveBeenCalled();
+  });
+
   it('drops a sync cancelled while running without reporting a failure', async () => {
     const gate = deferred<void>();
     const syncDocument = vi.fn(async () => {
