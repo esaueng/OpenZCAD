@@ -20,6 +20,7 @@ import {
 } from './compression';
 import { E2eeError } from './errors';
 import {
+  COMPRESSIONS,
   CONTENT_BLOB_KINDS,
   ENVELOPE_FIXED_PREFIX_BYTES,
   PLAINTEXT_CEILINGS,
@@ -525,6 +526,19 @@ function checkCallerLimit(limit: number | undefined): void {
 }
 
 export function plaintextCap(limits: PayloadLimits): number {
+  // An unknown kind would look up no ceiling, and NaN would then pass every
+  // size comparison: validate every input before computing the cap.
+  if (
+    typeof limits?.kind !== 'string' ||
+    !Object.hasOwn(PLAINTEXT_CEILINGS, limits.kind) ||
+    !COMPRESSIONS.includes(limits.compression) ||
+    !isUint(limits.declaredLength, Number.MAX_SAFE_INTEGER)
+  ) {
+    throw new E2eeError(
+      'invalid-argument',
+      'Payload limits need a known kind and compression and a whole-byte length'
+    );
+  }
   checkCallerLimit(limits.maxPlaintextBytes);
   const ceiling = Math.min(
     PLAINTEXT_CEILINGS[limits.kind],

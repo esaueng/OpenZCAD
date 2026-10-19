@@ -23,7 +23,8 @@ import {
   envelopeBodyLength,
   envelopeKeyFromBytes,
   parseEnvelope,
-  type ContentBlobReference
+  type ContentBlobReference,
+  type PayloadLimits
 } from './envelope';
 import { E2eeError, type E2eeErrorCode } from './errors';
 import {
@@ -490,6 +491,22 @@ describe('decompression limits', () => {
       ),
       'limit-exceeded'
     );
+  });
+
+  it('decodePayload refuses unknown kinds and malformed limits', async () => {
+    const gz = await gzipBytes(new Uint8Array(1000));
+    for (const limits of [
+      { kind: 'video', compression: 'gzip', declaredLength: 1000 },
+      { kind: 'toString', compression: 'gzip', declaredLength: 1000 },
+      { kind: 'document', compression: 'brotli', declaredLength: 1000 },
+      { kind: 'document', compression: 'gzip', declaredLength: Number.NaN },
+      { kind: 'document', compression: 'gzip', declaredLength: -1 }
+    ]) {
+      await rejectsWith(
+        decodePayload(gz, limits as unknown as PayloadLimits),
+        'invalid-argument'
+      );
+    }
   });
 
   it('decodePayload is the same bounded decode, exposed', async () => {

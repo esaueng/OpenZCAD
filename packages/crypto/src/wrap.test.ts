@@ -251,6 +251,25 @@ describe('symmetric key wrapping', () => {
     );
   });
 
+  it('refuses an HKDF key without deriveKey usage with a typed error', async () => {
+    const bitsOnly = await crypto.subtle.importKey(
+      'raw',
+      patternBytes(32),
+      'HKDF',
+      false,
+      ['deriveBits']
+    );
+    await rejectsWith(
+      wrapKey(bitsOnly, BLOB_KEY, BLOB_CONTEXT),
+      'invalid-argument'
+    );
+    const wrapped = await wrapKey(patternBytes(32), BLOB_KEY, BLOB_CONTEXT);
+    await rejectsWith(
+      unwrapKey(bitsOnly, wrapped, BLOB_CONTEXT),
+      'invalid-argument'
+    );
+  });
+
   it('validates contexts and key lengths', async () => {
     const bad: unknown[] = [
       { purpose: 'version-key', projectId: 'p', keyEpoch: 1, kind: 'document' },

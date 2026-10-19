@@ -57,8 +57,16 @@ export async function hkdfBaseKey(
       'deriveBits'
     ]);
   }
-  if (material.algorithm.name !== 'HKDF') {
-    throw new E2eeError('invalid-argument', `${what} must be an HKDF key`);
+  // Every caller derives keys with `deriveKey`; without that usage
+  // WebCrypto would throw a native error instead of an E2eeError.
+  if (
+    material?.algorithm?.name !== 'HKDF' ||
+    !material.usages.includes('deriveKey')
+  ) {
+    throw new E2eeError(
+      'invalid-argument',
+      `${what} must be an HKDF key with deriveKey usage`
+    );
   }
   return material;
 }
