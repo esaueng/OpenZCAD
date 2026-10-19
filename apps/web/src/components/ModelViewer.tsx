@@ -2509,6 +2509,9 @@ export function ModelViewer({
         center.y + translation.y,
         center.z + translation.z
       );
+      if (E2E_CANVAS_HOOKS_ENABLED) {
+        renderer.domElement.dataset.e2eMoveCopyPreview = String(moveCopyPreview.active);
+      }
     }
 
     let animationFrame: number | null = null;
@@ -10054,14 +10057,13 @@ export function ModelViewer({
       delete context.renderer.domElement.dataset.e2eMoveGizmoY;
     }
     if (!movePreview) {
-      context.moveCopyPreview.clear();
       applyMoveGizmoFocus(context.moveGizmoGroup, null);
       if (moveGizmoHudRef.current) {
         moveGizmoHudRef.current.hidden = true;
       }
       if (moveCommitHold) {
-        // Committed move, rebuild in flight: keep the (still old) mesh posed
-        // at the applied transform so it never flashes at the resting pose.
+        // Committed move, rebuild in flight: keep its mesh or temporary copy
+        // at the applied transform until the exact result replaces it.
         const held = bodies.find(
           (candidate) => candidate.bodyId === moveCommitHold.bodyId
         );
@@ -10077,6 +10079,10 @@ export function ModelViewer({
           );
         }
         return;
+      }
+      context.moveCopyPreview.clear();
+      if (E2E_CANVAS_HOOKS_ENABLED) {
+        context.renderer.domElement.dataset.e2eMoveCopyPreview = 'false';
       }
       // Cancel without a document change must restore the resting pose.
       for (const object of context.objectsByBodyId.values()) {

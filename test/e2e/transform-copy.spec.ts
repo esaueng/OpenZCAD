@@ -6,6 +6,8 @@ import {
   stubApi
 } from './openzcad-fixtures';
 
+type CopyPublicationGate = { hold: boolean; held: number; release(): void };
+
 /**
  * M10: the Move gizmo card's Copy box adds a moved copy as a body of its
  * own. The source stays live, both show in Items, History has one Copy row,
@@ -118,4 +120,90 @@ test('a coincident copy asks before a tool, history, measure or selection transi
   await ask.getByRole('button', { name: 'Apply', exact: true }).click();
   await expectBodyCount(page, 2);
   await expect(inspector).toBeVisible();
+});
+
+test('keeps the applied copy visible until the exact worker publishes it', async ({
+  page
+}) => {
+  await page.addInitScript(() => {
+    const scope = window as typeof window & {
+      copyPublicationGate: CopyPublicationGate;
+    };
+    const pending: (() => void)[] = [];
+    scope.copyPublicationGate = {
+      hold: false,
+      held: 0,
+      release() {
+        this.hold = false;
+        for (const deliver of pending.splice(0)) deliver();
+      }
+    };
+    const descriptor = Object.getOwnPropertyDescriptor(
+      Worker.prototype,
+      'onmessage'
+    )!;
+    Object.defineProperty(Worker.prototype, 'onmessage', {
+      ...descriptor,
+      set(listener: (event: MessageEvent) => void) {
+        descriptor.set!.call(this, (event: MessageEvent) => {
+          const response = event.data as { type?: string };
+          if (
+            scope.copyPublicationGate.hold &&
+            ['sync', 'projection', 'projection-delta'].includes(
+              response.type ?? ''
+            )
+          ) {
+            scope.copyPublicationGate.held += 1;
+            pending.push(() => listener.call(this, event));
+          } else listener.call(this, event);
+        });
+      }
+    });
+  });
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Copy publication hold');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
+  await page.keyboard.press('m');
+  const overlay = page.getByRole('form', { name: 'Move controls' });
+  await overlay.getByLabel('Move X in mm').fill('40');
+  await overlay
+    .getByRole('checkbox', { name: 'Copy (keep the original)' })
+    .check();
+  await expect(canvas).toHaveAttribute('data-e2e-move-copy-preview', 'true');
+  await page.evaluate(() => {
+    (
+      window as typeof window & { copyPublicationGate: CopyPublicationGate }
+    ).copyPublicationGate.hold = true;
+  });
+  await overlay.getByRole('button', { name: 'Apply copy' }).click();
+  await expect(overlay).toBeHidden();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            window as typeof window & {
+              copyPublicationGate: CopyPublicationGate;
+            }
+          ).copyPublicationGate.held
+      )
+    )
+    .toBeGreaterThan(0);
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
+  await expect(canvas).toHaveAttribute('data-e2e-move-copy-preview', 'true');
+  await page.evaluate(() => {
+    (
+      window as typeof window & { copyPublicationGate: CopyPublicationGate }
+    ).copyPublicationGate.release();
+  });
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2');
+  await expect(canvas).toHaveAttribute('data-e2e-move-copy-preview', 'false');
 });

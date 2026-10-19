@@ -7694,10 +7694,10 @@ export function App() {
           : {})
       })
     );
-    // A copy leaves its source where it was, so nothing holds the pose.
-    if (created && !preview.copy) {
+    if (created) {
       // Hold the gizmo pose on screen until the exact rebuild replaces the
-      // meshes; cleared by onDerived in the same batch as the new geometry.
+      // meshes, including a copy's temporary projection; cleared by onDerived
+      // in the same batch as the new geometry.
       setMoveCommitHold(preview);
     }
     return created;

@@ -6,6 +6,10 @@ export class MoveCopyPreview {
   private source: THREE.Object3D | null = null;
   private copy: THREE.Object3D | null = null;
 
+  get active(): boolean {
+    return !!this.copy?.parent;
+  }
+
   target(
     source: THREE.Object3D,
     copy: boolean,

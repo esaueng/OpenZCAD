@@ -11,6 +11,7 @@ import {
   findFeature,
   listFeaturesInOrder,
   listNodesByKind,
+  normalizeDocument,
   updateFeature
 } from '@openzcad/document-core';
 import {
@@ -353,7 +354,10 @@ describe('transform copy (M10)', { timeout: 60_000 }, () => {
       manager.document.commandLog
     );
     expect(replayed.bodyOrder).toEqual(manager.document.bodyOrder);
-    const { of } = await bodies(replayed);
+    const reopened = normalizeDocument(
+      JSON.parse(JSON.stringify(replayed)) as ProjectDocument
+    );
+    const { of } = await bodies(reopened);
     expect(of(blockId)).toMatchObject({ min: [0, 0, 0], max: [20, 10, 10] });
     expect(of(ids.bodyId)).toMatchObject({
       min: [30, 0, 0],
