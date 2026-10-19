@@ -1,4 +1,7 @@
-import { listFeaturesInOrder } from '@openzcad/document-core';
+import {
+  booleanConsumedBodyIds,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
 import type {
   BodyId,
   FeatureId,
@@ -27,11 +30,13 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
     case 'extrude':
       return data.targetBodyId ? [data.targetBodyId] : [];
     case 'boolean':
-      return [...data.targetBodyIds];
+      // M11: a kept input stands on its own, unchanged, and stays exportable.
+      return booleanConsumedBodyIds(data);
     case 'transform':
       // A copy (M10) leaves its source in place, as a Mirror does.
       return data.copy ? [] : [data.targetBodyId];
     case 'split':
+      return data.keepOriginal === true ? [] : [data.targetBodyId];
     case 'hole':
     case 'shell':
     case 'solid-offset':

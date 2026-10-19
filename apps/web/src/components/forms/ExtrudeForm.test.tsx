@@ -245,10 +245,7 @@ describe('through-all extent (F01)', () => {
       />
     );
     expect(screen.queryByLabelText('Extent')).toBeNull();
-    await user.selectOptions(
-      screen.getByLabelText('Extrude operation'),
-      'cut'
-    );
+    await user.selectOptions(screen.getByLabelText('Extrude operation'), 'cut');
     await user.selectOptions(
       await screen.findByLabelText('Extent'),
       'through-all'
@@ -565,4 +562,33 @@ describe('extrusion field unit context', () => {
       expect(onSubmit).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('intersect result intent (ZC-060)', () => {
+  it('needs a target and submits an explicit Intersect with it', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <ExtrudeForm
+        {...base}
+        initial={{ ...initial, distance: 8 }}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />
+    );
+    await user.selectOptions(
+      screen.getByLabelText('Stored extrude operation'),
+      'intersect'
+    );
+    // One body: it is picked for the user, as for Add and Cut.
+    expect(screen.getByLabelText('Extrude target body')).toHaveValue('plate');
+    // Through all stays a cut-only extent.
+    expect(screen.queryByLabelText('Extent')).toBeNull();
+    await user.click(screen.getByRole('button', { name: /Apply/ }));
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        choice: { operation: 'intersect', targetBodyId: 'plate' }
+      })
+    );
+  });
 });

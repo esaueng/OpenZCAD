@@ -24,6 +24,7 @@
 import { OcctKernel, type ShapeHandle } from 'occt-wasm';
 import occtWasmUrl from 'occt-wasm/dist/occt-wasm.wasm?url';
 import {
+  booleanConsumedBodyIds,
   findSketch,
   getParameterScope,
   listFeaturesInOrder,
@@ -1550,6 +1551,51 @@ export class OcctStepKernelAdapter {
                 'The OCCT parity reference does not model through-all extrudes.'
               );
             }
+            if (
+              feature.data.featureKind === 'extrude' &&
+              feature.data.operation === 'intersect' &&
+              feature.bodyId
+            ) {
+              // ZC-060: the common of the swept tool and its stored target,
+              // which the intersect consumes.
+              const targetBodyId = feature.data.targetBodyId;
+              const target =
+                targetBodyId === undefined
+                  ? undefined
+                  : result.shapes.get(targetBodyId);
+              if (
+                !targetBodyId ||
+                !target ||
+                result.consumed.has(targetBodyId)
+              ) {
+                throw new Error('Stored intersect target is unavailable.');
+              }
+              const tool = this.buildSweep(
+                document,
+                feature,
+                scope,
+                result.sketchBases,
+                (message) =>
+                  result.warnings.push(`Feature "${feature.name}": ${message}`)
+              );
+              const output = this.kernel.unifySameDomain(
+                this.kernel.common(target, tool)
+              );
+              if (!(this.kernel.getVolume(output) > 0)) {
+                throw new Error(
+                  'Stored intersect extrusion no longer overlaps its target.'
+                );
+              }
+              result.consumed.add(targetBodyId);
+              result.shapes.set(feature.bodyId, output);
+              result.lineages.set(
+                feature.bodyId,
+                hashOnlyOcctLineage(
+                  'Intersect extrude history precedes production same-domain unification; topology remains hash-only.'
+                )
+              );
+              break;
+            }
             if (feature.bodyId) {
               const shape = this.buildSweep(
                 document,
@@ -1968,7 +2014,8 @@ export class OcctStepKernelAdapter {
               }
             }
             output = this.kernel.unifySameDomain(output);
-            feature.data.targetBodyIds.forEach((bodyId) =>
+            // M11: kept inputs stay live beside the result.
+            booleanConsumedBodyIds(feature.data).forEach((bodyId) =>
               result.consumed.add(bodyId)
             );
             result.shapes.set(feature.bodyId, output);

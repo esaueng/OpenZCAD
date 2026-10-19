@@ -19,7 +19,7 @@ import { inheritMeshOrigin } from './exact-shape-utils';
  * - Hole, shell, solid offset, draft, fillet, chamfer and pattern consume
  *   `targetBodyId` and replace it, so they pass it through. A suppressed
  *   pattern leaves its seed.
- * - An add or cut extrude consumes `targetBodyId`; its tool comes from a
+ * - An add, cut or intersect extrude consumes `targetBodyId`; its tool comes from a
  *   sketch, so no other body is involved. A new-body extrude has no input.
  * - A boolean passes its first operand through — the target of a subtract,
  *   the first body of a union or intersect — and leaves the tool operands
@@ -27,6 +27,9 @@ import { inheritMeshOrigin } from './exact-shape-utils';
  *   is deliberately not `activeWhen = 0`, which consumes the tools too: that
  *   switch is a modelled configuration whose tools are construction, while
  *   suppressing a step should show the model as if the step were not there.
+ *   A boolean that keeps its target (M11 `keepOriginals` all or target)
+ *   passes nothing through: the target is already live under its own id, so
+ *   standing it in for the result would show it twice, as for mirror.
  * - Transform and direct edit rewrite their target in place under the same
  *   id, so a skipped one already leaves the input where dependents look.
  * - Mirror and thicken create an additional body and leave their input live;
@@ -58,7 +61,9 @@ export function suppressedFeaturePassThroughSource(
         ? null
         : (data.targetBodyId ?? null);
     case 'boolean':
-      return data.targetBodyIds[0] ?? null;
+      return data.keepOriginals === 'all' || data.keepOriginals === 'target'
+        ? null
+        : (data.targetBodyIds[0] ?? null);
     case 'transform':
     case 'direct-edit':
     case 'mirror':

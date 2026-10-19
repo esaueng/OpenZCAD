@@ -29,7 +29,8 @@ export interface ResolvedExtrude {
 export type ExtrudeChoice =
   | { operation: 'automatic' }
   | { operation: 'new-body' }
-  | { operation: 'add' | 'cut'; targetBodyId?: BodyId };
+  /** Intersect (ZC-060) is explicit only; inference never proposes it. */
+  | { operation: 'add' | 'cut' | 'intersect'; targetBodyId?: BodyId };
 
 export interface ResolveExtrudeOptions {
   choice?: ExtrudeChoice;
@@ -48,10 +49,16 @@ export interface ResolveExtrudeOptions {
   faceAttachment?: { bodyId: BodyId; direction: 'into' | 'away' };
 }
 
+const EXPLICIT_OPERATION_LABELS = {
+  add: 'Add',
+  cut: 'Cut',
+  intersect: 'Intersect'
+} as const;
+
 /** Rewrites an extrude input's stored operation without touching the rest. */
 export function withOperation(
   input: ExtrudeInput,
-  operation: 'new-body' | 'add' | 'cut',
+  operation: 'new-body' | 'add' | 'cut' | 'intersect',
   targetBodyId?: BodyId
 ): ExtrudeInput {
   const { operation: _operation, targetBodyId: _target, ...rest } = input;
@@ -112,7 +119,7 @@ export async function resolveExtrudeOperation(
       choice.operation === 'new-body' ? undefined : choice.targetBodyId;
     if (choice.operation !== 'new-body' && !targetBodyId) {
       throw new Error(
-        `Select a target body for ${choice.operation === 'cut' ? 'Cut' : 'Add'}.`
+        `Select a target body for ${EXPLICIT_OPERATION_LABELS[choice.operation]}.`
       );
     }
     if (targetBodyId) {
@@ -304,12 +311,14 @@ type OperationInference = Pick<
 const OPERATION_PHRASES: Record<OperationInference['operation'], string> = {
   cut: 'cut into the body',
   add: 'add to the body',
+  intersect: 'keep only what it shares with the body',
   'new-body': 'make a new body'
 };
 
 const OUTCOME_PHRASES: Record<OperationInference['operation'], string> = {
   cut: ', cut into the body',
   add: ', added to the body',
+  intersect: ', intersected with the body',
   'new-body': ' as a new body'
 };
 

@@ -74,6 +74,8 @@ export interface MirrorFormState {
    * id survives a reopen untouched; the numeric fields are not consulted.
    */
   datumFeatureId?: FeatureId;
+  /** Split only (M11): leave the input body live beside the halves. */
+  keepOriginal?: boolean;
 }
 
 export interface ShellFormState {
@@ -449,7 +451,10 @@ export function modelingFormStateFromFeature(
             : {
                 origin: vectorText(data.plane.origin),
                 normal: vectorText(data.plane.normal)
-              })
+              }),
+          ...(data.featureKind === 'split' && data.keepOriginal === true
+            ? { keepOriginal: true }
+            : {})
         }
       };
     case 'shell':
@@ -570,8 +575,21 @@ export function modelingFeatureUpdate(
         data: { featureKind: 'hole', ...parameters }
       };
     }
+    case 'split': {
+      const { name, ids: _ids, keepOriginal, ...parameters } = submission.input;
+      return {
+        featureId,
+        name,
+        data: {
+          featureKind: 'split',
+          ...parameters,
+          ...(keepOriginal === true ? { keepOriginal } : {})
+        },
+        // Consuming the original is the absent field, never `false`.
+        ...(keepOriginal === true ? {} : { clearData: ['keepOriginal'] })
+      };
+    }
     case 'mirror':
-    case 'split':
     case 'shell':
     case 'solid-offset':
     case 'draft':
@@ -1159,7 +1177,15 @@ export function buildModelingOperationSubmission(
         };
     return state.operation === 'mirror'
       ? { operation: 'mirror', input: { name, targetBodyId, plane } }
-      : { operation: 'split', input: { name, targetBodyId, plane } };
+      : {
+          operation: 'split',
+          input: {
+            name,
+            targetBodyId,
+            plane,
+            ...(state.value.keepOriginal ? { keepOriginal: true } : {})
+          }
+        };
   }
   if (state.operation === 'shell') {
     const selected = requireFaces(state.value.openingFaceHashes, faceOptions);

@@ -1,5 +1,6 @@
 import {
   createBodyFeatureIds,
+  featureKeepsInputBody,
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import type {
@@ -56,15 +57,15 @@ export function importedOpeningCommand(
   if (!source || source.data.featureKind !== 'imported-step')
     throw new Error('Opening recipes require an imported STEP source.');
   if (
-    features
-      .slice(index + 1)
-      .some(
-        (f) =>
-          ('targetBodyId' in f.data &&
-            f.data.targetBodyId === input.targetBodyId) ||
+    features.slice(index + 1).some(
+      (f) =>
+        // M11: a Boolean or Split that keeps the import does not edit it.
+        !featureKeepsInputBody(f.data, input.targetBodyId) &&
+        (('targetBodyId' in f.data &&
+          f.data.targetBodyId === input.targetBodyId) ||
           ('targetBodyIds' in f.data &&
-            f.data.targetBodyIds.includes(input.targetBodyId))
-      )
+            f.data.targetBodyIds.includes(input.targetBodyId)))
+    )
   )
     throw new Error('Opening recipes require an unmodified imported source.');
   const commands: AnyCommand[] = [];

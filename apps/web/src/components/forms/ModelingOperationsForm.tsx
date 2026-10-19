@@ -1233,10 +1233,30 @@ export function ModelingOperationsForm({
               />
             </>
           ) : null}
+          {state.operation === 'split' ? (
+            <label className="field-check">
+              <input
+                type="checkbox"
+                checked={state.value.keepOriginal === true}
+                onChange={(event) =>
+                  replaceState({
+                    ...state,
+                    value: {
+                      ...state.value,
+                      keepOriginal: event.target.checked
+                    }
+                  })
+                }
+              />
+              <span>Keep original</span>
+            </label>
+          ) : null}
           <p className="muted">
             {state.operation === 'mirror'
               ? 'The original remains; Mirror creates a separate copy without fusion.'
-              : 'Split replaces the body with the two halves on either side of the plane.'}
+              : state.value.keepOriginal
+                ? 'Split keeps the body and adds the two halves on either side of the plane.'
+                : 'Split replaces the body with the two halves on either side of the plane.'}
           </p>
         </>
       ) : null}

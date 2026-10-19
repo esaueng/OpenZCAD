@@ -7,7 +7,10 @@ import {
   type ProjectDocument,
   isTransformCopy
 } from '@openzcad/shared';
-import { listFeaturesInOrder } from '@openzcad/document-core';
+import {
+  booleanConsumedBodyIds,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
 import { affectedFeatureTargets } from './affectedFeatureTargets';
 import { validatedFeatureRejection } from './featureValidation';
 import type { ExtrudeFormValue } from '../components/forms/ExtrudeForm';
@@ -25,7 +28,9 @@ export function extrudeEditCommand(
     );
   }
   if (value.choice.operation === 'automatic') {
-    throw new Error('Choose New Body, Add, or Cut when editing an extrusion.');
+    throw new Error(
+      'Choose New Body, Add, Cut, or Intersect when editing an extrusion.'
+    );
   }
   if (value.choice.operation !== 'new-body' && !value.choice.targetBodyId) {
     throw new Error('Select a target body for this extrusion.');
@@ -90,7 +95,8 @@ export function extrudeEditTargets(
     if (isFeatureSuppressed(earlier)) continue;
     const data = earlier.data;
     if (data.featureKind === 'boolean') {
-      data.targetBodyIds.forEach((id) => unavailable.add(id));
+      // M11: a kept input stays a legal target after the Boolean.
+      booleanConsumedBodyIds(data).forEach((id) => unavailable.add(id));
     } else if (
       'targetBodyId' in data &&
       data.targetBodyId &&
@@ -98,6 +104,7 @@ export function extrudeEditTargets(
       earlier.bodyId !== data.targetBodyId &&
       data.featureKind !== 'mirror' &&
       data.featureKind !== 'thicken' &&
+      !(data.featureKind === 'split' && data.keepOriginal === true) &&
       !isTransformCopy(data)
     ) {
       unavailable.add(data.targetBodyId);
