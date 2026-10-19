@@ -305,6 +305,13 @@ export type GeometryWorkerResult =
       ok: true;
       requestId: string;
       geometry: GeometryReadyState;
+      /** Worker-side durations, for drag tracing. */
+      timings?: {
+        queueMs: number;
+        kernelMs: number;
+        yields: number;
+        yieldMs: number;
+      };
     }
   | {
       type: 'preview-geometry';
@@ -588,12 +595,24 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       }
       await preloadDocumentFonts(document);
       post(stateFor('rebuilding', request, { stale: true }));
+      const kernelStartedMs = performance.now();
+      const yieldTask = geometryYield();
+      let yields = 0;
+      let yieldMs = 0;
       const geometry = await exact.previewGeometry(document, {
         deferTopology: request.deferTopology,
         cancellation: {
           isCancelled: () => cancelledRequests.has(request.requestId)
         },
-        yieldControl: geometryYield()
+        yieldControl: () => {
+          const pending = yieldTask();
+          if (!pending) return;
+          const started = performance.now();
+          yields += 1;
+          return pending.then(() => {
+            yieldMs += performance.now() - started;
+          });
+        }
       });
       if (cancelledRequests.has(request.requestId)) return;
       // Geometry-only work has no completed result-cache entry or live mass
@@ -605,7 +624,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           type: 'preview-geometry',
           ok: true,
           requestId: request.requestId,
-          geometry
+          geometry,
+          timings: {
+            queueMs,
+            kernelMs: performance.now() - kernelStartedMs,
+            yields,
+            yieldMs
+          }
         },
         derivedMeshTransferables(geometry)
       );

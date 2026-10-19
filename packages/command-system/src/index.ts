@@ -63,7 +63,8 @@ import {
   type SketchObjectData,
   type SketchProfileReference,
   type UnitSystem,
-  isDatumPlaneRef
+  isDatumPlaneRef,
+  isFeatureRollbackSuppressed
 } from '@openzcad/shared';
 import {
   addSketchReferenceDimension,
@@ -3669,4 +3670,98 @@ export function replayCommands(
   }
 
   return appendRevision(next, 'Replay');
+}
+
+/** History steps Duplicate supports (U06, ZC-104). */
+const DUPLICABLE_KINDS = ['transform', 'mirror', 'pattern'] as const;
+
+/**
+ * Why a history step cannot be duplicated, or null when it can. Duplicate
+ * covers the steps that repeat cleanly — a transform, a mirror, a pattern —
+ * and every other kind says so rather than offering a copy that would fight
+ * over the same faces or sketch.
+ */
+export function duplicateFeatureRefusal(
+  document: ProjectDocument,
+  featureId: FeatureId
+): string | null {
+  const feature = findFeature(document, featureId);
+  if (!feature) return `Feature ${featureId} not found.`;
+  if (
+    !(DUPLICABLE_KINDS as readonly string[]).includes(feature.data.featureKind)
+  ) {
+    return 'Duplicate covers Move, Mirror and Pattern steps only.';
+  }
+  // A copy lands right after its source. Past the end of history it would
+  // build active inside the paused tail, change the rolled-back model and
+  // split the rollback suffix, so it waits for the full history.
+  if (isFeatureRollbackSuppressed(feature)) {
+    return 'This step is past the end of history; resume full history to duplicate it.';
+  }
+  return null;
+}
+
+/**
+ * U06 (ZC-104): a duplicated history step. The copy reads exactly the
+ * references the source reads (its target body, plane, counts and
+ * expressions), takes new feature and body identities and the next free
+ * name, and lands directly after the source, where those references are
+ * known to resolve. The two commands are existing kinds, run by the caller
+ * as one transaction, so one undo removes the copy and an older client
+ * replays it.
+ */
+export function duplicateFeatureCommands(
+  document: ProjectDocument,
+  featureId: FeatureId
+): { commands: AnyCommand[]; featureId: FeatureId; label: string } {
+  const refusal = duplicateFeatureRefusal(document, featureId);
+  if (refusal) throw new Error(refusal);
+  const source = findFeature(document, featureId)!;
+  const name = numberedFeatureName(document, source.name);
+  const data = deepClone(source.data);
+  let create: AnyCommand;
+  let copyId: FeatureId;
+  switch (data.featureKind) {
+    case 'transform': {
+      const ids = createFeatureOnlyIds();
+      copyId = ids.featureId;
+      create = commandFactories.transformBody({
+        name,
+        targetBodyId: data.targetBodyId,
+        ...data.transform,
+        ids
+      });
+      break;
+    }
+    case 'mirror': {
+      const ids = createBodyFeatureIds();
+      copyId = ids.featureId;
+      create = commandFactories.mirrorBody({
+        name,
+        targetBodyId: data.targetBodyId,
+        plane: data.plane,
+        ids
+      });
+      break;
+    }
+    case 'pattern': {
+      const ids = createBodyFeatureIds();
+      copyId = ids.featureId;
+      const { featureKind: _kind, ...pattern } = data;
+      create = commandFactories.patternBody({ ...pattern, name, ids });
+      break;
+    }
+    default:
+      throw new Error('Duplicate covers Move, Mirror and Pattern steps only.');
+  }
+  const ordered = listFeaturesInOrder(document).map((entry) => entry.featureId);
+  const after = ordered.indexOf(featureId) + 1;
+  const commands: AnyCommand[] = [create];
+  // A copy of the last step is already where it belongs.
+  if (after < ordered.length) {
+    commands.push(
+      commandFactories.moveFeature({ featureId: copyId, toIndex: after })
+    );
+  }
+  return { commands, featureId: copyId, label: `Duplicate ${source.name}` };
 }

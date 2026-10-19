@@ -17,6 +17,7 @@ import type {
 } from '@openzcad/shared';
 import type { CommandManager } from '@openzcad/command-system';
 import { mark, measure, timed } from '../lib/perf';
+import { faceDragTraceEnabled, traceFaceDrag } from '../lib/faceDragTrace';
 import type {
   ExactSectionPlane,
   MeshQualityReport,
@@ -41,6 +42,9 @@ type ExportSuccess = Extract<GeometryExportResult, { ok: true }>;
 interface PendingRequest<T> {
   resolve(value: T): void;
   reject(error: Error): void;
+  /** Drag tracing: when the request was posted, and the posting cost. */
+  postedAt?: number;
+  sendMs?: number;
 }
 
 /**
@@ -655,6 +659,18 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           );
           if (!pending) return;
           geometryPreviewRequests.current.delete(message.requestId);
+          if (faceDragTraceEnabled()) {
+            traceFaceDrag('reply', {
+              ms: performance.now() - (pending.postedAt ?? performance.now()),
+              detail: {
+                ok: message.ok ? 1 : 0,
+                ...(message.ok && message.timings ? message.timings : {}),
+                ...(pending.sendMs === undefined
+                  ? {}
+                  : { sendMs: pending.sendMs })
+              }
+            });
+          }
           if (message.ok) pending.resolve(message.geometry);
           else pending.reject(new Error(message.error));
           return;
@@ -980,12 +996,18 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         });
         options?.signal?.addEventListener('abort', onAbort, { once: true });
         watchRequest(requestId);
+        const postedAt = performance.now();
         worker.postMessage({
           type: 'preview-geometry',
           requestId,
           document: documentForRebuild(document),
           ...(options?.deferTopology ? { deferTopology: true } : {})
         });
+        const entry = geometryPreviewRequests.current.get(requestId);
+        if (entry) {
+          entry.postedAt = postedAt;
+          entry.sendMs = performance.now() - postedAt;
+        }
       });
     },
     exportModel(format, document, bodyIds, options) {

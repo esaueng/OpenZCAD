@@ -103,9 +103,9 @@ import { diagnoseImportedSolid } from './exact-lineage-builders';
 import {
   blendRegionKeyOfHashes,
   measureOwnedFaceGeometry,
-  measureFaceGeometry,
   withFaceGeometryMemo
 } from './exact-measure';
+import { PreviewFaceGeometryCache } from './preview-face-geometry-cache';
 import {
   hasRefusingFeatureWarning,
   raiseFeatureWarning
@@ -1102,6 +1102,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   >();
   /** The project the held display deflections belong to. */
   private heldDisplayProjectId: ProjectDocument['projectId'] | null = null;
+  /** Unchanged faces' measurements, shared by successive drag previews. */
+  private readonly previewFaceGeometry = new PreviewFaceGeometryCache();
   /**
    * ADR-011 witnesses per solid handle in the history kernel, so the next
    * edit of a body starts from the witnesses its measurement recorded. Same
@@ -1549,6 +1551,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // deflections fresh before the build (the union gate reads them).
     if (this.heldDisplayProjectId !== document.projectId) {
       this.heldDisplayDeflections.clear();
+      this.previewFaceGeometry.clear();
       this.heldDisplayProjectId = document.projectId;
     }
     // Kernel reads the replay shares with the measurement pass of the same
@@ -2569,7 +2572,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                     geometry:
                       witness.surfaceType === 'bspline'
                         ? undefined
-                        : measureFaceGeometry(kernel, group.handle)
+                        : this.previewFaceGeometry.measure(
+                            kernel,
+                            group.handle,
+                            witness
+                          )
                   };
                 })
               ),

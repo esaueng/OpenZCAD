@@ -76,6 +76,7 @@ import {
   CirclePause,
   CirclePlay,
   Combine,
+  Copy,
   Crosshair,
   Download,
   Eye,
@@ -105,6 +106,8 @@ import {
 import {
   CommandManager,
   commandFactories,
+  duplicateFeatureCommands,
+  duplicateFeatureRefusal,
   isParameterRetype,
   type AnyCommand
 } from '@openzcad/command-system';
@@ -340,6 +343,7 @@ import {
 } from './lib/projectTabOwnership';
 
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
+import { traceFaceDrag, traceFaceDragPublish } from './lib/faceDragTrace';
 import { modalHoldsKeyboard, useModalFocus } from './lib/useModalFocus';
 import {
   downloadText,
@@ -3226,13 +3230,22 @@ export function App() {
   const offsetPreview = useRef(
     new LivePreview<OffsetPreviewCandidate, GeometryReadyState>({
       build: (offset) => {
+        const buildStarted = performance.now();
         const base = managerRef.current?.document;
         const plan = base ? buildOffsetEditPlan(offset, undefined, base) : null;
         const current = interactionRef.current;
-        return base && plan && current.mode === 'face'
+        const candidate =
+          base && plan && current.mode === 'face'
+            ? plan.command.apply(base)
+            : null;
+        traceFaceDrag('request', {
+          value: offset,
+          ms: performance.now() - buildStarted
+        });
+        return base && plan && candidate && current.mode === 'face'
           ? {
               selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`,
-              document: plan.command.apply(base),
+              document: candidate,
               offset,
               bodyId: plan.bodyId,
               command: plan.command,
@@ -3290,6 +3303,7 @@ export function App() {
           setRenderedOffsetPreview(null);
           return;
         }
+        traceFaceDragPublish(preview.document.offset, preview.document);
         reusableOffsetPreviewRef.current = { candidate: preview.document };
         setPreviewDoc(null);
         setFaceGeometryPreview({
@@ -3304,11 +3318,11 @@ export function App() {
         // while the hand is actually ahead of the published geometry.
         setPreviewDeferred(offsetPreview.degraded && offsetPreview.lagging);
       },
-      onFailure: ({ error, value }) =>
-        reportPreviewFailure(
-          errorMessage(error, 'Exact offset preview failed.'),
-          value
-        ),
+      onFailure: ({ error, value }) => {
+        const message = errorMessage(error, 'Exact offset preview failed.');
+        traceFaceDrag('refusal', { value, message });
+        reportPreviewFailure(message, value);
+      },
       acceptValue: (offset) =>
         Number.isFinite(offset) && Math.abs(offset) > 1e-9,
       ...(E2E_SLOW_FRAME_MS === undefined
@@ -17608,6 +17622,48 @@ export function App() {
     );
   }
 
+  /**
+   * U06 (ZC-104): repeats a Move, Mirror or Pattern step right after itself
+   * as one undoable edit, then opens the copy so its copied references (the
+   * same body, plane and values) can be reviewed and changed.
+   */
+  function handleDuplicateFeature(feature: FeatureNode) {
+    const owner = managerRef.current;
+    if (!owner || !ensureCanEdit(`duplicate ${feature.name}`)) return;
+    const document = owner.document;
+    let duplicate: ReturnType<typeof duplicateFeatureCommands>;
+    try {
+      duplicate = duplicateFeatureCommands(document, feature.featureId);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    const { commands, featureId: copyId, label } = duplicate;
+    const copyBodyId =
+      feature.data.featureKind === 'transform'
+        ? feature.data.targetBodyId
+        : (commands[0]!.payload as { ids: { bodyId: BodyId } }).ids.bodyId;
+    const targets = [
+      ...affectedFeatureTargets(document, feature.featureId),
+      { featureName: label, featureId: copyId, resultBodyId: copyBodyId }
+    ];
+    void validatedFeature.runTransaction(commands, {
+      label,
+      targets,
+      validatingMessage: `Checking the copy of ${feature.name}…`,
+      successMessage: `Duplicated ${feature.name}.`,
+      onSuccess: () => {
+        if (managerRef.current !== owner) return;
+        const copy = findFeature(owner.document, copyId);
+        if (copy) handleSelectFeatureFromTree(copy.id, false);
+        announce(`Duplicated ${feature.name}.`, {
+          label: 'Undo',
+          run: handleUndo
+        });
+      }
+    });
+  }
+
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     // Counted before the delete: afterwards the source is gone and the walk
     // has nothing to start from. A load-bearing delete announces its blast
@@ -18414,6 +18470,23 @@ export function App() {
                   ]
                 : [])
           ]
+        : []),
+      ...(row
+        ? (() => {
+            const refusal =
+              doc && duplicateFeatureRefusal(doc, feature.featureId);
+            return [
+              {
+                item: {
+                  id: 'duplicate',
+                  label: 'Duplicate',
+                  icon: <Copy size={13} aria-hidden="true" />,
+                  ...(refusal ? { disabled: true, detail: refusal } : {})
+                },
+                run: () => handleDuplicateFeature(feature)
+              }
+            ];
+          })()
         : []),
       {
         item: {
