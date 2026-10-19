@@ -28,13 +28,20 @@ import {
 } from './envelope';
 import { E2eeError, type E2eeErrorCode } from './errors';
 import {
+  COMPRESSIONS,
+  CONTENT_BLOB_KINDS,
+  ENVELOPE_MAGIC,
   PLAINTEXT_CEILINGS,
+  PROJECT_ENVELOPE_KINDS,
   encodeEnvelopePrefix,
   type ContentBlobHeader,
   type ProjectEnvelopeHeader,
   type ProjectEnvelopeHeaderInit
 } from './header';
+import { generateSigningKeyPair } from './keys';
+import { verifyProjectEnvelopeSignature, verifyVersionChain } from './signing';
 import { patternBytes, queuedRandom } from './test-support';
+import { IDENTITY_UNLOCK_METHODS, UNLOCK_METHODS } from './wrap';
 
 const CHUNK = 64;
 const CIPHER_CHUNK = CHUNK + 16;
@@ -485,6 +492,31 @@ describe('decompression limits', () => {
     }
   });
 
+  it('refuses an oversized body before hashing it for signatures', async () => {
+    const { envelope } = await forged(patternBytes(4096 * 64, 3), {
+      plaintextLength: 1024
+    });
+    expect(() => parseEnvelope(envelope)).toThrow(
+      expect.objectContaining({ code: 'limit-exceeded' })
+    );
+    const author = await generateSigningKeyPair();
+    const digest = vi.spyOn(crypto.subtle, 'digest');
+    try {
+      await rejectsWith(
+        verifyProjectEnvelopeSignature(
+          author.publicKey,
+          envelope,
+          new Uint8Array(73).fill(1, 0, 1)
+        ),
+        'limit-exceeded'
+      );
+      await rejectsWith(verifyVersionChain([envelope]), 'limit-exceeded');
+      expect(digest).not.toHaveBeenCalled();
+    } finally {
+      digest.mockRestore();
+    }
+  });
+
   it('keeps the ceiling table immutable at runtime', () => {
     expect(Object.isFrozen(PLAINTEXT_CEILINGS)).toBe(true);
     expect(() => {
@@ -492,6 +524,19 @@ describe('decompression limits', () => {
         Number.MAX_SAFE_INTEGER;
     }).toThrow(TypeError);
     expect(PLAINTEXT_CEILINGS.thumbnail).toBe(512 * 1024);
+    // The name tables assign wire codes by position.
+    for (const table of [
+      PROJECT_ENVELOPE_KINDS,
+      CONTENT_BLOB_KINDS,
+      COMPRESSIONS,
+      ENVELOPE_MAGIC,
+      UNLOCK_METHODS,
+      IDENTITY_UNLOCK_METHODS
+    ]) {
+      expect(Object.isFrozen(table)).toBe(true);
+      expect(() => (table as unknown[]).reverse()).toThrow(TypeError);
+    }
+    expect(PROJECT_ENVELOPE_KINDS[0]).toBe('document');
   });
 
   it('stops at the kind ceiling even when the header claims more', async () => {

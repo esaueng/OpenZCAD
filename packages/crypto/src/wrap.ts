@@ -46,15 +46,18 @@ export const WRAP_VERSION_KW = 2;
 /** Public-key seal: ephemeral ECDH P-256, HKDF-SHA256, AES-256-GCM. */
 export const SEAL_VERSION_1 = 1;
 
-export const UNLOCK_METHODS = [
+export const UNLOCK_METHODS = Object.freeze([
   'device',
   'passkey-prf',
   'recovery-key',
   'device-approval'
-] as const;
+] as const);
 export type UnlockMethod = (typeof UNLOCK_METHODS)[number];
 /** Only these open the identity key; device keys and the account key never do. */
-export const IDENTITY_UNLOCK_METHODS = ['passkey-prf', 'recovery-key'] as const;
+export const IDENTITY_UNLOCK_METHODS = Object.freeze([
+  'passkey-prf',
+  'recovery-key'
+] as const);
 export type IdentityUnlockMethod = (typeof IDENTITY_UNLOCK_METHODS)[number];
 
 /**

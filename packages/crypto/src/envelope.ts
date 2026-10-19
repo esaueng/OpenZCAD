@@ -1066,9 +1066,11 @@ export interface EnvelopeShape extends EnvelopePrefix {
 }
 
 /**
- * Checks either envelope class without a key: the prefix parses and the
- * body splits into whole chunks. This is all a server can verify; the
- * header is unauthenticated until a key holder decrypts it.
+ * Checks either envelope class without a key: the prefix parses, the
+ * body splits into whole chunks, and the payload is no larger than the
+ * header's kind, compression and declared size allow (`limit-exceeded`).
+ * This is all a server can verify; the header is unauthenticated until a
+ * key holder decrypts it.
  */
 export function parseEnvelope(envelope: Uint8Array): EnvelopeShape {
   const length = envelopePrefixLength(envelope);
@@ -1089,11 +1091,23 @@ export function parseEnvelope(envelope: Uint8Array): EnvelopeShape {
   if (chunkCount - 1 > MAX_CHUNK_INDEX) {
     throw new E2eeError('limit-exceeded', 'Envelope has too many chunks');
   }
-  return {
-    ...prefix,
-    chunkCount,
-    payloadLength: body - chunkCount * GCM_TAG_BYTES
-  };
+  const payloadLength = body - chunkCount * GCM_TAG_BYTES;
+  // Refuse a body larger than its header can produce before anyone hashes
+  // or decrypts it: signature and chain checks hash the whole envelope.
+  const { header } = prefix;
+  const cap = plaintextCap({
+    kind: header.kind,
+    compression: header.compression,
+    declaredLength: header.plaintextLength
+  });
+  const bound = header.compression === 'none' ? cap : maxPayloadBytes(cap);
+  if (payloadLength > bound) {
+    throw new E2eeError(
+      'limit-exceeded',
+      `Envelope payload is ${payloadLength} bytes; its header allows ${bound}`
+    );
+  }
+  return { ...prefix, chunkCount, payloadLength };
 }
 
 // --- Streams (content blobs) ----------------------------------------------

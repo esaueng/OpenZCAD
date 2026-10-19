@@ -2,7 +2,9 @@ import { ByteReader, ByteWriter, copyBytes, isUint, type Bytes } from './bytes';
 import { E2eeError, type E2eeErrorCode } from './errors';
 
 /** First three bytes of every envelope: "OZE". */
-export const ENVELOPE_MAGIC: readonly number[] = [0x4f, 0x5a, 0x45];
+export const ENVELOPE_MAGIC: readonly number[] = Object.freeze([
+  0x4f, 0x5a, 0x45
+]);
 /** AES-256-GCM STREAM chunks under a single-use 256-bit key. */
 export const ENVELOPE_VERSION_1 = 1;
 /** Magic, version byte and the u32 header length. */
@@ -17,22 +19,26 @@ export const MAX_BLOB_IDS = 4096;
 export const MAX_HEADER_BYTES = 1024 * 1024;
 const MAX_U32 = 0xffffffff;
 
+// The kind and compression tables give each name its wire code by
+// position. They are exported, so they are frozen: a consumer that sorted
+// or spliced one would silently re-number every envelope it wrote or read.
+
 /** Project envelopes: bound to one project, one fresh key per version. */
-export const PROJECT_ENVELOPE_KINDS = [
+export const PROJECT_ENVELOPE_KINDS = Object.freeze([
   'document',
   'measurements',
   'view-state',
   'share-snapshot'
-] as const;
+] as const);
 export type ProjectEnvelopeKind = (typeof PROJECT_ENVELOPE_KINDS)[number];
 
 /** Content blobs: no project id; the referencing envelope authenticates them. */
-export const CONTENT_BLOB_KINDS = [
+export const CONTENT_BLOB_KINDS = Object.freeze([
   'import-source',
   'mesh-payload',
   'thumbnail',
   'export'
-] as const;
+] as const);
 export type ContentBlobKind = (typeof CONTENT_BLOB_KINDS)[number];
 
 /**
@@ -59,7 +65,7 @@ export const PLAINTEXT_CEILINGS: Readonly<
   thumbnail: 512 * 1024
 });
 
-export const COMPRESSIONS = ['none', 'gzip'] as const;
+export const COMPRESSIONS = Object.freeze(['none', 'gzip'] as const);
 export type Compression = (typeof COMPRESSIONS)[number];
 
 /** Format parameters both classes carry; neither links a blob to a project. */
