@@ -44,6 +44,8 @@ export {
   EnvelopeKey,
   MAX_READER_PUSH_BYTES,
   MAX_READER_PUSH_RECORDS,
+  MAX_WRITER_WRITE_BYTES,
+  MAX_WRITER_WRITE_RECORDS,
   checkBlobReferences,
   contentBlobReference,
   contentBlobReferenceFromJson,

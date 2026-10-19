@@ -6,6 +6,8 @@ import {
   EnvelopeKey,
   MAX_READER_PUSH_BYTES,
   MAX_READER_PUSH_RECORDS,
+  MAX_WRITER_WRITE_BYTES,
+  MAX_WRITER_WRITE_RECORDS,
   checkBlobReferences,
   contentBlobReference,
   contentBlobReferenceFromJson,
@@ -838,6 +840,41 @@ describe('content blobs', () => {
     });
     await reader.push(envelope);
     await rejectsWith(reader.finish(), 'authentication-failed');
+  });
+
+  it('a direct writer call is bounded in bytes and records', async () => {
+    const plaintext = patternBytes(64 * (MAX_WRITER_WRITE_RECORDS + 10), 7);
+    const writer = await createContentBlobWriter(
+      EnvelopeKey.generate(),
+      'export',
+      {
+        compression: 'none',
+        chunkSize: 64,
+        plaintextLength: plaintext.byteLength
+      }
+    );
+    const encrypt = vi.spyOn(crypto.subtle, 'encrypt');
+    try {
+      await rejectsWith(writer.write(plaintext), 'invalid-argument');
+      await rejectsWith(
+        writer.write(new Uint8Array(MAX_WRITER_WRITE_BYTES + 1)),
+        'invalid-argument'
+      );
+      expect(encrypt).not.toHaveBeenCalled();
+    } finally {
+      encrypt.mockRestore();
+    }
+    // A refused write leaves the writer usable: slice and carry on.
+    const parts = [writer.prefix];
+    for (let at = 0; at < plaintext.byteLength; at += 64 * 512) {
+      parts.push(
+        ...(await writer.write(plaintext.subarray(at, at + 64 * 512)))
+      );
+    }
+    parts.push(await writer.finish());
+    expect(
+      await decryptContentBlob(contentBlobReference(writer), joinBytes(parts))
+    ).toEqual(plaintext);
   });
 
   it('a direct reader push is bounded in bytes and records', async () => {

@@ -190,9 +190,17 @@ class CiphertextHasher {
 
 // --- Writer ---------------------------------------------------------------
 
+/** Largest single `write`: one maximum-size chunk. */
+export const MAX_WRITER_WRITE_BYTES = MAX_CHUNK_SIZE;
+/** Most records one `write` may seal, so each call's work stays bounded. */
+export const MAX_WRITER_WRITE_RECORDS = 1024;
+
 /**
  * Incremental encryptor. Emit `prefix` first, then everything `write` and
- * `finish` return, in order. Chunk `i` always starts at
+ * `finish` return, in order. One `write` takes at most
+ * `MAX_WRITER_WRITE_BYTES` and `MAX_WRITER_WRITE_RECORDS` chunks' worth
+ * (one `chunkSize` slice always fits); a larger write is refused
+ * (`invalid-argument`) without changing the writer, so slice and retry. Chunk `i` always starts at
  * `prefix.length + i * (chunkSize + 16)`, so multipart part boundaries and
  * ranged reads need no alignment with chunks. A full chunk is held back
  * until the next write or `finish` shows whether it is the last.
@@ -226,6 +234,26 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
 
   /** Encrypts every chunk that is now known not to be the last. */
   async write(payload: Uint8Array): Promise<Bytes[]> {
+    if (!(payload instanceof Uint8Array)) {
+      throw new E2eeError('invalid-argument', 'Write payload bytes');
+    }
+    if (payload.byteLength > MAX_WRITER_WRITE_BYTES) {
+      throw new E2eeError(
+        'invalid-argument',
+        `Write at most ${MAX_WRITER_WRITE_BYTES} bytes at a time`
+      );
+    }
+    // The loop below seals every whole chunk but the last one held back.
+    const size = this.header.chunkSize;
+    const records = Math.ceil(
+      (this.pending.byteLength + payload.byteLength - size) / size
+    );
+    if (records > MAX_WRITER_WRITE_RECORDS) {
+      throw new E2eeError(
+        'invalid-argument',
+        `Write at most ${MAX_WRITER_WRITE_RECORDS} chunks at a time`
+      );
+    }
     return this.exclusive(async () => {
       this.written += payload.byteLength;
       if (this.enforceLength && this.written > this.header.plaintextLength) {
@@ -234,7 +262,6 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
           `Payload is longer than the declared ${this.header.plaintextLength} bytes`
         );
       }
-      const size = this.header.chunkSize;
       const data = this.pending.byteLength
         ? concatBytes(this.pending, payload)
         : payload;
