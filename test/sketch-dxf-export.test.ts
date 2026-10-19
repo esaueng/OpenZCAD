@@ -443,7 +443,7 @@ describe('exportSketchDxf', { timeout: 120_000 }, () => {
 
   it('refuses unknown object kinds and dangling object ids', async () => {
     const future = sketchDocument('Future', [
-      { objectKind: 'spline', points: [] } as unknown as SketchObjectData
+      { objectKind: 'helix', turns: 3 } as unknown as SketchObjectData
     ]);
     await refuses(
       adapter.exportSketchDxf(future.document, future.sketchId),
@@ -459,6 +459,45 @@ describe('exportSketchDxf', { timeout: 120_000 }, () => {
       adapter.exportSketchDxf(document, sketchId),
       'unsupported-object'
     );
+  });
+
+  it('refuses an ellipse or spline by name, since R12 has neither entity', async () => {
+    // I01: the extraction lowers both exactly, and the R12 writer refuses
+    // rather than sampling them into a POLYLINE.
+    for (const [object, entity] of [
+      [
+        {
+          objectKind: 'ellipse',
+          centerX: 0,
+          centerY: 0,
+          radiusX: 20,
+          radiusY: 8,
+          rotationDeg: 0
+        },
+        'ELLIPSE'
+      ],
+      [
+        {
+          objectKind: 'spline',
+          method: 'fit',
+          points: [
+            { x: 0, y: 0 },
+            { x: 10, y: 8 },
+            { x: 20, y: 0 }
+          ]
+        },
+        'SPLINE'
+      ]
+    ] as const) {
+      const { document, sketchId } = sketchDocument('Curve', [
+        line(0, -20, 30, -20),
+        object as SketchObjectData
+      ]);
+      const promise = adapter.exportSketchDxf(document, sketchId);
+      await refuses(promise, 'writer-refused');
+      await expect(promise).rejects.toThrow(`DXF R12 has no ${entity} entity`);
+      await expect(promise).rejects.toThrow('as SVG');
+    }
   });
 
   it('refuses an absent sketch id', async () => {

@@ -39,7 +39,40 @@ export interface DxfPolyline {
   readonly closed: boolean;
 }
 
-export type DxfEntity = DxfLine | DxfCircle | DxfArc | DxfPolyline;
+/**
+ * An ellipse or elliptical arc (I01), counter-clockwise in its parameter
+ * from `startParam` to `endParam` (radians; 0 to 2π for a full ellipse).
+ * `majorAxis` is the vector from the centre to the end of the axis that
+ * carries the larger radius, and `ratio` the minor radius over the major —
+ * the shape of a DXF ELLIPSE, which R12 itself does not have.
+ */
+export interface DxfEllipse {
+  readonly kind: 'ellipse';
+  readonly center: readonly [number, number];
+  readonly majorAxis: readonly [number, number];
+  readonly ratio: number;
+  readonly startParam: number;
+  readonly endParam: number;
+}
+
+/**
+ * A non-rational clamped B-spline (I01): `knots.length` is the control
+ * count plus `degree + 1`. DXF SPLINE carries exactly this; R12 does not.
+ */
+export interface DxfSpline {
+  readonly kind: 'spline';
+  readonly degree: number;
+  readonly knots: readonly number[];
+  readonly controls: ReadonlyArray<readonly [number, number]>;
+}
+
+export type DxfEntity =
+  | DxfLine
+  | DxfCircle
+  | DxfArc
+  | DxfPolyline
+  | DxfEllipse
+  | DxfSpline;
 
 /**
  * DXF forbids exponent notation, so plain `toString` (which yields `1e-7`
@@ -157,6 +190,13 @@ export function writeDxf(entities: readonly DxfEntity[]): string {
       case 'polyline':
         lines.push(...polylineEntity(entity));
         break;
+      case 'ellipse':
+      case 'spline':
+        // ELLIPSE and SPLINE arrived in R13; an R12 file could carry them
+        // only as a sampled POLYLINE, which this writer never emits.
+        throw new Error(
+          `DXF R12 has no ${entity.kind === 'ellipse' ? 'ELLIPSE' : 'SPLINE'} entity, so an ${entity.kind === 'ellipse' ? 'ellipse' : 'spline'} cannot be written exactly; export the sketch as SVG instead.`
+        );
     }
   }
   lines.push(...group(0, 'ENDSEC'), ...group(0, 'EOF'));

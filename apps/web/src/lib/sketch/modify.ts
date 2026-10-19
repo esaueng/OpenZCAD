@@ -479,6 +479,10 @@ function compositeRefusal(data: SketchObjectData, verb: string): string | null {
       return `A ${data.objectKind} is one object with no point identity. Draw it as lines to ${verb} part of it.`;
     case 'text':
       return `Text is one object; ${verb} is not available for it.`;
+    case 'ellipse':
+      return `${verb[0]!.toUpperCase()}${verb.slice(1)} is not available for an ellipse yet.`;
+    case 'spline':
+      return `${verb[0]!.toUpperCase()}${verb.slice(1)} is not available for a spline yet.`;
     default:
       return null;
   }

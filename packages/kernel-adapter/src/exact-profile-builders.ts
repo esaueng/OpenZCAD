@@ -61,6 +61,7 @@ import {
   subtract
 } from './exact-math';
 import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
+import { ellipseRegionEdges, splineRegionEdges } from './profile-curve-edges';
 import {
   basisMatchesLiftedFrame,
   bezierFallbackWarning,
@@ -549,6 +550,19 @@ export function makeRegionFace(
         }
         continue;
       }
+      if (curve.kind === 'ellipse' || curve.kind === 'spline') {
+        if (!rightHanded) {
+          throw new Error(
+            `An exact ${curve.kind} profile needs a right-handed sketch plane frame.`
+          );
+        }
+        edges.push(
+          ...(curve.kind === 'ellipse'
+            ? ellipseRegionEdges(kernel, basis, curve)
+            : splineRegionEdges(kernel, basis, curve))
+        );
+        continue;
+      }
       const span = Math.abs(curve.endAngle - curve.startAngle);
       const center = planePoint3(basis, curve.center);
       if (span >= Math.PI * 2 - 1e-9) {
@@ -794,7 +808,7 @@ function addRegionSideRoles(input: {
       input.diagnostics.push(
         remusHashOnlyLineage(
           'sweep',
-          `Selected-region side ${prefix} is a bezier with no analytic carrier.`
+          `Selected-region side ${prefix} is a ${curve.kind} with no analytic carrier.`
         )
       );
     }
