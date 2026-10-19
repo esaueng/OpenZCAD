@@ -4233,7 +4233,11 @@ export function App() {
     : viewMode
       ? (buildModeDisabledReason ??
         'View mode is read-only — switch to Tweak or Build to change parameters')
-      : projectEditDisabledReason;
+      : drawingMode
+        ? // Draw edits sheets only; a parameter-only undo or redo would
+          // otherwise change the model from there.
+          'Draw mode edits drawing sheets only — switch to Tweak or Build to change parameters'
+        : projectEditDisabledReason;
   const ownsOpenProject = Boolean(
     doc &&
     (doc.ownerUserId === session?.userId ||

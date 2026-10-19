@@ -159,6 +159,8 @@ test('lays out, places, exports and fences a drawing sheet', async ({
   // Reopen: the sheet and its placement come back from the saved document.
   await page.keyboard.press('ControlOrMeta+Shift+z');
   await expect(banner).toHaveCount(0);
+  // The redo must reach the device store before the tab goes away.
+  await expect(page.locator('.save-state')).toHaveClass(/is-(synced|local)\b/);
   await page.reload();
   const reopened = page.getByRole('region', { name: 'Drawings' });
   await expect(
@@ -178,4 +180,27 @@ test('lays out, places, exports and fences a drawing sheet', async ({
     )
     .toBe(121);
   await expect(reopened.getByRole('status')).toHaveCount(0);
+});
+
+test('refuses a parameter-only undo or redo in the Draw workspace', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Draw undo guard');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByLabel('New parameter name').fill('w');
+  await page.getByLabel('New parameter expression').fill('30');
+  await page.getByRole('button', { name: 'Add parameter' }).click();
+  await expect(page.locator('.param-row')).toContainText('w');
+
+  // The newest history entry only sets a parameter; Draw edits sheets only.
+  await mode(page, 'Draw').click();
+  await expect(page.getByRole('region', { name: 'Drawings' })).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Cannot undo: Draw mode edits drawing sheets only'
+  );
+  await mode(page, 'Build').click();
+  await expect(page.locator('.param-row')).toContainText('w');
 });
