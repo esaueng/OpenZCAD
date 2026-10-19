@@ -516,6 +516,12 @@ describe('S04 composite drawing on the pinned kernel', () => {
         ])
       );
     const [, s1, s2] = composite.edgeIds;
+    // A sliver is still a rectangle: a short side is measured on its own
+    // scale, not against the long one.
+    const sliver = draw(
+      cornerRectangleShape({ x: 0, y: 0 }, { x: 1_000_000, y: 1 })
+    );
+    expect(sliver.corners()).toHaveLength(4);
     // Corner 2 pulled off square: still a closed loop, no longer a rectangle.
     const skewed = resolveSketchComposite(
       composite,

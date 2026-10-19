@@ -222,7 +222,11 @@ function shapeLapse(
   const scale = Math.max(...lengths);
   const slack = Math.max(scale * 1e-6, 1e-9);
   const kind = composite.compositeKind;
-  if (lengths.some((length) => length <= slack)) {
+  // A side collapses only at floating-point scale: measured against the
+  // longest side's 1e-6, a valid 1,000,000 × 1 rectangle's short side
+  // would count as collapsed.
+  const collapsed = Math.max(scale * 1e-12, 1e-9);
+  if (lengths.some((length) => length <= collapsed)) {
     return `A side of the ${kind} has collapsed.`;
   }
   const helperKinds = sketchCompositeHelperKinds(composite.method);
