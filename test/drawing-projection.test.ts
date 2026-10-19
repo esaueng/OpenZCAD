@@ -573,6 +573,66 @@ describe('D01 occlusion tolerance', () => {
     });
   }
 
+  it('cuts an edge exactly where the occlusion test flips', () => {
+    // One curved face (two strips folded 10°) lying in z = 0 over x, y in
+    // [0, 10] × [−10, 10], and a lone edge descending through it, seen from
+    // above. The face's chordal sag widens its tolerance, so the edge turns
+    // hidden where it is that far below the face, not where it crosses it.
+    const a = (10 * Math.PI) / 180;
+    const sheet = {
+      vertices: Float32Array.from([
+        0,
+        0,
+        0,
+        10,
+        0,
+        0,
+        10,
+        10,
+        0,
+        0,
+        10,
+        0,
+        0,
+        -10 * Math.cos(a),
+        10 * Math.sin(a),
+        10,
+        -10 * Math.cos(a),
+        10 * Math.sin(a)
+      ]),
+      indices: Uint32Array.from([0, 1, 2, 0, 2, 3, 0, 4, 5, 0, 5, 1]),
+      faces: [{ triangleStart: 0, triangleCount: 4 }],
+      edges: []
+    };
+    const rod = {
+      vertices: new Float32Array(),
+      indices: new Uint32Array(),
+      edges: [[2, 5, 1, 8, 5, -1]]
+    };
+    const sag = Math.max(...triangleSag(sheet));
+    expect(sag).toBeGreaterThan(0.1);
+    const result = projectView({
+      orientation: 'top',
+      hiddenLines: true,
+      bodies: [sheet, rod]
+    });
+    // The tolerance is the floor plus the sag; z = 1 − (x − 2) / 3 along the
+    // edge, so it turns hidden at z = −tol.
+    const visibleRun = result.visible.find(
+      (line) =>
+        Math.abs(line[0]! - 2) < 1e-9 || Math.abs(line.at(-2)! - 2) < 1e-9
+    )!;
+    const end = Math.max(visibleRun[0]!, visibleRun.at(-2)!);
+    const diagonal = Math.hypot(10, 20, 20 * Math.sin(a));
+    const tol = diagonal * 1e-6 + sag;
+    expect(end).toBeCloseTo(5 + 3 * tol, 4);
+    expect(
+      result.hidden.some(
+        (line) => Math.abs(Math.min(line[0]!, line.at(-2)!) - end) < 1e-9
+      )
+    ).toBe(true);
+  });
+
   it('gives a crease between two planar faces no sag, however shallow', () => {
     // A 45° chamfer meeting its neighbour: both exact planes.
     expect([...fold(45, 'two')]).toEqual([0, 0, 0, 0]);

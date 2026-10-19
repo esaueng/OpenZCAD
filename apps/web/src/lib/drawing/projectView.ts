@@ -245,23 +245,21 @@ class OcclusionGrid {
         const r = ((pu - au) * dv - (pv - av) * du) / denom;
         if (s > 0 && s < 1 && r >= 0 && r <= 1) out.push(s);
       }
-      // Where the segment passes through the triangle's plane (an edge
-      // piercing a face, or two bodies that intersect), visibility can
-      // change inside the footprint. Both depths are linear along the
-      // segment, so the crossing is exact. The cut goes at the geometric
-      // crossing, not the tolerance-shifted one: an edge that only starts
-      // or ends on the plane (a face at its own corner) then yields at most
-      // a zero-length piece, and an edge leaving the plane at a shallow
-      // angle is still split where it actually passes behind it.
+      // Where the segment's depth meets this triangle's occlusion
+      // threshold (an edge piercing a face, two bodies that intersect, or an
+      // edge leaving a face it starts on): `occluded` tests
+      // `surface < depth - tol`, so its answer flips exactly where
+      // plane − depth = −tol. Both are linear along the segment. Slivers
+      // this cuts at an edge's own corner are merged away afterwards.
       const plane = (u: number, v: number) => {
         const w0 = ((t.u1 - u) * (t.v2 - v) - (t.u2 - u) * (t.v1 - v)) / t.area;
         const w1 = ((t.u2 - u) * (t.v0 - v) - (t.u0 - u) * (t.v2 - v)) / t.area;
         return w0 * t.d0 + w1 * t.d1 + (1 - w0 - w1) * t.d2;
       };
-      const g0 = plane(au, av) - ad;
-      const g1 = plane(bu, bv) - bd;
-      if ((g0 < 0 && g1 > 0) || (g0 > 0 && g1 < 0)) {
-        const s = g0 / (g0 - g1);
+      const f0 = plane(au, av) - ad + t.tol;
+      const f1 = plane(bu, bv) - bd + t.tol;
+      if ((f0 < 0 && f1 > 0) || (f0 > 0 && f1 < 0)) {
+        const s = f0 / (f0 - f1);
         if (s > 0 && s < 1) out.push(s);
       }
     }
@@ -670,6 +668,10 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     (isHidden ? hidden : visible).push(flat);
   };
 
+  // Pieces shorter than this, in projection, take their neighbours' state:
+  // at an edge's own corner the occlusion tolerance leaves slivers that are
+  // neither clearly in front nor behind, and no drawing wants them.
+  const minPiece = diagonal * 1e-4;
   for (const line of lines) {
     const count = Math.floor(line.length / 3);
     if (count < 2) continue;
@@ -678,12 +680,15 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       line[index * 3 + 1]! + (line[index * 3 + 4]! - line[index * 3 + 1]!) * f,
       line[index * 3 + 2]! + (line[index * 3 + 5]! - line[index * 3 + 2]!) * f
     ];
-    let run: number[] = [line[0]!, line[1]!, line[2]!];
-    let state: boolean | null = null;
+    // The line as points with one state per span between them. Visibility
+    // changes only where a projected segment crosses an occluding
+    // triangle's edge or occlusion threshold, so those cuts split it exactly
+    // and each span is classified once, however narrow the occluder.
+    const points: number[] = [line[0]!, line[1]!, line[2]!];
+    /** Whether each point is one of the line's own vertices (not a cut). */
+    const vertex: boolean[] = [true];
+    const spans: boolean[] = [];
     for (let s = 0; s < count - 1; s += 1) {
-      // Visibility can change only where the projected segment crosses an
-      // occluding triangle's edge, so those crossings split it exactly and
-      // each piece is classified once, however narrow the occluder.
       const [au, av, ad] = project(
         line[s * 3]!,
         line[s * 3 + 1]!,
@@ -694,24 +699,80 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
         line[s * 3 + 4]!,
         line[s * 3 + 5]!
       );
-      const cuts = [0, ...grid.crossings(au, av, ad, bu, bv, bd), 1];
+      // Cuts closer than float noise collapse into one; the segment's own
+      // end always survives, so the line keeps every one of its vertices.
+      const cuts = [0];
+      for (const cut of [...grid.crossings(au, av, ad, bu, bv, bd), 1]) {
+        if (cut - cuts.at(-1)! > 1e-12) cuts.push(cut);
+        else if (cut === 1) cuts[cuts.length - 1] = 1;
+      }
+      if (cuts.length < 2) cuts.push(1);
       for (let k = 0; k + 1 < cuts.length; k += 1) {
         const t0 = cuts[k]!;
         const t1 = cuts[k + 1]!;
-        if (t1 - t0 <= 1e-12) continue;
         const [x, y, z] = point(s, (t0 + t1) / 2);
-        const hidden = hiddenAt(x!, y!, z!);
-        if (state !== null && hidden !== state) {
-          const [cx, cy, cz] = point(s, t0);
-          run.push(cx!, cy!, cz!);
-          emit(run, state);
-          run = [cx!, cy!, cz!];
-        }
-        state = hidden;
+        spans.push(hiddenAt(x!, y!, z!));
+        const [ex, ey, ez] = point(s, t1);
+        points.push(ex!, ey!, ez!);
+        vertex.push(t1 === 1);
       }
-      run.push(line[s * 3 + 3]!, line[s * 3 + 4]!, line[s * 3 + 5]!);
     }
-    if (state !== null) emit(run, state);
+    if (spans.length === 0) continue;
+    // Group spans into pieces of one state, then let each short piece take
+    // the state before it (or after it, at the start of the line).
+    const spanLength = (index: number) => {
+      const [u0, v0] = project(
+        points[index * 3]!,
+        points[index * 3 + 1]!,
+        points[index * 3 + 2]!
+      );
+      const [u1, v1] = project(
+        points[index * 3 + 3]!,
+        points[index * 3 + 4]!,
+        points[index * 3 + 5]!
+      );
+      return Math.hypot(u1 - u0, v1 - v0);
+    };
+    const pieces: {
+      from: number;
+      to: number;
+      hidden: boolean;
+      length: number;
+    }[] = [];
+    spans.forEach((hidden, index) => {
+      const last = pieces.at(-1);
+      if (last && last.hidden === hidden) {
+        last.to = index + 1;
+        last.length += spanLength(index);
+      } else
+        pieces.push({
+          from: index,
+          to: index + 1,
+          hidden,
+          length: spanLength(index)
+        });
+    });
+    if (pieces.length > 1)
+      pieces.forEach((piece, index) => {
+        if (piece.length >= minPiece) return;
+        const neighbour = pieces[index - 1] ?? pieces[index + 1];
+        if (neighbour) piece.hidden = neighbour.hidden;
+      });
+    let start = 0;
+    for (let index = 0; index < pieces.length; index += 1) {
+      const next = pieces[index + 1];
+      if (next && next.hidden === pieces[index]!.hidden) continue;
+      const from = pieces[start]!.from;
+      const to = pieces[index]!.to;
+      // A run keeps its ends and the line's own vertices; cuts merged into
+      // its middle are collinear with their neighbours.
+      const run: number[] = [];
+      for (let p = from; p <= to; p += 1)
+        if (p === from || p === to || vertex[p])
+          run.push(points[p * 3]!, points[p * 3 + 1]!, points[p * 3 + 2]!);
+      emit(run, pieces[index]!.hidden);
+      start = index + 1;
+    }
   }
   return {
     visible,
