@@ -167,7 +167,7 @@ describe('OCCT reference lineage through a scaled Move', () => {
       ],
       [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0]
     );
-    expect(state.status).toBe('lineage');
+    if (state.status !== 'lineage') throw new Error('lineage was dropped');
     expect(state.diagnostics).toEqual([]);
     expect(state.references).toHaveLength(1);
     // Recorded as measured, so a later exact lookup finds it.
