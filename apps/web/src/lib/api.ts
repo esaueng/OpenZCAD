@@ -15,6 +15,7 @@ import type {
   CreateUploadSessionResponse,
   UploadedArtifactPart,
   DeleteAccountDataResponse,
+  DuplicateProjectRequest,
   DuplicateProjectResponse,
   FinalizeArtifactRequest,
   HealthResponse,
@@ -30,6 +31,7 @@ import type {
   SaveProjectDocumentRequest,
   SaveProjectDocumentResponse,
   SaveRevisionRequest,
+  UserId,
   StartEmailLoginRequest,
   StartEmailLoginResponse,
   UpdateAppSettingsRequest,
@@ -38,11 +40,14 @@ import type {
   VerifyEmailLoginRequest
 } from '@openzcad/shared';
 import {
+  adoptProjectDocument,
   createSavedRevision,
   normalizeDocument,
   normalizeDocumentHistory,
+  reidentifyProjectDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
+import { createId, toProjectId } from '@openzcad/shared';
 import { desktopFetch, isDesktopApp } from './desktopBridge';
 
 /**
@@ -227,8 +232,18 @@ export const api = {
    * Gives an existing device-local project an account record and its cloud identity.
    * The derived projection is dropped on the way out: it is rebuilt from
    * canonical history on load, and for a dense import it is most of the bytes.
+   *
+   * The browser re-homes the document itself (ADR-024 Phase 1): a fresh
+   * `proj_<uuid>` id, the account as owner and the closing "Saved to account"
+   * checkpoint. The device id travels beside it as the account's retry key,
+   * with the archived import ids localization removed, so a discarded mesh
+   * upload still refuses the adoption.
    */
-  adoptProject: (document: ProjectDocument) => {
+  adoptProject: (
+    document: ProjectDocument,
+    ownerUserId: UserId,
+    options: { sourceArtifactIds?: readonly string[] } = {}
+  ) => {
     // Shelf saves read IndexedDB without opening the project. Upgrade that
     // snapshot before the Worker checks its schema, keeping undo/redo endpoints
     // consistent with any migrated nodes. Reloading alone never rewrites it.
@@ -237,13 +252,31 @@ export const api = {
     const prepared = normalized.editHistory
       ? normalizeDocumentHistory(document, normalized)
       : normalized;
-    return requestJson<CreateProjectResponse>('/api/projects', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: prepared.name,
-        adoptionProtocolVersion: 1,
-        document: withoutDerivedProjection(prepared)
-      })
+    const send = (): Promise<CreateProjectResponse> => {
+      const adopted = adoptProjectDocument(
+        reidentifyProjectDocument(prepared, toProjectId(createId('proj'))),
+        ownerUserId,
+        prepared.name
+      );
+      return requestJson<CreateProjectResponse>('/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: prepared.name,
+          adoptionProtocolVersion: 2,
+          localProjectId: prepared.projectId,
+          ...(options.sourceArtifactIds?.length
+            ? { sourceArtifactIds: options.sourceArtifactIds }
+            : {}),
+          document: withoutDerivedProjection(adopted)
+        })
+      });
+    };
+    // A minted id that already names a project is a one-in-2^122 collision:
+    // mint another once rather than failing the save.
+    return send().catch((error: unknown) => {
+      if (error instanceof ApiError && error.code === 'PROJECT_ID_TAKEN')
+        return send();
+      throw error;
     });
   },
   loadProject: (projectId: string) =>
@@ -253,13 +286,15 @@ export const api = {
       { documentDownload: true }
     ),
   /**
-   * Copies a project. With `revisionId`, the copy starts from that stored save
-   * state instead of the project's current document and records where it came
-   * from; the source project is untouched either way.
+   * Stores a copy of a project. With `revisionId`, the copy starts from that
+   * stored save state and records where it came from; the source project is
+   * untouched either way. With `document`, the browser built the copy (ADR-024
+   * Phase 1) and lists the archived imports the account copies for it;
+   * without, the account builds it (the pre-Phase 1 contract).
    */
   duplicateProject: (
     projectId: string,
-    options: { name?: string; revisionId?: string } = {}
+    options: Omit<DuplicateProjectRequest, 'projectId'> = {}
   ) =>
     requestJson<DuplicateProjectResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/duplicate`,
@@ -269,7 +304,14 @@ export const api = {
           ...(options.name === undefined ? {} : { name: options.name }),
           ...(options.revisionId === undefined
             ? {}
-            : { revisionId: options.revisionId })
+            : { revisionId: options.revisionId }),
+          ...(options.document === undefined
+            ? {}
+            : {
+                document: withoutDerivedProjection(options.document),
+                documentDigest: options.documentDigest,
+                importSources: options.importSources ?? []
+              })
         })
       }
     ),

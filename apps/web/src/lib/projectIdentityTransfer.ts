@@ -11,6 +11,7 @@ import {
   reidentifyProjectDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
+import { importArtifactIds } from '@openzcad/persistence';
 import {
   toProjectId,
   type ArtifactRecord,
@@ -502,6 +503,8 @@ export async function restoreAccountProjectFromDevice(
 
 /** The App state and account-save step an adoption needs beyond the transfer. */
 export interface LocalProjectAdoptionState extends AdoptedProjectIdentityState {
+  /** The signed-in account the project is re-homed to. */
+  accountUserId: UserId;
   setCloudProjectIds: (
     update: (current: ReadonlySet<string>) => ReadonlySet<string>
   ) => void;
@@ -583,7 +586,9 @@ export async function adoptLocalProject(
     return { state: 'missing' };
   }
   try {
-    const response = await api.adoptProject(local);
+    const response = await api.adoptProject(local, app.accountUserId, {
+      sourceArtifactIds: importArtifactIds(local)
+    });
     const accountLocal = await transferAdoptedProjectIdentity(
       local,
       response.document,

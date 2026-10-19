@@ -220,15 +220,19 @@ export async function stubApi(
         units?: string;
         document?: ProjectDocument;
         initialDocument?: ProjectDocument;
+        adoptionProtocolVersion?: 1 | 2;
       };
-      // The browser builds a new project and the worker stores it as sent
-      // (ADR-024 Phase 1); only an adoption is rewritten.
+      // The browser builds a new project, or re-homes an adopted one, and the
+      // worker stores it as sent (ADR-024 Phase 1); only a version 1
+      // adoption is rewritten.
       const document = payload.document
-        ? adoptProjectDocument(
-            payload.document,
-            toUserId('user_e2e'),
-            payload.name
-          )
+        ? payload.adoptionProtocolVersion === 2
+          ? normalizeDocument(payload.document)
+          : adoptProjectDocument(
+              payload.document,
+              toUserId('user_e2e'),
+              payload.name
+            )
         : payload.initialDocument
           ? normalizeDocument(payload.initialDocument)
           : createProjectDocument(
@@ -250,6 +254,38 @@ export async function stubApi(
       });
     }
     return route.fulfill({ json: { projects: [] } });
+  });
+  // These specs have no account-side history: every save state the panel
+  // offers is one this device stored, so a branch falls back to this device.
+  await page.route('**/api/projects/*/revisions/*', (route) =>
+    route.fulfill({ status: 404, json: { error: 'Revision not found.' } })
+  );
+  // The browser builds a duplicate or branch and the worker stores it as sent
+  // (ADR-024 Phase 1). A request without a document asks the account to build
+  // the copy, which these specs' account cannot: it holds no projects.
+  await page.route('**/api/projects/*/duplicate', (route) => {
+    const payload = route.request().postDataJSON() as {
+      document?: ProjectDocument;
+    };
+    if (!payload.document)
+      return route.fulfill({
+        status: 404,
+        json: { error: 'Project not found.' }
+      });
+    const document = normalizeDocument(payload.document);
+    return route.fulfill({
+      status: 201,
+      json: {
+        project: {
+          projectId: document.projectId,
+          name: document.name,
+          revisionCount: document.revisions.length,
+          documentVersion: document.version,
+          updatedAt: new Date().toISOString()
+        },
+        document
+      }
+    });
   });
   await page.route('**/api/projects/*/revisions', (route) => {
     // Two verbs share this path: an explicit save POSTs a document, and the

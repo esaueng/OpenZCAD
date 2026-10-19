@@ -23,8 +23,10 @@ import {
   encodeImportedMeshPayload,
   importedSourceReferenceOf,
   toArtifactId,
+  toProjectId,
   toUserId,
   type ArtifactRecord,
+  type DuplicateProjectRequest,
   type ProjectDocument
 } from '@openzcad/shared';
 import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
@@ -33,6 +35,7 @@ import {
   createTestRoom
 } from './collaboration-room-harness';
 import { archiveAccountImportSources } from '../apps/web/src/lib/accountImportSources';
+import { buildCloudProjectCopy } from '../apps/web/src/lib/cloudProjectCopy';
 import { listLocalOnlyImportSources } from '../apps/web/src/lib/importArchival';
 
 const owner = toUserId('user_copy_owner');
@@ -294,6 +297,143 @@ async function cleanupIdentity(
     documentObjectId: head.document_object_id
   };
 }
+
+/** The request a browser sends after building the copy itself (ADR-024). */
+async function browserCopyRequest(
+  service: PersistenceService,
+  projectId: string,
+  saveState?: { revisionId: string; reason: string }
+): Promise<DuplicateProjectRequest> {
+  const head = (await service.loadProject(owner, projectId))!;
+  const request = await buildCloudProjectCopy(
+    { projectId, projectName: head.name, ...(saveState ? { saveState } : {}) },
+    owner,
+    (await service.listProjects(owner)).projects.map((project) => project.name),
+    {
+      loadProject: async (id) => (await service.loadProject(owner, id))!,
+      loadRevision: (id, revisionId) =>
+        service.loadRevision(owner, id, revisionId)
+    }
+  );
+  if (!request) throw new Error('The account did not supply the source.');
+  return { projectId: toProjectId(projectId), ...request };
+}
+
+describe.each(['memory', 'D1/R2'] as const)(
+  '%s browser-built copies with imports',
+  (backend) => {
+    const serviceOf = (): PersistenceService =>
+      backend === 'memory'
+        ? new InMemoryPersistenceService()
+        : d1Service().service;
+
+    it('stores the copy under its own id and archives only the sources it lists', async () => {
+      const service = serviceOf();
+      const { document: source, artifact } = await importedProject(service);
+      const request = await browserCopyRequest(service, source.projectId);
+      expect(request.importSources).toEqual([
+        {
+          artifactId: artifact.artifactId,
+          kind: 'mesh-payload',
+          checksumSha256: reference(mesh).checksumSha256,
+          logicalBytes: mesh.byteLength
+        }
+      ]);
+      const copy = await service.duplicateProject(owner, request);
+      expect(copy.document.projectId).toBe(request.document!.projectId);
+      expect(copy.project.projectId).toBe(request.document!.projectId);
+      expect(copy.document.checkpoints.at(-1)?.reason).toBe(
+        `Duplicated from ${source.name}`
+      );
+      const copied = importArtifactId(copy.document);
+      expect(copied).not.toBe(artifact.artifactId);
+      expect(copied.startsWith('artifact_local_')).toBe(false);
+      const download = await service.downloadArtifact(owner, copied);
+      expect(download?.artifact.projectId).toBe(copy.document.projectId);
+      expect(
+        new Uint8Array(await new Response(download!.body).arrayBuffer())
+      ).toEqual(mesh);
+      expect(await service.loadProject(owner, source.projectId)).toEqual(
+        source
+      );
+    });
+
+    it('stores a browser-built branch of a save state with its lineage', async () => {
+      const service = serviceOf();
+      const { document: source } = await importedProject(service);
+      const saved = await service.saveRevision(owner, {
+        projectId: source.projectId,
+        expectedVersion: source.version,
+        reason: 'With scan',
+        document: source
+      });
+      const manager = new CommandManager(saved);
+      manager.undo();
+      await service.saveDocument(owner, {
+        projectId: source.projectId,
+        expectedVersion: saved.version,
+        document: manager.document
+      });
+      const revisionId = saved.revisions.at(-1)!.revisionId;
+      const branch = await service.duplicateProject(
+        owner,
+        await browserCopyRequest(service, source.projectId, {
+          revisionId,
+          reason: 'With scan'
+        })
+      );
+      expect(branch.document.featureOrder).toHaveLength(1);
+      expect(branch.document.branchedFrom).toMatchObject({
+        projectId: source.projectId,
+        revisionId,
+        checkpointReason: 'With scan'
+      });
+      expect(
+        importArtifactId(branch.document).startsWith('artifact_local_')
+      ).toBe(false);
+    });
+
+    it('refuses a listed source from another project and removes the copy', async () => {
+      const service = serviceOf();
+      const { document: source } = await importedProject(service);
+      // Same bytes, so only the owning project tells the archives apart.
+      const { artifact: foreign } = await importedProject(service);
+      const request = await browserCopyRequest(service, source.projectId);
+      await expect(
+        service.duplicateProject(owner, {
+          ...request,
+          importSources: request.importSources!.map((ref) => ({
+            ...ref,
+            artifactId: foreign.artifactId
+          }))
+        })
+      ).rejects.toBeInstanceOf(ArtifactStorageError);
+      expect((await service.listProjects(owner)).projects).toHaveLength(2);
+      expect(
+        await service.loadProject(owner, request.document!.projectId)
+      ).toBeNull();
+    });
+
+    it('refuses listed bytes that do not hash to the listed source and removes the copy', async () => {
+      const service = serviceOf();
+      const { document: source } = await importedProject(service);
+      const request = await browserCopyRequest(service, source.projectId);
+      await expect(
+        service.duplicateProject(owner, {
+          ...request,
+          importSources: request.importSources!.map((ref) => ({
+            ...ref,
+            checksumSha256: 'f'.repeat(64)
+          }))
+        })
+      ).rejects.toBeInstanceOf(ArtifactStorageError);
+      expect((await service.listProjects(owner)).projects).toHaveLength(1);
+      expect(
+        await service.loadProject(owner, request.document!.projectId)
+      ).toBeNull();
+    });
+  }
+);
 
 describe.each(['memory', 'D1/R2'] as const)(
   '%s import duplication',
@@ -1529,4 +1669,43 @@ it('hydrates a failed cloud publication from verified aliases on fresh project a
       new Uint8Array(await new Response(download!.body).arrayBuffer())
     ).toEqual(mesh);
   }
+});
+
+it('finalizes a browser-built copy through the room against the client digest', async () => {
+  const { service, roomFor } = roomBackedService();
+  const { document: source, artifact } = await importedProject(service);
+  const request = await browserCopyRequest(service, source.projectId);
+  const copy = await service.duplicateProject(owner, request);
+  const copied = importArtifactId(copy.document);
+  expect(copied).not.toBe(artifact.artifactId);
+  expect(copied.startsWith('artifact_local_')).toBe(false);
+  expect(roomFor(copy.document.projectId).values.get('room:latest')).toEqual(
+    copy.document
+  );
+});
+
+it('rolls back a failed browser-built copy in the room against the client digest', async () => {
+  const { service, db } = roomBackedService();
+  const { document: source } = await importedProject(service);
+  const request = await browserCopyRequest(service, source.projectId);
+  const download = service.downloadArtifact.bind(service);
+  vi.spyOn(service, 'downloadArtifact').mockImplementationOnce(
+    async (...args) => {
+      const damaged = mesh.slice();
+      damaged[0] = damaged[0]! ^ 0xff;
+      return { ...(await download(...args))!, body: damaged.buffer };
+    }
+  );
+  await expect(service.duplicateProject(owner, request)).rejects.toBeInstanceOf(
+    ArtifactStorageError
+  );
+  expect(
+    await service.loadProject(owner, request.document!.projectId)
+  ).toBeNull();
+  expect((await service.listProjects(owner)).projects).toHaveLength(1);
+  expect(
+    db
+      .prepare('SELECT status FROM projects WHERE id = ?')
+      .get(request.document!.projectId)
+  ).toBeUndefined();
 });

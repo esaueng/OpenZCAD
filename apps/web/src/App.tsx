@@ -9049,7 +9049,10 @@ export function App() {
     // Loaded on demand: only saving a device project to the account gets here.
     const { adoptLocalProject: adopt } =
       await import('./lib/projectIdentityTransfer');
+    if (!session)
+      throw new Error('Sign in to save this project to your account.');
     return adopt(projectId, {
+      accountUserId: session.userId,
       localUserId,
       manager: () => managerRef.current,
       setDoc,
@@ -9910,9 +9913,35 @@ export function App() {
       );
       if (session && !deviceOnlySaveState) {
         try {
-          const response = await api.duplicateProject(project.projectId, {
-            ...(saveState ? { revisionId: saveState.revisionId } : {})
-          });
+          // The browser builds the copy and the account stores it (ADR-024
+          // Phase 1). Loaded on demand: only Duplicate and Branch get here.
+          const { buildCloudProjectCopy } =
+            await import('./lib/cloudProjectCopy');
+          const request = await buildCloudProjectCopy(
+            {
+              projectId: project.projectId,
+              projectName: project.name,
+              ...(saveState
+                ? {
+                    saveState: {
+                      revisionId: saveState.revisionId,
+                      reason: saveState.reason
+                    }
+                  }
+                : {})
+            },
+            session.userId,
+            projects.map((summary) => summary.name),
+            api
+          );
+          if (!request) {
+            // The account no longer stores that save state; this device may.
+            throw new ApiError(404, 'That save state is no longer stored.');
+          }
+          const response = await api.duplicateProject(
+            project.projectId,
+            request
+          );
           const localSource = await loadLocalProject(project.projectId).catch(
             () => null
           );

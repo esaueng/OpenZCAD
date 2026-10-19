@@ -114,7 +114,18 @@ for (const [copyStatus, sourceResult] of [
         ? route.fulfill({ json: { projects: [summary] } })
         : route.fallback()
     );
+    // The browser builds an account copy from the account's source document
+    // (ADR-024 Phase 1), so that read is the request the account refuses.
+    let accountReads = 0;
     let duplicateCalls = 0;
+    await page.route(`**/api/projects/${source.projectId}`, (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      accountReads++;
+      return route.fulfill({
+        status: copyStatus,
+        json: { error: 'Session expired.' }
+      });
+    });
     await page.route(
       `**/api/projects/${source.projectId}/duplicate`,
       (route) => {
@@ -167,7 +178,8 @@ for (const [copyStatus, sourceResult] of [
         })
       ).toHaveCount(0);
     }
-    expect(duplicateCalls).toBe(1);
+    expect(accountReads).toBe(1);
+    expect(duplicateCalls).toBe(0);
     const observed = await page.evaluate(
       async ({ projectId, checksum }) => {
         const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -207,6 +219,7 @@ for (const [copyStatus, sourceResult] of [
     console.log(
       'LOCAL_COPY_PROVENANCE',
       JSON.stringify({
+        accountReads,
         duplicateCalls,
         downloads,
         cached: observed.cached,
