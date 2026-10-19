@@ -26,6 +26,7 @@ import {
   PLAINTEXT_CEILINGS,
   DEFAULT_CHUNK_SIZE,
   HASH_BYTES,
+  MAX_CHUNK_SIZE,
   checkHeader,
   decodeEnvelopePrefix,
   encodeEnvelopePrefix,
@@ -348,9 +349,17 @@ export interface ReadOptions {
   readonly maxPlaintextBytes?: number;
 }
 
+/** Largest single `push`: one maximum-size record with its tag. */
+export const MAX_READER_PUSH_BYTES = MAX_CHUNK_SIZE + GCM_TAG_BYTES;
+/** Most records one `push` may open, so each call's work stays bounded. */
+export const MAX_READER_PUSH_RECORDS = 1024;
+
 /**
- * Incremental decryptor. Push envelope bytes in any slicing; each call
- * returns the payload chunks that authenticated. Output is not complete
+ * Incremental decryptor. Push envelope bytes in any slicing up to
+ * `MAX_READER_PUSH_BYTES` per call and `MAX_READER_PUSH_RECORDS` records'
+ * worth (`preferredPushBytes` is always within both); a larger push is
+ * refused (`invalid-argument`). Each call returns the payload chunks that
+ * authenticated. Output is not complete
  * until `finish` succeeds: only then has the final-chunk nonce proved that
  * nothing was cut off the end, and for a content blob that its ciphertext
  * hash matches the reference. Any failure poisons the reader.
@@ -409,10 +418,29 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
   }
 
   async push(bytes: Uint8Array): Promise<Bytes[]> {
+    if (!(bytes instanceof Uint8Array)) {
+      throw new E2eeError('invalid-argument', 'Push envelope bytes');
+    }
+    if (bytes.byteLength > MAX_READER_PUSH_BYTES) {
+      throw new E2eeError(
+        'invalid-argument',
+        `Push at most ${MAX_READER_PUSH_BYTES} bytes at a time`
+      );
+    }
     return this.exclusive(async () => {
       this.buffered = concatBytes(this.buffered, bytes);
       if (!this.parsed && !(await this.readPrefix())) return [];
       const cipherSize = this.parsed!.header.chunkSize + GCM_TAG_BYTES;
+      // The loop below opens every whole record but the last one buffered.
+      const records = Math.ceil(
+        (this.buffered.byteLength - cipherSize) / cipherSize
+      );
+      if (records > MAX_READER_PUSH_RECORDS) {
+        throw new E2eeError(
+          'invalid-argument',
+          `Push at most ${MAX_READER_PUSH_RECORDS} records at a time; use preferredPushBytes`
+        );
+      }
       const out: Bytes[] = [];
       let offset = 0;
       while (this.buffered.byteLength - offset > cipherSize) {

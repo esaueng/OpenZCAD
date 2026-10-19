@@ -42,6 +42,8 @@ export {
 } from './header';
 export {
   EnvelopeKey,
+  MAX_READER_PUSH_BYTES,
+  MAX_READER_PUSH_RECORDS,
   checkBlobReferences,
   contentBlobReference,
   contentBlobReferenceFromJson,

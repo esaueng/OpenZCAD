@@ -4,6 +4,8 @@ import { concatBytes, joinBytes, type Bytes } from './bytes';
 import { gunzipBytes, gzipBytes } from './compression';
 import {
   EnvelopeKey,
+  MAX_READER_PUSH_BYTES,
+  MAX_READER_PUSH_RECORDS,
   checkBlobReferences,
   contentBlobReference,
   contentBlobReferenceFromJson,
@@ -836,6 +838,37 @@ describe('content blobs', () => {
     });
     await reader.push(envelope);
     await rejectsWith(reader.finish(), 'authentication-failed');
+  });
+
+  it('a direct reader push is bounded in bytes and records', async () => {
+    // Minimum-size records: an unbounded push would open every one of
+    // them before returning.
+    const { envelope, reference } = await encryptContentBlob(
+      EnvelopeKey.generate(),
+      'export',
+      patternBytes(64 * (MAX_READER_PUSH_RECORDS + 10), 6),
+      { compression: 'none', chunkSize: 64 }
+    );
+    const decrypt = vi.spyOn(crypto.subtle, 'decrypt');
+    try {
+      await rejectsWith(
+        createContentBlobReader(reference).push(envelope),
+        'invalid-argument'
+      );
+      expect(decrypt).not.toHaveBeenCalled();
+    } finally {
+      decrypt.mockRestore();
+    }
+    await rejectsWith(
+      createContentBlobReader(reference).push(
+        new Uint8Array(MAX_READER_PUSH_BYTES + 1)
+      ),
+      'invalid-argument'
+    );
+    // Pushing preferredPushBytes at a time reads the same envelope.
+    expect(await decryptContentBlob(reference, envelope)).toEqual(
+      patternBytes(64 * (MAX_READER_PUSH_RECORDS + 10), 6)
+    );
   });
 
   it('id and kind in the reference must match an authentic header', async () => {
