@@ -5,7 +5,7 @@ import {
   createProjectDocument,
   normalizeDocument
 } from '@openzcad/document-core';
-import type { ProjectDocument } from '@openzcad/shared';
+import type { AppSettings, ProjectDocument } from '@openzcad/shared';
 import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
 import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceSession';
 
@@ -925,6 +925,40 @@ export async function seedDismissedWorkspaceTour(page: Page) {
       // Unreadable storage falls back to the app's own defaults.
     }
   });
+}
+
+/**
+ * Settles how unitless imports (STL, OBJ, PLY) are read before the app
+ * boots, merged into whatever settings the device already holds — a
+ * returning user who answered "millimetres, always". A fresh device asks at
+ * each import (`exchange-units.spec.ts`); specs about something else that
+ * import an STL call this so the question does not stand in their way. Not
+ * part of `stubApi`: writing the settings key would pre-empt specs that seed
+ * settings only when the key is absent.
+ */
+export async function seedUnitlessImportUnits(
+  page: Page,
+  units: AppSettings['files']['unitlessImportUnits'] = 'mm'
+) {
+  await page.addInitScript((units) => {
+    const key = 'openzcad-app-settings:v1';
+    try {
+      const raw = window.localStorage.getItem(key);
+      const root: Record<string, unknown> = raw
+        ? (JSON.parse(raw) as Record<string, unknown>)
+        : { settings: {}, syncedRevision: null };
+      const settings = (
+        root.settings && typeof root.settings === 'object'
+          ? root.settings
+          : root
+      ) as { files?: Record<string, unknown> };
+      if (typeof settings.files?.unitlessImportUnits === 'string') return;
+      settings.files = { ...settings.files, unitlessImportUnits: units };
+      window.localStorage.setItem(key, JSON.stringify(root));
+    } catch {
+      // Unreadable storage falls back to the app's own defaults.
+    }
+  }, units);
 }
 
 /**

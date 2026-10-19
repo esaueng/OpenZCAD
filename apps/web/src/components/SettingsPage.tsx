@@ -936,7 +936,7 @@ export function SettingsPage({
           {active === 'general' && anyMatch && (
             <Section
               title="General"
-              intro="Choose how OpenZCAD starts and what a new project inherits. Existing document units are never reinterpreted."
+              intro="Choose how OpenZCAD starts, what a new project inherits, and the units files are read and written in. Existing document units are never reinterpreted."
             >
               <SettingRow
                 title="Default units"
@@ -956,6 +956,57 @@ export function SettingsPage({
                     })
                   }
                 >
+                  <option value="mm">Millimeters</option>
+                  <option value="cm">Centimeters</option>
+                  <option value="m">Meters</option>
+                  <option value="inch">Inches</option>
+                </select>
+              </SettingRow>
+              <SettingRow
+                title="Unitless imports"
+                description="STL, OBJ and PLY files, and DXF files without a units header, do not say what their numbers mean. Choose at each import, or always read them one way."
+                scope="Imports"
+              >
+                <select
+                  value={settings.files.unitlessImportUnits}
+                  aria-label="Unitless imports"
+                  onChange={(event) =>
+                    patch({
+                      files: {
+                        ...settings.files,
+                        unitlessImportUnits: event.target
+                          .value as AppSettings['files']['unitlessImportUnits']
+                      }
+                    })
+                  }
+                >
+                  <option value="ask">Ask each time</option>
+                  <option value="document">Project units</option>
+                  <option value="mm">Millimeters</option>
+                  <option value="cm">Centimeters</option>
+                  <option value="m">Meters</option>
+                  <option value="inch">Inches</option>
+                </select>
+              </SettingRow>
+              <SettingRow
+                title="Export units"
+                description="The unit STEP, STL, 3MF, OBJ, PLY and DXF exports are written in. GLB is always meters, as glTF defines, and SVG keeps its physical size."
+                scope="Exports"
+              >
+                <select
+                  value={settings.files.exportUnits}
+                  aria-label="Export units"
+                  onChange={(event) =>
+                    patch({
+                      files: {
+                        ...settings.files,
+                        exportUnits: event.target
+                          .value as AppSettings['files']['exportUnits']
+                      }
+                    })
+                  }
+                >
+                  <option value="document">Project units</option>
                   <option value="mm">Millimeters</option>
                   <option value="cm">Centimeters</option>
                   <option value="m">Meters</option>

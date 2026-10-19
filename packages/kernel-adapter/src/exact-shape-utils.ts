@@ -391,12 +391,28 @@ export interface BodyMeshQuality {
   /** Edges used by more than two triangles after position welding. */
   nonManifoldEdges: number;
   watertight: boolean;
+  /** Triangles the export writes for this body at the checked tolerances. */
+  triangleCount: number;
+  /**
+   * Largest measured distance, in millimetres, from those triangles to the
+   * exact faces they approximate (0 for an all-planar body).
+   */
+  maxDeviation: number;
+  /** Curved-face triangles measured, and how many there were. */
+  sampledTriangles: number;
+  curvedTriangles: number;
 }
 
 export interface MeshQualityReport {
   /** True only when every exported body is individually watertight. */
   watertight: boolean;
   bodies: BodyMeshQuality[];
+  /** Triangles across every body. */
+  triangleCount: number;
+  /** The largest body deviation, millimetres. */
+  maxDeviation: number;
+  /** True when a large body was measured on a stride, not every triangle. */
+  sampled: boolean;
 }
 
 /**
@@ -408,6 +424,7 @@ export function readMeshQuality(raw: unknown): {
   boundaryEdges: number;
   nonManifoldEdges: number;
   isWatertight: boolean;
+  triangleCount: number | null;
 } {
   let payload: unknown = raw;
   if (typeof raw === 'string') {
@@ -431,5 +448,10 @@ export function readMeshQuality(raw: unknown): {
   ) {
     throw new Error('The kernel returned an unreadable mesh-quality result.');
   }
-  return { boundaryEdges, nonManifoldEdges, isWatertight };
+  const triangleCount =
+    typeof record.triangleCount === 'number' &&
+    Number.isFinite(record.triangleCount)
+      ? record.triangleCount
+      : null;
+  return { boundaryEdges, nonManifoldEdges, isWatertight, triangleCount };
 }

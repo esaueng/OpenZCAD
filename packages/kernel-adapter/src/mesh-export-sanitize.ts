@@ -82,8 +82,15 @@ export function sanitizeThreeMfModel(model: string): string {
   });
 }
 
-/** Remove exact zero-area facets from the generated 3MF model part. */
-export function sanitizeThreeMf(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+/**
+ * Remove exact zero-area facets from the generated 3MF model part, or apply
+ * `rewrite` to it instead when the caller has more to change (it then owns
+ * calling {@link sanitizeThreeMfModel}).
+ */
+export function sanitizeThreeMf(
+  bytes: Uint8Array,
+  rewrite: (model: string) => string = sanitizeThreeMfModel
+): Uint8Array<ArrayBuffer> {
   const files = unzipSync(bytes);
   const path = '3D/3dmodel.model';
   const model = files[path];
@@ -91,7 +98,7 @@ export function sanitizeThreeMf(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
     throw new Error('Mesh export produced a 3MF without a model part.');
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  const sanitized = sanitizeThreeMfModel(decoder.decode(model));
+  const sanitized = rewrite(decoder.decode(model));
   files[path] = encoder.encode(sanitized);
   return new Uint8Array(zipSync(files));
 }

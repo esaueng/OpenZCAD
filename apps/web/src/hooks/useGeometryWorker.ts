@@ -13,7 +13,8 @@ import type {
   BodyId,
   FaceRecognitionSummary,
   ProjectDocument,
-  SketchId
+  SketchId,
+  UnitSystem
 } from '@openzcad/shared';
 import type { CommandManager } from '@openzcad/command-system';
 import { mark, measure, timed } from '../lib/perf';
@@ -187,6 +188,10 @@ export interface GeometryWorkerApi {
     bodyIds: BodyId[],
     options?: {
       deflection?: number;
+      /** Mesh formats: the largest facet angle on curved faces, radians. */
+      angularTolerance?: number;
+      /** The unit to write (STEP, DXF, STL, 3MF, OBJ, PLY); mm when unset. */
+      units?: UnitSystem;
       /** One 'dxf' source: the planar face whose outline to export. */
       face?: DxfFaceSelector;
       /** The other 'dxf' source: the plane whose exact section to export. */
@@ -200,14 +205,18 @@ export interface GeometryWorkerApi {
     }
   ): Promise<ExportSuccess>;
   /**
-   * Pre-export printability check: watertightness per body at the deflection
-   * the export would use, in millimetres.
+   * Pre-export check of the mesh the export would write: watertightness,
+   * triangle count and measured deviation per body at the deflection (mm)
+   * and angular tolerance (radians) the export would use.
    */
   meshQuality(
     document: ProjectDocument,
     bodyIds: BodyId[],
     deflection: number,
-    options?: { onState?(state: GeometryWorkerState): void }
+    options?: {
+      angularTolerance?: number;
+      onState?(state: GeometryWorkerState): void;
+    }
   ): Promise<MeshQualityReport>;
   /** Queries live geometry; a stale derived-cache hit restores exact history first. */
   massProperties(
@@ -1058,6 +1067,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           ...(options?.deflection !== undefined
             ? { deflection: options.deflection }
             : {}),
+          ...(options?.angularTolerance !== undefined
+            ? { angularTolerance: options.angularTolerance }
+            : {}),
+          ...(options?.units !== undefined ? { units: options.units } : {}),
           ...(options?.face !== undefined ? { face: options.face } : {}),
           ...(options?.section !== undefined
             ? { section: options.section }
@@ -1076,7 +1089,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         type: 'mesh-quality',
         document: documentForWorker(document),
         bodyIds,
-        deflection
+        deflection,
+        ...(options?.angularTolerance !== undefined
+          ? { angularTolerance: options.angularTolerance }
+          : {})
       });
       if (!posted.ok) {
         return Promise.reject(new Error('Geometry worker is unavailable.'));

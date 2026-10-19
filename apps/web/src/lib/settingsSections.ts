@@ -44,13 +44,16 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
   {
     id: 'general',
     label: 'General',
-    detail: 'Startup and new-project defaults',
+    detail: 'Startup, new-project and file-unit defaults',
     group: 'Workspace',
     settings: [
       'Default units',
+      'Unitless imports',
+      'Export units',
       'Reopen the last project',
       'Confirm destructive actions'
-    ]
+    ],
+    searchTerms: ['import', 'export', 'stl', 'inches', 'millimeters']
   },
   {
     id: 'appearance',

@@ -1035,14 +1035,25 @@ export function describeDxfCounts(counts: Record<string, number>): string {
  * after the file, and the status line that says what was read, converted and
  * left out. Throws a {@link DxfImportError} when nothing in the file is
  * sketch geometry.
+ *
+ * `unitless` is how a file without `$INSUNITS` is read (the project's units
+ * unless the user chose otherwise); `declaresUnits` says whether that choice
+ * mattered, and `objects` are the sketch's curves in project units, for
+ * sizing the choice.
  */
 export function dxfSketchImportPlan(
   document: ProjectDocument,
   fileName: string,
   text: string,
-  nameFeature: (name: string) => string
-): { command: AnyCommand; status: string } {
-  const result = importDxfSketch(text, document.units);
+  nameFeature: (name: string) => string,
+  unitless: UnitSystem = document.units
+): {
+  command: AnyCommand;
+  status: string;
+  declaresUnits: boolean;
+  objects: SketchObjectData[];
+} {
+  const result = importDxfSketch(text, document.units, unitless);
   const left = [
     describeDxfCounts(result.dropped),
     describeDxfCounts(result.refused)
@@ -1059,7 +1070,9 @@ export function dxfSketchImportPlan(
     ? result.sourceUnit === unitName(document.units)
       ? ''
       : `, converted from ${result.sourceUnit}`
-    : `; it declares no units, so they were read as ${unitName(document.units)}`;
+    : unitless === document.units
+      ? `; it declares no units, so they were read as ${unitName(document.units)}`
+      : `; it declares no units, so they were read as ${unitName(unitless)} and converted`;
   const parts = [
     result.dropped && Object.keys(result.dropped).length
       ? `left out ${describeDxfCounts(result.dropped)}`
@@ -1075,6 +1088,8 @@ export function dxfSketchImportPlan(
       planeRef: newCanonicalPlaneRef('XY', 0),
       objects: result.objects
     }),
+    declaresUnits: result.sourceUnit !== null,
+    objects: result.objects,
     status: `Imported ${curves} ${curves === 1 ? 'curve' : 'curves'} from ${fileName} as sketch "${name}"${units}${parts.length ? ` · ${parts.join('; ')}` : ''}.`
   };
 }

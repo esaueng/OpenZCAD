@@ -2347,6 +2347,43 @@ describe('DXF sketch import plan', () => {
     );
   });
 
+  it('reads a unitless file in the unit the user chose, and says so', () => {
+    const text = dxf(['0', 'CIRCLE', '10', '1', '20', '0', '40', '1']);
+    const asDocument = dxfSketchImportPlan(doc(), 'disc.dxf', text, (n) => n);
+    expect(asDocument.declaresUnits).toBe(false);
+    // Read in the project's units the curves are the file's own numbers,
+    // which is what sizes the unit prompt.
+    expect(asDocument.objects).toEqual([
+      expect.objectContaining({ objectKind: 'circle', centerX: 1, radius: 1 })
+    ]);
+    const asInches = dxfSketchImportPlan(
+      doc(),
+      'disc.dxf',
+      text,
+      (n) => n,
+      'inch'
+    );
+    expect(asInches.objects).toEqual([
+      expect.objectContaining({
+        objectKind: 'circle',
+        centerX: 25.4,
+        radius: 25.4
+      })
+    ]);
+    expect(asInches.status).toBe(
+      'Imported 1 curve from disc.dxf as sketch "disc"; it declares no units, so they were read as inches and converted.'
+    );
+  });
+
+  it('ignores the unitless choice for a file that states its units', () => {
+    const text = dxf(['0', 'CIRCLE', '10', '0', '20', '0', '40', '1'], 1);
+    const plan = dxfSketchImportPlan(doc(), 'inch.dxf', text, (n) => n, 'cm');
+    expect(plan.declaresUnits).toBe(true);
+    expect(plan.objects).toEqual([
+      expect.objectContaining({ objectKind: 'circle', radius: 25.4 })
+    ]);
+  });
+
   it('refuses a file with nothing to sketch, saying what it had instead', () => {
     expect(() =>
       dxfSketchImportPlan(

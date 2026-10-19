@@ -54,6 +54,7 @@ import {
   datumPlaneSources,
   documentNodesWithHistory,
   documentTextBudgetError,
+  resolveExportUnits,
   resolveSketchComposite,
   sketchCompositeOf,
   sketchCompositeSizeDimensions
@@ -1045,6 +1046,11 @@ const LazyShaprImportDialog = lazyWithStaleChunkNotice(() =>
     default: module.ShaprImportDialog
   }))
 );
+const LazyImportUnitsDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/ImportUnitsDialog').then((module) => ({
+    default: module.ImportUnitsDialog
+  }))
+);
 /**
  * The edit panel, which only exists while something is being edited.
  *
@@ -1159,6 +1165,8 @@ function ImageExportDialog(
 }
 
 const ShaprImportDialog = withSuspense(LazyShaprImportDialog);
+
+const ImportUnitsDialog = withSuspense(LazyImportUnitsDialog);
 
 function Inspector(props: ComponentProps<typeof LazyInspector>) {
   return (
@@ -2025,6 +2033,15 @@ export function App() {
   });
   const [sharingOpen, setSharingOpen] = useState(false);
   const [meshExportOpen, setMeshExportOpen] = useState(false);
+  /** A unitless import waiting for the user to say what its numbers mean. */
+  const [importUnitsPrompt, setImportUnitsPrompt] = useState<Omit<
+    ComponentProps<typeof LazyImportUnitsDialog>,
+    'onChoose'
+  > | null>(null);
+  /** Its answer's receiver; a newer prompt cancels an older one. */
+  const importUnitsAnswerRef = useRef<
+    ((units: UnitSystem | null) => void) | null
+  >(null);
   /** The view's size when Export image… opened; null while it is closed. */
   const [imageExportView, setImageExportView] = useState<{
     width: number;
@@ -8063,7 +8080,8 @@ export function App() {
       sectionOutline,
       saveCadTextFile,
       exportFileStem(view.document.name),
-      setStatus
+      setStatus,
+      appSettingsRef.current.files.exportUnits
     );
   }
 
@@ -11059,6 +11077,38 @@ export function App() {
     }));
   }
 
+  /**
+   * How to read a file that states no unit: the unit the user settled on in
+   * Settings, or their answer to the prompt (null when they cancelled).
+   * `extent` is the file's own numbers, for sizing each choice.
+   */
+  async function readUnitlessImportAs(input: {
+    fileName: string;
+    kind: 'mesh' | 'dxf';
+    extent: number[];
+    documentUnits: UnitSystem;
+  }): Promise<UnitSystem | null> {
+    const units = await import('./lib/importUnits');
+    const settled = units.settledUnitlessReading(
+      appSettingsRef.current.files.unitlessImportUnits,
+      input.documentUnits
+    );
+    if (settled) return settled;
+    importUnitsAnswerRef.current?.(null);
+    return new Promise((resolve) => {
+      importUnitsAnswerRef.current = resolve;
+      setImportUnitsPrompt({
+        fileName: input.fileName,
+        extent: input.extent,
+        documentUnits: input.documentUnits,
+        initialUnit: units.historicalUnitlessReading(
+          input.kind,
+          input.documentUnits
+        )
+      });
+    });
+  }
+
   async function handleImportFile(file: File) {
     if (!managerRef.current || !doc || !ensureCanEdit('import geometry')) {
       return;
@@ -11163,12 +11213,37 @@ export function App() {
         refuseOversizedDxf(file.size);
         const text = await file.text();
         if (managerRef.current !== importManager) return;
-        const plan = dxfSketchImportPlan(
+        let plan = dxfSketchImportPlan(
           importManager.document,
           file.name,
           text,
           newFeatureName
         );
+        if (!plan.declaresUnits) {
+          const { sketchObjectsExtent } = await import('./lib/importUnits');
+          const documentUnits = importManager.document.units;
+          const reading = await readUnitlessImportAs({
+            fileName: file.name,
+            kind: 'dxf',
+            // Read in the project's units, the curves are the file's numbers.
+            extent: sketchObjectsExtent(plan.objects),
+            documentUnits
+          });
+          if (!reading) {
+            setStatus(`${file.name} was not imported: you cancelled it.`);
+            return;
+          }
+          if (managerRef.current !== importManager) return;
+          if (reading !== documentUnits) {
+            plan = dxfSketchImportPlan(
+              importManager.document,
+              file.name,
+              text,
+              newFeatureName,
+              reading
+            );
+          }
+        }
         if (executeCommand(plan.command)) setStatus(plan.status);
       } catch (error) {
         setStatus(errorMessage(error, `Could not import ${file.name}.`));
@@ -11228,6 +11303,37 @@ export function App() {
           finishImportAbort(abort);
           return;
         }
+        // STL states no unit: the file's numbers are read the way the user
+        // says (millimetres, as they always were, is the preselected answer).
+        let parsed = parseStl(contents, file.name);
+        const importUnits = await import('./lib/importUnits');
+        const reading = await readUnitlessImportAs({
+          fileName: file.name,
+          kind: 'mesh',
+          extent: importUnits.meshExtent(parsed.vertices),
+          documentUnits: doc.units
+        });
+        if (!reading || abort.signal.aborted) {
+          progress.finish({ tone: 'cancelled', message: 'nothing was added' });
+          setStatus(`${file.name} was not imported: you cancelled it.`);
+          return;
+        }
+        if (managerRef.current !== importManager) {
+          const message = 'The project changed while the import was waiting.';
+          progress.finish({ tone: 'warning', message });
+          setStatus(message);
+          return;
+        }
+        if (reading !== 'mm') {
+          parsed = {
+            ...parsed,
+            vertices: importUnits.verticesReadAs(parsed.vertices, reading)
+          };
+        }
+        const readingNote =
+          reading === 'mm'
+            ? ''
+            : `, read as ${importUnits.IMPORT_UNIT_LABELS[reading].toLowerCase()}`;
         // Taken only around the validated run itself — never across the read.
         // The run's own busy check still refuses a concurrent second drop,
         // and the shelf stays navigable for the switch the run then refuses
@@ -11242,7 +11348,6 @@ export function App() {
           return;
         }
         try {
-          const parsed = parseStl(contents, file.name);
           progress.update({ phase: 'building', fraction: null });
           const [{ createBodyFeatureIds }, meshImport] = await Promise.all([
             import('@openzcad/document-core'),
@@ -11284,7 +11389,7 @@ export function App() {
                 signal: abort.signal,
                 validatingMessage: `Checking ${file.name} against exact geometry…`,
                 successMessage: () =>
-                  `Imported ${parsed.triangleCount} triangles from ${file.name}${note}`,
+                  `Imported ${parsed.triangleCount} triangles from ${file.name}${readingNote}${note}`,
                 // No revalidation: an import appends a feature to a project,
                 // and a project switch mid-rebuild must refuse (or cancel), not
                 // rebuild the candidate against a document it was never meant
@@ -11427,6 +11532,29 @@ export function App() {
         trackDetail('error_import');
         setStatus(errorMessage(error, `${file.name} import failed.`));
         return;
+      }
+      // OBJ and PLY state no unit (3MF and glTF do, and arrive converted).
+      const importUnits = await import('./lib/importUnits');
+      if (!mesh.sourceUnit && importUnits.isUnitlessMeshFileName(file.name)) {
+        const reading = await readUnitlessImportAs({
+          fileName: file.name,
+          kind: 'mesh',
+          extent: importUnits.meshExtent(mesh.vertices),
+          documentUnits: doc.units
+        });
+        if (!reading) {
+          setStatus(`${file.name} was not imported: you cancelled it.`);
+          return;
+        }
+        if (reading !== 'mm') {
+          // A uniform enlargement: the worker's rebuild check, run on the
+          // millimetre reading, still holds for every larger unit.
+          mesh = {
+            ...mesh,
+            vertices: importUnits.verticesReadAs(mesh.vertices, reading),
+            sourceUnit: importUnits.IMPORT_UNIT_LABELS[reading].toLowerCase()
+          };
+        }
       }
       await commitImportedMesh({
         file,
@@ -11945,6 +12073,10 @@ export function App() {
         doc,
         [target.bodyId as BodyId],
         {
+          units: resolveExportUnits(
+            appSettingsRef.current.files.exportUnits,
+            doc.units
+          ),
           face: {
             bodyId: target.bodyId as BodyId,
             faceHash: face.hash,
@@ -12334,12 +12466,13 @@ export function App() {
         units: doc.units
       },
       produce: async (options) => {
-        const result = await geometry.exportModel(
-          'step',
-          doc,
-          exportBodyIds,
-          options
-        );
+        const result = await geometry.exportModel('step', doc, exportBodyIds, {
+          ...options,
+          units: resolveExportUnits(
+            appSettingsRef.current.files.exportUnits,
+            doc.units
+          )
+        });
         if (!('text' in result)) {
           throw new Error('The STEP export returned no text.');
         }
@@ -12359,7 +12492,8 @@ export function App() {
    */
   function handleExportMesh(
     format: MeshExportDialogFormat,
-    deflection: number
+    deflection: number,
+    tolerances: { angularTolerance?: number } = {}
   ) {
     if (currentGeometrySnapshot !== null) {
       setStatus(
@@ -12388,6 +12522,11 @@ export function App() {
       produce: async (options) => {
         const result = await geometry.exportModel(format, doc, exportBodyIds, {
           deflection,
+          ...tolerances,
+          units: resolveExportUnits(
+            appSettingsRef.current.files.exportUnits,
+            doc.units
+          ),
           ...options
         });
         return 'data' in result
@@ -12408,7 +12547,10 @@ export function App() {
 
   function handleCheckMeshQuality(
     deflection: number,
-    options?: { onProgress?(progress: ExportProgress): void }
+    options?: {
+      angularTolerance?: number;
+      onProgress?(progress: ExportProgress): void;
+    }
   ) {
     if (!doc || exportBodyIds.length === 0) {
       return Promise.reject(
@@ -12416,6 +12558,9 @@ export function App() {
       );
     }
     return geometry.meshQuality(doc, exportBodyIds, deflection, {
+      ...(options?.angularTolerance !== undefined
+        ? { angularTolerance: options.angularTolerance }
+        : {}),
       onState: (state) => {
         const progress = exportProgressFor(state);
         if (progress) {
@@ -18907,6 +19052,7 @@ export function App() {
     !sharingOpen &&
     !pendingShaprImport &&
     !meshExportOpen &&
+    !importUnitsPrompt &&
     !pendingFeatureDelete &&
     !activeSuppressionPrompt(pendingSuppression, doc?.projectId) &&
     !pendingToolSwitch;
@@ -22840,6 +22986,29 @@ export function App() {
                 onClose={() => setAccountConflict(null)}
               />
             )}
+          {importUnitsPrompt && (
+            <ImportUnitsDialog
+              fileName={importUnitsPrompt.fileName}
+              extent={importUnitsPrompt.extent}
+              documentUnits={importUnitsPrompt.documentUnits}
+              initialUnit={importUnitsPrompt.initialUnit}
+              onChoose={(choice) => {
+                const answer = importUnitsAnswerRef.current;
+                importUnitsAnswerRef.current = null;
+                setImportUnitsPrompt(null);
+                if (choice?.remember) {
+                  handleAppSettingsChange({
+                    ...appSettingsRef.current,
+                    files: {
+                      ...appSettingsRef.current.files,
+                      unitlessImportUnits: choice.units
+                    }
+                  });
+                }
+                answer?.(choice?.units ?? null);
+              }}
+            />
+          )}
           {meshExportOpen &&
             doc &&
             // Stays open while hidden bodies are switched off, even when
@@ -22875,6 +23044,14 @@ export function App() {
               }}
               onExport={handleExportMesh}
               onCheckQuality={handleCheckMeshQuality}
+              exportUnits={appSettings.files.exportUnits}
+              documentUnits={doc.units}
+              onExportUnitsChange={(exportUnits) =>
+                handleAppSettingsChange({
+                  ...appSettingsRef.current,
+                  files: { ...appSettingsRef.current.files, exportUnits }
+                })
+              }
             />
           )}
           {imageExportView && doc && (

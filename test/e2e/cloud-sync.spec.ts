@@ -20,6 +20,7 @@ import {
   expectBodyCount,
   expect,
   seedOpenModelDrawer,
+  seedUnitlessImportUnits,
   setSelectionFilter,
   stubApi,
   test
@@ -955,6 +956,7 @@ for (const uploadAvailable of [true, false]) {
     test.setTimeout(90_000);
     const api = new SharedCloudProjectApi();
     await api.install(page);
+    await seedUnitlessImportUnits(page);
     await page.goto('/');
     await page.getByLabel('Project name').fill('Imported repair fixture');
     await page

@@ -10,7 +10,8 @@ import type {
   FaceRecognitionSummary,
   ProjectDocument,
   ProjectId,
-  SketchId
+  SketchId,
+  UnitSystem
 } from '@openzcad/shared';
 import type {
   BuildCancellationSignal,
@@ -88,6 +89,13 @@ export type GeometryWorkerRequest =
       bodyIds: BodyId[];
       format: GeometryExportFormat;
       deflection?: number;
+      /** Mesh formats: the largest facet angle on curved faces, radians. */
+      angularTolerance?: number;
+      /**
+       * The unit to write where the format carries one or holds bare
+       * numbers (STEP, DXF, STL, 3MF, OBJ, PLY). Millimetres when unset.
+       */
+      units?: UnitSystem;
       /** One 'dxf' source: the planar face whose outline to export. */
       face?: DxfFaceSelector;
       /** The other 'dxf' source: the plane whose exact section to export. */
@@ -121,6 +129,7 @@ export type GeometryWorkerRequest =
       document: ProjectDocument;
       bodyIds: BodyId[];
       deflection: number;
+      angularTolerance?: number;
     }
   | {
       /** Reads live mass data, restoring exact history for a stale cache hit. */
@@ -818,7 +827,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         const report = await exact.meshQuality(
           document,
           request.bodyIds,
-          request.deflection
+          request.deflection,
+          request.angularTolerance
         );
         post({
           type: 'mesh-quality',
@@ -835,8 +845,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
             'DXF export needs a face selection, a section plane, or a sketch.'
           );
         }
+        const units = request.units ? { units: request.units } : {};
         const text = request.sketchId
-          ? await exact.exportSketchDxf(document, request.sketchId)
+          ? await exact.exportSketchDxf(document, request.sketchId, units)
           : request.section
             ? await exact.exportSectionDxf(
                 document,
@@ -844,9 +855,10 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                 // Same bodies as the section on screen. An empty selection
                 // means the caller has nothing to narrow it by, so the
                 // adapter's own document visibility stands.
-                request.bodyIds.length > 0 ? request.bodyIds : undefined
+                request.bodyIds.length > 0 ? request.bodyIds : undefined,
+                units
               )
-            : await exact.exportFaceDxf(document, request.face!);
+            : await exact.exportFaceDxf(document, request.face!, units);
         post({
           type: 'export',
           ok: true,
@@ -879,7 +891,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       if (request.format !== 'step' && request.format !== 'stl') {
         const data = await exact.exportMesh(document, request.bodyIds, {
           format: request.format,
-          deflection: request.deflection ?? DEFAULT_EXPORT_DEFLECTION
+          deflection: request.deflection ?? DEFAULT_EXPORT_DEFLECTION,
+          ...(request.units ? { units: request.units } : {}),
+          ...(request.angularTolerance !== undefined
+            ? { angularTolerance: request.angularTolerance }
+            : {})
         });
         post(
           {
@@ -897,11 +913,21 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       }
       const text =
         request.format === 'step'
-          ? await exact.exportStep(document, request.bodyIds)
+          ? await exact.exportStep(
+              document,
+              request.bodyIds,
+              request.units ? { units: request.units } : {}
+            )
           : await exact.exportStl(
               document,
               request.bodyIds,
-              request.deflection
+              request.deflection,
+              {
+                ...(request.units ? { units: request.units } : {}),
+                ...(request.angularTolerance !== undefined
+                  ? { angularTolerance: request.angularTolerance }
+                  : {})
+              }
             );
       const result: GeometryExportResult = {
         type: 'export',
