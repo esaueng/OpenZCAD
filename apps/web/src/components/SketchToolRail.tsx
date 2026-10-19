@@ -503,7 +503,11 @@ export function SketchToolRail({
                 aria-label="Next circle type"
                 onClick={() => onCircleMode(nextSketchCircleMode(circleMode))}
               >
-                <kbd>C</kbd>
+                {circleKey ? (
+                  <kbd>{platformShortcutLabel(circleKey)}</kbd>
+                ) : (
+                  <RotateCw size={12} aria-hidden="true" />
+                )}
               </button>
             </Tooltip>
           </span>

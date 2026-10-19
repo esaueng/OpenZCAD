@@ -83,7 +83,8 @@ export function canonicalChord(value: unknown): string | null {
   }
   // A shifted symbol is its own character; only letters and named keys keep
   // Shift as a separate modifier.
-  const keepsShift = /^[A-Z]$/.test(base) || NAMED_KEYS.has(base);
+  // Any script's letters count: Shift+Å is not Å.
+  const keepsShift = /^\p{L}$/u.test(base) || NAMED_KEYS.has(base);
   const kept = MODIFIER_ORDER.filter(
     (modifier) =>
       modifiers.includes(modifier) && (modifier !== 'Shift' || keepsShift)

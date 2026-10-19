@@ -18705,10 +18705,14 @@ export function App() {
         return;
       }
 
+      // A focused button presses on Space, so Space yields to it whatever it
+      // is bound to; any other key has no such claim.
+      const spaceOwnedByControl =
+        chord === 'Space' && focusedControlOwnsSpace(target);
       // The command the key means outside a sketch, if any. In a reading
       // workspace a tool key is still looked up, to say why it is refused.
       const modelCommand =
-        chord && !typing
+        chord && !typing && !spaceOwnedByControl
           ? keymap.commandFor(chord, [
               'model',
               modelingLocked ? 'view' : 'build'
@@ -18716,10 +18720,6 @@ export function App() {
           : null;
       const normalViewKey =
         modelCommand?.id === 'view-normal-to-face' && !event.repeat;
-      // A focused button presses on Space, so Space yields to it; any other
-      // key bound to this command has no such claim.
-      const spaceOwnedByControl =
-        chord === 'Space' && focusedControlOwnsSpace(target);
       const stableFaceSelection =
         renderedSelectedTopology?.kind === 'face' &&
         (interaction.mode === 'idle' ||
@@ -18727,8 +18727,7 @@ export function App() {
       if (
         normalViewKey &&
         tool === null &&
-        stableFaceSelection &&
-        !spaceOwnedByControl
+        stableFaceSelection
       ) {
         event.preventDefault();
         requestNormalToSelectedFace();
@@ -18952,11 +18951,12 @@ export function App() {
 
       // A resolved command owns its key: a remap onto a chord the browser
       // also answers to (Ctrl+P prints) must not do both. Tools prevent it
-      // themselves below, after their refusal check; Space reaching here had
-      // no face to turn to, so it keeps pressing the focused button.
+      // themselves below, after their refusal check. Only Space bound to
+      // Normal to face and finding no face to turn to is left alone: it ran
+      // nothing, and the page keeps its Space.
       if (
         modelCommand &&
-        chord !== 'Space' &&
+        !(modelCommand.id === 'view-normal-to-face' && chord === 'Space') &&
         commandTool(modelCommand.id) === null
       ) {
         event.preventDefault();
@@ -21495,6 +21495,9 @@ export function App() {
           <ProfileQuickAction
             profileName={selectedSketchProfileName}
             profileCount={selectedProfiles.length}
+            extrudeKey={keymap.label(
+              interaction.mode === 'sketch' ? 'sketch-extrude' : 'tool-extrude'
+            )}
             onExtrude={() =>
               startExtrude(selectedProfiles[0]!.sketchId as SketchId)
             }

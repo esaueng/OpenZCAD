@@ -118,3 +118,41 @@ test('a second key for Normal to face works while a button has focus', async ({
     'viewing normal to face'
   );
 });
+
+test('Space bound to another command yields to a focused button', async ({
+  page
+}) => {
+  // One key press, one action: with a button focused, Space presses it and
+  // runs nothing else, whichever command the keymap gives Space to.
+  await page.addInitScript(() => {
+    if (localStorage.getItem('openzcad-app-settings:v1')) return;
+    localStorage.setItem(
+      'openzcad-app-settings:v1',
+      JSON.stringify({
+        settings: {
+          keymap: {
+            overrides: { 'view-normal-to-face': [], 'view-grid': ['Space'] }
+          }
+        },
+        syncedRevision: null
+      })
+    );
+  });
+  await stubApi(page);
+  await createProject(page, 'Keymap space');
+  const grid = page.getByRole('button', { name: /^Toggle grid/ });
+  await expect(grid).toHaveAccessibleName('Toggle grid (Space)');
+
+  const before = await grid.getAttribute('aria-pressed');
+  await page.locator('body').click({ position: { x: 1, y: 1 } });
+  await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+  await page.keyboard.press('Space');
+  await expect(grid).not.toHaveAttribute('aria-pressed', before ?? '');
+
+  // Focused on the grid button itself: Space presses it once, so the grid
+  // flips back exactly once rather than twice.
+  const after = await grid.getAttribute('aria-pressed');
+  await grid.focus();
+  await page.keyboard.press('Space');
+  await expect(grid).not.toHaveAttribute('aria-pressed', after ?? '');
+});

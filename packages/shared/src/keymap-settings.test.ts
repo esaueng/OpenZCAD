@@ -27,6 +27,13 @@ describe('canonicalChord', () => {
     expect(canonicalChord('é')).toBe('É');
   });
 
+  it('keeps Shift on letters of any script', () => {
+    expect(canonicalChord('Shift+å')).toBe('Shift+Å');
+    expect(canonicalChord('å')).toBe('Å');
+    expect(canonicalChord('Shift+ж')).toBe('Shift+Ж');
+    expect(canonicalChord('Shift+1')).toBe('1');
+  });
+
   it('is stable: a canonical chord parses back to itself', () => {
     for (const value of ['b', 'ß', 'Shift+Ctrl+z', 'Shift+?', 'Ctrl++', 'é']) {
       const once = canonicalChord(value);
