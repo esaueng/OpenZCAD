@@ -90,6 +90,17 @@ function stubScene() {
   const taggedFill = new THREE.Mesh(new THREE.PlaneGeometry());
   taggedFill.userData.selectionOverlay = true;
   bodyA.add(taggedFill);
+  // An edge batch with a selection: suspended for the picture.
+  const edgeBatch = Object.assign(new THREE.Group(), {
+    suspended: false,
+    suspendHighlights() {
+      edgeBatch.suspended = true;
+      return () => {
+        edgeBatch.suspended = false;
+      };
+    }
+  });
+  bodyA.add(edgeBatch);
   scene.add(backdrop, grid, light, bodies, sketches, gizmo);
   const seen: Record<string, boolean | number>[] = [];
   const renderer = {
@@ -116,6 +127,7 @@ function stubScene() {
         shadowUpdate: renderer.shadowMap.needsUpdate,
         faceOverlay: faceOverlay.visible,
         taggedFill: taggedFill.visible,
+        edgesSuspended: edgeBatch.suspended,
         emissive: bodyA.material.emissive.getHex()
       });
     }),
@@ -147,6 +159,7 @@ function stubScene() {
     renderer,
     faceOverlay,
     taggedFill,
+    edgeBatch,
     refreshShadowMap
   };
 }
@@ -176,9 +189,11 @@ describe('renderViewportImage', () => {
         shadowUpdate: false,
         faceOverlay: false,
         taggedFill: false,
+        edgesSuspended: true,
         emissive: 0
       }
     ]);
+    expect(stub.edgeBatch.suspended).toBe(false);
     expect(stub.faceOverlay.visible).toBe(true);
     expect(stub.taggedFill.visible).toBe(true);
     expect(stub.bodyA.visible).toBe(true);
