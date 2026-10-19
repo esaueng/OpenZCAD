@@ -76,6 +76,12 @@ export default defineConfig({
           import.meta.url
         )
       ),
+      '@openzcad/kernel-adapter/face-attachment': fileURLToPath(
+        new URL(
+          './packages/kernel-adapter/src/face-attachment.ts',
+          import.meta.url
+        )
+      ),
       '@openzcad/kernel-adapter/extrude-inference': fileURLToPath(
         new URL(
           './packages/kernel-adapter/src/extrude-inference.ts',

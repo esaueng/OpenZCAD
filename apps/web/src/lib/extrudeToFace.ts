@@ -7,8 +7,11 @@ import {
   toFaceSignedDistance
 } from '@openzcad/document-core';
 import type {
+  BodyId,
   ExtrudeToFaceTarget,
+  FaceTopology,
   FeatureId,
+  FeatureNode,
   ProjectDocument,
   SketchId,
   TopologySelection
@@ -24,17 +27,78 @@ import { resolvedSketchPlaneBasis } from './sketch/planeBasis';
  */
 export function extrudeToFaceTargetFromPick(
   document: ProjectDocument,
-  selection: TopologySelection
+  selection: TopologySelection,
+  /**
+   * The extrude being edited or repaired, if any. A face picked on its own
+   * result body is resolved where the extrude reads it: a face the boolean
+   * carried from the add/cut/intersect input body is re-found on that input
+   * body (as it stood when this extrude consumed it), and a face the
+   * extrusion itself creates is refused.
+   */
+  editing?: FeatureNode
 ): ExtrudeToFaceTarget {
   if (selection.kind !== 'face') {
     throw new Error('Click a planar face for the extrusion to reach.');
   }
+  const face = document.derived.bodyRepresentations[
+    selection.bodyId
+  ]?.topology?.faces.find((candidate) => candidate.hash === selection.hash);
+  if (
+    editing?.bodyId !== undefined &&
+    selection.bodyId === editing.bodyId &&
+    editing.data.featureKind === 'extrude'
+  ) {
+    return carriedInputFace(document, editing, face);
+  }
+  return targetForFace(document, selection.bodyId, face);
+}
+
+/** The prefix the add/cut/intersect lineage puts on its input body's faces. */
+const CARRIED_TARGET_FACE = 'boolean.face.target.';
+
+function carriedInputFace(
+  document: ProjectDocument,
+  editing: FeatureNode,
+  face: FaceTopology | undefined
+): ExtrudeToFaceTarget {
+  const input =
+    editing.data.featureKind === 'extrude'
+      ? editing.data.targetBodyId
+      : undefined;
+  const reference = face?.reference;
+  if (
+    !input ||
+    !reference ||
+    reference.producingFeatureId !== editing.featureId ||
+    !reference.lineageName.startsWith(CARRIED_TARGET_FACE)
+  ) {
+    throw new Error(
+      'That face is made by this extrusion itself; pick a face it does not create.'
+    );
+  }
+  const lineageName = reference.lineageName.slice(CARRIED_TARGET_FACE.length);
+  const original = document.derived.bodyRepresentations[
+    input
+  ]?.topology?.faces.find(
+    (candidate) => candidate.reference?.lineageName === lineageName
+  );
+  if (!original) {
+    throw new Error(
+      'That face cannot be found on the body this extrusion consumes; pick another face.'
+    );
+  }
+  return targetForFace(document, input, original);
+}
+
+function targetForFace(
+  document: ProjectDocument,
+  bodyId: BodyId,
+  face: FaceTopology | undefined
+): ExtrudeToFaceTarget {
   const attachment = faceSketchAttachment({
-    bodyId: selection.bodyId,
-    pickedHash: selection.hash,
-    face: document.derived.bodyRepresentations[
-      selection.bodyId
-    ]?.topology?.faces.find((face) => face.hash === selection.hash)
+    bodyId,
+    pickedHash: face?.hash,
+    face
   });
   if (!attachment.ok) {
     throw new Error('Pick an exact planar face for the extrusion to reach.');
@@ -109,7 +173,7 @@ export function extrudeToFaceRepair(
   ) {
     throw new Error('Only an extrude to a face can have its face re-picked.');
   }
-  const toFace = extrudeToFaceTargetFromPick(document, selection);
+  const toFace = extrudeToFaceTargetFromPick(document, selection, feature);
   const label = `Re-pick face for ${feature.name}`;
   return {
     feature,

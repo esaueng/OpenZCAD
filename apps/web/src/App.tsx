@@ -2148,7 +2148,8 @@ export function App() {
    * click is that pick; Escape disarms it.
    */
   const [toFacePick, setToFacePick] = useState<
-    | { kind: 'create' | 'edit' }
+    | { kind: 'create' }
+    | { kind: 'edit'; featureId: FeatureId }
     | { kind: 'repair'; featureId: FeatureId; featureName: string }
     | null
   >(null);
@@ -18614,7 +18615,8 @@ export function App() {
   function extrudeToFacePicking(
     kind: 'create' | 'edit',
     sketchId: SketchId,
-    unresolved = false
+    unresolved = false,
+    featureId?: FeatureId
   ): ExtrudeToFacePicking {
     return {
       armed: toFacePick?.kind === kind,
@@ -18634,7 +18636,9 @@ export function App() {
         }
         setFaceRepair(null);
         setDatumRepair(null);
-        setToFacePick({ kind });
+        setToFacePick(
+          kind === 'edit' && featureId ? { kind, featureId } : { kind: 'create' }
+        );
         setStatus(
           'Click a planar face parallel to the sketch for the extrusion to reach · Esc cancels.'
         );
@@ -18706,7 +18710,13 @@ export function App() {
         setStatus('The extrude card closed; the face pick is canceled.');
         return;
       }
-      const target = extrudeToFaceTargetFromPick(doc, selection);
+      const editing =
+        armed.kind === 'edit' ? findFeature(doc, armed.featureId) : undefined;
+      const target = extrudeToFaceTargetFromPick(
+        doc,
+        selection,
+        editing ?? undefined
+      );
       setter.current(target);
       setToFacePick(null);
       setStatus(
@@ -22595,7 +22605,8 @@ export function App() {
                     feature.data.featureKind === 'extrude'
                       ? feature.data.sketchId
                       : ('' as SketchId),
-                    extrudeToFaceUnresolved(feature, warnings)
+                    extrudeToFaceUnresolved(feature, warnings),
+                    feature.featureId
                   )
                 }
                 onApplyRevolve={(feature, value) =>

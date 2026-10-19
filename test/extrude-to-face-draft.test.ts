@@ -23,11 +23,14 @@ import {
   toUserId,
   type BodyId,
   type ExtrudeToFaceTarget,
+  type FaceTopologyReferenceV5,
   type ProjectDocument,
   type SketchObjectData
 } from '@openzcad/shared';
 import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
 import { affectedFeatureTargets } from '../apps/web/src/lib/affectedFeatureTargets';
+import { extrudeToFaceTargetFromPick } from '../apps/web/src/lib/extrudeToFace';
+import { extrudeCapAncestor } from '../apps/web/src/lib/interaction/extrudeCapAncestry';
 import {
   extrudeEditCommand,
   extrudePreviewMagnitude
@@ -611,6 +614,101 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
           (target) => target.featureName
         )
       ).toContain('Post');
+    });
+
+    it('gives a derived extent no cap-drag ancestry: its distance is dormant', async () => {
+      const result = await post(25);
+      const feature = listFeaturesInOrder(result.document).at(-1)!;
+      const reference = {
+        kind: 'face',
+        producingFeatureId: feature.featureId,
+        lineageName: 'sweep.face.cap.end.x',
+        currentHash: 7,
+        witnessVersion: 1,
+        witness: {}
+      } as unknown as FaceTopologyReferenceV5;
+      expect(
+        extrudeCapAncestor(result.document, result.bodyId, reference, 7)
+      ).toBeNull();
+      // The same cap on a blind extrude is a distance drag.
+      const blind = updateFeature(result.document, {
+        featureId: feature.featureId,
+        clearData: ['endCondition', 'toFace']
+      });
+      expect(
+        extrudeCapAncestor(blind, result.bodyId, reference, 7)?.distance
+      ).toBe(1);
+    });
+
+    it("maps a face carried from an edited cut's input body back to that body", async () => {
+      let document = project('Pocket edit');
+      const block = box(document, 'Block', {
+        width: 20,
+        height: 20,
+        depth: 10
+      });
+      document = block.document;
+      const sketched = sketch(document, SQUARE, 10);
+      const pocket = extrudeSketch(sketched.document, {
+        name: 'Pocket',
+        sketchId: sketched.sketchId,
+        distance: -3,
+        operation: 'cut',
+        targetBodyId: block.bodyId
+      });
+      const built = await synced(pocket.document);
+      const faces =
+        built.derived.bodyRepresentations[pocket.bodyId]!.topology!.faces;
+      const bottom = faces.find(
+        (candidate) => (candidate.geometry?.normal?.z ?? 0) < -0.99
+      )!;
+      const feature = listFeaturesInOrder(built).at(-1)!;
+      const target = extrudeToFaceTargetFromPick(
+        built,
+        {
+          bodyId: pocket.bodyId,
+          kind: 'face',
+          topologyId: bottom.topologyId,
+          hash: bottom.hash
+        },
+        feature
+      );
+      expect(target.bodyId).toBe(block.bodyId);
+      const through = extrudeEditCommand(feature, {
+        name: 'Pocket',
+        sketchId: sketched.sketchId,
+        distance: -3,
+        symmetric: false,
+        backDistance: 0,
+        choice: { operation: 'cut', targetBodyId: block.bodyId },
+        endCondition: 'to-face',
+        toFace: target
+      }).apply(pocket.document);
+      const derived = await derive(through);
+      expect(derived.warnings).toEqual([]);
+      // The pocket now runs from the top face down to the floor: a hole.
+      expect(derived.bodyRepresentations[pocket.bodyId]!.volume).toBeCloseTo(
+        20 * 20 * 10 - 4 * 4 * 10,
+        6
+      );
+      // A face the extrusion itself makes (the pocket's own floor) is refused.
+      const floor = faces.find(
+        (candidate) =>
+          (candidate.geometry?.normal?.z ?? 0) > 0.99 &&
+          Math.abs((candidate.geometry?.center.z ?? 0) - 7) < 1e-6
+      )!;
+      expect(() =>
+        extrudeToFaceTargetFromPick(
+          built,
+          {
+            bodyId: pocket.bodyId,
+            kind: 'face',
+            topologyId: floor.topologyId,
+            hash: floor.hash
+          },
+          feature
+        )
+      ).toThrow(/made by this extrusion itself/);
     });
 
     it('refuses as unresolved when the face is no longer parallel', async () => {
