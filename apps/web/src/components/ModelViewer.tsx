@@ -2477,10 +2477,12 @@ export function ModelViewer({
           );
           const target = moveCopyPreview.target(object, !!preview.copy && !!body, () => {
             const resolution = context.fatLineResolution();
-            const copy = createObjectForBody(body!, resolution);
+            const copy = new THREE.Group();
+            const mesh = createObjectForBody(body!, resolution);
             const edges = createBodyEdgeOverlay(body!, resolution);
             edges.setDisplayMode(displayModeRef.current);
-            copy.add(edges);
+            mesh.add(edges);
+            copy.add(mesh);
             applyDisplayMode(copy, displayModeRef.current);
             return copy;
           });

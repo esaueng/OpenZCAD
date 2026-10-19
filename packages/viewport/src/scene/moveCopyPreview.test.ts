@@ -58,7 +58,7 @@ describe('a pending Move copy', () => {
     const preview = new MoveCopyPreview();
     const createCopy = () =>
       new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());
-    const copy = preview.target(source, true, createCopy) as THREE.Mesh;
+    const copy = preview.target(source, true, createCopy) as ReturnType<typeof createCopy>;
     const disposeCopyGeometry = vi.spyOn(copy.geometry, 'dispose');
     const disposeCopyMaterial = vi.spyOn(copy.material, 'dispose');
     const rebuilt = source.clone();
