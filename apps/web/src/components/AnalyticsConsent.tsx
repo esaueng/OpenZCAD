@@ -31,12 +31,14 @@ export function AnalyticsConsent() {
             'Anonymous feature counts. Never geometry, names, or identity.'
           )
         }
+        // The disclosure is the approved consent text word for word: a
+        // shortened copy dropped that local operations need opt-in.
         details={
           desktop
             ? undefined
             : {
                 summary: 'What’s collected',
-                body: 'Feature categories, workflow steps, exports, diagnostic codes, part-count and project-file-size ranges, transfer-size ranges, and coarse timings. No model contents, geometry, filenames, project names or identity. Off by default; this expanded scope requires a fresh choice. DNT/GPC and turning off cloud features suppress sending while preserving this choice; withdraw here to stop sending immediately. Existing anonymous totals cannot be attributed or removed. Basic server counters measure API activity and reliability. This browser-only choice is separate for each app.'
+                body: 'Allow Glimpse to count feature categories, workflow steps, exports, diagnostic codes, part-count and project-file-size ranges, transfer-size ranges, and coarse timings. This expanded scope requires a fresh choice. No model contents, geometry, filenames, project names or identity. Off by default. DNT/GPC and turning off cloud features suppress sending while preserving this choice; withdraw here to stop sending immediately. Existing anonymous totals cannot be attributed or removed. Basic server counters measure API activity and reliability. Local operations require opt-in. This browser-only choice is separate for each app.'
               }
         }
       >
@@ -167,7 +169,7 @@ export function CloudStatisticsConsent({
       hint={<span role="status">{status}</span>}
       details={{
         summary: 'What’s shared',
-        body: 'Hourly aggregate account, owned-project, revision and known storage-byte snapshots for 30 days, across your devices. Only opted-in accounts are included and no account or project identifiers leave OpenZCAD. Includes retained trash and storage metadata, never model contents. Withdraw here at any time; published aggregates remain up to 90 days. This account-wide permission is separate from browser DNT/GPC and this device’s cloud switch.'
+        body: 'Separately allow hourly aggregate account, owned-project, revision and known storage-byte snapshots for 30 days, across your devices. Only opted-in accounts are included. No account or project identifiers leave OpenZCAD. Includes retained trash and storage metadata, never model contents. Withdraw here at any time; published aggregates remain up to 90 days. This account-wide permission is separate from browser DNT/GPC and this device’s cloud switch.'
       }}
     >
       <Toggle

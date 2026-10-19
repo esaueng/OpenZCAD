@@ -832,6 +832,50 @@ describe('settings privacy and data section', () => {
     expect(screen.getByText(/cloud deletions below never touch/)).toBeVisible();
   });
 
+  it('keeps the file meter in range when the account is over its allowance', async () => {
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      ...storageUsage,
+      artifactBytes: 120 * 1_048_576
+    });
+    renderSettings(readyHealth, { initialSection: 'account', session });
+
+    const meter = await screen.findByRole('meter', {
+      name: 'Cloud file storage used'
+    });
+    const limit = String(storageUsage.artifactLimitBytes);
+    // The bar is full, never past full; the text says by how much.
+    expect(meter).toHaveAttribute('aria-valuemax', limit);
+    expect(meter).toHaveAttribute('aria-valuenow', limit);
+    expect(meter).toHaveAttribute(
+      'aria-valuetext',
+      '120.0 MB of 100.0 MB · over allowance'
+    );
+    expect(
+      screen.getByText('120.0 MB of 100.0 MB · over allowance')
+    ).toBeVisible();
+  });
+
+  it('reports in-range file usage as it is', async () => {
+    renderSettings(readyHealth, { initialSection: 'account', session });
+
+    const meter = await screen.findByRole('meter', {
+      name: 'Cloud file storage used'
+    });
+    expect(meter).toHaveAttribute('aria-valuenow', String(5 * 1_048_576));
+    expect(meter).toHaveAttribute('aria-valuetext', '5.0 MB of 100.0 MB');
+  });
+
+  it('keeps the full analytics disclosure, local operations included', async () => {
+    const user = userEvent.setup();
+    renderSettings(readyHealth, { initialSection: 'privacy', session });
+
+    await user.click(screen.getByText('What’s collected'));
+    expect(screen.getByText(/Local operations require opt-in\./)).toBeVisible();
+    expect(
+      screen.getByText(/This expanded scope requires a fresh choice\./)
+    ).toBeVisible();
+  });
+
   it('shows storage usage on Account, where the profile that owns it is', async () => {
     renderSettings(readyHealth, { initialSection: 'account', session });
 

@@ -178,25 +178,34 @@ export function Status({
   );
 }
 
-/** A used-of-limit bar with its figures. */
+/**
+ * A used-of-limit bar. An account may hold more than its allowance (existing
+ * files stay when it shrinks), so the exposed value is clamped into range as
+ * the bar is, and `valueText` carries the true figures, overage included.
+ */
 export function Meter({
   used,
   limit,
-  label
+  label,
+  valueText
 }: {
   used: number;
   limit: number;
   label: string;
+  valueText: string;
 }) {
-  const fraction = limit > 0 ? Math.min(1, used / limit) : 0;
+  const max = Math.max(0, limit);
+  const now = Math.min(max, Math.max(0, used));
+  const fraction = max > 0 ? now / max : 0;
   return (
     <span
       className="settings-meter-bar"
       role="meter"
       aria-label={label}
       aria-valuemin={0}
-      aria-valuemax={limit}
-      aria-valuenow={used}
+      aria-valuemax={max}
+      aria-valuenow={now}
+      aria-valuetext={valueText}
     >
       <span style={{ width: `${(fraction * 100).toFixed(1)}%` }} />
     </span>

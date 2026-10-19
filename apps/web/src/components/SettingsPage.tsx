@@ -116,6 +116,14 @@ function storageHint(usage: AccountStorageUsage | null): string {
   return `${countLabel(usage.projectCount, 'project', 'projects')} · ${countLabel(usage.revisionCount, 'revision', 'revisions')}. Up to ${formatBytes(usage.documentLimitBytes)} and ${usage.maxRevisionsPerProject} revisions per project.`;
 }
 
+/** Cloud file usage against the allowance, naming an overage outright. */
+function fileStorageFigure(usage: AccountStorageUsage): string {
+  const figure = `${formatBytes(usage.artifactBytes)} of ${formatBytes(usage.artifactLimitBytes)}`;
+  return usage.artifactBytes > usage.artifactLimitBytes
+    ? `${figure} · over allowance`
+    : figure;
+}
+
 type SectionId = SettingsSectionId;
 
 interface SettingsPageProps {
@@ -1902,10 +1910,9 @@ export function SettingsPage({
                               used={storageUsage.artifactBytes}
                               limit={storageUsage.artifactLimitBytes}
                               label="Cloud file storage used"
+                              valueText={fileStorageFigure(storageUsage)}
                             />
-                            <span>
-                              {`${formatBytes(storageUsage.artifactBytes)} of ${formatBytes(storageUsage.artifactLimitBytes)}`}
-                            </span>
+                            <span>{fileStorageFigure(storageUsage)}</span>
                           </span>
                         ) : (
                           <Status>—</Status>
