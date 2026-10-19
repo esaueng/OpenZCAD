@@ -240,27 +240,24 @@ class OcclusionGrid {
         const r = ((pu - au) * dv - (pv - av) * du) / denom;
         if (s > 0 && s < 1 && r >= 0 && r <= 1) out.push(s);
       }
-      // Where the segment passes through the triangle's plane: its depth
-      // meets the occlusion threshold there, so visibility can change
-      // inside the triangle's footprint (an edge piercing a face, or two
-      // bodies that intersect). Both depths are linear along the segment.
+      // Where the segment passes through the triangle's plane (an edge
+      // piercing a face, or two bodies that intersect), visibility can
+      // change inside the footprint. Both depths are linear along the
+      // segment, so the crossing is exact. The cut goes at the geometric
+      // crossing, not the tolerance-shifted one: an edge that only starts
+      // or ends on the plane (a face at its own corner) then yields at most
+      // a zero-length piece, and an edge leaving the plane at a shallow
+      // angle is still split where it actually passes behind it.
       const plane = (u: number, v: number) => {
         const w0 = ((t.u1 - u) * (t.v2 - v) - (t.u2 - u) * (t.v1 - v)) / t.area;
         const w1 = ((t.u2 - u) * (t.v0 - v) - (t.u0 - u) * (t.v2 - v)) / t.area;
         return w0 * t.d0 + w1 * t.d1 + (1 - w0 - w1) * t.d2;
       };
-      // An edge that merely starts or ends on the plane (a face at its own
-      // corner) does not pass through it; its endpoint already bounds it.
       const g0 = plane(au, av) - ad;
       const g1 = plane(bu, bv) - bd;
-      const tol = t.tol;
-      if (Math.abs(g0) > tol && Math.abs(g1) > tol) {
-        const f0 = g0 + tol;
-        const f1 = g1 + tol;
-        if ((f0 < 0 && f1 > 0) || (f0 > 0 && f1 < 0)) {
-          const s = f0 / (f0 - f1);
-          if (s > 0 && s < 1) out.push(s);
-        }
+      if ((g0 < 0 && g1 > 0) || (g0 > 0 && g1 < 0)) {
+        const s = g0 / (g0 - g1);
+        if (s > 0 && s < 1) out.push(s);
       }
     }
     return out.sort((a, b) => a - b);
