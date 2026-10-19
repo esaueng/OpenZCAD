@@ -186,6 +186,31 @@ export function drawingViewAlignment(
   return null;
 }
 
+/**
+ * Which side of its base a projected view belongs on, along their shared
+ * axis: +1 right (row) or above (column), −1 left or below. Third angle
+ * places a view on the side its camera looks from (the top view above the
+ * front, the right view to its right); first angle places it opposite. A
+ * view looking from neither side (the back, beside the front) goes right in
+ * third angle and left in first, so switching convention mirrors every
+ * projected view consistently. 0 when the two do not fold.
+ */
+export function projectedViewSide(
+  base: DrawingViewOrientation,
+  child: DrawingViewOrientation,
+  angle: DrawingProjectionAngle
+): 1 | -1 | 0 {
+  const alignment = drawingViewAlignment(base, child);
+  if (alignment === null) return 0;
+  const frame = DRAWING_VIEW_FRAMES[base];
+  const toward = DRAWING_VIEW_FRAMES[child].direction;
+  const axis = alignment === 'row' ? frame.x : frame.up;
+  // The child's camera sits at −direction.
+  const along = -(axis.x * toward.x + axis.y * toward.y + axis.z * toward.z);
+  const third = along < -1e-9 ? -1 : 1;
+  return angle === 'third' ? third : third === 1 ? -1 : 1;
+}
+
 /** A sheet scale `numerator : denominator` — paper length : model length. */
 export interface DrawingScale {
   numerator: number;

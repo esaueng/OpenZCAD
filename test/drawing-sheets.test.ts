@@ -13,6 +13,7 @@ import {
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   drawingSetError,
+  projectedViewSide,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
@@ -379,6 +380,55 @@ describe('D01 drawing section (schema v30)', () => {
       undefined
     ]);
     expect(views().top).toEqual({ x: 90, y: 210 });
+  });
+
+  it("keeps every projected view on its projection angle's side of the base", () => {
+    // The glass-box sides: third angle shows a view on its camera's side.
+    expect(projectedViewSide('front', 'top', 'third')).toBe(1);
+    expect(projectedViewSide('front', 'bottom', 'third')).toBe(-1);
+    expect(projectedViewSide('front', 'right', 'third')).toBe(1);
+    expect(projectedViewSide('front', 'left', 'third')).toBe(-1);
+    expect(projectedViewSide('front', 'top', 'first')).toBe(-1);
+    expect(projectedViewSide('front', 'left', 'first')).toBe(1);
+    expect(projectedViewSide('front', 'back', 'third')).toBe(
+      -projectedViewSide('front', 'back', 'first')
+    );
+    expect(projectedViewSide('front', 'iso', 'third')).toBe(0);
+
+    const document = boxDocument();
+    const ids = document.bodyOrder;
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.addDrawingSheet({
+        sheet: sheet(ids, [
+          view('front', ids, { centerMm: { x: 100, y: 100 } })
+        ])
+      })
+    );
+    // Third angle: a bottom view asked for above the front is put below it.
+    manager.execute(
+      commandFactories.addDrawingView({
+        sheetId,
+        view: view('bottom', ids, {
+          centerMm: { x: 40, y: 160 },
+          parentViewId: baseId
+        })
+      })
+    );
+    const bottom = () =>
+      manager.document.drawings!.sheets[0]!.views.find(
+        (entry) => entry.orientation === 'bottom'
+      )!.centerMm;
+    expect(bottom()).toEqual({ x: 100, y: 40 });
+    // A move cannot take it across to the top view's side.
+    manager.execute(
+      commandFactories.updateDrawingView({
+        sheetId,
+        viewId: 'dvw_bottom' as DrawingViewId,
+        centerMm: { x: 100, y: 150 }
+      })
+    );
+    expect(bottom()).toEqual({ x: 100, y: 100 });
   });
 
   it('mirrors projected views across their base when the projection angle changes', () => {

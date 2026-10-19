@@ -207,6 +207,27 @@ describe('DrawingWorkspace', () => {
     }
   });
 
+  it("adds a projected view on its projection angle's side of the base", async () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const sheet = {
+      ...starter(fingerprint),
+      projectionAngle: 'third' as const
+    };
+    const front = sheet.views[0]!;
+    const { onCommand } = setup({ sheet });
+    await userEvent.selectOptions(screen.getByLabelText('New view'), 'bottom');
+    await userEvent.click(screen.getByRole('button', { name: /Add view/ }));
+    const { view } = onCommand.mock.calls[0]![0].payload as {
+      view: DrawingSheet['views'][number];
+    };
+    expect(view.parentViewId).toBe(front.viewId);
+    expect(view.centerMm.x).toBeCloseTo(front.centerMm.x, 9);
+    // Third angle: the bottom view sits below the front, clear of it.
+    expect(view.centerMm.y).toBeLessThan(front.centerMm.y - 15);
+  });
+
   it('keeps the keys it handles from the workspace shortcuts', async () => {
     const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
       bodyId

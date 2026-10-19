@@ -17,8 +17,10 @@ import {
   DRAWING_VIEW_LABELS,
   DRAWING_VIEW_ORIENTATIONS,
   drawingPaperMm,
+  drawingPaperPerModelUnit,
   drawingViewAlignment,
   formatDrawingScale,
+  projectedViewSide,
   MAX_DRAWING_TEXT_LENGTH,
   type BodyId,
   type BodyRepresentation,
@@ -459,11 +461,54 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         drawingViewAlignment(view.orientation, addOrientation) !== null
     );
     const area = sheetViewArea(sheet);
+    const viewBodies = bodyIds.filter((id) => liveBodies.includes(id));
+    // A projected view goes beside its base, on the side the projection
+    // angle gives it, clear of the base by a gap; anything else starts in
+    // the middle of the sheet.
+    let centerMm = { x: area.x + area.width / 2, y: area.y + area.height / 2 };
+    if (base) {
+      const side = projectedViewSide(
+        base.orientation,
+        addOrientation,
+        sheet.projectionAngle
+      );
+      const k = drawingPaperPerModelUnit(sheet.scale, document.units);
+      const baseBox = estimateViewExtent(
+        bodies,
+        base.bodyIds,
+        base.orientation
+      );
+      const box = estimateViewExtent(bodies, viewBodies, addOrientation);
+      const gap = 15;
+      if (drawingViewAlignment(base.orientation, addOrientation) === 'row') {
+        const half =
+          ((baseBox?.maxU ?? 0) -
+            (baseBox?.minU ?? 0) +
+            ((box?.maxU ?? 0) - (box?.minU ?? 0))) *
+          k *
+          0.5;
+        centerMm = {
+          x: base.centerMm.x + side * (half + gap),
+          y: base.centerMm.y
+        };
+      } else {
+        const half =
+          ((baseBox?.maxV ?? 0) -
+            (baseBox?.minV ?? 0) +
+            ((box?.maxV ?? 0) - (box?.minV ?? 0))) *
+          k *
+          0.5;
+        centerMm = {
+          x: base.centerMm.x,
+          y: base.centerMm.y + side * (half + gap)
+        };
+      }
+    }
     const view: DrawingView = {
       viewId: createDrawingViewId(),
       orientation: addOrientation,
-      bodyIds: bodyIds.filter((id) => liveBodies.includes(id)),
-      centerMm: { x: area.x + area.width / 2, y: area.y + area.height / 2 },
+      bodyIds: viewBodies,
+      centerMm,
       hiddenLines: addOrientation !== 'iso',
       ...(base ? { parentViewId: base.viewId } : {})
     };

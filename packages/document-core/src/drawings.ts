@@ -2,6 +2,7 @@ import {
   assertDrawingSet,
   deepClone,
   drawingViewAlignment,
+  projectedViewSide,
   type BodyId,
   type DrawingSheet,
   type DrawingSheetId,
@@ -186,7 +187,14 @@ export function addDrawingView(
     const parent = view.parentViewId
       ? sheet.views.find((entry) => entry.viewId === view.parentViewId)
       : undefined;
-    if (parent) view.centerMm = alignedCenter(parent, view, view.centerMm);
+    if (parent)
+      view.centerMm = alignedCenter(
+        parent,
+        view,
+        view.centerMm,
+        sheet.projectionAngle,
+        'mirror'
+      );
     sheet.views.push(view);
     return sheets;
   });
@@ -194,17 +202,31 @@ export function addDrawingView(
 
 /**
  * Where `child` lands when asked to sit at `requested`: on the base's row
- * or column, whichever axis the two views share.
+ * or column, whichever axis the two views share, and on the side of the
+ * base the sheet's projection angle gives it. A request on the other side
+ * is mirrored across the base when a view is added (`mirror`) and stopped
+ * at the base when a view is moved (`clamp`), so no edit can contradict the
+ * projection named in the title block.
  */
 function alignedCenter(
   base: DrawingView,
   child: DrawingView,
-  requested: { x: number; y: number }
+  requested: { x: number; y: number },
+  angle: DrawingSheet['projectionAngle'],
+  across: 'mirror' | 'clamp'
 ): { x: number; y: number } {
   const alignment = drawingViewAlignment(base.orientation, child.orientation);
-  if (alignment === 'row') return { x: requested.x, y: base.centerMm.y };
-  if (alignment === 'column') return { x: base.centerMm.x, y: requested.y };
-  return requested;
+  if (alignment === null) return requested;
+  const side = projectedViewSide(base.orientation, child.orientation, angle);
+  const settle = (value: number, origin: number) =>
+    side * (value - origin) >= 0
+      ? value
+      : across === 'mirror'
+        ? 2 * origin - value
+        : origin;
+  return alignment === 'row'
+    ? { x: settle(requested.x, base.centerMm.x), y: base.centerMm.y }
+    : { x: base.centerMm.x, y: settle(requested.y, base.centerMm.y) };
 }
 
 export function updateDrawingView(
@@ -230,7 +252,13 @@ export function updateDrawingView(
         ? sheet.views.find((entry) => entry.viewId === view.parentViewId)
         : undefined;
       const next = parent
-        ? alignedCenter(parent, view, input.centerMm)
+        ? alignedCenter(
+            parent,
+            view,
+            input.centerMm,
+            sheet.projectionAngle,
+            'clamp'
+          )
         : { ...input.centerMm };
       const dx = next.x - view.centerMm.x;
       const dy = next.y - view.centerMm.y;
@@ -239,10 +267,13 @@ export function updateDrawingView(
       // axis, so the views it folds into stay aligned with it.
       for (const child of sheet.views) {
         if (child.parentViewId !== view.viewId) continue;
-        child.centerMm = alignedCenter(view, child, {
-          x: child.centerMm.x + dx,
-          y: child.centerMm.y + dy
-        });
+        child.centerMm = alignedCenter(
+          view,
+          child,
+          { x: child.centerMm.x + dx, y: child.centerMm.y + dy },
+          sheet.projectionAngle,
+          'clamp'
+        );
       }
     }
     return sheets;
