@@ -1,0 +1,337 @@
+/* ─────────────────────────────────────────────────────────────
+   D01 Drawing workspace: the sheet canvas over the stage and its
+   properties panel. The paper is white in every theme — it is the
+   page that prints — and its lines are black; only the chrome
+   around it follows the workspace tokens.
+   ───────────────────────────────────────────────────────────── */
+
+.stage-takeover {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  background: var(--color-bg);
+}
+
+.drawing-workspace {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  gap: var(--island-gap);
+  /* The top bar floats over the stage as islands; start below it. */
+  padding: var(--stage-top) var(--island-gap) var(--island-gap);
+}
+
+.drawing-stage {
+  position: relative;
+  /* The command bar and the status lane float at the stage's foot. */
+  padding-bottom: calc(var(--command-bar-h) + var(--island-gap) * 3);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.drawing-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  outline: none;
+  touch-action: none;
+}
+
+.drawing-canvas:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.drawing-paper {
+  fill: #ffffff;
+  filter: drop-shadow(0 2px 10px rgb(0 0 0 / 35%));
+}
+
+.drawing-strokes {
+  fill: none;
+  stroke: #000000;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.drawing-strokes polyline,
+.drawing-strokes polygon {
+  vector-effect: non-scaling-stroke;
+}
+
+.drawing-strokes.is-visible {
+  stroke-width: 1.4px;
+}
+
+.drawing-strokes.is-hidden {
+  stroke-width: 1px;
+  stroke-dasharray: 6 3;
+}
+
+.drawing-strokes.is-border {
+  stroke-width: 1.6px;
+}
+
+.drawing-strokes.is-thin {
+  stroke-width: 0.8px;
+}
+
+.drawing-texts {
+  fill: #000000;
+  font-family: Helvetica, Arial, sans-serif;
+  pointer-events: none;
+  user-select: none;
+}
+
+.drawing-view-outline {
+  fill: rgb(103 152 255 / 6%);
+  stroke: #8a93a0;
+  stroke-width: 1px;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.drawing-view-label {
+  fill: #6b7380;
+  font-family: var(--font-ui);
+  font-size: 3.2px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.drawing-view-hit {
+  fill: transparent;
+  stroke: transparent;
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+  cursor: grab;
+}
+
+.drawing-view-hit:hover {
+  stroke: rgb(103 152 255 / 55%);
+  stroke-dasharray: 4 3;
+}
+
+.drawing-view.is-selected .drawing-view-hit {
+  stroke: var(--color-accent);
+  stroke-dasharray: none;
+}
+
+.drawing-view.is-selected .drawing-view-label {
+  fill: var(--color-accent);
+}
+
+.drawing-title-hit {
+  fill: transparent;
+}
+
+.drawing-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+}
+
+.drawing-banner span {
+  flex: 1 1 auto;
+}
+
+.drawing-banner.is-stale,
+.drawing-banner.is-missing {
+  border-color: var(--color-warning);
+}
+
+.drawing-banner.is-pending {
+  color: var(--color-text-muted);
+}
+
+/* The left column lists the project's sheets; the right panel edits the
+   selected sheet or view. Both are islands like the rest of the stage. */
+.drawing-sheets,
+.drawing-panel {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 12px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+.drawing-sheets {
+  flex: 0 0 200px;
+}
+
+.drawing-panel {
+  flex: 0 0 280px;
+}
+
+.drawing-panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.drawing-panel-section:last-child {
+  border-bottom: 0;
+}
+
+.drawing-panel-section h3 {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.drawing-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.drawing-sheet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.drawing-sheet-item {
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.drawing-sheet-item:hover {
+  background: var(--color-surface-hover);
+}
+
+.drawing-sheet-item.active {
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+.drawing-field {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.drawing-field input,
+.drawing-field select {
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+
+.drawing-field-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.drawing-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+}
+
+.drawing-bodies {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.drawing-bodies legend {
+  padding: 0 4px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.drawing-hint {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.drawing-delete-sheet {
+  align-self: flex-start;
+}
+
+.drawing-empty {
+  margin: auto;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  color: var(--color-text-muted);
+}
+
+.drawing-empty h2 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--fs-lg);
+}
+
+.drawing-empty p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .drawing-workspace {
+    flex-direction: column;
+  }
+
+  .drawing-sheets,
+  .drawing-panel {
+    flex: 0 0 auto;
+    max-height: 45%;
+  }
+
+  .drawing-sheets {
+    max-height: 20%;
+  }
+}

@@ -155,6 +155,18 @@ import {
   type PrimitiveInput,
   renameNode,
   renameParameter,
+  addDrawingSheet,
+  updateDrawingSheet,
+  deleteDrawingSheet,
+  addDrawingView,
+  updateDrawingView,
+  deleteDrawingView,
+  type DrawingSheetAddInput,
+  type DrawingSheetUpdateInput,
+  type DrawingSheetDeleteInput,
+  type DrawingViewAddInput,
+  type DrawingViewUpdateInput,
+  type DrawingViewDeleteInput,
   resolveParamValue,
   resolveSketchInput,
   type RevolveInput,
@@ -257,7 +269,13 @@ export type CommandKind =
   | 'import.step'
   | 'import.shapr-guided'
   | 'node.rename'
-  | 'node.metadata.set';
+  | 'node.metadata.set'
+  | 'drawing.sheet.add'
+  | 'drawing.sheet.update'
+  | 'drawing.sheet.delete'
+  | 'drawing.view.add'
+  | 'drawing.view.update'
+  | 'drawing.view.delete';
 
 export interface CommandDefinition<TPayload> {
   kind: CommandKind;
@@ -311,7 +329,13 @@ export type AnyCommand =
   | CommandDefinition<ImportedStepInput>
   | CommandDefinition<ShaprGuidedImportInput>
   | CommandDefinition<NodeRenameInput>
-  | CommandDefinition<NodeMetadataInput>;
+  | CommandDefinition<NodeMetadataInput>
+  | CommandDefinition<DrawingSheetAddInput>
+  | CommandDefinition<DrawingSheetUpdateInput>
+  | CommandDefinition<DrawingSheetDeleteInput>
+  | CommandDefinition<DrawingViewAddInput>
+  | CommandDefinition<DrawingViewUpdateInput>
+  | CommandDefinition<DrawingViewDeleteInput>;
 
 function makeCommand<TPayload>(
   kind: CommandKind,
@@ -1812,6 +1836,59 @@ export const commandFactories = {
     return makeCommand('node.metadata.set', label, payload, (document) =>
       setNodeMetadata(document, payload)
     );
+  },
+  addDrawingSheet(
+    payload: DrawingSheetAddInput
+  ): CommandDefinition<DrawingSheetAddInput> {
+    return makeCommand(
+      'drawing.sheet.add',
+      `Add drawing ${payload.sheet.name}`,
+      payload,
+      (document) => addDrawingSheet(document, payload)
+    );
+  },
+  updateDrawingSheet(
+    payload: DrawingSheetUpdateInput,
+    label = payload.source ? 'Update drawing' : 'Edit drawing sheet'
+  ): CommandDefinition<DrawingSheetUpdateInput> {
+    return makeCommand('drawing.sheet.update', label, payload, (document) =>
+      updateDrawingSheet(document, payload)
+    );
+  },
+  deleteDrawingSheet(
+    payload: DrawingSheetDeleteInput
+  ): CommandDefinition<DrawingSheetDeleteInput> {
+    return makeCommand(
+      'drawing.sheet.delete',
+      'Delete drawing',
+      payload,
+      (document) => deleteDrawingSheet(document, payload)
+    );
+  },
+  addDrawingView(
+    payload: DrawingViewAddInput
+  ): CommandDefinition<DrawingViewAddInput> {
+    return makeCommand('drawing.view.add', 'Add drawing view', payload, (document) =>
+      addDrawingView(document, payload)
+    );
+  },
+  updateDrawingView(
+    payload: DrawingViewUpdateInput,
+    label = payload.centerMm ? 'Move drawing view' : 'Edit drawing view'
+  ): CommandDefinition<DrawingViewUpdateInput> {
+    return makeCommand('drawing.view.update', label, payload, (document) =>
+      updateDrawingView(document, payload)
+    );
+  },
+  deleteDrawingView(
+    payload: DrawingViewDeleteInput
+  ): CommandDefinition<DrawingViewDeleteInput> {
+    return makeCommand(
+      'drawing.view.delete',
+      'Delete drawing view',
+      payload,
+      (document) => deleteDrawingView(document, payload)
+    );
   }
 };
 
@@ -3236,6 +3313,15 @@ function parameterOnly(kinds: string[] | null): boolean {
   return !!kinds?.length && kinds.every((kind) => kind === 'parameter.set');
 }
 
+/** D01: a command that edits drawing sheets and never the model. */
+export function isDrawingCommandKind(kind: string): boolean {
+  return kind.startsWith('drawing.');
+}
+
+function drawingOnly(kinds: string[] | null): boolean {
+  return !!kinds?.length && kinds.every(isDrawingCommandKind);
+}
+
 /** Owns the canonical document, including its durable undo/redo position. */
 export class CommandManager {
   constructor(
@@ -3294,6 +3380,16 @@ export class CommandManager {
   /** The same question for the entry redo would apply. */
   get redoIsParameterOnly(): boolean {
     return parameterOnly(this.redoEntryKinds);
+  }
+  /**
+   * Whether undo would revert drawing-sheet edits only — the Drawing
+   * workspace's vocabulary, which leaves the model alone.
+   */
+  get undoIsDrawingOnly(): boolean {
+    return drawingOnly(this.undoEntryKinds);
+  }
+  get redoIsDrawingOnly(): boolean {
+    return drawingOnly(this.redoEntryKinds);
   }
   /**
    * Whether undo is available, in a workspace that allows parameter edits
@@ -3696,6 +3792,30 @@ export function replayCommands(
         break;
       case 'node.metadata.set':
         next = setNodeMetadata(next, command.payload as NodeMetadataInput);
+        break;
+      case 'drawing.sheet.add':
+        next = addDrawingSheet(next, command.payload as DrawingSheetAddInput);
+        break;
+      case 'drawing.sheet.update':
+        next = updateDrawingSheet(
+          next,
+          command.payload as DrawingSheetUpdateInput
+        );
+        break;
+      case 'drawing.sheet.delete':
+        next = deleteDrawingSheet(
+          next,
+          command.payload as DrawingSheetDeleteInput
+        );
+        break;
+      case 'drawing.view.add':
+        next = addDrawingView(next, command.payload as DrawingViewAddInput);
+        break;
+      case 'drawing.view.update':
+        next = updateDrawingView(next, command.payload as DrawingViewUpdateInput);
+        break;
+      case 'drawing.view.delete':
+        next = deleteDrawingView(next, command.payload as DrawingViewDeleteInput);
         break;
       default:
         // Unknown kinds are skipped (not fatal) so documents written by newer

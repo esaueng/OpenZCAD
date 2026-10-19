@@ -71,6 +71,7 @@ fn export_path(path: &Path, format: &str) -> Result<PathBuf, String> {
         "ply" => &["ply"][..],
         "svg" => &["svg"][..],
         "png" => &["png"][..],
+        "pdf" => &["pdf"][..],
         _ => &["stl"][..],
     };
     let extension = path
@@ -135,7 +136,7 @@ async fn save_cad_binary_file(
 ) -> Result<bool, String> {
     if !matches!(
         format.as_str(),
-        "stl" | "3mf" | "obj" | "glb" | "ply" | "png"
+        "stl" | "3mf" | "obj" | "glb" | "ply" | "png" | "pdf"
     ) {
         return Err("Unsupported export format.".to_string());
     }
@@ -154,6 +155,7 @@ async fn save_cad_binary_file(
         "glb" => "Export glTF",
         "ply" => "Export PLY",
         "png" => "Export PNG",
+        "pdf" => "Export PDF",
         _ => "Export STL",
     };
     let handle = rfd::AsyncFileDialog::new()
@@ -390,5 +392,10 @@ mod tests {
         );
         assert!(export_path(Path::new("part.png"), "svg").is_err());
         assert!(export_path(Path::new("part.svg"), "png").is_err());
+        assert_eq!(
+            export_path(Path::new("part-sheet-1"), "pdf").unwrap(),
+            Path::new("part-sheet-1.pdf")
+        );
+        assert!(export_path(Path::new("part.svg"), "pdf").is_err());
     }
 }

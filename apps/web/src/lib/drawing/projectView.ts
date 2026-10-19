@@ -1,0 +1,606 @@
+import {
+  DRAWING_VIEW_FRAMES,
+  type DrawingViewFrame,
+  type DrawingViewOrientation
+} from '@openzcad/shared';
+
+/**
+ * D01 view projection with hidden-line removal, in plain TypeScript.
+ *
+ * Why not the kernel's `projectEdges`: on the pinned build its occlusion test
+ * is local — a point is hidden only when a step of `1e-4 · diagonal` toward
+ * the camera enters the solid — so an edge behind a separate wall of the same
+ * part (the far post of a U seen from the side) reads as visible, one body
+ * never hides another, and curved faces get no silhouette (outline) curves,
+ * so a cylinder's side view has no sides. Both were measured against the pin;
+ * see `test/drawing-projection.test.ts`.
+ *
+ * What this does instead, from the display projection the geometry worker
+ * already publishes for every body:
+ *
+ * - **Lines.** Every feature edge's polyline, sampled by the kernel from the
+ *   exact curve (seam edges are not physical edges and are left out), plus
+ *   silhouette lines of curved faces: display-mesh edges where the surface
+ *   turns from facing the camera to facing away, within one face or across a
+ *   smooth (tangent) boundary.
+ * - **Visibility.** A sample is hidden when any triangle of any body in the
+ *   view covers it in projection and lies in front of it by more than a
+ *   depth tolerance. Triangles are bucketed in a projected grid. Transitions
+ *   are located by bisection, not left at the sample spacing.
+ *
+ * This is an approximation, and labelled as one: occlusion is tested against
+ * the display tessellation (chordal error of its deflection) and silhouettes
+ * run through mesh vertices. Exact edge geometry is used wherever an edge
+ * exists. Coordinates are in model units in the view plane, u right, v up.
+ */
+
+export interface ProjectionBodyInput {
+  /** World-space xyz triples. */
+  vertices: Float32Array | Float64Array;
+  indices: Uint32Array;
+  /** Triangle ranges of the body's B-rep faces, when topology is known. */
+  faces?: readonly { triangleStart: number; triangleCount: number }[];
+  /** World-space xyz polylines of the body's physical edges. */
+  edges: readonly (Float32Array | Float64Array | readonly number[])[];
+}
+
+export interface ViewProjectionInput {
+  orientation: DrawingViewOrientation;
+  hiddenLines: boolean;
+  bodies: readonly ProjectionBodyInput[];
+}
+
+export interface ViewProjection {
+  /** Flat `[u0, v0, u1, v1, …]` polylines in model units. */
+  visible: Float64Array[];
+  hidden: Float64Array[];
+  /** Extent of everything the view draws, or null for an empty view. */
+  bounds: { minU: number; minV: number; maxU: number; maxV: number } | null;
+}
+
+/** Steps a straight run is cut into before classification, per diagonal. */
+const SAMPLES_PER_DIAGONAL = 400;
+const BISECTION_STEPS = 14;
+/** Cosine of the largest dihedral still treated as a smooth surface. */
+const SMOOTH_DIHEDRAL_COS = Math.cos((50 * Math.PI) / 180);
+
+interface Triangle {
+  u0: number;
+  v0: number;
+  d0: number;
+  u1: number;
+  v1: number;
+  d1: number;
+  u2: number;
+  v2: number;
+  d2: number;
+  area: number;
+}
+
+class OcclusionGrid {
+  private readonly cells: number[][];
+  private readonly size: number;
+  private readonly minU: number;
+  private readonly minV: number;
+  private readonly cellU: number;
+  private readonly cellV: number;
+
+  constructor(
+    private readonly triangles: Triangle[],
+    bounds: { minU: number; minV: number; maxU: number; maxV: number },
+    private readonly depthTolerance: number,
+    private readonly coverTolerance: number
+  ) {
+    this.size = Math.max(
+      8,
+      Math.min(256, Math.ceil(Math.sqrt(triangles.length / 2)))
+    );
+    this.minU = bounds.minU;
+    this.minV = bounds.minV;
+    this.cellU = Math.max((bounds.maxU - bounds.minU) / this.size, 1e-12);
+    this.cellV = Math.max((bounds.maxV - bounds.minV) / this.size, 1e-12);
+    this.cells = Array.from({ length: this.size * this.size }, () => []);
+    triangles.forEach((triangle, index) => {
+      const i0 = this.column(Math.min(triangle.u0, triangle.u1, triangle.u2));
+      const i1 = this.column(Math.max(triangle.u0, triangle.u1, triangle.u2));
+      const j0 = this.row(Math.min(triangle.v0, triangle.v1, triangle.v2));
+      const j1 = this.row(Math.max(triangle.v0, triangle.v1, triangle.v2));
+      for (let j = j0; j <= j1; j += 1)
+        for (let i = i0; i <= i1; i += 1)
+          this.cells[j * this.size + i]!.push(index);
+    });
+  }
+
+  private column(u: number): number {
+    return Math.min(
+      this.size - 1,
+      Math.max(0, Math.floor((u - this.minU) / this.cellU))
+    );
+  }
+
+  private row(v: number): number {
+    return Math.min(
+      this.size - 1,
+      Math.max(0, Math.floor((v - this.minV) / this.cellV))
+    );
+  }
+
+  /** True when a triangle covers (u, v) in front of `depth`. */
+  occluded(u: number, v: number, depth: number): boolean {
+    const cell = this.cells[this.row(v) * this.size + this.column(u)]!;
+    for (const index of cell) {
+      const t = this.triangles[index]!;
+      // Barycentric weights against the signed projected area. A sample on a
+      // triangle's boundary counts as covered: an exclusive test let samples
+      // on the diagonal shared by two triangles of one face slip through as
+      // visible. Lines that only coincide with an occluder's outline are
+      // reconciled afterwards (`dropCoincidentHidden`).
+      const w0 = ((t.u1 - u) * (t.v2 - v) - (t.u2 - u) * (t.v1 - v)) / t.area;
+      const w1 = ((t.u2 - u) * (t.v0 - v) - (t.u0 - u) * (t.v2 - v)) / t.area;
+      const w2 = 1 - w0 - w1;
+      const edge = this.coverTolerance;
+      if (w0 < -edge || w1 < -edge || w2 < -edge) continue;
+      const surface = w0 * t.d0 + w1 * t.d1 + w2 * t.d2;
+      if (surface < depth - this.depthTolerance) return true;
+    }
+    return false;
+  }
+}
+
+function dot(frame: DrawingViewFrame['x'], x: number, y: number, z: number) {
+  return frame.x * x + frame.y * y + frame.z * z;
+}
+
+/** Joins unordered segments (pairs of welded vertex ids) into polylines. */
+function chainSegments(segments: [number, number][]): number[][] {
+  const adjacency = new Map<number, number[]>();
+  segments.forEach(([a, b], index) => {
+    adjacency.set(a, [...(adjacency.get(a) ?? []), index]);
+    adjacency.set(b, [...(adjacency.get(b) ?? []), index]);
+  });
+  const used = new Set<number>();
+  const chains: number[][] = [];
+  const walk = (start: number, first: number): number[] => {
+    const chain = [start];
+    let at = start;
+    let segment: number | undefined = first;
+    while (segment !== undefined && !used.has(segment)) {
+      used.add(segment);
+      const [a, b] = segments[segment]!;
+      at = a === at ? b : a;
+      chain.push(at);
+      const next = adjacency.get(at) ?? [];
+      // Continue only through a simple (degree-2) vertex.
+      segment =
+        next.length === 2 ? next.find((entry) => !used.has(entry)) : undefined;
+    }
+    return chain;
+  };
+  // Open chains start at their ends; closed loops at any vertex.
+  for (const [vertex, list] of adjacency)
+    if (list.length !== 2)
+      for (const segment of list)
+        if (!used.has(segment)) chains.push(walk(vertex, segment));
+  segments.forEach((segment, index) => {
+    if (!used.has(index)) chains.push(walk(segment[0], index));
+  });
+  return chains;
+}
+
+interface Polyline3 {
+  points: number[];
+}
+
+/**
+ * The silhouette polylines of one body's curved surfaces, as world points.
+ * Exported for tests.
+ */
+export function bodySilhouettes(
+  body: ProjectionBodyInput,
+  frame: DrawingViewFrame,
+  weldQuantum: number
+): Polyline3[] {
+  const { vertices, indices } = body;
+  const weld = new Map<string, number>();
+  const welded: number[] = [];
+  const positions: number[] = [];
+  for (let i = 0; i < vertices.length / 3; i += 1) {
+    const x = vertices[i * 3]!;
+    const y = vertices[i * 3 + 1]!;
+    const z = vertices[i * 3 + 2]!;
+    const key = `${Math.round(x / weldQuantum)},${Math.round(y / weldQuantum)},${Math.round(z / weldQuantum)}`;
+    let id = weld.get(key);
+    if (id === undefined) {
+      id = positions.length / 3;
+      weld.set(key, id);
+      positions.push(x, y, z);
+    }
+    welded.push(id);
+  }
+  const triangleCount = Math.floor(indices.length / 3);
+  const faceOf = new Int32Array(triangleCount).fill(-1);
+  body.faces?.forEach((face, faceIndex) => {
+    for (let t = 0; t < face.triangleCount; t += 1) {
+      const triangle = face.triangleStart + t;
+      if (triangle < triangleCount) faceOf[triangle] = faceIndex;
+    }
+  });
+  const normals = new Float64Array(triangleCount * 3);
+  const facing = new Int8Array(triangleCount);
+  for (let t = 0; t < triangleCount; t += 1) {
+    const a = welded[indices[t * 3]!]! * 3;
+    const b = welded[indices[t * 3 + 1]!]! * 3;
+    const c = welded[indices[t * 3 + 2]!]! * 3;
+    const ex = positions[b]! - positions[a]!;
+    const ey = positions[b + 1]! - positions[a + 1]!;
+    const ez = positions[b + 2]! - positions[a + 2]!;
+    const fx = positions[c]! - positions[a]!;
+    const fy = positions[c + 1]! - positions[a + 1]!;
+    const fz = positions[c + 2]! - positions[a + 2]!;
+    let nx = ey * fz - ez * fy;
+    let ny = ez * fx - ex * fz;
+    let nz = ex * fy - ey * fx;
+    const length = Math.hypot(nx, ny, nz);
+    if (length === 0) continue;
+    nx /= length;
+    ny /= length;
+    nz /= length;
+    normals[t * 3] = nx;
+    normals[t * 3 + 1] = ny;
+    normals[t * 3 + 2] = nz;
+    // A facet seen exactly edge-on counts as facing away. A cylinder whose
+    // silhouette falls mid-facet then outlines at that facet's front edge,
+    // half a facet off the true curve; a wall seen along its axis (all of it
+    // edge-on) meets its caps at sharp creases, which are never silhouettes.
+    facing[t] = dot(frame.direction, nx, ny, nz) < -1e-12 ? 1 : -1;
+  }
+  const edgeTriangles = new Map<number, number[]>();
+  const vertexCount = positions.length / 3;
+  for (let t = 0; t < triangleCount; t += 1) {
+    for (let k = 0; k < 3; k += 1) {
+      const a = welded[indices[t * 3 + k]!]!;
+      const b = welded[indices[t * 3 + ((k + 1) % 3)]!]!;
+      if (a === b) continue;
+      const key = Math.min(a, b) * vertexCount + Math.max(a, b);
+      const list = edgeTriangles.get(key);
+      if (list) list.push(t);
+      else edgeTriangles.set(key, [t]);
+    }
+  }
+  const segments: [number, number][] = [];
+  for (const [key, list] of edgeTriangles) {
+    if (list.length !== 2) continue;
+    const [p, q] = list as [number, number];
+    if (facing[p] === facing[q]) continue;
+    const sameFace = faceOf[p] !== -1 && faceOf[p] === faceOf[q];
+    const cosine =
+      normals[p * 3]! * normals[q * 3]! +
+      normals[p * 3 + 1]! * normals[q * 3 + 1]! +
+      normals[p * 3 + 2]! * normals[q * 3 + 2]!;
+    // A sharp crease between two faces is a feature edge, drawn already.
+    if (!sameFace && cosine < SMOOTH_DIHEDRAL_COS) continue;
+    segments.push([Math.floor(key / vertexCount), key % vertexCount]);
+  }
+  return chainSegments(segments).map((chain) => ({
+    points: chain.flatMap((id) => [
+      positions[id * 3]!,
+      positions[id * 3 + 1]!,
+      positions[id * 3 + 2]!
+    ])
+  }));
+}
+
+/** Projects the bodies of one view into visible and hidden polylines. */
+export function projectView(input: ViewProjectionInput): ViewProjection {
+  const frame = DRAWING_VIEW_FRAMES[input.orientation];
+  let min = [Infinity, Infinity, Infinity];
+  let max = [-Infinity, -Infinity, -Infinity];
+  for (const body of input.bodies)
+    for (let i = 0; i < body.vertices.length; i += 3)
+      for (let k = 0; k < 3; k += 1) {
+        const value = body.vertices[i + k]!;
+        if (value < min[k]!) min[k] = value;
+        if (value > max[k]!) max[k] = value;
+      }
+  if (!Number.isFinite(min[0]!)) {
+    min = [0, 0, 0];
+    max = [0, 0, 0];
+  }
+  const diagonal = Math.max(
+    Math.hypot(max[0]! - min[0]!, max[1]! - min[1]!, max[2]! - min[2]!),
+    1e-9
+  );
+  const project = (x: number, y: number, z: number) =>
+    [
+      dot(frame.x, x, y, z),
+      dot(frame.up, x, y, z),
+      dot(frame.direction, x, y, z)
+    ] as const;
+
+  const triangles: Triangle[] = [];
+  const bounds = {
+    minU: Infinity,
+    minV: Infinity,
+    maxU: -Infinity,
+    maxV: -Infinity
+  };
+  for (const body of input.bodies) {
+    const { vertices, indices } = body;
+    for (let t = 0; t + 2 < indices.length; t += 3) {
+      const [u0, v0, d0] = project(
+        vertices[indices[t]! * 3]!,
+        vertices[indices[t]! * 3 + 1]!,
+        vertices[indices[t]! * 3 + 2]!
+      );
+      const [u1, v1, d1] = project(
+        vertices[indices[t + 1]! * 3]!,
+        vertices[indices[t + 1]! * 3 + 1]!,
+        vertices[indices[t + 1]! * 3 + 2]!
+      );
+      const [u2, v2, d2] = project(
+        vertices[indices[t + 2]! * 3]!,
+        vertices[indices[t + 2]! * 3 + 1]!,
+        vertices[indices[t + 2]! * 3 + 2]!
+      );
+      bounds.minU = Math.min(bounds.minU, u0, u1, u2);
+      bounds.maxU = Math.max(bounds.maxU, u0, u1, u2);
+      bounds.minV = Math.min(bounds.minV, v0, v1, v2);
+      bounds.maxV = Math.max(bounds.maxV, v0, v1, v2);
+      const area = (u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0);
+      // Edge-on triangles cover no area and cannot hide anything.
+      if (Math.abs(area) <= diagonal * diagonal * 1e-14) continue;
+      triangles.push({ u0, v0, d0, u1, v1, d1, u2, v2, d2, area });
+    }
+  }
+
+  const lines: number[][] = [];
+  for (const body of input.bodies) {
+    for (const edge of body.edges) lines.push(Array.from(edge));
+    for (const silhouette of bodySilhouettes(body, frame, diagonal * 1e-7))
+      lines.push(silhouette.points);
+  }
+  for (const line of lines)
+    for (let i = 0; i + 2 < line.length; i += 3) {
+      const [u, v] = project(line[i]!, line[i + 1]!, line[i + 2]!);
+      bounds.minU = Math.min(bounds.minU, u);
+      bounds.maxU = Math.max(bounds.maxU, u);
+      bounds.minV = Math.min(bounds.minV, v);
+      bounds.maxV = Math.max(bounds.maxV, v);
+    }
+  if (!Number.isFinite(bounds.minU))
+    return { visible: [], hidden: [], bounds: null };
+
+  const grid = new OcclusionGrid(
+    triangles,
+    bounds,
+    // Display triangles sit within their chordal deflection of the exact
+    // surface the edge samples lie on; a few parts in ten thousand of the
+    // part's size clears that without letting a real wall through.
+    diagonal * 5e-4,
+    1e-9
+  );
+  const hiddenAt = (x: number, y: number, z: number): boolean => {
+    const [u, v, d] = project(x, y, z);
+    return grid.occluded(u, v, d);
+  };
+
+  const visible: Float64Array[] = [];
+  const hidden: Float64Array[] = [];
+  const step = diagonal / SAMPLES_PER_DIAGONAL;
+  const emit = (points: number[], isHidden: boolean) => {
+    if (points.length < 6) return;
+    let length = 0;
+    for (let i = 3; i < points.length; i += 3)
+      length += Math.hypot(
+        points[i]! - points[i - 3]!,
+        points[i + 1]! - points[i - 2]!,
+        points[i + 2]! - points[i - 1]!
+      );
+    if (length <= diagonal * 1e-9) return;
+    if (isHidden && !input.hiddenLines) return;
+    const flat = new Float64Array((points.length / 3) * 2);
+    let span = 0;
+    for (let i = 0, j = 0; i < points.length; i += 3, j += 2) {
+      const [u, v] = project(points[i]!, points[i + 1]!, points[i + 2]!);
+      flat[j] = u;
+      flat[j + 1] = v;
+      if (j > 0) span += Math.hypot(u - flat[j - 2]!, v - flat[j - 1]!);
+    }
+    // An edge running along the view direction projects to a point.
+    if (span <= diagonal * 1e-9) return;
+    (isHidden ? hidden : visible).push(flat);
+  };
+
+  for (const line of lines) {
+    // Densify: classification is by sub-segment midpoint. Only the line's
+    // own vertices and the visibility cuts are emitted; the samples between
+    // them are collinear with them.
+    const dense: number[] = [];
+    const keep: boolean[] = [];
+    for (let i = 0; i + 2 < line.length; i += 3) {
+      if (i > 0) {
+        const span = Math.hypot(
+          line[i]! - line[i - 3]!,
+          line[i + 1]! - line[i - 2]!,
+          line[i + 2]! - line[i - 1]!
+        );
+        const pieces = Math.min(4096, Math.ceil(span / step));
+        for (let k = 1; k < pieces; k += 1) {
+          const f = k / pieces;
+          dense.push(
+            line[i - 3]! + (line[i]! - line[i - 3]!) * f,
+            line[i - 2]! + (line[i + 1]! - line[i - 2]!) * f,
+            line[i - 1]! + (line[i + 2]! - line[i - 1]!) * f
+          );
+          keep.push(false);
+        }
+      }
+      dense.push(line[i]!, line[i + 1]!, line[i + 2]!);
+      keep.push(true);
+    }
+    const count = dense.length / 3;
+    if (count < 2) continue;
+    const at = (index: number, f: number) => [
+      dense[index * 3]! + (dense[index * 3 + 3]! - dense[index * 3]!) * f,
+      dense[index * 3 + 1]! +
+        (dense[index * 3 + 4]! - dense[index * 3 + 1]!) * f,
+      dense[index * 3 + 2]! +
+        (dense[index * 3 + 5]! - dense[index * 3 + 2]!) * f
+    ];
+    const states: boolean[] = [];
+    for (let s = 0; s < count - 1; s += 1) {
+      const [x, y, z] = at(s, 0.5);
+      states.push(hiddenAt(x!, y!, z!));
+    }
+    let run: number[] = [dense[0]!, dense[1]!, dense[2]!];
+    const pushVertex = (index: number) => {
+      if (keep[index] || index === count - 1)
+        run.push(
+          dense[index * 3]!,
+          dense[index * 3 + 1]!,
+          dense[index * 3 + 2]!
+        );
+    };
+    for (let s = 0; s < states.length; s += 1) {
+      const next = states[s + 1];
+      if (next === undefined || next === states[s]) {
+        pushVertex(s + 1);
+        continue;
+      }
+      // The switch lies between this segment's midpoint and the next one's:
+      // walk the path from one to the other and bisect.
+      let lo = 0;
+      let hi = 1;
+      const point = (f: number) =>
+        f <= 0.5 ? at(s, 0.5 + f) : at(s + 1, f - 0.5);
+      for (let k = 0; k < BISECTION_STEPS; k += 1) {
+        const mid = (lo + hi) / 2;
+        const [x, y, z] = point(mid);
+        if (hiddenAt(x!, y!, z!) === states[s]) lo = mid;
+        else hi = mid;
+      }
+      const [x, y, z] = point((lo + hi) / 2);
+      if ((lo + hi) / 2 > 0.5) pushVertex(s + 1);
+      run.push(x!, y!, z!);
+      emit(run, states[s]!);
+      run = [x!, y!, z!];
+      if ((lo + hi) / 2 <= 0.5) pushVertex(s + 1);
+    }
+    emit(run, states[states.length - 1]!);
+  }
+  return {
+    visible,
+    hidden: dropCoincidentHidden(hidden, visible, diagonal * 1e-6),
+    bounds
+  };
+}
+
+/**
+ * Hidden runs that lie entirely on a visible line, within `tolerance` model
+ * units. A box's back edges coincide with its front outline in a principal
+ * view; drafting draws the visible line and omits the hidden one under it.
+ */
+function dropCoincidentHidden(
+  hidden: Float64Array[],
+  visible: Float64Array[],
+  tolerance: number
+): Float64Array[] {
+  if (hidden.length === 0 || visible.length === 0) return hidden;
+  const segments: number[] = [];
+  for (const line of visible)
+    for (let i = 2; i + 1 < line.length; i += 2)
+      segments.push(line[i - 2]!, line[i - 1]!, line[i]!, line[i + 1]!);
+  let minU = Infinity;
+  let minV = Infinity;
+  let maxU = -Infinity;
+  let maxV = -Infinity;
+  for (let i = 0; i < segments.length; i += 2) {
+    minU = Math.min(minU, segments[i]!);
+    maxU = Math.max(maxU, segments[i]!);
+    minV = Math.min(minV, segments[i + 1]!);
+    maxV = Math.max(maxV, segments[i + 1]!);
+  }
+  const cells = 64;
+  const cellU = Math.max((maxU - minU) / cells, tolerance, 1e-12);
+  const cellV = Math.max((maxV - minV) / cells, tolerance, 1e-12);
+  const clamp = (value: number) => Math.min(cells - 1, Math.max(0, value));
+  const grid = new Map<number, number[]>();
+  for (let s = 0; s < segments.length; s += 4) {
+    const i0 = clamp(
+      Math.floor(
+        (Math.min(segments[s]!, segments[s + 2]!) - tolerance - minU) / cellU
+      )
+    );
+    const i1 = clamp(
+      Math.floor(
+        (Math.max(segments[s]!, segments[s + 2]!) + tolerance - minU) / cellU
+      )
+    );
+    const j0 = clamp(
+      Math.floor(
+        (Math.min(segments[s + 1]!, segments[s + 3]!) - tolerance - minV) /
+          cellV
+      )
+    );
+    const j1 = clamp(
+      Math.floor(
+        (Math.max(segments[s + 1]!, segments[s + 3]!) + tolerance - minV) /
+          cellV
+      )
+    );
+    for (let j = j0; j <= j1; j += 1)
+      for (let i = i0; i <= i1; i += 1) {
+        const key = j * cells + i;
+        const list = grid.get(key);
+        if (list) list.push(s);
+        else grid.set(key, [s]);
+      }
+  }
+  const onVisible = (u: number, v: number): boolean => {
+    if (
+      u < minU - tolerance ||
+      u > maxU + tolerance ||
+      v < minV - tolerance ||
+      v > maxV + tolerance
+    )
+      return false;
+    const key =
+      clamp(Math.floor((v - minV) / cellV)) * cells +
+      clamp(Math.floor((u - minU) / cellU));
+    for (const s of grid.get(key) ?? []) {
+      const au = segments[s]!;
+      const av = segments[s + 1]!;
+      const du = segments[s + 2]! - au;
+      const dv = segments[s + 3]! - av;
+      const lengthSq = du * du + dv * dv;
+      const t =
+        lengthSq === 0
+          ? 0
+          : Math.min(
+              1,
+              Math.max(0, ((u - au) * du + (v - av) * dv) / lengthSq)
+            );
+      if (Math.hypot(u - (au + du * t), v - (av + dv * t)) <= tolerance)
+        return true;
+    }
+    return false;
+  };
+  return hidden.filter((line) => {
+    for (let i = 0; i + 1 < line.length; i += 2) {
+      if (!onVisible(line[i]!, line[i + 1]!)) return true;
+      if (i + 3 < line.length) {
+        // The middle of each segment too: two ends on an outline can still
+        // span a gap in it.
+        for (const f of [0.25, 0.5, 0.75])
+          if (
+            !onVisible(
+              line[i]! + (line[i + 2]! - line[i]!) * f,
+              line[i + 1]! + (line[i + 3]! - line[i + 1]!) * f
+            )
+          )
+            return true;
+      }
+    }
+    return false;
+  });
+}

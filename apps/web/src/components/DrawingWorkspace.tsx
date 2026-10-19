@@ -1,0 +1,1075 @@
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent
+} from 'react';
+import { FileDown, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import { updateDrawingView } from '@openzcad/document-core';
+import {
+  createDrawingViewId,
+  DRAWING_PAPER_LABELS,
+  DRAWING_PAPER_SIZES_MM,
+  DRAWING_SCALE_PRESETS,
+  DRAWING_VIEW_LABELS,
+  DRAWING_VIEW_ORIENTATIONS,
+  drawingPaperMm,
+  drawingViewAlignment,
+  formatDrawingScale,
+  MAX_DRAWING_TEXT_LENGTH,
+  type BodyId,
+  type BodyRepresentation,
+  type DrawingPaperSize,
+  type DrawingSheet,
+  type DrawingSheetId,
+  type DrawingTitleBlock,
+  type DrawingView,
+  type DrawingViewId,
+  type DrawingViewOrientation,
+  type ProjectDocument
+} from '@openzcad/shared';
+import { DrawingProjectionClient } from '../lib/drawing/projectionClient';
+import type { ViewProjection } from '../lib/drawing/projectView';
+import {
+  composeSheetPage,
+  sheetViewArea,
+  titleBlockBox,
+  viewPageBox,
+  type SheetPage
+} from '../lib/drawing/sheetPage';
+import { sheetPageToPdf, sheetPageToSvg } from '../lib/drawing/sheetExport';
+import {
+  createStarterSheet,
+  defaultDrawingPaper,
+  drawingSourceFingerprint,
+  estimateViewExtent,
+  projectionBodyInput,
+  sheetBodyIds
+} from '../lib/drawing/sheetSources';
+import { exportFileStem } from '../lib/model';
+import { saveCadBinaryFile, saveCadTextFile } from '../lib/desktopBridge';
+
+/**
+ * D01 drawing workspace: the sheet canvas and its properties.
+ *
+ * Every edit is a document command, so it undoes, saves and syncs like any
+ * other. The canvas draws the same `SheetPage` the PDF and SVG writers
+ * serialize — one page transform for preview and export.
+ *
+ * The model fence: a sheet remembers a fingerprint of the bodies it draws.
+ * When the model no longer matches it, the sheet says so, draws its views as
+ * outlines only and refuses export until an explicit Update rebinds it. It
+ * never quietly redraws a sheet someone may already have handed off.
+ */
+export interface DrawingWorkspaceProps {
+  document: ProjectDocument;
+  /**
+   * The last completed projection of the model. It may lag a rebuild in
+   * flight; that is safe because a sheet draws only when these bodies match
+   * its fingerprint, so what it shows is always the model it is bound to.
+   */
+  bodies: Readonly<Record<string, BodyRepresentation | undefined>>;
+  /** Bodies a new sheet draws: the live, visible ones. */
+  defaultBodyIds: BodyId[];
+  /** Why drawing edits are refused, or null. */
+  editDisabledReason: string | null;
+  onCommand: (command: AnyCommand) => boolean;
+  onStatus: (message: string) => void;
+}
+
+type SheetStatus =
+  | { kind: 'ready'; fingerprint: string }
+  | { kind: 'pending' }
+  | { kind: 'stale'; fingerprint: string }
+  | { kind: 'missing'; bodyNames: string[] };
+
+type ViewState =
+  | { state: 'ready'; projection: ViewProjection }
+  | { state: 'projecting' }
+  | { state: 'error'; message: string };
+
+function sheetStatus(
+  sheet: DrawingSheet,
+  bodies: DrawingWorkspaceProps['bodies']
+): SheetStatus {
+  const ids = sheetBodyIds(sheet);
+  const missing = ids.filter((id) => !bodies[id] || bodies[id].consumed);
+  if (missing.length > 0)
+    return {
+      kind: 'missing',
+      bodyNames: missing.map((id) => bodies[id]?.name ?? 'a deleted body')
+    };
+  const fingerprint = drawingSourceFingerprint(bodies, ids);
+  if (!fingerprint) return { kind: 'pending' };
+  return fingerprint === sheet.source.fingerprint
+    ? { kind: 'ready', fingerprint }
+    : { kind: 'stale', fingerprint };
+}
+
+function projectionKey(fingerprint: string, view: DrawingView): string {
+  return `${fingerprint}|${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}`;
+}
+
+const PAPER_SIZES = Object.keys(DRAWING_PAPER_SIZES_MM) as DrawingPaperSize[];
+
+/** Projections for the sheet's views, cached by model and view intent. */
+function useViewProjections(
+  sheet: DrawingSheet | null,
+  status: SheetStatus | null,
+  bodies: DrawingWorkspaceProps['bodies']
+): Map<DrawingViewId, ViewState> {
+  const client = useRef<DrawingProjectionClient | null>(null);
+  const cache = useRef(new Map<string, ViewState>());
+  const mounted = useRef(false);
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    mounted.current = true;
+    const owned = new DrawingProjectionClient();
+    client.current = owned;
+    return () => {
+      mounted.current = false;
+      owned.dispose();
+      client.current = null;
+    };
+  }, []);
+  const fingerprint = status?.kind === 'ready' ? status.fingerprint : null;
+  useEffect(() => {
+    if (!sheet || !fingerprint || !client.current) return;
+    for (const view of sheet.views) {
+      const key = projectionKey(fingerprint, view);
+      if (cache.current.has(key)) continue;
+      const inputs = view.bodyIds
+        .map((id) => bodies[id])
+        .map((body) => (body ? projectionBodyInput(body) : null))
+        .filter((input) => input !== null);
+      cache.current.set(key, { state: 'projecting' });
+      client.current
+        .project({
+          orientation: view.orientation,
+          hiddenLines: view.hiddenLines,
+          bodies: inputs
+        })
+        .then(
+          (projection) =>
+            cache.current.set(key, { state: 'ready', projection }),
+          (error: unknown) => {
+            // A client closed under the request (an unmount, or React's
+            // development remount) is not the view's failure: forget it so
+            // the next pass asks again.
+            if (error instanceof Error && error.name === 'AbortError')
+              cache.current.delete(key);
+            else
+              cache.current.set(key, {
+                state: 'error',
+                message:
+                  error instanceof Error ? error.message : 'Projection failed.'
+              });
+          }
+        )
+        .finally(() => {
+          if (mounted.current) setRevision((value) => value + 1);
+        });
+    }
+    // Keep the cache to what this model can still use.
+    for (const key of cache.current.keys())
+      if (!key.startsWith(`${fingerprint}|`)) cache.current.delete(key);
+    // `revision` re-runs this pass after each answer, which re-requests any
+    // view whose request was dropped.
+  }, [sheet, fingerprint, bodies, revision]);
+  const states = new Map<DrawingViewId, ViewState>();
+  if (sheet && fingerprint)
+    for (const view of sheet.views) {
+      const entry = cache.current.get(projectionKey(fingerprint, view));
+      if (entry) states.set(view.viewId, entry);
+    }
+  return states;
+}
+
+function statusMessage(status: SheetStatus): string | null {
+  switch (status.kind) {
+    case 'ready':
+      return null;
+    case 'pending':
+      return 'Waiting for the model to finish updating.';
+    case 'stale':
+      return 'The model changed since this sheet was drawn. Update it to redraw the views.';
+    case 'missing':
+      return `This sheet draws ${status.bodyNames.join(', ')}, which no longer exists as a body. Remove it from the views that use it.`;
+  }
+}
+
+function svgPoints(points: number[], height: number): string {
+  const out: string[] = [];
+  for (let i = 0; i + 1 < points.length; i += 2)
+    out.push(
+      `${points[i]!.toFixed(3)},${(height - points[i + 1]!).toFixed(3)}`
+    );
+  return out.join(' ');
+}
+
+function TextField(props: {
+  label: string;
+  value: string;
+  placeholder?: string;
+  disabled: boolean;
+  onCommit: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(props.value);
+  useEffect(() => setDraft(props.value), [props.value]);
+  const commit = () => {
+    if (draft !== props.value) props.onCommit(draft);
+  };
+  return (
+    <label className="drawing-field">
+      <span>{props.label}</span>
+      <input
+        type="text"
+        value={draft}
+        placeholder={props.placeholder}
+        maxLength={MAX_DRAWING_TEXT_LENGTH}
+        disabled={props.disabled}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit();
+          if (event.key === 'Escape') setDraft(props.value);
+        }}
+      />
+    </label>
+  );
+}
+
+function NumberField(props: {
+  label: string;
+  value: number;
+  disabled: boolean;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(props.value.toFixed(1));
+  useEffect(() => setDraft(props.value.toFixed(1)), [props.value]);
+  const commit = () => {
+    const value = Number(draft);
+    if (Number.isFinite(value) && Math.abs(value - props.value) > 1e-9)
+      props.onCommit(value);
+    else setDraft(props.value.toFixed(1));
+  };
+  return (
+    <label className="drawing-field">
+      <span>{props.label}</span>
+      <input
+        type="number"
+        step={0.5}
+        value={draft}
+        disabled={props.disabled}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit();
+        }}
+      />
+    </label>
+  );
+}
+
+const TITLE_FIELDS: { key: keyof DrawingTitleBlock; label: string }[] = [
+  { key: 'title', label: 'Title' },
+  { key: 'drawingNumber', label: 'Drawing no.' },
+  { key: 'revision', label: 'Revision' },
+  { key: 'author', label: 'Drawn by' },
+  { key: 'date', label: 'Date' }
+];
+
+export function DrawingWorkspace(props: DrawingWorkspaceProps) {
+  const { document, bodies, editDisabledReason } = props;
+  const sheets = document.drawings?.sheets ?? [];
+  const [selectedSheetId, setSelectedSheetId] = useState<DrawingSheetId | null>(
+    sheets[0]?.sheetId ?? null
+  );
+  const sheet =
+    sheets.find((entry) => entry.sheetId === selectedSheetId) ??
+    sheets[0] ??
+    null;
+  const [selectedViewId, setSelectedViewId] = useState<DrawingViewId | null>(
+    null
+  );
+  const selectedView =
+    sheet?.views.find((view) => view.viewId === selectedViewId) ?? null;
+  const [addOrientation, setAddOrientation] =
+    useState<DrawingViewOrientation>('front');
+  const [drag, setDrag] = useState<{
+    viewId: DrawingViewId;
+    start: { x: number; y: number };
+    origin: { x: number; y: number };
+    current: { x: number; y: number };
+    pxPerMm: number;
+  } | null>(null);
+  const canvasRef = useRef<SVGSVGElement | null>(null);
+  const editable = editDisabledReason === null;
+  const status = sheet ? sheetStatus(sheet, bodies) : null;
+  const projections = useViewProjections(sheet, status, bodies);
+  const liveBodies = useMemo(
+    () =>
+      document.bodyOrder.filter((id) => {
+        const body = bodies[id];
+        return body && !body.consumed;
+      }),
+    [document.bodyOrder, bodies]
+  );
+
+  // The sheet as drawn: during a drag, the moved view (and the projected
+  // views it carries) at the pointer, by the same rule the command applies.
+  const shownSheet = useMemo(() => {
+    if (!sheet || !drag) return sheet;
+    const moved = updateDrawingView(
+      { ...document, drawings: { sheets: [sheet] } },
+      { sheetId: sheet.sheetId, viewId: drag.viewId, centerMm: drag.current }
+    );
+    return moved.drawings!.sheets[0]!;
+  }, [sheet, drag, document]);
+
+  const run = (command: AnyCommand) => {
+    if (!editable) {
+      props.onStatus(editDisabledReason ?? 'Drawing edits are unavailable.');
+      return false;
+    }
+    return props.onCommand(command);
+  };
+
+  const createSheet = () => {
+    const scope =
+      props.defaultBodyIds.length > 0 ? props.defaultBodyIds : liveBodies;
+    const bodyIds = scope.filter((id) => liveBodies.includes(id));
+    if (bodyIds.length === 0) {
+      props.onStatus('Add a body to the model before making a drawing.');
+      return;
+    }
+    const fingerprint = drawingSourceFingerprint(bodies, bodyIds);
+    if (!fingerprint) {
+      props.onStatus(
+        'Wait for the model to finish updating, then make the drawing.'
+      );
+      return;
+    }
+    const paper = defaultDrawingPaper(document.units);
+    const created = createStarterSheet({
+      name: `Sheet ${sheets.length + 1}`,
+      bodyIds,
+      bodies,
+      units: document.units,
+      paper: { size: paper.size, orientation: 'landscape' },
+      projectionAngle: paper.projectionAngle,
+      fingerprint
+    });
+    if (run(commandFactories.addDrawingSheet({ sheet: created })))
+      setSelectedSheetId(created.sheetId);
+  };
+
+  const updateSheet = (
+    patch: Omit<
+      Parameters<typeof commandFactories.updateDrawingSheet>[0],
+      'sheetId'
+    >,
+    label?: string
+  ) => {
+    if (!sheet) return;
+    run(
+      commandFactories.updateDrawingSheet(
+        { sheetId: sheet.sheetId, ...patch },
+        label
+      )
+    );
+  };
+
+  const moveView = (
+    viewId: DrawingViewId,
+    centerMm: { x: number; y: number }
+  ) => {
+    if (!sheet) return;
+    run(
+      commandFactories.updateDrawingView({
+        sheetId: sheet.sheetId,
+        viewId,
+        centerMm: {
+          x: Math.round(centerMm.x * 10) / 10,
+          y: Math.round(centerMm.y * 10) / 10
+        }
+      })
+    );
+  };
+
+  const addView = () => {
+    if (!sheet) return;
+    const bodyIds =
+      selectedView?.bodyIds ?? sheet.views[0]?.bodyIds ?? props.defaultBodyIds;
+    const base = sheet.views.find(
+      (view) =>
+        view.parentViewId === undefined &&
+        drawingViewAlignment(view.orientation, addOrientation) !== null
+    );
+    const area = sheetViewArea(sheet);
+    const view: DrawingView = {
+      viewId: createDrawingViewId(),
+      orientation: addOrientation,
+      bodyIds: bodyIds.filter((id) => liveBodies.includes(id)),
+      centerMm: { x: area.x + area.width / 2, y: area.y + area.height / 2 },
+      hiddenLines: addOrientation !== 'iso',
+      ...(base ? { parentViewId: base.viewId } : {})
+    };
+    if (view.bodyIds.length === 0) {
+      props.onStatus('Pick at least one body for the view.');
+      return;
+    }
+    if (run(commandFactories.addDrawingView({ sheetId: sheet.sheetId, view })))
+      setSelectedViewId(view.viewId);
+  };
+
+  const exportSheet = async (format: 'pdf' | 'svg') => {
+    if (!sheet || status?.kind !== 'ready') return;
+    const ready = sheet.views.map((view) => {
+      const state = projections.get(view.viewId);
+      return state?.state === 'ready'
+        ? { view, projection: state.projection }
+        : null;
+    });
+    if (ready.some((entry) => entry === null)) {
+      props.onStatus('Wait for every view to finish drawing, then export.');
+      return;
+    }
+    const page = composeSheetPage(
+      sheet,
+      ready.filter((entry) => entry !== null),
+      { projectName: document.name, units: document.units }
+    );
+    const fileName = `${exportFileStem(document.name)}-${exportFileStem(sheet.name)}.${format}`;
+    try {
+      const saved =
+        format === 'pdf'
+          ? await saveCadBinaryFile(
+              fileName,
+              'pdf',
+              sheetPageToPdf(page, sheet.name) as Uint8Array<ArrayBuffer>
+            )
+          : await saveCadTextFile(
+              fileName,
+              'svg',
+              sheetPageToSvg(page, sheet.name)
+            );
+      props.onStatus(
+        saved
+          ? `Exported the drawing to ${fileName}.`
+          : 'Drawing export cancelled.'
+      );
+    } catch (error) {
+      props.onStatus(
+        error instanceof Error ? error.message : 'Drawing export failed.'
+      );
+    }
+  };
+
+  const onViewPointerDown = (
+    event: ReactPointerEvent<SVGRectElement>,
+    view: DrawingView
+  ) => {
+    setSelectedViewId(view.viewId);
+    if (!editable || event.button !== 0 || !sheet || !canvasRef.current) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const paper = drawingPaperMm(sheet.paper);
+    const pxPerMm = Math.min(
+      rect.width / paper.width,
+      rect.height / paper.height
+    );
+    if (!(pxPerMm > 0)) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setDrag({
+      viewId: view.viewId,
+      start: { x: event.clientX, y: event.clientY },
+      origin: view.centerMm,
+      current: view.centerMm,
+      pxPerMm
+    });
+  };
+  const onViewPointerMove = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (!drag) return;
+    setDrag({
+      ...drag,
+      current: {
+        x: drag.origin.x + (event.clientX - drag.start.x) / drag.pxPerMm,
+        y: drag.origin.y - (event.clientY - drag.start.y) / drag.pxPerMm
+      }
+    });
+  };
+  const onViewPointerUp = () => {
+    if (!drag) return;
+    const moved =
+      Math.hypot(
+        drag.current.x - drag.origin.x,
+        drag.current.y - drag.origin.y
+      ) >= 0.2;
+    setDrag(null);
+    if (moved) moveView(drag.viewId, drag.current);
+  };
+  const onCanvasKeyDown = (event: ReactKeyboardEvent<SVGSVGElement>) => {
+    if (!selectedView || !sheet) return;
+    const step = event.shiftKey ? 10 : 1;
+    const delta: Record<string, [number, number]> = {
+      ArrowLeft: [-step, 0],
+      ArrowRight: [step, 0],
+      ArrowUp: [0, step],
+      ArrowDown: [0, -step]
+    };
+    const move = delta[event.key];
+    if (move) {
+      event.preventDefault();
+      moveView(selectedView.viewId, {
+        x: selectedView.centerMm.x + move[0],
+        y: selectedView.centerMm.y + move[1]
+      });
+    } else if (event.key === 'Delete' || event.key === 'Backspace') {
+      event.preventDefault();
+      if (
+        run(
+          commandFactories.deleteDrawingView({
+            sheetId: sheet.sheetId,
+            viewId: selectedView.viewId
+          })
+        )
+      )
+        setSelectedViewId(null);
+    }
+  };
+
+  const page: SheetPage | null = useMemo(() => {
+    if (!shownSheet) return null;
+    const ready = shownSheet.views.flatMap((view) => {
+      const state = projections.get(view.viewId);
+      return state?.state === 'ready'
+        ? [{ view, projection: state.projection }]
+        : [];
+    });
+    return composeSheetPage(shownSheet, ready, {
+      projectName: document.name,
+      units: document.units
+    });
+  }, [shownSheet, projections, document.name, document.units]);
+
+  if (!sheet || !shownSheet || !page || !status) {
+    return (
+      <section className="drawing-workspace" aria-label="Drawings">
+        <div className="drawing-empty">
+          <h2>Drawings</h2>
+          <p>
+            A drawing sheet lays out front, top, side and isometric views of the
+            model with hidden lines, on paper you can export as PDF or SVG.
+          </p>
+          <button
+            type="button"
+            className="primary"
+            onClick={createSheet}
+            disabled={!editable}
+            title={editDisabledReason ?? undefined}
+          >
+            <Plus size={14} aria-hidden="true" /> New drawing sheet
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  const paper = drawingPaperMm(sheet.paper);
+  const message = statusMessage(status);
+  const exportReason =
+    status.kind !== 'ready'
+      ? message
+      : sheet.views.some(
+            (view) => projections.get(view.viewId)?.state !== 'ready'
+          )
+        ? 'Drawing the views…'
+        : null;
+  const scaleOptions = DRAWING_SCALE_PRESETS.some(
+    (scale) => formatDrawingScale(scale) === formatDrawingScale(sheet.scale)
+  )
+    ? DRAWING_SCALE_PRESETS
+    : [...DRAWING_SCALE_PRESETS, sheet.scale];
+  const block = titleBlockBox(sheet);
+
+  return (
+    <section className="drawing-workspace" aria-label="Drawings">
+      <aside className="drawing-sheets" aria-label="Sheets">
+        <div className="drawing-panel-section">
+          <div className="drawing-panel-heading">
+            <h3>Sheets</h3>
+            <button
+              type="button"
+              className="secondary"
+              onClick={createSheet}
+              disabled={!editable}
+              title={
+                editDisabledReason ?? 'New sheet with the four standard views'
+              }
+            >
+              <Plus size={13} aria-hidden="true" /> New
+            </button>
+          </div>
+          <div
+            className="drawing-sheet-list"
+            role="listbox"
+            aria-label="Drawing sheets"
+          >
+            {sheets.map((entry) => (
+              <button
+                key={entry.sheetId}
+                type="button"
+                role="option"
+                aria-selected={entry.sheetId === sheet.sheetId}
+                className={`drawing-sheet-item${entry.sheetId === sheet.sheetId ? ' active' : ''}`}
+                onClick={() => {
+                  setSelectedSheetId(entry.sheetId);
+                  setSelectedViewId(null);
+                }}
+              >
+                {entry.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      </aside>
+      <div className="drawing-stage">
+        {message && (
+          <div className={`drawing-banner is-${status.kind}`} role="status">
+            <span>{message}</span>
+            {status.kind === 'stale' && (
+              <button
+                type="button"
+                className="primary"
+                disabled={!editable}
+                onClick={() =>
+                  updateSheet({ source: { fingerprint: status.fingerprint } })
+                }
+              >
+                <RefreshCw size={13} aria-hidden="true" /> Update
+              </button>
+            )}
+          </div>
+        )}
+        <svg
+          ref={canvasRef}
+          className="drawing-canvas"
+          role="application"
+          aria-label={`Sheet ${sheet.name}`}
+          tabIndex={0}
+          viewBox={`0 0 ${paper.width} ${paper.height}`}
+          preserveAspectRatio="xMidYMid meet"
+          onKeyDown={onCanvasKeyDown}
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) setSelectedViewId(null);
+          }}
+        >
+          <rect
+            className="drawing-paper"
+            width={paper.width}
+            height={paper.height}
+          />
+          {(['border', 'thin', 'hidden', 'visible'] as const).map((kind) => (
+            <g key={kind} className={`drawing-strokes is-${kind}`}>
+              {page.strokes
+                .filter((stroke) => stroke.kind === kind)
+                .map((stroke, index) =>
+                  stroke.closed ? (
+                    <polygon
+                      key={index}
+                      points={svgPoints(stroke.points, paper.height)}
+                    />
+                  ) : (
+                    <polyline
+                      key={index}
+                      points={svgPoints(stroke.points, paper.height)}
+                    />
+                  )
+                )}
+            </g>
+          ))}
+          <g className="drawing-texts">
+            {page.texts.map((text, index) => (
+              <text
+                key={index}
+                x={text.x}
+                y={paper.height - text.y}
+                fontSize={text.sizeMm / 0.718}
+                fontWeight={text.bold ? 'bold' : undefined}
+              >
+                {text.text}
+              </text>
+            ))}
+          </g>
+          {shownSheet.views.map((view) => {
+            const state = projections.get(view.viewId);
+            const extent =
+              state?.state === 'ready' && state.projection.bounds
+                ? state.projection.bounds
+                : estimateViewExtent(bodies, view.bodyIds, view.orientation);
+            if (!extent) return null;
+            const box = viewPageBox(view, extent, shownSheet, document.units);
+            const pad = 3;
+            const ready = state?.state === 'ready';
+            const label = DRAWING_VIEW_LABELS[view.orientation];
+            return (
+              <g
+                key={view.viewId}
+                className={`drawing-view${view.viewId === selectedViewId ? ' is-selected' : ''}${ready ? '' : ' is-placeholder'}`}
+                data-view={view.orientation}
+              >
+                {!ready && (
+                  <rect
+                    className="drawing-view-outline"
+                    x={box.x}
+                    y={paper.height - box.y - box.height}
+                    width={box.width}
+                    height={box.height}
+                  />
+                )}
+                <text
+                  className="drawing-view-label"
+                  x={box.x}
+                  y={paper.height - box.y + 5}
+                >
+                  {state?.state === 'error'
+                    ? `${label} — ${state.message}`
+                    : ready || status.kind !== 'ready'
+                      ? label
+                      : `${label} — drawing…`}
+                </text>
+                <rect
+                  className="drawing-view-hit"
+                  role="button"
+                  aria-label={`${label} view`}
+                  aria-pressed={view.viewId === selectedViewId}
+                  x={box.x - pad}
+                  y={paper.height - box.y - box.height - pad}
+                  width={box.width + 2 * pad}
+                  height={box.height + 2 * pad}
+                  onPointerDown={(event) => onViewPointerDown(event, view)}
+                  onPointerMove={onViewPointerMove}
+                  onPointerUp={onViewPointerUp}
+                  onPointerCancel={() => setDrag(null)}
+                />
+              </g>
+            );
+          })}
+          <rect
+            className="drawing-title-hit"
+            x={block.x}
+            y={paper.height - block.y - block.height}
+            width={block.width}
+            height={block.height}
+            onPointerDown={() => setSelectedViewId(null)}
+          />
+        </svg>
+      </div>
+      <aside className="drawing-panel" aria-label="Drawing properties">
+        <div className="drawing-panel-section">
+          <h3>Sheet</h3>
+          <TextField
+            label="Name"
+            value={sheet.name}
+            disabled={!editable}
+            onCommit={(name) =>
+              name.trim() &&
+              updateSheet({ name }, `Rename drawing to ${name.trim()}`)
+            }
+          />
+          <div className="drawing-field-row">
+            <label className="drawing-field">
+              <span>Paper</span>
+              <select
+                value={sheet.paper.size}
+                disabled={!editable}
+                onChange={(event) =>
+                  updateSheet({
+                    paper: {
+                      ...sheet.paper,
+                      size: event.target.value as DrawingPaperSize
+                    }
+                  })
+                }
+              >
+                {PAPER_SIZES.map((size) => (
+                  <option key={size} value={size}>
+                    {DRAWING_PAPER_LABELS[size]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="drawing-field">
+              <span>Orientation</span>
+              <select
+                value={sheet.paper.orientation}
+                disabled={!editable}
+                onChange={(event) =>
+                  updateSheet({
+                    paper: {
+                      ...sheet.paper,
+                      orientation: event.target
+                        .value as DrawingSheet['paper']['orientation']
+                    }
+                  })
+                }
+              >
+                <option value="landscape">Landscape</option>
+                <option value="portrait">Portrait</option>
+              </select>
+            </label>
+          </div>
+          <div className="drawing-field-row">
+            <label className="drawing-field">
+              <span>Scale</span>
+              <select
+                value={formatDrawingScale(sheet.scale)}
+                disabled={!editable}
+                onChange={(event) => {
+                  const scale = scaleOptions.find(
+                    (option) =>
+                      formatDrawingScale(option) === event.target.value
+                  );
+                  if (scale) updateSheet({ scale });
+                }}
+              >
+                {scaleOptions.map((scale) => (
+                  <option
+                    key={formatDrawingScale(scale)}
+                    value={formatDrawingScale(scale)}
+                  >
+                    {formatDrawingScale(scale)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="drawing-field">
+              <span>Projection</span>
+              <select
+                value={sheet.projectionAngle}
+                disabled={!editable}
+                onChange={(event) =>
+                  updateSheet({
+                    projectionAngle: event.target
+                      .value as DrawingSheet['projectionAngle']
+                  })
+                }
+              >
+                <option value="first">First angle</option>
+                <option value="third">Third angle</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div className="drawing-panel-section">
+          <h3>Title block</h3>
+          {TITLE_FIELDS.map(({ key, label }) => (
+            <TextField
+              key={key}
+              label={label}
+              value={sheet.titleBlock[key] ?? ''}
+              placeholder={key === 'title' ? document.name : undefined}
+              disabled={!editable}
+              onCommit={(value) =>
+                updateSheet({ titleBlock: { [key]: value } })
+              }
+            />
+          ))}
+        </div>
+        <div className="drawing-panel-section">
+          <h3>
+            {selectedView
+              ? `${DRAWING_VIEW_LABELS[selectedView.orientation]} view`
+              : 'Views'}
+          </h3>
+          {selectedView ? (
+            <>
+              <div className="drawing-field-row">
+                <NumberField
+                  label="Centre X (mm)"
+                  value={selectedView.centerMm.x}
+                  disabled={!editable}
+                  onCommit={(x) =>
+                    moveView(selectedView.viewId, {
+                      ...selectedView.centerMm,
+                      x
+                    })
+                  }
+                />
+                <NumberField
+                  label="Centre Y (mm)"
+                  value={selectedView.centerMm.y}
+                  disabled={!editable}
+                  onCommit={(y) =>
+                    moveView(selectedView.viewId, {
+                      ...selectedView.centerMm,
+                      y
+                    })
+                  }
+                />
+              </div>
+              {selectedView.parentViewId && (
+                <p className="drawing-hint">
+                  Projected from the{' '}
+                  {DRAWING_VIEW_LABELS[
+                    sheet.views.find(
+                      (view) => view.viewId === selectedView.parentViewId
+                    )!.orientation
+                  ].toLowerCase()}{' '}
+                  view: it stays aligned with it.
+                </p>
+              )}
+              <label className="drawing-check">
+                <input
+                  type="checkbox"
+                  checked={selectedView.hiddenLines}
+                  disabled={!editable}
+                  onChange={(event) =>
+                    run(
+                      commandFactories.updateDrawingView({
+                        sheetId: sheet.sheetId,
+                        viewId: selectedView.viewId,
+                        hiddenLines: event.target.checked
+                      })
+                    )
+                  }
+                />
+                Hidden lines
+              </label>
+              <fieldset className="drawing-bodies">
+                <legend>Bodies</legend>
+                {liveBodies.map((id) => (
+                  <label key={id} className="drawing-check">
+                    <input
+                      type="checkbox"
+                      checked={selectedView.bodyIds.includes(id)}
+                      disabled={
+                        !editable ||
+                        (selectedView.bodyIds.length === 1 &&
+                          selectedView.bodyIds[0] === id)
+                      }
+                      onChange={(event) =>
+                        run(
+                          commandFactories.updateDrawingView({
+                            sheetId: sheet.sheetId,
+                            viewId: selectedView.viewId,
+                            bodyIds: event.target.checked
+                              ? [...selectedView.bodyIds, id]
+                              : selectedView.bodyIds.filter(
+                                  (entry) => entry !== id
+                                )
+                          })
+                        )
+                      }
+                    />
+                    {bodies[id]?.name ?? id}
+                  </label>
+                ))}
+              </fieldset>
+              <button
+                type="button"
+                className="secondary"
+                disabled={!editable}
+                onClick={() => {
+                  if (
+                    run(
+                      commandFactories.deleteDrawingView({
+                        sheetId: sheet.sheetId,
+                        viewId: selectedView.viewId
+                      })
+                    )
+                  )
+                    setSelectedViewId(null);
+                }}
+              >
+                <Trash2 size={13} aria-hidden="true" /> Delete view
+              </button>
+            </>
+          ) : (
+            <p className="drawing-hint">
+              Select a view on the sheet to move it or change what it shows.
+              Drag it, or use the arrow keys (Shift for 10 mm).
+            </p>
+          )}
+          <div className="drawing-field-row">
+            <label className="drawing-field">
+              <span>New view</span>
+              <select
+                value={addOrientation}
+                disabled={!editable}
+                onChange={(event) =>
+                  setAddOrientation(
+                    event.target.value as DrawingViewOrientation
+                  )
+                }
+              >
+                {DRAWING_VIEW_ORIENTATIONS.map((orientation) => (
+                  <option key={orientation} value={orientation}>
+                    {DRAWING_VIEW_LABELS[orientation]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="secondary"
+              disabled={!editable}
+              onClick={addView}
+            >
+              <Plus size={13} aria-hidden="true" /> Add view
+            </button>
+          </div>
+        </div>
+        <div className="drawing-panel-section">
+          <h3>Export</h3>
+          <div className="drawing-field-row">
+            <button
+              type="button"
+              className="primary"
+              disabled={exportReason !== null}
+              title={exportReason ?? 'Export this sheet as a vector PDF'}
+              onClick={() => void exportSheet('pdf')}
+            >
+              <FileDown size={13} aria-hidden="true" /> PDF
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={exportReason !== null}
+              title={exportReason ?? 'Export this sheet as SVG'}
+              onClick={() => void exportSheet('svg')}
+            >
+              <FileDown size={13} aria-hidden="true" /> SVG
+            </button>
+          </div>
+          <p className="drawing-hint">
+            Lines come from the display tessellation and exact edge samples;
+            curved outlines are approximate to the display tolerance.
+          </p>
+          <button
+            type="button"
+            className="secondary drawing-delete-sheet"
+            disabled={!editable}
+            onClick={() => {
+              if (
+                run(
+                  commandFactories.deleteDrawingSheet({
+                    sheetId: sheet.sheetId
+                  })
+                )
+              )
+                setSelectedSheetId(null);
+            }}
+          >
+            <Trash2 size={13} aria-hidden="true" /> Delete sheet
+          </button>
+        </div>
+      </aside>
+    </section>
+  );
+}
+
+export default DrawingWorkspace;

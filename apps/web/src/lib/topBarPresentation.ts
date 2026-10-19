@@ -1,10 +1,10 @@
-import { Box, Eye, SlidersHorizontal } from 'lucide-react';
+import { Box, DraftingCompass, Eye, SlidersHorizontal } from 'lucide-react';
 import type { WorkspaceMode } from './panelState';
 import type { WorkspaceSaveState } from './cloudProjectAutosave';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from './workspaceSaveStatePresentation';
 
 /**
- * The three workspaces, in the order they appear. Each hint doubles as the
+ * The four workspaces, in the order they appear. Each hint doubles as the
  * tooltip body — the one place the difference between the modes is spelled
  * out, which matters most for Tweak, a mode a shared-link visitor may be
  * meeting for the first time.
@@ -32,6 +32,14 @@ export const WORKSPACE_MODE_OPTIONS: ReadonlyArray<{
     label: 'Build',
     hint: 'Full modeling workspace. Sketch, features, history.',
     Icon: Box
+  },
+  {
+    mode: 'drawing',
+    // A verb like its neighbours, and no wider than them: the segments are
+    // equal, so the longest label sets the whole switch's width.
+    label: 'Draw',
+    hint: 'Lay out drawing sheets of the model and export them as PDF or SVG.',
+    Icon: DraftingCompass
   }
 ];
 

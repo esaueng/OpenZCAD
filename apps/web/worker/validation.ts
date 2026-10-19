@@ -3,6 +3,7 @@ import {
   documentStructureError,
   documentEnvelopeError,
   assertDocumentTextBudget,
+  drawingSetError,
   hasValidImportedMeshSources,
   hasValidImportedStepSources
 } from '@openzcad/shared';
@@ -351,6 +352,12 @@ function parseProjectDocument(
     throw badRequest(
       error instanceof Error ? error.message : 'Invalid project text budget.'
     );
+  }
+  // D01: a malformed drawing section would make the project unopenable on
+  // every device (`normalizeDocument` fails closed on it), so refuse it here.
+  if (record.drawings !== undefined) {
+    const drawingsError = drawingSetError(record.drawings);
+    if (drawingsError) throw badRequest(`"document.drawings": ${drawingsError}`);
   }
   // Undo and redo can restore imports that are absent from current nodes.
   // Validate every copy before the document can be saved or shared.

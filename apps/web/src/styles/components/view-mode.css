@@ -8,7 +8,7 @@
 /* Docked at the left of the bar, between the brand and the project name:
    the workspace you are in reads before the document you are in it with.
 
-   Three equal segments and one accent-tinted thumb that slides to the
+   Four equal segments and one accent-tinted thumb that slides to the
    segment you chose. There is no track and no outline: the island has no
    border or padding, so the thumb fills its segment edge to edge and the
    control reads as one seamless surface, not a box inside a box. The Beta
@@ -18,7 +18,7 @@
   position: relative;
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   isolation: isolate;
 }
 
@@ -30,6 +30,10 @@
   --mode-switch-index: 2;
 }
 
+.mode-switch[data-active='drawing'] {
+  --mode-switch-index: 3;
+}
+
 /* The thumb. Sized to one segment and moved by whole segments, so it never
    has to know how wide a label is; the move is a transform, so it costs no
    layout, and it collapses to a jump under prefers-reduced-motion with every
@@ -39,7 +43,7 @@
   position: absolute;
   z-index: -1;
   inset: 0 auto 0 0;
-  width: calc(100% / 3);
+  width: calc(100% / 4);
   background: var(--color-accent-dim);
   /* The island's radius, so the flush thumb's outer corners follow it. */
   border-radius: var(--radius-lg);

@@ -261,7 +261,8 @@ const BINARY_EXPORT_CONTENT_TYPES = {
   // PLY has no registered media type, so it keeps the generic one — the
   // same mapping `inferContentType` in model.ts uses for `.ply` files.
   ply: 'application/octet-stream',
-  png: 'image/png'
+  png: 'image/png',
+  pdf: 'application/pdf'
 } as const;
 
 export type CadBinaryExportFormat = keyof typeof BINARY_EXPORT_CONTENT_TYPES;

@@ -17,7 +17,8 @@ export const HISTORY_FIELDS = [
   'commandLog',
   'assets',
   'shaprImports',
-  'shaprImportOrder'
+  'shaprImportOrder',
+  'drawings'
 ] as const;
 export type HistoryField = (typeof HISTORY_FIELDS)[number];
 
