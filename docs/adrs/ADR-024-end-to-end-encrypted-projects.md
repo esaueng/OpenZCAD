@@ -979,8 +979,11 @@ library's P-256 path is weaker.
 ### Decision
 
 Decided 2026-10-19, on the evidence of the library spike
-([PR #748](https://github.com/esaueng/OpenZCAD/pull/748),
-`docs/plans/mls-spike-2026-10.md`).
+([PR #748](https://github.com/esaueng/OpenZCAD/pull/748)). The report and its
+re-runnable harness are not on main yet; they land with that PR as
+`docs/plans/mls-spike-2026-10.md` and `spikes/mls/`. Until then, the evidence
+this decision rests on is
+[the report at commit 1e65de4a](https://github.com/esaueng/OpenZCAD/blob/1e65de4a4b9646bcfd83d2a8a34f3c8ef116d74b/docs/plans/mls-spike-2026-10.md).
 
 - **Library.** `mls-rs` 0.56 with its RustCrypto provider
   (`mls-rs-crypto-rustcrypto`), built to WASM and run in a lazily loaded
