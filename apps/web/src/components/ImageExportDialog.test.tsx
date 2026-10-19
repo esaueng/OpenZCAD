@@ -63,6 +63,18 @@ describe('ImageExportDialog', () => {
     });
   });
 
+  it('starts the grid option from the viewport setting', async () => {
+    const props = renderDialog({ initialShowGrid: false });
+    expect(
+      screen.getByLabelText<HTMLInputElement>('Include the grid and axes')
+        .checked
+    ).toBe(false);
+    await userEvent.click(screen.getByRole('button', { name: /Export PNG/ }));
+    expect(props.onExportPng).toHaveBeenCalledWith(
+      expect.objectContaining({ showGrid: false })
+    );
+  });
+
   it('refuses a size the device cannot render', async () => {
     const props = renderDialog({ maxSide: 4096 });
     const width = screen.getByLabelText('Width (px)');

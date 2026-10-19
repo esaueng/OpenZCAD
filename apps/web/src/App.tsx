@@ -22494,6 +22494,7 @@ export function App() {
                   ? interaction.session.sketchId
                   : null
               }
+              initialShowGrid={viewerSettings.showGrid}
               units={doc.units}
               onClose={() => setImageExportView(null)}
               onExportPng={(options) => void handleExportViewportPng(options)}

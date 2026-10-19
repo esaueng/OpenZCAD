@@ -2628,7 +2628,22 @@ export function ModelViewer({
             ],
             sketches: [regionGroup, sketchGroup],
             objectsByBodyId,
-            refreshShadowMap
+            refreshShadowMap,
+            emphasizeBodyColors: () => {
+              const restores: Array<() => void> = [];
+              for (const body of context.renderedBodies ?? []) {
+                const object = objectsByBodyId.get(body.bodyId);
+                if (!object) continue;
+                forEachMesh(object, (mesh) => {
+                  const was = mesh.material.color.clone();
+                  contextBodyColor(body.color, true, mesh.material.color);
+                  restores.push(() => mesh.material.color.copy(was));
+                });
+              }
+              return () => {
+                for (const restore of restores) restore();
+              };
+            }
           },
           request
         );

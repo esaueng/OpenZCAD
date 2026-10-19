@@ -36,6 +36,8 @@ export interface ImageExportDialogProps {
   /** The sketch being edited or selected, offered first. */
   initialSketchId?: string | null;
   initialKind?: ImageExportKind;
+  /** The grid option's starting state: the viewport's own grid setting. */
+  initialShowGrid?: boolean;
   units: UnitSystem;
   onClose(): void;
   /** Starts the export; the dialog closes and the host reports the outcome. */
@@ -69,6 +71,7 @@ export function ImageExportDialog({
   sketches,
   initialSketchId = null,
   initialKind,
+  initialShowGrid = true,
   units,
   onClose,
   onExportPng,
@@ -101,7 +104,7 @@ export function ImageExportDialog({
   const [width, setWidth] = useState(String(viewWidth));
   const [height, setHeight] = useState(String(viewHeight));
   const [transparent, setTransparent] = useState(false);
-  const [showGrid, setShowGrid] = useState(true);
+  const [showGrid, setShowGrid] = useState(initialShowGrid);
   const [sketchId, setSketchId] = useState(
     sketches.find((sketch) => sketch.sketchId === initialSketchId)?.sketchId ??
       sketches[0]?.sketchId ??

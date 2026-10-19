@@ -128,12 +128,21 @@ function stubScene() {
         faceOverlay: faceOverlay.visible,
         taggedFill: taggedFill.visible,
         edgesSuspended: edgeBatch.suspended,
+        colorsEmphasized: emphasized,
         emissive: bodyA.material.emissive.getHex()
       });
     }),
     readRenderTargetPixels: vi.fn()
   };
   const refreshShadowMap = vi.fn();
+  // Stands in for the viewer's undo of the selection's context dimming.
+  let emphasized = false;
+  const emphasizeBodyColors = vi.fn(() => {
+    emphasized = true;
+    return () => {
+      emphasized = false;
+    };
+  });
   const camera = new THREE.PerspectiveCamera(40, 2, 0.1, 100);
   const parts: ViewportImageScene = {
     renderer: renderer as unknown as THREE.WebGLRenderer,
@@ -147,7 +156,8 @@ function stubScene() {
       ['a', bodyA],
       ['b', bodyB]
     ]),
-    refreshShadowMap
+    refreshShadowMap,
+    emphasizeBodyColors
   };
   return {
     parts,
@@ -160,7 +170,10 @@ function stubScene() {
     faceOverlay,
     taggedFill,
     edgeBatch,
-    refreshShadowMap
+    grid,
+    refreshShadowMap,
+    emphasizeBodyColors,
+    isEmphasized: () => emphasized
   };
 }
 
@@ -190,6 +203,7 @@ describe('renderViewportImage', () => {
         faceOverlay: false,
         taggedFill: false,
         edgesSuspended: true,
+        colorsEmphasized: true,
         emissive: 0
       }
     ]);
@@ -259,5 +273,33 @@ describe('captureSamples', () => {
     expect(captureSamples(3840, 2160, 2)).toBe(2);
     expect(captureSamples(3841, 2160, 8)).toBe(0);
     expect(captureSamples(8000, 5000, 8)).toBe(0);
+  });
+});
+
+describe('renderViewportImage grid and colours', () => {
+  it('draws the grid when asked even if the viewport has it switched off', () => {
+    const stub = stubScene();
+    stub.grid.visible = false;
+    renderViewportImage(stub.parts, {
+      width: 16,
+      height: 16,
+      transparent: false,
+      showGrid: true
+    });
+    expect(stub.seen[0]).toMatchObject({ grid: true });
+    expect(stub.grid.visible).toBe(false);
+  });
+
+  it('renders bodies in their own colours, undoing selection dimming, then restores it', () => {
+    const stub = stubScene();
+    renderViewportImage(stub.parts, {
+      width: 16,
+      height: 16,
+      transparent: false,
+      showGrid: false
+    });
+    expect(stub.seen[0]).toMatchObject({ colorsEmphasized: true });
+    expect(stub.emphasizeBodyColors).toHaveBeenCalledTimes(1);
+    expect(stub.isEmphasized()).toBe(false);
   });
 });

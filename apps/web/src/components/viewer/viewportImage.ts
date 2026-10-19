@@ -74,6 +74,12 @@ export interface ViewportImageScene {
    * needs it rebuilt afterwards.
    */
   refreshShadowMap(): void;
+  /**
+   * Puts every body back in its own colour — undoing the dimming a face,
+   * edge or feature selection applies to the bodies around it — and
+   * returns the restore. The viewer owns the colours, so it does this.
+   */
+  emphasizeBodyColors?(): () => void;
 }
 
 /**
@@ -262,7 +268,9 @@ export function renderViewportImage(
   const keep = new Set(parts.content);
   for (const child of scene.children) {
     if (child === parts.backdrop) hide(child, !request.transparent);
-    else if (parts.grid.includes(child)) hide(child, request.showGrid);
+    // Set, not masked: the dialog's choice wins over the viewport setting,
+    // so a grid switched off on screen can still be asked for.
+    else if (parts.grid.includes(child)) show(child, request.showGrid);
     else if (bodyScoped && parts.sketches.includes(child)) hide(child, false);
     else hide(child, keep.has(child));
   }
@@ -313,6 +321,7 @@ export function renderViewportImage(
       }
     });
   }
+  if (parts.emphasizeBodyColors) restores.push(parts.emphasizeBodyColors());
   const background = scene.background;
   if (request.transparent) scene.background = null;
   restores.push(() => {
