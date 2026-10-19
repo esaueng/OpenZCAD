@@ -10,10 +10,12 @@ import { setAnalyticsEnabled, trackUsage, trackDetail, trackParts, trackSize, is
 import type {
   GeometryBodyRepresentation,
   GeometryReadyState,
+  ParameterKind,
   UserId
 } from '@openzcad/shared';
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
+import { datumFaceAttachFailed } from './lib/datumPlaneDisplay';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
 import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
 import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
@@ -25,13 +27,20 @@ import {
 } from './lib/parameterEdit';
 import type {
   ParameterPreviewBody,
-  parameterVisualPreview
+  prepareParameterEditSession
 } from './lib/parameterVisualPreview';
 import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
 import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
-import { featureHistory } from './lib/featureHistory';
+import { toggleBodyIsolation, type BodyIsolation } from './lib/bodyIsolation';
+import { failedFeatureIds } from './lib/featureRepair';
+import { featureHistory, relatedFeatureIds } from './lib/featureHistory';
+import {
+  exportScope,
+  exportScopeLabel,
+  type ExportScope
+} from './lib/exportScope';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
@@ -56,7 +65,8 @@ import {
   useRef,
   useState,
   type ChangeEvent,
-  type ComponentProps
+  type ComponentProps,
+  type JSXElementConstructor
 } from 'react';
 import { ExportDialogBoundary } from './components/ExportDialogBoundary';
 import {
@@ -95,6 +105,7 @@ import {
 import {
   CommandManager,
   commandFactories,
+  isParameterRetype,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -117,6 +128,7 @@ import {
   listNodesByKind,
   listExposedParameters,
   listParameters,
+  suggestParameterQuantities,
   normalizeDocument,
   normalizeDocumentHistory,
   numberedBodyName,
@@ -204,7 +216,9 @@ import {
   constraintToolsForObject,
   constraintToolSpec,
   describeConstraint,
+  disconnectConstraintIds,
   fullyDefinedIds,
+  lockConstraintIds,
   measureDrivingDimension,
   planConstraintFromSelection,
   refusePick,
@@ -326,9 +340,9 @@ import {
 } from './lib/projectTabOwnership';
 
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
+import { traceFaceDrag, traceFaceDragPublish } from './lib/faceDragTrace';
 import { modalHoldsKeyboard, useModalFocus } from './lib/useModalFocus';
 import {
-  PLANE_LABELS,
   downloadText,
   evalParamValue,
   exportFileStem,
@@ -536,7 +550,10 @@ import {
   type SketchConstraintToolKind,
   type SketchEditToolKind
 } from './lib/interaction/machine';
-import type { SketchEditHost } from './lib/sketch/edits';
+import type {
+  SketchEditHost,
+  SketchEditPickContext
+} from './lib/sketch/edits';
 import {
   faceOffsetBaseline,
   planFaceOffset,
@@ -591,7 +608,7 @@ import {
   displayObjectsWithTextBudget
 } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
-import { CommandBar, type PaletteCommand } from './components/CommandBar';
+import type { PaletteCommand } from './components/CommandBar';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
@@ -618,6 +635,7 @@ import {
 } from './components/forms/ExtrudeForm';
 import {
   extrudeEditCommand,
+  extrudePreviewMagnitude,
   extrudeEditTargets,
   extrudePreviewError
 } from './lib/extrudeEditing';
@@ -632,7 +650,7 @@ import type {
   DisplayMode,
   PickDetail,
   SketchOverlay,
-  ViewTarget
+  ViewRequestTarget
 } from '@openzcad/viewport/types';
 import type {
   MovePreview,
@@ -725,18 +743,27 @@ const stepImportRun = () => import('./lib/stepImportRun');
 const extrudeInference = () => import('./lib/extrudeInference');
 
 // The touch keypad is needed only when a numeric field requests it.
+/**
+ * A lazily loaded component that draws nothing until its chunk arrives. One
+ * helper instead of a hand-written Suspense wrapper per component: each of
+ * those cost the entry chunk its own copy of the same few lines.
+ */
+function withSuspense<P extends object>(Lazy: JSXElementConstructor<P>) {
+  return function Suspended(props: P) {
+    return (
+      <Suspense fallback={null}>
+        <Lazy {...props} />
+      </Suspense>
+    );
+  };
+}
+
 const LazyNumericKeypad = lazyWithStaleChunkNotice(() =>
   import('./components/NumericKeypad').then((module) => ({
     default: module.NumericKeypad
   }))
 );
-function NumericKeypad(props: ComponentProps<typeof LazyNumericKeypad>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyNumericKeypad {...props} />
-    </Suspense>
-  );
-}
+const NumericKeypad = withSuspense(LazyNumericKeypad);
 
 const LazyViewerShell = lazyWithStaleChunkNotice(() =>
   import('./components/ViewerShell').then((module) => ({
@@ -745,10 +772,13 @@ const LazyViewerShell = lazyWithStaleChunkNotice(() =>
 );
 const ViewModeBar = createLazyPanel<
   ComponentProps<typeof ViewModeBarComponent>
->('View tools', () =>
-  import('./components/ViewModeBar').then((module) => ({
-    default: module.ViewModeBar
-  }))
+>(
+  'View tools',
+  () =>
+    import('./components/ViewModeBar').then((module) => ({
+      default: module.ViewModeBar
+    })),
+  'view-tools'
 );
 // The Move panel is needed only once a Move starts; lazy, its fields stay
 // off the entry chunk, which runs at its budget. Its own boundary keeps a
@@ -773,6 +803,30 @@ const LazyMeasurementDock = lazyWithStaleChunkNotice(() =>
     default: module.MeasurementDock
   }))
 );
+// The search-and-ask bar belongs to the workspace alone; lazy, its command
+// parser and list stay off the entry chunk the start screen loads with,
+// which runs at its budget. Until it arrives the bar's own empty frame holds
+// its place, so the notice lane stacked on it does not move.
+const LazyCommandBar = lazyWithStaleChunkNotice(() =>
+  import('./components/CommandBar').then((module) => ({
+    default: module.CommandBar
+  }))
+);
+function CommandBar(props: ComponentProps<typeof LazyCommandBar>) {
+  return (
+    <ErrorBoundary label="Search bar">
+      <Suspense
+        fallback={
+          <div className="command-bar-row">
+            <div className="command-bar" />
+          </div>
+        }
+      >
+        <LazyCommandBar {...props} />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
 // The "?" control reference opens only on request; lazy, it also takes its
 // keyboard/pointer reference tables off the entry chunk.
 const LazyShortcutsOverlay = lazyWithStaleChunkNotice(() =>
@@ -780,13 +834,7 @@ const LazyShortcutsOverlay = lazyWithStaleChunkNotice(() =>
     default: module.ShortcutsOverlay
   }))
 );
-function ShortcutsOverlay(props: ComponentProps<typeof LazyShortcutsOverlay>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyShortcutsOverlay {...props} />
-    </Suspense>
-  );
-}
+const ShortcutsOverlay = withSuspense(LazyShortcutsOverlay);
 // Operation help is only needed after the user starts a modeling action.
 const LazyToolCard = lazyWithStaleChunkNotice(() =>
   import('./components/ToolCard').then((module) => ({
@@ -839,13 +887,7 @@ const LazySketchWorkflow = lazyWithStaleChunkNotice(() =>
     default: module.SketchWorkflow
   }))
 );
-function SketchWorkflow(props: ComponentProps<typeof LazySketchWorkflow>) {
-  return (
-    <Suspense fallback={null}>
-      <LazySketchWorkflow {...props} />
-    </Suspense>
-  );
-}
+const SketchWorkflow = withSuspense(LazySketchWorkflow);
 // The command card is the first thing the column shows, but its chunk is
 // small and fetched with the workspace: keeping the component (and the
 // selection-to-context rules it carries) out of the entry chunk is what
@@ -987,21 +1029,26 @@ const LazyModelingOperationsForm = lazyWithStaleChunkNotice(() =>
     default: module.ModelingOperationsForm
   }))
 );
+const LazySketchPlanePrompt = lazyWithStaleChunkNotice(() =>
+  import('./components/SketchPlanePrompt').then((module) => ({
+    default: module.SketchPlanePrompt
+  }))
+);
+const LazyDatumPlaneCard = lazyWithStaleChunkNotice(() =>
+  import('./components/forms/DatumPlaneForm').then((module) => ({
+    default: module.DatumPlaneWorkspaceCard
+  }))
+);
 
-function AssistantPanel(props: ComponentProps<typeof LazyAssistantPanel>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyAssistantPanel {...props} />
-    </Suspense>
-  );
-}
+const AssistantPanel = withSuspense(LazyAssistantPanel);
 
 function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
   return (
     <Suspense
       fallback={
-        <div className="viewer-shell" role="status" aria-live="polite">
-          Loading 3D viewport…
+        <div className="viewer-shell viewport-loading" role="status">
+          <span className="workspace-loading-ring spin" aria-hidden="true" />
+          <span>Loading 3D viewport…</span>
         </div>
       }
     >
@@ -1010,127 +1057,31 @@ function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
   );
 }
 
-function MeasurementDock(props: ComponentProps<typeof LazyMeasurementDock>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyMeasurementDock {...props} />
-    </Suspense>
-  );
-}
+const MeasurementDock = withSuspense(LazyMeasurementDock);
 
-function CommandCard(props: ComponentProps<typeof LazyCommandCard>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyCommandCard {...props} />
-    </Suspense>
-  );
-}
+const CommandCard = withSuspense(LazyCommandCard);
 
-function WorkspaceTour(props: ComponentProps<typeof LazyWorkspaceTour>) {
-  return (
-    <Suspense fallback={null}>
-      <LazyWorkspaceTour {...props} />
-    </Suspense>
-  );
-}
+const WorkspaceTour = withSuspense(LazyWorkspaceTour);
 
-function SketchToolRail(props: ComponentProps<typeof LazySketchToolRail>) {
-  return (
-    <Suspense fallback={null}>
-      <LazySketchToolRail {...props} />
-    </Suspense>
-  );
-}
+const SketchToolRail = withSuspense(LazySketchToolRail);
 
-function SketchReferenceDimensions(
-  props: ComponentProps<typeof LazySketchReferenceDimensions>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazySketchReferenceDimensions {...props} />
-    </Suspense>
-  );
-}
+const SketchReferenceDimensions = withSuspense(LazySketchReferenceDimensions);
 
-function SketchRelationsRail(
-  props: ComponentProps<typeof LazySketchRelationsRail>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazySketchRelationsRail {...props} />
-    </Suspense>
-  );
-}
+const SketchRelationsRail = withSuspense(LazySketchRelationsRail);
 
-function ResumeSessionDialog(
-  props: ComponentProps<typeof LazyResumeSessionDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyResumeSessionDialog {...props} />
-    </Suspense>
-  );
-}
+const ResumeSessionDialog = withSuspense(LazyResumeSessionDialog);
 
-function SaveRevisionDialog(
-  props: ComponentProps<typeof LazySaveRevisionDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazySaveRevisionDialog {...props} />
-    </Suspense>
-  );
-}
+const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
 
-function DeleteFeatureDialog(
-  props: ComponentProps<typeof LazyDeleteFeatureDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyDeleteFeatureDialog {...props} />
-    </Suspense>
-  );
-}
+const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
 
-function SuppressFeatureDialog(
-  props: ComponentProps<typeof LazySuppressFeatureDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazySuppressFeatureDialog {...props} />
-    </Suspense>
-  );
-}
+const SuppressFeatureDialog = withSuspense(LazySuppressFeatureDialog);
 
-function UnappliedCardDialog(
-  props: ComponentProps<typeof LazyUnappliedCardDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyUnappliedCardDialog {...props} />
-    </Suspense>
-  );
-}
+const UnappliedCardDialog = withSuspense(LazyUnappliedCardDialog);
 
-function ProjectConflictDialog(
-  props: ComponentProps<typeof LazyProjectConflictDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyProjectConflictDialog {...props} />
-    </Suspense>
-  );
-}
+const ProjectConflictDialog = withSuspense(LazyProjectConflictDialog);
 
-function SketchEntityEditor(
-  props: ComponentProps<typeof LazySketchEntityEditor>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazySketchEntityEditor {...props} />
-    </Suspense>
-  );
-}
+const SketchEntityEditor = withSuspense(LazySketchEntityEditor);
 
 function SketchTextCard(props: ComponentProps<typeof LazySketchTextCard>) {
   return (
@@ -1147,23 +1098,9 @@ function SketchTextCard(props: ComponentProps<typeof LazySketchTextCard>) {
   );
 }
 
-function SettingsPage(props: ComponentProps<typeof LazySettingsPage>) {
-  return (
-    <Suspense fallback={null}>
-      <LazySettingsPage {...props} />
-    </Suspense>
-  );
-}
+const SettingsPage = withSuspense(LazySettingsPage);
 
-function ProjectSharingDialog(
-  props: ComponentProps<typeof LazyProjectSharingDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyProjectSharingDialog {...props} />
-    </Suspense>
-  );
-}
+const ProjectSharingDialog = withSuspense(LazyProjectSharingDialog);
 
 function ExportDialog(props: ComponentProps<typeof LazyExportDialog>) {
   return (
@@ -1175,15 +1112,7 @@ function ExportDialog(props: ComponentProps<typeof LazyExportDialog>) {
   );
 }
 
-function ShaprImportDialog(
-  props: ComponentProps<typeof LazyShaprImportDialog>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyShaprImportDialog {...props} />
-    </Suspense>
-  );
-}
+const ShaprImportDialog = withSuspense(LazyShaprImportDialog);
 
 function Inspector(props: ComponentProps<typeof LazyInspector>) {
   return (
@@ -1193,15 +1122,11 @@ function Inspector(props: ComponentProps<typeof LazyInspector>) {
   );
 }
 
-function ModelingOperationsForm(
-  props: ComponentProps<typeof LazyModelingOperationsForm>
-) {
-  return (
-    <Suspense fallback={null}>
-      <LazyModelingOperationsForm {...props} />
-    </Suspense>
-  );
-}
+const ModelingOperationsForm = withSuspense(LazyModelingOperationsForm);
+
+const SketchPlanePrompt = withSuspense(LazySketchPlanePrompt);
+
+const DatumPlaneCard = withSuspense(LazyDatumPlaneCard);
 import {
   chooseProjectDocument,
   projectsHaveSameRebuildInputs,
@@ -1260,6 +1185,8 @@ import { PatternProgress } from './components/PatternProgress';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
+  planReorder,
+  reorderRefusal,
   type AffectedFeatureTarget
 } from './lib/affectedFeatureTargets';
 import {
@@ -1306,6 +1233,7 @@ import {
   type MoveSelectionRequest
 } from './lib/moveSelectionTransition';
 import {
+  featureOpensEditCard,
   resolveHistoryEditorFeature,
   resolveHistoryFeature,
   type HistoryEditorRequest
@@ -2129,6 +2057,28 @@ export function App() {
    */
   const [faceRepair, setFaceRepair] =
     useState<StaleDirectEditFaceRepair | null>(null);
+  /** The open Plane card's handler for a drag of its datum's handle. */
+  const datumOffsetDragRef = useRef<((delta: number) => void) | null>(null);
+  /** The open Plane card's draft Offset, drawn ahead of its Apply. */
+  const [datumOffsetDraft, setDatumOffsetDraft] = useState<number | null>(
+    null
+  );
+  /** Whether the open Plane card's draft can take a drag: a numeric offset. */
+  const [datumDragAvailable, setDatumDragAvailable] = useState(false);
+  /** The open Plane card's exact entry for its datum's handle. */
+  const datumOffsetEntryRef = useRef<(() => boolean) | null>(null);
+  /** R01: an offset datum whose source face is being re-picked. */
+  /**
+   * R01: a datum whose source face is being re-picked. `both` re-picks a
+   * midplane's two faces in turn (A, then B) and commits them as one edit;
+   * `first` holds the A pick while B is awaited.
+   */
+  const [datumRepair, setDatumRepair] = useState<{
+    feature: FeatureNode;
+    slot: 0 | 1;
+    both?: boolean;
+    first?: TopologySelection;
+  } | null>(null);
   const [formFacePickTarget, setFormFacePickTarget] = useState<BodyId | null>(
     null
   );
@@ -2489,6 +2439,11 @@ export function App() {
     () => new Set<string>([...localHiddenBodyIds, ...parameterHiddenBodyIds]),
     [localHiddenBodyIds, parameterHiddenBodyIds]
   );
+  // Not persisted: isolation is a temporary view, and a reload shows the
+  // user's own hidden set.
+  const [bodyIsolation, setBodyIsolation] = useState<
+    (BodyIsolation & { projectId: string }) | null
+  >(null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   const [faceGeometryPreview, setFaceGeometryPreview] = useState<{
     document: ProjectDocument;
@@ -2610,7 +2565,7 @@ export function App() {
     kind: 'clipping'
   });
   const [viewRequest, setViewRequest] = useState<{
-    view: ViewTarget;
+    view: ViewRequestTarget;
     nonce: number;
   } | null>(null);
   const [normalToFaceRequest, setNormalToFaceRequest] =
@@ -2898,7 +2853,7 @@ export function App() {
   const [parameterPreviewBase, setParameterPreviewBase] =
     useState<ProjectDocument | null>(null);
   const [makeParameterPreview, setMakeParameterPreview] = useState<
-    typeof parameterVisualPreview | null
+    typeof prepareParameterEditSession | null
   >(null);
   useEffect(() => {
     if (!parameterPreviewBase || makeParameterPreview) return;
@@ -2906,7 +2861,7 @@ export function App() {
     void import('./lib/parameterVisualPreview')
       .then((module) => {
         if (!disposed)
-          setMakeParameterPreview(() => module.parameterVisualPreview);
+          setMakeParameterPreview(() => module.prepareParameterEditSession);
       })
       .catch(() => {
         // Exact rebuilding remains available without a preview.
@@ -3224,6 +3179,9 @@ export function App() {
         };
       },
       derive: async (candidate, signal) => {
+        // Radius/hole gestures read the owned cylinder semantics while they
+        // stream. Keep their complete picking topology until that contract
+        // can be prepared independently from recognition.
         const derived = await geometry.previewGeometry(candidate.document, {
           signal
         });
@@ -3270,13 +3228,22 @@ export function App() {
   const offsetPreview = useRef(
     new LivePreview<OffsetPreviewCandidate, GeometryReadyState>({
       build: (offset) => {
+        const buildStarted = performance.now();
         const base = managerRef.current?.document;
         const plan = base ? buildOffsetEditPlan(offset, undefined, base) : null;
         const current = interactionRef.current;
-        return base && plan && current.mode === 'face'
+        const candidate =
+          base && plan && current.mode === 'face'
+            ? plan.command.apply(base)
+            : null;
+        traceFaceDrag('request', {
+          value: offset,
+          ms: performance.now() - buildStarted
+        });
+        return base && plan && candidate && current.mode === 'face'
           ? {
               selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`,
-              document: plan.command.apply(base),
+              document: candidate,
               offset,
               bodyId: plan.bodyId,
               command: plan.command,
@@ -3299,7 +3266,8 @@ export function App() {
           throw new Error(candidate.preflightRejection);
         }
         const derived = await geometry.previewGeometry(candidate.document, {
-          signal
+          signal,
+          deferTopology: true
         });
         const live = managerRef.current;
         const documentMoved =
@@ -3333,6 +3301,7 @@ export function App() {
           setRenderedOffsetPreview(null);
           return;
         }
+        traceFaceDragPublish(preview.document.offset, preview.document);
         reusableOffsetPreviewRef.current = { candidate: preview.document };
         setPreviewDoc(null);
         setFaceGeometryPreview({
@@ -3347,11 +3316,11 @@ export function App() {
         // while the hand is actually ahead of the published geometry.
         setPreviewDeferred(offsetPreview.degraded && offsetPreview.lagging);
       },
-      onFailure: ({ error, value }) =>
-        reportPreviewFailure(
-          errorMessage(error, 'Exact offset preview failed.'),
-          value
-        ),
+      onFailure: ({ error, value }) => {
+        const message = errorMessage(error, 'Exact offset preview failed.');
+        traceFaceDrag('refusal', { value, message });
+        reportPreviewFailure(message, value);
+      },
       acceptValue: (offset) =>
         Number.isFinite(offset) && Math.abs(offset) > 1e-9,
       ...(E2E_SLOW_FRAME_MS === undefined
@@ -3553,7 +3522,32 @@ export function App() {
         ...(diagnostic.detail ? { detail: diagnostic.detail } : {})
       });
       cylinderRadiusPreview.clear();
-      offsetPreview.clear();
+      // A refusal at release can arrive before its streamed preview. Keep
+      // the last accepted shape just as an in-drag refusal does, provided
+      // it still belongs to this source revision and face selection. stop()
+      // invalidates late frames without dropping the displayed candidate.
+      const acceptedOffset = reusableOffsetPreviewRef.current?.candidate;
+      const retainOffset =
+        pending?.interaction.mode === 'face' &&
+        pending.interaction.op === 'offset-face' &&
+        acceptedOffset !== undefined &&
+        pending.document.projectId === acceptedOffset.baseProjectId &&
+        pending.document.version === acceptedOffset.baseVersion &&
+        acceptedOffset.selectionKey ===
+          `${pending.interaction.op}:${pending.interaction.target.bodyId}:${pending.interaction.target.topologyId}:${Boolean(pending.interaction.target.localFaceOffset)}` &&
+        previewSelectionIsCurrent(acceptedOffset) &&
+        !isStaleSelectionError(diagnostic);
+      if (retainOffset) {
+        offsetPreview.stop();
+      } else {
+        offsetPreview.clear();
+        if (
+          pending?.interaction.mode === 'face' &&
+          pending.interaction.op === 'offset-face'
+        ) {
+          setLastValidPreview(null);
+        }
+      }
       regionExtrudePreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
@@ -3811,7 +3805,9 @@ export function App() {
         bodyId: feature.bodyId,
         extrude: feature.featureId
       };
-      edgeFormPreview.request(Math.abs(resolveDocumentValue(value.distance)));
+      edgeFormPreview.request(
+        extrudePreviewMagnitude(value, resolveDocumentValue)
+      );
     } catch (error) {
       setFeatureFormError(
         errorMessage(error, 'Unable to preview this extrusion.')
@@ -4193,7 +4189,10 @@ export function App() {
   function ensureCanExecute(commands: AnyCommand[], action: string): boolean {
     const parametersOnly =
       commands.length > 0 &&
-      commands.every((command) => command.kind === 'parameter.set');
+      commands.every(
+        (command) =>
+          command.kind === 'parameter.set' && !isParameterRetype(command)
+      );
     return parametersOnly
       ? ensureCanEditParameters(action)
       : ensureCanEdit(action);
@@ -4606,6 +4605,7 @@ export function App() {
     // An armed face re-pick names a feature by id; a different project's
     // features must never satisfy it.
     setFaceRepair(null);
+    setDatumRepair(null);
     // Nor may an armed edge or face operation, or a delete awaiting its
     // confirm: a "Fillet · Ready" chip from the last project read as a
     // command the new, empty one was somehow in the middle of.
@@ -5242,6 +5242,13 @@ export function App() {
     [doc]
   );
   const parameters = useMemo(() => (doc ? listParameters(doc) : []), [doc]);
+  // F05: what each unitless parameter's uses suggest it measures, offered
+  // in its type picker and never applied without the owner choosing it.
+  const parameterQuantitySuggestions = useMemo(
+    (): Record<string, ParameterKind> =>
+      doc ? suggestParameterQuantities(doc) : {},
+    [doc]
+  );
   // What Tweak mode and a share link offer. An uncurated document offers
   // everything, so the rule lives in document-core rather than here — the
   // panel and the Build-mode toggles must never disagree about it.
@@ -5555,6 +5562,16 @@ export function App() {
   // document swap, again when the worker result landed) for identical
   // geometry.
   const liveBodyRepresentations = doc?.derived.bodyRepresentations ?? null;
+  // Draft input leaves the document unchanged. Reuse recognized bounds instead
+  // of inspecting embedded STEP histories again for each rendered panel.
+  const liveParameterMinimums = useMemo(
+    () => (doc ? parameterMinimums(doc) : {}),
+    [doc]
+  );
+  const parameterPreviewSession = useMemo(
+    () => makeParameterPreview?.(parameterPreviewBase) ?? null,
+    [makeParameterPreview, parameterPreviewBase]
+  );
   const parameterPreview = useMemo(
     () =>
       !previewDoc &&
@@ -5562,19 +5579,15 @@ export function App() {
       parameterCandidate !== null &&
       parameterCandidate.base.projectId === doc?.projectId &&
       parameterCandidate?.base.version === doc?.version
-        ? (makeParameterPreview?.(
-            parameterPreviewBase,
-            parameterCandidate.document
-          ) ?? null)
+        ? (parameterPreviewSession?.preview(parameterCandidate.document) ?? null)
         : !previewDoc &&
             !exactGeometryReady &&
             geometry.state.phase !== 'failed'
-          ? (makeParameterPreview?.(parameterPreviewBase, doc, true) ?? null)
+          ? (parameterPreviewSession?.preview(doc, true) ?? null)
           : null,
     [
-      makeParameterPreview,
+      parameterPreviewSession,
       parameterCandidate,
-      parameterPreviewBase,
       doc,
       previewDoc,
       exactGeometryReady,
@@ -5758,6 +5771,18 @@ export function App() {
     selectedTopology
   ]);
   const selectedFeatureNodeId = selectedFeature?.id ?? null;
+  // History's Related view: the selected step's or bodies' lineage, or null
+  // with nothing selected so the toggle says why it is unavailable.
+  const historyRelatedFeatureIds = useMemo(
+    () =>
+      doc && (selectedFeature || selectedBodyIds.length > 0)
+        ? relatedFeatureIds(doc, {
+            featureId: selectedFeature?.featureId ?? null,
+            bodyIds: selectedFeature ? [] : selectedBodyIds
+          })
+        : null,
+    [doc, selectedFeature, selectedBodyIds]
+  );
   /**
    * Each opening of an edit card gets its own session. A late Apply must
    * leave a reopened card alone, even when it edits the same feature.
@@ -5904,15 +5929,22 @@ export function App() {
         : new Map<BodyId, WithheldExportBody>(),
     [doc, featureAttribution]
   );
-  const selectedBodyExportable = Boolean(
-    selectedBody &&
-    !selectedBody.consumed &&
-    selectedBody.exportableStep &&
-    !failedHistoryBodies.has(selectedBody.bodyId)
+  // Rows named "needs repair" for failures that leave every body standing,
+  // such as a transform whose target survives its own failure.
+  const failedHistoryFeatureIds = useMemo(
+    () =>
+      doc && featureAttribution?.derived === doc.derived
+        ? failedFeatureIds(featureAttribution.featureWarnings)
+        : new Set<FeatureId>(),
+    [doc, featureAttribution]
   );
-  const { exportBodyIds, exportWithheldMessage } = useMemo<{
+  // Viewport-hidden bodies export unless this is switched off; the dialog
+  // reports the count either way, so the choice is never silent.
+  const [exportIncludesHidden, setExportIncludesHidden] = useState(true);
+  const { exportBodyIds, exportWithheldMessage, exportScopeInfo } = useMemo<{
     exportBodyIds: BodyId[];
     exportWithheldMessage: string | null;
+    exportScopeInfo: ExportScope | null;
   }>(() => {
     if (
       !doc ||
@@ -5920,51 +5952,58 @@ export function App() {
       currentFaceGeometryPreview !== null ||
       (tweakMode && parameterModelError)
     ) {
-      return { exportBodyIds: [], exportWithheldMessage: null };
+      return {
+        exportBodyIds: [],
+        exportWithheldMessage: null,
+        exportScopeInfo: null
+      };
     }
     const bodyName = (bodyId: BodyId) =>
       doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId;
-    const exportable = (body: GeometryBodyRepresentation) =>
-      body.exportableStep &&
-      !body.consumed &&
-      !parameterHiddenBodyIds.has(body.bodyId);
-    if (selectedBody && exportable(selectedBody)) {
-      const withheld = failedHistoryBodies.get(selectedBody.bodyId);
-      return withheld
-        ? {
-            exportBodyIds: [],
-            exportWithheldMessage: withheldExportMessage([withheld], bodyName)
-          }
-        : {
-            exportBodyIds: [selectedBody.bodyId],
-            exportWithheldMessage: null
-          };
-    }
-    const candidates = Object.values(doc.derived.bodyRepresentations).filter(
-      exportable
+    const scope = exportScope(
+      Object.values(doc.derived.bodyRepresentations).map((body) => ({
+        bodyId: body.bodyId,
+        exportable:
+          body.exportableStep &&
+          !body.consumed &&
+          !parameterHiddenBodyIds.has(body.bodyId),
+        hidden: localHiddenBodyIds.has(body.bodyId),
+        withheld: failedHistoryBodies.has(body.bodyId)
+      })),
+      selectedBody?.bodyId ?? null,
+      exportIncludesHidden
     );
+    const withheld = scope.withheldIds.flatMap((bodyId) => {
+      const entry = failedHistoryBodies.get(bodyId as BodyId);
+      return entry ? [entry] : [];
+    });
     return {
-      exportBodyIds: candidates
-        .filter((body) => !failedHistoryBodies.has(body.bodyId))
-        .map((body) => body.bodyId),
-      exportWithheldMessage: withheldExportMessage(
-        candidates.flatMap((body) => {
-          const withheld = failedHistoryBodies.get(body.bodyId);
-          return withheld ? [withheld] : [];
-        }),
-        bodyName
-      )
+      exportBodyIds: scope.bodyIds as BodyId[],
+      exportWithheldMessage: withheldExportMessage(withheld, bodyName),
+      exportScopeInfo: scope
     };
   }, [
     failedHistoryBodies,
     doc,
     selectedBody,
     parameterHiddenBodyIds,
+    localHiddenBodyIds,
+    exportIncludesHidden,
     tweakMode,
     parameterModelError,
     currentGeometrySnapshot,
     currentFaceGeometryPreview
   ]);
+  // What the one-click STEP controls name: the selected body, or the
+  // all-bodies scope whenever hidden bodies are in it or left out of it.
+  const exportControlScope =
+    exportScopeInfo?.selection && selectedBody
+      ? selectedBody.name
+      : exportScopeInfo &&
+          (exportScopeInfo.hiddenIncluded > 0 ||
+            exportScopeInfo.hiddenExcluded > 0)
+        ? exportScopeLabel(exportScopeInfo)
+        : null;
 
   /**
    * What the current selection is, and the figure that goes with it.
@@ -6714,7 +6753,10 @@ export function App() {
     if (
       !managerRef.current ||
       commands.length === 0 ||
-      !(permission === 'parameters'
+      // A retype (F05) is a Build edit even on the parameter path: Tweak
+      // hides the type picker, and a check that outlasted the switch to
+      // Tweak must not land it there.
+      !(permission === 'parameters' && !commands.some(isParameterRetype)
         ? ensureCanEditParameters('apply this parameter edit')
         : ensureCanExecute(commands, 'apply this edit'))
     ) {
@@ -7132,9 +7174,8 @@ export function App() {
         setStatus('This history feature is no longer available to edit.');
         return;
       }
-      if (modelingFeatureIsEditable(feature.data.featureKind)) {
-        const nextTool = (feature.data as EditableModelingFeatureData)
-          .featureKind;
+      if (featureOpensEditCard(feature.data.featureKind)) {
+        const nextTool = feature.data.featureKind;
         const reason = toolDisabledReason(nextTool, availability);
         if (reason) {
           setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
@@ -7169,7 +7210,10 @@ export function App() {
       setStatus('This history feature is no longer available to edit.');
       return;
     }
-    const data = feature?.data as EditableModelingFeatureData | undefined;
+    const data = feature?.data as
+      | EditableModelingFeatureData
+      | Extract<FeatureNode['data'], { featureKind: 'datum-plane' }>
+      | undefined;
     const nextTool = data?.featureKind ?? request.tool;
     const reason = toolDisabledReason(nextTool, availability);
     if (reason) {
@@ -7354,7 +7398,7 @@ export function App() {
    */
   /** Opens a history feature in the modeling form it was created with. */
   function openModelingFeatureEditor(feature: FeatureNode) {
-    if (!modelingFeatureIsEditable(feature.data.featureKind)) return;
+    if (!featureOpensEditCard(feature.data.featureKind)) return;
     const data = feature.data as EditableModelingFeatureData;
     const reason = toolDisabledReason(data.featureKind, availability);
     if (reason) {
@@ -7684,9 +7728,53 @@ export function App() {
     }
   }
 
-  function requestView(view: ViewTarget) {
+  function requestView(view: ViewRequestTarget) {
     setViewRequest({ view, nonce: ++viewNonceRef.current });
   }
+
+  // Saved views: per project, on this device. The list and its storage live
+  // in the lazily loaded panel; the entry chunk has no room for them.
+  const savedViewsControl = doc
+    ? {
+        projectId: doc.projectId,
+        capture() {
+          const snapshot = projectViewSnapshot();
+          return snapshot
+            ? {
+                camera: snapshot.camera,
+                projection,
+                displayMode: viewerSettings.displayMode,
+                ...(viewerSettings.sectionView
+                  ? { sectionView: viewerSettings.sectionView }
+                  : {})
+              }
+            : null;
+        },
+        onApply(view: {
+          name: string;
+          camera: ViewportCameraState;
+          projection: typeof projection;
+          displayMode: DisplayMode;
+          sectionView?: SectionViewSettings;
+        }) {
+          setProjection(view.projection);
+          // The exact section on screen belongs to the cut being replaced.
+          clearSectionOutline();
+          setViewerSettings((current) => {
+            const { sectionView: _previous, ...rest } = current;
+            return {
+              ...rest,
+              displayMode: view.displayMode,
+              ...(view.sectionView ? { sectionView: view.sectionView } : {})
+            };
+          });
+          requestView({ pose: view.camera, projection: view.projection });
+          if (view.sectionView) void requestExactSection(view.sectionView);
+          setStatus(`${view.name}.`);
+        },
+        onStatus: setStatus
+      }
+    : undefined;
 
   function requestNormalToSelectedFace() {
     if (!normalToFaceTarget) {
@@ -7916,6 +8004,10 @@ export function App() {
   const [sketchVisibilityOverrides, setSketchVisibilityOverrides] = useState<
     Record<string, boolean>
   >({});
+  /** Datum planes hidden by their eye toggle: view state, as sketches' is. */
+  const [hiddenDatumIds, setHiddenDatumIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
 
   /** Sketches referenced by any feature: extrude/revolve, loft sections, sweep profile + path. */
   const consumedSketchIds = useMemo(() => {
@@ -8023,26 +8115,46 @@ export function App() {
   }
 
   function showAllBodies() {
+    setBodyIsolation(null);
     setHiddenBodyIds(new Set());
     setStatus('All bodies visible.');
   }
 
   /**
    * Hides every part except one. Running it again on the part already alone on
-   * screen brings the rest back, so the same control both enters and leaves the
-   * isolated view rather than stranding someone with everything hidden.
+   * screen leaves isolation, so the same control both enters and leaves the
+   * isolated view. Leaving restores the bodies hidden before isolating rather
+   * than showing everything.
    */
   function isolateBody(bodyId: string) {
-    const others = partBodies.filter((body) => body.bodyId !== bodyId);
-    const alreadyAlone = others.every((body) => hiddenBodyIds.has(body.bodyId));
-    if (alreadyAlone) {
-      showAllBodies();
+    const isolation =
+      bodyIsolation && bodyIsolation.projectId === doc?.projectId
+        ? bodyIsolation
+        : null;
+    const step = toggleBodyIsolation(
+      partBodies.map((body) => body.bodyId),
+      bodyId,
+      hiddenBodyIds,
+      localHiddenBodyIds,
+      isolation
+    );
+    setHiddenBodyIds(step.hidden);
+    setBodyIsolation(
+      step.isolation && doc
+        ? { ...step.isolation, projectId: doc.projectId }
+        : null
+    );
+    if (!step.entered) {
+      setStatus(
+        step.hidden.size === 0
+          ? 'All bodies visible.'
+          : `Left isolation · ${step.hidden.size} previously hidden ${step.hidden.size === 1 ? 'body stays' : 'bodies stay'} hidden.`
+      );
       return;
     }
-    setHiddenBodyIds(new Set(others.map((body) => body.bodyId)));
     const name = partBodies.find((body) => body.bodyId === bodyId)?.name;
     setStatus(
-      `Showing ${name ?? 'one body'} only · ${others.length} hidden. Isolate again to show all.`
+      `Showing ${name ?? 'one body'} only · ${partBodies.length - 1} hidden. Isolate again to leave.`
     );
   }
 
@@ -9960,6 +10072,11 @@ export function App() {
     setProjects((current) =>
       current.filter((project) => !destroyed.has(project.projectId))
     );
+    if (destroyed.size > 0) {
+      void import('./lib/savedViews').then(({ forgetSavedViews }) =>
+        destroyed.forEach((projectId) => forgetSavedViews(projectId))
+      );
+    }
     const failed = outcomes.find((outcome) => outcome.failure !== undefined);
     if (failed) {
       throw failed.failure;
@@ -10934,6 +11051,27 @@ export function App() {
       setStatus(
         'Shapr3D migration requires selecting one .shapr project and its companion .step file together.'
       );
+      return;
+    }
+    if (lowerName.endsWith('.dxf')) {
+      try {
+        const { dxfSketchImportPlan, refuseOversizedDxf } = await import(
+          './lib/dxfImport'
+        );
+        // By bytes, before the file is read into memory at all.
+        refuseOversizedDxf(file.size);
+        const text = await file.text();
+        if (managerRef.current !== importManager) return;
+        const plan = dxfSketchImportPlan(
+          importManager.document,
+          file.name,
+          text,
+          newFeatureName
+        );
+        if (executeCommand(plan.command)) setStatus(plan.status);
+      } catch (error) {
+        setStatus(errorMessage(error, `Could not import ${file.name}.`));
+      }
       return;
     }
     if (!/\.(?:stl|step|stp|3mf|obj|glb|ply)$/i.test(file.name)) {
@@ -11961,7 +12099,12 @@ export function App() {
         });
         return;
       }
-      const bodies = countLabel(exportBodyIds.length, 'body', 'bodies');
+      const hiddenNote = exportScopeInfo?.hiddenIncluded
+        ? ` (${exportScopeInfo.hiddenIncluded} hidden)`
+        : exportScopeInfo?.hiddenExcluded
+          ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
+          : '';
+      const bodies = `${countLabel(exportBodyIds.length, 'body', 'bodies')}${hiddenNote}`;
       const outcome =
         produced.warnings > 0
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
@@ -12523,6 +12666,56 @@ export function App() {
       handleFaceRepairPick(selection);
       return;
     }
+    if (datumRepair && !measuring && tool === null && !modelingLocked) {
+      const base = managerRef.current?.document;
+      if (!selection || !base) return;
+      const { feature: repair, slot, both, first } = datumRepair;
+      const attempt = datumRepairAttempt.current;
+      const withdrawn = () => datumRepairAttempt.current !== attempt;
+      void import('./lib/datumPlanes').then(
+        ({ datumFaceRepairEdit, datumFaceSourceFromPick }) => {
+          if (withdrawn()) return;
+          try {
+            if (both && !first) {
+              // Check face A now, so a bad pick is refused where it was made.
+              datumFaceSourceFromPick(base, repair.name, selection);
+              setDatumRepair({
+                feature: repair,
+                slot: 0,
+                both,
+                first: selection
+              });
+              setStatus(
+                `Face A taken · now click face B for "${repair.name}" · Esc cancels.`
+              );
+              return;
+            }
+            const edit = first
+              ? datumFaceRepairEdit(base, repair.featureId, first, 0, selection)
+              : datumFaceRepairEdit(base, repair.featureId, selection, slot);
+            void validatedFeature.runTransaction([edit.command], {
+              label: edit.label,
+              cancelled: withdrawn,
+              targets: affectedFeatureTargets(base, repair.featureId),
+              validateDerived: edit.validateDerived,
+              successMessage: `"${repair.name}" follows the re-picked face.`,
+              onSuccess: () => setDatumRepair(null),
+              // Stay armed: the next click can try another face (both faces
+              // again, from A, when the pair was refused).
+              onFailure: (message) => {
+                setStatus(message);
+                if (first) {
+                  setDatumRepair({ feature: repair, slot: 0, both: true });
+                }
+              }
+            });
+          } catch (error) {
+            setStatus(errorMessage(error, 'That face cannot carry this plane.'));
+          }
+        }
+      );
+      return;
+    }
     // A form that collects faces owns every viewport pick while it is open:
     // the click fills its face field instead of arming a drag handle and
     // replacing the form with the Offset Face card.
@@ -12561,6 +12754,12 @@ export function App() {
     // went on to arm a sketch, arm a drag handle, and replace the selection —
     // so an inspection pass rewrote the state a modelling session was holding.
     if (handleMeasurementPick(selection, additive, detail)) {
+      return;
+    }
+    // The Plane card asks for faces: a face click is its next source pick,
+    // not a selection that closes the card it was waiting for.
+    if (tool === 'datum-plane' && selection.kind === 'face') {
+      setSelectedTopology(selection);
       return;
     }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
@@ -13569,21 +13768,63 @@ export function App() {
       setStatus(refusal);
       return;
     }
+    const base = managerRef.current?.document;
+    if (!base || sketchSolving || geometryBusy) return;
+    const sketchId = interaction.session.sketchId as SketchId;
+    const objectId = interaction.session.selectedObjectId as EntityId;
+    const command = commandFactories.deleteSketchObject(
+      { sketchId, objectId },
+      'Delete sketch entity'
+    );
     setSketchDiagnosticPoints([]);
+    const source = listFeaturesInOrder(base).find(
+      (feature) =>
+        feature.data.featureKind === 'sketch' &&
+        feature.data.sketchId === sketchId
+    );
     if (
-      executeCommand(
-        commandFactories.deleteSketchObject(
-          {
-            sketchId: interaction.session.sketchId as SketchId,
-            objectId: interaction.session.selectedObjectId as EntityId
-          },
-          'Delete sketch entity'
-        )
-      )
+      !source ||
+      affectedFeatureTargets(base, source.featureId).length === 0
     ) {
-      dispatchInteraction({ type: 'sketch-select-object', objectId: null });
-      setStatus('Deleted sketch entity.');
+      if (executeCommand(command)) {
+        dispatchInteraction({ type: 'sketch-select-object', objectId: null });
+        setStatus('Deleted sketch entity.');
+      }
+      return;
     }
+    setSketchEditError(null);
+    setSketchSolving(true);
+    // A delete is an edit: features built on this sketch rebuild first, and
+    // one that would break refuses the delete by name instead of silently
+    // losing its profile.
+    void commitSketchEdit(
+      base,
+      sketchId,
+      [command],
+      'Delete sketch entity',
+      objectId
+    )
+      .then((committed) => {
+        if (!committed) return;
+        dispatchInteraction({ type: 'sketch-select-object', objectId: null });
+        setStatus('Deleted sketch entity.');
+      })
+      .catch((error: unknown) => {
+        if (error instanceof FeatureBuildError) {
+          recordHistoryFailure(error, base);
+        }
+        const message = errorMessage(
+          error,
+          'The sketch entity could not be deleted.'
+        );
+        if (
+          interactionRef.current.mode === 'sketch' &&
+          interactionRef.current.session.sketchId === sketchId
+        )
+          setSketchEditError(message);
+        setStatus(message);
+      })
+      .finally(() => setSketchSolving(false));
   }
 
   // ---------------------------------------------------------------------
@@ -13685,6 +13926,9 @@ export function App() {
   const [sketchEditDraft, setSketchEditDraft] = useState<{
     kind: SketchEditToolKind;
     picks: string[];
+    values?: number[];
+    raws?: string[];
+    anchor?: { x: number; y: number };
     documentVersion: number;
   } | null>(null);
   // The pill describes a solve of THIS session's sketch; leaving sketch mode
@@ -13950,7 +14194,55 @@ export function App() {
       );
       return true;
     }
-    const built = buildConstraint(doc, editingSketchNode, pending.kind, picks);
+    if (pending.kind === 'lock' || pending.kind === 'disconnect') {
+      const point = picks[0]!;
+      const ref = {
+        objectId: point.objectId as EntityId,
+        point: point.kind === 'point' ? point.point : 'center'
+      } as const;
+      // A second Lock on a locked point unlocks it; Disconnect only removes.
+      const removals =
+        pending.kind === 'lock'
+          ? lockConstraintIds(editingSketchNode, ref)
+          : disconnectConstraintIds(editingSketchNode, ref);
+      if (removals.length > 0) {
+        const verb = pending.kind === 'lock' ? 'Unlock point' : 'Disconnect point';
+        if (
+          executeTransaction(
+            verb,
+            removals.map((constraintId) =>
+              commandFactories.deleteSketchConstraint({
+                sketchId: editingSketchNode.sketchId,
+                constraintId: toSketchConstraintId(constraintId)
+              })
+            )
+          )
+        ) {
+          setSketchSolveStatus(null);
+          setStatus(
+            pending.kind === 'lock'
+              ? 'Point unlocked.'
+              : `Disconnected · removed ${removals.length} relation${removals.length === 1 ? '' : 's'}.`
+          );
+        }
+        dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+        return true;
+      }
+      if (pending.kind === 'disconnect') {
+        setStatus('That point has no coincident, midpoint or on-curve relation.');
+        dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+        return true;
+      }
+    }
+    const built = buildConstraint(
+      doc,
+      editingSketchNode,
+      pending.kind,
+      picks,
+      undefined,
+      (value) =>
+        evalParamValue(value, parameterScope.scope, doc.units) ?? undefined
+    );
     if ('error' in built) {
       setStatus(built.error);
     } else if (
@@ -13987,19 +14279,28 @@ export function App() {
         evalParamValue(value, parameterScope.scope, base.units) ?? undefined,
       addPick: (objectId) =>
         dispatchInteraction({ type: 'sketch-edit-pick', objectId }),
-      askValue: (kind, picks, label, initial) => {
-        setSketchEditDraft({ kind, picks, documentVersion: base.version });
+      askValue: (kind, picks, label, initial, step) => {
+        setSketchEditDraft({
+          kind,
+          picks,
+          ...step,
+          anchor,
+          documentVersion: base.version
+        });
         setKeypad({
           kind: 'sketch-edit',
           label,
           initial,
-          unitKind: 'length',
+          unitKind: step?.unitKind ?? 'length',
           ...(anchor ? { fixedClientAnchor: anchor } : {})
         });
         dispatchInteraction({ type: 'sketch-edit-tool', kind: null });
       },
+      disarm: () =>
+        dispatchInteraction({ type: 'sketch-edit-tool', kind: null }),
       runOperation: (operation) =>
         geometry.sketchPlanarOperation(base, operation),
+      solveSketch: geometry.solveSketch,
       commit: async (sketchId, commands, label) => {
         const applied = await commitSketchEdit(base, sketchId, commands, label);
         if (applied) setSketchSolveStatus(null);
@@ -14022,7 +14323,8 @@ export function App() {
    */
   function handleSketchEditPick(
     objectId: string | null,
-    clickPoint: { x: number; y: number }
+    clickPoint: { x: number; y: number },
+    context: SketchEditPickContext
   ): boolean {
     const pending =
       interaction.mode === 'sketch' ? interaction.session.pendingEdit : null;
@@ -14033,7 +14335,7 @@ export function App() {
       const host = sketchEditHost(doc, clickPoint);
       const sketch = editingSketchNode;
       void import('./lib/sketch/edits').then(({ advanceSketchEdit }) =>
-        advanceSketchEdit(host, doc, sketch, pending, objectId)
+        advanceSketchEdit(host, doc, sketch, pending, objectId, context)
       );
     }
     return true;
@@ -14061,13 +14363,14 @@ export function App() {
     }
     const { runSketchEdit } = await import('./lib/sketch/edits');
     await runSketchEdit(
-      sketchEditHost(base),
+      sketchEditHost(base, draft.anchor),
       base,
       sketch,
       draft.kind,
       draft.picks,
       value,
-      raw
+      raw,
+      draft
     );
   }
 
@@ -14341,7 +14644,13 @@ export function App() {
       const command = commandFactories.setParameter({ name, expression });
       command.validate(base);
       const candidate = command.apply(base);
-      if (parameterInputError(base, candidate)) {
+      if (
+        parameterInputError(
+          base,
+          candidate,
+          base === doc ? liveParameterMinimums : undefined
+        )
+      ) {
         setParameterCandidate(null);
         return;
       }
@@ -14365,7 +14674,9 @@ export function App() {
   async function handleSetParameter(
     name: string,
     expression: string,
-    addOnly = false
+    addOnly = false,
+    /** F05: a new quantity for the parameter (null: unitless). */
+    quantity?: ParameterKind | null
   ): Promise<string | null> {
     const manager = managerRef.current;
     if (!manager || !ensureCanEditParameters('change this parameter')) {
@@ -14404,7 +14715,8 @@ export function App() {
       const parameterCommand = commandFactories.setParameter({
         name,
         expression,
-        ...(addOnly ? { addOnly: true } : {})
+        ...(addOnly ? { addOnly: true } : {}),
+        ...(quantity !== undefined ? { quantity } : {})
       });
       parameterCommand.validate(base);
       let prospective = parameterCommand.apply(base);
@@ -15142,6 +15454,9 @@ export function App() {
       distance,
       symmetric: regionExtrudeSettings.current?.symmetric ?? false,
       backDistance: regionExtrudeSettings.current?.backDistance ?? 0,
+      // The form sends a side only with a through-all extent.
+      endCondition: regionExtrudeSettings.current?.endCondition,
+      throughAllSide: regionExtrudeSettings.current?.throughAllSide,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     };
   }
@@ -17061,8 +17376,8 @@ export function App() {
       return;
     }
     if (moveHasUnappliedChange(movePreview)) {
-      if (modelingFeatureIsEditable(node.data.featureKind)) {
-        const nextTool = (node.data as EditableModelingFeatureData).featureKind;
+      if (featureOpensEditCard(node.data.featureKind)) {
+        const nextTool = node.data.featureKind;
         const reason = toolDisabledReason(nextTool, availability);
         if (reason) {
           setStatus(`${TOOL_META[nextTool].label}: ${reason}.`);
@@ -17200,12 +17515,12 @@ export function App() {
     // in front of it. Last, so the form's target body wins the selection.
     if (
       node?.kind === 'feature' &&
-      modelingFeatureIsEditable(node.data.featureKind)
+      featureOpensEditCard(node.data.featureKind)
     ) {
       // This navigation has already settled its Move choice. Launch directly
       // so the render's old preview cannot queue the same question again.
       completeToolSwitch({
-        tool: (node.data as EditableModelingFeatureData).featureKind,
+        tool: node.data.featureKind,
         historyFeature: {
           projectId: current.projectId,
           featureId: node.featureId
@@ -17358,16 +17673,50 @@ export function App() {
     }
   }
 
+  /**
+   * Moves a History step, keyboard and drag alike. The order gate refuses a
+   * producer moved after its consumer at once; a legal order that leaves a
+   * later feature unbuildable is refused by name after an exact rebuild of
+   * the moved span, as a feature edit is, and the order stays as it was.
+   */
   function handleReorderFeature(featureId: FeatureId, toIndex: number) {
     const name =
       doc &&
       listFeaturesInOrder(doc).find((f) => f.featureId === featureId)?.name;
-    executeCommand(
-      commandFactories.moveFeature(
-        { featureId, toIndex },
-        name ? `Reorder ${name}` : 'Reorder feature'
-      )
-    );
+    const label = name ? `Reorder ${name}` : 'Reorder feature';
+    const command = commandFactories.moveFeature({ featureId, toIndex }, label);
+    const base = doc;
+    const plan = planReorder(base, featureId, toIndex, {
+      orderGate: (document) => command.validate(document),
+      canEdit: () => ensureCanEdit(`reorder ${name ?? 'this feature'}`),
+      geometryReady: (document) => geometry.isReadyFor(document)
+    });
+    if (plan.kind === 'direct') executeCommand(command);
+    if (plan.kind === 'pending')
+      setStatus('Exact geometry is still rebuilding. Reorder once it finishes.');
+    if (plan.kind !== 'validate') return;
+    let failed = '';
+    const attribution =
+      featureAttribution && featureAttribution.derived === base?.derived
+        ? featureAttribution.featureWarnings
+        : undefined;
+    void validatedFeature.runTransaction([command], {
+      label,
+      // Compared with the current model in `reorderRefusal`, so a failure the
+      // design already has does not block the move.
+      targets: [],
+      validateDerived: (derived) => {
+        const refusal =
+          base &&
+          reorderRefusal(base, derived, featureId, toIndex, attribution);
+        if (!refusal) return;
+        failed = `: ${refusal.featureName} would not rebuild`;
+        throw refusal;
+      },
+      validatingMessage: `Checking features after ${name ?? 'the move'}…`,
+      successMessage: commandOutcomeMessage(label),
+      onFailure: (message) => announce(`${label} not applied${failed}. ${message}`)
+    });
   }
 
   function handleToggleFeatureSuppression(feature: FeatureNode) {
@@ -17779,6 +18128,8 @@ export function App() {
     }
     setTool(null);
     clearSelection();
+    // One re-pick at a time: the click goes to whichever was asked for last.
+    setDatumRepair(null);
     setFaceRepair(repair);
     const bodyName =
       representations[repair.targetBodyId]?.name ?? 'the edited body';
@@ -17786,6 +18137,25 @@ export function App() {
       `Re-pick the face for "${repair.featureName}": click the ${faceRepairPickHint(repair)} on ${bodyName} · Esc cancels.`
     );
   }
+
+  // A datum re-pick yields to any mode that takes viewport clicks over:
+  // Measure, a tool, a sketch or a locked workspace (View or Tweak). Each
+  // arm or disarm also moves the attempt counter, which withdraws an edit
+  // still being checked.
+  const datumRepairAttempt = useRef(0);
+  useEffect(() => {
+    datumRepairAttempt.current += 1;
+  }, [datumRepair]);
+  useEffect(() => {
+    if (
+      measuring ||
+      tool !== null ||
+      modelingLocked ||
+      interaction.mode === 'sketch'
+    ) {
+      setDatumRepair(null);
+    }
+  }, [measuring, tool, modelingLocked, interaction.mode]);
 
   /**
    * Consumes a viewport pick while a face re-pick is armed. A pick that
@@ -17899,6 +18269,80 @@ export function App() {
               run: () => armFaceRepair(repair)
             }
           ]
+        : []),
+      // R01: a datum on a face that no longer resolves: one entry per face
+      // source (a midplane names A or B, since either may be the lost one).
+      // Only the build's own "cannot attach" failure proves the loss; a
+      // datum still rebuilding, or failing for another reason (a bad offset
+      // expression), is not something a new face could fix.
+      ...(feature.data.featureKind === 'datum-plane' &&
+      !isFeatureSuppressed(feature) &&
+      !doc?.derived.datumFrames?.[feature.featureId] &&
+      datumFaceAttachFailed(
+        feature,
+        doc && featureAttribution?.derived === doc.derived
+          ? featureAttribution.featureWarnings
+          : []
+      )
+        ? (feature.data.definition.kind === 'offset'
+            ? [feature.data.definition.source]
+            : feature.data.definition.sources
+          ).flatMap((source, index) => {
+            if (source.type !== 'face') return [];
+            const slot = index as 0 | 1;
+            const midplane =
+              feature.data.featureKind === 'datum-plane' &&
+              feature.data.definition.kind === 'midplane';
+            const which = midplane ? ` ${slot === 0 ? 'A' : 'B'}` : '';
+            return [
+              {
+                item: {
+                  id: `repair-datum-face${midplane ? `-${slot}` : ''}`,
+                  label: `Re-pick source face${which}…`,
+                  icon: <Crosshair size={13} aria-hidden="true" />
+                },
+                run: () => {
+                  if (!ensureCanEdit('repair a feature')) return;
+                  setTool(null);
+                  clearSelection();
+                  setFaceRepair(null);
+                  setDatumRepair({ feature, slot });
+                  setStatus(
+                    `Re-pick ${midplane ? `face${which}` : 'the face'} for "${feature.name}": click a planar face · Esc cancels.`
+                  );
+                }
+              }
+            ];
+          })
+          .concat(
+            // Both of a midplane's faces lost (a deleted body held them):
+            // either alone still leaves the plane unresolved, so pick both.
+            feature.data.featureKind === 'datum-plane' &&
+              feature.data.definition.kind === 'midplane' &&
+              feature.data.definition.sources.every(
+                (source) => source.type === 'face'
+              )
+              ? [
+                  {
+                    item: {
+                      id: 'repair-datum-faces-both',
+                      label: 'Re-pick both source faces…',
+                      icon: <Crosshair size={13} aria-hidden="true" />
+                    },
+                    run: () => {
+                      if (!ensureCanEdit('repair a feature')) return;
+                      setTool(null);
+                      clearSelection();
+                      setFaceRepair(null);
+                      setDatumRepair({ feature, slot: 0, both: true });
+                      setStatus(
+                        `Re-pick both faces for "${feature.name}": click face A, then face B · Esc cancels.`
+                      );
+                    }
+                  }
+                ]
+              : []
+          )
         : []),
       ...(bodyId && body && !body.consumed
         ? [
@@ -18315,9 +18759,10 @@ export function App() {
             }
             return;
           }
-          if (faceRepair) {
+          if (faceRepair || datumRepair) {
             event.preventDefault();
             setFaceRepair(null);
+            setDatumRepair(null);
             setStatus('Face re-pick canceled · the feature is unchanged.');
             return;
           }
@@ -19835,20 +20280,26 @@ export function App() {
     <Sidebar
       parameters={parameters}
       parameterValues={parameterScope.scope}
-      parameterMinimums={doc ? parameterMinimums(doc) : {}}
+      parameterMinimums={liveParameterMinimums}
       features={features}
       representations={representations}
+      failedFeatureIds={failedHistoryFeatureIds}
       geometryPending={Boolean(
         currentGeometrySnapshot || currentFaceGeometryPreview
       )}
+      relatedFeatureIds={historyRelatedFeatureIds}
       selectedFeatureNodeId={selectedFeatureNodeId}
       selectedSketchProfileId={selectedSketchProfileId}
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
+      document={doc}
+      hiddenDatumIds={hiddenDatumIds}
+      onHiddenDatumIdsChange={setHiddenDatumIds}
       warnings={diagnostics}
       historyDetails={
         <FeatureHistoryPanel
           document={doc}
+          scope={parameterScope.scope}
           selectedId={selectedFeatureNodeId}
           failure={
             historyFailure?.projectId === doc.projectId &&
@@ -19888,6 +20339,18 @@ export function App() {
       onSetParameter={(name, expression) =>
         handleSetParameter(name, expression)
       }
+      onSetParameterQuantity={(name, quantity, expression) => {
+        const current = parameters.find((entry) => entry.name === name);
+        return current
+          ? handleSetParameter(
+              name,
+              expression ?? current.expression,
+              false,
+              quantity
+            )
+          : Promise.resolve(`Parameter ${name} does not exist.`);
+      }}
+      parameterQuantitySuggestions={parameterQuantitySuggestions}
       onViewActivityLog={() => setActivityLogOpen(true)}
       onDeleteParameter={(name) =>
         executeCommand(commandFactories.deleteParameter({ name }))
@@ -20052,9 +20515,7 @@ export function App() {
             !parameterEditPending &&
             !parameterDraftActive
           }
-          exportScope={
-            selectedBodyExportable && selectedBody ? selectedBody.name : null
-          }
+          exportScope={exportControlScope}
           exportWithheld={exportWithheldMessage}
           saveState={presentedSaveState}
           saveToAccount={
@@ -20134,6 +20595,7 @@ export function App() {
               }))
             }
             onView={requestView}
+            {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
           />
@@ -20159,16 +20621,14 @@ export function App() {
             modelError={parameterModelError}
             parameters={exposedParameters}
             parameterValues={parameterScope.scope}
-            parameterMinimums={doc ? parameterMinimums(doc) : {}}
+            parameterMinimums={liveParameterMinimums}
             canExport={
               exportBodyIds.length > 0 &&
               !parameterEditPending &&
               !parameterDraftActive &&
               !parameterModelError
             }
-            exportScope={
-              selectedBodyExportable && selectedBody ? selectedBody.name : null
-            }
+            exportScope={exportControlScope}
             exportWithheld={exportWithheldMessage}
             onPreviewParameter={handlePreviewParameter}
             onSetParameter={(name, expression) =>
@@ -20444,18 +20904,24 @@ export function App() {
             onSketchMoveCommit={(objectId, data, verb) =>
               handleUpdateSketchEntity(data, verb, objectId)
             }
-            onSketchSelectObject={(objectId, snapPoint, clickPoint) => {
+            onSketchSelectObject={(
+              objectId,
+              snapPoint,
+              clickPoint,
+              planePoint
+            ) => {
               if (
                 handleSketchConstraintPick(
                   objectId,
                   snapPoint ?? null,
                   clickPoint
-                )
+                ) ||
+                handleSketchEditPick(objectId, clickPoint, {
+                  at: planePoint,
+                  snapPoint
+                })
               ) {
-                return;
-              }
-              if (handleSketchEditPick(objectId, clickPoint)) {
-                return;
+                return true;
               }
               dispatchInteraction({ type: 'sketch-select-object', objectId });
             }}
@@ -20465,12 +20931,57 @@ export function App() {
             onSelectRegion={handleSelectRegion}
             onHoverRegion={handleHoverRegion}
             planePickerArmed={!modelingLocked && tool === 'sketch'}
+            datumDocument={doc}
+            hiddenDatumIds={hiddenDatumIds}
+            selectedFeatureId={
+              (modelingEditFeature ?? selectedFeature)?.featureId ?? null
+            }
             planePickerOffset={sketchPlaneOffset}
             holeGhost={holePreviewState?.ghost ?? null}
             primitiveGhost={
               tool && PRIMITIVE_TOOLS.includes(tool) ? primitiveGhost : null
             }
             onPickPlane={startSketchOnPlane}
+            // A face re-pick or a measurement owns every viewport click; a
+            // datum must not open its card over one still armed.
+            // Only a free viewport selects a datum by clicking it: an open
+            // tool or card (Hole, Shell, a Plane draft…), a sketch, a
+            // re-pick or Measure owns the click and keeps its draft.
+            onPickDatum={
+              faceRepair ||
+              datumRepair ||
+              measuring ||
+              tool !== null ||
+              interaction.mode === 'sketch'
+                ? undefined
+                : (featureId) => {
+                    const node =
+                      doc && findFeature(doc, featureId as FeatureId);
+                    if (node) handleSelectFeatureFromTree(node.id, false);
+                  }
+            }
+            // A selected datum opens its Plane card; the handle feeds the
+            // card's Offset field, and the card's own Apply commits it. Only
+            // while that card edits this datum: a card creating a new plane
+            // must not take the old selection's drag as its own Offset.
+            onDatumOffsetDrag={
+              tool === 'datum-plane' &&
+              modelingEditFeature?.data.featureKind === 'datum-plane' &&
+              datumDragAvailable
+                ? (delta) => {
+                    const apply = datumOffsetDragRef.current;
+                    apply?.(delta);
+                    return Boolean(apply);
+                  }
+                : undefined
+            }
+            datumOffsetDraft={
+              tool === 'datum-plane' &&
+              modelingEditFeature?.data.featureKind === 'datum-plane'
+                ? datumOffsetDraft
+                : null
+            }
+            onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
             modeOverlay={
@@ -20609,7 +21120,10 @@ export function App() {
             projection={projection}
             orientationRef={orientationRef}
             onSelectTopology={handleSelectTopologyFromViewer}
-            topologyPicksHeld={currentGeometrySnapshot !== null}
+            topologyPicksHeld={
+              currentGeometrySnapshot !== null ||
+              currentFaceGeometryPreview?.geometry.topology === 'pending'
+            }
             onSelectEdgeChain={handleSelectEdgeChainFromViewer}
             selectionFilter={selectionFilter}
             onBoxSelect={handleBoxSelectFromViewer}
@@ -20626,6 +21140,7 @@ export function App() {
             measuring={measuring}
             onMeasure={toggleMeasure}
             onView={requestView}
+            {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
             sectionRange={
@@ -20852,53 +21367,22 @@ export function App() {
             liveSnapRef={moveSnapSetterRef}
           />
         ) : tool === 'sketch' ? (
-          // The plane chooser is a command card like any other. It floated
-          // over the viewport's top edge, where the mode toggle and, at
-          // 1024 px, the project name drew over its title and its ×.
-          <div className="sketch-plane-prompt" role="status">
-            <span>
-              <strong>Pick a sketch plane</strong>
-              <small>
-                Click a planar face on the model, or start on a principal plane.
-              </small>
-            </span>
-            <label className="sketch-plane-offset">
-              <span>Offset</span>
-              <input
-                type="number"
-                step="any"
-                value={sketchPlaneOffsetText}
-                aria-label="Sketch plane offset"
-                onChange={(event) =>
-                  setSketchPlaneOffsetText(event.target.value)
-                }
-              />
-              <span className="sketch-plane-offset-units">{doc.units}</span>
-            </label>
-            <span className="sketch-plane-buttons">
-              {(['XY', 'XZ', 'YZ'] as const).map((plane) => (
-                <button
-                  key={plane}
-                  type="button"
-                  onClick={() => startSketchOnPlane(plane)}
-                >
-                  {PLANE_LABELS[plane]}
-                </button>
-              ))}
-              <button
-                type="button"
-                className="sketch-plane-dismiss"
-                aria-label="Cancel sketch"
-                title="Cancel sketch (Esc)"
-                onClick={() => {
-                  cancelPanel();
-                  setStatus('Sketch canceled · no plane was chosen.');
-                }}
-              >
-                ×
-              </button>
-            </span>
-          </div>
+          <SketchPlanePrompt
+            document={doc}
+            offsetText={sketchPlaneOffsetText}
+            datumsReady={exactGeometryReady}
+            onOffsetTextChange={setSketchPlaneOffsetText}
+            onPickPlane={startSketchOnPlane}
+            onEnterSketch={(plane, message) => {
+              dispatchInteraction({ type: 'enter-sketch', plane });
+              setTool(null);
+              setStatus(message, { sticky: true });
+            }}
+            onCancel={() => {
+              cancelPanel();
+              setStatus('Sketch canceled · no plane was chosen.');
+            }}
+          />
         ) : tool === null &&
           selectedProfiles.length > 0 &&
           selectedSketchProfileName ? (
@@ -20996,6 +21480,8 @@ export function App() {
                       faceOptions={modelingOperationFaces}
                       profileOptions={modelingFormProfiles}
                       pathOptions={modelingFormPaths}
+                      datumDocument={doc}
+                      datumBefore={modelingEditFeature?.featureId ?? null}
                       initialTarget={modelingTargetBodyId ?? undefined}
                       viewportFacePick={viewportFormFacePick}
                       unsupportedReason={modelingUnsupportedReason ?? undefined}
@@ -21055,6 +21541,36 @@ export function App() {
                   )}
                 </div>
               </section>
+            ) : tool === 'datum-plane' && doc ? (
+              <DatumPlaneCard
+                key={modelingEditFeature?.featureId ?? 'new'}
+                document={doc}
+                editFeature={modelingEditFeature}
+                scope={parameterScope.scope}
+                selection={selectedTopology}
+                editDisabledReason={editDisabledReason}
+                exactGeometryReady={exactGeometryReady}
+                app={{
+                  managerRef,
+                  geometry,
+                  validatedFeature,
+                  ensureCanEdit,
+                  newFeatureName,
+                  setStatus,
+                  editCardSessionRef,
+                  editSessionIsCurrent,
+                  finishFeatureEdit,
+                  finishFeatureCreation,
+                  validateSelectionEdit,
+                  handleDeleteFeature,
+                  cancelPanel,
+                  closeFeaturePanel,
+                  datumOffsetDragRef,
+                  setDatumOffsetDraft,
+                  datumOffsetEntryRef,
+                  setDatumDragAvailable
+                }}
+              />
             ) : (
               <Inspector
                 tool={tool}
@@ -21586,7 +22102,7 @@ export function App() {
           <input
             ref={importInputRef}
             type="file"
-            accept=".fcstd,.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply"
+            accept=".fcstd,.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf"
             multiple
             style={{ display: 'none' }}
             onChange={(event: ChangeEvent<HTMLInputElement>) => {
@@ -21752,19 +22268,39 @@ export function App() {
                 onClose={() => setAccountConflict(null)}
               />
             )}
-          {meshExportOpen && doc && exportBodyIds.length > 0 && (
+          {meshExportOpen &&
+            doc &&
+            // Stays open while hidden bodies are switched off, even when
+            // nothing visible is left, so the choice can be undone here.
+            (exportBodyIds.length > 0 ||
+              (exportScopeInfo?.hiddenExcluded ?? 0) > 0) && (
             <ExportDialog
               scopeLabel={
-                selectedBodyExportable && selectedBody
+                exportScopeInfo?.selection && selectedBody
                   ? selectedBody.name
-                  : `all bodies (${exportBodyIds.length})`
+                  : exportScopeInfo
+                    ? exportScopeLabel(exportScopeInfo)
+                    : `all bodies (${exportBodyIds.length})`
               }
+              hiddenBodies={
+                exportScopeInfo && !exportScopeInfo.selection
+                  ? exportScopeInfo.hiddenIncluded +
+                    exportScopeInfo.hiddenExcluded
+                  : 0
+              }
+              includeHidden={exportIncludesHidden}
+              onIncludeHiddenChange={setExportIncludesHidden}
               bodies={exportBodyIds.map((bodyId) => ({
                 bodyId,
                 name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
               }))}
               revision={doc.version}
-              onClose={() => setMeshExportOpen(false)}
+              onClose={() => {
+                setMeshExportOpen(false);
+                // Leaving with every body hidden and left out would leave no
+                // export to reopen this dialog from; hidden bodies come back.
+                if (exportBodyIds.length === 0) setExportIncludesHidden(true);
+              }}
               onExport={handleExportMesh}
               onCheckQuality={handleCheckMeshQuality}
             />

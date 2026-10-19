@@ -7,9 +7,13 @@ import {
   type ReactNode
 } from 'react';
 import {
+  Crosshair,
   CircleDot,
   Construction,
+  Columns3,
   Diameter,
+  Ellipsis,
+  FlipHorizontal2,
   Grid3x3,
   Layers3,
   Magnet,
@@ -17,7 +21,9 @@ import {
   Minus,
   Play,
   Radius,
+  RotateCw,
   ScanSearch,
+  Scissors,
   Slice,
   Square,
   SquareDashed,
@@ -193,8 +199,25 @@ const CIRCLE_MODES: {
 const EDIT_TOOL_ICONS: Record<SketchEditToolKind, typeof Minus> = {
   fillet: Radius,
   chamfer: Slice,
-  offset: SquareDashed
+  offset: SquareDashed,
+  trim: Scissors,
+  mirror: FlipHorizontal2,
+  'linear-pattern': Columns3,
+  'circular-pattern': RotateCw
 };
+
+/**
+ * Fillet and Chamfer keep their own rail slots; the rest of the modify tools
+ * share one, opening beside the rail. The rail is a fixed column with no
+ * room left, so a new modify tool joins this fold rather than the column.
+ */
+const FOLDED_EDIT_TOOLS = new Set<SketchEditToolKind>([
+  'offset',
+  'trim',
+  'mirror',
+  'linear-pattern',
+  'circular-pattern'
+]);
 
 function circleModeSpec(mode: SketchCircleMode) {
   return CIRCLE_MODES.find((spec) => spec.mode === mode) ?? CIRCLE_MODES[0]!;
@@ -328,6 +351,8 @@ export function SketchToolRail({
   const togglePalette = () =>
     onTogglePalette ? onTogglePalette() : setPaletteOpenState((open) => !open);
   const constraintGroupRef = useRef<HTMLFieldSetElement>(null);
+  const [modifyOpen, setModifyOpen] = useState(false);
+  const modifyGroupId = useId();
   const reviewRequested = useRef(false);
   const [inspectedConstraintId, setInspectedConstraintId] = useState<
     string | null
@@ -468,32 +493,88 @@ export function SketchToolRail({
       {TOOLS.slice(3).map(drawTool)}
     </>
   );
+  const editTool = (
+    { kind, label, hint }: (typeof SKETCH_EDIT_TOOL_SPECS)[number],
+    inFold: boolean
+  ) => {
+    const Icon = EDIT_TOOL_ICONS[kind];
+    const active = pendingEdit?.kind === kind;
+    return (
+      <Tooltip
+        key={kind}
+        label={label}
+        description={canConstrain ? hint : 'Draw an entity first.'}
+      >
+        <button
+          type="button"
+          className={
+            inFold
+              ? `sketch-modify-item${active ? ' active' : ''}`
+              : active
+                ? 'active'
+                : undefined
+          }
+          aria-pressed={active}
+          aria-label={label}
+          disabled={!canConstrain}
+          onClick={() => {
+            if (inFold) setModifyOpen(false);
+            if (active) onEditTool(null);
+            else onEditTool(kind, hint);
+          }}
+        >
+          <Icon size={16} aria-hidden="true" />
+          {inFold && <span aria-hidden="true">{label}</span>}
+        </button>
+      </Tooltip>
+    );
+  };
+  const foldArmed =
+    pendingEdit !== null && FOLDED_EDIT_TOOLS.has(pendingEdit.kind);
   const modifyTools = (
     <>
-      {SKETCH_EDIT_TOOL_SPECS.map(({ kind, label, hint }) => {
-        const Icon = EDIT_TOOL_ICONS[kind];
-        const active = pendingEdit?.kind === kind;
-        return (
-          <Tooltip
-            key={kind}
-            label={label}
-            description={canConstrain ? hint : 'Draw an entity first.'}
+      {SKETCH_EDIT_TOOL_SPECS.filter(
+        ({ kind }) => !FOLDED_EDIT_TOOLS.has(kind)
+      ).map((spec) => editTool(spec, false))}
+      <span
+        className="sketch-modify-tool"
+        // Escape closes the fold from the toggle as well as from inside.
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && modifyOpen) {
+            event.stopPropagation();
+            setModifyOpen(false);
+          }
+        }}
+      >
+        <Tooltip
+          label="More modify tools"
+          description="Offset, trim, mirror and patterns"
+        >
+          <button
+            type="button"
+            className={foldArmed ? 'active' : undefined}
+            aria-label="More modify tools"
+            aria-expanded={modifyOpen}
+            aria-controls={modifyOpen ? modifyGroupId : undefined}
+            onClick={() => setModifyOpen((open) => !open)}
           >
-            <button
-              type="button"
-              className={active ? 'active' : undefined}
-              aria-pressed={active}
-              aria-label={label}
-              disabled={!canConstrain}
-              onClick={() =>
-                active ? onEditTool(null) : onEditTool(kind, hint)
-              }
-            >
-              <Icon size={16} aria-hidden="true" />
-            </button>
-          </Tooltip>
-        );
-      })}
+            <Ellipsis size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+        {modifyOpen && (
+          <span
+            id={modifyGroupId}
+            className="sketch-modify-flyout"
+            role="group"
+            aria-label="More modify tools"
+            data-rail-flyout=""
+          >
+            {SKETCH_EDIT_TOOL_SPECS.filter(({ kind }) =>
+              FOLDED_EDIT_TOOLS.has(kind)
+            ).map((spec) => editTool(spec, true))}
+          </span>
+        )}
+      </span>
     </>
   );
   // The solve status is the button's tone dot and its tooltip; the text
@@ -878,6 +959,18 @@ interface SketchRelationsRailProps {
  * rail reads as "what you can do with this" without rearranging itself.
  * A relation that does not fit is greyed and says why.
  */
+/**
+ * The point relations share one rail slot: four more icons ran the relations
+ * column onto the view cube and over the canvas. They are point-first picks,
+ * so a selected entity never fits them and nothing is lost by folding them.
+ */
+const POINT_RELATIONS = new Set<SketchConstraintToolKind>([
+  'symmetric',
+  'point-on-object',
+  'lock',
+  'disconnect'
+]);
+
 export function SketchRelationsRail({
   canConstrain,
   pendingConstraint,
@@ -886,6 +979,65 @@ export function SketchRelationsRail({
   onSelectionConstraintTool
 }: SketchRelationsRailProps) {
   const reasonId = useId();
+  const groupId = useId();
+  const [pointsOpen, setPointsOpen] = useState(false);
+  const pointArmed =
+    pendingConstraint !== null && POINT_RELATIONS.has(pendingConstraint.kind);
+
+  function relation(
+    { kind, label, hint }: (typeof CONSTRAINT_TOOL_SPECS)[number],
+    inGroup: boolean
+  ) {
+    const Icon = CONSTRAINT_ICONS[kind];
+    const armed = pendingConstraint?.kind === kind;
+    const fits = !selection || selection.fitting.includes(kind);
+    const reason = !canConstrain
+      ? 'Draw an entity first.'
+      : fits
+        ? null
+        : `Does not apply to ${/^[aeiou]/i.test(selection.kind) ? 'an' : 'a'} ${selection.kind}.`;
+    const named = armed || Boolean(selection && fits && canConstrain);
+    return (
+      <span key={kind} className="sketch-relation-slot">
+        {!inGroup && RELATION_GROUP_STARTS.has(kind) && (
+          <span className="sketch-relations-divider" aria-hidden="true" />
+        )}
+        <Tooltip label={label} description={reason ?? hint}>
+          <button
+            type="button"
+            className={`${inGroup ? 'sketch-point-relation' : 'sketch-relation'}${armed ? ' active' : ''}`}
+            aria-pressed={armed}
+            aria-label={label}
+            aria-describedby={reason ? `${reasonId}-${kind}` : undefined}
+            // An armed relation can always be put down again.
+            disabled={reason !== null && !armed}
+            onClick={() => {
+              if (inGroup) setPointsOpen(false);
+              if (selection && !armed) onSelectionConstraintTool(kind);
+              else onConstraintTool(armed ? null : kind);
+            }}
+          >
+            <Icon size={16} aria-hidden="true" />
+            {inGroup ? (
+              <span aria-hidden="true">{label}</span>
+            ) : (
+              named && (
+                <span className="sketch-relation-name" aria-hidden="true">
+                  {label}
+                </span>
+              )
+            )}
+            {reason && (
+              <span id={`${reasonId}-${kind}`} className="visually-hidden">
+                {reason}
+              </span>
+            )}
+          </button>
+        </Tooltip>
+      </span>
+    );
+  }
+
   return (
     <div
       className="sketch-relations"
@@ -893,52 +1045,48 @@ export function SketchRelationsRail({
       aria-label="Relations"
       aria-orientation="vertical"
     >
-      {CONSTRAINT_TOOL_SPECS.map(({ kind, label, hint }) => {
-        const Icon = CONSTRAINT_ICONS[kind];
-        const armed = pendingConstraint?.kind === kind;
-        const fits = !selection || selection.fitting.includes(kind);
-        const reason = !canConstrain
-          ? 'Draw an entity first.'
-          : fits
-            ? null
-            : `Does not apply to ${/^[aeiou]/i.test(selection.kind) ? 'an' : 'a'} ${selection.kind}.`;
-        const named = armed || Boolean(selection && fits && canConstrain);
-        return (
-          <span key={kind} className="sketch-relation-slot">
-            {RELATION_GROUP_STARTS.has(kind) && (
-              <span className="sketch-relations-divider" aria-hidden="true" />
-            )}
-            <Tooltip label={label} description={reason ?? hint}>
-              <button
-                type="button"
-                className={`sketch-relation${armed ? ' active' : ''}`}
-                aria-pressed={armed}
-                aria-label={label}
-                aria-describedby={reason ? `${reasonId}-${kind}` : undefined}
-                // An armed relation can always be put down again.
-                disabled={reason !== null && !armed}
-                onClick={() =>
-                  selection && !armed
-                    ? onSelectionConstraintTool(kind)
-                    : onConstraintTool(armed ? null : kind)
-                }
-              >
-                <Icon size={16} aria-hidden="true" />
-                {named && (
-                  <span className="sketch-relation-name" aria-hidden="true">
-                    {label}
-                  </span>
-                )}
-                {reason && (
-                  <span id={`${reasonId}-${kind}`} className="visually-hidden">
-                    {reason}
-                  </span>
-                )}
-              </button>
-            </Tooltip>
-          </span>
-        );
-      })}
+      {CONSTRAINT_TOOL_SPECS.filter(
+        ({ kind }) => !POINT_RELATIONS.has(kind)
+      ).map((spec) => relation(spec, false))}
+      <span
+        className="sketch-relation-slot sketch-point-relations-anchor"
+        // Escape closes the flyout from the toggle as well as from inside.
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && pointsOpen) {
+            event.stopPropagation();
+            setPointsOpen(false);
+          }
+        }}
+      >
+        <span className="sketch-relations-divider" aria-hidden="true" />
+        <Tooltip
+          label="Point relations"
+          description="Symmetric, point on curve, lock and disconnect"
+        >
+          <button
+            type="button"
+            className={`sketch-relation${pointArmed ? ' active' : ''}`}
+            aria-label="Point relations"
+            aria-expanded={pointsOpen}
+            aria-controls={pointsOpen ? groupId : undefined}
+            onClick={() => setPointsOpen((open) => !open)}
+          >
+            <Crosshair size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+        {pointsOpen && (
+          <div
+            id={groupId}
+            className="sketch-point-relations"
+            role="group"
+            aria-label="Point relations"
+          >
+            {CONSTRAINT_TOOL_SPECS.filter(({ kind }) =>
+              POINT_RELATIONS.has(kind)
+            ).map((spec) => relation(spec, true))}
+          </div>
+        )}
+      </span>
     </div>
   );
 }

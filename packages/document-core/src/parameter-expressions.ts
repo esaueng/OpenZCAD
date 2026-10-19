@@ -6,54 +6,83 @@ import type {
   SketchObjectData
 } from '@openzcad/shared';
 
-type Rewrite = (expression: string) => string;
+/**
+ * What a field holds (F05): a length, an angle in degrees, a unit-free
+ * number, or `null` when no quantity rule applies (direction components,
+ * a radians field, an on/off condition).
+ */
+export type ExpressionFieldDimension = 'length' | 'angle' | 'number' | null;
+
+/** Where a visited expression is stored: its holding object and key. */
+export interface ExpressionFieldSite {
+  container: object;
+  key: string;
+}
+
+type Rewrite = (
+  expression: string,
+  dimension: ExpressionFieldDimension,
+  site: ExpressionFieldSite
+) => string;
 
 function fields<T extends object>(
   value: T,
   keys: readonly (keyof T)[],
-  rewrite: Rewrite
+  rewrite: Rewrite,
+  dimension: ExpressionFieldDimension
 ): void {
   for (const key of keys) {
     if (typeof value[key] === 'string') {
-      const next = rewrite(value[key]);
+      const next = rewrite(value[key], dimension, {
+        container: value,
+        key: String(key)
+      });
       if (next !== value[key]) value[key] = next as T[keyof T];
     }
   }
 }
 
-function vector(value: ParametricVector3 | undefined, rewrite: Rewrite): void {
-  if (value) fields(value, ['x', 'y', 'z'], rewrite);
+function vector(
+  value: ParametricVector3 | undefined,
+  rewrite: Rewrite,
+  dimension: ExpressionFieldDimension
+): void {
+  if (value) fields(value, ['x', 'y', 'z'], rewrite, dimension);
 }
 
 function directEdit(data: DirectEditOperation, rewrite: Rewrite): void {
   switch (data.kind) {
     case 'resize-through-hole':
-      fields(data, ['diameter'], rewrite);
+      fields(data, ['diameter'], rewrite, 'length');
       return;
     case 'resize-imported-blind-hole':
-      fields(data, ['diameter', 'depth'], rewrite);
+      fields(data, ['diameter', 'depth'], rewrite, 'length');
       return;
     case 'resize-imported-counterbore':
       fields(
         data,
         ['boreDiameter', 'counterboreDiameter', 'counterboreDepth'],
-        rewrite
+        rewrite,
+        'length'
       );
       return;
     case 'resize-imported-countersink':
-      fields(data, ['boreDiameter', 'sinkDiameter', 'angleRadians'], rewrite);
+      fields(data, ['boreDiameter', 'sinkDiameter'], rewrite, 'length');
+      // Stored as raw radians: a typed angle (degrees) or length would be
+      // reinterpreted, so only a unitless value may drive it.
+      fields(data, ['angleRadians'], rewrite, 'number');
       return;
     case 'offset-face':
-      fields(data, ['offset'], rewrite);
+      fields(data, ['offset'], rewrite, 'length');
       return;
     case 'set-face-distance':
-      fields(data, ['distance'], rewrite);
+      fields(data, ['distance'], rewrite, 'length');
       return;
     case 'resize-cylindrical-face':
-      fields(data, ['radius'], rewrite);
+      fields(data, ['radius'], rewrite, 'length');
       return;
     case 'resize-blend':
-      fields(data, ['newRadius'], rewrite);
+      fields(data, ['newRadius'], rewrite, 'length');
       return;
     case 'remove-face-feature':
       return;
@@ -65,35 +94,51 @@ function directEdit(data: DirectEditOperation, rewrite: Rewrite): void {
 function feature(data: FeatureData, rewrite: Rewrite): void {
   switch (data.featureKind) {
     case 'primitive':
-      fields(data.dimensions, Object.keys(data.dimensions), rewrite);
+      fields(data.dimensions, Object.keys(data.dimensions), rewrite, 'length');
       return;
     case 'extrude':
-      fields(data, ['distance', 'backDistance'], rewrite);
+      fields(data, ['distance', 'backDistance'], rewrite, 'length');
       return;
     case 'revolve':
-      fields(data, ['angleDeg'], rewrite);
+      fields(data, ['angleDeg'], rewrite, 'angle');
       return;
     case 'loft':
-      vector(data.endPoint, rewrite);
+      vector(data.endPoint, rewrite, 'length');
       return;
     case 'helical-sweep':
-      fields(data, ['radius', 'pitch', 'turns'], rewrite);
-      vector(data.axisOrigin, rewrite);
-      vector(data.axisDirection, rewrite);
+      fields(data, ['radius', 'pitch'], rewrite, 'length');
+      fields(data, ['turns'], rewrite, 'number');
+      vector(data.axisOrigin, rewrite, 'length');
+      vector(data.axisDirection, rewrite, null);
       return;
     case 'boolean':
-      fields(data, ['activeWhen'], rewrite);
+      fields(data, ['activeWhen'], rewrite, null);
       return;
     case 'transform':
-      fields(data.transform, ['scale'], rewrite);
-      vector(data.transform.translation, rewrite);
-      vector(data.transform.rotationDeg, rewrite);
+      fields(data.transform, ['scale'], rewrite, 'number');
+      vector(data.transform.translation, rewrite, 'length');
+      vector(data.transform.rotationDeg, rewrite, 'angle');
       return;
     case 'mirror':
     case 'split':
-      vector(data.plane.origin, rewrite);
-      vector(data.plane.normal, rewrite);
+      // A datum reference carries no expressions of its own; the datum's
+      // feature is rewritten where it stands in history.
+      if ('origin' in data.plane) {
+        vector(data.plane.origin, rewrite, 'length');
+        vector(data.plane.normal, rewrite, null);
+      }
       return;
+    case 'datum-plane': {
+      const definition = data.definition;
+      const sources =
+        definition.kind === 'offset' ? [definition.source] : definition.sources;
+      if (definition.kind === 'offset')
+        fields(definition, ['offset'], rewrite, 'length');
+      for (const source of sources)
+        if (source.type === 'canonical')
+          fields(source, ['offset'], rewrite, 'length');
+      return;
+    }
     case 'hole':
       fields(
         data,
@@ -102,38 +147,38 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
           'depth',
           'counterboreDiameter',
           'counterboreDepth',
-          'countersinkDiameter',
-          'countersinkAngleDeg'
+          'countersinkDiameter'
         ],
-        rewrite
+        rewrite,
+        'length'
       );
-      fields(data.position, ['u', 'v'], rewrite);
+      fields(data, ['countersinkAngleDeg'], rewrite, 'angle');
+      fields(data.position, ['u', 'v'], rewrite, 'length');
       return;
     case 'shell':
     case 'thicken':
-      fields(data, ['thickness'], rewrite);
+      fields(data, ['thickness'], rewrite, 'length');
       return;
     case 'solid-offset':
-      fields(data, ['distance'], rewrite);
+      fields(data, ['distance'], rewrite, 'length');
       return;
     case 'draft':
-      fields(data, ['angleDeg'], rewrite);
-      vector(data.pullDirection, rewrite);
-      vector(data.neutralPoint, rewrite);
+      fields(data, ['angleDeg'], rewrite, 'angle');
+      vector(data.pullDirection, rewrite, null);
+      vector(data.neutralPoint, rewrite, 'length');
       return;
     case 'fillet':
-      fields(data, ['radius', 'endRadius'], rewrite);
+      fields(data, ['radius', 'endRadius'], rewrite, 'length');
       return;
     case 'chamfer':
-      fields(data, ['distance', 'angleDeg', 'distance2'], rewrite);
+      fields(data, ['distance', 'distance2'], rewrite, 'length');
+      fields(data, ['angleDeg'], rewrite, 'angle');
       return;
     case 'pattern':
-      fields(
-        data,
-        ['count', 'spacing', 'angleDeg', 'spacing2', 'count2'],
-        rewrite
-      );
-      vector(data.direction, rewrite);
+      fields(data, ['count', 'count2'], rewrite, 'number');
+      fields(data, ['spacing', 'spacing2'], rewrite, 'length');
+      fields(data, ['angleDeg'], rewrite, 'angle');
+      vector(data.direction, rewrite, null);
       return;
     case 'direct-edit':
       directEdit(data.operation, rewrite);
@@ -151,26 +196,30 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
 function sketchObject(data: SketchObjectData, rewrite: Rewrite): void {
   switch (data.objectKind) {
     case 'rectangle':
-      fields(data, ['width', 'height', 'centerX', 'centerY'], rewrite);
-      return;
-    case 'circle':
-      fields(data, ['radius', 'centerX', 'centerY'], rewrite);
-      return;
-    case 'polygon':
-      fields(data, ['sides', 'radius', 'centerX', 'centerY'], rewrite);
-      return;
-    case 'line':
-      fields(data, ['x1', 'y1', 'x2', 'y2'], rewrite);
-      return;
-    case 'arc':
       fields(
         data,
-        ['radius', 'centerX', 'centerY', 'startAngleDeg', 'endAngleDeg'],
-        rewrite
+        ['width', 'height', 'centerX', 'centerY'],
+        rewrite,
+        'length'
       );
       return;
+    case 'circle':
+      fields(data, ['radius', 'centerX', 'centerY'], rewrite, 'length');
+      return;
+    case 'polygon':
+      fields(data, ['sides'], rewrite, 'number');
+      fields(data, ['radius', 'centerX', 'centerY'], rewrite, 'length');
+      return;
+    case 'line':
+      fields(data, ['x1', 'y1', 'x2', 'y2'], rewrite, 'length');
+      return;
+    case 'arc':
+      fields(data, ['radius', 'centerX', 'centerY'], rewrite, 'length');
+      fields(data, ['startAngleDeg', 'endAngleDeg'], rewrite, 'angle');
+      return;
     case 'text':
-      fields(data, ['size', 'x', 'y', 'rotation'], rewrite);
+      fields(data, ['size', 'x', 'y'], rewrite, 'length');
+      fields(data, ['rotation'], rewrite, 'angle');
       return;
     default:
       data satisfies never;
@@ -184,20 +233,21 @@ export function rewriteNodeExpressions(
 ): void {
   if (node.kind === 'feature') feature(node.data, rewrite);
   else if (node.kind === 'sketch-object') sketchObject(node.data, rewrite);
-  else if (node.kind === 'parameter') fields(node, ['expression'], rewrite);
+  else if (node.kind === 'parameter')
+    fields(node, ['expression'], rewrite, node.quantity ?? null);
   else if (node.kind === 'sketch') {
     if (node.planeRef.type === 'canonical')
-      fields(node.planeRef, ['offset'], rewrite);
-    fields(node, ['offset'], rewrite);
+      fields(node.planeRef, ['offset'], rewrite, 'length');
+    fields(node, ['offset'], rewrite, 'length');
     for (const constraint of node.constraints ?? []) {
       const data = constraint.data;
       if (
         data.constraintKind === 'distance' ||
         data.constraintKind === 'radius'
       )
-        fields(data, ['value'], rewrite);
+        fields(data, ['value'], rewrite, 'length');
       else if (data.constraintKind === 'angle')
-        fields(data, ['valueDeg'], rewrite);
+        fields(data, ['valueDeg'], rewrite, 'angle');
     }
   }
 }

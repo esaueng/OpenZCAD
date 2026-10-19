@@ -24,6 +24,7 @@ import {
   type ParamValue,
   type SketchNode,
   type SketchObjectData,
+  type SketchPlaneRef,
   type SketchPathReference,
   type SketchSectionReference,
   type UnitSystem
@@ -239,11 +240,53 @@ export function resolveSketchBasisAtHistory(
   result: ExactBuildResult,
   scope: Record<string, number>
 ): PlaneBasis {
-  const planeRef = sketch.planeRef;
+  return resolvePlaneRefAtHistory(
+    kernel,
+    document,
+    sketch.planeRef,
+    { kind: 'Sketch', name: sketch.name },
+    result,
+    scope
+  );
+}
+
+/**
+ * The world frame of a sketch plane or R01 datum source at the current
+ * history position. A datum reads the frame its own feature resolved earlier
+ * in this build; a lineage face re-derives from the evolved face. Neither
+ * falls back to a stored frame: a missing source refuses by name.
+ */
+export function resolvePlaneRefAtHistory(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  planeRef: SketchPlaneRef,
+  ownerRef: {
+    kind: 'Sketch' | 'Datum plane' | 'Mirror' | 'Split';
+    name: string;
+  },
+  result: ExactBuildResult,
+  scope: Record<string, number>
+): PlaneBasis {
+  const owner =
+    ownerRef.kind === 'Mirror' || ownerRef.kind === 'Split'
+      ? ownerRef.kind
+      : `${ownerRef.kind} "${ownerRef.name}"`;
+  if (planeRef.type === 'datum') {
+    const frame = result.datumFrames.get(planeRef.datumFeatureId);
+    if (!frame) {
+      const datum = listFeaturesInOrder(document).find(
+        (candidate) => candidate.featureId === planeRef.datumFeatureId
+      );
+      throw new Error(
+        `${owner} cannot use datum plane "${datum?.name ?? planeRef.datumFeatureId}" because it is unavailable at this point in history.`
+      );
+    }
+    return frame;
+  }
   if (planeRef.type !== 'face' || !planeRef.faceReference) {
     if (planeRef.type === 'face') {
       result.warnings.push(
-        `Sketch "${sketch.name}": legacy face attachment has no schema-v5 lineage reference; using its stored migration frame.`
+        `${owner}: legacy face attachment has no schema-v5 lineage reference; using its stored migration frame.`
       );
     }
     return frameForPlaneRef(planeRef, (value) =>
@@ -254,7 +297,7 @@ export function resolveSketchBasisAtHistory(
   const sourceShape = result.shapes.get(planeRef.bodyId);
   if (!sourceShape) {
     throw new Error(
-      `Sketch "${sketch.name}" cannot attach because source body ${planeRef.bodyId} is unavailable at the sketch's history position.`
+      `${owner} cannot attach because source body ${planeRef.bodyId} is unavailable at the ${ownerRef.kind === 'Sketch' ? "sketch's" : "datum's"} history position.`
     );
   }
   const sourceFeature = listFeaturesInOrder(document).find(
@@ -273,7 +316,8 @@ export function resolveSketchBasisAtHistory(
       sourceNormal: planeRef.sourceNormal,
       frame: planeRef.frame
     },
-    sketchName: sketch.name,
+    sketchName: ownerRef.name,
+    ownerKind: ownerRef.kind === 'Sketch' ? 'Sketch' : 'Datum plane',
     sourceFeatureName:
       sourceFeature?.name ?? String(planeRef.faceReference.producingFeatureId)
   });

@@ -30,6 +30,19 @@ describe('featureValueSummary', () => {
     );
   });
 
+  it('summarises a datum offset as a length, unit suffix and all', () => {
+    const datum = feature({
+      featureKind: 'datum-plane',
+      definition: {
+        kind: 'offset',
+        source: { type: 'canonical', plane: 'XY', offset: 0 },
+        offset: '1 in',
+        reverseNormal: true
+      }
+    });
+    expect(featureValueSummary(datum, {}, 'mm')).toBe('25.4 mm flipped');
+  });
+
   it('shows nothing rather than a guess when a value does not evaluate', () => {
     const fillet = feature({ featureKind: 'fillet', radius: 'missing_param' });
     expect(featureValueSummary(fillet, {}, 'mm')).toBeNull();
@@ -64,6 +77,33 @@ describe('featureValueSummary', () => {
         'mm'
       )
     ).toBe('12 mm');
+    // F01: a through-all cut shows its extent, not the dormant distance.
+    expect(
+      featureValueSummary(
+        feature({
+          featureKind: 'extrude',
+          distance: 12,
+          operation: 'cut',
+          endCondition: 'through-all',
+          throughAllSide: 'forward'
+        } as never),
+        {},
+        'mm'
+      )
+    ).toBe('Through all');
+    expect(
+      featureValueSummary(
+        feature({
+          featureKind: 'extrude',
+          distance: 12,
+          operation: 'cut',
+          endCondition: 'through-all',
+          throughAllSide: 'both'
+        } as never),
+        {},
+        'mm'
+      )
+    ).toBe('Through all, both sides');
   });
 
   it.each([

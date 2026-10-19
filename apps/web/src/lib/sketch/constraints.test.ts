@@ -91,10 +91,89 @@ describe('sketch constraint picking', () => {
         'concentric',
         'midpoint',
         'distance',
-        'angle'
+        'angle',
+        'symmetric',
+        'point-on-object',
+        'lock',
+        'disconnect'
       ])
     );
-    expect(CONSTRAINT_TOOL_SPECS).toHaveLength(12);
+    expect(CONSTRAINT_TOOL_SPECS).toHaveLength(16);
+  });
+
+  it('S07: symmetry takes two points and a separate axis line', () => {
+    const { document, sketch, lineA, lineB, circle, arc } = fixture();
+    expect(
+      refusePick(document, sketch, 'symmetric', [], point(lineA, 'start'))
+    ).toBeNull();
+    expect(
+      refusePick(document, sketch, 'symmetric', [], point(lineA, 'center'))
+    ).toMatch(/start or end/);
+    const two = [point(lineA, 'start'), point(circle, 'center')];
+    expect(refusePick(document, sketch, 'symmetric', two, object(arc))).toMatch(
+      /axis must be a line/
+    );
+    // An axis that owns one of the mirrored points is refused.
+    expect(
+      refusePick(document, sketch, 'symmetric', two, object(lineA))
+    ).toMatch(/cannot be a line whose point/);
+    const built = buildConstraint(document, sketch, 'symmetric', [
+      ...two,
+      object(lineB)
+    ]);
+    expect(built).toEqual({
+      data: {
+        constraintKind: 'symmetric',
+        a: { objectId: lineA, point: 'start' },
+        b: { objectId: circle, point: 'center' },
+        axis: lineB
+      }
+    });
+  });
+
+  it('S07: a point goes on a line, circle or arc, never on its own object', () => {
+    const { document, sketch, lineA, lineB, circle, arc, rectangle } =
+      fixture();
+    const first = [point(lineA, 'end')];
+    for (const target of [lineB, circle, arc])
+      expect(
+        refusePick(document, sketch, 'point-on-object', first, object(target))
+      ).toBeNull();
+    expect(
+      refusePick(document, sketch, 'point-on-object', first, object(lineA))
+    ).toMatch(/different objects/);
+    expect(
+      refusePick(document, sketch, 'point-on-object', first, object(rectangle))
+    ).toMatch(/line, circle or arc/);
+  });
+
+  it('S07: lock records the resolved position and refuses without one', () => {
+    const { document, sketch, circle } = fixture();
+    expect(
+      buildConstraint(document, sketch, 'lock', [point(circle, 'center')])
+    ).toEqual({
+      error: 'Lock needs a snap point with a resolvable position.'
+    });
+    expect(
+      buildConstraint(
+        document,
+        sketch,
+        'lock',
+        [point(circle, 'center')],
+        undefined,
+        (value) => Number(value)
+      )
+    ).toEqual({
+      data: {
+        constraintKind: 'lock',
+        point: { objectId: circle, point: 'center' },
+        x: 20,
+        y: 0
+      }
+    });
+    expect(
+      buildConstraint(document, sketch, 'disconnect', [point(circle, 'center')])
+    ).toEqual({ error: 'Disconnect removes relations; it adds none.' });
   });
 
   it('accepts legal picks and refuses the wrong entity kinds', () => {

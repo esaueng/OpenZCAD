@@ -73,6 +73,11 @@ export function featureValueSummary(
       return null;
     }
     case 'extrude': {
+      if (data.endCondition === 'through-all') {
+        return data.throughAllSide === 'both'
+          ? 'Through all, both sides'
+          : 'Through all';
+      }
       const distance = lengthValue(data.distance);
       if (distance === null) {
         return null;
@@ -114,6 +119,13 @@ export function featureValueSummary(
       return length(data.thickness);
     case 'solid-offset':
       return length(data.distance);
+    case 'datum-plane': {
+      const flip = data.definition.reverseNormal ? ' flipped' : '';
+      if (data.definition.kind === 'midplane') return `midplane${flip}`;
+      // A length, so a unit-bearing offset ("1 in") still summarises.
+      const offset = lengthValue(data.definition.offset);
+      return offset === null ? null : `${offset} ${unit}${flip}`;
+    }
     case 'draft': {
       const angle = num(data.angleDeg);
       return angle === null ? null : `${angle}°`;

@@ -120,7 +120,8 @@
   border-radius: var(--radius-sm);
 }
 
-.object-filter select {
+.object-filter select,
+.object-filter input {
   flex: 1;
   min-width: 0;
   min-height: 32px;
@@ -129,6 +130,10 @@
   background: transparent;
   color: inherit;
   font-size: var(--fs-sm);
+}
+
+.object-filter input:focus {
+  box-shadow: none;
 }
 
 .param-list {
@@ -227,6 +232,40 @@
 
 .param-value.error {
   color: var(--color-error);
+}
+
+/* F05: the parameter's type, a compact picker trailing its value. It shows a
+   glyph (len, °, #, —) so the 290px column keeps its name track; the full
+   word is in the option labels' title and the accessible name. */
+.param-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.param-quantity {
+  /* The 24 px minimum pointer target; the row's inputs are 26 px. */
+  height: 24px;
+  min-width: 24px;
+  padding: 0 2px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  cursor: pointer;
+}
+
+.param-quantity:hover,
+.param-quantity:focus-visible {
+  border-color: var(--color-accent-dim);
+  color: var(--color-text-muted);
+}
+
+/* A unitless parameter whose uses agree on a quantity: offered, not set. */
+.param-quantity.suggested {
+  color: var(--color-warning);
 }
 
 .param-expose {
@@ -638,6 +677,29 @@
 .history-find-count {
   flex: 0 0 auto;
   font-size: var(--fs-mini);
+}
+
+/* A pressed chip, not a checkbox: it narrows the same list the field does. */
+.history-find-related {
+  flex: 0 0 auto;
+  height: 20px;
+  padding: 0 7px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-mini);
+}
+
+.history-find-related[aria-pressed='true'] {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent);
+}
+
+.history-find-related:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .history-match {

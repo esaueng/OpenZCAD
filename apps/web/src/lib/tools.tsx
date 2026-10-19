@@ -24,6 +24,7 @@ import {
   Shapes,
   Slice,
   Spline,
+  SquareDashed,
   SquareStack,
   Tornado,
   Torus,
@@ -37,6 +38,7 @@ export type ToolId =
   | 'cone'
   | 'torus'
   | 'sketch'
+  | 'datum-plane'
   | 'extrude'
   | 'revolve'
   | 'loft'
@@ -104,6 +106,12 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'create',
     shortcut: 'S',
     hint: 'Draw a 2D profile on a plane'
+  },
+  'datum-plane': {
+    label: 'Plane',
+    icon: icon(<SquareDashed size={16} aria-hidden="true" />),
+    group: 'create',
+    hint: 'Offset plane or midplane to sketch, split or mirror on'
   },
   box: {
     label: 'Box',
@@ -284,7 +292,11 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
 
 export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
   [
-    { id: 'create', label: 'Create', tools: ['sketch', ...PRIMITIVE_TOOLS] },
+    {
+      id: 'create',
+      label: 'Create',
+      tools: ['sketch', 'datum-plane', ...PRIMITIVE_TOOLS]
+    },
     {
       id: 'from-sketch',
       label: 'From sketch',

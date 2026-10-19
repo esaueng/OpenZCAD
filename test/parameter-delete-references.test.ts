@@ -65,6 +65,12 @@ describe('expressionIdentifiers', () => {
     expect(expressionIdentifiers('12')).toEqual([]);
   });
 
+  it('skips a unit suffix but reads a bare parameter of the same name', () => {
+    expect(expressionIdentifiers('5 m + m')).toEqual(['m']);
+    expect(expressionIdentifiers('2mm * mm')).toEqual(['mm']);
+    expect(expressionIdentifiers('30 deg')).toEqual([]);
+  });
+
   it('reads nothing out of text that is not an expression', () => {
     expect(expressionIdentifiers('open-sans')).toEqual(['open', 'sans']);
     expect(expressionIdentifiers("a string with 'quotes")).toEqual([]);

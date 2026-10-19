@@ -7,6 +7,7 @@ import {
 } from './exact-cancellation';
 import {
   getParameterScope,
+  typedParameterMisuse,
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import {
@@ -84,6 +85,8 @@ export type StrictUnionVerdict = BooleanHelperStrictUnionVerdict;
  * One shared shape keeps the 21 builders' signatures uniform.
  */
 export interface FeatureBuildContext {
+  /** Only the terminal face drag may defer output naming for a disposable mesh. */
+  deferredDirectEditFeatureId?: FeatureId;
   kernel: RemusKernel;
   document: ProjectDocument;
   scope: Record<string, number>;
@@ -171,12 +174,22 @@ function* buildDocumentHistorySteps(
    */
   lineageDemand?: ReadonlySet<BodyId> | readonly BodyId[],
   /** See {@link FeatureBuildContext.heldDisplayDeflection}. */
-  heldDisplayDeflection?: (bodyId: BodyId) => number | undefined
+  heldDisplayDeflection?: (bodyId: BodyId) => number | undefined,
+  deferredDirectEditFeatureId?: FeatureId
 ): Generator<void, ExactBuildResult> {
   const { scope, errors } = getParameterScope(document);
+  // F05: a feature fed a typed parameter as the wrong quantity (a length as
+  // a revolve angle) is refused by name rather than built from the number.
+  const misuse = new Map<string, string>();
+  for (const entry of typedParameterMisuse(document)) {
+    if (entry.featureId && !misuse.has(entry.featureId)) {
+      misuse.set(entry.featureId, entry.message);
+    }
+  }
   const result: ExactBuildResult = resume?.initial ?? {
     shapes: new Map(),
     sketchBases: new Map(),
+    datumFrames: new Map(),
     consumed: new Set(),
     importedStepDiagnostics: new Map(),
     meshBodies: new Set(),
@@ -204,6 +217,7 @@ function* buildDocumentHistorySteps(
       ? undefined
       : { signal, token: new OperationCancellationToken() };
   const ctx: FeatureBuildContext = {
+    deferredDirectEditFeatureId,
     kernel,
     document,
     scope,
@@ -242,6 +256,8 @@ function* buildDocumentHistorySteps(
         continue;
       }
       try {
+        const wrongQuantity = misuse.get(feature.featureId);
+        if (wrongQuantity) throw new Error(wrongQuantity);
         if (!primitiveReuse?.restore(index, feature, result)) {
           buildFeature(ctx, feature);
           primitiveReuse?.store(index, feature, result);

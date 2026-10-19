@@ -321,11 +321,13 @@ function SketchAttachmentSummary({
   const legacyFaceAttachment =
     sketch.planeRef.type === 'face' && !sketch.planeRef.faceReference;
   const attachmentLabel =
-    sketch.planeRef.type === 'frame'
-      ? 'Fixed plane'
-      : legacyFaceAttachment
-        ? 'Legacy stored face frame'
-        : 'Associative face';
+    sketch.planeRef.type === 'datum'
+      ? 'Datum plane'
+      : sketch.planeRef.type === 'frame'
+        ? 'Fixed plane'
+        : legacyFaceAttachment
+          ? 'Legacy stored face frame'
+          : 'Associative face';
   return (
     <div className="sketch-attachment">
       <div className="kv-grid">
@@ -1757,7 +1759,15 @@ export function Inspector(props: InspectorProps) {
               ? { backDistance: data.backDistance }
               : {}),
             operation: data.operation,
-            targetBodyId: data.targetBodyId
+            targetBodyId: data.targetBodyId,
+            ...(data.endCondition === 'through-all'
+              ? {
+                  endCondition: 'through-all' as const,
+                  ...(data.throughAllSide
+                    ? { throughAllSide: data.throughAllSide }
+                    : {})
+                }
+              : {})
           }}
           submitLabel="Apply"
           disabled={props.extrudeBusy}
@@ -2172,7 +2182,8 @@ export function Inspector(props: InspectorProps) {
         {/* Selecting a modeling feature opens its form directly (F19), so
             this only shows when that was refused — exact geometry still
             loading, say — and is the way to retry once it is ready. */}
-        {modelingFeatureIsEditable(data.featureKind) &&
+        {(modelingFeatureIsEditable(data.featureKind) ||
+          data.featureKind === 'datum-plane') &&
           props.onEditModelingFeature && (
             <button
               type="button"

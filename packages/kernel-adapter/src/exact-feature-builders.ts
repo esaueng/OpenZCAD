@@ -8,13 +8,23 @@ import { type FaceEvolutionPayloadV1, type RemusKernel } from './remus-runtime';
 import {
   findSketch,
   listFeaturesInOrder,
-  resolveParamValue
+  resolveParamValue,
+  validateExtrudeExtent
 } from '@openzcad/document-core';
-import { geometryTolerance, type Vec3 } from '@openzcad/geometry';
+import { throughAllSpan, unionBounds } from './through-all';
+import {
+  geometryTolerance,
+  midDatumPlane,
+  offsetDatumPlane,
+  type Vec3
+} from '@openzcad/geometry';
 import {
   FULL_REVOLVE_ANGLE_DEG,
   UNIT_TO_MM,
+  isDatumPlaneRef,
+  type DatumPlaneSource,
   type FeatureNode,
+  type ModelingPlaneReference,
   type ParamValue
 } from '@openzcad/shared';
 import type { ExactShape, ImportedStepDiagnostics } from './exact-types';
@@ -179,6 +189,7 @@ import {
   buildLoft,
   buildProfileSweep,
   buildHelicalSweep,
+  resolvePlaneRefAtHistory,
   resolveSketchBasisAtHistory
 } from './exact-profile-builders';
 import { applyDirectEdit } from './exact-direct-edit-ops';
@@ -248,16 +259,26 @@ function buildDirectEditFeature(
   if (!target) {
     throw new Error('Direct-edit target is unavailable.');
   }
-  const repair = !data.operation.faceReference
-    ? faceReferenceRepairCandidate(kernel, target, data.operation.faceHash)
-    : null;
+  const deferOutputLineage =
+    ctx.deferredDirectEditFeatureId === feature.featureId &&
+    data.operation.kind === 'offset-face' &&
+    target.solids.length === 1;
+  const repair =
+    !deferOutputLineage && !data.operation.faceReference
+      ? faceReferenceRepairCandidate(kernel, target, data.operation.faceHash)
+      : null;
   const edited = applyDirectEdit(
     kernel,
     target,
     data.operation,
     scope,
-    feature.featureId
+    feature.featureId,
+    deferOutputLineage
   );
+  if (deferOutputLineage) {
+    result.shapes.set(data.targetBodyId, edited);
+    return;
+  }
   const targetBodyId = data.targetBodyId;
   const producer = listFeaturesInOrder(document).find(
     (candidate) => candidate.bodyId === targetBodyId
@@ -436,17 +457,122 @@ function buildPrimitiveFeature(
   }
 }
 
+/**
+ * The region where two bodies' bounding boxes meet, as a body for scaling a
+ * volume tolerance: its box and box volume bound any overlap of the two.
+ * Disjoint boxes give an empty region (and a vanishing tolerance).
+ */
+function boundsOverlapBody(
+  a: Pick<ExtrudeInferenceBody, 'bbox'>,
+  b: Pick<ExtrudeInferenceBody, 'bbox'>
+): Pick<ExtrudeInferenceBody, 'volume' | 'bbox'> {
+  const min = {
+    x: Math.max(a.bbox.min.x, b.bbox.min.x),
+    y: Math.max(a.bbox.min.y, b.bbox.min.y),
+    z: Math.max(a.bbox.min.z, b.bbox.min.z)
+  };
+  const max = {
+    x: Math.max(min.x, Math.min(a.bbox.max.x, b.bbox.max.x)),
+    y: Math.max(min.y, Math.min(a.bbox.max.y, b.bbox.max.y)),
+    z: Math.max(min.z, Math.min(a.bbox.max.z, b.bbox.max.z))
+  };
+  return {
+    volume: (max.x - min.x) * (max.y - min.y) * (max.z - min.z),
+    bbox: { min, max }
+  };
+}
+
+function overlapRegionTolerance(
+  a: Pick<ExtrudeInferenceBody, 'bbox'>,
+  b: Pick<ExtrudeInferenceBody, 'bbox'>
+): number {
+  const region = boundsOverlapBody(a, b);
+  return extrudeVolumeTolerance(region, region);
+}
+
+/**
+ * F01: the blind extrude a through-all cut stands for at this history
+ * position. The span comes from the target's exact bounds projected on the
+ * resolved sketch normal (`throughAllSpan`), so moving or resizing the target
+ * moves the cut with it; a missing, consumed or mesh target, or one the
+ * chosen side does not reach, refuses here by name.
+ */
+function throughAllSweepFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'extrude'>
+): FeatureNode {
+  const { kernel, document, result } = ctx;
+  validateExtrudeExtent(data);
+  const targetBodyId = data.targetBodyId!;
+  const targetName = bodyName(document, targetBodyId);
+  if (result.consumed.has(targetBodyId)) {
+    throw new Error(`Through-all target ${targetName} was already consumed.`);
+  }
+  if (result.meshBodies.has(targetBodyId)) {
+    throw meshBooleanUnsupportedError(targetName);
+  }
+  const target = result.shapes.get(targetBodyId);
+  if (!target) {
+    throw new Error(`Through-all target ${targetName} is unavailable.`);
+  }
+  const basis = result.sketchBases.get(data.sketchId);
+  if (!basis) {
+    throw new Error('Through-all sketch plane did not resolve.');
+  }
+  const side = data.throughAllSide!;
+  let span: { forward: number; backward: number };
+  try {
+    span = throughAllSpan(
+      unionBounds(target.solids.map((solid) => kernel.boundingBox(solid))),
+      basis.origin,
+      basis.normal,
+      side
+    );
+  } catch (error) {
+    throw new Error(
+      `${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')} (target ${targetName}, side ${side}).`,
+      { cause: error }
+    );
+  }
+  const { forward, backward } = span;
+  const extent =
+    forward > 0 && backward > 0
+      ? { distance: forward, backDistance: backward }
+      : forward > 0
+        ? { distance: forward }
+        : { distance: -backward };
+  const {
+    symmetric: _symmetric,
+    backDistance: _backDistance,
+    endCondition: _endCondition,
+    throughAllSide: _throughAllSide,
+    ...rest
+  } = data;
+  return { ...feature, data: { ...rest, ...extent } };
+}
+
 function buildExtrudeFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
   data: FeatureDataOf<'extrude'>
 ): void {
   const { kernel, document, scope, result } = ctx;
+  // Every stored extent, blind included: an unknown end condition or a
+  // stray side must fail closed, not rebuild at the dormant distance.
+  validateExtrudeExtent(data);
   if (feature.bodyId) {
+    // A through-all cut sweeps a derived blind span; everything after this
+    // point (the overlap check, the boolean, the coplanar retry) treats it as
+    // the ordinary cut it then is. The stored feature is never rewritten.
+    const sweepFeature =
+      data.endCondition === 'through-all'
+        ? throughAllSweepFeature(ctx, feature, data)
+        : feature;
     const extrusion = buildSweep(
       kernel,
       document,
-      feature,
+      sweepFeature,
       scope,
       result.sketchBases,
       (message) => raiseFeatureWarning(result, feature, message, 'advisory')
@@ -494,15 +620,25 @@ function buildExtrudeFeature(
       feature.bodyId,
       feature.name
     );
+    // A through-all tool carries empty travel from a possibly distant sketch
+    // plane, so neither its size nor the whole target's is the scale of the
+    // cut. The overlap can only lie where the two bounding boxes meet, so it
+    // is measured against that region (a small hole in a big block is a thin
+    // column, not the block); the remove-everything guard below is measured
+    // against the target, whose remainder it judges.
+    const throughAll = data.endCondition === 'through-all';
     const sharedVolume = sharedShapeVolume(
       kernel,
       target,
       extrusion,
       targetBody,
-      extrusionBody
+      extrusionBody,
+      throughAll ? overlapRegionTolerance(targetBody, extrusionBody) : undefined
     );
     // A cut needs shared material: with none there is nothing to remove, and
-    // that can be settled before doing any work.
+    // that can be settled before doing any work. That holds for through-all
+    // too, whose span covers the target along the normal but not a profile
+    // moved off the target's footprint.
     if (operation === 'cut' && sharedVolume <= 0) {
       // Wording unchanged on purpose: `isMeasuredZeroOverlap` in the web app
       // matches this sentence to tell a measured zero-overlap candidate from
@@ -570,7 +706,7 @@ function buildExtrudeFeature(
         () =>
           piercedExtrudeTool(
             ctx,
-            feature,
+            sweepFeature,
             target.solids,
             extrusion.solids,
             operation
@@ -586,7 +722,7 @@ function buildExtrudeFeature(
       if (combined.tool === extrusion) {
         const pierced = piercedExtrudeTool(
           ctx,
-          feature,
+          sweepFeature,
           target.solids,
           extrusion.solids,
           operation
@@ -638,10 +774,10 @@ function buildExtrudeFeature(
         }
       }
     };
-    if (
-      operation === 'cut' &&
-      resultBody.volume <= extrudeVolumeTolerance(targetBody, extrusionBody)
-    ) {
+    const removalTolerance = throughAll
+      ? extrudeVolumeTolerance(targetBody, targetBody)
+      : extrudeVolumeTolerance(targetBody, extrusionBody);
+    if (operation === 'cut' && resultBody.volume <= removalTolerance) {
       throw new Error(
         `Stored cut extrusion would remove all of ${targetBody.name}; operation was not changed.`
       );
@@ -819,12 +955,88 @@ function buildTransformFeature(
   );
 }
 
+/**
+ * A Mirror or Split plane as a world point and unit normal (null when the
+ * stored normal is degenerate). An R01 datum reads the frame its own feature
+ * resolved earlier in this build and refuses by name when it is unavailable.
+ */
+function resolveOperationPlane(
+  ctx: FeatureBuildContext,
+  plane: ModelingPlaneReference,
+  label: 'mirror' | 'split'
+): { planePoint: Vec3; planeNormal: Vec3 | null } {
+  if (isDatumPlaneRef(plane)) {
+    const frame = resolvePlaneRefAtHistory(
+      ctx.kernel,
+      ctx.document,
+      plane,
+      { kind: label === 'mirror' ? 'Mirror' : 'Split', name: label },
+      ctx.result,
+      ctx.scope
+    );
+    return { planePoint: frame.origin, planeNormal: frame.normal };
+  }
+  const value = (raw: ParamValue, name: string) =>
+    resolveParamValue(raw, ctx.scope, `${label} ${name}`, ctx.document.units);
+  return {
+    planePoint: {
+      x: value(plane.origin.x, 'origin X'),
+      y: value(plane.origin.y, 'origin Y'),
+      z: value(plane.origin.z, 'origin Z')
+    },
+    planeNormal: normalized({
+      x: value(plane.normal.x, 'normal X'),
+      y: value(plane.normal.y, 'normal Y'),
+      z: value(plane.normal.z, 'normal Z')
+    })
+  };
+}
+
+/**
+ * R01: resolves a datum plane's frame once at its history position, for every
+ * later sketch, Mirror and Split to read. It makes no body.
+ */
+function buildDatumPlaneFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'datum-plane'>
+): void {
+  const { definition } = data;
+  const source = (planeRef: DatumPlaneSource) =>
+    resolvePlaneRefAtHistory(
+      ctx.kernel,
+      ctx.document,
+      planeRef,
+      { kind: 'Datum plane', name: feature.name },
+      ctx.result,
+      ctx.scope
+    );
+  const frame =
+    definition.kind === 'offset'
+      ? offsetDatumPlane(
+          source(definition.source),
+          resolveParamValue(
+            definition.offset,
+            ctx.scope,
+            'datum plane offset',
+            ctx.document.units
+          ),
+          definition.reverseNormal
+        )
+      : midDatumPlane(
+          source(definition.sources[0]),
+          source(definition.sources[1]),
+          definition.reverseNormal
+        );
+  ctx.result.datumFrames.set(feature.featureId, frame);
+}
+
 function buildMirrorFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
   data: FeatureDataOf<'mirror'>
 ): void {
-  const { kernel, scope, result } = ctx;
+  const { kernel, result } = ctx;
   if (!feature.bodyId) {
     throw new Error('Mirror has no result body.');
   }
@@ -832,43 +1044,11 @@ function buildMirrorFeature(
   if (!target) {
     throw new Error('Mirror target is unavailable.');
   }
-  const origin = data.plane.origin;
-  const rawNormal = data.plane.normal;
-  const planePoint = {
-    x: resolveParamValue(
-      origin.x,
-      scope,
-      'mirror origin X',
-      ctx.document.units
-    ),
-    y: resolveParamValue(
-      origin.y,
-      scope,
-      'mirror origin Y',
-      ctx.document.units
-    ),
-    z: resolveParamValue(origin.z, scope, 'mirror origin Z', ctx.document.units)
-  };
-  const planeNormal = normalized({
-    x: resolveParamValue(
-      rawNormal.x,
-      scope,
-      'mirror normal X',
-      ctx.document.units
-    ),
-    y: resolveParamValue(
-      rawNormal.y,
-      scope,
-      'mirror normal Y',
-      ctx.document.units
-    ),
-    z: resolveParamValue(
-      rawNormal.z,
-      scope,
-      'mirror normal Z',
-      ctx.document.units
-    )
-  });
+  const { planePoint, planeNormal } = resolveOperationPlane(
+    ctx,
+    data.plane,
+    'mirror'
+  );
   if (!planeNormal) {
     throw new Error('Mirror plane normal must be finite and non-zero.');
   }
@@ -1078,7 +1258,7 @@ function buildSplitFeature(
   feature: FeatureNode,
   data: FeatureDataOf<'split'>
 ): void {
-  const { kernel, scope, result } = ctx;
+  const { kernel, result } = ctx;
   if (!feature.bodyId) {
     throw new Error('Split has no result body.');
   }
@@ -1086,33 +1266,11 @@ function buildSplitFeature(
   if (!target) {
     throw new Error('Split target is unavailable.');
   }
-  const origin = data.plane.origin;
-  const rawNormal = data.plane.normal;
-  const planePoint = {
-    x: resolveParamValue(origin.x, scope, 'split origin X', ctx.document.units),
-    y: resolveParamValue(origin.y, scope, 'split origin Y', ctx.document.units),
-    z: resolveParamValue(origin.z, scope, 'split origin Z', ctx.document.units)
-  };
-  const planeNormal = normalized({
-    x: resolveParamValue(
-      rawNormal.x,
-      scope,
-      'split normal X',
-      ctx.document.units
-    ),
-    y: resolveParamValue(
-      rawNormal.y,
-      scope,
-      'split normal Y',
-      ctx.document.units
-    ),
-    z: resolveParamValue(
-      rawNormal.z,
-      scope,
-      'split normal Z',
-      ctx.document.units
-    )
-  });
+  const { planePoint, planeNormal } = resolveOperationPlane(
+    ctx,
+    data.plane,
+    'split'
+  );
   if (!planeNormal) {
     throw new Error('Split plane normal must be finite and non-zero.');
   }
@@ -2382,9 +2540,34 @@ function buildPatternFeature(
   if (!target) {
     throw new Error('Pattern target is unavailable.');
   }
-  const count = Math.round(
-    resolveParamValue(data.count, scope, 'count', ctx.document.units)
-  );
+  // Entry refuses a fractional count, but an expression can still evaluate
+  // to one later (`n / 2` after `n` changes). The build keeps rounding, as
+  // documents already rely on it, and says so instead of doing it silently.
+  const wholeCount = (value: ParamValue, label: string): number => {
+    const raw = resolveParamValue(value, scope, label, ctx.document.units);
+    const rounded = Math.round(raw);
+    if (Math.abs(raw - rounded) > 1e-9) {
+      // Six digits reads well, but the shown value must stay fractional and
+      // on the same side of the rounding threshold as `raw`: 2.000001 must
+      // not read as 2, nor 2.4999999 as 2.5 "rounded to 2".
+      let shown = raw;
+      for (let digits = 6; digits <= 15; digits += 1) {
+        const candidate = Number(raw.toPrecision(digits));
+        if (candidate !== rounded && Math.round(candidate) === rounded) {
+          shown = candidate;
+          break;
+        }
+      }
+      raiseFeatureWarning(
+        result,
+        feature,
+        `Pattern ${label} evaluates to ${shown}, not a whole number; it was rounded to ${rounded}.`,
+        'advisory'
+      );
+    }
+    return rounded;
+  };
+  const count = wholeCount(data.count, 'count');
   if (count < 2 || count > 100) {
     throw new Error('Pattern count must be between 2 and 100.');
   }
@@ -2392,14 +2575,9 @@ function buildPatternFeature(
   // the total rather than per axis.
   const count2 =
     data.patternKind === 'grid'
-      ? Math.round(
-          resolveParamValue(
-            data.count2 ?? data.count,
-            scope,
-            'count 2',
-            ctx.document.units
-          )
-        )
+      ? data.count2 === undefined
+        ? count
+        : wholeCount(data.count2, 'count 2')
       : 1;
   if (data.patternKind === 'grid' && (count2 < 2 || count2 > 100)) {
     throw new Error('Pattern count must be between 2 and 100.');
@@ -2712,6 +2890,9 @@ export function buildFeature(
       break;
     case 'pattern':
       buildPatternFeature(ctx, feature, feature.data);
+      break;
+    case 'datum-plane':
+      buildDatumPlaneFeature(ctx, feature, feature.data);
       break;
   }
 }

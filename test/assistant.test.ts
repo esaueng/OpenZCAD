@@ -1,3 +1,4 @@
+import { CAD_PATCH_OPERATION_KINDS } from '@openzcad/ai-contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_AI_MAX_OUTPUT_TOKENS,
@@ -374,7 +375,9 @@ describe('assistant integration', () => {
 
   it('accepts a 512000-byte digest and rejects one byte more', () => {
     const digest = { ...input.digest, warnings: [''] };
-    const baseBytes = new TextEncoder().encode(JSON.stringify(digest)).byteLength;
+    const baseBytes = new TextEncoder().encode(
+      JSON.stringify(digest)
+    ).byteLength;
     digest.warnings = ['x'.repeat(512_000 - baseBytes)];
     expect(() =>
       parseAssistantProposalRequest({ prompt: 'Model this', digest })
@@ -949,6 +952,90 @@ describe('assistant integration', () => {
     expect(schema).not.toContain('"const":"add_direct_edit"');
     expect(schema).not.toContain('"const":"add_shell"');
     expect(schema).not.toContain('"const":"add_solid_offset"');
+    // R01 datum operations stay dark until their one flag is set.
+    expect(schema).not.toContain('"const":"add_datum_plane"');
+    expect(schema).not.toContain('"const":"add_datum_sketch"');
+    expect(schema).not.toContain('"const":"add_datum_mirror"');
+    expect(schema).not.toContain('"const":"add_datum_split"');
+  });
+
+  async function datumRequest(operations?: readonly string[]) {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('data: {"type":"response.completed"}\n\n', {
+          headers: { 'content-type': 'text/event-stream' }
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await streamAssistantProposal(
+      { ...input, ...(operations ? { operations } : {}) },
+      {
+        AI_PROVIDER: 'responses-compatible',
+        AI_API_KEY: 'key',
+        AI_BASE_URL: 'https://models.example.test/v1/responses',
+        AI_PATCH_DATUM_PLANE_ENABLED: 'true',
+        AI_PATCH_MIRROR_ENABLED: 'true'
+      },
+      'user_test'
+    );
+    const request = JSON.parse(fetchMock.mock.calls[0]![1]?.body as string) as {
+      instructions: string;
+      text: { format: { schema: unknown } };
+    };
+    return {
+      enabledLine: request.instructions
+        .split('\n')
+        .find((line) => line.includes('enabled for this deployment'))!,
+      schema: JSON.stringify(request.text.format.schema)
+    };
+  }
+  const DATUM_KINDS = [
+    'add_datum_plane',
+    'add_datum_sketch',
+    'add_datum_mirror',
+    'add_datum_split'
+  ];
+
+  it('exposes all four datum-plane operations together behind one flag', async () => {
+    const { enabledLine, schema } = await datumRequest(
+      CAD_PATCH_OPERATION_KINDS
+    );
+    for (const kind of DATUM_KINDS) {
+      expect(enabledLine).toContain(`\`${kind}\``);
+      expect(schema).toContain(`"const":"${kind}"`);
+    }
+  });
+
+  it('never offers an operation the requesting client cannot parse', async () => {
+    // A tab loaded before negotiation sends no list: it keeps the operations
+    // that predate it and is never offered the datum operations.
+    const legacy = await datumRequest();
+    expect(legacy.enabledLine).toContain('`add_mirror`');
+    for (const kind of DATUM_KINDS) {
+      expect(legacy.enabledLine).not.toContain(`\`${kind}\``);
+      expect(legacy.schema).not.toContain(`"const":"${kind}"`);
+    }
+    // A client that declares its kinds gets exactly the enabled ones it lists.
+    const partial = await datumRequest(
+      CAD_PATCH_OPERATION_KINDS.filter((kind) => kind !== 'add_datum_sketch')
+    );
+    expect(partial.schema).not.toContain('"const":"add_datum_plane"');
+    expect(partial.schema).toContain('"const":"add_mirror"');
+  });
+
+  it('accepts a declared operation list and rejects a malformed one', () => {
+    const base = { prompt: 'Make a plate', digest: input.digest };
+    expect(
+      parseAssistantProposalRequest({ ...base, operations: ['add_mirror'] })
+        .operations
+    ).toEqual(['add_mirror']);
+    expect(parseAssistantProposalRequest(base).operations).toBeUndefined();
+    expect(() =>
+      parseAssistantProposalRequest({ ...base, operations: 'add_mirror' })
+    ).toThrow('"operations" must be a list of operation kinds.');
+    expect(() =>
+      parseAssistantProposalRequest({ ...base, operations: [7] })
+    ).toThrow('"operations" must be a list of operation kinds.');
   });
 
   it('prunes a rollout-flagged operation FIELD without withdrawing the operation', async () => {
@@ -1885,6 +1972,7 @@ describe('assistant integration', () => {
       'AI_PATCH_MIRROR_ENABLED',
       'AI_PATCH_SHELL_ENABLED',
       'AI_PATCH_SOLID_OFFSET_ENABLED',
+      'AI_PATCH_DATUM_PLANE_ENABLED',
       'AI_PATCH_PARTIAL_REVOLVE_ENABLED'
     ] as const;
 

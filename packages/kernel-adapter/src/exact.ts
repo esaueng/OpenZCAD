@@ -105,6 +105,7 @@ import {
   measureOwnedFaceGeometry,
   withFaceGeometryMemo
 } from './exact-measure';
+import { PreviewFaceGeometryCache } from './preview-face-geometry-cache';
 import {
   hasRefusingFeatureWarning,
   raiseFeatureWarning
@@ -234,11 +235,9 @@ import {
   topologyHashOfWitness,
   topologyWitnessesEqual
 } from './topology-lineage';
-import {
-  solveSketchWithGcs,
-  type ResolvedSketchObject,
-  type SketchSolveOutcome
-} from './gcs-sketch';
+// Type-only: the solver mapping loads on the first sketch solve, keeping it
+// out of the lazily loaded exact chunk, which sits at its size budget.
+import type { ResolvedSketchObject, SketchSolveOutcome } from './gcs-sketch';
 
 export type {
   SketchDofSummary,
@@ -565,6 +564,7 @@ export interface ExactKernelAdapter {
     options?: {
       cancellation?: BuildCancellationSignal;
       yieldControl?: () => Promise<void> | void;
+      deferTopology?: boolean;
     }
   ): Promise<GeometryReadyState>;
   syncDocument(
@@ -1102,6 +1102,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   >();
   /** The project the held display deflections belong to. */
   private heldDisplayProjectId: ProjectDocument['projectId'] | null = null;
+  /** Unchanged faces' measurements, shared by successive drag previews. */
+  private readonly previewFaceGeometry = new PreviewFaceGeometryCache();
   /**
    * ADR-011 witnesses per solid handle in the history kernel, so the next
    * edit of a body starts from the witnesses its measurement recorded. Same
@@ -1195,13 +1197,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     onProjection?: (derived: DerivedState) => void,
     lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>,
     cancellation?: BuildCancellationSignal,
-    yieldControl?: () => Promise<void> | void
+    yieldControl?: () => Promise<void> | void,
+    deferTerminalFaceLineage = false
   ): Promise<{
     kernel: RemusKernel;
     build: ExactBuildResult;
     replayed: number;
     restored: number;
     reusedPrimitives: number;
+    reusedPreparedFeatures: number;
     /** Strict verdicts the union gate established, keyed by kernel handle. */
     strictVerdicts: StrictUnionVerdicts;
     /** The replay's kernel reads, for the measurement pass of this sync. */
@@ -1215,6 +1219,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     throwIfBuildCancelled(cancellation);
     this.clearCurrentMassSnapshot();
     const features = listFeaturesInOrder(document);
+    const terminal = features.at(-1);
+    const deferredDirectEditFeatureId =
+      deferTerminalFaceLineage &&
+      terminal?.data.featureKind === 'direct-edit' &&
+      terminal.data.operation.kind === 'offset-face'
+        ? terminal.featureId
+        : undefined;
+
     // The first feature whose failure would describe this device's moment
     // rather than the document. Nothing at or after it is checkpointed, so
     // the next sync rebuilds it once the font face or source bytes arrive.
@@ -1252,14 +1264,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           ? lineageDemand
           : new Set(lineageDemand);
     const digests = cachingEnabled
-      ? features.map((feature, index) =>
-          historyFeatureDigest(
-            document,
-            feature,
-            index,
-            scope,
-            normalizedDemand
-          )
+      ? features.map(
+          (feature, index) =>
+            historyFeatureDigest(
+              document,
+              feature,
+              index,
+              scope,
+              normalizedDemand
+            ) +
+            (feature.featureId === deferredDirectEditFeatureId
+              ? '|display-output'
+              : '')
         )
       : [];
     // A request that may skip a boolean's probe can still restore a
@@ -1279,6 +1295,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     let initial: ExactBuildResult | null = null;
     let reusePrimitiveTail = false;
     let reusedPrimitives = 0;
+    let reusedPreparedFeatures = 0;
     let cacheResetReason:
       'checkpoint-ownership' | 'checkpoint-restore' | undefined;
     this.primitiveBuildCache.prune(features);
@@ -1534,6 +1551,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // deflections fresh before the build (the union gate reads them).
     if (this.heldDisplayProjectId !== document.projectId) {
       this.heldDisplayDeflections.clear();
+      this.previewFaceGeometry.clear();
       this.heldDisplayProjectId = document.projectId;
     }
     // Kernel reads the replay shares with the measurement pass of the same
@@ -1568,14 +1586,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         cachingEnabled
           ? {
               restore: (index, feature, result) => {
-                const reused =
-                  reusePrimitiveTail &&
-                  this.primitiveBuildCache.restore(
-                    feature,
-                    digests[index]!,
-                    result
-                  );
-                if (reused) reusedPrimitives += 1;
+                const reused = this.primitiveBuildCache.restore(
+                  feature,
+                  digests[index]!,
+                  result,
+                  reusePrimitiveTail
+                );
+                if (reused) {
+                  if (feature.data.featureKind === 'primitive')
+                    reusedPrimitives += 1;
+                  else reusedPreparedFeatures += 1;
+                }
                 return reused;
               },
               store: (index, feature, result) =>
@@ -1589,7 +1610,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           : undefined,
         cancellation,
         normalizedDemand,
-        (bodyId) => this.heldDisplayDeflections.get(bodyId)?.[0]
+        (bodyId) => this.heldDisplayDeflections.get(bodyId)?.[0],
+        deferredDirectEditFeatureId
       );
     } catch (error) {
       // A cancelled build keeps the retained prefix: the checkpoints pushed
@@ -1609,7 +1631,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         this.historyKernel === activeKernel &&
         (startIndex > 0 || reusePrimitiveTail)
       ) {
-        this.historyReplayWork += executedFeatures - reusedPrimitives;
+        this.historyReplayWork +=
+          executedFeatures - reusedPrimitives - reusedPreparedFeatures;
       }
     }
     // The cache event is emitted by syncDocument AFTER the measure pass, so
@@ -1617,9 +1640,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     return {
       kernel: activeKernel,
       build,
-      replayed: features.length - startIndex - reusedPrimitives,
+      replayed:
+        features.length -
+        startIndex -
+        reusedPrimitives -
+        reusedPreparedFeatures,
       restored: startIndex,
       reusedPrimitives,
+      reusedPreparedFeatures,
       ...(cacheResetReason ? { cacheResetReason } : {}),
       ...(recycled ? { recycleReason: 'replay-budget' as const } : {}),
       strictVerdicts,
@@ -2250,6 +2278,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     options?: {
       cancellation?: BuildCancellationSignal;
       yieldControl?: () => Promise<void> | void;
+      /** Publish meshes and display faces; picks await complete topology. */
+      deferTopology?: boolean;
     }
   ): Promise<GeometryReadyState> {
     return this.runHistoryJob(async () => {
@@ -2263,7 +2293,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         options?.cancellation,
         undefined,
         options?.yieldControl,
-        true
+        true,
+        options?.deferTopology ?? false
       );
       if (!('analysis' in result))
         throw new Error('Expected preview geometry.');
@@ -2281,7 +2312,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     cancellation?: BuildCancellationSignal,
     onGeometryReady?: (geometry: GeometryReadyState) => void,
     yieldControl?: () => Promise<void> | void,
-    geometryOnly = false
+    geometryOnly = false,
+    deferTopology = false
   ): Promise<DerivedState | GeometryReadyState> {
     cancellation = this.historySignal(cancellation);
     if (
@@ -2321,6 +2353,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         replayed,
         restored,
         reusedPrimitives,
+        reusedPreparedFeatures,
         strictVerdicts,
         readMemo,
         recycleReason,
@@ -2334,7 +2367,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         onProjection,
         lineageDemand,
         cancellation,
-        yieldControl
+        yieldControl,
+        geometryOnly && deferTopology
       );
       historyDone();
       const bodies = listNodesByKind(document, 'body');
@@ -2401,6 +2435,159 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         );
         const feature = features.get(body.featureId);
         const consumed = build.consumed.has(bodyId);
+        // K0.6 import taxonomy. Both warnings describe the imported FILE, so
+        // they are driven by what the import measured rather than by the
+        // body's state after later features edited it.
+        const imported = build.importedStepDiagnostics.get(bodyId);
+        const publishImportDiagnostics = () => {
+          if (imported && imported.rejections.length > 0) {
+            build.warnings.push(
+              importedStepDroppedSolidWarning(
+                body.name,
+                imported.rejections,
+                imported.declaredSolidCount
+              )
+            );
+          }
+          if (imported && imported.flagged.length > 0) {
+            build.warnings.push(
+              importedStepValidationWarning(
+                body.name,
+                imported.flagged.length,
+                imported.declaredSolidCount,
+                'Remus'
+              )
+            );
+          }
+        };
+        // An unqualified fast projection falls through to normal measurement,
+        // preserving its warning/refusal attribution and affected-feature scope.
+        deferredTopology: if (geometryOnly && deferTopology) {
+          // Construction scaffolding is neither picked nor rendered by an
+          // active drag. Its complete metadata remains in the committed base.
+          const strict =
+            !consumed &&
+            feature?.data.featureKind === 'boolean' &&
+            feature.data.operation === 'union' &&
+            !isFeatureSuppressed(feature);
+          // Hidden unions still need the normal display-closure gate.
+          if (strict && hiddenBodies.has(bodyId)) break deferredTopology;
+          for (const solid of shape.solids) {
+            const verdict = strictVerdicts.get(solid);
+            const relaxedErrors = kernel.validateSolidRelaxed(solid);
+            const strictErrors = strict
+              ? (verdict?.strictErrors ?? kernel.validateSolid(solid))
+              : 0;
+            if (relaxedErrors !== 0 || strictErrors !== 0)
+              break deferredTopology;
+          }
+          const metadata = {
+            bodyId,
+            name: body.name,
+            source: feature?.featureKind ?? 'primitive',
+            faceCount: shape.solids.reduce(
+              (count, solid) => count + kernel.getSolidFaces(solid).length,
+              0
+            ),
+            color: bodyDisplayColor(body.metadata, feature?.featureKind),
+            opacity: bodyOpacityFromMetadata(
+              body.metadata?.[BODY_OPACITY_METADATA_KEY]
+            ),
+            exportableStep: body.exportableStep,
+            consumed
+          };
+          if (consumed || hiddenBodies.has(bodyId)) {
+            publishImportDiagnostics();
+            // Validation targets include consumed construction bodies. Preserve
+            // their presence and verdict without projecting invisible meshes.
+            const bounds = shape.solids.map((solid) =>
+              kernel.boundingBox(solid)
+            );
+            const min = { x: 0, y: 0, z: 0 },
+              max = { x: 0, y: 0, z: 0 };
+            (['x', 'y', 'z'] as const).forEach((axis, i) => {
+              min[axis] = Math.min(...bounds.map((b) => b[i]!));
+              max[axis] = Math.max(...bounds.map((b) => b[i + 3]!));
+            });
+            geometryRepresentations[bodyId] = {
+              ...metadata,
+              bbox: { min, max },
+              mesh: {
+                kind: 'mesh',
+                vertices: new Float32Array(),
+                indices: new Uint32Array()
+              }
+            };
+            measurementDone();
+            continue;
+          }
+          let projection: ReturnType<typeof projectShapeMesh>;
+          try {
+            projection = withSyncReadMemo(readMemo, () =>
+              projectShapeMesh(
+                kernel,
+                shape,
+                32 * 1024 * 1024,
+                this.heldDisplayDeflections.get(bodyId),
+                strict ? strictVerdicts : undefined,
+                true
+              )
+            );
+          } catch {
+            // Display admission is an optimization, not a new refusal gate.
+            break deferredTopology;
+          }
+          this.heldDisplayDeflections.set(bodyId, projection.linearDeflections);
+          if (
+            strict &&
+            !projection.closureValidated &&
+            !isClosedConsistentlyOrientedMesh(
+              inspectTriangleMeshClosure(
+                projection.mesh.vertices,
+                projection.mesh.indices
+              )
+            )
+          )
+            break deferredTopology;
+          publishImportDiagnostics();
+          geometryRepresentations[bodyId] = {
+            ...metadata,
+            mesh: projection.mesh,
+            bbox: projection.bbox,
+            // Display face ranges keep the dragged highlight and analytic
+            // dimensions current. Edge topology, recognition and persistent
+            // output references remain pending; picks are held in the UI.
+            topology: {
+              faces: withSyncReadMemo(readMemo, () =>
+                projection.faceGroups.map((group) => {
+                  const witness = faceWitnessOf(kernel, group.handle);
+                  const hash = topologyHashOfWitness('face', witness);
+                  return {
+                    topologyId: `face:${hash}`,
+                    hash,
+                    triangleStart: group.triangleStart,
+                    triangleCount: group.triangleCount,
+                    // NURBS area integration is completion metadata, not a
+                    // display requirement. Picks are held for this snapshot.
+                    geometry:
+                      witness.surfaceType === 'bspline'
+                        ? undefined
+                        : this.previewFaceGeometry.measure(
+                            kernel,
+                            group.handle,
+                            witness
+                          )
+                  };
+                })
+              ),
+              edges: []
+            }
+          };
+          measurementDone();
+          await scheduling.checkpoint();
+          throwIfBuildCancelled(cancellation);
+          continue;
+        }
         // A suppressed union never ran: a body under its id is the first
         // operand passed through, which is not a union result to vouch for.
         const requiresStrictUnionValidation =
@@ -2598,29 +2785,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             `Body "${body.name}" failed exact B-rep validation.`
           );
         }
-        // K0.6 import taxonomy. Both warnings describe the imported FILE, so
-        // they are driven by what the import measured rather than by the
-        // body's state after later features edited it.
-        const imported = build.importedStepDiagnostics.get(bodyId);
-        if (imported && imported.rejections.length > 0) {
-          build.warnings.push(
-            importedStepDroppedSolidWarning(
-              body.name,
-              imported.rejections,
-              imported.declaredSolidCount
-            )
-          );
-        }
-        if (imported && imported.flagged.length > 0) {
-          build.warnings.push(
-            importedStepValidationWarning(
-              body.name,
-              imported.flagged.length,
-              imported.declaredSolidCount,
-              'Remus'
-            )
-          );
-        }
+        publishImportDiagnostics();
         if (
           requiresStrictUnionValidation &&
           feature !== undefined &&
@@ -2695,7 +2860,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           warnings: build.warnings,
           featureWarnings: build.featureWarnings,
           updatedAt: nowIso(),
-          analysis: 'pending' as const
+          analysis: 'pending' as const,
+          ...(deferTopology ? { topology: 'pending' as const } : {})
         });
       }
       if (
@@ -2729,12 +2895,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       throwIfBuildCancelled(cancellation);
       this.options.onRebuildCacheEvent?.({
         kind:
-          reusedPrimitives > 0
+          reusedPrimitives + reusedPreparedFeatures > 0
             ? 'independent-reuse'
             : restored > 0
               ? 'prefix-restore'
               : 'full-rebuild',
         ...(reusedPrimitives > 0 ? { reusedPrimitives } : {}),
+        ...(reusedPreparedFeatures > 0 ? { reusedPreparedFeatures } : {}),
         ...(recycleReason ? { recycleReason } : {}),
         replayed,
         restored,
@@ -2768,6 +2935,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ),
         warnings: build.warnings,
         updatedAt: nowIso(),
+        ...(build.datumFrames.size > 0
+          ? { datumFrames: Object.fromEntries(build.datumFrames) }
+          : {}),
         ...(build.faceReferenceRepairs?.length
           ? { faceReferenceRepairs: build.faceReferenceRepairs }
           : {}),
@@ -2798,7 +2968,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           cancellation,
           onGeometryReady,
           yieldControl,
-          geometryOnly
+          geometryOnly,
+          deferTopology
         );
       }
       throw error;
@@ -3393,6 +3564,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         });
       }
     }
+    const { solveSketchWithGcs } = await import('./gcs-sketch');
     const kernel = new RemusKernel();
     try {
       return solveSketchWithGcs(

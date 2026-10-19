@@ -107,7 +107,8 @@ export function keypadClampPosition(
 }
 
 /** Every document unit, plus the one angles use. */
-export type KeypadUnit = UnitSystem | 'deg';
+/** `count` is a plain whole-number entry: no conversion, no units allowed. */
+export type KeypadUnit = UnitSystem | 'deg' | 'count';
 
 /**
  * Units a value may name for itself, e.g. `25 mm` or `1 in`.
@@ -192,9 +193,12 @@ export function evaluateKeypadInput(
   scope: Record<string, number>,
   dimensionMode?: DimensionMode
 ): KeypadEvaluation {
-  const explicitMode = dimensionModeForInput(raw, scope);
-  const effectiveMode = explicitMode ?? dimensionMode;
-  const trimmed = stripDimensionPrefix(raw, scope);
+  // A count has no radial notation: Ø or R is not stripped (and halved),
+  // so it reads as the invalid input it is.
+  const count = entryUnit === 'count';
+  const explicitMode = count ? undefined : dimensionModeForInput(raw, scope);
+  const effectiveMode = count ? undefined : (explicitMode ?? dimensionMode);
+  const trimmed = count ? raw.trim() : stripDimensionPrefix(raw, scope);
   if (trimmed.length === 0) {
     return { ok: false, isExpression: false, error: 'required' };
   }
@@ -220,7 +224,7 @@ export function evaluateKeypadInput(
   };
   const plainNumber = Number(trimmed);
   if (Number.isFinite(plainNumber)) {
-    if (entryUnit === 'deg') {
+    if (entryUnit === 'deg' || entryUnit === 'count') {
       return normalize(plainNumber, false);
     }
     const factor = UNIT_TO_MM[entryUnit] / UNIT_TO_MM[documentUnits];
@@ -228,7 +232,10 @@ export function evaluateKeypadInput(
   }
   // A unit typed into the field wins over the selected chip. Angles have one
   // unit, so a suffix there would only ever contradict it.
-  const typed = entryUnit === 'deg' ? undefined : typedUnitValue(trimmed);
+  const typed =
+    entryUnit === 'deg' || entryUnit === 'count'
+      ? undefined
+      : typedUnitValue(trimmed);
   if (typed) {
     const factor = UNIT_TO_MM[typed.unit] / UNIT_TO_MM[documentUnits];
     return normalize(typed.value * factor, false, typed.unit);
@@ -243,7 +250,12 @@ export function evaluateKeypadInput(
     // is the evaluator's, shared with every typed expression field.
     const value = evaluateFieldExpression(trimmed, scope, {
       documentUnits,
-      dimension: entryUnit === 'deg' ? 'angle' : 'length'
+      dimension:
+        entryUnit === 'deg'
+          ? 'angle'
+          : entryUnit === 'count'
+            ? 'number'
+            : 'length'
     });
     if (!Number.isFinite(value)) {
       return { ok: false, isExpression: true, error: 'not finite' };

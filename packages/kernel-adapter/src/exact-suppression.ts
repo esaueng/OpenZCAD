@@ -72,6 +72,7 @@ export function suppressedFeaturePassThroughSource(
     case 'helical-sweep':
     case 'imported-mesh':
     case 'imported-step':
+    case 'datum-plane':
       return null;
     default: {
       const unhandled: never = data;

@@ -998,6 +998,28 @@
   box-shadow: var(--shadow-2);
 }
 
+/* Keep the lazy fallback in the same right-hand slot as the loaded rail.
+   Its six 30px controls, divider, gaps and padding occupy 209px. */
+.workspace.column-layout .view-tools-loading {
+  min-height: 209px;
+  justify-content: center;
+}
+
+/* Offline guidance is readable beside the compact rail, never squeezed into it. */
+.view-tools-loading > span:not(.workspace-loading-ring) {
+  position: absolute;
+  top: 0;
+  right: calc(100% + var(--island-gap));
+  width: min(220px, calc(100vw - var(--rail-w) - var(--island-gap) * 3));
+  box-sizing: border-box;
+  padding: var(--sp-3);
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+}
+
 .workspace.column-layout .view-mode-button,
 .workspace.column-layout .view-mode-button.wide {
   width: 30px;
@@ -2063,6 +2085,50 @@ button.command-rail:disabled {
   font-size: var(--fs-mini);
 }
 
+/* The modify tools that share one rail slot open beside it as a named
+   list, like the circle types: the rail stays one fixed column. */
+.workspace-column .sketch-modify-tool {
+  position: relative;
+  display: flex;
+}
+
+.sketch-modify-flyout {
+  position: absolute;
+  top: 0;
+  left: calc(100% + var(--island-gap));
+  z-index: calc(var(--z-inspector-float) + 4);
+  display: grid;
+  gap: 2px;
+  min-width: 168px;
+  padding: 3px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.48);
+  animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+.workspace-column .sketch-rail .sketch-modify-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  height: 28px;
+  padding: 0 9px 0 7px;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.viewer-area .workspace-column-float:has(.sketch-rail) .sketch-modify-flyout {
+  position: fixed;
+  /* Level with its rail slot: its static position. */
+  top: auto;
+  left: calc(100% + var(--island-gap));
+}
+
 /* Finish is the column's foot, lit like the primary verb. */
 .workspace-column-footer {
   display: flex;
@@ -2262,6 +2328,60 @@ button.command-rail:disabled {
 
 .sketch-relation-slot {
   display: contents;
+}
+
+/* The point relations fold into one slot whose flyout opens beside the
+   rail, as the rail's own names do, rather than lengthening the column. */
+.sketch-relation-slot.sketch-point-relations-anchor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.sketch-point-relations {
+  position: absolute;
+  top: 0;
+  right: calc(100% + var(--island-gap));
+  display: grid;
+  gap: 2px;
+  min-width: 160px;
+  padding: 4px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+}
+
+.sketch-point-relation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.sketch-point-relation:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.sketch-point-relation.active {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+}
+
+.sketch-point-relation:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* A window too short for the relations in one column (Angle fell off the

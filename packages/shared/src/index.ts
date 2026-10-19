@@ -27,11 +27,33 @@ export type SketchReferenceAnnotationId = Brand<
 >;
 export type ShaprImportId = Brand<string, 'ShaprImportId'>;
 
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 17 as const;
+/**
+ * v18 adds the S07 constraint kinds (`symmetric`, `point-on-object`, `lock`).
+ * They are additive, but a v17 client would accept them and solve without
+ * them, so the bump makes older clients refuse such documents instead.
+ *
+ * v19 adds R01 datum planes: the `datum-plane` feature kind and the datum
+ * references sketches, Split and Mirror can hold in place of a numeric plane.
+ *
+ * v20 adds the F01 through-all extrude end condition (`endCondition`,
+ * `throughAllSide`). A v19 client would replay such a cut at its stale blind
+ * distance, so the bump makes it refuse the document instead.
+ *
+ * v21 adds F05 typed parameters (`ParameterNode.quantity`). A typed parameter
+ * carries its dimension into expressions (`width + 5 mm`), which a v20 client
+ * would refuse or read as a bare number, so the bump makes it refuse such a
+ * document. Absent stays the unitless parameter every older document holds.
+ */
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 21 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
+/** F05: what a typed parameter measures. Absent on a node is unitless. */
+export type ParameterKind = 'length' | 'angle' | 'number';
+/** F01 extrude extents; to-face/to-next/offset-from-face are later slices. */
+export type ExtrudeEndCondition = 'blind' | 'through-all';
+export type ThroughAllSide = 'forward' | 'backward' | 'both';
 export type PlaneId = 'XY' | 'XZ' | 'YZ';
 /** See `SketchPlaneRef`'s `basisRevision`; absent means revision 1. */
 export type CanonicalPlaneBasisRevision = 2;
@@ -58,7 +80,8 @@ export type FeatureKind =
   | 'hole'
   | 'direct-edit'
   | 'imported-step'
-  | 'imported-mesh';
+  | 'imported-mesh'
+  | 'datum-plane';
 export type SketchObjectKind =
   'rectangle' | 'circle' | 'polygon' | 'line' | 'arc' | 'text';
 /**
@@ -219,6 +242,25 @@ export interface ParametricPlane {
   origin: ParametricVector3;
   /** Resolved and normalized during exact preflight; zero vectors are invalid. */
   normal: ParametricVector3;
+}
+
+/**
+ * A reference to an R01 datum plane by the feature that defines it. The
+ * datum resolves once, at its own history position; every consumer reads
+ * that result and never re-derives a plane from final topology.
+ */
+export interface DatumPlaneRef {
+  type: 'datum';
+  datumFeatureId: FeatureId;
+}
+
+/** A Split or Mirror plane: authored numbers, or a datum by reference. */
+export type ModelingPlaneReference = ParametricPlane | DatumPlaneRef;
+
+export function isDatumPlaneRef(
+  plane: ModelingPlaneReference | SketchPlaneRef
+): plane is DatumPlaneRef {
+  return (plane as { type?: unknown }).type === 'datum';
 }
 
 export type FaceDistanceMoveMode =
@@ -429,6 +471,15 @@ export interface ParameterNode extends BaseNode {
   expression: string;
   value: number;
   /**
+   * F05 (schema v21): what the parameter measures. A length or angle enters
+   * expressions with that dimension, so `width + 5 mm` evaluates and a length
+   * in an angle field is refused; a number is unit-free (counts, ratios).
+   * Absent is the legacy unitless parameter: dimensionless everywhere, as in
+   * every document before v21, and never retyped without the owner's say.
+   * (Named `quantity` because `kind` is the node discriminator.)
+   */
+  quantity?: ParameterKind;
+  /**
    * Offered in Tweak mode and through a share link. Absent means the row has
    * not been curated. A wholly uncurated model exposes every parameter for
    * backwards compatibility; the first eye-toggle materializes that effective
@@ -467,6 +518,7 @@ export interface SketchPlaneFrame {
  * schema-v4 migration and diagnostics; it is never a fallback for a v5 ref.
  */
 export type SketchPlaneRef =
+  | DatumPlaneRef
   | {
       type: 'canonical';
       plane: PlaneId;
@@ -510,6 +562,40 @@ export type SketchPlaneRef =
       sourceCentroid?: Vector3;
       sourceNormal: Vector3;
       frame: SketchPlaneFrame;
+    };
+
+/** A canonical plane (optionally offset), as a datum source. */
+export type CanonicalPlaneSource = Extract<SketchPlaneRef, { type: 'canonical' }>;
+
+/**
+ * A qualified exact planar face, as a datum source: lineage and the
+ * area-centroid anchor are both required, so the datum's origin never
+ * depends on the legacy vertex-mean marker.
+ */
+export type FacePlaneSource = Extract<SketchPlaneRef, { type: 'face' }> & {
+  faceReference: FaceTopologyReferenceV5;
+  sourceCentroid: Vector3;
+};
+
+export type DatumPlaneSource =
+  | CanonicalPlaneSource
+  | DatumPlaneRef
+  | FacePlaneSource;
+
+export type DatumPlaneDefinition =
+  | {
+      kind: 'offset';
+      source: DatumPlaneSource;
+      /** Signed distance along the source normal; zero is the source. */
+      offset: ParamValue;
+      /** Flips the result's normal (and v) without moving it. */
+      reverseNormal?: boolean;
+    }
+  | {
+      kind: 'midplane';
+      /** Ordered roles A and B; the result keeps A's frame. */
+      sources: [DatumPlaneSource, DatumPlaneSource];
+      reverseNormal?: boolean;
     };
 
 export interface SketchNode extends BaseNode {
@@ -610,7 +696,29 @@ export type SketchConstraintData =
       value: ParamValue;
     }
   | { constraintKind: 'radius'; objectId: EntityId; value: ParamValue }
-  | { constraintKind: 'angle'; a: EntityId; b: EntityId; valueDeg: ParamValue };
+  | { constraintKind: 'angle'; a: EntityId; b: EntityId; valueDeg: ParamValue }
+  /** Two points mirrored about a line: the axis bisects them at a right angle. */
+  | {
+      constraintKind: 'symmetric';
+      a: SketchPointRef;
+      b: SketchPointRef;
+      axis: EntityId;
+    }
+  /**
+   * A point held on a line (or its extension), a circle, or an arc's circle.
+   * The point stays free to slide along the curve.
+   */
+  | {
+      constraintKind: 'point-on-object';
+      point: SketchPointRef;
+      objectId: EntityId;
+    }
+  /**
+   * A point held at a fixed position in sketch coordinates, recorded when the
+   * lock was made. An edit that would move it conflicts instead of dragging
+   * the lock along; removing the constraint unlocks the point.
+   */
+  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number };
 
 export type SketchConstraintKind = SketchConstraintData['constraintKind'];
 
@@ -796,6 +904,15 @@ export interface SketchPathReference {
 
 export type FeatureData =
   | {
+      /**
+       * R01: a datum plane. It owns no body; its resolved frame is published
+       * at its history position for the sketches, Splits and Mirrors that
+       * reference it by this feature's id.
+       */
+      featureKind: 'datum-plane';
+      definition: DatumPlaneDefinition;
+    }
+  | {
       featureKind: 'primitive';
       primitiveKind: PrimitiveKind;
       dimensions: Record<string, ParamValue>;
@@ -827,6 +944,17 @@ export type FeatureData =
       operation?: ExtrudeOperation;
       /** Required for stored add/cut operations and absent for new-body. */
       targetBodyId?: BodyId;
+      /**
+       * F01 (schema v20): how far the extrusion reaches. Absent is `blind`,
+       * the `distance`/`symmetric`/`backDistance` extrude every older document
+       * stores. `through-all` cuts through the whole target along the sketch
+       * normal: the span is recomputed from the target at the feature's
+       * history position on every rebuild and never stored, and `distance`
+       * is kept only so switching back to blind restores it.
+       */
+      endCondition?: ExtrudeEndCondition;
+      /** Required with `through-all`; which side(s) of the sketch plane. */
+      throughAllSide?: ThroughAllSide;
       /**
        * When present, extrudes one detected closed region of the sketch
        * instead of the whole profile. Resolution fails closed: if neither the
@@ -919,7 +1047,7 @@ export type FeatureData =
       featureKind: 'mirror';
       targetBodyId: BodyId;
       /** The original remains live; this feature owns only the mirrored copy. */
-      plane: ParametricPlane;
+      plane: ModelingPlaneReference;
     }
   | {
       featureKind: 'hole';
@@ -970,7 +1098,7 @@ export type FeatureData =
       featureKind: 'split';
       /** Consumed: the two halves replace the input body. */
       targetBodyId: BodyId;
-      plane: ParametricPlane;
+      plane: ModelingPlaneReference;
       /**
        * The half on the side the plane normal points away from. The
        * feature's own `bodyId` names the positive half; a `FeatureNode`
@@ -1889,6 +2017,8 @@ export type GeometryBodyRepresentation = Omit<
  * Exact operations requiring analysis still await the completed result.
  */
 export interface GeometryReadyState {
+  /** Drag-only mesh publication: picking identities await complete topology. */
+  topology?: 'pending';
   bodyRepresentations: Record<BodyId, GeometryBodyRepresentation>;
   warnings: string[];
   /** Current build attribution; never borrowed from a completed projection. */
@@ -2218,9 +2348,23 @@ export interface EditAnalysisRequest {
   faceHashes: number[];
 }
 
+/** A resolved world frame: right-handed, u × v = normal. */
+export interface DatumFrame {
+  origin: Vector3;
+  u: Vector3;
+  v: Vector3;
+  normal: Vector3;
+}
+
 export interface DerivedState {
   editAnalysis?: EditAnalysisRequest;
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
+  /**
+   * R01: each datum plane's frame as the exact build resolved it at its own
+   * history position, so the browser places datum-attached sketches exactly
+   * as the kernel did. A datum that failed or is suppressed is absent.
+   */
+  datumFrames?: Record<FeatureId, DatumFrame>;
   exportableBodyIds: BodyId[];
   warnings: string[];
   updatedAt: string;
@@ -3378,7 +3522,8 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   hole: '#fb923c',
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
-  'imported-mesh': '#7aa3ff'
+  'imported-mesh': '#7aa3ff',
+  'datum-plane': '#9aa5b8'
 };
 
 export const featureColor = (kind: FeatureKind): string =>

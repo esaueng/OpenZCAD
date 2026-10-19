@@ -47,7 +47,25 @@
     // require the persisted project-wide lease.
     "PROJECT_SHARING_ENABLED": "true",
     "PROJECT_EDIT_LEASES_ENFORCED": "true",
-    "PROJECT_PERSONAL_SYNC_ENABLED": "true"
+    "PROJECT_PERSONAL_SYNC_ENABLED": "true",
+    // Assistant rollout flags live here, not in the dashboard: a deploy
+    // replaces dashboard variables with this block. Each one exposes its
+    // operation in the model's output schema, and every one compiles to a
+    // command the UI already ships, is checked against the digest, and is
+    // exact-preflighted before it applies. Set one to "false" (or remove it)
+    // to withdraw that operation without a code change.
+    // AI_PATCH_HOLE_CONTROL_ENABLED stays off: its bore measurements are not
+    // in the digest, so the model cannot author it; the app's own
+    // "Parameterize the mounting holes" suggestion covers it without a flag.
+    "AI_PATCH_DIRECT_EDIT_ENABLED": "true",
+    "AI_PATCH_GROWING_HOLDER_ENABLED": "true",
+    "AI_PATCH_FACE_SKETCH_ENABLED": "true",
+    "AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED": "true",
+    "AI_PATCH_MIRROR_ENABLED": "true",
+    "AI_PATCH_SHELL_ENABLED": "true",
+    "AI_PATCH_SOLID_OFFSET_ENABLED": "true",
+    "AI_PATCH_PARTIAL_REVOLVE_ENABLED": "true",
+    "AI_PATCH_DATUM_PLANE_ENABLED": "true"
   },
   // Secrets a deployment cannot run without (set with `wrangler secret put`;
   // wrangler has no schema key to declare them, so this is documentation only):

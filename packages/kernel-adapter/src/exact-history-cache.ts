@@ -22,6 +22,7 @@ import {
   expressionIdentifiers,
   findSketch,
   getParameterScope,
+  parameterKindsOf,
   keyableImportedNodeData
 } from '@openzcad/document-core';
 import {
@@ -331,10 +332,14 @@ function readsParameterScope(feature: FeatureNode): boolean {
  * in feature digests so parameter-independent imports can survive an edit.
  */
 export function historyScopeDigest(document: ProjectDocument): string {
-  const { errors } = getParameterScope(document);
+  const { scope, errors } = getParameterScope(document);
   return stableJson({
     units: document.units,
     errors,
+    // F05: a quantity-only change leaves every value equal but can make a
+    // feature's use of the parameter right or wrong; no checkpoint built
+    // under the old kinds may be restored under the new ones.
+    kinds: parameterKindsOf(scope),
     bezierProfileEdges: bezierProfileEdgesEnabled()
   });
 }
@@ -366,6 +371,7 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
   return {
     shapes,
     sketchBases: new Map(result.sketchBases),
+    datumFrames: new Map(result.datumFrames),
     consumed: new Set(result.consumed),
     importedStepDiagnostics: new Map(result.importedStepDiagnostics),
     meshBodies: new Set(result.meshBodies),
@@ -520,6 +526,8 @@ export interface RebuildCacheEvent {
   restored: number;
   /** Independent primitive features kept in the current kernel after the prefix. */
   reusedPrimitives?: number;
+  /** Audited immutable transform/carving branches reused in the same arena. */
+  reusedPreparedFeatures?: number;
   /** Bodies tessellated and measured by this sync. */
   remeasured: number;
   /** Bodies whose measurement was served from the per-body cache. */

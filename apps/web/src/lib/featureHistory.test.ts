@@ -6,7 +6,11 @@ import {
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import { toUserId, FEATURE_SUPPRESSED_METADATA_KEY } from '@openzcad/shared';
-import { featureHistory, featureResultBodyIds } from './featureHistory';
+import {
+  featureHistory,
+  featureResultBodyIds,
+  relatedFeatureIds
+} from './featureHistory';
 
 export function historyFixture() {
   const manager = new CommandManager(
@@ -250,4 +254,45 @@ it('makes the drilled body a dependent of the body a hole consumes', () => {
   expect([...graph.parents.get(hole!.featureId)!]).toEqual([box!.featureId]);
   expect([...graph.parents.get(fillet!.featureId)!]).toEqual([hole!.featureId]);
   expect([...graph.missing.get(hole!.featureId)!]).toEqual([]);
+});
+
+describe('related to selection (ZC-099)', () => {
+  function withSecondBody() {
+    const { manager } = historyFixture();
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Spacer',
+        primitiveKind: 'box',
+        dimensions: { width: 5, height: 5, depth: 5 }
+      })
+    );
+    const features = listFeaturesInOrder(manager.document);
+    const names = (ids: Set<string>) =>
+      features.filter((f) => ids.has(f.featureId)).map((f) => f.name);
+    return { manager, features, names };
+  }
+
+  it('keeps a feature, what it was built from and what is built on it', () => {
+    const { manager, features, names } = withSecondBody();
+    const move = features.find((f) => f.name === 'Move plate')!;
+    expect(
+      names(relatedFeatureIds(manager.document, { featureId: move.featureId }))
+    ).toEqual(['Profile', 'Plate', 'Move plate', 'Round corners']);
+    // The unrelated spacer is filtered out, and order is the history's.
+    const spacer = features.find((f) => f.name === 'Spacer')!;
+    expect(
+      names(
+        relatedFeatureIds(manager.document, { featureId: spacer.featureId })
+      )
+    ).toEqual(['Spacer']);
+  });
+
+  it('seeds from a selected body through every step that produced or edited it', () => {
+    const { manager, names } = withSecondBody();
+    const plate = manager.document.bodyOrder[0]!;
+    expect(
+      names(relatedFeatureIds(manager.document, { bodyIds: [plate] }))
+    ).toEqual(['Profile', 'Plate', 'Move plate', 'Round corners']);
+    expect(relatedFeatureIds(manager.document, {}).size).toBe(0);
+  });
 });

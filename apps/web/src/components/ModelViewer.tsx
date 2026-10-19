@@ -164,7 +164,7 @@ import {
   type SnapResolution,
   type ProjectionMode,
   type SketchOverlay,
-  type ViewTarget,
+  type ViewRequestTarget,
   type ViewerBodyMaterial,
   type ViewerSettings,
   type FatLineResolution,
@@ -286,8 +286,11 @@ type SketchMoveEvent = Extract<
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { PlaneId, SketchObjectData } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
+import { buildDatumPlaneRig, type DatumPlaneRig } from './viewer/datumPlaneRig';
+import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
 import { sketchValueResolver } from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
+import { traceFaceDrag } from '../lib/faceDragTrace';
 import {
   readWheelDeviceMemory,
   writeWheelDeviceMemory
@@ -677,7 +680,7 @@ export interface ModelViewerProps {
    */
   autoFrame?: AutoFrameRequest | null;
   /** Set to move the camera to a view target; nonce forces re-runs. */
-  viewRequest: { view: ViewTarget; nonce: number } | null;
+  viewRequest: { view: ViewRequestTarget; nonce: number } | null;
   /** Set to centre and frame an exact planar face; nonce forces re-runs. */
   normalToFaceRequest: NormalToFaceRequest | null;
   units: string;
@@ -858,6 +861,8 @@ export interface ModelViewerProps {
   planePickerOffset: number;
   /** A ghost plane was clicked. */
   onPickPlane(plane: PlaneId): void;
+  /** A datum plane was clicked where nothing in the model was under it. */
+  onPickDatum?(featureId: string): void;
   /**
    * The bore the open Hole card would drill, drawn through the body before
    * it exists. Null while no hole can be placed.
@@ -865,6 +870,11 @@ export interface ModelViewerProps {
   holeGhost?: HoleGhost | null;
   /** The solid the open primitive card would create, drawn before Create. */
   primitiveGhost?: PrimitiveGhost | null;
+  /**
+   * Committed R01 datum planes, drawn on the frames the exact build resolved.
+   * Hidden, suppressed and unresolved datums are simply absent.
+   */
+  datumPlanes?: readonly DatumPlaneDisplay[];
   /**
    * What measuring the hovered target would report, for the preview chip.
    * Null when measuring is off or the pick has nothing honest to say.
@@ -914,7 +924,11 @@ export interface ModelViewerProps {
     data: SketchObjectData,
     verb: 'Move' | 'Rotate'
   ): Promise<boolean> | boolean;
-  /** Selects a committed entity for exact-value editing. */
+  /**
+   * Selects a committed entity for exact-value editing. Returns true when an
+   * armed constraint or modify tool took the click, which then must not also
+   * select the region under it.
+   */
   onSketchSelectObject(
     objectId: string | null,
     /**
@@ -927,8 +941,13 @@ export interface ModelViewerProps {
       point: 'start' | 'end' | 'center';
     } | null,
     /** Client-space click used to place a driving-dimension editor. */
-    clickPoint: { x: number; y: number }
-  ): void;
+    clickPoint: { x: number; y: number },
+    /**
+     * The click on the sketch plane, unsnapped: where along a curve the
+     * click fell, which Trim needs and a snap would move to an end.
+     */
+    planePoint: { x: number; y: number } | null
+  ): boolean | void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   /**
@@ -995,6 +1014,8 @@ export interface SceneContext {
   ): void;
   /** The durable pose to persist for this project. */
   captureView(): ViewportCameraState;
+  /** Holds an exact durable pose, orthographic zoom included. */
+  restoreView(state: ViewportCameraState, projection: ProjectionMode): void;
   /** Invalidates the viewport and schedules a render if it is idle. */
   requestRender(): void;
   renderer: THREE.WebGLRenderer;
@@ -1641,8 +1662,27 @@ function startRequestedView(
   // first body. Otherwise that body's automatic fit can cancel this glide.
   context.hasFitCamera = true;
   const { camera, controls } = context;
+  const target = request.view;
+  if (typeof target === 'object' && 'pose' in target) {
+    // A saved view glides to its pose, then holds it exactly: the tween
+    // moves position and target, and the restore lands the orthographic
+    // zoom the glide does not carry.
+    const [px, py, pz] = target.pose.position;
+    const [tx, ty, tz] = target.pose.target;
+    context.startCameraTween(
+      {
+        position: new THREE.Vector3(px, py, pz),
+        target: new THREE.Vector3(tx, ty, tz),
+        near: camera.near,
+        far: camera.far
+      },
+      () => context.restoreView(target.pose, target.projection),
+      { ease: viewJumpEase }
+    );
+    return;
+  }
   const distance = Math.max(camera.position.distanceTo(controls.target), 1);
-  const direction = viewDirectionFor(request.view);
+  const direction = viewDirectionFor(target);
   context.startCameraTween(
     {
       position: controls.target.clone().addScaledVector(direction, distance),
@@ -1730,8 +1770,10 @@ export function ModelViewer({
   planePickerArmed,
   holeGhost = null,
   primitiveGhost = null,
+  datumPlanes,
   planePickerOffset,
   onPickPlane,
+  onPickDatum,
   onMeasurePreview,
   regionHandle,
   sketchMode,
@@ -1861,6 +1903,7 @@ export function ModelViewer({
   const geometryTraceRef = useRef(geometryTrace);
   geometryTraceRef.current = geometryTrace;
   const pendingEditFrameRef = useRef<typeof geometryTrace>(undefined);
+  const pendingTracedFrameRef = useRef(false);
   const installedEditRevisionRef = useRef<typeof geometryTrace>(undefined);
   const onBodiesDrawnElsewhereRef = useRef(onBodiesDrawnElsewhere);
   onBodiesDrawnElsewhereRef.current = onBodiesDrawnElsewhere;
@@ -1918,8 +1961,11 @@ export function ModelViewer({
   onMeasurePreviewRef.current = onMeasurePreview;
   const onPickPlaneRef = useRef(onPickPlane);
   onPickPlaneRef.current = onPickPlane;
+  const onPickDatumRef = useRef(onPickDatum);
+  onPickDatumRef.current = onPickDatum;
   const planePickerOffsetRef = useRef(planePickerOffset);
   planePickerOffsetRef.current = planePickerOffset;
+  const datumPlaneRigRef = useRef<DatumPlaneRig | null>(null);
   const planePickerRigRef = useRef<ReturnType<
     typeof buildPlanePickerRig
   > | null>(null);
@@ -2139,6 +2185,15 @@ export function ModelViewer({
         })
     );
     renderer.setSize(host.clientWidth, host.clientHeight);
+    // The canvas fills the host and is sized only through `renderer.setSize`,
+    // so its CSS size is the size last given there. Reading `clientWidth` in
+    // a frame, after that frame's DOM writes, forced a synchronous layout of
+    // the whole workspace each time it was asked.
+    let canvasCssWidth = host.clientWidth;
+    let canvasCssHeight = host.clientHeight;
+    const canvasWidth = () => canvasCssWidth || renderer.domElement.clientWidth;
+    const canvasHeight = () =>
+      canvasCssHeight || renderer.domElement.clientHeight;
     const applyPixelRatio = () =>
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     applyPixelRatio();
@@ -2295,8 +2350,8 @@ export function ModelViewer({
     // constant screen-space width, so the triad stays one crisp stroke at
     // any zoom.
     const axes = createAxesGizmo({
-      width: renderer.domElement.clientWidth || 1,
-      height: renderer.domElement.clientHeight || 1
+      width: canvasWidth() || 1,
+      height: canvasHeight() || 1
     });
     scene.add(axes);
 
@@ -2500,6 +2555,7 @@ export function ModelViewer({
       startCameraTween: (pose, onComplete, glide) =>
         cameraRig.startTween(pose, onComplete, glide),
       captureView: () => cameraRig.capture(),
+      restoreView: (state, mode) => cameraRig.restore(state, mode),
       requestRender,
       renderer,
       labelRenderer,
@@ -2526,8 +2582,8 @@ export function ModelViewer({
         return selection.hoveredEdge;
       },
       fatLineResolution: () => ({
-        width: renderer.domElement.clientWidth || 1,
-        height: renderer.domElement.clientHeight || 1
+        width: canvasWidth() || 1,
+        height: canvasHeight() || 1
       }),
       dimensionLabels: new Set(),
       get hoverFaceMesh() {
@@ -3120,8 +3176,8 @@ export function ModelViewer({
           projectToScreen(
             SNAP_PROJECT_SCRATCH.set(point.x, point.y, point.z),
             context.activeCamera,
-            renderer.domElement.clientWidth,
-            renderer.domElement.clientHeight
+            canvasWidth(),
+            canvasHeight()
           )
       );
     }
@@ -3818,8 +3874,8 @@ export function ModelViewer({
         const candidateScreen = projectToScreen(
           candidatePoint,
           context.activeCamera,
-          renderer.domElement.clientWidth,
-          renderer.domElement.clientHeight
+          canvasWidth(),
+          canvasHeight()
         );
         if (!candidateScreen) {
           continue;
@@ -4919,6 +4975,22 @@ export function ModelViewer({
         onPickPlaneRef.current(ghost.plane);
         return;
       }
+      // A datum plane is chosen only where nothing in the model is under
+      // the pointer: its quad is translucent and often passes through the
+      // part, so it must never steal a click meant for a face behind it.
+      if (!result && onPickDatumRef.current) {
+        const datum = datumPlaneRigRef.current;
+        if (datum) {
+          picker.setRayFromEvent(event);
+          const hit = picker.intersect(datum.targets(), false)[0];
+          const featureId = hit?.object.userData.datumFeatureId as
+            string | undefined;
+          if (featureId) {
+            onPickDatumRef.current(featureId);
+            return;
+          }
+        }
+      }
       if (result?.region) {
         onSelectRegionRef.current(result.region, {
           additive: event.shiftKey,
@@ -4975,7 +5047,7 @@ export function ModelViewer({
     const scaleBarModelCenter = new THREE.Vector3();
     /** World units spanned by one screen pixel at the given point. */
     function worldPerPixelAt(point: THREE.Vector3): number {
-      const height = Math.max(renderer.domElement.clientHeight, 1);
+      const height = Math.max(canvasHeight(), 1);
       if (context.projection === 'orthographic') {
         return (
           (orthographic.top - orthographic.bottom) /
@@ -4986,6 +5058,28 @@ export function ModelViewer({
       const distance = Math.max(camera.position.distanceTo(point), 0.001);
       return (
         (2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) /
+        height
+      );
+    }
+
+    const depthForward = new THREE.Vector3();
+    const depthOffset = new THREE.Vector3();
+    /**
+     * World units per screen pixel at `point`, measured from its depth along
+     * the camera's forward axis: what perspective projection actually scales
+     * by. Euclidean distance overstates it off-axis, so a plane at the edge of
+     * the view drew larger than one at its centre.
+     */
+    function worldPerPixelAtDepth(point: THREE.Vector3): number {
+      if (context.projection === 'orthographic') return worldPerPixelAt(point);
+      const height = Math.max(canvasHeight(), 1);
+      camera.getWorldDirection(depthForward);
+      const depth = Math.max(
+        depthOffset.subVectors(point, camera.position).dot(depthForward),
+        0.001
+      );
+      return (
+        (2 * depth * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) /
         height
       );
     }
@@ -5384,8 +5478,8 @@ export function ModelViewer({
                 .clone()
                 .addScaledVector(rig.direction, -0.4 * scale),
               context.activeCamera,
-              renderer.domElement.clientWidth,
-              renderer.domElement.clientHeight
+              canvasWidth(),
+              canvasHeight()
             );
             if (!hit) {
               return [];
@@ -5408,11 +5502,27 @@ export function ModelViewer({
       return animating;
     }
 
+    /** What the chip showed when last placed; see `updateOffsetChip`. */
+    let chipLayoutKey: string | null = null;
     function updateOffsetChip() {
       const chip = offsetChipRef.current;
       if (!chip) {
         return;
       }
+      // Layout reads come before this function's writes. A read after a
+      // write forces a synchronous layout of the whole workspace, and a
+      // dragged chip used to force several every frame. The pills' widths
+      // are therefore the last frame's; a frame that changes what they show
+      // renders once more, so the next one measures and places them again.
+      const chipWidth = chip.offsetWidth;
+      const labelWidth = radiusLabelChip.offsetWidth;
+      const lane = renderer.domElement
+        .closest('.viewer-area')
+        ?.querySelector<HTMLElement>('.stage-right > *');
+      const laneLeft = lane
+        ? lane.getBoundingClientRect().left -
+          renderer.domElement.getBoundingClientRect().left
+        : null;
       // Either rig answers the same two questions; only the label differs.
       // In a multi-region extrude the chip rides the arrow last grabbed.
       const regionChipRig =
@@ -5458,6 +5568,7 @@ export function ModelViewer({
         }
       }
       if (!anchor) {
+        chipLayoutKey = null;
         chip.hidden = true;
         radiusLabelChip.hidden = true;
         keypadAnchorRef.current?.(null);
@@ -5480,10 +5591,11 @@ export function ModelViewer({
       let screen = projectToScreen(
         anchor,
         context.activeCamera,
-        renderer.domElement.clientWidth,
-        renderer.domElement.clientHeight
+        canvasWidth(),
+        canvasHeight()
       );
       if (!screen) {
+        chipLayoutKey = null;
         chip.hidden = true;
         radiusLabelChip.hidden = true;
         keypadAnchorRef.current?.(null);
@@ -5505,8 +5617,8 @@ export function ModelViewer({
         const pinScreen = projectToScreen(
           rig.group.position,
           context.activeCamera,
-          renderer.domElement.clientWidth,
-          renderer.domElement.clientHeight
+          canvasWidth(),
+          canvasHeight()
         );
         // The pill starts at the anchor and runs toward the pin, so it
         // reaches the pin once the gap between them is shorter than the
@@ -5518,7 +5630,7 @@ export function ModelViewer({
         // measuring last frame's width would otherwise flip the decision
         // every frame right at the threshold, so the chip never settles.
         const pillReach =
-          chip.offsetWidth +
+          chipWidth +
           DIMENSION_CHIP_PIN_CLEARANCE_PX +
           (dimensionChipBesidePinRef.current ? 24 : 0);
         // Zoomed in on the wall, the 45% point of the radius is off the
@@ -5526,8 +5638,8 @@ export function ModelViewer({
         const anchorOffCanvas =
           screen.x < 0 ||
           screen.y < 0 ||
-          screen.x > renderer.domElement.clientWidth ||
-          screen.y > renderer.domElement.clientHeight;
+          screen.x > canvasWidth() ||
+          screen.y > canvasHeight();
         if (pinScreen && (gapToPin < pillReach || anchorOffCanvas)) {
           dimensionChipBesidePin = true;
           screen = pinScreen;
@@ -5546,14 +5658,14 @@ export function ModelViewer({
         const start = projectToScreen(
           line.start,
           context.activeCamera,
-          renderer.domElement.clientWidth,
-          renderer.domElement.clientHeight
+          canvasWidth(),
+          canvasHeight()
         );
         const end = projectToScreen(
           line.end,
           context.activeCamera,
-          renderer.domElement.clientWidth,
-          renderer.domElement.clientHeight
+          canvasWidth(),
+          canvasHeight()
         );
         if (start && end) {
           const dx = end.x - start.x;
@@ -5596,13 +5708,8 @@ export function ModelViewer({
         // The right lane's first panel (the command card, the inspector, or
         // the model drawer alone) shares the lane's left edge with whatever
         // is under it.
-        const inspector = renderer.domElement
-          .closest('.viewer-area')
-          ?.querySelector<HTMLElement>('.stage-right > *');
-        if (inspector) {
-          const hostRect = renderer.domElement.getBoundingClientRect();
-          const inspectorLeft =
-            inspector.getBoundingClientRect().left - hostRect.left;
+        if (laneLeft !== null) {
+          const inspectorLeft = laneLeft;
           // A cap or region anchor can project underneath its floating
           // editor. Rather than clamp the chip back onto the pin, swap it to
           // the pin's other side; only if that is under the editor too does
@@ -5636,8 +5743,8 @@ export function ModelViewer({
         const hitScreen = projectToScreen(
           hitCenter,
           context.activeCamera,
-          renderer.domElement.clientWidth,
-          renderer.domElement.clientHeight
+          canvasWidth(),
+          canvasHeight()
         );
         const dragDirection = screenDirectionFor(
           rig.group.position,
@@ -5667,8 +5774,8 @@ export function ModelViewer({
         const hitScreen = projectToScreen(
           hitCenter,
           context.activeCamera,
-          renderer.domElement.clientWidth,
-          renderer.domElement.clientHeight
+          canvasWidth(),
+          canvasHeight()
         );
         const dragDirection = screenDirectionFor(
           rig.group.position,
@@ -5777,7 +5884,7 @@ export function ModelViewer({
         const alongX = Math.cos(lineAngle);
         const alongY = Math.sin(lineAngle);
         const half = LINE_LABEL_GAP_PX / 2;
-        const valueReach = chip.offsetWidth / 2 + half;
+        const valueReach = chipWidth / 2 + half;
         hud.showAt(
           chip,
           screen.x + alongX * valueReach,
@@ -5785,7 +5892,7 @@ export function ModelViewer({
         );
         if (tagText !== null) {
           radiusLabelChip.textContent = tagText;
-          const tagReach = radiusLabelChip.offsetWidth / 2 + half;
+          const tagReach = labelWidth / 2 + half;
           hud.showAt(
             radiusLabelChip,
             screen.x - alongX * tagReach,
@@ -5826,21 +5933,15 @@ export function ModelViewer({
             // ends there. Centred on the anchor instead, the tag reached
             // back over the pin whenever the axis pointed at the camera.
             const clearance = PIN_CHIP_GAP_PX / 2;
-            const tagWidth = radiusLabelChip.offsetWidth;
-            const valueWidth = chip.offsetWidth;
+            const tagWidth = labelWidth;
+            const valueWidth = chipWidth;
             const width = tagWidth + 2 + valueWidth;
             // The whole pair keeps out from under the right lane (the anchor
             // dodge above only reserves a centred value's width): one that
             // would reach it goes to the pin's other side, and clamps only
             // when that side is under the lane too.
-            const lane = renderer.domElement
-              .closest('.viewer-area')
-              ?.querySelector<HTMLElement>('.stage-right > *');
-            const limit = lane
-              ? lane.getBoundingClientRect().left -
-                renderer.domElement.getBoundingClientRect().left -
-                8
-              : Number.POSITIVE_INFINITY;
+            const limit =
+              laneLeft !== null ? laneLeft - 8 : Number.POSITIVE_INFINITY;
             let start =
               screen.x >= pinScreenAt.x
                 ? screen.x - clearance
@@ -5854,16 +5955,21 @@ export function ModelViewer({
             hud.showAt(chip, start + tagWidth + 2 + valueWidth / 2, screen.y);
             hud.showAt(radiusLabelChip, start + tagWidth, screen.y);
           } else {
-            hud.showAt(
-              radiusLabelChip,
-              screen.x - chip.offsetWidth / 2 - 2,
-              screen.y
-            );
+            hud.showAt(radiusLabelChip, screen.x - chipWidth / 2 - 2, screen.y);
           }
         } else {
           radiusLabelChip.hidden = true;
         }
       }
+      const layoutKey = [
+        chip.hidden,
+        chip.textContent,
+        chip.dataset.variant,
+        radiusLabelChip.hidden,
+        radiusLabelChip.textContent
+      ].join('|');
+      if (layoutKey !== chipLayoutKey) requestRender();
+      chipLayoutKey = layoutKey;
       keypadAnchorRef.current?.(screen);
     }
 
@@ -6011,8 +6117,8 @@ export function ModelViewer({
       const screen = projectToScreen(
         world,
         context.activeCamera,
-        renderer.domElement.clientWidth,
-        renderer.domElement.clientHeight
+        canvasWidth(),
+        canvasHeight()
       );
       if (!screen) {
         sketchCenterTarget.hidden = true;
@@ -6301,12 +6407,7 @@ export function ModelViewer({
       );
       if (centerTarget) {
         const halfSpan =
-          worldPerPixel *
-          Math.max(
-            renderer.domElement.clientWidth,
-            renderer.domElement.clientHeight
-          ) *
-          0.65;
+          worldPerPixel * Math.max(canvasWidth(), canvasHeight()) * 0.65;
         rig.setInference(centerInferenceSegments(centerTarget, halfSpan));
         positionSketchCenterTarget(
           centerTarget,
@@ -6548,8 +6649,8 @@ export function ModelViewer({
             basis.origin.z + basis.u.z * grabPoint.x + basis.v.z * grabPoint.y
           ),
           context.activeCamera,
-          renderer.domElement.clientWidth,
-          renderer.domElement.clientHeight
+          canvasWidth(),
+          canvasHeight()
         );
         const pointer = hud.toLocal(event.clientX, event.clientY);
         const hit =
@@ -6873,8 +6974,8 @@ export function ModelViewer({
           basis.origin.z + basis.u.z * grab.x + basis.v.z * grab.y
         ),
         context.activeCamera,
-        renderer.domElement.clientWidth,
-        renderer.domElement.clientHeight
+        canvasWidth(),
+        canvasHeight()
       );
       if (!screen) {
         sketchGrabHandle.hidden = true;
@@ -7181,6 +7282,10 @@ export function ModelViewer({
             : Math.round(raw / snap) * snap;
           if (Math.abs(value - rig.value()) > 1e-9) {
             rig.setValue(value);
+            traceFaceDrag('pointer', {
+              value,
+              ms: performance.now() - event.timeStamp
+            });
             const exactOnRelease = queueOffsetBodyProxy(value, event.timeStamp);
             onOffsetPreviewRef.current(value, !exactOnRelease);
           }
@@ -7829,11 +7934,18 @@ export function ModelViewer({
                   point: activeSketchSnap.pointRef
                 }
               : null;
-          onSketchSelectObjectRef.current(objectId, snapPoint, {
-            x: event.clientX,
-            y: event.clientY
-          });
-          if (!objectId) {
+          const planePoint = screenRayToPlanePoint(
+            context.raycaster.ray.origin,
+            context.raycaster.ray.direction,
+            mode.basis
+          );
+          const consumed = onSketchSelectObjectRef.current(
+            objectId,
+            snapPoint,
+            { x: event.clientX, y: event.clientY },
+            planePoint ? { x: planePoint.x, y: planePoint.y } : null
+          );
+          if (!objectId && consumed !== true) {
             const profile = picker.pick(event)?.region;
             if (profile) {
               onSelectRegionRef.current(profile, {
@@ -8378,6 +8490,7 @@ export function ModelViewer({
     let loopWasAnimating = false;
     function animate(now: number) {
       animationFrame = null;
+      const frameStarted = performance.now();
       if (e2eCanvasHooksEnabled) {
         framesDrawn += 1;
         renderer.domElement.dataset.e2eFrames = String(framesDrawn);
@@ -8388,6 +8501,8 @@ export function ModelViewer({
         const height = viewerHost.clientHeight;
         cameraRig.handleResize();
         renderer.setSize(width, height);
+        canvasCssWidth = width;
+        canvasCssHeight = height;
         labelRenderer.setSize(width, height);
         // Screen-space fat lines rasterize against the viewport size. Walking
         // the scene covers body edges, sketches, previews and handle rigs
@@ -8418,6 +8533,7 @@ export function ModelViewer({
 
       // Ghost planes hold their screen size, so they stay a target rather
       // than a backdrop as the camera dollies.
+      datumPlaneRigRef.current?.setScale(worldPerPixelAtDepth);
       const planePicker = planePickerRigRef.current;
       if (planePicker) {
         // Scale first: the offset is expressed in world units and has to be
@@ -8460,9 +8576,11 @@ export function ModelViewer({
         positionSketchMoveHandles();
       } else {
         sketchGridReadoutRef?.current?.(null);
-        sketchGridIndicator.hidden = true;
-        sketchGrabHandle.hidden = true;
-        sketchRotateRing.hidden = true;
+        // Every frame passes here outside a sketch; rewriting an unchanged
+        // attribute still dirties style before the frame's layout reads.
+        if (!sketchGridIndicator.hidden) sketchGridIndicator.hidden = true;
+        if (!sketchGrabHandle.hidden) sketchGrabHandle.hidden = true;
+        if (!sketchRotateRing.hidden) sketchRotateRing.hidden = true;
       }
 
       // Preselection and selection overlays cut to their targets; their
@@ -8600,6 +8718,7 @@ export function ModelViewer({
       if (drawnElsewhere) {
         onBodiesDrawnElsewhereRef.current?.(drawnElsewhere);
       }
+      let renderStarted = performance.now();
       // The first draw compiles every material's shaders and uploads the
       // environment map, so it costs far more than steady-state frames.
       if (firstFrame) {
@@ -8614,8 +8733,17 @@ export function ModelViewer({
           'viewer.firstFrame.ready'
         );
       } else {
+        renderStarted = performance.now();
         renderer.render(scene, context.activeCamera);
       }
+      traceFaceDrag('frame', {
+        ms: performance.now() - frameStarted,
+        detail: {
+          presented: pendingTracedFrameRef.current ? 1 : 0,
+          renderMs: performance.now() - renderStarted
+        }
+      });
+      pendingTracedFrameRef.current = false;
       const presented = pendingEditFrameRef.current;
       if (presented) {
         pendingEditFrameRef.current = undefined;
@@ -8654,11 +8782,7 @@ export function ModelViewer({
         });
         lastPerfFrameAt = now;
       }
-      updateDimensionLabels(
-        context,
-        renderer.domElement.clientWidth,
-        renderer.domElement.clientHeight
-      );
+      updateDimensionLabels(context, canvasWidth(), canvasHeight());
       labelRenderer.render(scene, context.activeCamera);
       avoidSketchDimensionOverlays(labelRenderer.domElement);
       if (cylinderRadiusProxyFrame && import.meta.env.OZ_PERF === '1') {
@@ -8682,8 +8806,8 @@ export function ModelViewer({
         measurementCalloutsRef.current,
         measurementBoundsRef.current,
         context.activeCamera,
-        renderer.domElement.clientWidth,
-        renderer.domElement.clientHeight
+        canvasWidth(),
+        canvasHeight()
       );
 
       // Push camera orientation to the view widget only when it changes.
@@ -9841,7 +9965,13 @@ export function ModelViewer({
         pendingEditFrameRef.current = revision;
       }
       measure('viewer.bodies', 'viewer.bodies:begin');
-      onGeometryPresentedRef.current?.(performance.now() - installationStarted);
+      const installationMs = performance.now() - installationStarted;
+      traceFaceDrag('install', {
+        ms: installationMs,
+        detail: { renderChanged: renderChanged ? 1 : 0 }
+      });
+      if (renderChanged) pendingTracedFrameRef.current = true;
+      onGeometryPresentedRef.current?.(installationMs);
     }
   }, [
     bodies,
@@ -10646,6 +10776,45 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [planePickerArmed]);
+
+  // Committed datum planes (viewer/datumPlaneRig), rebuilt when the set,
+  // a frame or the selection changes; the render loop keeps their size.
+  const datumPlaneKey = JSON.stringify(
+    (datumPlanes ?? []).map(({ featureId, frame, selected }) => ({
+      featureId,
+      frame,
+      selected
+    }))
+  );
+  useEffect(() => {
+    const context = contextRef.current;
+    const planes = JSON.parse(datumPlaneKey) as DatumPlaneDisplay[];
+    if (!context || planes.length === 0) {
+      return;
+    }
+    const rig = buildDatumPlaneRig(planes);
+    rig.setScale(() => 0.05);
+    context.scene.add(rig.group);
+    datumPlaneRigRef.current = rig;
+    const canvas = context.renderer.domElement;
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      canvas.dataset.e2eDatumPlanes = JSON.stringify(
+        planes.map(({ featureId, frame }) => ({
+          featureId,
+          origin: frame.origin,
+          normal: frame.normal
+        }))
+      );
+    }
+    context.requestRender();
+    return () => {
+      context.scene.remove(rig.group);
+      rig.dispose();
+      if (datumPlaneRigRef.current === rig) datumPlaneRigRef.current = null;
+      delete canvas.dataset.e2eDatumPlanes;
+      context.requestRender();
+    };
+  }, [datumPlaneKey]);
 
   // The open Hole card's bore (viewer/holeGhostRig): an opening on the entry
   // face and a barrel that is a faint ghost inside the body, so it reads as a

@@ -185,25 +185,21 @@ function positiveError(
 }
 
 /**
- * A count the geometry takes only within its range. `whole` counts are
- * refused unless integral, as polygon sides are; the others are rounded
- * first, as the pattern builder rounds its counts.
+ * A count the geometry takes only within its range, refused unless
+ * integral: polygon sides and pattern instances are whole numbers.
  */
 function countError(
   value: string,
   scope: Record<string, number>,
   min: number,
   max: number,
-  whole: boolean,
   quantity?: FieldQuantity
 ): string | undefined {
   const preview = previewExpression(value, scope, quantity);
   if (!preview.ok || preview.value === undefined) return undefined;
-  const count = whole ? preview.value : Math.round(preview.value);
+  const count = preview.value;
   if (Number.isInteger(count) && count >= min && count <= max) return undefined;
-  return whole
-    ? `Must be a whole number from ${min} to ${max}.`
-    : `Must be from ${min} to ${max}.`;
+  return `Must be a whole number from ${min} to ${max}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -705,7 +701,6 @@ export function SketchForm({
       scope,
       3,
       MAX_SKETCH_POLYGON_SIDES,
-      true,
       number
     )
   };
@@ -1894,9 +1889,8 @@ export function PatternForm({
         ? fieldsValid(scope, [spacing, spacing2, count2]) && axis !== axis2
         : fieldsValid(scope, [angleDeg]);
   const countErrors = {
-    count: countError(count, scope, 2, 100, false),
-    count2:
-      kind === 'grid' ? countError(count2, scope, 2, 100, false) : undefined
+    count: countError(count, scope, 2, 100),
+    count2: kind === 'grid' ? countError(count2, scope, 2, 100) : undefined
   };
   const canSubmit =
     name.trim().length > 0 &&

@@ -4,12 +4,16 @@ import {
   CircleDot,
   CircleDotDashed,
   Equal,
+  Lock,
   MoveHorizontal,
   MoveVertical,
   Radius,
   Ruler,
+  SplinePointer,
+  SquareSplitHorizontal,
   Tangent,
-  TriangleRight
+  TriangleRight,
+  Unlink
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { SketchConstraintToolKind } from '../lib/interaction/machine';
@@ -27,5 +31,9 @@ export const CONSTRAINT_ICONS: Record<SketchConstraintToolKind, LucideIcon> = {
   midpoint: BetweenHorizontalEnd,
   radius: Radius,
   distance: Ruler,
-  angle: TriangleRight
+  angle: TriangleRight,
+  symmetric: SquareSplitHorizontal,
+  'point-on-object': SplinePointer,
+  lock: Lock,
+  disconnect: Unlink
 };

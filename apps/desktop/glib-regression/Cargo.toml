@@ -1,0 +1,8 @@
+[package]
+name = "openzcad-glib-regression"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+glib = { path = "../src-tauri/vendor/glib", default-features = false }

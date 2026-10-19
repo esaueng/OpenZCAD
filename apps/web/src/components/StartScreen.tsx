@@ -1,6 +1,6 @@
 import { ProjectImportButton } from './ProjectImportButton';
 import { platformShortcutLabel } from '../lib/platformShortcut';
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { Fragment, lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useDissolveOnUnmount } from '../hooks/useDissolveOnUnmount';
 import {
   Archive,
@@ -14,14 +14,16 @@ import {
   CloudOff,
   CloudUpload,
   Copy,
-  GraduationCap,
   GripVertical,
   Info,
+  LayoutGrid,
+  List,
   LoaderCircle,
   MoreHorizontal,
   Pin,
   Plus,
   RotateCcw,
+  RotateCw,
   Search,
   Settings,
   Trash2,
@@ -45,6 +47,7 @@ import { bucketProjectsByShelf, moveItem } from '../lib/projectShelf';
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
+import { DemoModelIcon } from './DemoModelIcon';
 import { PartThumbnail } from './PartThumbnail';
 import type { ProjectProperties } from '../lib/projectProperties';
 
@@ -125,6 +128,51 @@ interface StartScreenProps {
 }
 
 const LOADING_PROJECT_TILES = 10;
+
+/** The Parts shelf's narrowing, beside its heading. */
+type ShelfFilter = 'all' | 'pinned' | 'attention' | 'local';
+type ShelfSort = 'custom' | 'edited' | 'name';
+type ShelfLayout = 'grid' | 'list';
+
+const SHELF_FILTERS: ReadonlyArray<{ id: ShelfFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'pinned', label: 'Pinned' },
+  { id: 'attention', label: 'Needs attention' },
+  { id: 'local', label: 'This device only' }
+];
+
+const SHELF_LAYOUT_STORAGE_KEY = 'openzcad.start.layout';
+
+/** A per-device convenience: an unreadable store simply means the grid. */
+function readShelfLayout(): ShelfLayout {
+  try {
+    return globalThis.localStorage?.getItem(SHELF_LAYOUT_STORAGE_KEY) === 'list'
+      ? 'list'
+      : 'grid';
+  } catch {
+    return 'grid';
+  }
+}
+
+function writeShelfLayout(layout: ShelfLayout) {
+  try {
+    globalThis.localStorage?.setItem(SHELF_LAYOUT_STORAGE_KEY, layout);
+  } catch {
+    // Private windows and blocked storage keep the choice for this visit.
+  }
+}
+
+const RECOVERY_SUFFIX = / \((?:Recovery|Local copy)\)(?: \(copy(?: \d+)?\))*$/;
+
+/**
+ * The part a recovery copy was made from, by name: conflict recovery and
+ * local-copy saves append "(Recovery)" or "(Local copy)", and duplicating one
+ * appends "(copy)". Null for an ordinary part.
+ */
+export function recoveryCopyOf(name: string): string | null {
+  const match = RECOVERY_SUFFIX.exec(name);
+  return match ? name.slice(0, match.index) : null;
+}
 
 function formatTime(date: Date): string {
   return date.toLocaleTimeString(undefined, {
@@ -261,6 +309,9 @@ export function StartScreen({
   const [units, setUnits] = useState<UnitSystem>(defaultUnits);
   const [query, setQuery] = useState('');
   const [shelf, setShelf] = useState<ProjectStatus>('active');
+  const [filter, setFilter] = useState<ShelfFilter>('all');
+  const [sort, setSort] = useState<ShelfSort>('custom');
+  const [layout, setLayout] = useState<ShelfLayout>(readShelfLayout);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [propertiesProject, setPropertiesProject] =
     useState<ProjectSummary | null>(null);
@@ -333,12 +384,102 @@ export function StartScreen({
   const shelves = bucketProjectsByShelf(userProjects);
   const shelfProjects = shelves[shelf];
 
+  // Demos are rebuilt from their definitions on any device, so they are not
+  // work to rescue and would only pad the offer. Trashed projects are excluded
+  // for the same reason in reverse: uploading something on its way out is not
+  // what "save my work" means.
+  const localOnlyProjects =
+    signedIn && accountProjectListReached
+      ? userProjects.filter(
+          (project) =>
+            !cloudProjectIds.has(project.projectId) &&
+            projectOrganization(project).status !== 'deleted'
+        )
+      : [];
+
+  const syncEntryById = new Map(
+    (syncRun ?? []).map((entry) => [entry.projectId, entry] as const)
+  );
+  const syncTotals = syncRun ? syncRunTotals(syncRun) : null;
+  const syncFailures = (syncRun ?? []).filter(
+    (entry) => entry.state === 'failed'
+  );
+  // Retrying re-enters the bulk path with just the failed projects, so the
+  // panel restarts scoped to what actually needs another attempt.
+  const failedSummaries = syncFailures.flatMap((entry) => {
+    const summary = userProjects.find(
+      (project) => project.projectId === entry.projectId
+    );
+    return summary ? [summary] : [];
+  });
+
+  const localOnlyIds = new Set(
+    localOnlyProjects.map((project) => project.projectId)
+  );
+  // Recovery copies stay parts in their own right (they open, sync and
+  // trash like any other), but each original says how many it has, and the
+  // Needs attention filter gathers them with the parts that diverged or
+  // failed to save.
+  const recoveryCounts = new Map<string, number>();
+  for (const project of shelfProjects) {
+    const original = recoveryCopyOf(project.name);
+    if (original !== null) {
+      recoveryCounts.set(original, (recoveryCounts.get(original) ?? 0) + 1);
+    }
+  }
+  const needsAttention = (project: ProjectSummary) =>
+    conflictedProjectIds.has(project.projectId) ||
+    syncEntryById.get(project.projectId)?.state === 'failed' ||
+    recoveryCopyOf(project.name) !== null;
+  const filterMatches: Record<
+    ShelfFilter,
+    (project: ProjectSummary) => boolean
+  > = {
+    all: () => true,
+    pinned: (project) => projectOrganization(project).pinned,
+    attention: needsAttention,
+    local: (project) => localOnlyIds.has(project.projectId)
+  };
+  // Filters narrow the Parts shelf only; Archive and Trash are short lists.
+  const filterable = shelf === 'active';
+  // "This device only" means something only against an account listing;
+  // signed out, or with the listing unreachable, it would hide every part.
+  const activeFilter: ShelfFilter =
+    !filterable ||
+    (filter === 'local' && !(signedIn && accountProjectListReached))
+      ? 'all'
+      : filter;
+  const filterCounts = Object.fromEntries(
+    SHELF_FILTERS.map((entry) => [
+      entry.id,
+      shelfProjects.filter(filterMatches[entry.id]).length
+    ])
+  ) as Record<ShelfFilter, number>;
+  const filteredProjects =
+    activeFilter === 'all'
+      ? shelfProjects
+      : shelfProjects.filter(filterMatches[activeFilter]);
+
   const search = query.trim().toLowerCase();
-  const matchingProjects = search
-    ? shelfProjects.filter((project) =>
+  const searchedProjects = search
+    ? filteredProjects.filter((project) =>
         project.name.toLowerCase().includes(search)
       )
-    : shelfProjects;
+    : filteredProjects;
+  // Pinned parts stay at the front whatever the order: pinning is the one
+  // ordering a person chose on purpose.
+  const matchingProjects =
+    sort === 'custom'
+      ? searchedProjects
+      : [...searchedProjects].sort((a, b) => {
+          const pinned =
+            Number(projectOrganization(b).pinned) -
+            Number(projectOrganization(a).pinned);
+          if (pinned !== 0) return pinned;
+          return sort === 'edited'
+            ? b.updatedAt.localeCompare(a.updatedAt)
+            : a.name.localeCompare(b.name, undefined, { numeric: true });
+        });
 
   // A part sent to another shelf takes its tile, and the focused control in
   // it, off the page, which would leave focus on nothing. Once it is gone the
@@ -379,36 +520,12 @@ export function StartScreen({
 
   // Dragging reorders positions within a shelf, which only means anything when
   // every position is on screen and in its stored order.
-  const canReorder = shelf === 'active' && !search && !busy;
-
-  // Demos are rebuilt from their definitions on any device, so they are not
-  // work to rescue and would only pad the offer. Trashed projects are excluded
-  // for the same reason in reverse: uploading something on its way out is not
-  // what "save my work" means.
-  const localOnlyProjects =
-    signedIn && accountProjectListReached
-      ? userProjects.filter(
-          (project) =>
-            !cloudProjectIds.has(project.projectId) &&
-            projectOrganization(project).status !== 'deleted'
-        )
-      : [];
-
-  const syncEntryById = new Map(
-    (syncRun ?? []).map((entry) => [entry.projectId, entry] as const)
-  );
-  const syncTotals = syncRun ? syncRunTotals(syncRun) : null;
-  const syncFailures = (syncRun ?? []).filter(
-    (entry) => entry.state === 'failed'
-  );
-  // Retrying re-enters the bulk path with just the failed projects, so the
-  // panel restarts scoped to what actually needs another attempt.
-  const failedSummaries = syncFailures.flatMap((entry) => {
-    const summary = userProjects.find(
-      (project) => project.projectId === entry.projectId
-    );
-    return summary ? [summary] : [];
-  });
+  const canReorder =
+    shelf === 'active' &&
+    !search &&
+    !busy &&
+    activeFilter === 'all' &&
+    sort === 'custom';
 
   function moveProject(projectId: string, toIndex: number) {
     const from = shelfProjects.findIndex(
@@ -457,6 +574,11 @@ export function StartScreen({
     setOpenMenu(null);
   }
 
+  function selectLayout(next: ShelfLayout) {
+    setLayout(next);
+    writeShelfLayout(next);
+  }
+
   function renderProjectTile(project: ProjectSummary, index: number) {
     const organization = projectOrganization(project);
     const menuOpen = openMenu === project.projectId;
@@ -470,6 +592,9 @@ export function StartScreen({
       !cloudProjectIds.has(project.projectId);
     const conflicted = conflictedProjectIds.has(project.projectId);
     const syncEntry = syncEntryById.get(project.projectId);
+    const recoveryOf = recoveryCopyOf(project.name);
+    const copies =
+      recoveryOf === null ? (recoveryCounts.get(project.name) ?? 0) : 0;
 
     const preview = (
       <>
@@ -479,6 +604,32 @@ export function StartScreen({
             loadThumbnail={loadThumbnail}
             publishThumbnail={publishThumbnail}
           />
+        </span>
+        <span className="start-tile-body">
+          <strong className="start-tile-name">{project.name}</strong>
+          <small className="start-tile-meta">
+            <time
+              dateTime={project.updatedAt}
+              title={`Last edited ${formatLastEditedExact(project.updatedAt)}`}
+            >
+              {formatLastEdited(project.updatedAt)}
+              {recoveryOf !== null &&
+                ` · ${formatTime(new Date(project.updatedAt))}`}
+            </time>
+            <span className="start-tile-rev">
+              {project.revisionCount}{' '}
+              {project.revisionCount === 1 ? 'save' : 'saves'}
+            </span>
+          </small>
+          {trashed && (
+            <small className="start-tile-purge">
+              {daysLeft === 0
+                ? 'Deleting shortly'
+                : `Deletes in ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`}
+            </small>
+          )}
+        </span>
+        <span className="start-tile-flags">
           {syncEntry && !trashed ? (
             <span
               className={`start-tile-badge is-sync-${syncEntry.state}`}
@@ -511,6 +662,9 @@ export function StartScreen({
               ) : (
                 <TriangleAlert size={12} aria-hidden="true" />
               )}
+              {syncEntry.state === 'failed' && (
+                <span className="start-tile-badge-text">Not saved</span>
+              )}
             </span>
           ) : conflicted && !trashed ? (
             <span
@@ -520,6 +674,9 @@ export function StartScreen({
               title="This project changed here and in your account. Open it to choose which to keep."
             >
               <TriangleAlert size={12} aria-hidden="true" />
+              <span className="start-tile-badge-text">
+                Changed in two places
+              </span>
             </span>
           ) : (
             localOnly &&
@@ -534,29 +691,10 @@ export function StartScreen({
               </span>
             )
           )}
-        </span>
-        <span className="start-tile-body">
-          <strong className="start-tile-name">{project.name}</strong>
-          <small className="start-tile-meta">
-            <time
-              dateTime={project.updatedAt}
-              title={`Last edited ${formatLastEditedExact(project.updatedAt)}`}
-            >
-              {formatLastEdited(project.updatedAt)}
-              {/\((Recovery|Local copy)\)$/.test(project.name) &&
-                ` · ${formatTime(new Date(project.updatedAt))}`}
-            </time>
-            <span className="start-tile-rev">
-              {project.revisionCount}{' '}
-              {project.revisionCount === 1 ? 'save' : 'saves'}
+          {recoveryOf !== null && !trashed && (
+            <span className="start-tile-badge is-recovery">
+              <span className="start-tile-badge-text">Recovery copy</span>
             </span>
-          </small>
-          {trashed && (
-            <small className="start-tile-purge">
-              {daysLeft === 0
-                ? 'Deleting shortly'
-                : `Deletes in ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`}
-            </small>
           )}
         </span>
       </>
@@ -861,6 +999,24 @@ export function StartScreen({
           </div>
         )}
 
+        {copies > 0 && !trashed && (
+          // Searching by the original's name brings its copies up beside it.
+          <button
+            type="button"
+            className="start-tile-copies"
+            aria-label={`Show ${project.name} with its ${copies} recovery ${
+              copies === 1 ? 'copy' : 'copies'
+            }`}
+            onClick={() => {
+              setFilter('all');
+              setQuery(project.name);
+            }}
+          >
+            <Copy size={12} aria-hidden="true" />
+            {copies} recovery {copies === 1 ? 'copy' : 'copies'}
+          </button>
+        )}
+
         {trashed && (
           // The visible labels are short for the narrow footer; the names
           // say which part, and match the menu's "Delete forever".
@@ -893,6 +1049,37 @@ export function StartScreen({
       </div>
     );
   }
+
+  const showFilters = filterable && !loading && shelfProjects.length > 0;
+  // Pinned parts head the shelf as their own group when the whole shelf is
+  // on screen. Partitioned by the flag, not sliced by count: a part created
+  // this session is prepended to the listing ahead of pinned ones. Each tile
+  // keeps its shelf-wide position, which is what reordering uses.
+  const pinnedProjects = matchingProjects.filter(
+    (project) => projectOrganization(project).pinned
+  );
+  const shelfPositions = new Map(
+    matchingProjects.map((project, index) => [project.projectId, index])
+  );
+  const shelfGroups: Array<{
+    label: string | null;
+    projects: ProjectSummary[];
+  }> =
+    shelf === 'active' &&
+    activeFilter === 'all' &&
+    !search &&
+    pinnedProjects.length > 0 &&
+    pinnedProjects.length < matchingProjects.length
+      ? [
+          { label: 'Pinned', projects: pinnedProjects },
+          {
+            label: 'Parts',
+            projects: matchingProjects.filter(
+              (project) => !projectOrganization(project).pinned
+            )
+          }
+        ]
+      : [{ label: null, projects: matchingProjects }];
 
   const shelfLabel =
     SHELVES.find((entry) => entry.status === shelf) ?? SHELVES[0]!;
@@ -1216,50 +1403,130 @@ export function StartScreen({
               <h2 id="start-parts-title" ref={partsTitleRef} tabIndex={-1}>
                 {shelfLabel.label}
               </h2>
-              <span className="start-section-note">
-                {loading
-                  ? 'Loading parts…'
-                  : shelfProjects.length === 0
-                    ? shelf === 'active' && partsElsewhere
-                      ? 'none on this shelf'
-                      : shelfLabel.empty
-                    : search
-                      ? `${matchingProjects.length} of ${shelfProjects.length} match`
-                      : `${shelfProjects.length} ${
-                          shelfProjects.length === 1 ? 'part' : 'parts'
-                        }`}
-              </span>
+              {/* The filters carry the count once they show; the note keeps
+                  the empty, loading and search states. */}
+              {!(showFilters && !search) && (
+                <span className="start-section-note">
+                  {loading
+                    ? 'Loading parts…'
+                    : shelfProjects.length === 0
+                      ? shelf === 'active' && partsElsewhere
+                        ? 'none on this shelf'
+                        : shelfLabel.empty
+                      : search
+                        ? `${matchingProjects.length} of ${filteredProjects.length} match`
+                        : `${shelfProjects.length} ${
+                            shelfProjects.length === 1 ? 'part' : 'parts'
+                          }`}
+                </span>
+              )}
             </div>
 
+            {showFilters && (
+              <div
+                className="start-filters"
+                role="group"
+                aria-label="Show parts"
+              >
+                {SHELF_FILTERS.filter(
+                  (entry) =>
+                    entry.id === 'all' ||
+                    entry.id === activeFilter ||
+                    filterCounts[entry.id] > 0
+                ).map((entry) => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    aria-pressed={activeFilter === entry.id}
+                    className={[
+                      'start-filter',
+                      activeFilter === entry.id ? 'is-active' : '',
+                      entry.id === 'attention' ? 'is-attention' : ''
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                    onClick={() => {
+                      setFilter(entry.id);
+                      setOpenMenu(null);
+                    }}
+                  >
+                    {entry.label}
+                    <span className="start-filter-count">
+                      {filterCounts[entry.id]}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
             {(loading || userProjects.length > 0) && (
-              <div className="start-search">
-                <Search size={13} aria-hidden="true" />
-                <input
-                  value={query}
-                  type="text"
-                  aria-label="Search parts"
-                  placeholder="Search parts…"
-                  onChange={(event) => setQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Escape' && query) {
-                      // Escape belongs to the field while it has a query;
-                      // swallowing it stops the app's Escape ladder from also
-                      // reacting to a keystroke the user aimed here.
-                      event.stopPropagation();
-                      setQuery('');
-                    }
-                  }}
-                />
-                {query && (
+              <div className="start-toolbar-tools">
+                {shelfProjects.length > 1 && (
+                  <label className="start-sort">
+                    <span className="visually-hidden">Sort parts</span>
+                    <select
+                      value={sort}
+                      onChange={(event) =>
+                        setSort(event.target.value as ShelfSort)
+                      }
+                    >
+                      <option value="custom">Custom order</option>
+                      <option value="edited">Last edited</option>
+                      <option value="name">Name</option>
+                    </select>
+                  </label>
+                )}
+                <div className="start-search">
+                  <Search size={13} aria-hidden="true" />
+                  <input
+                    value={query}
+                    type="text"
+                    aria-label="Search parts"
+                    placeholder="Search parts…"
+                    onChange={(event) => setQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape' && query) {
+                        // Escape belongs to the field while it has a query;
+                        // swallowing it stops the app's Escape ladder from also
+                        // reacting to a keystroke the user aimed here.
+                        event.stopPropagation();
+                        setQuery('');
+                      }
+                    }}
+                  />
+                  {query && (
+                    <button
+                      type="button"
+                      className="start-search-clear"
+                      aria-label="Clear search"
+                      onClick={() => setQuery('')}
+                    >
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+                <div className="start-layout" role="group" aria-label="Layout">
                   <button
                     type="button"
-                    className="start-search-clear"
-                    aria-label="Clear search"
-                    onClick={() => setQuery('')}
+                    className="start-layout-button"
+                    aria-label="Grid"
+                    aria-pressed={layout === 'grid'}
+                    title="Grid"
+                    onClick={() => selectLayout('grid')}
                   >
-                    <X size={12} aria-hidden="true" />
+                    <LayoutGrid size={14} aria-hidden="true" />
                   </button>
-                )}
+                  <button
+                    type="button"
+                    className="start-layout-button"
+                    aria-label="List"
+                    aria-pressed={layout === 'list'}
+                    title="List"
+                    onClick={() => selectLayout('list')}
+                  >
+                    <List size={14} aria-hidden="true" />
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -1313,12 +1580,54 @@ export function StartScreen({
           )}
 
           {!loading && matchingProjects.length > 0 && (
-            <div className="start-tile-grid">
-              {matchingProjects.map((project, index) =>
-                renderProjectTile(project, index)
+            <>
+              {layout === 'list' && (
+                <div className="start-list-head" aria-hidden="true">
+                  <span>Name</span>
+                  <span>Status</span>
+                  <span>Edited</span>
+                  <span>Saves</span>
+                </div>
               )}
-            </div>
+              {shelfGroups.map((group) => (
+                <Fragment key={group.label ?? 'all'}>
+                  {group.label && (
+                    <h3 className="start-shelf-group">
+                      {group.label}
+                      <span>{group.projects.length}</span>
+                    </h3>
+                  )}
+                  <div
+                    className={
+                      layout === 'list'
+                        ? 'start-tile-grid is-list'
+                        : 'start-tile-grid'
+                    }
+                  >
+                    {group.projects.map((project) =>
+                      renderProjectTile(
+                        project,
+                        shelfPositions.get(project.projectId) ?? 0
+                      )
+                    )}
+                  </div>
+                </Fragment>
+              ))}
+            </>
           )}
+
+          {!loading &&
+            !search &&
+            activeFilter !== 'all' &&
+            shelfProjects.length > 0 &&
+            matchingProjects.length === 0 && (
+              <p className="start-no-matches" role="status">
+                No parts here right now.
+                <button type="button" onClick={() => setFilter('all')}>
+                  Show all parts
+                </button>
+              </p>
+            )}
 
           {!loading && shelfProjects.length === 0 && (
             <div className="start-empty" role="status">
@@ -1392,11 +1701,14 @@ export function StartScreen({
             >
               <span className="demo-card-head">
                 <span className="demo-card-icon">
-                  <GraduationCap size={15} aria-hidden="true" />
+                  <DemoModelIcon demoKey={demo.key} />
                 </span>
                 <span className="demo-card-title">
                   <strong>{demo.name.replace('Demo · ', '')}</strong>
                   <span className="demo-card-tagline">{demo.tagline}</span>
+                  <span className="demo-card-summary">
+                    {demo.summary ?? demo.tagline}
+                  </span>
                 </span>
               </span>
               <span className="demo-card-revs">
@@ -1429,18 +1741,20 @@ export function StartScreen({
         {onReloadForUpdate || onReloadForLoadFailure ? (
           // Module failures can stay cached until navigation. This action
           // outlives the toast, whether or not an update was confirmed.
-          <span className="start-update" role="alert">
-            <span>
-              {onReloadForUpdate
-                ? 'A new version of OpenZCAD is available.'
-                : STALE_CHUNK_MESSAGE}
+          <span
+            className={`start-update ${onReloadForUpdate ? 'is-update' : 'is-failure'}`}
+            role="alert"
+          >
+            <span className="start-update-dot" aria-hidden="true" />
+            <span className="start-update-text">
+              {onReloadForUpdate ? 'New version ready' : STALE_CHUNK_MESSAGE}
             </span>
             <button
               type="button"
-              className="primary"
               onClick={onReloadForUpdate ?? onReloadForLoadFailure}
             >
               Reload
+              <RotateCw size={13} aria-hidden="true" />
             </button>
           </span>
         ) : null}

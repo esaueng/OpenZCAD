@@ -27,12 +27,16 @@ export function parameterMinimums(
 /** A cheap refusal before any worker work, including edits to driving aliases. */
 export function parameterInputError(
   base: ProjectDocument,
-  candidate: ProjectDocument
+  candidate: ProjectDocument,
+  /** Recognized bounds from this exact base for a pure parameter draft. */
+  minimums?: Readonly<Record<string, number>>
 ): string | null {
   const before = getParameterScope(base).scope;
   const { scope, errors } = getParameterScope(candidate);
   if (errors.length) return errors[0]!;
-  for (const [name, minimum] of Object.entries(parameterMinimums(candidate))) {
+  for (const [name, minimum] of Object.entries(
+    minimums ?? parameterMinimums(candidate)
+  )) {
     if (
       before[name] !== scope[name] &&
       scope[name] !== undefined &&
@@ -75,8 +79,16 @@ export function parameterUntouchedSince(
   live: ProjectDocument,
   name: string
 ): boolean {
-  const expressionIn = (document: ProjectDocument) =>
-    listParameters(document).find((parameter) => parameter.name === name)
-      ?.expression ?? null;
-  return expressionIn(base) === expressionIn(live);
+  // Expression and quantity both: an undo or a collaborator may retype the
+  // parameter (F05) without touching its expression, and a retry must not
+  // overwrite that.
+  const stateIn = (document: ProjectDocument) => {
+    const parameter = listParameters(document).find(
+      (candidate) => candidate.name === name
+    );
+    return parameter
+      ? `${parameter.quantity ?? 'unitless'}\u0000${parameter.expression}`
+      : null;
+  };
+  return stateIn(base) === stateIn(live);
 }

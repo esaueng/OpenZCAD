@@ -884,7 +884,13 @@ export function sharedShapeVolume(
   left: ExactShape,
   right: ExactShape,
   leftBody: ExtrudeInferenceBody,
-  rightBody: ExtrudeInferenceBody
+  rightBody: ExtrudeInferenceBody,
+  /**
+   * The volume at or below which the overlap counts as none. Defaults to the
+   * scale of both bodies; a caller whose tool carries long empty travel
+   * passes the target's own scale instead.
+   */
+  tolerance: number = extrudeVolumeTolerance(leftBody, rightBody)
 ): number {
   if (!extrudeBoundsCanShareVolume(leftBody.bbox, rightBody.bbox)) {
     return 0;
@@ -916,7 +922,7 @@ export function sharedShapeVolume(
       }
     }
   }
-  return total > extrudeVolumeTolerance(leftBody, rightBody) ? total : 0;
+  return total > tolerance ? total : 0;
 }
 
 export function isFaceConnectedSolid(

@@ -17,7 +17,7 @@ import { boundedName } from '@openzcad/shared';
  *    lock, so no lock is ever held across it.
  * 3. Reserve the commit lock, and hold it across the write. Asking whether it
  *    was free would not do: the write takes seconds to minutes.
- * 4. Write the bytes.
+ * 4. Read and sanitize the source, then write only the sanitized bytes.
  * 5. Validate against the exact kernel, archiving only once it has accepted.
  * 6. Settle the bytes: kept for a commit, discarded for a refusal, kept for
  *    anything that reached no verdict at all.
@@ -32,7 +32,10 @@ import {
   createBodyFeatureIds,
   type ImportedStepInput
 } from '@openzcad/document-core';
-import { parseStepMetadata } from '@openzcad/io-step';
+import {
+  parseStepMetadata,
+  sanitizeStepHeaderPrivacy
+} from '@openzcad/io-step';
 import type {
   ImportedSourceReference,
   ProjectDocument
@@ -327,7 +330,8 @@ function declined(): StepImportResult {
 export async function runStepImport(
   deps: StepImportRunDeps
 ): Promise<StepImportResult> {
-  const { file, status } = deps;
+  const { status } = deps;
+  let { file } = deps;
   const store = deps.store ?? localStepImportSourceStore;
   const maxSourceBytes = deps.limits?.maxSourceBytes ?? MAX_SOURCE_IMPORT_BYTES;
   const maxEmbeddedBytes =
@@ -426,6 +430,26 @@ export async function runStepImport(
   /** What went wrong on the way, when nothing ever reached a verdict. */
   let thrown: string | null = null;
   try {
+    stopIfCancelled();
+    // Hash, store, inspect and archive exactly the same sanitized source.
+    // Never persist the original path-bearing bytes, even for a local-only
+    // import whose archive is retried later. DATA records remain unchanged.
+    const originalText = await file.text();
+    stopIfCancelled();
+    const stepText = sanitizeStepHeaderPrivacy(originalText, file.name);
+    if (stepText !== originalText) {
+      file = new File([stepText], file.name, {
+        type: file.type,
+        lastModified: file.lastModified
+      });
+    }
+    // A longer replacement name can push a source across either byte fence.
+    if (
+      file.size > maxSourceBytes ||
+      (readiness === 'unavailable' && file.size > maxEmbeddedBytes)
+    ) {
+      throw new Error('Sanitized STEP source exceeds the import size limit.');
+    }
     // A store that could not be opened a moment ago will not open now, and
     // asking anyway only spends a second failed open to learn the same thing.
     if (readiness !== 'unavailable') {
@@ -471,7 +495,6 @@ export async function runStepImport(
     // taken when the ceiling was 250 MB, so it bounds today's 128 MB too —
     // so this reports no fraction. There is nothing to watch.
     progress?.update({ phase: 'reading', fraction: null });
-    const stepText = await file.text();
     const metadata = parseStepMetadata(file.name, stepText);
     // Last boundary before the disposable exact-rebuild worker is created.
     stopIfCancelled();

@@ -29,6 +29,7 @@ export function extrudeEditCommand(
   if (value.choice.operation !== 'new-body' && !value.choice.targetBodyId) {
     throw new Error('Select a target body for this extrusion.');
   }
+  const throughAll = value.endCondition === 'through-all';
   return commandFactories.updateFeature(
     {
       featureId: feature.featureId,
@@ -42,11 +43,36 @@ export function extrudeEditCommand(
         targetBodyId:
           value.choice.operation === 'new-body'
             ? undefined
-            : value.choice.targetBodyId
-      }
+            : value.choice.targetBodyId,
+        ...(throughAll
+          ? {
+              endCondition: 'through-all' as const,
+              throughAllSide: value.throughAllSide ?? 'forward'
+            }
+          : {})
+      },
+      // Blind is the absent extent; a stale side must not outlive it.
+      ...(!throughAll && feature.data.endCondition !== undefined
+        ? { clearData: ['endCondition', 'throughAllSide'] }
+        : {})
     },
     `Edit ${value.name}`
   );
+}
+
+/**
+ * The magnitude an extrude edit preview is requested at. A through-all cut's
+ * stored distance is dormant (the build derives the span), so it is never
+ * resolved: a distance naming a since-deleted parameter must not block the
+ * preview of an edit that Apply accepts.
+ */
+export function extrudePreviewMagnitude(
+  value: Pick<ExtrudeFormValue, 'distance' | 'endCondition'>,
+  resolve: (distance: ExtrudeFormValue['distance']) => number
+): number {
+  return value.endCondition === 'through-all'
+    ? 1
+    : Math.abs(resolve(value.distance));
 }
 
 /** Validate at the feature's history position, not against today's live bodies. */
@@ -78,9 +104,14 @@ export function extrudeEditTargets(
   for (const bodyId of document.bodyOrder) {
     if (unavailable.has(bodyId)) continue;
     try {
+      // The probe asks only "may this body be a target here?". A through-all
+      // extent is cut-only, so it is cleared from the probe, not the feature.
       const command = commandFactories.updateFeature({
         featureId: feature.featureId,
-        data: { operation: 'add', targetBodyId: bodyId }
+        data: { operation: 'add', targetBodyId: bodyId },
+        ...(feature.data.endCondition !== undefined
+          ? { clearData: ['endCondition', 'throughAllSide'] }
+          : {})
       });
       command.validate(document);
       const body = Object.values(document.nodes).find(

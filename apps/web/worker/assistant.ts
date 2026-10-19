@@ -237,6 +237,8 @@ interface ProposalInput {
   digest: CadDocumentDigest;
   history?: readonly AssistantHistoryTurn[];
   attachments?: readonly AssistantAttachment[];
+  /** Operation kinds the requesting client can parse, when it says. */
+  operations?: readonly string[];
 }
 
 export interface AssistantStatus {
@@ -402,8 +404,48 @@ const ROLLOUT_OPERATION_FLAGS = [
   ['add_multi_profile_extrude', 'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED'],
   ['add_mirror', 'AI_PATCH_MIRROR_ENABLED'],
   ['add_shell', 'AI_PATCH_SHELL_ENABLED'],
-  ['add_solid_offset', 'AI_PATCH_SOLID_OFFSET_ENABLED']
+  ['add_solid_offset', 'AI_PATCH_SOLID_OFFSET_ENABLED'],
+  ['add_datum_plane', 'AI_PATCH_DATUM_PLANE_ENABLED'],
+  ['add_datum_sketch', 'AI_PATCH_DATUM_PLANE_ENABLED'],
+  ['add_datum_mirror', 'AI_PATCH_DATUM_PLANE_ENABLED'],
+  ['add_datum_split', 'AI_PATCH_DATUM_PLANE_ENABLED']
 ] as const;
+
+/**
+ * Operations added after clients began declaring what they can parse. A
+ * request without that declaration comes from a tab loaded before then, whose
+ * parser rejects these, so it is never offered them.
+ */
+const NEGOTIATED_OPERATIONS: ReadonlySet<string> = new Set([
+  'add_datum_plane',
+  'add_datum_sketch',
+  'add_datum_mirror',
+  'add_datum_split'
+]);
+
+/**
+ * The deployment's flags as one request may use them: a rollout flag stays
+ * on only when the requesting client can parse every operation it gates.
+ * Prompt and schema both read flags, so narrowing them here keeps the two in
+ * step without threading a second rule through each.
+ */
+export function assistantEnvForClient(
+  env: CloudflareEnv,
+  clientOperations: readonly string[] | undefined
+): CloudflareEnv {
+  const known = clientOperations ? new Set(clientOperations) : undefined;
+  const supported = (operation: string) =>
+    known ? known.has(operation) : !NEGOTIATED_OPERATIONS.has(operation);
+  const withdrawn = new Set(
+    ROLLOUT_OPERATION_FLAGS.filter(([operation]) => !supported(operation)).map(
+      ([, flag]) => flag
+    )
+  );
+  if (withdrawn.size === 0) return env;
+  const narrowed = { ...env } as Record<string, unknown>;
+  for (const flag of withdrawn) narrowed[flag] = 'false';
+  return narrowed;
+}
 
 /**
  * Rollout flags on a single PROPERTY of an operation that is already
@@ -446,6 +488,8 @@ When enabled:
 - \`add_mirror\` creates a separate reflected body and keeps its source.
 - \`add_shell\` requires one or more explicitly referenced opening faces.
 - \`add_solid_offset\` uses a positive outward distance and may still be refused by exact kernel topology limits.
+- \`add_datum_plane\` creates a named reference plane that later operations reuse: an \`offset\` plane a signed distance along a source plane's normal (positive follows the source normal), or a \`midplane\` halfway between two parallel sources. A source is a principal plane (XY/XZ/YZ with an offset) or a datum — a datum-plane featureId from the digest or the \`$localId\` of an earlier \`add_datum_plane\`. Give it a \`localId\` when anything later uses it. Fill only the fields its kind uses and send null for the rest. Drive the offset with a parameter when the user names the distance.
+- \`add_datum_sketch\` sketches on a datum plane, in the plane's own 2D coordinates, exactly like \`add_sketch\`; a later \`add_extrude\` extrudes it along the datum normal. \`add_datum_mirror\` creates a separate reflected body across a datum plane and keeps its source. \`add_datum_split\` cuts a body in two at a datum plane and replaces it: \`localId\` names the half the datum normal points toward, \`secondLocalId\` the other; the plane must cross the body through flat faces. Use these instead of repeating plane numbers when several features share one plane.
 
 Rollout-controlled operation fields (the operations themselves stay available either way). Enabled: ${enabledProperties.length > 0 ? enabledProperties.map((field) => `\`${field}\``).join(', ') : 'none'}. Disabled: ${disabledProperties.length > 0 ? disabledProperties.map((field) => `\`${field}\``).join(', ') : 'none'}.
 
@@ -995,6 +1039,7 @@ export async function streamAssistantProposal(
   safetyIdentifier?: string,
   runtime?: AssistantRuntimeConfig
 ): Promise<Response> {
+  env = assistantEnvForClient(env, input.operations);
   const provider = runtime?.provider ?? providerFor(env);
   const model = runtime?.model ?? modelFor(env, provider);
   const requestId = crypto.randomUUID();

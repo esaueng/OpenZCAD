@@ -192,7 +192,10 @@ export async function cancelDesktopSignIn(): Promise<void> {
 }
 
 function contentTypeFor(name: string): string {
-  return name.toLowerCase().endsWith('.stl') ? 'model/stl' : 'model/step';
+  const lower = name.toLowerCase();
+  if (lower.endsWith('.stl')) return 'model/stl';
+  if (lower.endsWith('.dxf')) return 'image/vnd.dxf';
+  return 'model/step';
 }
 
 export function nativeCadFile(value: NativeCadFile): File {

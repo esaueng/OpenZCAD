@@ -1,6 +1,7 @@
 /**
- * Pure logic behind the sketch rail's modify tools — fillet, chamfer, and
- * offset. What each tool needs picked, which picks it refuses and why, and
+ * Pure logic behind the sketch rail's modify tools — fillet, chamfer and
+ * offset on the kernel's 2D operations, plus the app-side Trim, Mirror and
+ * patterns in `./modify`. What each tool needs picked, which picks it refuses and why, and
  * how a kernel answer becomes the one transaction that replaces the geometry
  * and re-states what the solver knows about it.
  *
@@ -17,6 +18,18 @@ import type {
   SketchPlanarOperation,
   SketchPlanarResult
 } from '@openzcad/kernel-adapter/exact';
+import type { SketchEditToolKind } from '../interaction/machine';
+import {
+  planSketchCircularPattern,
+  planSketchLinearPattern,
+  planSketchMirror,
+  planSketchTrim,
+  resolvePatternPivot,
+  settleOptionalRelations,
+  type Point2,
+  type SketchModifyPlan,
+  type SketchRankProbe
+} from './modify';
 import {
   createId,
   toEntityId,
@@ -30,8 +43,10 @@ import {
   type SketchPointRef
 } from '@openzcad/shared';
 
-/** Modify tools exposed by the sketch rail. */
-export type SketchEditToolKind = 'fillet' | 'chamfer' | 'offset';
+export type { SketchEditToolKind };
+
+/** What a keypad step measures; a count is a plain whole number. */
+export type SketchEditValueUnit = 'length' | 'angle' | 'count';
 
 export interface SketchEditToolSpec {
   kind: SketchEditToolKind;
@@ -40,8 +55,8 @@ export interface SketchEditToolSpec {
   picks: 1 | 2;
   /** Instruction shown while the tool is armed. */
   hint: string;
-  /** What the keypad asks for once the picks are in. */
-  valueLabel: string;
+  /** What the keypad asks for once the picks are in (kernel tools). */
+  valueLabel?: string;
 }
 
 export const SKETCH_EDIT_TOOL_SPECS: readonly SketchEditToolSpec[] = [
@@ -65,8 +80,39 @@ export const SKETCH_EDIT_TOOL_SPECS: readonly SketchEditToolSpec[] = [
     picks: 1,
     hint: 'Click one line of a closed loop, then enter the distance.',
     valueLabel: 'Offset distance'
+  },
+  {
+    kind: 'trim',
+    label: 'Trim',
+    picks: 1,
+    hint: 'Click the part of a line, arc or circle to remove. It is cut back to the nearest crossings; Escape finishes.'
+  },
+  {
+    kind: 'mirror',
+    label: 'Mirror',
+    picks: 2,
+    hint: 'Click a line, arc or circle, then the line to mirror it about.'
+  },
+  {
+    kind: 'linear-pattern',
+    label: 'Linear pattern',
+    picks: 2,
+    hint: 'Click the entity to repeat, then a line for the direction. Then enter the spacing and the count.'
+  },
+  {
+    kind: 'circular-pattern',
+    label: 'Circular pattern',
+    picks: 2,
+    hint: 'Click the entity to repeat, then a circle or arc (or snap to a line end) for the pivot. Then enter the count and the angle.'
   }
 ] as const;
+
+/** The modify tools that run on the kernel's 2D operations. */
+function kernelTool(
+  kind: SketchEditToolKind
+): kind is 'fillet' | 'chamfer' | 'offset' {
+  return kind === 'fillet' || kind === 'chamfer' || kind === 'offset';
+}
 
 export function sketchEditToolSpec(
   kind: SketchEditToolKind
@@ -127,13 +173,23 @@ export function refuseEditPick(
   sketch: SketchNode,
   kind: SketchEditToolKind,
   existing: readonly string[],
-  objectId: string
+  objectId: string,
+  pivotSnapped = false
 ): string | null {
   const spec = sketchEditToolSpec(kind);
   if (existing.length >= spec.picks) {
     return `${spec.label} already has all of its picks.`;
   }
-  if (existing.includes(objectId)) {
+  // A circular pattern may turn an entity about its own snapped end, and a
+  // line may run a linear pattern along itself.
+  if (
+    existing.includes(objectId) &&
+    !(
+      existing.length === 1 &&
+      ((kind === 'circular-pattern' && pivotSnapped) ||
+        kind === 'linear-pattern')
+    )
+  ) {
     return 'That entity is already part of this operation.';
   }
   const data = sketchObjectData(document, sketch, objectId);
@@ -143,6 +199,18 @@ export function refuseEditPick(
   const composite = COMPOSITE_REFUSALS[data.objectKind];
   if (composite) {
     return composite;
+  }
+  if (!kernelTool(kind)) {
+    if (
+      existing.length === 1 &&
+      (kind === 'mirror' || kind === 'linear-pattern') &&
+      data.objectKind !== 'line'
+    ) {
+      return kind === 'mirror'
+        ? 'Mirror reflects about a line. Pick a line as the mirror.'
+        : 'A linear pattern runs along a line. Pick a line for its direction.';
+    }
+    return null;
   }
   if (data.objectKind === 'line') {
     return null;
@@ -686,6 +754,22 @@ export function sketchOffsetCommands(
   return commands;
 }
 
+/** One value a finished pick sequence still needs from the keypad. */
+export interface SketchEditValueStep {
+  label: string;
+  unitKind: SketchEditValueUnit;
+  initial: number;
+  message: string;
+}
+
+/** Where the click landed, for the tools that need more than an entity. */
+export interface SketchEditPickContext {
+  /** The click on the sketch plane, unsnapped. Trim cuts the segment here. */
+  at?: Point2 | null;
+  /** The named point the click snapped to, when it had one. */
+  snapPoint?: { objectId: string; point: 'start' | 'end' | 'center' } | null;
+}
+
 /**
  * What one pick against an armed modify tool means, in the pieces the app has
  * to act on. Keeping the decision here rather than in `App` keeps the tools
@@ -699,18 +783,135 @@ export type SketchEditPickOutcome =
   /** The pick is accepted and the tool wants more. */
   | { status: 'pick'; message: string }
   /** The picks are complete; ask for the value, prefilled with `initial`. */
-  | {
-      status: 'value';
-      label: string;
-      initial: number;
-      message: string;
-    };
+  | ({ status: 'value'; picks: string[] } & SketchEditValueStep)
+  /** The picks are complete and the tool needs no value: run it now. */
+  | { status: 'run'; picks: string[] };
+
+function lineLength(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  objectId: string,
+  resolve: ResolveParam
+): number | null {
+  const data = sketchObjectData(document, sketch, objectId);
+  const ends = data ? lineEnds(data, resolve) : null;
+  return ends
+    ? Math.hypot(ends.end.x - ends.start.x, ends.end.y - ends.start.y)
+    : null;
+}
+
+function roundPrefill(value: number): number {
+  return Math.max(Math.round(value * 1000) / 1000, 0.001);
+}
 
 /**
- * Validate one pick and say what it completes. The geometry precondition is
- * checked here, before the value is asked for, so a corner that does not exist
- * or a loop that is not closed is refused at the pick rather than after the
- * user has typed a number.
+ * The keypad steps a finished pick sequence asks for, in order, or why the
+ * picks cannot be completed. The geometry precondition is checked here, so a
+ * corner that does not exist or a loop that is not closed is refused before
+ * the user types anything.
+ */
+export function sketchEditValueSteps(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  kind: SketchEditToolKind,
+  picks: readonly string[],
+  resolve: ResolveParam
+): SketchEditValueStep[] | { error: string } {
+  const spec = sketchEditToolSpec(kind);
+  switch (kind) {
+    case 'trim':
+    case 'mirror':
+      return [];
+    case 'linear-pattern': {
+      const length = lineLength(document, sketch, picks[1]!, resolve);
+      if (length === null || length === 0) {
+        return {
+          error: 'The direction line has a dimension that does not evaluate.'
+        };
+      }
+      return [
+        {
+          label: 'Pattern spacing',
+          unitKind: 'length',
+          initial: roundPrefill(length),
+          message: `${spec.label}: enter the spacing along the line, start to end.`
+        },
+        {
+          label: 'Pattern count',
+          unitKind: 'count',
+          initial: 3,
+          message: `${spec.label}: enter how many instances, the source included.`
+        }
+      ];
+    }
+    case 'circular-pattern': {
+      const pivot = resolvePatternPivot(document, sketch, picks[1]!, resolve);
+      if ('error' in pivot) {
+        return { error: pivot.error };
+      }
+      return [
+        {
+          label: 'Pattern count',
+          unitKind: 'count',
+          initial: 6,
+          message: `${spec.label}: enter how many instances, the source included.`
+        },
+        {
+          label: 'Pattern angle',
+          unitKind: 'angle',
+          initial: 360,
+          message: `${spec.label}: enter the total angle. 360° spaces them evenly.`
+        }
+      ];
+    }
+    case 'offset': {
+      const loop = resolveSketchLoop(document, sketch, picks[0]!, resolve);
+      if ('error' in loop) {
+        return { error: loop.error };
+      }
+      return [
+        {
+          label: spec.valueLabel!,
+          unitKind: 'length',
+          initial: 1,
+          message: `${spec.label}: enter the distance. Positive is outward.`
+        }
+      ];
+    }
+    default: {
+      const resolved = resolveSketchCorner(
+        document,
+        sketch,
+        picks[0]!,
+        picks[1]!,
+        resolve
+      );
+      if ('error' in resolved) {
+        return { error: resolved.error };
+      }
+      // A quarter of the shorter leg always fits, so the prefill is a value
+      // the tool will accept rather than one it has to refuse.
+      const { corner, farA, farB } = resolved.corner;
+      const shortest = Math.min(
+        Math.hypot(farA.x - corner.x, farA.y - corner.y),
+        Math.hypot(farB.x - corner.x, farB.y - corner.y)
+      );
+      return [
+        {
+          label: spec.valueLabel!,
+          unitKind: 'length',
+          initial: roundPrefill(shortest / 4),
+          message: `${spec.label}: enter the value.`
+        }
+      ];
+    }
+  }
+}
+
+/**
+ * Validate one pick and say what it completes. A circular pattern's pivot
+ * pick carries the snapped point as `objectId#point`, so a line end can be
+ * the pivot.
  */
 export function advanceSketchEditPick(
   document: ProjectDocument,
@@ -718,58 +919,53 @@ export function advanceSketchEditPick(
   kind: SketchEditToolKind,
   existing: readonly string[],
   objectId: string | null,
-  resolve: ResolveParam
+  resolve: ResolveParam,
+  context: SketchEditPickContext = {}
 ): SketchEditPickOutcome {
   const spec = sketchEditToolSpec(kind);
-  if (!objectId) {
+  // The pivot is a point, so the active snap names it, over whatever curve
+  // the click also hit: a centre is not on its drawn curve at all, and a
+  // line crossing a centre would otherwise win the pick.
+  if (
+    kind === 'circular-pattern' &&
+    existing.length === 1 &&
+    context.snapPoint
+  ) {
+    objectId = context.snapPoint.objectId;
+  }
+  if (!objectId || (kind === 'trim' && !context.at)) {
     return { status: 'hint', message: spec.hint };
   }
-  const refusal = refuseEditPick(document, sketch, kind, existing, objectId);
+  const snapped =
+    context.snapPoint?.objectId === objectId ? context.snapPoint.point : null;
+  const pivotPick =
+    kind === 'circular-pattern' && existing.length === 1 && snapped;
+  const refusal = refuseEditPick(
+    document,
+    sketch,
+    kind,
+    existing,
+    objectId,
+    Boolean(pivotPick)
+  );
   if (refusal) {
     return { status: 'refuse', reason: refusal };
   }
-  const picks = [...existing, objectId];
+  const picks = [...existing, pivotPick ? `${objectId}#${snapped}` : objectId];
   if (picks.length < spec.picks) {
     return {
       status: 'pick',
       message: `${spec.label}: pick ${picks.length + 1} of ${spec.picks}.`
     };
   }
-  if (kind === 'offset') {
-    const loop = resolveSketchLoop(document, sketch, picks[0]!, resolve);
-    if ('error' in loop) {
-      return { status: 'refuse', reason: loop.error };
-    }
-    return {
-      status: 'value',
-      label: spec.valueLabel,
-      initial: 1,
-      message: `${spec.label}: enter the distance. Positive is outward.`
-    };
+  const steps = sketchEditValueSteps(document, sketch, kind, picks, resolve);
+  if ('error' in steps) {
+    return { status: 'refuse', reason: steps.error };
   }
-  const resolved = resolveSketchCorner(
-    document,
-    sketch,
-    picks[0]!,
-    picks[1]!,
-    resolve
-  );
-  if ('error' in resolved) {
-    return { status: 'refuse', reason: resolved.error };
-  }
-  // A quarter of the shorter leg always fits, so the prefill is a value the
-  // tool will accept rather than one it has to refuse.
-  const { corner, farA, farB } = resolved.corner;
-  const shortest = Math.min(
-    Math.hypot(farA.x - corner.x, farA.y - corner.y),
-    Math.hypot(farB.x - corner.x, farB.y - corner.y)
-  );
-  return {
-    status: 'value',
-    label: spec.valueLabel,
-    initial: Math.max(Math.round((shortest / 4) * 1000) / 1000, 0.001),
-    message: `${spec.label}: enter the value.`
-  };
+  const first = steps[0];
+  return first
+    ? { status: 'value', picks, ...first }
+    : { status: 'run', picks };
 }
 
 /** A modify tool ready to run, or the reason it cannot. */
@@ -783,11 +979,14 @@ export type SketchEditPlan =
       label: string;
       /** The kernel's answer, turned into the one transaction it becomes. */
       commit(result: SketchPlanarResult): AnyCommand[];
-    };
+    }
+  /** An app-side tool: the commands are already the whole transaction. */
+  | Extract<SketchModifyPlan, { status: 'commands' }>;
 
 /**
- * Turn a finished pick sequence plus its value into the kernel request and the
- * commands its answer becomes.
+ * Turn a finished pick sequence plus its values into the kernel request and
+ * the commands its answer becomes, or straight into commands for the
+ * app-side tools. `values` and `raws` are the keypad steps in order.
  */
 export function planSketchEdit(
   document: ProjectDocument,
@@ -795,17 +994,63 @@ export function planSketchEdit(
   sketchId: SketchId,
   kind: SketchEditToolKind,
   picks: readonly string[],
-  value: number,
+  value: number | readonly number[],
   raw: string,
-  resolve: ResolveParam
+  resolve: ResolveParam,
+  at?: Point2
 ): SketchEditPlan {
   const spec = sketchEditToolSpec(kind);
+  const values = typeof value === 'number' ? [value] : value;
   if (picks.length !== spec.picks) {
     return {
       status: 'refuse',
       reason: `${spec.label} needs ${spec.picks} pick(s).`
     };
   }
+  if (kind === 'trim') {
+    return at
+      ? planSketchTrim(document, sketch, sketchId, picks[0]!, at, resolve)
+      : { status: 'refuse', reason: spec.hint };
+  }
+  if (kind === 'mirror') {
+    return planSketchMirror(
+      document,
+      sketch,
+      sketchId,
+      picks[0]!,
+      picks[1]!,
+      resolve
+    );
+  }
+  if (kind === 'linear-pattern') {
+    return planSketchLinearPattern(
+      document,
+      sketch,
+      sketchId,
+      picks[0]!,
+      picks[1]!,
+      values[0]!,
+      values[1]!,
+      resolve
+    );
+  }
+  if (kind === 'circular-pattern') {
+    const pivot = resolvePatternPivot(document, sketch, picks[1]!, resolve);
+    if ('error' in pivot) {
+      return { status: 'refuse', reason: pivot.error };
+    }
+    return planSketchCircularPattern(
+      document,
+      sketch,
+      sketchId,
+      picks[0]!,
+      pivot.pivot,
+      values[0]!,
+      values[1]!,
+      resolve
+    );
+  }
+  const amount = values[0]!;
   if (kind === 'offset') {
     const loop = resolveSketchLoop(document, sketch, picks[0]!, resolve);
     if ('error' in loop) {
@@ -817,7 +1062,7 @@ export function planSketchEdit(
       operation: {
         kind: 'offset',
         loop: loop.loop.points,
-        distance: value,
+        distance: amount,
         join: 'arc'
       },
       commit: (result) => {
@@ -844,7 +1089,7 @@ export function planSketchEdit(
     return {
       status: 'operation',
       label: spec.label,
-      operation: { kind: 'chamfer', corner, distance: value },
+      operation: { kind: 'chamfer', corner, distance: amount },
       commit: (result) => {
         if (result.kind !== 'chamfer') {
           throw new Error('The kernel answered a different operation.');
@@ -861,11 +1106,11 @@ export function planSketchEdit(
     };
   }
   // An expression stays parametric in the radius it drives.
-  const storedRadius: ParamValue = Number.isFinite(Number(raw)) ? value : raw;
+  const storedRadius: ParamValue = Number.isFinite(Number(raw)) ? amount : raw;
   return {
     status: 'operation',
     label: spec.label,
-    operation: { kind: 'fillet', corner, radius: value },
+    operation: { kind: 'fillet', corner, radius: amount },
     commit: (result) => {
       if (result.kind !== 'fillet') {
         throw new Error('The kernel answered a different operation.');
@@ -881,6 +1126,12 @@ export function planSketchEdit(
       );
     }
   };
+}
+
+/** The keypad steps already answered for a multi-value tool. */
+export interface SketchEditAnswers {
+  values: number[];
+  raws: string[];
 }
 
 /**
@@ -899,14 +1150,25 @@ export interface SketchEditHost {
   resolve: ResolveParam;
   /** Take one more pick for the armed tool. */
   addPick(objectId: string): void;
-  /** The picks are in: ask for the value and remember the sequence. */
+  /**
+   * The picks are in: ask for the next value and remember the sequence and
+   * the steps already answered. Disarms the tool.
+   */
   askValue(
     kind: SketchEditToolKind,
     picks: string[],
     label: string,
-    initial: string
+    initial: string,
+    step?: { unitKind: SketchEditValueUnit } & SketchEditAnswers
   ): void;
+  /** Put the armed tool down without asking for anything. */
+  disarm(): void;
   runOperation(operation: SketchPlanarOperation): Promise<SketchPlanarResult>;
+  /** Solve a prospective document's sketch; judges optional relations. */
+  solveSketch(
+    document: ProjectDocument,
+    sketchId: SketchId
+  ): Promise<SketchRankProbe>;
   /** Apply the commands as one undoable transaction; false if it was dropped. */
   commit(
     sketchId: SketchId,
@@ -922,7 +1184,8 @@ export function advanceSketchEdit(
   document: ProjectDocument,
   sketch: SketchNode,
   pending: { kind: SketchEditToolKind; picks: string[] },
-  objectId: string | null
+  objectId: string | null,
+  context: SketchEditPickContext = {}
 ): void {
   const outcome = advanceSketchEditPick(
     document,
@@ -930,7 +1193,8 @@ export function advanceSketchEdit(
     pending.kind,
     pending.picks,
     objectId,
-    host.resolve
+    host.resolve,
+    context
   );
   if (outcome.status === 'refuse') {
     host.setStatus(outcome.reason);
@@ -945,16 +1209,40 @@ export function advanceSketchEdit(
     host.setStatus(outcome.message);
     return;
   }
+  if (outcome.status === 'run') {
+    // Trim stays armed: each click is its own trim, and Escape puts it
+    // down. Mirror is one operation, like the kernel tools.
+    if (pending.kind !== 'trim') {
+      host.disarm();
+    }
+    void runSketchEdit(
+      host,
+      document,
+      sketch,
+      pending.kind,
+      outcome.picks,
+      0,
+      '',
+      undefined,
+      context.at ?? undefined
+    );
+    return;
+  }
   host.askValue(
     pending.kind,
-    [...pending.picks, objectId!],
+    outcome.picks,
     outcome.label,
-    String(outcome.initial)
+    String(outcome.initial),
+    { unitKind: outcome.unitKind, values: [], raws: [] }
   );
   host.setStatus(outcome.message);
 }
 
-/** Run one finished modify tool: ask the kernel, commit its answer. */
+/**
+ * Run one finished modify tool: ask for the next value if the tool has more
+ * steps, else ask the kernel (for the kernel tools) and commit the answer as
+ * one transaction.
+ */
 export async function runSketchEdit(
   host: SketchEditHost,
   document: ProjectDocument,
@@ -962,17 +1250,43 @@ export async function runSketchEdit(
   kind: SketchEditToolKind,
   picks: readonly string[],
   value: number,
-  raw: string
+  raw: string,
+  earlier?: Partial<SketchEditAnswers>,
+  at?: Point2
 ): Promise<void> {
+  const steps = sketchEditValueSteps(
+    document,
+    sketch,
+    kind,
+    picks,
+    host.resolve
+  );
+  if ('error' in steps) {
+    host.setStatus(steps.error);
+    return;
+  }
+  const values = steps.length === 0 ? [] : [...(earlier?.values ?? []), value];
+  const raws = steps.length === 0 ? [] : [...(earlier?.raws ?? []), raw];
+  const next = steps[values.length];
+  if (next) {
+    host.askValue(kind, [...picks], next.label, String(next.initial), {
+      unitKind: next.unitKind,
+      values,
+      raws
+    });
+    host.setStatus(next.message);
+    return;
+  }
   const plan = planSketchEdit(
     document,
     sketch,
     sketch.sketchId,
     kind,
     picks,
-    value,
-    raw,
-    host.resolve
+    values,
+    raws[0] ?? raw,
+    host.resolve,
+    at
   );
   if (plan.status === 'refuse') {
     host.setStatus(plan.reason);
@@ -980,8 +1294,21 @@ export async function runSketchEdit(
   }
   host.setBusy(true);
   host.setError(null);
-  host.setStatus(`Building the ${plan.label.toLowerCase()}\u2026`);
+  host.setStatus(`Building the ${plan.label.toLowerCase()}…`);
   try {
+    if (plan.status === 'commands') {
+      const commands = await settleOptionalRelations(
+        document,
+        sketch.sketchId,
+        plan.commands,
+        plan.optional ?? [],
+        host.solveSketch
+      );
+      if (await host.commit(sketch.sketchId, commands, plan.label)) {
+        host.setStatus(plan.message);
+      }
+      return;
+    }
     const result = await host.runOperation(plan.operation);
     if (await host.commit(sketch.sketchId, plan.commit(result), plan.label)) {
       host.setStatus(`${plan.label} applied.`);

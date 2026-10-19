@@ -249,6 +249,33 @@
   line-height: 1.4;
 }
 
+/* In the column the launch card is two rows — name and units side by side,
+   then Create — so a once-a-session action stops taking a third of it. The
+   fields keep their accessible names; the labels and hint step aside. */
+@media (min-width: 901px) {
+  .start-launch-form {
+    grid-template-columns: minmax(0, 1fr) max-content;
+    column-gap: 6px;
+  }
+
+  .start-launch-form h2,
+  .start-field-name,
+  .start-launch-form .start-launch-error {
+    grid-column: 1 / -1;
+  }
+
+  .start-launch-submit {
+    margin-top: 0;
+    padding-inline: 9px;
+    white-space: nowrap;
+  }
+
+  .start-launch-form .start-field-label,
+  .start-launch-hint {
+    display: none;
+  }
+}
+
 /* ── Column: shelves ─────────────────────────────────────── */
 
 .start-library {
@@ -563,15 +590,121 @@
   gap: var(--sp-3);
 }
 
-/* Title, shelf tabs and search on one line: the parts you own are the page,
-   so the controls that narrow them stay beside their heading rather than on
-   a second row that pushes the grid down. */
+/* Title, filters, order, search and layout on one ruled line: the parts you
+   own are the page, so the controls that narrow them stay beside their
+   heading rather than on a second row that pushes the grid down. */
 .start-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--sp-3) var(--sp-4);
-  min-height: 32px;
+  gap: var(--sp-2) var(--sp-5);
+  min-height: 40px;
+  border-bottom: var(--border-thin);
+}
+
+/* Text tabs on the toolbar's rule rather than a row of pills: the underline
+   is the selection, the count says what each one holds. */
+.start-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-self: stretch;
+  gap: 0 var(--sp-4);
+}
+
+.start-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  margin-bottom: -1px;
+  padding: 2px 1px 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+}
+
+.start-filter:hover {
+  color: var(--color-text);
+}
+
+.start-filter.is-active {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent);
+}
+
+.start-filter-count {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
+}
+
+.start-filter.is-attention .start-filter-count {
+  color: var(--color-warning);
+}
+
+.start-toolbar-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+  min-width: 0;
+}
+
+.start-sort select {
+  min-height: 30px;
+  padding-block: 0;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  background-color: transparent;
+  border-color: transparent;
+}
+
+.start-sort select:hover {
+  border-color: var(--color-border);
+}
+
+.start-layout {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.start-layout-button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--color-text-subtle);
+  border-radius: var(--radius-md);
+}
+
+.start-layout-button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.start-layout-button[aria-pressed='true'] {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+/* Pinned parts head the shelf as their own labelled group. */
+.start-shelf-group {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-regular);
+}
+
+.start-shelf-group span {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
 }
 
 .start-toolbar-title {
@@ -603,8 +736,7 @@
   position: relative;
   display: flex;
   align-items: center;
-  margin-left: auto;
-  width: min(260px, 100%);
+  width: min(220px, 100%);
 }
 
 .start-search > svg {
@@ -876,16 +1008,48 @@
  * Sits over the preview rather than in the grid flow, so a part that is only on
  * this device is marked without the thumbnail being resized around the mark.
  */
-.start-tile-badge {
+/* The part's states, over the top-left of its preview in the grid and as the
+   Status column in the list. Plain labels for anything that needs a decision
+   (a divergence, a failed save, a recovery copy); an icon for ordinary ones. */
+.start-tile-open {
+  position: relative;
+}
+
+.start-tile-flags {
   position: absolute;
   top: 6px;
   left: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: calc(100% - 96px);
+  pointer-events: none;
+}
+
+.start-tile-flags:empty {
+  display: none;
+}
+
+.start-tile-badge {
   display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 3px;
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-sm);
   color: var(--color-text-subtle);
+}
+
+.start-tile-badge-text {
+  padding-right: 2px;
+  font-size: var(--fs-mini);
+  line-height: 12px;
+  white-space: nowrap;
+}
+
+.start-tile-badge.is-recovery {
+  color: var(--color-text-muted);
 }
 
 /* The thumbnail's own svg rule fills the tile; the badge icon must not. */
@@ -954,6 +1118,194 @@
 .start-tile-purge {
   color: var(--color-warning);
   font-size: var(--fs-xs);
+}
+
+/* An original's recovery copies, one press from being shown beside it. */
+.start-tile-copies {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 var(--sp-3);
+  color: var(--color-accent);
+  font-size: var(--fs-xs);
+  text-align: left;
+  border-top: var(--border-thin);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+
+.start-tile-copies:hover {
+  background: var(--color-accent-dim);
+}
+
+/* ── List layout ─────────────────────────────────────────── */
+
+/* The same tiles, laid out as rows: the body and its meta dissolve into the
+   row's columns, so every action, menu and reorder handle keeps working. */
+.start-list-head,
+.start-tile-grid.is-list .start-tile-open {
+  grid-template-columns: 52px minmax(0, 1fr) 170px 160px 56px 88px;
+}
+
+.start-list-head {
+  display: grid;
+  gap: var(--sp-3);
+  margin-bottom: calc(4px - var(--sp-3));
+  padding: 0 var(--sp-3);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.start-list-head span:first-child {
+  grid-column: 2;
+}
+
+.start-tile-grid.is-list {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+}
+
+.start-tile-grid.is-list .start-tile {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.start-tile-grid.is-list .start-tile + .start-tile {
+  border-top: var(--border-thin);
+}
+
+.start-tile-grid.is-list .start-tile-project.is-pinned {
+  border-color: var(--color-border);
+}
+
+.start-tile-grid.is-list
+  .start-tile-project:has(
+    > .start-tile-open:not(.is-static):hover:not(:disabled)
+  ) {
+  background: var(--color-surface-hover);
+}
+
+.start-tile-grid.is-list .start-tile-open {
+  grid-template-rows: none;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 6px var(--sp-3);
+}
+
+.start-tile-grid.is-list .start-tile-body,
+.start-tile-grid.is-list .start-tile-meta {
+  display: contents;
+}
+
+.start-tile-grid.is-list .start-tile-thumb {
+  width: 52px;
+  padding: 2px;
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+}
+
+.start-tile-grid.is-list .start-tile-thumb-empty {
+  display: none;
+}
+
+.start-tile-grid.is-list .start-tile-name {
+  order: 1;
+}
+
+.start-tile-grid.is-list .start-tile-flags {
+  position: static;
+  order: 2;
+  max-width: none;
+}
+
+/* An empty Status cell still holds its column. */
+.start-tile-grid.is-list .start-tile-flags:empty {
+  display: flex;
+}
+
+.start-tile-grid.is-list .start-tile-meta time {
+  order: 3;
+}
+
+.start-tile-grid.is-list .start-tile-rev {
+  order: 4;
+}
+
+.start-tile-grid.is-list .start-tile-purge {
+  order: 5;
+  grid-column: 2 / -1;
+}
+
+/* Centred on the part's own row, not on a row that carries its copies. */
+.start-tile-grid.is-list .start-tile-actions {
+  top: 22px;
+  right: var(--sp-3);
+  transform: translateY(-50%);
+}
+
+.start-tile-grid.is-list .start-tile-copies {
+  padding-left: calc(52px + var(--sp-3) * 2);
+  border-radius: 0;
+}
+
+/* The menu carries Restore and Delete forever; a row has no footer. */
+.start-tile-grid.is-list .start-tile-footer {
+  display: none;
+}
+
+/* Once the toolbar wraps, the rule belongs under the tabs, not the tools. */
+@media (max-width: 900px) {
+  .start-toolbar {
+    border-bottom: 0;
+  }
+
+  .start-filters {
+    flex-basis: 100%;
+    border-bottom: var(--border-thin);
+  }
+
+  .start-toolbar-tools {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .start-toolbar-tools .start-search {
+    flex: 1;
+    width: auto;
+  }
+}
+
+@media (max-width: 680px) {
+  .start-list-head {
+    display: none;
+  }
+
+  .start-tile-grid.is-list .start-tile-open {
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+    /* Touch screens keep all three row actions in sight. */
+    padding-right: 112px;
+  }
+
+  .start-tile-grid.is-list .start-tile-thumb {
+    grid-row: span 2;
+    width: 44px;
+  }
+
+  .start-tile-grid.is-list .start-tile-flags {
+    grid-column: 2 / -1;
+    order: 5;
+  }
+
+  .start-tile-grid.is-list .start-tile-rev {
+    display: none;
+  }
 }
 
 /* ── Tile actions ────────────────────────────────────────── */
@@ -1073,29 +1425,57 @@
 
 /* ── Cloud card: update notice ───────────────────────────── */
 
-/* A newer build is out: said in the accent, with the action beside it, as a
-   pill above the cloud card. */
+/* A newer build is out: one quiet line above the cloud card — a dot, the
+   news, and a text action. A failed download says more, so its sentence
+   wraps and the dot turns to the warning colour. */
 .start-update {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--sp-2);
-  min-height: 26px;
-  padding: 3px 3px 3px 10px;
+  min-height: 28px;
+  padding-left: 10px;
   color: var(--color-text);
-  font-size: var(--fs-xs);
-  background: var(--color-accent-dim);
-  border: 1px solid var(--color-accent-border);
-  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+}
+
+.start-update-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+
+.start-update.is-failure .start-update-dot {
+  align-self: flex-start;
+  margin-top: 6px;
+  background: var(--color-warning);
+}
+
+.start-update-text {
+  flex: 1;
+  min-width: 0;
 }
 
 .start-update button {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
   min-height: 0;
-  height: 24px;
+  height: 28px;
   padding: 0 8px;
-  font-size: var(--fs-xs);
+  color: var(--color-accent);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  background: transparent;
+  border: 0;
   border-radius: var(--radius-sm);
+}
+
+.start-update button:hover {
+  background: var(--color-accent-dim);
 }
 
 /* Discovery keeps the library layout; unknown data is never an empty shelf

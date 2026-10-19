@@ -12,6 +12,28 @@
   overflow: hidden;
 }
 
+/* The viewport owns the whole stage, including while its module downloads. */
+.viewport-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.workspace-loading-ring {
+  display: block;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+}
+
 .viewer-shell canvas {
   display: block;
   width: 100% !important;
@@ -289,6 +311,47 @@
   border-radius: var(--radius-sm);
   font-size: var(--fs-sm);
   white-space: nowrap;
+}
+
+/* Saved views run the width of the tile grid, under the standard views. */
+.saved-views {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 2px;
+  margin-top: 2px;
+  padding-top: 4px;
+  border-top: var(--border-thin);
+}
+
+.saved-views-row {
+  display: flex;
+  gap: 2px;
+}
+
+.saved-views .saved-views-apply {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
+.saved-views .saved-views-delete,
+.saved-views .saved-views-save {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.saved-views .saved-views-delete {
+  flex: 0 0 26px;
+  padding: 0;
+}
+
+.saved-views .saved-views-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* A view's key rides its tile, after the name. */

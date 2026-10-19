@@ -56,6 +56,18 @@ describe('evaluateKeypadInput', () => {
     expect(evaluateKeypadInput('2', 'mm', 'cm', scope).value).toBeCloseTo(0.2);
   });
 
+  it('takes a count as a plain number and refuses units on it', () => {
+    expect(evaluateKeypadInput('6', 'count', 'mm', scope).value).toBe(6);
+    expect(evaluateKeypadInput('w / 5', 'count', 'mm', scope).value).toBe(6);
+    expect(evaluateKeypadInput('6 deg', 'count', 'mm', scope).ok).toBe(false);
+    expect(evaluateKeypadInput('6 mm', 'count', 'mm', scope).ok).toBe(false);
+    // Radial notation is not a count: no prefix stripping, no halving.
+    expect(evaluateKeypadInput('Ø6', 'count', 'mm', scope).ok).toBe(false);
+    expect(
+      evaluateKeypadInput('6', 'count', 'mm', scope, 'diameter').value
+    ).toBe(6);
+  });
+
   it('passes degrees through untouched', () => {
     expect(evaluateKeypadInput('45', 'deg', 'mm', scope).value).toBe(45);
   });

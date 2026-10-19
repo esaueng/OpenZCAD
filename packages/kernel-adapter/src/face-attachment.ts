@@ -53,6 +53,8 @@ export interface ResolveFaceAttachmentInput {
   readonly candidates: readonly FaceAttachmentCandidate[];
   readonly snapshot: FaceAttachmentSnapshot;
   readonly sketchName: string;
+  /** What attaches, for messages: a sketch unless an R01 datum says otherwise. */
+  readonly ownerKind?: 'Sketch' | 'Datum plane';
   readonly sourceFeatureName: string;
 }
 
@@ -94,7 +96,7 @@ function failure(
   const source = named(input.sourceFeatureName, '<unnamed source feature>');
   return new FaceAttachmentResolutionError(
     reason,
-    `Sketch "${sketch}" cannot attach to source feature "${source}": ${detail} ${snapshotDiagnostic(input.snapshot)}`
+    `${input.ownerKind ?? 'Sketch'} "${sketch}" cannot attach to source feature "${source}": ${detail} ${snapshotDiagnostic(input.snapshot)}`
   );
 }
 

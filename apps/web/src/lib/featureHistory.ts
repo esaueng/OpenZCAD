@@ -1,10 +1,13 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
+import { isDatumPlaneRef } from '@openzcad/shared';
 import type {
   BodyId,
+  DatumPlaneSource,
   FeatureId,
   FeatureNode,
   ProjectDocument,
-  SketchId
+  SketchId,
+  SketchPlaneRef
 } from '@openzcad/shared';
 
 /** All result bodies, including in-place edits and the second half of a split. */
@@ -27,12 +30,13 @@ export function featureResultBodyIds(feature: FeatureNode): BodyId[] {
 export function featureHistory(document: ProjectDocument) {
   const features = listFeaturesInOrder(document);
   const parents = new Map<FeatureId, Set<FeatureId>>();
-  const missing = new Map<FeatureId, Set<'body' | 'sketch'>>();
+  const missing = new Map<FeatureId, Set<'body' | 'sketch' | 'datum'>>();
   const bodyOwners = new Map<BodyId, FeatureId>();
   const sketchOwners = new Map<SketchId, FeatureId>();
+  const datumOwners = new Set<FeatureId>();
   for (const feature of features) {
     const inputs = new Set<FeatureId>();
-    const missingInputs = new Set<'body' | 'sketch'>();
+    const missingInputs = new Set<'body' | 'sketch' | 'datum'>();
     const body = (id: BodyId | undefined) => {
       const owner = id && bodyOwners.get(id);
       if (owner) inputs.add(owner);
@@ -43,14 +47,30 @@ export function featureHistory(document: ProjectDocument) {
       if (owner) inputs.add(owner);
       else missingInputs.add('sketch');
     };
+    // A datum is a feature: depending on one is depending on its feature.
+    const datum = (id: FeatureId) => {
+      if (datumOwners.has(id)) inputs.add(id);
+      else missingInputs.add('datum');
+    };
+    const planeSource = (source: DatumPlaneSource | SketchPlaneRef) => {
+      if (source.type === 'datum') datum(source.datumFeatureId);
+      else if (source.type === 'face') body(source.bodyId);
+    };
     const data = feature.data;
     switch (data.featureKind) {
       case 'sketch': {
         const plane = findSketch(document, data.sketchId)?.planeRef;
-        if (plane?.type === 'face') body(plane.bodyId);
+        if (plane) planeSource(plane);
         sketchOwners.set(data.sketchId, feature.featureId);
         break;
       }
+      case 'datum-plane':
+        (data.definition.kind === 'offset'
+          ? [data.definition.source]
+          : data.definition.sources
+        ).forEach(planeSource);
+        datumOwners.add(feature.featureId);
+        break;
       case 'extrude':
         sketch(data.sketchId);
         body(data.targetBodyId);
@@ -72,10 +92,13 @@ export function featureHistory(document: ProjectDocument) {
       case 'boolean':
         data.targetBodyIds.forEach(body);
         break;
-      case 'hole':
       case 'split':
-      case 'transform':
       case 'mirror':
+        body(data.targetBodyId);
+        if (isDatumPlaneRef(data.plane)) datum(data.plane.datumFeatureId);
+        break;
+      case 'hole':
+      case 'transform':
       case 'shell':
       case 'solid-offset':
       case 'draft':
@@ -119,4 +142,35 @@ export function featureHistory(document: ProjectDocument) {
     });
   };
   return { features, parents, downstream, missing };
+}
+
+/**
+ * The history steps related to a selection: the selected feature (or every
+ * feature that produced or edited a selected body), everything those steps
+ * were built from, and everything built on them. Order and suppression are
+ * untouched; this only says which rows a "related to selection" view keeps.
+ */
+export function relatedFeatureIds(
+  document: ProjectDocument,
+  selection: { featureId?: FeatureId | null; bodyIds?: readonly string[] }
+): Set<FeatureId> {
+  const { features, parents, downstream } = featureHistory(document);
+  const bodies = new Set(selection.bodyIds ?? []);
+  const seeds = features.filter(
+    (feature) =>
+      feature.featureId === selection.featureId ||
+      featureResultBodyIds(feature).some((id) => bodies.has(id))
+  );
+  const related = new Set<FeatureId>();
+  const ancestors = (id: FeatureId) => {
+    if (related.has(id)) return;
+    related.add(id);
+    for (const parent of parents.get(id) ?? []) ancestors(parent);
+  };
+  for (const seed of seeds) {
+    ancestors(seed.featureId);
+    for (const dependent of downstream(seed.featureId))
+      related.add(dependent.featureId);
+  }
+  return related;
 }

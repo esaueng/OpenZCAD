@@ -4,6 +4,7 @@ import { useState, type ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_APP_SETTINGS, type AppSettings } from '@openzcad/shared';
 import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
+import { SKETCH_EDIT_TOOL_SPECS } from '../lib/sketch/edits';
 import { SketchRelationsRail, SketchToolRail } from './SketchToolRail';
 
 function renderRail(
@@ -314,7 +315,15 @@ describe('SketchToolRail', () => {
   });
 
   it('lights only the armed modify tool, not Select under it', () => {
-    for (const kind of ['fillet', 'chamfer', 'offset'] as const) {
+    for (const kind of [
+      'fillet',
+      'chamfer',
+      'offset',
+      'trim',
+      'mirror',
+      'linear-pattern',
+      'circular-pattern'
+    ] as const) {
       const { unmount } = renderRail({
         // Arming a modify tool parks the machine on Select for its picks.
         tool: 'select',
@@ -324,9 +333,17 @@ describe('SketchToolRail', () => {
       const lit = Array.from(
         rail.querySelectorAll('button[aria-pressed="true"]')
       ).map((button) => button.getAttribute('aria-label'));
-      const label = kind[0]!.toUpperCase() + kind.slice(1);
-      expect(lit).toEqual([label]);
-      expect(rail.querySelectorAll('button.active')).toHaveLength(1);
+      const label = SKETCH_EDIT_TOOL_SPECS.find(
+        (spec) => spec.kind === kind
+      )!.label;
+      // A folded tool lights the fold's toggle while the list is closed.
+      const folded = kind !== 'fillet' && kind !== 'chamfer';
+      expect(lit).toEqual(folded ? [] : [label]);
+      const active = rail.querySelectorAll('button.active');
+      expect(active).toHaveLength(1);
+      expect(active[0]!.getAttribute('aria-label')).toBe(
+        folded ? 'More modify tools' : label
+      );
       unmount();
     }
     // Without one, Select reads as the live tool again.
@@ -536,11 +553,44 @@ describe('SketchToolRail', () => {
     await user.click(armed);
     expect(onEditTool).toHaveBeenLastCalledWith(null);
 
-    for (const label of ['Chamfer', 'Offset']) {
-      expect(
-        screen.getByRole('button', { name: new RegExp(`^${label}$`) })
-      ).toBeEnabled();
-    }
+    expect(screen.getByRole('button', { name: /^Chamfer$/ })).toBeEnabled();
+  });
+
+  it('folds offset, trim, mirror and the patterns into one rail slot', async () => {
+    const user = userEvent.setup();
+    const onEditTool = vi.fn();
+    renderRail({ onEditTool, canConstrain: true });
+    const rail = screen.getByRole('toolbar', { name: 'Sketch tools' });
+    expect(within(rail).queryByRole('button', { name: 'Trim' })).toBeNull();
+    const toggle = within(rail).getByRole('button', {
+      name: 'More modify tools'
+    });
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const group = within(rail).getByRole('group', {
+      name: 'More modify tools'
+    });
+    expect(
+      within(group)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'))
+    ).toEqual([
+      'Offset',
+      'Trim',
+      'Mirror',
+      'Linear pattern',
+      'Circular pattern'
+    ]);
+    await user.click(within(group).getByRole('button', { name: 'Mirror' }));
+    expect(onEditTool).toHaveBeenLastCalledWith(
+      'mirror',
+      'Click a line, arc or circle, then the line to mirror it about.'
+    );
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    // Escape closes the list from inside without reaching the canvas.
+    await user.click(toggle);
+    await user.keyboard('{Escape}');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('marks solver-named constraints as actionable conflicts', async () => {
@@ -646,11 +696,51 @@ describe('SketchRelationsRail', () => {
     const names = Array.from(rail.querySelectorAll('button')).map((button) =>
       button.getAttribute('aria-label')
     );
-    expect(names).toEqual(CONSTRAINT_TOOL_SPECS.map(({ label }) => label));
+    // The point relations fold into one slot, last in the column.
+    const points = ['Symmetric', 'Point on curve', 'Lock', 'Disconnect'];
+    expect(names).toEqual([
+      ...CONSTRAINT_TOOL_SPECS.map(({ label }) => label).filter(
+        (label) => !points.includes(label)
+      ),
+      'Point relations'
+    ]);
     for (const name of names) {
       expect(screen.getByRole('button', { name: name! })).toBeEnabled();
     }
     expect(container.querySelector('.sketch-relation-name')).toBeNull();
+  });
+
+  it('opens the point relations in a flyout and arms one from it', async () => {
+    const user = userEvent.setup();
+    const onConstraintTool = vi.fn();
+    const { rerender, props } = renderRelations({ onConstraintTool });
+    const group = screen.getByRole('button', { name: 'Point relations' });
+    expect(group).toHaveAttribute('aria-expanded', 'false');
+    await user.click(group);
+    const flyout = within(
+      screen.getByRole('group', { name: 'Point relations' })
+    );
+    expect(
+      flyout.getAllByRole('button').map((b) => b.getAttribute('aria-label'))
+    ).toEqual(['Symmetric', 'Point on curve', 'Lock', 'Disconnect']);
+    await user.click(flyout.getByRole('button', { name: 'Lock' }));
+    expect(onConstraintTool).toHaveBeenLastCalledWith('lock');
+    // Arming closes the flyout; the slot reads armed while a point
+    // relation collects its picks.
+    expect(group).toHaveAttribute('aria-expanded', 'false');
+    rerender(
+      <SketchRelationsRail
+        {...props}
+        pendingConstraint={{ kind: 'lock', picks: [] }}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Point relations' })).toHaveClass(
+      'active'
+    );
+    // Escape inside the flyout closes it.
+    await user.click(screen.getByRole('button', { name: 'Point relations' }));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('group', { name: 'Point relations' })).toBeNull();
   });
 
   it('arms a relation and disarms it on a second click', async () => {

@@ -1,9 +1,24 @@
 import type { ParameterPreviewBody } from '../lib/parameterVisualPreview';
-import type { SketchDimensionIdentity } from '@openzcad/shared';
+import type {
+  FeatureId,
+  ProjectDocument,
+  SketchDimensionIdentity
+} from '@openzcad/shared';
 import type { HoleGhost } from '../lib/holeGhost';
 import type { PrimitiveGhost } from '../lib/primitiveGhost';
+import {
+  datumOffsetHandle,
+  datumPlaneDisplays,
+  shiftedDatumFrame
+} from '../lib/datumPlaneDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
-import { useMemo, useRef, type MutableRefObject, type ReactNode } from 'react';
+import {
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type ReactNode
+} from 'react';
 import {
   ModelViewer,
   type BodyAppearancePreview,
@@ -30,9 +45,11 @@ import type {
   SketchOverlay,
   ViewerSettings,
   ViewTarget,
+  ViewRequestTarget,
   WheelDevice
 } from '@openzcad/viewport';
 import { ViewerToolbar } from './ViewerToolbar';
+import type { SavedViewsSectionProps } from './SavedViewsSection';
 import {
   measurementAnnotationsOnScreen,
   sectionOutlineFor,
@@ -128,7 +145,7 @@ interface ViewerShellProps {
   settings: ViewerSettings;
   fitSignal: number;
   autoFrame?: AutoFrameRequest | null;
-  viewRequest: { view: ViewTarget; nonce: number } | null;
+  viewRequest: { view: ViewRequestTarget; nonce: number } | null;
   normalToFaceRequest: NormalToFaceRequest | null;
   units: string;
   editableBodyIds: string[];
@@ -261,8 +278,9 @@ interface ViewerShellProps {
       objectId: string;
       point: 'start' | 'end' | 'center';
     } | null,
-    clickPoint: { x: number; y: number }
-  ): void;
+    clickPoint: { x: number; y: number },
+    planePoint: { x: number; y: number } | null
+  ): boolean | void;
   sketchViews: SketchViewData[];
   selectedProfileIds: string[];
   profileSelectionMode: boolean;
@@ -277,7 +295,28 @@ interface ViewerShellProps {
   holeGhost?: HoleGhost | null;
   /** The open primitive card's solid, drawn before Create. */
   primitiveGhost?: PrimitiveGhost | null;
+  /** The document whose resolved R01 datum planes the viewport draws. */
+  datumDocument?: ProjectDocument | null;
+  /** Datum planes hidden by their eye toggle. */
+  hiddenDatumIds?: ReadonlySet<string>;
+  /** The selected or edited feature, drawn highlighted when it is a datum. */
+  selectedFeatureId?: FeatureId | null;
   onPickPlane(plane: PlaneId): void;
+  onPickDatum?(featureId: string): void;
+  /**
+   * A drag of the selected datum's handle, as a change to its stored offset
+   * (already signed for a reversed datum). The handle arms only when this is
+   * set and no other offset handle is.
+   */
+  onDatumOffsetDrag?(delta: number): boolean;
+  /**
+   * How far the open Plane card's draft moves the selected datum, in its
+   * stored offset (null when it is not a plain change of distance): the
+   * plane and its pin are drawn there until Apply rebuilds the datum.
+   */
+  datumOffsetDraft?: number | null;
+  /** Exact entry for the selected datum's handle: focuses the card's Offset. */
+  onDatumOffsetEntry?(): boolean;
   /** What measuring the hovered target would report; null when measure is off. */
   onMeasurePreview?:
     | ((
@@ -307,6 +346,8 @@ interface ViewerShellProps {
   measuring?: boolean;
   onMeasure?(next: boolean): void;
   onView(view: ViewTarget): void;
+  /** The project's saved views, shown in the Standard views panel. */
+  savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
   sectionRange: { min: number; max: number } | null;
@@ -417,7 +458,14 @@ export function ViewerShell({
   planePickerOffset,
   holeGhost = null,
   primitiveGhost = null,
+  datumDocument = null,
+  hiddenDatumIds,
+  selectedFeatureId = null,
   onPickPlane,
+  onPickDatum,
+  onDatumOffsetDrag,
+  datumOffsetDraft = null,
+  onDatumOffsetEntry,
   onMeasurePreview,
   regionHandle,
   onSelectSketchProfile,
@@ -429,6 +477,7 @@ export function ViewerShell({
   measuring = false,
   onMeasure,
   onView,
+  savedViews,
   onCycleDisplayMode,
   onToggleProjection,
   sectionRange,
@@ -457,6 +506,63 @@ export function ViewerShell({
   /** Kernel section geometry for the resting plane; null while dragging. */
   const exactSection: ExactSectionRegionDisplay[] | null =
     drawnSection.kind === 'exact' ? drawnSection.regions : null;
+  // R01: a selected offset datum gets the same pin face offsets use. It
+  // yields to any armed offset handle, and its target is memoized on the
+  // values it shows so the rig is not rebuilt on every render.
+  const datumHandle =
+    // The pin arms only while the card's draft is this datum with nothing
+    // but its distance changed: after a new source, a Midplane or an
+    // expression, a drag could not show where Apply will put the plane.
+    datumDocument &&
+    onDatumOffsetDrag &&
+    !offsetHandle &&
+    datumOffsetDraft !== null
+      ? datumOffsetHandle(
+          datumDocument,
+          selectedFeatureId,
+          hiddenDatumIds ?? new Set()
+        )
+      : null;
+  // The plane follows its edit: the card's draft Offset moves it (and the
+  // pin) off the built frame, and a drag in progress moves it further, so
+  // what is drawn is always where Apply would put it.
+  const draftShift =
+    datumHandle && datumOffsetDraft !== null
+      ? datumOffsetDraft * datumHandle.sense
+      : 0;
+  const [datumDrag, setDatumDrag] = useState<{
+    featureId: string;
+    distance: number;
+  } | null>(null);
+  const dragShift =
+    datumHandle && datumDrag?.featureId === datumHandle.featureId
+      ? datumDrag.distance
+      : 0;
+  // Every datum gesture starts a fresh pin at zero: the gesture count is
+  // part of the target, so a release (accepted, refused or back at zero)
+  // rebuilds the rig and no gesture carries the last one's value.
+  const [datumGesture, setDatumGesture] = useState(0);
+  const datumHandleKey = datumHandle
+    ? JSON.stringify({ ...datumHandle, draftShift, gesture: datumGesture })
+    : '';
+  const datumOffsetTarget = useMemo<OffsetHandleTarget | null>(() => {
+    if (!datumHandleKey) return null;
+    const handle = JSON.parse(datumHandleKey) as NonNullable<
+      typeof datumHandle
+    > & { draftShift: number };
+    const { normal } = handle;
+    return {
+      bodyId: '',
+      topologyId: '',
+      point: {
+        x: handle.point.x + normal.x * handle.draftShift,
+        y: handle.point.y + normal.y * handle.draftShift,
+        z: handle.point.z + normal.z * handle.draftShift
+      },
+      normal,
+      initialValue: 0
+    };
+  }, [datumHandleKey]);
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
   const sketchGridReadoutRef = useRef<SketchGridReadoutSink | null>(null);
@@ -485,6 +591,7 @@ export function ViewerShell({
       measuring={measuring}
       {...(onMeasure ? { onMeasure } : {})}
       onView={onView}
+      {...(savedViews ? { savedViews } : {})}
       onCycleDisplayMode={onCycleDisplayMode}
       onToggleProjection={onToggleProjection}
       sectionRange={sectionRange}
@@ -569,13 +676,34 @@ export function ViewerShell({
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
         onBoxSelect={onBoxSelect}
-        offsetHandle={offsetHandle}
-        onOffsetPreview={onOffsetPreview}
-        onOffsetCommit={onOffsetCommit}
-        onOffsetCancel={onOffsetCancel}
+        offsetHandle={offsetHandle ?? datumOffsetTarget}
+        onOffsetPreview={
+          datumOffsetTarget && datumHandle
+            ? (distance) =>
+                setDatumDrag({
+                  featureId: datumHandle.featureId,
+                  distance
+                })
+            : onOffsetPreview
+        }
+        onOffsetCommit={(value) => {
+          if (!datumHandle || !onDatumOffsetDrag) return onOffsetCommit(value);
+          setDatumDrag(null);
+          setDatumGesture((gesture) => gesture + 1);
+          return onDatumOffsetDrag(value * datumHandle.sense);
+        }}
+        onOffsetCancel={() => {
+          setDatumDrag(null);
+          setDatumGesture((gesture) => gesture + 1);
+          onOffsetCancel();
+        }}
         offsetPreviewInvalid={offsetPreviewInvalid}
         previewDeferred={previewDeferred}
-        onOpenOffsetKeypad={onOpenOffsetKeypad}
+        onOpenOffsetKeypad={
+          datumOffsetTarget && !offsetHandle
+            ? () => onDatumOffsetEntry?.() ?? false
+            : onOpenOffsetKeypad
+        }
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}
         moveValuesSetterRef={moveValuesSetterRef}
@@ -615,7 +743,27 @@ export function ViewerShell({
         planePickerOffset={planePickerOffset}
         holeGhost={holeGhost}
         primitiveGhost={primitiveGhost}
+        datumPlanes={
+          datumDocument
+            ? datumPlaneDisplays(
+                datumDocument,
+                hiddenDatumIds ?? new Set(),
+                selectedFeatureId
+              ).map((plane) =>
+                plane.featureId === datumHandle?.featureId
+                  ? {
+                      ...plane,
+                      frame: shiftedDatumFrame(
+                        plane.frame,
+                        draftShift + dragShift
+                      )
+                    }
+                  : plane
+              )
+            : []
+        }
         onPickPlane={onPickPlane}
+        onPickDatum={onPickDatum}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
         onSelectSketchProfile={onSelectSketchProfile}

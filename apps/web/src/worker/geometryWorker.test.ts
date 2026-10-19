@@ -120,7 +120,14 @@ describe('geometry worker rebuild coordination', () => {
         type: 'preview-geometry',
         ok: true,
         requestId: 'frame',
-        geometry
+        geometry,
+        // Worker-side durations for drag tracing (faceDragTrace.ts).
+        timings: {
+          queueMs: expect.any(Number) as unknown,
+          kernelMs: expect.any(Number) as unknown,
+          yields: expect.any(Number) as unknown,
+          yieldMs: expect.any(Number) as unknown
+        }
       })
     );
     expect(syncDocument).not.toHaveBeenCalled();
