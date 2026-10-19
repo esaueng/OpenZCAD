@@ -110,6 +110,7 @@ export {
   type ShareSnapshotKeyContext,
   type ShareSnapshotKeyWraps,
   type UnlockMethod,
+  type SealContext,
   type WrapContext,
   type WrapPurpose
 } from './wrap';

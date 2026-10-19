@@ -147,6 +147,30 @@ export type WrapContext =
 
 export type WrapPurpose = WrapContext['purpose'];
 
+/**
+ * The only contexts a key may be sealed to a public key under: the account
+ * key for a device being approved, and a project key for a member. Long-term
+ * private keys never leave their wrap hierarchy this way.
+ */
+export type SealContext =
+  | (Extract<WrapContext, { purpose: 'account-key' }> & {
+      readonly method: 'device-approval';
+    })
+  | Extract<WrapContext, { purpose: 'project-key' }>;
+
+function checkSealContext(context: WrapContext): void {
+  const allowed =
+    context?.purpose === 'project-key' ||
+    (context?.purpose === 'account-key' &&
+      context.method === 'device-approval');
+  if (!allowed) {
+    throw new E2eeError(
+      'invalid-argument',
+      'Only a device-approval account key or a project key may be sealed'
+    );
+  }
+}
+
 type FieldRule = 'string' | 'uint' | readonly string[];
 
 const CONTEXT_FIELDS: Record<WrapPurpose, Record<string, FieldRule>> = {
@@ -500,11 +524,12 @@ async function sealKek(
 export async function sealKeyWith(
   recipientPublicKey: Uint8Array | CryptoKey,
   secret: Uint8Array,
-  context: WrapContext,
+  context: SealContext,
   ephemeral: CryptoKeyPair,
   random: RandomSource
 ): Promise<Bytes> {
   const aadContext = encodeWrapContext(context);
+  checkSealContext(context);
   checkSecretLength(secret, context);
   const recipient = await toEncryptionPublicKey(recipientPublicKey);
   const ephemeralRaw = await exportPublicKey(ephemeral.publicKey);
@@ -533,8 +558,9 @@ export async function sealKeyWith(
 export async function sealKey(
   recipientPublicKey: Uint8Array | CryptoKey,
   secret: Uint8Array,
-  context: WrapContext
+  context: SealContext
 ): Promise<Bytes> {
+  checkSealContext(context);
   const ephemeral = await subtle().generateKey(
     { name: 'ECDH', namedCurve: 'P-256' },
     false,
@@ -558,9 +584,10 @@ export interface SealRecipient {
 export async function openSealedKey(
   recipient: SealRecipient,
   sealed: Uint8Array,
-  context: WrapContext
+  context: SealContext
 ): Promise<Bytes> {
   const aadContext = encodeWrapContext(context);
+  checkSealContext(context);
   readVersion(sealed, SEAL_VERSION_1, 'Sealed key');
   const reader = new ByteReader(sealed, 'Sealed key');
   const version = reader.bytes(1);

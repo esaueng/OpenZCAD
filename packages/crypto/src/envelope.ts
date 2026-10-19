@@ -15,6 +15,7 @@ import {
   DEFAULT_MAX_PLAINTEXT_BYTES,
   compressStream,
   decompressStream,
+  requireCompressionStreams,
   gunzipBytes,
   gzipBytes
 } from './compression';
@@ -1213,6 +1214,9 @@ export function encryptContentBlobStream(
 ): ContentBlobEncryptStream {
   const compression = options.compression ?? 'gzip';
   const declared = options.plaintextLength;
+  // Before `pipeThrough` locks and starts the source: past that point a
+  // setup failure would leave it running with no handle to cancel it.
+  if (compression === 'gzip') requireCompressionStreams();
   let seen = 0;
   const counted = plaintext.pipeThrough(
     new TransformStream<Bytes, Bytes>({

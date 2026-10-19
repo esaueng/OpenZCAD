@@ -174,6 +174,12 @@ UTF-8 string and type 2 a u64.
 | `share-key`              | KW     | projectId, keyEpoch, shareId         | project key; it never encrypts content                                       |
 | `share-version-key`      | KW     | projectId, shareId, versionId        | share key: a share snapshot's version key, for link visitors                 |
 
+Sealing to a public key is limited to two contexts (`SealContext`): the
+account key with method `device-approval`, for a device being approved, and a
+`project-key`, for a member. Any other purpose is refused
+(`invalid-argument`), so long-term private keys never leave their wrap
+hierarchy by seal.
+
 `wrapShareSnapshotKey` wraps a share snapshot's fresh version key twice:
 under the project key for members (`version-key`, kind `share-snapshot`) and
 under the share key for link visitors. Blob keys are not wrapped; they travel

@@ -25,6 +25,7 @@ import {
   sealKey,
   unwrapKey,
   wrapKey,
+  type SealContext,
   type WrapContext
 } from './wrap';
 
@@ -34,6 +35,12 @@ const WRAP_CONTEXT: WrapContext = {
   keyEpoch: 0,
   kind: 'document',
   versionId: '1'
+};
+const SEAL_CONTEXT: SealContext = {
+  purpose: 'project-key',
+  userId: 'u1',
+  projectId: 'p',
+  keyEpoch: 0
 };
 
 type Mutator = (input: Bytes, next: () => number) => Bytes;
@@ -198,7 +205,7 @@ describe('parser fuzzing', () => {
     const sealed = await sealKey(
       recipient.publicKey,
       patternBytes(32),
-      WRAP_CONTEXT
+      SEAL_CONTEXT
     );
     const envelope = await encryptProjectEnvelope(
       EnvelopeKey.generate(),
@@ -226,7 +233,7 @@ describe('parser fuzzing', () => {
         })
       );
       await onlyTypedErrors(() =>
-        openSealedKey(recipient, mutate(seed, sealed), WRAP_CONTEXT)
+        openSealedKey(recipient, mutate(seed, sealed), SEAL_CONTEXT)
       );
       await onlyTypedErrors(() =>
         verifyProjectEnvelopeSignature(

@@ -7,7 +7,7 @@ import { E2eeError } from './errors';
  */
 export const DEFAULT_MAX_PLAINTEXT_BYTES = 128 * 1024 * 1024;
 
-function requireCompressionStreams(): void {
+export function requireCompressionStreams(): void {
   if (
     typeof CompressionStream !== 'function' ||
     typeof DecompressionStream !== 'function'

@@ -911,6 +911,29 @@ describe('content blobs', () => {
     expect(Object.isFrozen(parseEnvelope(envelope).header)).toBe(true);
   });
 
+  it('leaves the source unlocked when gzip is unavailable', () => {
+    let cancelled = false;
+    const source = new ReadableStream<Bytes>({
+      cancel() {
+        cancelled = true;
+      }
+    });
+    vi.stubGlobal('CompressionStream', undefined);
+    try {
+      expect(() =>
+        encryptContentBlobStream(EnvelopeKey.generate(), 'export', source, {
+          compression: 'gzip',
+          plaintextLength: 1
+        })
+      ).toThrow(expect.objectContaining({ code: 'unavailable' }));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    // Nothing locked or started it, so the caller can still cancel it.
+    expect(source.locked).toBe(false);
+    expect(cancelled).toBe(false);
+  });
+
   it('a direct writer call is bounded in bytes and records', async () => {
     const plaintext = patternBytes(64 * (MAX_WRITER_WRITE_RECORDS + 10), 7);
     const writer = await createContentBlobWriter(

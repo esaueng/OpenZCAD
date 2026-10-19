@@ -22,6 +22,7 @@ import {
   unwrapKey,
   wrapKey,
   wrapShareSnapshotKey,
+  type SealContext,
   type WrapContext
 } from './wrap';
 
@@ -528,7 +529,7 @@ describe('sealing to a public key', () => {
     const device = await generateEncryptionKeyPair(false);
     expect(device.privateKey.extractable).toBe(false);
     const accountKey = generateSymmetricKey();
-    const context: WrapContext = {
+    const context: SealContext = {
       purpose: 'account-key',
       userId: 'user-1',
       method: 'device-approval',
@@ -536,6 +537,39 @@ describe('sealing to a public key', () => {
     };
     const sealed = await sealKey(device.publicKey, accountKey, context);
     expect(await openSealedKey(device, sealed, context)).toEqual(accountKey);
+  });
+
+  it('seals only device-approval account keys and project keys', async () => {
+    // Long-term private keys stay inside their wrap hierarchy: a seal under
+    // any other purpose is refused at runtime, typed or not.
+    const member = await generateEncryptionKeyPair();
+    const sealed = await sealKey(member.publicKey, PROJECT_KEY, CONTEXT);
+    for (const context of [
+      {
+        purpose: 'identity-key',
+        userId: 'u',
+        method: 'recovery-key',
+        unlockId: 'r'
+      },
+      { purpose: 'encryption-private-key', userId: 'u', keyId: 'k' },
+      { purpose: 'account-key', userId: 'u', method: 'device', unlockId: 'd' },
+      {
+        purpose: 'version-key',
+        projectId: 'p',
+        keyEpoch: 1,
+        kind: 'document',
+        versionId: 'v'
+      }
+    ] as unknown as SealContext[]) {
+      await rejectsWith(
+        sealKey(member.publicKey, patternBytes(32), context),
+        'invalid-argument'
+      );
+      await rejectsWith(
+        openSealedKey(member, sealed, context),
+        'invalid-argument'
+      );
+    }
   });
 
   it('exports only P-256 public keys', async () => {
