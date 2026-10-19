@@ -952,6 +952,111 @@
   text-align: center;
 }
 
+/* A keymap row: the action label (with its capture prompt or refusal
+   under it) on the left, its Add key / Reset buttons at the right edge. */
+.settings-control-row dd:has(> strong) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: var(--sp-2);
+  row-gap: 2px;
+}
+
+.settings-control-row dd:has(> strong) > small {
+  grid-column: 1;
+}
+
+.settings-control-row dd:has(> strong) > .keymap-actions {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.settings-control-row dd strong {
+  font-weight: var(--fw-regular);
+}
+
+.settings-control-row dd small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  line-height: 1.4;
+}
+
+/* The keymap editor groups carry a command count beside their title. */
+.settings-control-group > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.settings-control-group > header > span {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  white-space: nowrap;
+}
+
+/* The keymap editor: the keyboard groups with each binding removable and a
+   capture button per command. It opens its card, so the card's own border
+   is its top edge. */
+.keymap-editor {
+  min-width: 0;
+}
+
+.keymap-editor-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 10px var(--sp-4);
+  border-bottom: var(--border-thin);
+}
+
+.keymap-editor-bar p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.keymap-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.keymap-chip .icon-button {
+  width: 18px;
+  height: 18px;
+}
+
+.keymap-unbound {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  white-space: nowrap;
+}
+
+.keymap-refusal {
+  color: var(--color-warning);
+}
+
+.keymap-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+}
+
+.keymap-actions button {
+  min-height: 24px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-mini);
+}
+
+.keymap-actions .is-capturing {
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-dim);
+}
+
 .settings-empty {
   width: min(760px, 100%);
   margin: 0 auto;

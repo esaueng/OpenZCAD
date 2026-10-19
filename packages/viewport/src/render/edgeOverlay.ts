@@ -605,6 +605,45 @@ export class BodyEdgeOverlay extends THREE.Group {
     return true;
   }
 
+  /**
+   * Draws the batch with no hover or selection styling — every highlight
+   * tier hidden, the idle edges in their unselected style — until the
+   * returned restore runs. For a still image of the part; the restore puts
+   * back exactly what was there, so nothing retargets or eases.
+   */
+  suspendHighlights(): () => void {
+    const tiers = [
+      this.hoverEdges,
+      this.hoverHiddenEdges,
+      this.selectedEdges,
+      this.selectedHiddenEdges,
+      this.selectedFaceBoundaryEdges,
+      this.selectedFaceBoundaryHiddenEdges
+    ];
+    const visible = tiers.map((line) => line.visible);
+    for (const line of tiers) line.visible = false;
+    const material = this.idleEdges.material;
+    const idle = {
+      color: material.color.getHex(),
+      linewidth: material.linewidth,
+      opacity: material.opacity
+    };
+    const bodySelected = this.bodySelected;
+    if (bodySelected) {
+      this.bodySelected = false;
+      this.applyIdleStyle();
+      this.bodySelected = true;
+    }
+    return () => {
+      tiers.forEach((line, index) => {
+        line.visible = visible[index]!;
+      });
+      material.color.setHex(idle.color);
+      material.linewidth = idle.linewidth;
+      material.opacity = idle.opacity;
+    };
+  }
+
   /** Avoid x-ray ambiguity while sketch mode intentionally recedes solids. */
   setXrayEnabled(enabled: boolean) {
     if (this.xrayEnabled === enabled) {

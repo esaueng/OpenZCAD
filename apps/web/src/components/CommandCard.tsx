@@ -16,6 +16,7 @@ import {
   type ToolAvailability,
   type ToolId
 } from '../lib/tools';
+import { toolCommandId, useKeymap } from '../lib/keymap';
 import { Tooltip } from './Tooltip';
 
 interface CommandCardProps {
@@ -64,8 +65,10 @@ export function CommandCard({
 }: CommandCardProps) {
   const context = commandContextFor(selection);
   const restCount = remainingTools().length;
+  const keymap = useKeymap();
   const button = (tool: ToolId, variant: 'rail' | 'tile') => {
     const meta = TOOL_META[tool];
+    const shortcut = keymap.label(toolCommandId(tool));
     const disabledReason = toolDisabledReason(tool, availability);
     const active = activeTool === tool;
     // The primary verb hints at what to do next; once a tool is armed it
@@ -77,14 +80,14 @@ export function CommandCard({
       <Tooltip
         key={tool}
         label={meta.label}
-        shortcut={meta.shortcut}
+        shortcut={shortcut}
         description={disabledReason ?? meta.hint}
       >
         <button
           type="button"
           className={`command-${variant}${primary ? ' is-primary' : ''}${active ? ' active' : ''}${applies ? '' : ' is-dim'}`}
           disabled={disabledReason !== null}
-          aria-label={toolTitle(tool, availability)}
+          aria-label={toolTitle(tool, availability, shortcut ?? null)}
           aria-pressed={active}
           data-applies={applies ? 'true' : 'false'}
           onClick={() => onLaunchTool(tool)}

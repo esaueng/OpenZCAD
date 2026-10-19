@@ -92,6 +92,7 @@ import {
   markAssistantCredentialValidated,
   parseAssistantCredential,
   parseUpdateAppSettingsRequest,
+  settingsRequestOmitsKeymap,
   resolveUserAssistant,
   saveAssistantCredential,
   updateAppSettings
@@ -1188,8 +1189,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'PATCH' && pathname === '/api/settings') {
+    const body = await readJsonBody(request);
     const payload = parseUpdateAppSettingsRequest(
-      await readJsonBody(request),
+      body,
       env.ENVIRONMENT,
       env.AI_ALLOWED_BASE_URL_HOSTS
     );
@@ -1197,7 +1199,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       userId,
       payload,
       env,
-      session.email
+      session.email,
+      // A client from before remapping sends no keymap: keep the stored one.
+      { keepStoredKeymap: settingsRequestOmitsKeymap(body) }
     );
     // Only the switch turning off is news to the rooms. Settings save on every
     // cosmetic change, and each owned project costs a Durable Object call, so

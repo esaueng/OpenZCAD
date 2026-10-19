@@ -7,9 +7,12 @@ import {
 import { X } from 'lucide-react';
 import {
   advanceThroughCompleted,
+  tourStepBody,
   WORKSPACE_TOUR_STEPS,
   type WorkspaceTourSignals
 } from '../lib/workspaceTour';
+import { useKeymap } from '../lib/keymap';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 import { StableLabel } from './StableLabel';
 
 interface WorkspaceTourProps extends WorkspaceTourSignals {
@@ -30,6 +33,7 @@ export function WorkspaceTour({
   exportSeen,
   onDismiss
 }: WorkspaceTourProps) {
+  const keymap = useKeymap();
   const [index, setIndex] = useState(() =>
     advanceThroughCompleted(0, { featureCount, hasSelection, exportSeen })
   );
@@ -172,7 +176,12 @@ export function WorkspaceTour({
           happens), so the new step is announced. */}
       <div aria-live="polite" aria-atomic="true">
         <h2 className="workspace-tour-title">{step.title}</h2>
-        <p className="workspace-tour-body">{step.body}</p>
+        <p className="workspace-tour-body">
+          {tourStepBody(step, (id) => {
+            const chord = keymap.label(id);
+            return chord ? platformShortcutLabel(chord) : undefined;
+          })}
+        </p>
       </div>
       <footer className="workspace-tour-actions">
         <button

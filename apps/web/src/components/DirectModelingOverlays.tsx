@@ -1,10 +1,13 @@
 import { Check, Layers3, MousePointer2, X } from 'lucide-react';
 import { displayLengthName, type UnitSystem } from '@openzcad/shared';
 import { useEffect, useState, type MutableRefObject } from 'react';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 
 interface ProfileQuickActionProps {
   profileName: string;
   profileCount?: number;
+  /** The live key that extrudes from here; no keycap when unbound. */
+  extrudeKey?: string;
   onExtrude(): void;
   onDismiss(): void;
 }
@@ -12,6 +15,7 @@ interface ProfileQuickActionProps {
 export function ProfileQuickAction({
   profileName,
   profileCount = 1,
+  extrudeKey,
   onExtrude,
   onDismiss
 }: ProfileQuickActionProps) {
@@ -33,7 +37,7 @@ export function ProfileQuickAction({
       <button type="button" className="profile-extrude" onClick={onExtrude}>
         <Layers3 size={15} aria-hidden="true" />
         Extrude
-        <kbd>E</kbd>
+        {extrudeKey && <kbd>{platformShortcutLabel(extrudeKey)}</kbd>}
       </button>
       <button
         type="button"

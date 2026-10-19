@@ -35,11 +35,12 @@ import {
   resolveParamValue,
   rigidImportedSource
 } from '@openzcad/document-core';
-import { writeDxf } from '@openzcad/io-dxf';
+import { writeDxf, type DxfEntity } from '@openzcad/io-dxf';
 import { writeAsciiStl } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
 import { sketchDxfEntities, SketchDxfExportError } from './exact-sketch-dxf';
 export { SketchDxfExportError } from './exact-sketch-dxf';
+import { writeSketchSvg } from './exact-sketch-svg';
 export type {
   SketchDxfInput,
   SketchDxfInputObject,
@@ -688,6 +689,17 @@ export interface ExactKernelAdapter {
   exportSketchDxf(
     document: ProjectDocument,
     sketchId: SketchId
+  ): Promise<string>;
+  /**
+   * The same sketch geometry as `exportSketchDxf`, as an SVG drawing in the
+   * DOCUMENT's units: one user unit per document unit, a viewBox over the
+   * exact curve extent, and a physical width/height so it opens at 1:1. Lines,
+   * arcs and circles stay exact SVG elements; the refusals are the DXF ones.
+   */
+  exportSketchSvg(
+    document: ProjectDocument,
+    sketchId: SketchId,
+    options?: { transparent?: boolean }
   ): Promise<string>;
   /**
    * One planar sketch edit on the kernel's 2D operations: a corner fillet, a
@@ -3260,6 +3272,48 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     sketchId: SketchId
   ): Promise<string> {
+    return this.exportSketchEntities(
+      document,
+      sketchId,
+      UNIT_TO_MM[document.units],
+      (entities) => writeDxf(entities),
+      'The DXF writer could not assemble the document.'
+    );
+  }
+
+  async exportSketchSvg(
+    document: ProjectDocument,
+    sketchId: SketchId,
+    options: { transparent?: boolean } = {}
+  ): Promise<string> {
+    const name = findSketch(document, sketchId)?.name;
+    // Scale 1: SVG keeps the document's own units, stated by its width/height.
+    return this.exportSketchEntities(
+      document,
+      sketchId,
+      1,
+      (entities) =>
+        writeSketchSvg(entities, {
+          units: document.units,
+          ...(name ? { title: name } : {}),
+          ...(options.transparent === false ? { transparent: false } : {})
+        }),
+      'The SVG writer could not assemble the document.'
+    );
+  }
+
+  /**
+   * One saved sketch lowered to exact 2D entities at `scale` per document
+   * unit, then handed to a format writer. Shared by the DXF and SVG exports
+   * so both refuse the same sketches by the same names.
+   */
+  private async exportSketchEntities(
+    document: ProjectDocument,
+    sketchId: SketchId,
+    scale: number,
+    write: (entities: DxfEntity[]) => string,
+    writerFailure: string
+  ): Promise<string> {
     const sketch = findSketch(document, sketchId);
     if (!sketch) {
       throw new SketchDxfExportError(
@@ -3298,19 +3352,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           scope,
           basis,
           documentUnits: document.units,
-          millimeterScale: UNIT_TO_MM[document.units]
+          millimeterScale: scale
         });
         if (outcome.status === 'refused') {
           throw new SketchDxfExportError(outcome.reason, outcome.message);
         }
         try {
-          return writeDxf(outcome.entities);
+          return write(outcome.entities);
         } catch (error) {
           throw new SketchDxfExportError(
             'writer-refused',
-            error instanceof Error
-              ? error.message
-              : 'The DXF writer could not assemble the document.'
+            error instanceof Error ? error.message : writerFailure
           );
         }
       });

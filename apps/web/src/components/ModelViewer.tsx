@@ -139,6 +139,7 @@ import {
   tuneShadowFrustum,
   VIEWPORT_RENDER_ORDER,
   DrawnBodyReport,
+  MoveCopyPreview,
   type AxisProjection,
   type CameraPose,
   type ExactSectionRegionDisplay,
@@ -291,6 +292,12 @@ import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
 import { sketchValueResolver } from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
 import { traceFaceDrag } from '../lib/faceDragTrace';
+import {
+  IMAGE_UNSELECTED_STYLE,
+  renderViewportImage,
+  viewportImageMaxSide,
+  type ViewportImageSource
+} from './viewer/viewportImage';
 import {
   readWheelDeviceMemory,
   writeWheelDeviceMemory
@@ -974,6 +981,11 @@ export interface ModelViewerProps {
       ) => void)
     | null
   >;
+  /**
+   * Installed while the scene lives: draws the current view offscreen at a
+   * chosen size for image export, without presenting a frame.
+   */
+  viewportImageRef?: MutableRefObject<ViewportImageSource | null>;
   /** Stationary right-click; right-drag stays a pan. */
   onContextMenu(
     x: number,
@@ -1025,6 +1037,7 @@ export interface SceneContext {
   overlayGroup: THREE.Group;
   gizmoGroup: THREE.Group;
   moveGizmoGroup: THREE.Group;
+  moveCopyPreview: MoveCopyPreview;
   /** Applies pending Move/Rotate values to the target body and the gizmo. */
   applyMovePreview(
     translation: MovePreview['translation'],
@@ -1790,6 +1803,7 @@ export function ModelViewer({
   onResizePrimitiveFace,
   onMovePreviewChange,
   moveValuesSetterRef,
+  viewportImageRef,
   onContextMenu
 }: ModelViewerProps) {
   const drawingBodiesRef = useRef<
@@ -2455,6 +2469,8 @@ export function ModelViewer({
       }
     }
 
+    const moveCopyPreview = new MoveCopyPreview();
+
     function applyMovePreview(
       translation: MovePreview['translation'],
       rotationDeg: MovePreview['rotationDeg']
@@ -2479,14 +2495,29 @@ export function ModelViewer({
       } else {
         const object = context.objectsByBodyId.get(preview.bodyId);
         if (object) {
+          const body = context.renderedBodies?.find(
+            (candidate) => candidate.bodyId === preview.bodyId
+          );
+          const target = moveCopyPreview.target(object, !!preview.copy && !!body, () => {
+            const resolution = context.fatLineResolution();
+            const copy = new THREE.Group();
+            const mesh = createObjectForBody(body!, resolution);
+            const edges = createBodyEdgeOverlay(body!, resolution);
+            edges.setDisplayMode(displayModeRef.current);
+            mesh.add(edges);
+            copy.add(mesh);
+            applyDisplayMode(copy, displayModeRef.current);
+            return copy;
+          });
           const final = composeMoveTransform(center, translation, rotationDeg);
-          object.rotation.copy(moveEuler(rotationDeg));
-          object.position.set(final.x, final.y, final.z);
+          target.rotation.copy(moveEuler(rotationDeg));
+          target.position.set(final.x, final.y, final.z);
           // The mesh rotates about its own origin and then translates, so the
           // callout's anchor has to take the same two steps to stay over the
           // body — adding the translation alone would drift it off under any
           // rotation.
-          poseSelectionCallout(preview.bodyId, rotationDeg, final);
+          if (preview.copy) restSelectionCallouts();
+          else poseSelectionCallout(preview.bodyId, rotationDeg, final);
           // The shadow map is frozen (`autoUpdate = false`) so camera-only
           // frames reuse it — that is where most of the render win came from.
           // A body moving under the light is one of the few things that
@@ -2501,6 +2532,9 @@ export function ModelViewer({
         center.y + translation.y,
         center.z + translation.z
       );
+      if (E2E_CANVAS_HOOKS_ENABLED) {
+        renderer.domElement.dataset.e2eMoveCopyPreview = String(moveCopyPreview.active);
+      }
     }
 
     let animationFrame: number | null = null;
@@ -2564,6 +2598,7 @@ export function ModelViewer({
       overlayGroup,
       gizmoGroup,
       moveGizmoGroup,
+      moveCopyPreview,
       applyMovePreview,
       restSelectionCallouts,
       refreshShadowMap,
@@ -2596,6 +2631,60 @@ export function ModelViewer({
       timer: new THREE.Timer()
     };
     contextRef.current = context;
+    const viewportImage: ViewportImageSource = {
+      capture: (request) => {
+        const image = renderViewportImage(
+          {
+            renderer,
+            scene,
+            camera: cameraRig.activeCamera,
+            backdrop: gradientBackdrop,
+            grid: [grid, axes],
+            content: [
+              skyLight,
+              keyLight,
+              keyLight.target,
+              rimLight,
+              shadowCatcher,
+              bodyGroup,
+              regionGroup,
+              sketchGroup
+            ],
+            sketches: [regionGroup, sketchGroup],
+            objectsByBodyId,
+            refreshShadowMap,
+            emphasizeBodyColors: () => {
+              const restores: Array<() => void> = [];
+              for (const body of context.renderedBodies ?? []) {
+                const object = objectsByBodyId.get(body.bodyId);
+                if (!object) continue;
+                forEachMesh(object, (mesh) => {
+                  const was = mesh.material.color.clone();
+                  contextBodyColor(body.color, true, mesh.material.color);
+                  restores.push(() => mesh.material.color.copy(was));
+                });
+              }
+              return () => {
+                for (const restore of restores) restore();
+              };
+            }
+          },
+          request
+        );
+        requestRender();
+        return image;
+      },
+      viewSize: () => ({
+        width: renderer.domElement.width,
+        height: renderer.domElement.height
+      }),
+      // Read when asked, not at mount: the export is rare, and the renderer
+      // need not be fully initialised for the viewer to start.
+      get maxSide() {
+        return viewportImageMaxSide(renderer);
+      }
+    };
+    if (viewportImageRef) viewportImageRef.current = viewportImage;
 
     const restoredView = initialViewRef.current;
     if (restoredView) {
@@ -8962,6 +9051,7 @@ export function ModelViewer({
       // Hover slots are children of body objects, but their buffers and
       // materials belong to SelectionManager. Detach them before the body
       // tree is disposed so ownership is not crossed or disposed twice.
+      moveCopyPreview.clear();
       selection.dispose();
       clearGroup(bodyGroup);
       clearGroup(sketchGroup);
@@ -9021,6 +9111,9 @@ export function ModelViewer({
       moveGizmoHudRef.current = null;
       if (orientationDragRef.current === orientationDragControls) {
         orientationDragRef.current = null;
+      }
+      if (viewportImageRef?.current === viewportImage) {
+        viewportImageRef.current = null;
       }
       contextRef.current = null;
     };
@@ -9217,6 +9310,7 @@ export function ModelViewer({
         (focusGhostBodies?.length ?? 0) > 0);
     if (bodiesChanged) mark('viewer.bodies:begin');
     if (renderChanged) {
+      context.moveCopyPreview.clear();
       // The exact worker result is authoritative. Forget the visual proxy
       // before its old Three object is disposed and replaced.
       cylinderRadiusProxyControllerRef.current?.discard();
@@ -10076,8 +10170,8 @@ export function ModelViewer({
         moveGizmoHudRef.current.hidden = true;
       }
       if (moveCommitHold) {
-        // Committed move, rebuild in flight: keep the (still old) mesh posed
-        // at the applied transform so it never flashes at the resting pose.
+        // Committed move, rebuild in flight: keep its mesh or temporary copy
+        // at the applied transform until the exact result replaces it.
         const held = bodies.find(
           (candidate) => candidate.bodyId === moveCommitHold.bodyId
         );
@@ -10093,6 +10187,10 @@ export function ModelViewer({
           );
         }
         return;
+      }
+      context.moveCopyPreview.clear();
+      if (E2E_CANVAS_HOOKS_ENABLED) {
+        context.renderer.domElement.dataset.e2eMoveCopyPreview = 'false';
       }
       // Cancel without a document change must restore the resting pose.
       for (const object of context.objectsByBodyId.values()) {
@@ -10116,6 +10214,7 @@ export function ModelViewer({
     }
     let center: THREE.Vector3;
     if (movePreview.target === 'sketch') {
+      context.moveCopyPreview.clear();
       const view = sketchViews.find(
         (candidate) => candidate.sketchId === movePreview.bodyId
       );
@@ -10459,6 +10558,14 @@ export function ModelViewer({
         });
         line.name = 'sketch-curve';
         line.userData.sketchViewId = view.sketchId;
+        if (view.selected) {
+          // What an image export draws instead: selection is a viewing state.
+          line.userData[IMAGE_UNSELECTED_STYLE] = {
+            color: curve.construction ? 0x7b8da3 : SKETCH_COLOR,
+            linewidth: SKETCH_CURVE_WIDTH,
+            opacity: curve.construction ? 0.72 : 0.9
+          };
+        }
         if (curve.construction) {
           line.material.dashed = true;
           line.material.dashSize = 1.4;
@@ -11422,6 +11529,12 @@ export function ModelViewer({
         })
       );
       profileFill.userData.sketchId = sketch.sketchId;
+      if (sketch.selected) {
+        profileFill.userData[IMAGE_UNSELECTED_STYLE] = {
+          color: 0x2f4fa8,
+          opacity: 0.1
+        };
+      }
       profileFill.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_FILL;
       context.sketchGroup.add(profileFill);
 
@@ -11439,6 +11552,12 @@ export function ModelViewer({
       );
       line.name = 'sketch-curve';
       line.raycast = () => undefined;
+      if (sketch.selected) {
+        line.userData[IMAGE_UNSELECTED_STYLE] = {
+          color: SKETCH_COLOR,
+          opacity: 0.5
+        };
+      }
       line.renderOrder = sketch.selected
         ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
         : VIEWPORT_RENDER_ORDER.SKETCH_CURVE;

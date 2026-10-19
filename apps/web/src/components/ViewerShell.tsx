@@ -5,6 +5,7 @@ import type {
   SketchDimensionIdentity
 } from '@openzcad/shared';
 import type { HoleGhost } from '../lib/holeGhost';
+import type { ViewportImageSource } from './viewer/viewportImage';
 import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import {
   datumOffsetHandle,
@@ -240,6 +241,8 @@ interface ViewerShellProps {
       ) => void)
     | null
   >;
+  /** Filled by the viewer: offscreen capture of the current view. */
+  viewportImageRef?: MutableRefObject<ViewportImageSource | null>;
   cylinderRadiusHandle: CylinderRadiusHandleTarget | null;
   cylinderDimensionMode: DimensionMode;
   onCylinderDimensionModeChange(mode: DimensionMode): void;
@@ -423,6 +426,7 @@ export function ViewerShell({
   keypadAnchorRef,
   offsetSetterRef,
   moveValuesSetterRef,
+  viewportImageRef,
   cylinderRadiusHandle,
   cylinderDimensionMode,
   onCylinderDimensionModeChange,
@@ -707,6 +711,7 @@ export function ViewerShell({
         keypadAnchorRef={keypadAnchorRef}
         offsetSetterRef={offsetSetterRef}
         moveValuesSetterRef={moveValuesSetterRef}
+        viewportImageRef={viewportImageRef}
         cylinderRadiusHandle={cylinderRadiusHandle}
         cylinderDimensionMode={cylinderDimensionMode}
         onCylinderDimensionModeChange={onCylinderDimensionModeChange}

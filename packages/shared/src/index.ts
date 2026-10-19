@@ -6,7 +6,9 @@ export * from './imported-step-source';
 export * from './imported-mesh-payload';
 export * from './sketch-reference-dimensions';
 export * from './mass-density';
+export * from './keymap-settings';
 import type { DocumentHistory } from './document-history';
+import type { KeymapOverrides } from './keymap-settings';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
 export type ProjectId = Brand<string, 'ProjectId'>;
@@ -48,8 +50,13 @@ export type ShaprImportId = Brand<string, 'ShaprImportId'>;
  * and scale turn about it rather than the world origin. A v21 client would
  * turn such a Move about the origin and move the body elsewhere, so the bump
  * makes it refuse the document instead.
+ *
+ * v23 adds the M10 transform copy (`copy: true` on a transform feature, which
+ * then owns a body of its own and leaves its source live). A v22 client would
+ * move the source instead and lose the copy's body, so the bump makes it
+ * refuse the document.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 22 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 23 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -915,6 +922,27 @@ export interface SketchPathReference {
   entityIds: EntityId[];
 }
 
+/**
+ * An in-place Move/Rotate/Scale: it rewrites `targetBodyId` and owns no body.
+ * A transform copy (M10, `copy: true`) is not one: it owns its own body and
+ * leaves the target untouched, so placement and in-place-edit rules that
+ * read "the transform of body X" must skip it.
+ */
+export function isInPlaceTransform(
+  data: FeatureData
+): data is Extract<FeatureData, { featureKind: 'transform' }> {
+  return data.featureKind === 'transform' && data.copy !== true;
+}
+
+/** M10: a transform that adds a moved copy and leaves its source live. */
+export function isTransformCopy(
+  data: FeatureData
+): data is Extract<FeatureData, { featureKind: 'transform' }> & {
+  copy: true;
+} {
+  return data.featureKind === 'transform' && data.copy === true;
+}
+
 export type FeatureData =
   | {
       /**
@@ -1055,6 +1083,13 @@ export type FeatureData =
       featureKind: 'transform';
       targetBodyId: BodyId;
       transform: ParametricTransform3D;
+      /**
+       * M10 (schema v23): true makes this a copy. The feature then owns its
+       * own `bodyId` (and body node), like a Mirror, and the target stays
+       * live and unmoved. Absent is the in-place Move every older document
+       * holds: it rewrites `targetBodyId` and has no body of its own.
+       */
+      copy?: true;
     }
   | {
       featureKind: 'mirror';
@@ -3012,6 +3047,14 @@ export interface AppSettings {
     /** Selection-first direct manipulation: click geometry, drag handles. */
     directManipulation: boolean;
   };
+  /**
+   * The user's shortcut remaps, by command id; a command without an entry
+   * keeps its default. A preference, never project data: the same document
+   * opens with whichever keys its reader chose.
+   */
+  keymap: {
+    overrides: KeymapOverrides;
+  };
 }
 
 export interface PanelWidthLimits {
@@ -3100,6 +3143,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   experiments: {
     directManipulation: true
+  },
+  keymap: {
+    overrides: {}
   }
 };
 

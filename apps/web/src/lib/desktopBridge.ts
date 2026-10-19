@@ -228,7 +228,7 @@ function downloadBlobFile(
 
 export async function saveCadTextFile(
   suggestedName: string,
-  format: 'step' | 'stl' | 'dxf',
+  format: 'step' | 'stl' | 'dxf' | 'svg',
   contents: string
 ): Promise<boolean> {
   if (!isDesktopApp()) {
@@ -239,7 +239,9 @@ export async function saveCadTextFile(
         ? 'model/step'
         : format === 'dxf'
           ? 'image/vnd.dxf'
-          : 'model/stl'
+          : format === 'svg'
+            ? 'image/svg+xml'
+            : 'model/stl'
     );
     return true;
   }
@@ -258,7 +260,8 @@ const BINARY_EXPORT_CONTENT_TYPES = {
   glb: 'model/gltf-binary',
   // PLY has no registered media type, so it keeps the generic one — the
   // same mapping `inferContentType` in model.ts uses for `.ply` files.
-  ply: 'application/octet-stream'
+  ply: 'application/octet-stream',
+  png: 'image/png'
 } as const;
 
 export type CadBinaryExportFormat = keyof typeof BINARY_EXPORT_CONTENT_TYPES;

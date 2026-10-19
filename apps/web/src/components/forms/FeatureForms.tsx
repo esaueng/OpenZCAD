@@ -1219,6 +1219,11 @@ export interface TransformFormValue {
    * origin; the Move gizmo writes the body's centre.
    */
   pivot?: { x: ParamValue; y: ParamValue; z: ParamValue };
+  /**
+   * M10: add a moved copy as a new body and leave the source in place. Set
+   * only when creating; a stored Move cannot become a copy or stop being one.
+   */
+  copy?: boolean;
 }
 
 interface TransformFormProps {
@@ -1270,6 +1275,7 @@ export function TransformForm({
     py: paramValueText(initial?.pivot?.y ?? 0),
     pz: paramValueText(initial?.pivot?.z ?? 0)
   }));
+  const [copy, setCopy] = useState(initial?.copy ?? false);
   const setValue = (key: string) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
 
@@ -1327,7 +1333,8 @@ export function TransformForm({
             z: coerceParamValue(values.rz ?? '0')
           },
           ...(scale === 1 ? {} : { scale }),
-          ...(atOrigin ? {} : { pivot })
+          ...(atOrigin ? {} : { pivot }),
+          ...(copy ? { copy: true } : {})
         });
       }}
       onCancel={onCancel}
@@ -1346,6 +1353,22 @@ export function TransformForm({
           ))}
         </select>
       </label>
+      {/* M10: a copy is fixed when the Move is made — it owns a body of its
+          own — so an edit names what it is instead of offering a toggle. */}
+      {initial ? (
+        initial.copy && (
+          <p className="field-hint">Copy: the source body stays in place.</p>
+        )
+      ) : (
+        <label className="field transform-copy">
+          <input
+            type="checkbox"
+            checked={copy}
+            onChange={(event) => setCopy(event.target.checked)}
+          />
+          <span>Copy (keep the original)</span>
+        </label>
+      )}
       {/* The labels the Move gizmo's card uses (F19): a Move is created
           there and edited here, and the two named the same fields
           "dX" and "Move X". */}

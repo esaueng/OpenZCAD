@@ -70,6 +70,9 @@ import {
   POINTER_CONTROL_GROUPS,
   type ControlReferenceGroup
 } from '../lib/controlReference';
+import { KeymapEditor } from './KeymapEditor';
+import { resolveKeymap } from '../lib/keymap';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 import { BrandMark } from './BrandMark';
 import {
   Group,
@@ -175,6 +178,16 @@ const SECTION_ICONS: Record<SectionId, ReactNode> = {
   privacy: <LockKeyhole size={15} aria-hidden="true" />,
   advanced: <Cpu size={15} aria-hidden="true" />
 };
+
+/**
+ * The keyboard reference without its remappable items, which the keymap
+ * editor lists with their live keys: what is left keeps one meaning always.
+ */
+const FIXED_KEYBOARD_GROUPS: readonly ControlReferenceGroup[] =
+  KEYBOARD_CONTROL_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !('commands' in item))
+  })).filter((group) => group.items.length > 0);
 
 /**
  * The keyboard and pointer reference: keys and the action they run. Each
@@ -482,6 +495,9 @@ export function SettingsPage({
   onDismissProjectInvitation,
   onClose
 }: SettingsPageProps) {
+  // The save key as the user has it, for copy that tells them how to save.
+  const saveChord = resolveKeymap(settings.keymap.overrides).label('file-save');
+  const saveKeyCopy = saveChord ? ` (${platformShortcutLabel(saveChord)})` : '';
   const [initialViewState] = useState(loadSettingsViewState);
   const [active, setActive] = useState<SectionId>(
     initialSection ?? initialViewState.activeSection
@@ -1021,8 +1037,20 @@ export function SettingsPage({
                   />
                 </SettingRow>
               </Group>
+              {/* Every remappable command with its live keys. A key can mean
+                  one thing per context (C is Cylinder in the workspace and
+                  Circle in a sketch); the editor's groups are those contexts.
+                  The overrides follow the account, never a project. */}
               <Group title="Keyboard" note="Paused while you type">
-                <ControlReferenceGroups groups={KEYBOARD_CONTROL_GROUPS} />
+                <KeymapEditor
+                  overrides={settings.keymap.overrides}
+                  onChange={(overrides) =>
+                    onChange({ ...settings, keymap: { overrides } })
+                  }
+                />
+              </Group>
+              <Group title="Fixed keys" note="Can’t be reassigned">
+                <ControlReferenceGroups groups={FIXED_KEYBOARD_GROUPS} />
               </Group>
               <Group title="Mouse & pointer">
                 <ControlReferenceGroups groups={POINTER_CONTROL_GROUPS} />
@@ -1134,7 +1162,7 @@ export function SettingsPage({
               <Group title="Cloud">
                 <SettingRow
                   title="Cloud autosave"
-                  hint="Off: update the cloud copy only with Ctrl/Cmd+S."
+                  hint={`Off: update the cloud copy only when you save a revision${saveKeyCopy}.`}
                 >
                   <Toggle
                     label="Cloud autosave"
@@ -1172,7 +1200,7 @@ export function SettingsPage({
                 </SettingRow>
                 <SettingRow
                   title="Cloud revisions"
-                  hint="Ctrl/Cmd+S saves a revision."
+                  hint={`Saving a revision${saveKeyCopy} adds a checkpoint.`}
                 >
                   <Status>
                     {cloudFunctionsEnabled ? 'Manual' : 'Disabled'}

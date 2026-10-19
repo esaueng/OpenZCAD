@@ -434,11 +434,17 @@ describe('settings controls section', () => {
       null
     );
     const headers = container.querySelectorAll('.settings-group-head');
+    // The remappable keys under one header, then the keys that keep one
+    // meaning everywhere, then the pointer.
     expect([...headers].map((header) => header.textContent)).toEqual([
       'Navigation',
       expect.stringContaining('Keyboard'),
+      expect.stringContaining('Fixed keys'),
       'Mouse & pointer'
     ]);
+    expect(
+      screen.getByRole('button', { name: 'Reset all shortcuts' })
+    ).toBeDisabled();
     // The banner's guidance lives on beside the one header.
     expect(headers[1]).toHaveTextContent(/Paused while you type/);
   });
