@@ -1396,6 +1396,32 @@ describe('content blobs', () => {
     expect(reader.header?.blobId).toBe(reference.blobId);
   });
 
+  it('a failing envelope source is aborted, not malformed', async () => {
+    const { envelope, reference } = await blob(patternBytes(CHUNK * 3, 2));
+    let sent = false;
+    const failing = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(envelope.subarray(0, 40));
+          return;
+        }
+        controller.error(new TypeError('network connection lost'));
+      }
+    });
+    await rejectsWith(
+      collect(decryptContentBlobStream(reference, failing)),
+      'aborted'
+    );
+    // Corrupt bytes from a healthy source are still malformed or refused.
+    const corrupt = new Uint8Array(envelope);
+    corrupt[corrupt.byteLength - 1]! ^= 1;
+    await rejectsWith(
+      collect(decryptContentBlobStream(reference, stream([corrupt]))),
+      'authentication-failed'
+    );
+  });
+
   it('a stream decrypt holds the reference as passed', async () => {
     const plaintext = patternBytes(CHUNK * 3 + 9, 6);
     for (const compression of ['none', 'gzip'] as const) {

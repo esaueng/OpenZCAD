@@ -1511,7 +1511,21 @@ export function decryptContentBlobStream(
       try {
         for (;;) {
           if (!input || inputOffset >= input.byteLength) {
-            const next = await envelopeReader.read();
+            let next: ReadableStreamReadResult<Uint8Array>;
+            try {
+              next = await envelopeReader.read();
+            } catch (cause) {
+              // The source itself failed (network, disk): retryable, not
+              // corrupt ciphertext, so it is `aborted` rather than
+              // `malformed`. Parse and authentication errors pass as is.
+              throw cause instanceof E2eeError
+                ? cause
+                : new E2eeError(
+                    'aborted',
+                    'The envelope stream failed before it ended',
+                    { cause }
+                  );
+            }
             if (next.done) {
               for (const part of await reader.finish())
                 controller.enqueue(part);
