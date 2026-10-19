@@ -136,7 +136,7 @@ describe('three-point and parallel planes in the document (v25)', () => {
     const saved = JSON.parse(
       JSON.stringify(parallel.document)
     ) as ProjectDocument;
-    expect(saved.schemaVersion).toBe(25);
+    expect(saved.schemaVersion).toBe(26);
     expect(normalizeDocument(saved)).toEqual(parallel.document);
 
     // A v22 document opens with its datums exactly as written.
