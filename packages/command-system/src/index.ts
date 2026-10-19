@@ -195,7 +195,7 @@ import {
 import {
   expandEditCandidateProposal,
   unmodifiedImportedSource,
-  isSketchDimensionField,
+  sketchObjectExposesDimension,
   isLocalBodyRef,
   normalizeLocalId,
   type CadDatumPlaneSource,
@@ -2619,7 +2619,7 @@ export function commandsForCadPatch(
             `Sketch object ${operation.objectId} is not available on ${operation.sketchId}.`
           );
         }
-        if (!isSketchDimensionField(object.data.objectKind, operation.field)) {
+        if (!sketchObjectExposesDimension(object.data, operation.field)) {
           throw new Error(
             `${object.data.objectKind} sketch object ${operation.objectId} does not expose an editable ${operation.field} dimension.`
           );

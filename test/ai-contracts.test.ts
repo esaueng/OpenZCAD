@@ -7,6 +7,7 @@ import {
   groundCadPatchProposalToSelection,
   parseAssistantReply,
   parseCadPatchProposal,
+  sketchObjectExposesDimension,
   TEXT_FONT_FAMILY_IDS,
   validateCadPatchProposalAgainstDigest
 } from '@openzcad/ai-contracts';
@@ -200,6 +201,65 @@ describe('AI patch contracts', () => {
         digest
       )
     ).toThrow(/stale or unavailable field/);
+  });
+
+  it('edits an elliptical arc range only on an existing arc (I01)', () => {
+    const digestFor = (object: Record<string, unknown>) => {
+      const created = addSketchFeature(
+        createProjectDocument('Ellipse edit', toUserId('user_digest_ellipse')),
+        {
+          name: 'Profile',
+          plane: 'XY',
+          offset: 0,
+          object: {
+            objectKind: 'ellipse',
+            centerX: 0,
+            centerY: 0,
+            radiusX: 20,
+            radiusY: 8,
+            rotationDeg: 0,
+            ...object
+          } as never
+        }
+      );
+      const digest = createCadDocumentDigest(created.document);
+      const objectId = (
+        digest.features.find((feature) => feature.featureKind === 'sketch')
+          ?.data as { objectIds?: string[] } | undefined
+      )?.objectIds?.[0];
+      return { digest, sketchId: created.sketchId, objectId: objectId! };
+    };
+    const edit = (target: ReturnType<typeof digestFor>, field: string) =>
+      validateCadPatchProposalAgainstDigest(
+        parseCadPatchProposal({
+          proposalId: 'proposal_ellipse',
+          summary: 'Edit the ellipse.',
+          assumptions: [],
+          operations: [
+            {
+              kind: 'set_sketch_dimension',
+              sketchId: target.sketchId,
+              objectId: target.objectId,
+              field,
+              value: 30
+            }
+          ]
+        }),
+        target.digest
+      );
+    const full = digestFor({});
+    expect(() => edit(full, 'radiusY')).not.toThrow();
+    // Half a range on a full ellipse would leave an object no rebuild takes.
+    expect(() => edit(full, 'startParamDeg')).toThrow(/stale or unavailable/);
+    expect(() => edit(full, 'endParamDeg')).toThrow(/stale or unavailable/);
+    const arc = digestFor({ startParamDeg: 0, endParamDeg: 120 });
+    expect(() => edit(arc, 'endParamDeg')).not.toThrow();
+    expect(
+      sketchObjectExposesDimension(
+        { objectKind: 'spline', points: [] },
+        'points'
+      )
+    ).toBe(false);
   });
 
   it('offers the AI exactly the font families the geometry package bundles', () => {
@@ -688,7 +748,10 @@ describe('AI patch contracts', () => {
   });
 
   it('refuses selected edges across bodies when one modifier cannot preserve them', () => {
-    const document = createProjectDocument('Selected edges', toUserId('user_ai'));
+    const document = createProjectDocument(
+      'Selected edges',
+      toUserId('user_ai')
+    );
     const bodyA = toBodyId('body_a');
     const bodyB = toBodyId('body_b');
     const digest = createCadDocumentDigest(document, {

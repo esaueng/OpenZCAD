@@ -56,7 +56,8 @@ import {
   ellipseObjectFromPoints,
   ellipseParamDegAt,
   ellipticalArcObject,
-  splineObjectFromPoints
+  splineObjectFromPoints,
+  sketchObjectGrabbedAlongCurve
 } from './session';
 
 describe('snapSketchPoint / sketchObjectFromDrag', () => {
@@ -1335,5 +1336,79 @@ describe('I01 curve construction', () => {
       centerX: 4,
       centerY: 5
     });
+  });
+});
+
+describe('I01 curves under the drag', () => {
+  const resolve = (value: unknown) => Number(value);
+  const spline: SketchObjectData = {
+    objectKind: 'spline',
+    method: 'fit',
+    points: [
+      { x: 0, y: 0 },
+      { x: 5, y: 9 },
+      { x: 10, y: 0 }
+    ]
+  };
+
+  it('grabs elliptical arcs and splines along the curve, full ellipses by the centre', () => {
+    const ellipse: SketchObjectData = {
+      objectKind: 'ellipse',
+      centerX: 0,
+      centerY: 0,
+      radiusX: 10,
+      radiusY: 4,
+      rotationDeg: 0
+    };
+    expect(sketchObjectGrabbedAlongCurve(spline)).toBe(true);
+    expect(
+      sketchObjectGrabbedAlongCurve({
+        ...ellipse,
+        startParamDeg: 0,
+        endParamDeg: 90
+      })
+    ).toBe(true);
+    expect(sketchObjectGrabbedAlongCurve(ellipse)).toBe(false);
+    expect(sketchObjectGrabPoint(ellipse, resolve)).toEqual({ x: 0, y: 0 });
+    expect(
+      sketchObjectGrabbedAlongCurve({
+        objectKind: 'circle',
+        centerX: 0,
+        centerY: 0,
+        radius: 1
+      })
+    ).toBe(false);
+  });
+
+  it('rebases a spline drag point by point and never writes centre fields', () => {
+    const moved = translateSketchObject(spline, 3, -2, resolve);
+    expect(sketchMoveChanged(spline, moved, resolve)).toBe(true);
+    // A concurrent edit moved the middle point; the drag still applies.
+    const current: SketchObjectData = {
+      ...spline,
+      points: [
+        { x: 0, y: 0 },
+        { x: 6, y: 10 },
+        { x: 10, y: 0 }
+      ]
+    };
+    const rebased = rebaseSketchMove(spline, moved, current, resolve);
+    expect(rebased).toEqual({
+      ...spline,
+      points: [
+        { x: 3, y: -2 },
+        { x: 9, y: 8 },
+        { x: 13, y: -2 }
+      ]
+    });
+    expect(rebased).not.toHaveProperty('centerX');
+    expect(
+      rebaseSketchMove(
+        spline,
+        moved,
+        { ...spline, points: spline.points.slice(0, 2) },
+        resolve
+      )
+    ).toBeNull();
   });
 });

@@ -1209,6 +1209,9 @@ function positionFields(data: SketchObjectData): [string, string][] {
       ];
     case 'text':
       return [['x', 'y']];
+    case 'spline':
+      // A spline's position is its point list; callers move it point by point.
+      return [];
     default:
       return [['centerX', 'centerY']];
   }
@@ -1266,6 +1269,24 @@ export function sketchObjectGrabPoint(
     }
   } catch {
     return null;
+  }
+}
+
+/**
+ * True for an object that has no grab point and is grabbed anywhere along
+ * its curve instead: lines, arcs, elliptical arcs and splines. A full
+ * ellipse, like a circle, is grabbed by its centre.
+ */
+export function sketchObjectGrabbedAlongCurve(data: SketchObjectData): boolean {
+  switch (data.objectKind) {
+    case 'line':
+    case 'arc':
+    case 'spline':
+      return true;
+    case 'ellipse':
+      return data.startParamDeg !== undefined;
+    default:
+      return false;
   }
 }
 
@@ -1531,6 +1552,25 @@ export function rebaseSketchMove(
     !sketchObjectMovable(current)
   ) {
     return null;
+  }
+  if (
+    original.objectKind === 'spline' &&
+    moved.objectKind === 'spline' &&
+    current.objectKind === 'spline'
+  ) {
+    // The drag is one rigid offset; a concurrent edit that changed the
+    // point count leaves nothing to rebase it onto.
+    if (current.points.length !== original.points.length) {
+      return null;
+    }
+    const first = original.points[0];
+    const movedFirst = moved.points[0];
+    if (!first || !movedFirst) {
+      return null;
+    }
+    const dx = resolve(movedFirst.x) - resolve(first.x);
+    const dy = resolve(movedFirst.y) - resolve(first.y);
+    return translateSketchObject(current, dx, dy, resolve);
   }
   const before = original as unknown as Record<string, unknown>;
   const after = moved as unknown as Record<string, unknown>;

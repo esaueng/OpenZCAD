@@ -246,6 +246,7 @@ import {
   lineObjectFromPoints,
   nearestCenterGuideTarget,
   placeSketchObjectGrabPoint,
+  sketchObjectGrabbedAlongCurve,
   sketchObjectGrabPoint,
   sketchObjectMovable,
   sketchObjectRotatable,
@@ -7093,7 +7094,7 @@ export function ModelViewer({
           handle = 'rotate';
           grab = press;
         }
-      } else if (data.objectKind === 'line' || data.objectKind === 'arc') {
+      } else if (sketchObjectGrabbedAlongCurve(data)) {
         setRayFromEvent(event);
         const hitId = sketchRigRef.current?.pickObject(
           context.raycaster,
