@@ -7,7 +7,11 @@ import type {
   Transform3D,
   UnitSystem
 } from '@openzcad/shared';
-import { listFeaturesInOrder, resolveParamValue } from './index';
+import {
+  booleanConsumedBodyIds,
+  listFeaturesInOrder,
+  resolveParamValue
+} from './index';
 
 /** A measured construction can replay fixed rigid placement, but its world
  * coordinate cuts cannot follow a placement driven by an editable parameter.
@@ -102,6 +106,14 @@ export function rigidImportedSource(
         Array.isArray(data.targetBodyIds) &&
         data.targetBodyIds.includes(bodyId))
     ))
+      continue;
+    // M11: a Boolean or Split that keeps this body leaves it live and
+    // unchanged under its own id, so it is no edit of the import.
+    if (
+      (data.featureKind === 'boolean' &&
+        !booleanConsumedBodyIds(data).includes(bodyId)) ||
+      (data.featureKind === 'split' && data.keepOriginal === true)
+    )
       continue;
     if (
       data.featureKind !== 'transform' ||
