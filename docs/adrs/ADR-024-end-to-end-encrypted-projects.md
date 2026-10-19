@@ -104,10 +104,11 @@ classes:
   project and are never moved between projects.
 - **Content blobs** hold imported sources, mesh payloads, thumbnails and
   archived exports. Their header carries only an immutable random blob id, the
-  blob kind and the algorithm version; no project id. Large content blobs are
-  split into fixed-size chunks, and each chunk binds the blob id, its index
-  and a final-chunk flag, so a truncated, reordered or transplanted chunk
-  fails. Multipart uploads use the same chunking per part.
+  blob kind, the algorithm version and the exact plaintext size; no project
+  id. Large content blobs are split into fixed-size chunks. Each chunk's
+  authenticated data binds the whole header (so the declared size as well),
+  its index and a final-chunk flag, so a truncated, reordered, transplanted
+  or resized chunk fails. Multipart uploads use the same chunking per part.
 
 A content blob is authenticated by the project envelope that references it.
 That envelope records the blob id, the blob's random key and a hash of its
@@ -447,8 +448,20 @@ comparison, which is safe only because of its commitment step.
   visitors. The share key never encrypts content itself. Each snapshot is signed by its author. The visitor's browser fetches
   the signed roster (below), checks it chains to the owner key named in the
   link, and accepts the snapshot only if an owner or editor in that roster
-  signed it. Revoking a link deletes the snapshot. "Make a copy" decrypts in
-  the visitor's browser and saves under the visitor's keys, or locally.
+  signed it. "Make a copy" decrypts in the visitor's browser and saves under
+  the visitor's keys, or locally.
+- **Share-link revocation is project state, not a server deletion.** A
+  compromised server could keep the snapshot and the wrapped share key, and
+  keep presenting the link to editors as active. So the set of active links
+  lives inside the encrypted, signed document: each link's id, the hash of
+  its share key and its mode. Revoking a link writes a new version without
+  it. Editors' browsers republish snapshots only for links in the current
+  head's active set, and never wrap a new snapshot key to a revoked share
+  key. A server cannot add a link back, because it cannot write a signed
+  version. Revocation stops future snapshots only: anything a visitor already
+  downloaded, and the last snapshot published before the revocation, stays
+  readable to anyone holding the link, even if the server keeps serving it.
+  The server is still asked to delete it.
 - **Live editing** keeps leases, presence and roles. The room relays encrypted
   documents and orders versions. On a conflict it returns the base and the
   latest ciphertext; the browser merges with `mergeCollaborationDocuments`,
@@ -663,18 +676,33 @@ encrypts under the project key is unchanged.
   stated: a server that hides the removal Commit from some members.
 - **Long-offline devices.** A device must process every Commit since it was
   last online, or rejoin. Rejoining uses an external Commit (§12.4.3.2). It
-  covers a device whose browser storage was cleared, and it is exactly the
-  path a stolen, removed device would use to reinsert itself. Every member's
-  browser therefore accepts an external Commit only when both hold:
-  - its credential is certified, and not revoked, in the newest device list
-    of that user the browser has seen. Removing a device signs that revocation
-    with the identity key, as before, besides removing its leaf;
-  - it carries an external PSK derived from the user's current account key.
-    Removing a device rotates the account key, so a removed device cannot
-    produce the PSK even with its old certified signing key.
+  covers a device whose browser storage was cleared, including a user's only
+  device on a project nobody else is in. It is also exactly the path a
+  stolen, removed device would use to reinsert itself. Any secret the rejoin
+  proves must already be known to the current members, because a pre-shared
+  key feeds the shared key schedule (§8.4). So the proof is a resumption PSK
+  (§8.6), which every member of a recent epoch derives anyway:
+  - Each of a user's devices, as it processes an epoch, stores that epoch's
+    resumption PSK on the server, wrapped under the user's current account
+    key.
+  - A device that has lost its MLS state first unlocks the account key with a
+    passkey, the recovery key or approval from another device. It then fetches
+    the newest wrapped resumption PSK and sends an external Commit that
+    includes it.
+  - Every member's browser accepts that external Commit only if three things
+    hold. The credential is certified, and not revoked, in the newest device
+    list of that user the browser has seen; removing a device signs that
+    revocation with the identity key, as before, besides removing its leaf.
+    The PSK's epoch is later than that user's newest device revocation. And
+    the PSK's epoch is within the members' retention window of recent epochs.
+  - A removed device fails twice over. Its revocation is recorded, and the
+    account key was rotated when it was removed, so it can unwrap only PSKs
+    from before its removal, which the epoch rule refuses.
 
-  A device that fails either check must be approved again from another
-  device, or unlock with a passkey or the recovery key, before it can rejoin.
+  A device that cannot meet these rules, for example after an absence longer
+  than the retention window, is re-added by an ordinary Add from any current
+  member's browser after the same credential checks. The spike confirms that
+  the chosen library accepts PSK proposals in external Commits.
 
 - **A new dependency.** MLS needs a maintained implementation; this is not
   something to hand-write. It loads lazily, outside the entry chunk.
