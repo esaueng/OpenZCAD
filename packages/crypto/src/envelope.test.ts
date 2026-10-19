@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { concatBytes, type Bytes } from './bytes';
+import { concatBytes, joinBytes, type Bytes } from './bytes';
 import { gunzipBytes, gzipBytes } from './compression';
 import {
   EnvelopeKey,
@@ -879,6 +879,43 @@ describe('content blobs', () => {
     await rejectsWith(
       collect(decryptContentBlobStream(wrongHash, stream([envelope]))),
       'authentication-failed'
+    );
+  });
+
+  it('resolves the reference only once the final chunk has been read', async () => {
+    const plaintext = patternBytes(CHUNK * 3);
+    const encrypted = encryptContentBlobStream(
+      EnvelopeKey.generate(),
+      'export',
+      stream([plaintext]),
+      { compression: 'none', chunkSize: CHUNK, plaintextLength: CHUNK * 3 }
+    );
+    const reader = encrypted.envelope.getReader();
+    // Prefix, then the two non-final records; the final one is now queued.
+    for (let i = 0; i < 3; i += 1) await reader.read();
+    let settled = false;
+    void encrypted.reference.then(
+      () => (settled = true),
+      () => (settled = true)
+    );
+    await new Promise((done) => setTimeout(done, 0));
+    expect(settled).toBe(false);
+    // Discarding the queued final chunk must not leave a usable reference.
+    await reader.cancel('upload abandoned');
+    await rejectsWith(encrypted.reference, 'aborted');
+  });
+
+  it('joins any number of chunks without spreading them', async () => {
+    // Half a million parts: far more than an engine accepts as arguments.
+    const parts = Array.from({ length: 500_000 }, () => Uint8Array.of(7));
+    expect(joinBytes(parts).byteLength).toBe(500_000);
+    // The one-shot paths build and read many-chunk envelopes the same way.
+    const plaintext = patternBytes(CHUNK * 5_000, 1);
+    const key = patternBytes(32, 0x51);
+    const envelope = await sealProject(plaintext, { chunkSize: CHUNK }, key);
+    expect(parseEnvelope(envelope).chunkCount).toBe(5_000);
+    expect((await decryptProjectEnvelope(key, envelope)).plaintext).toEqual(
+      plaintext
     );
   });
 

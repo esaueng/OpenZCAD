@@ -574,15 +574,57 @@ export async function decodePayload(
   return plaintext;
 }
 
+/**
+ * Encrypts a whole payload into one preallocated buffer, a chunk-size slice
+ * at a time, so no per-chunk array list is kept or spread.
+ */
+async function sealWhole(
+  writer: EnvelopeWriter,
+  payload: Uint8Array
+): Promise<Bytes> {
+  const out = new Uint8Array(writer.encryptedLength(payload.byteLength));
+  out.set(writer.prefix);
+  let at = writer.prefix.byteLength;
+  const step = writer.header.chunkSize;
+  for (let offset = 0; offset < payload.byteLength; offset += step) {
+    for (const chunk of await writer.write(
+      payload.subarray(offset, offset + step)
+    )) {
+      out.set(chunk, at);
+      at += chunk.byteLength;
+    }
+  }
+  const last = await writer.finish();
+  out.set(last, at);
+  return out;
+}
+
+/**
+ * Decrypts a whole envelope into one buffer (the payload is never larger
+ * than the envelope), a record at a time, without keeping per-chunk arrays.
+ */
 async function readWhole<H extends EnvelopeHeader>(
   reader: EnvelopeReader<H>,
   envelope: Uint8Array,
   declaredLength: (header: H) => number,
   maxPlaintextBytes: number | undefined
 ): Promise<{ header: H; plaintext: Bytes }> {
-  const parts = [...(await reader.push(envelope)), ...(await reader.finish())];
+  const payloadBuffer = new Uint8Array(envelope.byteLength);
+  let at = 0;
+  const take = (parts: readonly Bytes[]) => {
+    for (const part of parts) {
+      payloadBuffer.set(part, at);
+      at += part.byteLength;
+    }
+  };
+  for (let offset = 0; offset < envelope.byteLength;) {
+    const slice = envelope.subarray(offset, offset + reader.preferredPushBytes);
+    offset += slice.byteLength;
+    take(await reader.push(slice));
+  }
+  take(await reader.finish());
   const header = reader.header!;
-  const plaintext = await decodePayload(concatBytes(...parts), {
+  const plaintext = await decodePayload(payloadBuffer.subarray(0, at), {
     kind: header.kind,
     compression: header.compression,
     declaredLength: declaredLength(header),
@@ -679,8 +721,7 @@ export async function encryptProjectEnvelope(
     writer.header.compression === 'gzip'
       ? await gzipBytes(plaintext)
       : plaintext;
-  const chunks = await writer.write(payload);
-  return concatBytes(writer.prefix, ...chunks, await writer.finish());
+  return sealWhole(writer, payload);
 }
 
 /**
@@ -694,9 +735,7 @@ export async function encryptWithHeaderForTests<H extends EnvelopeHeader>(
   payload: Uint8Array
 ): Promise<{ envelope: Bytes; writer: EnvelopeWriter<H> }> {
   const writer = await createWriter(key, header, false);
-  const chunks = await writer.write(payload);
-  const envelope = concatBytes(writer.prefix, ...chunks, await writer.finish());
-  return { envelope, writer };
+  return { envelope: await sealWhole(writer, payload), writer };
 }
 
 export async function decryptProjectEnvelope(
@@ -823,8 +862,7 @@ export async function encryptContentBlobWith(
     writer.header.compression === 'gzip'
       ? await gzipBytes(plaintext)
       : plaintext;
-  const chunks = await writer.write(payload);
-  const envelope = concatBytes(writer.prefix, ...chunks, await writer.finish());
+  const envelope = await sealWhole(writer, payload);
   return {
     envelope,
     reference: contentBlobReference(writer)
@@ -1070,6 +1108,7 @@ export function encryptContentBlobStream(
     return typed;
   };
   let writer: EnvelopeWriter<ContentBlobHeader>;
+  let finalEnqueued = false;
   let input: Bytes | null = null;
   let inputOffset = 0;
   const envelope = new ReadableStream<Bytes>({
@@ -1086,19 +1125,26 @@ export function encryptContentBlobStream(
     },
     async pull(controller) {
       try {
+        // The final chunk was enqueued on an earlier pull, and this pull
+        // only runs once the consumer has read it: now the blob is complete
+        // on the consumer's side, so the reference may resolve. A cancel
+        // before that rejects it instead.
+        if (finalEnqueued) {
+          controller.close();
+          resolve(contentBlobReference(writer));
+          return;
+        }
         // Read until something can be emitted: the writer holds a full
         // chunk back until it knows whether more follows, and a pull that
-        // enqueues nothing would never be called again.
-        // Feed the writer one chunk-size slice per step, so a large input
-        // chunk yields its records a few at a time under backpressure
-        // instead of all at once.
+        // enqueues nothing would never be called again. Feed the writer one
+        // chunk-size slice per step, so a large input chunk yields its
+        // records a few at a time under backpressure.
         for (;;) {
           if (!input || inputOffset >= input.byteLength) {
             const next = await payload.read();
             if (next.done) {
               controller.enqueue(await writer.finish());
-              controller.close();
-              resolve(contentBlobReference(writer));
+              finalEnqueued = true;
               return;
             }
             input = next.value;

@@ -1,4 +1,4 @@
-import { concatBytes, isUint, type Bytes } from './bytes';
+import { isUint, joinBytes, type Bytes } from './bytes';
 import { E2eeError } from './errors';
 
 /**
@@ -49,7 +49,7 @@ export async function readAll(
     }
     parts.push(value);
   }
-  return concatBytes(...parts);
+  return joinBytes(parts);
 }
 
 /** Gzip-compresses bytes before they are encrypted. */

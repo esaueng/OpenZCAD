@@ -16,7 +16,8 @@ export function copyBytes(bytes: Uint8Array): Bytes {
   return out;
 }
 
-export function concatBytes(...parts: readonly Uint8Array[]): Bytes {
+/** Concatenates an array of parts without spreading it into arguments. */
+export function joinBytes(parts: readonly Uint8Array[]): Bytes {
   let length = 0;
   for (const part of parts) length += part.byteLength;
   const out = new Uint8Array(length);
@@ -26,6 +27,11 @@ export function concatBytes(...parts: readonly Uint8Array[]): Bytes {
     offset += part.byteLength;
   }
   return out;
+}
+
+/** Concatenates a few parts; use `joinBytes` for an array of any length. */
+export function concatBytes(...parts: readonly Uint8Array[]): Bytes {
+  return joinBytes(parts);
 }
 
 /**
@@ -200,7 +206,7 @@ export class ByteWriter {
   }
 
   finish(): Bytes {
-    return concatBytes(...this.parts);
+    return joinBytes(this.parts);
   }
 
   private fixed(size: number, write: (view: DataView) => void): this {
