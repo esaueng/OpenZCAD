@@ -167,6 +167,12 @@ cases have not been rerun in Safari or WebKit.
   have it. The outside-window Commit now fails with
   `InvalidCommit(PskError(KeyNotFound))` before app policy. The harness checks
   that exact refusal instead of accepting a policy-only window rejection.
+- OpenMLS validates every queued Update leaf against the certified-device
+  directory and preserves its proposer's user identity before merging a staged
+  Commit. Isolated by-reference Update trials reproduce and refuse an
+  uncertified replacement key and a certified key for another user; a certified
+  same-user key rotation remains accepted. These trials supplement the
+  committer-path check and the normal Update scenario.
 - All six Node scenarios and all three variants' main and rejoin scenarios
   pass in Chromium 153 on Linux x86_64. The corrected group-state figures,
   timings and bundle measurements are preserved separately in

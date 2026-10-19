@@ -5,15 +5,15 @@
     "mls-rs": [
       {
         "host": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-        "loadMs": 12.4,
+        "loadMs": 11.4,
         "library": "mls-rs+webcrypto",
         "failedSteps": [],
         "medianMs": {
-          "commitCreate": 2.1,
+          "commitCreate": 2,
           "commitProcess": 1.2,
-          "addCommitWithWelcome": 2.6,
+          "addCommitWithWelcome": 3.1,
           "welcomeJoin": 1.3,
-          "externalCommit": 2.8
+          "externalCommit": 2.7
         },
         "samples": {
           "commitCreate": 13,
@@ -21,14 +21,14 @@
           "welcomeJoin": 7
         },
         "sizes": {
-          "commit_path_only": 660,
-          "group_info_with_external_pub": 1326,
-          "key_package": 400,
+          "commit_path_only": 661,
+          "group_info_with_external_pub": 1331,
+          "key_package": 403,
           "signature_secret_key": 138,
-          "state_a1_1_member": 2800,
+          "state_a1_1_member": 2801,
           "state_a1_3_members": 4322,
-          "welcome_1_joiner": 1063,
-          "welcome_4_member_group": 1719
+          "welcome_1_joiner": 1066,
+          "welcome_4_member_group": 1722
         },
         "epochChecks": 26,
         "finalEpoch": 32,
@@ -47,12 +47,12 @@
       },
       {
         "host": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-        "loadMs": 11.3,
+        "loadMs": 9.8,
         "library": "mls-rs+webcrypto",
         "failedSteps": [],
         "medianMs": {
-          "commitCreate": 1.8,
-          "commitProcess": 1.2,
+          "commitCreate": 1.9,
+          "commitProcess": 1.1,
           "addCommitWithWelcome": 2.4,
           "welcomeJoin": 1.3,
           "externalCommit": 2.7
@@ -63,13 +63,13 @@
           "welcomeJoin": 7
         },
         "sizes": {
-          "commit_path_only": 660,
-          "group_info_with_external_pub": 1328,
-          "key_package": 401,
+          "commit_path_only": 662,
+          "group_info_with_external_pub": 1333,
+          "key_package": 399,
           "signature_secret_key": 138,
           "state_a1_1_member": 2801,
           "state_a1_3_members": 4322,
-          "welcome_1_joiner": 1065,
+          "welcome_1_joiner": 1064,
           "welcome_4_member_group": 1723
         },
         "epochChecks": 26,
@@ -82,7 +82,7 @@
             "sealedBytes": 4338,
             "keyExtractable": false,
             "exportRefused": true,
-            "roundTripMs": 2.200000047683716,
+            "roundTripMs": 2,
             "identical": true
           }
         ]
@@ -95,7 +95,7 @@
         "medianMs": {
           "commitCreate": 1.8,
           "commitProcess": 1.2,
-          "addCommitWithWelcome": 2.3,
+          "addCommitWithWelcome": 2.7,
           "welcomeJoin": 1.3,
           "externalCommit": 2.7
         },
@@ -106,13 +106,13 @@
         },
         "sizes": {
           "commit_path_only": 660,
-          "group_info_with_external_pub": 1330,
-          "key_package": 400,
+          "group_info_with_external_pub": 1332,
+          "key_package": 401,
           "signature_secret_key": 138,
-          "state_a1_1_member": 2800,
-          "state_a1_3_members": 4321,
+          "state_a1_1_member": 2801,
+          "state_a1_3_members": 4323,
           "welcome_1_joiner": 1064,
-          "welcome_4_member_group": 1721
+          "welcome_4_member_group": 1722
         },
         "epochChecks": 26,
         "finalEpoch": 32,
@@ -120,11 +120,11 @@
           {
             "label": "mls-rs/A1",
             "store": "indexeddb",
-            "stateBytes": 4321,
-            "sealedBytes": 4337,
+            "stateBytes": 4323,
+            "sealedBytes": 4339,
             "keyExtractable": false,
             "exportRefused": true,
-            "roundTripMs": 1.899999976158142,
+            "roundTripMs": 2.100000023841858,
             "identical": true
           }
         ]
@@ -133,15 +133,15 @@
     "mls-rs-rustcrypto": [
       {
         "host": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-        "loadMs": 12.1,
+        "loadMs": 12.6,
         "library": "mls-rs+rustcrypto",
         "failedSteps": [],
         "medianMs": {
-          "commitCreate": 6.6,
-          "commitProcess": 3.8,
-          "addCommitWithWelcome": 9.5,
-          "welcomeJoin": 5.9,
-          "externalCommit": 12.2
+          "commitCreate": 6.3,
+          "commitProcess": 3.2,
+          "addCommitWithWelcome": 9.2,
+          "welcomeJoin": 5.5,
+          "externalCommit": 12.4
         },
         "samples": {
           "commitCreate": 13,
@@ -149,14 +149,14 @@
           "welcomeJoin": 7
         },
         "sizes": {
-          "commit_path_only": 663,
+          "commit_path_only": 664,
           "group_info_with_external_pub": 1335,
-          "key_package": 402,
+          "key_package": 404,
           "signature_secret_key": 32,
           "state_a1_1_member": 2481,
           "state_a1_3_members": 4006,
           "welcome_1_joiner": 1069,
-          "welcome_4_member_group": 1730
+          "welcome_4_member_group": 1731
         },
         "epochChecks": 26,
         "finalEpoch": 32,
@@ -168,21 +168,21 @@
             "sealedBytes": 4022,
             "keyExtractable": false,
             "exportRefused": true,
-            "roundTripMs": 2.100000023841858,
+            "roundTripMs": 1.899999976158142,
             "identical": true
           }
         ]
       },
       {
         "host": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-        "loadMs": 10.7,
+        "loadMs": 11.5,
         "library": "mls-rs+rustcrypto",
         "failedSteps": [],
         "medianMs": {
-          "commitCreate": 6.8,
-          "commitProcess": 3.8,
-          "addCommitWithWelcome": 9.4,
-          "welcomeJoin": 6,
+          "commitCreate": 6.2,
+          "commitProcess": 3.2,
+          "addCommitWithWelcome": 9,
+          "welcomeJoin": 5.5,
           "externalCommit": 12.2
         },
         "samples": {
@@ -192,12 +192,12 @@
         },
         "sizes": {
           "commit_path_only": 664,
-          "group_info_with_external_pub": 1336,
-          "key_package": 404,
+          "group_info_with_external_pub": 1337,
+          "key_package": 403,
           "signature_secret_key": 32,
           "state_a1_1_member": 2481,
-          "state_a1_3_members": 4003,
-          "welcome_1_joiner": 1070,
+          "state_a1_3_members": 4004,
+          "welcome_1_joiner": 1069,
           "welcome_4_member_group": 1731
         },
         "epochChecks": 26,
@@ -206,26 +206,26 @@
           {
             "label": "mls-rs/A1",
             "store": "indexeddb",
-            "stateBytes": 4003,
-            "sealedBytes": 4019,
+            "stateBytes": 4004,
+            "sealedBytes": 4020,
             "keyExtractable": false,
             "exportRefused": true,
-            "roundTripMs": 2.399999976158142,
+            "roundTripMs": 1.899999976158142,
             "identical": true
           }
         ]
       },
       {
         "host": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-        "loadMs": 14.5,
+        "loadMs": 15.1,
         "library": "mls-rs+rustcrypto",
         "failedSteps": [],
         "medianMs": {
-          "commitCreate": 6.6,
-          "commitProcess": 3.7,
-          "addCommitWithWelcome": 9.4,
-          "welcomeJoin": 5.9,
-          "externalCommit": 12.1
+          "commitCreate": 6.3,
+          "commitProcess": 3.2,
+          "addCommitWithWelcome": 9.3,
+          "welcomeJoin": 5.6,
+          "externalCommit": 12.2
         },
         "samples": {
           "commitCreate": 13,
@@ -234,13 +234,13 @@
         },
         "sizes": {
           "commit_path_only": 663,
-          "group_info_with_external_pub": 1334,
-          "key_package": 401,
+          "group_info_with_external_pub": 1337,
+          "key_package": 403,
           "signature_secret_key": 32,
           "state_a1_1_member": 2482,
-          "state_a1_3_members": 4006,
+          "state_a1_3_members": 4004,
           "welcome_1_joiner": 1068,
-          "welcome_4_member_group": 1731
+          "welcome_4_member_group": 1730
         },
         "epochChecks": 26,
         "finalEpoch": 32,
@@ -248,11 +248,11 @@
           {
             "label": "mls-rs/A1",
             "store": "indexeddb",
-            "stateBytes": 4006,
-            "sealedBytes": 4022,
+            "stateBytes": 4004,
+            "sealedBytes": 4020,
             "keyExtractable": false,
             "exportRefused": true,
-            "roundTripMs": 2.1999999284744263,
+            "roundTripMs": 2.200000047683716,
             "identical": true
           }
         ]
@@ -261,126 +261,126 @@
     "openmls": [
       {
         "host": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-        "loadMs": 13.3,
+        "loadMs": 12.2,
         "library": "openmls",
         "failedSteps": [],
         "medianMs": {
-          "commitCreate": 6.7,
-          "commitProcess": 3.6,
+          "commitCreate": 6.8,
+          "commitProcess": 3.65,
           "addCommitWithWelcome": 8.8,
-          "welcomeJoin": 6.3,
-          "externalCommit": 11.6
-        },
-        "samples": {
-          "commitCreate": 13,
-          "commitProcess": 61,
-          "welcomeJoin": 7
-        },
-        "sizes": {
-          "commit_path_only": 655,
-          "group_info_with_external_pub": 1371,
-          "key_package": 394,
-          "signature_key_pair_record": 774,
-          "state_a1_1_member": 24883,
-          "state_a1_3_members": 29863,
-          "welcome_1_joiner": 1086,
-          "welcome_4_member_group": 1756
-        },
-        "epochChecks": 26,
-        "finalEpoch": 33,
-        "persistence": [
-          {
-            "label": "openmls/A1",
-            "store": "indexeddb",
-            "stateBytes": 29863,
-            "sealedBytes": 29879,
-            "keyExtractable": false,
-            "exportRefused": true,
-            "roundTripMs": 2.5,
-            "identical": true
-          }
-        ]
-      },
-      {
-        "host": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-        "loadMs": 11.9,
-        "library": "openmls",
-        "failedSteps": [],
-        "medianMs": {
-          "commitCreate": 6.7,
-          "commitProcess": 3.5,
-          "addCommitWithWelcome": 8.8,
-          "welcomeJoin": 6.1,
-          "externalCommit": 11.4
-        },
-        "samples": {
-          "commitCreate": 13,
-          "commitProcess": 61,
-          "welcomeJoin": 7
-        },
-        "sizes": {
-          "commit_path_only": 658,
-          "group_info_with_external_pub": 1372,
-          "key_package": 395,
-          "signature_key_pair_record": 769,
-          "state_a1_1_member": 24937,
-          "state_a1_3_members": 29769,
-          "welcome_1_joiner": 1085,
-          "welcome_4_member_group": 1760
-        },
-        "epochChecks": 26,
-        "finalEpoch": 33,
-        "persistence": [
-          {
-            "label": "openmls/A1",
-            "store": "indexeddb",
-            "stateBytes": 29769,
-            "sealedBytes": 29785,
-            "keyExtractable": false,
-            "exportRefused": true,
-            "roundTripMs": 2.5,
-            "identical": true
-          }
-        ]
-      },
-      {
-        "host": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
-        "loadMs": 10.9,
-        "library": "openmls",
-        "failedSteps": [],
-        "medianMs": {
-          "commitCreate": 6.7,
-          "commitProcess": 3.5,
-          "addCommitWithWelcome": 8.7,
           "welcomeJoin": 6.2,
           "externalCommit": 11.6
         },
         "samples": {
           "commitCreate": 13,
-          "commitProcess": 61,
+          "commitProcess": 62,
           "welcomeJoin": 7
         },
         "sizes": {
-          "commit_path_only": 657,
-          "group_info_with_external_pub": 1372,
+          "commit_path_only": 656,
+          "group_info_with_external_pub": 1368,
           "key_package": 395,
           "signature_key_pair_record": 761,
-          "state_a1_1_member": 24796,
-          "state_a1_3_members": 29789,
+          "state_a1_1_member": 24934,
+          "state_a1_3_members": 29879,
           "welcome_1_joiner": 1086,
-          "welcome_4_member_group": 1759
+          "welcome_4_member_group": 1755
         },
-        "epochChecks": 26,
+        "epochChecks": 27,
         "finalEpoch": 33,
         "persistence": [
           {
             "label": "openmls/A1",
             "store": "indexeddb",
-            "stateBytes": 29789,
-            "sealedBytes": 29805,
+            "stateBytes": 29879,
+            "sealedBytes": 29895,
             "keyExtractable": false,
             "exportRefused": true,
-            "roundTripMs": 2.299999952316284,
+            "roundTripMs": 2.600000023841858,
+            "identical": true
+          }
+        ]
+      },
+      {
+        "host": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+        "loadMs": 11.6,
+        "library": "openmls",
+        "failedSteps": [],
+        "medianMs": {
+          "commitCreate": 6.7,
+          "commitProcess": 3.55,
+          "addCommitWithWelcome": 8.7,
+          "welcomeJoin": 6.1,
+          "externalCommit": 11.6
+        },
+        "samples": {
+          "commitCreate": 13,
+          "commitProcess": 62,
+          "welcomeJoin": 7
+        },
+        "sizes": {
+          "commit_path_only": 657,
+          "group_info_with_external_pub": 1371,
+          "key_package": 396,
+          "signature_key_pair_record": 761,
+          "state_a1_1_member": 24864,
+          "state_a1_3_members": 29744,
+          "welcome_1_joiner": 1086,
+          "welcome_4_member_group": 1756
+        },
+        "epochChecks": 27,
+        "finalEpoch": 33,
+        "persistence": [
+          {
+            "label": "openmls/A1",
+            "store": "indexeddb",
+            "stateBytes": 29744,
+            "sealedBytes": 29760,
+            "keyExtractable": false,
+            "exportRefused": true,
+            "roundTripMs": 2.200000047683716,
+            "identical": true
+          }
+        ]
+      },
+      {
+        "host": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+        "loadMs": 12.9,
+        "library": "openmls",
+        "failedSteps": [],
+        "medianMs": {
+          "commitCreate": 6.7,
+          "commitProcess": 3.65,
+          "addCommitWithWelcome": 8.8,
+          "welcomeJoin": 6.1,
+          "externalCommit": 11.5
+        },
+        "samples": {
+          "commitCreate": 13,
+          "commitProcess": 62,
+          "welcomeJoin": 7
+        },
+        "sizes": {
+          "commit_path_only": 656,
+          "group_info_with_external_pub": 1370,
+          "key_package": 395,
+          "signature_key_pair_record": 764,
+          "state_a1_1_member": 24882,
+          "state_a1_3_members": 29792,
+          "welcome_1_joiner": 1087,
+          "welcome_4_member_group": 1755
+        },
+        "epochChecks": 27,
+        "finalEpoch": 33,
+        "persistence": [
+          {
+            "label": "openmls/A1",
+            "store": "indexeddb",
+            "stateBytes": 29792,
+            "sealedBytes": 29808,
+            "keyExtractable": false,
+            "exportRefused": true,
+            "roundTripMs": 2.100000023841858,
             "identical": true
           }
         ]

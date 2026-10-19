@@ -48,6 +48,7 @@ describe.each(LIBRARIES)('$dir', ({ dir, name }) => {
       'create + add A2 via Welcome',
       'add B1 with editor role',
       'Update proposal by B1, committed by A1',
+      ...(dir === 'openmls' ? ['policy: uncertified Update rejected', 'policy: Update changing user rejected', 'policy: certified same-user Update accepted'] : []),
       'timed path-only commits',
       'timed Welcome joins',
       'policy: editor Add rejected',

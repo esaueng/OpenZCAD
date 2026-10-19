@@ -227,7 +227,15 @@ fn authorize_commit(
                 let proposer_user = leaf_user(group, *proposer)?;
                 let role = roles.get(&proposer_user).ok_or("proposer holds no role")?.role;
                 let ok = match q.proposal() {
-                    Proposal::Update(_) | Proposal::SelfRemove => true,
+                    Proposal::Update(update) => {
+                        let leaf = update.leaf_node();
+                        if user_of(leaf.credential())? != proposer_user {
+                            return Err("proposer changed user".into());
+                        }
+                        dir.check(leaf.credential(), leaf.signature_key().as_slice())?;
+                        true
+                    }
+                    Proposal::SelfRemove => true,
                     Proposal::Remove(r) => {
                         role == Role::Owner || leaf_user(group, r.removed())? == proposer_user
                     }
@@ -455,6 +463,63 @@ fn deliver(
     Ok(())
 }
 
+/// Independent state for adversarial Update trials; the main scenario stays valid.
+fn fork_device(device: &Device) -> R<Device> {
+    let storage = storage_from_bytes(&storage_bytes(&device.provider)?)?;
+    let group_id = device.group.as_ref().ok_or("no group")?.group_id();
+    let group = MlsGroup::load(&storage, group_id).map_err(s)?.ok_or("fork missing group")?;
+    Ok(Device {
+        name: device.name.clone(),
+        provider: Provider { crypto: RustCrypto::default(), storage },
+        signer: device.signer.clone(),
+        cwk: device.cwk.clone(),
+        group: Some(group),
+        window: device.window,
+        saved: device.saved.clone(),
+    })
+}
+
+/// A by-reference Update rotates B's leaf key; A1 commits and A2 receives.
+fn update_trial(
+    hooks: &Hooks,
+    report: &mut Report,
+    project_id: &[u8],
+    devices: [&Device; 3],
+    directory: &Directory,
+    new_user: &str,
+    certified: bool,
+    refusal: Option<&str>,
+) -> R<String> {
+    let mut owner = fork_device(devices[0])?;
+    let mut receiver = fork_device(devices[1])?;
+    let mut proposer = fork_device(devices[2])?;
+    let mut directory = directory.clone();
+    let rotated = new_device(new_user, "rotated", &mut directory, certified)?;
+    let (proposal, _) = proposer.group.as_mut().unwrap().propose_self_update_with_new_signer(
+        &proposer.provider,
+        &proposer.signer,
+        NewSignerBundle { signer: &rotated.signer, credential_with_key: rotated.cwk.clone() },
+        LeafNodeParameters::default(),
+    ).map_err(s)?;
+    deliver(hooks, report, &proposal, &mut [&mut owner, &mut receiver], &directory)?;
+    let bundle = owner.group.as_mut().unwrap().commit_to_pending_proposals(&owner.provider, &owner.signer).map_err(s)?.0;
+    merge_own(&mut owner)?;
+    let before = receiver.group.as_ref().unwrap().epoch();
+    let result = receive(hooks, report, &mut receiver, &bundle, &directory);
+    match (refusal, result) {
+        (Some(reason), Err(error)) if error.contains(reason) => {
+            if receiver.group.as_ref().unwrap().epoch() != before {
+                return Err("refused Update advanced the receiver epoch".into());
+            }
+            Ok(error)
+        }
+        (Some(_), Ok(())) => Err("unauthorized Update was merged".into()),
+        (Some(_), Err(error)) => Err(format!("unexpected refusal: {error}")),
+        (None, Err(error)) => Err(error),
+        (None, Ok(())) => check_agreement(report, project_id, &[&owner, &receiver]),
+    }
+}
+
 fn commit(d: &mut Device) -> R<CommitMessageBundle> {
     let provider = &d.provider;
     let signer = &d.signer;
@@ -643,6 +708,15 @@ async fn scenario(hooks: &Hooks, report: &mut Report, project_id: &[u8], rounds:
     deliver(hooks, report, &bundle, &mut [&mut a2, &mut b1], &dir)?;
     let r = check_agreement(report, project_id, &[&a1, &a2, &b1]);
     report.step("Update proposal by B1, committed by A1", r);
+
+    for (name, user, certified, refusal) in [
+        ("policy: uncertified Update rejected", "B", false, Some("not certified")),
+        ("policy: Update changing user rejected", "A", true, Some("proposer changed user")),
+        ("policy: certified same-user Update accepted", "B", true, None),
+    ] {
+        let result = update_trial(hooks, report, project_id, [&a1, &a2, &b1], &dir, user, certified, refusal);
+        report.step(name, result);
+    }
 
     // 3. Commit timing: rotating self-update commits ----------------------
     for round in 0..rounds {
