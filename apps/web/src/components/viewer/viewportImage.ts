@@ -127,6 +127,58 @@ export function fitCameraToAspect(
   return () => undefined;
 }
 
+/**
+ * The `userData` key a selected sketch curve or fill carries its unselected
+ * look under. Sketch selection is baked into those materials when they are
+ * built, so the capture needs to be told what they look like unselected.
+ */
+export const IMAGE_UNSELECTED_STYLE = 'imageUnselectedStyle';
+
+export interface ImageUnselectedStyle {
+  color?: THREE.ColorRepresentation;
+  linewidth?: number;
+  opacity?: number;
+}
+
+type StyledMaterial = THREE.Material & {
+  color?: THREE.Color;
+  linewidth?: number;
+};
+
+/** Applies a sketch object's unselected look; returns the exact restore. */
+function unselectSketchObject(node: THREE.Object3D): (() => void) | null {
+  const material = (node as THREE.Mesh).material as StyledMaterial | undefined;
+  if (!material || Array.isArray(material)) return null;
+  const style = node.userData[IMAGE_UNSELECTED_STYLE] as
+    ImageUnselectedStyle | undefined;
+  // A picked profile region: its fill drops back to the sketch's idle level.
+  const region =
+    node.userData.region !== undefined && node.userData.regionSelected === true
+      ? {
+          opacity: (node.userData.regionBaseOpacity as number | undefined) ?? 0
+        }
+      : undefined;
+  const target: ImageUnselectedStyle | undefined = style ?? region;
+  if (!target) return null;
+  const was = {
+    color: material.color?.clone(),
+    linewidth: material.linewidth,
+    opacity: material.opacity
+  };
+  if (target.color !== undefined && material.color) {
+    material.color.set(target.color);
+  }
+  if (target.linewidth !== undefined && material.linewidth !== undefined) {
+    material.linewidth = target.linewidth;
+  }
+  if (target.opacity !== undefined) material.opacity = target.opacity;
+  return () => {
+    if (was.color && material.color) material.color.copy(was.color);
+    if (was.linewidth !== undefined) material.linewidth = was.linewidth;
+    material.opacity = was.opacity;
+  };
+}
+
 /** An edge batch (`BodyEdgeOverlay`) that can draw without highlights. */
 interface SuspendsHighlights {
   suspendHighlights(): () => void;
@@ -322,6 +374,13 @@ export function renderViewportImage(
     });
   }
   if (parts.emphasizeBodyColors) restores.push(parts.emphasizeBodyColors());
+  // A selected sketch or picked profile is styled in its own materials.
+  for (const group of parts.sketches) {
+    group.traverse((node) => {
+      const restore = unselectSketchObject(node);
+      if (restore) restores.push(restore);
+    });
+  }
   const background = scene.background;
   if (request.transparent) scene.background = null;
   restores.push(() => {

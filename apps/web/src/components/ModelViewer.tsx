@@ -292,6 +292,7 @@ import { sketchValueResolver } from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
 import { traceFaceDrag } from '../lib/faceDragTrace';
 import {
+  IMAGE_UNSELECTED_STYLE,
   renderViewportImage,
   viewportImageMaxSide,
   type ViewportImageSource
@@ -10527,6 +10528,14 @@ export function ModelViewer({
         });
         line.name = 'sketch-curve';
         line.userData.sketchViewId = view.sketchId;
+        if (view.selected) {
+          // What an image export draws instead: selection is a viewing state.
+          line.userData[IMAGE_UNSELECTED_STYLE] = {
+            color: curve.construction ? 0x7b8da3 : SKETCH_COLOR,
+            linewidth: SKETCH_CURVE_WIDTH,
+            opacity: curve.construction ? 0.72 : 0.9
+          };
+        }
         if (curve.construction) {
           line.material.dashed = true;
           line.material.dashSize = 1.4;
@@ -11490,6 +11499,12 @@ export function ModelViewer({
         })
       );
       profileFill.userData.sketchId = sketch.sketchId;
+      if (sketch.selected) {
+        profileFill.userData[IMAGE_UNSELECTED_STYLE] = {
+          color: 0x2f4fa8,
+          opacity: 0.1
+        };
+      }
       profileFill.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_FILL;
       context.sketchGroup.add(profileFill);
 
@@ -11507,6 +11522,12 @@ export function ModelViewer({
       );
       line.name = 'sketch-curve';
       line.raycast = () => undefined;
+      if (sketch.selected) {
+        line.userData[IMAGE_UNSELECTED_STYLE] = {
+          color: SKETCH_COLOR,
+          opacity: 0.5
+        };
+      }
       line.renderOrder = sketch.selected
         ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
         : VIEWPORT_RENDER_ORDER.SKETCH_CURVE;

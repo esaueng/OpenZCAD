@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  IMAGE_UNSELECTED_STYLE,
   captureSamples,
   fitCameraToAspect,
   renderViewportImage,
@@ -301,5 +302,62 @@ describe('renderViewportImage grid and colours', () => {
     expect(stub.seen[0]).toMatchObject({ colorsEmphasized: true });
     expect(stub.emphasizeBodyColors).toHaveBeenCalledTimes(1);
     expect(stub.isEmphasized()).toBe(false);
+  });
+});
+
+describe('renderViewportImage sketch selection', () => {
+  it('draws a selected sketch and a picked region unselected, then restores them', () => {
+    const stub = stubScene();
+    const curveMaterial = new THREE.LineBasicMaterial({
+      color: 0x4d8dff,
+      opacity: 1
+    }) as THREE.LineBasicMaterial & { linewidth: number };
+    curveMaterial.linewidth = 1.8;
+    const curve = new THREE.Line(new THREE.BufferGeometry(), curveMaterial);
+    curve.userData[IMAGE_UNSELECTED_STYLE] = {
+      color: 0xa0b0c0,
+      linewidth: 1.2,
+      opacity: 0.9
+    };
+    const regionMaterial = new THREE.MeshBasicMaterial({ opacity: 0.4 });
+    const region = new THREE.Mesh(new THREE.BufferGeometry(), regionMaterial);
+    region.userData = {
+      region: { profileId: 'p' },
+      regionSelected: true,
+      regionBaseOpacity: 0.08
+    };
+    const plain = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({ opacity: 0.5 })
+    );
+    stub.sketches.add(curve, region, plain);
+    let during: unknown;
+    stub.renderer.render.mockImplementation((object: THREE.Object3D) => {
+      if (object !== stub.parts.scene) return;
+      during = {
+        color: curveMaterial.color.getHex(),
+        linewidth: curveMaterial.linewidth,
+        opacity: curveMaterial.opacity,
+        region: regionMaterial.opacity,
+        plain: plain.material.opacity
+      };
+    });
+    renderViewportImage(stub.parts, {
+      width: 16,
+      height: 16,
+      transparent: false,
+      showGrid: false
+    });
+    expect(during).toEqual({
+      color: 0xa0b0c0,
+      linewidth: 1.2,
+      opacity: 0.9,
+      region: 0.08,
+      plain: 0.5
+    });
+    expect(curveMaterial.color.getHex()).toBe(0x4d8dff);
+    expect(curveMaterial.linewidth).toBe(1.8);
+    expect(curveMaterial.opacity).toBe(1);
+    expect(regionMaterial.opacity).toBe(0.4);
   });
 });
