@@ -891,8 +891,20 @@ encrypts under the project key is unchanged.
     carries over the earlier project keys from the user's account-key-wrapped
     copies, which every accepted project keeps. Old versions stay readable,
     and the version chain continues under the new group's epochs. A reset is
-    refused whenever the old group lists any other identity, so it cannot be
-    used to drop collaborators. The spike ran each
+    refused whenever the newest group state the browser can find lists any
+    other identity. That check is only as good as that state, and a browser
+    that has lost all its MLS state has no pin of its own. A compromised
+    server could show it an epoch from before collaborators joined, and the
+    reset would then fork the project away from them. Two mitigations bound
+    this. The browser also checks the newest membership record it can
+    authenticate itself: a copy of the roles extension, wrapped under the
+    account key, that each of the user's devices updates whenever it accepts
+    a membership change. The user must also confirm, in plain words, that the
+    project has no collaborators. A reset entry is signed and public, so a
+    collaborator's browser that later sees one excluding them reports the
+    fork, and the project state code exposes it. A reset is therefore a
+    recovery tool that can create a fork under a compromised server, not a
+    guaranteed-safe operation, and the ADR claims nothing stronger. The spike ran each
     of these rules on its own in both libraries, and each refusal fired for
     exactly its intended reason. Not yet covered: a removed device failing both
     rules at once, the account-key rotation and the server-stored wrapped PSKs,
