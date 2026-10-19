@@ -12,6 +12,7 @@ import type {
   FaceTopology,
   FeatureId,
   FeatureNode,
+  ParamValue,
   ProjectDocument,
   SketchId,
   TopologySelection
@@ -127,22 +128,28 @@ export function toFaceDistanceEstimate(
   const sketch = findSketch(document, sketchId);
   if (!sketch) return null;
   const { scope } = getParameterScope(document);
+  const resolve = (value: ParamValue) =>
+    resolveParamValue(value, scope, 'sketch offset', document.units);
+  // Both planes are re-resolved against the current projection, as the
+  // build re-resolves them: an upstream edit can move the sketch and the
+  // face together, so the face's pick-time snapshot is not where it is now.
   let basis;
+  let face;
   try {
     basis = resolvedSketchPlaneBasis(
       document,
       sketch.planeRef,
-      (value) =>
-        resolveParamValue(value, scope, 'sketch offset', document.units),
+      resolve,
       sketch.name
     );
+    face = resolvedSketchPlaneBasis(document, target, resolve, sketch.name);
   } catch {
     return null;
   }
   // The exact build's own test, so the card never offers a face it refuses.
   return toFaceSignedDistance(basis, {
-    point: target.sourceCentroid,
-    normal: target.sourceNormal
+    point: face.origin,
+    normal: face.normal
   });
 }
 

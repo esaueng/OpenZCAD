@@ -29,7 +29,10 @@ import {
 } from '@openzcad/shared';
 import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
 import { affectedFeatureTargets } from '../apps/web/src/lib/affectedFeatureTargets';
-import { extrudeToFaceTargetFromPick } from '../apps/web/src/lib/extrudeToFace';
+import {
+  extrudeToFaceTargetFromPick,
+  toFaceDistanceEstimate
+} from '../apps/web/src/lib/extrudeToFace';
 import { extrudeCapAncestor } from '../apps/web/src/lib/interaction/extrudeCapAncestry';
 import {
   extrudeEditCommand,
@@ -709,6 +712,33 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
           feature
         )
       ).toThrow(/made by this extrusion itself/);
+    });
+
+    it('estimates the reach from where the face is now, not where it was picked', async () => {
+      const result = await post(25);
+      const feature = listFeaturesInOrder(result.document).at(-1)!;
+      const lift = listFeaturesInOrder(result.document).find(
+        (candidate) => candidate.name === 'Lift'
+      )!;
+      const moved = await synced(
+        updateFeature(result.document, {
+          featureId: lift.featureId,
+          data: {
+            transform: {
+              translation: { x: 0, y: 0, z: 40 },
+              rotationDeg: { x: 0, y: 0, z: 0 }
+            }
+          }
+        })
+      );
+      if (feature.data.featureKind !== 'extrude') throw new Error('extrude');
+      expect(
+        toFaceDistanceEstimate(
+          moved,
+          feature.data.sketchId,
+          feature.data.toFace!
+        )
+      ).toBeCloseTo(40, 9);
     });
 
     it('refuses as unresolved when the face is no longer parallel', async () => {
