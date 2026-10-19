@@ -124,7 +124,10 @@ libraries alone are smaller.
 | mls-rs (both providers)                 | 4.0–4.4 KB | 2.4–2.9 KB | 32 B raw, or 138 B PKCS#8 with WebCrypto |
 | OpenMLS                                 | 25–30 KB   | 21–25 KB   | 0.8 KB stored record                     |
 
-Both libraries keep three past epochs. OpenMLS stores JSON-encoded records,
+These main-scenario figures include the signer and an empty rejoin-PSK cache.
+The separate mls-rs rejoin scenario seals five retained epoch secrets with the receiver
+and verifies an external Commit after discarding and restoring that receiver.
+Both libraries keep three past group epochs. OpenMLS stores JSON-encoded records,
 which is most of the gap.
 The complete-state figures are from the corrected Linux runs in
 [`review-2026-10-19`](../../spikes/mls/results/review-2026-10-19/).
@@ -143,7 +146,8 @@ so the original Safari/WebKit results proved a sealed group-state round trip,
 not recovery of a complete device after restart.
 
 The corrected mls-rs payload contains the group id, stored group and retained
-epochs, public signing identity, and leaf signing secret. The experiment
+epochs, public signing identity, leaf signing secret and retained external
+rejoin PSKs. The experiment
 drops the old device, client, group and signer before restoring everything
 from that payload and committing again. The corrected Node and Chromium
 runs pass for both mls-rs providers. Chromium also exercises real IndexedDB;
@@ -153,7 +157,10 @@ cases have not been rerun in Safari or WebKit.
 ## Corrections and verification (19 October)
 
 - The complete mls-rs payload now includes the leaf signer; the post-reload
-  Commit cannot borrow a private key from the discarded client.
+  Commit cannot borrow a private key from the discarded client. A second
+  restart after PSK accumulation restores the retained cache, then accepts an
+  authorized external Commit using a pre-restart PSK. The receiver does not
+  retain its old live client or cache for this test.
 - OpenMLS explicitly deletes external PSKs older than `WINDOW` from its
   `MemoryStorage` and prunes the matching saved-secret list. A removed device
   keeps its old secret for the negative test, but active members no longer

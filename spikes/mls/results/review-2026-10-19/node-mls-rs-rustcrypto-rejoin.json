@@ -27,7 +27,7 @@
     {
       "name": "rejoin accepted: unrevoked device, PSK inside the window",
       "ok": true,
-      "detail": "PSK of epoch 5 at epoch 6; epoch 7, 3 members agree"
+      "detail": "PSK of epoch 5 at epoch 6; receiver signer and retained PSKs restored from sealed state; epoch 7, 3 members agree"
     },
     {
       "name": "rejoin refused: PSK outside the retention window",
@@ -47,29 +47,32 @@
   ],
   "commit_create_ms": [],
   "commit_process_ms": [
-    3.785329000000047,
-    3.1583239999999932,
-    3.2491449999999986,
-    3.0954850000000533,
-    3.1071159999999054,
-    3.2486049999999977,
-    3.23427700000002,
-    3.1539050000001225,
-    3.753319000000147,
-    3.0896640000000843,
-    3.108408999999938,
-    3.3982169999999314,
-    3.517411999999922,
-    3.200533999999834,
-    3.293489000000136
+    3.154205999999931,
+    2.6754009999999653,
+    2.6682969999999386,
+    2.6951980000001186,
+    2.7427979999999934,
+    2.69735199999991,
+    2.6657219999999597,
+    2.6723349999999755,
+    3.118979999999965,
+    2.6740279999999075,
+    2.764809000000014,
+    2.794415000000072,
+    2.7448309999999765,
+    2.761022000000139,
+    2.7500420000001213
   ],
   "add_commit_ms": [],
   "welcome_join_ms": [],
   "external_commit_ms": [
-    21.198834999999917
+    18.80632000000014
   ],
-  "sizes": {},
+  "sizes": {
+    "retained_rejoin_psks": 5,
+    "state_a1_rejoin_receiver": 3573
+  },
   "epoch_checks": 1,
-  "exporter_sample": "72b02c32983ef744",
+  "exporter_sample": "08d1df2a5543b4b7",
   "final_epoch": 15
 }

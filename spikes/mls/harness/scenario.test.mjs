@@ -94,6 +94,16 @@ describe.each(LIBRARIES)('$dir', ({ dir, name }) => {
       "rejoin refused: PSK from before the member's role change",
       'rejoin refused: removed member, PSK from before removal'
     ]);
+    if (dir.startsWith('mls-rs')) {
+      const restored = report.steps.find(
+        (s) => s.name === 'rejoin accepted: unrevoked device, PSK inside the window'
+      );
+      expect(restored.detail).toContain(
+        'receiver signer and retained PSKs restored from sealed state'
+      );
+      expect(report.sizes.retained_rejoin_psks).toBe(5);
+      expect(report.sizes.state_a1_rejoin_receiver).toBeGreaterThan(0);
+    }
     if (dir === 'openmls') {
       const expired = report.steps.find(
         (s) => s.name === 'rejoin refused: PSK outside the retention window'

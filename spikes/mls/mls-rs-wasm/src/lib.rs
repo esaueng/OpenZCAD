@@ -456,6 +456,7 @@ struct StoredDevice {
     group: StoredGroup,
     identity: SigningIdentity,
     secret: SignatureSecretKey,
+    psks: Vec<StoredEpoch>,
 }
 
 #[derive(Clone, Default)]
@@ -464,21 +465,23 @@ struct SpikeStorage(Arc<Mutex<BTreeMap<Vec<u8>, StoredGroup>>>);
 const EPOCH_RETENTION: usize = 3;
 
 impl SpikeStorage {
-    fn export(&self, group_id: &[u8], identity: &SigningIdentity, secret: &SignatureSecretKey) -> Option<Vec<u8>> {
+    fn export(&self, group_id: &[u8], identity: &SigningIdentity, secret: &SignatureSecretKey, psks: &SpikePsks) -> Option<Vec<u8>> {
         self.0.lock().unwrap().get(group_id).map(|group| StoredDevice {
             group_id: group_id.to_vec(),
             group: group.clone(),
             identity: identity.clone(),
             secret: secret.clone(),
+            psks: psks.0.lock().unwrap().iter().map(|(id, data)| StoredEpoch { id: *id, data: data.clone() }).collect(),
         }.mls_encode_to_vec().unwrap())
     }
-    fn import(bytes: &[u8]) -> R<(Vec<u8>, Self, SigningIdentity, SignatureSecretKey)> {
+    fn import(bytes: &[u8]) -> R<(Vec<u8>, Self, SigningIdentity, SignatureSecretKey, SpikePsks)> {
         let storage = Self::default();
         let mut input = bytes;
         let stored = StoredDevice::mls_decode(&mut input).map_err(s)?;
         if !input.is_empty() { return Err("trailing persisted device bytes".into()); }
         storage.0.lock().unwrap().insert(stored.group_id.clone(), stored.group);
-        Ok((stored.group_id, storage, stored.identity, stored.secret))
+        let psks = SpikePsks(Arc::new(Mutex::new(stored.psks.into_iter().map(|entry| (entry.id, entry.data)).collect())));
+        Ok((stored.group_id, storage, stored.identity, stored.secret, psks))
     }
 }
 
@@ -1012,7 +1015,7 @@ async fn scenario(hooks: &Hooks, report: &mut Report, project_id: &[u8], rounds:
     // 8. Persist A1 through the host (encrypted IndexedDB) and reload ------
     {
         g(&mut a1)?.write_to_storage().await.map_err(s)?;
-        let bytes = a1.storage.export(&group_id, &a1.identity, &a1.secret).ok_or("nothing stored")?;
+        let bytes = a1.storage.export(&group_id, &a1.identity, &a1.secret, &a1.psks).ok_or("nothing stored")?;
         report.sizes.insert("state_a1_3_members".into(), bytes.len());
         let secret_len = a1.secret.as_bytes().len();
         report.sizes.insert("signature_secret_key".into(), secret_len);
@@ -1022,8 +1025,8 @@ async fn scenario(hooks: &Hooks, report: &mut Report, project_id: &[u8], rounds:
         // successful Commit must now get its signing key from the sealed blob.
         drop(a1);
         let restored = hooks.persist("mls-rs/A1", &bytes).await?;
-        let (restored_group_id, storage, identity, secret) = SpikeStorage::import(&restored)?;
-        let psks = SpikePsks::default();
+        let (restored_group_id, storage, identity, secret, psks) = SpikeStorage::import(&restored)?;
+        let saved = psks.0.lock().unwrap().iter().map(|(epoch, secret)| (*epoch, secret.clone())).collect();
         let client = make_client(
             identity.clone(),
             secret.clone(),
@@ -1034,7 +1037,7 @@ async fn scenario(hooks: &Hooks, report: &mut Report, project_id: &[u8], rounds:
             None,
         );
         let group = client.load_group(&restored_group_id).await.map_err(s)?;
-        a1 = Device { name, user, client, secret, identity, storage, psks, saved: Vec::new(), group: Some(group) };
+        a1 = Device { name, user, client, secret, identity, storage, psks, saved, group: Some(group) };
         let out = g(&mut a1)?.commit(vec![]).await.map_err(s)?;
         g(&mut a1)?.apply_pending_commit().await.map_err(s)?;
         deliver(hooks, report, &out.commit_message, &mut [&mut a2, &mut b1]).await?;
@@ -1107,7 +1110,7 @@ async fn scenario(hooks: &Hooks, report: &mut Report, project_id: &[u8], rounds:
 
     // Final state sizes.
     g(&mut a1)?.write_to_storage().await.map_err(s)?;
-    let bytes = a1.storage.export(&group_id, &a1.identity, &a1.secret).ok_or("nothing stored")?;
+    let bytes = a1.storage.export(&group_id, &a1.identity, &a1.secret, &a1.psks).ok_or("nothing stored")?;
     report.sizes.insert("state_a1_1_member".into(), bytes.len());
     let _ = (&a1.name, &a1.user);
     Ok(())
@@ -1380,6 +1383,21 @@ async fn rejoin_scenario(hooks: &Hooks, report: &mut Report, project_id: &[u8]) 
         let gi = g(&mut a1)?.group_info_message_allowing_ext_commit(true).await.map_err(s)?;
         let newest = a3.saved.last().ok_or("no saved psk")?.0;
         let mut a3x = rejoiner!(a3, dir, w);
+        // Restart a receiver after PSKs have accumulated. No old client,
+        // signer, group or PSK cache survives the sealed-state round trip.
+        g(&mut a1)?.write_to_storage().await.map_err(s)?;
+        let bytes = a1.storage.export(&group_id, &a1.identity, &a1.secret, &a1.psks).ok_or("nothing stored")?;
+        report.sizes.insert("state_a1_rejoin_receiver".into(), bytes.len());
+        report.sizes.insert("retained_rejoin_psks".into(), a1.psks.0.lock().unwrap().len());
+        let name = a1.name.clone();
+        let user = a1.user.clone();
+        drop(a1);
+        let restored = hooks.persist("mls-rs/rejoin-receiver", &bytes).await?;
+        let (restored_group_id, storage, identity, secret, psks) = SpikeStorage::import(&restored)?;
+        let saved = psks.0.lock().unwrap().iter().map(|(epoch, secret)| (*epoch, secret.clone())).collect();
+        let client = make_client(identity.clone(), secret.clone(), dir.clone(), storage.clone(), psks.clone(), true, w);
+        let group = client.load_group(&restored_group_id).await.map_err(s)?;
+        a1 = Device { name, user, client, secret, identity, storage, psks, saved, group: Some(group) };
         let t = hooks.now();
         let r = try_rejoin(hooks, report, &mut a3x, newest, saved_psk(&a3, newest)?, gi, &mut [&mut a1, &mut b1]).await?;
         report.external_commit_ms.push(hooks.now() - t);
@@ -1389,7 +1407,7 @@ async fn rejoin_scenario(hooks: &Hooks, report: &mut Report, project_id: &[u8]) 
                 record_psks(project_id, &mut [&mut a1, &mut a3, &mut b1]).await?;
                 check_agreement(report, project_id, &[&a1, &a3, &b1])
                     .await
-                    .map(|d| format!("PSK of epoch {newest} at epoch {now}; {d}"))
+                    .map(|d| format!("PSK of epoch {newest} at epoch {now}; receiver signer and retained PSKs restored from sealed state; {d}"))
             }
             Err(e) => Err(e),
         };
