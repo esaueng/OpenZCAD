@@ -1014,6 +1014,18 @@ describe('content blobs', () => {
     expect(Object.isFrozen(parseEnvelope(envelope).header)).toBe(true);
   });
 
+  it('checks the expectation as passed, even if it changes mid-call', async () => {
+    const envelope = await sealProject(text('x'));
+    const roster = new Uint8Array(HEADER.rosterEntryHash);
+    const expectation = { projectId: 'project-a', rosterEntryHash: roster };
+    const decrypting = decryptProjectEnvelope(KEY, envelope, {
+      expect: expectation
+    });
+    expectation.projectId = 'project-b';
+    roster.fill(0);
+    expect((await decrypting).plaintext).toEqual(text('x'));
+  });
+
   it('encrypts the plaintext as it was when the call began', async () => {
     // Writer setup awaits key import: an edit to the caller's array by then
     // must not change what is sealed under a header built from its length.

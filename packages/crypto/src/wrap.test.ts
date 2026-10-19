@@ -598,6 +598,20 @@ describe('sealing to a public key', () => {
     expect(await opening).toEqual(PROJECT_KEY);
   });
 
+  it('opens with the recipient as passed, even if it changes mid-call', async () => {
+    const member = await generateEncryptionKeyPair();
+    const other = await generateEncryptionKeyPair();
+    const sealed = await sealKey(member.publicKey, PROJECT_KEY, CONTEXT);
+    const recipient = {
+      privateKey: member.privateKey,
+      publicKey: member.publicKey
+    };
+    const opening = openSealedKey(recipient, sealed, CONTEXT);
+    recipient.privateKey = other.privateKey;
+    recipient.publicKey = other.publicKey;
+    expect(await opening).toEqual(PROJECT_KEY);
+  });
+
   it('seals the account key to a device being approved', async () => {
     const device = await generateEncryptionKeyPair(false);
     expect(device.privateKey.extractable).toBe(false);

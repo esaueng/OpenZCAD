@@ -627,7 +627,10 @@ export async function openSealedKey(
   const ephemeralRaw = reader.bytes(P256_PUBLIC_KEY_BYTES);
   const iv = reader.bytes(GCM_IV_BYTES);
   checkCiphertextLength(reader.remaining, context, 'Sealed key');
-  if (!isP256Key(recipient?.privateKey, 'ECDH', 'private')) {
+  // Read the recipient once: the object may change while keys import.
+  const privateKey = recipient?.privateKey;
+  const publicKey = recipient?.publicKey;
+  if (!isP256Key(privateKey, 'ECDH', 'private')) {
     throw new E2eeError(
       'invalid-argument',
       'Expected a P-256 ECDH private key'
@@ -636,12 +639,12 @@ export async function openSealedKey(
   // Both start now, so each copies its raw bytes before anything is awaited.
   const [ephemeral, own] = await Promise.all([
     toEncryptionPublicKey(ephemeralRaw),
-    toEncryptionPublicKey(recipient.publicKey)
+    toEncryptionPublicKey(publicKey)
   ]);
   let kek: CryptoKey;
   try {
     kek = await sealKek(
-      recipient.privateKey,
+      privateKey,
       ephemeral.key,
       ephemeralRaw,
       own.raw,

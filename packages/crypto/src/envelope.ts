@@ -841,7 +841,16 @@ function sameHash(want: Uint8Array | null, have: Uint8Array | null): boolean {
     : equalBytes(want, have);
 }
 
-function acceptProject(expect: ProjectEnvelopeExpectation) {
+function acceptProject(given: ProjectEnvelopeExpectation) {
+  // Checked only once the first chunk decrypts, after awaits: hold the
+  // expectation as passed, hashes included.
+  const copyHash = <T>(hash: T): T =>
+    hash instanceof Uint8Array ? (copyBytes(hash) as T) : hash;
+  const expect: ProjectEnvelopeExpectation = {
+    ...given,
+    previousVersionHash: copyHash(given.previousVersionHash),
+    rosterEntryHash: copyHash(given.rosterEntryHash)
+  };
   return (header: EnvelopeHeader): void => {
     if (header.class !== 'project') mismatch('class');
     for (const field of [
