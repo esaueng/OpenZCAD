@@ -170,9 +170,10 @@ test('E while composing does not extrude or drop the draft', async ({
   await page.mouse.click(corner.x, corner.y);
   await page.mouse.move(corner.x + 80, corner.y - 50, { steps: 4 });
   await page.mouse.click(corner.x + 80, corner.y - 50);
+  // A rectangle is four sides held as one shape.
   await expect
     .poll(async () => (await readLiveSketch(canvas)).objects.length)
-    .toBe(1);
+    .toBe(4);
 
   await page.keyboard.press('t');
   const card = page.getByRole('form', { name: 'Place text' });

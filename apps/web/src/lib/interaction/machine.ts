@@ -71,7 +71,28 @@ export interface RegionTarget {
 }
 
 export type SketchToolId =
-  'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'text';
+  'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'polygon' | 'text';
+
+/** How the Rectangle tool places its shape (S04: drawn as held lines). */
+export type SketchRectangleMode = 'corner' | 'center' | 'three-point';
+
+/** The rectangle types in the order the rail's strip shows them and R cycles. */
+export const SKETCH_RECTANGLE_MODES: readonly SketchRectangleMode[] = [
+  'corner',
+  'center',
+  'three-point'
+];
+
+/** The type after `mode` in the strip's order, wrapping round. */
+export function nextSketchRectangleMode(
+  mode: SketchRectangleMode
+): SketchRectangleMode {
+  const index = SKETCH_RECTANGLE_MODES.indexOf(mode);
+  return SKETCH_RECTANGLE_MODES[(index + 1) % SKETCH_RECTANGLE_MODES.length]!;
+}
+
+/** The polygon tool's starting side count: a hexagon. */
+export const DEFAULT_SKETCH_POLYGON_SIDES = 6;
 
 /** Construction method used by the shared Circle tool. */
 export type SketchCircleMode =
@@ -188,6 +209,10 @@ export interface SketchSessionState {
   plane: SketchPlaneRef;
   tool: SketchToolId;
   circleMode: SketchCircleMode;
+  /** The Rectangle tool's type; absent is `corner`. */
+  rectangleMode?: SketchRectangleMode;
+  /** The Polygon tool's side count; absent is {@link DEFAULT_SKETCH_POLYGON_SIDES}. */
+  polygonSides?: number;
   /** True while a drawing gesture (drag or line/arc chain) is in flight. */
   drawing: boolean;
   /** Stable document id of the entity selected for editing. */
@@ -321,6 +346,8 @@ export type InteractionEvent =
   | { type: 'enter-sketch'; plane: SketchPlaneRef; sketchId?: string }
   | { type: 'sketch-tool'; tool: SketchToolId }
   | { type: 'sketch-circle-mode'; mode: SketchCircleMode }
+  | { type: 'sketch-rectangle-mode'; mode: SketchRectangleMode }
+  | { type: 'sketch-polygon-sides'; sides: number }
   | { type: 'sketch-created'; sketchId: string }
   | { type: 'sketch-drawing'; drawing: boolean }
   | { type: 'sketch-select-object'; objectId: string | null }
@@ -745,6 +772,33 @@ function reduceInteraction(
           pendingConstraint: null,
           pendingEdit: null
         }
+      };
+    case 'sketch-rectangle-mode':
+      if (state.mode !== 'sketch') {
+        return state;
+      }
+      return {
+        ...state,
+        session: {
+          ...state.session,
+          tool: 'rectangle',
+          rectangleMode: event.mode,
+          drawing: false,
+          selectedObjectId: null,
+          pendingConstraint: null,
+          pendingEdit: null,
+          textDraft: null
+        }
+      };
+    case 'sketch-polygon-sides':
+      if (state.mode !== 'sketch') {
+        return state;
+      }
+      // A side count is a setting of the tool, not a gesture: it never ends
+      // a drawing in flight, so a polygon being dragged picks it up live.
+      return {
+        ...state,
+        session: { ...state.session, polygonSides: event.sides }
       };
     case 'sketch-tool':
       if (state.mode !== 'sketch') {
@@ -1341,7 +1395,15 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
                   : state.session.circleMode === 'two-point-diameter'
                     ? 'Place opposite diameter endpoints. Tab cycles overlapping snaps.'
                     : 'Place three circumference points. Collinear input is rejected.'
-                : 'Draw with exact geometry snaps. Esc ends a chain.'
+                : state.session.tool === 'rectangle'
+                  ? (state.session.rectangleMode ?? 'corner') === 'center'
+                    ? 'Place the center, then a corner. The center stays where you put it.'
+                    : state.session.rectangleMode === 'three-point'
+                      ? 'Place one side’s two ends, then a third point for the height.'
+                      : 'Place two opposite corners. Tab switches width and height.'
+                  : state.session.tool === 'polygon'
+                    ? 'Place the center, then a vertex: its distance is the circumradius.'
+                    : 'Draw with exact geometry snaps. Esc ends a chain.'
       };
     case 'idle':
       return null;

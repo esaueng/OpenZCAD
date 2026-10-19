@@ -47,8 +47,11 @@ import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
 import type { FaceNamer } from './lib/faceProducerName';
 import {
   documentNodesWithHistory,
-  documentTextBudgetError
+  documentTextBudgetError,
+  resolveSketchComposite,
+  sketchCompositeOf
 } from '@openzcad/shared';
+import type { SketchCompositeSummary } from './components/SketchEntityEditor';
 import { useWorkspaceResume } from './hooks/useWorkspaceResume';
 import { buildMeasurementRecord } from './lib/measurementRecord';
 import {
@@ -243,6 +246,7 @@ import {
   solvedSketchCommands
 } from './lib/sketch/applySolve';
 import { sketchContentFramePoints } from './lib/sketch/session';
+import type { CompositeShape } from './lib/sketch/composites';
 import { resolvedSketchPlaneBasis } from './lib/sketch/planeBasis';
 import { sketchEntityEditTarget } from './lib/sketch/editTarget';
 import { textPlacementBudgetError } from './lib/sketch/textPlacement';
@@ -546,6 +550,8 @@ import {
   isOperationState,
   isStaleSelectionError,
   nextSketchCircleMode,
+  nextSketchRectangleMode,
+  DEFAULT_SKETCH_POLYGON_SIDES,
   radialFaceOperationName,
   toolCardFor,
   type FaceTarget,
@@ -13425,6 +13431,8 @@ export function App() {
       frame,
       tool: session.tool,
       circleMode: session.circleMode,
+      rectangleMode: session.rectangleMode ?? 'corner',
+      polygonSides: session.polygonSides ?? DEFAULT_SKETCH_POLYGON_SIDES,
       snapStep: appSettings.sketching.snapEnabled
         ? appSettings.sketching.linearSnap
         : null,
@@ -13560,6 +13568,36 @@ export function App() {
       )
     ) {
       selectIfText(session.sketchId as SketchId);
+    }
+  }
+
+  /**
+   * A rectangle or polygon gesture finished: its lines, the relations that
+   * hold them and the record that names them commit as one transaction
+   * (S04), so one undo removes the whole shape.
+   */
+  async function handleSketchCommitComposite(shape: CompositeShape) {
+    if (interaction.mode !== 'sketch') {
+      return;
+    }
+    setSketchDiagnosticPoints([]);
+    const session = interaction.session;
+    const construction = sketchConstruction;
+    const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
+    const { compositeCommands } = await import('./lib/sketch/composites');
+    const commit = compositeCommands(
+      shape,
+      session.sketchId
+        ? { kind: 'sketch', sketchId: session.sketchId as SketchId }
+        : { kind: 'new-sketch', name, planeRef: session.plane },
+      { construction }
+    );
+    if (!executeTransaction(commit.label, commit.commands)) {
+      return;
+    }
+    if (!session.sketchId) {
+      dispatchInteraction({ type: 'sketch-created', sketchId: commit.sketchId });
+      setStatus(`${name} started.`);
     }
   }
 
@@ -13748,6 +13786,99 @@ export function App() {
         setSketchEditError(message);
       setStatus(message);
       return false;
+    } finally {
+      setSketchSolving(false);
+    }
+  }
+
+  /**
+   * Resizes the selected side's rectangle or polygon as one object: every
+   * side and helper moves in one edit, solved together with the sketch's
+   * relations, and refused whole if a relation holds a value it would move.
+   */
+  async function handleResizeSketchComposite(
+    size: SketchCompositeSummary['size']
+  ) {
+    const base = managerRef.current?.document;
+    const target = sketchEntityEditTarget(interactionRef.current);
+    if (!base || !target || sketchSolving || geometryBusy) return;
+    const sketchId = target.sketchId as SketchId;
+    const sketch = findSketch(base, sketchId);
+    const composite = sketch && sketchCompositeOf(sketch, target.objectId);
+    if (!sketch || !composite) return;
+    const objects = new Map(
+      sketch.objectIds.flatMap((id) => {
+        const node = base.nodes[id];
+        return node?.kind === 'sketch-object'
+          ? [[String(id), node.data] as const]
+          : [];
+      })
+    );
+    const resolved = resolveSketchComposite(composite, objects, (value) =>
+      evalParamValue(value, getParameterScope(base).scope, base.units) ?? undefined
+    );
+    if (resolved.status !== 'resolved') {
+      setSketchEditError(resolved.reason);
+      return;
+    }
+    setSketchSolving(true);
+    setSketchEditError(null);
+    setSketchDiagnosticPoints([]);
+    const noun = composite.compositeKind;
+    try {
+      const [
+        {
+          compositeMemberUpdates,
+          resizedPolygon,
+          resizedRectangleCorners
+        },
+        { sketchEntitiesEditCommands }
+      ] = await Promise.all([
+        import('./lib/sketch/composites'),
+        import('./lib/sketch/editing')
+      ]);
+      const polygon =
+        'circumradius' in size
+          ? resizedPolygon(resolved.corners, resolved.center, size.circumradius)
+          : null;
+      const corners =
+        'circumradius' in size
+          ? (polygon?.corners ?? null)
+          : composite.compositeKind === 'rectangle'
+            ? resizedRectangleCorners(
+                resolved.corners,
+                composite.method,
+                size.width,
+                size.height
+              )
+            : null;
+      if (!corners) {
+        throw new Error(`That size is too small for a ${noun} side.`);
+      }
+      const commands = await sketchEntitiesEditCommands(
+        base,
+        sketchId,
+        compositeMemberUpdates(composite, corners, objects, polygon ?? undefined),
+        (document, id) => geometry.solveSketch(document, id),
+        `Resize ${noun}`
+      );
+      if (
+        await commitSketchEdit(
+          base,
+          sketchId,
+          commands,
+          `Resize ${noun}`,
+          target.raceObjectId
+        )
+      ) {
+        setStatus(`Resized ${noun}.`);
+        setSketchSolveStatus(null);
+      }
+    } catch (error) {
+      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
+      const message = errorMessage(error, `The ${noun} could not be resized.`);
+      setSketchEditError(message);
+      setStatus(message);
     } finally {
       setSketchSolving(false);
     }
@@ -14046,6 +14177,60 @@ export function App() {
           data.constraintKind === 'radius'
       }));
   }, [editingSketchNode, doc, selectedSketchEntity]);
+
+  /**
+   * The rectangle or polygon the selected line is a side of (S04), as its
+   * card shows it. Null for any other selection, and for a composite whose
+   * sides no longer close: its record names a shape it no longer is.
+   */
+  const selectedComposite = useMemo((): SketchCompositeSummary | null => {
+    if (!editingSketchNode || !doc || !selectedSketchEntity) return null;
+    const composite = sketchCompositeOf(
+      editingSketchNode,
+      selectedSketchEntity.id
+    );
+    const side = composite?.edgeIds.indexOf(selectedSketchEntity.id) ?? -1;
+    if (!composite || side < 0) return null;
+    const objects = new Map(
+      editingSketchNode.objectIds.flatMap((id) => {
+        const node = doc.nodes[id];
+        return node?.kind === 'sketch-object'
+          ? [[String(id), node.data] as const]
+          : [];
+      })
+    );
+    const resolved = resolveSketchComposite(
+      composite,
+      objects,
+      (value) =>
+        evalParamValue(value, parameterScope.scope, doc.units) ?? undefined
+    );
+    if (resolved.status !== 'resolved') return null;
+    const [c0, c1, , c3] = resolved.corners;
+    const span = (a: typeof c0, b: typeof c0) =>
+      Math.hypot(b!.x - a!.x, b!.y - a!.y);
+    const polygon = composite.compositeKind === 'polygon';
+    return {
+      compositeId: composite.compositeId,
+      kind: composite.compositeKind,
+      title: polygon
+        ? 'Polygon'
+        : composite.method === 'center'
+          ? 'Center rectangle'
+          : composite.method === 'three-point'
+            ? 'Three-point rectangle'
+            : 'Rectangle',
+      side: side + 1,
+      sides: composite.edgeIds.length,
+      size: polygon
+        ? { circumradius: span(resolved.center, c0) }
+        : { width: span(c0, c1), height: span(c0, c3) },
+      anchor:
+        polygon || composite.method === 'center'
+          ? 'Keeps its center.'
+          : 'Keeps corner 1.'
+    };
+  }, [editingSketchNode, doc, selectedSketchEntity, parameterScope.scope]);
 
   // What the relations rail offers the selected entity: its kind, for the
   // refusal it names, and the relations that take it as their first pick.
@@ -18762,6 +18947,20 @@ export function App() {
           });
           return;
         }
+        // R does the same for the rectangle's types.
+        if (
+          event.key.toLowerCase() === 'r' &&
+          interaction.session.tool === 'rectangle'
+        ) {
+          event.preventDefault();
+          dispatchInteraction({
+            type: 'sketch-rectangle-mode',
+            mode: nextSketchRectangleMode(
+              interaction.session.rectangleMode ?? 'corner'
+            )
+          });
+          return;
+        }
         const sketchTool =
           event.key.toLowerCase() === 'v'
             ? ('select' as const)
@@ -18773,9 +18972,11 @@ export function App() {
                   ? ('circle' as const)
                   : event.key.toLowerCase() === 'r'
                     ? ('rectangle' as const)
-                    : event.key.toLowerCase() === 't'
-                      ? ('text' as const)
-                      : null;
+                    : event.key.toLowerCase() === 'p'
+                      ? ('polygon' as const)
+                      : event.key.toLowerCase() === 't'
+                        ? ('text' as const)
+                        : null;
         if (sketchTool) {
           event.preventDefault();
           dispatchInteraction({ type: 'sketch-tool', tool: sketchTool });
@@ -20186,6 +20387,10 @@ export function App() {
         void handleUpdateSketchEntity(data);
       }}
       onDelete={handleDeleteSketchEntity}
+      composite={selectedComposite}
+      onResizeComposite={(size) => {
+        void handleResizeSketchComposite(size);
+      }}
       constraints={selectedEntityConstraints}
       onEditConstraint={handleEditSketchDimension}
       onDeleteConstraint={handleDeleteSketchConstraint}
@@ -20322,6 +20527,16 @@ export function App() {
             type: 'sketch-circle-mode',
             mode
           })
+        }
+        rectangleMode={interaction.session.rectangleMode ?? 'corner'}
+        polygonSides={
+          interaction.session.polygonSides ?? DEFAULT_SKETCH_POLYGON_SIDES
+        }
+        onRectangleMode={(mode) =>
+          dispatchInteraction({ type: 'sketch-rectangle-mode', mode })
+        }
+        onPolygonSides={(sides) =>
+          dispatchInteraction({ type: 'sketch-polygon-sides', sides })
         }
         onConstruction={setSketchConstruction}
         onSettings={(sketching) => {
@@ -20949,6 +21164,9 @@ export function App() {
             sketchMode={modelingLocked ? null : sketchModeForViewer}
             sketchTextAnchorRef={sketchTextAnchorRef}
             onSketchCommit={handleSketchCommit}
+            onSketchCommitComposite={(shape) => {
+              void handleSketchCommitComposite(shape);
+            }}
             onEditSketchDimension={handleEditSketchDimension}
             onMoveSketchDimension={handleMoveSketchDimension}
             onSketchDrawingChange={(drawing) =>

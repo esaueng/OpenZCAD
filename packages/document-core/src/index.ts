@@ -19,6 +19,8 @@ import {
   assertSketchReferenceDimensions
 } from './sketch-reference-dimensions';
 export * from './sketch-reference-dimensions';
+import { assertSketchComposites, compositesWithout } from './sketch-composites';
+export * from './sketch-composites';
 export {
   constantRigidTransform,
   rigidImportedSource
@@ -810,7 +812,10 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   }
   const document = withReadableHistory(input);
   for (const node of documentNodesWithHistory(document)) {
-    if (node.kind === 'sketch') assertSketchReferenceDimensions(node);
+    if (node.kind === 'sketch') {
+      assertSketchReferenceDimensions(node);
+      assertSketchComposites(node);
+    }
     if (node.kind === 'parameter') assertParameterQuantity(node);
   }
   const revisions = Array.isArray(document.revisions)
@@ -864,6 +869,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // `constraints`, so nothing needs rewriting.
   // Schema v15 -> v16 adds the canonical-plane basis marker. Never synthesize
   // it while migrating: unmarked saved sketches must retain revision 1 geometry.
+  // Schema v21 -> v22 adds S04 sketch composites. Never synthesize one:
+  // a saved rectangle or polygon object stays the parametric object it was.
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version
   // boundary prevents older clients from accepting meshes they cannot rebuild.
@@ -1553,6 +1560,11 @@ export function deleteSketchObject(
         !constraintObjectIds(constraint.data).includes(input.objectId)
     );
   }
+  // A composite missing a side or helper is no longer the shape it names, so
+  // it dissolves; its other lines and relations stay as ordinary geometry.
+  const composites = compositesWithout(sketch, input.objectId);
+  if (composites) sketch.composites = composites;
+  else delete sketch.composites;
   delete next.nodes[input.objectId];
   next.version += 1;
   return next;

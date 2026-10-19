@@ -971,15 +971,24 @@ test('shows profile readiness and preserves exact entity edits through extrude a
   await page.keyboard.type('20');
   await page.keyboard.press('Enter');
   await expect(overview).toContainText('1 closed profile ready to extrude');
+  // The rectangle is four held sides; selecting one opens the shape's card,
+  // which resizes all four as one object.
   const first = (await readLiveSketch(canvas)).objects[0]!;
+  const rectangleSize = async () => {
+    const [bottom, right] = (await readLiveSketch(canvas)).objects as {
+      data: { x1: number; y1: number; x2: number; y2: number };
+    }[];
+    return {
+      width: Math.abs(bottom!.data.x2 - bottom!.data.x1),
+      height: Math.abs(right!.data.y2 - right!.data.y1)
+    };
+  };
   await overview.getByLabel('Selected geometry').selectOption(first.id);
-  const editor = page.getByRole('form', { name: 'Edit rectangle' });
+  const editor = page.getByRole('form', { name: 'Resize rectangle' });
   await expect(editor.getByLabel('Width', { exact: true })).toHaveValue('40');
   await editor.getByLabel('Width', { exact: true }).fill('50');
-  await editor.getByRole('button', { name: 'Apply', exact: true }).click();
-  await expect
-    .poll(async () => (await readLiveSketch(canvas)).objects[0]!.data)
-    .toMatchObject({ width: 50, height: 20 });
+  await editor.getByRole('button', { name: 'Resize', exact: true }).click();
+  await expect.poll(rectangleSize).toEqual({ width: 50, height: 20 });
   await page.keyboard.press('Control+z');
   await expect(editor.getByLabel('Width', { exact: true })).toHaveValue('40');
   await page.keyboard.press('Control+Shift+z');
@@ -1005,10 +1014,8 @@ test('shows profile readiness and preserves exact entity edits through extrude a
   ).toHaveCount(0);
   await overview.getByLabel('Selected geometry').selectOption(first.id);
   await editor.getByLabel('Width', { exact: true }).fill('60');
-  await editor.getByRole('button', { name: 'Apply', exact: true }).click();
-  await expect
-    .poll(async () => (await readLiveSketch(canvas)).objects[0]!.data)
-    .toMatchObject({ width: 60, height: 20 });
+  await editor.getByRole('button', { name: 'Resize', exact: true }).click();
+  await expect.poll(rectangleSize).toEqual({ width: 60, height: 20 });
   await expect(overview).toContainText('1 closed profile ready to extrude');
   await page.screenshot({
     path: test.info().outputPath('sketch-overview.png')

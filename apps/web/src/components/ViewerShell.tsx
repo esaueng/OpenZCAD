@@ -5,6 +5,7 @@ import type {
   SketchDimensionIdentity
 } from '@openzcad/shared';
 import type { HoleGhost } from '../lib/holeGhost';
+import type { CompositeShape } from '../lib/sketch/composites';
 import type { PrimitiveGhost } from '../lib/primitiveGhost';
 import {
   datumOffsetHandle,
@@ -263,6 +264,7 @@ interface ViewerShellProps {
   /** Where the text card's live outline sits; the card's Place reads it. */
   sketchTextAnchorRef?: MutableRefObject<{ x: number; y: number } | null>;
   onSketchCommit(object: SketchObjectData): void;
+  onSketchCommitComposite(shape: CompositeShape): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
   onMoveSketchDimension(
     identity: SketchDimensionIdentity,
@@ -442,6 +444,7 @@ export function ViewerShell({
   sketchMode,
   sketchTextAnchorRef,
   onSketchCommit,
+  onSketchCommitComposite,
   onEditSketchDimension,
   onMoveSketchDimension,
   onSketchDrawingChange,
@@ -727,6 +730,7 @@ export function ViewerShell({
         sketchMode={sketchMode}
         sketchTextAnchorRef={sketchTextAnchorRef}
         onSketchCommit={onSketchCommit}
+        onSketchCommitComposite={onSketchCommitComposite}
         onEditSketchDimension={onEditSketchDimension}
         onMoveSketchDimension={onMoveSketchDimension}
         onSketchDrawingChange={onSketchDrawingChange}

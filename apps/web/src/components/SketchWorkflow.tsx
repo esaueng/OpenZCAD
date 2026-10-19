@@ -12,7 +12,11 @@ export interface SketchWorkflowProps {
    */
   tool: Pick<
     SketchSessionState,
-    'tool' | 'circleMode' | 'pendingConstraint' | 'pendingEdit'
+    | 'tool'
+    | 'circleMode'
+    | 'rectangleMode'
+    | 'pendingConstraint'
+    | 'pendingEdit'
   >;
   objects: { id: string; label: string }[];
   selectedId: string | null;
@@ -47,7 +51,11 @@ function toolReadout(session: SketchWorkflowProps['tool']): string {
       : null;
   return armed
     ? `${armed.spec.label}: ${armed.picks}/${armed.spec.picks} selected`
-    : sketchDrawToolLabel(session.tool, session.circleMode);
+    : sketchDrawToolLabel(
+        session.tool,
+        session.circleMode,
+        session.rectangleMode
+      );
 }
 
 /** Persistent, document-backed orientation and feedback for the sketch session. */

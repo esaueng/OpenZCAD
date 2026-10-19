@@ -216,9 +216,10 @@ test('a datum plane drives a sketch, a Split and a Mirror, and an edit moves the
   await page.mouse.click(from!.x, from!.y);
   await page.mouse.move(to!.x, to!.y, { steps: 4 });
   await page.mouse.click(to!.x, to!.y);
+  // A rectangle is four sides held as one shape.
   await expect
     .poll(async () => (await liveSketch(canvas)).objects.length)
-    .toBe(1);
+    .toBe(4);
   await page
     .getByRole('button', { name: 'Finish Sketch', exact: true })
     .click();

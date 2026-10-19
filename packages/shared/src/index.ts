@@ -5,6 +5,7 @@ export * from './textLimits';
 export * from './imported-step-source';
 export * from './imported-mesh-payload';
 export * from './sketch-reference-dimensions';
+export * from './sketch-composites';
 export * from './mass-density';
 import type { DocumentHistory } from './document-history';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
@@ -26,6 +27,7 @@ export type SketchReferenceAnnotationId = Brand<
   'SketchReferenceAnnotationId'
 >;
 export type ShaprImportId = Brand<string, 'ShaprImportId'>;
+export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 
 /**
  * v18 adds the S07 constraint kinds (`symmetric`, `point-on-object`, `lock`).
@@ -43,8 +45,16 @@ export type ShaprImportId = Brand<string, 'ShaprImportId'>;
  * carries its dimension into expressions (`width + 5 mm`), which a v20 client
  * would refuse or read as a bare number, so the bump makes it refuse such a
  * document. Absent stays the unitless parameter every older document holds.
+ *
+ * v22 adds S04 composite identity (`SketchNode.composites`): a rectangle or
+ * polygon drawn in the viewport is real lines held by persisted relations,
+ * and the composite record names those lines as one object with ordered
+ * corners and sides. A v21 client would drop the record on its next save and
+ * leave four unrelated lines, so the bump makes it refuse such a document.
+ * Absent means no composites: every older rectangle and polygon object loads
+ * unchanged and is never decomposed.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 21 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 22 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -635,6 +645,13 @@ export interface SketchNode extends BaseNode {
    * constraint through a click or a label drag.
    */
   referenceDimensions?: SketchReferenceDimension[];
+  /**
+   * S04 composite identity (schema v22, additive): rectangles and polygons
+   * drawn as lines, each named as one object. Absent means none, so every
+   * earlier document replays untouched; a legacy `rectangle` or `polygon`
+   * object is never rewritten into one.
+   */
+  composites?: SketchComposite[];
 }
 
 export interface SketchDimensionLabelPosition {
@@ -764,6 +781,50 @@ export interface SketchReferenceDimension {
 export type SketchDimensionIdentity =
   | { kind: 'constraint'; constraintId: SketchConstraintId }
   | { kind: 'reference'; annotationId: SketchReferenceAnnotationId };
+
+/**
+ * How a composite was drawn. It decides which relations hold the shape
+ * (horizontal/vertical sides for an axis-aligned rectangle, perpendicular
+ * and parallel sides for a three-point one, equal sides on a circumcircle
+ * for a polygon) and what a resize holds still: a corner rectangle keeps
+ * corner 0, a centre rectangle keeps its centre.
+ */
+export type SketchCompositeData =
+  | {
+      compositeKind: 'rectangle';
+      method: 'corner' | 'center' | 'three-point';
+    }
+  | {
+      compositeKind: 'polygon';
+      /** Vertices lie on the construction circle: its radius is the circumradius. */
+      method: 'inscribed';
+    };
+
+export type SketchCompositeKind = SketchCompositeData['compositeKind'];
+
+/**
+ * S04: a rectangle or regular polygon drawn as real `line` objects, named as
+ * one object. The shape's intent lives in ordinary persisted relations
+ * (coincident corners, horizontal/vertical or perpendicular/parallel sides,
+ * equal sides), so the solver, dimensions and modify tools treat its sides
+ * like any other lines. This record adds the identity those relations
+ * cannot carry: which lines form one shape, and in what order.
+ *
+ * Side `i` is `edgeIds[i]`; it runs from corner `i` to corner `i + 1`
+ * (wrapping), counter-clockwise, so corner `i` is the start of side `i` and
+ * is held to the end of side `i - 1` by a coincident relation. Corner and
+ * side identity is therefore an index into this list, never a coordinate.
+ *
+ * `helperIds` are construction geometry the composite owns: a centre
+ * rectangle's two diagonals (whose crossing is the centre) and a polygon's
+ * circumcircle. Deleting any member dissolves the record; the lines and
+ * their remaining relations stay.
+ */
+export type SketchComposite = SketchCompositeData & {
+  compositeId: SketchCompositeId;
+  edgeIds: EntityId[];
+  helperIds?: EntityId[];
+};
 
 export type SketchObjectData = (
   | {
@@ -3446,6 +3507,8 @@ export const toSketchReferenceAnnotationId = (
 ): SketchReferenceAnnotationId => value as SketchReferenceAnnotationId;
 export const toShaprImportId = (value: string): ShaprImportId =>
   value as ShaprImportId;
+export const toSketchCompositeId = (value: string): SketchCompositeId =>
+  value as SketchCompositeId;
 
 /**
  * The colour every solid is drawn in until someone chooses another (design

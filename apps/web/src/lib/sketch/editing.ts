@@ -113,15 +113,42 @@ export async function sketchEntityEditCommands(
     sketchId: SketchId
   ) => Promise<SketchSolveOutcome>
 ): Promise<AnyCommand[]> {
-  const before = base.nodes[objectId];
-  if (before?.kind !== 'sketch-object')
-    throw new Error('The selected geometry is no longer available.');
-  const commands = [
+  return sketchEntitiesEditCommands(
+    base,
+    sketchId,
+    [{ objectId, data }],
+    solve
+  );
+}
+
+/**
+ * Several objects' new data as one edit, solved together: a composite's
+ * resize moves all its sides and helpers at once, so no intermediate state
+ * (one side moved, its neighbours not) ever reaches the solver. Every value
+ * the caller asked for must survive the solve, as for a single edit.
+ */
+export async function sketchEntitiesEditCommands(
+  base: ProjectDocument,
+  sketchId: SketchId,
+  updates: readonly { objectId: EntityId; data: SketchObjectData }[],
+  solve: (
+    document: ProjectDocument,
+    sketchId: SketchId
+  ) => Promise<SketchSolveOutcome>,
+  label?: string
+): Promise<AnyCommand[]> {
+  const befores = updates.map(({ objectId }) => {
+    const before = base.nodes[objectId];
+    if (before?.kind !== 'sketch-object')
+      throw new Error('The selected geometry is no longer available.');
+    return before;
+  });
+  const commands = updates.map(({ objectId, data }) =>
     commandFactories.updateSketchObject(
       { sketchId, objectId, data },
-      `Edit ${data.objectKind}`
+      label ?? `Edit ${data.objectKind}`
     )
-  ];
+  );
   const prospective = apply(base, commands);
   if (!findSketch(prospective, sketchId)?.constraints?.length) return commands;
   const outcome = await solve(prospective, sketchId);
@@ -131,9 +158,12 @@ export async function sketchEntityEditCommands(
     );
   }
   const solved = solvedSketchCommands(prospective, sketchId, outcome);
-  const result = apply(prospective, solved).nodes[objectId];
+  const after = apply(prospective, solved);
   const scope = getParameterScope(prospective).scope;
-  if (result?.kind === 'sketch-object') {
+  for (const [index, { objectId, data }] of updates.entries()) {
+    const before = befores[index]!;
+    const result = after.nodes[objectId];
+    if (result?.kind !== 'sketch-object') continue;
     for (const [key, requested] of Object.entries(data)) {
       const previous = (before.data as unknown as Record<string, unknown>)[key];
       const actual = (result.data as unknown as Record<string, unknown>)[key];

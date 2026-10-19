@@ -40,6 +40,7 @@ export {
 import {
   createId,
   createSketchReferenceAnnotationId,
+  createSketchCompositeId,
   assertDocumentHistory,
   assertDocumentTextBudget,
   isVariableFilletLaw,
@@ -67,6 +68,8 @@ import {
   isFeatureRollbackSuppressed
 } from '@openzcad/shared';
 import {
+  addSketchComposite,
+  type SketchCompositeAddInput,
   addSketchReferenceDimension,
   deleteSketchReferenceDimension,
   setSketchReferenceLabelPosition,
@@ -217,6 +220,7 @@ export type CommandKind =
   | 'sketch.constraint.add'
   | 'sketch.constraint.delete'
   | 'sketch.constraint.label-position'
+  | 'sketch.composite.add'
   | 'reference-dimension.add'
   | 'reference-dimension.delete'
   | 'reference-dimension.label-position'
@@ -277,6 +281,7 @@ export type AnyCommand =
   | CommandDefinition<SketchConstraintAddInput>
   | CommandDefinition<SketchConstraintDeleteInput>
   | CommandDefinition<SketchDimensionLabelPositionInput>
+  | CommandDefinition<SketchCompositeAddInput>
   | CommandDefinition<SketchReferenceDimensionAddInput>
   | CommandDefinition<SketchReferenceDimensionDeleteInput>
   | CommandDefinition<SketchReferenceLabelPositionInput>
@@ -1241,6 +1246,26 @@ export const commandFactories = {
           throw new Error(
             `Sketch ${payload.sketchId} has no constraint ${payload.constraintId}.`
           );
+        }
+      }
+    );
+  },
+  addSketchComposite(
+    payload: SketchCompositeAddInput,
+    label = 'Group sketch geometry'
+  ): CommandDefinition<SketchCompositeAddInput> {
+    const withIds = {
+      ...payload,
+      ids: payload.ids ?? { compositeId: createSketchCompositeId() }
+    };
+    return makeCommand(
+      'sketch.composite.add',
+      label,
+      withIds,
+      (document) => addSketchComposite(document, withIds).document,
+      (document) => {
+        if (!findSketch(document, payload.sketchId)) {
+          throw new Error(`Sketch ${payload.sketchId} not found.`);
         }
       }
     );
@@ -3493,6 +3518,12 @@ export function replayCommands(
           next,
           command.payload as SketchDimensionLabelPositionInput
         );
+        break;
+      case 'sketch.composite.add':
+        next = addSketchComposite(
+          next,
+          command.payload as SketchCompositeAddInput
+        ).document;
         break;
       case 'feature.extrude':
         next = extrudeSketch(next, command.payload as ExtrudeInput).document;

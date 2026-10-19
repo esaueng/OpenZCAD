@@ -1,11 +1,89 @@
 # S04: Constraint-capable composite sketch identity
 
-Status: design proposal for review. No runtime behavior is implemented by this
-document.
+Status: **implemented for new drawings by the decision below (schema v22).**
+The sections after it are the original proposal, kept as history and as the
+design for the legacy parametric objects, which this decision leaves as they
+are.
 
 Baseline: OpenZCAD `main` at `efa2662910199e6d23d63f337e35d3d591614d21`.
 
-## Decision summary
+## Decision (October 2026): new drawings are held lines
+
+The owner chose the alternative this proposal rejected as a default:
+**decompose at creation, for new drawings only.** The viewport's Rectangle
+tool (corner, centre and three-point types) and the new Polygon tool draw
+real `line` objects held by ordinary persisted relations, and one additive
+`SketchNode.composites` record names those lines as one object. Every
+rectangle or polygon object already stored keeps loading as the parametric
+object it is; nothing is rewritten on load, and nothing converts an old
+object.
+
+Why the rejection no longer holds:
+
+* **The rejection's cost was a legacy cost.** The table below rejects
+  decomposition because it "changes object IDs, region source IDs, history
+  shape … It makes opening an old document equivalent to an unrequested
+  edit." All of that is about converting saved objects. A new drawing has no
+  prior IDs, regions or history to change.
+* **A three-point rectangle cannot be a parametric rectangle.** The
+  `rectangle` object is axis-aligned (`width`, `height`, `centerX`,
+  `centerY`) and this proposal makes any rotation a named refusal. Holding a
+  rotated rectangle needed either a new rotation field plus the virtual
+  solver bridge, or lines.
+* **Lines get the whole sketch toolkit now.** Held lines solve on the
+  existing GCS, take every existing relation and dimension at their corners
+  and sides, and work with Trim, Fillet, Chamfer, Offset, Mirror and the
+  patterns, which refuse composite objects by name. The virtual-graph bridge
+  this proposal designs would have taken several slices to reach a subset of
+  that.
+
+What the record carries (`SketchComposite`, `packages/shared`):
+
+* `compositeId` (`scmp_…`), `compositeKind` (`rectangle` | `polygon`) and
+  `method` (`corner` | `center` | `three-point` for rectangles, `inscribed`
+  for polygons).
+* `edgeIds`: side `i` runs from corner `i` to corner `i + 1`,
+  counter-clockwise. Corner `i` is the start of side `i`, held to the end of
+  side `i - 1` by a coincident relation. Corner and side identity is an index
+  into this list, never a coordinate.
+* `helperIds`: owned construction geometry. These are a centre rectangle's two
+  diagonals (their crossing is the centre) and a polygon's circumcircle.
+
+The relations each tool writes are proved independent on the pinned kernel,
+so none is reported redundant. Each leaves exactly the shape's own freedom:
+
+| Tool | Relations | Freedom left |
+| --- | --- | --- |
+| Corner / centre rectangle | 4 corner coincidents; sides 0, 2 horizontal and 1, 3 vertical; centre type adds 4 diagonal-end coincidents | 4 (position, size) |
+| Three-point rectangle | 4 corner coincidents; side 1 perpendicular to side 0; both opposite pairs parallel | 5 (adds rotation) |
+| Inscribed polygon | n corner coincidents; every vertex on the construction circumcircle; every side equal to side 0 | 4 (centre, circumradius, rotation) |
+
+The rules:
+
+* **One transaction.** Sides, helpers, relations and the record commit
+  together with pre-assigned IDs, so one undo removes the shape and redo or
+  replay restores the same IDs.
+* **Deleting a member dissolves the record.** The other lines and their
+  surviving relations stay as ordinary geometry; undo restores the record.
+  An edit that opens the loop leaves the record in place, and the shared
+  resolver then reports it as broken by name. It never guesses.
+* **Resize is one object edit.** Selecting a side opens the shape's card:
+  width and height, or circumradius. It moves every side and helper in one
+  edit, solved together with the sketch's relations. A centre rectangle
+  keeps its centre, a polygon keeps its centre and rotation, and the others
+  keep corner 1.
+* **Not geometry.** The record never enters the solver or the exact-history
+  digest. The lines and relations are the geometry.
+* **Schema v22.** The bump stops a v21 client from silently dropping the
+  record on save. `normalizeDocument` validates the record's shape and never
+  synthesizes one.
+
+Still open under S04: corner and side snap or dimension targets that name
+a composite (S02-D), and the region-provenance tokens and the
+explicit-conversion command for the **legacy** parametric objects, as
+designed below.
+
+## Decision summary (original proposal)
 
 Keep `rectangle` and `polygon` as authored parametric sketch objects and give
 their derived corners and edges stable, typed identities. Do not silently
