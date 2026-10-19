@@ -191,15 +191,16 @@ structural rather than probabilistic:
 
 ### Key hierarchy
 
-| Layer               | What it is                                                                                                                                                                               | Wrapped by                                                               |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| Identity key        | One long-term ECDSA P-256 pair per user; its fingerprint is what other people verify. It signs only certificates and revocations for the user's other keys, and the user's contacts list | The recovery key and passkeys only; never device keys or the account key |
-| Device signing key  | One ECDSA P-256 pair per device, non-extractable where the platform allows, certified by the identity key. Signs versions, roster entries and share snapshots                            | Never leaves its device                                                  |
-| Account key         | One random 256-bit key per user, never stored unwrapped                                                                                                                                  | Each unlock method                                                       |
-| Encryption key pair | ECDH P-256 for receiving project keys; the public half is certified by the identity key                                                                                                  | Account key                                                              |
-| Project key         | One random key per project, versioned by epoch                                                                                                                                           | Each member's encryption public key, then the member's account key       |
-| Version keys        | One random key per project envelope (document version, measurements, view state, share snapshot); a share snapshot's key is also wrapped by its share key                                | Project key                                                              |
-| Blob keys           | One random key per content blob (import source, mesh payload, thumbnail, archived export)                                                                                                | Recorded inside the referencing project envelope                         |
+| Layer               | What it is                                                                                                                                                                                | Wrapped by                                                               |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Identity key        | One long-term ECDSA P-256 pair per user; its fingerprint is what other people verify. It signs only certificates and revocations for the user's other keys, and the user's contacts list  | The recovery key and passkeys only; never device keys or the account key |
+| Device signing key  | One ECDSA P-256 pair per device, non-extractable where the platform allows, certified by the identity key. Signs versions, roster entries and share snapshots                             | Never leaves its device                                                  |
+| Device unlock key   | One ECDH P-256 pair per device; the private half is non-extractable and stays on the device. The public half is certified by the identity key in the device list, next to the signing key | Never leaves its device; the account key is wrapped to it                |
+| Account key         | One random 256-bit key per user, never stored unwrapped                                                                                                                                   | Each unlock method                                                       |
+| Encryption key pair | ECDH P-256 for receiving project keys; the public half is certified by the identity key                                                                                                   | Account key                                                              |
+| Project key         | One random key per project, versioned by epoch                                                                                                                                            | Each member's encryption public key, then the member's account key       |
+| Version keys        | One random key per project envelope (document version, measurements, view state, share snapshot); a share snapshot's key is also wrapped by its share key                                 | Project key                                                              |
+| Blob keys           | One random key per content blob (import source, mesh payload, thumbnail, archived export)                                                                                                 | Recorded inside the referencing project envelope                         |
 
 The identity key is kept apart so it can outlive any device. Everyday unlocking
 never touches it: a device that is stolen while unlocked holds the account
@@ -232,8 +233,12 @@ key or a passkey also opens the identity key. It is unlocked briefly, for
 certifying or revoking a device, rotating keys or replacing the recovery key,
 and is then discarded from memory.
 
-- **This device:** a non-extractable key in IndexedDB on the web and in the
-  macOS Keychain on desktop, next to the existing refresh token.
+- **This device:** the device unlock key, whose private half is
+  non-extractable in IndexedDB on the web and in the macOS Keychain on
+  desktop, next to the existing refresh token. The account key is stored
+  wrapped to its certified public half. That lets another browser wrap a new
+  account key for this device while it is offline, without ever seeing a
+  secret of the device.
 - **A passkey** through the WebAuthn PRF extension where the browser and
   authenticator support it. The desktop WebView has no WebAuthn and relies on
   the other methods.
@@ -283,7 +288,12 @@ keys and a copy of the old wraps. Rotation protects what comes after.
     sit. Revocations also cut off roster and epoch entries signed by that
     device;
   - rotates the account key and the encryption key pair, certifying the new
-    encryption key in the same entry;
+    encryption key in the same entry. The new account key is wrapped to the
+    certified device unlock key of every surviving device, taken from the
+    newest device list (which this same browser is signing), never from a
+    key the server offers. A surviving device that was offline unwraps the
+    new account key with its own private half the next time it opens.
+    Surviving devices need no re-approval, and a removed device gets no wrap;
   - starts a new epoch on every project the user belongs to, owned or
     shared, before the removal completes (see
     [Epoch rotation](#epoch-rotation)). The removed device cannot unwrap the
