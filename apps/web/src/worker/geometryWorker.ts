@@ -47,9 +47,10 @@ import { documentFontsArrived, preloadDocumentFonts } from '../lib/textFonts';
  * scaling — defaulting to the adapter's standard export tessellation when
  * omitted. `dxf` exports a 2D outline and requires either a `face` (one
  * planar face's outline) or a `section` plane (the exact cross-section).
+ * `svg` draws one saved sketch's exact curves and requires a `sketchId`.
  */
 export type GeometryExportFormat =
-  'step' | 'stl' | 'dxf' | 'stl-binary' | '3mf' | 'obj' | 'glb' | 'ply';
+  'step' | 'stl' | 'dxf' | 'svg' | 'stl-binary' | '3mf' | 'obj' | 'glb' | 'ply';
 
 /** The export formats whose payload crosses back as transferred bytes. */
 export type GeometryBinaryExportFormat = Extract<
@@ -91,8 +92,10 @@ export type GeometryWorkerRequest =
       face?: DxfFaceSelector;
       /** The other 'dxf' source: the plane whose exact section to export. */
       section?: ExactSectionPlane;
-      /** The third 'dxf' source: the saved sketch whose geometry to export. */
+      /** The third 'dxf' source, and the only 'svg' one: the saved sketch. */
       sketchId?: SketchId;
+      /** 'svg' only: false paints a white background behind the curves. */
+      transparent?: boolean;
     }
   | {
       /**
@@ -211,7 +214,7 @@ export type GeometryExportResult =
       type: 'export';
       ok: true;
       requestId: string;
-      format: 'step' | 'stl' | 'dxf';
+      format: 'step' | 'stl' | 'dxf' | 'svg';
       text: string;
       warnings: string[];
     }
@@ -849,6 +852,24 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           ok: true,
           requestId: request.requestId,
           format: 'dxf',
+          text,
+          warnings: []
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.format === 'svg') {
+        if (!request.sketchId) {
+          throw new Error('SVG export needs a sketch.');
+        }
+        const text = await exact.exportSketchSvg(document, request.sketchId, {
+          ...(request.transparent === false ? { transparent: false } : {})
+        });
+        post({
+          type: 'export',
+          ok: true,
+          requestId: request.requestId,
+          format: 'svg',
           text,
           warnings: []
         });

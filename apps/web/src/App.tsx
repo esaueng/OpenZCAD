@@ -41,6 +41,11 @@ import {
   exportScopeLabel,
   type ExportScope
 } from './lib/exportScope';
+import {
+  DESKTOP_IMAGE_MAX_PIXELS,
+  initialImageSketchId,
+  viewImageScope
+} from './lib/imageExport';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
@@ -424,6 +429,11 @@ import type {
   ExportProgress,
   MeshExportDialogFormat
 } from './components/ExportDialog';
+import type {
+  PngExportOptions,
+  SvgExportOptions
+} from './components/ImageExportDialog';
+import type { ViewportImageSource } from './components/viewer/viewportImage';
 import type { ShaprImportDialogPhase } from './components/ShaprImportDialog';
 import type { GeometryWorkerState } from './worker/geometryWorker';
 
@@ -1001,6 +1011,11 @@ const LazyExportDialog = lazyWithStaleChunkNotice(() =>
     default: module.ExportDialog
   }))
 );
+const LazyImageExportDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/ImageExportDialog').then((module) => ({
+    default: module.ImageExportDialog
+  }))
+);
 // Off the entry chunk: nothing shows for the first 600 ms of a run anyway,
 // and most sessions never move a file at all.
 const LazyActivityPill = lazyWithStaleChunkNotice(() =>
@@ -1109,6 +1124,18 @@ function ExportDialog(props: ComponentProps<typeof LazyExportDialog>) {
     <ExportDialogBoundary onClose={props.onClose}>
       <Suspense fallback={null}>
         <LazyExportDialog {...props} />
+      </Suspense>
+    </ExportDialogBoundary>
+  );
+}
+
+function ImageExportDialog(
+  props: ComponentProps<typeof LazyImageExportDialog>
+) {
+  return (
+    <ExportDialogBoundary onClose={props.onClose}>
+      <Suspense fallback={null}>
+        <LazyImageExportDialog {...props} />
       </Suspense>
     </ExportDialogBoundary>
   );
@@ -1959,6 +1986,13 @@ export function App() {
   });
   const [sharingOpen, setSharingOpen] = useState(false);
   const [meshExportOpen, setMeshExportOpen] = useState(false);
+  /** The view's size when Export image… opened; null while it is closed. */
+  const [imageExportView, setImageExportView] = useState<{
+    width: number;
+    height: number;
+    maxSide: number;
+  } | null>(null);
+  const viewportImageRef = useRef<ViewportImageSource | null>(null);
   const [pendingShaprImport, setPendingShaprImport] =
     useState<PendingShaprImport | null>(null);
   const shaprPreviewAbortRef = useRef<AbortController | null>(null);
@@ -11888,6 +11922,74 @@ export function App() {
     }
   }
 
+  function openImageExport() {
+    const source = viewportImageRef.current;
+    const size = source?.viewSize();
+    setImageExportView({
+      width: size && size.width > 0 ? size.width : 1280,
+      height: size && size.height > 0 ? size.height : 720,
+      maxSide: source?.maxSide ?? 4096
+    });
+  }
+
+  /**
+   * The current view as a PNG: drawn offscreen by the viewer at the chosen
+   * size, so the live canvas never shows the capture, then encoded here.
+   */
+  async function handleExportViewportPng(options: PngExportOptions) {
+    const source = viewportImageRef.current;
+    if (!doc || !source) {
+      setStatus('The viewport is not ready to capture yet.');
+      return;
+    }
+    const fileName = `${exportFileStem(doc.name)}.png`;
+    const scope = viewImageScope(exportScopeInfo, selectedBody?.name ?? null);
+    try {
+      setStatus('Rendering the view as PNG…');
+      const pixels = source.capture({
+        ...options,
+        ...(scope.bodyIds ? { bodyIds: scope.bodyIds } : {})
+      });
+      const { encodePng } = await import('./lib/pngEncode');
+      const png = await encodePng(pixels.rgba, pixels.width, pixels.height);
+      const saved = await saveCadBinaryFile(fileName, 'png', png);
+      setStatus(
+        saved
+          ? `Exported a ${pixels.width} × ${pixels.height} PNG to ${fileName}.`
+          : 'PNG export cancelled.'
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'PNG export failed.'));
+    }
+  }
+
+  /** One sketch's exact curves as an SVG at 1:1 in document units. */
+  async function handleExportSketchSvg(options: SvgExportOptions) {
+    // No rebuild guard: the sketch is read from the saved document, and the
+    // worker queues the export behind any rebuild in flight. The dialog
+    // offers SVG while the model updates, so it must be able to deliver it.
+    if (!doc) {
+      return;
+    }
+    const fileName = `${exportFileStem(doc.name)}-sketch.svg`;
+    try {
+      setStatus('Exporting the sketch as SVG…');
+      const result = await geometry.exportModel('svg', doc, [], {
+        sketchId: options.sketchId as SketchId,
+        transparent: options.transparent
+      });
+      if (!('text' in result)) {
+        throw new Error('The SVG export returned no text.');
+      }
+      const saved = await saveCadTextFile(fileName, 'svg', result.text);
+      setStatus(
+        saved ? `Exported the sketch to ${fileName}.` : 'SVG export cancelled.'
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'SVG export failed.'));
+    }
+  }
+
   async function handleExportProject() {
     if (!doc || projectTransferRef.current) return;
     projectTransferRef.current = true;
@@ -19585,6 +19687,14 @@ export function App() {
       run: () => setMeshExportOpen(true)
     },
     {
+      id: 'file-export-image',
+      label: 'Export image…',
+      group: 'File',
+      keywords: ['png', 'svg', 'image', 'screenshot', 'picture', 'sketch'],
+      icon: <Download size={16} aria-hidden="true" />,
+      run: openImageExport
+    },
+    {
       id: 'file-import',
       label: 'Import CAD files…',
       group: 'File',
@@ -20640,6 +20750,7 @@ export function App() {
           onImportFiles={(files) => void handleImportFiles(files)}
           onExportStep={() => void handleExportStep()}
           onOpenMeshExport={() => setMeshExportOpen(true)}
+          onOpenImageExport={openImageExport}
           onArchiveLocalSources={() => void handleArchiveLocalSources()}
           onExportDiagnostics={handleExportDiagnostics}
           onExportInteractionLog={() => void handleExportInteractionLog()}
@@ -20910,6 +21021,7 @@ export function App() {
             onWheelDeviceLearned={handleWheelDeviceLearned}
             onMovePreviewChange={handleMovePreviewChange}
             moveValuesSetterRef={moveValuesSetterRef}
+            viewportImageRef={viewportImageRef}
             offsetHandle={modelingLocked ? null : offsetHandleTarget}
             onOffsetPreview={handleOffsetPreview}
             onOffsetCommit={(value) => {
@@ -22403,6 +22515,39 @@ export function App() {
               }}
               onExport={handleExportMesh}
               onCheckQuality={handleCheckMeshQuality}
+            />
+          )}
+          {imageExportView && doc && (
+            <ImageExportDialog
+              viewScopeLabel={
+                viewImageScope(exportScopeInfo, selectedBody?.name ?? null)
+                  .label
+              }
+              viewSize={imageExportView}
+              maxSide={imageExportView.maxSide}
+              // The desktop save refuses files over 50 MiB.
+              {...(isDesktopApp()
+                ? { maxPixels: DESKTOP_IMAGE_MAX_PIXELS }
+                : {})}
+              pngUnavailable={
+                currentGeometrySnapshot !== null
+                  ? 'Wait for the model to finish updating.'
+                  : null
+              }
+              sketches={sketchOptions}
+              initialSketchId={initialImageSketchId({
+                editing:
+                  interaction.mode === 'sketch'
+                    ? interaction.session.sketchId
+                    : null,
+                selected: selectedSketch?.sketchId ?? null,
+                profiles: selectedProfiles.map((profile) => profile.sketchId)
+              })}
+              initialShowGrid={viewerSettings.showGrid}
+              units={doc.units}
+              onClose={() => setImageExportView(null)}
+              onExportPng={(options) => void handleExportViewportPng(options)}
+              onExportSvg={(options) => void handleExportSketchSvg(options)}
             />
           )}
           {pendingShaprImport && (

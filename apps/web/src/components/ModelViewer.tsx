@@ -293,6 +293,12 @@ import { sketchValueResolver } from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
 import { traceFaceDrag } from '../lib/faceDragTrace';
 import {
+  IMAGE_UNSELECTED_STYLE,
+  renderViewportImage,
+  viewportImageMaxSide,
+  type ViewportImageSource
+} from './viewer/viewportImage';
+import {
   readWheelDeviceMemory,
   writeWheelDeviceMemory
 } from '../lib/wheelDeviceMemory';
@@ -975,6 +981,11 @@ export interface ModelViewerProps {
       ) => void)
     | null
   >;
+  /**
+   * Installed while the scene lives: draws the current view offscreen at a
+   * chosen size for image export, without presenting a frame.
+   */
+  viewportImageRef?: MutableRefObject<ViewportImageSource | null>;
   /** Stationary right-click; right-drag stays a pan. */
   onContextMenu(
     x: number,
@@ -1792,6 +1803,7 @@ export function ModelViewer({
   onResizePrimitiveFace,
   onMovePreviewChange,
   moveValuesSetterRef,
+  viewportImageRef,
   onContextMenu
 }: ModelViewerProps) {
   const drawingBodiesRef = useRef<
@@ -2619,6 +2631,60 @@ export function ModelViewer({
       timer: new THREE.Timer()
     };
     contextRef.current = context;
+    const viewportImage: ViewportImageSource = {
+      capture: (request) => {
+        const image = renderViewportImage(
+          {
+            renderer,
+            scene,
+            camera: cameraRig.activeCamera,
+            backdrop: gradientBackdrop,
+            grid: [grid, axes],
+            content: [
+              skyLight,
+              keyLight,
+              keyLight.target,
+              rimLight,
+              shadowCatcher,
+              bodyGroup,
+              regionGroup,
+              sketchGroup
+            ],
+            sketches: [regionGroup, sketchGroup],
+            objectsByBodyId,
+            refreshShadowMap,
+            emphasizeBodyColors: () => {
+              const restores: Array<() => void> = [];
+              for (const body of context.renderedBodies ?? []) {
+                const object = objectsByBodyId.get(body.bodyId);
+                if (!object) continue;
+                forEachMesh(object, (mesh) => {
+                  const was = mesh.material.color.clone();
+                  contextBodyColor(body.color, true, mesh.material.color);
+                  restores.push(() => mesh.material.color.copy(was));
+                });
+              }
+              return () => {
+                for (const restore of restores) restore();
+              };
+            }
+          },
+          request
+        );
+        requestRender();
+        return image;
+      },
+      viewSize: () => ({
+        width: renderer.domElement.width,
+        height: renderer.domElement.height
+      }),
+      // Read when asked, not at mount: the export is rare, and the renderer
+      // need not be fully initialised for the viewer to start.
+      get maxSide() {
+        return viewportImageMaxSide(renderer);
+      }
+    };
+    if (viewportImageRef) viewportImageRef.current = viewportImage;
 
     const restoredView = initialViewRef.current;
     if (restoredView) {
@@ -9046,6 +9112,9 @@ export function ModelViewer({
       if (orientationDragRef.current === orientationDragControls) {
         orientationDragRef.current = null;
       }
+      if (viewportImageRef?.current === viewportImage) {
+        viewportImageRef.current = null;
+      }
       contextRef.current = null;
     };
   }, []);
@@ -10489,6 +10558,14 @@ export function ModelViewer({
         });
         line.name = 'sketch-curve';
         line.userData.sketchViewId = view.sketchId;
+        if (view.selected) {
+          // What an image export draws instead: selection is a viewing state.
+          line.userData[IMAGE_UNSELECTED_STYLE] = {
+            color: curve.construction ? 0x7b8da3 : SKETCH_COLOR,
+            linewidth: SKETCH_CURVE_WIDTH,
+            opacity: curve.construction ? 0.72 : 0.9
+          };
+        }
         if (curve.construction) {
           line.material.dashed = true;
           line.material.dashSize = 1.4;
@@ -11452,6 +11529,12 @@ export function ModelViewer({
         })
       );
       profileFill.userData.sketchId = sketch.sketchId;
+      if (sketch.selected) {
+        profileFill.userData[IMAGE_UNSELECTED_STYLE] = {
+          color: 0x2f4fa8,
+          opacity: 0.1
+        };
+      }
       profileFill.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_FILL;
       context.sketchGroup.add(profileFill);
 
@@ -11469,6 +11552,12 @@ export function ModelViewer({
       );
       line.name = 'sketch-curve';
       line.raycast = () => undefined;
+      if (sketch.selected) {
+        line.userData[IMAGE_UNSELECTED_STYLE] = {
+          color: SKETCH_COLOR,
+          opacity: 0.5
+        };
+      }
       line.renderOrder = sketch.selected
         ? VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY
         : VIEWPORT_RENDER_ORDER.SKETCH_CURVE;
