@@ -66,12 +66,15 @@ import { saveCadBinaryFile, saveCadTextFile } from '../lib/desktopBridge';
  */
 export interface DrawingWorkspaceProps {
   document: ProjectDocument;
-  /**
-   * The last completed projection of the model. It may lag a rebuild in
-   * flight; that is safe because a sheet draws only when these bodies match
-   * its fingerprint, so what it shows is always the model it is bound to.
-   */
+  /** The last completed projection of the model; it may lag `document`. */
   bodies: Readonly<Record<string, BodyRepresentation | undefined>>;
+  /**
+   * True while `bodies` is not the projection of `document` (a rebuild is in
+   * flight). A sheet is never ready, drawn or exported then: old geometry
+   * that still matches its fingerprint is not the model the document holds.
+   * Sheet edits keep the ready geometry, so they never set this.
+   */
+  geometryPending: boolean;
   /** Bodies a new sheet draws: the live, visible ones. */
   defaultBodyIds: BodyId[];
   /** Why drawing edits are refused, or null. */
@@ -93,7 +96,8 @@ type ViewState =
 
 function sheetStatus(
   sheet: DrawingSheet,
-  bodies: DrawingWorkspaceProps['bodies']
+  bodies: DrawingWorkspaceProps['bodies'],
+  geometryPending: boolean
 ): SheetStatus {
   const ids = sheetBodyIds(sheet);
   const missing = ids.filter((id) => !bodies[id] || bodies[id].consumed);
@@ -102,6 +106,7 @@ function sheetStatus(
       kind: 'missing',
       bodyNames: missing.map((id) => bodies[id]?.name ?? 'a deleted body')
     };
+  if (geometryPending) return { kind: 'pending' };
   const fingerprint = drawingSourceFingerprint(bodies, ids);
   if (!fingerprint) return { kind: 'pending' };
   return fingerprint === sheet.source.fingerprint
@@ -308,7 +313,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   } | null>(null);
   const canvasRef = useRef<SVGSVGElement | null>(null);
   const editable = editDisabledReason === null;
-  const status = sheet ? sheetStatus(sheet, bodies) : null;
+  const status = sheet
+    ? sheetStatus(sheet, bodies, props.geometryPending)
+    : null;
   const projections = useViewProjections(sheet, status, bodies);
   const liveBodies = useMemo(
     () =>
@@ -347,7 +354,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return;
     }
     const fingerprint = drawingSourceFingerprint(bodies, bodyIds);
-    if (!fingerprint) {
+    if (!fingerprint || props.geometryPending) {
       props.onStatus(
         'Wait for the model to finish updating, then make the drawing.'
       );

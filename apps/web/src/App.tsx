@@ -22636,6 +22636,7 @@ export function App() {
               <LazyDrawingWorkspace
                 document={doc}
                 bodies={doc.derived.bodyRepresentations}
+                geometryPending={!geometry.isReadyFor(doc)}
                 defaultBodyIds={exportBodyIds}
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}

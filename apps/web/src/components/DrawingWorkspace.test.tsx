@@ -90,6 +90,7 @@ function setup(
     sheet?: DrawingSheet;
     size?: number;
     editDisabledReason?: string | null;
+    geometryPending?: boolean;
   } = {}
 ) {
   const base = createProjectDocument('Bracket', toUserId('test'));
@@ -105,6 +106,7 @@ function setup(
     <DrawingWorkspace
       document={document}
       bodies={bodies}
+      geometryPending={options.geometryPending ?? false}
       defaultBodyIds={[bodyId]}
       editDisabledReason={options.editDisabledReason ?? null}
       onCommand={onCommand}
@@ -174,6 +176,25 @@ describe('DrawingWorkspace', () => {
     expect(
       screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
     ).toBe(false);
+  });
+
+  it('waits, rather than drawing or exporting, while the model rebuilds', () => {
+    // The completed geometry still matches the sheet, but the document has
+    // moved on: it is not the model to draw or export.
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    setup({ sheet: starter(fingerprint), geometryPending: true });
+    expect(screen.getByRole('status').textContent).toMatch(
+      /Waiting for the model/
+    );
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    expect(
+      canvas.querySelectorAll('.drawing-view.is-placeholder')
+    ).toHaveLength(4);
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
+    ).toBe(true);
   });
 
   it('shows a stale sheet as outlines, refuses export and rebinds on Update', async () => {
