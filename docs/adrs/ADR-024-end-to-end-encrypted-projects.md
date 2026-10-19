@@ -135,12 +135,21 @@ document. Browsers therefore never decompress without limits:
 
 - Decompression streams through `DecompressionStream` and stops the moment
   output exceeds the smaller of two limits: the header's declared plaintext
-  size, and a fixed ceiling for that blob kind. The ceilings match today's
-  server limits: `MAX_CLOUD_PROJECT_DOCUMENT_BYTES` for documents, and
-  `MAX_ARTIFACT_UPLOAD_BYTES` for imported sources and archived exports.
-  Thumbnails, measurements and view state get smaller ceilings of their own.
+  size, and a fixed ceiling for that blob kind. The ceilings are today's
+  parser and download safety limits, not storage quotas:
+  - documents use `MAX_CLOUD_PROJECT_DOCUMENT_BYTES` (24 MiB);
+  - imported sources and mesh payloads use the 128 MiB import and download
+    ceilings, `MAX_SOURCE_IMPORT_BYTES` (`apps/web/src/lib/stepImportRun.ts`)
+    and `MAX_ARTIFACT_DOWNLOAD_BYTES`
+    (`apps/web/src/lib/exactSourceResolver.ts`);
+  - archived exports use the same 128 MiB until a measured format needs more.
+
+  `MAX_ARTIFACT_UPLOAD_BYTES` (1 GiB) is the multipart storage reservation and
+  is never a decompression limit. Thumbnails, measurements and view state get
+  smaller ceilings of their own.
   This is the client-side counterpart of the cap in `decodeProjectStorageBody`
   (`packages/cloudflare-adapters/src/project-object-storage.ts`).
+
 - A body that decompresses to anything other than its declared size fails,
   and the browser keeps the last good version.
 - JSON parsing of a decompressed document keeps today's depth and
