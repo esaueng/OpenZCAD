@@ -1,4 +1,5 @@
 import {
+  featureKeepsInputBody,
   isValidParameterName,
   listFeaturesInOrder,
   listParameters
@@ -62,15 +63,15 @@ export function unmodifiedImportedSource(
     !source ||
     source.data.featureKind !== 'imported-step' ||
     source.data.planarEmboss ||
-    features
-      .slice(index + 1)
-      .some(
-        (feature) =>
-          ('targetBodyId' in feature.data &&
-            feature.data.targetBodyId === bodyId) ||
+    features.slice(index + 1).some(
+      (feature) =>
+        // M11: a Boolean or Split that keeps the import does not edit it.
+        !featureKeepsInputBody(feature.data, bodyId as BodyId) &&
+        (('targetBodyId' in feature.data &&
+          feature.data.targetBodyId === bodyId) ||
           ('targetBodyIds' in feature.data &&
-            feature.data.targetBodyIds.includes(bodyId as BodyId))
-      )
+            feature.data.targetBodyIds.includes(bodyId as BodyId)))
+    )
   )
     return null;
   return source;

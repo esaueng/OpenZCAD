@@ -131,7 +131,9 @@ export function ExtrudeForm({
     const d = previewExpression(next.distance, scope, quantity);
     const b = previewExpression(next.backDistance, scope, quantity);
     const targetRequired =
-      next.choice.operation === 'add' || next.choice.operation === 'cut';
+      next.choice.operation === 'add' ||
+      next.choice.operation === 'cut' ||
+      next.choice.operation === 'intersect';
     const targetBodyId = targetRequired ? next.choice.targetBodyId : undefined;
     const nextThroughAll = isThroughAll(next);
     if (

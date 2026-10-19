@@ -1229,6 +1229,7 @@ import { PatternProgress } from './components/PatternProgress';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
+  editAffectedFeatureTargets,
   planReorder,
   reorderRefusal,
   type AffectedFeatureTarget
@@ -7013,11 +7014,22 @@ export function App() {
       feature.data.featureKind === 'pattern'
         ? runPattern
         : executeValidatedFeature;
+    // The proposed document names any input the edit newly takes (M11).
+    let proposed: ProjectDocument | null = null;
+    try {
+      proposed = command.apply(doc);
+    } catch {
+      // The command's own validation reports this on the run below.
+    }
     void run(command, {
       featureName,
       resultBodyId,
-      targets: affectedFeatureTargets(doc, feature.featureId).map(
-        (target, index) => (index === 0 ? { ...target, featureName } : target)
+      targets: editAffectedFeatureTargets(
+        doc,
+        proposed,
+        feature.featureId
+      ).map((target, index) =>
+        index === 0 ? { ...target, featureName } : target
       ),
       successMessage: commandOutcomeMessage(command.label),
       onSuccess: () => finishFeatureEdit(feature, editSession),
@@ -22385,8 +22397,15 @@ export function App() {
                       data: {
                         featureKind: 'boolean',
                         operation: value.operation,
-                        targetBodyIds: value.targetBodyIds
-                      }
+                        targetBodyIds: value.targetBodyIds,
+                        ...(value.keepOriginals !== undefined
+                          ? { keepOriginals: value.keepOriginals }
+                          : {})
+                      },
+                      // M11: consuming every input is the absent field.
+                      ...(value.keepOriginals === undefined
+                        ? { clearData: ['keepOriginals'] }
+                        : {})
                     },
                     `Edit ${value.name}`
                   );

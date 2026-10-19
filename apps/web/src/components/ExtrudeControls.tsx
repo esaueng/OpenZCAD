@@ -16,7 +16,10 @@ export function ExtrudeControls({
   onChange,
   allowAutomatic = true
 }: ExtrudeControlsProps) {
-  const needsTarget = choice.operation === 'add' || choice.operation === 'cut';
+  const needsTarget =
+    choice.operation === 'add' ||
+    choice.operation === 'cut' ||
+    choice.operation === 'intersect';
   return (
     <div className="extrude-controls">
       <label className="field">
@@ -30,7 +33,9 @@ export function ExtrudeControls({
           onChange={(event) => {
             const operation = event.target.value as ExtrudeChoice['operation'];
             onChange(
-              operation === 'add' || operation === 'cut'
+              operation === 'add' ||
+                operation === 'cut' ||
+                operation === 'intersect'
                 ? {
                     operation,
                     ...(needsTarget && choice.targetBodyId
@@ -47,6 +52,7 @@ export function ExtrudeControls({
           <option value="new-body">New body</option>
           <option value="add">Add</option>
           <option value="cut">Cut</option>
+          <option value="intersect">Intersect</option>
         </select>
       </label>
       {needsTarget && (
