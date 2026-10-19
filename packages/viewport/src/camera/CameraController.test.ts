@@ -1058,3 +1058,52 @@ describe('CameraController teardown', () => {
     expect(root.live).toEqual([]);
   });
 });
+
+describe('CameraController field of view', () => {
+  /** Half the height the perspective view spans at the orbit target. */
+  function spanAtTarget(controller: CameraController) {
+    const camera = controller.perspective;
+    return (
+      camera.position.distanceTo(controller.controls.target) *
+      Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))
+    );
+  }
+
+  it('keeps the framing while the depth cue changes', () => {
+    const { controller, onViewChange } = createController();
+    const span = spanAtTarget(controller);
+    const direction = controller.viewDirection();
+    const near = controller.perspective.near;
+    controller.setFieldOfView(25);
+    expect(controller.fieldOfView).toBe(25);
+    expect(spanAtTarget(controller)).toBeCloseTo(span, 9);
+    // Along the same axis, and further out: a narrower view stands back.
+    expect(controller.viewDirection().angleTo(direction)).toBeLessThan(1e-9);
+    expect(orbitDistance(controller)).toBeGreaterThan(150);
+    expect(controller.perspective.near).toBeGreaterThan(near);
+    expect(onViewChange).toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it('clamps to the preference bounds and ignores a repeat', () => {
+    const { controller, onViewChange } = createController();
+    controller.setFieldOfView(170);
+    expect(controller.fieldOfView).toBe(90);
+    onViewChange.mockClear();
+    controller.setFieldOfView(90);
+    expect(onViewChange).not.toHaveBeenCalled();
+    controller.setFieldOfView(1);
+    expect(controller.fieldOfView).toBe(15);
+    controller.dispose();
+  });
+
+  it('leaves an orthographic view exactly as it was', () => {
+    const { controller } = createController();
+    controller.applyProjection('orthographic');
+    const before = controller.capture();
+    controller.setFieldOfView(70);
+    expect(controller.capture()).toEqual(before);
+    expect(controller.projection).toBe('orthographic');
+    controller.dispose();
+  });
+});

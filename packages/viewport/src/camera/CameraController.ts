@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { VIEWPORT_FIELD_OF_VIEW_BOUNDS } from '@openzcad/shared';
 import type { CameraPose } from '../render/scene';
 import {
   easeInOutCubic,
@@ -156,6 +157,12 @@ export interface CameraControllerOptions {
   wheelElement?: HTMLElement;
   /** Invalidates the viewport so the render loop draws another frame. */
   requestRender(): void;
+  /**
+   * Starting perspective field of view, degrees; 45 when absent. Given here
+   * rather than set afterwards so a restored pose, saved at this field of
+   * view, is not dollied as if it had been saved at another.
+   */
+  fieldOfView?: number;
   /** Immediate in-memory pose sink, including gesture-time camera changes. */
   onViewChange(state: ViewportCameraState): void;
   /** Durable pose sink, called only after a camera gesture or glide settles. */
@@ -224,7 +231,16 @@ export class CameraController {
     });
     const aspect = this.aspect();
 
-    this.perspective = new THREE.PerspectiveCamera(45, aspect, 0.1, 4000);
+    this.perspective = new THREE.PerspectiveCamera(
+      THREE.MathUtils.clamp(
+        options.fieldOfView ?? VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
+        VIEWPORT_FIELD_OF_VIEW_BOUNDS.min,
+        VIEWPORT_FIELD_OF_VIEW_BOUNDS.max
+      ),
+      aspect,
+      0.1,
+      4000
+    );
     // Z-up, matching the solid kernel: a part's vertical size is its `depth`,
     // and cylinders extrude along +Z. This must be set before OrbitControls is
     // constructed below — OrbitControls snapshots `object.up` into a quaternion
@@ -1113,6 +1129,54 @@ export class CameraController {
     this.orthographic.top = halfHeight;
     this.orthographic.bottom = -halfHeight;
     this.orthographic.updateProjectionMatrix();
+  }
+
+  /** The perspective camera's vertical field of view, in degrees. */
+  get fieldOfView(): number {
+    return this.perspective.fov;
+  }
+
+  /**
+   * Widens or narrows the perspective view while keeping the framing: the
+   * camera dollies along its view axis so the span at the orbit target —
+   * distance × tan(fov / 2) — is unchanged, and the part stays the size it
+   * was on screen while the depth cue changes. The orthographic frustum is
+   * derived from that same span, so it is untouched. Near and far scale with
+   * the distance so depth precision is what it was.
+   */
+  setFieldOfView(degrees: number) {
+    const next = THREE.MathUtils.clamp(
+      degrees,
+      VIEWPORT_FIELD_OF_VIEW_BOUNDS.min,
+      VIEWPORT_FIELD_OF_VIEW_BOUNDS.max
+    );
+    const current = this.perspective.fov;
+    if (!Number.isFinite(next) || Math.abs(next - current) < 1e-9) {
+      return;
+    }
+    this.cancelZoom();
+    this.cancelTween();
+    this.followOrthographic();
+    const ratio =
+      Math.tan(THREE.MathUtils.degToRad(current / 2)) /
+      Math.tan(THREE.MathUtils.degToRad(next / 2));
+    const { perspective } = this;
+    perspective.position.sub(this.orbit.target).multiplyScalar(ratio);
+    perspective.position.add(this.orbit.target);
+    perspective.near *= ratio;
+    perspective.far *= ratio;
+    perspective.fov = next;
+    perspective.updateProjectionMatrix();
+    perspective.updateMatrixWorld();
+    if (this.mode === 'orthographic') {
+      // The controls drive the ortho camera, whose picture this does not
+      // change; updating them would only re-derive its pose to the ulp.
+      return;
+    }
+    this.orbit.update();
+    this.emitViewChange();
+    this.scheduleSettledViewChange();
+    this.options.requestRender();
   }
 
   dispose() {

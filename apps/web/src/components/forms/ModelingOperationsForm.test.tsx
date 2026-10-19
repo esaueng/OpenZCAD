@@ -227,6 +227,43 @@ describe('Modeling operations form', () => {
     ).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('adds a box sweep of faces to the shell list without toggling any off', () => {
+    const extraFace = {
+      ...faces[0]!,
+      hash: 43,
+      topologyId: 'face:43',
+      label: 'Second plane'
+    };
+    const shellProps = {
+      operation: 'shell' as const,
+      scope: {},
+      bodies,
+      faceOptions: [...faces, extraFace],
+      onPreflight: vi.fn(),
+      onSubmit: vi.fn()
+    };
+    const view = render(<ModelingOperationsForm {...shellProps} />);
+    view.rerender(
+      <ModelingOperationsForm
+        {...shellProps}
+        viewportFacePick={{ bodyId, hash: 42 }}
+      />
+    );
+    // The sweep holds 42 again and a face the card does not offer (77).
+    view.rerender(
+      <ModelingOperationsForm
+        {...shellProps}
+        viewportFacePick={{ bodyId, hash: 42, hashes: [42, 43, 77] }}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: `1 ${faces[0]!.label}` })
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      screen.getByRole('button', { name: `2 ${extraFace.label}` })
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('follows a viewport pick onto another body when the workspace retargets it', () => {
     const otherBodyId = toBodyId('other_body');
     const props = {

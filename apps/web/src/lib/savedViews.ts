@@ -22,6 +22,8 @@ export interface SavedView {
   displayMode: DisplayMode;
   /** The section the view was saved with; absent means no section. */
   sectionView?: SectionViewSettings;
+  /** Saved in X-ray; absent (older views) means not. */
+  xray?: boolean;
   savedAt: number;
 }
 
@@ -92,7 +94,8 @@ function isSavedView(value: unknown): value is SavedView {
       isPositive(view.camera.orthographicHalfHeight)) &&
     (view.projection === 'perspective' || view.projection === 'orthographic') &&
     DISPLAY_MODES.includes(view.displayMode) &&
-    isSection(view.sectionView)
+    isSection(view.sectionView) &&
+    (view.xray === undefined || typeof view.xray === 'boolean')
   );
 }
 

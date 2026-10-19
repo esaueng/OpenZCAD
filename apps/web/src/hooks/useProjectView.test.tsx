@@ -56,3 +56,54 @@ describe('project camera pose persistence', () => {
     expect(loadProjectView('project-1')?.camera).toEqual(settledPose);
   });
 });
+
+describe('sketch visibility on this device', () => {
+  const defaults = {
+    projection: 'perspective' as const,
+    showGrid: true,
+    displayMode: 'shaded-edges' as const,
+    reducedMotion: false,
+    zoomToCursor: true,
+    middleDrag: 'pan' as const,
+    pointerNavigation: 'auto' as const
+  };
+
+  it('survives a reload, and a view from another device keeps it', async () => {
+    const first = renderHook(() => useProjectView('project-1'));
+    act(() => first.result.current.onCameraSettled('project-1', settledPose));
+    act(() => first.result.current.setSketchVisibility({ 'sketch-a': false }));
+    await waitFor(() =>
+      expect(loadProjectView('project-1')?.sketchVisibility).toEqual({
+        'sketch-a': false
+      })
+    );
+    first.unmount();
+
+    // A reload: a fresh hook restores the project's remembered choices.
+    const second = renderHook(() => useProjectView('project-1'));
+    act(() => second.result.current.restore('project-1', defaults));
+    expect(second.result.current.sketchVisibility).toEqual({
+      'sketch-a': false
+    });
+
+    // The account's resume state carries no sketch choices.
+    act(() =>
+      second.result.current.apply({
+        camera: transientPose,
+        projection: 'orthographic',
+        settings: { showGrid: false, displayMode: 'wireframe' },
+        hiddenBodyIds: []
+      })
+    );
+    expect(second.result.current.sketchVisibility).toEqual({
+      'sketch-a': false
+    });
+    expect(loadProjectView('project-1')?.sketchVisibility).toEqual({
+      'sketch-a': false
+    });
+
+    // Another project starts with none.
+    act(() => second.result.current.restore('project-2', defaults));
+    expect(second.result.current.sketchVisibility).toEqual({});
+  });
+});

@@ -6,6 +6,8 @@ import {
   normalizeKeymapOverrides,
   nowIso,
   PANEL_WIDTH_LIMITS,
+  VIEWPORT_FIELD_OF_VIEW_BOUNDS,
+  XRAY_OPACITY_BOUNDS,
   type AppSettings,
   type PanelWidthLimits,
   type AppSettingsResponse,
@@ -306,6 +308,17 @@ export function parseUpdateAppSettingsRequest(
           'pointerNavigation',
           POINTER_NAVIGATIONS,
           'auto'
+        ),
+        // Optional and clamped, like the panel widths: an older client
+        // omits them, and a newer one's out-of-range value is pulled in
+        // exactly as the browser pulls it in.
+        fieldOfView: optionalBoundedNumber(
+          viewport.fieldOfView,
+          VIEWPORT_FIELD_OF_VIEW_BOUNDS
+        ),
+        xrayOpacity: optionalBoundedNumber(
+          viewport.xrayOpacity,
+          XRAY_OPACITY_BOUNDS
         )
       },
       sketching: {

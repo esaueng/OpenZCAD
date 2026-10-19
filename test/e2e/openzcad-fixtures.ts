@@ -429,7 +429,7 @@ export async function setSelectionFilter(
  */
 export async function locateEdge(
   page: Page,
-  options: { exclude?: string[] } = {}
+  options: { exclude?: string[]; occluded?: boolean } = {}
 ) {
   const canvas = page.locator('.viewer-host canvas');
   let found: { x: number; y: number; topologyId: string } | null = null;
@@ -437,7 +437,7 @@ export async function locateEdge(
     .poll(
       async () => {
         found = await canvas.evaluate(
-          (element, excludeTopologyIds) =>
+          (element, { excludeTopologyIds, occluded }) =>
             new Promise<{
               x: number;
               y: number;
@@ -445,11 +445,14 @@ export async function locateEdge(
             } | null>((resolve) => {
               element.dispatchEvent(
                 new CustomEvent('openzcad:e2e-locate-edge', {
-                  detail: { resolve, excludeTopologyIds }
+                  detail: { resolve, excludeTopologyIds, occluded }
                 })
               );
             }),
-          options.exclude ?? []
+          {
+            excludeTopologyIds: options.exclude ?? [],
+            occluded: options.occluded ?? false
+          }
         );
         return found !== null;
       },

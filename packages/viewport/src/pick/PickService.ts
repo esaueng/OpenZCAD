@@ -70,6 +70,11 @@ export interface PickServiceOptions {
   /** Cached plane-local profiles used for command-aware 2D picking. */
   profiles?(): readonly ProfilePickTarget[];
   selectionContext?(): 'default' | 'sketch-edit' | 'profile-command';
+  /**
+   * X-ray: faces hide nothing, so an edge anywhere along the ray outranks
+   * the faces in front of it, and a solid no longer blocks a sketch region.
+   */
+  selectThrough?(): boolean;
 }
 
 interface TopologyUserData {
@@ -89,6 +94,22 @@ interface TopologyUserData {
  * genuine occluder — the lip over a blind hole's floor — is far outside it.
  */
 const BOUNDARY_OCCLUSION_RELATIVE_EPSILON = 1e-3;
+
+/**
+ * Select-through ordering: every edge in the pick band ahead of every face,
+ * each kind still nearest first. Faces drawn translucent do not stand
+ * between the pointer and an edge behind them.
+ */
+function edgesThroughFaces(
+  hits: THREE.Intersection<THREE.Object3D>[]
+): THREE.Intersection<THREE.Object3D>[] {
+  const isEdge = (hit: THREE.Intersection<THREE.Object3D>) =>
+    (hit.object.userData as TopologyUserData).topologyKind === 'edge';
+  return [
+    ...hits.filter((hit) => isEdge(hit)),
+    ...hits.filter((hit) => !isEdge(hit))
+  ];
+}
 
 /**
  * Raycasting and topology resolution for the viewport.
@@ -145,6 +166,10 @@ export class PickService {
 
   private get filter(): SelectionFilter {
     return this.options.filter?.() ?? 'any';
+  }
+
+  private get selectThrough(): boolean {
+    return this.options.selectThrough?.() ?? false;
   }
 
   /**
@@ -323,6 +348,7 @@ export class PickService {
     // behind a solid unreachable, which is the case the filter exists for.
     if (
       this.filter === 'any' &&
+      !this.selectThrough &&
       (this.options.selectionContext?.() ?? 'default') === 'default'
     ) {
       const bodyBlock = bodyIntersections()[0];
@@ -572,8 +598,12 @@ export class PickService {
   private topologyCandidates(
     bodyIntersections: () => THREE.Intersection<THREE.Object3D>[]
   ): PickCandidate[] {
+    const hits = bodyIntersections();
     return this.applyFilter(
-      this.promoteBoundaryEdge(prioritizeVisibleEdgeHit(bodyIntersections()))
+      (this.selectThrough
+        ? edgesThroughFaces(hits)
+        : this.promoteBoundaryEdge(prioritizeVisibleEdgeHit(hits))
+      )
         .map((hit) => this.topologyCandidate(hit))
         .filter((candidate): candidate is PickCandidate => candidate !== null)
     );

@@ -101,6 +101,7 @@ import {
   Redo2,
   Ruler,
   Save,
+  ScanEye,
   Settings as SettingsIcon,
   Scissors,
   Slice,
@@ -260,7 +261,9 @@ import { textPlacementBudgetError } from './lib/sketch/textPlacement';
 import {
   modelingOperationNeedsPlanarFaces,
   modelingOperationPicksFaces,
+  resolveFormFaceBox,
   resolveFormFacePick,
+  formFaceListOperation,
   type FacePickOperation,
   type FormFacePick
 } from './lib/holeFacePick';
@@ -2170,6 +2173,24 @@ export function App() {
   // behind there.
   const selectedBodyIdsRef = useRef(selectedBodyIds);
   selectedBodyIdsRef.current = selectedBodyIds;
+  /**
+   * Faces taken by one box sweep with the Face filter. They are the selection
+   * only while the body selection that sweep set is still the one in force:
+   * any later pick, clear or sweep replaces `selectedBodyIds` (or sets a
+   * topology or edge pick), and the faces go with it, so no other path has to
+   * remember to clear them.
+   */
+  const [boxFaces, setBoxFaces] = useState<{
+    bodyIds: BodyId[];
+    faces: TopologySelection[];
+  } | null>(null);
+  const boxSelectedFaces =
+    boxFaces &&
+    boxFaces.bodyIds === selectedBodyIds &&
+    selectedTopology === null &&
+    selectedEdges.length === 0
+      ? boxFaces.faces
+      : null;
   const [selectedSketchProfileId, setSelectedSketchProfileId] =
     useState<SketchId | null>(null);
   const [selectedProfiles, setSelectedProfiles] = useState<RegionPickData[]>(
@@ -2485,6 +2506,8 @@ export function App() {
     initialView,
     hiddenBodyIds: localHiddenBodyIds,
     setHiddenBodyIds,
+    sketchVisibility: sketchVisibilityOverrides,
+    setSketchVisibility: setSketchVisibilityOverrides,
     restore: restoreProjectView,
     apply: applyProjectView,
     snapshot: projectViewSnapshot,
@@ -2554,8 +2577,11 @@ export function App() {
     documentVersion: doc?.version ?? 0,
     synced: saveState === 'synced',
     getState() {
-      const view = doc ? projectViewSnapshot() : null;
-      if (!view) return null;
+      const snapshot = doc ? projectViewSnapshot() : null;
+      if (!snapshot) return null;
+      // Sketch visibility is this device's choice, like its saved views; it
+      // does not travel to the account's resume state.
+      const { sketchVisibility: _thisDevice, ...view } = snapshot;
       return {
         ...view,
         selectedBodyIds,
@@ -2602,8 +2628,10 @@ export function App() {
       setViewerSettings((current) => ({
         ...current,
         showGrid: appSettings.viewport.showGrid,
-        displayMode: appSettings.viewport.displayMode
+        displayMode: appSettings.viewport.displayMode,
+        xray: false
       }));
+      setSketchVisibilityOverrides({});
       setResumeViewGeneration((value) => value + 1);
     }
   });
@@ -6445,7 +6473,8 @@ export function App() {
   );
   // The focus faces are drawn as a selected face is, not with the accent
   // fill of a blend preview that does not exist yet.
-  const focusFaces = historyFocus?.focus.faces;
+  // A box sweep's faces draw the same way: several faces lit as one pick.
+  const focusFaces = historyFocus?.focus.faces ?? boxSelectedFaces ?? undefined;
 
   /**
    * The selection chip anchored to the pick: name, key measurement, the
@@ -6465,8 +6494,9 @@ export function App() {
   };
   const clearSelectionRef = useRef<() => void>(() => undefined);
   clearSelectionRef.current = clearSelection;
-  const calloutKind: SelectionCalloutKind | null =
-    selectedEdges.length > 0 || renderedSelectedTopology?.kind === 'edge'
+  const calloutKind: SelectionCalloutKind | null = boxSelectedFaces
+    ? 'faces'
+    : selectedEdges.length > 0 || renderedSelectedTopology?.kind === 'edge'
       ? 'edges'
       : renderedSelectedTopology?.kind === 'face'
         ? 'face'
@@ -6527,6 +6557,19 @@ export function App() {
         onClear: () => clearSelectionRef.current()
       };
     }
+    // A box sweep's faces are named by count and anchored on the faces, as
+    // a History row's are; the verbs are the tools that take them.
+    if (boxSelectedFaces && calloutInteractive) {
+      return {
+        label: textLabelSegments(
+          `${boxSelectedFaces.length} ${boxSelectedFaces.length === 1 ? 'face' : 'faces'}`
+        ),
+        verbs,
+        anchor: 'focus',
+        onVerb,
+        onClear: () => clearSelectionRef.current()
+      };
+    }
     // A running tool has its own card and handles, and View and Tweak do
     // not edit: the pick keeps its plain name label, which takes no input
     // and so can never sit over a gizmo handle.
@@ -6547,6 +6590,7 @@ export function App() {
     };
   }, [
     historyFocus,
+    boxSelectedFaces,
     selectionSummary,
     selectedBodyIds,
     calloutVerbsKey,
@@ -7461,16 +7505,24 @@ export function App() {
       setModelingTargetBodyId(targetBodyId);
       // A face already picked on that body is the answer to the form's first
       // question, so it lands in the face field instead of being thrown away.
+      // So are the faces a box swept, for the cards that list faces.
       const seeded =
-        modelingOperationPicksFaces(nextTool) &&
-        targetBodyId &&
-        selectedTopology?.kind === 'face'
-          ? resolveFormFacePick(
-              nextTool,
-              targetBodyId,
-              selectedTopology,
-              representations[targetBodyId]?.topology
-            )
+        modelingOperationPicksFaces(nextTool) && targetBodyId
+          ? boxSelectedFaces && formFaceListOperation(nextTool)
+            ? resolveFormFaceBox(
+                nextTool,
+                targetBodyId,
+                boxSelectedFaces,
+                representations[targetBodyId]?.topology
+              )
+            : selectedTopology?.kind === 'face'
+              ? resolveFormFacePick(
+                  nextTool,
+                  targetBodyId,
+                  selectedTopology,
+                  representations[targetBodyId]?.topology
+                )
+              : null
           : null;
       setViewportFormFacePick(seeded?.ok ? seeded.pick : null);
       setFormFacePickTarget(null);
@@ -7847,7 +7899,8 @@ export function App() {
                 displayMode: viewerSettings.displayMode,
                 ...(viewerSettings.sectionView
                   ? { sectionView: viewerSettings.sectionView }
-                  : {})
+                  : {}),
+                ...(viewerSettings.xray ? { xray: true } : {})
               }
             : null;
         },
@@ -7857,6 +7910,7 @@ export function App() {
           projection: typeof projection;
           displayMode: DisplayMode;
           sectionView?: SectionViewSettings;
+          xray?: boolean;
         }) {
           setProjection(view.projection);
           // The exact section on screen belongs to the cut being replaced.
@@ -7866,6 +7920,7 @@ export function App() {
             return {
               ...rest,
               displayMode: view.displayMode,
+              xray: view.xray === true,
               ...(view.sectionView ? { sectionView: view.sectionView } : {})
             };
           });
@@ -7905,6 +7960,21 @@ export function App() {
       setStatus(`Projection: ${next}.`);
       return next;
     });
+  }
+
+  /**
+   * X-ray rides over the display mode rather than replacing it, so turning
+   * it off returns exactly the mode, the hidden bodies and the selection
+   * that were on screen before.
+   */
+  function toggleXray() {
+    const next = !viewerSettingsRef.current.xray;
+    setViewerSettings((current) => ({ ...current, xray: next }));
+    setStatus(
+      next
+        ? `X-ray on · faces at ${appSettings.viewport.xrayOpacity}% · picks and box selection go through them.`
+        : 'X-ray off.'
+    );
   }
 
   /**
@@ -8097,14 +8167,10 @@ export function App() {
     });
   }
 
-  /**
-   * Per-sketch visibility override. Absent means the default: a sketch whose
-   * profile a feature consumed hides itself, everything else shows. View
-   * state, deliberately not written into the document.
-   */
-  const [sketchVisibilityOverrides, setSketchVisibilityOverrides] = useState<
-    Record<string, boolean>
-  >({});
+  // Per-sketch visibility overrides (`sketchVisibilityOverrides`) come from
+  // the project view: absent means the default — a sketch whose profile a
+  // feature consumed hides itself, everything else shows. View state on this
+  // device, persisted beside the camera and deliberately not in the document.
   /** Datum planes hidden by their eye toggle: view state, as sketches' is. */
   const [hiddenDatumIds, setHiddenDatumIds] = useState<ReadonlySet<string>>(
     () => new Set()
@@ -13391,6 +13457,135 @@ export function App() {
     }
   }
 
+  /**
+   * Faces or edges swept by a drag rectangle under the Face or Edge filter.
+   *
+   * Edges stay on one body, as every edge selection does (a fillet or
+   * chamfer works on one body): the body with the most edges in the box
+   * keeps them, and the status says when others were left out. Faces may
+   * span bodies. An open Shell, Draft, Hole or Thicken card takes the faces
+   * instead, as it takes a clicked face.
+   */
+  function handleBoxSelectTopologyFromViewer(
+    selections: TopologySelection[],
+    kind: 'face' | 'edge'
+  ) {
+    if (selections.length === 0) {
+      // An empty sweep is an empty sweep, whatever the filter.
+      handleBoxSelectFromViewer([]);
+      return;
+    }
+    if (!doc) return;
+    if (currentGeometrySnapshot !== null) {
+      setStatus(
+        'The model is still updating. Try that selection again when it finishes.'
+      );
+      return;
+    }
+    if (
+      !exactGeometryReady &&
+      selections.some((selection) => !selectionResolvesInDerived(doc, selection))
+    ) {
+      setStatus(
+        'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
+      );
+      return;
+    }
+    if (kind === 'edge') {
+      const byBody = new Map<BodyId, TopologySelection[]>();
+      for (const selection of selections) {
+        byBody.set(selection.bodyId, [
+          ...(byBody.get(selection.bodyId) ?? []),
+          selection
+        ]);
+      }
+      const edges = [...byBody.values()].sort(
+        (left, right) => right.length - left.length
+      )[0]!;
+      if (
+        deferMoveSelection({
+          kind: 'edge-chain',
+          selections: edges.map((selection) => ({ ...selection }))
+        })
+      ) {
+        return;
+      }
+      if (movePreview) {
+        setMovePreview(null);
+        setTool(null);
+      }
+      selectEdgeChainFromViewer(edges);
+      setStatus(
+        `${edges.length} ${edges.length === 1 ? 'edge' : 'edges'} selected.${
+          byBody.size > 1
+            ? ' Edges on other bodies were left out: an edge selection stays on one body.'
+            : ''
+        }`
+      );
+      return;
+    }
+    if (moveHasUnappliedChange(movePreview)) {
+      setStatus('Apply or cancel the Move before selecting faces with a box.');
+      return;
+    }
+    if (movePreview) {
+      setMovePreview(null);
+      setTool(null);
+    }
+    if (modelingOperationPicksFaces(tool) && modelingTargetBodyId) {
+      boxFacesIntoForm(tool, modelingTargetBodyId, selections);
+      return;
+    }
+    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+      dispatchInteraction({ type: 'clear' });
+    }
+    const bodyIds = [...new Set(selections.map((face) => face.bodyId))];
+    setSelectedSketchProfileId(null);
+    setSelectedEdges([]);
+    setSelectedTopology(null);
+    setSelectedBodyIds(bodyIds);
+    setBoxFaces({ bodyIds, faces: selections });
+    inferFeatureNodeFor(bodyIds.length === 1 ? bodyIds[0]! : null);
+    setStatus(
+      `${selections.length} ${selections.length === 1 ? 'face' : 'faces'} selected.`
+    );
+  }
+
+  /** A sweep's faces, into the open card that collects faces. */
+  function boxFacesIntoForm(
+    operation: FacePickOperation,
+    targetBodyId: BodyId,
+    selections: TopologySelection[]
+  ) {
+    const label = TOOL_META[operation].label;
+    if (!exactGeometryReady) {
+      setStatus(
+        `${label}: wait for exact geometry to finish rebuilding, then pick the faces.`
+      );
+      return;
+    }
+    const result = resolveFormFaceBox(
+      operation,
+      targetBodyId,
+      selections,
+      representations[targetBodyId]?.topology
+    );
+    if (!result.ok) {
+      setStatus(result.reason);
+      return;
+    }
+    modelingPreflightRef.current = null;
+    setViewportFormFacePick(result.pick);
+    setSelectedBodyIds([targetBodyId]);
+    setSelectedEdges([]);
+    setFormFacePickTarget(null);
+    setStatus(
+      `${label}: ${result.added} ${result.added === 1 ? 'face' : 'faces'} from the box${
+        result.skipped > 0 ? ` (${result.skipped} left out)` : ''
+      } · check the result.`
+    );
+  }
+
   function handleClearSelectedEdges() {
     setSelectedEdges([]);
     const bodyId = edgeModifierBody?.bodyId;
@@ -18390,6 +18585,15 @@ export function App() {
         },
         {
           item: {
+            id: 'xray',
+            label: viewerSettings.xray ? 'Turn X-ray off' : 'Turn X-ray on',
+            icon: <ScanEye size={13} aria-hidden="true" />,
+            shortcut: menuShortcut('view-xray')
+          },
+          run: toggleXray
+        },
+        {
+          item: {
             id: 'showAll',
             label: 'Show all bodies',
             icon: <Eye size={13} aria-hidden="true" />,
@@ -19389,6 +19593,9 @@ export function App() {
         case 'view-projection':
           toggleProjection();
           return;
+        case 'view-xray':
+          toggleXray();
+          return;
         case 'selection-filter': {
           // Advances from the filter in force, not from the manual one: with
           // a tool choosing the filter those differ, and stepping from the
@@ -19867,6 +20074,14 @@ export function App() {
       shortcut: keymap.label('view-projection'),
       icon: <Camera size={16} aria-hidden="true" />,
       run: toggleProjection
+    },
+    {
+      id: 'view-xray',
+      label: viewerSettings.xray ? 'X-ray: off' : 'X-ray: on',
+      group: 'View',
+      shortcut: keymap.label('view-xray'),
+      icon: <ScanEye size={16} aria-hidden="true" />,
+      run: toggleXray
     },
     {
       id: 'view-show-all',
@@ -21131,6 +21346,7 @@ export function App() {
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
+            onToggleXray={toggleXray}
           />
         ) : // The sketch session brings its own tool rail. Before it, while
         // the plane is being picked, the plane chooser in the command slot
@@ -21664,6 +21880,9 @@ export function App() {
             onSelectEdgeChain={handleSelectEdgeChainFromViewer}
             selectionFilter={selectionFilter}
             onBoxSelect={handleBoxSelectFromViewer}
+            onBoxSelectTopology={handleBoxSelectTopologyFromViewer}
+            fieldOfView={appSettings.viewport.fieldOfView}
+            xrayOpacity={appSettings.viewport.xrayOpacity / 100}
             onSelectSketchProfile={handleSelectSketchProfile}
             onResizePrimitiveFace={handleResizePrimitiveFace}
             onContextMenu={handleViewportContextMenu}
@@ -21680,6 +21899,7 @@ export function App() {
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
+            onToggleXray={toggleXray}
             sectionRange={
               viewerSettings.sectionView
                 ? sectionAxisRange(viewerSettings.sectionView.plane)

@@ -5,6 +5,7 @@ import {
   Maximize2,
   Redo2,
   Ruler,
+  ScanEye,
   Slice,
   Undo2
 } from 'lucide-react';
@@ -78,6 +79,8 @@ interface ViewerToolbarProps {
   savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
+  /** Absent, no X-ray button is drawn. */
+  onToggleXray?(): void;
   /** Switches the section view on (at the last plane used) or off. */
   onToggleSection(): void;
   /** Cuts on another plane; chosen inside the section panel. */
@@ -142,6 +145,7 @@ export function ViewerToolbar({
   savedViews,
   onCycleDisplayMode,
   onToggleProjection,
+  onToggleXray,
   onToggleSection,
   onSectionPlane,
   onSectionOffset,
@@ -478,6 +482,23 @@ export function ViewerToolbar({
           <DisplayModeIcon mode={settings.displayMode} />
         </button>
       </Tooltip>
+      {onToggleXray && (
+        <Tooltip
+          label="X-ray"
+          shortcut={keymap.label('view-xray')}
+          description="See and pick through faces"
+        >
+          <button
+            type="button"
+            className={`rail-button ${settings.xray ? 'active' : ''}`}
+            onClick={onToggleXray}
+            aria-label={labelWithKey('X-ray', keymap.label('view-xray'))}
+            aria-pressed={settings.xray === true}
+          >
+            <ScanEye size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+      )}
       <span className="rail-divider" aria-hidden="true" />
       <div className="rail-views-anchor" ref={anchorRef}>
         <Tooltip label="Standard views">

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Camera, Grid3x3, Maximize2, Ruler } from 'lucide-react';
+import { Camera, Grid3x3, Maximize2, Ruler, ScanEye } from 'lucide-react';
 import {
   SavedViewsSection,
   type SavedViewsSectionProps
@@ -45,6 +45,8 @@ interface ViewModeBarProps {
   savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
+  /** Absent, no X-ray button is drawn. */
+  onToggleXray?(): void;
 }
 
 /**
@@ -66,7 +68,8 @@ export function ViewModeBar({
   onView,
   savedViews,
   onCycleDisplayMode,
-  onToggleProjection
+  onToggleProjection,
+  onToggleXray
 }: ViewModeBarProps) {
   const keymap = useKeymap();
   const [viewsOpen, setViewsOpen] = useState(false);
@@ -241,6 +244,23 @@ export function ViewModeBar({
           <Camera size={16} aria-hidden="true" />
         </button>
       </Tooltip>
+      {onToggleXray && (
+        <Tooltip
+          label="X-ray"
+          shortcut={keymap.label('view-xray')}
+          description="See and pick through faces"
+        >
+          <button
+            type="button"
+            className={`view-mode-button${settings.xray ? ' active' : ''}`}
+            onClick={onToggleXray}
+            aria-label={labelWithKey('X-ray', keymap.label('view-xray'))}
+            aria-pressed={settings.xray === true}
+          >
+            <ScanEye size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+      )}
     </div>
   );
 }

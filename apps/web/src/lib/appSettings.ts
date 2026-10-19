@@ -2,6 +2,8 @@ import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
   PANEL_WIDTH_LIMITS,
+  VIEWPORT_FIELD_OF_VIEW_BOUNDS,
+  XRAY_OPACITY_BOUNDS,
   normalizeKeymapOverrides,
   type AppSettings,
   type PanelWidthLimits,
@@ -214,7 +216,13 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         viewport.pointerNavigation,
         POINTER_NAVIGATIONS,
         defaults.viewport.pointerNavigation
-      )
+      ),
+      // Absent from settings written before either existed.
+      fieldOfView: clampedNumber(
+        viewport.fieldOfView,
+        VIEWPORT_FIELD_OF_VIEW_BOUNDS
+      ),
+      xrayOpacity: clampedNumber(viewport.xrayOpacity, XRAY_OPACITY_BOUNDS)
     },
     sketching: {
       gridVisible: boolean(

@@ -48,6 +48,35 @@ describe('workspace session persistence', () => {
     expect(loadProjectView('project-1', storage)).toEqual(view);
   });
 
+  it('keeps sketch visibility and X-ray with the view, dropping bad entries', () => {
+    const storage = new MemoryStorage();
+    saveProjectView(
+      'project-1',
+      {
+        ...view,
+        settings: { ...view.settings, xray: true },
+        sketchVisibility: { 'sketch-a': false, 'sketch-b': true }
+      },
+      storage
+    );
+    expect(loadProjectView('project-1', storage)).toMatchObject({
+      settings: { xray: true },
+      sketchVisibility: { 'sketch-a': false, 'sketch-b': true }
+    });
+
+    // Hand-edited storage: a non-boolean entry is dropped, not the view.
+    const raw = JSON.parse(storage.getItem(WORKSPACE_SESSION_STORAGE_KEY)!) as {
+      views: Record<string, Record<string, unknown>>;
+    };
+    raw.views['project-1']!.sketchVisibility = { 'sketch-a': 'no', '': true };
+    (raw.views['project-1']!.settings as Record<string, unknown>).xray = 'yes';
+    storage.setItem(WORKSPACE_SESSION_STORAGE_KEY, JSON.stringify(raw));
+    const reloaded = loadProjectView('project-1', storage);
+    expect(reloaded?.camera).toEqual(view.camera);
+    expect(reloaded?.sketchVisibility).toBeUndefined();
+    expect(reloaded?.settings.xray).toBe(false);
+  });
+
   it('keeps a project view while an explicit return home clears auto-open', () => {
     const storage = new MemoryStorage();
     rememberActiveProject('project-1', storage);

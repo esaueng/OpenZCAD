@@ -150,6 +150,23 @@ describe('saved view upkeep', () => {
     ]);
   });
 
+  it('keeps X-ray with the view and drops a malformed flag', () => {
+    const storage = memoryStorage();
+    saveView('p1', { ...pose(1), xray: true }, { storage, now: 1, id: 'x' });
+    expect(loadSavedViews('p1', storage)[0]?.xray).toBe(true);
+    const valid = { ...pose(1), name: 'View 1', savedAt: 1 };
+    storage.setItem(
+      SAVED_VIEWS_STORAGE_KEY,
+      JSON.stringify({
+        p1: [
+          { ...valid, id: 'bad', xray: 'on' },
+          { ...valid, id: 'older' }
+        ]
+      })
+    );
+    expect(loadSavedViews('p1', storage).map((v) => v.id)).toEqual(['older']);
+  });
+
   it('reports a refused delete and keeps the stored list', () => {
     const storage = memoryStorage();
     saveView('p1', pose(1), { storage, id: 'a' });

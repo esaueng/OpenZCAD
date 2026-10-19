@@ -24,6 +24,12 @@ export interface ProjectViewState {
   projection: ProjectionMode;
   settings: ViewerSettings;
   hiddenBodyIds: string[];
+  /**
+   * Sketches shown or hidden by hand, by sketch id. Absent from views
+   * written before it, and from the cross-device resume state, which keeps
+   * this device's own choices; an id with no entry follows the default.
+   */
+  sketchVisibility?: Record<string, boolean>;
 }
 
 interface StoredProjectView extends ProjectViewState {
@@ -81,6 +87,27 @@ function isDisplayMode(value: unknown): value is DisplayMode {
   );
 }
 
+/** At most this many per project; sketch ids are short, the session small. */
+const MAX_SKETCH_VISIBILITY_ENTRIES = 500;
+
+/** Only well-formed entries survive; a bad map reads as no choices made. */
+function parseSketchVisibility(
+  value: unknown
+): Record<string, boolean> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(
+      (entry): entry is [string, boolean] =>
+        entry[0].length > 0 &&
+        entry[0].length <= 200 &&
+        typeof entry[1] === 'boolean'
+    )
+    .slice(0, MAX_SKETCH_VISIBILITY_ENTRIES);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
 function parseStoredView(value: unknown): StoredProjectView | null {
   if (!value || typeof value !== 'object') {
     return null;
@@ -116,10 +143,22 @@ function parseStoredView(value: unknown): StoredProjectView | null {
       orthographicHalfHeight: camera.orthographicHalfHeight
     },
     projection: candidate.projection,
-    settings: { ...settings },
+    settings: {
+      ...settings,
+      ...(settings.xray === undefined || typeof settings.xray === 'boolean'
+        ? {}
+        : { xray: false })
+    },
     hiddenBodyIds: [...candidate.hiddenBodyIds],
+    ...withSketchVisibility(parseSketchVisibility(candidate.sketchVisibility)),
     updatedAt: candidate.updatedAt
   };
+}
+
+function withSketchVisibility(
+  visibility: Record<string, boolean> | undefined
+): Pick<ProjectViewState, 'sketchVisibility'> {
+  return visibility ? { sketchVisibility: { ...visibility } } : {};
 }
 
 function readSession(storage: StorageLike | null): WorkspaceSession {
@@ -294,7 +333,8 @@ export function loadProjectView(
     },
     projection: view.projection,
     settings: { ...view.settings },
-    hiddenBodyIds: [...view.hiddenBodyIds]
+    hiddenBodyIds: [...view.hiddenBodyIds],
+    ...withSketchVisibility(view.sketchVisibility)
   };
 }
 

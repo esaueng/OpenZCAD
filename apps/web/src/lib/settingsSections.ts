@@ -65,8 +65,21 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     label: 'Viewport',
     detail: 'How new views look',
     group: 'Workspace',
-    settings: ['Projection', 'Display mode', 'Show construction grid'],
-    searchTerms: ['wireframe', 'perspective', 'orthographic']
+    settings: [
+      'Projection',
+      'Display mode',
+      'Show construction grid',
+      'Field of view',
+      'X-ray opacity'
+    ],
+    searchTerms: [
+      'wireframe',
+      'perspective',
+      'orthographic',
+      'fov',
+      'xray',
+      'transparent'
+    ]
   },
   {
     id: 'controls',

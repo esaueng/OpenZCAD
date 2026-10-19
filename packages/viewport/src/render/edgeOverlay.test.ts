@@ -404,6 +404,27 @@ describe('BodyEdgeOverlay', () => {
     expect(overlay.idleEdges.visible).toBe(true);
   });
 
+  it('draws every edge in the wireframe ink in X-ray, even when shaded', () => {
+    const overlay = makeOverlay();
+    const material = overlay.idleEdges.material;
+    overlay.setDisplayMode('shaded');
+    expect(overlay.idleEdges.visible).toBe(false);
+
+    expect(overlay.setXrayView(true)).toBe(true);
+    expect(overlay.setXrayView(true)).toBe(false);
+    expect(overlay.idleEdges.material).toBe(material);
+    expect(overlay.idleEdges.visible).toBe(true);
+    expect(material.color.getHex()).toBe(EDGE_WIREFRAME_COLOR);
+    expect(material.opacity).toBe(1);
+
+    // Leaving X-ray puts back exactly the mode that was chosen.
+    overlay.setXrayView(false);
+    expect(overlay.idleEdges.visible).toBe(false);
+    overlay.setDisplayMode('shaded-edges');
+    expect(material.color.getHex()).toBe(EDGE_IDLE_COLOR);
+    expect(material.opacity).toBe(EDGE_IDLE_OPACITY);
+  });
+
   it('outlines a selected body by restyling its idle batch in place', () => {
     const overlay = makeOverlay();
     const idleMaterial = overlay.idleEdges.material;
