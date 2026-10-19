@@ -3,6 +3,7 @@ import { Trash2 } from 'lucide-react';
 import type { AnyCommand, CommandManager } from '@openzcad/command-system';
 import type {
   BodyId,
+  EdgeVertexPointSource,
   FacePlaneSource,
   FeatureId,
   FeatureNode,
@@ -26,12 +27,17 @@ import {
   datumFormValidation,
   datumSourceKey,
   datumSourceOptions,
+  datumVertexFromEdgePick,
+  datumVertexKey,
+  datumVertexOption,
   faceSourceOption,
   newDatumPlaneFormState,
   nextDatumPlaneName,
   requireResolvedDatums,
   type DatumPlaneFormState,
   type DatumPlaneSubmission,
+  type DatumPointDraft,
+  type DatumPointOption,
   type DatumSourceOption
 } from '../../lib/datumPlanes';
 import type {
@@ -53,6 +59,13 @@ export interface DatumPlaneFormProps {
    * cannot be one (not planar, no lineage). Null with no face picked.
    */
   pickedFace?: { option: DatumSourceOption } | { reason: string } | null;
+  /**
+   * A vertex to offer from the current viewport edge pick (the end nearer
+   * the click), or why the pick cannot be one. Null with no edge picked.
+   */
+  pickedVertex?: { option: DatumPointOption } | { reason: string } | null;
+  /** Vertices to offer from the start: those an edited datum already uses. */
+  vertexOptions?: readonly DatumPointOption[];
   unsupportedReason?: string;
   onPreflight(submission: DatumPlaneSubmission): Promise<ExactPreflightResult>;
   onSubmit(submission: DatumPlaneSubmission): void;
@@ -124,6 +137,8 @@ export function DatumPlaneForm({
   units,
   editing = false,
   pickedFace = null,
+  pickedVertex = null,
+  vertexOptions = [],
   unsupportedReason,
   onPreflight,
   onSubmit,
@@ -195,6 +210,48 @@ export function DatumPlaneForm({
     // Only a new pick acts; the list and state it reads are this render's.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latestPick?.key]);
+  // Every edge end picked while the card is open stays on offer, and a pick
+  // fills the point slot the card is asking for.
+  const [pickedVertices, setPickedVertices] = useState<DatumPointOption[]>(
+    () =>
+      pickedVertex && 'option' in pickedVertex ? [pickedVertex.option] : []
+  );
+  const latestVertex =
+    pickedVertex && 'option' in pickedVertex ? pickedVertex.option : null;
+  const seenVertex = useRef(latestVertex?.key ?? null);
+  useEffect(() => {
+    if (!latestVertex || latestVertex.key === seenVertex.current) return;
+    seenVertex.current = latestVertex.key;
+    if (!pickedVertices.some((vertex) => vertex.key === latestVertex.key))
+      setPickedVertices((vertices) => [...vertices, latestVertex]);
+    const draft: DatumPointDraft = {
+      type: 'vertex',
+      source: latestVertex.source
+    };
+    epoch.current += 1;
+    setPreflight({ status: 'idle' });
+    onDraftChange?.();
+    setState((current) => {
+      // A parallel plane's one point takes every pick; three points fill in
+      // order and then stay as they are (the pick is still offered).
+      const index =
+        current.mode === 'three-point'
+          ? current.points.findIndex((point) => point === null)
+          : 0;
+      if (index < 0) return current;
+      const points = [...current.points] as DatumPlaneFormState['points'];
+      points[index] = draft;
+      return { ...current, points };
+    });
+    // Only a new pick acts; the list and state it reads are this render's.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestVertex?.key]);
+  const vertices = [
+    ...vertexOptions,
+    ...pickedVertices.filter(
+      (vertex) => !vertexOptions.some((option) => option.key === vertex.key)
+    )
+  ];
   const options = [
     ...sources,
     ...pickedFaces.filter(
@@ -299,6 +356,76 @@ export function DatumPlaneForm({
     );
   };
 
+  const pointSlot = (index: 0 | 1 | 2, label: string) => {
+    const draft = state.points[index];
+    const key =
+      draft?.type === 'vertex'
+        ? datumVertexKey(draft.source)
+        : draft
+          ? 'typed'
+          : '';
+    const setPoint = (next: DatumPointDraft | null) => {
+      const points = [...state.points] as DatumPlaneFormState['points'];
+      points[index] = next;
+      replace({ ...state, points });
+    };
+    const ownVertex =
+      draft?.type === 'vertex' && !vertices.some((vertex) => vertex.key === key)
+        ? [{ key, label: 'Vertex', source: draft.source }]
+        : [];
+    return (
+      <>
+        <label className="field">
+          <span>{label}</span>
+          <select
+            value={key}
+            aria-label={label}
+            aria-description="Pick an edge near its end in the viewport, or type a position"
+            onChange={(event) => {
+              const value = event.target.value;
+              const vertex = [...ownVertex, ...vertices].find(
+                (candidate) => candidate.key === value
+              );
+              setPoint(
+                value === 'typed'
+                  ? draft?.type === 'typed'
+                    ? draft
+                    : { type: 'typed', x: '0', y: '0', z: '0' }
+                  : vertex
+                    ? { type: 'vertex', source: vertex.source }
+                    : null
+              );
+            }}
+          >
+            <option value="">Choose a point…</option>
+            {[...ownVertex, ...vertices].map((vertex) => (
+              <option key={vertex.key} value={vertex.key}>
+                {vertex.label}
+              </option>
+            ))}
+            <option value="typed">Type a position</option>
+          </select>
+        </label>
+        {draft?.type === 'typed'
+          ? (['x', 'y', 'z'] as const).map((axis) => (
+              <ExprInput
+                key={axis}
+                label={`${label} ${axis.toUpperCase()}`}
+                value={draft[axis]}
+                scope={scope}
+                {...(units
+                  ? {
+                      quantity: { documentUnits: units, dimension: 'length' }
+                    }
+                  : {})}
+                onChange={(value) => setPoint({ ...draft, [axis]: value })}
+              />
+            ))
+          : null}
+      </>
+    );
+  };
+
   const buttonLabel =
     preflight.status === 'pending'
       ? 'Checking the plane…'
@@ -319,7 +446,9 @@ export function DatumPlaneForm({
         {(
           [
             ['offset', 'Offset plane'],
-            ['midplane', 'Midplane']
+            ['midplane', 'Midplane'],
+            ['three-point', 'Three points'],
+            ['parallel-point', 'Parallel at point']
           ] as const
         ).map(([mode, text]) => (
           <button
@@ -349,13 +478,34 @@ export function DatumPlaneForm({
             />
           </div>
         </>
-      ) : (
+      ) : state.mode === 'midplane' ? (
         <>
           {slot('sourceA', 'Plane A', 'The first of two parallel planes')}
           {slot('sourceB', 'Plane B', 'The second of two parallel planes')}
         </>
+      ) : state.mode === 'three-point' ? (
+        <>
+          {pointSlot(0, 'Point 1')}
+          {pointSlot(1, 'Point 2')}
+          {pointSlot(2, 'Point 3')}
+        </>
+      ) : (
+        <>
+          {slot('sourceA', 'Parallel to', 'The plane or face to copy')}
+          {pointSlot(0, 'Through point')}
+        </>
       )}
-      {pickedFace && 'reason' in pickedFace ? (
+      {state.mode === 'three-point' || state.mode === 'parallel-point' ? (
+        pickedVertex && 'reason' in pickedVertex ? (
+          <p className="muted">{pickedVertex.reason}</p>
+        ) : (
+          <p className="muted">
+            Pick an edge near its end in the viewport to offer that vertex.
+          </p>
+        )
+      ) : null}
+      {state.mode === 'three-point' ? null : pickedFace &&
+        'reason' in pickedFace ? (
         <p className="muted">{pickedFace.reason}</p>
       ) : pickedFace ? null : (
         <p className="muted">
@@ -419,6 +569,8 @@ export interface DatumPlaneCardProps {
   scope: Record<string, number>;
   /** The flat face picked in the viewport, or why the pick cannot be one. */
   pickedFace: FacePlaneSource | { reason: string } | null;
+  /** The edge end picked in the viewport, or why the pick cannot be one. */
+  pickedVertex?: EdgeVertexPointSource | { reason: string } | null;
   unsupportedReason?: string;
   onPreflight: DatumPlaneFormProps['onPreflight'];
   onSubmit: DatumPlaneFormProps['onSubmit'];
@@ -440,6 +592,7 @@ export function DatumPlaneCard({
   editing,
   scope,
   pickedFace,
+  pickedVertex = null,
   unsupportedReason,
   onPreflight,
   onSubmit,
@@ -450,6 +603,12 @@ export function DatumPlaneCard({
   offsetEntryRef,
   onOffsetDragAvailable
 }: DatumPlaneCardProps) {
+  const vertex: DatumPlaneFormProps['pickedVertex'] =
+    pickedVertex && 'reason' in pickedVertex
+      ? { reason: pickedVertex.reason }
+      : pickedVertex
+        ? { option: datumVertexOption(document, pickedVertex, 'Picked vertex') }
+        : null;
   const picked: DatumPlaneFormProps['pickedFace'] =
     pickedFace && 'reason' in pickedFace
       ? { reason: pickedFace.reason }
@@ -478,6 +637,13 @@ export function DatumPlaneCard({
     editing?.featureId ?? null,
     ownFaces
   );
+  const ownVertices = editing
+    ? initial.points.flatMap((point) =>
+        point?.type === 'vertex'
+          ? [datumVertexOption(document, point.source)]
+          : []
+      )
+    : [];
   return (
     <DatumPlaneForm
       initial={initial}
@@ -486,6 +652,8 @@ export function DatumPlaneCard({
       units={document.units}
       editing={editing !== null}
       pickedFace={picked}
+      pickedVertex={vertex}
+      vertexOptions={ownVertices}
       {...(unsupportedReason !== undefined ? { unsupportedReason } : {})}
       onPreflight={onPreflight}
       onSubmit={onSubmit}
@@ -545,8 +713,13 @@ export interface DatumPlaneWorkspaceCardProps {
   /** The feature the workspace reopened; a datum plane makes this an edit. */
   editFeature: FeatureNode | null;
   scope: Record<string, number>;
-  /** The current viewport pick; a planar face is offered as a source. */
+  /**
+   * The current viewport pick; a planar face is offered as a plane source,
+   * an edge as the vertex at its end nearer `pickPoint`.
+   */
   selection: { kind: string; bodyId: BodyId; hash?: number } | null;
+  /** Where the current pick was clicked, in world space, if known. */
+  pickPoint?: { x: number; y: number; z: number } | null;
   /** Why the card cannot commit right now, if it cannot. */
   editDisabledReason: string | null;
   exactGeometryReady: boolean;
@@ -563,6 +736,7 @@ export function DatumPlaneWorkspaceCard({
   editFeature,
   scope,
   selection,
+  pickPoint = null,
   editDisabledReason,
   exactGeometryReady,
   app
@@ -610,6 +784,10 @@ export function DatumPlaneWorkspaceCard({
               'This face has no identity a rebuild can find again, so a plane cannot follow it.'
           };
   }
+  const pickedVertex =
+    selection?.kind === 'edge'
+      ? datumVertexFromEdgePick(document, selection, pickPoint)
+      : null;
   const current = () => app.managerRef.current?.document ?? null;
   const preflight = async (
     submission: DatumPlaneSubmission
@@ -743,6 +921,7 @@ export function DatumPlaneWorkspaceCard({
           editing={editing}
           scope={scope}
           pickedFace={pickedFace}
+          pickedVertex={pickedVertex}
           {...(unsupportedReason !== undefined ? { unsupportedReason } : {})}
           onPreflight={preflight}
           onSubmit={submit}

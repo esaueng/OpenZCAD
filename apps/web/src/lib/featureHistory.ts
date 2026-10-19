@@ -1,5 +1,10 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
-import { isDatumPlaneRef, isInPlaceTransform } from '@openzcad/shared';
+import {
+  datumPlaneSources,
+  datumPointSources,
+  isDatumPlaneRef,
+  isInPlaceTransform
+} from '@openzcad/shared';
 import type {
   BodyId,
   DatumPlaneSource,
@@ -65,10 +70,9 @@ export function featureHistory(document: ProjectDocument) {
         break;
       }
       case 'datum-plane':
-        (data.definition.kind === 'offset'
-          ? [data.definition.source]
-          : data.definition.sources
-        ).forEach(planeSource);
+        datumPlaneSources(data.definition).forEach(planeSource);
+        for (const point of datumPointSources(data.definition))
+          if (point.type === 'edge-vertex') body(point.bodyId);
         datumOwners.add(feature.featureId);
         break;
       case 'extrude':

@@ -286,6 +286,65 @@ describe('booleanEvolutionProbeNeeded', () => {
     ).toBe(true);
   });
 
+  // A vertex source re-finds its edge through verified lineage too.
+  function datumThroughVertex(
+    document: ProjectDocument,
+    bodyId: BodyId,
+    producingFeatureId: FeatureId
+  ): ProjectDocument {
+    return addDatumPlane(document, {
+      name: 'Vertex plane',
+      definition: {
+        kind: 'parallel-point',
+        source: { type: 'canonical', plane: 'XY', offset: 0 },
+        point: {
+          type: 'edge-vertex',
+          bodyId,
+          edgeReference: {
+            kind: 'edge',
+            producingFeatureId,
+            lineageName: 'edge:top',
+            currentHash: 1,
+            witnessVersion: 1,
+            witness: {
+              curveType: 'LINE',
+              length: 1,
+              closed: false,
+              endpoints: [
+                [0, 0, 0],
+                [1, 0, 0]
+              ],
+              midpoint: [0, 0, 0]
+            }
+          },
+          end: 0
+        }
+      }
+    }).document;
+  }
+
+  it('is true when a later datum passes through a vertex of the result', () => {
+    const { document, bodyId } = fusedPlateDocument();
+    const fuse = booleanFeatureOf(document);
+    expect(
+      booleanEvolutionProbeNeeded(
+        datumThroughVertex(document, bodyId, fuse.featureId),
+        fuse
+      )
+    ).toBe(true);
+    const moved = transformBody(document, {
+      name: 'Move',
+      targetBodyId: bodyId,
+      translation: { x: 5, y: 0, z: 0 }
+    });
+    expect(
+      booleanEvolutionProbeNeeded(
+        datumThroughVertex(moved.document, moved.bodyId, fuse.featureId),
+        fuse
+      )
+    ).toBe(true);
+  });
+
   it('is false for a canonical datum or one on an unrelated body', () => {
     const { document } = fusedPlateDocument();
     const fuse = booleanFeatureOf(document);

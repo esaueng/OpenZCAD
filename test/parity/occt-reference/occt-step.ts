@@ -37,8 +37,10 @@ import {
   mergeAdjacentProfiles,
   midDatumPlane,
   offsetDatumPlane,
+  parallelDatumPlane,
   polygonProfile,
   rectangleProfile,
+  threePointDatumPlane,
   type PlaneBasis,
   type SketchRegion,
   type Vec2,
@@ -53,6 +55,7 @@ import {
   type BodyId,
   type BodyRepresentation,
   type BodyTopology,
+  type DatumPointSource,
   type DirectEditOperation,
   type DerivedState,
   type FaceAnalyticWitnessV1,
@@ -119,7 +122,9 @@ import {
   type SweepSemanticDescriptor
 } from './occt-lineage';
 import {
+  resolveEdgeVertex,
   resolveFaceAttachment,
+  type EdgeVertexCandidate,
   type FaceAttachmentCandidate
 } from '../../../packages/kernel-adapter/src/face-attachment';
 import { importedStepValidationWarning } from '../../../packages/kernel-adapter/src/imported-step-validation';
@@ -550,6 +555,39 @@ function faceAttachmentCandidatesForShape(
       ...candidate,
       witnessVersion: 1 as const,
       plane,
+      ...(reference
+        ? {
+            lineage: {
+              source: 'derived' as const,
+              identity: {
+                producingFeatureId: reference.producingFeatureId,
+                lineageName: reference.lineageName
+              }
+            }
+          }
+        : {})
+    };
+  });
+}
+
+function edgeVertexCandidatesForShape(
+  kernel: OcctKernel,
+  shape: ShapeHandle,
+  lineage: OcctLineageState | undefined
+): EdgeVertexCandidate[] {
+  return kernel.getSubShapes(shape, 'edge').map((edge) => {
+    const candidate = edgeTopologyCandidate(kernel, edge);
+    const reference = referenceForOcctCandidate(lineage, candidate);
+    const vertices = kernel
+      .getSubShapes(edge, 'vertex')
+      .map((vertex) => kernel.vertexPosition(vertex));
+    return {
+      ...candidate,
+      witnessVersion: 1 as const,
+      endpoints:
+        candidate.witness.closed || vertices.length < 2
+          ? null
+          : ([vertices[0]!, vertices[1]!] as const),
       ...(reference
         ? {
             lineage: {
@@ -1174,6 +1212,47 @@ export class OcctStepKernelAdapter {
     };
   }
 
+  /** Mirrors the production point resolver for R01 datum point sources. */
+  private resolveDatumPointAtHistory(
+    document: ProjectDocument,
+    point: DatumPointSource,
+    datumName: string,
+    result: OcctBuildResult,
+    scope: Record<string, number>
+  ): Vec3 {
+    if (point.type === 'point') {
+      const axis = (value: ParamValue, name: string) =>
+        resolveParamValue(value, scope, `datum point ${name}`, document.units);
+      return {
+        x: axis(point.point.x, 'X'),
+        y: axis(point.point.y, 'Y'),
+        z: axis(point.point.z, 'Z')
+      };
+    }
+    const shape = result.shapes.get(point.bodyId);
+    if (!shape) {
+      throw new Error(
+        `Datum plane "${datumName}" cannot use a vertex of body ${point.bodyId} because it is unavailable at the datum's history position.`
+      );
+    }
+    const sourceFeature = listFeaturesInOrder(document).find(
+      (candidate) =>
+        candidate.featureId === point.edgeReference.producingFeatureId
+    );
+    return resolveEdgeVertex({
+      reference: point.edgeReference,
+      end: point.end,
+      candidates: edgeVertexCandidatesForShape(
+        this.kernel,
+        shape,
+        result.lineages.get(point.bodyId)
+      ),
+      datumName,
+      sourceFeatureName:
+        sourceFeature?.name ?? String(point.edgeReference.producingFeatureId)
+    });
+  }
+
   private makeProfileFace(
     data: SketchObjectData,
     basis: PlaneBasis,
@@ -1758,6 +1837,15 @@ export class OcctStepKernelAdapter {
                 result,
                 scope
               );
+            const point = (pointSource: DatumPointSource) =>
+              this.resolveDatumPointAtHistory(
+                document,
+                pointSource,
+                feature.name,
+                result,
+                scope
+              );
+            const reverse = definition.reverseNormal;
             result.datumFrames.set(
               feature.featureId,
               definition.kind === 'offset'
@@ -1769,13 +1857,26 @@ export class OcctStepKernelAdapter {
                       'datum plane offset',
                       document.units
                     ),
-                    definition.reverseNormal
+                    reverse
                   )
-                : midDatumPlane(
-                    source(definition.sources[0]),
-                    source(definition.sources[1]),
-                    definition.reverseNormal
-                  )
+                : definition.kind === 'midplane'
+                  ? midDatumPlane(
+                      source(definition.sources[0]),
+                      source(definition.sources[1]),
+                      reverse
+                    )
+                  : definition.kind === 'three-point'
+                    ? threePointDatumPlane(
+                        point(definition.points[0]),
+                        point(definition.points[1]),
+                        point(definition.points[2]),
+                        reverse
+                      )
+                    : parallelDatumPlane(
+                        source(definition.source),
+                        point(definition.point),
+                        reverse
+                      )
             );
             break;
           }

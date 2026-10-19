@@ -12,7 +12,10 @@ import type {
   ProjectDocument,
   TopologyLineageDiagnostic
 } from '@openzcad/shared';
-import type { FaceAttachmentCandidate } from './face-attachment';
+import type {
+  EdgeVertexCandidate,
+  FaceAttachmentCandidate
+} from './face-attachment';
 import type { ExactBuildResult, ExactShape } from './exact-types';
 import { listNodesByKind, resolveParamValue } from '@openzcad/document-core';
 import {
@@ -24,7 +27,12 @@ import {
 import { topologyHashOfWitness } from './topology-lineage';
 import { topologyCandidatesForSolid } from './exact-lineage-builders';
 import { measureFaceGeometry } from './exact-measure';
-import { MEASUREMENT_DEFLECTION, faceWitnessOf } from './exact-witnesses';
+import {
+  MEASUREMENT_DEFLECTION,
+  edgeSampleOf,
+  edgeWitnessOf,
+  faceWitnessOf
+} from './exact-witnesses';
 import { GEOMETRY_EPSILON } from './exact-math';
 import { healPipelineSolid, requireValidSolid } from './kernel-validation';
 
@@ -108,6 +116,38 @@ export function faceAttachmentCandidatesForShape(
         witnessVersion: 1 as const,
         witness,
         plane,
+        ...(reference
+          ? {
+              lineage: {
+                source: 'derived' as const,
+                identity: {
+                  producingFeatureId: reference.producingFeatureId,
+                  lineageName: reference.lineageName
+                }
+              }
+            }
+          : {})
+      };
+    })
+  );
+}
+
+/** Every edge of `shape` with its lineage and exact endpoints (R01 vertices). */
+export function edgeVertexCandidatesForShape(
+  kernel: RemusKernel,
+  shape: ExactShape
+): EdgeVertexCandidate[] {
+  return shape.solids.flatMap((solid) =>
+    Array.from(kernel.getSolidEdges(solid), (handle) => {
+      const witness = edgeWitnessOf(kernel, handle);
+      const sample = edgeSampleOf(kernel, handle);
+      const reference = shape.lineage?.edgeReferences.get(handle);
+      return {
+        kind: 'edge' as const,
+        currentHash: topologyHashOfWitness('edge', witness),
+        witnessVersion: 1 as const,
+        witness,
+        endpoints: sample.closed ? null : sample.endpoints,
         ...(reference
           ? {
               lineage: {

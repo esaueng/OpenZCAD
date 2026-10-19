@@ -61,8 +61,14 @@ export type ShaprImportId = Brand<string, 'ShaprImportId'>;
  * (`keepOriginal`) (M11). A v23 client would rebuild an intersect extrude
  * as a cut and hide bodies the feature keeps, so the bump makes it refuse
  * such a document. Every field is optional; absent is the v23 behaviour.
+ *
+ * v25 adds two R01 datum-plane definitions, `three-point` and
+ * `parallel-point`, and the point sources they read (world coordinates or an
+ * edge's end vertex). An older client would refuse or misread such a datum
+ * and every sketch, Split and Mirror built on it, so the bump makes it refuse
+ * the document instead. Existing datums are unchanged.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 24 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 25 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -614,6 +620,28 @@ export type DatumPlaneSource =
   | DatumPlaneRef
   | FacePlaneSource;
 
+/**
+ * Schema v25: a model vertex, named as one end of an open edge whose
+ * schema-v5 lineage the exact build re-finds at the datum's history position.
+ * `end` 0 is the end whose quantized (ADR-011) coordinates sort first by x,
+ * then y, then z, which both kernels read identically; the vertex's exact
+ * position is then taken from the resolved edge. A deleted, ambiguous or
+ * closed edge refuses by name. No vertex is guessed by proximity.
+ */
+export interface EdgeVertexPointSource {
+  type: 'edge-vertex';
+  bodyId: BodyId;
+  edgeReference: EdgeTopologyReferenceV5;
+  end: 0 | 1;
+}
+
+/**
+ * Schema v25: a point a datum plane passes through: expression-capable world
+ * coordinates in document units, or a model vertex by reference.
+ */
+export type DatumPointSource =
+  { type: 'point'; point: ParametricVector3 } | EdgeVertexPointSource;
+
 export type DatumPlaneDefinition =
   | {
       kind: 'offset';
@@ -628,7 +656,71 @@ export type DatumPlaneDefinition =
       /** Ordered roles A and B; the result keeps A's frame. */
       sources: [DatumPlaneSource, DatumPlaneSource];
       reverseNormal?: boolean;
+    }
+  | {
+      /**
+       * Schema v25: the plane through three points. The origin is the first
+       * point, u points at the second, and the normal follows the right-hand
+       * rule (first → second → third). Coincident or collinear points are
+       * refused; no plane is guessed.
+       */
+      kind: 'three-point';
+      points: [DatumPointSource, DatumPointSource, DatumPointSource];
+      reverseNormal?: boolean;
+    }
+  | {
+      /**
+       * Schema v25: the plane parallel to `source` through `point`, keeping
+       * the source's axes. A point on the source gives the source itself.
+       */
+      kind: 'parallel-point';
+      source: DatumPlaneSource;
+      point: DatumPointSource;
+      reverseNormal?: boolean;
     };
+
+/** The plane sources a datum definition reads, in role order. */
+export function datumPlaneSources(
+  definition: DatumPlaneDefinition
+): DatumPlaneSource[] {
+  switch (definition.kind) {
+    case 'offset':
+    case 'parallel-point':
+      return [definition.source];
+    case 'midplane':
+      return [...definition.sources];
+    case 'three-point':
+      return [];
+  }
+}
+
+/** The point sources a datum definition reads, in role order. */
+export function datumPointSources(
+  definition: DatumPlaneDefinition
+): DatumPointSource[] {
+  switch (definition.kind) {
+    case 'three-point':
+      return [...definition.points];
+    case 'parallel-point':
+      return [definition.point];
+    default:
+      return [];
+  }
+}
+
+/**
+ * The bodies whose topology a datum reads: face sources and vertex sources.
+ * A datum resolving through one of these consumes its identity just as a
+ * face-attached sketch does.
+ */
+export function datumSourceBodyIds(definition: DatumPlaneDefinition): BodyId[] {
+  const bodies = new Set<BodyId>();
+  for (const source of datumPlaneSources(definition))
+    if (source.type === 'face') bodies.add(source.bodyId);
+  for (const point of datumPointSources(definition))
+    if (point.type === 'edge-vertex') bodies.add(point.bodyId);
+  return [...bodies];
+}
 
 export interface SketchNode extends BaseNode {
   kind: 'sketch';
