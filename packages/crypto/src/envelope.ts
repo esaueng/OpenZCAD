@@ -512,6 +512,19 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
         throw new E2eeError('malformed', 'Envelope ends without a final chunk');
       }
       const last = await this.open(this.buffered, true);
+      // An uncompressed payload is the plaintext: it must be exactly the
+      // declared size, or a key holder could pass off a truncated blob as
+      // complete. (Gzip payloads are checked once inflated.)
+      const { header } = this.parsed!;
+      if (
+        header.compression === 'none' &&
+        this.produced !== header.plaintextLength
+      ) {
+        throw new E2eeError(
+          'malformed',
+          `Plaintext is ${this.produced} bytes, not the declared ${header.plaintextLength}`
+        );
+      }
       if (this.hasher && this.expectedHash) {
         const hash = await this.hasher.finish();
         if (!equalBytes(hash, this.expectedHash)) {

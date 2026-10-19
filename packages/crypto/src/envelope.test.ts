@@ -883,6 +883,31 @@ describe('content blobs', () => {
     expect(Object.isFrozen(writer.header)).toBe(true);
   });
 
+  it('a direct reader refuses an uncompressed blob shorter than declared', async () => {
+    const { envelope: base } = await blob(text('hi'));
+    const header = parseEnvelope(base).header as ContentBlobHeader;
+    // A hash-matching pair whose header claims more than the body holds.
+    const { envelope, writer } = await encryptWithHeaderForTests(
+      EnvelopeKey.generate(),
+      {
+        ...header,
+        compression: 'none',
+        chunkSize: CHUNK,
+        plaintextLength: CHUNK * 2
+      },
+      patternBytes(CHUNK + 5, 4)
+    );
+    const reference = contentBlobReference(writer);
+    const reader = createContentBlobReader(reference);
+    for (let at = 0; at < envelope.byteLength;) {
+      const slice = envelope.subarray(at, at + reader.preferredPushBytes);
+      at += slice.byteLength;
+      await reader.push(slice);
+    }
+    await rejectsWith(reader.finish(), 'malformed');
+    await rejectsWith(decryptContentBlob(reference, envelope), 'malformed');
+  });
+
   it('an authenticated reader header cannot be altered mid-read', async () => {
     const plaintext = patternBytes(CHUNK * 4 + 3, 9);
     const { envelope, reference } = await encryptContentBlob(
