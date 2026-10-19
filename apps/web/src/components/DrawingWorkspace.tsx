@@ -137,6 +137,8 @@ function useViewProjections(
 ): Map<DrawingViewId, ViewState> {
   const client = useRef<DrawingProjectionClient | null>(null);
   const cache = useRef(new Map<string, ViewState>());
+  /** Failed requests per view, so a worker that keeps failing is not retried forever. */
+  const failures = useRef(new Map<string, number>());
   const mounted = useRef(false);
   const [revision, setRevision] = useState(0);
   useEffect(() => {
@@ -193,12 +195,17 @@ function useViewProjections(
             }
           },
           (error: unknown) => {
+            // The request itself failed — the worker closed under it or
+            // stopped — not any one view: forget the views so the next pass
+            // asks a fresh worker. A worker that keeps failing gets two more
+            // tries before the views show the error. A closed client (an
+            // unmount, React's development remount) never counts.
+            const aborted =
+              error instanceof Error && error.name === 'AbortError';
             for (const view of views) {
-              // A client closed under the request (an unmount, or React's
-              // development remount) is not the view's failure: forget it so
-              // the next pass asks again.
-              if (error instanceof Error && error.name === 'AbortError')
-                cache.current.delete(view.key);
+              const tries = (failures.current.get(view.key) ?? 0) + 1;
+              if (!aborted) failures.current.set(view.key, tries);
+              if (aborted || tries < 3) cache.current.delete(view.key);
               else
                 cache.current.set(view.key, {
                   state: 'error',

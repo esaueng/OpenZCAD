@@ -24,8 +24,9 @@ import {
  *   turns from facing the camera to facing away, within one face or across a
  *   smooth (tangent) boundary.
  * - **Visibility.** A projected edge segment is split wherever it crosses
- *   the edge of a triangle it passes over; between two such crossings the
- *   same triangles cover it, so each piece is classified once, at its middle:
+ *   the edge of a triangle it passes over, and wherever it passes through a
+ *   triangle's plane; between two such cuts the same triangles cover it on
+ *   the same side, so each piece is classified once, at its middle:
  *   hidden when a triangle of any body in the view lies in front of it by
  *   more than a depth tolerance. No occluder is too narrow to be found.
  *
@@ -202,7 +203,14 @@ class OcclusionGrid {
    * it passes over, sorted. Between two of them every point is covered by
    * the same triangles, so visibility is constant there.
    */
-  crossings(au: number, av: number, bu: number, bv: number): number[] {
+  crossings(
+    au: number,
+    av: number,
+    ad: number,
+    bu: number,
+    bv: number,
+    bd: number
+  ): number[] {
     const du = bu - au;
     const dv = bv - av;
     // Every cell the segment passes through, by an exact supercover walk:
@@ -230,6 +238,28 @@ class OcclusionGrid {
         const s = ((pu - au) * ev - (pv - av) * eu) / denom;
         const r = ((pu - au) * dv - (pv - av) * du) / denom;
         if (s > 0 && s < 1 && r >= 0 && r <= 1) out.push(s);
+      }
+      // Where the segment passes through the triangle's plane: its depth
+      // meets the occlusion threshold there, so visibility can change
+      // inside the triangle's footprint (an edge piercing a face, or two
+      // bodies that intersect). Both depths are linear along the segment.
+      const plane = (u: number, v: number) => {
+        const w0 = ((t.u1 - u) * (t.v2 - v) - (t.u2 - u) * (t.v1 - v)) / t.area;
+        const w1 = ((t.u2 - u) * (t.v0 - v) - (t.u0 - u) * (t.v2 - v)) / t.area;
+        return w0 * t.d0 + w1 * t.d1 + (1 - w0 - w1) * t.d2;
+      };
+      // An edge that merely starts or ends on the plane (a face at its own
+      // corner) does not pass through it; its endpoint already bounds it.
+      const g0 = plane(au, av) - ad;
+      const g1 = plane(bu, bv) - bd;
+      const tol = this.depthTolerance;
+      if (Math.abs(g0) > tol && Math.abs(g1) > tol) {
+        const f0 = g0 + tol;
+        const f1 = g1 + tol;
+        if ((f0 < 0 && f1 > 0) || (f0 > 0 && f1 < 0)) {
+          const s = f0 / (f0 - f1);
+          if (s > 0 && s < 1) out.push(s);
+        }
       }
     }
     return out.sort((a, b) => a - b);
@@ -544,17 +574,17 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       // Visibility can change only where the projected segment crosses an
       // occluding triangle's edge, so those crossings split it exactly and
       // each piece is classified once, however narrow the occluder.
-      const [au, av] = project(
+      const [au, av, ad] = project(
         line[s * 3]!,
         line[s * 3 + 1]!,
         line[s * 3 + 2]!
       );
-      const [bu, bv] = project(
+      const [bu, bv, bd] = project(
         line[s * 3 + 3]!,
         line[s * 3 + 4]!,
         line[s * 3 + 5]!
       );
-      const cuts = [0, ...grid.crossings(au, av, bu, bv), 1];
+      const cuts = [0, ...grid.crossings(au, av, ad, bu, bv, bd), 1];
       for (let k = 0; k + 1 < cuts.length; k += 1) {
         const t0 = cuts[k]!;
         const t1 = cuts[k + 1]!;

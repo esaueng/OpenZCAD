@@ -258,6 +258,34 @@ describe('D01 view projection', () => {
     ).toEqual([]);
   });
 
+  it("splits an edge where it passes through another body's face", async () => {
+    // A bar pierces a plate. Seen from (1, −1, 1), the bar's near top edge
+    // is visible in front of the plate (y < 0) and hidden from where it
+    // enters the plate's front face at y = 0, inside that face's footprint.
+    let document = createProjectDocument('Pierce', toUserId('test'));
+    const plate = box(document, 'Plate', [20, 2, 20]);
+    const bar = box(plate.document, 'Bar', [2, 10, 2], [9, -4, 9]);
+    document = bar.document;
+    const result = await project(document, [plate.bodyId, bar.bodyId], 'iso');
+    const [eu, ev] = projected('iso', [11, 0, 11]);
+    const [su, sv] = projected('iso', [11, -4, 11]);
+    const near = (line: Float64Array, u: number, v: number) => {
+      for (let i = 0; i + 1 < line.length; i += 2)
+        if (Math.hypot(line[i]! - u, line[i + 1]! - v) < 0.05) return true;
+      return false;
+    };
+    // One visible run from the bar's front corner to where it enters the
+    // plate (other edges share the corner, so match both ends).
+    expect(
+      result.visible.some((line) => near(line, su, sv) && near(line, eu, ev)),
+      'visible run from the bar end to the plate face'
+    ).toBe(true);
+    expect(
+      result.hidden.some((line) => near(line, eu, ev)),
+      'hidden run starts at the plate face'
+    ).toBe(true);
+  });
+
   it('lets one body hide another', async () => {
     let document = createProjectDocument('Two', toUserId('test'));
     const front = box(document, 'Front', [20, 2, 20]);

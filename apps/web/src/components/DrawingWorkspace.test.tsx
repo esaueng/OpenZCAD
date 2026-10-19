@@ -11,6 +11,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { DrawingWorkspace } from './DrawingWorkspace';
+import { DrawingProjectionClient } from '../lib/drawing/projectionClient';
 import {
   createStarterSheet,
   drawingSourceFingerprint
@@ -176,6 +177,34 @@ describe('DrawingWorkspace', () => {
     expect(
       screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
     ).toBe(false);
+  });
+
+  it('retries the views after the projection worker fails', async () => {
+    const original = DrawingProjectionClient.prototype.project;
+    const project = vi
+      .spyOn(DrawingProjectionClient.prototype, 'project')
+      .mockImplementationOnce(() =>
+        Promise.reject(new Error('The drawing projection worker stopped.'))
+      )
+      .mockImplementation(function (this: DrawingProjectionClient, ...args) {
+        return original.apply(this, args);
+      });
+    try {
+      const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+        bodyId
+      ])!;
+      setup({ sheet: starter(fingerprint) });
+      const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+      await waitFor(() =>
+        expect(
+          canvas.querySelectorAll('.drawing-view.is-placeholder')
+        ).toHaveLength(0)
+      );
+      expect(project).toHaveBeenCalledTimes(2);
+      expect(canvas.textContent).not.toMatch(/worker stopped/);
+    } finally {
+      project.mockRestore();
+    }
   });
 
   it('waits, rather than drawing or exporting, while the model rebuilds', () => {
