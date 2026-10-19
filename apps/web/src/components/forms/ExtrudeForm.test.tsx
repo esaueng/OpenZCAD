@@ -719,8 +719,11 @@ describe('to-face extent and draft (F01, schema v29)', () => {
     expect(
       screen.getByRole('button', { name: 'Re-pick face' })
     ).toBeInTheDocument();
+    // Applying the unchanged, unresolved face cannot succeed.
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
     act(() => host.setterRef.current?.({ ...face, faceHash: 8 }));
     expect(screen.queryByText(/Target face is unresolved/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
   });
 
   it('returns to Distance when the viewport arrow is dragged', async () => {

@@ -2062,12 +2062,22 @@ function validateToFaceTarget(target: unknown): void {
  * expression is checked where it resolves, in the build). It tapers a
  * one-sided extrusion only.
  */
-function validateExtrudeDraft(data: {
-  draftAngleDeg?: unknown;
-  endCondition?: unknown;
-  symmetric?: unknown;
-  backDistance?: unknown;
-}): void {
+function validateExtrudeDraft(
+  data: {
+    draftAngleDeg?: unknown;
+    endCondition?: unknown;
+    symmetric?: unknown;
+    backDistance?: unknown;
+  },
+  resolve?: ParamZeroResolver
+): void {
+  // A value that resolves to zero (`0 mm`, or a parameter at 0) is the
+  // absent default; without a resolver only a literal zero is.
+  const zero = (value: unknown) =>
+    isZeroParam(value) ||
+    (resolve !== undefined &&
+      (typeof value === 'string' || typeof value === 'number') &&
+      resolve(value) === 0);
   const angle = data.draftAngleDeg;
   if (angle === undefined) return;
   if (typeof angle === 'number') {
@@ -2079,17 +2089,41 @@ function validateExtrudeDraft(data: {
   } else if (typeof angle !== 'string' || !angle.trim()) {
     throw new Error('Draft angle must be a number or an expression.');
   }
-  if (isZeroParam(angle)) return;
+  if (zero(angle)) return;
   if (data.endCondition === 'through-all') {
     throw new Error(
       'A through-all cut has no draft yet; use a distance or a face.'
     );
   }
-  if (data.symmetric === true || !isZeroParam(data.backDistance)) {
+  if (data.symmetric === true || !zero(data.backDistance)) {
     throw new Error(
       'Draft applies to a one-sided extrusion; a symmetric or two-sided extrusion has no draft yet.'
     );
   }
+}
+
+/**
+ * Resolves a stored value against the document's parameters, or null when it
+ * does not resolve; see `extrudeParamResolver`.
+ */
+export type ParamZeroResolver = (value: ParamValue) => number | null;
+
+/**
+ * The resolver `validateExtrudeExtent` reads zeroes through, for `document`.
+ * Entry and rebuild both use one, so a `0 mm` back distance or a draft
+ * parameter at 0 is the absent default in both places.
+ */
+export function extrudeParamResolver(
+  document: ProjectDocument,
+  scope: Record<string, number> = getParameterScope(document).scope
+): ParamZeroResolver {
+  return (value) => {
+    try {
+      return resolveParamValue(value, scope, undefined, document.units);
+    } catch {
+      return null;
+    }
+  };
 }
 
 /**
@@ -2105,16 +2139,19 @@ export const MAX_EXTRUDE_DRAFT_DEG = 89;
  * lineage-named planar face, one-sided). Everything else fails closed rather
  * than guessing a target, an operation, a face, or which side was meant.
  */
-export function validateExtrudeExtent(data: {
-  endCondition?: unknown;
-  throughAllSide?: unknown;
-  toFace?: unknown;
-  draftAngleDeg?: unknown;
-  operation?: unknown;
-  targetBodyId?: unknown;
-  symmetric?: unknown;
-  backDistance?: unknown;
-}): void {
+export function validateExtrudeExtent(
+  data: {
+    endCondition?: unknown;
+    throughAllSide?: unknown;
+    toFace?: unknown;
+    draftAngleDeg?: unknown;
+    operation?: unknown;
+    targetBodyId?: unknown;
+    symmetric?: unknown;
+    backDistance?: unknown;
+  },
+  resolve?: ParamZeroResolver
+): void {
   // Every caller of this check reads the operation next, and an unknown one
   // must not fall through to whichever arm a builder happens to default to.
   if (
@@ -2125,7 +2162,7 @@ export function validateExtrudeExtent(data: {
       `Unknown extrude operation ${JSON.stringify(data.operation)}.`
     );
   }
-  validateExtrudeDraft(data);
+  validateExtrudeDraft(data, resolve);
   // Only an absent field is blind: a stored `null` is malformed, not legacy.
   const condition =
     data.endCondition === undefined ? 'blind' : data.endCondition;
@@ -2194,7 +2231,7 @@ export function extrudeSketch(
       'An extrude cannot be both symmetric and two-sided; set symmetric or backDistance, not both.'
     );
   }
-  validateExtrudeExtent(input);
+  validateExtrudeExtent(input, extrudeParamResolver(document));
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();
@@ -2236,7 +2273,7 @@ export function extrudeSketch(
             toFace: deepClone(input.toFace!)
           }
         : {}),
-      // Zero is the absent default, so it is never written.
+      // A literal zero is the absent default, so it is never written.
       ...(isZeroParam(input.draftAngleDeg)
         ? {}
         : { draftAngleDeg: input.draftAngleDeg! })
@@ -4211,7 +4248,7 @@ export function updateFeature(
     }
   }
   if (feature.data.featureKind === 'extrude') {
-    validateExtrudeExtent(feature.data);
+    validateExtrudeExtent(feature.data, extrudeParamResolver(next));
   } else if (
     feature.data.featureKind === 'boolean' ||
     feature.data.featureKind === 'split'

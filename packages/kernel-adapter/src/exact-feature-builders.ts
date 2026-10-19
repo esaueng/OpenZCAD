@@ -11,6 +11,7 @@ import {
   listFeaturesInOrder,
   resolveParamValue,
   validateExtrudeExtent,
+  extrudeParamResolver,
   validateKeepOriginals
 } from '@openzcad/document-core';
 import { throughAllSpan, unionBounds } from './through-all';
@@ -567,8 +568,10 @@ function buildExtrudeFeature(
 ): void {
   const { kernel, document, scope, result } = ctx;
   // Every stored extent, blind included: an unknown end condition or a
-  // stray side must fail closed, not rebuild at the dormant distance.
-  validateExtrudeExtent(data);
+  // stray side must fail closed, not rebuild at the dormant distance. Zeroes
+  // resolve as at entry, so a draft whose parameter has since left 0 beside
+  // a back distance refuses here by name.
+  validateExtrudeExtent(data, extrudeParamResolver(document, scope));
   if (feature.bodyId) {
     // A through-all cut sweeps a derived blind span; everything after this
     // point (the overlap check, the boolean, the coplanar retry) treats it as

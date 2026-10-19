@@ -9,6 +9,7 @@ import {
   extrudeToFaceUnresolved,
   listFeaturesInOrder,
   normalizeDocument,
+  setParameter,
   updateFeature
 } from '@openzcad/document-core';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
@@ -25,6 +26,7 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
+import { affectedFeatureTargets } from '../apps/web/src/lib/affectedFeatureTargets';
 import {
   extrudeEditCommand,
   extrudePreviewMagnitude
@@ -550,6 +552,18 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       );
     });
 
+    it('names the to-face extrude among the features an upstream edit affects', async () => {
+      const result = await post(25);
+      const lift = listFeaturesInOrder(result.document).find(
+        (feature) => feature.name === 'Lift'
+      )!;
+      expect(
+        affectedFeatureTargets(result.document, lift.featureId).map(
+          (target) => target.featureName
+        )
+      ).toContain('Post');
+    });
+
     it('refuses as unresolved when the face is no longer parallel', async () => {
       const result = await post(25);
       const lift = listFeaturesInOrder(result.document).find(
@@ -715,6 +729,52 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       expect(derived.bodyRepresentations[result.bodyId]!.volume).toBeCloseTo(
         40 * 40 * 10 - draftedBox(20, 12, 6, TAN5),
         6
+      );
+    });
+
+    it('reads a resolved zero as the one-sided default, at entry and on rebuild', async () => {
+      let document = setParameter(project('Zeroes'), {
+        name: 'taper',
+        expression: '0'
+      });
+      const sketched = sketch(document, RECT);
+      document = sketched.document;
+      // A unit-bearing zero back distance does not make it two-sided.
+      const unit = extrudeSketch(document, {
+        name: 'Unit zero',
+        sketchId: sketched.sketchId,
+        distance: 10,
+        backDistance: '0 mm',
+        draftAngleDeg: 5
+      });
+      const derived = await derive(unit.document);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.bodyRepresentations[unit.bodyId]!.volume).toBeCloseTo(
+        draftedBox(20, 12, 10, TAN5),
+        6
+      );
+      // A draft parameter at 0 beside a symmetric extrusion is accepted...
+      const parametric = extrudeSketch(document, {
+        name: 'Taper',
+        sketchId: sketched.sketchId,
+        distance: 10,
+        symmetric: true,
+        draftAngleDeg: 'taper'
+      });
+      expect(
+        (await derive(parametric.document)).bodyRepresentations[
+          parametric.bodyId
+        ]!.volume
+      ).toBeCloseTo(2400, 6);
+      // ...and refused by name once the parameter leaves 0.
+      const tapered = setParameter(parametric.document, {
+        name: 'taper',
+        expression: '3'
+      });
+      const refused = await derive(tapered);
+      expect(refused.bodyRepresentations[parametric.bodyId]).toBeUndefined();
+      expect(refused.warnings.join('\n')).toMatch(
+        /Feature "Taper": Draft applies to a one-sided extrusion/
       );
     });
 

@@ -227,6 +227,9 @@ export function ExtrudeForm({
         // No face yet, or one the build would refuse from this sketch (not
         // parallel to it, or lying on it): nothing to Create or Apply.
         (!next.toFace ||
+          // The stored face no longer resolves: only a re-pick can apply.
+          (toFacePicking!.unresolved === true &&
+            next.toFace === initial.toFace) ||
           toFacePicking!.describe(next.toFace).distance === null)) ||
       (!nextThroughAll &&
         (!a.ok || a.value === undefined || draftAngleError(next) !== null)) ||
