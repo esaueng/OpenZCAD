@@ -150,6 +150,30 @@ describe('DrawingWorkspace', () => {
     );
   });
 
+  it('refuses a new sheet when every body is hidden, not draws the hidden ones', async () => {
+    const base = createProjectDocument('Bracket', toUserId('test'));
+    const onCommand = vi.fn((_command: AnyCommand) => true);
+    const onStatus = vi.fn();
+    render(
+      <DrawingWorkspace
+        document={{ ...base, bodyOrder: [bodyId] }}
+        bodies={{ [bodyId]: cube() }}
+        geometryPending={false}
+        defaultBodyIds={[]}
+        editDisabledReason={null}
+        onCommand={onCommand}
+        onStatus={onStatus}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole('button', { name: /New drawing sheet/ })
+    );
+    expect(onCommand).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenCalledWith(
+      'Show at least one body to make a drawing of it.'
+    );
+  });
+
   it('refuses to start a sheet where the project is read-only', () => {
     setup({ editDisabledReason: 'This shared project is read-only' });
     expect(

@@ -576,26 +576,32 @@ export function bodySilhouettes(
   }));
 }
 
-/** Projects the bodies of one view into visible and hidden polylines. */
-export function projectView(input: ViewProjectionInput): ViewProjection {
-  const frame = DRAWING_VIEW_FRAMES[input.orientation];
-  let min = [Infinity, Infinity, Infinity];
-  let max = [-Infinity, -Infinity, -Infinity];
-  for (const body of input.bodies)
-    for (let i = 0; i < body.vertices.length; i += 3)
-      for (let k = 0; k < 3; k += 1) {
-        const value = body.vertices[i + k]!;
-        if (value < min[k]!) min[k] = value;
-        if (value > max[k]!) max[k] = value;
-      }
-  if (!Number.isFinite(min[0]!)) {
-    min = [0, 0, 0];
-    max = [0, 0, 0];
-  }
-  const diagonal = Math.max(
+/** The diagonal of a body's display-mesh bounding box (never zero). */
+function bodyDiagonal(body: ProjectionBodyInput): number {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  const take = (x: number, y: number, z: number) => {
+    const p = [x, y, z];
+    for (let k = 0; k < 3; k += 1) {
+      min[k] = Math.min(min[k]!, p[k]!);
+      max[k] = Math.max(max[k]!, p[k]!);
+    }
+  };
+  for (let i = 0; i + 2 < body.vertices.length; i += 3)
+    take(body.vertices[i]!, body.vertices[i + 1]!, body.vertices[i + 2]!);
+  for (const edge of body.edges)
+    for (let i = 0; i + 2 < edge.length; i += 3)
+      take(edge[i]!, edge[i + 1]!, edge[i + 2]!);
+  if (!Number.isFinite(min[0]!)) return 1e-9;
+  return Math.max(
     Math.hypot(max[0]! - min[0]!, max[1]! - min[1]!, max[2]! - min[2]!),
     1e-9
   );
+}
+
+/** Projects the bodies of one view into visible and hidden polylines. */
+export function projectView(input: ViewProjectionInput): ViewProjection {
+  const frame = DRAWING_VIEW_FRAMES[input.orientation];
   const project = (x: number, y: number, z: number) =>
     [
       dot(frame.x, x, y, z),
@@ -610,12 +616,17 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     maxU: -Infinity,
     maxV: -Infinity
   };
-  const meshes = input.bodies.map((body) => analyzeMesh(body, diagonal * 1e-7));
-  // A floor for flat triangles and float noise, far below any real gap.
-  const depthFloor = diagonal * 1e-6;
+  // Every scale that only absorbs float noise is the body's own: bodies far
+  // apart (along the view or across it) must not coarsen each other.
+  const scales = input.bodies.map(bodyDiagonal);
+  const meshes = input.bodies.map((body, bodyIndex) =>
+    analyzeMesh(body, scales[bodyIndex]! * 1e-7)
+  );
   input.bodies.forEach((body, bodyIndex) => {
     const { vertices, indices } = body;
     const sag = triangleSag(body, meshes[bodyIndex]);
+    // A floor for flat triangles and float noise, far below any real gap.
+    const depthFloor = scales[bodyIndex]! * 1e-6;
     for (let t = 0; t + 2 < indices.length; t += 3) {
       const [u0, v0, d0] = project(
         vertices[indices[t]! * 3]!,
@@ -637,8 +648,14 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       bounds.minV = Math.min(bounds.minV, v0, v1, v2);
       bounds.maxV = Math.max(bounds.maxV, v0, v1, v2);
       const area = (u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0);
-      // Edge-on triangles cover no area and cannot hide anything.
-      if (Math.abs(area) <= diagonal * diagonal * 1e-14) continue;
+      // Edge-on triangles cover no area and cannot hide anything; judged
+      // against the triangle's own size, not the view's.
+      const longest = Math.max(
+        (u1 - u0) ** 2 + (v1 - v0) ** 2,
+        (u2 - u1) ** 2 + (v2 - v1) ** 2,
+        (u0 - u2) ** 2 + (v0 - v2) ** 2
+      );
+      if (Math.abs(area) <= longest * 1e-10) continue;
       triangles.push({
         u0,
         v0,
@@ -661,7 +678,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     for (const silhouette of bodySilhouettes(
       body,
       frame,
-      diagonal * 1e-7,
+      scales[bodyIndex]! * 1e-7,
       meshes[bodyIndex]
     ))
       lines.push(silhouette.points);
@@ -678,6 +695,11 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     return { visible: [], hidden: [], bounds: null };
 
   const grid = new OcclusionGrid(triangles, bounds, 1e-9);
+  // Thresholds on drawn (projected) lines scale with what is drawn.
+  const span = Math.max(
+    Math.hypot(bounds.maxU - bounds.minU, bounds.maxV - bounds.minV),
+    1e-9
+  );
   const hiddenAt = (x: number, y: number, z: number): boolean => {
     const [u, v, d] = project(x, y, z);
     return grid.occluded(u, v, d);
@@ -694,18 +716,18 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
         points[i + 1]! - points[i - 2]!,
         points[i + 2]! - points[i - 1]!
       );
-    if (length <= diagonal * 1e-9) return;
+    if (length <= span * 1e-9) return;
     if (isHidden && !input.hiddenLines) return;
     const flat = new Float64Array((points.length / 3) * 2);
-    let span = 0;
+    let drawn = 0;
     for (let i = 0, j = 0; i < points.length; i += 3, j += 2) {
       const [u, v] = project(points[i]!, points[i + 1]!, points[i + 2]!);
       flat[j] = u;
       flat[j + 1] = v;
-      if (j > 0) span += Math.hypot(u - flat[j - 2]!, v - flat[j - 1]!);
+      if (j > 0) drawn += Math.hypot(u - flat[j - 2]!, v - flat[j - 1]!);
     }
     // An edge running along the view direction projects to a point.
-    if (span <= diagonal * 1e-9) return;
+    if (drawn <= span * 1e-9) return;
     (isHidden ? hidden : visible).push(flat);
   };
 
@@ -713,7 +735,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   // neighbours' state: where an edge meets a face's plane at its own end,
   // the occlusion tolerance leaves a sliver that is neither clearly in front
   // nor behind, and no drawing wants it.
-  const minPiece = diagonal * 1e-4;
+  const minPiece = span * 1e-4;
   for (const line of lines) {
     const count = Math.floor(line.length / 3);
     if (count < 2) continue;
@@ -831,7 +853,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   }
   return {
     visible,
-    hidden: dropCoincidentHidden(hidden, visible, diagonal * 1e-6),
+    hidden: dropCoincidentHidden(hidden, visible, span * 1e-6),
     bounds
   };
 }

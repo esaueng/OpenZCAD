@@ -85,7 +85,7 @@ export interface DrawingWorkspaceProps {
   geometryPending: boolean;
   /**
    * Bodies a new sheet draws: the live bodies on screen, independent of the
-   * selection and the export scope. Empty falls back to every live body.
+   * selection and the export scope. Empty refuses the new sheet.
    */
   defaultBodyIds: BodyId[];
   /** Why drawing edits are refused, or null. */
@@ -393,11 +393,17 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   };
 
   const createSheet = () => {
-    const scope =
-      props.defaultBodyIds.length > 0 ? props.defaultBodyIds : liveBodies;
-    const bodyIds = scope.filter((id) => liveBodies.includes(id));
+    // The bodies on screen, exactly: hiding every body is a choice, not a
+    // reason to draw the hidden ones.
+    const bodyIds = props.defaultBodyIds.filter((id) =>
+      liveBodies.includes(id)
+    );
     if (bodyIds.length === 0) {
-      props.onStatus('Add a body to the model before making a drawing.');
+      props.onStatus(
+        liveBodies.length === 0
+          ? 'Add a body to the model before making a drawing.'
+          : 'Show at least one body to make a drawing of it.'
+      );
       return;
     }
     const fingerprint = drawingSourceFingerprint(bodies, bodyIds);
