@@ -77,7 +77,6 @@ export {
   gzipBytes
 } from './compression';
 export {
-  PASSKEY_PRF_INPUT,
   exportPrivateKey,
   exportPublicKey,
   generateDeviceUnlockKey,
@@ -87,7 +86,8 @@ export {
   importEncryptionPublicKey,
   importSigningPrivateKey,
   importSigningPublicKey,
-  importUnlockSecret
+  importUnlockSecret,
+  passkeyPrfInput
 } from './keys';
 export {
   IDENTITY_UNLOCK_METHODS,

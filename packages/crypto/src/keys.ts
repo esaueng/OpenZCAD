@@ -197,10 +197,15 @@ export async function generateDeviceUnlockKey(): Promise<CryptoKey> {
   return key;
 }
 
+const PASSKEY_PRF_LABEL = 'OpenZCAD E2EE v1 passkey unlock';
+
 /**
  * The first WebAuthn PRF input for passkey unlock. Fixed, so a passkey
- * always yields the same 32-byte secret for this application.
+ * always yields the same 32-byte secret for this application. Each call
+ * returns a fresh copy: a shared exported array could be altered by any
+ * consumer, and a wrap made under the altered input would no longer open
+ * once the page reloads with the real one.
  */
-export const PASSKEY_PRF_INPUT: Bytes = new TextEncoder().encode(
-  'OpenZCAD E2EE v1 passkey unlock'
-);
+export function passkeyPrfInput(): Bytes {
+  return new TextEncoder().encode(PASSKEY_PRF_LABEL);
+}

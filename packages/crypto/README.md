@@ -179,7 +179,7 @@ under the project key for members (`version-key`, kind `share-snapshot`) and
 under the share key for link visitors. Blob keys are not wrapped; they travel
 inside the project envelope. Unlock secrets are imported as non-extractable
 HKDF keys, so a device key in IndexedDB never exposes its bytes. The passkey
-PRF input is `PASSKEY_PRF_INPUT`.
+PRF input is `passkeyPrfInput()`, a fresh copy on each call.
 
 ## Codes
 

@@ -9,7 +9,8 @@ import {
   importEncryptionPrivateKey,
   importEncryptionPublicKey,
   importSigningPrivateKey,
-  importUnlockSecret
+  importUnlockSecret,
+  passkeyPrfInput
 } from './keys';
 import { generateSymmetricKey } from './primitives';
 import { patternBytes } from './test-support';
@@ -320,6 +321,20 @@ describe('symmetric key wrapping', () => {
     } as const;
     expect(encodeWrapContext(reordered)).toEqual(
       encodeWrapContext(BLOB_CONTEXT)
+    );
+  });
+});
+
+describe('passkey PRF input', () => {
+  it('is fixed and cannot be altered through a returned copy', () => {
+    const first = passkeyPrfInput();
+    expect(new TextDecoder().decode(first)).toBe(
+      'OpenZCAD E2EE v1 passkey unlock'
+    );
+    first.fill(0);
+    expect(passkeyPrfInput()).not.toBe(first);
+    expect(new TextDecoder().decode(passkeyPrfInput())).toBe(
+      'OpenZCAD E2EE v1 passkey unlock'
     );
   });
 });
