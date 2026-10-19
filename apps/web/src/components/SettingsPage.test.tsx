@@ -391,7 +391,7 @@ describe('settings offline mode', () => {
 
     await user.click(screen.getByRole('button', { name: 'Saving' }));
     expect(screen.getByText('Local autosave')).toBeInTheDocument();
-    expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(screen.getByText('Always on')).toBeInTheDocument();
     expect(
       screen.getByRole('checkbox', { name: 'Cloud autosave' })
     ).toBeDisabled();
@@ -416,12 +416,10 @@ describe('settings viewport copy', () => {
     renderSettings();
 
     await user.click(screen.getByRole('button', { name: 'Controls' }));
+    expect(screen.getByText('Pan matches desktop CAD.')).toBeInTheDocument();
     expect(
-      screen.getByText(
-        /toward whatever is under the cursor, as desktop CAD does/
-      )
+      screen.getByText('Off zooms toward the middle of the view.')
     ).toBeInTheDocument();
-    expect(screen.getByText(/Pan matches desktop CAD;/)).toBeInTheDocument();
   });
 });
 
@@ -435,16 +433,14 @@ describe('settings controls section', () => {
     expect(screen.queryByText('Shortcuts are fixed and context-aware.')).toBe(
       null
     );
-    const headers = container.querySelectorAll(
-      '.settings-control-collection > header'
-    );
+    const headers = container.querySelectorAll('.settings-group-head');
     expect([...headers].map((header) => header.textContent)).toEqual([
-      expect.stringContaining('Navigation'),
+      'Navigation',
       expect.stringContaining('Keyboard'),
-      expect.stringContaining('Mouse & pointer')
+      'Mouse & pointer'
     ]);
-    // The banner's guidance lives on in the one header.
-    expect(headers[1]).toHaveTextContent(/pause while you type/);
+    // The banner's guidance lives on beside the one header.
+    expect(headers[1]).toHaveTextContent(/Paused while you type/);
   });
 });
 
@@ -611,9 +607,6 @@ describe('settings advanced section', () => {
     await user.click(screen.getByRole('button', { name: 'Advanced' }));
 
     expect(screen.getByText('Cloud project storage')).toBeInTheDocument();
-    expect(
-      screen.getByText(/ready to store your projects before they can sync/)
-    ).toBeInTheDocument();
     expect(screen.getByText('Not ready')).toHaveClass(
       'settings-state',
       'warning'
@@ -959,5 +952,57 @@ describe('settings project invitation handoff', () => {
     expect(screen.getByText(/Project invitation ready/)).toBeInTheDocument();
     expect(screen.queryByText(/invite=/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Not now' })).toBeEnabled();
+  });
+});
+
+describe('settings page pattern', () => {
+  it('shows a short choice whole, as one option per radio', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn<ComponentProps<typeof SettingsPage>['onChange']>();
+    renderSettings(null, { initialSection: 'appearance', onChange });
+
+    const theme = screen.getByRole('radiogroup', { name: 'Theme' });
+    const options = within(theme).getAllByRole('radio');
+    expect(
+      options.map((option) => option.closest('label')?.textContent)
+    ).toEqual(['System', 'Light', 'Dark']);
+    expect(within(theme).getByRole('radio', { name: 'System' })).toBeChecked();
+
+    await user.click(within(theme).getByRole('radio', { name: 'Light' }));
+    expect(onChange.mock.calls[0]?.[0].appearance.theme).toBe('light');
+  });
+
+  it('names an abbreviated unit in full for assistive technology', () => {
+    renderSettings(null, { initialSection: 'general' });
+    const units = screen.getByRole('radiogroup', { name: 'Default units' });
+    expect(
+      within(units).getByRole('radio', { name: 'Millimeters' })
+    ).toBeChecked();
+    expect(within(units).getByRole('radio', { name: 'Inches' })).toBeVisible();
+  });
+
+  /**
+   * Settings had grown a paragraph under every row. Each row now carries at
+   * most one short line; anything longer belongs behind a disclosure.
+   */
+  it('keeps every row hint to one short line on every page', async () => {
+    const user = userEvent.setup();
+    const { container } = renderSettings();
+    const nav = screen.getByRole('complementary', {
+      name: 'Settings sections'
+    });
+    const labels = within(nav)
+      .getAllByRole('button')
+      .map((button) => button.getAttribute('aria-label'))
+      .filter((label): label is string => Boolean(label));
+    expect(labels.length).toBeGreaterThanOrEqual(10);
+
+    for (const label of labels) {
+      await user.click(within(nav).getByRole('button', { name: label }));
+      const tooLong = [...container.querySelectorAll('.setting-copy > small')]
+        .map((hint) => hint.textContent ?? '')
+        .filter((hint) => hint.length === 0 || hint.length > 100);
+      expect({ label, tooLong }).toEqual({ label, tooLong: [] });
+    }
   });
 });

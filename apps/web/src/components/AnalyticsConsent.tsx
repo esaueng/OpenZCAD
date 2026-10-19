@@ -1,6 +1,7 @@
 import { cloudFunctionsAreEnabled, cloudRequestSignal } from '../lib/cloudMode';
 import { isDesktopApp } from '../lib/desktopBridge';
 import { useEffect, useState } from 'react';
+import { SettingRow, Toggle } from './settingsControls';
 import {
   hasAnalyticsConsent,
   setAnalyticsEnabled,
@@ -15,13 +16,26 @@ export function AnalyticsConsent() {
     return () => window.removeEventListener('glimpse-consent-changed', update);
   }, []);
   return (
-    <div className="settings-analytics-consent">
-      <label>
-        <input
-          type="checkbox"
+    <>
+      <SettingRow
+        title="Usage analytics"
+        hint={
+          error ? (
+            <span role="status">{error}</span>
+          ) : (
+            'Anonymous feature counts. Never geometry, names, or identity.'
+          )
+        }
+        details={{
+          summary: 'What’s collected',
+          body: 'Feature categories, workflow steps, exports, diagnostic codes, part-count and project-file-size ranges, transfer-size ranges, and coarse timings. No model contents, geometry, filenames, project names or identity. Off by default; this expanded scope requires a fresh choice. DNT/GPC and turning off cloud features suppress sending while preserving this choice; withdraw here to stop sending immediately. Existing anonymous totals cannot be attributed or removed. Basic server counters measure API activity and reliability. This browser-only choice is separate for each app.'
+        }}
+      >
+        <Toggle
           checked={enabled}
-          onChange={(event) => {
-            const saved = setAnalyticsEnabled(event.currentTarget.checked);
+          label="Optional usage analytics"
+          onChange={(checked) => {
+            const saved = setAnalyticsEnabled(checked);
             setEnabled(hasAnalyticsConsent());
             setError(
               saved
@@ -29,25 +43,22 @@ export function AnalyticsConsent() {
                 : 'Could not save this choice. Analytics are off in this page; clear this site’s stored data if withdrawal cannot be saved.'
             );
           }}
-        />{' '}
-        Optional usage analytics
-      </label>
-      <p>
+        />
+      </SettingRow>
+      <SettingRow
+        title="Diagnostic report"
+        hint="Counts from this page since opt-in, as JSON. Never uploaded."
+      >
         <button
           type="button"
           className="secondary"
           disabled={!enabled}
           onClick={downloadDiagnosticReport}
         >
-          Download diagnostic report
+          Download
         </button>
-      </p>
-      <p>
-        Report contains only allowlisted counts from this page since opt-in.
-        Review the JSON before sharing it yourself. No automatic upload.
-      </p>
-      {error && <p role="status">{error}</p>}
-    </div>
+      </SettingRow>
+    </>
   );
 }
 
@@ -127,19 +138,22 @@ export function CloudStatisticsConsent({ accountKey }: { accountKey: string }) {
     }
   }
   return (
-    <div className="settings-analytics-consent">
-      <label>
-        <input
-          type="checkbox"
-          checked={enabled}
-          disabled={!ready || busy}
-          onChange={(e) => {
-            void change(e.currentTarget.checked);
-          }}
-        />{' '}
-        Cloud account statistics for 30 days
-      </label>
-      <p role="status">{status}</p>
-    </div>
+    <SettingRow
+      title="Cloud account statistics"
+      hint={<span role="status">{status}</span>}
+      details={{
+        summary: 'What’s shared',
+        body: 'Hourly aggregate account, owned-project, revision and known storage-byte snapshots for 30 days, across your devices. Only opted-in accounts are included and no account or project identifiers leave OpenZCAD. Includes retained trash and storage metadata, never model contents. Withdraw here at any time; published aggregates remain up to 90 days. This account-wide permission is separate from browser DNT/GPC and this device’s cloud switch.'
+      }}
+    >
+      <Toggle
+        checked={enabled}
+        disabled={!ready || busy}
+        label="Cloud account statistics for 30 days"
+        onChange={(checked) => {
+          void change(checked);
+        }}
+      />
+    </SettingRow>
   );
 }

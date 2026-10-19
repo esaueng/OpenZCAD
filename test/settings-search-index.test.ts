@@ -6,12 +6,19 @@ import {
   visibleSettingsSections
 } from '../apps/web/src/lib/settingsSections';
 
-const SOURCE = readFileSync(
-  fileURLToPath(
-    new URL('../apps/web/src/components/SettingsPage.tsx', import.meta.url)
-  ),
-  'utf8'
-);
+function source(name: string): string {
+  return readFileSync(
+    fileURLToPath(
+      new URL(`../apps/web/src/components/${name}`, import.meta.url)
+    ),
+    'utf8'
+  );
+}
+
+const SOURCE = source('SettingsPage.tsx');
+
+/** Privacy's consent rows render from their own component. */
+const ANALYTICS_SOURCE = source('AnalyticsConsent.tsx');
 
 /**
  * The "Find a setting" index lives in SETTINGS_SECTIONS while the settings
@@ -19,30 +26,45 @@ const SOURCE = readFileSync(
  * silently and quietly stop matching. Parse the rendered side out of the source
  * and require it agrees with the index.
  */
-function renderedSettingsBySection(): Map<string, string[]> {
-  const bySection = new Map<string, string[]>();
-  let section: string | null = null;
+function settingTitles(
+  text: string,
+  initialSection: string | null,
+  onTitle: (section: string, title: string) => void,
+  onSection: (section: string) => void = () => undefined
+) {
+  let section = initialSection;
   let tag: string | null = null;
-  for (const line of SOURCE.split('\n')) {
+  for (const line of text.split('\n')) {
     const sectionMatch = line.match(/active === '([a-z]+)'/);
     if (sectionMatch) {
       section = sectionMatch[1]!;
-      bySection.set(section, bySection.get(section) ?? []);
+      onSection(section);
     }
-    // A reference collection's title is a heading, not a setting.
-    const tagMatch = line.match(
-      /<(Section|SettingRow|ControlReferenceCollection)\b/
-    );
+    // A group's or page's title is a heading, not a setting.
+    const tagMatch = line.match(/<(Section|Group|SettingRow|Status)\b/);
     if (tagMatch) {
       tag = tagMatch[1]!;
     }
-    const titleMatch = line.match(/^\s*title="([^"]+)"/);
+    // On its own line, or inline after `<SettingRow compact`.
+    const titleMatch = line.match(
+      /(?:^\s*|<SettingRow\b[^>]*\s)title="([^"]+)"/
+    );
     // Only SettingRow titles are indexed; the Section title duplicates the
     // section label already covered by the nav.
     if (titleMatch && section && tag === 'SettingRow') {
-      bySection.get(section)!.push(titleMatch[1]!);
+      onTitle(section, titleMatch[1]!);
     }
   }
+}
+
+function renderedSettingsBySection(): Map<string, string[]> {
+  const bySection = new Map<string, string[]>();
+  const add = (section: string, title: string) =>
+    bySection.get(section)!.push(title);
+  settingTitles(SOURCE, null, add, (section) =>
+    bySection.set(section, bySection.get(section) ?? [])
+  );
+  settingTitles(ANALYTICS_SOURCE, 'privacy', add);
   return bySection;
 }
 
@@ -66,9 +88,12 @@ describe('settings search index', () => {
     );
 
     for (const [section, titles] of rendered) {
-      expect({ section, titles: indexed.get(section) }).toEqual({
+      expect({
         section,
-        titles
+        titles: [...new Set(indexed.get(section))].sort()
+      }).toEqual({
+        section,
+        titles: [...new Set(titles)].sort()
       });
     }
   });
