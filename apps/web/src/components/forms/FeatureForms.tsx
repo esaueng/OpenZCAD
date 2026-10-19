@@ -6,6 +6,7 @@ import {
   MAX_SKETCH_POLYGON_SIDES,
   type AxisId,
   type BodyId,
+  type BooleanKeepOriginals,
   type BooleanOperation,
   type EdgeTopologyReferenceV5,
   type ParamValue,
@@ -1032,13 +1033,38 @@ const OPERATION_LABELS: Record<BooleanOperation, string> = {
   intersect: 'Intersect'
 };
 
+/** M11: '' is the absent field, which consumes every input. */
+const KEEP_ORIGINALS_LABELS: Record<BooleanKeepOriginals | '', string> = {
+  '': 'None',
+  target: 'Body 1',
+  tools: 'Bodies 2+',
+  all: 'All'
+};
+
+export interface BooleanFormValue {
+  name: string;
+  operation: BooleanOperation;
+  targetBodyIds: BodyId[];
+  /** Absent consumes every input body. */
+  keepOriginals?: BooleanKeepOriginals;
+}
+
+function keepOriginalsNote(keep: BooleanKeepOriginals | ''): string {
+  switch (keep) {
+    case 'all':
+      return 'Input bodies are kept beside the result.';
+    case 'target':
+      return 'Body 1 is kept beside the result; the others are consumed.';
+    case 'tools':
+      return 'Bodies 2+ are kept beside the result; body 1 is consumed.';
+    default:
+      return 'Input bodies are consumed; deleting the boolean restores them.';
+  }
+}
+
 interface BooleanFormProps {
   bodies: BodyOption[];
-  initial?: {
-    name: string;
-    operation: BooleanOperation;
-    targetBodyIds: BodyId[];
-  };
+  initial?: BooleanFormValue;
   presetOperation?: BooleanOperation;
   /**
    * The viewport's body selection, in pick order. When given, the list is a
@@ -1048,11 +1074,7 @@ interface BooleanFormProps {
   selection?: BodyId[];
   onSelectionChange?(bodyIds: BodyId[]): void;
   submitLabel: string;
-  onSubmit(value: {
-    name: string;
-    operation: BooleanOperation;
-    targetBodyIds: BodyId[];
-  }): void;
+  onSubmit(value: BooleanFormValue): void;
   onCancel?: () => void;
 }
 
@@ -1071,6 +1093,9 @@ export function BooleanForm({
   );
   const [name, setName] = useState(
     initial?.name ?? OPERATION_LABELS[operation]
+  );
+  const [keepOriginals, setKeepOriginals] = useState<BooleanKeepOriginals | ''>(
+    initial?.keepOriginals ?? ''
   );
   // Selection order matters: the first body is the base a subtract cuts from.
   // Editing an existing feature keeps its own list; creating one shares the
@@ -1123,7 +1148,12 @@ export function BooleanForm({
       submitLabel={submitLabel}
       canSubmit={canSubmit}
       onSubmit={() =>
-        onSubmit({ name: name.trim(), operation, targetBodyIds: selected })
+        onSubmit({
+          name: name.trim(),
+          operation,
+          targetBodyIds: selected,
+          ...(keepOriginals ? { keepOriginals } : {})
+        })
       }
       onCancel={onCancel}
     >
@@ -1196,9 +1226,25 @@ export function BooleanForm({
           Union joins solids that touch or overlap. It does not fill empty gaps.
         </p>
       )}
-      <p className="muted">
-        Input bodies are consumed; deleting the boolean restores them.
-      </p>
+      <label className="field">
+        <span>Keep originals</span>
+        <select
+          aria-label="Keep originals"
+          value={keepOriginals}
+          onChange={(event) =>
+            setKeepOriginals(event.target.value as BooleanKeepOriginals | '')
+          }
+        >
+          {(
+            Object.keys(KEEP_ORIGINALS_LABELS) as (BooleanKeepOriginals | '')[]
+          ).map((id) => (
+            <option key={id} value={id}>
+              {KEEP_ORIGINALS_LABELS[id]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="muted">{keepOriginalsNote(keepOriginals)}</p>
     </FormShell>
   );
 }

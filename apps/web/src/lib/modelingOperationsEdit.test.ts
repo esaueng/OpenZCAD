@@ -410,3 +410,49 @@ describe('profile feature editing', () => {
     ).toThrow(/Saved path entities/);
   });
 });
+
+describe('split keep-original (M11)', () => {
+  const split: Extract<FeatureNode['data'], { featureKind: 'split' }> = {
+    featureKind: 'split',
+    targetBodyId: 'body_block' as never,
+    plane: {
+      origin: { x: 5, y: 0, z: 0 },
+      normal: { x: 1, y: 0, z: 0 }
+    },
+    secondBodyId: 'body_back' as never
+  };
+
+  it('reopens a kept original and stores only `true`', () => {
+    const state = modelingFormStateFromFeature('Split', {
+      ...split,
+      keepOriginal: true
+    });
+    expect(state).toMatchObject({
+      operation: 'split',
+      value: { keepOriginal: true }
+    });
+    const submission = buildModelingOperationSubmission(state);
+    expect(submission).toMatchObject({
+      operation: 'split',
+      input: { keepOriginal: true }
+    });
+    expect(
+      modelingFeatureUpdate('feat_split' as FeatureId, submission)
+    ).toMatchObject({
+      data: { featureKind: 'split', keepOriginal: true }
+    });
+  });
+
+  it('clears the field, never storing `false`, when the box is unticked', () => {
+    const state = modelingFormStateFromFeature('Split', split);
+    expect(state.value).not.toHaveProperty('keepOriginal');
+    const submission = buildModelingOperationSubmission({
+      ...state,
+      value: { ...state.value, keepOriginal: false }
+    } as typeof state);
+    expect(submission.input).not.toHaveProperty('keepOriginal');
+    const update = modelingFeatureUpdate('feat_split' as FeatureId, submission);
+    expect(update?.data).not.toHaveProperty('keepOriginal');
+    expect(update?.clearData).toEqual(['keepOriginal']);
+  });
+});

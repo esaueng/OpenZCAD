@@ -3,6 +3,7 @@ import {
   isStaleSelectionError,
   type InteractionState
 } from './machine';
+import { activeKeymap, keyHint } from '../keymap';
 
 /**
  * What the workspace should be telling you to do right now.
@@ -63,7 +64,13 @@ function armedStep(state: InteractionState): string {
         if (state.target.resizeBodyFeatureId && !state.target.localFaceOffset) {
           return 'Drag the arrow to resize the body, or type an exact distance · The opposite side stays fixed';
         }
-        return 'Drag the arrow to push or pull the face, or type an exact distance · Space faces it head-on';
+        // The key is the user's: a remap is named, an unbound one omitted.
+        return [
+          'Drag the arrow to push or pull the face, or type an exact distance',
+          keyHint(activeKeymap(), 'view-normal-to-face', 'faces it head-on')
+        ]
+          .filter(Boolean)
+          .join(' · ');
     }
   }
   if (state.mode === 'edges') {

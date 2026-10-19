@@ -479,6 +479,62 @@ describe('application settings', () => {
     expect(parsed.settings.files.cloudAutosave).toBe(true);
   });
 
+  it('round-trips shortcut remaps through device storage', () => {
+    const remapped = defaultAppSettings();
+    remapped.keymap = {
+      overrides: { 'view-grid': ['H'], 'tool-fillet': ['Ctrl+Shift+F'] }
+    };
+
+    expect(saveLocalAppSettings(remapped, null)).toBe(true);
+    expect(loadLocalAppSettings().keymap.overrides).toEqual({
+      'view-grid': ['H'],
+      'tool-fillet': ['Ctrl+Shift+F']
+    });
+  });
+
+  it('cleans stored shortcut remaps instead of discarding them', () => {
+    expect(
+      normalizeAppSettings({
+        keymap: {
+          overrides: {
+            // Canonicalized: lower-case letter, modifier order, shifted symbol.
+            'view-fit': ['k', 'Shift+Ctrl+x', 'Shift+?'],
+            // An empty list is how a default is cleared, so it stays.
+            'view-grid': [],
+            'Not An Id': ['G'],
+            'view-display': 'W',
+            'view-projection': ['Hyper+P', 'P', 'P']
+          }
+        }
+      }).keymap.overrides
+    ).toEqual({
+      'view-fit': ['K', 'Ctrl+Shift+X', '?'],
+      'view-grid': [],
+      'view-projection': ['P']
+    });
+    expect(normalizeAppSettings({}).keymap).toEqual({ overrides: {} });
+  });
+
+  it('carries shortcut remaps through the account round trip', () => {
+    const settings = deepClone(DEFAULT_APP_SETTINGS);
+    settings.keymap = { overrides: { 'view-grid': ['H'] } };
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings },
+        'development'
+      ).settings.keymap
+    ).toEqual({ overrides: { 'view-grid': ['H'] } });
+
+    // A client from before remapping still saves, with every default kept.
+    const { keymap: _omitted, ...legacy } = deepClone(DEFAULT_APP_SETTINGS);
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings: legacy },
+        'development'
+      ).settings.keymap
+    ).toEqual({ overrides: {} });
+  });
+
   it('clamps an out-of-range delay at the account boundary too', () => {
     const settings = deepClone(DEFAULT_APP_SETTINGS);
     settings.files = {

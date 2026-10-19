@@ -32,7 +32,6 @@ import type {
   BodyId,
   BodyMassProperties,
   BodyRepresentation,
-  BooleanOperation,
   FaceGeometry,
   FeatureId,
   FeatureNode,
@@ -47,6 +46,7 @@ import type {
 } from '@openzcad/shared';
 import {
   BooleanForm,
+  type BooleanFormValue,
   EdgeModifierForm,
   ExtrudeForm,
   PatternForm,
@@ -133,11 +133,7 @@ export interface InspectorCallbacks {
     axis: RevolveAxis;
     angleDeg: ParamValue;
   }): void;
-  onCreateBoolean(value: {
-    name: string;
-    operation: BooleanOperation;
-    targetBodyIds: BodyOption['bodyId'][];
-  }): void;
+  onCreateBoolean(value: BooleanFormValue): void;
   onCreateTransform(value: TransformFormValue): void;
   onCreateEdgeModifier(
     kind: 'fillet' | 'chamfer',
@@ -185,14 +181,7 @@ export interface InspectorCallbacks {
       angleDeg: ParamValue;
     }
   ): void;
-  onApplyBoolean(
-    feature: FeatureNode,
-    value: {
-      name: string;
-      operation: BooleanOperation;
-      targetBodyIds: BodyOption['bodyId'][];
-    }
-  ): void;
+  onApplyBoolean(feature: FeatureNode, value: BooleanFormValue): void;
   onApplyTransform(feature: FeatureNode, value: TransformFormValue): void;
   onApplyEdgeModifier(
     feature: FeatureNode,
@@ -1802,7 +1791,10 @@ export function Inspector(props: InspectorProps) {
           initial={{
             name: selectedFeature.name,
             operation: data.operation,
-            targetBodyIds: data.targetBodyIds
+            targetBodyIds: data.targetBodyIds,
+            ...(data.keepOriginals !== undefined
+              ? { keepOriginals: data.keepOriginals }
+              : {})
           }}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyBoolean(selectedFeature, value)}

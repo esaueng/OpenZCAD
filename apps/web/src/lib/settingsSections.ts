@@ -1,4 +1,5 @@
 import { CONTROL_REFERENCE_SEARCH_TERMS } from './controlReference';
+import { KEYMAP_COMMANDS } from './keymap';
 import type { SettingsSectionId } from './settingsSectionIds';
 
 /**
@@ -79,7 +80,16 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'mouse',
       'trackpad',
       'navigation',
-      ...CONTROL_REFERENCE_SEARCH_TERMS
+      ...CONTROL_REFERENCE_SEARCH_TERMS,
+      // Every remappable command by name, so "fillet" finds where to give
+      // Fillet a key, and the words people use for remapping.
+      ...KEYMAP_COMMANDS.map((command) => command.label),
+      'remap',
+      'keymap',
+      'key binding',
+      'hotkey',
+      'customize shortcuts',
+      'Reset all shortcuts'
     ]
   },
   {

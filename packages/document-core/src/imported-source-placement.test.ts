@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { toUserId } from '@openzcad/shared';
 import {
+  addSplitFeature,
+  booleanBodies,
   constantRigidTransform,
   createProjectDocument,
   importStepBody,
@@ -117,5 +119,54 @@ describe('constant placement with unit suffixes', () => {
         'mm'
       )
     ).toBeNull();
+  });
+
+  it('stays eligible through a Boolean or Split that keeps it, and only then (M11)', () => {
+    const holder = importStepBody(
+      createProjectDocument('Kept import', toUserId('test')),
+      {
+        name: 'Holder',
+        artifactId: 'holder',
+        sourceName: 'holder.step',
+        stepText: 'ISO-10303-21;'
+      }
+    );
+    const tool = importStepBody(holder.document, {
+      name: 'Tool',
+      artifactId: 'tool',
+      sourceName: 'tool.step',
+      stepText: 'ISO-10303-21;'
+    });
+    const operands = [holder.bodyId, tool.bodyId];
+    for (const [keepOriginals, eligible] of [
+      ['all', true],
+      ['target', true],
+      ['tools', false],
+      [undefined, false]
+    ] as const) {
+      const combined = booleanBodies(tool.document, {
+        name: 'Union',
+        operation: 'union',
+        targetBodyIds: operands,
+        ...(keepOriginals ? { keepOriginals } : {})
+      }).document;
+      expect(rigidImportedSource(combined, holder.bodyId) !== null).toBe(
+        eligible
+      );
+    }
+    for (const keepOriginal of [true, undefined] as const) {
+      const split = addSplitFeature(tool.document, {
+        name: 'Split',
+        targetBodyId: holder.bodyId,
+        plane: {
+          origin: { x: 0, y: 0, z: 0 },
+          normal: { x: 1, y: 0, z: 0 }
+        },
+        ...(keepOriginal ? { keepOriginal } : {})
+      }).document;
+      expect(rigidImportedSource(split, holder.bodyId) !== null).toBe(
+        keepOriginal === true
+      );
+    }
   });
 });

@@ -74,7 +74,15 @@ export interface AffectedFeatureTarget {
  */
 export function affectedFeatureTargets(
   document: ProjectDocument,
-  sourceFeatureId: FeatureId
+  sourceFeatureId: FeatureId,
+  options: {
+    /**
+     * Also walk the branches of a Boolean's or Split's inputs. An edit needs
+     * this (it can change which inputs are kept, M11); a failure of the
+     * feature as stored does not, since its kept inputs stand on their own.
+     */
+    inputBranches?: boolean;
+  } = {}
 ): AffectedFeatureTarget[] {
   const features = listFeaturesInOrder(document);
   const sourceIndex = features.findIndex(
@@ -106,6 +114,15 @@ export function affectedFeatureTargets(
   }
 
   const affectedBodies = new Set<BodyId>(sourceBodyId ? [sourceBodyId] : []);
+  // M11: editing a Boolean or Split can change which of its inputs it keeps,
+  // and a later feature on an input that stops being kept loses its body.
+  // So an edit walks the inputs' own downstream branches too; the inputs are
+  // not targets themselves, since consuming them is the edit's intent.
+  if (options.inputBranches && source.data.featureKind === 'boolean') {
+    source.data.targetBodyIds.forEach((bodyId) => affectedBodies.add(bodyId));
+  } else if (options.inputBranches && source.data.featureKind === 'split') {
+    affectedBodies.add(source.data.targetBodyId);
+  }
   const affectedSketches = new Set<SketchId>(
     sourceSketchId ? [sourceSketchId] : []
   );
@@ -411,4 +428,34 @@ export function reorderRefusal(
     }
   }
   return null;
+}
+
+/**
+ * The targets an edit of `featureId` must validate: those of the feature as
+ * stored in `base`, then any more that the feature as `proposed` adds. An
+ * edit that points a Boolean or Split at a different input (or stops keeping
+ * one, M11) puts that input's later features at stake, and only the proposed
+ * document names the new input. The stored source stays first.
+ */
+export function editAffectedFeatureTargets(
+  base: ProjectDocument,
+  proposed: ProjectDocument | null,
+  featureId: FeatureId
+): AffectedFeatureTarget[] {
+  const targets = affectedFeatureTargets(base, featureId, {
+    inputBranches: true
+  });
+  if (!proposed) return targets;
+  const key = (target: AffectedFeatureTarget) =>
+    `${target.featureId}:${target.resultBodyId}`;
+  const seen = new Set(targets.map(key));
+  for (const target of affectedFeatureTargets(proposed, featureId, {
+    inputBranches: true
+  })) {
+    if (!seen.has(key(target))) {
+      seen.add(key(target));
+      targets.push(target);
+    }
+  }
+  return targets;
 }

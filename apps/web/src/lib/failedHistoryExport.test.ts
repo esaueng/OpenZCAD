@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
+  addSplitFeature,
+  booleanBodies,
   createProjectDocument,
   listFeaturesInOrder,
   mirrorBody,
@@ -161,5 +163,82 @@ describe('failed-history export guard', () => {
       '2 bodies (Housing 1, Lid 1) not exported: 2 features failed to rebuild (“Wall”, “Cut”), so they do not match the design. Fix or suppress the failed feature in History to export them.'
     );
     expect(withheldExportMessage([], name)).toBeNull();
+  });
+});
+
+describe('failed-history export of kept inputs (M11)', () => {
+  function boxes() {
+    let document = createProjectDocument('Kept', toUserId('user_kept'));
+    for (const name of ['A', 'B']) {
+      document = addPrimitiveFeature(document, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      });
+    }
+    return { document, a: document.bodyOrder[0]!, b: document.bodyOrder[1]! };
+  }
+  function failing(document: ProjectDocument, bodies: BodyId[]) {
+    const feature = listFeaturesInOrder(document).at(-1)!;
+    return {
+      ...document,
+      derived: {
+        ...document.derived,
+        bodyRepresentations: Object.fromEntries(
+          bodies.map((bodyId) => [
+            bodyId,
+            { bodyId, exportableStep: true, consumed: false }
+          ])
+        ) as unknown as ProjectDocument['derived']['bodyRepresentations'],
+        warnings: ['failed'],
+        featureWarnings: [
+          {
+            featureId: feature.featureId,
+            featureName: feature.name,
+            kind: 'build-failed' as const,
+            message: 'failed'
+          }
+        ]
+      }
+    };
+  }
+
+  it('withholds only the inputs a failed Boolean would have consumed', () => {
+    for (const [keepOriginals, withheld] of [
+      ['all', []],
+      ['target', ['b']],
+      ['tools', ['a']],
+      [undefined, ['a', 'b']]
+    ] as const) {
+      const { document, a, b } = boxes();
+      const union = booleanBodies(document, {
+        name: 'Union',
+        operation: 'union',
+        targetBodyIds: [a, b],
+        ...(keepOriginals ? { keepOriginals } : {})
+      });
+      const names = { a, b };
+      expect([
+        ...failedHistoryExportBodies(failing(union.document, [a, b])).keys()
+      ]).toEqual(withheld.map((name) => names[name]));
+    }
+  });
+
+  it('keeps the original of a failed Split that keeps it exportable', () => {
+    for (const keepOriginal of [true, undefined] as const) {
+      const { document, a } = boxes();
+      const split = addSplitFeature(document, {
+        name: 'Split',
+        targetBodyId: a,
+        plane: {
+          origin: { x: 5, y: 0, z: 0 },
+          normal: { x: 1, y: 0, z: 0 }
+        },
+        ...(keepOriginal ? { keepOriginal } : {})
+      });
+      expect([
+        ...failedHistoryExportBodies(failing(split.document, [a])).keys()
+      ]).toEqual(keepOriginal ? [] : [a]);
+    }
   });
 });

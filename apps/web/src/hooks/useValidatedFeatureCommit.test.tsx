@@ -7,10 +7,12 @@ import {
 } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
+  booleanBodies,
   createBodyFeatureIds,
   createProjectDocument,
   filletEdges,
-  listFeaturesInOrder
+  listFeaturesInOrder,
+  transformBody
 } from '@openzcad/document-core';
 import { toUserId, type BodyId, type ProjectDocument } from '@openzcad/shared';
 import {
@@ -336,6 +338,88 @@ describe('validated feature commit', () => {
     expect(manager.canUndo).toBe(false);
     expect(onStatus).toHaveBeenLastCalledWith(
       'Fillet could not be created on 2 selected edges with radius 1.'
+    );
+  });
+});
+
+describe('validated edit that consumes a dependent body (M11)', () => {
+  it('rejects an edit that stops keeping a body a later feature uses', async () => {
+    let document = createProjectDocument('Kept', toUserId('user_kept'));
+    for (const name of ['A', 'B']) {
+      document = addPrimitiveFeature(document, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      });
+    }
+    const [a, b] = document.bodyOrder as [BodyId, BodyId];
+    const union = booleanBodies(document, {
+      name: 'Union',
+      operation: 'union',
+      targetBodyIds: [a, b],
+      keepOriginals: 'target'
+    });
+    const moved = transformBody(union.document, {
+      name: 'Move A',
+      targetBodyId: a,
+      translation: { x: 20, y: 0, z: 0 }
+    }).document;
+    const representation = (bodyId: BodyId, consumed: boolean) => ({
+      ...bodyRepresentation(bodyId),
+      consumed
+    });
+    moved.derived = {
+      ...moved.derived,
+      bodyRepresentations: {
+        [a]: representation(a, false),
+        [union.bodyId]: representation(union.bodyId, false)
+      }
+    };
+    const manager = new CommandManager(moved);
+    const unionFeature = listFeaturesInOrder(moved).find(
+      (feature) => feature.name === 'Union'
+    )!;
+    const command = commandFactories.updateFeature({
+      featureId: unionFeature.featureId,
+      clearData: ['keepOriginals']
+    });
+    const commit = vi.fn(() => true);
+    const onStatus = vi.fn();
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit({
+        manager: () => manager,
+        derive: async (candidate) => ({
+          // The consumed body is still published, as construction.
+          bodyRepresentations: {
+            [a]: representation(a, true),
+            [union.bodyId]: representation(union.bodyId, false)
+          },
+          exportableBodyIds: [union.bodyId],
+          warnings: [],
+          updatedAt: candidate.derived.updatedAt
+        }),
+        commit,
+        commitTransaction: () => true,
+        onBusy: vi.fn(),
+        onStatus
+      })
+    );
+    let applied: ValidatedFeatureOutcome | undefined;
+    await act(async () => {
+      applied = await result.current.run(command, {
+        featureName: 'Union',
+        resultBodyId: union.bodyId,
+        targets: [
+          { featureName: 'Union', resultBodyId: union.bodyId },
+          { featureName: 'Move A', resultBodyId: a }
+        ],
+        successMessage: command.label
+      });
+    });
+    expect(applied).toBe('rejected');
+    expect(commit).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenLastCalledWith(
+      'Move A would lose its body: this change consumes it.'
     );
   });
 });

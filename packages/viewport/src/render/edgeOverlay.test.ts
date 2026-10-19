@@ -519,6 +519,45 @@ function instanceBufferFloats(line: THREE.Object3D): number {
  * across seven equal batches and 338 ms on the main thread, with 98 MB of that
  * idle. They start empty now and grow to what is actually drawn.
  */
+describe('BodyEdgeOverlay.suspendHighlights', () => {
+  it('draws no selection or hover styling until restored, then restores it exactly', () => {
+    const overlay = makeOverlay();
+    overlay.setSelected([selection('edge-a')]);
+    overlay.setSelectedFaceBoundary(101);
+    overlay.setHovered({ bodyId: BODY_ID, topologyId: 'edge-b', hash: 13 });
+    overlay.setBodySelected(true);
+    settle(overlay);
+    const visibleNames = () =>
+      overlay.children
+        .filter((child) => child.visible)
+        .map((child) => child.name)
+        .sort();
+    const material = overlay.idleEdges.material;
+    const before = {
+      names: visibleNames(),
+      color: material.color.getHex(),
+      linewidth: material.linewidth,
+      opacity: material.opacity
+    };
+    expect(before.names).toContain('body-edge-selected');
+    expect(before.names).toContain('body-face-boundary-selected');
+
+    const restore = overlay.suspendHighlights();
+    expect(visibleNames()).toEqual(['body-edge']);
+    const plain = makeOverlay().idleEdges.material;
+    expect(material.color.getHex()).toBe(plain.color.getHex());
+    expect(material.linewidth).toBe(plain.linewidth);
+
+    restore();
+    expect({
+      names: visibleNames(),
+      color: material.color.getHex(),
+      linewidth: material.linewidth,
+      opacity: material.opacity
+    }).toEqual(before);
+  });
+});
+
 describe('BodyEdgeOverlay allocation', () => {
   const AUXILIARY = [
     'body-edge-hover',

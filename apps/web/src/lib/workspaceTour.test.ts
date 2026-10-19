@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   advanceThroughCompleted,
+  tourStepBody,
   WORKSPACE_TOUR_STEPS,
   type WorkspaceTourSignals
 } from './workspaceTour';
@@ -20,8 +21,19 @@ describe('workspace tour', () => {
     expect(new Set(ids).size).toBe(WORKSPACE_TOUR_STEPS.length);
     for (const step of WORKSPACE_TOUR_STEPS) {
       expect(step.title.length).toBeGreaterThan(0);
-      expect(step.body.length).toBeGreaterThan(0);
+      expect(tourStepBody(step, () => 'B').length).toBeGreaterThan(0);
     }
+  });
+
+  it('teaches the live Box key, and none when it is unbound', () => {
+    const create = WORKSPACE_TOUR_STEPS[0]!;
+    expect(tourStepBody(create, () => 'B')).toContain(
+      'click Box (the cube), or press B, then press Enter'
+    );
+    expect(tourStepBody(create, () => 'J')).toContain('or press J,');
+    expect(tourStepBody(create, () => undefined)).toContain(
+      'click Box (the cube) then press Enter'
+    );
   });
 
   it('advances exactly through the steps the user already did', () => {

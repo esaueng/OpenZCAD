@@ -76,6 +76,7 @@ import {
   archiveHistorySources,
   type ImportedSourceArchiveIdentity,
   applyDocumentChanges,
+  booleanConsumedBodyIds,
   recordDocumentEdit,
   normalizeDocumentHistory,
   addPrimitiveFeature,
@@ -2245,7 +2246,8 @@ class LocalBodyScope {
       const data = feature.data;
       switch (data.featureKind) {
         case 'boolean':
-          for (const bodyId of data.targetBodyIds) {
+          // M11: a kept input stays live beside the result.
+          for (const bodyId of booleanConsumedBodyIds(data)) {
             this.consumed.set(bodyId, consumedByHistory);
           }
           break;
@@ -2261,8 +2263,12 @@ class LocalBodyScope {
         case 'chamfer':
         case 'pattern':
         case 'hole':
-        case 'split':
           this.consumed.set(data.targetBodyId, consumedByHistory);
+          break;
+        case 'split':
+          if (data.keepOriginal !== true) {
+            this.consumed.set(data.targetBodyId, consumedByHistory);
+          }
           break;
         default:
           break;

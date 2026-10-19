@@ -6,7 +6,9 @@ export * from './imported-step-source';
 export * from './imported-mesh-payload';
 export * from './sketch-reference-dimensions';
 export * from './mass-density';
+export * from './keymap-settings';
 import type { DocumentHistory } from './document-history';
+import type { KeymapOverrides } from './keymap-settings';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
 export type ProjectId = Brand<string, 'ProjectId'>;
@@ -53,6 +55,12 @@ export type ShaprImportId = Brand<string, 'ShaprImportId'>;
  * then owns a body of its own and leaves its source live). A v22 client would
  * move the source instead and lose the copy's body, so the bump makes it
  * refuse the document.
+ *
+ * v24 adds the Stage 4 solid options: the extrude `intersect` result intent
+ * (ZC-060) and keep-originals on Boolean (`keepOriginals`) and Split
+ * (`keepOriginal`) (M11). A v23 client would rebuild an intersect extrude
+ * as a cut and hide bodies the feature keeps, so the bump makes it refuse
+ * such a document. Every field is optional; absent is the v23 behaviour.
  *
  * v25 adds two R01 datum-plane definitions, `three-point` and
  * `parallel-point`, and the point sources they read (world coordinates or an
@@ -108,6 +116,12 @@ export type SketchObjectKind =
 export type TextFontStyle = 'regular' | 'bold' | 'italic' | 'boldItalic';
 export type TextAlign = 'left' | 'center' | 'right';
 export type BooleanOperation = 'union' | 'subtract' | 'intersect';
+/**
+ * M11: which inputs a Boolean leaves live beside its result. The target is
+ * the first body (a subtract's base); the tools are the rest. Absent keeps
+ * none, the consume-everything Boolean every document before v24 stores.
+ */
+export type BooleanKeepOriginals = 'all' | 'target' | 'tools';
 export type PatternKind = 'linear' | 'circular' | 'grid';
 export type AxisId = 'x' | 'y' | 'z';
 
@@ -957,8 +971,12 @@ export type RevolveAxis = 'horizontal' | 'vertical';
  */
 export const FULL_REVOLVE_ANGLE_DEG = 360;
 
-/** Persistent result mode chosen when an extrusion is first created. */
-export type ExtrudeOperation = 'new-body' | 'add' | 'cut';
+/**
+ * Persistent result mode chosen when an extrusion is first created.
+ * `intersect` (ZC-060, schema v24) keeps only the material the extrusion and
+ * its target share; it is always explicit, never inferred.
+ */
+export type ExtrudeOperation = 'new-body' | 'add' | 'cut' | 'intersect';
 
 /**
  * Persistent reference to one derived bounded sketch cell.
@@ -1073,7 +1091,7 @@ export type FeatureData =
        * behavior; rebuilds never infer a different operation.
        */
       operation?: ExtrudeOperation;
-      /** Required for stored add/cut operations and absent for new-body. */
+      /** Required for stored add/cut/intersect and absent for new-body. */
       targetBodyId?: BodyId;
       /**
        * F01 (schema v20): how far the extrusion reaches. Absent is `blind`,
@@ -1168,6 +1186,11 @@ export type FeatureData =
       activeWhen?: ParamValue;
       operation: BooleanOperation;
       targetBodyIds: BodyId[];
+      /**
+       * M11 (schema v24): inputs left live beside the result instead of
+       * consumed. Absent consumes every input, as before v24.
+       */
+      keepOriginals?: BooleanKeepOriginals;
     }
   | {
       featureKind: 'transform';
@@ -1244,6 +1267,12 @@ export type FeatureData =
        * `targetBodyIds` carries body references.
        */
       secondBodyId: BodyId;
+      /**
+       * M11 (schema v24): leave the input body live beside the two halves.
+       * Absent consumes it, as every split before v24 did; only `true` is
+       * stored, so a cleared choice is the absent field, never `false`.
+       */
+      keepOriginal?: true;
     }
   | {
       featureKind: 'shell';
@@ -3137,6 +3166,14 @@ export interface AppSettings {
     /** Selection-first direct manipulation: click geometry, drag handles. */
     directManipulation: boolean;
   };
+  /**
+   * The user's shortcut remaps, by command id; a command without an entry
+   * keeps its default. A preference, never project data: the same document
+   * opens with whichever keys its reader chose.
+   */
+  keymap: {
+    overrides: KeymapOverrides;
+  };
 }
 
 export interface PanelWidthLimits {
@@ -3225,6 +3262,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   experiments: {
     directManipulation: true
+  },
+  keymap: {
+    overrides: {}
   }
 };
 

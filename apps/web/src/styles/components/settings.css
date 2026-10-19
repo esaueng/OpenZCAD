@@ -843,6 +843,67 @@
   line-height: 1.4;
 }
 
+/* The keymap editor: the keyboard groups with each binding removable and a
+   capture button per command. */
+.keymap-editor {
+  border-top: var(--border-thin);
+}
+
+.keymap-editor-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: var(--border-thin);
+}
+
+.keymap-editor-bar p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.keymap-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.keymap-chip .icon-button {
+  width: 18px;
+  height: 18px;
+}
+
+.keymap-unbound {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+  white-space: nowrap;
+}
+
+.keymap-refusal {
+  color: var(--color-warning);
+}
+
+.keymap-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+.keymap-actions button {
+  min-height: 24px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-mini);
+}
+
+.keymap-actions .is-capturing {
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-dim);
+}
+
 /* Every row draws its own bottom rule; the card's border already closes the
    last one, so a second line there doubled it. */
 .settings-card > :last-child,

@@ -224,3 +224,66 @@ describe('Boolean form body names', () => {
     ]).toEqual(['Box Body (2)', 'Box Body (3)', 'Box Body (1)']);
   });
 });
+
+describe('Boolean keep originals (M11)', () => {
+  it('submits no keep choice by default and says the inputs are consumed', () => {
+    const onSubmit = vi.fn();
+    render(
+      <BooleanForm
+        bodies={bodies}
+        presetOperation="union"
+        selection={bodies.map((body) => body.bodyId)}
+        submitLabel="Create"
+        onSubmit={onSubmit}
+      />
+    );
+    expect(
+      screen.getByText(
+        'Input bodies are consumed; deleting the boolean restores them.'
+      )
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Create/ }));
+    expect(onSubmit).toHaveBeenCalledOnce();
+    expect(onSubmit.mock.calls[0]![0]).not.toHaveProperty('keepOriginals');
+  });
+
+  it('submits the chosen keep and reopens it', () => {
+    const onSubmit = vi.fn();
+    const { unmount } = render(
+      <BooleanForm
+        bodies={bodies}
+        presetOperation="subtract"
+        selection={bodies.map((body) => body.bodyId)}
+        submitLabel="Create"
+        onSubmit={onSubmit}
+      />
+    );
+    fireEvent.change(screen.getByLabelText('Keep originals'), {
+      target: { value: 'tools' }
+    });
+    expect(
+      screen.getByText(
+        'Bodies 2+ are kept beside the result; body 1 is consumed.'
+      )
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Create/ }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ keepOriginals: 'tools' })
+    );
+    unmount();
+    render(
+      <BooleanForm
+        bodies={bodies}
+        initial={{
+          name: 'Subtract',
+          operation: 'subtract',
+          targetBodyIds: bodies.map((body) => body.bodyId),
+          keepOriginals: 'all'
+        }}
+        submitLabel="Apply"
+        onSubmit={() => undefined}
+      />
+    );
+    expect(screen.getByLabelText('Keep originals')).toHaveValue('all');
+  });
+});

@@ -6,10 +6,12 @@ import {
 } from './exact-operation-lineage';
 import { type FaceEvolutionPayloadV1, type RemusKernel } from './remus-runtime';
 import {
+  booleanConsumedBodyIds,
   findSketch,
   listFeaturesInOrder,
   resolveParamValue,
-  validateExtrudeExtent
+  validateExtrudeExtent,
+  validateKeepOriginals
 } from '@openzcad/document-core';
 import { throughAllSpan, unionBounds } from './through-all';
 import {
@@ -643,8 +645,12 @@ function buildExtrudeFeature(
     // A cut needs shared material: with none there is nothing to remove, and
     // that can be settled before doing any work. That holds for through-all
     // too, whose span covers the target along the normal but not a profile
-    // moved off the target's footprint.
-    if (operation === 'cut' && sharedVolume <= 0) {
+    // moved off the target's footprint. An intersect with no shared material
+    // would be an empty body (ZC-060), so it is refused the same way.
+    if (
+      (operation === 'cut' || operation === 'intersect') &&
+      sharedVolume <= 0
+    ) {
       // Wording unchanged on purpose: `isMeasuredZeroOverlap` in the web app
       // matches this sentence to tell a measured zero-overlap candidate from
       // a kernel refusal.
@@ -688,13 +694,21 @@ function buildExtrudeFeature(
         : unifyBooleanFaces(
             kernel,
             coaxial ??
-              exactCutWithCancellation(
-                kernel,
-                targetSolid,
-                extrusionSolid,
-                ctx.cancellation,
-                operandNames
-              )
+              (operation === 'intersect'
+                ? exactIntersectWithCancellation(
+                    kernel,
+                    targetSolid,
+                    extrusionSolid,
+                    ctx.cancellation,
+                    operandNames
+                  )
+                : exactCutWithCancellation(
+                    kernel,
+                    targetSolid,
+                    extrusionSolid,
+                    ctx.cancellation,
+                    operandNames
+                  ))
           );
       return { tool, operandLineage, extrusionSolid, coaxial, solid, union };
     };
@@ -706,16 +720,20 @@ function buildExtrudeFeature(
       // refused; the same tool with a hair of travel across the face is not,
       // and where the gate holds that travel cannot change the result. The
       // user's refusal stands if the gate fails or the twin is refused too.
+      // Intersect is never pierced, as for the Boolean feature: the pierce
+      // is qualified only for the cut and add it was proved against.
       combined = retryCoplanarRefusal(
         error,
         () =>
-          piercedExtrudeTool(
-            ctx,
-            sweepFeature,
-            target.solids,
-            extrusion.solids,
-            operation
-          ),
+          operation === 'intersect'
+            ? null
+            : piercedExtrudeTool(
+                ctx,
+                sweepFeature,
+                target.solids,
+                extrusion.solids,
+                operation
+              ),
         combine
       );
     }
@@ -730,7 +748,8 @@ function buildExtrudeFeature(
           sweepFeature,
           target.solids,
           extrusion.solids,
-          operation
+          // Only an add reaches the union gate.
+          'add'
         );
         if (pierced) combined = combine(pierced);
       }
@@ -787,6 +806,11 @@ function buildExtrudeFeature(
         `Stored cut extrusion would remove all of ${targetBody.name}; operation was not changed.`
       );
     }
+    if (operation === 'intersect' && resultBody.volume <= removalTolerance) {
+      throw new Error(
+        `Stored intersect extrusion would leave nothing of ${targetBody.name}; operation was not changed.`
+      );
+    }
     result.consumed.add(targetBodyId);
     // One target solid and one tool solid is what the kernel's pairwise
     // entity-evolution entry points take, and only then do the operand
@@ -803,7 +827,7 @@ function buildExtrudeFeature(
         : pairwise
           ? probeBooleanEntityEvolution({
               kernel,
-              operation: operation === 'add' ? 'fuse' : 'cut',
+              operation: operation === 'add' ? 'fuse' : operation,
               a: targetSolid,
               b: extrusionSolid,
               shipped: solid,
@@ -1309,6 +1333,7 @@ function buildSplitFeature(
   if (!feature.bodyId) {
     throw new Error('Split has no result body.');
   }
+  validateKeepOriginals(data);
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
     throw new Error('Split target is unavailable.');
@@ -1351,7 +1376,8 @@ function buildSplitFeature(
     solids: [negative],
     lineage: remusHashOnlyLineage('split', lineageNote)
   });
-  result.consumed.add(data.targetBodyId);
+  // M11: a kept original stays live, unchanged, beside its two halves.
+  if (data.keepOriginal !== true) result.consumed.add(data.targetBodyId);
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
   inheritMeshOrigin(result, data.targetBodyId, data.secondBodyId);
 }
@@ -1536,6 +1562,7 @@ function buildBooleanFeature(
   if (!feature.bodyId || data.targetBodyIds.length < 2) {
     throw new Error('Boolean requires at least two bodies.');
   }
+  validateKeepOriginals(data);
   const meshOperand = data.targetBodyIds.find((bodyId) =>
     result.meshBodies.has(bodyId)
   );
@@ -1561,7 +1588,9 @@ function buildBooleanFeature(
     ) === 0
   ) {
     result.shapes.set(feature.bodyId, operands[0]!);
-    data.targetBodyIds.forEach((bodyId) => result.consumed.add(bodyId));
+    booleanConsumedBodyIds(data).forEach((bodyId) =>
+      result.consumed.add(bodyId)
+    );
     inheritMeshOrigin(result, data.targetBodyIds[0]!, feature.bodyId);
     return;
   }
@@ -1974,7 +2003,8 @@ function combineBooleanOperands(
       amendFeatureWarning(result, refusalIndex, feature.featureId, suggestion);
     }
   }
-  data.targetBodyIds.forEach((bodyId) => result.consumed.add(bodyId));
+  // M11: a kept input stays live beside the result, its own shape untouched.
+  booleanConsumedBodyIds(data).forEach((bodyId) => result.consumed.add(bodyId));
   result.shapes.set(bodyId, {
     solids: [solid],
     lineage: deriveBooleanLineage({
