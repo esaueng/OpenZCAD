@@ -424,7 +424,6 @@ export function readMeshQuality(raw: unknown): {
   boundaryEdges: number;
   nonManifoldEdges: number;
   isWatertight: boolean;
-  triangleCount: number | null;
 } {
   let payload: unknown = raw;
   if (typeof raw === 'string') {
@@ -448,10 +447,5 @@ export function readMeshQuality(raw: unknown): {
   ) {
     throw new Error('The kernel returned an unreadable mesh-quality result.');
   }
-  const triangleCount =
-    typeof record.triangleCount === 'number' &&
-    Number.isFinite(record.triangleCount)
-      ? record.triangleCount
-      : null;
-  return { boundaryEdges, nonManifoldEdges, isWatertight, triangleCount };
+  return { boundaryEdges, nonManifoldEdges, isWatertight };
 }

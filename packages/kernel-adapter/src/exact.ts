@@ -180,6 +180,7 @@ export { importMeshFile, type ImportedMeshTriangles } from './mesh-file-import';
 import {
   sanitizeBinaryPly,
   sanitizeBinaryStl,
+  countExportedTriangles,
   sanitizeThreeMf,
   sanitizeThreeMfModel
 } from './mesh-export-sanitize';
@@ -3665,8 +3666,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               distance: (x, y, z, face) =>
                 kernel.pointToFaceDistance(x, y, z, face)[0] ?? 0
             });
-            triangleCount +=
-              quality.triangleCount ?? grouped.indices.length / 3;
+            // Counted the way the sanitizers filter the written file (zero
+            // area at float32, the precision STL and PLY store), not the
+            // kernel's welded count, which drops a different set.
+            triangleCount += countExportedTriangles(
+              grouped.positions,
+              grouped.indices
+            );
             maxDeviation = Math.max(maxDeviation, deviation.maxDeviation);
             sampledTriangles += deviation.sampledTriangles;
             curvedTriangles += deviation.curvedTriangles;

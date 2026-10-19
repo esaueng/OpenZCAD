@@ -1,7 +1,7 @@
 import { unzipSync, zipSync } from 'fflate';
 
 function triangleHasArea(
-  positions: readonly number[],
+  positions: ArrayLike<number>,
   a: number,
   b: number,
   c: number
@@ -24,6 +24,23 @@ function triangleHasArea(
   if (![ax, ay, az, ux, uy, uz, vx, vy, vz, ...cross].every(Number.isFinite))
     throw new Error('Mesh export contains a non-finite coordinate.');
   return cross.some((component) => component !== 0);
+}
+
+/**
+ * Triangles of an indexed mesh that the sanitizers below keep: every one
+ * with a nonzero area at the positions' own precision. The export check
+ * counts with this, so the number it reports is the number the file holds.
+ */
+export function countExportedTriangles(
+  positions: ArrayLike<number>,
+  indices: ArrayLike<number>
+): number {
+  let kept = 0;
+  for (let t = 0; t + 2 < indices.length; t += 3) {
+    const [a, b, c] = [indices[t]!, indices[t + 1]!, indices[t + 2]!];
+    if (triangleHasArea(positions, a, b, c)) kept++;
+  }
+  return kept;
 }
 
 /** Remove exact zero-area records from the already-quantized binary STL. */
