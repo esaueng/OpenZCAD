@@ -266,6 +266,12 @@ keys and a copy of the old wraps. Rotation protects what comes after.
     again outside OpenZCAD. Until then they treat it as unverified: no new
     key wraps go to it, and its signatures are refused.
 
+    In shared projects the roster still names the old, now compromised
+    identity, and membership changes are owner-only. So the replacement is
+    owner-mediated, under the rules in
+    [Identity replacement](#identity-replacement). Until each owner acts, the
+    member has no access to that project, by design.
+
   Settings warns when no recovery key has been confirmed.
 
 - **A passkey that may be compromised** is removed the same way as an exposed
@@ -320,6 +326,16 @@ keys:
   project shared with that person, but only through an authenticated path
   (below).
 
+The identity fingerprint never changes, but the encryption key it certifies
+does. A server could pair a correct identity with an old device list whose
+encryption key a removed device still holds. So the live comparison covers
+more than the identity. The QR code or digit groups are computed over the
+identity key and the hash of the contact's current device-list head. The
+verifying browser pins that head along with the identity. After that, a
+project key is wrapped only to the encryption key certified in a device-list
+head at least as new as the pinned one. Each time the browser sees a newer
+head that chains from the pinned one, it moves the pin forward.
+
 A pinned key that changes drops back to unverified, and the browser warns.
 
 **Pins must not roll back.** A server that served an older copy of the user's
@@ -328,8 +344,9 @@ replaced. Pins therefore live in a contacts list, not in plain encrypted
 settings:
 
 - The contacts list is a hash-chained list of entries signed by the user's
-  identity key. Each entry verifies a contact's identity key, or records that
-  a verified key was replaced or is no longer trusted. Every device pins the
+  identity key. Each entry verifies a contact's identity key together with
+  the device-list head pinned for it, moves that head forward, or records
+  that a verified key was replaced or is no longer trusted. Every device pins the
   newest entry it has seen and refuses an older or forked list, with the same
   rule as versions.
 - Verifying someone, and recording that their key changed, both sign a new
@@ -415,6 +432,33 @@ merged versions written after a room conflict. ADR-019's server-side role
 enforcement stays as defense in depth, and as the only enforcement on
 plaintext projects.
 
+### Identity replacement
+
+A compromised identity must lose access at once, and its replacement gains
+access only after a person has verified it. Two roster rules cover this.
+
+- **Self-removal.** Any member may sign a roster entry that removes only
+  themselves. It also starts a new epoch wrapped to the remaining members. It
+  can only reduce access, so it is safe to allow even from a key the attacker
+  also holds; an attacker who sends it only locks themselves out. When a
+  member replaces an exposed identity, their browser uses the old identity,
+  one last time, to sign a self-removal from every shared project. That
+  rotates those epochs immediately, without waiting for any owner.
+- **Owner re-adds.** The owner's browser shows the member's new identity as
+  unverified. After the owner verifies it outside OpenZCAD, the owner signs a
+  roster entry adding the new identity with the member's former role, and
+  wraps the current project key to it. Until then the member can neither read
+  new versions nor write.
+- **An owner's own identity.** When the owner's identity is replaced, the
+  roster's anchor changes. The owner's browser signs a self-removal of the old
+  identity with an anchor-transfer entry naming the new one. Members keep
+  refusing every roster or epoch entry signed by the new identity until they
+  have verified it outside OpenZCAD. Until then they can still read existing
+  content but treat the project as frozen: no writes, no new members. If the
+  attacker holding the old owner identity signs conflicting roster entries,
+  members see a fork and report it. The verified new anchor decides between
+  the branches.
+
 ### Epoch rotation
 
 A new project-key epoch is an entry in the roster chain that carries no
@@ -422,7 +466,8 @@ content. It holds the new project key wrapped to the current certified
 encryption key of every member the roster lists. It is signed by a device key
 of the member who started it. Any member may start one, not only the owner,
 so a project never waits for an offline owner. Membership itself stays
-owner-only: an epoch entry cannot add, drop or change anyone. Each browser
+owner-only, with the one exception below: an epoch entry cannot add, drop or
+change anyone. Each browser
 checks that its own wrap is present and that the wrapped set matches the
 roster. An entry that leaves someone out is reported as an attack on
 availability; it gives the starter no extra access.
