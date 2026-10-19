@@ -18609,6 +18609,8 @@ export function App() {
       armed: toFacePick?.kind === kind,
       unresolved,
       setterRef: kind === 'create' ? regionToFaceSetter : editToFaceSetter,
+      cancel: () =>
+        setToFacePick((armed) => (armed?.kind === kind ? null : armed)),
       describe: (target) => ({
         label: doc ? toFaceTargetLabel(doc, target) : 'face',
         distance: doc ? toFaceDistanceEstimate(doc, sketchId, target) : null

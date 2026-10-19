@@ -53,6 +53,11 @@ export interface ExtrudeToFacePicking {
   armed: boolean;
   /** Arms (or, when armed, cancels) the viewport face pick. */
   onPick(): void;
+  /**
+   * Withdraws this card's armed pick, if any: called when the card unmounts,
+   * so a closed card never leaves the viewport waiting for its face.
+   */
+  cancel(): void;
   /** How a target reads and where it sits, from the current projection. */
   describe(target: ExtrudeToFaceTarget): ExtrudeToFaceInfo;
   /** The stored face no longer resolves (edit only). */
@@ -218,7 +223,11 @@ export function ExtrudeForm({
     const a = previewExpression(next.draftAngle, scope, angleQuantity);
     if (
       !next.name.trim() ||
-      (nextToFace && !next.toFace) ||
+      (nextToFace &&
+        // No face yet, or one the build would refuse from this sketch (not
+        // parallel to it, or lying on it): nothing to Create or Apply.
+        (!next.toFace ||
+          toFacePicking!.describe(next.toFace).distance === null)) ||
       (!nextThroughAll &&
         (!a.ok || a.value === undefined || draftAngleError(next) !== null)) ||
       // Through all and to-face ignore the distance; it is kept only for
@@ -306,11 +315,15 @@ export function ExtrudeForm({
     });
   };
   const faceSetterRef = toFacePicking?.setterRef;
+  const cancelPick = useRef(() => {});
+  cancelPick.current = () => toFacePicking?.cancel();
   useEffect(() => {
     if (!faceSetterRef) return;
     faceSetterRef.current = (target) => updateFace.current(target);
     return () => {
       faceSetterRef.current = null;
+      // Closing the card withdraws its pick, armed or not.
+      cancelPick.current();
     };
   }, [faceSetterRef]);
 

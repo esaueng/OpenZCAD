@@ -624,6 +624,7 @@ describe('to-face extent and draft (F01, schema v29)', () => {
     return {
       armed: false,
       onPick: vi.fn(),
+      cancel: vi.fn(),
       describe: () => ({ label: 'Ceiling · face', distance: 25 }),
       setterRef: { current: null } satisfies ExtrudeToFacePicking['setterRef'],
       ...overrides
@@ -668,6 +669,21 @@ describe('to-face extent and draft (F01, schema v29)', () => {
     );
   });
 
+  it('withdraws its pick when the card closes', () => {
+    const host = picking({ armed: true });
+    const { unmount } = render(
+      <ExtrudeForm
+        {...base}
+        toFacePicking={host}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(host.cancel).not.toHaveBeenCalled();
+    unmount();
+    expect(host.cancel).toHaveBeenCalledOnce();
+  });
+
   it('says before Apply when the picked face cannot be reached from the sketch', async () => {
     const host = picking({
       describe: () => ({ label: 'Wall · face', distance: null })
@@ -684,6 +700,8 @@ describe('to-face extent and draft (F01, schema v29)', () => {
     expect(
       screen.getByText(/not parallel to the sketch plane, or lies on it/)
     ).toBeInTheDocument();
+    // A face the build would refuse cannot be submitted.
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
   });
 
   it('shows the unresolved state on reopen until a re-pick replaces the face', async () => {
