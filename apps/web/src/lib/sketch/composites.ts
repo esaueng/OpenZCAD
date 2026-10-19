@@ -19,6 +19,7 @@ import {
   sketchCompositeCornerRef,
   toEntityId,
   type EntityId,
+  type ParamValue,
   type SketchComposite,
   type SketchCompositeData,
   type SketchConstraintData,
@@ -584,40 +585,62 @@ export function resizedPolygon(
 /**
  * The object updates that move a resolved composite onto `corners` (and the
  * polygon onto `circle`): each side from its corner to the next, and each
- * helper to match. Members keep their ids and their construction flag.
+ * helper to match. Members keep their ids and their construction flag, and
+ * a coordinate the resize does not move keeps its stored value, so an
+ * expression typed into a side still drives it afterwards. With `resolve`
+ * absent every stored value is taken literally.
  */
 export function compositeMemberUpdates(
   composite: SketchComposite,
   corners: readonly CompositePoint[],
   current: ReadonlyMap<string, SketchObjectData>,
-  circle?: { center: CompositePoint; radius: number }
+  circle?: { center: CompositePoint; radius: number },
+  resolve: (value: ParamValue) => number | undefined = (value) =>
+    typeof value === 'number' ? value : undefined
 ): { objectId: EntityId; data: SketchObjectData }[] {
-  const keep = (objectId: EntityId, data: SketchObjectData) =>
-    current.get(objectId)?.construction
-      ? { ...data, construction: true }
-      : data;
+  /** `next`, with every field it would not move taken back from `existing`. */
+  const settle = <T extends SketchObjectData>(
+    objectId: EntityId,
+    next: T
+  ): SketchObjectData => {
+    const existing = current.get(objectId);
+    if (!existing || existing.objectKind !== next.objectKind) return next;
+    const merged: Record<string, unknown> = { ...existing };
+    for (const [key, value] of Object.entries(next)) {
+      const stored = (existing as Record<string, unknown>)[key];
+      const unmoved =
+        typeof value === 'number' &&
+        (typeof stored === 'number' || typeof stored === 'string') &&
+        Math.abs((resolve(stored) ?? NaN) - value) <= UNMOVED;
+      merged[key] = unmoved ? stored : value;
+    }
+    return merged as SketchObjectData;
+  };
   const updates = composite.edgeIds.map((objectId, index) => ({
     objectId,
-    data: keep(objectId, sideObject(corners, index))
+    data: settle(objectId, sideObject(corners, index))
   }));
   for (const [index, objectId] of (composite.helperIds ?? []).entries()) {
     const existing = current.get(objectId);
     if (existing?.objectKind === 'circle' && circle) {
       updates.push({
         objectId,
-        data: {
-          ...existing,
+        data: settle(objectId, {
+          objectKind: 'circle',
           centerX: circle.center.x,
           centerY: circle.center.y,
           radius: circle.radius
-        }
+        })
       });
     } else if (existing?.objectKind === 'line' && corners.length === 4) {
       updates.push({
         objectId,
-        data: keep(objectId, diagonal(corners, index === 0 ? 0 : 1))
+        data: settle(objectId, diagonal(corners, index === 0 ? 0 : 1))
       });
     }
   }
   return updates;
 }
+
+/** How far a coordinate may differ and still count as not moved by a resize. */
+const UNMOVED = 1e-9;

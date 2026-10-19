@@ -253,6 +253,45 @@ describe('S04 composite resize', () => {
     expect(resizedPolygon(shape.corners, { x: 1, y: 1 }, 0.2)).toBeNull();
   });
 
+  it('keeps an expression a resize does not move, and replaces one it moves', () => {
+    const edges = ids('e', 4);
+    const composite: SketchComposite = {
+      compositeId: 'scmp_1' as SketchComposite['compositeId'],
+      compositeKind: 'rectangle',
+      method: 'corner',
+      edgeIds: edges
+    };
+    const scope: Record<string, number> = { w: 4, h: 4 };
+    const resolve = (value: number | string) =>
+      typeof value === 'number' ? value : scope[value];
+    const current = new Map<string, SketchObjectData>([
+      [edges[0]!, { objectKind: 'line', x1: 0, y1: 0, x2: 'w', y2: 0 }],
+      [edges[1]!, { objectKind: 'line', x1: 'w', y1: 0, x2: 'w', y2: 'h' }]
+    ]);
+    // A taller rectangle: side 0 does not move, side 1's top end does.
+    const updates = compositeMemberUpdates(
+      composite,
+      resizedRectangleCorners(square, 'corner', 4, 6)!,
+      current,
+      undefined,
+      resolve
+    );
+    expect(updates[0]!.data).toEqual({
+      objectKind: 'line',
+      x1: 0,
+      y1: 0,
+      x2: 'w',
+      y2: 0
+    });
+    expect(updates[1]!.data).toEqual({
+      objectKind: 'line',
+      x1: 'w',
+      y1: 0,
+      x2: 'w',
+      y2: 6
+    });
+  });
+
   it('moves every side and helper, keeping construction flags', () => {
     const edges = ids('e', 4);
     const helpers = ids('h', 2);

@@ -13974,7 +13974,15 @@ export function App() {
       const commands = await sketchEntitiesEditCommands(
         base,
         sketchId,
-        compositeMemberUpdates(composite, corners, objects, polygon ?? undefined),
+        compositeMemberUpdates(
+          composite,
+          corners,
+          objects,
+          polygon ?? undefined,
+          (value) =>
+            evalParamValue(value, getParameterScope(base).scope, base.units) ??
+            undefined
+        ),
         (document, id) => geometry.solveSketch(document, id),
         `Resize ${noun}`
       );
