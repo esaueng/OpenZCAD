@@ -311,8 +311,20 @@ keys and a copy of the old wraps. Rotation protects what comes after.
 
 Each version's header carries the hash of the previous version, and its author's
 certified device key signs it. Browsers remember the newest version they have seen of each project
-and refuse any version whose chain does not contain it. That gives fork
-consistency, not full consistency:
+and refuse any version offered as the current head whose chain does not
+contain it. Two kinds of read are kept apart:
+
+- **Current head.** The version the project opens at, or that live editing
+  moves to, must descend from the pinned head, and accepting it moves the pin
+  forward.
+- **Historical read.** Opening a retained revision or named checkpoint
+  deliberately reads an older version. It is accepted when it is the pinned
+  head or one of its ancestors, proven by walking the hash chain back from
+  the pinned head, and it never moves the pin. Restoring or branching from it
+  writes a new version that descends from the current head, as ADR-022's
+  restore does today, so history never rewinds.
+
+That gives fork consistency, not full consistency:
 
 - **What is detected.** A browser cannot be rolled back behind what it has
   already seen. If the server ever shows two members a forked history, then
@@ -462,7 +474,12 @@ accepts a version only if:
   member as owner or editor;
 - that roster entry is the one in force for the version's parent, or a later
   one;
-- the entry chains to the newest roster entry the browser has seen.
+- the entry is the newest roster entry the browser has seen or one of its
+  ancestors. A current head must also satisfy the rule above for the roster in
+  force at its parent. A historical version is checked against the older
+  roster entry it names, which is how it was valid when written, plus any
+  revocation cutoffs learned since. A historical read never moves the roster
+  pin, the same as for versions.
 
 A version signed by a viewer, by a removed editor after the removal entry, or
 by any key not in the roster is refused and reported, even if the server
