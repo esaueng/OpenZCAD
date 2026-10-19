@@ -5,6 +5,7 @@ import type {
   ParametricVector3,
   SketchObjectData
 } from '@openzcad/shared';
+import { datumPlaneSources, datumPointSources } from '@openzcad/shared';
 
 /**
  * What a field holds (F05): a length, an angle in degrees, a unit-free
@@ -130,13 +131,13 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       return;
     case 'datum-plane': {
       const definition = data.definition;
-      const sources =
-        definition.kind === 'offset' ? [definition.source] : definition.sources;
       if (definition.kind === 'offset')
         fields(definition, ['offset'], rewrite, 'length');
-      for (const source of sources)
+      for (const source of datumPlaneSources(definition))
         if (source.type === 'canonical')
           fields(source, ['offset'], rewrite, 'length');
+      for (const point of datumPointSources(definition))
+        if (point.type === 'point') vector(point.point, rewrite, 'length');
       return;
     }
     case 'hole':

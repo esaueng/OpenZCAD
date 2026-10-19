@@ -32,6 +32,23 @@
 > The bump is v18 → v19. The Plane tool, Items/History presentation and AI
 > operations (R01-C/D) remain open.
 
+> **Point constructors (2026-10-19, schema v22):** the release boundary below
+> moved for two constructors. `three-point` takes three point sources: the
+> origin is the first, u points at the second and the normal follows the
+> right-hand rule (first → second → third); points closer than the linear
+> tolerance, or a third point within it of the line through the other two,
+> are refused. `parallel-point` takes one plane source (canonical, datum or
+> qualified face) and one point source, and copies the plane's axes through
+> the point. A point source is either expression-capable world coordinates
+> or an `edge-vertex`: one end of an open edge named by its schema-v5
+> lineage, where `end` 0 is the end whose quantized coordinates sort first
+> by x, then y, then z. The vertex's exact position comes from the resolved
+> edge; a deleted, ambiguous, closed or hash-only edge refuses by name, and
+> no vertex is chosen by proximity. Both kernels share the construction
+> rules (`packages/geometry`) and the edge-vertex resolver
+> (`face-attachment.ts`). Vertex re-pick repair and AI operations for these
+> kinds remain open.
+
 This revision replaces the earlier canonical-offset-only first slice.
 [ROADMAP.md](../../ROADMAP.md#r01) owns delivery status. This document proposes
 contracts and acceptance evidence; it adds no runtime capability or schema bump.

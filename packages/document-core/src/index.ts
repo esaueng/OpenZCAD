@@ -54,11 +54,14 @@ import {
   toRevisionId,
   toShaprImportId,
   toSketchId,
+  datumPlaneSources,
+  datumPointSources,
   isDatumPlaneRef,
   type BodyId,
   type BodyNode,
   type DatumPlaneDefinition,
   type DatumPlaneSource,
+  type DatumPointSource,
   type AxisId,
   type BooleanOperation,
   type DocumentNode,
@@ -2271,6 +2274,17 @@ function sameSource(a: DatumPlaneSource, b: DatumPlaneSource): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+function samePoint(a: DatumPointSource, b: DatumPointSource): boolean {
+  if (a.type === 'edge-vertex' && b.type === 'edge-vertex')
+    return (
+      a.bodyId === b.bodyId &&
+      a.end === b.end &&
+      a.edgeReference.lineageName === b.edgeReference.lineageName &&
+      a.edgeReference.producingFeatureId === b.edgeReference.producingFeatureId
+    );
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 function requireFiniteLiteral(value: ParamValue, label: string): void {
   if (typeof value === 'number' && !Number.isFinite(value)) {
     throw new Error(`${label} must be a finite distance.`);
@@ -2287,15 +2301,31 @@ export function validateDatumPlaneDefinition(
   definition: DatumPlaneDefinition,
   ownFeatureId: FeatureId | null
 ): void {
-  const sources =
-    definition.kind === 'offset' ? [definition.source] : definition.sources;
-  if (definition.kind === 'offset') {
-    requireFiniteLiteral(definition.offset, 'The plane offset');
-  } else if (definition.kind !== 'midplane' || sources.length !== 2) {
-    throw new Error('A datum plane is an offset plane or a midplane.');
+  const sources = datumPlaneSources(definition);
+  const points = datumPointSources(definition);
+  switch (definition.kind) {
+    case 'offset':
+      requireFiniteLiteral(definition.offset, 'The plane offset');
+      break;
+    case 'midplane':
+      if (sources.length !== 2)
+        throw new Error('A midplane needs two source planes.');
+      break;
+    case 'three-point':
+      if (points.length !== 3)
+        throw new Error('A three-point plane needs three points.');
+      break;
+    case 'parallel-point':
+      if (!definition.source || !definition.point)
+        throw new Error('A parallel plane needs a plane and a point.');
+      break;
+    default:
+      throw new Error(
+        'A datum plane is an offset plane, a midplane, a three-point plane or a parallel plane through a point.'
+      );
   }
   for (const source of sources) {
-    switch (source.type) {
+    switch (source?.type) {
       case 'canonical':
         if (!['XY', 'XZ', 'YZ'].includes(source.plane)) {
           throw new Error(`Unknown canonical plane "${String(source.plane)}".`);
@@ -2324,8 +2354,46 @@ export function validateDatumPlaneDefinition(
         throw new Error('A datum plane source is a plane, a datum or a face.');
     }
   }
+  for (const point of points) {
+    switch (point?.type) {
+      case 'point':
+        for (const axis of ['x', 'y', 'z'] as const)
+          requireFiniteLiteral(
+            point.point?.[axis] ?? Number.NaN,
+            `The point's ${axis.toUpperCase()} coordinate`
+          );
+        break;
+      case 'edge-vertex':
+        if (
+          point.edgeReference?.kind !== 'edge' ||
+          point.edgeReference.witness?.closed !== false ||
+          (point.end !== 0 && point.end !== 1)
+        ) {
+          throw new Error(
+            'A vertex source needs one end of an open edge with a qualified lineage reference.'
+          );
+        }
+        if (!document.bodyOrder.includes(point.bodyId)) {
+          throw new Error(`The vertex's body ${point.bodyId} does not exist.`);
+        }
+        break;
+      default:
+        throw new Error('A datum point is a position or a vertex.');
+    }
+  }
   if (definition.kind === 'midplane' && sameSource(sources[0]!, sources[1]!)) {
     throw new Error('A midplane needs two different source planes.');
+  }
+  if (definition.kind === 'three-point') {
+    for (const [a, b] of [
+      [0, 1],
+      [0, 2],
+      [1, 2]
+    ] as const) {
+      if (samePoint(points[a]!, points[b]!)) {
+        throw new Error('A three-point plane needs three different points.');
+      }
+    }
   }
 }
 
@@ -2347,11 +2415,7 @@ export function datumPlaneDependents(
     const { data } = feature;
     let uses = false;
     if (data.featureKind === 'datum-plane') {
-      const sources =
-        data.definition.kind === 'offset'
-          ? [data.definition.source]
-          : data.definition.sources;
-      uses = sources.some(usesDatum);
+      uses = datumPlaneSources(data.definition).some(usesDatum);
     } else if (data.featureKind === 'mirror' || data.featureKind === 'split') {
       uses = usesDatum(data.plane);
     } else if (data.featureKind === 'sketch') {

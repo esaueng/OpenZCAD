@@ -3,6 +3,8 @@ import {
   canonicalPlaneBasis,
   midDatumPlane,
   offsetDatumPlane,
+  parallelDatumPlane,
+  threePointDatumPlane,
   type PlaneBasis
 } from '@openzcad/geometry';
 
@@ -101,5 +103,128 @@ describe('midplane', () => {
     // Just inside and just outside the coincidence tolerance (1e-6 here).
     expect(() => midDatumPlane(at(0), at(5e-7))).toThrow(/coincide/);
     expect(midDatumPlane(at(0), at(2e-6)).origin.z).toBeCloseTo(1e-6, 12);
+  });
+});
+
+const p = (x: number, y: number, z: number) => ({ x, y, z });
+/** Signed distance of `point` from `plane` along its normal. */
+const height = (
+  plane: PlaneBasis,
+  point: { x: number; y: number; z: number }
+) =>
+  (point.x - plane.origin.x) * plane.normal.x +
+  (point.y - plane.origin.y) * plane.normal.y +
+  (point.z - plane.origin.z) * plane.normal.z;
+
+describe('three-point datum plane', () => {
+  it('puts three points at z = 0 on the plane z = 0 with a +Z normal', () => {
+    const plane = threePointDatumPlane(p(0, 0, 0), p(10, 0, 0), p(0, 10, 0));
+    expect(plane.origin).toEqual(p(0, 0, 0));
+    expect(plane.normal).toEqual(p(0, 0, 1));
+    expect(plane.u).toEqual(p(1, 0, 0));
+    expect(plane.v).toEqual(p(0, 1, 0));
+    expect(height(plane, p(37, -9, 0))).toBe(0);
+    expect(handed(plane)).toBeCloseTo(1, 12);
+  });
+
+  it('follows the right-hand rule: clockwise points give -Z', () => {
+    const plane = threePointDatumPlane(p(0, 0, 5), p(0, 10, 5), p(10, 0, 5));
+    expect(plane.normal).toEqual(p(0, 0, -1));
+    expect(plane.origin.z).toBe(5);
+    expect(handed(plane)).toBeCloseTo(1, 12);
+  });
+
+  it('passes through all three points of an oblique triple', () => {
+    const points = [p(1, 2, 3), p(7, -4, 9), p(-2, 5, 11)] as const;
+    const plane = threePointDatumPlane(...points);
+    for (const point of points) expect(height(plane, point)).toBeCloseTo(0, 12);
+    expect(handed(plane)).toBeCloseTo(1, 12);
+  });
+
+  it('is the plane x + y + z = 1 through the unit intercepts', () => {
+    const plane = threePointDatumPlane(p(1, 0, 0), p(0, 1, 0), p(0, 0, 1));
+    const s = 1 / Math.sqrt(3);
+    expect(plane.normal.x).toBeCloseTo(s, 12);
+    expect(plane.normal.y).toBeCloseTo(s, 12);
+    expect(plane.normal.z).toBeCloseTo(s, 12);
+    expect(height(plane, p(0, 0, 0))).toBeCloseTo(-s, 12);
+  });
+
+  it('flips the normal without moving the plane', () => {
+    const plane = threePointDatumPlane(
+      p(0, 0, 0),
+      p(10, 0, 0),
+      p(0, 10, 0),
+      true
+    );
+    expect(plane.normal.z).toBe(-1);
+    expect(Math.hypot(plane.normal.x, plane.normal.y)).toBe(0);
+    expect(plane.origin).toEqual(p(0, 0, 0));
+    expect(handed(plane)).toBeCloseTo(1, 12);
+  });
+
+  it.each([
+    ['in a line', p(0, 0, 0), p(5, 5, 5), p(10, 10, 10)],
+    ['in a line, third behind the first', p(0, 0, 0), p(4, 0, 0), p(-3, 0, 0)],
+    ['within the tolerance of a line', p(0, 0, 0), p(10, 0, 0), p(5, 1e-7, 0)]
+  ])('refuses points %s as collinear', (_name, a, b, c) => {
+    expect(() => threePointDatumPlane(a, b, c)).toThrow(/collinear/);
+  });
+
+  it('refuses coincident points, naming which', () => {
+    expect(() =>
+      threePointDatumPlane(p(1, 1, 1), p(1, 1, 1), p(0, 5, 0))
+    ).toThrow(/first and second coincide/);
+    expect(() =>
+      threePointDatumPlane(p(0, 0, 0), p(3, 0, 0), p(3, 0, 0))
+    ).toThrow(/second and third coincide/);
+  });
+
+  it('refuses a non-finite point', () => {
+    expect(() =>
+      threePointDatumPlane(p(0, 0, 0), p(Number.NaN, 0, 0), p(0, 1, 0))
+    ).toThrow(/second point is not a finite/);
+  });
+});
+
+describe('parallel-at-point datum plane', () => {
+  it('moves XY up to a point at z = 7, keeping its axes', () => {
+    const plane = parallelDatumPlane(xy, p(3, -2, 7));
+    expect(plane.origin).toEqual(p(3, -2, 7));
+    expect(plane.normal).toEqual(xy.normal);
+    expect(plane.u).toEqual(xy.u);
+    expect(height(plane, p(-50, 80, 7))).toBe(0);
+  });
+
+  it('gives the source itself for a point on it', () => {
+    const plane = parallelDatumPlane(at(4), p(9, 9, 4));
+    expect(height(plane, at(4).origin)).toBe(0);
+    expect(plane.normal).toEqual(at(4).normal);
+  });
+
+  it('copies a tilted source through a point', () => {
+    const s = Math.SQRT1_2;
+    const tilted: PlaneBasis = {
+      origin: p(0, 0, 0),
+      u: p(1, 0, 0),
+      v: p(0, s, s),
+      normal: p(0, -s, s)
+    };
+    const plane = parallelDatumPlane(tilted, p(0, 0, 10));
+    // Distance from the source along its normal: 10·sin 45°.
+    expect(height(tilted, plane.origin)).toBeCloseTo(10 * s, 12);
+    expect(plane.normal).toEqual(tilted.normal);
+  });
+
+  it('flips the normal and stays right-handed', () => {
+    const plane = parallelDatumPlane(xy, p(0, 0, 2), true);
+    expect(plane.normal.z).toBe(-1);
+    expect(handed(plane)).toBeCloseTo(1, 12);
+  });
+
+  it('refuses a non-finite point', () => {
+    expect(() => parallelDatumPlane(xy, p(0, Infinity, 0))).toThrow(
+      /through point is not a finite/
+    );
   });
 });

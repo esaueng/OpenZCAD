@@ -1479,9 +1479,12 @@ export const commandFactories = {
     const withIds = { ...payload, ids: payload.ids ?? createFeatureOnlyIds() };
     return makeCommand(
       'feature.datum-plane',
-      payload.definition.kind === 'midplane'
-        ? 'Add midplane'
-        : 'Add offset plane',
+      {
+        offset: 'Add offset plane',
+        midplane: 'Add midplane',
+        'three-point': 'Add three-point plane',
+        'parallel-point': 'Add parallel plane'
+      }[payload.definition.kind],
       withIds,
       (document) => addDatumPlane(document, withIds).document,
       (document) =>

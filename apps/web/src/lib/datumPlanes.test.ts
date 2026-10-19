@@ -10,6 +10,8 @@ import {
 import {
   toUserId,
   type DatumFrame,
+  type DatumPlaneDefinition,
+  type EdgeVertexPointSource,
   type FeatureId,
   type FeatureNode,
   type FeatureWarning,
@@ -26,12 +28,16 @@ import {
   datumPlaneDisplays,
   datumPlaneRows,
   datumSourceOptions,
+  datumVertexFromEdgePick,
+  datumVertexOption,
   downstreamDatumIds,
+  edgeEnds,
   earlierDatumPlanes,
   newDatumPlaneFormState,
   nextDatumPlaneName,
   requireResolvedDatum,
-  requireResolvedDatums
+  requireResolvedDatums,
+  type DatumPlaneFormState
 } from './datumPlanes';
 
 const XY = { type: 'canonical', plane: 'XY', offset: 0 } as const;
@@ -460,5 +466,201 @@ describe('datum viewport handle and repair (R01)', () => {
         1
       )
     ).toThrow('Only a datum plane source can be re-picked here.');
+  });
+});
+
+describe('three-point and parallel datums (R01)', () => {
+  const edgeReference = (name: string, closed = false) =>
+    ({
+      kind: 'edge',
+      producingFeatureId: 'feat_box' as FeatureId,
+      lineageName: name,
+      currentHash: 1,
+      witnessVersion: 1,
+      witness: closed
+        ? {
+            curveType: 'CIRCLE',
+            length: 6,
+            closed: true,
+            center: [0, 0, 0],
+            axis: [0, 0, 1000]
+          }
+        : {
+            curveType: 'LINE',
+            length: 10,
+            closed: false,
+            endpoints: [
+              [10e6, 0, 20e6],
+              [0, 0, 20e6]
+            ],
+            midpoint: [5e6, 0, 20e6]
+          }
+    }) as EdgeVertexPointSource['edgeReference'];
+
+  function boxWithEdges(edges: { hash: number; reference?: unknown }[]) {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Edges', toUserId('user_datum_ui')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 20 }
+      }
+    );
+    const bodyId = document.bodyOrder.at(-1)!;
+    return {
+      bodyId,
+      document: {
+        ...document,
+        derived: {
+          ...document.derived,
+          bodyRepresentations: {
+            [bodyId]: {
+              name: 'Box',
+              topology: { faces: [], edges }
+            }
+          }
+        }
+      } as unknown as ProjectDocument
+    };
+  }
+
+  it('orders edge ends by quantized x, then y, then z', () => {
+    const ends = edgeEnds(edgeReference('edge:top').witness)!;
+    expect(ends[0]).toEqual({ x: 0, y: 0, z: 20 });
+    expect(ends[1]).toEqual({ x: 10, y: 0, z: 20 });
+    expect(edgeEnds(edgeReference('edge:rim', true).witness)).toBeNull();
+  });
+
+  it('takes the end of a picked edge nearer the click, refusing closed or unnamed edges', () => {
+    const { document, bodyId } = boxWithEdges([
+      { hash: 1, reference: edgeReference('edge:top') },
+      { hash: 2, reference: edgeReference('edge:rim', true) },
+      { hash: 3 }
+    ]);
+    const pick = (
+      hash: number,
+      point: { x: number; y: number; z: number } | null
+    ) =>
+      datumVertexFromEdgePick(document, { kind: 'edge', bodyId, hash }, point);
+    expect(pick(1, { x: 9, y: 0, z: 20 })).toMatchObject({
+      type: 'edge-vertex',
+      end: 1
+    });
+    expect(pick(1, { x: 1, y: 0, z: 20 })).toMatchObject({ end: 0 });
+    expect(pick(1, null)).toMatchObject({ end: 0 });
+    const reason = (result: ReturnType<typeof pick>) =>
+      'reason' in result ? result.reason : null;
+    expect(reason(pick(2, null))).toMatch(/closed edge has no end vertex/);
+    expect(reason(pick(3, null))).toMatch(
+      /no identity a rebuild can find again/
+    );
+    const vertex = pick(1, null) as EdgeVertexPointSource;
+    expect(datumVertexOption(document, vertex).label).toBe(
+      'Vertex (0, 0, 20) of Box'
+    );
+  });
+
+  it('round-trips both definitions through the card and describes them', () => {
+    const { document, bodyId } = boxWithEdges([]);
+    const vertex: EdgeVertexPointSource = {
+      type: 'edge-vertex',
+      bodyId,
+      edgeReference: edgeReference('edge:top'),
+      end: 1
+    };
+    const three: DatumPlaneDefinition = {
+      kind: 'three-point',
+      points: [
+        vertex,
+        { type: 'point', point: { x: 'lid', y: 0, z: 0 } },
+        { type: 'point', point: { x: 0, y: 10, z: 0 } }
+      ],
+      reverseNormal: true
+    };
+    const parallel: DatumPlaneDefinition = {
+      kind: 'parallel-point',
+      source: XY,
+      point: vertex
+    };
+    let next = document;
+    const ids: FeatureId[] = [];
+    for (const [name, definition] of [
+      ['Tilt', three],
+      ['Lid', parallel]
+    ] as const) {
+      const added = addDatumPlane(next, { name, definition });
+      next = added.document;
+      ids.push(added.featureId);
+      const feature = findFeature(next, added.featureId)!;
+      expect(
+        buildDatumPlaneDefinition(datumFormStateFromFeature(feature))
+      ).toEqual(definition);
+    }
+    expect(
+      datumPlaneDescription(next, findFeature(next, ids[0]!)!, { lid: 4 }, 'mm')
+    ).toBe('Through a vertex of Box, (4, 0, 0) and (0, 10, 0), flipped');
+    expect(
+      datumPlaneDescription(next, findFeature(next, ids[1]!)!, {}, 'mm')
+    ).toBe('Parallel to Top (XY) through a vertex of Box');
+    // A vertex re-pick is not a face re-pick.
+    expect(() =>
+      datumFaceRepairEdit(next, ids[0]!, { kind: 'face', bodyId, hash: 1 })
+    ).toThrow(/Only a datum plane source/);
+  });
+
+  it('validates point slots: missing first, then malformed, then repeated', () => {
+    const state = {
+      ...newDatumPlaneFormState('Plane 1', XY),
+      mode: 'three-point' as const
+    };
+    expect(datumFormValidation(state, {})?.kind).toBe('missing');
+    expect(datumFormValidation(state, {})?.reason).toMatch(/first point/);
+    const typed = (x: string) => ({
+      type: 'typed' as const,
+      x,
+      y: '0',
+      z: '0'
+    });
+    const reasonOf = (next: DatumPlaneFormState) =>
+      datumFormValidation(next, {})?.reason;
+    expect(
+      reasonOf({ ...state, points: [typed('0'), typed('nope'), typed('2')] })
+    ).toMatch(/second point's X/);
+    expect(
+      reasonOf({ ...state, points: [typed('0'), typed('0 '), typed('2')] })
+    ).toBe('A three-point plane needs three different points.');
+    expect(
+      reasonOf({ ...state, mode: 'parallel-point', points: [null, null, null] })
+    ).toMatch(/through point/);
+  });
+
+  it('reports a datum through a vertex of a body an edit changes as downstream', () => {
+    const { document, first } = twoDatums();
+    const boxed = addPrimitiveFeature(document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 20 }
+    });
+    const split = addSplitFeature(boxed, {
+      name: 'Split',
+      targetBodyId: boxed.bodyOrder.at(-1)!,
+      plane: { type: 'datum', datumFeatureId: first }
+    });
+    const through = addDatumPlane(split.document, {
+      name: 'Plane 3',
+      definition: {
+        kind: 'parallel-point',
+        source: XY,
+        point: {
+          type: 'edge-vertex',
+          bodyId: split.document.bodyOrder.at(-1)!,
+          edgeReference: edgeReference('edge:top'),
+          end: 0
+        }
+      }
+    });
+    expect(downstreamDatumIds(through.document, first)).toContain(
+      through.featureId
+    );
   });
 });

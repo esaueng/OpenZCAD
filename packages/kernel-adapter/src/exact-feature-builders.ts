@@ -16,6 +16,9 @@ import {
   geometryTolerance,
   midDatumPlane,
   offsetDatumPlane,
+  parallelDatumPlane,
+  threePointDatumPlane,
+  type PlaneBasis,
   type Vec3
 } from '@openzcad/geometry';
 import {
@@ -23,6 +26,7 @@ import {
   UNIT_TO_MM,
   isDatumPlaneRef,
   type DatumPlaneSource,
+  type DatumPointSource,
   type FeatureNode,
   type ModelingPlaneReference,
   type ParamValue
@@ -189,6 +193,7 @@ import {
   buildLoft,
   buildProfileSweep,
   buildHelicalSweep,
+  resolveDatumPointAtHistory,
   resolvePlaneRefAtHistory,
   resolveSketchBasisAtHistory
 } from './exact-profile-builders';
@@ -1011,23 +1016,52 @@ function buildDatumPlaneFeature(
       ctx.result,
       ctx.scope
     );
-  const frame =
-    definition.kind === 'offset'
-      ? offsetDatumPlane(
-          source(definition.source),
-          resolveParamValue(
-            definition.offset,
-            ctx.scope,
-            'datum plane offset',
-            ctx.document.units
-          ),
-          definition.reverseNormal
-        )
-      : midDatumPlane(
-          source(definition.sources[0]),
-          source(definition.sources[1]),
-          definition.reverseNormal
-        );
+  const point = (pointSource: DatumPointSource) =>
+    resolveDatumPointAtHistory(
+      ctx.kernel,
+      ctx.document,
+      pointSource,
+      feature.name,
+      ctx.result,
+      ctx.scope
+    );
+  let frame: PlaneBasis;
+  switch (definition.kind) {
+    case 'offset':
+      frame = offsetDatumPlane(
+        source(definition.source),
+        resolveParamValue(
+          definition.offset,
+          ctx.scope,
+          'datum plane offset',
+          ctx.document.units
+        ),
+        definition.reverseNormal
+      );
+      break;
+    case 'midplane':
+      frame = midDatumPlane(
+        source(definition.sources[0]),
+        source(definition.sources[1]),
+        definition.reverseNormal
+      );
+      break;
+    case 'three-point':
+      frame = threePointDatumPlane(
+        point(definition.points[0]),
+        point(definition.points[1]),
+        point(definition.points[2]),
+        definition.reverseNormal
+      );
+      break;
+    case 'parallel-point':
+      frame = parallelDatumPlane(
+        source(definition.source),
+        point(definition.point),
+        definition.reverseNormal
+      );
+      break;
+  }
   ctx.result.datumFrames.set(feature.featureId, frame);
 }
 
