@@ -68,7 +68,7 @@ const SAG_FALLBACK_SMOOTH_COS = Math.cos((15 * Math.PI) / 180);
 /** Cosine of the largest dihedral still treated as a smooth surface. */
 const SMOOTH_DIHEDRAL_COS = Math.cos((50 * Math.PI) / 180);
 
-interface Triangle {
+export interface Triangle {
   u0: number;
   v0: number;
   d0: number;
@@ -157,7 +157,8 @@ export function gridCellsAlong(
   return out;
 }
 
-class OcclusionGrid {
+/** Exported for tests. */
+export class OcclusionGrid {
   private readonly cells: number[][];
   private readonly size: number;
   private readonly minU: number;
@@ -179,15 +180,50 @@ class OcclusionGrid {
     this.cellU = Math.max((bounds.maxU - bounds.minU) / this.size, 1e-12);
     this.cellV = Math.max((bounds.maxV - bounds.minV) / this.size, 1e-12);
     this.cells = Array.from({ length: this.size * this.size }, () => []);
+    // Each triangle goes only into the cells it covers, row by row: clip it
+    // to the row's strip and take the strip's u-range. Bounding boxes would
+    // put a long thin sliver (a fan around a shared vertex) into every cell
+    // of its box, which on a dense mesh runs to billions of entries.
     triangles.forEach((triangle, index) => {
-      const i0 = this.column(Math.min(triangle.u0, triangle.u1, triangle.u2));
-      const i1 = this.column(Math.max(triangle.u0, triangle.u1, triangle.u2));
+      const corners = [
+        [triangle.u0, triangle.v0],
+        [triangle.u1, triangle.v1],
+        [triangle.u2, triangle.v2]
+      ] as const;
       const j0 = this.row(Math.min(triangle.v0, triangle.v1, triangle.v2));
       const j1 = this.row(Math.max(triangle.v0, triangle.v1, triangle.v2));
-      for (let j = j0; j <= j1; j += 1)
+      for (let j = j0; j <= j1; j += 1) {
+        // The strip, widened by a hair so a triangle touching its boundary
+        // still lands in both rows.
+        const bottom = this.minV + j * this.cellV - this.cellV * 1e-9;
+        const top = this.minV + (j + 1) * this.cellV + this.cellV * 1e-9;
+        let low = Infinity;
+        let high = -Infinity;
+        const take = (u: number) => {
+          low = Math.min(low, u);
+          high = Math.max(high, u);
+        };
+        for (let e = 0; e < 3; e += 1) {
+          const [pu, pv] = corners[e]!;
+          const [qu, qv] = corners[(e + 1) % 3]!;
+          if (pv >= bottom && pv <= top) take(pu);
+          for (const line of [bottom, top]) {
+            if ((pv - line) * (qv - line) < 0)
+              take(pu + ((qu - pu) * (line - pv)) / (qv - pv));
+          }
+        }
+        if (low > high) continue;
+        const i0 = this.column(low);
+        const i1 = this.column(high);
         for (let i = i0; i <= i1; i += 1)
           this.cells[j * this.size + i]!.push(index);
+      }
     });
+  }
+
+  /** How many triangle entries the grid holds; for tests. */
+  get entryCount(): number {
+    return this.cells.reduce((sum, cell) => sum + cell.length, 0);
   }
 
   private column(u: number): number {
@@ -708,13 +744,11 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       // Cuts closer than float noise collapse into one; the segment's own
       // end always survives, so the line keeps every one of its vertices.
       const cuts: { t: number; kind: CutKind }[] = [{ t: 0, kind: 'vertex' }];
-      for (const cut of [
-        ...grid.crossings(au, av, ad, bu, bv, bd).map(({ t, depth }) => ({
-          t,
-          kind: depth ? 'depth' : 'edge'
-        })),
-        { t: 1, kind: 'vertex' as CutKind }
-      ]) {
+      const found: { t: number; kind: CutKind }[] = grid
+        .crossings(au, av, ad, bu, bv, bd)
+        .map(({ t, depth }) => ({ t, kind: depth ? 'depth' : 'edge' }));
+      found.push({ t: 1, kind: 'vertex' });
+      for (const cut of found) {
         const last = cuts.at(-1)!;
         if (cut.t - last.t > 1e-12) cuts.push(cut);
         else if (cut.kind === 'vertex') cuts[cuts.length - 1] = cut;

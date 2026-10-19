@@ -1,6 +1,7 @@
 import {
   SHEET_HIDDEN_DASH_MM,
   SHEET_STROKE_WIDTH_MM,
+  sheetSafeText,
   type SheetPage,
   type SheetStrokeKind
 } from './sheetPage';
@@ -41,7 +42,9 @@ export function sheetPageToSvg(page: SheetPage, title: string): string {
   const lines: string[] = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     `<svg xmlns="http://www.w3.org/2000/svg" width="${num(page.widthMm)}mm" height="${num(h)}mm" viewBox="0 0 ${num(page.widthMm)} ${num(h)}">`,
-    `<title>${escapeXml(title)}</title>`,
+    // Sheet names come from saved documents; only text an XML parser
+    // accepts goes into the file (the same rule as the page's own text).
+    `<title>${escapeXml(sheetSafeText(title))}</title>`,
     `<rect width="${num(page.widthMm)}" height="${num(h)}" fill="#ffffff"/>`
   ];
   for (const kind of STROKE_ORDER) {
@@ -138,7 +141,7 @@ export function sheetPageToPdf(page: SheetPage, title: string): Uint8Array {
     `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
-    `<< /Title ${pdfString(title)} /Producer (OpenZCAD) >>`
+    `<< /Title ${pdfString(sheetSafeText(title))} /Producer (OpenZCAD) >>`
   ];
   // Every character is one Latin-1 byte (strings escape the rest), so byte
   // offsets are string lengths.

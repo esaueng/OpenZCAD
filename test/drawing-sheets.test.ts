@@ -733,6 +733,16 @@ describe('D01 sheet page and export', () => {
     expect(sheetPageToSvg(pageAgain, sheetAgain.name)).toBe(svg);
   });
 
+  it('writes only XML-safe characters into the SVG title', () => {
+    const page = composeSheetPage({ ...sheet([]), views: [] }, [], {
+      projectName: 'Bracket',
+      units: 'mm'
+    });
+    const svg = sheetPageToSvg(page, 'Sheet\u0000one <a>');
+    expect(svg).toContain('<title>Sheet?one &lt;a&gt;</title>');
+    expect(svg).not.toContain('\u0000');
+  });
+
   it('keeps sheet text inside the PDF font and the title block cells', () => {
     expect(sheetSafeText('Ø12 bore — 30°')).toBe('Ø12 bore ? 30°');
     const page = composeSheetPage(

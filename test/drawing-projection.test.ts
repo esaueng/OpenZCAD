@@ -15,6 +15,7 @@ import {
 } from '@openzcad/shared';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import {
+  OcclusionGrid,
   gridCellsAlong,
   projectView,
   triangleSag,
@@ -677,5 +678,46 @@ describe('D01 occlusion tolerance', () => {
     expect(Math.max(...fold(10))).toBeGreaterThan(0);
     // Facets of one curved face carry their chordal sag.
     expect(Math.max(...fold(45, 'one'))).toBeGreaterThan(0);
+  });
+});
+
+describe('D01 occlusion grid', () => {
+  it('files a thin triangle under the cells it covers, not its whole bounding box', () => {
+    // A fan of 2000 slivers around a shared centre: every sliver's bounding
+    // box spans a quadrant of the grid, its footprint only a thin wedge.
+    const count = 2000;
+    const triangles = Array.from({ length: count }, (_, k) => {
+      const a0 = (2 * Math.PI * k) / count;
+      const a1 = (2 * Math.PI * (k + 1)) / count;
+      const u1 = 100 * Math.cos(a0);
+      const v1 = 100 * Math.sin(a0);
+      const u2 = 100 * Math.cos(a1);
+      const v2 = 100 * Math.sin(a1);
+      return {
+        u0: 0,
+        v0: 0,
+        d0: 0,
+        u1,
+        v1,
+        d1: 0,
+        u2,
+        v2,
+        d2: 0,
+        area: u1 * v2 - u2 * v1,
+        tol: 0
+      };
+    });
+    const grid = new OcclusionGrid(
+      triangles,
+      { minU: -100, minV: -100, maxU: 100, maxV: 100 },
+      1e-9
+    );
+    // 32 × 32 cells: a wedge crosses about one cell per row it spans, so
+    // the total stays near count × (rows / 2), far below the bounding-box
+    // filing (about a quarter of the grid per sliver).
+    expect(grid.entryCount).toBeLessThan(count * 40);
+    // And it still answers: the centre is covered, a point outside is not.
+    expect(grid.occluded(10, 10, 1)).toBe(true);
+    expect(grid.occluded(90, 90, 1)).toBe(false);
   });
 });
