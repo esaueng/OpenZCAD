@@ -301,6 +301,32 @@ export function transformMatrix(
   ]);
 }
 
+/** A row-major 3×4 affine transform as the kernel's row-major 4×4 matrix. */
+export function affineMatrix(rows: readonly number[]): Float64Array {
+  if (rows.length !== 12) {
+    throw new Error('An affine transform has 12 entries.');
+  }
+  return new Float64Array([...rows, 0, 0, 0, 1]);
+}
+
+/** `outer · inner`: the affine transform applying `inner` first. */
+export function composeAffine(
+  outer: Float64Array,
+  inner: Float64Array
+): Float64Array {
+  const result = new Float64Array(16);
+  for (let row = 0; row < 4; row += 1) {
+    for (let column = 0; column < 4; column += 1) {
+      let sum = 0;
+      for (let k = 0; k < 4; k += 1) {
+        sum += outer[row * 4 + k]! * inner[k * 4 + column]!;
+      }
+      result[row * 4 + column] = sum;
+    }
+  }
+  return result;
+}
+
 export function uniformScaleMatrix(factor: number): Float64Array {
   return new Float64Array([
     factor,

@@ -10,6 +10,7 @@ import {
 } from 'react';
 import {
   AlertTriangle,
+  Axis3d,
   Box,
   CirclePause,
   CirclePlay,
@@ -75,6 +76,8 @@ function featureIcon(feature: FeatureNode) {
       return <Move3d size={size} aria-hidden="true" />;
     case 'datum-plane':
       return <SquareDashed size={size} aria-hidden="true" />;
+    case 'datum-axis':
+      return <Axis3d size={size} aria-hidden="true" />;
     default:
       return <FileBox size={size} aria-hidden="true" />;
   }

@@ -8,12 +8,14 @@ import { remusTranslators } from './remus-runtime';
 import type { Vec3 } from '@openzcad/geometry';
 import type {
   BodyId,
+  FaceGeometry,
   ParamValue,
   ProjectDocument,
   TopologyLineageDiagnostic
 } from '@openzcad/shared';
 import type {
   EdgeVertexCandidate,
+  ExactRevolutionAxisData,
   FaceAttachmentCandidate
 } from './face-attachment';
 import type { ExactBuildResult, ExactShape } from './exact-types';
@@ -116,6 +118,7 @@ export function faceAttachmentCandidatesForShape(
         witnessVersion: 1 as const,
         witness,
         plane,
+        revolution: geometry ? revolutionAxisOf(geometry) : null,
         ...(reference
           ? {
               lineage: {
@@ -130,6 +133,36 @@ export function faceAttachmentCandidatesForShape(
       };
     })
   );
+}
+
+/**
+ * R01: the exact axis of a cylindrical face (through the middle of its axial
+ * span) or a conical one (through its apex); null for any other carrier.
+ */
+function revolutionAxisOf(
+  geometry: FaceGeometry
+): ExactRevolutionAxisData | null {
+  const type = geometry.surfaceType.toLowerCase();
+  if (type === 'cylinder' && geometry.axisStart && geometry.axisEnd) {
+    const { axisStart: start, axisEnd: end } = geometry;
+    return {
+      kind: 'cylinder',
+      point: {
+        x: (start.x + end.x) / 2,
+        y: (start.y + end.y) / 2,
+        z: (start.z + end.z) / 2
+      },
+      direction: {
+        x: end.x - start.x,
+        y: end.y - start.y,
+        z: end.z - start.z
+      }
+    };
+  }
+  if (type === 'cone' && geometry.apex && geometry.axis) {
+    return { kind: 'cone', point: geometry.apex, direction: geometry.axis };
+  }
+  return null;
 }
 
 /** Every edge of `shape` with its lineage and exact endpoints (R01 vertices). */

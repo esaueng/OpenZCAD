@@ -5,7 +5,12 @@ import type {
   ParametricVector3,
   SketchObjectData
 } from '@openzcad/shared';
-import { datumPlaneSources, datumPointSources } from '@openzcad/shared';
+import {
+  datumAxisPlaneSources,
+  datumAxisPointSources,
+  datumPlaneSources,
+  datumPointSources
+} from '@openzcad/shared';
 
 /**
  * What a field holds (F05): a length, an angle in degrees, a unit-free
@@ -120,6 +125,8 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       vector(data.transform.translation, rewrite, 'length');
       vector(data.transform.rotationDeg, rewrite, 'angle');
       vector(data.transform.pivot, rewrite, 'length');
+      if (data.axisRotation)
+        fields(data.axisRotation, ['angleDeg'], rewrite, 'angle');
       return;
     case 'mirror':
     case 'split':
@@ -184,6 +191,13 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       return;
     case 'direct-edit':
       directEdit(data.operation, rewrite);
+      return;
+    case 'datum-axis':
+      for (const source of datumAxisPlaneSources(data.definition))
+        if (source.type === 'canonical')
+          fields(source, ['offset'], rewrite, 'length');
+      for (const point of datumAxisPointSources(data.definition))
+        if (point.type === 'point') vector(point.point, rewrite, 'length');
       return;
     case 'sketch':
     case 'sweep':

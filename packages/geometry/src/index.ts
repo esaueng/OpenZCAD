@@ -466,6 +466,201 @@ export function parallelDatumPlane(
   return reverseNormal ? flipped(frame) : frame;
 }
 
+/** A resolved datum axis: a point on the line and its unit direction. */
+export interface DatumAxis {
+  origin: DatumVector;
+  direction: DatumVector;
+}
+
+function axisResult(
+  origin: DatumVector,
+  direction: DatumVector,
+  reverseDirection: boolean
+): DatumAxis {
+  const unit = datumScale(direction, 1 / datumLength(direction));
+  return {
+    origin,
+    direction: reverseDirection ? datumScale(unit, -1) : unit
+  };
+}
+
+/**
+ * The axis from the first point toward the second, with its origin on the
+ * first. Points closer than the linear tolerance (scaled as a three-point
+ * plane's are) are refused: they name no direction.
+ */
+export function twoPointDatumAxis(
+  first: DatumVector,
+  second: DatumVector,
+  reverseDirection = false
+): DatumAxis {
+  requirePoint(first, 'first');
+  requirePoint(second, 'second');
+  const along = datumSub(second, first);
+  const magnitude = Math.max(datumLength(first), datumLength(second));
+  const tolerance = Math.max(
+    geometryTolerance(datumLength(along)),
+    magnitude * 8 * Number.EPSILON
+  );
+  if (datumLength(along) <= tolerance) {
+    throw new Error(
+      'An axis through two points needs two separate points; these coincide.'
+    );
+  }
+  return axisResult(first, along, reverseDirection);
+}
+
+/**
+ * The axis along a straight edge, from its end 0 toward its end 1. The
+ * caller has already checked that the edge is a line; a zero-length one is
+ * refused like coincident points.
+ */
+export function edgeDatumAxis(
+  start: DatumVector,
+  end: DatumVector,
+  reverseDirection = false
+): DatumAxis {
+  requirePoint(start, 'edge start');
+  requirePoint(end, 'edge end');
+  const along = datumSub(end, start);
+  if (datumLength(along) <= geometryTolerance(datumLength(start))) {
+    throw new Error('An axis along an edge needs an edge of non-zero length.');
+  }
+  return axisResult(start, along, reverseDirection);
+}
+
+/**
+ * Components at or below this are treated as zero when choosing a surface
+ * axis's canonical sense: the ADR-011 direction quantum, so float noise on a
+ * near-axis-aligned direction cannot pick a different sign in either kernel.
+ */
+const AXIS_SENSE_QUANTUM = 1e-6;
+
+/**
+ * A surface axis (cylinder or cone) has no preferred sense, and two kernels
+ * may report it either way round, so it is made canonical: the first
+ * component beyond the direction quantum is positive.
+ */
+export function canonicalAxisDirection(direction: DatumVector): DatumVector {
+  const length = datumLength(direction);
+  if (!(length > 0) || !Number.isFinite(length)) {
+    throw new Error('The surface axis has no direction.');
+  }
+  const unit = datumScale(direction, 1 / length);
+  for (const component of [unit.x, unit.y, unit.z]) {
+    if (Math.abs(component) > AXIS_SENSE_QUANTUM) {
+      return component < 0 ? datumScale(unit, -1) : unit;
+    }
+  }
+  return unit;
+}
+
+/**
+ * The axis of a cylindrical or conical face through `origin` (the middle of
+ * a cylinder's axial span, or a cone's apex), in its canonical sense.
+ */
+export function surfaceDatumAxis(
+  origin: DatumVector,
+  direction: DatumVector,
+  reverseDirection = false
+): DatumAxis {
+  requirePoint(origin, 'axis');
+  return axisResult(
+    origin,
+    canonicalAxisDirection(direction),
+    reverseDirection
+  );
+}
+
+/**
+ * The line where planes A and B meet, running along nA × nB with its origin
+ * at the point of the line nearest A's origin. Parallel planes (antiparallel
+ * included) are refused with the midplane's parallelism tolerance, on both
+ * sides of which the result is tested: there is no line to guess.
+ */
+export function planeIntersectionDatumAxis(
+  a: PlaneBasis,
+  b: PlaneBasis,
+  reverseDirection = false
+): DatumAxis {
+  requireFrame(a, 'first');
+  requireFrame(b, 'second');
+  const direction = datumCross(a.normal, b.normal);
+  if (datumLength(direction) <= GEOMETRY_RELATIVE_TOLERANCE) {
+    throw new Error(
+      'An axis where two planes meet needs planes that are not parallel; these are parallel.'
+    );
+  }
+  // Step from A's origin within plane A, perpendicular to the line, until
+  // plane B is reached: that point is the line's nearest to A's origin.
+  const within = datumCross(direction, a.normal);
+  const step =
+    (datumDot(b.normal, b.origin) - datumDot(b.normal, a.origin)) /
+    datumDot(b.normal, within);
+  return axisResult(
+    datumAdd(a.origin, datumScale(within, step)),
+    direction,
+    reverseDirection
+  );
+}
+
+/** Largest |axis · sketch normal| a revolve axis may have (small-angle radians). */
+const REVOLVE_AXIS_TILT_TOLERANCE = 1e-9;
+
+/**
+ * R01: a revolve turns its profile about an axis in the profile's own plane.
+ * A datum axis that tilts out of the sketch plane, or runs parallel to it
+ * off the plane, is refused by name rather than projected onto it.
+ */
+export function requireRevolveAxisInPlane(
+  axis: DatumAxis,
+  basis: PlaneBasis,
+  sketchName: string
+): void {
+  const tilt = Math.abs(datumDot(axis.direction, basis.normal));
+  const offset = Math.abs(
+    datumDot(datumSub(axis.origin, basis.origin), basis.normal)
+  );
+  const scale = Math.max(datumLength(axis.origin), datumLength(basis.origin));
+  if (tilt > REVOLVE_AXIS_TILT_TOLERANCE || offset > geometryTolerance(scale)) {
+    throw new Error(
+      `The datum axis does not lie in the plane of sketch "${sketchName}"; a revolve needs an axis in its profile's plane.`
+    );
+  }
+}
+
+/**
+ * The row-major 3×4 rigid transform turning `angleDeg` degrees about the
+ * line through `origin` along unit `direction`, right-handed (Rodrigues).
+ * Points on the line stay fixed.
+ */
+export function axisRotationMatrix(
+  axis: DatumAxis,
+  angleDeg: number
+): number[] {
+  const { x, y, z } = axis.direction;
+  const angle = (angleDeg * Math.PI) / 180;
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  const t = 1 - c;
+  const r = [
+    [t * x * x + c, t * x * y - s * z, t * x * z + s * y],
+    [t * x * y + s * z, t * y * y + c, t * y * z - s * x],
+    [t * x * z - s * y, t * y * z + s * x, t * z * z + c]
+  ] as const;
+  const o = axis.origin;
+  const shift = (row: readonly [number, number, number], p: number) =>
+    p - (row[0] * o.x + row[1] * o.y + row[2] * o.z);
+  return [
+    ...r[0],
+    shift(r[0], o.x),
+    ...r[1],
+    shift(r[1], o.y),
+    ...r[2],
+    shift(r[2], o.z)
+  ];
+}
+
 /**
  * Resolves a sketch plane reference to a concrete basis. This is the single
  * shared resolution path — the kernel adapter and the viewport must agree on

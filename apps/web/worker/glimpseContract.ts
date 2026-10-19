@@ -46,6 +46,7 @@ export const CAD_OPERATIONS = [
   'feature.mirror',
   'feature.split',
   'feature.datum-plane',
+  'feature.datum-axis',
   'feature.hole',
   'feature.shell',
   'feature.solid-offset',

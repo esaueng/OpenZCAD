@@ -60,10 +60,15 @@ import {
   toRevisionId,
   toShaprImportId,
   toSketchId,
+  datumAxisPlaneSources,
+  datumAxisPointSources,
   datumPlaneSources,
   datumPointSources,
+  featureDatumAxisRefs,
   isDatumPlaneRef,
   type BodyId,
+  type DatumAxisDefinition,
+  type DatumAxisRef,
   type BodyNode,
   type ParametricTransform3D,
   type DatumPlaneDefinition,
@@ -351,6 +356,8 @@ export interface RevolveInput {
   axis: RevolveAxis;
   /** Sweep angle in degrees, `(0, 360]`. Omitted means a full turn. */
   angleDeg?: ParamValue;
+  /** R01 (schema v28): turn about this earlier datum axis instead of `axis`. */
+  axisRef?: DatumAxisRef;
   ids?: BodyFeatureIds;
 }
 
@@ -441,6 +448,8 @@ export interface TransformInput {
   copy?: boolean;
   /** Name of the copy's body; defaults to a numbered "<source> copy" name. */
   bodyName?: string;
+  /** R01 (schema v28): first turn the body about an earlier datum axis. */
+  axisRotation?: { axis: DatumAxisRef; angleDeg: ParamValue };
   ids?: FeatureOnlyIds | BodyFeatureIds;
 }
 
@@ -454,6 +463,12 @@ export interface MirrorInput {
 export interface DatumPlaneInput {
   name: string;
   definition: DatumPlaneDefinition;
+  ids?: FeatureOnlyIds;
+}
+
+export interface DatumAxisInput {
+  name: string;
+  definition: DatumAxisDefinition;
   ids?: FeatureOnlyIds;
 }
 
@@ -569,6 +584,8 @@ export interface PatternInput {
   spacing2?: ParamValue;
   /** Grid only: instance count along `axis2`; absent reads as `count`. */
   count2?: ParamValue;
+  /** R01 (schema v28), circular only: turn about this earlier datum axis. */
+  axisRef?: DatumAxisRef;
   ids?: BodyFeatureIds;
 }
 
@@ -2177,7 +2194,8 @@ export function revolveSketch(
       // Written only when asked for. An absent field is a full turn, so a
       // full revolve stays byte-identical to one authored before partial
       // revolve existed — including its ADR-013 semantic lineage.
-      ...(input.angleDeg === undefined ? {} : { angleDeg: input.angleDeg })
+      ...(input.angleDeg === undefined ? {} : { angleDeg: input.angleDeg }),
+      ...(input.axisRef ? { axisRef: datumAxisRefOnly(input.axisRef) } : {})
     }
   };
 
@@ -2352,13 +2370,13 @@ export function booleanBodies(
  */
 function datumFeaturesBefore(
   document: ProjectDocument,
-  beforeFeatureId: FeatureId | null
+  beforeFeatureId: FeatureId | null,
+  kind: 'datum-plane' | 'datum-axis' = 'datum-plane'
 ): Set<FeatureId> {
   const datums = new Set<FeatureId>();
   for (const feature of listFeaturesInOrder(document)) {
     if (feature.featureId === beforeFeatureId) break;
-    if (feature.data.featureKind === 'datum-plane')
-      datums.add(feature.featureId);
+    if (feature.data.featureKind === kind) datums.add(feature.featureId);
   }
   return datums;
 }
@@ -2462,6 +2480,29 @@ export function validateDatumPlaneDefinition(
         'A datum plane is an offset plane, a midplane, a three-point plane or a parallel plane through a point.'
       );
   }
+  validateDatumPlaneSources(document, sources, ownFeatureId);
+  validateDatumPointSources(document, points);
+  if (definition.kind === 'midplane' && sameSource(sources[0]!, sources[1]!)) {
+    throw new Error('A midplane needs two different source planes.');
+  }
+  if (definition.kind === 'three-point') {
+    for (const [a, b] of [
+      [0, 1],
+      [0, 2],
+      [1, 2]
+    ] as const) {
+      if (samePoint(points[a]!, points[b]!)) {
+        throw new Error('A three-point plane needs three different points.');
+      }
+    }
+  }
+}
+
+function validateDatumPlaneSources(
+  document: ProjectDocument,
+  sources: readonly DatumPlaneSource[],
+  ownFeatureId: FeatureId | null
+): void {
   for (const source of sources) {
     switch (source?.type) {
       case 'canonical':
@@ -2492,6 +2533,12 @@ export function validateDatumPlaneDefinition(
         throw new Error('A datum plane source is a plane, a datum or a face.');
     }
   }
+}
+
+function validateDatumPointSources(
+  document: ProjectDocument,
+  points: readonly DatumPointSource[]
+): void {
   for (const point of points) {
     switch (point?.type) {
       case 'point':
@@ -2519,19 +2566,134 @@ export function validateDatumPlaneDefinition(
         throw new Error('A datum point is a position or a vertex.');
     }
   }
-  if (definition.kind === 'midplane' && sameSource(sources[0]!, sources[1]!)) {
-    throw new Error('A midplane needs two different source planes.');
+}
+
+/** The stored form of a datum axis reference: the id and nothing else. */
+function datumAxisRefOnly(ref: DatumAxisRef): DatumAxisRef {
+  return { type: 'datum-axis', datumFeatureId: ref.datumFeatureId };
+}
+
+/**
+ * R01: a revolve, circular pattern or Move may turn only about a datum axis
+ * that exists and comes earlier in history. A reference carrying anything
+ * besides the id is refused, so no stored line can stand in for the datum.
+ */
+export function validateDatumAxisRef(
+  document: ProjectDocument,
+  ref: DatumAxisRef,
+  ownFeatureId: FeatureId | null
+): void {
+  if (
+    ref?.type !== 'datum-axis' ||
+    Object.keys(ref).some((key) => key !== 'type' && key !== 'datumFeatureId')
+  ) {
+    throw new Error('A datum axis reference carries only the datum id.');
   }
-  if (definition.kind === 'three-point') {
-    for (const [a, b] of [
-      [0, 1],
-      [0, 2],
-      [1, 2]
-    ] as const) {
-      if (samePoint(points[a]!, points[b]!)) {
-        throw new Error('A three-point plane needs three different points.');
-      }
+  const node = listFeaturesInOrder(document).find(
+    (feature) => feature.featureId === ref.datumFeatureId
+  );
+  if (!node || node.data.featureKind !== 'datum-axis') {
+    throw new Error(`No datum axis ${ref.datumFeatureId} exists.`);
+  }
+  if (
+    !datumFeaturesBefore(document, ownFeatureId, 'datum-axis').has(
+      ref.datumFeatureId
+    )
+  ) {
+    throw new Error(
+      `Datum axis "${node.name}" comes later in history; a feature can only turn about an earlier one.`
+    );
+  }
+}
+
+/** Checks every datum axis a feature's data turns about (R01). */
+export function validateFeatureDatumAxisRefs(
+  document: ProjectDocument,
+  data: FeatureData,
+  ownFeatureId: FeatureId | null
+): void {
+  for (const ref of featureDatumAxisRefs(data))
+    validateDatumAxisRef(document, ref, ownFeatureId);
+  if (data.featureKind === 'pattern' && data.axisRef) {
+    if (data.patternKind !== 'circular') {
+      throw new Error('Only a circular pattern turns about a datum axis.');
     }
+  }
+  if (data.featureKind === 'transform' && data.axisRotation) {
+    requireFiniteLiteral(data.axisRotation.angleDeg, 'The axis rotation angle');
+  }
+}
+
+/**
+ * Structural checks on a datum axis definition at its history position.
+ * Geometric ones (coincident points, a straight edge, a cylinder or cone,
+ * parallel planes, a resolvable source) need the exact build and are refused
+ * there, by name, with the authored definition kept.
+ */
+export function validateDatumAxisDefinition(
+  document: ProjectDocument,
+  definition: DatumAxisDefinition,
+  ownFeatureId: FeatureId | null
+): void {
+  const sources = datumAxisPlaneSources(definition);
+  const points = datumAxisPointSources(definition);
+  switch (definition?.kind) {
+    case 'two-point':
+      if (points.length !== 2)
+        throw new Error('An axis through two points needs two points.');
+      break;
+    case 'edge':
+      if (
+        definition.source?.type !== 'edge' ||
+        definition.source.edgeReference?.kind !== 'edge' ||
+        definition.source.edgeReference.witness?.closed !== false
+      ) {
+        throw new Error(
+          'An axis along an edge needs an open edge with a qualified lineage reference.'
+        );
+      }
+      if (!document.bodyOrder.includes(definition.source.bodyId)) {
+        throw new Error(
+          `The edge's body ${definition.source.bodyId} does not exist.`
+        );
+      }
+      break;
+    case 'cylinder':
+      if (
+        definition.source?.type !== 'face' ||
+        definition.source.faceReference?.kind !== 'face'
+      ) {
+        throw new Error(
+          'A cylinder axis needs a face with a qualified lineage reference.'
+        );
+      }
+      if (!document.bodyOrder.includes(definition.source.bodyId)) {
+        throw new Error(
+          `The face's body ${definition.source.bodyId} does not exist.`
+        );
+      }
+      break;
+    case 'plane-intersection':
+      if (sources.length !== 2)
+        throw new Error('An axis where two planes meet needs two planes.');
+      break;
+    default:
+      throw new Error(
+        'A datum axis runs through two points, along an edge, along a cylinder or cone, or where two planes meet.'
+      );
+  }
+  validateDatumPlaneSources(document, sources, ownFeatureId);
+  validateDatumPointSources(document, points);
+  if (definition.kind === 'two-point' && samePoint(points[0]!, points[1]!)) {
+    throw new Error('An axis through two points needs two different points.');
+  }
+  if (
+    definition.kind === 'plane-intersection' &&
+    sameSource(sources[0]!, sources[1]!)
+  ) {
+    throw new Error(
+      'An axis where two planes meet needs two different planes.'
+    );
   }
 }
 
@@ -2554,6 +2716,8 @@ export function datumPlaneDependents(
     let uses = false;
     if (data.featureKind === 'datum-plane') {
       uses = datumPlaneSources(data.definition).some(usesDatum);
+    } else if (data.featureKind === 'datum-axis') {
+      uses = datumAxisPlaneSources(data.definition).some(usesDatum);
     } else if (data.featureKind === 'mirror' || data.featureKind === 'split') {
       uses = usesDatum(data.plane);
     } else if (data.featureKind === 'sketch') {
@@ -2565,6 +2729,50 @@ export function datumPlaneDependents(
     if (uses) names.push(feature.name);
   }
   return names;
+}
+
+/**
+ * The names of everything that turns about datum axis `datumFeatureId`:
+ * revolves, circular patterns and Moves. Suppressed entries count.
+ */
+export function datumAxisDependents(
+  document: ProjectDocument,
+  datumFeatureId: FeatureId
+): string[] {
+  return listFeaturesInOrder(document)
+    .filter((feature) =>
+      featureDatumAxisRefs(feature.data).some(
+        (ref) => ref.datumFeatureId === datumFeatureId
+      )
+    )
+    .map((feature) => feature.name);
+}
+
+/** Adds an R01 datum axis at the end of history; it owns no body. */
+export function addDatumAxis(
+  document: ProjectDocument,
+  input: DatumAxisInput
+): { document: ProjectDocument; featureId: FeatureId } {
+  validateDatumAxisDefinition(document, input.definition, null);
+  const next = cloneDocument(document);
+  const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
+  next.nodes[featureNodeId] = {
+    id: featureNodeId,
+    kind: 'feature',
+    name: input.name,
+    parentId: next.activePartId,
+    revisionId: null,
+    featureId,
+    featureKind: 'datum-axis',
+    data: {
+      featureKind: 'datum-axis',
+      definition: deepClone(input.definition)
+    }
+  };
+  next.featureOrder.push(featureId);
+  attachToPart(next, featureNodeId);
+  next.version += 1;
+  return { document: next, featureId };
 }
 
 /** Adds an R01 datum plane at the end of history; it owns no body. */
@@ -2610,7 +2818,8 @@ export function transformBody(
     input.scale,
     input.pivot?.x,
     input.pivot?.y,
-    input.pivot?.z
+    input.pivot?.z,
+    input.axisRotation?.angleDeg
   ];
   if (
     values.some((value) => typeof value === 'number' && !Number.isFinite(value))
@@ -2640,7 +2849,8 @@ export function transformBody(
     data: {
       featureKind: 'transform',
       targetBodyId: input.targetBodyId,
-      transform
+      transform,
+      ...axisRotationField(input)
     }
   };
 
@@ -2648,6 +2858,20 @@ export function transformBody(
   attachToPart(next, featureNodeId);
   next.version += 1;
   return { document: next, bodyId: input.targetBodyId };
+}
+
+/** R01: the stored axis rotation of a Move, written only when asked for. */
+function axisRotationField(input: TransformInput): {
+  axisRotation?: { axis: DatumAxisRef; angleDeg: ParamValue };
+} {
+  return input.axisRotation
+    ? {
+        axisRotation: {
+          axis: datumAxisRefOnly(input.axisRotation.axis),
+          angleDeg: deepClone(input.axisRotation.angleDeg)
+        }
+      }
+    : {};
 }
 
 /**
@@ -2693,7 +2917,8 @@ function transformCopyBody(
       featureKind: 'transform',
       targetBodyId: input.targetBodyId,
       transform,
-      copy: true
+      copy: true,
+      ...axisRotationField(input)
     }
   };
   const source = findBodyNode(document, input.targetBodyId);
@@ -3109,7 +3334,8 @@ export function patternBody(
       ...(input.direction ? { direction: input.direction } : {}),
       ...(input.axis2 ? { axis2: input.axis2 } : {}),
       ...(input.spacing2 !== undefined ? { spacing2: input.spacing2 } : {}),
-      ...(input.count2 !== undefined ? { count2: input.count2 } : {})
+      ...(input.count2 !== undefined ? { count2: input.count2 } : {}),
+      ...(input.axisRef ? { axisRef: datumAxisRefOnly(input.axisRef) } : {})
     },
     input.ids
   );
@@ -3889,7 +4115,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'endCondition',
     'throughAllSide'
   ],
-  revolve: ['sketchId', 'axis', 'angleDeg'],
+  revolve: ['sketchId', 'axis', 'angleDeg', 'axisRef'],
   loft: ['sections', 'mode', 'endPoint'],
   sweep: ['profile', 'path', 'mode', 'guide'],
   'helical-sweep': [
@@ -3901,9 +4127,10 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'turns'
   ],
   boolean: ['operation', 'targetBodyIds', 'keepOriginals'],
-  transform: ['targetBodyId', 'transform'],
+  transform: ['targetBodyId', 'transform', 'axisRotation'],
   mirror: ['targetBodyId', 'plane'],
   'datum-plane': ['definition'],
+  'datum-axis': ['definition'],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane', 'keepOriginal'],
   hole: [
@@ -3962,7 +4189,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'direction',
     'axis2',
     'spacing2',
-    'count2'
+    'count2',
+    'axisRef'
   ],
   'direct-edit': ['targetBodyId', 'operation'],
   'imported-step': [
@@ -4001,7 +4229,11 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   loft: ['endPoint'],
   sweep: ['guide'],
   fillet: ['endRadius', 'radiusLaw'],
-  chamfer: ['angleDeg', 'distance2']
+  chamfer: ['angleDeg', 'distance2'],
+  // R01: clearing a datum axis returns to the sketch or world axis.
+  revolve: ['axisRef'],
+  pattern: ['axisRef'],
+  transform: ['axisRotation']
 };
 
 /**
@@ -4114,12 +4346,19 @@ export function updateFeature(
       feature.data.definition,
       feature.featureId
     );
+  } else if (feature.data.featureKind === 'datum-axis') {
+    validateDatumAxisDefinition(
+      next,
+      feature.data.definition,
+      feature.featureId
+    );
   } else if (
     feature.data.featureKind === 'mirror' ||
     feature.data.featureKind === 'split'
   ) {
     validateModelingPlane(next, feature.data.plane, feature.featureId);
   }
+  validateFeatureDatumAxisRefs(next, feature.data, feature.featureId);
   // New Body has no dependency on the previous Add/Cut target. Undefined
   // patch values are normally ignored, so clear this semantic dependency here.
   if (
@@ -4406,6 +4645,16 @@ export function deleteFeature(
         `Cannot delete datum plane "${feature.name}": ${dependents.join(', ')} ${
           dependents.length === 1 ? 'uses' : 'use'
         } it. Delete those or move them to another plane first.`
+      );
+    }
+  }
+  if (feature.data.featureKind === 'datum-axis') {
+    const dependents = datumAxisDependents(next, feature.featureId);
+    if (dependents.length > 0) {
+      throw new Error(
+        `Cannot delete datum axis "${feature.name}": ${dependents.join(', ')} ${
+          dependents.length === 1 ? 'turns' : 'turn'
+        } about it. Delete those or move them to another axis first.`
       );
     }
   }

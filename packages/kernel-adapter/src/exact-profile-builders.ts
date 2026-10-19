@@ -5,9 +5,13 @@ import {
   resolveParamValue
 } from '@openzcad/document-core';
 import {
+  edgeDatumAxis,
   frameForPlaneRef,
   geometryTolerance,
   mergeAdjacentProfiles,
+  requireRevolveAxisInPlane,
+  surfaceDatumAxis,
+  type DatumAxis,
   type PlaneBasis,
   type RegionCurve,
   type SketchRegion,
@@ -23,6 +27,9 @@ import {
   type SketchId,
   type ParamValue,
   type SketchNode,
+  type DatumAxisEdgeSource,
+  type DatumAxisFaceSource,
+  type DatumAxisRef,
   type DatumPointSource,
   type SketchObjectData,
   type SketchPlaneRef,
@@ -77,7 +84,13 @@ import {
   type RemusLineageState,
   type RemusSemanticAssignment
 } from './remus-lineage';
-import { resolveEdgeVertex, resolveFaceAttachment } from './face-attachment';
+import {
+  resolveDatumAxisEdge,
+  resolveDatumAxisFace,
+  resolveEdgeVertex,
+  resolveFaceAttachment,
+  type DatumOwnerKind
+} from './face-attachment';
 
 const CURVE_SEGMENTS = 32;
 /** `liftCurve2dToPlane` curve types: 0 line, 1 circle, 2 ellipse, 3 NURBS. */
@@ -263,7 +276,7 @@ export function resolvePlaneRefAtHistory(
   document: ProjectDocument,
   planeRef: SketchPlaneRef,
   ownerRef: {
-    kind: 'Sketch' | 'Datum plane' | 'Mirror' | 'Split';
+    kind: 'Sketch' | 'Datum plane' | 'Datum axis' | 'Mirror' | 'Split';
     name: string;
   },
   result: ExactBuildResult,
@@ -319,7 +332,10 @@ export function resolvePlaneRefAtHistory(
       frame: planeRef.frame
     },
     sketchName: ownerRef.name,
-    ownerKind: ownerRef.kind === 'Sketch' ? 'Sketch' : 'Datum plane',
+    ownerKind:
+      ownerRef.kind === 'Sketch' || ownerRef.kind === 'Datum axis'
+        ? ownerRef.kind
+        : 'Datum plane',
     sourceFeatureName:
       sourceFeature?.name ?? String(planeRef.faceReference.producingFeatureId)
   });
@@ -342,7 +358,8 @@ export function resolveDatumPointAtHistory(
   point: DatumPointSource,
   datumName: string,
   result: ExactBuildResult,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  ownerKind: DatumOwnerKind = 'Datum plane'
 ): Vec3 {
   if (point.type === 'point') {
     const axis = (value: ParamValue, name: string) =>
@@ -360,7 +377,7 @@ export function resolveDatumPointAtHistory(
   );
   if (!shape) {
     throw new Error(
-      `Datum plane "${datumName}" cannot use a vertex of body ${point.bodyId} because it is unavailable at the datum's history position.`
+      `${ownerKind} "${datumName}" cannot use a vertex of body ${point.bodyId} because it is unavailable at the datum's history position.`
     );
   }
   return resolveEdgeVertex({
@@ -368,9 +385,77 @@ export function resolveDatumPointAtHistory(
     end: point.end,
     candidates: edgeVertexCandidatesForShape(kernel, shape),
     datumName,
+    ownerKind,
     sourceFeatureName:
       sourceFeature?.name ?? String(point.edgeReference.producingFeatureId)
   });
+}
+
+/**
+ * R01: the line a datum axis's edge or face source names at the axis's
+ * history position: a straight edge from its end 0 to its end 1, or a
+ * cylinder's or cone's exact axis in canonical sense. Both re-find their
+ * topology through verified lineage and refuse by name when they cannot.
+ */
+export function resolveDatumAxisSourceAtHistory(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  source: DatumAxisEdgeSource | DatumAxisFaceSource,
+  datumName: string,
+  result: ExactBuildResult,
+  reverseDirection: boolean | undefined
+): DatumAxis {
+  const shape = result.shapes.get(source.bodyId);
+  const reference =
+    source.type === 'edge' ? source.edgeReference : source.faceReference;
+  if (!shape) {
+    throw new Error(
+      `Datum axis "${datumName}" cannot use ${source.type === 'edge' ? 'an edge' : 'a face'} of body ${source.bodyId} because it is unavailable at the datum's history position.`
+    );
+  }
+  const sourceFeatureName =
+    listFeaturesInOrder(document).find(
+      (candidate) => candidate.featureId === reference.producingFeatureId
+    )?.name ?? String(reference.producingFeatureId);
+  if (source.type === 'edge') {
+    const [start, end] = resolveDatumAxisEdge({
+      reference: source.edgeReference,
+      candidates: edgeVertexCandidatesForShape(kernel, shape),
+      datumName,
+      sourceFeatureName
+    });
+    return edgeDatumAxis(start, end, reverseDirection);
+  }
+  const axis = resolveDatumAxisFace({
+    reference: source.faceReference,
+    candidates: faceAttachmentCandidatesForShape(kernel, shape),
+    datumName,
+    sourceFeatureName
+  });
+  return surfaceDatumAxis(axis.point, axis.direction, reverseDirection);
+}
+
+/**
+ * R01: the line a consumer's datum axis reference resolved to earlier in this
+ * build. A datum axis that failed, is suppressed or comes later is refused by
+ * name; no stored or sketch axis stands in for it.
+ */
+export function resolveDatumAxisRefAtHistory(
+  document: ProjectDocument,
+  ref: DatumAxisRef,
+  owner: string,
+  result: ExactBuildResult
+): DatumAxis {
+  const axis = result.datumAxes.get(ref.datumFeatureId);
+  if (!axis) {
+    const datum = listFeaturesInOrder(document).find(
+      (candidate) => candidate.featureId === ref.datumFeatureId
+    );
+    throw new Error(
+      `${owner} cannot use datum axis "${datum?.name ?? ref.datumFeatureId}" because it is unavailable at this point in history.`
+    );
+  }
+  return axis;
 }
 
 export function makeProfileFace(
@@ -1817,7 +1902,9 @@ export function buildSweep(
   feature: FeatureNode,
   scope: Record<string, number>,
   sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
-  warn: (message: string) => void
+  warn: (message: string) => void,
+  /** R01: the resolved datum axis a revolve with an `axisRef` turns about. */
+  revolveAxis?: DatumAxis
 ): ExactShape {
   if (
     feature.data.featureKind !== 'extrude' &&
@@ -1920,8 +2007,18 @@ export function buildSweep(
     document.units
   );
 
-  const direction = feature.data.axis === 'vertical' ? basis.v : basis.u;
-  const point = pointOnPlane(basis, { x: 0, y: 0 }, 0);
+  if (feature.data.axisRef && !revolveAxis) {
+    throw new Error('Revolve datum axis did not resolve.');
+  }
+  if (revolveAxis) requireRevolveAxisInPlane(revolveAxis, basis, sketch.name);
+  const direction = revolveAxis
+    ? revolveAxis.direction
+    : feature.data.axis === 'vertical'
+      ? basis.v
+      : basis.u;
+  const point = revolveAxis
+    ? revolveAxis.origin
+    : pointOnPlane(basis, { x: 0, y: 0 }, 0);
   const angleDeg = resolveRevolveAngleDeg(feature.data.angleDeg, scope);
   const solid = kernel.revolve(
     face,

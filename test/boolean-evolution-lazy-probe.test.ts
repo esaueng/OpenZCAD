@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
+  addDatumAxis,
   addDatumPlane,
   addPrimitiveFeature,
   addSketchFeature,
@@ -343,6 +344,74 @@ describe('booleanEvolutionProbeNeeded', () => {
         fuse
       )
     ).toBe(true);
+  });
+
+  // R01: a datum axis along an edge or a cylinder face re-finds it through
+  // verified lineage, so it consumes the result's identity as well.
+  it('is true when a later datum axis runs along an edge or face of the result', () => {
+    const { document, bodyId } = fusedPlateDocument();
+    const fuse = booleanFeatureOf(document);
+    const edge = addDatumAxis(document, {
+      name: 'Edge axis',
+      definition: {
+        kind: 'edge',
+        source: {
+          type: 'edge',
+          bodyId,
+          edgeReference: {
+            kind: 'edge',
+            producingFeatureId: fuse.featureId,
+            lineageName: 'edge:top',
+            currentHash: 1,
+            witnessVersion: 1,
+            witness: {
+              curveType: 'LINE',
+              length: 1,
+              closed: false,
+              endpoints: [
+                [0, 0, 0],
+                [1, 0, 0]
+              ],
+              midpoint: [0, 0, 0]
+            }
+          }
+        }
+      }
+    }).document;
+    expect(booleanEvolutionProbeNeeded(edge, fuse)).toBe(true);
+    const moved = transformBody(document, {
+      name: 'Move',
+      targetBodyId: bodyId,
+      translation: { x: 5, y: 0, z: 0 }
+    });
+    const face = addDatumAxis(moved.document, {
+      name: 'Bore axis',
+      definition: {
+        kind: 'cylinder',
+        source: {
+          type: 'face',
+          bodyId: moved.bodyId,
+          faceReference: {
+            kind: 'face',
+            producingFeatureId: fuse.featureId,
+            lineageName: 'face:bore'
+          } as never
+        }
+      }
+    }).document;
+    expect(booleanEvolutionProbeNeeded(face, fuse)).toBe(true);
+    // An axis through typed points reads no topology.
+    const typed = addDatumAxis(document, {
+      name: 'Typed axis',
+      definition: {
+        kind: 'two-point',
+        points: [
+          { type: 'point', point: { x: 0, y: 0, z: 0 } },
+          { type: 'point', point: { x: 0, y: 0, z: 1 } }
+        ]
+      }
+    }).document;
+    expect(booleanEvolutionProbeNeeded(typed, fuse)).toBe(false);
   });
 
   it('is false for a canonical datum or one on an unrelated body', () => {

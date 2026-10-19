@@ -57,6 +57,7 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
     case 'imported-step':
     case 'imported-mesh':
     case 'datum-plane':
+    case 'datum-axis':
       return [];
   }
 }
