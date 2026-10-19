@@ -4,17 +4,21 @@ import type {
   ParametricTransform3D,
   ParamValue,
   ProjectDocument,
-  Transform3D
+  Transform3D,
+  UnitSystem
 } from '@openzcad/shared';
-import { evaluateExpression, listFeaturesInOrder } from './index';
+import { listFeaturesInOrder, resolveParamValue } from './index';
 
 /** A measured construction can replay fixed rigid placement, but its world
- * coordinate cuts cannot follow a placement driven by an editable parameter. */
+ * coordinate cuts cannot follow a placement driven by an editable parameter.
+ * Values resolve as the exact build resolves them, in `documentUnits`, so a
+ * suffixed constant (`10 mm`) is fixed while a parameter read is not. */
 export function constantRigidTransform(
-  transform: ParametricTransform3D
+  transform: ParametricTransform3D,
+  documentUnits?: UnitSystem
 ): Transform3D | null {
   const value = (input: ParamValue) =>
-    typeof input === 'number' ? input : evaluateExpression(input, {});
+    resolveParamValue(input, {}, undefined, documentUnits);
   try {
     if (transform.scale !== undefined && value(transform.scale) !== 1)
       return null;
@@ -105,7 +109,7 @@ export function rigidImportedSource(
       feature.metadata?.rollbackSuppressed
     )
       return null;
-    const transform = constantRigidTransform(data.transform);
+    const transform = constantRigidTransform(data.transform, document.units);
     if (!transform) return null;
     placement.push(transform);
   }

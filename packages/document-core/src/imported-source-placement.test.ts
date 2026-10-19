@@ -98,3 +98,24 @@ describe('fixed imported source placement', () => {
         ).toBeNull();
   });
 });
+
+describe('constant placement with unit suffixes', () => {
+  it('resolves a suffixed pivot in document units and refuses a parameter', () => {
+    const turn = {
+      translation: { x: 0, y: 0, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 90 }
+    };
+    const placed = constantRigidTransform(
+      { ...turn, pivot: { x: '1 cm', y: 0, z: 0 } },
+      'mm'
+    );
+    expect(placed?.translation.x).toBeCloseTo(10, 9);
+    expect(placed?.translation.y).toBeCloseTo(-10, 9);
+    expect(
+      constantRigidTransform(
+        { ...turn, pivot: { x: 'width', y: 0, z: 0 } },
+        'mm'
+      )
+    ).toBeNull();
+  });
+});
