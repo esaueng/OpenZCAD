@@ -852,13 +852,27 @@ encrypts under the project key is unchanged.
   **The last leaf.** Rejoin needs a PSK later than the removed leaf's cutoff,
   and such a PSK exists only if some member advances the group after the
   removal. If the device being removed is the only leaf left in a group (a
-  solo project whose one device was lost), there is no such member. So the
-  removal flow orders the steps itself: the browser performing the removal
-  first rejoins every group where the departing device is the user's last
-  leaf, using the newest wrapped PSK, which is still valid because nothing
-  has been revoked yet. It then commits the Remove of the old leaf from its
-  new leaf, and only then signs the device-list revocation. The browser doing
-  the removal always holds the account key, so it can always run these steps.
+  solo project whose one device was lost), there is no such member. The
+  stolen device may also still be online, and could inject leaves of its own
+  while its credential is still valid. So the order is fixed:
+  1. **Revoke first.** The browser performing the removal holds the account
+     key and unlocks the identity key. It signs the device-list revocation
+     before anything else. That same entry certifies its own credential as
+     the named replacement for the revoked one.
+  2. **Refuse the revoked credential everywhere.** From then on, every
+     member refuses any Commit, proposal or content signed by a revoked
+     credential, wherever it claims to sit.
+  3. **One narrow exception.** In a group where every remaining leaf of the
+     user carries the revoked credential, the named replacement credential,
+     and no other, may rejoin with the newest pre-revocation PSK. Its
+     external Commit must remove every leaf that carries a revoked
+     credential. mls-rs does that in the same Commit. With OpenMLS it is the
+     immediately following Commit, and members accept no other content in
+     between.
+
+  The stolen device cannot use the window: its credential is already
+  revoked, so its own Commits and external joins are refused, and the
+  exception names only the replacement.
 
   A device that cannot meet these rules, for example after an absence longer
   than the retention window, is re-added by an ordinary Add from the owner, after the same credential
