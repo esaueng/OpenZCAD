@@ -212,11 +212,19 @@ test('UI-10: the entity editor and palette clear the right rails on a phone', as
     { width: 320, height: 568 }
   ]) {
     await page.setViewportSize(size);
-    await expectReachable(editor.getByRole('button', { name: 'Apply' }));
+    // A rectangle side brings its shape's resize card and its relations
+    // under the line's values, so the flyout column (a scroll container)
+    // runs past a phone's height: each control counts once scrolled to, as
+    // long as nothing covers it there.
+    const apply = editor.getByRole('button', { name: 'Apply' });
+    await apply.scrollIntoViewIfNeeded();
+    await expectReachable(apply);
     for (const field of await editor.getByRole('textbox').all()) {
+      await field.scrollIntoViewIfNeeded();
       await expectReachable(field);
     }
     const gridSnaps = palette.getByRole('button', { name: /^Grid snaps/ });
+    await gridSnaps.scrollIntoViewIfNeeded();
     await expectReachable(gridSnaps);
     // Nothing in the palette runs out past its own edge.
     expect(

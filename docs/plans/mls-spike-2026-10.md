@@ -1,7 +1,12 @@
 # MLS library spike — October 2026
 
-Roadmap: [L11](../../ROADMAP.md#l11) ([ADR-024, PR #743](https://github.com/esaueng/OpenZCAD/pull/743), "MLS assessment"). Spike code: [`spikes/mls/`](../../spikes/mls/).
+Roadmap: [L11](../../ROADMAP.md#l11) ([ADR-024](../adrs/ADR-024-end-to-end-encrypted-projects.md), "MLS assessment"). Spike code: [`spikes/mls/`](../../spikes/mls/).
 Nothing in `apps/` or `packages/` imports it.
+
+**Decision (2026-10-19):** the owner chose mls-rs with the RustCrypto
+provider, as recommended below. ADR-024 records it in
+[PR #757](https://github.com/esaueng/OpenZCAD/pull/757). The Phase 8 outside
+review covers the MLS integration and the pinned mls-rs version.
 
 ## Recommendation
 

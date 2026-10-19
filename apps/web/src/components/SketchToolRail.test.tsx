@@ -222,6 +222,64 @@ describe('SketchToolRail', () => {
     ).toHaveAttribute('aria-pressed', 'false');
   });
 
+  it('shows the rectangle types and the polygon as one shape strip, with the polygon’s sides', async () => {
+    const user = userEvent.setup();
+    const onRectangleMode = vi.fn();
+    const onPolygonSides = vi.fn();
+    const onTool = vi.fn();
+    const { props, rerender } = renderRail({
+      tool: 'rectangle',
+      onRectangleMode,
+      onPolygonSides,
+      onTool
+    });
+    expect(screen.getByRole('button', { name: 'Rectangle' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    const strip = screen.getByRole('radiogroup', { name: 'Shape type' });
+    expect(
+      within(strip)
+        .getAllByRole('radio')
+        .map((radio) => radio.textContent)
+    ).toEqual(['Corner', 'Center', '3 points', 'Polygon']);
+    expect(within(strip).getByRole('radio', { name: 'Corner' })).toBeChecked();
+
+    await user.click(within(strip).getByRole('radio', { name: '3 points' }));
+    expect(onRectangleMode).toHaveBeenLastCalledWith('three-point');
+    await user.click(
+      screen.getByRole('button', { name: 'Next rectangle type' })
+    );
+    expect(onRectangleMode).toHaveBeenLastCalledWith('center');
+    // The polygon is its own tool sharing the slot.
+    await user.click(within(strip).getByRole('radio', { name: 'Polygon' }));
+    expect(onTool).toHaveBeenLastCalledWith('polygon');
+
+    rerender(<SketchToolRail {...props} tool="polygon" polygonSides={6} />);
+    expect(screen.getByRole('button', { name: 'Polygon' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(within(strip).getByRole('radio', { name: 'Polygon' })).toBeChecked();
+    const sides = screen.getByRole('spinbutton', { name: 'Polygon sides' });
+    expect(sides).toHaveValue(6);
+    await user.clear(sides);
+    await user.type(sides, '2');
+    // A count the document refuses is never committed.
+    expect(onPolygonSides).not.toHaveBeenCalled();
+    await user.type(sides, '4');
+    expect(onPolygonSides).toHaveBeenLastCalledWith(24);
+    await user.clear(sides);
+    await user.type(sides, '65');
+    expect(onPolygonSides).toHaveBeenLastCalledWith(6);
+
+    // The strip leaves with the shape tools.
+    rerender(<SketchToolRail {...props} tool="line" />);
+    expect(
+      screen.queryByRole('radiogroup', { name: 'Shape type' })
+    ).not.toBeInTheDocument();
+  });
+
   it('keeps geometry and grid snapping independent', async () => {
     const user = userEvent.setup();
     const onSettings = vi.fn();

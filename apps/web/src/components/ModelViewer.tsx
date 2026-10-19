@@ -276,8 +276,18 @@ import type {
   InteractionEvent,
   SketchCircleMode,
   SketchMoveHandle,
+  SketchRectangleMode,
   SketchTextDraft
 } from '../lib/interaction/machine';
+import {
+  compositeSizeLabel,
+  dragCompositeShape,
+  inscribedPolygonShape,
+  isCompositeShape,
+  threePointRectangleShape,
+  typedRectangleShape,
+  type CompositeShape
+} from '../lib/sketch/composites';
 
 /** The machine events a sketch object drag reports. */
 type SketchMoveEvent = Extract<
@@ -392,8 +402,12 @@ export type SketchEntryFrame =
 export interface SketchModeState {
   basis: PlaneBasis;
   frame: SketchEntryFrame | null;
-  tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'text';
+  tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'polygon' | 'text';
   circleMode: SketchCircleMode;
+  /** The Rectangle tool's type. */
+  rectangleMode: SketchRectangleMode;
+  /** The Polygon tool's side count. */
+  polygonSides: number;
   snapStep: number | null;
   gridVisible: boolean;
   geometrySnapEnabled: boolean;
@@ -904,6 +918,11 @@ export interface ModelViewerProps {
   sketchTextAnchorRef?: MutableRefObject<SketchPoint | null>;
   /** A drawing gesture completed an entity. */
   onSketchCommit(object: SketchObjectData): void;
+  /**
+   * A rectangle or polygon gesture completed a composite: lines held by
+   * relations and named as one object (S04).
+   */
+  onSketchCommitComposite(shape: CompositeShape): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
   onMoveSketchDimension(
     identity: SketchDimensionIdentity,
@@ -1792,6 +1811,7 @@ export function ModelViewer({
   sketchMode,
   sketchTextAnchorRef,
   onSketchCommit,
+  onSketchCommitComposite,
   onEditSketchDimension,
   onMoveSketchDimension,
   onSketchDrawingChange,
@@ -2071,6 +2091,8 @@ export function ModelViewer({
   }, [bodies]);
   const onSketchCommitRef = useRef(onSketchCommit);
   onSketchCommitRef.current = onSketchCommit;
+  const onSketchCommitCompositeRef = useRef(onSketchCommitComposite);
+  onSketchCommitCompositeRef.current = onSketchCommitComposite;
   const onSketchDrawingChangeRef = useRef(onSketchDrawingChange);
   onSketchDrawingChangeRef.current = onSketchDrawingChange;
   const onSketchSelectObjectRef = useRef(onSketchSelectObject);
@@ -3076,7 +3098,8 @@ export function ModelViewer({
     let latestSketchPoint: SketchPoint | null = null;
     let sketchNumericRaw: string | null = null;
     let sketchNumericKind:
-      'radius' | 'diameter' | 'length' | 'width' | 'height' = 'length';
+      'radius' | 'diameter' | 'circumradius' | 'length' | 'width' | 'height' =
+      'length';
     /**
      * The rectangle's other side while you type this one. A rectangle is the
      * only shape here with two independent numbers, so Tab parks the value you
@@ -6242,6 +6265,7 @@ export function ModelViewer({
     const SKETCH_NUMERIC_LABELS = {
       radius: 'Radius',
       diameter: 'Diameter',
+      circumradius: 'Circumradius',
       length: 'Length',
       width: 'Width',
       height: 'Height'
@@ -6337,26 +6361,47 @@ export function ModelViewer({
           typedOther > 0
             ? typedOther
             : null;
-        const width =
-          sketchNumericKind === 'width'
-            ? value
-            : (otherValue ?? Math.abs(live.x - gesture.dragStart.x));
-        const height =
-          sketchNumericKind === 'height'
-            ? value
-            : (otherValue ?? Math.abs(live.y - gesture.dragStart.y));
-        // Keep the corner the drag is heading toward: an exact 40x20 typed
-        // while dragging up and left must not flip to down and right.
-        const signX = live.x < gesture.dragStart.x ? -1 : 1;
-        const signY = live.y < gesture.dragStart.y ? -1 : 1;
-        const rectangle = sketchObjectFromDrag('rectangle', gesture.dragStart, {
-          x: gesture.dragStart.x + signX * width,
-          y: gesture.dragStart.y + signY * height
-        });
+        const rectangle = typedRectangleShape(
+          mode.rectangleMode === 'center' ? 'center' : 'corner',
+          gesture.dragStart,
+          live,
+          {
+            width: sketchNumericKind === 'width' ? value : otherValue,
+            height: sketchNumericKind === 'height' ? value : otherValue
+          }
+        );
         if (!rectangle) {
           return false;
         }
-        onSketchCommitRef.current(rectangle);
+        onSketchCommitCompositeRef.current(rectangle);
+        gesture.dragStart = null;
+        gesture.awaitingSecondPoint = false;
+        sketchRigRef.current?.setInProgress(null, false);
+        onSketchDrawingChangeRef.current(false);
+        finishSketchNumericEntry();
+        requestRender();
+        return true;
+      }
+      if (mode.tool === 'polygon' && gesture.dragStart) {
+        // The typed value is the circumradius; the pointer keeps the
+        // rotation, as it does for a typed line length.
+        const vertex = pointAtDistanceAlongDirection(
+          gesture.dragStart,
+          latestSketchPoint ?? {
+            x: gesture.dragStart.x,
+            y: gesture.dragStart.y + 1
+          },
+          value
+        );
+        const polygon = inscribedPolygonShape(
+          gesture.dragStart,
+          vertex,
+          mode.polygonSides
+        );
+        if (!polygon) {
+          return false;
+        }
+        onSketchCommitCompositeRef.current(polygon);
         gesture.dragStart = null;
         gesture.awaitingSecondPoint = false;
         sketchRigRef.current?.setInProgress(null, false);
@@ -6392,7 +6437,8 @@ export function ModelViewer({
         ((mode.tool === 'circle' &&
           mode.circleMode !== 'three-point' &&
           gesture.dragStart !== null) ||
-          (mode.tool === 'rectangle' && gesture.dragStart !== null) ||
+          ((mode.tool === 'rectangle' || mode.tool === 'polygon') &&
+            gesture.dragStart !== null) ||
           (mode.tool === 'line' && gesture.chainAnchor !== null));
       if (!supported) {
         return false;
@@ -6454,7 +6500,9 @@ export function ModelViewer({
                 : 'radius'
               : mode.tool === 'rectangle'
                 ? 'width'
-                : 'length';
+                : mode.tool === 'polygon'
+                  ? 'circumradius'
+                  : 'length';
           sketchNumericRaw = '';
           sketchNumericOther = null;
         }
@@ -6522,6 +6570,38 @@ export function ModelViewer({
         showSketchCenterInference(point, snapTargetsRef.current);
       }
       if (
+        mode.tool === 'rectangle' &&
+        mode.rectangleMode === 'three-point' &&
+        gesture.circleFirst
+      ) {
+        if (!gesture.circleSecond) {
+          rig.setInProgress([gesture.circleFirst, point], false);
+          positionSketchDimLabel(
+            event,
+            `${Math.round(Math.hypot(point.x - gesture.circleFirst.x, point.y - gesture.circleFirst.y) * 1000) / 1000} ${unitLabelRef.current} · point 2 of 3`,
+            false
+          );
+        } else {
+          const shape = threePointRectangleShape(
+            gesture.circleFirst,
+            gesture.circleSecond,
+            point
+          );
+          if (isCompositeShape(shape)) {
+            rig.setInProgress(shape.corners, true);
+            positionSketchDimLabel(event, compositeSizeLabel(shape), false);
+          } else {
+            rig.setInProgress(
+              [gesture.circleFirst, gesture.circleSecond],
+              false
+            );
+            positionSketchDimLabel(event, shape.refusal, false);
+          }
+        }
+        requestRender();
+        return;
+      }
+      if (
         mode.tool === 'circle' &&
         mode.circleMode === 'three-point' &&
         gesture.circleFirst
@@ -6559,8 +6639,25 @@ export function ModelViewer({
       }
       if (
         gesture.dragStart &&
-        (mode.tool === 'circle' || mode.tool === 'rectangle')
+        (mode.tool === 'rectangle' || mode.tool === 'polygon')
       ) {
+        const shape = dragCompositeShape(
+          mode.tool,
+          mode.rectangleMode,
+          mode.polygonSides,
+          gesture.dragStart,
+          point
+        );
+        if (shape) {
+          rig.setInProgress(shape.corners, true);
+          positionSketchDimLabel(event, compositeSizeLabel(shape));
+        } else {
+          rig.setInProgress([gesture.dragStart, point], false);
+        }
+        requestRender();
+        return;
+      }
+      if (gesture.dragStart && mode.tool === 'circle') {
         if (mode.tool === 'circle') {
           const circle =
             mode.circleMode === 'two-point-diameter'
@@ -7626,7 +7723,9 @@ export function ModelViewer({
         const point = sketchPointAt(event);
         if (
           point &&
-          (mode.tool === 'rectangle' ||
+          ((mode.tool === 'rectangle' &&
+            mode.rectangleMode !== 'three-point') ||
+            mode.tool === 'polygon' ||
             (mode.tool === 'circle' && mode.circleMode !== 'three-point'))
         ) {
           if (!gesture.dragStart) {
@@ -7643,7 +7742,8 @@ export function ModelViewer({
           point &&
           (mode.tool === 'line' ||
             mode.tool === 'arc' ||
-            (mode.tool === 'circle' && mode.circleMode === 'three-point'))
+            (mode.tool === 'circle' && mode.circleMode === 'three-point') ||
+            (mode.tool === 'rectangle' && mode.rectangleMode === 'three-point'))
         ) {
           gesture.pointerId = event.pointerId;
           gesture.moved = false;
@@ -8054,13 +8154,25 @@ export function ModelViewer({
             requestRender();
             return;
           }
-          if (point && (mode.tool === 'circle' || mode.tool === 'rectangle')) {
+          if (point && mode.tool === 'circle') {
             const object =
-              mode.tool === 'circle' && mode.circleMode === 'two-point-diameter'
+              mode.circleMode === 'two-point-diameter'
                 ? circleObjectFromDiameter(gesture.dragStart, point)
                 : sketchObjectFromDrag(mode.tool, gesture.dragStart, point);
             if (object) {
               onSketchCommitRef.current(object);
+            }
+          }
+          if (point && (mode.tool === 'rectangle' || mode.tool === 'polygon')) {
+            const shape = dragCompositeShape(
+              mode.tool,
+              mode.rectangleMode,
+              mode.polygonSides,
+              gesture.dragStart,
+              point
+            );
+            if (shape) {
+              onSketchCommitCompositeRef.current(shape);
             }
           }
           gesture.dragStart = null;
@@ -8068,6 +8180,44 @@ export function ModelViewer({
           rig?.setInProgress(null, false);
           finishSketchNumericEntry();
           onSketchDrawingChangeRef.current(false);
+          requestRender();
+          return;
+        }
+        if (
+          mode.tool === 'rectangle' &&
+          mode.rectangleMode === 'three-point' &&
+          point &&
+          !moved
+        ) {
+          if (!gesture.circleFirst) {
+            gesture.circleFirst = point;
+            onSketchDrawingChangeRef.current(true);
+          } else if (!gesture.circleSecond) {
+            if (
+              Math.hypot(
+                point.x - gesture.circleFirst.x,
+                point.y - gesture.circleFirst.y
+              ) >= 0.5
+            ) {
+              gesture.circleSecond = point;
+            }
+          } else {
+            const shape = threePointRectangleShape(
+              gesture.circleFirst,
+              gesture.circleSecond,
+              point
+            );
+            if (isCompositeShape(shape)) {
+              onSketchCommitCompositeRef.current(shape);
+              gesture.circleFirst = null;
+              gesture.circleSecond = null;
+              rig?.setInProgress(null, false);
+              hideSketchDimLabel();
+              onSketchDrawingChangeRef.current(false);
+            } else {
+              positionSketchDimLabel(event, shape.refusal, false);
+            }
+          }
           requestRender();
           return;
         }

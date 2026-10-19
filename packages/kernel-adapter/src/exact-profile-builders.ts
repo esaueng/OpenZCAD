@@ -23,6 +23,7 @@ import {
   type SketchId,
   type ParamValue,
   type SketchNode,
+  type DatumPointSource,
   type SketchObjectData,
   type SketchPlaneRef,
   type SketchPathReference,
@@ -40,6 +41,7 @@ import {
   topologyCandidatesForSolid
 } from './exact-lineage-builders';
 import {
+  edgeVertexCandidatesForShape,
   faceAttachmentCandidatesForShape,
   formatMeasuredVolume,
   resolveParametricPoint,
@@ -75,7 +77,7 @@ import {
   type RemusLineageState,
   type RemusSemanticAssignment
 } from './remus-lineage';
-import { resolveFaceAttachment } from './face-attachment';
+import { resolveEdgeVertex, resolveFaceAttachment } from './face-attachment';
 
 const CURVE_SEGMENTS = 32;
 /** `liftCurve2dToPlane` curve types: 0 line, 1 circle, 2 ellipse, 3 NURBS. */
@@ -327,6 +329,48 @@ export function resolvePlaneRefAtHistory(
     v: frame.yAxis,
     normal: frame.zAxis
   };
+}
+
+/**
+ * R01: the world position of a datum's point source at its history
+ * position. Coordinates are lengths in document units; a vertex re-finds its
+ * edge through verified lineage and refuses by name when it cannot.
+ */
+export function resolveDatumPointAtHistory(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  point: DatumPointSource,
+  datumName: string,
+  result: ExactBuildResult,
+  scope: Record<string, number>
+): Vec3 {
+  if (point.type === 'point') {
+    const axis = (value: ParamValue, name: string) =>
+      resolveParamValue(value, scope, `datum point ${name}`, document.units);
+    return {
+      x: axis(point.point.x, 'X'),
+      y: axis(point.point.y, 'Y'),
+      z: axis(point.point.z, 'Z')
+    };
+  }
+  const shape = result.shapes.get(point.bodyId);
+  const sourceFeature = listFeaturesInOrder(document).find(
+    (candidate) =>
+      candidate.featureId === point.edgeReference.producingFeatureId
+  );
+  if (!shape) {
+    throw new Error(
+      `Datum plane "${datumName}" cannot use a vertex of body ${point.bodyId} because it is unavailable at the datum's history position.`
+    );
+  }
+  return resolveEdgeVertex({
+    reference: point.edgeReference,
+    end: point.end,
+    candidates: edgeVertexCandidatesForShape(kernel, shape),
+    datumName,
+    sourceFeatureName:
+      sourceFeature?.name ?? String(point.edgeReference.producingFeatureId)
+  });
 }
 
 export function makeProfileFace(

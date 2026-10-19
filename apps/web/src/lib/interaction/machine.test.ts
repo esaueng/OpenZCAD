@@ -272,6 +272,31 @@ describe('interactionReducer', () => {
     expect(state).toEqual(IDLE);
   });
 
+  it('arms the rectangle by type and keeps the polygon’s side count as a setting', () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    state = interactionReducer(state, {
+      type: 'sketch-rectangle-mode',
+      mode: 'three-point'
+    });
+    expect(state.mode === 'sketch' && state.session.tool).toBe('rectangle');
+    expect(state.mode === 'sketch' && state.session.rectangleMode).toBe(
+      'three-point'
+    );
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'polygon' });
+    state = interactionReducer(state, {
+      type: 'sketch-drawing',
+      drawing: true
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-polygon-sides',
+      sides: 8
+    });
+    // A side count never ends the polygon being drawn.
+    expect(state.mode === 'sketch' && state.session.drawing).toBe(true);
+    expect(state.mode === 'sketch' && state.session.polygonSides).toBe(8);
+    expect(state.mode === 'sketch' && state.session.tool).toBe('polygon');
+  });
+
   it('steps the circle type in the strip order, wrapping round', () => {
     expect(nextSketchCircleMode('center-radius')).toBe('two-point-diameter');
     expect(nextSketchCircleMode('two-point-diameter')).toBe('three-point');

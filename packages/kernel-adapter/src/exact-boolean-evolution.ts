@@ -1,9 +1,10 @@
-import type {
-  BodyId,
-  FacePlaneSource,
-  FeatureId,
-  FeatureNode,
-  ProjectDocument
+import {
+  datumPlaneSources,
+  datumPointSources,
+  type BodyId,
+  type FeatureId,
+  type FeatureNode,
+  type ProjectDocument
 } from '@openzcad/shared';
 import { listFeaturesInOrder } from '@openzcad/document-core';
 import type { RemusKernel } from './remus-runtime';
@@ -358,18 +359,39 @@ const KNOWN_FEATURE_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The face sources of an R01 datum plane. A face-derived datum resolves its
- * frame from the face's verified lineage, so it consumes face identity just
- * as a face-attached sketch does; datum and canonical sources consume none.
+ * The topology sources of an R01 datum plane: faces it resolves a frame
+ * from and edges whose end vertex it passes through. Both resolve through
+ * verified lineage, so the datum consumes that identity just as a
+ * face-attached sketch does; datum, canonical and coordinate sources
+ * consume none.
  */
-function datumFaceSources(feature: FeatureNode): FacePlaneSource[] {
+function datumTopologySources(
+  feature: FeatureNode
+): { bodyId: BodyId; producingFeatureId: FeatureId }[] {
   if (feature.data.featureKind !== 'datum-plane') return [];
   const { definition } = feature.data;
-  const sources =
-    definition.kind === 'offset' ? [definition.source] : definition.sources;
-  return sources.filter(
-    (source): source is FacePlaneSource => source.type === 'face'
-  );
+  return [
+    ...datumPlaneSources(definition).flatMap((source) =>
+      source.type === 'face'
+        ? [
+            {
+              bodyId: source.bodyId,
+              producingFeatureId: source.faceReference.producingFeatureId
+            }
+          ]
+        : []
+    ),
+    ...datumPointSources(definition).flatMap((point) =>
+      point.type === 'edge-vertex'
+        ? [
+            {
+              bodyId: point.bodyId,
+              producingFeatureId: point.edgeReference.producingFeatureId
+            }
+          ]
+        : []
+    )
+  ];
 }
 
 const KNOWN_NODE_KINDS: ReadonlySet<string> = new Set([
@@ -473,8 +495,8 @@ function persistedReferenceNamesProducer(
         break;
       case 'datum-plane':
         if (
-          datumFaceSources(feature).some(
-            (source) => source.faceReference.producingFeatureId === producer
+          datumTopologySources(feature).some(
+            (source) => source.producingFeatureId === producer
           )
         )
           return true;
@@ -599,9 +621,9 @@ export function booleanEvolutionProbeNeeded(
       continue;
     }
     if (downstream.data.featureKind === 'datum-plane') {
-      // A datum reads a face of an existing body and produces none.
+      // A datum reads a face or vertex of an existing body and produces none.
       if (
-        datumFaceSources(downstream).some((source) =>
+        datumTopologySources(downstream).some((source) =>
           descendants.has(source.bodyId)
         )
       ) {

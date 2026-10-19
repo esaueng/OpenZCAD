@@ -1,5 +1,6 @@
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -14,6 +15,7 @@ import {
 import {
   toBodyId,
   toUserId,
+  type EdgeVertexPointSource,
   type FacePlaneSource,
   type FeatureId,
   type ProjectDocument
@@ -25,6 +27,7 @@ import {
   type DatumPlaneCardApp
 } from './DatumPlaneForm';
 import { ModelingOperationsForm } from './ModelingOperationsForm';
+import type { DatumPlaneSubmission } from '../../lib/datumPlanes';
 
 const XY = { type: 'canonical', plane: 'XY', offset: 0 } as const;
 
@@ -426,5 +429,200 @@ describe('Plane card and the viewport handle (R01)', () => {
     expect(screen.getByLabelText('Offset')).toHaveFocus();
     unmount();
     expect(offsetEntryRef.current).toBeNull();
+  });
+});
+
+describe('Plane card: three points and parallel at a point (R01)', () => {
+  const vertexEdge = (
+    a: [number, number, number],
+    b: [number, number, number],
+    name: string
+  ): EdgeVertexPointSource => ({
+    type: 'edge-vertex',
+    bodyId: toBodyId('body_block'),
+    edgeReference: {
+      kind: 'edge',
+      producingFeatureId: 'feat_block' as FeatureId,
+      lineageName: name,
+      currentHash: 1,
+      witnessVersion: 1,
+      witness: {
+        curveType: 'LINE',
+        length: 20,
+        closed: false,
+        // Quantized in the 1e-6 quantum, deliberately out of order.
+        endpoints: [b.map((c) => c * 1e6), a.map((c) => c * 1e6)] as never,
+        midpoint: [0, 0, 0]
+      }
+    },
+    end: 0
+  });
+
+  it('creates a three-point plane from typed positions', async () => {
+    const onSubmit = vi.fn<(submission: DatumPlaneSubmission) => void>();
+    render(
+      <DatumPlaneCard
+        document={createProjectDocument('New', toUserId('user_plane_card'))}
+        editing={null}
+        scope={{ h: 4 }}
+        pickedFace={null}
+        onPreflight={async () => ({ status: 'ready' as const })}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Three points' }));
+    expect(
+      screen.getByText(/Pick an edge end for the first point/)
+    ).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
+    const typed = (slot: string, x: string, y: string, z: string) => {
+      fireEvent.change(screen.getByLabelText(slot), {
+        target: { value: 'typed' }
+      });
+      fireEvent.change(screen.getByLabelText(`${slot} X`), {
+        target: { value: x }
+      });
+      fireEvent.change(screen.getByLabelText(`${slot} Y`), {
+        target: { value: y }
+      });
+      fireEvent.change(screen.getByLabelText(`${slot} Z`), {
+        target: { value: z }
+      });
+    };
+    typed('Point 1', '0', '0', 'h');
+    typed('Point 2', '0', '0', 'h');
+    typed('Point 3', '0', '10', 'h');
+    expect(
+      screen.getByText('A three-point plane needs three different points.')
+    ).toBeVisible();
+    typed('Point 2', '10', '0', 'h');
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({
+      name: 'Plane 1',
+      definition: {
+        kind: 'three-point',
+        points: [
+          { type: 'point', point: { x: 0, y: 0, z: 'h' } },
+          { type: 'point', point: { x: 10, y: 0, z: 'h' } },
+          { type: 'point', point: { x: 0, y: 10, z: 'h' } }
+        ]
+      }
+    });
+  });
+
+  it('fills point slots from successive edge picks, labelled by position', async () => {
+    const document = createProjectDocument(
+      'Picks',
+      toUserId('user_plane_card')
+    );
+    const picks = [
+      vertexEdge([0, 0, 20], [20, 0, 20], 'edge:a'),
+      { ...vertexEdge([0, 0, 20], [20, 0, 20], 'edge:a'), end: 1 as const },
+      vertexEdge([0, 20, 20], [20, 20, 20], 'edge:b')
+    ];
+    const onSubmit = vi.fn<(submission: DatumPlaneSubmission) => void>();
+    const props = {
+      document,
+      editing: null,
+      scope: {},
+      pickedFace: null,
+      onPreflight: async () => ({ status: 'ready' as const }),
+      onSubmit,
+      onCancel: vi.fn()
+    };
+    const view = render(<DatumPlaneCard {...props} pickedVertex={null} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Three points' }));
+    for (const pick of picks) {
+      view.rerender(<DatumPlaneCard {...props} pickedVertex={pick} />);
+    }
+    // End 0 sorts first by quantized x: (0, 0, 20) on edge a.
+    expect(screen.getByLabelText('Point 1')).toHaveDisplayValue(
+      'Picked vertex (0, 0, 20)'
+    );
+    expect(screen.getByLabelText('Point 2')).toHaveDisplayValue(
+      'Picked vertex (20, 0, 20)'
+    );
+    expect(screen.getByLabelText('Point 3')).toHaveDisplayValue(
+      'Picked vertex (0, 20, 20)'
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0]![0].definition).toEqual({
+      kind: 'three-point',
+      points: picks
+    });
+  });
+
+  it('says why a picked edge cannot give a vertex', () => {
+    render(
+      <DatumPlaneCard
+        document={createProjectDocument('New', toUserId('user_plane_card'))}
+        editing={null}
+        scope={{}}
+        pickedFace={null}
+        pickedVertex={{ reason: 'A closed edge has no end vertex.' }}
+        onPreflight={vi.fn()}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Parallel at point' }));
+    expect(screen.getByText('A closed edge has no end vertex.')).toBeVisible();
+  });
+
+  it('creates a parallel plane through a point and reopens it for edit', async () => {
+    const empty = createProjectDocument(
+      'Parallel',
+      toUserId('user_plane_card')
+    );
+    const onSubmit = vi.fn<(submission: DatumPlaneSubmission) => void>();
+    render(
+      <DatumPlaneCard
+        document={empty}
+        editing={null}
+        scope={{}}
+        pickedFace={null}
+        onPreflight={async () => ({ status: 'ready' as const })}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Parallel at point' }));
+    expect(screen.getByLabelText('Parallel to')).toHaveDisplayValue('Top (XY)');
+    fireEvent.change(screen.getByLabelText('Through point'), {
+      target: { value: 'typed' }
+    });
+    fireEvent.change(screen.getByLabelText('Through point Z'), {
+      target: { value: '7' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    const definition = onSubmit.mock.calls[0]![0].definition;
+    expect(definition).toEqual({
+      kind: 'parallel-point',
+      source: XY,
+      point: { type: 'point', point: { x: 0, y: 0, z: 7 } }
+    });
+
+    const saved = addDatumPlane(empty, { name: 'Lid', definition });
+    cleanup();
+    render(
+      <DatumPlaneCard
+        document={saved.document}
+        editing={findFeature(saved.document, saved.featureId)!}
+        scope={{}}
+        pickedFace={null}
+        onPreflight={vi.fn()}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Parallel at point' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('Through point Z')).toHaveValue('7');
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeVisible();
   });
 });

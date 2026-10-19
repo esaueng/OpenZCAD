@@ -5,6 +5,7 @@ export * from './textLimits';
 export * from './imported-step-source';
 export * from './imported-mesh-payload';
 export * from './sketch-reference-dimensions';
+export * from './sketch-composites';
 export * from './mass-density';
 export * from './keymap-settings';
 import type { DocumentHistory } from './document-history';
@@ -28,6 +29,7 @@ export type SketchReferenceAnnotationId = Brand<
   'SketchReferenceAnnotationId'
 >;
 export type ShaprImportId = Brand<string, 'ShaprImportId'>;
+export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 
 /**
  * v18 adds the S07 constraint kinds (`symmetric`, `point-on-object`, `lock`).
@@ -61,8 +63,22 @@ export type ShaprImportId = Brand<string, 'ShaprImportId'>;
  * (`keepOriginal`) (M11). A v23 client would rebuild an intersect extrude
  * as a cut and hide bodies the feature keeps, so the bump makes it refuse
  * such a document. Every field is optional; absent is the v23 behaviour.
+ *
+ * v25 adds two R01 datum-plane definitions, `three-point` and
+ * `parallel-point`, and the point sources they read (world coordinates or an
+ * edge's end vertex). An older client would refuse or misread such a datum
+ * and every sketch, Split and Mirror built on it, so the bump makes it refuse
+ * the document instead. Existing datums are unchanged.
+ *
+ * v26 adds S04 composite identity (`SketchNode.composites`): a rectangle or
+ * polygon drawn in the viewport is real lines held by persisted relations,
+ * and the composite record names those lines as one object with ordered
+ * corners and sides. An older client would drop the record on its next save and
+ * leave four unrelated lines, so the bump makes it refuse such a document.
+ * Absent means no composites: every older rectangle and polygon object loads
+ * unchanged and is never decomposed.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 24 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 26 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -614,6 +630,28 @@ export type DatumPlaneSource =
   | DatumPlaneRef
   | FacePlaneSource;
 
+/**
+ * Schema v25: a model vertex, named as one end of an open edge whose
+ * schema-v5 lineage the exact build re-finds at the datum's history position.
+ * `end` 0 is the end whose quantized (ADR-011) coordinates sort first by x,
+ * then y, then z, which both kernels read identically; the vertex's exact
+ * position is then taken from the resolved edge. A deleted, ambiguous or
+ * closed edge refuses by name. No vertex is guessed by proximity.
+ */
+export interface EdgeVertexPointSource {
+  type: 'edge-vertex';
+  bodyId: BodyId;
+  edgeReference: EdgeTopologyReferenceV5;
+  end: 0 | 1;
+}
+
+/**
+ * Schema v25: a point a datum plane passes through: expression-capable world
+ * coordinates in document units, or a model vertex by reference.
+ */
+export type DatumPointSource =
+  { type: 'point'; point: ParametricVector3 } | EdgeVertexPointSource;
+
 export type DatumPlaneDefinition =
   | {
       kind: 'offset';
@@ -628,7 +666,71 @@ export type DatumPlaneDefinition =
       /** Ordered roles A and B; the result keeps A's frame. */
       sources: [DatumPlaneSource, DatumPlaneSource];
       reverseNormal?: boolean;
+    }
+  | {
+      /**
+       * Schema v25: the plane through three points. The origin is the first
+       * point, u points at the second, and the normal follows the right-hand
+       * rule (first → second → third). Coincident or collinear points are
+       * refused; no plane is guessed.
+       */
+      kind: 'three-point';
+      points: [DatumPointSource, DatumPointSource, DatumPointSource];
+      reverseNormal?: boolean;
+    }
+  | {
+      /**
+       * Schema v25: the plane parallel to `source` through `point`, keeping
+       * the source's axes. A point on the source gives the source itself.
+       */
+      kind: 'parallel-point';
+      source: DatumPlaneSource;
+      point: DatumPointSource;
+      reverseNormal?: boolean;
     };
+
+/** The plane sources a datum definition reads, in role order. */
+export function datumPlaneSources(
+  definition: DatumPlaneDefinition
+): DatumPlaneSource[] {
+  switch (definition.kind) {
+    case 'offset':
+    case 'parallel-point':
+      return [definition.source];
+    case 'midplane':
+      return [...definition.sources];
+    case 'three-point':
+      return [];
+  }
+}
+
+/** The point sources a datum definition reads, in role order. */
+export function datumPointSources(
+  definition: DatumPlaneDefinition
+): DatumPointSource[] {
+  switch (definition.kind) {
+    case 'three-point':
+      return [...definition.points];
+    case 'parallel-point':
+      return [definition.point];
+    default:
+      return [];
+  }
+}
+
+/**
+ * The bodies whose topology a datum reads: face sources and vertex sources.
+ * A datum resolving through one of these consumes its identity just as a
+ * face-attached sketch does.
+ */
+export function datumSourceBodyIds(definition: DatumPlaneDefinition): BodyId[] {
+  const bodies = new Set<BodyId>();
+  for (const source of datumPlaneSources(definition))
+    if (source.type === 'face') bodies.add(source.bodyId);
+  for (const point of datumPointSources(definition))
+    if (point.type === 'edge-vertex') bodies.add(point.bodyId);
+  return [...bodies];
+}
 
 export interface SketchNode extends BaseNode {
   kind: 'sketch';
@@ -667,6 +769,13 @@ export interface SketchNode extends BaseNode {
    * constraint through a click or a label drag.
    */
   referenceDimensions?: SketchReferenceDimension[];
+  /**
+   * S04 composite identity (schema v26, additive): rectangles and polygons
+   * drawn as lines, each named as one object. Absent means none, so every
+   * earlier document replays untouched; a legacy `rectangle` or `polygon`
+   * object is never rewritten into one.
+   */
+  composites?: SketchComposite[];
 }
 
 export interface SketchDimensionLabelPosition {
@@ -796,6 +905,53 @@ export interface SketchReferenceDimension {
 export type SketchDimensionIdentity =
   | { kind: 'constraint'; constraintId: SketchConstraintId }
   | { kind: 'reference'; annotationId: SketchReferenceAnnotationId };
+
+/**
+ * How a composite was drawn. It decides which relations hold the shape
+ * (horizontal/vertical sides for an axis-aligned rectangle, perpendicular
+ * and parallel sides for a three-point one, equal sides on a circumcircle
+ * for a polygon) and what a resize holds still: a corner rectangle keeps
+ * corner 0, a centre rectangle keeps its centre.
+ */
+export type SketchCompositeData =
+  | {
+      compositeKind: 'rectangle';
+      method: 'corner' | 'center' | 'three-point';
+    }
+  | {
+      compositeKind: 'polygon';
+      /** Vertices lie on the construction circle: its radius is the circumradius. */
+      method: 'inscribed';
+    };
+
+export type SketchCompositeKind = SketchCompositeData['compositeKind'];
+
+/**
+ * S04: a rectangle or regular polygon drawn as real `line` objects, named as
+ * one object. The shape's intent lives in ordinary persisted relations
+ * (coincident corners, horizontal/vertical or perpendicular/parallel sides,
+ * equal sides), so the solver, dimensions and modify tools treat its sides
+ * like any other lines. This record adds the identity those relations
+ * cannot carry: which lines form one shape, and in what order.
+ *
+ * Side `i` is `edgeIds[i]`; it runs from corner `i` to corner `i + 1`
+ * (wrapping), counter-clockwise, so corner `i` is the start of side `i` and
+ * is held to the end of side `i - 1` by a coincident relation. Corner and
+ * side identity is therefore an index into this list, never a coordinate.
+ * A polygon walked clockwise resolves as broken. A rectangle that an edit
+ * has mirrored through itself still resolves: its corners keep their
+ * indices, and nothing about it depends on the direction of the walk.
+ *
+ * `helperIds` are construction geometry the composite owns: a centre
+ * rectangle's two diagonals (whose crossing is the centre) and a polygon's
+ * circumcircle. Deleting any member dissolves the record; the lines and
+ * their remaining relations stay.
+ */
+export type SketchComposite = SketchCompositeData & {
+  compositeId: SketchCompositeId;
+  edgeIds: EntityId[];
+  helperIds?: EntityId[];
+};
 
 export type SketchObjectData = (
   | {
@@ -2729,6 +2885,13 @@ export interface CreateProjectRequest {
   document?: ProjectDocument;
   /** Client can transfer local records to the returned cloud identity. */
   adoptionProtocolVersion?: 1;
+  /**
+   * A new project the browser built (ADR-024 Phase 1). The account stores it
+   * under its own id after the checks an adoption gets; unlike `document`, it
+   * keeps that id and records no device binding. Requests without it are the
+   * pre-Phase 1 contract, kept for one release: the server builds the document.
+   */
+  initialDocument?: ProjectDocument;
 }
 
 export interface CreateProjectResponse {
@@ -2787,6 +2950,13 @@ export interface SaveRevisionRequest {
   reason: string;
   expectedVersion: number;
   document: ProjectDocument;
+  /**
+   * The revision the browser appended to `document` for this save, with its
+   * checkpoint (ADR-024 Phase 1). The server checks it and stores the document
+   * as sent. Requests without it are the pre-Phase 1 contract, kept for one
+   * release: the server mints the save point itself.
+   */
+  savedRevisionId?: RevisionId;
 }
 
 /**
@@ -3309,6 +3479,9 @@ export interface ProjectEditLease {
   expiresAt: number;
 }
 
+/** The save revision reason a "Keep this device's version" choice records. */
+export const KEPT_LOCAL_VERSION_REASON = 'Kept this device’s version';
+
 export type CollaborationClientMessage =
   | {
       type: 'hello';
@@ -3326,6 +3499,12 @@ export type CollaborationClientMessage =
       leaseId?: string;
       /** Explicit user choice after preserving the other copy; fenced by baseVersion. */
       conflictResolution?: 'keep-local';
+      /**
+       * With `keep-local`: the save revision the browser appended to
+       * `document` (ADR-024 Phase 1). Without it the room mints one, the
+       * pre-Phase 1 contract kept for one release.
+       */
+      savedRevisionId?: string;
     }
   | { type: 'presence'; clientId: string; status: 'active' | 'idle' }
   | { type: 'lease-acquire'; clientId: string }
@@ -3532,6 +3711,8 @@ export const toSketchReferenceAnnotationId = (
 ): SketchReferenceAnnotationId => value as SketchReferenceAnnotationId;
 export const toShaprImportId = (value: string): ShaprImportId =>
   value as ShaprImportId;
+export const toSketchCompositeId = (value: string): SketchCompositeId =>
+  value as SketchCompositeId;
 
 /**
  * The colour every solid is drawn in until someone chooses another (design

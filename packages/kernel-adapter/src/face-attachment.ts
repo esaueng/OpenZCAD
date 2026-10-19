@@ -1,11 +1,14 @@
 import type {
+  EdgeTopologyReferenceV5,
   FaceTopologyReferenceV5,
   SketchPlaneFrame,
   Vector3
 } from '@openzcad/shared';
 
+import { edgeEndPoint } from './topology-fingerprint';
 import {
   resolveTopologyReference,
+  type EdgeTopologyResolutionCandidate,
   type FaceTopologyResolutionCandidate,
   type TopologyResolutionFailureReason
 } from './topology-lineage';
@@ -356,4 +359,60 @@ export function resolveFaceAttachment(
     );
   }
   return frame;
+}
+
+/**
+ * One exact edge at a datum's history position, with its exact endpoints
+ * (null for a closed edge, which has no end vertex).
+ */
+export interface EdgeVertexCandidate extends EdgeTopologyResolutionCandidate {
+  readonly endpoints: readonly [Vector3, Vector3] | null;
+}
+
+export interface ResolveEdgeVertexInput {
+  readonly reference: EdgeTopologyReferenceV5;
+  readonly end: 0 | 1;
+  readonly candidates: readonly EdgeVertexCandidate[];
+  readonly datumName: string;
+  readonly sourceFeatureName: string;
+}
+
+/**
+ * R01: the exact vertex a datum's edge-vertex source names, re-found solely
+ * through verified lineage at the datum's history position. A deleted,
+ * ambiguous or now-closed edge refuses by name; the stored witness never
+ * stands in for the edge, and no vertex is chosen by proximity.
+ */
+export function resolveEdgeVertex(input: ResolveEdgeVertexInput): Vector3 {
+  const fail = (detail: string) =>
+    new Error(
+      `Datum plane "${named(input.datumName, '<unnamed datum>')}" cannot use a vertex of source feature "${named(input.sourceFeatureName, '<unnamed source feature>')}": ${detail}`
+    );
+  const resolution = resolveTopologyReference(
+    input.reference,
+    input.candidates
+  );
+  if (resolution.status === 'failed') {
+    throw fail(
+      mappedFailureReason(resolution.reason) === 'deleted'
+        ? `its edge was deleted or no longer exists. ${resolution.message}`
+        : resolution.message
+    );
+  }
+  if (resolution.via !== 'lineage') {
+    throw fail(
+      'a vertex source requires verified lineage; hash fallback is not accepted.'
+    );
+  }
+  const candidate = input.candidates.find(
+    (entry) => entry === resolution.candidate
+  );
+  if (!candidate?.endpoints) {
+    throw fail('its edge is now closed and has no end vertex.');
+  }
+  const point = edgeEndPoint(candidate.endpoints, input.end);
+  if (!finiteVector(point)) {
+    throw fail('the resolved vertex is not a finite position.');
+  }
+  return { x: point.x, y: point.y, z: point.z };
 }

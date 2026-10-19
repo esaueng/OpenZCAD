@@ -150,6 +150,28 @@ export function edgeFingerprintOf(sample: EdgeSample): number {
   return fingerprintOfSignature(edgeSignatureOf(sample));
 }
 
+/**
+ * R01 edge-vertex sources: which exact endpoint `end` names. End 0 is the one
+ * whose quantized coordinates sort first by x, then y, then z — integers both
+ * kernels agree on, so neither raw-coordinate noise nor a kernel's edge
+ * orientation decides it. The returned point is the exact endpoint.
+ */
+export function edgeEndPoint(
+  endpoints: readonly [Vec3, Vec3],
+  end: 0 | 1
+): Vec3 {
+  const key = (point: Vec3) =>
+    [point.x, point.y, point.z].map(quantizeCoordinate);
+  const [a, b] = endpoints.map(key) as [number[], number[]];
+  let order = 0;
+  for (let index = 0; index < 3 && order === 0; index += 1) {
+    order = Math.sign(a[index]! - b[index]!);
+  }
+  const first = order <= 0 ? endpoints[0] : endpoints[1];
+  const second = order <= 0 ? endpoints[1] : endpoints[0];
+  return end === 0 ? first : second;
+}
+
 /** Endpoint coincidence after quantization decides closedness identically on both kernels. */
 export function isClosedEdge(start: Vec3, end: Vec3): boolean {
   return (

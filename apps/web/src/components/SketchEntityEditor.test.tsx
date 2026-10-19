@@ -908,3 +908,84 @@ describe('sketch field unit context', () => {
     );
   });
 });
+
+describe('composite card (S04)', () => {
+  const side: SketchObjectData = {
+    objectKind: 'line',
+    x1: 0,
+    y1: 0,
+    x2: 20,
+    y2: 0
+  };
+
+  it('names the shape and side, and resizes the rectangle as one object', async () => {
+    const user = userEvent.setup();
+    const onResizeComposite = vi.fn();
+    render(
+      <SketchEntityEditor
+        data={side}
+        scope={{ gap: 3 }}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+        composite={{
+          compositeId: 'scmp_1',
+          kind: 'rectangle',
+          title: 'Center rectangle',
+          side: 1,
+          sides: 4,
+          size: { width: 20, height: 12 },
+          anchor: 'Keeps its center.'
+        }}
+        onResizeComposite={onResizeComposite}
+      />
+    );
+    const card = screen.getByRole('form', { name: 'Resize center rectangle' });
+    expect(card).toHaveTextContent('Side 1 of 4');
+    expect(card).toHaveTextContent('Keeps its center.');
+    expect(within(card).getByLabelText('Width')).toHaveValue('20');
+    const height = within(card).getByLabelText('Height');
+    await user.clear(height);
+    await user.type(height, 'gap * 4');
+    await user.click(within(card).getByRole('button', { name: 'Resize' }));
+    // The typed expression rides along, so it keeps driving the height; the
+    // untouched plain width does not.
+    expect(onResizeComposite).toHaveBeenCalledWith(
+      { width: 20, height: 12 },
+      { height: 'gap * 4' }
+    );
+  });
+
+  it('offers the polygon its circumradius and refuses a non-positive size', async () => {
+    const user = userEvent.setup();
+    const onResizeComposite = vi.fn();
+    render(
+      <SketchEntityEditor
+        data={side}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onClose={vi.fn()}
+        composite={{
+          compositeId: 'scmp_2',
+          kind: 'polygon',
+          title: 'Polygon',
+          side: 3,
+          sides: 6,
+          size: { circumradius: 10 },
+          anchor: 'Keeps its center.'
+        }}
+        onResizeComposite={onResizeComposite}
+      />
+    );
+    const card = screen.getByRole('form', { name: 'Resize polygon' });
+    const radius = within(card).getByLabelText('Circumradius');
+    await user.clear(radius);
+    await user.type(radius, '0');
+    expect(within(card).getByRole('button', { name: 'Resize' })).toBeDisabled();
+    await user.clear(radius);
+    await user.type(radius, '15');
+    await user.click(within(card).getByRole('button', { name: 'Resize' }));
+    expect(onResizeComposite).toHaveBeenCalledWith({ circumradius: 15 }, {});
+  });
+});

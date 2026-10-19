@@ -142,7 +142,9 @@ export const KEYMAP_COMMANDS: readonly KeymapCommand[] = [
   command('sketch-arc', 'Arc', 'sketch-mode', 'sketch', 'A'),
   // Pressed again on the circle tool, it steps the circle type.
   command('sketch-circle', 'Circle', 'sketch-mode', 'sketch', 'C'),
+  // Pressed again on the rectangle tool, it steps the rectangle type.
   command('sketch-rectangle', 'Rectangle', 'sketch-mode', 'sketch', 'R'),
+  command('sketch-polygon', 'Polygon', 'sketch-mode', 'sketch', 'P'),
   command('sketch-text', 'Text', 'sketch-mode', 'sketch', 'T'),
   command('sketch-extrude', 'Extrude the sketch', 'sketch-mode', 'sketch', 'E')
 ];
