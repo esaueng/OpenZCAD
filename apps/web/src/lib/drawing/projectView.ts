@@ -376,8 +376,11 @@ function chainSegments(segments: [number, number][]): number[][] {
   return chains;
 }
 
-/** Where a run's point came from: the line itself, or a visibility cut. */
-type CutKind = 'vertex' | 'edge' | 'depth';
+/**
+ * Where a run's point came from: one of the line's two ends (a B-rep edge's
+ * end vertex, or a silhouette's), a sample along it, or a visibility cut.
+ */
+type CutKind = 'end' | 'vertex' | 'edge' | 'depth';
 
 interface Polyline3 {
   points: number[];
@@ -750,7 +753,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     // and each span is classified once, however narrow the occluder.
     const points: number[] = [line[0]!, line[1]!, line[2]!];
     /** What each point is: one of the line's own vertices, or a cut. */
-    const kinds: CutKind[] = ['vertex'];
+    const kinds: CutKind[] = ['end'];
     const spans: boolean[] = [];
     for (let s = 0; s < count - 1; s += 1) {
       const [au, av, ad] = project(
@@ -765,15 +768,20 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       );
       // Cuts closer than float noise collapse into one; the segment's own
       // end always survives, so the line keeps every one of its vertices.
-      const cuts: { t: number; kind: CutKind }[] = [{ t: 0, kind: 'vertex' }];
+      const cuts: { t: number; kind: CutKind }[] = [
+        { t: 0, kind: s === 0 ? 'end' : 'vertex' }
+      ];
       const found: { t: number; kind: CutKind }[] = grid
         .crossings(au, av, ad, bu, bv, bd)
         .map(({ t, depth }) => ({ t, kind: depth ? 'depth' : 'edge' }));
-      found.push({ t: 1, kind: 'vertex' });
+      // Only the line's own two ends are B-rep edge ends; the samples between
+      // are just points along a curve.
+      found.push({ t: 1, kind: s === count - 2 ? 'end' : 'vertex' });
       for (const cut of found) {
         const last = cuts.at(-1)!;
         if (cut.t - last.t > 1e-12) cuts.push(cut);
-        else if (cut.kind === 'vertex') cuts[cuts.length - 1] = cut;
+        else if (cut.kind === 'vertex' || cut.kind === 'end')
+          cuts[cuts.length - 1] = cut;
         // Coincident cuts: a footprint crossing outranks a depth one.
         else if (cut.kind === 'edge' && last.kind === 'depth')
           last.kind = 'edge';
@@ -824,14 +832,15 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
         });
     });
     // Only a corner artifact merges: a short piece between one of the
-    // line's own vertices and an occlusion-threshold cut, where the edge
-    // meets the plane of a face at its own end. A piece bounded by an
-    // occluder's footprint is a real interval, however short.
+    // line's two ends and an occlusion-threshold cut, where the edge meets
+    // the plane of a face at its own end. A piece beside an interior sample
+    // of a curved edge, or bounded by an occluder's footprint, is a real
+    // interval, however short.
     if (pieces.length > 1)
       pieces.forEach((piece, index) => {
         if (piece.length >= minPiece) return;
         const ends = [kinds[piece.from], kinds[piece.to]];
-        if (!(ends.includes('vertex') && ends.includes('depth'))) return;
+        if (!(ends.includes('end') && ends.includes('depth'))) return;
         const neighbour = pieces[index - 1] ?? pieces[index + 1];
         if (neighbour) piece.hidden = neighbour.hidden;
       });
@@ -845,7 +854,12 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       // its middle are collinear with their neighbours.
       const run: number[] = [];
       for (let p = from; p <= to; p += 1)
-        if (p === from || p === to || kinds[p] === 'vertex')
+        if (
+          p === from ||
+          p === to ||
+          kinds[p] === 'vertex' ||
+          kinds[p] === 'end'
+        )
           run.push(points[p * 3]!, points[p * 3 + 1]!, points[p * 3 + 2]!);
       emit(run, pieces[index]!.hidden);
       start = index + 1;

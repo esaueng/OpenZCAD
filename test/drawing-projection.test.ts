@@ -721,6 +721,54 @@ describe('D01 occlusion tolerance', () => {
     expect(onLine(result.hidden, insideFar).length).toBeGreaterThanOrEqual(4);
   });
 
+  it('keeps a short visible gap beside an interior sample of a curved edge', () => {
+    // A 1000 mm polyline edge with an interior sample at x = 500, seen from
+    // above. A flat strip hides x in [400, 500]; a sloped one over
+    // [500, 600] rises above the edge only past x = 500.03. The 0.03 mm in
+    // between is visible: bounded by an interior sample and a depth cut, it
+    // is not a corner artifact (only the edge's own ends make those).
+    const quad = (corners: number[][]) => ({
+      vertices: Float64Array.from(corners.flat()),
+      indices: Uint32Array.from([0, 1, 2, 0, 2, 3]),
+      faces: [{ triangleStart: 0, triangleCount: 2 }],
+      edges: []
+    });
+    const flat = quad([
+      [400, -1, 1],
+      [500, -1, 1],
+      [500, 1, 1],
+      [400, 1, 1]
+    ]);
+    // z = (x − 500.03) / 10: below the edge before 500.03, above after.
+    const z = (x: number) => (x - 500.03) / 10;
+    const sloped = quad([
+      [500, -1, z(500)],
+      [600, -1, z(600)],
+      [600, 1, z(600)],
+      [500, 1, z(500)]
+    ]);
+    const rod = {
+      vertices: Float64Array.from([0, -0.5, -5, 1000, -0.5, -5, 1000, 0.5, -5]),
+      indices: Uint32Array.from([0, 1, 2]),
+      edges: [[0, 0, 0, 500, 0, 0, 1000, 0, 0]]
+    };
+    const result = projectView({
+      orientation: 'top',
+      hiddenLines: true,
+      bodies: [flat, sloped, rod]
+    });
+    const onRod = (line: Float64Array) =>
+      Math.abs(line[1]!) < 1e-9 && Math.abs(line.at(-1)!) < 1e-9;
+    const gap = result.visible.filter(
+      (line) =>
+        onRod(line) &&
+        Math.abs(Math.min(line[0]!, line.at(-2)!) - 500) < 1e-6 &&
+        // 500.03 plus the depth floor's sliver of slope.
+        Math.abs(Math.max(line[0]!, line.at(-2)!) - 500.03) < 5e-3
+    );
+    expect(gap).toHaveLength(1);
+  });
+
   it('keeps an occluded interval shorter than the sliver threshold', () => {
     // A 1000 mm edge under a 0.05 mm strip: 5e-5 of the view, below the
     // corner-sliver threshold, but bounded by the strip's own footprint.
