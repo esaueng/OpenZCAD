@@ -96,7 +96,7 @@ describe('transform copy (M10)', { timeout: 60_000 }, () => {
   }
 
   it('adds an independent body and leaves the source in place', async () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(26);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(29);
     const { manager, blockId } = block();
     const command = copyCommand(blockId);
     manager.execute(command);

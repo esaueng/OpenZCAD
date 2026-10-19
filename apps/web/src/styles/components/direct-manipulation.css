@@ -1701,6 +1701,22 @@
   width: auto;
 }
 
+/* F01 to-face: the target line, its re-pick button and the note, as one
+   group under Extent; the button sits at its content width. */
+.extrude-to-face {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.extrude-to-face p {
+  margin: 0;
+}
+
+.extrude-to-face > button {
+  justify-self: start;
+}
+
 /* M10: the Move card's copy toggle, laid out like the extrude symmetry box. */
 .transform-copy {
   display: flex;

@@ -57,7 +57,7 @@ export interface ResolveFaceAttachmentInput {
   readonly snapshot: FaceAttachmentSnapshot;
   readonly sketchName: string;
   /** What attaches, for messages: a sketch unless an R01 datum says otherwise. */
-  readonly ownerKind?: 'Sketch' | 'Datum plane';
+  readonly ownerKind?: 'Sketch' | 'Datum plane' | 'Extrude';
   readonly sourceFeatureName: string;
 }
 

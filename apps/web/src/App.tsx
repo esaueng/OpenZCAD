@@ -146,6 +146,7 @@ import {
   normalizeDocumentHistory,
   numberedBodyName,
   numberedFeatureName,
+  extrudeToFaceUnresolved,
   repairedDirectEditOperation,
   resolveParamValue,
   staleDirectEditFaceRepair,
@@ -174,6 +175,7 @@ import type {
   BodyTopology,
   BodyRepresentation,
   EntityId,
+  ExtrudeToFaceTarget,
   FeatureId,
   FeatureNode,
   FeatureWarning,
@@ -660,8 +662,15 @@ import {
 } from './lib/resolvedExtrudePreview';
 import {
   ExtrudeForm,
-  type ExtrudeFormValue
+  type ExtrudeFormValue,
+  type ExtrudeToFacePicking
 } from './components/forms/ExtrudeForm';
+import {
+  extrudeToFaceRepair,
+  extrudeToFaceTargetFromPick,
+  toFaceDistanceEstimate,
+  toFaceTargetLabel
+} from './lib/extrudeToFace';
 import {
   extrudeEditCommand,
   extrudePreviewMagnitude,
@@ -2132,6 +2141,23 @@ export function App() {
    */
   const [faceRepair, setFaceRepair] =
     useState<StaleDirectEditFaceRepair | null>(null);
+  /**
+   * F01 (v29): an armed to-face pick. `create` and `edit` hand the face to
+   * the open extrude card; `repair` re-picks the face of an unresolved
+   * to-face extrude from its history row. While set, the next viewport face
+   * click is that pick; Escape disarms it.
+   */
+  const [toFacePick, setToFacePick] = useState<
+    | { kind: 'create' | 'edit' }
+    | { kind: 'repair'; featureId: FeatureId; featureName: string }
+    | null
+  >(null);
+  const regionToFaceSetter = useRef<
+    ((target: ExtrudeToFaceTarget) => void) | null
+  >(null);
+  const editToFaceSetter = useRef<
+    ((target: ExtrudeToFaceTarget) => void) | null
+  >(null);
   /** The open Plane card's handler for a drag of its datum's handle. */
   const datumOffsetDragRef = useRef<((delta: number) => void) | null>(null);
   /** The open Plane card's draft Offset, drawn ahead of its Apply. */
@@ -3445,6 +3471,13 @@ export function App() {
         const sketchNode = listNodesByKind(base, 'sketch').find(
           (candidate) => candidate.sketchId === current.target.sketchId
         );
+        // To face with no face picked yet has nothing to preview.
+        if (
+          regionExtrudeSettings.current?.endCondition === 'to-face' &&
+          !regionExtrudeSettings.current.toFace
+        ) {
+          return null;
+        }
         const command = commandFactories.extrudeSketch(
           regionExtrudeInputFor(current.target, distance)
         );
@@ -12843,6 +12876,10 @@ export function App() {
       handleFaceRepairPick(selection);
       return;
     }
+    if (toFacePick) {
+      handleToFacePick(selection);
+      return;
+    }
     if (datumRepair && !measuring && tool === null && !modelingLocked) {
       const base = managerRef.current?.document;
       if (!selection || !base) return;
@@ -15846,9 +15883,12 @@ export function App() {
       distance,
       symmetric: regionExtrudeSettings.current?.symmetric ?? false,
       backDistance: regionExtrudeSettings.current?.backDistance ?? 0,
-      // The form sends a side only with a through-all extent.
+      // The form sends a side only with a through-all extent, and a face
+      // only with a to-face one.
       endCondition: regionExtrudeSettings.current?.endCondition,
       throughAllSide: regionExtrudeSettings.current?.throughAllSide,
+      toFace: regionExtrudeSettings.current?.toFace,
+      draftAngleDeg: regionExtrudeSettings.current?.draftAngleDeg,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     };
   }
@@ -18556,6 +18596,114 @@ export function App() {
     }
   }
 
+  /**
+   * F01 (v29): the extrude card's side of the to-face pick. One armed pick
+   * at a time, as for the re-picks: arming it withdraws any other.
+   */
+  function extrudeToFacePicking(
+    kind: 'create' | 'edit',
+    sketchId: SketchId,
+    unresolved = false
+  ): ExtrudeToFacePicking {
+    return {
+      armed: toFacePick?.kind === kind,
+      unresolved,
+      setterRef: kind === 'create' ? regionToFaceSetter : editToFaceSetter,
+      describe: (target) => ({
+        label: doc ? toFaceTargetLabel(doc, target) : 'face',
+        distance: doc ? toFaceDistanceEstimate(doc, sketchId, target) : null
+      }),
+      onPick: () => {
+        if (toFacePick?.kind === kind) {
+          setToFacePick(null);
+          setStatus('Face pick canceled.');
+          return;
+        }
+        setFaceRepair(null);
+        setDatumRepair(null);
+        setToFacePick({ kind });
+        setStatus(
+          'Click a planar face parallel to the sketch for the extrusion to reach · Esc cancels.'
+        );
+      }
+    };
+  }
+
+  function armToFaceRepair(feature: FeatureNode) {
+    if (!ensureCanEdit('repair a feature')) {
+      return;
+    }
+    setTool(null);
+    clearSelection();
+    setFaceRepair(null);
+    setDatumRepair(null);
+    setToFacePick({
+      kind: 'repair',
+      featureId: feature.featureId,
+      featureName: feature.name
+    });
+    setStatus(
+      `Re-pick the face "${feature.name}" reaches: click a planar face parallel to its sketch · Esc cancels.`
+    );
+  }
+
+  /**
+   * Consumes a viewport pick while a to-face pick is armed. A face that
+   * cannot be a target keeps the pick armed and says why; a repair stays
+   * armed until its validated rebuild accepts the face.
+   */
+  function handleToFacePick(selection: TopologySelection | null) {
+    const armed = toFacePick;
+    if (!armed || !doc) {
+      return;
+    }
+    if (!selection) {
+      setStatus('Click a planar face for the extrusion to reach · Esc cancels.');
+      return;
+    }
+    if (!exactGeometryReady) {
+      setStatus(
+        'Exact geometry is still rebuilding. Pick the face again in a moment.'
+      );
+      return;
+    }
+    try {
+      if (armed.kind === 'repair') {
+        const repair = extrudeToFaceRepair(doc, armed.featureId, selection);
+        const targets = affectedFeatureTargets(doc, armed.featureId);
+        if (!repair.feature.bodyId) {
+          throw new Error('This extrude has no body to rebuild.');
+        }
+        void executeValidatedFeature(repair.command, {
+          featureName: repair.feature.name,
+          resultBodyId: repair.feature.bodyId,
+          ...(targets.length > 0 ? { targets } : {}),
+          validatingMessage: `Rebuilding "${repair.feature.name}" with the re-picked face…`,
+          successMessage: `"${repair.feature.name}" reaches the re-picked face.`,
+          onSuccess: () => setToFacePick(null),
+          // The refusal shows in the status bar and the pick stays armed.
+          onFailure: () => {}
+        });
+        return;
+      }
+      const setter =
+        armed.kind === 'create' ? regionToFaceSetter : editToFaceSetter;
+      if (!setter.current) {
+        setToFacePick(null);
+        setStatus('The extrude card closed; the face pick is canceled.');
+        return;
+      }
+      const target = extrudeToFaceTargetFromPick(doc, selection);
+      setter.current(target);
+      setToFacePick(null);
+      setStatus(
+        `The extrusion reaches ${toFaceTargetLabel(doc, target)} · ${armed.kind === 'create' ? 'Create' : 'Apply'} saves it.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'That face cannot be reached.'));
+    }
+  }
+
   function armFaceRepair(repair: StaleDirectEditFaceRepair) {
     if (!ensureCanEdit('repair a feature')) {
       return;
@@ -18590,6 +18738,18 @@ export function App() {
       setDatumRepair(null);
     }
   }, [measuring, tool, modelingLocked, interaction.mode]);
+  // A to-face pick yields the same way, and a create pick also ends with
+  // the region card it serves.
+  useEffect(() => {
+    if (
+      measuring ||
+      modelingLocked ||
+      interaction.mode === 'sketch' ||
+      (toFacePick?.kind === 'create' && interaction.mode !== 'region')
+    ) {
+      setToFacePick(null);
+    }
+  }, [measuring, modelingLocked, interaction.mode, toFacePick?.kind]);
 
   /**
    * Consumes a viewport pick while a face re-pick is armed. A pick that
@@ -18701,6 +18861,19 @@ export function App() {
                 icon: <Crosshair size={13} aria-hidden="true" />
               },
               run: () => armFaceRepair(repair)
+            }
+          ]
+        : []),
+      // F01 (v29): a to-face extrude whose face no longer resolves.
+      ...(extrudeToFaceUnresolved(feature, warnings)
+        ? [
+            {
+              item: {
+                id: 'repick-to-face',
+                label: 'Re-pick face…',
+                icon: <Crosshair size={13} aria-hidden="true" />
+              },
+              run: () => armToFaceRepair(feature)
             }
           ]
         : []),
@@ -19233,11 +19406,12 @@ export function App() {
             }
             return;
           }
-          if (faceRepair || datumRepair) {
+          if (faceRepair || datumRepair || toFacePick) {
             event.preventDefault();
             setFaceRepair(null);
             setDatumRepair(null);
-            setStatus('Face re-pick canceled · the feature is unchanged.');
+            setToFacePick(null);
+            setStatus('Face pick canceled · the feature is unchanged.');
             return;
           }
           if (interaction.mode === 'sketch') {
@@ -21487,6 +21661,7 @@ export function App() {
             onPickDatum={
               faceRepair ||
               datumRepair ||
+              toFacePick ||
               measuring ||
               tool !== null ||
               interaction.mode === 'sketch'
@@ -21521,6 +21696,7 @@ export function App() {
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
             regionHandle={modelingLocked ? null : regionHandleTarget}
+            facePickOnly={toFacePick !== null}
             modeOverlay={
               modelingLocked ? (
                 <>
@@ -21785,6 +21961,10 @@ export function App() {
                     }
                     submitLabel="Create"
                     distanceSetterRef={regionDistanceSetter}
+                    toFacePicking={extrudeToFacePicking(
+                      'create',
+                      interaction.target.sketchId as SketchId
+                    )}
                     onDraft={(value) => {
                       regionExtrudeSettings.current = value;
                       dispatchInteraction({
@@ -22396,6 +22576,15 @@ export function App() {
                 onApplyExtrude={applyExtrudeForm}
                 onPreviewExtrude={previewExtrudeForm}
                 extrudeTargets={availableExtrudeTargets}
+                extrudeToFacePicking={(feature) =>
+                  extrudeToFacePicking(
+                    'edit',
+                    feature.data.featureKind === 'extrude'
+                      ? feature.data.sketchId
+                      : ('' as SketchId),
+                    extrudeToFaceUnresolved(feature, warnings)
+                  )
+                }
                 onApplyRevolve={(feature, value) =>
                   applyValidatedFeature(
                     commandFactories.updateFeature(

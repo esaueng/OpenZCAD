@@ -78,6 +78,11 @@ import {
   type RemusSemanticAssignment
 } from './remus-lineage';
 import { resolveEdgeVertex, resolveFaceAttachment } from './face-attachment';
+import {
+  DRAFTED_EXTRUDE_HASH_ONLY_REASON,
+  draftExtrudedSolids,
+  resolveExtrudeDraftDeg
+} from './extrude-options';
 
 const CURVE_SEGMENTS = 32;
 /** `liftCurve2dToPlane` curve types: 0 line, 1 circle, 2 ellipse, 3 NURBS. */
@@ -1812,6 +1817,51 @@ export function buildHelicalSweep(
 }
 
 export function buildSweep(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  feature: FeatureNode,
+  scope: Record<string, number>,
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+  warn: (message: string) => void
+): ExactShape {
+  const shape = buildStraightSweep(
+    kernel,
+    document,
+    feature,
+    scope,
+    sketchBases,
+    warn
+  );
+  if (feature.data.featureKind !== 'extrude') return shape;
+  // F01 (v29): the draft tapers the straight sweep about the sketch plane, so
+  // every caller (the feature itself, a pierced twin, a preview) sees the
+  // same drafted tool.
+  const angle = resolveExtrudeDraftDeg(feature.data, scope, document);
+  if (angle === 0) return shape;
+  const basis = sketchBases.get(feature.data.sketchId)!;
+  const sign =
+    resolveParamValue(
+      feature.data.distance,
+      scope,
+      'distance',
+      document.units
+    ) < 0
+      ? -1
+      : 1;
+  return {
+    solids: draftExtrudedSolids(
+      kernel,
+      shape.solids,
+      basis,
+      scale(basis.normal, sign),
+      angle,
+      `Extrude "${feature.name}"`
+    ),
+    lineage: remusHashOnlyLineage('sweep', DRAFTED_EXTRUDE_HASH_ONLY_REASON)
+  };
+}
+
+function buildStraightSweep(
   kernel: RemusKernel,
   document: ProjectDocument,
   feature: FeatureNode,

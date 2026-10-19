@@ -100,7 +100,7 @@ function throughBlock(): {
 
 describe('Stage 4 solid options: document contract', () => {
   it('is schema v24', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(26);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(29);
   });
 
   it('stores nothing new when no option is chosen', () => {

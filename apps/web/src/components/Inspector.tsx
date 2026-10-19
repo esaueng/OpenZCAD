@@ -1,4 +1,7 @@
-import type { ExtrudeFormValue } from './forms/ExtrudeForm';
+import type {
+  ExtrudeFormValue,
+  ExtrudeToFacePicking
+} from './forms/ExtrudeForm';
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { unitLabel } from '../lib/measurements';
@@ -172,6 +175,8 @@ export interface InspectorCallbacks {
   onPreviewExtrude(feature: FeatureNode, value: ExtrudeFormValue | null): void;
   extrudeBusy?: boolean;
   extrudeTargets: { bodyId: BodyId; name: string }[];
+  /** F01 (v29): the viewport face pick an extrude edit's To face uses. */
+  extrudeToFacePicking?(feature: FeatureNode): ExtrudeToFacePicking;
   onApplyRevolve(
     feature: FeatureNode,
     value: {
@@ -1800,8 +1805,17 @@ export function Inspector(props: InspectorProps) {
                     ? { throughAllSide: data.throughAllSide }
                     : {})
                 }
+              : {}),
+            ...(data.endCondition === 'to-face' && data.toFace
+              ? { endCondition: 'to-face' as const, toFace: data.toFace }
+              : {}),
+            ...(data.draftAngleDeg !== undefined
+              ? { draftAngleDeg: data.draftAngleDeg }
               : {})
           }}
+          {...(props.extrudeToFacePicking
+            ? { toFacePicking: props.extrudeToFacePicking(selectedFeature) }
+            : {})}
           submitLabel="Apply"
           disabled={props.extrudeBusy}
           bodies={props.extrudeTargets}

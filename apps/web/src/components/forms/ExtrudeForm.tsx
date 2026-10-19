@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
-import { coerceParamValue } from '@openzcad/document-core';
+import {
+  MAX_EXTRUDE_DRAFT_DEG,
+  coerceParamValue
+} from '@openzcad/document-core';
 import type {
   BodyId,
   ExtrudeEndCondition,
+  ExtrudeToFaceTarget,
   ParamValue,
   SketchId,
   ThroughAllSide,
@@ -27,6 +31,34 @@ export interface ExtrudeFormValue {
    */
   endCondition?: ExtrudeEndCondition;
   throughAllSide?: ThroughAllSide;
+  /** F01 (v29): present exactly with `to-face`. */
+  toFace?: ExtrudeToFaceTarget;
+  /** F01 (v29): absent for straight walls (a typed 0 is sent as absent). */
+  draftAngleDeg?: ParamValue;
+}
+
+/**
+ * What the host tells the form about a to-face target: how it reads, and
+ * where the build will put it (the signed distance from the sketch plane),
+ * or why it cannot reach it from this sketch.
+ */
+export interface ExtrudeToFaceInfo {
+  label: string;
+  distance: number | null;
+}
+
+/** The host's side of the to-face pick (see `ExtrudeExtentControls`). */
+export interface ExtrudeToFacePicking {
+  /** True while the viewport is waiting for this form's face. */
+  armed: boolean;
+  /** Arms (or, when armed, cancels) the viewport face pick. */
+  onPick(): void;
+  /** How a target reads and where it sits, from the current projection. */
+  describe(target: ExtrudeToFaceTarget): ExtrudeToFaceInfo;
+  /** The stored face no longer resolves (edit only). */
+  unresolved?: boolean;
+  /** Receives the face the viewport pick produced. */
+  setterRef: MutableRefObject<((target: ExtrudeToFaceTarget) => void) | null>;
 }
 
 interface ExtrudeFormProps {
@@ -44,7 +76,11 @@ interface ExtrudeFormProps {
     targetBodyId?: BodyId;
     endCondition?: ExtrudeEndCondition;
     throughAllSide?: ThroughAllSide;
+    toFace?: ExtrudeToFaceTarget;
+    draftAngleDeg?: ParamValue;
   };
+  /** Absent: To face is not offered (no host to pick the face with). */
+  toFacePicking?: ExtrudeToFacePicking;
   creating?: boolean;
   profileCount?: number;
   disabled?: boolean;
@@ -61,6 +97,9 @@ interface ExtrudeFormProps {
  * rather than wrapped again, so Reverse twice reads as it started instead of
  * `-(-(10/2))`.
  */
+/** The steepest draft the form takes; the schema's own bound. */
+const MAX_DRAFT_DEG = MAX_EXTRUDE_DRAFT_DEG;
+
 export function reversedDistance(distance: string): string {
   const text = distance.trim();
   if (Number.isFinite(Number(text))) {
@@ -95,6 +134,7 @@ export function ExtrudeForm({
   disabled = false,
   submitLabel,
   distanceSetterRef,
+  toFacePicking,
   onDraft,
   onPreview,
   onSubmit,
@@ -110,7 +150,9 @@ export function ExtrudeForm({
       ...(initial.targetBodyId ? { targetBodyId: initial.targetBodyId } : {})
     },
     endCondition: initial.endCondition ?? 'blind',
-    throughAllSide: initial.throughAllSide ?? 'forward'
+    throughAllSide: initial.throughAllSide ?? 'forward',
+    toFace: initial.toFace,
+    draftAngle: paramValueText(initial.draftAngleDeg ?? 0)
   }));
   // Through all needs one explicit cut target, so it is offered once Cut is
   // chosen, never while the operation is still being inferred.
@@ -118,14 +160,50 @@ export function ExtrudeForm({
   const isThroughAll = (next: typeof draft) =>
     next.choice.operation === 'cut' && next.endCondition === 'through-all';
   const throughAll = isThroughAll(draft);
+  // F01 (v29): to-face replaces the distance with a picked face; any
+  // operation may reach one. A host with no face pick never offers it.
+  const isToFace = (next: typeof draft) =>
+    toFacePicking !== undefined && next.endCondition === 'to-face';
+  const toFace = isToFace(draft);
+  const toFaceInfo =
+    toFace && draft.toFace ? toFacePicking!.describe(draft.toFace) : null;
+  // A face picked here that the build would refuse (not parallel to the
+  // sketch, or lying on it) is said before Apply rather than after.
+  const toFaceProblem =
+    toFaceInfo && toFaceInfo.distance === null
+      ? 'This face is not parallel to the sketch plane, or lies on it; pick a face parallel to the sketch.'
+      : null;
   // A new extrude opens at zero until the user drags or types a distance, so
   // the zero-distance error waits for that edit (or an attempt to submit)
   // rather than greeting the card in red. Create stays disabled either way.
   const [distanceEdited, setDistanceEdited] = useState(false);
   const quantity = { documentUnits: units, dimension: 'length' } as const;
+  const angleQuantity = { documentUnits: units, dimension: 'angle' } as const;
   const distance = previewExpression(draft.distance, scope, quantity);
   const back = previewExpression(draft.backDistance, scope, quantity);
   const valid = valueFor(draft) !== null;
+  const draftError = draftAngleError(draft);
+
+  /**
+   * Why the draft cannot apply as typed, or null. It tapers a one-sided
+   * extrusion only, and an angle at a right angle has no finite taper.
+   */
+  function draftAngleError(next: typeof draft): string | null {
+    const a = previewExpression(next.draftAngle, scope, angleQuantity);
+    if (!a.ok || a.value === undefined) return null;
+    if (Math.abs(a.value) >= MAX_DRAFT_DEG) {
+      return `Draft must be between -${MAX_DRAFT_DEG}° and ${MAX_DRAFT_DEG}°.`;
+    }
+    if (a.value === 0) return null;
+    if (!isToFace(next) && next.symmetric) {
+      return 'Draft tapers a one-sided extrusion; turn off Symmetric to draft it.';
+    }
+    const b = previewExpression(next.backDistance, scope, quantity);
+    if (!isToFace(next) && b.ok && b.value !== undefined && b.value !== 0) {
+      return 'Draft tapers a one-sided extrusion; clear Back distance to draft it.';
+    }
+    return null;
+  }
 
   function valueFor(next: typeof draft): ExtrudeFormValue | null {
     const d = previewExpression(next.distance, scope, quantity);
@@ -136,11 +214,17 @@ export function ExtrudeForm({
       next.choice.operation === 'intersect';
     const targetBodyId = targetRequired ? next.choice.targetBodyId : undefined;
     const nextThroughAll = isThroughAll(next);
+    const nextToFace = isToFace(next);
+    const a = previewExpression(next.draftAngle, scope, angleQuantity);
     if (
       !next.name.trim() ||
-      // Through all ignores the distance; it is kept only for switching
-      // back to blind, so it cannot block Apply.
+      (nextToFace && !next.toFace) ||
       (!nextThroughAll &&
+        (!a.ok || a.value === undefined || draftAngleError(next) !== null)) ||
+      // Through all and to-face ignore the distance; it is kept only for
+      // switching back to blind, so it cannot block Apply.
+      (!nextThroughAll &&
+        !nextToFace &&
         (!d.ok ||
           d.value === undefined ||
           d.value === 0 ||
@@ -154,21 +238,31 @@ export function ExtrudeForm({
 
   function formValue(next: typeof draft): ExtrudeFormValue {
     const nextThroughAll = isThroughAll(next);
-    // A through-all cut derives its span in the build, so its distance is
-    // dormant; a create still needs it non-zero, so an untouched 0 sends 1.
+    const nextToFace = isToFace(next);
+    const derived = nextThroughAll || nextToFace;
+    // A through-all cut and a to-face extrude derive their span in the
+    // build, so the distance is dormant; a create still needs it non-zero,
+    // so an untouched 0 sends 1.
     const typed = coerceParamValue(next.distance);
+    const draftAngleDeg = coerceParamValue(next.draftAngle);
     return {
       name: next.name.trim(),
       sketchId: initial.sketchId,
-      distance: nextThroughAll && !typed ? 1 : typed,
-      symmetric: nextThroughAll ? false : next.symmetric,
+      distance: derived && !typed ? 1 : typed,
+      symmetric: derived ? false : next.symmetric,
       backDistance:
-        nextThroughAll || next.symmetric
-          ? 0
-          : coerceParamValue(next.backDistance),
+        derived || next.symmetric ? 0 : coerceParamValue(next.backDistance),
       choice: next.choice,
-      endCondition: nextThroughAll ? 'through-all' : 'blind',
-      ...(nextThroughAll ? { throughAllSide: next.throughAllSide } : {})
+      endCondition: nextThroughAll
+        ? 'through-all'
+        : nextToFace
+          ? 'to-face'
+          : 'blind',
+      ...(nextThroughAll ? { throughAllSide: next.throughAllSide } : {}),
+      ...(nextToFace && next.toFace ? { toFace: next.toFace } : {}),
+      ...(!nextThroughAll && draftAngleDeg !== 0 && draftAngleDeg !== '0'
+        ? { draftAngleDeg }
+        : {})
     };
   }
 
@@ -179,11 +273,18 @@ export function ExtrudeForm({
     onDraft?.(formValue(next));
     onPreview?.(valueFor(next));
   }
+  // The viewport arrow and keypad set a distance: on a to-face extrude that
+  // is a choice of Distance over the face, so the extent follows the drag.
   const updateDistance = useRef((value: ParamValue) =>
     change({ distance: paramValueText(value) })
   );
   updateDistance.current = (value) =>
-    change({ distance: paramValueText(value) });
+    change({
+      distance: paramValueText(value),
+      ...(draft.endCondition === 'to-face'
+        ? { endCondition: 'blind' as const }
+        : {})
+    });
   useEffect(() => {
     if (!distanceSetterRef) return;
     distanceSetterRef.current = (value) => updateDistance.current(value);
@@ -191,6 +292,27 @@ export function ExtrudeForm({
       distanceSetterRef.current = null;
     };
   }, [distanceSetterRef]);
+  // A picked face becomes the target, and the depth it gives becomes the
+  // dormant distance, so switching back to Distance keeps the same reach.
+  const updateFace = useRef((_target: ExtrudeToFaceTarget) => {});
+  updateFace.current = (target) => {
+    const reach = toFacePicking?.describe(target).distance ?? null;
+    change({
+      toFace: target,
+      endCondition: 'to-face',
+      ...(reach !== null
+        ? { distance: String(Math.round(reach * 1e6) / 1e6) }
+        : {})
+    });
+  };
+  const faceSetterRef = toFacePicking?.setterRef;
+  useEffect(() => {
+    if (!faceSetterRef) return;
+    faceSetterRef.current = (target) => updateFace.current(target);
+    return () => {
+      faceSetterRef.current = null;
+    };
+  }, [faceSetterRef]);
 
   function submit() {
     setDistanceEdited(true);
@@ -209,7 +331,9 @@ export function ExtrudeForm({
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.stopPropagation();
-          onCancel();
+          // An armed face pick is the innermost thing Escape can close.
+          if (toFacePicking?.armed) toFacePicking.onPick();
+          else onCancel();
         }
         if (
           event.key === 'Enter' &&
@@ -243,14 +367,30 @@ export function ExtrudeForm({
           allowAutomatic={creating}
           onChange={(choice) => change({ choice })}
         />
-        {offersThroughAll ? (
+        {offersThroughAll || toFacePicking ? (
           <ExtrudeExtentControls
-            endCondition={draft.endCondition}
+            endCondition={
+              throughAll || toFace
+                ? draft.endCondition
+                : draft.endCondition === 'through-all'
+                  ? 'blind'
+                  : draft.endCondition
+            }
             throughAllSide={draft.throughAllSide}
+            offersThroughAll={offersThroughAll}
+            toFace={{
+              label: toFaceInfo?.label ?? null,
+              unresolved:
+                toFacePicking?.unresolved === true &&
+                draft.toFace === initial.toFace,
+              problem: toFaceProblem,
+              armed: toFacePicking?.armed === true,
+              onPick: () => toFacePicking?.onPick()
+            }}
             onChange={change}
           />
         ) : null}
-        {throughAll ? null : (
+        {throughAll || toFace ? null : (
           <>
             <ExprInput
               label="Distance"
@@ -315,6 +455,16 @@ export function ExtrudeForm({
               {submitLabel} saves the result.
             </p>
           </>
+        )}
+        {throughAll ? null : (
+          <ExprInput
+            label="Draft angle"
+            value={draft.draftAngle}
+            scope={scope}
+            quantity={angleQuantity}
+            onChange={(draftAngle) => change({ draftAngle })}
+            error={draftError ?? undefined}
+          />
         )}
       </fieldset>
       <div className="form-actions">

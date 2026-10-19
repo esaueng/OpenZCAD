@@ -329,6 +329,10 @@ function featureScopeForBodies(
         if (data.targetBodyId) {
           neededBodies.add(data.targetBodyId);
         }
+        // F01: a to-face extent reads the face's body at this position.
+        if (data.toFace) {
+          neededBodies.add(data.toFace.bodyId);
+        }
         break;
       case 'revolve':
         neededSketches.add(data.sketchId);

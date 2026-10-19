@@ -99,6 +99,7 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       return;
     case 'extrude':
       fields(data, ['distance', 'backDistance'], rewrite, 'length');
+      fields(data, ['draftAngleDeg'], rewrite, 'angle');
       return;
     case 'revolve':
       fields(data, ['angleDeg'], rewrite, 'angle');

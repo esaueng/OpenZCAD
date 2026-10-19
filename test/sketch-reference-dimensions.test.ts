@@ -22,7 +22,7 @@ function user() {
 
 describe('S02-A reference dimension schema envelope', () => {
   it('retains additive reference dimensions in the current schema', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(26);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(29);
   });
 
   it('leaves a document without reference dimensions byte-identical', () => {

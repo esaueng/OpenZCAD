@@ -1040,6 +1040,29 @@ function transformMatrix(
   ];
 }
 
+/**
+ * How OCCT's drafted-prism angle relates to the document's: positive tapers
+ * inward in both, which `occt-extrude-options.spec.ts` checks against the
+ * closed form rather than assumes.
+ */
+const OCCT_DRAFT_SIGN = 1;
+
+/** F01 (v29): the extrude's draft in degrees, zero for straight walls. */
+function extrudeDraftDeg(
+  data: Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
+  scope: Record<string, number>,
+  document: ProjectDocument
+): number {
+  return data.draftAngleDeg === undefined
+    ? 0
+    : resolveParamValue(
+        data.draftAngleDeg,
+        scope,
+        'draft angle',
+        document.units
+      );
+}
+
 function sweepSemanticDescriptor(
   document: ProjectDocument,
   feature: FeatureNode,
@@ -1462,14 +1485,92 @@ export class OcctStepKernelAdapter {
       warn(flattenedOutlineWarning(flattenedOutlines));
     }
     const solids = connectedRegionGroups(regions).map((group) => {
-      return this.kernel.extrude(
+      return this.prism(
         this.makeRegionFace(mergeAdjacentProfiles(group), basis),
+        basis,
+        distance,
+        extrudeDraftDeg(data, scope, document)
+      );
+    });
+    return solids.length === 1 ? solids[0]! : this.kernel.makeCompound(solids);
+  }
+
+  /**
+   * A straight prism, or with F01's draft (schema v29) OCCT's own drafted
+   * prism (`BRepFeat_MakeDraftPrism`-style), an independent construction from
+   * the production kernel draft and cone loft. OCCT's angle tapers the walls
+   * inward for a positive value, the document's convention.
+   */
+  private prism(
+    face: ShapeHandle,
+    basis: PlaneBasis,
+    distance: number,
+    draftDeg: number
+  ): ShapeHandle {
+    if (draftDeg === 0) {
+      return this.kernel.extrude(
+        face,
         basis.normal.x * distance,
         basis.normal.y * distance,
         basis.normal.z * distance
       );
-    });
-    return solids.length === 1 ? solids[0]! : this.kernel.makeCompound(solids);
+    }
+    return this.kernel.draftPrism(
+      face,
+      basis.normal.x * distance,
+      basis.normal.y * distance,
+      basis.normal.z * distance,
+      OCCT_DRAFT_SIGN * draftDeg
+    );
+  }
+
+  /**
+   * F01 (v29): the blind extrude a to-face extrude stands for here, its
+   * distance measured from the sketch plane to the lineage-resolved face, as
+   * production does. A face that does not resolve, or no longer lies
+   * parallel to the sketch, refuses.
+   */
+  private toFaceSweepFeature(
+    document: ProjectDocument,
+    feature: FeatureNode,
+    result: OcctBuildResult,
+    scope: Record<string, number>
+  ): FeatureNode {
+    if (
+      feature.data.featureKind !== 'extrude' ||
+      feature.data.endCondition !== 'to-face' ||
+      !feature.data.toFace
+    ) {
+      return feature;
+    }
+    const basis = result.sketchBases.get(feature.data.sketchId);
+    if (!basis) {
+      throw new Error('Extrude sketch plane did not resolve.');
+    }
+    const face = this.resolvePlaneRefAtHistory(
+      document,
+      feature.data.toFace,
+      feature.name,
+      result,
+      scope
+    );
+    const alignment =
+      face.normal.x * basis.normal.x +
+      face.normal.y * basis.normal.y +
+      face.normal.z * basis.normal.z;
+    if (Math.abs(Math.abs(alignment) - 1) > 1e-9) {
+      throw new Error('The to-face target is not parallel to the sketch.');
+    }
+    const distance =
+      (face.origin.x - basis.origin.x) * basis.normal.x +
+      (face.origin.y - basis.origin.y) * basis.normal.y +
+      (face.origin.z - basis.origin.z) * basis.normal.z;
+    const {
+      endCondition: _endCondition,
+      toFace: _toFace,
+      ...rest
+    } = feature.data;
+    return { ...feature, data: { ...rest, distance } };
   }
 
   /**
@@ -1556,11 +1657,11 @@ export class OcctStepKernelAdapter {
         'distance',
         document.units
       );
-      return this.kernel.extrude(
+      return this.prism(
         face,
-        basis.normal.x * distance,
-        basis.normal.y * distance,
-        basis.normal.z * distance
+        basis,
+        distance,
+        extrudeDraftDeg(feature.data, scope, document)
       );
     }
 
@@ -1632,6 +1733,53 @@ export class OcctStepKernelAdapter {
             }
             if (
               feature.data.featureKind === 'extrude' &&
+              feature.data.endCondition === 'to-face' &&
+              feature.bodyId
+            ) {
+              // Production's to-face add/cut/intersect go through its own
+              // boolean path; this reference models the new body only, and
+              // refuses the rest rather than report a false match.
+              if ((feature.data.operation ?? 'new-body') !== 'new-body') {
+                throw new Error(
+                  'The OCCT parity reference models a to-face extrude as a new body only.'
+                );
+              }
+              const sweep = this.toFaceSweepFeature(
+                document,
+                feature,
+                result,
+                scope
+              );
+              const shape = this.buildSweep(
+                document,
+                sweep,
+                scope,
+                result.sketchBases,
+                (message) =>
+                  result.warnings.push(`Feature "${feature.name}": ${message}`)
+              );
+              result.shapes.set(feature.bodyId, shape);
+              result.lineages.set(
+                feature.bodyId,
+                extrudeDraftDeg(feature.data, scope, document) !== 0
+                  ? hashOnlyOcctLineage(
+                      'A drafted extrude publishes hash-only references, as production does.'
+                    )
+                  : semanticSweepLineage(
+                      feature.featureId,
+                      sweepSemanticDescriptor(
+                        document,
+                        sweep,
+                        scope,
+                        result.sketchBases
+                      ),
+                      topologyCandidatesForShape(this.kernel, shape)
+                    )
+              );
+              break;
+            }
+            if (
+              feature.data.featureKind === 'extrude' &&
               feature.data.operation === 'intersect' &&
               feature.bodyId
             ) {
@@ -1685,6 +1833,18 @@ export class OcctStepKernelAdapter {
                   result.warnings.push(`Feature "${feature.name}": ${message}`)
               );
               result.shapes.set(feature.bodyId, shape);
+              if (
+                feature.data.featureKind === 'extrude' &&
+                extrudeDraftDeg(feature.data, scope, document) !== 0
+              ) {
+                result.lineages.set(
+                  feature.bodyId,
+                  hashOnlyOcctLineage(
+                    'A drafted extrude publishes hash-only references, as production does.'
+                  )
+                );
+                break;
+              }
               result.lineages.set(
                 feature.bodyId,
                 semanticSweepLineage(
