@@ -837,11 +837,14 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
 }
 
 /**
- * Hidden runs that lie entirely on a visible line, within `tolerance` model
- * units. A box's back edges coincide with its front outline in a principal
- * view; drafting draws the visible line and omits the hidden one under it.
+ * Hidden lines with the stretches that lie on a visible line removed, within
+ * `tolerance` model units. A box's back edges coincide with its front outline
+ * in a principal view; drafting draws the visible line and omits the hidden
+ * one under it. Each hidden segment loses exactly the intervals that
+ * collinear visible segments cover, so a gap in the visible outline of any
+ * width keeps its piece of the hidden line.
  */
-function dropCoincidentHidden(
+export function dropCoincidentHidden(
   hidden: Float64Array[],
   visible: Float64Array[],
   tolerance: number
@@ -865,30 +868,14 @@ function dropCoincidentHidden(
   const cellU = Math.max((maxU - minU) / cells, tolerance, 1e-12);
   const cellV = Math.max((maxV - minV) / cells, tolerance, 1e-12);
   const clamp = (value: number) => Math.min(cells - 1, Math.max(0, value));
+  const column = (u: number) => clamp(Math.floor((u - minU) / cellU));
+  const row = (v: number) => clamp(Math.floor((v - minV) / cellV));
   const grid = new Map<number, number[]>();
   for (let s = 0; s < segments.length; s += 4) {
-    const i0 = clamp(
-      Math.floor(
-        (Math.min(segments[s]!, segments[s + 2]!) - tolerance - minU) / cellU
-      )
-    );
-    const i1 = clamp(
-      Math.floor(
-        (Math.max(segments[s]!, segments[s + 2]!) + tolerance - minU) / cellU
-      )
-    );
-    const j0 = clamp(
-      Math.floor(
-        (Math.min(segments[s + 1]!, segments[s + 3]!) - tolerance - minV) /
-          cellV
-      )
-    );
-    const j1 = clamp(
-      Math.floor(
-        (Math.max(segments[s + 1]!, segments[s + 3]!) + tolerance - minV) /
-          cellV
-      )
-    );
+    const i0 = column(Math.min(segments[s]!, segments[s + 2]!) - tolerance);
+    const i1 = column(Math.max(segments[s]!, segments[s + 2]!) + tolerance);
+    const j0 = row(Math.min(segments[s + 1]!, segments[s + 3]!) - tolerance);
+    const j1 = row(Math.max(segments[s + 1]!, segments[s + 3]!) + tolerance);
     for (let j = j0; j <= j1; j += 1)
       for (let i = i0; i <= i1; i += 1) {
         const key = j * cells + i;
@@ -897,51 +884,98 @@ function dropCoincidentHidden(
         else grid.set(key, [s]);
       }
   }
-  const onVisible = (u: number, v: number): boolean => {
-    if (
-      u < minU - tolerance ||
-      u > maxU + tolerance ||
-      v < minV - tolerance ||
-      v > maxV + tolerance
-    )
-      return false;
-    const key =
-      clamp(Math.floor((v - minV) / cellV)) * cells +
-      clamp(Math.floor((u - minU) / cellU));
-    for (const s of grid.get(key) ?? []) {
-      const au = segments[s]!;
-      const av = segments[s + 1]!;
-      const du = segments[s + 2]! - au;
-      const dv = segments[s + 3]! - av;
-      const lengthSq = du * du + dv * dv;
-      const t =
-        lengthSq === 0
-          ? 0
-          : Math.min(
-              1,
-              Math.max(0, ((u - au) * du + (v - av) * dv) / lengthSq)
-            );
-      if (Math.hypot(u - (au + du * t), v - (av + dv * t)) <= tolerance)
-        return true;
+
+  /** The parts of segment p→q no collinear visible segment covers, as [t0, t1]. */
+  const uncovered = (
+    pu: number,
+    pv: number,
+    qu: number,
+    qv: number
+  ): [number, number][] => {
+    const du = qu - pu;
+    const dv = qv - pv;
+    const length = Math.hypot(du, dv);
+    if (length <= tolerance) return [];
+    const candidates = new Set<number>();
+    for (const cell of gridCellsAlong(
+      (pu - minU) / cellU,
+      (pv - minV) / cellV,
+      (qu - minU) / cellU,
+      (qv - minV) / cellV,
+      cells
+    )) {
+      // The tolerance band can reach one cell further either side.
+      const ci = cell % cells;
+      const cj = Math.floor(cell / cells);
+      for (let j = cj - 1; j <= cj + 1; j += 1)
+        for (let i = ci - 1; i <= ci + 1; i += 1)
+          for (const s of grid.get(clamp(j) * cells + clamp(i)) ?? [])
+            candidates.add(s);
     }
-    return false;
+    const covered: [number, number][] = [];
+    for (const s of candidates) {
+      const ends = [
+        [segments[s]!, segments[s + 1]!],
+        [segments[s + 2]!, segments[s + 3]!]
+      ] as const;
+      // Collinear: both ends of the visible segment on the hidden one's line.
+      const off = ends.map(
+        ([u, v]) => Math.abs((u - pu) * dv - (v - pv) * du) / length
+      );
+      if (off[0]! > tolerance || off[1]! > tolerance) continue;
+      const t = ends.map(
+        ([u, v]) => ((u - pu) * du + (v - pv) * dv) / (length * length)
+      );
+      // Exact extent: a hidden piece that only meets a visible one end to
+      // end (the same edge turning hidden) loses nothing.
+      const t0 = Math.max(0, Math.min(t[0]!, t[1]!));
+      const t1 = Math.min(1, Math.max(t[0]!, t[1]!));
+      if (t1 > t0) covered.push([t0, t1]);
+    }
+    covered.sort((a, b) => a[0] - b[0]);
+    const gaps: [number, number][] = [];
+    let at = 0;
+    for (const [t0, t1] of covered) {
+      if (t0 > at) gaps.push([at, t0]);
+      at = Math.max(at, t1);
+    }
+    if (at < 1) gaps.push([at, 1]);
+    // A gap no longer than the tolerance is the same line, not a gap.
+    return gaps.filter(([t0, t1]) => (t1 - t0) * length > tolerance);
   };
-  return hidden.filter((line) => {
-    for (let i = 0; i + 1 < line.length; i += 2) {
-      if (!onVisible(line[i]!, line[i + 1]!)) return true;
-      if (i + 3 < line.length) {
-        // The middle of each segment too: two ends on an outline can still
-        // span a gap in it.
-        for (const f of [0.25, 0.5, 0.75])
-          if (
-            !onVisible(
-              line[i]! + (line[i + 2]! - line[i]!) * f,
-              line[i + 1]! + (line[i + 3]! - line[i + 1]!) * f
-            )
-          )
-            return true;
+
+  const out: Float64Array[] = [];
+  for (const line of hidden) {
+    let run: number[] = [];
+    const flush = () => {
+      if (run.length >= 4) out.push(Float64Array.from(run));
+      run = [];
+    };
+    for (let i = 2; i + 1 < line.length; i += 2) {
+      const pu = line[i - 2]!;
+      const pv = line[i - 1]!;
+      const qu = line[i]!;
+      const qv = line[i + 1]!;
+      for (const [t0, t1] of uncovered(pu, pv, qu, qv)) {
+        const au = pu + (qu - pu) * t0;
+        const av = pv + (qv - pv) * t0;
+        const bu = pu + (qu - pu) * t1;
+        const bv = pv + (qv - pv) * t1;
+        const lastU = run.at(-2);
+        const lastV = run.at(-1);
+        // Continue the run across a polyline vertex; start anew after a gap.
+        if (
+          lastU === undefined ||
+          lastV === undefined ||
+          Math.hypot(lastU - au, lastV - av) > tolerance
+        ) {
+          flush();
+          run.push(au, av);
+        }
+        run.push(bu, bv);
       }
     }
-    return false;
-  });
+    flush();
+  }
+  return out;
 }

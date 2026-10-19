@@ -45,6 +45,8 @@ import {
   sheetBodyIds
 } from '../apps/web/src/lib/drawing/sheetSources';
 import { parseSaveProjectDocumentRequest } from '../apps/web/worker/validation';
+import * as webGlimpse from '../apps/web/src/lib/glimpseContract';
+import * as workerGlimpse from '../apps/web/worker/glimpseContract';
 
 type Adapter = Awaited<ReturnType<typeof createExactKernelAdapter>>;
 let adapter: Adapter;
@@ -518,6 +520,21 @@ describe('D01 drawing section (schema v30)', () => {
         })
       )
     ).toThrow(/not in this project/);
+  });
+
+  it('lists every drawing command in both analytics operation allowlists', () => {
+    const kinds = [
+      'drawing.sheet.add',
+      'drawing.sheet.update',
+      'drawing.sheet.delete',
+      'drawing.view.add',
+      'drawing.view.update',
+      'drawing.view.delete'
+    ];
+    for (const contract of [webGlimpse, workerGlimpse])
+      expect(contract.EXPANDED.feature_operation).toEqual(
+        expect.arrayContaining(kinds)
+      );
   });
 
   it('refuses a view of a body the project does not have', () => {

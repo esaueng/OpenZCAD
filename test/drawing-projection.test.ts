@@ -16,6 +16,7 @@ import {
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import {
   OcclusionGrid,
+  dropCoincidentHidden,
   gridCellsAlong,
   projectView,
   triangleSag,
@@ -249,7 +250,9 @@ describe('D01 view projection', () => {
       result.hidden,
       (u, v) => Math.abs(v - 10) < 1e-6 && u >= 100 - 1e-6 && u <= 100.2 + 1e-6
     );
-    expect(runs(covered)).toEqual([
+    // The bar's front-top and back-top edges coincide in this view; both
+    // are behind the fin there, so the span is drawn hidden (once per edge).
+    expect([...new Set(runs(covered))]).toEqual([
       run('front', [100, 10, 10], [100.2, 10, 10])
     ]);
     expect(
@@ -632,6 +635,25 @@ describe('D01 occlusion tolerance', () => {
         (line) => Math.abs(Math.min(line[0]!, line.at(-2)!) - end) < 1e-9
       )
     ).toBe(true);
+  });
+
+  it('keeps a hidden line wherever a visible outline over it has a gap', () => {
+    // A hidden line under a visible one broken by a 0.3 mm gap that falls
+    // between the hidden run's ends and quarter points.
+    const hidden = [Float64Array.from([0, 0, 100, 0])];
+    const visible = [
+      Float64Array.from([0, 0, 30.1, 0]),
+      Float64Array.from([30.4, 0, 100, 0])
+    ];
+    const kept = dropCoincidentHidden(hidden, visible, 1e-6);
+    expect(kept).toHaveLength(1);
+    expect([...kept[0]!].map((value) => +value.toFixed(6))).toEqual([
+      30.1, 0, 30.4, 0
+    ]);
+    // A hidden line wholly under a visible one is dropped.
+    expect(
+      dropCoincidentHidden(hidden, [Float64Array.from([0, 0, 100, 0])], 1e-6)
+    ).toEqual([]);
   });
 
   it('keeps an occluded interval shorter than the sliver threshold', () => {
