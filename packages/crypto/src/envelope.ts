@@ -1,4 +1,5 @@
 import {
+  ByteQueue,
   ByteWriter,
   asBytes,
   concatBytes,
@@ -210,7 +211,7 @@ export const MAX_WRITER_WRITE_RECORDS = 1024;
  * `gzip`, feed it gzip bytes (or use the stream helper).
  */
 export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
-  private pending: Bytes = new Uint8Array();
+  private readonly pending = new ByteQueue();
   private written = 0;
   private index = 0;
   private state: 'open' | 'busy' | 'closed' = 'open';
@@ -264,7 +265,7 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
     // The loop below seals every whole chunk but the last one held back.
     const size = this.header.chunkSize;
     const records = Math.ceil(
-      (this.pending.byteLength + payload.byteLength - size) / size
+      (this.pending.length + payload.byteLength - size) / size
     );
     if (records > MAX_WRITER_WRITE_RECORDS) {
       throw new E2eeError(
@@ -280,16 +281,15 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
           `Payload is longer than the declared ${this.header.plaintextLength} bytes`
         );
       }
-      const data = this.pending.byteLength
-        ? concatBytes(this.pending, payload)
-        : payload;
+      // WebCrypto copies its input when called, so sealing straight from
+      // the queue is safe; a full chunk waits until more data shows it is
+      // not the last.
+      this.pending.append(payload);
       const out: Bytes[] = [];
-      let offset = 0;
-      while (data.byteLength - offset > size) {
-        out.push(await this.seal(data.subarray(offset, offset + size), false));
-        offset += size;
+      while (this.pending.length > size) {
+        out.push(await this.seal(this.pending.view().subarray(0, size), false));
+        this.pending.consume(size);
       }
-      this.pending = copyBytes(data.subarray(offset));
       return out;
     });
   }
@@ -303,7 +303,7 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
           `Payload is ${this.written} bytes, not the declared ${this.header.plaintextLength}`
         );
       }
-      const chunk = await this.seal(this.pending, true);
+      const chunk = await this.seal(this.pending.view(), true);
       if (this.hasher) this.hash = await this.hasher.finish();
       return chunk;
     });
@@ -410,7 +410,7 @@ export const MAX_READER_PUSH_RECORDS = 1024;
  * hash matches the reference. Any failure poisons the reader.
  */
 export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
-  private buffered: Bytes = new Uint8Array();
+  private readonly buffered = new ByteQueue();
   private parsed: EnvelopePrefix | null = null;
   private cryptoKey: CryptoKey | null = null;
   private index = 0;
@@ -450,12 +450,12 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
     if (this.parsed) return this.parsed.header.chunkSize + GCM_TAG_BYTES;
     // Before the header: just enough to complete the prefix, so the first
     // push does not also carry a run of records.
-    const have = this.buffered.byteLength;
+    const have = this.buffered.length;
     if (have < ENVELOPE_FIXED_PREFIX_BYTES) {
       return ENVELOPE_FIXED_PREFIX_BYTES - have;
     }
     try {
-      const length = envelopePrefixLength(this.buffered);
+      const length = envelopePrefixLength(this.buffered.view());
       return length === null ? 1 : Math.max(1, length - have);
     } catch {
       return 1; // `push` reports the malformed prefix.
@@ -473,12 +473,12 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
       );
     }
     return this.exclusive(async () => {
-      this.buffered = concatBytes(this.buffered, bytes);
+      this.buffered.append(bytes);
       if (!this.parsed && !(await this.readPrefix())) return [];
       const cipherSize = this.parsed!.header.chunkSize + GCM_TAG_BYTES;
       // The loop below opens every whole record but the last one buffered.
       const records = Math.ceil(
-        (this.buffered.byteLength - cipherSize) / cipherSize
+        (this.buffered.length - cipherSize) / cipherSize
       );
       if (records > MAX_READER_PUSH_RECORDS) {
         throw new E2eeError(
@@ -487,17 +487,12 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
         );
       }
       const out: Bytes[] = [];
-      let offset = 0;
-      while (this.buffered.byteLength - offset > cipherSize) {
+      while (this.buffered.length > cipherSize) {
         out.push(
-          await this.open(
-            this.buffered.subarray(offset, offset + cipherSize),
-            false
-          )
+          await this.open(this.buffered.view().subarray(0, cipherSize), false)
         );
-        offset += cipherSize;
+        this.buffered.consume(cipherSize);
       }
-      this.buffered = copyBytes(this.buffered.subarray(offset));
       return out;
     });
   }
@@ -508,10 +503,10 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
       if (!this.parsed && !(await this.readPrefix())) {
         throw new E2eeError('malformed', 'Envelope ends inside its header');
       }
-      if (this.buffered.byteLength < GCM_TAG_BYTES) {
+      if (this.buffered.length < GCM_TAG_BYTES) {
         throw new E2eeError('malformed', 'Envelope ends without a final chunk');
       }
-      const last = await this.open(this.buffered, true);
+      const last = await this.open(this.buffered.view(), true);
       // An uncompressed payload is the plaintext: it must be exactly the
       // declared size, or a key holder could pass off a truncated blob as
       // complete. (Gzip payloads are checked once inflated.)
@@ -541,11 +536,13 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
   }
 
   private async readPrefix(): Promise<boolean> {
-    const length = envelopePrefixLength(this.buffered);
-    if (length === null || this.buffered.byteLength < length) return false;
-    this.parsed = decodeEnvelopePrefix(this.buffered.subarray(0, length));
+    const length = envelopePrefixLength(this.buffered.view());
+    if (length === null || this.buffered.length < length) return false;
+    this.parsed = decodeEnvelopePrefix(
+      this.buffered.view().subarray(0, length)
+    );
+    this.buffered.consume(length);
     await this.hasher?.add(this.parsed.prefix);
-    this.buffered = this.buffered.subarray(length);
     this.cryptoKey = await importChunkKey(this.key, 'decrypt');
     return true;
   }

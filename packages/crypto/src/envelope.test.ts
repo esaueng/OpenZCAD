@@ -883,6 +883,54 @@ describe('content blobs', () => {
     expect(Object.isFrozen(writer.header)).toBe(true);
   });
 
+  it('byte-at-a-time writes and pushes copy each byte a bounded number of times', async () => {
+    // One 64 KiB record fed a byte at a time: recopying the growing buffer
+    // on every call would move about 2 GB here (and ~1 TB for a 1 MiB
+    // record); the queue keeps the total linear in the input.
+    const size = 64 * 1024;
+    const plaintext = patternBytes(size + 10, 5);
+    let copied = 0;
+    const set = vi
+      .spyOn(Uint8Array.prototype, 'set')
+      .mockImplementation(function (
+        this: Uint8Array,
+        source: ArrayLike<number>,
+        offset?: number
+      ) {
+        copied += source.length;
+        Reflect.apply(Int8Array.prototype.set, this, [source, offset]);
+      });
+    try {
+      const writer = await createContentBlobWriter(
+        EnvelopeKey.generate(),
+        'export',
+        {
+          compression: 'none',
+          chunkSize: size,
+          plaintextLength: plaintext.byteLength
+        }
+      );
+      const parts = [writer.prefix];
+      for (let at = 0; at < plaintext.byteLength; at += 1) {
+        parts.push(...(await writer.write(plaintext.subarray(at, at + 1))));
+      }
+      parts.push(await writer.finish());
+      expect(copied).toBeLessThan(plaintext.byteLength * 10);
+      const envelope = joinBytes(parts);
+      copied = 0;
+      const reader = createContentBlobReader(contentBlobReference(writer));
+      const out: Bytes[] = [];
+      for (let at = 0; at < envelope.byteLength; at += 1) {
+        out.push(...(await reader.push(envelope.subarray(at, at + 1))));
+      }
+      out.push(...(await reader.finish()));
+      expect(copied).toBeLessThan(envelope.byteLength * 10);
+      expect(joinBytes(out)).toEqual(plaintext);
+    } finally {
+      set.mockRestore();
+    }
+  });
+
   it('a direct reader refuses an uncompressed blob shorter than declared', async () => {
     const { envelope: base } = await blob(text('hi'));
     const header = parseEnvelope(base).header as ContentBlobHeader;

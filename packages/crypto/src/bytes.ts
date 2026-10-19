@@ -164,6 +164,54 @@ export function fromBase32(text: string, byteLength: number): Bytes {
 
 const MAX_U64 = Number.MAX_SAFE_INTEGER;
 
+/**
+ * A FIFO byte buffer for incremental readers and writers. Appends grow the
+ * backing store geometrically and consumed bytes are dropped by moving the
+ * live remainder only when space runs out, so every byte is copied a
+ * bounded number of times however finely the input is sliced.
+ */
+export class ByteQueue {
+  private buffer: Bytes = new Uint8Array(0);
+  private start = 0;
+  private end = 0;
+
+  get length(): number {
+    return this.end - this.start;
+  }
+
+  /** The live bytes, valid until the next `append` or `consume`. */
+  view(): Bytes {
+    return this.buffer.subarray(this.start, this.end);
+  }
+
+  append(bytes: Uint8Array): void {
+    if (bytes.byteLength === 0) return;
+    const live = this.length;
+    if (this.end + bytes.byteLength > this.buffer.byteLength) {
+      const needed = live + bytes.byteLength;
+      if (needed * 2 <= this.buffer.byteLength) {
+        // Plenty of room once compacted: move the live bytes to the front.
+        this.buffer.copyWithin(0, this.start, this.end);
+      } else {
+        const grown = new Uint8Array(
+          Math.max(needed, this.buffer.byteLength * 2, 256)
+        );
+        grown.set(this.view());
+        this.buffer = grown;
+      }
+      this.start = 0;
+      this.end = live;
+    }
+    this.buffer.set(bytes, this.end);
+    this.end += bytes.byteLength;
+  }
+
+  consume(count: number): void {
+    this.start += count;
+    if (this.start === this.end) this.start = this.end = 0;
+  }
+}
+
 export function isUint(value: unknown, max: number): value is number {
   return (
     typeof value === 'number' &&
