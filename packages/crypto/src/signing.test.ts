@@ -616,6 +616,10 @@ describe('recovery keys', () => {
     );
   });
 
+  it('refuses a far-too-long recovery key before normalising it', async () => {
+    await rejectsWith(parseRecoveryKey('A'.repeat(1024 * 1024)), 'malformed');
+  });
+
   it('catches a mistyped character', async () => {
     const formatted = await formatRecoveryKey(patternBytes(32, 0x42));
     const first = formatted[0] === 'A' ? 'B' : 'A';

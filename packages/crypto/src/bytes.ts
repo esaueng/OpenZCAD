@@ -108,9 +108,15 @@ export function toBase64Url(bytes: Uint8Array): string {
     .replace(/=+$/, '');
 }
 
-export function fromBase64Url(text: string): Bytes {
+/**
+ * Decodes unpadded base64url. With `byteLength`, the encoded length is
+ * checked first, so an oversized string is refused before any work.
+ */
+export function fromBase64Url(text: string, byteLength?: number): Bytes {
   if (
     typeof text !== 'string' ||
+    (byteLength !== undefined &&
+      text.length !== Math.ceil((byteLength * 4) / 3)) ||
     !/^[A-Za-z0-9_-]*$/.test(text) ||
     text.length % 4 === 1
   ) {

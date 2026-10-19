@@ -396,6 +396,11 @@ export async function parseRecoveryKey(text: string): Promise<Bytes> {
   if (typeof text !== 'string') {
     throw new E2eeError('invalid-argument', 'Recovery key must be text');
   }
+  // A key is 69 characters (14 groups of four); allow generous spacing,
+  // but refuse anything far longer before normalising it.
+  if (text.length > 256) {
+    throw new E2eeError('malformed', 'Recovery key is too long');
+  }
   const payload = fromBase32(
     text.replace(/[\s-]/g, ''),
     KEY_BYTES + RECOVERY_CHECKSUM_BYTES

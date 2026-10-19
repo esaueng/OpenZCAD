@@ -1229,8 +1229,13 @@ export function contentBlobReferenceFromJson(
   const record = (
     typeof value === 'object' && value !== null ? value : {}
   ) as Record<string, unknown>;
-  const key = fromBase64Url(record.key as string);
-  const ciphertextHash = fromBase64Url(record.ciphertextHash as string);
+  // Lengths are checked before decoding: an untrusted reference with huge
+  // strings is refused without decoding them.
+  const key = fromBase64Url(record.key as string, KEY_BYTES);
+  const ciphertextHash = fromBase64Url(
+    record.ciphertextHash as string,
+    HASH_BYTES
+  );
   const reference = {
     blobId: record.blobId,
     kind: record.kind,

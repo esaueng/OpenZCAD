@@ -822,6 +822,24 @@ describe('content blobs', () => {
     ]) {
       expect(() => contentBlobReferenceFromJson(bad)).toThrow(E2eeError);
     }
+    // Oversized encodings are refused on length, before any decoding.
+    const atob = vi.spyOn(globalThis, 'atob');
+    try {
+      for (const field of ['key', 'ciphertextHash']) {
+        expect(() =>
+          contentBlobReferenceFromJson({
+            ...(json as object),
+            [field]: 'A'.repeat(8 * 1024 * 1024)
+          })
+        ).toThrow(expect.objectContaining({ code: 'malformed' }));
+      }
+      // Only the valid 43-character field beside it is ever decoded.
+      for (const [input] of atob.mock.calls) {
+        expect(String(input).length).toBeLessThan(64);
+      }
+    } finally {
+      atob.mockRestore();
+    }
   });
 
   it('a blob swapped in from another blob id is refused', async () => {
