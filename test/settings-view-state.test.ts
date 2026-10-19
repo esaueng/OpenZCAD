@@ -46,13 +46,13 @@ describe('settings view state', () => {
   it('updates one field without losing the rest of the view', () => {
     saveSettingsViewState({
       open: true,
-      activeSection: 'shortcuts',
+      activeSection: 'controls',
       query: 'mouse',
       scrollTop: 420
     });
     expect(updateSettingsViewState({ open: false })).toEqual({
       open: false,
-      activeSection: 'shortcuts',
+      activeSection: 'controls',
       query: 'mouse',
       scrollTop: 420
     });
@@ -70,5 +70,24 @@ describe('settings view state', () => {
         token: 'must-not-be-restored'
       })
     ).toEqual(defaultSettingsViewState());
+  });
+
+  it('reopens a renamed section where its settings now live', () => {
+    window.localStorage.setItem(
+      SETTINGS_VIEW_STATE_STORAGE_KEY,
+      JSON.stringify({ open: true, activeSection: 'files', scrollTop: 0 })
+    );
+    expect(loadSettingsViewState().activeSection).toBe('saving');
+    expect(
+      normalizeSettingsViewState({ activeSection: 'shortcuts' }).activeSection
+    ).toBe('controls');
+  });
+
+  it('never resolves a stored id up the prototype chain', () => {
+    for (const activeSection of ['constructor', 'toString', '__proto__']) {
+      expect(normalizeSettingsViewState({ activeSection }).activeSection).toBe(
+        'general'
+      );
+    }
   });
 });

@@ -103,7 +103,7 @@ the user just put it.
 - **Wheel intent is classified, not assumed** (`input/wheelGesture.ts`): a
   pinch sets `ctrlKey` and always zooms; line and page deltas come only from a
   wheel; a horizontal component and sub-notch pixel deltas come from a
-  trackpad. Settings › Viewport › **Scroll wheel** forces a device's meaning
+  trackpad. Settings › Controls › **Scroll wheel** forces a device's meaning
   for hardware the heuristic reads wrongly; `auto` is the default and
   classifies each event on its own.
 - **Click threshold is 5 px**, centralised in `GestureRouter` along with

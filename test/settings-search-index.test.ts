@@ -29,7 +29,10 @@ function renderedSettingsBySection(): Map<string, string[]> {
       section = sectionMatch[1]!;
       bySection.set(section, bySection.get(section) ?? []);
     }
-    const tagMatch = line.match(/<(Section|SettingRow)\b/);
+    // A reference collection's title is a heading, not a setting.
+    const tagMatch = line.match(
+      /<(Section|SettingRow|ControlReferenceCollection)\b/
+    );
     if (tagMatch) {
       tag = tagMatch[1]!;
     }
@@ -99,7 +102,9 @@ describe('assistant settings', () => {
 
   it('still matches sections by label, detail, and setting title', () => {
     const byLabel = visibleSettingsSections({ query: 'viewport' });
-    const bySettingTitle = visibleSettingsSections({ query: 'angular snap' });
+    const bySettingTitle = visibleSettingsSections({
+      query: 'snap tolerance'
+    });
     const byDetail = visibleSettingsSections({ query: 'diagnostics' });
 
     expect(byLabel.map((section) => section.id)).toContain('viewport');
@@ -126,20 +131,23 @@ describe('privacy settings', () => {
 });
 
 describe('offline mode', () => {
-  it('keeps its master toggle in the always-visible General section', () => {
+  it('keeps its master toggle on Account, which stays visible offline', () => {
     expect(
-      SETTINGS_SECTIONS.find((section) => section.id === 'general')?.settings
+      SETTINGS_SECTIONS.find((section) => section.id === 'account')?.settings
     ).toContain('Cloud features');
+    const account = visibleSettingsSections({
+      cloudFunctionsEnabled: false
+    }).find((section) => section.id === 'account');
+    expect(account?.settings).toEqual(['Cloud features']);
   });
 
-  it('removes account and assistant surfaces while keeping local settings', () => {
+  it('removes the assistant and cloud account surfaces while keeping local settings', () => {
     const offline = visibleSettingsSections({
       cloudFunctionsEnabled: false
     });
 
-    expect(offline.map((section) => section.id)).not.toContain('account');
     expect(offline.map((section) => section.id)).not.toContain('assistant');
-    expect(offline.map((section) => section.id)).toContain('files');
+    expect(offline.map((section) => section.id)).toContain('saving');
     expect(offline.map((section) => section.id)).toContain('general');
   });
 

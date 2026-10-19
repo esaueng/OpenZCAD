@@ -1,4 +1,5 @@
 import {
+  LEGACY_SETTINGS_SECTION_IDS,
   SETTINGS_SECTION_IDS,
   type SettingsSectionId
 } from './settingsSectionIds';
@@ -40,11 +41,15 @@ export function normalizeSettingsViewState(value: unknown): SettingsViewState {
   if (typeof root.open === 'boolean') {
     state.open = root.open;
   }
-  if (
-    typeof root.activeSection === 'string' &&
-    KNOWN_SECTION_IDS.has(root.activeSection)
-  ) {
-    state.activeSection = root.activeSection as SettingsSectionId;
+  if (typeof root.activeSection === 'string') {
+    if (KNOWN_SECTION_IDS.has(root.activeSection)) {
+      state.activeSection = root.activeSection as SettingsSectionId;
+    } else if (Object.hasOwn(LEGACY_SETTINGS_SECTION_IDS, root.activeSection)) {
+      // Own keys only: a stored "constructor" must not resolve up the
+      // prototype chain to a function.
+      state.activeSection =
+        LEGACY_SETTINGS_SECTION_IDS[root.activeSection] ?? state.activeSection;
+    }
   }
   if (typeof root.query === 'string') {
     state.query = root.query;
