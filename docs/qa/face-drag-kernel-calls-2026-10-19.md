@@ -113,6 +113,23 @@ Milliseconds over the 26 accepted warm ticks. The other 14 ticks were refused
     together. The preview's final clone of every body's state is the remaining
     per-tick candidate.
 
+- **The preview face-geometry cache roughly breaks even.**
+  - Turning it off left the holder's tick p50 unchanged within noise: 229–258
+    vs 234–244 ms on 2026.1.66, and 167–195 vs 158–184 ms on 2026.1.68.
+  - Its key cost about what it saved, because building it reads about 10 kernel
+    values per edge on every face.
+  - Two exact reductions now cut `edgeLength` reads from 1,376 to 410 per tick
+    (12.4 → 4.0 ms on 2026.1.68):
+    - The key no longer reads edge lengths. Five quantized samples along each
+      edge, its curve type and its NURBS definition already determine the
+      curve.
+    - Face witnesses read each edge length once per sync memo, instead of
+      once for each of the edge's two faces. Summation order is unchanged, so
+      perimeters stay bit-identical.
+  - Removing the remaining key cost needs a kernel-side per-face content
+    digest, so the adapter can skip the witness, the key and the measurement
+    for faces that are unchanged.
+
 ## Not measured here
 
 - `postMessage` costs.
