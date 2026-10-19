@@ -64,3 +64,16 @@ export function viewImageScope(
         : `visible bodies (${visible})`
   };
 }
+
+/**
+ * The sketch an SVG export starts on: the one being edited, else the one
+ * selected in History, else the sketch of a picked profile. Null leaves the
+ * dialog on the first sketch, where the choice is visible.
+ */
+export function initialImageSketchId(context: {
+  editing: string | null;
+  selected: string | null;
+  profiles: readonly string[];
+}): string | null {
+  return context.editing ?? context.selected ?? context.profiles[0] ?? null;
+}

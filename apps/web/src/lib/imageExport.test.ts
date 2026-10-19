@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { exportScope } from './exportScope';
 import {
   IMAGE_EXPORT_MAX_PIXELS,
+  initialImageSketchId,
   imageSizeProblem,
   viewImageScope
 } from './imageExport';
@@ -73,5 +74,22 @@ describe('viewImageScope', () => {
       'the current view'
     );
     expect(viewImageScope(null, null).label).toBe('the current view');
+  });
+});
+
+describe('initialImageSketchId', () => {
+  it('prefers the edited sketch, then the selected one, then a picked profile', () => {
+    expect(
+      initialImageSketchId({ editing: 'e', selected: 's', profiles: ['p'] })
+    ).toBe('e');
+    expect(
+      initialImageSketchId({ editing: null, selected: 's', profiles: ['p'] })
+    ).toBe('s');
+    expect(
+      initialImageSketchId({ editing: null, selected: null, profiles: ['p'] })
+    ).toBe('p');
+    expect(
+      initialImageSketchId({ editing: null, selected: null, profiles: [] })
+    ).toBeNull();
   });
 });

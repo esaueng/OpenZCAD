@@ -41,7 +41,7 @@ import {
   exportScopeLabel,
   type ExportScope
 } from './lib/exportScope';
-import { viewImageScope } from './lib/imageExport';
+import { initialImageSketchId, viewImageScope } from './lib/imageExport';
 import { FeatureBuildError } from './lib/featureValidation';
 import { edgeModifierCommand } from './lib/edgeModifierEdit';
 import type { EdgeModifierFormValue } from './components/forms/FeatureForms';
@@ -22489,11 +22489,14 @@ export function App() {
                   : null
               }
               sketches={sketchOptions}
-              initialSketchId={
-                interaction.mode === 'sketch'
-                  ? interaction.session.sketchId
-                  : null
-              }
+              initialSketchId={initialImageSketchId({
+                editing:
+                  interaction.mode === 'sketch'
+                    ? interaction.session.sketchId
+                    : null,
+                selected: selectedSketch?.sketchId ?? null,
+                profiles: selectedProfiles.map((profile) => profile.sketchId)
+              })}
               initialShowGrid={viewerSettings.showGrid}
               units={doc.units}
               onClose={() => setImageExportView(null)}
