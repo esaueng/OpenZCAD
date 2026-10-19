@@ -1,4 +1,9 @@
 import { inflateSync } from 'node:zlib';
+import {
+  addSketchFeature,
+  createProjectDocument
+} from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
 import type { Download, Page } from '@playwright/test';
 import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
 
@@ -205,3 +210,79 @@ test('exports the view as a sized, transparent PNG and a sketch as exact SVG', a
   expect(viewBox[3]).toBeCloseTo(12.7 + 0.25, 6);
   expect(svg).toMatch(/width="38\.35mm" height="12\.95mm"/);
 });
+
+for (const arc of [
+  { name: 'large finite angle', start: 2 ** 60, end: 2 ** 60 + 256 },
+  { name: 'nearly closed arc', start: 0, end: 359.999999999 }
+]) {
+  test(`exports a visible SVG for a ${arc.name}`, async ({ page }) => {
+    await stubApi(page);
+    const { document } = addSketchFeature(
+      createProjectDocument('Arc image', toUserId('user_e2e')),
+      {
+        name: 'Arc',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          {
+            objectKind: 'arc',
+            centerX: 0,
+            centerY: 0,
+            radius: 10,
+            startAngleDeg: arc.start,
+            endAngleDeg: arc.end
+          }
+        ]
+      }
+    );
+    await page.route('**/api/projects', (route) =>
+      route.request().method() === 'POST'
+        ? route.fulfill({
+            status: 201,
+            json: {
+              project: {
+                projectId: document.projectId,
+                name: document.name,
+                revisionCount: 1,
+                updatedAt: new Date().toISOString()
+              },
+              document
+            }
+          })
+        : route.fulfill({ json: { projects: [] } })
+    );
+    await page.goto('/');
+    await page.getByLabel('Project name').fill(document.name);
+    await page.getByRole('button', { name: 'Create project' }).click();
+    await expect(
+      page.locator('.feature-row .feature-name', { hasText: /^Arc$/ })
+    ).toBeVisible();
+    const dialog = await openImageExport(page);
+    await dialog.getByRole('radio', { name: 'SVG' }).check();
+    const downloadPromise = page.waitForEvent('download', { timeout: 10_000 });
+    await dialog.getByRole('button', { name: 'Export SVG' }).click();
+    const svg = (await readDownload(await downloadPromise)).toString('utf8');
+    const bounds = await page.evaluate((source) => {
+      const root = new DOMParser().parseFromString(
+        source,
+        'image/svg+xml'
+      ).documentElement;
+      const node = document.importNode(root, true);
+      document.body.appendChild(node);
+      try {
+        const box = node.querySelector('path')!.getBBox();
+        return { width: box.width, height: box.height };
+      } finally {
+        node.remove();
+      }
+    }, svg);
+    const extent = svg
+      .match(/viewBox="([^"]+)"/)![1]!
+      .split(' ')
+      .map(Number);
+    expect(extent[2]).toBe(20.25);
+    // Chromium's SVG path bounds use float precision; the serialized extent
+    // above is exact, and the path must actually draw the full diameter.
+    expect(bounds.width).toBeCloseTo(20, 4);
+    expect(bounds.height).toBeGreaterThan(16.9);
+  });
+}

@@ -66,6 +66,10 @@ function arcSweep(entity: Extract<DxfEntity, { kind: 'arc' }>): number {
   return sweep <= 0 ? sweep + 360 : sweep;
 }
 
+function normalizedAngle(degrees: number): number {
+  return ((degrees % 360) + 360) % 360;
+}
+
 function pointAt(
   center: readonly [number, number],
   radius: number,
@@ -127,22 +131,17 @@ export function sketchSvgBounds(entities: readonly DxfEntity[]): Bounds {
         break;
       case 'arc': {
         const sweep = arcSweep(entity);
+        const start = normalizedAngle(entity.startAngleDeg);
+        include(bounds, ...pointAt(entity.center, entity.radius, start));
         include(
           bounds,
-          ...pointAt(entity.center, entity.radius, entity.startAngleDeg)
-        );
-        include(
-          bounds,
-          ...pointAt(entity.center, entity.radius, entity.startAngleDeg + sweep)
+          ...pointAt(entity.center, entity.radius, start + sweep)
         );
         // Each multiple of 90° the sweep crosses is an axis extreme.
-        const first = Math.ceil(entity.startAngleDeg / 90) * 90;
-        for (
-          let angle = first;
-          angle < entity.startAngleDeg + sweep;
-          angle += 90
-        ) {
-          const quadrant = (((angle / 90) % 4) + 4) % 4;
+        // Work in one turn and visit each quadrant once. At a large finite
+        // starting angle, adding 90 can round back to the same number.
+        for (let quadrant = 0; quadrant < 4; quadrant += 1) {
+          if (normalizedAngle(quadrant * 90 - start) > sweep) continue;
           const [cx, cy] = entity.center;
           const r = entity.radius;
           include(
@@ -172,17 +171,20 @@ function element(entity: DxfEntity): string {
     }
     case 'arc': {
       const sweep = arcSweep(entity);
-      const [x0, y0] = pointAt(
-        entity.center,
-        entity.radius,
-        entity.startAngleDeg
-      );
-      const [x1, y1] = pointAt(
-        entity.center,
-        entity.radius,
-        entity.startAngleDeg + sweep
-      );
+      const start = normalizedAngle(entity.startAngleDeg);
+      const [x0, y0] = pointAt(entity.center, entity.radius, start);
+      const [x1, y1] = pointAt(entity.center, entity.radius, start + sweep);
       const r = num(entity.radius);
+      // A nearly full turn can round to coincident SVG endpoints. One SVG
+      // arc then draws nothing; two arcs retain the circle at our precision.
+      if (sweep > 180 && num(x0) === num(x1) && num(y0) === num(y1)) {
+        const [xm, ym] = pointAt(
+          entity.center,
+          entity.radius,
+          start + sweep / 2
+        );
+        return `<path d="M${num(x0)} ${num(-y0)} A${r} ${r} 0 0 0 ${num(xm)} ${num(-ym)} A${r} ${r} 0 0 0 ${num(x1)} ${num(-y1)}"/>`;
+      }
       // y is negated, so counter-clockwise in the sketch is sweep flag 0.
       return `<path d="M${num(x0)} ${num(-y0)} A${r} ${r} 0 ${sweep > 180 ? 1 : 0} 0 ${num(x1)} ${num(-y1)}"/>`;
     }
