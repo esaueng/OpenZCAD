@@ -141,10 +141,12 @@ export async function verifyProjectEnvelopeSignature(
     publicKey instanceof Uint8Array
       ? await importSigningPublicKey(publicKey)
       : publicKey;
-  if (!isP256Key(key, 'ECDSA', 'public')) {
+  // Without the verify usage `subtle.verify` throws, which the catch below
+  // would report as a bad signature rather than an unusable key.
+  if (!isP256Key(key, 'ECDSA', 'public') || !key.usages.includes('verify')) {
     throw new E2eeError(
       'invalid-argument',
-      'Expected a P-256 ECDSA public key'
+      'Expected a P-256 ECDSA public key with the verify usage'
     );
   }
   const message = await versionStatement(envelope, signedAt);

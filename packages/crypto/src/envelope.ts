@@ -373,12 +373,10 @@ export class EnvelopeReader<H extends EnvelopeHeader = EnvelopeHeader> {
     options: ReadOptions = {}
   ) {
     this.hasher = expectedHash ? new CiphertextHasher() : null;
-    // The payload may be gzip of incompressible data, slightly larger than
-    // the plaintext: allow deflate's worst-case overhead on top.
     checkCallerLimit(options.maxPlaintextBytes);
-    const plaintextLimit =
-      options.maxPlaintextBytes ?? DEFAULT_MAX_PLAINTEXT_BYTES;
-    this.maxBytes = plaintextLimit + Math.ceil(plaintextLimit / 1024) + 1024;
+    this.maxBytes = maxPayloadBytes(
+      options.maxPlaintextBytes ?? DEFAULT_MAX_PLAINTEXT_BYTES
+    );
   }
 
   /** The header, once the first chunk has authenticated it. */
@@ -522,10 +520,14 @@ export interface PayloadLimits {
 }
 
 /**
- * The plaintext cap for one payload: the smaller of its declared size, its
- * kind's ceiling and the caller's limit. A declared size above the ceiling
- * is refused before any decompression (`limit-exceeded`).
+ * The largest payload a plaintext limit allows. A gzip payload of
+ * incompressible data is slightly larger than its plaintext, so deflate's
+ * worst-case overhead is allowed on top.
  */
+function maxPayloadBytes(plaintextLimit: number): number {
+  return plaintextLimit + Math.ceil(plaintextLimit / 1024) + 1024;
+}
+
 function checkCallerLimit(limit: number | undefined): void {
   if (limit !== undefined && !isUint(limit, Number.MAX_SAFE_INTEGER)) {
     throw new E2eeError(
@@ -535,6 +537,11 @@ function checkCallerLimit(limit: number | undefined): void {
   }
 }
 
+/**
+ * The plaintext cap for one payload: the smaller of its declared size, its
+ * kind's ceiling and the caller's limit. A declared size above the ceiling
+ * is refused before any decompression (`limit-exceeded`).
+ */
 export function plaintextCap(limits: PayloadLimits): number {
   // An unknown kind would look up no ceiling, and NaN would then pass every
   // size comparison: validate every input before computing the cap.
@@ -624,8 +631,10 @@ async function sealWhole(
 }
 
 /**
- * Decrypts a whole envelope into one buffer (the payload is never larger
- * than the envelope), a record at a time, without keeping per-chunk arrays.
+ * Decrypts a whole envelope into one buffer, a record at a time, without
+ * keeping per-chunk arrays. The buffer is sized once the first chunk has
+ * authenticated the header, to the payload that header can legitimately
+ * produce, so an oversized body is refused instead of being mirrored.
  */
 async function readWhole<H extends EnvelopeHeader>(
   reader: EnvelopeReader<H>,
@@ -633,10 +642,28 @@ async function readWhole<H extends EnvelopeHeader>(
   declaredLength: (header: H) => number,
   maxPlaintextBytes: number | undefined
 ): Promise<{ header: H; plaintext: Bytes }> {
-  const payloadBuffer = new Uint8Array(envelope.byteLength);
+  let payloadBuffer: Bytes | null = null;
   let at = 0;
   const take = (parts: readonly Bytes[]) => {
+    if (parts.length === 0) return;
+    if (!payloadBuffer) {
+      const header = reader.header!;
+      const cap = plaintextCap({
+        kind: header.kind,
+        compression: header.compression,
+        declaredLength: declaredLength(header),
+        maxPlaintextBytes
+      });
+      const bound = header.compression === 'none' ? cap : maxPayloadBytes(cap);
+      payloadBuffer = new Uint8Array(Math.min(envelope.byteLength, bound));
+    }
     for (const part of parts) {
+      if (at + part.byteLength > payloadBuffer.byteLength) {
+        throw new E2eeError(
+          'limit-exceeded',
+          `Payload is larger than its header allows (${payloadBuffer.byteLength} bytes)`
+        );
+      }
       payloadBuffer.set(part, at);
       at += part.byteLength;
     }
@@ -648,7 +675,7 @@ async function readWhole<H extends EnvelopeHeader>(
   }
   take(await reader.finish());
   const header = reader.header!;
-  const plaintext = await decodePayload(payloadBuffer.subarray(0, at), {
+  const plaintext = await decodePayload(payloadBuffer!.subarray(0, at), {
     kind: header.kind,
     compression: header.compression,
     declaredLength: declaredLength(header),

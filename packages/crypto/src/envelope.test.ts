@@ -466,6 +466,34 @@ describe('decompression limits', () => {
     await rejectsWith(decryptProjectEnvelope(key, envelope), 'limit-exceeded');
   });
 
+  it('refuses an oversized one-shot body before buffering all of it', async () => {
+    // The header declares 1 KiB, uncompressed; the body carries 64 records
+    // of 4 KiB. The one-shot buffer is sized from the header, so the first
+    // record already overflows it and the rest are never decrypted.
+    const { key, envelope } = await forged(patternBytes(4096 * 64, 3), {
+      plaintextLength: 1024
+    });
+    const decrypt = vi.spyOn(crypto.subtle, 'decrypt');
+    try {
+      await rejectsWith(
+        decryptProjectEnvelope(key, envelope),
+        'limit-exceeded'
+      );
+      expect(decrypt.mock.calls.length).toBeLessThan(4);
+    } finally {
+      decrypt.mockRestore();
+    }
+  });
+
+  it('keeps the ceiling table immutable at runtime', () => {
+    expect(Object.isFrozen(PLAINTEXT_CEILINGS)).toBe(true);
+    expect(() => {
+      (PLAINTEXT_CEILINGS as Record<string, number>).thumbnail =
+        Number.MAX_SAFE_INTEGER;
+    }).toThrow(TypeError);
+    expect(PLAINTEXT_CEILINGS.thumbnail).toBe(512 * 1024);
+  });
+
   it('stops at the kind ceiling even when the header claims more', async () => {
     const big = await gzipBytes(
       new Uint8Array(PLAINTEXT_CEILINGS.document + 1)

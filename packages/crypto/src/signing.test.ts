@@ -218,6 +218,23 @@ describe('version signatures', () => {
     );
   });
 
+  it('refuse a public key without the verify usage', async () => {
+    // The public half of a ['sign']-only pair has no usages; verifying with
+    // it would throw inside WebCrypto and read as a forged signature.
+    const signOnly = await crypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true,
+      ['sign']
+    );
+    expect(signOnly.publicKey.usages).not.toContain('verify');
+    const envelope = await version(1, null);
+    const signature = await signProjectEnvelope(signOnly.privateKey, envelope);
+    await rejectsWith(
+      verifyProjectEnvelopeSignature(signOnly.publicKey, envelope, signature),
+      'invalid-argument'
+    );
+  });
+
   it('refuse content blobs, malformed input and unknown versions', async () => {
     const author = await generateSigningKeyPair();
     const envelope = await version(1, null);
@@ -347,6 +364,15 @@ describe('asset de-duplication', () => {
       ['verify']
     );
     await rejectsWith(assetDedupeHash(verifyOnly, content), 'invalid-argument');
+    // A short HMAC key would let the server enumerate the secret.
+    const short = await crypto.subtle.importKey(
+      'raw',
+      patternBytes(1),
+      { name: 'HMAC', hash: 'SHA-256', length: 8 },
+      false,
+      ['sign']
+    );
+    await rejectsWith(assetDedupeHash(short, content), 'invalid-argument');
   });
 });
 

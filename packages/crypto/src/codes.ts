@@ -64,11 +64,14 @@ export async function assetDedupeHash(
   if (
     algorithm?.name !== 'HMAC' ||
     algorithm.hash?.name !== 'SHA-256' ||
+    // A shorter key would let the server enumerate the secret and test
+    // for known files; require the 256 bits importAssetDedupeSecret uses.
+    algorithm.length !== KEY_BYTES * 8 ||
     !dedupeKey.usages.includes('sign')
   ) {
     throw new E2eeError(
       'invalid-argument',
-      'Expected an HMAC-SHA-256 signing key from importAssetDedupeSecret'
+      'Expected a 256-bit HMAC-SHA-256 signing key from importAssetDedupeSecret'
     );
   }
   return toHex(

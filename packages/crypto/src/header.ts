@@ -48,7 +48,7 @@ export type ContentBlobKind = (typeof CONTENT_BLOB_KINDS)[number];
  */
 export const PLAINTEXT_CEILINGS: Readonly<
   Record<ProjectEnvelopeKind | ContentBlobKind, number>
-> = {
+> = Object.freeze({
   document: 24 * 1024 * 1024,
   'share-snapshot': 24 * 1024 * 1024,
   measurements: 512 * 1024,
@@ -57,7 +57,7 @@ export const PLAINTEXT_CEILINGS: Readonly<
   'mesh-payload': 128 * 1024 * 1024,
   export: 128 * 1024 * 1024,
   thumbnail: 512 * 1024
-};
+});
 
 export const COMPRESSIONS = ['none', 'gzip'] as const;
 export type Compression = (typeof COMPRESSIONS)[number];
