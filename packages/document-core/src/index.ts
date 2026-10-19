@@ -2261,20 +2261,20 @@ export function booleanBodies(
     id: bodyNodeId,
     kind: 'body',
     // A subtract's result is still the base body with material cut away, so
-    // it keeps the base body's name — unless the base is kept (M11), when
-    // the two would share it. A union or intersect made with a numbered name
-    // is a body of its own; one recorded without one keeps the base body's
-    // name, as it always did.
-    name:
-      input.bodyName !== undefined &&
-      (input.operation !== 'subtract' ||
-        !booleanConsumedBodyIds(input).includes(input.targetBodyIds[0]!))
+    // it keeps the base body's name. A union or intersect made with a
+    // numbered name is a body of its own; one recorded without one keeps the
+    // base body's name, as it always did. When the base is kept (M11) it is
+    // still on screen under that name, so the result never borrows it: it
+    // takes the numbered name, or `<feature> Body` when none was recorded.
+    name: booleanConsumedBodyIds(input).includes(input.targetBodyIds[0]!)
+      ? input.bodyName !== undefined && input.operation !== 'subtract'
         ? input.bodyName
         : derivedBodyName(
             document,
             input.targetBodyIds[0],
             `${input.name} Body`
-          ),
+          )
+      : (input.bodyName ?? `${input.name} Body`),
     parentId: next.activePartId,
     revisionId: null,
     bodyId,

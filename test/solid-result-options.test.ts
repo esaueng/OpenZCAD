@@ -319,6 +319,25 @@ describe('Stage 4 solid options: exact build', () => {
       node.kind === 'body' ? [[node.bodyId, node.name] as const] : []
     );
     expect(new Map(names).get(result.bodyId)).toBe('Subtract 1');
+    // Without a recorded numbered name the result still never borrows the
+    // kept base's name.
+    for (const keepOriginals of ['target', 'all'] as const) {
+      for (const operation of ['subtract', 'union'] as const) {
+        const fallback = booleanBodies(document, {
+          name: 'Cut',
+          operation,
+          targetBodyIds: [a, b],
+          keepOriginals
+        });
+        const byId = new Map(
+          Object.values(fallback.document.nodes).flatMap((node) =>
+            node.kind === 'body' ? [[node.bodyId, node.name] as const] : []
+          )
+        );
+        expect(byId.get(fallback.bodyId)).toBe('Cut Body');
+        expect(byId.get(fallback.bodyId)).not.toBe(byId.get(a));
+      }
+    }
   });
 
   it('lets a later feature consume a kept original', async () => {
