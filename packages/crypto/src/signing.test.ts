@@ -28,6 +28,8 @@ import {
   generateIdentityKeyPair
 } from './keys';
 import {
+  acceptCurrentVersion,
+  acceptHistoricalVersion,
   signProjectEnvelope,
   verifyProjectEnvelopeSignature,
   verifyVersionChain,
@@ -206,6 +208,65 @@ describe('version signatures', () => {
     await rejectsWith(
       signProjectEnvelope(author.signer(), blob),
       'invalid-argument'
+    );
+  });
+});
+
+describe('version read modes', () => {
+  it('current head: must descend from the pin, and advances it', async () => {
+    const chain = await chainOf(4);
+    const hashes = await verifyVersionChain(chain);
+    const head = await acceptCurrentVersion(chain.slice(1), {
+      pinnedVersionHash: hashes[1]!
+    });
+    expect(head).toEqual({ pin: hashes[3], advanced: true });
+    expect(
+      await acceptCurrentVersion(chain.slice(0, 2), {
+        pinnedVersionHash: hashes[1]!
+      })
+    ).toEqual({ pin: hashes[1], advanced: false });
+    // An older version offered as the current head is a rollback.
+    await rejectsWith(
+      acceptCurrentVersion(chain.slice(0, 2), {
+        pinnedVersionHash: hashes[3]!
+      }),
+      'chain-broken'
+    );
+    // So is a fork that skips the pinned version.
+    const sibling = await version(3, hashes[1]!);
+    await rejectsWith(
+      acceptCurrentVersion([chain[0]!, chain[1]!, sibling], {
+        pinnedVersionHash: hashes[2]!
+      }),
+      'chain-broken'
+    );
+  });
+
+  it('historical read: an ancestor of the pin, proven by walking back', async () => {
+    const chain = await chainOf(4);
+    const hashes = await verifyVersionChain(chain);
+    const walk = [chain[3]!, chain[2]!, chain[1]!];
+    const read = await acceptHistoricalVersion(walk, hashes[3]!);
+    expect(read.versionHash).toEqual(hashes[1]);
+    expect(read.header.documentVersion).toBe(2);
+    // The pinned head itself is a valid historical read.
+    expect(
+      (await acceptHistoricalVersion([chain[3]!], hashes[3]!)).versionHash
+    ).toEqual(hashes[3]);
+    // The walk must start at the pin and follow parent links.
+    await rejectsWith(
+      acceptHistoricalVersion([chain[2]!, chain[1]!], hashes[3]!),
+      'chain-broken'
+    );
+    await rejectsWith(
+      acceptHistoricalVersion([chain[3]!, chain[1]!], hashes[3]!),
+      'chain-broken'
+    );
+    // A version from a fork is not an ancestor, whatever it claims.
+    const fork = await version(3, hashes[1]!);
+    await rejectsWith(
+      acceptHistoricalVersion([chain[3]!, fork], hashes[3]!),
+      'chain-broken'
     );
   });
 });

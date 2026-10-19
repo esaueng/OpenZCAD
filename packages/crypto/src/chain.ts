@@ -1,4 +1,4 @@
-import { concatBytes, equalBytes, label, type Bytes } from './bytes';
+import { concatBytes, copyBytes, equalBytes, label, type Bytes } from './bytes';
 import { E2eeError } from './errors';
 import { HASH_BYTES } from './header';
 import { sha256 } from './primitives';
@@ -95,4 +95,75 @@ export function checkChain(
       `${what} must start at its first entry`
     );
   }
+}
+
+/**
+ * The two ways a browser reads a chained history (ADR-024, Version
+ * integrity). A current head moves the pin forward; a historical read
+ * proves an older entry is the pin or one of its ancestors and leaves the
+ * pin alone, so history never rewinds.
+ */
+export type ChainReadMode = 'current' | 'historical';
+
+export interface HeadAdvance {
+  /** The pin after accepting the head: the head's hash. */
+  readonly pin: Bytes;
+  /** False when the head is the pinned entry itself. */
+  readonly advanced: boolean;
+}
+
+/**
+ * Current-head mode: `links`, oldest first and contiguous, must contain the
+ * pin (when there is one) and end at the candidate head, which therefore
+ * descends from the pin. Returns the advanced pin.
+ */
+export function checkCurrentHead(
+  what: string,
+  links: readonly ChainLink[],
+  pinnedEntryHash: Uint8Array | undefined
+): HeadAdvance {
+  checkChain(what, links, { pinnedEntryHash, fromGenesis: false });
+  const head = links.at(-1)!;
+  return {
+    pin: copyBytes(head.hash),
+    advanced: !pinnedEntryHash || !equalBytes(head.hash, pinnedEntryHash)
+  };
+}
+
+/** One step of a backwards walk: an entry's hash and its parent's hash. */
+export interface BackLink {
+  readonly hash: Uint8Array;
+  readonly previousEntryHash: Uint8Array | null;
+}
+
+/**
+ * Historical mode: `walk` runs newest first from the pinned head back to
+ * the candidate, each entry naming the next as its parent. Proves the
+ * candidate is the pin or one of its ancestors; the pin does not move.
+ */
+export function checkHistoricalRead(
+  what: string,
+  walk: readonly BackLink[],
+  pinnedEntryHash: Uint8Array
+): void {
+  const first = walk[0];
+  if (!first || !equalBytes(first.hash, pinnedEntryHash)) {
+    throw new E2eeError(
+      'chain-broken',
+      `${what}: a historical read walks back from the pinned head`
+    );
+  }
+  walk.forEach((link, i) => {
+    const parent = walk[i + 1];
+    if (
+      parent &&
+      (link.previousEntryHash === null ||
+        !equalBytes(link.previousEntryHash, parent.hash))
+    ) {
+      throw new E2eeError(
+        'chain-broken',
+        `${what}: the walk back from the pinned head breaks`
+      );
+    }
+  });
 }

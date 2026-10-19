@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { equalBytes } from './bytes';
 import { E2eeError, type E2eeErrorCode } from './errors';
 import {
+  acceptCurrentRoster,
   checkVersionEpoch,
+  historicalRosterState,
   decodeRosterEntry,
   encodeRosterEntry,
   rosterEntryHash,
@@ -413,6 +415,48 @@ describe('roster chains', () => {
       verifyRosterChain([...chain, sameEpoch], f.lists),
       'chain-broken'
     );
+  });
+});
+
+describe('roster read modes', () => {
+  it('current head advances the pin; historical reads use the named entry', async () => {
+    const f = await fixture();
+    const chain = await withViewer(f);
+    const first = await acceptCurrentRoster(chain.slice(0, 2), f.lists);
+    expect(first.pin.advanced).toBe(true);
+    const next = await acceptCurrentRoster(chain, f.lists, {
+      pinnedEntryHash: first.pin.pin
+    });
+    expect(next.pin.pin).toEqual(next.entries[3]!.hash);
+    // Older roster offered as current: refused.
+    await rejectsWith(
+      acceptCurrentRoster(chain.slice(0, 2), f.lists, {
+        pinnedEntryHash: next.pin.pin
+      }),
+      'chain-broken'
+    );
+    // A historical version names entry 1 (before the viewer joined).
+    const old = historicalRosterState(
+      next.entries,
+      next.pin.pin,
+      next.entries[1]!.hash
+    );
+    expect(old.members.map((m) => m.userId).sort()).toEqual([
+      'editor-1',
+      'owner-1'
+    ]);
+    expect(old.keyEpoch).toBe(1);
+    // An entry newer than the pin, or not in the chain, is refused.
+    expect(() =>
+      historicalRosterState(
+        next.entries,
+        next.entries[1]!.hash,
+        next.entries[3]!.hash
+      )
+    ).toThrow(expect.objectContaining({ code: 'chain-broken' }));
+    expect(() =>
+      historicalRosterState(next.entries, next.pin.pin, patternBytes(32))
+    ).toThrow(expect.objectContaining({ code: 'chain-broken' }));
   });
 });
 

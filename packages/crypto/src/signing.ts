@@ -1,5 +1,10 @@
 import { ByteWriter, equalBytes, type Bytes } from './bytes';
-import { checkChain } from './chain';
+import {
+  checkChain,
+  checkCurrentHead,
+  checkHistoricalRead,
+  type HeadAdvance
+} from './chain';
 import {
   signWithDevice,
   verifyDeviceSignature,
@@ -152,4 +157,73 @@ export async function verifyVersionChain(
     { pinnedEntryHash: options.pinnedVersionHash, fromGenesis: false }
   );
   return hashes;
+}
+
+/**
+ * Current-head mode for versions: `envelopes`, oldest first, run from (at
+ * or before) the pinned version to the candidate head, the last one. The
+ * head must descend from the pin; accepting it moves the pin to the head.
+ */
+export async function acceptCurrentVersion(
+  envelopes: readonly Uint8Array[],
+  options: { readonly pinnedVersionHash?: Uint8Array } = {}
+): Promise<HeadAdvance> {
+  const hashes = await verifyVersionChain(envelopes, options);
+  return checkCurrentHead(
+    'Version history',
+    hashes.map((hash, sequence) => ({
+      sequence,
+      previousEntryHash: sequence === 0 ? null : hashes[sequence - 1]!,
+      hash
+    })),
+    options.pinnedVersionHash
+  );
+}
+
+export interface HistoricalVersion {
+  readonly header: ProjectEnvelopeHeader;
+  readonly versionHash: Bytes;
+}
+
+/**
+ * Historical mode for versions (opening a retained revision or named
+ * checkpoint): `walk` runs newest first from the pinned version back to the
+ * one being read, each naming the next as its previous version. Proves the
+ * last one is the pin or an ancestor of it; the pin does not move. Check it
+ * against the roster entry its header names (`historicalRosterState`), with
+ * the author's current device list so later revocation cutoffs apply.
+ */
+export async function acceptHistoricalVersion(
+  walk: readonly Uint8Array[],
+  pinnedVersionHash: Uint8Array
+): Promise<HistoricalVersion> {
+  const steps = await Promise.all(
+    walk.map(async (envelope) => ({
+      header: projectHeaderOf(envelope).header,
+      hash: await versionHash(envelope)
+    }))
+  );
+  steps.forEach((step, i) => {
+    const older = steps[i + 1];
+    if (
+      older &&
+      (older.header.projectId !== step.header.projectId ||
+        older.header.documentVersion >= step.header.documentVersion)
+    ) {
+      throw new E2eeError(
+        'chain-broken',
+        'Version history: the walk back changes project or does not go back'
+      );
+    }
+  });
+  checkHistoricalRead(
+    'Version history',
+    steps.map(({ header, hash }) => ({
+      hash,
+      previousEntryHash: header.previousVersionHash
+    })),
+    pinnedVersionHash
+  );
+  const target = steps.at(-1)!;
+  return { header: target.header, versionHash: target.hash };
 }

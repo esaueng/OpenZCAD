@@ -112,10 +112,15 @@ export {
 export {
   chainEntryHash,
   checkChain,
+  checkCurrentHead,
+  checkHistoricalRead,
   checkNextLink,
   followsLink,
+  type BackLink,
   type ChainLink,
-  type ChainOptions
+  type ChainOptions,
+  type ChainReadMode,
+  type HeadAdvance
 } from './chain';
 export {
   DEVICE_SIGNATURE_PURPOSES,
@@ -148,18 +153,23 @@ export {
   type VerifiedDeviceSignature
 } from './devices';
 export {
+  acceptCurrentVersion,
+  acceptHistoricalVersion,
   signProjectEnvelope,
   verifyProjectEnvelopeSignature,
   verifyVersionChain,
   versionHash,
+  type HistoricalVersion,
   type VersionSignatureOptions
 } from './signing';
 export {
   ROSTER_ENTRY_TYPES,
   ROSTER_ROLES,
+  acceptCurrentRoster,
   checkVersionEpoch,
   decodeRosterEntry,
   encodeRosterEntry,
+  historicalRosterState,
   rosterEntryHash,
   signRosterEntry,
   signRosterEntryWithIdentity,

@@ -6,7 +6,14 @@ import {
   isUint,
   type Bytes
 } from './bytes';
-import { chainEntryHash, checkChain, type ChainLink } from './chain';
+import {
+  chainEntryHash,
+  checkChain,
+  checkCurrentHead,
+  checkHistoricalRead,
+  type ChainLink,
+  type HeadAdvance
+} from './chain';
 import {
   readDeviceSignature,
   signIdentityStatement,
@@ -783,4 +790,67 @@ async function verifySigner(
     signedBy: 'device',
     device
   };
+}
+
+/**
+ * Current-head mode for rosters: verifies the chain (which must contain the
+ * pin) and returns the pin advanced to its newest entry.
+ */
+export async function acceptCurrentRoster(
+  chain: readonly SignedRosterEntry[],
+  deviceLists: RosterDeviceLists,
+  options: RosterChainOptions = {}
+): Promise<{ entries: VerifiedRosterEntry[]; pin: HeadAdvance }> {
+  const entries = await verifyRosterChain(chain, deviceLists, options);
+  return {
+    entries,
+    pin: checkCurrentHead(
+      'Roster',
+      entries.map(({ entry, hash }) => ({
+        sequence: entry.sequence,
+        previousEntryHash: entry.previousEntryHash,
+        hash
+      })),
+      options.pinnedEntryHash
+    )
+  };
+}
+
+/**
+ * Historical mode for rosters: the roster in force at the older entry a
+ * historical version names, which must be the pinned entry or one of its
+ * ancestors, proven by walking back from the pin through `verified` (a
+ * verified chain, oldest first). The pin does not move. Check the version's
+ * author against this state, using their current device list so that any
+ * revocation cutoff learned since still applies.
+ */
+export function historicalRosterState(
+  verified: readonly VerifiedRosterEntry[],
+  pinnedEntryHash: Uint8Array,
+  namedEntryHash: Uint8Array
+): RosterState {
+  const pinAt = verified.findIndex(({ hash }) =>
+    equalBytes(hash, pinnedEntryHash)
+  );
+  const namedAt = verified.findIndex(({ hash }) =>
+    equalBytes(hash, namedEntryHash)
+  );
+  if (pinAt < 0 || namedAt < 0 || namedAt > pinAt) {
+    throw new E2eeError(
+      'chain-broken',
+      'Roster: the named entry is not the pinned entry or one of its ancestors'
+    );
+  }
+  checkHistoricalRead(
+    'Roster',
+    verified
+      .slice(namedAt, pinAt + 1)
+      .reverse()
+      .map(({ entry, hash }) => ({
+        hash,
+        previousEntryHash: entry.previousEntryHash
+      })),
+    pinnedEntryHash
+  );
+  return verified[namedAt]!.state;
 }

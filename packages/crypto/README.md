@@ -132,6 +132,22 @@ A browser pins the newest entry it has seen and refuses a list that does not
 contain the pin, which catches both rollback and forks. Version histories
 reuse the pin rule.
 
+### Read modes
+
+Version and roster pins are read in one of two modes:
+
+- **Current head** (`acceptCurrentVersion`, `acceptCurrentRoster`,
+  `checkCurrentHead`): the version the project opens at, or that live editing
+  moves to, must descend from the pin. Accepting it moves the pin forward.
+- **Historical read** (`acceptHistoricalVersion`, `historicalRosterState`,
+  `checkHistoricalRead`): a retained revision or named checkpoint must be
+  the pin or one of its ancestors. That is proven by walking parent links
+  back from the pinned head, and the pin is left alone. The version is then
+  checked against the older roster entry it names, which shows how it was
+  valid when written, and against the author's current device list, so
+  revocation cutoffs learned since still apply. Restoring from it writes a
+  new current head, so history never rewinds.
+
 ### Device lists
 
 A **device list** is a chain of identity-signed entries. Each entry is a full
