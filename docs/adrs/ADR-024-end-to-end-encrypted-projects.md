@@ -724,10 +724,13 @@ encrypts under the project key is unchanged.
     back requires an Add from the owner.
 
   A device that cannot meet these rules, for example after an absence longer
-  than the retention window, is re-added by an ordinary Add from any current
-  member's browser after the same credential checks. The spike ran all of
-  these rules in both libraries, and each refusal fired for exactly its
-  intended reason. With OpenMLS, a rejoining device whose old signing key was
+  than the retention window, is re-added by an ordinary Add from the owner, after the same credential
+  checks; only the owner may add leaves. The spike ran each
+  of these rules on its own in both libraries, and each refusal fired for
+  exactly its intended reason. Not yet covered: a removed device failing both
+  rules at once, the account-key rotation and the server-stored wrapped PSKs,
+  and the removal rule for a member who was removed and later re-added. Phase
+  5 tests add them. With OpenMLS, a rejoining device whose old signing key was
   lost needs a second Commit to remove its stale leaf. mls-rs replaces the
   leaf in the same external Commit.
 
