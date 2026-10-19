@@ -66,6 +66,7 @@ export * from './scene/TopologyPickList';
 export * from './scene/objects';
 export * from './scene/exactSection';
 export * from './scene/drawnBodies';
+export * from './scene/moveCopyPreview';
 
 // Labels: screen-space dimension label layout.
 export * from './labels/dimensionLabel';

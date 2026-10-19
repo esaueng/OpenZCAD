@@ -6838,6 +6838,12 @@ export function App() {
       : `${featureName.trim()} 1`;
   }
 
+  function newCopyBodyName(bodyId: BodyId): string {
+    const current = managerRef.current?.document;
+    const source = current ? findBodyNode(current, bodyId)?.name : undefined;
+    return newBodyName(`${source ?? 'Body'} copy`);
+  }
+
   /**
    * "Hole", then "Hole 2": the History name a feature made now takes, so two
    * holes are not two rows both reading "Hole". Stored in the command like
@@ -7700,14 +7706,18 @@ export function App() {
       commandFactories.transformBody({
         // Whatever the gizmo's Name field holds, falling back to the default
         // rather than committing a feature with a blank name.
-        name: newFeatureName(moveName.trim() || 'Move'),
+        name: newFeatureName(moveName.trim() || (preview.copy ? 'Copy' : 'Move')),
         targetBodyId: preview.bodyId as BodyId,
-        ...values
+        ...values,
+        ...(preview.copy
+          ? { copy: true, bodyName: newCopyBodyName(preview.bodyId as BodyId) }
+          : {})
       })
     );
     if (created) {
       // Hold the gizmo pose on screen until the exact rebuild replaces the
-      // meshes; cleared by onDerived in the same batch as the new geometry.
+      // meshes, including a copy's temporary projection; cleared by onDerived
+      // in the same batch as the new geometry.
       setMoveCommitHold(preview);
     }
     return created;
@@ -17815,7 +17825,7 @@ export function App() {
     }
     const { commands, featureId: copyId, label } = duplicate;
     const copyBodyId =
-      feature.data.featureKind === 'transform'
+      feature.data.featureKind === 'transform' && feature.data.copy !== true
         ? feature.data.targetBodyId
         : (commands[0]!.payload as { ids: { bodyId: BodyId } }).ids.bodyId;
     const targets = [
@@ -21647,6 +21657,14 @@ export function App() {
             }
             onConfirm={confirmMove}
             onCancel={cancelPanel}
+            copy={
+              movePreview.target === 'sketch' ? undefined : !!movePreview.copy
+            }
+            onCopy={(copy) =>
+              setMovePreview((current) =>
+                current ? { ...current, copy } : current
+              )
+            }
             liveValuesRef={moveValuesSetterRef}
             liveSnapRef={moveSnapSetterRef}
           />
@@ -21943,8 +21961,7 @@ export function App() {
                 }}
                 onCreateTransform={(value) => {
                   const name = newFeatureName(value.name);
-                  createValidatedFeature(
-                    commandFactories.transformBody({
+                  const command = commandFactories.transformBody({
                       name,
                       targetBodyId: value.targetBodyId,
                       translation: value.translation,
@@ -21954,10 +21971,18 @@ export function App() {
                         : {}),
                       ...(value.pivot !== undefined
                         ? { pivot: value.pivot }
+                        : {}),
+                      ...(value.copy
+                        ? { copy: true, bodyName: newCopyBodyName(value.targetBodyId) }
                         : {})
-                    }),
+                    });
+                  createValidatedFeature(
+                    command,
                     name,
-                    value.targetBodyId
+                    // A copy's result is its new body; a Move's, its target.
+                    command.payload.ids && 'bodyId' in command.payload.ids
+                      ? command.payload.ids.bodyId
+                      : value.targetBodyId
                   );
                 }}
                 onPreviewEdgeModifier={previewEdgeForm}
@@ -22187,7 +22212,8 @@ export function App() {
                     ),
                     feature,
                     value.name,
-                    value.targetBodyId
+                    // A copy (M10) rebuilds its own body, not its source.
+                    feature.bodyId ?? value.targetBodyId
                   )
                 }
                 onApplyEdgeModifier={applyEdgeForm}

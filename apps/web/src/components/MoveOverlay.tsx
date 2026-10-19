@@ -42,6 +42,12 @@ interface MoveOverlayProps {
   targetBodyId?: string;
   onTargetBody?(bodyId: string): void;
   /**
+   * M10: add the moved body as a copy and leave the source in place.
+   * Omitted for a sketch move, which has no body to copy.
+   */
+  copy?: boolean;
+  onCopy?(value: boolean): void;
+  /**
    * Where this panel publishes a sink for live drag values. The viewport
    * writes the numbers a gesture is producing straight into it, so dragging
    * the gizmo updates these fields without a workspace render. `values` stays
@@ -143,6 +149,8 @@ export function MoveOverlay({
   targets,
   targetBodyId,
   onTargetBody,
+  copy,
+  onCopy,
   liveValuesRef,
   liveSnapRef
 }: MoveOverlayProps) {
@@ -175,8 +183,10 @@ export function MoveOverlay({
     MOVE_AXES.some((axis) => values.translation[axis] !== 0) ||
     MOVE_AXES.some((axis) => values.rotationDeg[axis] !== 0);
   // Match the shared confirmation guard, including translation-only sketches.
+  // A copy in place is a real result (a coincident duplicate to move later),
+  // so a copy applies at zero where a plain Move has nothing to do.
   const canApply =
-    dirty &&
+    (dirty || copy === true) &&
     moveHasFiniteValues({
       ...values,
       ...(hideRotation ? { target: 'sketch' as const } : {})
@@ -275,9 +285,19 @@ export function MoveOverlay({
           ))}
         </div>
       )}
+      {copy !== undefined && onCopy ? (
+        <label className="field transform-copy">
+          <input
+            type="checkbox"
+            checked={copy}
+            onChange={(event) => onCopy(event.target.checked)}
+          />
+          <span>Copy (keep the original)</span>
+        </label>
+      ) : null}
       <div className="form-actions">
         <button type="submit" className="primary" disabled={!canApply}>
-          Apply move
+          {copy ? 'Apply copy' : 'Apply move'}
         </button>
         <button type="button" className="secondary" onClick={onCancel}>
           Cancel

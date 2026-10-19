@@ -9,7 +9,8 @@ import {
   type FaceTopologyReferenceV5,
   type FeatureId,
   type FeatureNode,
-  type ProjectDocument
+  type ProjectDocument,
+  isInPlaceTransform
 } from '@openzcad/shared';
 
 /** Primitive dimension a face drag on a derived body can still drive. */
@@ -121,7 +122,8 @@ function primitiveChain(
   for (const [index, feature] of features.entries()) {
     if (
       isFeatureSuppressed(feature) ||
-      feature.data.featureKind !== 'transform' ||
+      // A copy (M10) scales its own body, not the ancestry it reads.
+      !isInPlaceTransform(feature.data) ||
       !ancestryBodyIds.has(feature.data.targetBodyId)
     )
       continue;
