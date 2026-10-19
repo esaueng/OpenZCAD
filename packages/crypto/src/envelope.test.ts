@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { concatBytes, joinBytes, type Bytes } from './bytes';
+import { concatBytes, copyBytes, joinBytes, type Bytes } from './bytes';
 import { gunzipBytes, gzipBytes } from './compression';
 import {
   EnvelopeKey,
@@ -840,6 +840,47 @@ describe('content blobs', () => {
     });
     await reader.push(envelope);
     await rejectsWith(reader.finish(), 'authentication-failed');
+  });
+
+  it('a consumer that transfers the prefix it was handed cannot break later chunks', async () => {
+    const plaintext = patternBytes(CHUNK * 3 + 5, 8);
+    const encrypted = encryptContentBlobStream(
+      EnvelopeKey.generate(),
+      'mesh-payload',
+      stream([plaintext]),
+      {
+        compression: 'none',
+        chunkSize: CHUNK,
+        plaintextLength: plaintext.byteLength
+      }
+    );
+    const reader = encrypted.envelope.getReader();
+    const first = (await reader.read()).value!;
+    const prefix = copyBytes(first);
+    // As if posted to an upload worker: the buffer is detached here.
+    structuredClone(first.buffer, { transfer: [first.buffer] });
+    expect(first.byteLength).toBe(0);
+    const parts = [prefix];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value);
+    }
+    const reference = await encrypted.reference;
+    expect(await decryptContentBlob(reference, joinBytes(parts))).toEqual(
+      plaintext
+    );
+    // The writer's own prefix and header are not the consumer's to edit.
+    const writer = await createContentBlobWriter(
+      EnvelopeKey.generate(),
+      'export',
+      { compression: 'none', chunkSize: CHUNK, plaintextLength: 1 }
+    );
+    const canonical = writer.prefix;
+    writer.prefix.fill(0);
+    expect(writer.prefix).toEqual(canonical);
+    expect(canonical.some((byte) => byte !== 0)).toBe(true);
+    expect(Object.isFrozen(writer.header)).toBe(true);
   });
 
   it('a direct writer call is bounded in bytes and records', async () => {

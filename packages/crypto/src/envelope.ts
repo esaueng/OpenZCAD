@@ -215,10 +215,18 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
   private state: 'open' | 'busy' | 'closed' = 'open';
   private readonly hasher: CiphertextHasher | null;
   private hash: Bytes | null = null;
+  /**
+   * The canonical prefix every chunk's AAD binds. Consumers only ever see
+   * copies, so one that transfers or edits the bytes it was handed (say,
+   * to an upload worker) cannot change what later chunks authenticate.
+   */
+  readonly #prefix: Bytes;
+  /** Frozen, so a consumer cannot alter the chunking mid-envelope. */
+  readonly header: H;
 
   constructor(
-    readonly header: H,
-    readonly prefix: Bytes,
+    header: H,
+    prefix: Bytes,
     private readonly key: CryptoKey,
     /**
      * Uncompressed payloads are the plaintext, so the writer refuses any
@@ -227,9 +235,18 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
      */
     private readonly enforceLength = header.compression === 'none'
   ) {
+    const frozen: H = { ...header };
+    Object.freeze(frozen);
+    this.header = frozen;
+    this.#prefix = copyBytes(prefix);
     this.hasher = header.class === 'content' ? new CiphertextHasher() : null;
     // Folded in before the first chunk, which awaits it.
-    this.hasher?.add(prefix).catch(() => undefined);
+    this.hasher?.add(this.#prefix).catch(() => undefined);
+  }
+
+  /** The envelope prefix to emit first; a fresh copy on each read. */
+  get prefix(): Bytes {
+    return copyBytes(this.#prefix);
   }
 
   /** Encrypts every chunk that is now known not to be the last. */
@@ -307,7 +324,7 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
   /** Total envelope length for a payload of `payloadLength` bytes. */
   encryptedLength(payloadLength: number): number {
     return (
-      this.prefix.byteLength +
+      this.#prefix.byteLength +
       envelopeBodyLength(payloadLength, this.header.chunkSize)
     );
   }
@@ -321,7 +338,7 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
     const sealed = await aesGcmEncrypt(
       this.key,
       chunkNonce(index, final),
-      chunkAad(this.prefix, index),
+      chunkAad(this.#prefix, index),
       chunk
     );
     await this.hasher?.add(sealed);
