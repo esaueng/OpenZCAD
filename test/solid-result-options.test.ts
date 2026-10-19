@@ -413,6 +413,29 @@ describe('Stage 4 solid options: exact build', () => {
     }
   });
 
+  it('labels a kept split original and its halves apart', () => {
+    const { document, a } = cubePair();
+    const split = addSplitFeature(document, {
+      name: 'Split',
+      targetBodyId: a,
+      plane: {
+        origin: { x: 5, y: 0, z: 0 },
+        normal: { x: 1, y: 0, z: 0 }
+      },
+      keepOriginal: true
+    });
+    const names = new Map(
+      Object.values(split.document.nodes).flatMap((node) =>
+        node.kind === 'body' ? [[node.bodyId, node.name] as const] : []
+      )
+    );
+    expect(
+      new Set([a, split.bodyId, split.secondBodyId].map((id) => names.get(id)))
+        .size
+    ).toBe(3);
+    expect(names.get(split.bodyId)).toBe(`${names.get(a)} (front)`);
+  });
+
   it('offers a kept split original as a later extrude target', () => {
     const { document, a } = cubePair();
     const split = addSplitFeature(document, {

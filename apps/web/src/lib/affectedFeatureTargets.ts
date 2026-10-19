@@ -104,6 +104,15 @@ export function affectedFeatureTargets(
   }
 
   const affectedBodies = new Set<BodyId>(sourceBodyId ? [sourceBodyId] : []);
+  // M11: editing a Boolean or Split can change which of its inputs it keeps,
+  // and a later feature on an input that stops being kept loses its body.
+  // So the inputs' own downstream branches are validated too; the inputs are
+  // not targets themselves, since consuming them is the edit's intent.
+  if (source.data.featureKind === 'boolean') {
+    source.data.targetBodyIds.forEach((bodyId) => affectedBodies.add(bodyId));
+  } else if (source.data.featureKind === 'split') {
+    affectedBodies.add(source.data.targetBodyId);
+  }
   const affectedSketches = new Set<SketchId>(
     sourceSketchId ? [sourceSketchId] : []
   );

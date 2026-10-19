@@ -2700,7 +2700,13 @@ export function addSplitFeature(
     metadata: { color: featureColor('split') }
   });
   const sourceName = derivedBodyName(document, input.targetBodyId, input.name);
-  next.nodes[bodyNodeId] = bodyNode(bodyNodeId, bodyId, sourceName);
+  // M11: a kept original is still on screen under its own name, so the
+  // positive half is labelled as a half rather than borrowing it.
+  next.nodes[bodyNodeId] = bodyNode(
+    bodyNodeId,
+    bodyId,
+    input.keepOriginal === true ? `${sourceName} (front)` : sourceName
+  );
   next.nodes[ids.secondBodyNodeId] = bodyNode(
     ids.secondBodyNodeId,
     ids.secondBodyId,

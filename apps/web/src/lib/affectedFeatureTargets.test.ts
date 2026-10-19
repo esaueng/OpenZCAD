@@ -4,6 +4,7 @@ import {
   addPrimitiveFeature,
   addSketchFeature,
   addSplitFeature,
+  booleanBodies,
   extrudeSketch,
   chamferEdges,
   createProjectDocument,
@@ -611,5 +612,61 @@ describe('affected feature targets', () => {
       });
       expect(noop.orderGate).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('kept Boolean and Split inputs (M11)', () => {
+  function boxes() {
+    let document = createProjectDocument('Kept', toUserId('user_kept'));
+    for (const name of ['A', 'B']) {
+      document = addPrimitiveFeature(document, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      });
+    }
+    return { document, a: document.bodyOrder[0]!, b: document.bodyOrder[1]! };
+  }
+
+  it('validates a later feature on a kept Boolean input when the Boolean is edited', () => {
+    const { document, a, b } = boxes();
+    const union = booleanBodies(document, {
+      name: 'Union',
+      operation: 'union',
+      targetBodyIds: [a, b],
+      keepOriginals: 'target'
+    });
+    const moved = transformBody(union.document, {
+      name: 'Move A',
+      targetBodyId: a,
+      translation: { x: 20, y: 0, z: 0 }
+    }).document;
+    const unionId = listFeaturesInOrder(moved).find(
+      (feature) => feature.name === 'Union'
+    )!.featureId;
+    expect(
+      affectedFeatureTargets(moved, unionId).map((target) => target.featureName)
+    ).toEqual(['Union', 'Move A']);
+  });
+
+  it('validates a later feature on a kept Split original when the Split is edited', () => {
+    const { document, a } = boxes();
+    const split = addSplitFeature(document, {
+      name: 'Split',
+      targetBodyId: a,
+      plane: { origin: { x: 5, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } },
+      keepOriginal: true
+    });
+    const moved = transformBody(split.document, {
+      name: 'Move A',
+      targetBodyId: a,
+      translation: { x: 20, y: 0, z: 0 }
+    }).document;
+    const splitId = listFeaturesInOrder(moved).find(
+      (feature) => feature.name === 'Split'
+    )!.featureId;
+    expect(
+      affectedFeatureTargets(moved, splitId).map((target) => target.featureName)
+    ).toEqual(['Split', 'Move A']);
   });
 });
