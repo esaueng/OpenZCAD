@@ -82,10 +82,40 @@ Milliseconds over the 26 accepted warm ticks. The other 14 ticks were refused
    spends `volume` 352 ms, `solidEdgeRelations` 332 ms and `recognizeFeatures`
    331 ms, against an 18.8 ms move.
 
+## Follow-ups measured the same day
+
+- **The post-commit broadcast sync is cheap in the adapter.**
+  - The app commits with a full-lineage sync. The new document version then
+    triggers a broadcast sync with an empty lineage demand, which misses the
+    worker's result cache.
+  - Replayed through the adapter (`OFFSET_PERF_BROADCAST=1`), that second
+    sync of the hammer holder takes 42 ms wall, 5 ms of it in the kernel,
+    after a 1,663 ms commit sync.
+  - The adapter's history and measured-body caches absorb it, so merging the
+    two worker cache keys is a small win, not a priority.
+- **Drag previews now reuse the committed measurement of unchanged bodies.**
+  - A body qualifies when it keeps its solid handles, lineage, import
+    diagnostics and recounted handle/validation witness. Its last complete
+    measurement is then published in the deferred-preview shape instead of
+    being re-meshed.
+  - With 200 unrelated boxes, interleaved 6-tick runs went from a wall p50 of
+    608/633 ms to 525/484 ms, and from a kernel p50 of 305/305 ms to
+    261/246 ms. The single-body holder is unchanged.
+  - Two limits remain:
+    - **Rebuilt bodies.** 57 of the 200 boxes sit after the nearest retained
+      checkpoint. They are rebuilt with new handles on every tick, which is
+      the sparse-checkpoint cost.
+    - **Refusals.** In the 40-tick run, reuse stopped after the first refused
+      ticks (7 and 8). Every later tick re-meshed all 201 bodies. The cause is
+      not yet traced; the measured-body cache only refills on a complete sync.
+  - A CPU profile of a 6-tick run spends 380 ms in `structuredClone` inside
+    `syncMeasuredDocument`, across the import, the previews and the commit
+    together. The preview's final clone of every body's state is the remaining
+    per-tick candidate.
+
 ## Not measured here
 
-- The worker's second, broadcast sync after a commit.
-- `structuredClone` and `postMessage` costs.
+- `postMessage` costs.
 - Viewer installation.
 - Browser WASM tiering.
 

@@ -96,6 +96,7 @@ import type {
   DxfFaceSelector,
   ExactBuildResult,
   ExactShape,
+  ImportedStepDiagnostics,
   MeasuredShape,
   PreparedShapeMeasurement
 } from './exact-types';
@@ -1151,6 +1152,48 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.historyKernel.free();
       this.historyKernel = null;
     }
+  }
+
+  /**
+   * A drag preview's copy of a body's last complete measurement, when the
+   * body is the same entity it was then: the same solid handles (handles are
+   * never reused, see {@link MeasuredBodyCacheEntry}), lineage and import
+   * diagnostics, and a recounted handle/validation witness that matches. Any
+   * disagreement returns null and the preview meshes the body as before. The
+   * result shares the cached buffers: the preview's final `structuredClone`
+   * detaches everything it publishes, so callers never alias the cache.
+   */
+  private reusedPreviewMeasurement(
+    kernel: RemusKernel,
+    bodyId: BodyId,
+    shape: ExactShape,
+    strict: boolean,
+    imported: ImportedStepDiagnostics | undefined
+  ): Pick<
+    MeasuredShape,
+    'vertices' | 'indices' | 'bbox' | 'topology' | 'faceCount'
+  > | null {
+    const cached = this.measuredShapeCache.get(bodyId);
+    if (
+      !cached ||
+      cached.analysisKey !== undefined ||
+      cached.strict !== strict ||
+      cached.solidKey !== shape.solids.join(',') ||
+      cached.provenanceKey !== measurementProvenanceKey(shape, imported)
+    ) {
+      return null;
+    }
+    try {
+      if (
+        JSON.stringify(measurementWitness(kernel, shape, strict)) !==
+        JSON.stringify(cached.witness)
+      ) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    return cached.measured;
   }
 
   private evictMeasuredShape(bodyId: BodyId): void {
@@ -2489,6 +2532,54 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             !isFeatureSuppressed(feature);
           // Hidden unions still need the normal display-closure gate.
           if (strict && hiddenBodies.has(bodyId)) break deferredTopology;
+          if (!consumed && !hiddenBodies.has(bodyId)) {
+            const reused = this.reusedPreviewMeasurement(
+              kernel,
+              bodyId,
+              shape,
+              strict,
+              imported
+            );
+            if (reused) {
+              publishImportDiagnostics();
+              geometryRepresentations[bodyId] = {
+                bodyId,
+                name: body.name,
+                source: feature?.featureKind ?? 'primitive',
+                faceCount: reused.faceCount,
+                color: bodyDisplayColor(body.metadata, feature?.featureKind),
+                opacity: bodyOpacityFromMetadata(
+                  body.metadata?.[BODY_OPACITY_METADATA_KEY]
+                ),
+                exportableStep: body.exportableStep,
+                consumed,
+                mesh: {
+                  kind: 'mesh',
+                  vertices: reused.vertices,
+                  indices: reused.indices
+                },
+                bbox: reused.bbox,
+                // The same shape as a meshed preview body: display faces
+                // only, NURBS geometry and edge topology left pending.
+                topology: {
+                  faces: reused.topology.faces.map((face) => ({
+                    topologyId: face.topologyId,
+                    hash: face.hash,
+                    triangleStart: face.triangleStart,
+                    triangleCount: face.triangleCount,
+                    geometry:
+                      face.geometry?.surfaceType === 'bspline'
+                        ? undefined
+                        : face.geometry
+                  })),
+                  edges: []
+                }
+              };
+              reusedMeasurements += 1;
+              measurementDone();
+              continue;
+            }
+          }
           for (const solid of shape.solids) {
             const verdict = strictVerdicts.get(solid);
             const relaxedErrors = kernel.validateSolidRelaxed(solid);
