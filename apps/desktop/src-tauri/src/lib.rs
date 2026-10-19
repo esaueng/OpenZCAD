@@ -69,6 +69,8 @@ fn export_path(path: &Path, format: &str) -> Result<PathBuf, String> {
         "obj" => &["obj"][..],
         "glb" => &["glb"][..],
         "ply" => &["ply"][..],
+        "svg" => &["svg"][..],
+        "png" => &["png"][..],
         _ => &["stl"][..],
     };
     let extension = path
@@ -94,7 +96,7 @@ async fn save_cad_file(
     format: String,
     contents: String,
 ) -> Result<bool, String> {
-    if !matches!(format.as_str(), "step" | "stl" | "dxf") {
+    if !matches!(format.as_str(), "step" | "stl" | "dxf" | "svg") {
         return Err("Unsupported export format.".to_string());
     }
     if suggested_name.is_empty()
@@ -110,6 +112,7 @@ async fn save_cad_file(
         .set_title(match format.as_str() {
             "step" => "Export STEP",
             "dxf" => "Export DXF",
+            "svg" => "Export SVG",
             _ => "Export STL",
         })
         .set_file_name(&suggested_name)
@@ -130,7 +133,10 @@ async fn save_cad_binary_file(
     format: String,
     contents: Vec<u8>,
 ) -> Result<bool, String> {
-    if !matches!(format.as_str(), "stl" | "3mf" | "obj" | "glb" | "ply") {
+    if !matches!(
+        format.as_str(),
+        "stl" | "3mf" | "obj" | "glb" | "ply" | "png"
+    ) {
         return Err("Unsupported export format.".to_string());
     }
     if suggested_name.is_empty()
@@ -147,6 +153,7 @@ async fn save_cad_binary_file(
         "obj" => "Export OBJ",
         "glb" => "Export glTF",
         "ply" => "Export PLY",
+        "png" => "Export PNG",
         _ => "Export STL",
     };
     let handle = rfd::AsyncFileDialog::new()
@@ -361,5 +368,27 @@ mod tests {
         );
         assert!(export_path(Path::new("plate-face.stl"), "dxf").is_err());
         assert!(export_path(Path::new("plate-face.dxf"), "stl").is_err());
+    }
+
+    #[test]
+    fn accepts_image_export_names() {
+        assert_eq!(
+            export_path(Path::new("part-sketch.svg"), "svg").unwrap(),
+            Path::new("part-sketch.svg")
+        );
+        assert_eq!(
+            export_path(Path::new("part"), "svg").unwrap(),
+            Path::new("part.svg")
+        );
+        assert_eq!(
+            export_path(Path::new("part.PNG"), "png").unwrap(),
+            Path::new("part.PNG")
+        );
+        assert_eq!(
+            export_path(Path::new("part"), "png").unwrap(),
+            Path::new("part.png")
+        );
+        assert!(export_path(Path::new("part.png"), "svg").is_err());
+        assert!(export_path(Path::new("part.svg"), "png").is_err());
     }
 }

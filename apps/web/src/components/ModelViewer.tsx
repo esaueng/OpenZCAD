@@ -292,6 +292,11 @@ import { sketchValueResolver } from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
 import { traceFaceDrag } from '../lib/faceDragTrace';
 import {
+  renderViewportImage,
+  viewportImageMaxSide,
+  type ViewportImageSource
+} from './viewer/viewportImage';
+import {
   readWheelDeviceMemory,
   writeWheelDeviceMemory
 } from '../lib/wheelDeviceMemory';
@@ -974,6 +979,11 @@ export interface ModelViewerProps {
       ) => void)
     | null
   >;
+  /**
+   * Installed while the scene lives: draws the current view offscreen at a
+   * chosen size for image export, without presenting a frame.
+   */
+  viewportImageRef?: MutableRefObject<ViewportImageSource | null>;
   /** Stationary right-click; right-drag stays a pan. */
   onContextMenu(
     x: number,
@@ -1790,6 +1800,7 @@ export function ModelViewer({
   onResizePrimitiveFace,
   onMovePreviewChange,
   moveValuesSetterRef,
+  viewportImageRef,
   onContextMenu
 }: ModelViewerProps) {
   const drawingBodiesRef = useRef<
@@ -2596,6 +2607,43 @@ export function ModelViewer({
       timer: new THREE.Timer()
     };
     contextRef.current = context;
+    const viewportImage: ViewportImageSource = {
+      capture: (request) => {
+        const image = renderViewportImage(
+          {
+            renderer,
+            scene,
+            camera: cameraRig.activeCamera,
+            backdrop: gradientBackdrop,
+            grid: [grid, axes],
+            content: [
+              skyLight,
+              keyLight,
+              keyLight.target,
+              rimLight,
+              shadowCatcher,
+              bodyGroup,
+              regionGroup,
+              sketchGroup
+            ],
+            objectsByBodyId
+          },
+          request
+        );
+        requestRender();
+        return image;
+      },
+      viewSize: () => ({
+        width: renderer.domElement.width,
+        height: renderer.domElement.height
+      }),
+      // Read when asked, not at mount: the export is rare, and the renderer
+      // need not be fully initialised for the viewer to start.
+      get maxSide() {
+        return viewportImageMaxSide(renderer);
+      }
+    };
+    if (viewportImageRef) viewportImageRef.current = viewportImage;
 
     const restoredView = initialViewRef.current;
     if (restoredView) {
@@ -9021,6 +9069,9 @@ export function ModelViewer({
       moveGizmoHudRef.current = null;
       if (orientationDragRef.current === orientationDragControls) {
         orientationDragRef.current = null;
+      }
+      if (viewportImageRef?.current === viewportImage) {
+        viewportImageRef.current = null;
       }
       contextRef.current = null;
     };
