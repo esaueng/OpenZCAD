@@ -648,9 +648,7 @@ describe('to-face extent and draft (F01, schema v29)', () => {
       />
     );
     expect(screen.getByText('Checking the target face…')).toBeVisible();
-    expect(
-      screen.getByRole('button', { name: 'Apply', exact: true })
-    ).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
     expect(
       screen.queryByText(/This face is not parallel/)
     ).not.toBeInTheDocument();
