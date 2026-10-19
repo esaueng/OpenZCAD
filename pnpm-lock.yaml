@@ -211,6 +211,8 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
+  packages/crypto: {}
+
   packages/document-core:
     dependencies:
       '@openzcad/shared':
