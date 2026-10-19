@@ -366,7 +366,7 @@ test('the top-bar status chips only report, and saving lives on File', async ({
   const settings = page.getByRole('dialog', { name: 'Settings' });
   await expect(settings).toBeVisible();
   await expect(
-    settings.getByRole('heading', { name: 'Account & collaboration' })
+    settings.getByRole('heading', { level: 2, name: 'Account', exact: true })
   ).toBeVisible();
   await settings.getByRole('button', { name: /^Back/ }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);

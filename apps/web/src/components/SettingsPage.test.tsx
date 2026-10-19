@@ -1,7 +1,7 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState, type ComponentProps } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   defaultAppSettings,
   loadLocalAppSettings,
@@ -20,6 +20,23 @@ import {
 } from '@openzcad/shared';
 import { SettingsPage } from './SettingsPage';
 import { api } from '../lib/api';
+
+// Account loads storage usage for a signed-in profile; no test reaches a server.
+const storageUsage = {
+  projectCount: 3,
+  documentBytes: 2_048,
+  revisionBytes: 1_024,
+  revisionCount: 4,
+  documentLimitBytes: 10 * 1_048_576,
+  maxRevisionsPerProject: 20,
+  artifactBytes: 5 * 1_048_576,
+  artifactCount: 2,
+  artifactLimitBytes: 100 * 1_048_576
+};
+
+beforeEach(() => {
+  vi.spyOn(api, 'storageUsage').mockResolvedValue(storageUsage);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -145,29 +162,34 @@ describe('settings number fields', () => {
     expect(latest().sketching.linearSnap).toBe(0.5);
   });
 
-  it('clamps an out-of-range angle on blur to the value storage keeps', async () => {
+  it('clamps an out-of-range tolerance on blur to the value storage keeps', async () => {
     const user = userEvent.setup();
     const { latest } = renderStatefulSettings({ initialSection: 'sketching' });
-    const angle = screen.getByLabelText('Angular snap increment');
+    const tolerance = screen.getByLabelText('Sketch snap tolerance');
 
-    await user.clear(angle);
-    await user.type(angle, '500');
+    await user.clear(tolerance);
+    await user.type(tolerance, '500');
     // Still being typed: shown as typed, never committed out of range.
-    expect(angle).toHaveValue(500);
-    expect(latest().sketching.angleSnap).toBeLessThanOrEqual(90);
+    expect(tolerance).toHaveValue(500);
+    expect(latest().sketching.snapTolerancePx).toBeLessThanOrEqual(24);
     await user.tab();
 
-    expect(angle).toHaveValue(90);
-    expect(latest().sketching.angleSnap).toBe(90);
+    expect(tolerance).toHaveValue(24);
+    expect(latest().sketching.snapTolerancePx).toBe(24);
     // What the page shows is what a reload reads back, not the default.
     window.localStorage.clear();
     saveLocalAppSettings(latest());
-    expect(loadLocalAppSettings().sketching.angleSnap).toBe(90);
+    expect(loadLocalAppSettings().sketching.snapTolerancePx).toBe(24);
+  });
+
+  it('does not offer the angular snap no tool reads yet', () => {
+    renderSettings(null, { initialSection: 'sketching' });
+    expect(screen.queryByLabelText('Angular snap increment')).toBeNull();
   });
 
   it.each([
     { label: 'Sketch snap tolerance', key: 'snapTolerancePx', value: 4.5 },
-    { label: 'Angular snap increment', key: 'angleSnap', value: 22.5 }
+    { label: 'Linear snap increment', key: 'linearSnap', value: 2.25 }
   ] as const)(
     'preserves fractional $label through storage',
     async ({ label, key, value }) => {
@@ -322,7 +344,7 @@ describe('settings accessible names', () => {
     const user = userEvent.setup();
     const personal = defaultAppSettings();
     personal.assistant.credentialSource = 'personal';
-    renderSettings(null, { settings: personal, initialSection: 'viewport' });
+    renderSettings(null, { settings: personal, initialSection: 'controls' });
 
     expect(
       screen.getByRole('checkbox', { name: 'Zoom toward the pointer' })
@@ -359,7 +381,6 @@ describe('settings offline mode', () => {
     });
 
     expect(screen.getByText('Offline mode')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Account' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'AI Assistant' })).toBeNull();
     expect(
       screen.queryByRole('checkbox', { name: 'AI assistant' })
@@ -368,7 +389,7 @@ describe('settings offline mode', () => {
       screen.queryByRole('checkbox', { name: 'Project sharing' })
     ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Files & autosave' }));
+    await user.click(screen.getByRole('button', { name: 'Saving' }));
     expect(screen.getByText('Local autosave')).toBeInTheDocument();
     expect(screen.getByText('Active')).toBeInTheDocument();
     expect(
@@ -376,7 +397,14 @@ describe('settings offline mode', () => {
     ).toBeDisabled();
     expect(screen.getByText('Disabled')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'General' }));
+    // Account stays reachable offline, holding only the way back: the cloud
+    // switch, never the sign-in, sharing, or storage it would block.
+    await user.click(screen.getByRole('button', { name: 'Account' }));
+    expect(screen.getByText(/Cloud features are off/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole('checkbox', { name: 'Project sharing' })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('Account storage')).not.toBeInTheDocument();
     await user.click(screen.getByRole('checkbox', { name: 'Cloud features' }));
     expect(onCloudFunctionsEnabledChange).toHaveBeenCalledWith(true);
   });
@@ -387,7 +415,7 @@ describe('settings viewport copy', () => {
     const user = userEvent.setup();
     renderSettings();
 
-    await user.click(screen.getByRole('button', { name: 'Viewport' }));
+    await user.click(screen.getByRole('button', { name: 'Controls' }));
     expect(
       screen.getByText(
         /toward whatever is under the cursor, as desktop CAD does/
@@ -397,12 +425,12 @@ describe('settings viewport copy', () => {
   });
 });
 
-describe('settings shortcuts section', () => {
+describe('settings controls section', () => {
   it('opens on one keyboard header, not a banner stacked above it', async () => {
     const user = userEvent.setup();
     const { container } = renderSettings();
 
-    await user.click(screen.getByRole('button', { name: 'Shortcuts' }));
+    await user.click(screen.getByRole('button', { name: 'Controls' }));
 
     expect(screen.queryByText('Shortcuts are fixed and context-aware.')).toBe(
       null
@@ -411,11 +439,12 @@ describe('settings shortcuts section', () => {
       '.settings-control-collection > header'
     );
     expect([...headers].map((header) => header.textContent)).toEqual([
+      expect.stringContaining('Navigation'),
       expect.stringContaining('Keyboard'),
       expect.stringContaining('Mouse & pointer')
     ]);
     // The banner's guidance lives on in the one header.
-    expect(headers[0]).toHaveTextContent(/pause while you type/);
+    expect(headers[1]).toHaveTextContent(/pause while you type/);
   });
 });
 
@@ -801,17 +830,25 @@ describe('settings privacy and data section', () => {
     expect(
       screen.getByRole('button', { name: 'Delete all data' })
     ).toBeEnabled();
-    expect(screen.getByText(/cloud actions below never touch/)).toBeVisible();
+    expect(screen.getByText(/cloud deletions below never touch/)).toBeVisible();
   });
 
-  it('does not duplicate destructive cloud actions on Account or Files & autosave', async () => {
+  it('shows storage usage on Account, where the profile that owns it is', async () => {
+    renderSettings(readyHealth, { initialSection: 'account', session });
+
+    expect(await screen.findByText(/3 projects/)).toBeInTheDocument();
+    expect(screen.getByText(/^5.* of 100/)).toBeInTheDocument();
+    expect(api.storageUsage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not duplicate destructive cloud actions on Account or Saving', async () => {
     const user = userEvent.setup();
     renderSettings(readyHealth, { initialSection: 'account', session });
 
     expect(
       screen.queryByRole('button', { name: 'Delete all data' })
     ).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Files & autosave' }));
+    await user.click(screen.getByRole('button', { name: 'Saving' }));
     expect(
       screen.queryByRole('button', { name: 'Delete projects' })
     ).not.toBeInTheDocument();

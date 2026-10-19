@@ -423,7 +423,7 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
 
   // Turning the preference off restores zooming toward the view centre.
   await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  await page.getByRole('button', { name: 'Controls', exact: true }).click();
   await page.getByLabel('Zoom toward the pointer').uncheck();
   await page
     .getByRole('button', { name: /Back to workspace|Close settings/ })
@@ -946,7 +946,7 @@ test('the middle-button drag preference changes what a middle drag does', async 
   // Switching to orbit first re-pivots onto the pointed geometry without
   // moving the camera, then turns the camera around that new target.
   await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  await page.getByRole('button', { name: 'Controls', exact: true }).click();
   await page.getByLabel('Middle-button drag').selectOption('orbit');
   await page
     .getByRole('button', { name: /Back to workspace|Close settings/ })
