@@ -345,8 +345,11 @@ keys and a copy of the old wraps. Rotation protects what comes after.
   key, steer future wraps to it, and sign as the user. No "it was only lost"
   shortcut can rule that out, so there is none. Settings explains the cost
   before the user starts: every contact verifies them again. The browser
-  runs the same rotation as removing a device (new account key, new
-  encryption key pair, new project epochs), then creates a new identity key. The new identity is accompanied by a
+  creates a new identity key with a fresh device list, as described under
+  [Unlock and devices](#unlock-and-devices), then rotates the account key, the
+  encryption key pair and the project epochs. The new keys are wrapped only to
+  devices and unlock methods re-approved under the new identity, never to
+  targets carried over from the old device list. The new identity is accompanied by a
   statement signed by the old one, but that statement proves nothing to
   members, since the attacker could have signed it too. Every member who
   verified the old fingerprint sees the key as changed and must verify it
