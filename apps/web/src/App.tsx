@@ -3442,6 +3442,11 @@ export function App() {
    */
   const regionExtrudeCommitRequest = useRef(0);
   const regionExtrudeSettings = useRef<ExtrudeFormValue | null>(null);
+  /** The region card's extent takes its depth from the build (F01). */
+  const regionExtentIsDerived = () => {
+    const extent = regionExtrudeSettings.current?.endCondition;
+    return extent === 'to-face' || extent === 'through-all';
+  };
   const regionDistanceSetter = useRef<((value: ParamValue) => void) | null>(
     null
   );
@@ -3461,7 +3466,9 @@ export function App() {
       OffsetPreviewResult & { resolved: ResolvedExtrude }
     >({
       build: (requestedDistance) => {
-        const distance = Math.round(requestedDistance * 1000) / 1000;
+        const distance = regionExtentIsDerived()
+          ? requestedDistance
+          : Math.round(requestedDistance * 1000) / 1000;
         if (distance === 0) return null;
         const base = managerRef.current?.document;
         const current = interactionRef.current;
@@ -15917,7 +15924,11 @@ export function App() {
       return;
     }
     const target = interaction.target;
-    const rounded = Math.round(distance * 1000) / 1000;
+    // A to-face or through-all extent derives its depth in the build, so
+    // its dormant distance only has to be non-zero, not three decimals deep
+    // (a face 0.4 mm away in a metre document is 0.0004).
+    const derived = regionExtentIsDerived();
+    const rounded = derived ? distance : Math.round(distance * 1000) / 1000;
     if (rounded === 0) {
       return;
     }
