@@ -18,7 +18,7 @@ function inspectorOf(page: Page) {
   return page.getByRole('region', { name: 'Feature inspector' });
 }
 
-function mode(page: Page, name: 'Build' | 'Draw') {
+function mode(page: Page, name: 'View' | 'Build' | 'Draw') {
   return page
     .getByRole('group', { name: 'Workspace mode' })
     .getByRole('button', { name, exact: true });
@@ -203,4 +203,33 @@ test('refuses a parameter-only undo or redo in the Draw workspace', async ({
   );
   await mode(page, 'Build').click();
   await expect(page.locator('.param-row')).toContainText('w');
+});
+
+test('refuses a drawing-only undo in the View workspace', async ({ page }) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('View undo guard');
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await inspectorOf(page)
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+  await mode(page, 'Draw').click();
+  const drawings = page.getByRole('region', { name: 'Drawings' });
+  await drawings.getByRole('button', { name: 'New drawing sheet' }).click();
+  await expect(
+    drawings.getByRole('application', { name: 'Sheet Sheet 1' })
+  ).toBeVisible();
+
+  // The newest entry adds the sheet; View is read-only for sheets too.
+  await mode(page, 'View').click();
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(page.getByRole('contentinfo')).toContainText('Cannot undo');
+  await mode(page, 'Draw').click();
+  await expect(
+    drawings.getByRole('application', { name: 'Sheet Sheet 1' })
+  ).toBeVisible();
 });

@@ -4223,9 +4223,14 @@ export function App() {
         : drawingMode
           ? 'Draw mode edits drawing sheets only — switch to Build to model'
           : projectEditDisabledReason;
-  // D01 sheet edits answer to the project's own locks only: a read-only seat
-  // or a second tab refuses them, the workspace mode never does.
-  const drawingEditDisabledReason = projectEditDisabledReason;
+  // D01 sheet edits answer to the project's own locks in Draw and Build (a
+  // read-only seat or a second tab refuses them), and to the reading
+  // workspaces' locks in View and Tweak, where a drawing-only undo or redo
+  // must not edit sheets either.
+  const drawingEditDisabledReason =
+    !projectOpenElsewhere && (viewMode || tweakMode)
+      ? editDisabledReason
+      : projectEditDisabledReason;
   // The parameter guard: the same chain, except Tweak deliberately passes —
   // adjusting a published dimension is the one edit that workspace allows.
   const parameterEditDisabledReason = projectOpenElsewhere
