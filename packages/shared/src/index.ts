@@ -46,15 +46,20 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * would refuse or read as a bare number, so the bump makes it refuse such a
  * document. Absent stays the unitless parameter every older document holds.
  *
- * v22 adds S04 composite identity (`SketchNode.composites`): a rectangle or
+ * v22 adds the M10 transform pivot (`ParametricTransform3D.pivot`): rotation
+ * and scale turn about it rather than the world origin. A v21 client would
+ * turn such a Move about the origin and move the body elsewhere, so the bump
+ * makes it refuse the document instead.
+ *
+ * v23 adds S04 composite identity (`SketchNode.composites`): a rectangle or
  * polygon drawn in the viewport is real lines held by persisted relations,
  * and the composite record names those lines as one object with ordered
- * corners and sides. A v21 client would drop the record on its next save and
+ * corners and sides. A v22 client would drop the record on its next save and
  * leave four unrelated lines, so the bump makes it refuse such a document.
  * Absent means no composites: every older rectangle and polygon object loads
  * unchanged and is never decomposed.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 22 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 23 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -238,13 +243,21 @@ export interface ParametricTransform3D {
   translation: ParametricVector3;
   rotationDeg: ParametricVector3;
   /**
-   * Uniform scale factor about the world origin, applied before rotation and
+   * Uniform scale factor about the pivot, applied before rotation and
    * translation. Absent means 1 (no scaling); the rebuild rejects values that
    * do not resolve to a positive finite number. Uniform only: the exact
    * kernel preserves analytic surfaces under conformal maps, and a
    * non-uniform factor would silently degrade cylinders to NURBS.
    */
   scale?: ParamValue;
+  /**
+   * M10 (schema v22): the point rotation and scale turn about, in document
+   * units; the translation then moves the result. Absent is the world origin,
+   * as every older document stores it. The Move gizmo writes the body's
+   * centre here, so a later edit to its rotation still turns the body in
+   * place rather than about the origin.
+   */
+  pivot?: ParametricVector3;
 }
 
 /** Parametric plane used by exact mirror features. */
@@ -646,7 +659,7 @@ export interface SketchNode extends BaseNode {
    */
   referenceDimensions?: SketchReferenceDimension[];
   /**
-   * S04 composite identity (schema v22, additive): rectangles and polygons
+   * S04 composite identity (schema v23, additive): rectangles and polygons
    * drawn as lines, each named as one object. Absent means none, so every
    * earlier document replays untouched; a legacy `rectangle` or `polygon`
    * object is never rewritten into one.

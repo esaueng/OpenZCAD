@@ -1823,6 +1823,9 @@ export function Inspector(props: InspectorProps) {
             rotationDeg: data.transform.rotationDeg,
             ...(data.transform.scale !== undefined
               ? { scale: data.transform.scale }
+              : {}),
+            ...(data.transform.pivot !== undefined
+              ? { pivot: data.transform.pivot }
               : {})
           }}
           submitLabel="Apply"

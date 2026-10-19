@@ -419,8 +419,10 @@ export interface TransformInput {
   targetBodyId: BodyId;
   translation: ParametricVector3;
   rotationDeg?: ParametricVector3;
-  /** Uniform scale about the world origin; omitted means 1. */
+  /** Uniform scale about the pivot; omitted means 1. */
   scale?: ParamValue;
+  /** M10: rotation and scale turn about this point; omitted is the origin. */
+  pivot?: ParametricVector3;
   ids?: FeatureOnlyIds;
 }
 
@@ -869,7 +871,7 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // `constraints`, so nothing needs rewriting.
   // Schema v15 -> v16 adds the canonical-plane basis marker. Never synthesize
   // it while migrating: unmarked saved sketches must retain revision 1 geometry.
-  // Schema v21 -> v22 adds S04 sketch composites. Never synthesize one:
+  // Schema v22 -> v23 adds S04 sketch composites. Never synthesize one:
   // a saved rectangle or polygon object stays the parametric object it was.
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version
@@ -2417,7 +2419,10 @@ export function transformBody(
     input.rotationDeg?.x,
     input.rotationDeg?.y,
     input.rotationDeg?.z,
-    input.scale
+    input.scale,
+    input.pivot?.x,
+    input.pivot?.y,
+    input.pivot?.z
   ];
   if (
     values.some((value) => typeof value === 'number' && !Number.isFinite(value))
@@ -2441,7 +2446,8 @@ export function transformBody(
       transform: {
         translation: input.translation,
         rotationDeg: input.rotationDeg ?? { x: 0, y: 0, z: 0 },
-        ...(input.scale !== undefined ? { scale: input.scale } : {})
+        ...(input.scale !== undefined ? { scale: input.scale } : {}),
+        ...(input.pivot !== undefined ? { pivot: deepClone(input.pivot) } : {})
       }
     }
   };

@@ -20,7 +20,7 @@ import {
 } from './index';
 
 /**
- * S04 (schema v22): the composite record that names a drawn rectangle's or
+ * S04 (schema v23): the composite record that names a drawn rectangle's or
  * polygon's lines as one object. It groups, never moves geometry; it is
  * validated on load and on add, and it dissolves with any member.
  */

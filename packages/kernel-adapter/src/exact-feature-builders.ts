@@ -929,6 +929,7 @@ function buildTransformFeature(
   if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
     throw new Error('Transform scale must resolve to a positive number.');
   }
+  const pivot = data.transform.pivot;
   result.shapes.set(
     data.targetBodyId,
     copyShapeWithVerifiedLineage(
@@ -945,7 +946,12 @@ function buildTransformFeature(
           y: resolveParamValue(rotation.y, scope, 'rotate Y', document.units),
           z: resolveParamValue(rotation.z, scope, 'rotate Z', document.units)
         },
-        scaleFactor
+        scaleFactor,
+        pivot && {
+          x: resolveParamValue(pivot.x, scope, 'pivot X', document.units),
+          y: resolveParamValue(pivot.y, scope, 'pivot Y', document.units),
+          z: resolveParamValue(pivot.z, scope, 'pivot Z', document.units)
+        }
       ),
       // Both primitive planners convert world-space drags through uniform scale.
       ['cylinder', 'box'].includes(
