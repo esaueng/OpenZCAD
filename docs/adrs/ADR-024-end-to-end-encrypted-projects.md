@@ -689,15 +689,27 @@ encrypts under the project key is unchanged.
     passkey, the recovery key or approval from another device. It then fetches
     the newest wrapped resumption PSK and sends an external Commit that
     includes it.
-  - Every member's browser accepts that external Commit only if three things
-    hold. The credential is certified, and not revoked, in the newest device
-    list of that user the browser has seen; removing a device signs that
-    revocation with the identity key, as before, besides removing its leaf.
-    The PSK's epoch is later than that user's newest device revocation. And
-    the PSK's epoch is within the members' retention window of recent epochs.
+  - Every member's browser accepts that external Commit only if all of these
+    hold:
+    - **The identity is still a member.** The roles extension in the current
+      epoch's GroupContext lists the credential's identity with its current
+      role, so a rejoin can only bring back another device of an existing
+      member. It never re-adds a removed member, and it never grants a
+      different role.
+    - **The device is not revoked.** The credential is certified, and not
+      revoked, in the newest device list of that user the browser has seen.
+      Removing a device signs that revocation with the identity key, as
+      before, besides removing its leaf.
+    - **The PSK is fresh enough.** Its epoch is later than that user's newest
+      device revocation, and later than the identity's most recent removal
+      from, or role change in, this group.
+    - **The PSK is recent.** Its epoch is within the members' retention
+      window.
   - A removed device fails twice over. Its revocation is recorded, and the
     account key was rotated when it was removed, so it can unwrap only PSKs
     from before its removal, which the epoch rule refuses.
+  - A removed member fails at the first check whatever PSK they hold. Coming
+    back requires an Add from the owner.
 
   A device that cannot meet these rules, for example after an absence longer
   than the retention window, is re-added by an ordinary Add from any current
