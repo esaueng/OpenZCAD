@@ -461,11 +461,27 @@ comparison, which is safe only because of its commitment step.
   save. Each snapshot is a fresh project envelope with its own version key,
   as the nonce rules require. That version key is wrapped twice with AES-KW:
   under the project key for members, and under the share key for link
-  visitors. The share key never encrypts content itself. Each snapshot is signed by its author. The visitor's browser fetches
-  the signed roster (below), checks it chains to the owner key named in the
-  link, and accepts the snapshot only if an owner or editor in that roster
-  signed it. "Make a copy" decrypts in the visitor's browser and saves under
-  the visitor's keys, or locally.
+  visitors. The share key never encrypts content itself. Each snapshot is signed by its author's device key. An anonymous
+  visitor cannot follow project membership, under either the custom roster
+  or MLS: an MLS GroupInfo is vouched for by whichever member leaf signed it,
+  not by the owner (§12.4.3), so a former editor could build a plausible
+  tree. Each link therefore carries its own **share-authority statement**:
+  - The owner signs it, with a device key certified in the owner's device
+    list. It names the link id, the identity fingerprints allowed to publish
+    snapshots (the owner and current editors), a sequence number and an
+    expiry.
+  - The visitor's browser checks, in order: the owner hash in the link, the
+    owner's device list, the statement's signature and expiry, then the
+    snapshot author's identity in the statement, and that author's device
+    list certifying the signing device. It accepts the snapshot only if every
+    step holds.
+  - Any of the owner's devices renews the statement while it is online, and
+    issues a new one at once when an editor is removed or the link revoked.
+  - A former editor can therefore publish snapshots that visitors accept only
+    until the statement they were listed in expires (seven days by default).
+    After the expiry, visitors see that the owner has not recently confirmed
+    the link. Those limits are inherent to anonymous access. "Make a copy" decrypts in the visitor's browser and saves under
+    the visitor's keys, or locally.
 - **Share-link revocation is project state, not a server deletion.** A
   compromised server could keep the snapshot and the wrapped share key, and
   keep presenting the link to editors as active. So the set of active links
@@ -662,7 +678,7 @@ encrypts under the project key is unchanged.
 | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
 | Project key and its epochs; [Epoch rotation](#epoch-rotation)               | MLS epochs. The project key is exported per epoch. Any member's Commit starts a new epoch, so rotation never waits for an owner                                                                                                                                                                                                   | Replaced                        |
 | Encryption key pair; wrapping the project key to each member                | Per-leaf HPKE keys in KeyPackages and the ratchet tree. Joiners get secrets through Welcome                                                                                                                                                                                                                                       | Replaced                        |
-| [Signed roster](#signed-roster) membership and its entry-type table         | Group membership is the ratchet tree, agreed through the GroupContext tree hash. Roles (owner, editor, viewer) move into an application GroupContext extension                                                                                                                                                                    | Replaced; roles stay app policy |
+| [Signed roster](#signed-roster) membership and its entry-type table         | Group membership is the ratchet tree, agreed through the GroupContext tree hash. Roles (owner, editor, viewer) move into an application GroupContext extension. Share links keep a small owner-signed share-authority statement for anonymous visitors, who cannot follow the group                                               | Replaced; roles stay app policy |
 | Self-removal and the post-removal epoch rule                                | A Commit may not remove its own sender (§12.2), so another member commits a departing member's Remove (or a SelfRemove proposal from the MLS extensions work). The Commit's fresh path secret excludes the removed leaf, which is the rule the custom design had to add by hand                                                   | Replaced                        |
 | Revocation cutoffs, device-removal rotation of project keys                 | Removing a device is a Remove of its leaf in every group. Content is signed by the sender's leaf key within an epoch, so a removed leaf cannot sign for later epochs                                                                                                                                                              | Replaced                        |
 | Identity-signed device list and its revocations                             | Still needed: MLS has no notion of a revoked credential, and a removed device keeps its certified signing key. The Authentication Service refuses any credential the user's latest device list revokes, in KeyPackages, Adds and external Commits (RFC 9420 §12.4.3.2 warns that a compromised signature key can rejoin this way) | Kept                            |
