@@ -4,11 +4,13 @@ import {
   bindingConflict,
   bindingRefusal,
   chordFromEvent,
+  chordLeavesTypingAlone,
   commandTool,
   contextsOverlap,
   KEYMAP_COMMANDS,
   KEYMAP_GROUPS,
   keymapCommand,
+  keyHint,
   labelWithKey,
   resolveKeymap,
   setActiveKeymapOverrides,
@@ -196,6 +198,12 @@ describe('remapping', () => {
     expect(bindingRefusal(DEFAULTS, 'sketch-line', 'B')).toBeNull();
   });
 
+  it('refuses a key the command already has, rather than listing it twice', () => {
+    expect(bindingRefusal(DEFAULTS, 'view-fit', 'F')).toBe(
+      'F is already a shortcut for Fit view.'
+    );
+  });
+
   it('frees a key once it is removed from its owner', () => {
     const freed = resolveKeymap(withBindings({}, 'view-fit', []));
     expect(freed.bindings('view-fit')).toEqual([]);
@@ -246,6 +254,27 @@ describe('remapping', () => {
       'Toggle grid (H)'
     );
     expect(labelWithKey('Toggle grid', undefined)).toBe('Toggle grid');
+  });
+});
+
+describe('typing and hints', () => {
+  it('lets only modifier chords and function keys through a text field', () => {
+    expect(chordLeavesTypingAlone('Ctrl+,')).toBe(true);
+    expect(chordLeavesTypingAlone('Alt+M')).toBe(true);
+    expect(chordLeavesTypingAlone('F2')).toBe(true);
+    expect(chordLeavesTypingAlone('Shift+F2')).toBe(true);
+    // These type, or move the caret.
+    for (const chord of ['K', 'Shift+K', '?', 'Space', 'Home', 'PageDown']) {
+      expect(chordLeavesTypingAlone(chord), chord).toBe(false);
+    }
+  });
+
+  it('names the live key in hint copy, or nothing when unbound', () => {
+    expect(keyHint(DEFAULTS, 'tool-union', 'union')).toBe('U union');
+    const unbound = resolveKeymap(withBindings({}, 'tool-union', []));
+    expect(keyHint(unbound, 'tool-union', 'union')).toBeNull();
+    const moved = resolveKeymap(withBindings({}, 'tool-union', ['J']));
+    expect(keyHint(moved, 'tool-union', 'union')).toBe('J union');
   });
 });
 

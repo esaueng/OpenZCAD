@@ -15,6 +15,8 @@ import {
 } from '../lib/statusLifetime';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import type { StatusTone } from './StatusActivityLog';
+import { useKeymap } from '../lib/keymap';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 
 /**
  * A message worth going back to the log for: a warning, or a refusal worded
@@ -296,6 +298,8 @@ export function ViewportDockExtras({
   // The cycle ends by handing the filter back to the tool (null), as the
   // status bar's chips did when their active one was clicked again.
   const handsBack = filterIndex === SELECTION_FILTERS.length - 1;
+  const filterChord = useKeymap().label('selection-filter');
+  const filterKey = filterChord ? platformShortcutLabel(filterChord) : null;
   return (
     <>
       <span className="viewport-dock-divider" aria-hidden="true" />
@@ -304,10 +308,10 @@ export function ViewportDockExtras({
         className={`viewport-dock-filter mono${selectionFilterIsAutomatic ? ' automatic' : ''}`}
         title={
           selectionFilterIsAutomatic
-            ? `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} — chosen by the active tool · Q cycles`
+            ? `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} — chosen by the active tool${filterKey ? ` · ${filterKey} cycles` : ''}`
             : handsBack
               ? `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} · click to hand the filter back to the tool`
-              : `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} · click or Q for ${SELECTION_FILTER_LABELS[nextFilter].toLowerCase()}`
+              : `Selecting ${SELECTION_FILTER_LABELS[selectionFilter].toLowerCase()} · click${filterKey ? ` or ${filterKey}` : ''} for ${SELECTION_FILTER_LABELS[nextFilter].toLowerCase()}`
         }
         aria-label={`Selection filter: ${SELECTION_FILTER_LABELS[selectionFilter]}. Cycle.`}
         onClick={() => onSelectionFilter(handsBack ? null : nextFilter)}

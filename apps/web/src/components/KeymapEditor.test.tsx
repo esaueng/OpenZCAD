@@ -71,6 +71,21 @@ describe('KeymapEditor', () => {
     expect(add).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('refuses a key the command already has', () => {
+    const onChange = vi.fn();
+    render(<Harness onChange={onChange} />);
+    const add = screen.getByRole('button', {
+      name: 'Add a shortcut for Toggle the grid'
+    });
+    fireEvent.click(add);
+    fireEvent.keyDown(add, { key: 'g', code: 'KeyG' });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'G is already a shortcut for Toggle the grid.'
+    );
+    expect(onChange).not.toHaveBeenCalled();
+    expect(within(row('view-grid')).getAllByText('G')).toHaveLength(1);
+  });
+
   it('keeps Escape for cancelling and lets Settings stay open', () => {
     const onChange = vi.fn();
     const outside = vi.fn();

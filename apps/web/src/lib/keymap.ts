@@ -274,6 +274,9 @@ export function bindingRefusal(
   if (BROWSER_CHORDS.has(chord)) {
     return `${shown} belongs to the browser and never reaches the workspace.`;
   }
+  if (keymap.bindings(id).includes(chord)) {
+    return `${shown} is already a shortcut for ${keymapCommand(id)?.label ?? 'this command'}.`;
+  }
   const clash = bindingConflict(keymap, id, chord);
   if (clash) {
     return `${shown} is already ${clash.label}. Remove it there first.`;
@@ -375,9 +378,16 @@ export function chordFromEvent(
   );
 }
 
-/** Whether a chord leaves a text field's typing alone (it holds Ctrl or Alt). */
-export function chordHasCommandModifier(chord: string): boolean {
-  return chord.startsWith('Ctrl+') || chord.startsWith('Alt+');
+/**
+ * Whether a chord leaves a text field's typing alone: it holds Ctrl or Alt,
+ * or is a function key, which neither types nor moves the caret.
+ */
+export function chordLeavesTypingAlone(chord: string): boolean {
+  return (
+    chord.startsWith('Ctrl+') ||
+    chord.startsWith('Alt+') ||
+    /^(Shift\+)?F\d+$/.test(chord)
+  );
 }
 
 const ARROWS: Readonly<Record<string, string>> = {
@@ -408,6 +418,19 @@ export function referenceKeyLabel(chord: string): string {
  */
 export function labelWithKey(label: string, chord: string | undefined): string {
   return chord ? `${label} (${platformShortcutLabel(chord)})` : label;
+}
+
+/**
+ * Hint copy that names a command's live key — "E extrudes" — or null when the
+ * command is unbound, so a lane line never points at a key that does nothing.
+ */
+export function keyHint(
+  keymap: Keymap,
+  id: string,
+  action: string
+): string | null {
+  const chord = keymap.label(id);
+  return chord ? `${platformShortcutLabel(chord)} ${action}` : null;
 }
 
 // The live keymap, set from the user's settings by the workspace and read by

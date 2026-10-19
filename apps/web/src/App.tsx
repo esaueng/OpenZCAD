@@ -370,7 +370,8 @@ import {
 import { KERNEL_BUILD } from './lib/kernelBuild';
 import {
   chordFromEvent,
-  chordHasCommandModifier,
+  chordLeavesTypingAlone,
+  keyHint,
   commandTool,
   toolCommandId,
   setActiveKeymapOverrides,
@@ -1866,6 +1867,15 @@ export function App() {
   }, [appSettings.keymap.overrides]);
   const keymap = useKeymap();
   /** A command's live key as a context menu prints it; none when unbound. */
+  /** "U union · X subtract · I intersect" in the live keys; null if none. */
+  const booleanKeyHints = () =>
+    [
+      keyHint(keymap, 'tool-union', 'union'),
+      keyHint(keymap, 'tool-subtract', 'subtract'),
+      keyHint(keymap, 'tool-intersect', 'intersect')
+    ]
+      .filter(Boolean)
+      .join(' · ') || null;
   const menuShortcut = (id: string) => {
     const chord = keymap.label(id);
     return chord ? platformShortcutLabel(chord) : undefined;
@@ -6129,7 +6139,7 @@ export function App() {
     if (selectedBodyIds.length > 1) {
       return {
         label: textLabelSegments(`${selectedBodyIds.length} bodies`),
-        detail: 'U union · X subtract · I intersect'
+        detail: booleanKeyHints() ?? 'Union, subtract or intersect them'
       };
     }
     const bodyId = selectedBodyIds[0];
@@ -12416,7 +12426,10 @@ export function App() {
     const name =
       sketchOptions.find((candidate) => candidate.sketchId === typedSketchId)
         ?.name ?? 'Profile';
-    setStatus(`${name}: closed profile selected · press E to extrude.`);
+    const extrudeKey = keymap.label('tool-extrude');
+    setStatus(
+      `${name}: closed profile selected · ${extrudeKey ? `press ${platformShortcutLabel(extrudeKey)} to extrude` : 'Extrude it from the tools'}.`
+    );
   }
 
   /**
@@ -15377,11 +15390,13 @@ export function App() {
       additive: modifiers.additive || modifiers.toggle,
       group: group.map(regionTargetFor)
     });
+    // Outside a sketch the Extrude tool's key is the one that takes it.
+    const profileExtrudeKey = keymap.label('tool-extrude');
     setStatus(
       nextProfiles.length > 1
         ? `${nextProfiles.length} closed sketch profiles selected · drag any arrow to extrude them together.`
         : nextProfiles.length === 1
-          ? 'Closed sketch profile selected · press E to Extrude, or drag the arrow.'
+          ? `Closed sketch profile selected · ${profileExtrudeKey ? `press ${platformShortcutLabel(profileExtrudeKey)} to Extrude, or drag the arrow` : 'drag the arrow to extrude'}.`
           : 'Sketch profile selection cleared.'
     );
   }
@@ -18568,9 +18583,10 @@ export function App() {
       const target = event.target as HTMLElement | null;
       const typing = isTypingTarget(target);
       // A chord without Ctrl or Alt is typing while a field has focus, so a
-      // global command bound to a bare key waits for the field to let go.
+      // global command bound to a bare key waits for the field to let go;
+      // a function key types nothing and still runs.
       const global =
-        chord && (!typing || chordHasCommandModifier(chord))
+        chord && (!typing || chordLeavesTypingAlone(chord))
           ? keymap.commandFor(chord, ['global'])?.id
           : undefined;
 
@@ -19755,16 +19771,25 @@ export function App() {
     keymap.label('command-palette') ?? null,
     keymap.label('shortcut-reference') ?? null
   );
+  const measureKey = keymap.label('view-measure')
+    ? platformShortcutLabel(keymap.label('view-measure')!)
+    : null;
+  const faceSelectedHint = [
+    'Face selected',
+    keyHint(keymap, 'view-normal-to-face', 'faces it head-on')
+  ]
+    .filter(Boolean)
+    .join(' — ');
   const viewModeHint = measuring
     ? measurementDraft
       ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
       : measurementMode === 'smart'
-        ? `Smart measure · pick geometry · Shift+Click totals edges · ${modelingLocked ? 'M' : 'Esc'} exits`
+        ? `Smart measure · pick geometry · Shift+Click totals edges · ${(modelingLocked && measureKey) || 'Esc'} exits`
         : measurementMode === 'distance'
           ? 'Distance · pick the first target · centers resolve automatically'
           : 'Angle · pick a straight edge, circular axis or planar face'
     : selectedTopology?.kind === 'face'
-      ? 'Face selected — Space faces it head-on'
+      ? faceSelectedHint
       : viewerBodies.length > 0
         ? 'Click a body, face, or edge · Measure records what you pick'
         : idleHint;
@@ -19781,7 +19806,15 @@ export function App() {
       ? tweakModeHint
       : (commandPromptText(interaction) ??
         (tool === 'sketch'
-          ? 'Drag to draw · R rectangle · C circle · P polygon · Enter finishes'
+          ? [
+              'Drag to draw',
+              keyHint(keymap, 'sketch-rectangle', 'rectangle'),
+              keyHint(keymap, 'sketch-circle', 'circle'),
+              'P polygon',
+              'Enter finishes'
+            ]
+              .filter(Boolean)
+              .join(' · ')
           : tool === 'fillet' || tool === 'chamfer'
             ? selectedEdges.length > 0
               ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
@@ -19793,9 +19826,9 @@ export function App() {
               : tool
                 ? 'Enter creates · Esc cancels'
                 : selectedBodyIds.length >= 2
-                  ? `${selectedBodyIds.length} bodies picked — U union · X subtract · I intersect`
+                  ? `${selectedBodyIds.length} bodies picked${booleanKeyHints() ? ` — ${booleanKeyHints()}` : ''}`
                   : selectedTopology?.kind === 'face'
-                    ? 'Face selected — Space faces it head-on'
+                    ? faceSelectedHint
                     : selectedTopology?.kind === 'edge'
                       ? // Neither tool has a shortcut, so the rail is the only
                         // route: name it the way the rail names itself.
