@@ -2016,9 +2016,7 @@ test('signs in with an email code only when cloud profile access is requested', 
   const signOut = page.getByRole('button', { name: 'Sign out' });
   await expect(signOut).toBeVisible();
   await expect(
-    page
-      .locator('.setting-row', { has: signOut })
-      .locator('.setting-title strong')
+    page.locator('.setting-row', { has: signOut }).locator('.setting-title')
   ).toHaveText('Name hidden');
   await expect(page.locator('.settings-save-message')).not.toContainText(
     'maker@example.com'
@@ -2070,7 +2068,7 @@ test('explains beta auth and Turnstile readiness failures', async ({
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   await expect(
     page.getByRole('alert').filter({
-      hasText: 'Beta sign-in configuration could not be reached'
+      hasText: 'Sign-in could not be reached'
     })
   ).toBeVisible();
   await expect(page.getByLabel('Email address')).toHaveCount(0);
