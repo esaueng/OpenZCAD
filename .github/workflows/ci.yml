@@ -26,4 +26,4 @@ jobs:
     if: github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'kernel-bump'
     permissions:
       contents: read
-    uses: esaueng/OpenZCAD/.github/workflows/fleet-ci.yml@2481ddc3afd4845da0cf737ba07bced7ca713ad7
+    uses: esaueng/OpenZCAD/.github/workflows/fleet-ci.yml@f593505b95dfe7f2d8efd67021d703d02b52c2c9
