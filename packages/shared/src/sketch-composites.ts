@@ -4,6 +4,8 @@ import type {
   ParamValue,
   SketchComposite,
   SketchCompositeId,
+  SketchConstraint,
+  SketchConstraintData,
   SketchNode,
   SketchObjectData,
   SketchPointRef
@@ -301,4 +303,63 @@ function shapeLapse(
     return 'The polygon’s sides no longer run round its circumcircle in order.';
   }
   return null;
+}
+
+/** The sizes a composite's card can drive with an expression. */
+export type SketchCompositeSizeKey = 'width' | 'height' | 'circumradius';
+
+/**
+ * Where each size of a composite lives as a driving dimension: width is the
+ * distance from corner 0 to corner 1, height from corner 0 to corner 3, and
+ * a polygon's circumradius is its circumcircle's radius.
+ */
+export function sketchCompositeSizeDimension(
+  composite: SketchComposite,
+  key: SketchCompositeSizeKey,
+  value: ParamValue
+): SketchConstraintData | null {
+  if (key === 'circumradius') {
+    const circle = composite.helperIds?.[0];
+    return composite.compositeKind === 'polygon' && circle
+      ? { constraintKind: 'radius', objectId: circle, value }
+      : null;
+  }
+  if (composite.compositeKind !== 'rectangle') return null;
+  return {
+    constraintKind: 'distance',
+    a: sketchCompositeCornerRef(composite, 0),
+    b: sketchCompositeCornerRef(composite, key === 'width' ? 1 : 3),
+    value
+  };
+}
+
+/** Whether two relations hold the same size of the same thing. */
+function sameSize(a: SketchConstraintData, b: SketchConstraintData): boolean {
+  if (a.constraintKind === 'radius' && b.constraintKind === 'radius') {
+    return a.objectId === b.objectId;
+  }
+  if (a.constraintKind !== 'distance' || b.constraintKind !== 'distance') {
+    return false;
+  }
+  const key = (ref: SketchPointRef) => `${ref.objectId}:${ref.point}`;
+  const pair = [key(a.a), key(a.b)].sort().join('|');
+  return pair === [key(b.a), key(b.b)].sort().join('|');
+}
+
+/**
+ * The existing driving dimension for each size of `composite`, if any: what
+ * its card shows in place of the measured number.
+ */
+export function sketchCompositeSizeDimensions(
+  composite: SketchComposite,
+  constraints: readonly SketchConstraint[]
+): Partial<Record<SketchCompositeSizeKey, SketchConstraint>> {
+  const found: Partial<Record<SketchCompositeSizeKey, SketchConstraint>> = {};
+  for (const key of ['width', 'height', 'circumradius'] as const) {
+    const wanted = sketchCompositeSizeDimension(composite, key, 0);
+    const match =
+      wanted && constraints.find((item) => sameSize(item.data, wanted));
+    if (match) found[key] = match;
+  }
+  return found;
 }

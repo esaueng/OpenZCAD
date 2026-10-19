@@ -54,7 +54,8 @@ import {
   documentNodesWithHistory,
   documentTextBudgetError,
   resolveSketchComposite,
-  sketchCompositeOf
+  sketchCompositeOf,
+  sketchCompositeSizeDimensions
 } from '@openzcad/shared';
 import type { SketchCompositeSummary } from './components/SketchEntityEditor';
 import { useWorkspaceResume } from './hooks/useWorkspaceResume';
@@ -13963,7 +13964,8 @@ export function App() {
    * relations, and refused whole if a relation holds a value it would move.
    */
   async function handleResizeSketchComposite(
-    size: SketchCompositeSummary['size']
+    size: SketchCompositeSummary['size'],
+    expressions: NonNullable<SketchCompositeSummary['expressions']> = {}
   ) {
     const base = managerRef.current?.document;
     const target = sketchEntityEditTarget(interactionRef.current);
@@ -13995,6 +13997,7 @@ export function App() {
       const [
         {
           compositeMemberUpdates,
+          compositeSizeCommands,
           resizedPolygon,
           resizedRectangleCorners
         },
@@ -14034,7 +14037,15 @@ export function App() {
             undefined
         ),
         (document, id) => geometry.solveSketch(document, id),
-        `Resize ${noun}`
+        `Resize ${noun}`,
+        // An expression typed into the card keeps driving its size.
+        compositeSizeCommands(
+          sketchId,
+          composite,
+          sketch.constraints ?? [],
+          expressions,
+          `Resize ${noun}`
+        )
       );
       if (
         await commitSketchEdit(
@@ -14399,6 +14410,21 @@ export function App() {
       size: polygon
         ? { circumradius: span(resolved.center, c0) }
         : { width: span(c0, c1), height: span(c0, c3) },
+      expressions: Object.fromEntries(
+        Object.entries(
+          sketchCompositeSizeDimensions(
+            composite,
+            editingSketchNode.constraints ?? []
+          )
+        ).flatMap(([key, constraint]) => {
+          const value =
+            constraint.data.constraintKind === 'distance' ||
+            constraint.data.constraintKind === 'radius'
+              ? constraint.data.value
+              : undefined;
+          return typeof value === 'string' ? [[key, value]] : [];
+        })
+      ),
       anchor:
         polygon || composite.method === 'center'
           ? 'Keeps its center.'
@@ -20615,8 +20641,8 @@ export function App() {
       }}
       onDelete={handleDeleteSketchEntity}
       composite={selectedComposite}
-      onResizeComposite={(size) => {
-        void handleResizeSketchComposite(size);
+      onResizeComposite={(size, expressions) => {
+        void handleResizeSketchComposite(size, expressions);
       }}
       constraints={selectedEntityConstraints}
       onEditConstraint={handleEditSketchDimension}

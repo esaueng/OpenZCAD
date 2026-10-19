@@ -135,7 +135,9 @@ export async function sketchEntitiesEditCommands(
     document: ProjectDocument,
     sketchId: SketchId
   ) => Promise<SketchSolveOutcome>,
-  label?: string
+  label?: string,
+  /** Relation changes that ride the same edit, applied before the solve. */
+  relations: readonly AnyCommand[] = []
 ): Promise<AnyCommand[]> {
   const befores = updates.map(({ objectId }) => {
     const before = base.nodes[objectId];
@@ -143,12 +145,15 @@ export async function sketchEntitiesEditCommands(
       throw new Error('The selected geometry is no longer available.');
     return before;
   });
-  const commands = updates.map(({ objectId, data }) =>
-    commandFactories.updateSketchObject(
-      { sketchId, objectId, data },
-      label ?? `Edit ${data.objectKind}`
-    )
-  );
+  const commands = [
+    ...updates.map(({ objectId, data }) =>
+      commandFactories.updateSketchObject(
+        { sketchId, objectId, data },
+        label ?? `Edit ${data.objectKind}`
+      )
+    ),
+    ...relations
+  ];
   const prospective = apply(base, commands);
   if (!findSketch(prospective, sketchId)?.constraints?.length) return commands;
   const outcome = await solve(prospective, sketchId);

@@ -40,6 +40,11 @@ export interface SketchCompositeSummary {
   sides: number;
   /** Width and height, or the polygon's circumradius. */
   size: { width: number; height: number } | { circumradius: number };
+  /**
+   * Sizes a dimension already drives with an expression: the card shows the
+   * expression, not the number it measures to.
+   */
+  expressions?: Partial<Record<'width' | 'height' | 'circumradius', string>>;
   /** What a resize holds still, said on the card. */
   anchor: string;
 }
@@ -48,7 +53,14 @@ interface SketchEntityEditorProps {
   data: SketchObjectData;
   /** Set when the selected line is a side of a rectangle or polygon. */
   composite?: SketchCompositeSummary | null;
-  onResizeComposite?(size: SketchCompositeSummary['size']): void;
+  /**
+   * `expressions` holds each field typed as an expression rather than a
+   * plain number; those sizes keep driving the shape through a dimension.
+   */
+  onResizeComposite?(
+    size: SketchCompositeSummary['size'],
+    expressions: NonNullable<SketchCompositeSummary['expressions']>
+  ): void;
   scope: Record<string, number>;
   units?: UnitSystem;
   disabled?: boolean;
@@ -494,7 +506,9 @@ export function SketchEntityEditor({
           scope={scope}
           units={units}
           disabled={disabled}
-          onResize={(size) => onResizeComposite?.(size)}
+          onResize={(size, expressions) =>
+            onResizeComposite?.(size, expressions)
+          }
         />
       )}
       {constraints && constraints.length > 0 && (
@@ -550,6 +564,9 @@ export function SketchEntityEditor({
 
 const formatSize = (value: number) => String(Math.round(value * 1e6) / 1e6);
 
+/** A size typed as a plain number, as opposed to an expression. */
+const PLAIN_SIZE = /^[+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i;
+
 /**
  * The shape the selected side belongs to, resized as one object: every side
  * and helper moves in one edit, solved together, so the shape's relations
@@ -567,7 +584,10 @@ function SketchCompositeCard({
   scope: Record<string, number>;
   units: UnitSystem;
   disabled: boolean;
-  onResize(size: SketchCompositeSummary['size']): void;
+  onResize(
+    size: SketchCompositeSummary['size'],
+    expressions: NonNullable<SketchCompositeSummary['expressions']>
+  ): void;
 }) {
   const fields =
     'circumradius' in composite.size
@@ -580,7 +600,8 @@ function SketchCompositeCard({
     Object.fromEntries(
       Object.entries(composite.size).map(([key, value]) => [
         key,
-        formatSize(value)
+        composite.expressions?.[key as keyof typeof composite.expressions] ??
+          formatSize(value)
       ])
     )
   );
@@ -597,10 +618,19 @@ function SketchCompositeCard({
   function submit(event: FormEvent) {
     event.preventDefault();
     if (!valid || disabled) return;
+    // A plain number moves the shape once, as a drag does; an expression
+    // (a parameter, say) keeps driving it.
+    const expressions = Object.fromEntries(
+      fields.flatMap(({ key }) => {
+        const text = (values[key] ?? '').trim();
+        return PLAIN_SIZE.test(text) ? [] : [[key, text]];
+      })
+    );
     onResize(
       'circumradius' in composite.size
         ? { circumradius: numbers[0]! }
-        : { width: numbers[0]!, height: numbers[1]! }
+        : { width: numbers[0]!, height: numbers[1]! },
+      expressions
     );
   }
   return (

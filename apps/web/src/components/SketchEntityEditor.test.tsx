@@ -948,7 +948,12 @@ describe('composite card (S04)', () => {
     await user.clear(height);
     await user.type(height, 'gap * 4');
     await user.click(within(card).getByRole('button', { name: 'Resize' }));
-    expect(onResizeComposite).toHaveBeenCalledWith({ width: 20, height: 12 });
+    // The typed expression rides along, so it keeps driving the height; the
+    // untouched plain width does not.
+    expect(onResizeComposite).toHaveBeenCalledWith(
+      { width: 20, height: 12 },
+      { height: 'gap * 4' }
+    );
   });
 
   it('offers the polygon its circumradius and refuses a non-positive size', async () => {
@@ -981,6 +986,6 @@ describe('composite card (S04)', () => {
     await user.clear(radius);
     await user.type(radius, '15');
     await user.click(within(card).getByRole('button', { name: 'Resize' }));
-    expect(onResizeComposite).toHaveBeenCalledWith({ circumradius: 15 });
+    expect(onResizeComposite).toHaveBeenCalledWith({ circumradius: 15 }, {});
   });
 });

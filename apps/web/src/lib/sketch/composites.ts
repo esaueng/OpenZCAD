@@ -16,12 +16,16 @@ import {
   MAX_SKETCH_POLYGON_SIDES,
   createId,
   createSketchCompositeId,
+  sketchCompositeSizeDimension,
+  sketchCompositeSizeDimensions,
   sketchCompositeCornerRef,
   toEntityId,
   type EntityId,
   type ParamValue,
   type SketchComposite,
+  type SketchCompositeSizeKey,
   type SketchCompositeData,
+  type SketchConstraint,
   type SketchConstraintData,
   type SketchId,
   type SketchObjectData,
@@ -644,3 +648,54 @@ export function compositeMemberUpdates(
 
 /** How far a coordinate may differ and still count as not moved by a resize. */
 const UNMOVED = 1e-9;
+
+// ---------------------------------------------------------------------------
+// Driving sizes: an expression typed into the resize card
+
+/**
+ * The commands that make each typed expression drive its size: the size's
+ * existing dimension restated with the new value under the same id (so a
+ * placed label stays put), or a new dimension. Plain numbers write none:
+ * they move the shape once, as a drag does.
+ */
+export function compositeSizeCommands(
+  sketchId: SketchId,
+  composite: SketchComposite,
+  constraints: readonly SketchConstraint[],
+  expressions: Partial<Record<SketchCompositeSizeKey, string>>,
+  label: string
+): AnyCommand[] {
+  const existing = sketchCompositeSizeDimensions(composite, constraints);
+  const commands: AnyCommand[] = [];
+  for (const [key, text] of Object.entries(expressions) as [
+    SketchCompositeSizeKey,
+    string
+  ][]) {
+    const constraint = sketchCompositeSizeDimension(
+      composite,
+      key,
+      text.trim()
+    );
+    if (!constraint) continue;
+    const current = existing[key];
+    if (current) {
+      commands.push(
+        commandFactories.deleteSketchConstraint(
+          { sketchId, constraintId: current.constraintId },
+          label
+        )
+      );
+    }
+    commands.push(
+      commandFactories.addSketchConstraint(
+        {
+          sketchId,
+          constraint,
+          ...(current ? { ids: { constraintId: current.constraintId } } : {})
+        },
+        label
+      )
+    );
+  }
+  return commands;
+}

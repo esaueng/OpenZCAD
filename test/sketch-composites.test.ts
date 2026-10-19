@@ -29,6 +29,7 @@ import {
   centerRectangleShape,
   compositeCommands,
   compositeMemberUpdates,
+  compositeSizeCommands,
   cornerRectangleShape,
   inscribedPolygonShape,
   isCompositeShape,
@@ -132,7 +133,8 @@ const close = (actual: { x: number; y: number }[], expected: number[][]) => {
 async function resize(
   fixture: ReturnType<typeof draw>,
   corners: { x: number; y: number }[],
-  circle?: { center: { x: number; y: number }; radius: number }
+  circle?: { center: { x: number; y: number }; radius: number },
+  expressions: Partial<Record<'width' | 'height' | 'circumradius', string>> = {}
 ) {
   const composite = fixture.sketch().composites![0]!;
   const commands = await sketchEntitiesEditCommands(
@@ -140,7 +142,14 @@ async function resize(
     fixture.sketchId,
     compositeMemberUpdates(composite, corners, fixture.objects(), circle),
     (document, id) => adapter.solveSketch(document, id),
-    'Resize'
+    'Resize',
+    compositeSizeCommands(
+      fixture.sketchId,
+      composite,
+      fixture.sketch().constraints ?? [],
+      expressions,
+      'Resize'
+    )
   );
   fixture.manager.execute(composeCommands('Resize', commands));
 }
@@ -266,6 +275,75 @@ describe('S04 composite drawing on the pinned kernel', () => {
     const after = fixture.corners();
     expect((after[0]!.x + after[2]!.x) / 2).toBeCloseTo(5, 9);
     expect((after[0]!.y + after[2]!.y) / 2).toBeCloseTo(7, 9);
+  });
+
+  it('a width typed as an expression keeps driving the rectangle through a dimension', async () => {
+    const fixture = draw(
+      cornerRectangleShape({ x: 0, y: 0 }, { x: 20, y: 12 })
+    );
+    fixture.manager.execute(
+      commandFactories.setParameter({ name: 'plate', expression: '30' })
+    );
+    await resize(
+      fixture,
+      resizedRectangleCorners(fixture.corners(), 'corner', 30, 12)!,
+      undefined,
+      { width: 'plate' }
+    );
+    const dimension = fixture
+      .sketch()
+      .constraints!.find((c) => c.data.constraintKind === 'distance');
+    expect(dimension?.data).toEqual({
+      constraintKind: 'distance',
+      a: { objectId: fixture.commit.edgeIds[0], point: 'start' },
+      b: { objectId: fixture.commit.edgeIds[1], point: 'start' },
+      value: 'plate'
+    });
+    // Position and height are still free: the dimension took one freedom
+    // and none of the shape's relations became redundant.
+    const outcome = await fixture.solve();
+    expect(outcome.dof.rank).toBe(outcome.dof.numEquations);
+    expect(outcome.dof.dof).toBe(3);
+    // Typed again, the same dimension is restated, never duplicated.
+    await resize(
+      fixture,
+      resizedRectangleCorners(fixture.corners(), 'corner', 30, 12)!,
+      undefined,
+      { width: 'plate' }
+    );
+    const distances = fixture
+      .sketch()
+      .constraints!.filter((c) => c.data.constraintKind === 'distance');
+    expect(distances.map((c) => c.constraintId)).toEqual([
+      dimension!.constraintId
+    ]);
+    // A new parameter value drives the width on the next solve.
+    fixture.manager.execute(
+      commandFactories.setParameter({ name: 'plate', expression: '42' })
+    );
+    const solved = await fixture.solve();
+    const bottom = solved.objects.find(
+      (entry) => entry.objectId === fixture.commit.edgeIds[0]
+    ) as unknown as { x1: number; x2: number };
+    expect(Math.abs(bottom.x2 - bottom.x1)).toBeCloseTo(42, 6);
+  });
+
+  it('a circumradius typed as an expression becomes the circle’s radius dimension', async () => {
+    const fixture = draw(
+      inscribedPolygonShape({ x: 0, y: 0 }, { x: 10, y: 0 }, 6)
+    );
+    fixture.manager.execute(
+      commandFactories.setParameter({ name: 'hex', expression: '12' })
+    );
+    const grown = resizedPolygon(fixture.corners(), { x: 0, y: 0 }, 12)!;
+    await resize(fixture, grown.corners, grown, { circumradius: 'hex' });
+    const circle = fixture.sketch().composites![0]!.helperIds![0]!;
+    expect(
+      fixture
+        .sketch()
+        .constraints!.filter((c) => c.data.constraintKind === 'radius')
+        .map((c) => c.data)
+    ).toEqual([{ constraintKind: 'radius', objectId: circle, value: 'hex' }]);
   });
 
   it('a corner rectangle resizes about corner 0', async () => {
