@@ -350,8 +350,12 @@ keys and a copy of the old wraps. Rotation protects what comes after.
   encryption key pair and the project epochs. The new keys are wrapped only to
   devices and unlock methods re-approved under the new identity, never to
   targets carried over from the old device list. The new identity is accompanied by a
-  statement signed by the old one, but that statement proves nothing to
-  members, since the attacker could have signed it too. Every member who
+  transition statement. It is signed by the old identity key when that key
+  can still be opened, and otherwise by a device signing key the old identity
+  certified and never revoked. That second case covers losing the only
+  identity wrapper, for example the recovery key on desktop, where passkeys
+  are unavailable, while a working device remains. Either way the statement
+  proves nothing to members, since an attacker could have signed it too. Every member who
   verified the old fingerprint sees the key as changed and must verify it
   again outside OpenZCAD. Until then they treat it as unverified: no new
   key wraps go to it, and its signatures are refused.
@@ -587,12 +591,12 @@ Each encrypted project has a roster: a chain of typed entries. Each type has
 its own signer rule and its own limits on what it may change. A browser
 rejects an entry whose signer or content breaks its type's rule:
 
-| Entry type      | Who may sign it                                                 | What it may change                                                                                                                            |
-| --------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Membership      | A certified device key of the owner                             | Add or remove members, change roles; when anyone loses access, the owner, a remaining member, generates the next epoch in the same entry      |
-| Epoch           | A certified device key of any current member, including viewers | Nothing about membership; only a new project key wrapped to every listed member (see [Epoch rotation](#epoch-rotation))                       |
-| Self-removal    | The departing member's device key, or their identity key        | Removes only the signer and carries no key; a remaining member then starts the next epoch (see [Identity replacement](#identity-replacement)) |
-| Anchor transfer | The owner's old identity key                                    | Names the owner's new identity; members accept it only after verifying that identity outside OpenZCAD                                         |
+| Entry type      | Who may sign it                                                       | What it may change                                                                                                                            |
+| --------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Membership      | A certified device key of the owner                                   | Add or remove members, change roles; when anyone loses access, the owner, a remaining member, generates the next epoch in the same entry      |
+| Epoch           | A certified device key of any current member, including viewers       | Nothing about membership; only a new project key wrapped to every listed member (see [Epoch rotation](#epoch-rotation))                       |
+| Self-removal    | The departing member's device key, or their identity key              | Removes only the signer and carries no key; a remaining member then starts the next epoch (see [Identity replacement](#identity-replacement)) |
+| Anchor transfer | The owner's old identity key, or an unrevoked device key it certified | Names the owner's new identity; members accept it only after verifying that identity outside OpenZCAD                                         |
 
 Membership entries are the only ones that list members. The others apply to
 the membership in force at their parent.
@@ -652,7 +656,11 @@ access only after a person has verified it. Two roster rules cover this.
   new versions nor write.
 - **An owner's own identity.** When the owner's identity is replaced, the
   roster's anchor changes. The owner's browser signs a self-removal of the old
-  identity with an anchor-transfer entry naming the new one. Members keep
+  identity with an anchor-transfer entry naming the new one. It signs with the
+  old identity key, or, if no unlock method for it survives, with a device
+  key the old identity certified and never revoked. An attacker holding
+  either could sign a competing transfer, so the out-of-band verification
+  below is what decides, not the signer. Members keep
   refusing every roster or epoch entry signed by the new identity until they
   have verified it outside OpenZCAD. Until then they can still read existing
   content but treat the project as frozen: no writes, no new members. If the
@@ -769,6 +777,19 @@ encrypts under the project key is unchanged.
   deliberately trades forward secrecy for stored content, which members are
   meant to be able to read. Post-compromise security for later content
   remains.
+- **Historical authority.** Keys alone let a joiner decrypt an old version,
+  but not check that its author held an editing role in the epoch it names:
+  the current tree no longer holds removed leaves or old roles. So the
+  archive also keeps an epoch record for every epoch: the GroupContext (tree
+  hash, confirmed transcript hash, roles extension), the public leaf
+  credentials, and the epoch's Commit, encrypted under that epoch's exported
+  key. To verify an old version, a browser replays the records forward from
+  the newest owner-signed checkpoint. It checks each Commit against the
+  confirmed transcript hash of the next record, then checks the author's
+  leaf and role in the named epoch. The owner's browser signs a checkpoint of
+  the current GroupContext and tree every few hundred epochs, so replay stays
+  short. A version whose chain does not verify is shown as unverified, never
+  trusted on the server's word.
 - **Authorization.** MLS lets any member propose and commit (§3.2, §16.11).
   Every member's browser must reject, in commit validation, any Commit or
   proposal its sender's role does not allow. Viewers may commit only Updates
