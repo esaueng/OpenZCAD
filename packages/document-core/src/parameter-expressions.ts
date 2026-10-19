@@ -119,6 +119,7 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       fields(data.transform, ['scale'], rewrite, 'number');
       vector(data.transform.translation, rewrite, 'length');
       vector(data.transform.rotationDeg, rewrite, 'angle');
+      vector(data.transform.pivot, rewrite, 'length');
       return;
     case 'mirror':
     case 'split':

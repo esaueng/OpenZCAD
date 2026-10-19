@@ -32,7 +32,7 @@
 > The bump is v18 → v19. The Plane tool, Items/History presentation and AI
 > operations (R01-C/D) remain open.
 
-> **Point constructors (2026-10-19, schema v22):** the release boundary below
+> **Point constructors (2026-10-19, schema v23):** the release boundary below
 > moved for two constructors. `three-point` takes three point sources: the
 > origin is the first, u points at the second and the normal follows the
 > right-hand rule (first → second → third); points closer than the linear

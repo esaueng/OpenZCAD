@@ -30,7 +30,7 @@ import {
 } from '@openzcad/shared';
 
 /**
- * R01 three-point and parallel-at-point datum planes (schema v22): the
+ * R01 three-point and parallel-at-point datum planes (schema v23): the
  * document contract, the exact build's resolution of typed and vertex point
  * sources, and the refusals for collinear, coincident and missing sources.
  */
@@ -120,9 +120,9 @@ function vertexOf(
 
 const v = (x: number, y: number, z: number): Vec3 => ({ x, y, z });
 
-describe('three-point and parallel planes in the document (v22)', () => {
-  it('is schema 22, additive, and round-trips without rewriting', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(22);
+describe('three-point and parallel planes in the document (v23)', () => {
+  it('is schema 23, additive, and round-trips without rewriting', () => {
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(23);
     const planed = withDatum(blank(), {
       kind: 'three-point',
       points: [at(0, 0, 0), at('5 + 5', 0, 0), at(0, 10, 0)]
@@ -136,19 +136,19 @@ describe('three-point and parallel planes in the document (v22)', () => {
     const saved = JSON.parse(
       JSON.stringify(parallel.document)
     ) as ProjectDocument;
-    expect(saved.schemaVersion).toBe(22);
+    expect(saved.schemaVersion).toBe(23);
     expect(normalizeDocument(saved)).toEqual(parallel.document);
 
-    // A v21 document opens with its datums exactly as written.
+    // A v22 document opens with its datums exactly as written.
     type Version = typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
     const offset = withDatum(blank(), {
       kind: 'offset',
       source: xy,
       offset: 10
     }).document;
-    const legacy = { ...offset, schemaVersion: 21 as Version };
+    const legacy = { ...offset, schemaVersion: 22 as Version };
     const opened = normalizeDocument(structuredClone(legacy));
-    expect({ ...opened, schemaVersion: 21 }).toEqual(legacy);
+    expect({ ...opened, schemaVersion: 22 }).toEqual(legacy);
   });
 
   it('refuses repeated points, missing bodies and malformed points', () => {

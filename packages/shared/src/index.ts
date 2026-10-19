@@ -44,13 +44,18 @@ export type ShaprImportId = Brand<string, 'ShaprImportId'>;
  * would refuse or read as a bare number, so the bump makes it refuse such a
  * document. Absent stays the unitless parameter every older document holds.
  *
- * v22 adds two R01 datum-plane definitions, `three-point` and
+ * v22 adds the M10 transform pivot (`ParametricTransform3D.pivot`): rotation
+ * and scale turn about it rather than the world origin. A v21 client would
+ * turn such a Move about the origin and move the body elsewhere, so the bump
+ * makes it refuse the document instead.
+ *
+ * v23 adds two R01 datum-plane definitions, `three-point` and
  * `parallel-point`, and the point sources they read (world coordinates or an
- * edge's end vertex). A v21 client would refuse or misread such a datum and
+ * edge's end vertex). A v22 client would refuse or misread such a datum and
  * every sketch, Split and Mirror built on it, so the bump makes it refuse the
  * document instead. Existing datums are unchanged.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 22 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 23 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -234,13 +239,21 @@ export interface ParametricTransform3D {
   translation: ParametricVector3;
   rotationDeg: ParametricVector3;
   /**
-   * Uniform scale factor about the world origin, applied before rotation and
+   * Uniform scale factor about the pivot, applied before rotation and
    * translation. Absent means 1 (no scaling); the rebuild rejects values that
    * do not resolve to a positive finite number. Uniform only: the exact
    * kernel preserves analytic surfaces under conformal maps, and a
    * non-uniform factor would silently degrade cylinders to NURBS.
    */
   scale?: ParamValue;
+  /**
+   * M10 (schema v22): the point rotation and scale turn about, in document
+   * units; the translation then moves the result. Absent is the world origin,
+   * as every older document stores it. The Move gizmo writes the body's
+   * centre here, so a later edit to its rotation still turns the body in
+   * place rather than about the origin.
+   */
+  pivot?: ParametricVector3;
 }
 
 /** Parametric plane used by exact mirror features. */
@@ -589,7 +602,7 @@ export type DatumPlaneSource =
   | FacePlaneSource;
 
 /**
- * Schema v22: a model vertex, named as one end of an open edge whose
+ * Schema v23: a model vertex, named as one end of an open edge whose
  * schema-v5 lineage the exact build re-finds at the datum's history position.
  * `end` 0 is the end whose quantized (ADR-011) coordinates sort first by x,
  * then y, then z, which both kernels read identically; the vertex's exact
@@ -604,7 +617,7 @@ export interface EdgeVertexPointSource {
 }
 
 /**
- * Schema v22: a point a datum plane passes through: expression-capable world
+ * Schema v23: a point a datum plane passes through: expression-capable world
  * coordinates in document units, or a model vertex by reference.
  */
 export type DatumPointSource =
@@ -627,7 +640,7 @@ export type DatumPlaneDefinition =
     }
   | {
       /**
-       * Schema v22: the plane through three points. The origin is the first
+       * Schema v23: the plane through three points. The origin is the first
        * point, u points at the second, and the normal follows the right-hand
        * rule (first → second → third). Coincident or collinear points are
        * refused; no plane is guessed.
@@ -638,7 +651,7 @@ export type DatumPlaneDefinition =
     }
   | {
       /**
-       * Schema v22: the plane parallel to `source` through `point`, keeping
+       * Schema v23: the plane parallel to `source` through `point`, keeping
        * the source's axes. A point on the source gives the source itself.
        */
       kind: 'parallel-point';
