@@ -266,8 +266,8 @@ for (const arc of [
         source,
         'image/svg+xml'
       ).documentElement;
-      const node = document.importNode(root, true);
-      document.body.appendChild(node);
+      const node = window.document.importNode(root, true);
+      window.document.body.appendChild(node);
       try {
         const box = node.querySelector('path')!.getBBox();
         return { width: box.width, height: box.height };
