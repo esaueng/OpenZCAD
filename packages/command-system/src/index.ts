@@ -57,6 +57,7 @@ import {
   type FeatureNode,
   type ParamValue,
   type ParameterKind,
+  type DocumentHistoryEntry,
   type ProjectDocument,
   type SerializedCommand,
   toSketchConstraintId,
@@ -1868,8 +1869,11 @@ export const commandFactories = {
   addDrawingView(
     payload: DrawingViewAddInput
   ): CommandDefinition<DrawingViewAddInput> {
-    return makeCommand('drawing.view.add', 'Add drawing view', payload, (document) =>
-      addDrawingView(document, payload)
+    return makeCommand(
+      'drawing.view.add',
+      'Add drawing view',
+      payload,
+      (document) => addDrawingView(document, payload)
     );
   },
   updateDrawingView(
@@ -3318,8 +3322,25 @@ export function isDrawingCommandKind(kind: string): boolean {
   return kind.startsWith('drawing.');
 }
 
-function drawingOnly(kinds: string[] | null): boolean {
-  return !!kinds?.length && kinds.every(isDrawingCommandKind);
+/**
+ * Whether a history entry edits drawing sheets and nothing else. Its kinds
+ * are only a label — a document from disk, an account or a peer may carry
+ * any — so the recorded changes decide: they may touch the drawing section
+ * and append or remove drawing commands in the log, and nothing more.
+ */
+function drawingOnly(entry: DocumentHistoryEntry | undefined): boolean {
+  if (!entry?.commandKinds?.length) return false;
+  if (!entry.commandKinds.every(isDrawingCommandKind)) return false;
+  return entry.changes.every((change) => {
+    if (change.field === 'drawings') return true;
+    if (change.field !== 'commandLog' || change.kind !== 'splice') return false;
+    return [...change.before, ...change.after].every(
+      (command) =>
+        typeof command === 'object' &&
+        command !== null &&
+        isDrawingCommandKind(String((command as { kind?: unknown }).kind))
+    );
+  });
 }
 
 /** Owns the canonical document, including its durable undo/redo position. */
@@ -3386,10 +3407,10 @@ export class CommandManager {
    * workspace's vocabulary, which leaves the model alone.
    */
   get undoIsDrawingOnly(): boolean {
-    return drawingOnly(this.undoEntryKinds);
+    return drawingOnly(this.history?.entries[(this.history?.cursor ?? 0) - 1]);
   }
   get redoIsDrawingOnly(): boolean {
-    return drawingOnly(this.redoEntryKinds);
+    return drawingOnly(this.history?.entries[this.history.cursor]);
   }
   /**
    * Whether undo is available, in a workspace that allows parameter edits
@@ -3812,10 +3833,16 @@ export function replayCommands(
         next = addDrawingView(next, command.payload as DrawingViewAddInput);
         break;
       case 'drawing.view.update':
-        next = updateDrawingView(next, command.payload as DrawingViewUpdateInput);
+        next = updateDrawingView(
+          next,
+          command.payload as DrawingViewUpdateInput
+        );
         break;
       case 'drawing.view.delete':
-        next = deleteDrawingView(next, command.payload as DrawingViewDeleteInput);
+        next = deleteDrawingView(
+          next,
+          command.payload as DrawingViewDeleteInput
+        );
         break;
       default:
         // Unknown kinds are skipped (not fatal) so documents written by newer

@@ -74,6 +74,8 @@ interface Triangle {
   v2: number;
   d2: number;
   area: number;
+  /** Depth margin for this triangle: a floor plus its own chordal sag. */
+  tol: number;
 }
 
 /**
@@ -161,7 +163,6 @@ class OcclusionGrid {
   constructor(
     private readonly triangles: Triangle[],
     bounds: { minU: number; minV: number; maxU: number; maxV: number },
-    private readonly depthTolerance: number,
     private readonly coverTolerance: number
   ) {
     this.size = Math.max(
@@ -252,7 +253,7 @@ class OcclusionGrid {
       // corner) does not pass through it; its endpoint already bounds it.
       const g0 = plane(au, av) - ad;
       const g1 = plane(bu, bv) - bd;
-      const tol = this.depthTolerance;
+      const tol = t.tol;
       if (Math.abs(g0) > tol && Math.abs(g1) > tol) {
         const f0 = g0 + tol;
         const f1 = g1 + tol;
@@ -291,7 +292,7 @@ class OcclusionGrid {
       const edge = this.coverTolerance;
       if (w0 < -edge || w1 < -edge || w2 < -edge) continue;
       const surface = w0 * t.d0 + w1 * t.d1 + w2 * t.d2;
-      if (surface < depth - this.depthTolerance) return true;
+      if (surface < depth - t.tol) return true;
     }
     return false;
   }
@@ -341,15 +342,22 @@ interface Polyline3 {
   points: number[];
 }
 
-/**
- * The silhouette polylines of one body's curved surfaces, as world points.
- * Exported for tests.
- */
-export function bodySilhouettes(
+interface MeshAnalysis {
+  welded: number[];
+  positions: number[];
+  faceOf: Int32Array;
+  /** Unit triangle normals, xyz per triangle (zero for a degenerate one). */
+  normals: Float64Array;
+  /** Welded edge key → the triangles that share it. */
+  edgeTriangles: Map<number, number[]>;
+  vertexCount: number;
+}
+
+/** Welds a body's display mesh and records its triangles' normals and adjacency. */
+function analyzeMesh(
   body: ProjectionBodyInput,
-  frame: DrawingViewFrame,
   weldQuantum: number
-): Polyline3[] {
+): MeshAnalysis {
   const { vertices, indices } = body;
   const weld = new Map<string, number>();
   const welded: number[] = [];
@@ -376,7 +384,6 @@ export function bodySilhouettes(
     }
   });
   const normals = new Float64Array(triangleCount * 3);
-  const facing = new Int8Array(triangleCount);
   for (let t = 0; t < triangleCount; t += 1) {
     const a = welded[indices[t * 3]!]! * 3;
     const b = welded[indices[t * 3 + 1]!]! * 3;
@@ -387,22 +394,14 @@ export function bodySilhouettes(
     const fx = positions[c]! - positions[a]!;
     const fy = positions[c + 1]! - positions[a + 1]!;
     const fz = positions[c + 2]! - positions[a + 2]!;
-    let nx = ey * fz - ez * fy;
-    let ny = ez * fx - ex * fz;
-    let nz = ex * fy - ey * fx;
+    const nx = ey * fz - ez * fy;
+    const ny = ez * fx - ex * fz;
+    const nz = ex * fy - ey * fx;
     const length = Math.hypot(nx, ny, nz);
     if (length === 0) continue;
-    nx /= length;
-    ny /= length;
-    nz /= length;
-    normals[t * 3] = nx;
-    normals[t * 3 + 1] = ny;
-    normals[t * 3 + 2] = nz;
-    // A facet seen exactly edge-on counts as facing away. A cylinder whose
-    // silhouette falls mid-facet then outlines at that facet's front edge,
-    // half a facet off the true curve; a wall seen along its axis (all of it
-    // edge-on) meets its caps at sharp creases, which are never silhouettes.
-    facing[t] = dot(frame.direction, nx, ny, nz) < -1e-12 ? 1 : -1;
+    normals[t * 3] = nx / length;
+    normals[t * 3 + 1] = ny / length;
+    normals[t * 3 + 2] = nz / length;
   }
   const edgeTriangles = new Map<number, number[]>();
   const vertexCount = positions.length / 3;
@@ -417,20 +416,110 @@ export function bodySilhouettes(
       else edgeTriangles.set(key, [t]);
     }
   }
+  return { welded, positions, faceOf, normals, edgeTriangles, vertexCount };
+}
+
+/** Whether two triangles meet across a smooth part of one surface. */
+function smoothNeighbours(mesh: MeshAnalysis, p: number, q: number): boolean {
+  const sameFace = mesh.faceOf[p] !== -1 && mesh.faceOf[p] === mesh.faceOf[q];
+  const cosine =
+    mesh.normals[p * 3]! * mesh.normals[q * 3]! +
+    mesh.normals[p * 3 + 1]! * mesh.normals[q * 3 + 1]! +
+    mesh.normals[p * 3 + 2]! * mesh.normals[q * 3 + 2]!;
+  return sameFace || cosine >= SMOOTH_DIHEDRAL_COS;
+}
+
+/**
+ * How far each display triangle may sit from the exact surface it stands
+ * for: its width across each smooth neighbouring edge times the angle its
+ * normal turns there, over four (the sagitta of a chord is width · angle / 8,
+ * doubled for safety). Planar faces have no sag, so a tolerance built from it
+ * stays local: a wall a tenth of a millimetre in front of an edge still hides
+ * it on a metre-long part.
+ */
+function triangleSag(
+  body: ProjectionBodyInput,
+  mesh: MeshAnalysis
+): Float64Array {
+  const sag = new Float64Array(mesh.faceOf.length);
+  const { positions, vertexCount } = mesh;
+  for (const [key, list] of mesh.edgeTriangles) {
+    if (list.length !== 2) continue;
+    const [p, q] = list as [number, number];
+    if (!smoothNeighbours(mesh, p, q)) continue;
+    const cosine =
+      mesh.normals[p * 3]! * mesh.normals[q * 3]! +
+      mesh.normals[p * 3 + 1]! * mesh.normals[q * 3 + 1]! +
+      mesh.normals[p * 3 + 2]! * mesh.normals[q * 3 + 2]!;
+    const angle = Math.acos(Math.min(1, Math.max(-1, cosine)));
+    if (angle === 0) continue;
+    const a = Math.floor(key / vertexCount) * 3;
+    const b = (key % vertexCount) * 3;
+    const shared = Math.hypot(
+      positions[b]! - positions[a]!,
+      positions[b + 1]! - positions[a + 1]!,
+      positions[b + 2]! - positions[a + 2]!
+    );
+    if (shared === 0) continue;
+    for (const t of [p, q]) {
+      const i0 = mesh.welded[body.indices[t * 3]!]! * 3;
+      const i1 = mesh.welded[body.indices[t * 3 + 1]!]! * 3;
+      const i2 = mesh.welded[body.indices[t * 3 + 2]!]! * 3;
+      const ex = positions[i1]! - positions[i0]!;
+      const ey = positions[i1 + 1]! - positions[i0 + 1]!;
+      const ez = positions[i1 + 2]! - positions[i0 + 2]!;
+      const fx = positions[i2]! - positions[i0]!;
+      const fy = positions[i2 + 1]! - positions[i0 + 1]!;
+      const fz = positions[i2 + 2]! - positions[i0 + 2]!;
+      const doubleArea = Math.hypot(
+        ey * fz - ez * fy,
+        ez * fx - ex * fz,
+        ex * fy - ey * fx
+      );
+      const width = doubleArea / shared;
+      sag[t] = Math.max(sag[t]!, (width * angle) / 4);
+    }
+  }
+  return sag;
+}
+
+/**
+ * The silhouette polylines of one body's curved surfaces, as world points.
+ * Exported for tests.
+ */
+export function bodySilhouettes(
+  body: ProjectionBodyInput,
+  frame: DrawingViewFrame,
+  weldQuantum: number,
+  mesh: MeshAnalysis = analyzeMesh(body, weldQuantum)
+): Polyline3[] {
+  const triangleCount = mesh.faceOf.length;
+  const facing = new Int8Array(triangleCount);
+  for (let t = 0; t < triangleCount; t += 1) {
+    // A facet seen exactly edge-on counts as facing away. A cylinder whose
+    // silhouette falls mid-facet then outlines at that facet's front edge,
+    // half a facet off the true curve; a wall seen along its axis (all of it
+    // edge-on) meets its caps at sharp creases, which are never silhouettes.
+    facing[t] =
+      dot(
+        frame.direction,
+        mesh.normals[t * 3]!,
+        mesh.normals[t * 3 + 1]!,
+        mesh.normals[t * 3 + 2]!
+      ) < -1e-12
+        ? 1
+        : -1;
+  }
   const segments: [number, number][] = [];
-  for (const [key, list] of edgeTriangles) {
+  for (const [key, list] of mesh.edgeTriangles) {
     if (list.length !== 2) continue;
     const [p, q] = list as [number, number];
     if (facing[p] === facing[q]) continue;
-    const sameFace = faceOf[p] !== -1 && faceOf[p] === faceOf[q];
-    const cosine =
-      normals[p * 3]! * normals[q * 3]! +
-      normals[p * 3 + 1]! * normals[q * 3 + 1]! +
-      normals[p * 3 + 2]! * normals[q * 3 + 2]!;
     // A sharp crease between two faces is a feature edge, drawn already.
-    if (!sameFace && cosine < SMOOTH_DIHEDRAL_COS) continue;
-    segments.push([Math.floor(key / vertexCount), key % vertexCount]);
+    if (!smoothNeighbours(mesh, p, q)) continue;
+    segments.push([Math.floor(key / mesh.vertexCount), key % mesh.vertexCount]);
   }
+  const { positions } = mesh;
   return chainSegments(segments).map((chain) => ({
     points: chain.flatMap((id) => [
       positions[id * 3]!,
@@ -474,8 +563,12 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     maxU: -Infinity,
     maxV: -Infinity
   };
-  for (const body of input.bodies) {
+  const meshes = input.bodies.map((body) => analyzeMesh(body, diagonal * 1e-7));
+  // A floor for flat triangles and float noise, far below any real gap.
+  const depthFloor = diagonal * 1e-6;
+  input.bodies.forEach((body, bodyIndex) => {
     const { vertices, indices } = body;
+    const sag = triangleSag(body, meshes[bodyIndex]!);
     for (let t = 0; t + 2 < indices.length; t += 3) {
       const [u0, v0, d0] = project(
         vertices[indices[t]! * 3]!,
@@ -499,16 +592,33 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       const area = (u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0);
       // Edge-on triangles cover no area and cannot hide anything.
       if (Math.abs(area) <= diagonal * diagonal * 1e-14) continue;
-      triangles.push({ u0, v0, d0, u1, v1, d1, u2, v2, d2, area });
+      triangles.push({
+        u0,
+        v0,
+        d0,
+        u1,
+        v1,
+        d1,
+        u2,
+        v2,
+        d2,
+        area,
+        tol: depthFloor + sag[t / 3]!
+      });
     }
-  }
+  });
 
   const lines: number[][] = [];
-  for (const body of input.bodies) {
+  input.bodies.forEach((body, bodyIndex) => {
     for (const edge of body.edges) lines.push(Array.from(edge));
-    for (const silhouette of bodySilhouettes(body, frame, diagonal * 1e-7))
+    for (const silhouette of bodySilhouettes(
+      body,
+      frame,
+      diagonal * 1e-7,
+      meshes[bodyIndex]
+    ))
       lines.push(silhouette.points);
-  }
+  });
   for (const line of lines)
     for (let i = 0; i + 2 < line.length; i += 3) {
       const [u, v] = project(line[i]!, line[i + 1]!, line[i + 2]!);
@@ -520,15 +630,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   if (!Number.isFinite(bounds.minU))
     return { visible: [], hidden: [], bounds: null };
 
-  const grid = new OcclusionGrid(
-    triangles,
-    bounds,
-    // Display triangles sit within their chordal deflection of the exact
-    // surface the edge samples lie on; a few parts in ten thousand of the
-    // part's size clears that without letting a real wall through.
-    diagonal * 5e-4,
-    1e-9
-  );
+  const grid = new OcclusionGrid(triangles, bounds, 1e-9);
   const hiddenAt = (x: number, y: number, z: number): boolean => {
     const [u, v, d] = project(x, y, z);
     return grid.occluded(u, v, d);

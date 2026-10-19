@@ -286,6 +286,25 @@ describe('D01 view projection', () => {
     ).toBe(true);
   });
 
+  it('hides a body a tenth of a millimetre behind a face on a metre-scale sheet', async () => {
+    // A 1 m panel 0.05 mm thick, and a small block 0.1 mm behind its front
+    // face: a tolerance scaled to the whole view (0.5 mm here) let every
+    // edge of the block through as visible.
+    let document = createProjectDocument('Panel', toUserId('test'));
+    const panel = box(document, 'Panel', [1000, 0.05, 1000]);
+    const block = box(panel.document, 'Block', [10, 2, 10], [495, 0.1, 495]);
+    document = block.document;
+    const result = await project(
+      document,
+      [panel.bodyId, block.bodyId],
+      'front'
+    );
+    const inside = (u: number, v: number) =>
+      u >= 495 - 1e-6 && u <= 505 + 1e-6 && v >= 495 - 1e-6 && v <= 505 + 1e-6;
+    expect(onLine(result.visible, inside)).toEqual([]);
+    expect(onLine(result.hidden, inside).length).toBeGreaterThan(0);
+  });
+
   it('lets one body hide another', async () => {
     let document = createProjectDocument('Two', toUserId('test'));
     const front = box(document, 'Front', [20, 2, 20]);

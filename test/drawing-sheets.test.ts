@@ -256,6 +256,31 @@ describe('D01 drawing section (schema v30)', () => {
     ).toThrow(/undo history/);
   });
 
+  it('decides drawing-only undo from the recorded changes, not the kind label', () => {
+    const document = boxDocument();
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.addDrawingSheet({ sheet: sheet(document.bodyOrder) })
+    );
+    expect(manager.undoIsDrawingOnly).toBe(true);
+    // A history from disk or a peer labelled "drawing" but changing the model.
+    const forged = structuredClone(manager.document.editHistory!);
+    forged.entries.at(-1)!.changes.push({
+      kind: 'value',
+      field: 'name',
+      before: 'Bracket',
+      after: 'Renamed'
+    });
+    const tampered = new CommandManager({
+      ...manager.document,
+      editHistory: forged
+    });
+    expect(tampered.undoIsDrawingOnly).toBe(false);
+    // A model edit is never drawing-only, and undoing a sheet edit is redo's.
+    manager.undo();
+    expect(manager.redoIsDrawingOnly).toBe(true);
+  });
+
   it('undoes, redoes and replays sheet commands', () => {
     const document = boxDocument();
     const manager = new CommandManager(document);
