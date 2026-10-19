@@ -790,7 +790,12 @@ encrypts under the project key is unchanged.
   hash, confirmed transcript hash, roles extension), the public ratchet tree
   needed to replay it, the epoch's Commit, and every proposal that Commit
   applies by reference (§12.4), such as a SelfRemove or a Remove sent ahead
-  of time. A Commit holds only the hash of a referenced proposal, so without
+  of time. When a Remove carries out a signed leave request rather than a
+  SelfRemove, the record also keeps that request, and the Commit binds its
+  hash in the Commit's authenticated data, which the committer signs and the
+  transcript covers. Application messages are outside the transcript
+  (§8.2), so without this binding a replaying browser could not tell a
+  requested leave from an unauthorised eviction. A Commit holds only the hash of a referenced proposal, so without
   the proposal itself a joiner could not replay the epoch or see who asked
   for the change. All of it is encrypted under that epoch's exported key. To verify an old version, a browser replays the records forward from
   the newest owner-signed checkpoint. It checks each Commit against the
