@@ -12426,7 +12426,12 @@ export function App() {
     const name =
       sketchOptions.find((candidate) => candidate.sketchId === typedSketchId)
         ?.name ?? 'Profile';
-    const extrudeKey = keymap.label('tool-extrude');
+    // In a sketch the sketch's own Extrude key takes the profile.
+    const extrudeKey = keymap.label(
+      interactionRef.current.mode === 'sketch'
+        ? 'sketch-extrude'
+        : 'tool-extrude'
+    );
     setStatus(
       `${name}: closed profile selected · ${extrudeKey ? `press ${platformShortcutLabel(extrudeKey)} to extrude` : 'Extrude it from the tools'}.`
     );

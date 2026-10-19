@@ -50,6 +50,12 @@ describe('platformShortcutLabel', () => {
     expect(platformShortcutLabel('Ctrl+Shift+M', 'iPad')).toBe('⇧⌘M');
   });
 
+  it('names the Command key on a plus-key chord', () => {
+    expect(platformShortcutLabel('Ctrl++', 'MacIntel')).toBe('⌘+');
+    expect(platformShortcutLabel('Ctrl+Shift++', 'MacIntel')).toBe('⇧⌘+');
+    expect(platformShortcutLabel('+', 'MacIntel')).toBe('+');
+  });
+
   it('leaves single keys and other platforms alone', () => {
     expect(platformShortcutLabel('G', 'MacIntel')).toBe('G');
     expect(platformShortcutLabel('Space', 'MacIntel')).toBe('Space');

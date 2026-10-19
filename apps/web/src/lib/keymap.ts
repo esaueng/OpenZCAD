@@ -352,9 +352,15 @@ export function chordFromEvent(
   event: Pick<
     KeyboardEvent,
     'key' | 'code' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'
-  >
+  > &
+    Partial<Pick<KeyboardEvent, 'getModifierState'>>
 ): string | null {
   if (MODIFIER_KEYS.has(event.key)) return null;
+  // AltGr types a character (German AltGr+Q is @) and some platforms report
+  // it as Ctrl+Alt: the chord is the character typed, not a shortcut.
+  if (event.getModifierState?.('AltGraph')) {
+    return canonicalChord(KEY_ALIASES[event.key] ?? event.key);
+  }
   const mod = event.ctrlKey || event.metaKey;
   let key: string;
   if (event.code === 'Space' || event.key === ' ') {

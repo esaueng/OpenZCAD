@@ -1243,8 +1243,9 @@ export function SettingsPage({
                     <p>
                       Shortcuts are grouped by the part of the workspace that
                       owns them, and any of them can be changed. A key can mean
-                      one thing per context: in a sketch, C draws a circle; in
-                      View mode, M measures. Keys pause while you type or while
+                      one thing per context: by default C is Cylinder in the
+                      workspace and Circle in a sketch, and M is Move in Build
+                      and Measure in View. Keys pause while you type or while
                       Settings is open. These preferences follow your account,
                       never a project.
                     </p>

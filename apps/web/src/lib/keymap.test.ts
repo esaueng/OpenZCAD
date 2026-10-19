@@ -166,6 +166,20 @@ describe('chordFromEvent', () => {
     expect(chordFromEvent(key('+', { ctrlKey: true }))).toBe('Ctrl++');
   });
 
+  it('reads AltGr as the character it types, not a Ctrl+Alt chord', () => {
+    const altGr = (code: string, produced: string) => ({
+      ...key(produced, { ctrlKey: true, altKey: true }, code),
+      getModifierState: (state: string) => state === 'AltGraph'
+    });
+    // German AltGr+Q types @; it must not become Ctrl+Alt+Q.
+    expect(chordFromEvent(altGr('KeyQ', '@'))).toBe('@');
+    expect(chordFromEvent(altGr('KeyL', 'ł'))).toBe('Ł');
+    // Without AltGraph, the same modifiers are a real chord.
+    expect(
+      chordFromEvent(key('q', { ctrlKey: true, altKey: true }, 'KeyQ'))
+    ).toBe('Ctrl+Alt+Q');
+  });
+
   it('ignores a bare modifier', () => {
     expect(chordFromEvent(key('Shift', { shiftKey: true }))).toBeNull();
     expect(chordFromEvent(key('Meta', { metaKey: true }))).toBeNull();

@@ -40,10 +40,11 @@ export function platformShortcutLabel(
     return shortcut;
   }
   const parts = shortcut.split('+');
-  // "Ctrl++" style chords never occur; a trailing empty part means the key
-  // itself was "+", so keep it rather than dropping it.
-  const key = parts.length > 1 && parts.at(-1) === '' ? '+' : parts.at(-1)!;
-  const modifiers = new Set(parts.slice(0, -1));
+  // A trailing empty part means the key itself is "+" ("Ctrl++" splits to
+  // Ctrl, '', ''): the last two parts are the key, not a modifier.
+  const plusKey = parts.length > 1 && parts.at(-1) === '';
+  const key = plusKey ? '+' : parts.at(-1)!;
+  const modifiers = new Set(parts.slice(0, plusKey ? -2 : -1));
   if (![...modifiers].every((part) => part in MAC_MODIFIER_GLYPHS)) {
     return shortcut;
   }
