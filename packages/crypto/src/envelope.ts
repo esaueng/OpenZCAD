@@ -234,10 +234,12 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
     private readonly key: CryptoKey,
     /**
      * Uncompressed payloads are the plaintext, so the writer refuses any
-     * total other than the declared size. A gzip payload's plaintext size
-     * is the caller's to guarantee (the stream helper checks it).
+     * total other than the declared size. A gzip payload may not exceed
+     * what readers accept for its header (`payloadBound`); its plaintext
+     * size is the caller's to guarantee (the stream helper checks it).
+     * Only the hostile-writer test helper turns this off.
      */
-    private readonly enforceLength = header.compression === 'none'
+    private readonly enforceLimits = true
   ) {
     const frozen: H = { ...header };
     Object.freeze(frozen);
@@ -277,10 +279,25 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
     }
     return this.exclusive(async () => {
       this.written += payload.byteLength;
-      if (this.enforceLength && this.written > this.header.plaintextLength) {
+      if (
+        this.enforceLimits &&
+        this.header.compression === 'none' &&
+        this.written > this.header.plaintextLength
+      ) {
         throw new E2eeError(
           'invalid-argument',
           `Payload is longer than the declared ${this.header.plaintextLength} bytes`
+        );
+      }
+      if (
+        this.enforceLimits &&
+        this.header.compression === 'gzip' &&
+        this.written > payloadBound(this.header)
+      ) {
+        // Every reader would refuse it: stop before sealing more.
+        throw new E2eeError(
+          'limit-exceeded',
+          `A gzip payload for ${this.header.plaintextLength} bytes may not exceed ${payloadBound(this.header)} bytes`
         );
       }
       // WebCrypto copies its input when called, so sealing straight from
@@ -299,7 +316,11 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
   /** Encrypts the final chunk (possibly empty) and closes the writer. */
   async finish(): Promise<Bytes> {
     const last = await this.exclusive(async () => {
-      if (this.enforceLength && this.written !== this.header.plaintextLength) {
+      if (
+        this.enforceLimits &&
+        this.header.compression === 'none' &&
+        this.written !== this.header.plaintextLength
+      ) {
         throw new E2eeError(
           'invalid-argument',
           `Payload is ${this.written} bytes, not the declared ${this.header.plaintextLength}`
@@ -375,7 +396,7 @@ const writerKeys = new WeakMap<EnvelopeWriter, EnvelopeKey>();
 async function createWriter<H extends EnvelopeHeader>(
   key: EnvelopeKey,
   header: H,
-  enforceLength = header.compression === 'none'
+  enforceLimits = true
 ): Promise<EnvelopeWriter<H>> {
   const prefix = encodeEnvelopePrefix(header);
   const raw = consumeKey(key);
@@ -383,7 +404,7 @@ async function createWriter<H extends EnvelopeHeader>(
     header,
     prefix,
     await importChunkKey(raw, 'encrypt'),
-    enforceLength
+    enforceLimits
   );
   writerKeys.set(writer, key);
   return writer;

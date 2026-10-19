@@ -1135,6 +1135,18 @@ describe('content blobs', () => {
     expect(cancelled).toBe(false);
   });
 
+  it('a direct gzip writer stops at the payload readers would accept', async () => {
+    // 100 declared bytes allow 100 + 1 + 1024 bytes of gzip payload; past
+    // that every reader refuses the blob, so the writer stops sealing.
+    const writer = await createContentBlobWriter(
+      EnvelopeKey.generate(),
+      'export',
+      { compression: 'gzip', chunkSize: CHUNK, plaintextLength: 100 }
+    );
+    await writer.write(patternBytes(1125, 1));
+    await rejectsWith(writer.write(patternBytes(1, 2)), 'limit-exceeded');
+  });
+
   it('a direct writer call is bounded in bytes and records', async () => {
     const plaintext = patternBytes(64 * (MAX_WRITER_WRITE_RECORDS + 10), 7);
     const writer = await createContentBlobWriter(
