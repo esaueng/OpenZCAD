@@ -1893,28 +1893,13 @@ export function SettingsPage({
           {active === 'privacy' && anyMatch && (
             <Section title="Privacy & data" intro="What leaves this device.">
               <Group title="Analytics">
-                {desktopApp ? (
-                  <SettingRow
-                    title="Usage analytics"
-                    hint="Available in the web browser. This desktop app does not send usage events."
-                  >
-                    <Status>Web only</Status>
-                  </SettingRow>
-                ) : (
-                  <AnalyticsConsent />
-                )}
+                <AnalyticsConsent />
                 {session && !desktopApp ? (
-                  cloudFunctionsEnabled ? (
-                    <CloudStatisticsConsent
-                      key={session.userId}
-                      accountKey={session.userId}
-                    />
-                  ) : (
-                    <SettingRow
-                      title="Cloud account statistics"
-                      hint="Turn on cloud features to manage this. An existing grant lasts until withdrawn or 30 days."
-                    />
-                  )
+                  <CloudStatisticsConsent
+                    key={session.userId}
+                    accountKey={session.userId}
+                    cloudEnabled={cloudFunctionsEnabled}
+                  />
                 ) : null}
               </Group>
               <Group title="Your data">

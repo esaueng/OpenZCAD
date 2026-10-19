@@ -182,10 +182,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Diagnostic report',
       'Cloud account statistics',
       'Local project data',
+      'Cloud data',
       'Delete all cloud projects',
       'Delete cloud profile',
-      'Delete all cloud data',
-      'Cloud data'
+      'Delete all cloud data'
     ],
     searchTerms: [
       'delete account',

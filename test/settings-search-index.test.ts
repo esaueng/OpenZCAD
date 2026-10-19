@@ -17,29 +17,15 @@ function source(name: string): string {
 
 const SOURCE = source('SettingsPage.tsx');
 
-/** Privacy's consent rows render from their own component. */
-const ANALYTICS_SOURCE = source('AnalyticsConsent.tsx');
-
 /**
  * The "Find a setting" index lives in SETTINGS_SECTIONS while the settings
  * themselves are declared as JSX in SettingsPage, so the two can drift apart
  * silently and quietly stop matching. Parse the rendered side out of the source
- * and require it agrees with the index.
+ * and require it agrees with the index, in order.
  */
-function settingTitles(
-  text: string,
-  initialSection: string | null,
-  onTitle: (section: string, title: string) => void,
-  onSection: (section: string) => void = () => undefined
-) {
-  let section = initialSection;
+function rowTitles(text: string): Array<{ line: string; title?: string }> {
   let tag: string | null = null;
-  for (const line of text.split('\n')) {
-    const sectionMatch = line.match(/active === '([a-z]+)'/);
-    if (sectionMatch) {
-      section = sectionMatch[1]!;
-      onSection(section);
-    }
+  return text.split('\n').map((line) => {
     // A group's or page's title is a heading, not a setting.
     const tagMatch = line.match(/<(Section|Group|SettingRow|Status)\b/);
     if (tagMatch) {
@@ -51,20 +37,54 @@ function settingTitles(
     );
     // Only SettingRow titles are indexed; the Section title duplicates the
     // section label already covered by the nav.
-    if (titleMatch && section && tag === 'SettingRow') {
-      onTitle(section, titleMatch[1]!);
+    return titleMatch && tag === 'SettingRow'
+      ? { line, title: titleMatch[1]! }
+      : { line };
+  });
+}
+
+/**
+ * Rows a component in another file renders, by component name, so they are
+ * counted where SettingsPage places the component.
+ */
+function componentTitles(name: string): Map<string, string[]> {
+  const byComponent = new Map<string, string[]>();
+  let component: string | null = null;
+  for (const { line, title } of rowTitles(source(name))) {
+    const declared = line.match(/^export function ([A-Z]\w*)/);
+    if (declared) {
+      component = declared[1]!;
+      byComponent.set(component, []);
+    }
+    if (title && component) {
+      byComponent.get(component)!.push(title);
     }
   }
+  return byComponent;
 }
+
+const SPLICED = componentTitles('AnalyticsConsent.tsx');
 
 function renderedSettingsBySection(): Map<string, string[]> {
   const bySection = new Map<string, string[]>();
-  const add = (section: string, title: string) =>
-    bySection.get(section)!.push(title);
-  settingTitles(SOURCE, null, add, (section) =>
-    bySection.set(section, bySection.get(section) ?? [])
-  );
-  settingTitles(ANALYTICS_SOURCE, 'privacy', add);
+  let section: string | null = null;
+  for (const { line, title } of rowTitles(SOURCE)) {
+    const sectionMatch = line.match(/active === '([a-z]+)'/);
+    if (sectionMatch) {
+      section = sectionMatch[1]!;
+      bySection.set(section, bySection.get(section) ?? []);
+    }
+    if (!section) {
+      continue;
+    }
+    const used = line.match(/<([A-Z]\w*)\b/)?.[1];
+    if (used && SPLICED.has(used)) {
+      bySection.get(section)!.push(...SPLICED.get(used)!);
+    }
+    if (title) {
+      bySection.get(section)!.push(title);
+    }
+  }
   return bySection;
 }
 
@@ -87,13 +107,20 @@ describe('settings search index', () => {
       30
     );
 
+    // The consent rows come from AnalyticsConsent.tsx; a parser that lost
+    // them would leave Privacy short without failing the comparison.
+    expect(SPLICED.get('AnalyticsConsent')).toEqual([
+      'Usage analytics',
+      'Diagnostic report'
+    ]);
+    expect(SPLICED.get('CloudStatisticsConsent')).toEqual([
+      'Cloud account statistics'
+    ]);
+
     for (const [section, titles] of rendered) {
-      expect({
+      expect({ section, titles: indexed.get(section) }).toEqual({
         section,
-        titles: [...new Set(indexed.get(section))].sort()
-      }).toEqual({
-        section,
-        titles: [...new Set(titles)].sort()
+        titles
       });
     }
   });
