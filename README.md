@@ -11,26 +11,30 @@ Use the hosted beta at [zcad.app](https://zcad.app/).
 > be reset, migrated, or not carried forward to a future production release.
 > Keep independent local or exported backups of anything important.
 
-![OpenZCAD workspace — Mounting Bracket demo](docs/design/readme-mounting-bracket.png)
+![OpenZCAD Build workspace with the Mounting Bracket demo and Parameters drawer open](docs/design/readme-mounting-bracket.png)
+
+*Current workspace, captured 18 October 2026 from the built-in demos running locally.*
 
 ## Highlights
 
-**Exact parametric modeling.** Primitives, multi-profile sketch/extrude, revolve, booleans, transforms, mirror-copy, shell, solid offset, fillet, chamfer, and linear/circular patterns, built on the [Remus](https://github.com/esaueng/remus) exact kernel. Sketches carry lines, arcs, circles, rectangles, polygons, and text set in bundled font files. New face-attached sketches re-resolve an exact lineage reference at their history position instead of freezing a viewport plane. Parametric expressions, ordered feature history with editing and deletion, deterministic replay, transactions, and undo/redo.
+**Exact parametric modeling.** Primitives, multi-profile sketch/extrude, revolve, loft, sweep, booleans, transforms, mirror-copy, shell, solid offset, fillet, chamfer, and linear/circular patterns, built on the [Remus](https://github.com/esaueng/remus) exact kernel. Sketches carry lines, arcs, circles, rectangles, polygons, and text set in bundled font files. New face-attached sketches re-resolve an exact lineage reference at their history position instead of freezing a viewport plane. Reusable offset planes and parallel midplanes support sketches, Split, and Mirror. Parametric expressions, ordered feature history with editing, suppression and rollback, deterministic replay, transactions, and undo/redo.
 
 **Direct manipulation.** Model directly on the geometry: drag a face to offset it, drag a sketch region into a solid, drag an edge to grow a fillet or chamfer, move/rotate bodies with a snapping gizmo — every drag pairs with exact numeric entry. In-viewport sketching includes snapping, live dimensions, direct tools for every schema-backed constraint kind, and placed driving distance/angle dimensions whose values accept named-parameter expressions. Box select, selection filters, a right-click menu, and an Esc ladder round out the interaction model.
 
-**One column, one canvas.** The workspace is a single resizable column beside a full-width viewport: an icon tool grid on top (solids, sketch, modify, finish and repeat), then Parameters, Bodies, History, Revisions, and Diagnostics. The bottom of the canvas is one dock — viewer bar, selection filter, snap, the activity log, and the scale bar — with status delivered as a toast above it and the orientation cube, with perspective/orthographic switching, in the corner. Three top-bar modes subtract chrome as the job gets smaller: **Build** is the full modeling workspace, **Tweak** exposes only the parameters, and **View** is a clean deck for looking. Once enabled in Settings, the AI assistant sits behind an edge tab on the right seam (`⌘J`); `⌘K` opens the command palette and `⌘,` the Settings overlay, which preserves the open tool, panel state, and committed work — keypad drafts included — but drops a not-yet-opened exact-entry queue.
+**A viewport-first workspace.** Floating controls leave the model at the centre: a compact tool rail on the left, view and inspection instruments on the right, and command search along the bottom. The right-hand **Objects**, **History**, and **Parameters** buttons open a shared model drawer, which also holds Revisions and Diagnostics. Objects lists bodies and sketches with selection and visibility controls. **Build** exposes the full modeling tools, **Tweak** focuses on parameters and export, and **View** presents the model for inspection. `Ctrl/Cmd+K` opens command search; `Ctrl/Cmd+,` opens Settings over the workspace. The optional [AI assistant](#ai-assistant-experimental) shares the bottom prompt and proposes changes for review before you apply them.
 
-**One kernel, one topology language.** Remus builds every document, imported STEP included. OpenCascade is gone from the adapter and survives only as the parity corpus's reference implementation under `test/parity/occt-reference`, which never ships. Remus publishes exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md), [ADR-020](docs/adrs/ADR-020-remus-browser-kernel.md)). Primitive, sweep, and supported rigid-transform identities can survive upstream edits. Boolean, blend, pattern, direct-edit, and STEP provenance remain hash-only where complete evolution is not proved, and every ambiguous or unsupported resolution fails closed.
+**One kernel, one topology language.** Remus builds every document, imported STEP included. OpenCascade is absent from the modeling adapter; it is used by the non-shipping parity reference and by the separately loaded FreeCAD import converter. Remus publishes exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md), [ADR-020](docs/adrs/ADR-020-remus-browser-kernel.md)). Verified primitive, sweep, transform, boolean, blend, and pattern lineage can survive upstream edits within supported subsets. Where complete evolution is not proved, references remain hash-only; ambiguous or unsupported resolution fails closed.
 
-**Import and export.** Editable STEP import is stored in replayable document history and rebuilt exactly, honouring the file's own declared length and plane-angle units. Selecting an exact imported face shows its surface type and area; the shipped direct-edit subset includes validated through-hole and cylindrical-face edits. A bounded exact recognizer includes blind-hole, counterbore, countersink, boss, pocket, and taper detectors; the live imported-body pass publishes non-overlapping revolution proofs, including counterbores with a conical entry chamfer. Auto-parameterize coordinates the three hole families; the other proof families remain read-only. STEP export preserves distinct solids as a compound; STL export is always millimetres. STL, 3MF, OBJ, glTF binary and PLY imports become mesh bodies. All geometry and exports run in the browser worker.
+**Import and export.** Editable STEP import is stored in replayable document history and rebuilt exactly, honouring the file's own declared length and plane-angle units. Selecting an exact imported face shows its surface type and area; the shipped direct-edit subset includes validated through-hole and cylindrical-face edits. A bounded exact recognizer includes blind-hole, counterbore, countersink, boss, pocket, and taper detectors; the live imported-body pass publishes non-overlapping revolution proofs, including counterbores with a conical entry chamfer. Auto-parameterize coordinates the three hole families; the other proof families remain read-only. STEP export preserves distinct solids as a compound; STL export is always millimetres. STL, 3MF, OBJ, glTF binary and PLY imports become mesh bodies. Additional migration paths import [FreeCAD saved solids](docs/freecad-import.md) and a [Shapr3D project paired with its STEP export](docs/shapr-import.md), with explicit limits on recovered history. All geometry and exports run in browser workers.
 
 **Local-first, optionally cloud.** IndexedDB autosave works with no account, and **File → Export project** writes a complete `.openzcad` backup at any time (see [Project backups](#project-backups)). When local and cloud copies diverge, OpenZCAD preserves both and asks which one to keep instead of guessing from versions or timestamps. Optional passwordless profiles unlock cloud projects, synced settings, project shelves that pin, reorder, archive, and recycle across devices, and live per-project collaboration with owner/editor/viewer roles and per-browser edit leases shared by one editing account. Owners can mint revocable share links that let anyone open the model, adjust its parameters, and export without an account. Conflict recovery always writes a local recovery project before choosing the room version, keeping the leased local version, or saving the local version as a copy. Account settings show storage in use and can erase account data on request. The checked-in beta configuration enables sharing and lease enforcement for authenticated accounts; the local development configuration keeps them off.
 
 <p align="center">
-  <img src="docs/design/readme-pipe-flange.png" width="49%" alt="Pipe Flange demo — revolved flange with a patterned bolt circle" />
-  <img src="docs/design/readme-heat-sink.png" width="49%" alt="Heat Sink demo — extruded base with a parametric fin field" />
+  <img src="docs/design/readme-pipe-flange.png" width="49%" alt="Pipe Flange in Tweak mode — exposed dimensions beside a revolved flange and bolt circle" />
+  <img src="docs/design/readme-heat-sink.png" width="49%" alt="Heat Sink in View mode — extruded base and parametric fin field" />
 </p>
+
+*Pipe Flange in Tweak mode (left) and Heat Sink in View mode (right).*
 
 ## Roadmap
 
@@ -44,12 +48,19 @@ See [Contributing](CONTRIBUTING.md) for development and pull request guidance, a
 Requires Node.js 20.19+ on the 20.x line, or Node.js 22.12+, and pnpm 10.
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 cp apps/web/.dev.vars.example apps/web/.dev.vars
 pnpm dev:web
 ```
 
-Open the URL Vite prints. Three built-in demos (Mounting Bracket, Pipe Flange, Heat Sink) are available from the start screen.
+Open the URL Vite prints. The start screen offers three built-in demos: **Mounting Bracket**, **Pipe Flange**, and **Heat Sink**. Each includes revisions A → C so you can inspect how the model was built.
+
+To explore the workspace:
+
+1. Open **Mounting Bracket** and use the right-hand **Parameters** button to inspect its named dimensions.
+2. Open **History** to inspect features and revisions, or **Objects** to select and hide bodies or sketches.
+3. Switch to **Tweak** to adjust exposed parameters, or **View** to inspect the result.
+4. Use **File → Export project** for an editable backup, or export STEP/STL for downstream use.
 
 Settings are available from the start screen, the workspace gear, the command palette, or `Ctrl/Cmd+,` — the Settings page overlays the workspace, so the open tool, panel state, and committed work survive it, keypad drafts included; a not-yet-opened exact-entry queue does not.
 
@@ -161,7 +172,7 @@ Interaction and startup performance are measured, not guessed — see [docs/perf
 OZ_PERF=1 pnpm exec playwright test interaction-probe
 ```
 
-The exact adapter and Remus WASM load lazily inside the geometry worker on the first non-empty rebuild or export. The kernel-adapter manifest pins the Remus WASM packages to immutable source commits, and `pnpm-lock.yaml` records their resolved dependencies for reproducible installs. The Remus update workflow proposes pin updates through pull requests. OpenCascade is no longer part of the adapter at all, so neither its ~22 MB WASM nor any code that reaches it is emitted into the bundle. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
+The exact adapter and Remus WASM load lazily inside the geometry worker on the first non-empty rebuild or export. The kernel-adapter manifest pins the Remus WASM packages to immutable source commits, and `pnpm-lock.yaml` records their resolved dependencies for reproducible installs. The Remus update workflow proposes pin updates through pull requests. Ordinary modeling loads only Remus. FreeCAD import separately loads an OpenCascade-based BREP-to-STEP converter on demand; that converter is not part of the modeling adapter. Canonical rebuild results use a worker-local LRU capped at 8 entries and 32 MiB, with at most 4 distinct loads in flight. Cache hits are structured-cloned and exports remain uncached caller-owned work. See [ADR-015](docs/adrs/ADR-015-bounded-exact-rebuild-cache.md) and the measured bundle inventory in [docs/performance-baseline.md](docs/performance-baseline.md).
 
 ## Deploying to Cloudflare
 
@@ -300,11 +311,11 @@ Cloud settings, personal credentials, projects, artifacts, and collaboration req
 
 ## AI assistant (experimental)
 
-An optional side panel turns plain-language requests into reviewable document patches. It is experimental and entirely optional — the workspace is fully functional without it. Provider-backed requests stay dormant until a provider key is configured; verified local recipes remain available without one.
+An optional console assistant turns plain-language requests into reviewable document patches. It is experimental and entirely optional — the workspace is fully functional without it. Provider-backed requests stay dormant until a provider key is configured; verified local recipes remain available without one.
 
-The assistant docks behind an edge tab on the right seam of the viewport (`⌘J`), so a closed panel gives its whole width back to the model; the conversation keeps running behind it, and the tab counts any reply that lands while it is closed. Each project's thread — what was asked, what the assistant asked back, and which proposals were applied or rejected — is kept on the device and read back when the project reopens, so the scrollback is a record rather than a session.
+Enable the assistant in **Settings → AI**. Its conversation opens above the bottom prompt, leaving the model at full width; `Ctrl/Cmd+J` toggles it. Plain-language input asks the assistant, while `/` lists commands. Click outside the conversation to tuck it away; the prompt indicates work in progress and unread replies. Each project's thread — what was asked, what the assistant asked back, and which proposals were applied or rejected — is kept on the device and read back when the project reopens, so the scrollback is a record rather than a session.
 
-The assistant streams proposals through the OpenAI Responses API. It sees compact feature history, live exact-topology summaries, and the active selection, so "fillet all edges" resolves stable edge fingerprints without manual picking. Output is constrained to a strict CAD patch schema; you preview, apply, or reject, and apply is one normal undoable transaction. PDF and image drawings can be attached as references. The AI can only propose a small allowlisted command patch — it cannot directly mutate a document, viewport, or kernel.
+The assistant streams proposals through the OpenAI Responses API. It sees compact feature history, live exact-topology summaries, and the active selection, so "fillet all edges" resolves stable edge fingerprints without manual picking. Output is constrained to a strict CAD patch schema; you preview, apply, or reject, and apply is one normal undoable transaction. PDF and image drawings can be attached as references. The AI can only propose an allowlisted command patch — it cannot directly mutate a document, viewport, or kernel.
 
 **Fillet all edges** is also available without a provider key. Ask "add a fillet on all edges" or "fillet all edges by 1 mm", or choose the matching assistant action. It uses the complete local edge inventory of the named, selected, or sole part, excludes periodic seams, and previews one fillet feature before Apply. Without a radius it uses the manual tool's default of 2 document units. Explicit radius units are converted to document units. Unsupported corner combinations refuse the entire proposal and preserve the original part; joined box corners are covered, while concave bracket corners remain a kernel limitation. The viewport fillet/chamfer card also offers **Select all edges**.
 
@@ -336,7 +347,7 @@ Signed-in users can instead store a personal provider token (Settings → AI). T
 Current assistant limitations and gates:
 
 - **Assistant usage is bounded before provider dispatch** — beta requests require server-granted hosted-AI access, D1-backed per-account request and token-weighted cost quotas, and per-account expiring concurrency leases. There is no shared deployment usage cap; provider-side billing controls remain separate.
-- Deterministic contracts are implemented for face-attached sketches, multi-profile extrudes, mirror, shell, solid offset, transforms, edge modifiers, patterns, and the existing validated direct-edit subset. The six newer operation families remain independently dark behind their `AI_PATCH_*_ENABLED` flags; topology-dependent proposals must repeat the exact digest witness and are rejected when stale.
+- Deterministic contracts are implemented for face-attached sketches, multi-profile extrudes, mirror, shell, solid offset, transforms, edge modifiers, patterns, and the existing validated direct-edit subset. The checked-in beta configuration enables the mature operation families, partial revolve, and datum-plane proposals behind independent `AI_PATCH_*_ENABLED` flags; client capability negotiation also limits the operations offered to each browser. Growing-holder hole controls remain disabled. Topology-dependent proposals must repeat the exact digest witness and are rejected when stale. Configuration describes rollout intent; it is not proof of a live deployment.
 - Exact `add_direct_edit` coordination for proved imported blind holes, counterbores, and countersinks is enabled in `AI_CAD_OPERATION_CAPABILITIES`; the standalone `recognized_imported_feature` operation name remains unsupported. Diameter changes re-cut ordinary proved holes, while blind/counterbore depth changes, countersink angle changes, and diameter changes on a counterbore with an entry chamfer fail with an explicit not-yet-supported error. Proposals cannot import geometry or perform collaboration actions.
 
 ## Known limitations

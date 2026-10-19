@@ -211,6 +211,16 @@
   white-space: nowrap;
 }
 
+/* Why an action is unavailable, under its label: wraps rather than clips. */
+.context-menu-detail {
+  display: block;
+  max-width: 220px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--color-text-subtle);
+  white-space: normal;
+}
+
 /* 24px like the suppression, rollback and delete icons in the same row: at
    20px it was the one row control under the pointer-target floor. */
 .row-visibility {
