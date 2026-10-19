@@ -2,6 +2,7 @@ import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
   PANEL_WIDTH_LIMITS,
+  normalizeKeymapOverrides,
   type AppSettings,
   type PanelWidthLimits,
   type UnitSystem
@@ -151,6 +152,7 @@ export function normalizeAppSettings(value: unknown): AppSettings {
   const collaboration = record(root.collaboration);
   const assistant = record(root.assistant);
   const experiments = record(root.experiments);
+  const keymap = record(root.keymap);
   return {
     schemaVersion: 1,
     general: {
@@ -311,6 +313,9 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         experiments.directManipulation,
         defaults.experiments.directManipulation
       )
+    },
+    keymap: {
+      overrides: normalizeKeymapOverrides(keymap.overrides)
     }
   };
 }

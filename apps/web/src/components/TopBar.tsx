@@ -1,4 +1,5 @@
 import { ProjectImportButton } from './ProjectImportButton';
+import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import {
@@ -166,6 +167,9 @@ export function TopBar({
   onSignIn,
   onOpenSettings
 }: TopBarProps) {
+  const keymap = useKeymap();
+  const saveKey = keymap.label('file-save');
+  const saveNamedKey = keymap.label('file-save-named');
   // A mesh payload is the import's internal triangles, not a file anyone
   // picked or would download; the original upload is listed beside it.
   const artifacts = storedArtifacts.filter(
@@ -450,7 +454,10 @@ export function TopBar({
         data-active={workspaceMode}
         role="group"
         aria-label="Workspace mode"
-        title={`Switch between viewing, tweaking parameters and modeling (${platformShortcutLabel('Ctrl+Shift+M')})`}
+        title={labelWithKey(
+          'Switch between viewing, tweaking parameters and modeling',
+          keymap.label('workspace-mode-cycle')
+        )}
       >
         {WORKSPACE_MODE_OPTIONS.map(({ mode, label, hint, Icon }) => {
           const disabledReason =
@@ -530,7 +537,7 @@ export function TopBar({
               className={`save-state topbar-action is-readout is-${saveState}`}
               role="status"
               aria-label={saveLabel}
-              title={`${saveTitle} Save a revision from File or with ${platformShortcutLabel('Ctrl+S')}.`}
+              title={`${saveTitle} Save a revision from File${saveKey ? ` or with ${platformShortcutLabel(saveKey)}` : ''}.`}
             >
               {saveChipContent}
             </span>
@@ -619,7 +626,7 @@ export function TopBar({
               >
                 <Save size={13} aria-hidden="true" />
                 <span>Save revision</span>
-                <small>{platformShortcutLabel('Ctrl+S')}</small>
+                {saveKey && <small>{platformShortcutLabel(saveKey)}</small>}
               </button>
               <button
                 type="button"
@@ -630,7 +637,9 @@ export function TopBar({
               >
                 <Save size={13} aria-hidden="true" />
                 <span>Save revision as…</span>
-                <small>{platformShortcutLabel('Ctrl+Shift+S')}</small>
+                {saveNamedKey && (
+                  <small>{platformShortcutLabel(saveNamedKey)}</small>
+                )}
               </button>
               <div className="topbar-menu-sep" />
               <strong className="topbar-menu-label">Import</strong>
@@ -819,7 +828,7 @@ export function TopBar({
           <button
             className="secondary topbar-action settings-action"
             type="button"
-            title={`Settings (${platformShortcutLabel('Ctrl+,')})`}
+            title={labelWithKey('Settings', keymap.label('app-settings'))}
             aria-label="Open settings"
             onClick={onOpenSettings}
           >

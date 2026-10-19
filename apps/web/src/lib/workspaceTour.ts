@@ -23,10 +23,24 @@ export interface WorkspaceTourSignals {
   exportSeen: boolean;
 }
 
+/** A command's live key as shown, or undefined when it is unbound. */
+export type TourKeyLabel = (commandId: string) => string | undefined;
+
+export function tourStepBody(
+  step: WorkspaceTourStep,
+  keyLabel: TourKeyLabel
+): string {
+  return typeof step.body === 'function' ? step.body(keyLabel) : step.body;
+}
+
 export interface WorkspaceTourStep {
   id: WorkspaceTourStepId;
   title: string;
-  body: string;
+  /**
+   * A body that names a key takes the live label (`useKeymap`), so a remap
+   * is what the tour teaches; read it through `tourStepBody`.
+   */
+  body: string | ((keyLabel: TourKeyLabel) => string);
   /** Chrome region the step points at; highlighted while the step is up. */
   targetSelector: string | null;
   /** True when the signals show the user already did this step's action. */
@@ -37,7 +51,10 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
   {
     id: 'create',
     title: 'Create your first feature',
-    body: 'Pick a tool from the rail on the left — click Box (the cube), or press B, then press Enter to create it. Its tools stay in place whatever you pick; More tools at its foot opens the rest.',
+    body: (keyLabel) => {
+      const boxKey = keyLabel('tool-box');
+      return `Pick a tool from the rail on the left — click Box (the cube)${boxKey ? `, or press ${boxKey},` : ''} then press Enter to create it. Its tools stay in place whatever you pick; More tools at its foot opens the rest.`;
+    },
     targetSelector: '.tool-palette',
     isComplete: (signals) => signals.featureCount > 0
   },

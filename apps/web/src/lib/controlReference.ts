@@ -1,8 +1,31 @@
+import {
+  KEYMAP_COMMANDS,
+  keymapCommand,
+  referenceKeyLabel,
+  type Keymap
+} from './keymap';
+
 export interface ControlReferenceItem {
   id: string;
+  /** The default keys, as the reference writes them. */
   keys: readonly string[];
+  /**
+   * The keymap commands behind a remappable item, whose live keys replace
+   * `keys` wherever the reference is drawn (`liveControlKeys`).
+   */
+  commands?: readonly string[];
   action: string;
   detail: string;
+}
+
+/** A remappable item: its commands and their default keys. */
+function bound(...commands: string[]) {
+  return {
+    commands,
+    keys: commands.flatMap((id) =>
+      (keymapCommand(id)?.defaults ?? []).map(referenceKeyLabel)
+    )
+  };
 }
 
 export interface ControlReferenceGroup {
@@ -16,7 +39,9 @@ export interface ControlReferenceGroup {
  * Workspace key map, grouped by the context that owns each shortcut.
  *
  * Settings and the in-workspace `?` overlay render this same data so the two
- * references cannot quietly disagree as controls evolve.
+ * references cannot quietly disagree as controls evolve. A remappable item's
+ * keys come from the keymap registry, and both surfaces draw the user's live
+ * binding in their place.
  */
 export const KEYBOARD_CONTROL_GROUPS = [
   {
@@ -26,38 +51,38 @@ export const KEYBOARD_CONTROL_GROUPS = [
     items: [
       {
         id: 'open-settings',
-        keys: ['Ctrl/Cmd+,'],
+        ...bound('app-settings'),
         action: 'Open settings',
         detail: 'Available from the start screen or an open project.'
       },
       {
         id: 'command-palette',
-        keys: ['Ctrl/Cmd+K', '/'],
+        ...bound('command-palette', 'command-slash'),
         action: 'Focus the command bar',
         detail:
           'Search tools, views, file actions, and workspace commands, or ask the assistant.'
       },
       {
         id: 'save-revision',
-        keys: ['Ctrl/Cmd+S'],
+        ...bound('file-save'),
         action: 'Save a revision',
         detail: 'Saves the current canonical project document.'
       },
       {
         id: 'undo',
-        keys: ['Ctrl/Cmd+Z'],
+        ...bound('edit-undo'),
         action: 'Undo',
         detail: 'Steps backward through document history.'
       },
       {
         id: 'redo',
-        keys: ['Ctrl/Cmd+Shift+Z', 'Ctrl/Cmd+Y'],
+        ...bound('edit-redo'),
         action: 'Redo',
         detail: 'Restores the next document-history step.'
       },
       {
         id: 'shortcut-reference',
-        keys: ['?'],
+        ...bound('shortcut-reference'),
         action: 'Open the shortcut reference',
         detail: 'Shows this keyboard map without leaving the workspace.'
       }
@@ -70,55 +95,55 @@ export const KEYBOARD_CONTROL_GROUPS = [
     items: [
       {
         id: 'box',
-        keys: ['B'],
+        ...bound('tool-box'),
         action: 'Box',
         detail: 'Create a rectangular solid.'
       },
       {
         id: 'cylinder',
-        keys: ['C'],
+        ...bound('tool-cylinder'),
         action: 'Cylinder',
         detail: 'Create a circular solid.'
       },
       {
         id: 'sketch',
-        keys: ['S'],
+        ...bound('tool-sketch'),
         action: 'Sketch',
         detail: 'Start a 2D profile on a plane.'
       },
       {
         id: 'extrude',
-        keys: ['E'],
+        ...bound('tool-extrude'),
         action: 'Extrude',
         detail: 'Push a sketch profile into a solid.'
       },
       {
         id: 'revolve',
-        keys: ['R'],
+        ...bound('tool-revolve'),
         action: 'Revolve',
         detail: 'Spin a sketch around an axis.'
       },
       {
         id: 'union',
-        keys: ['U'],
+        ...bound('tool-union'),
         action: 'Union',
         detail: 'Merge selected bodies into one.'
       },
       {
         id: 'subtract',
-        keys: ['X'],
+        ...bound('tool-subtract'),
         action: 'Subtract',
         detail: 'Cut selected bodies out of a base body.'
       },
       {
         id: 'intersect',
-        keys: ['I'],
+        ...bound('tool-intersect'),
         action: 'Intersect',
         detail: 'Keep only the overlap between selected bodies.'
       },
       {
         id: 'move',
-        keys: ['M'],
+        ...bound('tool-transform'),
         action: 'Move',
         detail: 'Translate or rotate a body. Build mode; in View, M measures.'
       }
@@ -131,55 +156,55 @@ export const KEYBOARD_CONTROL_GROUPS = [
     items: [
       {
         id: 'front-view',
-        keys: ['1'],
+        ...bound('view-front'),
         action: 'Front view',
         detail: 'Align the camera with the front of the model.'
       },
       {
         id: 'top-view',
-        keys: ['2'],
+        ...bound('view-top'),
         action: 'Top view',
         detail: 'Align the camera above the model.'
       },
       {
         id: 'right-view',
-        keys: ['3'],
+        ...bound('view-right'),
         action: 'Right view',
         detail: 'Align the camera with the right side.'
       },
       {
         id: 'isometric-view',
-        keys: ['4'],
+        ...bound('view-iso'),
         action: 'Isometric view',
         detail: 'Return to the standard three-quarter view.'
       },
       {
         id: 'fit-view',
-        keys: ['F'],
+        ...bound('view-fit'),
         action: 'Fit view',
         detail: 'Frame all visible model geometry.'
       },
       {
         id: 'normal-to-face',
-        keys: ['Space'],
+        ...bound('view-normal-to-face'),
         action: 'Normal to selected face',
         detail: 'Centres and frames an exact planar face head-on.'
       },
       {
         id: 'toggle-grid',
-        keys: ['G'],
+        ...bound('view-grid'),
         action: 'Toggle the grid',
         detail: 'Show or hide the construction grid.'
       },
       {
         id: 'display-mode',
-        keys: ['W'],
+        ...bound('view-display'),
         action: 'Cycle display mode',
         detail: 'Step through shaded + edges, shaded, and wireframe.'
       },
       {
         id: 'projection',
-        keys: ['P'],
+        ...bound('view-projection'),
         action: 'Toggle projection',
         detail: 'Switch between perspective and orthographic projection.'
       }
@@ -193,14 +218,14 @@ export const KEYBOARD_CONTROL_GROUPS = [
     items: [
       {
         id: 'workspace-mode',
-        keys: ['Ctrl/Cmd+Shift+M'],
+        ...bound('workspace-mode-cycle'),
         action: 'Cycle View, Tweak and Build',
         detail:
           'A shared project you can only read stays in View, and says why.'
       },
       {
         id: 'measure',
-        keys: ['M'],
+        ...bound('view-measure'),
         action: 'Measure',
         detail:
           'In View mode only. Records what you pick; Escape stops recording and keeps the results.'
@@ -220,7 +245,7 @@ export const KEYBOARD_CONTROL_GROUPS = [
     items: [
       {
         id: 'selection-filter',
-        keys: ['Q'],
+        ...bound('selection-filter'),
         action: 'Cycle the selection filter',
         detail: 'Steps through Any, Body, Face, Edge, and Sketch.'
       },
@@ -252,37 +277,37 @@ export const KEYBOARD_CONTROL_GROUPS = [
     items: [
       {
         id: 'sketch-select',
-        keys: ['V'],
+        ...bound('sketch-select'),
         action: 'Select',
         detail: 'Pick an existing sketch entity or profile.'
       },
       {
         id: 'sketch-line',
-        keys: ['L'],
+        ...bound('sketch-line'),
         action: 'Line',
         detail: 'Click to place a start point, then each next point.'
       },
       {
         id: 'sketch-arc',
-        keys: ['A'],
+        ...bound('sketch-arc'),
         action: 'Arc',
         detail: 'Place the center, start, and end of the arc.'
       },
       {
         id: 'sketch-circle',
-        keys: ['C'],
+        ...bound('sketch-circle'),
         action: 'Circle',
         detail: 'Drag from the center to set the radius.'
       },
       {
         id: 'sketch-rectangle',
-        keys: ['R'],
+        ...bound('sketch-rectangle'),
         action: 'Rectangle',
         detail: 'Drag from one corner to the opposite corner.'
       },
       {
         id: 'sketch-text',
-        keys: ['T'],
+        ...bound('sketch-text'),
         action: 'Text',
         detail: 'Place editable text on the sketch plane.'
       },
@@ -466,3 +491,50 @@ export const CONTROL_REFERENCE_SEARCH_TERMS = [
   group.description,
   ...group.items.flatMap((item) => [...item.keys, item.action, item.detail])
 ]);
+
+/** An item's keys as the user has them bound; empty when they unbound it. */
+export function liveControlKeys(
+  item: ControlReferenceItem,
+  keymap: Keymap
+): readonly string[] {
+  return item.commands
+    ? item.commands.flatMap((id) => keymap.bindings(id).map(referenceKeyLabel))
+    : item.keys;
+}
+
+/**
+ * The keyboard reference as the user's keymap has it. A tool the user gave a
+ * key joins the modeling-tools list, which otherwise names only the tools
+ * that ship with one.
+ */
+export function liveKeyboardGroups(
+  keymap: Keymap
+): readonly ControlReferenceGroup[] {
+  return KEYBOARD_CONTROL_GROUPS.map((group) => {
+    const items: ControlReferenceItem[] = group.items.map((item) => ({
+      ...item,
+      keys: liveControlKeys(item, keymap)
+    }));
+    if (group.id === 'modeling-tools') {
+      const listed = new Set(
+        group.items.flatMap((item): readonly string[] => item.commands)
+      );
+      for (const command of KEYMAP_COMMANDS) {
+        if (
+          command.group === 'modeling-tools' &&
+          !listed.has(command.id) &&
+          keymap.bindings(command.id).length > 0
+        ) {
+          items.push({
+            id: command.id,
+            keys: keymap.bindings(command.id).map(referenceKeyLabel),
+            commands: [command.id],
+            action: command.label,
+            detail: 'A key you assigned in Settings.'
+          });
+        }
+      }
+    }
+    return { ...group, items };
+  });
+}

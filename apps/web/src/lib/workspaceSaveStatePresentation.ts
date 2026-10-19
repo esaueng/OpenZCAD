@@ -102,6 +102,6 @@ export const WORKSPACE_SAVE_STATE_PRESENTATION: Record<
     topBarLabel: 'Autosave off',
     statusBarLabel: 'Autosave off',
     title:
-      'Saved on this device · cloud autosave is off. Ctrl/Cmd+S updates your account.'
+      'Saved on this device · cloud autosave is off. Saving a revision updates your account.'
   }
 };

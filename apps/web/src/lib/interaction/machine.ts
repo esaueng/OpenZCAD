@@ -12,6 +12,7 @@ import {
   type FaceCapabilityTarget,
   type SelectionActionId
 } from './capabilities';
+import { activeKeymap, keyHint } from '../keymap';
 
 /**
  * The selection-first interaction machine.
@@ -1248,7 +1249,16 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
                 : state.target.resizeBodyFeatureId &&
                     !state.target.localFaceOffset
                   ? 'Drag to resize · Tap the value to type.'
-                  : 'Drag the arrow to offset the face, or tap the value to type · Space faces it head-on.';
+                  : `${[
+                      'Drag the arrow to offset the face, or tap the value to type',
+                      keyHint(
+                        activeKeymap(),
+                        'view-normal-to-face',
+                        'faces it head-on'
+                      )
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}.`;
       // Single-capability faces suppress the action row: one button that only
       // restates the title is noise on a card meant to stay out of the way.
       const alwaysShowActions =

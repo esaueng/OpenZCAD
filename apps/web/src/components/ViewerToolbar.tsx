@@ -27,25 +27,32 @@ import {
 } from '../lib/sectionOutline';
 import { DISPLAY_MODE_LABELS } from '../lib/displayMode';
 import { Tooltip } from './Tooltip';
+import { labelWithKey, useKeymap, type Keymap } from '../lib/keymap';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 
 /**
  * Every standard view, in reading order down the flyout. Back, left and
  * bottom were previously reachable only by orbiting the cube; only the four
  * with a shortcut ever had a button of their own.
  */
-const VIEWS: { id: StandardView; shortcut?: string }[] = [
-  { id: 'front', shortcut: '1' },
+const VIEWS: { id: StandardView; command?: string }[] = [
+  { id: 'front', command: 'view-front' },
   { id: 'back' },
   { id: 'left' },
-  { id: 'right', shortcut: '3' },
-  { id: 'top', shortcut: '2' },
+  { id: 'right', command: 'view-right' },
+  { id: 'top', command: 'view-top' },
   { id: 'bottom' },
-  { id: 'iso', shortcut: '4' }
+  { id: 'iso', command: 'view-iso' }
 ];
 
-function viewTitle(view: { id: StandardView; shortcut?: string }): string {
-  const label = `${VIEW_LABELS[view.id]} view`;
-  return view.shortcut ? `${label} (${view.shortcut})` : label;
+function viewTitle(
+  view: { id: StandardView; command?: string },
+  keymap: Keymap
+): string {
+  return labelWithKey(
+    `${VIEW_LABELS[view.id]} view`,
+    view.command && keymap.label(view.command)
+  );
 }
 
 interface ViewerToolbarProps {
@@ -143,6 +150,7 @@ export function ViewerToolbar({
   sectionOutline,
   units
 }: ViewerToolbarProps) {
+  const keymap = useKeymap();
   const [viewsOpen, setViewsOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -278,7 +286,7 @@ export function ViewerToolbar({
     // The viewer bar: undo/redo and the viewport toggles. Still `.viewer-rail`
     // in the stylesheets; the name is what people call it.
     <div className="viewer-rail" role="toolbar" aria-label="Viewer bar">
-      <Tooltip label="Undo" shortcut="Ctrl+Z">
+      <Tooltip label="Undo" shortcut={keymap.label('edit-undo')}>
         <button
           type="button"
           className="rail-button"
@@ -289,7 +297,7 @@ export function ViewerToolbar({
           <Undo2 size={16} aria-hidden="true" />
         </button>
       </Tooltip>
-      <Tooltip label="Redo" shortcut="Ctrl+Shift+Z">
+      <Tooltip label="Redo" shortcut={keymap.label('edit-redo')}>
         <button
           type="button"
           className="rail-button"
@@ -322,24 +330,24 @@ export function ViewerToolbar({
       )}
       <Tooltip
         label="Fit view"
-        shortcut="F"
+        shortcut={keymap.label('view-fit')}
         description="Double-click the viewport to fit"
       >
         <button
           type="button"
           className="rail-button"
           onClick={onFit}
-          aria-label="Fit view (F)"
+          aria-label={labelWithKey('Fit view', keymap.label('view-fit'))}
         >
           <Maximize2 size={16} aria-hidden="true" />
         </button>
       </Tooltip>
-      <Tooltip label="Toggle grid" shortcut="G">
+      <Tooltip label="Toggle grid" shortcut={keymap.label('view-grid')}>
         <button
           type="button"
           className={`rail-button ${settings.showGrid ? 'active' : ''}`}
           onClick={onToggleGrid}
-          aria-label="Toggle grid (G)"
+          aria-label={labelWithKey('Toggle grid', keymap.label('view-grid'))}
           aria-pressed={settings.showGrid}
         >
           <Grid3x3 size={16} aria-hidden="true" />
@@ -347,14 +355,14 @@ export function ViewerToolbar({
       </Tooltip>
       <Tooltip
         label="Projection"
-        shortcut="P"
+        shortcut={keymap.label('view-projection')}
         description={`Now: ${projectionLabel}`}
       >
         <button
           type="button"
           className={`rail-button ${projection === 'orthographic' ? 'active' : ''}`}
           onClick={onToggleProjection}
-          aria-label={`Orthographic projection (P) — now: ${projectionLabel}`}
+          aria-label={`${labelWithKey('Orthographic projection', keymap.label('view-projection'))} — now: ${projectionLabel}`}
           aria-pressed={projection === 'orthographic'}
         >
           <Camera size={16} aria-hidden="true" />
@@ -458,14 +466,14 @@ export function ViewerToolbar({
       </div>
       <Tooltip
         label="Display mode"
-        shortcut="W"
+        shortcut={keymap.label('view-display')}
         description={`Now: ${displayModeLabel}`}
       >
         <button
           type="button"
           className="rail-button"
           onClick={onCycleDisplayMode}
-          aria-label={`Display mode (W) — now: ${displayModeLabel}`}
+          aria-label={`${labelWithKey('Display mode', keymap.label('view-display'))} — now: ${displayModeLabel}`}
         >
           <DisplayModeIcon mode={settings.displayMode} />
         </button>
@@ -504,11 +512,13 @@ export function ViewerToolbar({
                 onClick={() => selectView(view.id)}
                 // The visible text is just the view name; the accessible
                 // name keeps the "<View> view (n)" wording used elsewhere.
-                aria-label={viewTitle(view)}
+                aria-label={viewTitle(view, keymap)}
               >
                 {VIEW_LABELS[view.id]}
-                {view.shortcut ? (
-                  <kbd aria-hidden="true">{view.shortcut}</kbd>
+                {view.command && keymap.label(view.command) ? (
+                  <kbd aria-hidden="true">
+                    {platformShortcutLabel(keymap.label(view.command)!)}
+                  </kbd>
                 ) : null}
               </button>
             ))}

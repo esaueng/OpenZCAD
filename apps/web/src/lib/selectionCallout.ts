@@ -11,6 +11,7 @@ import {
   type ToolAvailability,
   type ToolId
 } from './tools';
+import { activeKeymap, toolCommandId } from './keymap';
 
 /**
  * The one surface that answers "what did I pick, and what can I do with it":
@@ -144,7 +145,11 @@ function toolVerb(
   return {
     id: `tool:${tool}`,
     label: TOOL_META[tool].label,
-    title: toolTitle(tool, availability),
+    title: toolTitle(
+      tool,
+      availability,
+      activeKeymap().label(toolCommandId(tool)) ?? null
+    ),
     disabled: toolDisabledReason(tool, availability) !== null,
     pressed: false
   };
