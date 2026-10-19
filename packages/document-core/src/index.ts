@@ -420,8 +420,10 @@ export interface TransformInput {
   targetBodyId: BodyId;
   translation: ParametricVector3;
   rotationDeg?: ParametricVector3;
-  /** Uniform scale about the world origin; omitted means 1. */
+  /** Uniform scale about the pivot; omitted means 1. */
   scale?: ParamValue;
+  /** M10: rotation and scale turn about this point; omitted is the origin. */
+  pivot?: ParametricVector3;
   ids?: FeatureOnlyIds;
 }
 
@@ -1947,7 +1949,7 @@ export function validateKeepOriginals(
 /**
  * M11: the inputs a Boolean consumes, in operand order. The target is the
  * first body and the tools the rest; whatever is kept stays live beside the
- * result. Absent `keepOriginals` consumes every input, as before v22.
+ * result. Absent `keepOriginals` consumes every input, as before v23.
  */
 export function booleanConsumedBodyIds(data: {
   targetBodyIds: readonly BodyId[];
@@ -2494,7 +2496,10 @@ export function transformBody(
     input.rotationDeg?.x,
     input.rotationDeg?.y,
     input.rotationDeg?.z,
-    input.scale
+    input.scale,
+    input.pivot?.x,
+    input.pivot?.y,
+    input.pivot?.z
   ];
   if (
     values.some((value) => typeof value === 'number' && !Number.isFinite(value))
@@ -2518,7 +2523,8 @@ export function transformBody(
       transform: {
         translation: input.translation,
         rotationDeg: input.rotationDeg ?? { x: 0, y: 0, z: 0 },
-        ...(input.scale !== undefined ? { scale: input.scale } : {})
+        ...(input.scale !== undefined ? { scale: input.scale } : {}),
+        ...(input.pivot !== undefined ? { pivot: deepClone(input.pivot) } : {})
       }
     }
   };

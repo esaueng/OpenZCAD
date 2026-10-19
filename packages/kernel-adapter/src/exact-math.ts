@@ -251,7 +251,9 @@ export function profilePoints(
 export function transformMatrix(
   translation: Vec3,
   rotationDeg: Vec3,
-  scale = 1
+  scale = 1,
+  /** Rotation and scale turn about this point (M10); the origin when absent. */
+  pivot?: Vec3
 ): Float64Array {
   const rx = (rotationDeg.x * Math.PI) / 180;
   const ry = (rotationDeg.y * Math.PI) / 180;
@@ -262,19 +264,36 @@ export function transformMatrix(
   const sb = Math.sin(ry);
   const cc = Math.cos(rz);
   const sc = Math.sin(rz);
-  return new Float64Array([
+  const linear = [
     scale * cc * cb,
     scale * (cc * sb * sa - sc * ca),
     scale * (cc * sb * ca + sc * sa),
-    translation.x,
     scale * sc * cb,
     scale * (sc * sb * sa + cc * ca),
     scale * (sc * sb * ca - cc * sa),
-    translation.y,
     scale * -sb,
     scale * cb * sa,
-    scale * cb * ca,
-    translation.z,
+    scale * cb * ca
+  ] as const;
+  // About a pivot p: x ↦ L(x − p) + p + t, so the translation becomes
+  // t + p − L·p. With no pivot this is exactly the world-origin transform.
+  const px = pivot?.x ?? 0;
+  const py = pivot?.y ?? 0;
+  const pz = pivot?.z ?? 0;
+  const [l00, l01, l02, l10, l11, l12, l20, l21, l22] = linear;
+  return new Float64Array([
+    l00,
+    l01,
+    l02,
+    translation.x + px - (l00 * px + l01 * py + l02 * pz),
+    l10,
+    l11,
+    l12,
+    translation.y + py - (l10 * px + l11 * py + l12 * pz),
+    l20,
+    l21,
+    l22,
+    translation.z + pz - (l20 * px + l21 * py + l22 * pz),
     0,
     0,
     0,

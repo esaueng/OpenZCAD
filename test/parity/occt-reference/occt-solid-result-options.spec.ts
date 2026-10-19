@@ -21,7 +21,7 @@ import {
 import { OcctStepKernelAdapter } from './occt-step';
 
 /**
- * Research-audit Stage 4 (schema v22) across both kernels: the extrude
+ * Research-audit Stage 4 (schema v23) across both kernels: the extrude
  * Intersect intent (ZC-060) and Boolean keep-originals (M11). Each volume is
  * checked against its closed form on both, not one kernel against the other,
  * so a shared mistake cannot read as parity. The OCCT reference does not

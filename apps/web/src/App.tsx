@@ -491,7 +491,6 @@ import {
   MoveInstruction,
   ProfileQuickAction
 } from './components/DirectModelingOverlays';
-import { composeMoveTransform } from '@openzcad/viewport/move-transform';
 import { SELECTION_FILTERS } from '@openzcad/viewport/types';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import {
@@ -7658,28 +7657,33 @@ export function App() {
       y: (body.bbox.min.y + body.bbox.max.y) / 2,
       z: (body.bbox.min.z + body.bbox.max.z) / 2
     };
-    // Rotation is about the gizmo center; fold the pivot into the feature's
-    // world-origin translation (see composeMoveTransform).
-    const translation = composeMoveTransform(
-      center,
-      preview.translation,
-      preview.rotationDeg
-    );
+    // M10: rotation turns about the gizmo centre, stored as the Move's pivot
+    // on every gizmo Move, so a rotation or scale added by a later edit still
+    // turns the body in place rather than about the world origin.
     const round = (value: number) => Math.round(value * 1000) / 1000;
     const values = {
       translation: {
-        x: round(translation.x),
-        y: round(translation.y),
-        z: round(translation.z)
+        x: round(preview.translation.x),
+        y: round(preview.translation.y),
+        z: round(preview.translation.z)
       },
       rotationDeg: {
         x: round(preview.rotationDeg.x),
         y: round(preview.rotationDeg.y),
         z: round(preview.rotationDeg.z)
+      },
+      pivot: {
+        x: round(center.x),
+        y: round(center.y),
+        z: round(center.z)
       }
     };
-    // Finite inputs can still overflow during pivot composition or rounding.
-    if (!moveHasFiniteValues(values)) {
+    // Finite inputs can still overflow during rounding.
+    if (
+      !moveHasFiniteValues(values) ||
+      (values.pivot &&
+        ![values.pivot.x, values.pivot.y, values.pivot.z].every(Number.isFinite))
+    ) {
       setStatus(
         'Could not apply Move: its resulting transform must be finite.'
       );
@@ -21729,6 +21733,9 @@ export function App() {
                       rotationDeg: value.rotationDeg,
                       ...(value.scale !== undefined
                         ? { scale: value.scale }
+                        : {}),
+                      ...(value.pivot !== undefined
+                        ? { pivot: value.pivot }
                         : {})
                     }),
                     name,
@@ -21956,6 +21963,11 @@ export function App() {
                             // scale out here is what clears a previous one.
                             ...(value.scale !== undefined
                               ? { scale: value.scale }
+                              : {}),
+                            // So is the pivot (M10): an edit keeps the one
+                            // the gizmo wrote unless the form moves it.
+                            ...(value.pivot !== undefined
+                              ? { pivot: value.pivot }
                               : {})
                           }
                         }
