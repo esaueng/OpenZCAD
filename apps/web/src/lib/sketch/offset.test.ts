@@ -235,6 +235,24 @@ describe('sketch offset: chains and joins (ZC-015)', () => {
     });
   });
 
+  it('refuses an offset that passes too near the source between its ends', () => {
+    // A hook whose last leg stops 1.5 above the first: the first leg's
+    // offset at y = 1 runs 0.5 from that leg's end at (10, 1.5), though
+    // every point a fixed sampling would check stays 1 away.
+    const { plan, ids } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 100, y2: 0 },
+      { objectKind: 'line', x1: 100, y1: 0, x2: 100, y2: 10 },
+      { objectKind: 'line', x1: 100, y1: 10, x2: 10, y2: 10 },
+      { objectKind: 'line', x1: 10, y1: 10, x2: 10, y2: 1.5 }
+    ]);
+    expect(plan(ids[0]!, 1, MITER)).toEqual({
+      status: 'refuse',
+      reason: 'That offset collapses through the chain. Use a smaller distance.'
+    });
+    // Half the gap clears it.
+    expect(plan(ids[0]!, 0.7, MITER).status).toBe('commands');
+  });
+
   it('stops a chain where it branches, and offsets one curve with Chain off', () => {
     const { manager, sketch, ids } = sketchWith([
       { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },

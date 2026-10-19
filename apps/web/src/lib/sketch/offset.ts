@@ -26,8 +26,8 @@
  * neighbours overlap instead, both are trimmed back to their crossing.
  *
  * Two witnesses run on every result before it is offered: no point of it may
- * lie nearer the source than the distance asked for, and no two of its curves
- * may cross. An inward offset past a loop's collapse point fails one or the
+ * lie nearer the source than the distance asked for (measured exactly, curve
+ * to curve, not at samples), and no two of its curves may cross. An inward offset past a loop's collapse point fails one or the
  * other, and is refused with nothing changed.
  */
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
@@ -626,6 +626,62 @@ function offsetChain(
   return pieces;
 }
 
+/**
+ * Points of `curve` where its distance to `other` can be smallest, besides
+ * the ends of both: the foot of a circle's centre on a line, and where the
+ * line through two centres meets a round. Kept only where they lie on
+ * `curve`; the minimum between two lines or rounds that do not cross is at
+ * an end or at one of these.
+ */
+function interiorCandidates(curve: Travel, other: Travel): Point2[] {
+  if (curve.kind === 'line') {
+    if (other.kind === 'line') return [];
+    const d = sub(curve.b, curve.a);
+    const t = dot(sub(other.c, curve.a), d) / dot(d, d);
+    return t > 0 && t < 1 ? [add(curve.a, d, t)] : [];
+  }
+  const stored = storedCurve(curve) as Extract<Curve2, { kind: 'arc' }>;
+  const toward = (target: Point2): Point2[] => {
+    const offset = sub(target, curve.c);
+    const l = length(offset);
+    if (l <= JOINT) return [];
+    const u = { x: offset.x / l, y: offset.y / l };
+    return [add(curve.c, u, curve.r), add(curve.c, u, -curve.r)];
+  };
+  const targets =
+    other.kind === 'line'
+      ? (() => {
+          // The round's points nearest and farthest from the line run
+          // perpendicular to it through the centre.
+          const d = sub(other.b, other.a);
+          const n = { x: -d.y, y: d.x };
+          return toward(add(curve.c, n));
+        })()
+      : toward(other.c);
+  return targets.filter(
+    (point) =>
+      wrapPositive(angleOf(curve.c, point) - stored.start) <= stored.sweep
+  );
+}
+
+/**
+ * The least distance between two travelled curves, exactly: zero where they
+ * cross, else the least over the critical points of each against the other.
+ * Sampling instead misses a near pass between samples.
+ */
+function curveDistance(first: Travel, second: Travel): number {
+  if (curveCrossings(storedCurve(first), storedCurve(second)).length > 0) {
+    return 0;
+  }
+  const against = (curve: Travel, other: Travel) =>
+    [
+      travelStart(curve),
+      travelEnd(curve),
+      ...interiorCandidates(curve, other)
+    ].map((point) => distanceTo(point, other));
+  return Math.min(...against(first, second), ...against(second, first));
+}
+
 function witness(
   pieces: readonly Piece[],
   members: readonly Member[],
@@ -635,12 +691,8 @@ function witness(
   const wanted = Math.abs(s);
   const slack = Math.max(wanted, 1) * WITNESS;
   for (const { travel } of pieces) {
-    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
-      const point = pointAt(travel, t);
-      const nearest = Math.min(
-        ...members.map((member) => distanceTo(point, member.travel))
-      );
-      if (nearest < wanted - slack) {
+    for (const member of members) {
+      if (curveDistance(travel, member.travel) < wanted - slack) {
         throw new Error(
           'That offset collapses through the chain. Use a smaller distance.'
         );
