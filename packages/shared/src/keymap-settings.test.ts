@@ -20,17 +20,20 @@ describe('canonicalChord', () => {
     expect(canonicalChord('Shift+Space')).toBe('Shift+Space');
   });
 
-  it('keeps a key whose upper case would not be one character', () => {
-    // ß upper-cases to SS; storing that would drop the binding on reload.
+  it('keeps letters beyond ASCII exactly as typed', () => {
+    // ß upper-cases to SS, and Turkish i and ı both to I: folding would
+    // drop or merge bindings, so only a–z fold.
     expect(canonicalChord('ß')).toBe('ß');
     expect(canonicalChord('Ctrl+ß')).toBe('Ctrl+ß');
-    expect(canonicalChord('é')).toBe('É');
+    expect(canonicalChord('ı')).toBe('ı');
+    expect(canonicalChord('ı')).not.toBe(canonicalChord('i'));
+    expect(canonicalChord('é')).toBe('é');
   });
 
   it('keeps Shift on letters of any script', () => {
-    expect(canonicalChord('Shift+å')).toBe('Shift+Å');
-    expect(canonicalChord('å')).toBe('Å');
-    expect(canonicalChord('Shift+ж')).toBe('Shift+Ж');
+    expect(canonicalChord('Shift+Å')).toBe('Shift+Å');
+    expect(canonicalChord('å')).toBe('å');
+    expect(canonicalChord('Shift+Ж')).toBe('Shift+Ж');
     expect(canonicalChord('Shift+1')).toBe('1');
   });
 

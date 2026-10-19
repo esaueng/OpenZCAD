@@ -75,6 +75,8 @@ import {
   type ControlReferenceGroup
 } from '../lib/controlReference';
 import { KeymapEditor } from './KeymapEditor';
+import { resolveKeymap } from '../lib/keymap';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 import { BrandMark } from './BrandMark';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
 import {
@@ -604,6 +606,9 @@ export function SettingsPage({
   onDismissProjectInvitation,
   onClose
 }: SettingsPageProps) {
+  // The save key as the user has it, for copy that tells them how to save.
+  const saveChord = resolveKeymap(settings.keymap.overrides).label('file-save');
+  const saveKeyCopy = saveChord ? ` (${platformShortcutLabel(saveChord)})` : '';
   const [initialViewState] = useState(loadSettingsViewState);
   const [active, setActive] = useState<SectionId>(
     initialSection ?? initialViewState.activeSection
@@ -1394,7 +1399,7 @@ export function SettingsPage({
               </SettingRow>
               <SettingRow
                 title="Cloud autosave"
-                description="Copy a project your account holds to the account shortly after you stop editing. Turn it off to update your account only with Ctrl/Cmd+S."
+                description={`Copy a project your account holds to the account shortly after you stop editing. Turn it off to update your account only when you save a revision${saveKeyCopy}.`}
                 scope="Account"
               >
                 <Toggle
@@ -1434,7 +1439,7 @@ export function SettingsPage({
               </SettingRow>
               <SettingRow
                 title="Cloud revisions"
-                description="Ctrl/Cmd+S creates an explicit owner-scoped checkpoint. Autosave does not add to this history."
+                description={`Saving a revision${saveKeyCopy} creates an explicit owner-scoped checkpoint. Autosave does not add to this history.`}
                 scope="Current project"
               >
                 <span className="settings-state">

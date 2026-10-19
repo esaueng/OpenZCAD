@@ -74,10 +74,10 @@ export function canonicalChord(value: unknown): string | null {
   if (NAMED_KEYS.has(key)) {
     base = key;
   } else if (Array.from(key).length === 1 && key.trim() === key) {
-    // A letter is stored upper case, but only where that stays one
-    // character: ß upper-cases to SS, which would not parse back.
-    const upper = key.toUpperCase();
-    base = Array.from(upper).length === 1 ? upper : key;
+    // Only ASCII letters fold to upper case. Beyond ASCII, case mapping
+    // merges keys (Turkish i and ı both become I) or grows them (ß is SS),
+    // so those letters are kept exactly as typed.
+    base = /^[a-z]$/.test(key) ? key.toUpperCase() : key;
   } else {
     return null;
   }

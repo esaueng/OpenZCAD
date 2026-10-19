@@ -173,7 +173,7 @@ describe('chordFromEvent', () => {
     });
     // German AltGr+Q types @; it must not become Ctrl+Alt+Q.
     expect(chordFromEvent(altGr('KeyQ', '@'))).toBe('@');
-    expect(chordFromEvent(altGr('KeyL', 'ł'))).toBe('Ł');
+    expect(chordFromEvent(altGr('KeyL', 'ł'))).toBe('ł');
     // Without AltGraph, the same modifiers are a real chord.
     expect(
       chordFromEvent(key('q', { ctrlKey: true, altKey: true }, 'KeyQ'))
