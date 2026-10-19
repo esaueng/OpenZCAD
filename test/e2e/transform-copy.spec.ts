@@ -47,7 +47,7 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await expectConsumedBodyCount(page, 0);
   const rows = page.locator('.body-row');
   await expect(rows).toHaveCount(2);
-  await expect(rows.filter({ hasText: /copy$/ })).toHaveCount(1);
+  await expect(rows.filter({ hasText: /copy 1$/ })).toHaveCount(1);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Copy' })
   ).toHaveCount(1);
@@ -68,8 +68,17 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await expect(rows).toHaveCount(1);
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
   await expectBodyCount(page, 2);
-  await expect(rows.filter({ hasText: /copy$/ })).toHaveCount(1);
+  await expect(rows.filter({ hasText: /copy 1$/ })).toHaveCount(1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  await page.locator('.body-row-main').first().click();
+  await page.keyboard.press('m');
+  await overlay
+    .getByRole('checkbox', { name: 'Copy (keep the original)' })
+    .check();
+  await overlay.getByRole('button', { name: 'Apply copy' }).click();
+  await expectBodyCount(page, 3);
+  await expect(rows.filter({ hasText: /copy 1$/ })).toHaveCount(1);
+  await expect(rows.filter({ hasText: /copy 2$/ })).toHaveCount(1);
 });
 
 test('a coincident copy asks before a tool, history, measure or selection transition', async ({

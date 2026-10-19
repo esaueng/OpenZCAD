@@ -6818,6 +6818,12 @@ export function App() {
       : `${featureName.trim()} 1`;
   }
 
+  function newCopyBodyName(bodyId: BodyId): string {
+    const current = managerRef.current?.document;
+    const source = current ? findBodyNode(current, bodyId)?.name : undefined;
+    return newBodyName(`${source ?? 'Body'} copy`);
+  }
+
   /**
    * "Hole", then "Hole 2": the History name a feature made now takes, so two
    * holes are not two rows both reading "Hole". Stored in the command like
@@ -7683,7 +7689,9 @@ export function App() {
         name: newFeatureName(moveName.trim() || (preview.copy ? 'Copy' : 'Move')),
         targetBodyId: preview.bodyId as BodyId,
         ...values,
-        ...(preview.copy ? { copy: true } : {})
+        ...(preview.copy
+          ? { copy: true, bodyName: newCopyBodyName(preview.bodyId as BodyId) }
+          : {})
       })
     );
     // A copy leaves its source where it was, so nothing holds the pose.
@@ -21673,7 +21681,9 @@ export function App() {
                       ...(value.pivot !== undefined
                         ? { pivot: value.pivot }
                         : {}),
-                      ...(value.copy ? { copy: true } : {})
+                      ...(value.copy
+                        ? { copy: true, bodyName: newCopyBodyName(value.targetBodyId) }
+                        : {})
                     });
                   createValidatedFeature(
                     command,

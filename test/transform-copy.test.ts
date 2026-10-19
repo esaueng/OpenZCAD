@@ -102,7 +102,7 @@ describe('transform copy (M10)', { timeout: 60_000 }, () => {
     expect(isTransformCopy(feature.data)).toBe(true);
     expect(isInPlaceTransform(feature.data)).toBe(false);
     const names = listNodesByKind(document, 'body').map((body) => body.name);
-    expect(names).toEqual(['Block Body', 'Block Body copy']);
+    expect(names).toEqual(['Block Body', 'Block Body copy 1']);
 
     const { derived, of } = await bodies(document);
     expect(of(blockId)).toEqual({
@@ -176,6 +176,26 @@ describe('transform copy (M10)', { timeout: 60_000 }, () => {
       after.commandLog
     );
     expect(replayed.bodyOrder).toEqual(after.bodyOrder);
+  });
+
+  it('numbers repeated copies and preserves their names through redo and replay', () => {
+    const { manager, blockId } = block();
+    manager.execute(copyCommand(blockId));
+    manager.execute(copyCommand(blockId));
+    const names = (document: ProjectDocument) =>
+      listNodesByKind(document, 'body').map((body) => body.name);
+    const expected = ['Block Body', 'Block Body copy 1', 'Block Body copy 2'];
+    expect(names(manager.document)).toEqual(expected);
+    manager.undo();
+    manager.redo();
+    expect(names(manager.document)).toEqual(expected);
+    const replayed = replayCommands(
+      createProjectDocument('Copy', toUserId('user_m10_copy')),
+      manager.document.commandLog
+    );
+    expect(names(replayed)).toEqual(expected);
+    manager.execute(copyCommand(blockId, { bodyName: 'Spare' }));
+    expect(names(manager.document).at(-1)).toBe('Spare');
   });
 
   it('preserves explicit feature IDs and dependent copies across redo and replay', async () => {

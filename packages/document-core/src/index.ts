@@ -428,7 +428,7 @@ export interface TransformInput {
    * live. A copy needs body ids; an in-place Move needs only feature ids.
    */
   copy?: boolean;
-  /** Name of the copy's body; defaults to "<source> copy". */
+  /** Name of the copy's body; defaults to a numbered "<source> copy" name. */
   bodyName?: string;
   ids?: FeatureOnlyIds | BodyFeatureIds;
 }
@@ -2501,7 +2501,7 @@ function transformCopyBody(
     kind: 'body',
     name:
       input.bodyName ??
-      `${derivedBodyName(document, input.targetBodyId, input.name)} copy`,
+      numberedBodyName(document, `${derivedBodyName(document, input.targetBodyId, input.name)} copy`),
     parentId: next.activePartId,
     revisionId: null,
     bodyId,
