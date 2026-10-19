@@ -86,7 +86,10 @@ keeping the last good one.
 Every stored blob is an envelope with an algorithm version, a small plaintext
 header and AES-256-GCM ciphertext. The whole header is bound into the
 authenticated data, so changing it breaks decryption. Bodies are compressed
-before encryption. There are two envelope classes:
+before encryption. The header records the exact plaintext size, so an
+envelope that inflates beyond its declared size fails (see
+[Decompression limits](#decompression-limits)). There are two envelope
+classes:
 
 - **Project envelopes** hold document versions, measurements, workspace view
   state and share snapshots. Their header carries the project id, document
@@ -116,6 +119,28 @@ known file is present. The HMAC is an index column beside the blob, not part
 of any envelope. A copied blob gets the destination's HMAC only when the
 copying browser has the plaintext at hand; otherwise it has no de-duplication
 entry, which affects only future de-duplication.
+
+### Decompression limits
+
+The server can no longer inspect what it stores, so a small, highly
+compressible envelope from a buggy or hostile editor could expand until it
+exhausts the browser. That would happen before the validators ever see the
+document. Browsers therefore never decompress without limits:
+
+- Decompression streams through `DecompressionStream` and stops the moment
+  output exceeds the smaller of two limits: the header's declared plaintext
+  size, and a fixed ceiling for that blob kind. The ceilings match today's
+  server limits: `MAX_CLOUD_PROJECT_DOCUMENT_BYTES` for documents, and
+  `MAX_ARTIFACT_UPLOAD_BYTES` for imported sources and archived exports.
+  Thumbnails, measurements and view state get smaller ceilings of their own.
+  This is the client-side counterpart of the cap in `decodeProjectStorageBody`
+  (`packages/cloudflare-adapters/src/project-object-storage.ts`).
+- A body that decompresses to anything other than its declared size fails,
+  and the browser keeps the last good version.
+- JSON parsing of a decompressed document keeps today's depth and
+  value-count guards before any validator runs.
+- Decompression and parsing run in a worker. A stalled or oversized job is
+  terminated, not awaited, so the page stays responsive.
 
 ### Nonces and key use
 
@@ -151,7 +176,7 @@ structural rather than probabilistic:
 | Account key         | One random 256-bit key per user, never stored unwrapped                                                                                                                                  | Each unlock method                                                       |
 | Encryption key pair | ECDH P-256 for receiving project keys; the public half is certified by the identity key                                                                                                  | Account key                                                              |
 | Project key         | One random key per project, versioned by epoch                                                                                                                                           | Each member's encryption public key, then the member's account key       |
-| Version keys        | One random key per project envelope (document version, measurements, view state, share snapshot)                                                                                         | Project key                                                              |
+| Version keys        | One random key per project envelope (document version, measurements, view state, share snapshot); a share snapshot's key is also wrapped by its share key                                | Project key                                                              |
 | Blob keys           | One random key per content blob (import source, mesh payload, thumbnail, archived export)                                                                                                | Recorded inside the referencing project envelope                         |
 
 The identity key is kept apart so it can outlive any device. Everyday unlocking
@@ -389,7 +414,10 @@ comparison, which is safe only because of its commitment step.
   the full hash of the owner's identity key; the fragment never reaches the
   server. The share key is stored wrapped under the project key, so any
   editor's browser republishes the snapshot (current model, no history) on
-  save. Each snapshot is signed by its author. The visitor's browser fetches
+  save. Each snapshot is a fresh project envelope with its own version key,
+  as the nonce rules require. That version key is wrapped twice with AES-KW:
+  under the project key for members, and under the share key for link
+  visitors. The share key never encrypts content itself. Each snapshot is signed by its author. The visitor's browser fetches
   the signed roster (below), checks it chains to the owner key named in the
   link, and accepts the snapshot only if an owner or editor in that roster
   signed it. Revoking a link deletes the snapshot. "Make a copy" decrypts in
@@ -406,9 +434,20 @@ comparison, which is safe only because of its commitment step.
 
 ### Signed roster
 
-Each encrypted project has a roster: a chain of entries signed by one of the
-owner's certified device keys.
-Each entry lists every member's user id, verified identity-key fingerprint and role
+Each encrypted project has a roster: a chain of typed entries. Each type has
+its own signer rule and its own limits on what it may change. A browser
+rejects an entry whose signer or content breaks its type's rule:
+
+| Entry type      | Who may sign it                                                 | What it may change                                                                                                      |
+| --------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Membership      | A certified device key of the owner                             | Add or remove members, change roles; carries a new epoch whenever anyone loses access                                   |
+| Epoch           | A certified device key of any current member, including viewers | Nothing about membership; only a new project key wrapped to every listed member (see [Epoch rotation](#epoch-rotation)) |
+| Self-removal    | The departing member's device key, or their identity key        | Removes only the signer; carries a new epoch for the rest (see [Identity replacement](#identity-replacement))           |
+| Anchor transfer | The owner's old identity key                                    | Names the owner's new identity; members accept it only after verifying that identity outside OpenZCAD                   |
+
+Membership entries are the only ones that list members. The others apply to
+the membership in force at their parent.
+Each membership entry lists every member's user id, verified identity-key fingerprint and role
 (owner, editor or viewer), the key epoch, a sequence number and the hash of the
 previous entry. The owner's identity key, as verified by each member, anchors
 the chain through the owner's device list. Browsers pin the newest roster entry they have seen, with the same
