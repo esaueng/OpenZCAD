@@ -117,6 +117,31 @@ of any envelope. A copied blob gets the destination's HMAC only when the
 copying browser has the plaintext at hand; otherwise it has no de-duplication
 entry, which affects only future de-duplication.
 
+### Nonces and key use
+
+AES-GCM must never repeat a nonce under the same key. The format makes that
+structural rather than probabilistic:
+
+- **One key, one blob.** Every version key and blob key is freshly random, and
+  it encrypts exactly one immutable envelope. Content never changes in place:
+  a changed file is a new blob with a new id and a new key. A retried upload
+  re-sends the same ciphertext; it never re-encrypts under the existing key.
+- **Deterministic chunk nonces.** Within one envelope, chunk `i` uses the
+  96-bit nonce `uint88_be(i) || last`, where `last` is `0x01` on the final
+  chunk and `0x00` otherwise (the STREAM construction). A single-chunk body
+  is chunk 0 with `last = 0x01`. Each chunk's authenticated data is the
+  serialized header plus the chunk index, so nonce, index, final flag and
+  header are all bound. Truncation, reordering, duplication and transplanting
+  chunks between blobs all fail.
+- **Wrapping keys.** A key that encrypts many small items (the project key
+  wrapping version keys, the account key wrapping user and project keys)
+  wraps them with AES-KW, which takes no nonce. Any AES-GCM use under such a
+  long-lived key takes a fresh random 96-bit nonce, stored beside the
+  ciphertext, and stays far below 2^32 operations per key. Key epochs and
+  rotation keep counts low in practice.
+- **Test vectors** in Phase 2 fix the nonce layout, and negative tests prove
+  that a reused key or nonce is refused by the encoder.
+
 ### Key hierarchy
 
 | Layer         | What it is                                                                                       | Wrapped by                                              |
@@ -151,11 +176,25 @@ keys. Any one of these unlock methods opens the account key:
   the other methods.
 - **The recovery key:** a random 256-bit code the user must save and confirm
   during setup.
-- **Approval from an unlocked device.** The new device shows a short code
-  computed from its own public key. The approving device computes the code
-  from the key the server handed it and wraps the account key only if the
-  two match, so the server cannot substitute a device. The flow reuses the
+- **Approval from an unlocked device.** A short code computed from the new
+  device's public key alone would be grindable: the server sees the real key
+  and can generate keys offline until one matches the shortened code. The
+  approval therefore uses one of two authenticated forms. The flow reuses the
   shape of the desktop sign-in approval.
+  - **Scan (preferred when the devices are together).** The approving device
+    scans a QR code on the new device that carries the full 256-bit hash of
+    its public key, and wraps the account key only if the hash matches the
+    key the server delivered.
+  - **Compare (remote).** The two devices run a commitment-based
+    short-authentication-string exchange. The new device first sends a
+    commitment `H(pk_new || n_new)` to a fresh random nonce. Only after it
+    receives the approver's key and nonce `n_app` does it reveal `n_new`.
+    Both devices then show six digits from
+    `H(pk_new || pk_app || n_new || n_app)`. The commitment fixes the new
+    side's values before the server can see the approver's, so offline
+    grinding is impossible. A substituted key succeeds with probability
+    10^-6 per attempt, and every attempt is a visible approval prompt.
+    Approvals are rate-limited per account.
 
 ### Key lifecycle
 
@@ -187,9 +226,10 @@ consistency, not full consistency:
   sees evidence of the other. A new browser, or one whose storage was cleared,
   has no last-seen version, so it accepts any validly signed chain, however
   stale.
-- **Cross-client anchor.** The sharing dialog and project info show a short
-  project state code, derived from the newest version's hash, its version
-  number and the signing member's fingerprint. Members who compare codes
+- **Cross-client anchor.** The sharing dialog and project info show a
+  project state code derived from the newest version's hash, its version
+  number and the signing member's fingerprint. Like every code in this
+  design that people compare by eye, it is shown at full length (see below). Members who compare codes
   outside OpenZCAD, or a fresh browser checking against a member's code,
   detect a split view or rollback. Each signed version also carries the
   author's signed timestamp, so a fresh browser warns when the newest version
@@ -202,7 +242,13 @@ consistency, not full consistency:
   silently moved backwards from what they have seen.
 
 Browsers pin each member's public key on first sight and warn when it changes.
-The sharing dialog shows a short key fingerprint for comparison.
+The sharing dialog shows the key's fingerprint for comparison.
+
+**Codes people compare.** A truncated hash of a key the server can see invites
+offline grinding, so no fingerprint or state code is shortened below 128
+bits. They are shown as a word list or digit groups, with a QR form for
+scanning. The only short code in the design is the six-digit device-approval
+comparison, which is safe only because of its commitment step.
 
 ### Sharing and collaboration
 
@@ -261,17 +307,17 @@ so the existing Vitest, parity and Playwright suites prove the behavior before
 any encryption lands. After that, encryption is a storage-format change.
 Estimates are judgment, not measurement.
 
-| Phase | Scope                                                                                                                                                                                                                                                                                                                                         | Estimate     |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| 0     | This ADR and roadmap row L11. A privacy policy page is a prerequisite for any public encryption claim; OpenZCAD has none yet.                                                                                                                                                                                                                 | 1 PR (this)  |
-| 1     | Thin server, still plaintext: the browser creates projects, mints revisions and checkpoints, duplicates, branches and adopts, splits import assets and runs the room merge. Copy rollback and finalize compare client-supplied digests. The room conflict reply carries the base version. The server keeps size and envelope checks.          | 5–6 PRs      |
-| 2     | Crypto core package: envelope v1 with algorithm versioning, project envelopes and project-free content blobs, AES-256-GCM, HKDF, ECDH wrapping, authenticated-data binding, chunked blobs that detect truncation, fixed test vectors and a fuzzed envelope parser.                                                                            | 1 PR         |
-| 3     | Keys and devices: D1 key tables, setup with a required recovery key, passkey unlock, key-derived device approval, desktop Keychain storage and an Encryption section in Settings with device removal, rotation, recovery-key reissue and the sign-out choice. Setup screens load lazily (entry budget). Playwright fixtures seed device keys. | 3–4 PRs      |
-| 4     | Encrypted projects, opt-in per account: documents, revisions, assets, names, thumbnails, measurements, view state and archived exports; the room relay; version-integrity checks. Each project records a format version so older builds say "update to open". Breaking storage and API change.                                                | 2–3 PRs      |
-| 5     | Sharing: owner-signed invitations, member key wraps, share links with fragment keys, new epochs on removal, key pinning and fingerprints, and the project state code.                                                                                                                                                                         | 2 PRs        |
-| 6     | Assistant consent on encrypted projects.                                                                                                                                                                                                                                                                                                      | 1 PR         |
-| 7     | Migrate existing projects: each owner's browser encrypts every revision and asset, then the server deletes the plaintext, including legacy `document_json` rows and the room's retained history. Beta-only reverse path for turning encryption off. Needs its own production authorization.                                                   | 1–2 PRs      |
-| 8     | Default on; delete the server document pipeline and the off switch; keep a browser read path for legacy plaintext projects; update `docs/SELF_HOSTING.md`; outside review of the crypto and key flows.                                                                                                                                        | 1 PR, review |
+| Phase | Scope                                                                                                                                                                                                                                                                                                                                                                            | Estimate     |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| 0     | This ADR and roadmap row L11. A privacy policy page is a prerequisite for any public encryption claim; OpenZCAD has none yet.                                                                                                                                                                                                                                                    | 1 PR (this)  |
+| 1     | Thin server, still plaintext: the browser creates projects, mints revisions and checkpoints, duplicates, branches and adopts, splits import assets and runs the room merge. Copy rollback and finalize compare client-supplied digests. The room conflict reply carries the base version. The server keeps size and envelope checks.                                             | 5–6 PRs      |
+| 2     | Crypto core package: envelope v1 with algorithm versioning, project envelopes and project-free content blobs, STREAM chunk nonces with one key per envelope, AES-256-GCM, HKDF, ECDH wrapping, authenticated-data binding, chunked blobs that detect truncation, fixed test vectors and a fuzzed envelope parser.                                                                | 1 PR         |
+| 3     | Keys and devices: D1 key tables, setup with a required recovery key, passkey unlock, device approval by QR scan or commitment-based code comparison, desktop Keychain storage and an Encryption section in Settings with device removal, rotation, recovery-key reissue and the sign-out choice. Setup screens load lazily (entry budget). Playwright fixtures seed device keys. | 3–4 PRs      |
+| 4     | Encrypted projects, opt-in per account: documents, revisions, assets, names, thumbnails, measurements, view state and archived exports; the room relay; version-integrity checks. Each project records a format version so older builds say "update to open". Breaking storage and API change.                                                                                   | 2–3 PRs      |
+| 5     | Sharing: owner-signed invitations, member key wraps, share links with fragment keys, new epochs on removal, key pinning and fingerprints, and the project state code.                                                                                                                                                                                                            | 2 PRs        |
+| 6     | Assistant consent on encrypted projects.                                                                                                                                                                                                                                                                                                                                         | 1 PR         |
+| 7     | Migrate existing projects: each owner's browser encrypts every revision and asset, then the server deletes the plaintext, including legacy `document_json` rows and the room's retained history. Beta-only reverse path for turning encryption off. Needs its own production authorization.                                                                                      | 1–2 PRs      |
+| 8     | Default on; delete the server document pipeline and the off switch; keep a browser read path for legacy plaintext projects; update `docs/SELF_HOSTING.md`; outside review of the crypto and key flows.                                                                                                                                                                           | 1 PR, review |
 
 Total: 17–21 PRs.
 
