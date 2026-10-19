@@ -11,13 +11,24 @@ export const SETTINGS_SECTION_IDS = [
   'general',
   'appearance',
   'viewport',
+  'controls',
   'sketching',
-  'files',
-  'assistant',
+  'saving',
   'account',
-  'shortcuts',
+  'assistant',
   'privacy',
   'advanced'
 ] as const;
 
 export type SettingsSectionId = (typeof SETTINGS_SECTION_IDS)[number];
+
+/**
+ * Ids a stored Settings view may still name from before a section was
+ * renamed, mapped to the section that now holds the same settings.
+ */
+export const LEGACY_SETTINGS_SECTION_IDS: Readonly<
+  Record<string, SettingsSectionId>
+> = {
+  files: 'saving',
+  shortcuts: 'controls'
+};

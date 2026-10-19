@@ -346,7 +346,7 @@ export const POINTER_CONTROL_GROUPS = [
         id: 'middle-drag',
         keys: ['Middle-drag'],
         action: 'Use the configured navigation action',
-        detail: 'Pan, orbit, or zoom as chosen under Viewport settings.'
+        detail: 'Pan, orbit, or zoom as chosen under Navigation, above.'
       },
       {
         id: 'right-pan',

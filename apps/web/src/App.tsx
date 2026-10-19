@@ -6672,8 +6672,8 @@ export function App() {
   function handleWheelDeviceLearned(device: WheelDevice) {
     setStatus(
       device === 'trackpad'
-        ? 'Trackpad detected: two fingers pan, pinch to zoom. Scroll wheel is under Settings › Viewport.'
-        : 'Mouse wheel detected: scroll to zoom. Scroll wheel is under Settings › Viewport.'
+        ? 'Trackpad detected: two fingers pan, pinch to zoom. Scroll wheel is under Settings › Controls.'
+        : 'Mouse wheel detected: scroll to zoom. Scroll wheel is under Settings › Controls.'
     );
   }
 
