@@ -172,7 +172,23 @@ test('exports the view as a sized, transparent PNG and a sketch as exact SVG', a
     ])
   ).toEqual(before);
 
-  // An opaque export fills every pixel.
+  // An opaque export fills every pixel and keeps the live backdrop colours.
+  const liveView = await canvas.screenshot();
+  const liveBackground = await page.evaluate(async (base64) => {
+    const image = await createImageBitmap(
+      new Blob(
+        [Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))],
+        { type: 'image/png' }
+      )
+    );
+    const sample = document.createElement('canvas');
+    sample.width = image.width;
+    sample.height = image.height;
+    const context = sample.getContext('2d')!;
+    context.drawImage(image, 0, 0);
+    image.close();
+    return [...context.getImageData(0, 0, 1, 1).data];
+  }, liveView.toString('base64'));
   dialog = await openImageExport(page);
   await dialog.getByLabel('Width (px)').fill('64');
   await dialog.getByLabel('Height (px)').fill('48');
@@ -183,6 +199,20 @@ test('exports the view as a sized, transparent PNG and a sketch as exact SVG', a
   expect([opaquePng.width, opaquePng.height]).toEqual([64, 48]);
   for (let i = 3; i < opaquePng.rgba.length; i += 4) {
     expect(opaquePng.rgba[i]).toBe(255);
+  }
+  // Compare matching native-resolution pixels, avoiding screenshot resampling.
+  dialog = await openImageExport(page);
+  await dialog.getByLabel('Width (px)').fill(String(before[0]));
+  await dialog.getByLabel('Height (px)').fill(String(before[1]));
+  downloadPromise = page.waitForEvent('download');
+  await dialog.getByRole('button', { name: 'Export PNG' }).click();
+  const nativePng = decodePng(await readDownload(await downloadPromise));
+  expect([nativePng.width, nativePng.height]).toEqual(before);
+  for (let channel = 0; channel < 3; channel += 1) {
+    // The half-float capture and 8-bit canvas can round by one colour step.
+    expect(
+      Math.abs(nativePng.rgba[channel]! - liveBackground[channel]!)
+    ).toBeLessThanOrEqual(1);
   }
 
   // SVG: the imported sketch, exact, in the document's millimetres.

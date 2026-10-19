@@ -218,31 +218,19 @@ export function captureSamples(
   return width * height <= MSAA_MAX_PIXELS ? Math.min(4, maxSamples) : 0;
 }
 
-const TONE_MAPPING_DEFINES: Partial<Record<THREE.ToneMapping, string>> = {
-  [THREE.LinearToneMapping]: 'LINEAR_TONE_MAPPING',
-  [THREE.ReinhardToneMapping]: 'REINHARD_TONE_MAPPING',
-  [THREE.CineonToneMapping]: 'CINEON_TONE_MAPPING',
-  [THREE.ACESFilmicToneMapping]: 'ACES_FILMIC_TONE_MAPPING',
-  [THREE.AgXToneMapping]: 'AGX_TONE_MAPPING',
-  [THREE.NeutralToneMapping]: 'NEUTRAL_TONE_MAPPING'
-};
-
 const TEXTURE_READ = 'gl_FragColor = texture2D( tDiffuse, vUv );';
 
 /**
- * A render target gets linear, un-tone-mapped colour — three applies the
- * output transform only on the way to the canvas — so this pass applies the
- * renderer's own tone mapping and sRGB encoding, as the canvas would. It
- * first divides out alpha: blending onto a transparent clear leaves colour
- * premultiplied, and PNG stores it straight.
+ * The scene target applies tone mapping per material, in linear colour.
+ * This pass applies the renderer's sRGB encoding after dividing out alpha:
+ * blending onto a transparent clear leaves colour premultiplied, and PNG
+ * stores it straight.
  */
 function outputPass(renderer: THREE.WebGLRenderer) {
   if (!OutputShader.fragmentShader.includes(TEXTURE_READ)) {
     throw new Error('The output shader changed shape; update viewportImage.');
   }
   const defines: Record<string, string> = {};
-  const toneMapping = TONE_MAPPING_DEFINES[renderer.toneMapping];
-  if (toneMapping) defines[toneMapping] = '';
   if (
     THREE.ColorManagement.getTransfer(renderer.outputColorSpace) ===
     THREE.SRGBTransfer
@@ -423,6 +411,11 @@ export function renderViewportImage(
     depthBuffer: true,
     stencilBuffer: true
   });
+  // Three's display-target path (also used by XR) preserves each material's
+  // toneMapped setting. Linear output lets the final pass unpremultiply
+  // before sRGB encoding, while untone-mapped backdrop/line colours stay so.
+  Object.assign(scene3d, { isXRRenderTarget: true });
+  scene3d.texture.colorSpace = THREE.LinearSRGBColorSpace;
   const output = new THREE.WebGLRenderTarget(width, height, {
     type: THREE.UnsignedByteType,
     depthBuffer: false
