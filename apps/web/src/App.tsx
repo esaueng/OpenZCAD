@@ -81,6 +81,7 @@ import {
 import { ExportDialogBoundary } from './components/ExportDialogBoundary';
 import {
   Box,
+  DraftingCompass,
   Camera,
   Check,
   CirclePause,
@@ -1359,7 +1360,8 @@ import {
   toggleSidebarSection,
   type PanelState,
   type SidebarSectionId,
-  type WorkspaceMode
+  type WorkspaceMode,
+  WORKSPACE_MODE_ORDER
 } from './lib/panelState';
 import {
   loadSettingsViewState,
@@ -4170,6 +4172,27 @@ export function App() {
   const viewMode = resolvedWorkspaceMode === 'view';
   const tweakMode = resolvedWorkspaceMode === 'tweak';
   const drawingMode = resolvedWorkspaceMode === 'drawing';
+  // Ctrl+Shift+M steps View → Tweak → Build → Draw past whatever the project
+  // locks. The shortcut and the palette row that advertises it both read
+  // this, so the row always names where the key goes.
+  const workspaceModeLock = (mode: WorkspaceMode): string | null =>
+    mode === 'build'
+      ? buildModeDisabledReason
+      : mode === 'tweak'
+        ? tweakModeDisabledReason
+        : mode === 'drawing'
+          ? drawingModeDisabledReason
+          : null;
+  const nextWorkspaceMode: WorkspaceMode | null =
+    [1, 2, 3]
+      .map(
+        (step) =>
+          WORKSPACE_MODE_ORDER[
+            (WORKSPACE_MODE_ORDER.indexOf(resolvedWorkspaceMode) + step) %
+              WORKSPACE_MODE_ORDER.length
+          ]!
+      )
+      .find((mode) => workspaceModeLock(mode) === null) ?? null;
   // Undo/redo affordances for the toolbar and the palette. In Tweak each is
   // live only for a parameter-only entry — the one that command would apply.
   // Computed at render from the manager's tracked kinds — unknown (pre-kind
@@ -19056,38 +19079,14 @@ export function App() {
 
       if (global === 'workspace-mode-cycle') {
         event.preventDefault();
-        // Cycle View → Tweak → Build → Draw, skipping whatever the project
-        // locks.
-        const order: readonly WorkspaceMode[] = [
-          'view',
-          'tweak',
-          'build',
-          'drawing'
-        ];
-        const at = order.indexOf(resolvedWorkspaceMode);
-        for (let step = 1; step <= order.length; step += 1) {
-          const next = order[(at + step) % order.length]!;
-          const reason =
-            next === 'build'
-              ? buildModeDisabledReason
-              : next === 'tweak'
-                ? tweakModeDisabledReason
-                : next === 'drawing'
-                  ? drawingModeDisabledReason
-                  : null;
-          if (reason !== null) {
-            continue;
-          }
-          if (next === resolvedWorkspaceMode) {
-            // Every other mode is locked; say why instead of "switching"
-            // to where we already are.
-            setStatus(
-              `Workspace pinned to View: ${buildModeDisabledReason ?? 'other modes are unavailable'}.`
-            );
-          } else {
-            handleWorkspaceMode(next);
-          }
-          return;
+        if (nextWorkspaceMode === null) {
+          // Every other mode is locked; say why instead of "switching" to
+          // where we already are.
+          setStatus(
+            `Workspace pinned to View: ${buildModeDisabledReason ?? 'other modes are unavailable'}.`
+          );
+        } else {
+          handleWorkspaceMode(nextWorkspaceMode);
         }
         return;
       }
@@ -19830,24 +19829,8 @@ export function App() {
     }));
     if (hidden) panels.release('drawer');
   };
-  // Ctrl+Shift+M steps View → Tweak → Build past whatever the project locks,
-  // so only the row it would land on carries it as its shortcut.
-  const modeCycle: readonly WorkspaceMode[] = ['view', 'tweak', 'build'];
-  const modeShortcutTarget = [1, 2]
-    .map(
-      (step) =>
-        modeCycle[
-          (modeCycle.indexOf(resolvedWorkspaceMode) + step) % modeCycle.length
-        ]!
-    )
-    .find(
-      (mode) =>
-        (mode === 'build'
-          ? buildModeDisabledReason
-          : mode === 'tweak'
-            ? tweakModeDisabledReason
-            : null) === null
-    );
+  // Only the row Ctrl+Shift+M would land on carries it as its shortcut.
+  const modeShortcutTarget = nextWorkspaceMode;
   const modeShortcut = (mode: WorkspaceMode) =>
     mode === modeShortcutTarget
       ? keymap.label('workspace-mode-cycle')
@@ -20158,6 +20141,19 @@ export function App() {
             icon: <Box size={16} aria-hidden="true" />,
             disabledReason: buildModeDisabledReason,
             run: () => handleWorkspaceMode('build')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    ...(!drawingMode
+      ? [
+          {
+            id: 'workspace-mode-drawing',
+            label: 'Switch to Draw mode',
+            group: 'General',
+            shortcut: modeShortcut('drawing'),
+            icon: <DraftingCompass size={16} aria-hidden="true" />,
+            disabledReason: drawingModeDisabledReason,
+            run: () => handleWorkspaceMode('drawing')
           } satisfies PaletteCommand
         ]
       : []),

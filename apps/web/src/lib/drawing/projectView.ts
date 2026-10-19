@@ -206,8 +206,9 @@ class OcclusionGrid {
 
   /**
    * Parameters in (0, 1) where segment a→b crosses the edge of a triangle
-   * it passes over, sorted. Between two of them every point is covered by
-   * the same triangles, so visibility is constant there.
+   * it passes over (`depth: false`) or a triangle's occlusion threshold
+   * (`depth: true`), sorted. Between two of them every point is covered by
+   * the same triangles on the same side, so visibility is constant there.
    */
   crossings(
     au: number,
@@ -216,7 +217,7 @@ class OcclusionGrid {
     bu: number,
     bv: number,
     bd: number
-  ): number[] {
+  ): { t: number; depth: boolean }[] {
     const du = bu - au;
     const dv = bv - av;
     // Every cell the segment passes through, by an exact supercover walk:
@@ -225,7 +226,7 @@ class OcclusionGrid {
     const seen = new Set<number>();
     for (const cell of this.cellsAlong(au, av, bu, bv))
       for (const index of this.cells[cell]!) seen.add(index);
-    const out: number[] = [];
+    const out: { t: number; depth: boolean }[] = [];
     const denomFloor = 1e-18;
     for (const index of seen) {
       const t = this.triangles[index]!;
@@ -243,7 +244,8 @@ class OcclusionGrid {
         if (Math.abs(denom) <= denomFloor) continue;
         const s = ((pu - au) * ev - (pv - av) * eu) / denom;
         const r = ((pu - au) * dv - (pv - av) * du) / denom;
-        if (s > 0 && s < 1 && r >= 0 && r <= 1) out.push(s);
+        if (s > 0 && s < 1 && r >= 0 && r <= 1)
+          out.push({ t: s, depth: false });
       }
       // Where the segment's depth meets this triangle's occlusion
       // threshold (an edge piercing a face, two bodies that intersect, or an
@@ -260,10 +262,10 @@ class OcclusionGrid {
       const f1 = plane(bu, bv) - bd + t.tol;
       if ((f0 < 0 && f1 > 0) || (f0 > 0 && f1 < 0)) {
         const s = f0 / (f0 - f1);
-        if (s > 0 && s < 1) out.push(s);
+        if (s > 0 && s < 1) out.push({ t: s, depth: true });
       }
     }
-    return out.sort((a, b) => a - b);
+    return out.sort((a, b) => a.t - b.t);
   }
 
   private cellsAlong(au: number, av: number, bu: number, bv: number): number[] {
@@ -337,6 +339,9 @@ function chainSegments(segments: [number, number][]): number[][] {
   });
   return chains;
 }
+
+/** Where a run's point came from: the line itself, or a visibility cut. */
+type CutKind = 'vertex' | 'edge' | 'depth';
 
 interface Polyline3 {
   points: number[];
@@ -668,9 +673,10 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     (isHidden ? hidden : visible).push(flat);
   };
 
-  // Pieces shorter than this, in projection, take their neighbours' state:
-  // at an edge's own corner the occlusion tolerance leaves slivers that are
-  // neither clearly in front nor behind, and no drawing wants them.
+  // Corner artifacts shorter than this, in projection, take their
+  // neighbours' state: where an edge meets a face's plane at its own end,
+  // the occlusion tolerance leaves a sliver that is neither clearly in front
+  // nor behind, and no drawing wants it.
   const minPiece = diagonal * 1e-4;
   for (const line of lines) {
     const count = Math.floor(line.length / 3);
@@ -685,8 +691,8 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     // triangle's edge or occlusion threshold, so those cuts split it exactly
     // and each span is classified once, however narrow the occluder.
     const points: number[] = [line[0]!, line[1]!, line[2]!];
-    /** Whether each point is one of the line's own vertices (not a cut). */
-    const vertex: boolean[] = [true];
+    /** What each point is: one of the line's own vertices, or a cut. */
+    const kinds: CutKind[] = ['vertex'];
     const spans: boolean[] = [];
     for (let s = 0; s < count - 1; s += 1) {
       const [au, av, ad] = project(
@@ -701,20 +707,29 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       );
       // Cuts closer than float noise collapse into one; the segment's own
       // end always survives, so the line keeps every one of its vertices.
-      const cuts = [0];
-      for (const cut of [...grid.crossings(au, av, ad, bu, bv, bd), 1]) {
-        if (cut - cuts.at(-1)! > 1e-12) cuts.push(cut);
-        else if (cut === 1) cuts[cuts.length - 1] = 1;
+      const cuts: { t: number; kind: CutKind }[] = [{ t: 0, kind: 'vertex' }];
+      for (const cut of [
+        ...grid.crossings(au, av, ad, bu, bv, bd).map(({ t, depth }) => ({
+          t,
+          kind: depth ? 'depth' : 'edge'
+        })),
+        { t: 1, kind: 'vertex' as CutKind }
+      ]) {
+        const last = cuts.at(-1)!;
+        if (cut.t - last.t > 1e-12) cuts.push(cut);
+        else if (cut.kind === 'vertex') cuts[cuts.length - 1] = cut;
+        // Coincident cuts: a footprint crossing outranks a depth one.
+        else if (cut.kind === 'edge' && last.kind === 'depth')
+          last.kind = 'edge';
       }
-      if (cuts.length < 2) cuts.push(1);
       for (let k = 0; k + 1 < cuts.length; k += 1) {
-        const t0 = cuts[k]!;
-        const t1 = cuts[k + 1]!;
+        const t0 = cuts[k]!.t;
+        const t1 = cuts[k + 1]!.t;
         const [x, y, z] = point(s, (t0 + t1) / 2);
         spans.push(hiddenAt(x!, y!, z!));
         const [ex, ey, ez] = point(s, t1);
         points.push(ex!, ey!, ez!);
-        vertex.push(t1 === 1);
+        kinds.push(cuts[k + 1]!.kind);
       }
     }
     if (spans.length === 0) continue;
@@ -752,9 +767,15 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
           length: spanLength(index)
         });
     });
+    // Only a corner artifact merges: a short piece between one of the
+    // line's own vertices and an occlusion-threshold cut, where the edge
+    // meets the plane of a face at its own end. A piece bounded by an
+    // occluder's footprint is a real interval, however short.
     if (pieces.length > 1)
       pieces.forEach((piece, index) => {
         if (piece.length >= minPiece) return;
+        const ends = [kinds[piece.from], kinds[piece.to]];
+        if (!(ends.includes('vertex') && ends.includes('depth'))) return;
         const neighbour = pieces[index - 1] ?? pieces[index + 1];
         if (neighbour) piece.hidden = neighbour.hidden;
       });
@@ -768,7 +789,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       // its middle are collinear with their neighbours.
       const run: number[] = [];
       for (let p = from; p <= to; p += 1)
-        if (p === from || p === to || vertex[p])
+        if (p === from || p === to || kinds[p] === 'vertex')
           run.push(points[p * 3]!, points[p * 3 + 1]!, points[p * 3 + 2]!);
       emit(run, pieces[index]!.hidden);
       start = index + 1;

@@ -633,6 +633,41 @@ describe('D01 occlusion tolerance', () => {
     ).toBe(true);
   });
 
+  it('keeps an occluded interval shorter than the sliver threshold', () => {
+    // A 1000 mm edge under a 0.05 mm strip: 5e-5 of the view, below the
+    // corner-sliver threshold, but bounded by the strip's own footprint.
+    const strip = {
+      vertices: Float32Array.from([
+        500, -1, 1, 500.05, -1, 1, 500.05, 1, 1, 500, 1, 1
+      ]),
+      indices: Uint32Array.from([0, 1, 2, 0, 2, 3]),
+      faces: [{ triangleStart: 0, triangleCount: 2 }],
+      edges: []
+    };
+    // The rod's edge, with a strip of mesh well below it so the view spans
+    // the full 1000 mm (the threshold scales with it) without hiding it.
+    const rod = {
+      vertices: Float32Array.from([0, -0.5, -5, 1000, -0.5, -5, 1000, 0.5, -5]),
+      indices: Uint32Array.from([0, 1, 2]),
+      edges: [[0, 0, 0, 1000, 0, 0]]
+    };
+    const result = projectView({
+      orientation: 'top',
+      hiddenLines: true,
+      bodies: [strip, rod]
+    });
+    const covered = result.hidden.filter(
+      (line) => Math.abs(line[1]!) < 1e-9 && Math.abs(line.at(-1)!) < 1e-9
+    );
+    expect(covered).toHaveLength(1);
+    // Float32 vertices: 500.05 is stored as 500.0499878.
+    expect(Math.min(covered[0]![0]!, covered[0]!.at(-2)!)).toBeCloseTo(500, 4);
+    expect(Math.max(covered[0]![0]!, covered[0]!.at(-2)!)).toBeCloseTo(
+      500.05,
+      4
+    );
+  });
+
   it('gives a crease between two planar faces no sag, however shallow', () => {
     // A 45° chamfer meeting its neighbour: both exact planes.
     expect([...fold(45, 'two')]).toEqual([0, 0, 0, 0]);

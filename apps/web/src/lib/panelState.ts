@@ -39,6 +39,14 @@ export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = [
  */
 export type WorkspaceMode = 'view' | 'tweak' | 'build' | 'drawing';
 
+/** The order the workspace switch shows the modes and Ctrl+Shift+M cycles them. */
+export const WORKSPACE_MODE_ORDER: readonly WorkspaceMode[] = [
+  'view',
+  'tweak',
+  'build',
+  'drawing'
+];
+
 export interface PanelState {
   /** Section id to open/closed. Absent means open. */
   sidebarSections: Record<SidebarSectionId, boolean>;
