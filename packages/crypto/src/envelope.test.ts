@@ -258,6 +258,32 @@ describe('project envelopes', () => {
     );
   });
 
+  it('refuses to construct a writer outside the module', async () => {
+    // A second writer under one AES-GCM key would restart chunk nonces at
+    // zero, so the class itself must not be constructible by consumers.
+    const writer = await createContentBlobWriter(
+      EnvelopeKey.generate(),
+      'export',
+      { compression: 'none', chunkSize: CHUNK, plaintextLength: 1 }
+    );
+    const Ctor = writer.constructor as new (...args: unknown[]) => unknown;
+    const key = await crypto.subtle.importKey(
+      'raw',
+      patternBytes(32),
+      'AES-GCM',
+      false,
+      ['encrypt']
+    );
+    for (const args of [
+      [writer.header, writer.prefix, key],
+      [Symbol('EnvelopeWriter'), writer.header, writer.prefix, key]
+    ]) {
+      expect(() => new Ctor(...args)).toThrow(
+        expect.objectContaining({ code: 'invalid-argument' })
+      );
+    }
+  });
+
   it('every header field is authenticated', async () => {
     const envelope = await sealProject(patternBytes(CHUNK * 3 + 10, 5));
     const { chunks } = split(envelope);

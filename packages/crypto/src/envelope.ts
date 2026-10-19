@@ -194,6 +194,9 @@ class CiphertextHasher {
 
 // --- Writer ---------------------------------------------------------------
 
+/** Held only by `createWriter`; the constructor refuses to run without it. */
+const writerToken: unique symbol = Symbol('EnvelopeWriter');
+
 /** Largest single `write`: one maximum-size chunk. */
 export const MAX_WRITER_WRITE_BYTES = MAX_CHUNK_SIZE;
 /** Most records one `write` may seal, so each call's work stays bounded. */
@@ -228,7 +231,13 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
   /** Frozen, so a consumer cannot alter the chunking mid-envelope. */
   readonly header: H;
 
+  /**
+   * @internal Only `createWriter` holds the token: a second writer under
+   * the same AES-GCM key would restart chunk nonces at zero, so writers
+   * exist only for a freshly consumed `EnvelopeKey`.
+   */
   constructor(
+    token: typeof writerToken,
     header: H,
     prefix: Bytes,
     private readonly key: CryptoKey,
@@ -241,6 +250,12 @@ export class EnvelopeWriter<H extends EnvelopeHeader = EnvelopeHeader> {
      */
     private readonly enforceLimits = true
   ) {
+    if (token !== writerToken) {
+      throw new E2eeError(
+        'invalid-argument',
+        'Create writers with createContentBlobWriter or the encrypt functions'
+      );
+    }
     const frozen: H = { ...header };
     Object.freeze(frozen);
     this.header = frozen;
@@ -401,6 +416,7 @@ async function createWriter<H extends EnvelopeHeader>(
   const prefix = encodeEnvelopePrefix(header);
   const raw = consumeKey(key);
   const writer = new EnvelopeWriter(
+    writerToken,
     header,
     prefix,
     await importChunkKey(raw, 'encrypt'),
