@@ -371,7 +371,9 @@ export class PickService {
     return raycaster
       .intersectObjects(this.options.bodyGroup.children, true)
       .filter((hit) => {
-        if (plane && plane.distanceToPoint(hit.point) < 0) return false;
+        const geometryPoint =
+          (hit as { pointOnLine?: THREE.Vector3 }).pointOnLine ?? hit.point;
+        if (plane && plane.distanceToPoint(geometryPoint) < 0) return false;
         let object: THREE.Object3D | null = hit.object;
         while (object) {
           if (!object.visible) {

@@ -751,6 +751,28 @@ describe('X-ray select-through', () => {
     }
   );
 
+  it.each([1, -1])(
+    'clips the edge location rather than its pick-band ray point (side: %s)',
+    (side) => {
+      const bodyGroup = new THREE.Group();
+      bodyGroup.add(batchedBody('rear', 0));
+      const { service } = makeService({ bodyGroup }, undefined, {
+        selectThrough: () => true,
+        clippingPlane: () =>
+          new THREE.Plane(new THREE.Vector3(0, side, 0), -side * 0.01)
+      });
+      const event = { clientX: 50, clientY: 49.9 } as MouseEvent;
+      service.setRayFromEvent(event);
+      const hit = service.intersect(
+        bodyGroup.children
+      )[0] as THREE.Intersection & { pointOnLine: THREE.Vector3 };
+      expect(hit.point.y).toBeGreaterThan(0.01);
+      expect(hit.pointOnLine.y).toBeCloseTo(0);
+      if (side > 0) expect(service.pick(event)).toBeNull();
+      else expect(service.pick(event)?.selection?.topologyId).toBe('edge-rear');
+    }
+  );
+
   it('takes the rear edge through the face in X-ray', () => {
     let xray = true;
     const { service } = makeService(

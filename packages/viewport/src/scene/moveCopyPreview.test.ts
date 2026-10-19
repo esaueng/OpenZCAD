@@ -2,8 +2,46 @@ import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { MoveCopyPreview } from './moveCopyPreview';
 import { bodyDrawnAsBuilt } from './drawnBodies';
+import { createBodyEdgeOverlay } from '../render/edgeOverlay';
+import { toBodyId } from '@openzcad/shared';
 
 describe('a pending Move copy', () => {
+  it.each([1, 0.6])(
+    'refreshes the cached copy from source opacity and X-ray (appearance: %s)',
+    (appearance) => {
+      const root = new THREE.Group();
+      const source = new THREE.Mesh(
+        new THREE.BoxGeometry(),
+        new THREE.MeshPhongMaterial()
+      );
+      root.add(source);
+      const preview = new MoveCopyPreview();
+      const copy = new THREE.Mesh(
+        new THREE.BoxGeometry(),
+        new THREE.MeshPhongMaterial()
+      );
+      const edges = createBodyEdgeOverlay({
+        bodyId: toBodyId('source'),
+        topology: {
+          faces: [],
+          edges: [{ topologyId: 'edge', hash: 1, points: [0, 0, 0, 1, 0, 0] }]
+        }
+      });
+      copy.add(edges);
+      preview.target(source, true, () => copy);
+      copy.position.x = 40;
+      for (const factor of [0.35, 1, 0.35]) {
+        source.material.opacity = appearance * factor;
+        preview.refreshAppearance('shaded', factor < 1);
+        expect(copy.material.opacity).toBeCloseTo(appearance * factor, 12);
+        expect(copy.material.depthWrite).toBe(appearance * factor >= 1);
+        expect(edges.idleEdges.visible).toBe(factor < 1);
+        expect(copy.position.x).toBe(40);
+        expect(preview.active).toBe(true);
+      }
+    }
+  );
+
   it('draws the source and a separate transformed solid, then restores a plain Move', () => {
     const group = new THREE.Group();
     const source = new THREE.Mesh(
@@ -58,7 +96,9 @@ describe('a pending Move copy', () => {
     const preview = new MoveCopyPreview();
     const createCopy = () =>
       new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());
-    const copy = preview.target(source, true, createCopy) as ReturnType<typeof createCopy>;
+    const copy = preview.target(source, true, createCopy) as ReturnType<
+      typeof createCopy
+    >;
     const disposeCopyGeometry = vi.spyOn(copy.geometry, 'dispose');
     const disposeCopyMaterial = vi.spyOn(copy.material, 'dispose');
     const rebuilt = source.clone();

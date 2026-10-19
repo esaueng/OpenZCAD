@@ -512,3 +512,65 @@ for (const operation of ['Shell', 'Draft']) {
       .toBe(1);
   });
 }
+
+test('a pending Move copy follows X-ray opacity and edge styling', async ({
+  page
+}) => {
+  await createBox(page, 'X-ray Copy Part');
+  const display = page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: /^Display mode/ });
+  for (
+    let count = 0;
+    count < 3 &&
+    !/now: Shaded$/.test((await display.getAttribute('aria-label')) ?? '');
+    count += 1
+  )
+    await display.click();
+  await xrayButton(page).click();
+  await page.keyboard.press('m');
+  const controls = page.getByRole('form', { name: 'Move controls' });
+  await controls.getByLabel('Move X in mm').fill('40');
+  await controls
+    .getByRole('checkbox', { name: 'Copy (keep the original)' })
+    .check();
+  await expect(canvas(page)).toHaveAttribute(
+    'data-e2e-move-copy-preview',
+    'true'
+  );
+  const state = () =>
+    canvas(page).evaluate(
+      (element) =>
+        new Promise<{ faces: boolean[]; edges: boolean[] }>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-render-policy', {
+              detail: {
+                resolve: (policy: {
+                  bodyFaces: { depthWrite: boolean }[];
+                  bodyEdges: { name: string; visible: boolean }[];
+                }) =>
+                  resolve({
+                    faces: policy.bodyFaces.map((face) => face.depthWrite),
+                    edges: policy.bodyEdges
+                      .filter((edge) => edge.name === 'body-edge')
+                      .map((edge) => edge.visible)
+                  })
+              }
+            })
+          );
+        })
+    );
+  await expect
+    .poll(state)
+    .toEqual({ faces: [false, false], edges: [true, true] });
+  await xrayButton(page).click();
+  await expect
+    .poll(state)
+    .toEqual({ faces: [true, true], edges: [false, false] });
+  await xrayButton(page).click();
+  await expect
+    .poll(state)
+    .toEqual({ faces: [false, false], edges: [true, true] });
+  await controls.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expectBodyCount(page, 1);
+});

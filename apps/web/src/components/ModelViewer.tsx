@@ -2568,6 +2568,10 @@ export function ModelViewer({
             applyDisplayMode(copy, displayModeRef.current);
             return copy;
           });
+          moveCopyPreview.refreshAppearance(
+            displayModeRef.current,
+            xrayRef.current
+          );
           const final = composeMoveTransform(center, translation, rotationDeg);
           target.rotation.copy(moveEuler(rotationDeg));
           target.position.set(final.x, final.y, final.z);
@@ -10118,6 +10122,10 @@ export function ModelViewer({
     if (bodiesChanged) {
       applyDisplayMode(context.bodyGroup, displayModeRef.current);
     }
+    context.moveCopyPreview.refreshAppearance(
+      displayModeRef.current,
+      xrayRef.current
+    );
     // Rebuilt bodies and freshly created highlight geometry arrive without
     // clip planes; reapply so an active section survives both.
     applySectionPlane(
@@ -11932,6 +11940,10 @@ export function ModelViewer({
       for (const edgeOverlay of context.edgeOverlaysByBodyId.values()) {
         edgeOverlay.setDisplayMode(settings.displayMode);
       }
+      context.moveCopyPreview.refreshAppearance(
+        settings.displayMode,
+        xrayRef.current
+      );
       context.requestRender();
     }
   }, [settings.showGrid, settings.displayMode]);
