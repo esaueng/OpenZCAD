@@ -90,8 +90,8 @@ before encryption. There are two envelope classes:
 
 - **Project envelopes** hold document versions, measurements, workspace view
   state and share snapshots. Their header carries the project id, document
-  version, previous-version hash, schema version, key epoch, blob kind and the
-  ids of the content blobs the version references. They are bound to one
+  version, previous-version hash, roster entry hash, schema version, key
+  epoch, blob kind and the ids of the content blobs the version references. They are bound to one
   project and are never moved between projects.
 - **Content blobs** hold imported sources, mesh payloads, thumbnails and
   archived exports. Their header carries only an immutable random blob id, the
@@ -241,8 +241,18 @@ consistency, not full consistency:
   cannot fork or roll back a project. It can only claim that a member is never
   silently moved backwards from what they have seen.
 
-Browsers pin each member's public key on first sight and warn when it changes.
-The sharing dialog shows the key's fingerprint for comparison.
+The server's key directory is not trusted: on first sight it could hand out a
+key of its own. Browsers therefore keep two kinds of pin for other people's
+keys:
+
+- **Seen:** a key the browser has been shown. It is displayed with a warning
+  and is never used to wrap a project key.
+- **Verified:** a key whose full fingerprint the user has compared with its
+  owner outside OpenZCAD, by QR in person or by reading digit groups over a
+  call. The pin is stored in the user's own encrypted settings, so it carries
+  to their other devices and every later project shared with that person.
+
+A pinned key that changes drops back to unverified, and the browser warns.
 
 **Codes people compare.** A truncated hash of a key the server can see invites
 offline grinding, so no fingerprint or state code is shortened below 128
@@ -255,23 +265,60 @@ comparison, which is safe only because of its commitment step.
 - **Encryption follows the owner's account.** A project owned by an account
   that has not opted in stays plaintext. Invitees must set up encryption
   before they can open an encrypted project.
-- **Invitations are signed by the owner.** If the invitee already has keys,
-  the owner's browser wraps the project key to them at once. Otherwise the
-  invitation waits, and the owner's next session completes it, but only for
-  invitations it signed and only after the owner confirms the invitee's
-  fingerprint. Sharing remains owner-only (ADR-019).
+- **Invitations are signed by the owner, and a project key is only ever
+  wrapped to a verified key.** If the invitee already has keys and the owner
+  has verified them, from this or an earlier share, the owner's browser wraps
+  at once. If the keys are only seen, or the invitee hasn't set up encryption
+  yet, the invitation waits. The owner's next session completes it, but only
+  for invitations it signed and only after the owner verifies the invitee's
+  fingerprint. Both paths require the same comparison, so verification costs
+  one comparison per person, not one per project. The comparison is mutual:
+  the invitee verifies the owner's fingerprint in the same step, which anchors
+  the project's roster for them. Sharing remains owner-only (ADR-019).
 - **Invitation emails** name the sender, not the project.
-- **Share links** become `#share=<token>.<key>`; the fragment never reaches
-  the server. The share key is stored wrapped under the project key, so any
+- **Share links** become `#share=<token>.<key>.<owner>`, where `<owner>` is
+  the full hash of the owner's signing key; the fragment never reaches the
+  server. The share key is stored wrapped under the project key, so any
   editor's browser republishes the snapshot (current model, no history) on
-  save. Revoking a link deletes the snapshot. "Make a copy" decrypts in the
-  visitor's browser and saves under the visitor's keys, or locally.
+  save. Each snapshot is signed by its author. The visitor's browser fetches
+  the signed roster (below), checks it chains to the owner key named in the
+  link, and accepts the snapshot only if an owner or editor in that roster
+  signed it. Revoking a link deletes the snapshot. "Make a copy" decrypts in
+  the visitor's browser and saves under the visitor's keys, or locally.
 - **Live editing** keeps leases, presence and roles. The room relays encrypted
   documents and orders versions. On a conflict it returns the base and the
   latest ciphertext; the browser merges with `mergeCollaborationDocuments`,
   moved to a shared package, and resubmits.
-- **Removing a member** starts a new project-key epoch.
-- **Viewers** hold the project key; read-only remains a server rule on writes.
+- **Removing a member** starts a new project-key epoch and a new roster entry.
+- **Viewers** hold the project key, so they can decrypt, and they hold a valid
+  signing key of their own. Read-only therefore cannot rest on the server
+  alone, which this design treats as possibly compromised. Browsers enforce it
+  through the signed roster.
+
+### Signed roster
+
+Each encrypted project has a roster: a chain of entries signed by the owner.
+Each entry lists every member's user id, verified key fingerprint and role
+(owner, editor or viewer), the key epoch, a sequence number and the hash of the
+previous entry. The owner's signing key, as verified by each member, anchors
+the chain. Browsers pin the newest roster entry they have seen, with the same
+fork-consistency rule as versions.
+
+Every project envelope names the roster entry it was written under. A browser
+accepts a version only if:
+
+- its author signed it with a key that the named roster entry lists as owner
+  or editor;
+- that roster entry is the one in force for the version's parent, or a later
+  one;
+- the entry chains to the newest roster entry the browser has seen.
+
+A version signed by a viewer, by a removed editor after the removal entry, or
+by any key not in the roster is refused and reported, even if the server
+accepted it. The same check covers share snapshots, named checkpoints and
+merged versions written after a room conflict. ADR-019's server-side role
+enforcement stays as defense in depth, and as the only enforcement on
+plaintext projects.
 
 ### Plaintext metadata
 
@@ -314,12 +361,12 @@ Estimates are judgment, not measurement.
 | 2     | Crypto core package: envelope v1 with algorithm versioning, project envelopes and project-free content blobs, STREAM chunk nonces with one key per envelope, AES-256-GCM, HKDF, ECDH wrapping, authenticated-data binding, chunked blobs that detect truncation, fixed test vectors and a fuzzed envelope parser.                                                                | 1 PR         |
 | 3     | Keys and devices: D1 key tables, setup with a required recovery key, passkey unlock, device approval by QR scan or commitment-based code comparison, desktop Keychain storage and an Encryption section in Settings with device removal, rotation, recovery-key reissue and the sign-out choice. Setup screens load lazily (entry budget). Playwright fixtures seed device keys. | 3–4 PRs      |
 | 4     | Encrypted projects, opt-in per account: documents, revisions, assets, names, thumbnails, measurements, view state and archived exports; the room relay; version-integrity checks. Each project records a format version so older builds say "update to open". Breaking storage and API change.                                                                                   | 2–3 PRs      |
-| 5     | Sharing: owner-signed invitations, member key wraps, share links with fragment keys, new epochs on removal, key pinning and fingerprints, and the project state code.                                                                                                                                                                                                            | 2 PRs        |
+| 5     | Sharing: owner-signed invitations, member key wraps, share links with fragment keys, the owner-signed roster with client-side role checks, new epochs on removal, seen and verified key pins, fingerprints, and the project state code.                                                                                                                                          | 2–3 PRs      |
 | 6     | Assistant consent on encrypted projects.                                                                                                                                                                                                                                                                                                                                         | 1 PR         |
 | 7     | Migrate existing projects: each owner's browser encrypts every revision and asset, then the server deletes the plaintext, including legacy `document_json` rows and the room's retained history. Beta-only reverse path for turning encryption off. Needs its own production authorization.                                                                                      | 1–2 PRs      |
 | 8     | Default on; delete the server document pipeline and the off switch; keep a browser read path for legacy plaintext projects; update `docs/SELF_HOSTING.md`; outside review of the crypto and key flows.                                                                                                                                                                           | 1 PR, review |
 
-Total: 17–21 PRs.
+Total: 17–22 PRs.
 
 ## Consequences
 
