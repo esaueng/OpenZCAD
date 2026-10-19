@@ -30,6 +30,7 @@ import {
   Torus,
   TriangleRight
 } from 'lucide-react';
+import { platformShortcutLabel } from './platformShortcut';
 
 export type ToolId =
   | 'box'
@@ -80,7 +81,10 @@ export interface ToolMeta {
   short?: string;
   icon: ReactNode;
   group: ToolGroup;
-  /** Single-key shortcut, if the tool has one. */
+  /**
+   * The tool's default key, if it has one. The user's keymap can replace it,
+   * so surfaces read `useKeymap()` rather than this.
+   */
   shortcut?: string;
   /** One-line description for tooltips and the command palette. */
   hint: string;
@@ -437,16 +441,18 @@ export function toolDisabledReason(
   return null;
 }
 
-/** Tooltip text: label, shortcut, and either the hint or the disabled reason. */
-export function toolTitle(tool: ToolId, avail: ToolAvailability): string {
+/**
+ * Tooltip text: label, shortcut, and either the hint or the disabled reason.
+ * The shortcut is the live keymap's (`useKeymap`), null when unbound; the
+ * default stands in for callers with no keymap to hand.
+ */
+export function toolTitle(
+  tool: ToolId,
+  avail: ToolAvailability,
+  shortcut: string | null = TOOL_META[tool].shortcut ?? null
+): string {
   const meta = TOOL_META[tool];
-  const key = meta.shortcut ? ` (${meta.shortcut})` : '';
+  const key = shortcut ? ` (${platformShortcutLabel(shortcut)})` : '';
   const reason = toolDisabledReason(tool, avail);
   return `${meta.label}${key} — ${reason ?? meta.hint}`;
 }
-
-export const SHORTCUT_TO_TOOL: Record<string, ToolId> = Object.fromEntries(
-  (Object.entries(TOOL_META) as [ToolId, ToolMeta][])
-    .filter(([, meta]) => meta.shortcut)
-    .map(([tool, meta]) => [meta.shortcut!.toLowerCase(), tool])
-);

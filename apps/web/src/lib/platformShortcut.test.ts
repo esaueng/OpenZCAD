@@ -10,6 +10,13 @@ describe('idleWorkspaceHint', () => {
     expect(idleWorkspaceHint('MacIntel')).toBe('⌘K commands · ? shortcuts');
     expect(idleWorkspaceHint('Win32')).toBe('Ctrl+K commands · ? shortcuts');
   });
+
+  it('names the keys the user remapped, and leaves out an unbound one', () => {
+    expect(idleWorkspaceHint('MacIntel', 'Ctrl+Shift+P', 'H')).toBe(
+      '⇧⌘P commands · H shortcuts'
+    );
+    expect(idleWorkspaceHint('Win32', null, '?')).toBe('? shortcuts');
+  });
 });
 
 describe('commandPaletteShortcut', () => {
@@ -18,6 +25,14 @@ describe('commandPaletteShortcut', () => {
       accessible: 'Cmd+K',
       glyph: '⌘K'
     });
+  });
+
+  it('follows a remap, and is absent when unbound', () => {
+    expect(commandPaletteShortcut('MacIntel', 'Ctrl+Shift+P')).toEqual({
+      accessible: 'Cmd+Shift+P',
+      glyph: '⇧⌘P'
+    });
+    expect(commandPaletteShortcut('Win32', null)).toBeNull();
   });
 
   it('uses Ctrl copy on other platforms', () => {

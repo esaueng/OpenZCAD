@@ -59,7 +59,8 @@ interface CommandBarProps {
    */
   askUnavailable?: boolean;
   /** The platform's shortcut for the bar: ⌘K or Ctrl+K. */
-  searchKey: PlatformShortcutCopy;
+  /** Null when the user unbound the shortcut. */
+  searchKey: PlatformShortcutCopy | null;
   /** The assistant is answering: the prompt's glyph turns while it does. */
   busy?: boolean;
   /** A reply landed while the conversation was tucked away. */
@@ -507,7 +508,7 @@ export function CommandBar({
             role="combobox"
             aria-label="Search commands"
             // ARIA names the modifiers Meta and Control.
-            aria-keyshortcuts={searchKey.accessible
+            aria-keyshortcuts={searchKey?.accessible
               .replace('Cmd', 'Meta')
               .replace('Ctrl', 'Control')}
             aria-autocomplete="list"
@@ -600,9 +601,11 @@ export function CommandBar({
             }}
           />
         </span>
-        <kbd>
-          <ShortcutKeys label={searchKey.glyph} />
-        </kbd>
+        {searchKey && (
+          <kbd>
+            <ShortcutKeys label={searchKey.glyph} />
+          </kbd>
+        )}
       </div>
     </div>
   );

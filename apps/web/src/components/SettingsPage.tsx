@@ -73,6 +73,7 @@ import {
   POINTER_CONTROL_GROUPS,
   type ControlReferenceGroup
 } from '../lib/controlReference';
+import { KeymapEditor } from './KeymapEditor';
 import { BrandMark } from './BrandMark';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
 import {
@@ -319,6 +320,16 @@ function Section({
     </section>
   );
 }
+
+/**
+ * The keyboard reference without its remappable items, which the keymap
+ * editor lists with their live keys: what is left keeps one meaning always.
+ */
+const FIXED_KEYBOARD_GROUPS: readonly ControlReferenceGroup[] =
+  KEYBOARD_CONTROL_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !('commands' in item))
+  })).filter((group) => group.items.length > 0);
 
 function ControlReferenceGroups({
   groups
@@ -2118,11 +2129,35 @@ export function SettingsPage({
               {/* One header for the keyboard half. A banner above it used to
                   repeat the keyboard icon with its own line of guidance, so
                   the page opened on two stacked headers. */}
+              <section className="settings-control-collection">
+                <header>
+                  <span className="settings-control-collection-icon">
+                    <Keyboard size={18} aria-hidden="true" />
+                  </span>
+                  <span>
+                    <h3>Keyboard</h3>
+                    <p>
+                      Shortcuts are grouped by the part of the workspace that
+                      owns them, and any of them can be changed. A key can mean
+                      one thing per context: in a sketch, C draws a circle; in
+                      View mode, M measures. Keys pause while you type or while
+                      Settings is open. These preferences follow your account,
+                      never a project.
+                    </p>
+                  </span>
+                </header>
+                <KeymapEditor
+                  overrides={settings.keymap.overrides}
+                  onChange={(overrides) =>
+                    onChange({ ...settings, keymap: { overrides } })
+                  }
+                />
+              </section>
               <ControlReferenceCollection
                 icon={<Keyboard size={18} aria-hidden="true" />}
-                title="Keyboard"
-                description="Shortcuts are fixed and grouped by the part of the workspace that owns them. They pause while you type or while Settings is open; in a sketch, C and R draw a circle and a rectangle."
-                groups={KEYBOARD_CONTROL_GROUPS}
+                title="Fixed keys"
+                description="Escape always steps back, Enter confirms, Tab moves focus and Delete removes the selection; these keep one meaning everywhere and cannot be reassigned. While a command waits for a value, digits type it."
+                groups={FIXED_KEYBOARD_GROUPS}
               />
               <ControlReferenceCollection
                 icon={<MousePointer2 size={18} aria-hidden="true" />}

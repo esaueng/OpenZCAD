@@ -13,15 +13,17 @@ import type {
 import { AxisTriadIcon, DisplayModeIcon } from './ViewerRailIcons';
 import { DISPLAY_MODE_LABELS } from '../lib/displayMode';
 import { Tooltip } from './Tooltip';
+import { labelWithKey, useKeymap } from '../lib/keymap';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 
-const VIEWS: { id: StandardView; shortcut?: string }[] = [
-  { id: 'front', shortcut: '1' },
+const VIEWS: { id: StandardView; command?: string }[] = [
+  { id: 'front', command: 'view-front' },
   { id: 'back' },
   { id: 'left' },
-  { id: 'right', shortcut: '3' },
-  { id: 'top', shortcut: '2' },
+  { id: 'right', command: 'view-right' },
+  { id: 'top', command: 'view-top' },
   { id: 'bottom' },
-  { id: 'iso', shortcut: '4' }
+  { id: 'iso', command: 'view-iso' }
 ];
 
 /** Cased like the display modes the bar's other "Now:" lines name. */
@@ -66,6 +68,7 @@ export function ViewModeBar({
   onCycleDisplayMode,
   onToggleProjection
 }: ViewModeBarProps) {
+  const keymap = useKeymap();
   const [viewsOpen, setViewsOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -104,7 +107,7 @@ export function ViewModeBar({
     <div className="view-mode-bar" role="toolbar" aria-label="View tools">
       <Tooltip
         label="Measure"
-        shortcut="M"
+        shortcut={keymap.label('view-measure')}
         description="Inspect geometry, distance, and angle"
       >
         <button
@@ -121,14 +124,14 @@ export function ViewModeBar({
       <span className="view-mode-divider" aria-hidden="true" />
       <Tooltip
         label="Fit view"
-        shortcut="F"
+        shortcut={keymap.label('view-fit')}
         description="Double-click the viewport to fit"
       >
         <button
           type="button"
           className="view-mode-button"
           onClick={onFit}
-          aria-label="Fit view (F)"
+          aria-label={labelWithKey('Fit view', keymap.label('view-fit'))}
         >
           <Maximize2 size={16} aria-hidden="true" />
         </button>
@@ -171,13 +174,16 @@ export function ViewModeBar({
                     // returns to the button that opened it, not to <body>.
                     triggerRef.current?.focus();
                   }}
-                  aria-label={
-                    view.shortcut ? `${label} (${view.shortcut})` : label
-                  }
+                  aria-label={labelWithKey(
+                    label,
+                    view.command && keymap.label(view.command)
+                  )}
                 >
                   {VIEW_LABELS[view.id]}
-                  {view.shortcut ? (
-                    <kbd aria-hidden="true">{view.shortcut}</kbd>
+                  {view.command && keymap.label(view.command) ? (
+                    <kbd aria-hidden="true">
+                      {platformShortcutLabel(keymap.label(view.command)!)}
+                    </kbd>
                   ) : null}
                 </button>
               );
@@ -195,12 +201,12 @@ export function ViewModeBar({
           </div>
         )}
       </div>
-      <Tooltip label="Toggle grid" shortcut="G">
+      <Tooltip label="Toggle grid" shortcut={keymap.label('view-grid')}>
         <button
           type="button"
           className={`view-mode-button${settings.showGrid ? ' active' : ''}`}
           onClick={onToggleGrid}
-          aria-label="Toggle grid (G)"
+          aria-label={labelWithKey('Toggle grid', keymap.label('view-grid'))}
           aria-pressed={settings.showGrid}
         >
           <Grid3x3 size={16} aria-hidden="true" />
@@ -208,28 +214,28 @@ export function ViewModeBar({
       </Tooltip>
       <Tooltip
         label="Display mode"
-        shortcut="W"
+        shortcut={keymap.label('view-display')}
         description={`Now: ${displayModeLabel}`}
       >
         <button
           type="button"
           className="view-mode-button"
           onClick={onCycleDisplayMode}
-          aria-label={`Display mode (W) — now: ${displayModeLabel}`}
+          aria-label={`${labelWithKey('Display mode', keymap.label('view-display'))} — now: ${displayModeLabel}`}
         >
           <DisplayModeIcon mode={settings.displayMode} />
         </button>
       </Tooltip>
       <Tooltip
         label="Projection"
-        shortcut="P"
+        shortcut={keymap.label('view-projection')}
         description={`Now: ${projectionLabel}`}
       >
         <button
           type="button"
           className={`view-mode-button${projection === 'orthographic' ? ' active' : ''}`}
           onClick={onToggleProjection}
-          aria-label={`Orthographic projection (P) — now: ${projectionLabel}`}
+          aria-label={`${labelWithKey('Orthographic projection', keymap.label('view-projection'))} — now: ${projectionLabel}`}
           aria-pressed={projection === 'orthographic'}
         >
           <Camera size={16} aria-hidden="true" />

@@ -3,6 +3,7 @@ import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
   deepClone,
+  normalizeKeymapOverrides,
   nowIso,
   PANEL_WIDTH_LIMITS,
   type AppSettings,
@@ -247,6 +248,9 @@ export function parseUpdateAppSettingsRequest(
     settings.experiments ?? {},
     '"settings.experiments"'
   );
+  // Optional so clients from before shortcut remapping keep saving; the
+  // bindings are cleaned rather than rejected, as the browser cleans them.
+  const keymap = asRecord(settings.keymap ?? {}, '"settings.keymap"');
   const provider = requiredMember(assistant, 'provider', PROVIDERS);
   const rawBaseUrl = requiredString(assistant, 'baseUrl', 2_048, true);
   const baseUrl =
@@ -375,6 +379,9 @@ export function parseUpdateAppSettingsRequest(
           typeof experiments.directManipulation === 'boolean'
             ? experiments.directManipulation
             : true
+      },
+      keymap: {
+        overrides: normalizeKeymapOverrides(keymap.overrides)
       }
     }
   };

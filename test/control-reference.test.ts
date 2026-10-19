@@ -109,3 +109,14 @@ describe('controls reference', () => {
     }
   });
 });
+
+describe('shortcut remapping search', () => {
+  it('finds the keymap editor by remapping words and by any command', () => {
+    for (const query of ['remap', 'hotkey', 'fillet', 'reset all shortcuts']) {
+      expect(
+        visibleSettingsSections({ query }).map((section) => section.id),
+        query
+      ).toContain('shortcuts');
+    }
+  });
+});
