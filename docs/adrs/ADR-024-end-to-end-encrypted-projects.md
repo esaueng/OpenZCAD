@@ -276,26 +276,26 @@ keys and a copy of the old wraps. Rotation protects what comes after.
 
   The identity key is unchanged, so members' verification still holds.
 
-- **Replacing the recovery key** asks why:
-  - **Lost, and no one else has seen it.** The browser runs the same rotation
-    as removing a device (new account key, new encryption key pair, new
-    project epochs), wraps the identity key under the new recovery key, and
-    deletes the old wraps. Anyone who later finds the old code and a backup of
-    the old wraps can read only content from before the replacement.
-  - **Someone may have seen it.** The old code also opened the identity key,
-    so the identity is compromised. The browser does everything above, then
-    creates a new identity key. The new identity is accompanied by a
-    statement signed by the old one, but that statement proves nothing to
-    members, since the attacker could have signed it too. Every member who
-    verified the old fingerprint sees the key as changed and must verify it
-    again outside OpenZCAD. Until then they treat it as unverified: no new
-    key wraps go to it, and its signatures are refused.
+- **Replacing the recovery key** always replaces the identity key as well,
+  whether the old code was lost or may have been seen. The old code opened
+  the identity key, and a retained copy of the old wrap would let whoever
+  finds the code later act as that identity: certify their own encryption
+  key, steer future wraps to it, and sign as the user. No "it was only lost"
+  shortcut can rule that out, so there is none. Settings explains the cost
+  before the user starts: every contact verifies them again. The browser
+  runs the same rotation as removing a device (new account key, new
+  encryption key pair, new project epochs), then creates a new identity key. The new identity is accompanied by a
+  statement signed by the old one, but that statement proves nothing to
+  members, since the attacker could have signed it too. Every member who
+  verified the old fingerprint sees the key as changed and must verify it
+  again outside OpenZCAD. Until then they treat it as unverified: no new
+  key wraps go to it, and its signatures are refused.
 
-    In shared projects the roster still names the old, now compromised
-    identity, and membership changes are owner-only. So the replacement is
-    owner-mediated, under the rules in
-    [Identity replacement](#identity-replacement). Until each owner acts, the
-    member has no access to that project, by design.
+  In shared projects the roster still names the old, now compromised
+  identity, and membership changes are owner-only. So the replacement is
+  owner-mediated, under the rules in
+  [Identity replacement](#identity-replacement). Until each owner acts, the
+  member has no access to that project, by design.
 
   Settings warns when no recovery key has been confirmed.
 
@@ -438,12 +438,12 @@ Each encrypted project has a roster: a chain of typed entries. Each type has
 its own signer rule and its own limits on what it may change. A browser
 rejects an entry whose signer or content breaks its type's rule:
 
-| Entry type      | Who may sign it                                                 | What it may change                                                                                                      |
-| --------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Membership      | A certified device key of the owner                             | Add or remove members, change roles; carries a new epoch whenever anyone loses access                                   |
-| Epoch           | A certified device key of any current member, including viewers | Nothing about membership; only a new project key wrapped to every listed member (see [Epoch rotation](#epoch-rotation)) |
-| Self-removal    | The departing member's device key, or their identity key        | Removes only the signer; carries a new epoch for the rest (see [Identity replacement](#identity-replacement))           |
-| Anchor transfer | The owner's old identity key                                    | Names the owner's new identity; members accept it only after verifying that identity outside OpenZCAD                   |
+| Entry type      | Who may sign it                                                 | What it may change                                                                                                                            |
+| --------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Membership      | A certified device key of the owner                             | Add or remove members, change roles; when anyone loses access, the owner, a remaining member, generates the next epoch in the same entry      |
+| Epoch           | A certified device key of any current member, including viewers | Nothing about membership; only a new project key wrapped to every listed member (see [Epoch rotation](#epoch-rotation))                       |
+| Self-removal    | The departing member's device key, or their identity key        | Removes only the signer and carries no key; a remaining member then starts the next epoch (see [Identity replacement](#identity-replacement)) |
+| Anchor transfer | The owner's old identity key                                    | Names the owner's new identity; members accept it only after verifying that identity outside OpenZCAD                                         |
 
 Membership entries are the only ones that list members. The others apply to
 the membership in force at their parent.
@@ -477,12 +477,20 @@ A compromised identity must lose access at once, and its replacement gains
 access only after a person has verified it. Two roster rules cover this.
 
 - **Self-removal.** Any member may sign a roster entry that removes only
-  themselves. It also starts a new epoch wrapped to the remaining members. It
-  can only reduce access, so it is safe to allow even from a key the attacker
-  also holds; an attacker who sends it only locks themselves out. When a
-  member replaces an exposed identity, their browser uses the old identity,
-  one last time, to sign a self-removal from every shared project. That
-  rotates those epochs immediately, without waiting for any owner.
+  themselves. It changes membership and nothing else. It never carries a
+  project key, because whoever signs it may be an attacker holding the old
+  identity, and would learn any key they chose. It can only reduce access,
+  so it is safe to allow from a key the attacker also holds. When a member
+  replaces an exposed identity, their browser uses the old identity, one
+  last time, to sign a self-removal from every shared project.
+- **Post-removal epoch.** After any entry that removes someone, whether a
+  self-removal or an owner's membership entry, the next project key must be
+  generated by a member who remains. The first remaining member's browser to
+  see the removal starts that epoch, before any write. Readers refuse a
+  version written after a removal unless it uses an epoch started after the
+  removal by a device of a remaining member. So nothing written after a
+  removal is ever under a key the departed identity chose or holds. This
+  needs no owner: any remaining member, viewers included, can start it.
 - **Owner re-adds.** The owner's browser shows the member's new identity as
   unverified. After the owner verifies it outside OpenZCAD, the owner signs a
   roster entry adding the new identity with the member's former role, and
@@ -512,9 +520,9 @@ roster. An entry that leaves someone out is reported as an attack on
 availability; it gives the starter no extra access.
 
 Writers enforce the rotation. Before writing, a browser checks the device
-lists of every roster member. If any member has revoked a device, or replaced
-an encryption key, after the current epoch began, the browser starts a new
-epoch first and writes under it. Readers refuse a version that still uses the
+lists of every roster member. If any member has revoked a device, replaced an
+encryption key, or left the roster after the current epoch began, the browser
+starts a new epoch first and writes under it. Readers refuse a version that still uses the
 older epoch unless it is within the cutoff of every revocation they have seen.
 Versions inside the cutoffs stay valid. So once any member's browser
 has seen a revocation, no later content is written to keys the removed device
