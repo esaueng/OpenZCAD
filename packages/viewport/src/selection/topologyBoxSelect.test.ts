@@ -336,6 +336,54 @@ describe('box selection of edges', () => {
 });
 
 describe('box selection of faces', () => {
+  it('takes a visible face corner inside a crossing even without an owned depth cell', () => {
+    const ortho = new THREE.OrthographicCamera(-200, 200, 200, -200, 0.1, 1000);
+    ortho.position.set(0, 0, 100);
+    ortho.lookAt(0, 0, 0);
+    ortho.updateMatrixWorld(true);
+    const triangle: TopologyBoxCandidate = {
+      bodyId: 'corner',
+      positions: [-100, 100, 0, -100, 0, 0, 0, 100, 0],
+      indices: [0, 1, 2],
+      topology: {
+        edges: [],
+        faces: [
+          {
+            topologyId: 'triangle',
+            hash: 1,
+            triangleStart: 0,
+            triangleCount: 1
+          }
+        ]
+      }
+    };
+    const rect = rectFromDrag(1995, 995, 3990, 3990);
+    const opts = {
+      camera: ortho,
+      width: 4000,
+      height: 4000,
+      kind: 'face' as const
+    };
+    expect(ids(topologyInBox([triangle], rect, 'crossing', opts))).toEqual([
+      'triangle'
+    ]);
+    expect(topologyInBox([triangle], rect, 'window', opts)).toEqual([]);
+    const occluder: TopologyBoxCandidate = {
+      bodyId: 'front',
+      positions: [-200, 200, 10, -200, -200, 10, 200, -200, 10, 200, 200, 10],
+      indices: [0, 1, 2, 0, 2, 3],
+      topology: {
+        edges: [],
+        faces: [
+          { topologyId: 'cover', hash: 2, triangleStart: 0, triangleCount: 2 }
+        ]
+      }
+    };
+    expect(
+      ids(topologyInBox([triangle, occluder], rect, 'crossing', opts))
+    ).toEqual(['cover']);
+  });
+
   const camera = lookingDown();
   const options = (selectThrough = false) => ({
     camera,

@@ -1,3 +1,4 @@
+import { VIEWPORT_FIELD_OF_VIEW_BOUNDS } from '@openzcad/shared';
 import type {
   DisplayMode,
   ProjectionMode,
@@ -24,6 +25,8 @@ export interface SavedView {
   sectionView?: SectionViewSettings;
   /** Saved in X-ray; absent (older views) means not. */
   xray?: boolean;
+  /** Captured camera angle; absent in older saved views. */
+  fieldOfView?: number;
   savedAt: number;
 }
 
@@ -95,7 +98,12 @@ function isSavedView(value: unknown): value is SavedView {
     (view.projection === 'perspective' || view.projection === 'orthographic') &&
     DISPLAY_MODES.includes(view.displayMode) &&
     isSection(view.sectionView) &&
-    (view.xray === undefined || typeof view.xray === 'boolean')
+    (view.xray === undefined || typeof view.xray === 'boolean') &&
+    (view.fieldOfView === undefined ||
+      (typeof view.fieldOfView === 'number' &&
+        Number.isFinite(view.fieldOfView) &&
+        view.fieldOfView >= VIEWPORT_FIELD_OF_VIEW_BOUNDS.min &&
+        view.fieldOfView <= VIEWPORT_FIELD_OF_VIEW_BOUNDS.max))
   );
 }
 

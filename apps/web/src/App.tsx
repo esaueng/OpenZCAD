@@ -7903,6 +7903,7 @@ export function App() {
                 camera: snapshot.camera,
                 projection,
                 displayMode: viewerSettings.displayMode,
+                fieldOfView: appSettingsRef.current.viewport.fieldOfView,
                 ...(viewerSettings.sectionView
                   ? { sectionView: viewerSettings.sectionView }
                   : {}),
@@ -7917,8 +7918,13 @@ export function App() {
           displayMode: DisplayMode;
           sectionView?: SectionViewSettings;
           xray?: boolean;
+          fieldOfView?: number;
         }) {
           setProjection(view.projection);
+          if (view.fieldOfView !== undefined) {
+            const current = appSettingsRef.current;
+            handleAppSettingsChange({ ...current, viewport: { ...current.viewport, fieldOfView: view.fieldOfView } });
+          }
           // The exact section on screen belongs to the cut being replaced.
           clearSectionOutline();
           setViewerSettings((current) => {

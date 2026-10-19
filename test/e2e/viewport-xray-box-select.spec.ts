@@ -574,3 +574,24 @@ test('a pending Move copy follows X-ray opacity and edge styling', async ({
   await controls.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expectBodyCount(page, 1);
 });
+
+test('a saved perspective view restores its captured field of view', async ({
+  page
+}) => {
+  await createBox(page, 'Saved FOV Part');
+  await page.getByRole('button', { name: 'Fit' }).click();
+  await page.waitForTimeout(700);
+  await expect(canvas(page)).toHaveAttribute('data-e2e-field-of-view', '45');
+  await page.getByRole('button', { name: 'Standard views' }).click();
+  await page.getByRole('button', { name: 'Save view', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  await page.getByLabel('Perspective field of view').fill('70');
+  await page.getByLabel('Perspective field of view').blur();
+  await page.getByRole('button', { name: 'Back to workspace' }).click();
+  await expect(canvas(page)).toHaveAttribute('data-e2e-field-of-view', '70');
+  await page.getByRole('button', { name: 'Standard views' }).click();
+  await page.getByRole('button', { name: 'Go to View 1' }).click();
+  await expect(canvas(page)).toHaveAttribute('data-e2e-field-of-view', '45');
+});

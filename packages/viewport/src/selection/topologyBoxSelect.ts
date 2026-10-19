@@ -445,6 +445,44 @@ class DepthGrid {
   }
 }
 
+/** A point inside the convex triangle/rectangle intersection. */
+function faceSampleInRect(
+  a: ProjectedPoint,
+  b: ProjectedPoint,
+  c: ProjectedPoint,
+  rect: ScreenRect
+): { x: number; y: number } | null {
+  let polygon = [a, b, c].map(({ x, y }) => ({ x, y }));
+  for (const [axis, boundary, direction] of [
+    ['x', rect.left, 1],
+    ['x', rect.right, -1],
+    ['y', rect.top, 1],
+    ['y', rect.bottom, -1]
+  ] as const) {
+    const clipped: { x: number; y: number }[] = [];
+    for (let index = 0; index < polygon.length; index += 1) {
+      const start = polygon[index]!;
+      const end = polygon[(index + 1) % polygon.length]!;
+      const insideStart = direction * (start[axis] - boundary) >= 0;
+      const insideEnd = direction * (end[axis] - boundary) >= 0;
+      if (insideStart) clipped.push(start);
+      if (insideStart !== insideEnd) {
+        const t = (boundary - start[axis]) / (end[axis] - start[axis]);
+        clipped.push({
+          x: start.x + (end.x - start.x) * t,
+          y: start.y + (end.y - start.y) * t
+        });
+      }
+    }
+    polygon = clipped;
+    if (polygon.length === 0) return null;
+  }
+  return {
+    x: polygon.reduce((sum, point) => sum + point.x, 0) / polygon.length,
+    y: polygon.reduce((sum, point) => sum + point.y, 0) / polygon.length
+  };
+}
+
 function faceSelections(
   bodies: ProjectedBody[],
   rect: ScreenRect,
@@ -491,7 +529,7 @@ function faceSelections(
           touched = true;
         }
         // A face too small to own a whole cell still shows itself through its
-        // triangle centroids, tested like an edge sample — but only where the
+        // triangle/rectangle overlap, tested like an edge sample — but only where the
         // triangle faces the camera and is at least a pixel thick. A face seen
         // edge-on (a top view's sides, nudged off vertical) or from behind at
         // a silhouette has its centroid on the outline, beside empty cells,
@@ -503,11 +541,16 @@ function faceSelections(
           !owned.has(`${bodyIndex}:${faceIndex}`) &&
           facingThickness(a, b, c) >= MIN_FACING_THICKNESS_PX
         ) {
-          const x = (a.x + b.x + c.x) / 3;
-          const y = (a.y + b.y + c.y) / 3;
-          if (pointInRect({ x, y }, rect)) {
-            const key = (keys[ia]! + keys[ib]! + keys[ic]!) / 3;
-            sampleVisible = grid.visible(x, y, key, bodies);
+          const sample = faceSampleInRect(a, b, c, rect);
+          const weights = sample
+            ? barycentric(sample.x, sample.y, a, b, c)
+            : null;
+          if (sample && weights) {
+            const key =
+              weights[0] * keys[ia]! +
+              weights[1] * keys[ib]! +
+              weights[2] * keys[ic]!;
+            sampleVisible = grid.visible(sample.x, sample.y, key, bodies);
           }
         }
       }
