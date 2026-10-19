@@ -576,7 +576,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   const depthFloor = diagonal * 1e-6;
   input.bodies.forEach((body, bodyIndex) => {
     const { vertices, indices } = body;
-    const sag = triangleSag(body, meshes[bodyIndex]!);
+    const sag = triangleSag(body, meshes[bodyIndex]);
     for (let t = 0; t + 2 < indices.length; t += 3) {
       const [u0, v0, d0] = project(
         vertices[indices[t]! * 3]!,
