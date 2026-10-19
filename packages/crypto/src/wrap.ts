@@ -232,17 +232,45 @@ export function encodeWrapContext(context: WrapContext): Bytes {
   return writer.finish();
 }
 
+const MAX_PRIVATE_KEY_BYTES = 4096;
+
+/** Smallest and largest secret a purpose wraps: a PKCS#8 key or 32 bytes. */
+function secretBounds(context: WrapContext): [min: number, max: number] {
+  return PRIVATE_KEY_PURPOSES.includes(context.purpose)
+    ? [1, MAX_PRIVATE_KEY_BYTES]
+    : [KEY_BYTES, KEY_BYTES];
+}
+
 function checkSecretLength(secret: Uint8Array, context: WrapContext): void {
-  const privateKey = PRIVATE_KEY_PURPOSES.includes(context.purpose);
-  const ok = privateKey
-    ? secret.byteLength > 0 && secret.byteLength <= 4096
-    : secret.byteLength === KEY_BYTES;
-  if (!ok) {
+  const [min, max] = secretBounds(context);
+  if (secret.byteLength < min || secret.byteLength > max) {
     throw new E2eeError(
       'invalid-argument',
-      privateKey
-        ? 'Private key bytes must be 1..4096 bytes'
-        : 'Wrapped keys must be 32 bytes'
+      min === max
+        ? 'Wrapped keys must be 32 bytes'
+        : `Private key bytes must be 1..${MAX_PRIVATE_KEY_BYTES} bytes`
+    );
+  }
+}
+
+/**
+ * Refuses a GCM record whose ciphertext cannot hold a secret of this
+ * purpose before WebCrypto decrypts it, so an oversized record from the
+ * server costs nothing to reject.
+ */
+function checkCiphertextLength(
+  length: number,
+  context: WrapContext,
+  what: string
+): void {
+  const [min, max] = secretBounds(context);
+  if (length < GCM_TAG_BYTES + min) {
+    throw new E2eeError('malformed', `${what} is truncated`);
+  }
+  if (length > GCM_TAG_BYTES + max) {
+    throw new E2eeError(
+      'malformed',
+      `${what} is longer than any ${context.purpose} secret`
     );
   }
 }
@@ -396,9 +424,7 @@ export async function unwrapKey(
   const reader = new ByteReader(wrapped, 'Wrapped key');
   const version = reader.bytes(1);
   const iv = reader.bytes(GCM_IV_BYTES);
-  if (reader.remaining < GCM_TAG_BYTES + 1) {
-    throw new E2eeError('malformed', 'Wrapped key is truncated');
-  }
+  checkCiphertextLength(reader.remaining, context, 'Wrapped key');
   const secret = await aesGcmDecrypt(
     await gcmKek(kek, context.purpose),
     iv,
@@ -540,9 +566,7 @@ export async function openSealedKey(
   const version = reader.bytes(1);
   const ephemeralRaw = reader.bytes(P256_PUBLIC_KEY_BYTES);
   const iv = reader.bytes(GCM_IV_BYTES);
-  if (reader.remaining < GCM_TAG_BYTES + 1) {
-    throw new E2eeError('malformed', 'Sealed key is truncated');
-  }
+  checkCiphertextLength(reader.remaining, context, 'Sealed key');
   if (!isP256Key(recipient?.privateKey, 'ECDH', 'private')) {
     throw new E2eeError(
       'invalid-argument',

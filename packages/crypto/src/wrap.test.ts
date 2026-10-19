@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { concatBytes } from './bytes';
 import { E2eeError, type E2eeErrorCode } from './errors';
 import {
   exportPrivateKey,
@@ -250,6 +251,58 @@ describe('symmetric key wrapping', () => {
       unwrapKey(accountKey, wrapped, { ...context, keyId: 'k2' }),
       'authentication-failed'
     );
+  });
+
+  it('refuses oversized key records before decrypting them', async () => {
+    const accountKey = generateSymmetricKey();
+    const encryption = await generateEncryptionKeyPair();
+    const context: WrapContext = {
+      purpose: 'encryption-private-key',
+      userId: 'user-1',
+      keyId: 'k1'
+    };
+    const wrapped = await wrapKey(
+      accountKey,
+      await exportPrivateKey(encryption.privateKey),
+      context
+    );
+    const sealContext: WrapContext = {
+      purpose: 'project-key',
+      userId: 'user-1',
+      projectId: 'p',
+      keyEpoch: 1
+    };
+    const sealed = await sealKey(
+      encryption.publicKey,
+      PROJECT_KEY,
+      sealContext
+    );
+    const decrypt = vi.spyOn(crypto.subtle, 'decrypt');
+    try {
+      // A private key is at most 4096 bytes; a 1 MiB record cannot hold one.
+      await rejectsWith(
+        unwrapKey(
+          accountKey,
+          concatBytes(wrapped, new Uint8Array(1024 * 1024)),
+          context
+        ),
+        'malformed'
+      );
+      // A sealed project key holds exactly 32 bytes: one byte more or less
+      // is refused without opening it.
+      for (const forged of [
+        concatBytes(sealed, new Uint8Array(1)),
+        sealed.subarray(0, sealed.byteLength - 1)
+      ]) {
+        await rejectsWith(
+          openSealedKey(encryption, forged, sealContext),
+          'malformed'
+        );
+      }
+      expect(decrypt).not.toHaveBeenCalled();
+    } finally {
+      decrypt.mockRestore();
+    }
   });
 
   it('refuses an HKDF key without deriveKey usage with a typed error', async () => {
