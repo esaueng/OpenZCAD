@@ -243,7 +243,9 @@ export class OcclusionGrid {
   /**
    * Parameters in (0, 1) where segment a→b crosses the edge of a triangle
    * it passes over (`depth: false`) or a triangle's occlusion threshold
-   * (`depth: true`), sorted. Between two of them every point is covered by
+   * (`depth: true`), sorted. A depth cut also says whether the segment's
+   * start or end lies on that triangle's plane (`onA`, `onB`): the face the
+   * point belongs to, which is what makes a sliver there a corner artifact. Between two of them every point is covered by
    * the same triangles on the same side, so visibility is constant there.
    */
   crossings(
@@ -253,7 +255,7 @@ export class OcclusionGrid {
     bu: number,
     bv: number,
     bd: number
-  ): { t: number; depth: boolean }[] {
+  ): { t: number; depth: boolean; onA?: boolean; onB?: boolean }[] {
     const du = bu - au;
     const dv = bv - av;
     // Every cell the segment passes through, by an exact supercover walk:
@@ -262,7 +264,8 @@ export class OcclusionGrid {
     const seen = new Set<number>();
     for (const cell of this.cellsAlong(au, av, bu, bv))
       for (const index of this.cells[cell]!) seen.add(index);
-    const out: { t: number; depth: boolean }[] = [];
+    const out: { t: number; depth: boolean; onA?: boolean; onB?: boolean }[] =
+      [];
     const denomFloor = 1e-18;
     for (const index of seen) {
       const t = this.triangles[index]!;
@@ -298,7 +301,13 @@ export class OcclusionGrid {
       const f1 = plane(bu, bv) - bd + t.tol;
       if ((f0 < 0 && f1 > 0) || (f0 > 0 && f1 < 0)) {
         const s = f0 / (f0 - f1);
-        if (s > 0 && s < 1) out.push({ t: s, depth: true });
+        if (s > 0 && s < 1)
+          out.push({
+            t: s,
+            depth: true,
+            onA: Math.abs(f0 - t.tol) <= t.tol,
+            onB: Math.abs(f1 - t.tol) <= t.tol
+          });
       }
     }
     return out.sort((a, b) => a.t - b.t);
@@ -380,7 +389,7 @@ function chainSegments(segments: [number, number][]): number[][] {
  * Where a run's point came from: one of the line's two ends (a B-rep edge's
  * end vertex, or a silhouette's), a sample along it, or a visibility cut.
  */
-type CutKind = 'end' | 'vertex' | 'edge' | 'depth';
+type CutKind = 'end' | 'vertex' | 'edge' | 'depth' | 'corner';
 
 interface Polyline3 {
   points: number[];
@@ -771,9 +780,19 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       const cuts: { t: number; kind: CutKind }[] = [
         { t: 0, kind: s === 0 ? 'end' : 'vertex' }
       ];
+      // A depth cut is a corner cut only when the line's own end lies on the
+      // plane that made it: the face at that end. Any other occluder's
+      // threshold bounds a real interval, however short.
       const found: { t: number; kind: CutKind }[] = grid
         .crossings(au, av, ad, bu, bv, bd)
-        .map(({ t, depth }) => ({ t, kind: depth ? 'depth' : 'edge' }));
+        .map(({ t, depth, onA, onB }) => ({
+          t,
+          kind: !depth
+            ? 'edge'
+            : (s === 0 && onA) || (s === count - 2 && onB)
+              ? 'corner'
+              : 'depth'
+        }));
       // Only the line's own two ends are B-rep edge ends; the samples between
       // are just points along a curve.
       found.push({ t: 1, kind: s === count - 2 ? 'end' : 'vertex' });
@@ -783,7 +802,10 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
         else if (cut.kind === 'vertex' || cut.kind === 'end')
           cuts[cuts.length - 1] = cut;
         // Coincident cuts: a footprint crossing outranks a depth one.
-        else if (cut.kind === 'edge' && last.kind === 'depth')
+        else if (
+          cut.kind === 'edge' &&
+          (last.kind === 'depth' || last.kind === 'corner')
+        )
           last.kind = 'edge';
       }
       for (let k = 0; k + 1 < cuts.length; k += 1) {
@@ -840,7 +862,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       pieces.forEach((piece, index) => {
         if (piece.length >= minPiece) return;
         const ends = [kinds[piece.from], kinds[piece.to]];
-        if (!(ends.includes('end') && ends.includes('depth'))) return;
+        if (!(ends.includes('end') && ends.includes('corner'))) return;
         const neighbour = pieces[index - 1] ?? pieces[index + 1];
         if (neighbour) piece.hidden = neighbour.hidden;
       });

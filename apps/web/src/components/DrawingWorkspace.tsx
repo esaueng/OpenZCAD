@@ -145,6 +145,13 @@ function useViewProjections(
   /** Failed requests per view, so a worker that keeps failing is not retried forever. */
   const failures = useRef(new Map<string, number>());
   const mounted = useRef(false);
+  /**
+   * One batch at a time: while one is out, a pass asks for nothing, and the
+   * answer's revision runs the next pass for whatever the sheet on screen
+   * still lacks. Nothing is ever superseded, so two requests can never take
+   * turns cancelling each other's views.
+   */
+  const outstanding = useRef(false);
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     mounted.current = true;
@@ -158,7 +165,8 @@ function useViewProjections(
   }, []);
   const fingerprint = status?.kind === 'ready' ? status.fingerprint : null;
   useEffect(() => {
-    if (!sheet || !fingerprint || !client.current) return;
+    if (!sheet || !fingerprint || !client.current || outstanding.current)
+      return;
     // Every view this pass still needs goes in one request, with each body's
     // geometry once however many views draw it.
     const views: DrawingProjectionViewRequest[] = [];
@@ -181,7 +189,8 @@ function useViewProjections(
       });
       cache.current.set(key, { state: 'projecting' });
     }
-    if (views.length > 0)
+    if (views.length > 0) {
+      outstanding.current = true;
       client.current
         .project(inputs, views)
         .then(
@@ -226,8 +235,10 @@ function useViewProjections(
           }
         )
         .finally(() => {
+          outstanding.current = false;
           if (mounted.current) setRevision((value) => value + 1);
         });
+    }
     // Keep the cache to what this model can still use.
     for (const key of cache.current.keys())
       if (!key.startsWith(`${fingerprint}|`)) cache.current.delete(key);

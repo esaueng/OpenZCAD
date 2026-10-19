@@ -769,6 +769,40 @@ describe('D01 occlusion tolerance', () => {
     expect(gap).toHaveLength(1);
   });
 
+  it("keeps a short prefix bounded by an unrelated face, not the edge's own", () => {
+    // Seen from above, an edge starts 0.003 mm above a plate it does not
+    // belong to and dips under it 0.03 mm later: a real visible prefix,
+    // shorter than the corner-sliver threshold of this 1000 mm view.
+    const plate = {
+      vertices: Float64Array.from([
+        -10, -1, 0, 100, -1, 0, 100, 1, 0, -10, 1, 0
+      ]),
+      indices: Uint32Array.from([0, 1, 2, 0, 2, 3]),
+      faces: [{ triangleStart: 0, triangleCount: 2 }],
+      edges: []
+    };
+    const z = (x: number) => 0.003 - 0.1 * x;
+    const rod = {
+      vertices: Float64Array.from([
+        0, -0.5, -500, 1000, -0.5, -500, 1000, 0.5, -500
+      ]),
+      indices: Uint32Array.from([0, 1, 2]),
+      edges: [[0, 0, z(0), 1000, 0, z(1000)]]
+    };
+    const result = projectView({
+      orientation: 'top',
+      hiddenLines: true,
+      bodies: [plate, rod]
+    });
+    const prefix = result.visible.filter(
+      (line) =>
+        Math.abs(line[1]!) < 1e-9 &&
+        Math.min(line[0]!, line.at(-2)!) < 1e-9 &&
+        Math.max(line[0]!, line.at(-2)!) < 0.05
+    );
+    expect(prefix).toHaveLength(1);
+  });
+
   it('keeps an occluded interval shorter than the sliver threshold', () => {
     // A 1000 mm edge under a 0.05 mm strip: 5e-5 of the view, below the
     // corner-sliver threshold, but bounded by the strip's own footprint.
