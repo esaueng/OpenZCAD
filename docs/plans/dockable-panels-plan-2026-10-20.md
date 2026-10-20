@@ -147,8 +147,14 @@ The menu replaces the rail's Layout button.
      Within a side the outermost column goes first. This is a projection at
      render time only: the stored layout keeps them docked, so a wider window
      gets them back.
-   - At 720 px stage width and below there are no docks: a panel opens one at
-     a time in the existing phone lane. Docking starts at 721 px.
+   - At 720 px stage width and below there are no docks and no floating
+     windows: a panel opens one at a time in the existing phone lane. Docking
+     starts at 721 px.
+     - Docked and floating panels, stored or arrived at by resizing, are
+       projected into that lane: only the panel opened most recently shows,
+       and the stored layout is kept for a wider window.
+     - Pop out, Float and drop-to-float are not offered there. A drag ends
+       back in the lane.
 2. **Persistence.**
    - Layouts are per device, Build only. View and Tweak keep their own rails.
    - A new storage key, `openzcad-panel-layout:v1`, sits beside
@@ -180,7 +186,10 @@ The menu replaces the rail's Layout button.
        `Alt+↑`/`Alt+↓` while the grip has focus.
    - Gaps are `role="separator"` with `aria-valuenow`; arrow keys resize them
      and Home splits evenly.
-   - Floating windows move with arrow keys while the grip has focus.
+   - Floating windows move with the arrow keys while the grip has focus, and
+     resize with `Shift` plus the arrow keys (10 px steps, within the
+     260–600 px width and ≥ 160 px height bounds). The corner grip is also a
+     focusable control named "Resize <Name> window" that takes the same keys.
 4. **Rail buttons.**
    - Revisions and Diagnostics get rail buttons.
    - Diagnostics shows a warning-count badge and **does not** open by itself.
@@ -192,8 +201,8 @@ The menu replaces the rail's Layout button.
   classes the e2e suite reads stay the same: `.feature-row`, `.body-row`,
   `.param-row`, `.revision-row`, `.diagnostic-row`.
 - **Suspension.** Sketch and drag suspension (`usePanelSuspension`) applies to
-  every docked and floating panel, as it does to the drawer today. A rail press
-  releases it.
+  every open panel — docked, floating and the unpinned one — as it does to the
+  drawer today. A rail press releases it.
 - **Inspector and command card.** They keep the right lane, now inside the
   right rail. `--lane-end` grows by the right dock's width. They stop sharing a
   lane with the panels.
@@ -283,6 +292,9 @@ Each slice is one PR and records its evidence in the U08 row.
 - **Behaviour.**
   - Independent panels in right columns: stacking, gap resize and even split,
     pin/unpin/close/home, the unpinned panel, the headings.
+  - The header's Pop out button is not rendered until slice 4 ships floating
+    windows, so this slice has no control that would send a panel to an
+    unrendered float.
   - The instrument rail moves to the dock's inner edge and gains Revisions and
     Diagnostics (with its badge).
   - The inspector lane, obstacles, suspension and search hand-off as above.
@@ -322,7 +334,9 @@ Each slice is one PR and records its evidence in the U08 row.
   - two pinned panels stack
   - gap drag and double-click split
   - the inspector stays clear of the dock
-  - sketch hides and restores the dock
+  - sketch hides and restores the dock and an open unpinned panel, and a
+    drag on the model suspends both
+  - headers carry Pin and Close but no Pop out
   - ⌘K opens a parameter
   - the rail is reachable at 1280×720
   - a five-panel column at the supported 390 px window height scrolls and
@@ -339,7 +353,7 @@ Each slice is one PR and records its evidence in the U08 row.
   - Header drags, rail drag-out, the chip and slot preview, new columns on
     both sides with the rail slide, emptied columns holding their place.
   - Floating windows and stacks, the frame grip, corner resize.
-  - The keyboard Move menu, separator keys, floating-window arrow keys.
+  - The keyboard Move menu, separator keys, floating-window move and resize keys, and Pop out in the header.
   - The 60% dock-footprint cap, which matters from this slice on because it adds
     extra columns and the left dock.
   - The two-sided Essentials default for devices with no stored layout.
@@ -353,6 +367,10 @@ Each slice is one PR and records its evidence in the U08 row.
   - Keyboard placement through the Move menu: into a named column at a
     chosen slot (Move to, then Move up/down), into a floating window, a new
     column on each side, and Float.
+  - Keyboard moving and resizing of a floating window, from the grip and
+    from the resize control, stopping at the bounds.
+  - At 720 px a stored floating layout shows one panel in the phone lane,
+    Pop out is not offered, and widening the window restores the windows.
   - Unit tests for the hit-test thresholds.
   - A render-count check that `ModelViewer` doesn't re-render during a drag.
 
