@@ -66,6 +66,8 @@ export interface EngineApi {
     groupInfo: Uint8Array,
     request: RejoinRequest
   ): RejoinResult;
+  confirmRejoin(id: number): void;
+  discardRejoin(id: number): void;
   status(id: number): SessionStatus;
   projectKey(id: number): Uint8Array;
   epochAuthenticator(id: number): Uint8Array;
@@ -393,6 +395,14 @@ export class MlsEngine implements EngineApi {
       )
     );
     return { commit: fromHex(out.commit), change: change(out.change) };
+  }
+
+  confirmRejoin(id: number): void {
+    this.run(() => this.session(id).confirmRejoin());
+  }
+
+  discardRejoin(id: number): void {
+    this.run(() => this.session(id).discardRejoin());
   }
 
   status(id: number): SessionStatus {

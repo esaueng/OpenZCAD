@@ -55,6 +55,8 @@ const METHODS = new Set<string>([
   'groupInfo',
   'inspectGroupInfo',
   'rejoin',
+  'confirmRejoin',
+  'discardRejoin',
   'status',
   'projectKey',
   'epochAuthenticator',

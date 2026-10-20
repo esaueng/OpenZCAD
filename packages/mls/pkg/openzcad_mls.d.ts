@@ -12,8 +12,16 @@ export class MlsSession {
      */
     commit(spec_json: string, key_packages: Uint8Array[]): string;
     confirmCommit(): string;
+    /**
+     * The room accepted the external Commit.
+     */
+    confirmRejoin(): void;
     createGroup(rejoin_window: number): string;
     discardCommit(): void;
+    /**
+     * Another Commit won the epoch: restore the session as before the rejoin.
+     */
+    discardRejoin(): void;
     epochAuthenticator(): Uint8Array;
     export(): Uint8Array;
     /**
@@ -83,8 +91,10 @@ export interface InitOutput {
     readonly mlssession_certify: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_commit: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly mlssession_confirmCommit: (a: number, b: number) => void;
+    readonly mlssession_confirmRejoin: (a: number, b: number) => void;
     readonly mlssession_createGroup: (a: number, b: number, c: number) => void;
     readonly mlssession_discardCommit: (a: number, b: number) => void;
+    readonly mlssession_discardRejoin: (a: number, b: number) => void;
     readonly mlssession_epochAuthenticator: (a: number, b: number) => void;
     readonly mlssession_export: (a: number, b: number) => void;
     readonly mlssession_generate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;

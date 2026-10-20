@@ -410,6 +410,7 @@ async function rejoin(
     ...(replaceLeaf === undefined ? {} : { replaceLeaf })
   });
   await deliver(result.commit, receivers);
+  await joiner.session.confirmRejoin();
   await world.storePsks([joiner, ...receivers]);
   return `PSK of epoch ${psk.epoch} accepted; now epoch ${result.change.epoch}`;
 }
@@ -796,6 +797,7 @@ const rejoinRules = suite<RejoinCast>({
           psk: solo.newestPsk('S'),
           replaceLeaf: stale
         });
+        await s2.session.confirmRejoin();
         await solo.storePsks([s2]);
         await tick(solo, s2, []);
         const status = await s2.session.status();
@@ -912,6 +914,53 @@ const rejoinRules = suite<RejoinCast>({
         );
         context.a3 = back;
         return `${result}; ${await agree([a1, back, b1])}`;
+      }
+    },
+    {
+      name: 'a rejoin that loses its epoch to another Commit is discarded and retried',
+      async run({ world, a1, a2, a3, b1 }) {
+        // A failed rejoin leaves a removed session removed.
+        const removed = await world.copy(a2, 'A2 (failed rejoin)');
+        await failsWith(
+          () =>
+            removed.session.rejoin(new Uint8Array([1]), {
+              psk: { epoch: 0, secret: new Uint8Array(32) }
+            }),
+          'mls'
+        );
+        assert(
+          (await removed.session.status()).removed,
+          'still removed after a failed rejoin'
+        );
+        world.retire(removed);
+        const a8 = await world.device('A', 'A8');
+        const groupInfo = await a1.session.groupInfo();
+        const lost = await a8.session.rejoin(groupInfo, {
+          psk: world.psk('A', await epochOf(a1))
+        });
+        let status = await a8.session.status();
+        assert(status.pendingRejoin && status.inGroup, 'the rejoin is pending');
+        await failsWith(() => a8.session.commit(), 'state');
+        await failsWith(() => a8.session.projectKey(), 'state');
+        // The room took B1's Commit for that epoch instead.
+        await advance(world, b1, [a1, a3]);
+        await failsWith(() => a1.session.process(lost.commit), 'mls');
+        await a8.session.discardRejoin();
+        status = await a8.session.status();
+        assert(
+          !status.pendingRejoin && !status.inGroup,
+          'the session is back to no group'
+        );
+        const retried = await rejoin(
+          world,
+          a8,
+          a1,
+          world.psk('A', await epochOf(a1)),
+          [a1, a3, b1]
+        );
+        world.retire(a8);
+        await advance(world, a1, [a3, b1, a8], { remove: [await indexOf(a8)] });
+        return `stale rejoin discarded; ${retried}`;
       }
     },
     {

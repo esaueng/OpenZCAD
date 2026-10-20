@@ -223,6 +223,18 @@ impl MlsSession {
         json(&self.inner.rejoin(group_info, psk_epoch, psk, remove).map_err(to_js)?)
     }
 
+    /// The room accepted the external Commit.
+    #[wasm_bindgen(js_name = confirmRejoin)]
+    pub fn confirm_rejoin(&mut self) -> Result<(), JsValue> {
+        self.inner.confirm_rejoin().map_err(to_js)
+    }
+
+    /// Another Commit won the epoch: restore the session as before the rejoin.
+    #[wasm_bindgen(js_name = discardRejoin)]
+    pub fn discard_rejoin(&mut self) -> Result<(), JsValue> {
+        self.inner.discard_rejoin().map_err(to_js)
+    }
+
     pub fn status(&self) -> Result<String, JsValue> {
         json(&self.inner.status().map_err(to_js)?)
     }

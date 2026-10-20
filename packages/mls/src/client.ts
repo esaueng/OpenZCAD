@@ -173,9 +173,21 @@ export class MlsSession {
     return this.api.inspectGroupInfo(this.id, groupInfo);
   }
 
-  /** Rejoin by external Commit with a rejoin PSK. */
+  /**
+   * Rejoin by external Commit with a rejoin PSK. The new epoch is provisional
+   * until the room accepts the Commit (`confirmRejoin`); if another Commit
+   * wins the epoch, `discardRejoin` restores the session as it was.
+   */
   rejoin(groupInfo: Uint8Array, request: RejoinRequest): Promise<RejoinResult> {
     return this.api.rejoin(this.id, groupInfo, request);
+  }
+
+  confirmRejoin(): Promise<void> {
+    return this.api.confirmRejoin(this.id);
+  }
+
+  discardRejoin(): Promise<void> {
+    return this.api.discardRejoin(this.id);
   }
 
   status(): Promise<SessionStatus> {

@@ -30,19 +30,19 @@ const projectKey = await session.projectKey();
 const sealed = await session.seal(stateKey); // non-extractable AES-256-GCM
 ```
 
-| Operation                               | Methods                                                    |
-| --------------------------------------- | ---------------------------------------------------------- |
-| Leaf key, certified by the device key   | `generate`, `certificationPayload`, `certify`              |
-| Create; KeyPackage; Add + Welcome; join | `createGroup`, `keyPackage`, `commit({ add })`, `join`     |
-| Update, Remove, roles                   | `proposeUpdate`, `commit({ remove, setRoles, dropUsers })` |
-| Leave                                   | `proposeSelfRemove` (another member commits it)            |
-| The room accepts or rejects a Commit    | `confirmCommit`, `discardCommit`                           |
-| Incoming proposals and Commits          | `process`                                                  |
-| Rejoin by external Commit               | `groupInfo`, `inspectGroupInfo`, `rejoin`, `rejoinPsk`     |
-| Keys and codes                          | `projectKey`, `epochAuthenticator`                         |
-| History archive                         | `EpochChange.epochRecord`, `decodeEpochRecord`             |
-| Verify members before joining           | `inspectWelcome`, `leafCertificationPayload`               |
-| Persist                                 | `seal`, `Mls.open`                                         |
+| Operation                               | Methods                                                                                  |
+| --------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Leaf key, certified by the device key   | `generate`, `certificationPayload`, `certify`                                            |
+| Create; KeyPackage; Add + Welcome; join | `createGroup`, `keyPackage`, `commit({ add })`, `join`                                   |
+| Update, Remove, roles                   | `proposeUpdate`, `commit({ remove, setRoles, dropUsers })`                               |
+| Leave                                   | `proposeSelfRemove` (another member commits it)                                          |
+| The room accepts or rejects a Commit    | `confirmCommit`, `discardCommit`                                                         |
+| Incoming proposals and Commits          | `process`                                                                                |
+| Rejoin by external Commit               | `groupInfo`, `inspectGroupInfo`, `rejoin`, `confirmRejoin`, `discardRejoin`, `rejoinPsk` |
+| Keys and codes                          | `projectKey`, `epochAuthenticator`                                                       |
+| History archive                         | `EpochChange.epochRecord`, `decodeEpochRecord`                                           |
+| Verify members before joining           | `inspectWelcome`, `leafCertificationPayload`                                             |
+| Persist                                 | `seal`, `Mls.open`                                                                       |
 
 Seal and store the session after every operation that changes it, before
 sending its output to the room. A reopened session needs `setDirectory` again.

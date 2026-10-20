@@ -180,6 +180,7 @@ pub struct Status {
     pub epoch: Option<u64>,
     pub own_index: Option<u32>,
     pub pending_commit: bool,
+    pub pending_rejoin: bool,
     pub members: Vec<LeafInfo>,
     pub roles: Option<RolesInfo>,
 }
@@ -257,6 +258,9 @@ struct StoredSession {
     proposals: Vec<StoredProposal>,
     pending: Option<StoredPending>,
     removed: bool,
+    /// The session as it was before an external Commit the room has not
+    /// accepted yet.
+    rejoin_backup: Option<Vec<u8>>,
 }
 
 /// One epoch of the history archive (ADR-024, "Historical authority"): the
@@ -294,6 +298,7 @@ pub struct Session {
     proposals: BTreeMap<Vec<u8>, Vec<u8>>,
     pending: Option<StoredPending>,
     removed: bool,
+    rejoin_backup: Option<Vec<u8>>,
 }
 
 fn check_id(label: &str, value: &[u8]) -> Res<()> {
@@ -327,6 +332,7 @@ impl Session {
             proposals: BTreeMap::new(),
             pending: None,
             removed: false,
+            rejoin_backup: None,
         })
     }
 
@@ -529,6 +535,7 @@ impl Session {
     /// commit stays pending until the room accepts it ([`Self::confirm_commit`])
     /// or another Commit wins the epoch ([`Self::discard_commit`]).
     pub fn commit(&mut self, spec: CommitSpec, key_packages: Vec<Vec<u8>>) -> Res<PendingCommit> {
+        self.settled()?;
         if self.group()?.has_pending_commit() {
             return Err(Error::state("a commit is already pending"));
         }
@@ -640,6 +647,7 @@ impl Session {
     }
 
     pub fn confirm_commit(&mut self) -> Res<EpochChange> {
+        self.settled()?;
         let pending = self
             .pending
             .clone()
@@ -652,6 +660,7 @@ impl Session {
     }
 
     pub fn discard_commit(&mut self) -> Res<()> {
+        self.settled()?;
         self.group_mut()?.clear_pending_commit();
         self.pending = None;
         self.write()
@@ -659,17 +668,20 @@ impl Session {
 
     /// An Add by reference, for another member to commit.
     pub fn propose_add(&mut self, key_package: &[u8]) -> Res<Vec<u8>> {
+        self.settled()?;
         let key_package = MlsMessage::from_bytes(key_package)?;
         let message = self.group_mut()?.propose_add(key_package, Vec::new())?;
         self.remember_own_proposal(message)
     }
 
     pub fn propose_update(&mut self) -> Res<Vec<u8>> {
+        self.settled()?;
         let message = self.group_mut()?.propose_update(Vec::new())?;
         self.remember_own_proposal(message)
     }
 
     pub fn propose_self_remove(&mut self) -> Res<Vec<u8>> {
+        self.settled()?;
         let message = self.group_mut()?.propose_self_remove(Vec::new())?;
         self.remember_own_proposal(message)
     }
@@ -686,6 +698,7 @@ impl Session {
 
     /// Process a handshake message from the room: a proposal or a Commit.
     pub fn process(&mut self, bytes: &[u8]) -> Res<Processed> {
+        self.settled()?;
         let message = MlsMessage::from_bytes(bytes)?;
         let is_commit = matches!(
             message.description(),
@@ -732,6 +745,7 @@ impl Session {
     /// A GroupInfo that lets a device of a listed member rejoin by external
     /// Commit, carrying this member's leaf-removal records.
     pub fn group_info(&self) -> Res<Vec<u8>> {
+        self.settled()?;
         let mut extensions = ExtensionList::new();
         let removals = self.policy.removals.lock().unwrap().clone();
         extensions
@@ -790,10 +804,72 @@ impl Session {
     /// Rejoin by external Commit with a rejoin PSK, optionally replacing one
     /// stale leaf of this user in the same Commit.
     /// A session whose leaf was removed may rejoin; its old group is dropped.
+    ///
+    /// The new epoch stays provisional until the room accepts the external
+    /// Commit ([`Self::confirm_rejoin`]); if another Commit wins the epoch,
+    /// [`Self::discard_rejoin`] restores the session as it was. Any failure
+    /// restores it too.
     pub fn rejoin(&mut self, group_info: &[u8], psk_epoch: u64, psk: &[u8], remove: Option<u32>) -> Res<RejoinResult> {
+        if self.rejoin_backup.is_some() {
+            return Err(Error::state("a rejoin is already pending"));
+        }
         if self.group.is_some() && !self.removed {
             return Err(Error::state("this session already has a group"));
         }
+        let backup = self.export()?;
+        match self.rejoin_provisional(group_info, psk_epoch, psk, remove) {
+            Ok(result) => {
+                self.rejoin_backup = Some(backup);
+                Ok(result)
+            }
+            Err(error) => {
+                self.restore_from(&backup)?;
+                Err(error)
+            }
+        }
+    }
+
+    pub fn confirm_rejoin(&mut self) -> Res<()> {
+        self.rejoin_backup
+            .take()
+            .map(|_| ())
+            .ok_or_else(|| Error::state("no rejoin is pending"))
+    }
+
+    pub fn discard_rejoin(&mut self) -> Res<()> {
+        let backup = self
+            .rejoin_backup
+            .take()
+            .ok_or_else(|| Error::state("no rejoin is pending"))?;
+        self.restore_from(&backup)
+    }
+
+    /// Replace this session with an exported copy, keeping the injected
+    /// verifier and the test flag.
+    fn restore_from(&mut self, backup: &[u8]) -> Res<()> {
+        let verifier = self.policy.directory.get();
+        let skip = self.policy.skip_send_checks.load(Ordering::Relaxed);
+        let restored = Session::import(backup, &self.project_id)?;
+        restored.policy.directory.set(verifier);
+        restored.set_skip_send_checks(skip);
+        *self = restored;
+        Ok(())
+    }
+
+    fn settled(&self) -> Res<()> {
+        if self.rejoin_backup.is_some() {
+            return Err(Error::state("confirm or discard the pending rejoin first"));
+        }
+        Ok(())
+    }
+
+    fn rejoin_provisional(
+        &mut self,
+        group_info: &[u8],
+        psk_epoch: u64,
+        psk: &[u8],
+        remove: Option<u32>,
+    ) -> Res<RejoinResult> {
         if self.removed {
             self.removed = false;
             self.group = None;
@@ -1039,6 +1115,7 @@ impl Session {
             epoch,
             own_index,
             pending_commit: pending,
+            pending_rejoin: self.rejoin_backup.is_some(),
             members,
             roles,
         })
@@ -1047,6 +1124,7 @@ impl Session {
     /// The per-epoch project key: `MLS-Exporter("openzcad project key",
     /// project id, 32)`.
     pub fn project_key(&self) -> Res<Vec<u8>> {
+        self.settled()?;
         Ok(self
             .group()?
             .export_secret(PROJECT_KEY_LABEL, &self.project_id, 32)?
@@ -1054,10 +1132,12 @@ impl Session {
     }
 
     pub fn epoch_authenticator(&self) -> Res<Vec<u8>> {
+        self.settled()?;
         Ok(self.group()?.epoch_authenticator()?.to_vec())
     }
 
     pub fn rejoin_psk(&self) -> Res<RejoinPsk> {
+        self.settled()?;
         let epoch = self.group()?.current_epoch();
         let secret = self
             .psks
@@ -1111,6 +1191,7 @@ impl Session {
                 .collect(),
             pending: self.pending.clone(),
             removed: self.removed,
+            rejoin_backup: self.rejoin_backup.clone(),
         }
         .mls_encode_to_vec()
         .map_err(Error::codec)
@@ -1147,6 +1228,7 @@ impl Session {
             proposals: stored.proposals.into_iter().map(|p| (p.reference, p.message)).collect(),
             pending: stored.pending,
             removed: stored.removed,
+            rejoin_backup: stored.rejoin_backup,
         };
         for kp in stored.key_packages {
             session.key_packages.insert(kp.id, kp.data);

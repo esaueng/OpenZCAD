@@ -145,6 +145,8 @@ export interface SessionStatus {
   epoch: number | null;
   ownIndex: number | null;
   pendingCommit: boolean;
+  /** An external rejoin the room has not accepted yet. */
+  pendingRejoin: boolean;
   members: LeafInfo[];
   roles: ProjectRoles | null;
 }
