@@ -172,6 +172,32 @@ Milliseconds over the 26 accepted warm ticks. The other 14 ticks were refused
   - Regression: the second test in `test/preview-measured-body-reuse.test.ts`.
     With the store removed, the untouched extrusion is meshed on every tick.
 
+- **The preview face cache is now keyed by Remus's face content digest.**
+  - `faceContentDigests` (esaueng/remus#1188) returns a 128-bit exact digest
+    of each face's content. A preview reads one digest per meshed body, and
+    a face whose digest it has seen before skips its witness, shape key and
+    measurement. All three read only the face's own surface, boundary and
+    vertices, which the digest covers.
+  - The binding is feature-detected. Until a Remus package ships it, the
+    pinned kernel keeps the previous path.
+  - Measured against a local release build of that Remus branch (SIMD, no
+    `wasm-opt`), with the binding present and renamed away in the same
+    build. Hammer holder, 12 ticks, 6 accepted:
+
+    | Run                   | Accepted wall p50 / p95 | Kernel p50 / p95 | `edgeLength` / `evaluateEdgeCurve` reads per tick |
+    | --------------------- | ----------------------: | ---------------: | ------------------------------------------------: |
+    | Holder, digests off   |           182.8 / 257.7 |    133.1 / 180.0 |                                       410 / 3,020 |
+    | Holder, digests on    |           135.1 / 228.5 |     92.8 / 148.8 |                                         117 / 705 |
+    | + 200 boxes, off (×3) |   228.8–254.1 / 355–425 |      132.4–147.1 |                                       410 / 3,020 |
+    | + 200 boxes, on (×3)  |   215.2–231.9 / 408–421 |      127.3–137.5 |                                         117 / 705 |
+
+  - The digest call costs about 2 ms per tick. With 200 boxes the p95 tick
+    is the drag's first, which meshes the 57 rebuilt bodies; it is unchanged
+    within this host's noise.
+  - Regression: `test/preview-face-digest.test.ts` publishes identical
+    previews with and without digests and requires digest hits. It skips on
+    kernels without the binding, so CI runs it once the Remus update lands.
+
 ## Not measured here
 
 - `postMessage` costs.
