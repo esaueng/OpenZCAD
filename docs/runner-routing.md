@@ -5,6 +5,29 @@ immutable commit from `ci.yml`. GitHub evaluates the runner expression before
 scheduling each job. There is no GitHub-hosted authorization or routing job in
 front of the Linux checks, and no routing HTTP request from Actions.
 
+## Changing the fleet workflow
+
+`ci.yml` must pin a commit main already contains. Actions cannot resolve a
+reusable workflow at a commit only `refs/pull/N/head` reaches, and GitHub
+deletes a PR's branch at merge, so a pin to a PR branch commit fails every
+`ci` run at startup, with no jobs, from that merge until a re-pin lands. That
+happened on 19 October after #756 and on 20 October after #769.
+`scripts/test-direct-fleet.py` fails a pin that main does not contain.
+
+Change it in two PRs, as Remus does:
+
+1. **Stage.** Add the new version as `fleet-ci-vN.yml` (the next unused N),
+   with `ci.yml` and the active file unchanged. Add it to the runner map in
+   `test/security-workflow.test.ts`. Nothing calls it yet.
+2. **Activate.** After the staging PR merges, pin `ci.yml` to
+   `fleet-ci-vN.yml@<the staging squash commit on main>` and delete the
+   previously active file. This PR's own CI runs the new version before it
+   reaches main. Tests read the active file from the pin
+   (`test/fleet-workflow.ts`), and the pinned bytes must equal the
+   checked-in file.
+
+Old pinned commits stay on main, so earlier runs can still be re-run.
+
 Only the approved owner's open, same-repository PR merge refs are eligible.
 Main pushes and manual dispatches also require protected main. Repository name
 and numeric identity, PR author, event actor and rerun actor are checked in the

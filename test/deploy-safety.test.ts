@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
 import { UPLOAD_CLEANUP_CRON } from '../scripts/validate-deployment-config.mjs';
+import { FLEET_CI_PATH } from './fleet-workflow';
 
 interface PackageJson {
   scripts?: Record<string, string>;
@@ -198,7 +199,7 @@ describe('CI gates cannot silently stop testing', () => {
     // touches anything but the lockfile precisely so a kernel change gets its
     // own parity-tested review; without this guard, a Dependabot bump bypasses
     // that entirely and no commit message mentions the kernel.
-    const ci = readFileSync('.github/workflows/fleet-ci.yml', 'utf8');
+    const ci = readFileSync(FLEET_CI_PATH, 'utf8');
     expect(ci).toContain('Refuse an unannounced geometry kernel bump');
     expect(ci).toContain('automation/remus-');
     // The default checkout is shallow, so the guard has to fetch the one base
