@@ -161,6 +161,35 @@ export function gridCellsAlong(
 const MAX_OCCLUSION_GRID_ENTRIES = 4_000_000;
 
 /**
+ * The parameter range of segment a→b inside the box, by Liang–Barsky, or
+ * null when it misses the box.
+ */
+function clipToBox(
+  au: number,
+  av: number,
+  bu: number,
+  bv: number,
+  box: { minU: number; minV: number; maxU: number; maxV: number }
+): [number, number] | null {
+  const du = bu - au;
+  const dv = bv - av;
+  let t0 = 0;
+  let t1 = 1;
+  for (const [p, q] of [
+    [-du, au - box.minU],
+    [du, box.maxU - au],
+    [-dv, av - box.minV],
+    [dv, box.maxV - av]
+  ] as const) {
+    if (p === 0) {
+      if (q < 0) return null;
+    } else if (p < 0) t0 = Math.max(t0, q / p);
+    else t1 = Math.min(t1, q / p);
+  }
+  return t0 <= t1 ? [t0, t1] : null;
+}
+
+/**
  * One occlusion grid per body, each over that body's own extent. A single
  * grid over the whole view sizes its cells by the view, so compact bodies far
  * apart on the page each fall into one cell, and every segment then tests
@@ -246,23 +275,15 @@ export class OcclusionIndex {
     const du = bu - au;
     const dv = bv - av;
     for (const entry of this.grids) {
-      // Liang–Barsky: the part of the segment over this grid's extent.
-      let t0 = 0;
-      let t1 = 1;
-      const sides: [number, number][] = [
-        [-du, au - (entry.minU - entry.margin)],
-        [du, entry.maxU + entry.margin - au],
-        [-dv, av - (entry.minV - entry.margin)],
-        [dv, entry.maxV + entry.margin - av]
-      ];
-      let outside = false;
-      for (const [p, q] of sides) {
-        if (p === 0) {
-          if (q < 0) outside = true;
-        } else if (p < 0) t0 = Math.max(t0, q / p);
-        else t1 = Math.min(t1, q / p);
-      }
-      if (outside || t0 > t1) continue;
+      // The part of the segment over this grid's extent.
+      const clipped = clipToBox(au, av, bu, bv, {
+        minU: entry.minU - entry.margin,
+        minV: entry.minV - entry.margin,
+        maxU: entry.maxU + entry.margin,
+        maxV: entry.maxV + entry.margin
+      });
+      if (!clipped) continue;
+      const [t0, t1] = clipped;
       const at = (t: number) =>
         [au + du * t, av + dv * t, ad + (bd - ad) * t] as const;
       const [cu0, cv0, cd0] = t0 === 0 ? [au, av, ad] : at(t0);
@@ -283,20 +304,38 @@ export class OcclusionIndex {
   }
 }
 
-/** Exported for tests. */
+/** A cell holding more triangles than this gets a finer grid of its own. */
+const CELL_SPLIT_LOAD = 64;
+/** How many times a cell may be refined, below the top grid. */
+const MAX_GRID_LEVEL = 4;
+
+/**
+ * A uniform grid of triangle indices over a box, refined where it is dense:
+ * a cell that holds more than `CELL_SPLIT_LOAD` triangles gets a grid of its
+ * own over the cell, so separate solids of one body (a pattern's instances)
+ * or any clustered mesh never pile into a few coarse cells. Exported for
+ * tests.
+ */
 export class OcclusionGrid {
   private readonly cells: number[][];
+  /** A finer grid for each refined cell. */
+  private readonly children: (OcclusionGrid | undefined)[];
   private readonly size: number;
   private readonly minU: number;
   private readonly minV: number;
+  private readonly maxU: number;
+  private readonly maxV: number;
   private readonly cellU: number;
   private readonly cellV: number;
+  private remainingEntries: number;
 
   constructor(
     private readonly triangles: Triangle[],
     bounds: { minU: number; minV: number; maxU: number; maxV: number },
     private readonly coverTolerance: number,
-    entryBudget = MAX_OCCLUSION_GRID_ENTRIES
+    entryBudget = MAX_OCCLUSION_GRID_ENTRIES,
+    members?: readonly number[],
+    level = 0
   ) {
     if (!Number.isSafeInteger(entryBudget) || entryBudget < 0)
       throw new Error('Invalid drawing projection memory budget.');
@@ -305,10 +344,13 @@ export class OcclusionGrid {
     // cannot raise the production limit.
     const entryLimit = Math.min(entryBudget, MAX_OCCLUSION_GRID_ENTRIES);
     let entries = 0;
+    const indices = members ?? triangles.map((_, index) => index);
     this.size = Math.max(
       8,
-      Math.min(256, Math.ceil(Math.sqrt(triangles.length / 2)))
+      Math.min(256, Math.ceil(Math.sqrt(indices.length / 2)))
     );
+    this.maxU = bounds.maxU;
+    this.maxV = bounds.maxV;
     this.minU = bounds.minU;
     this.minV = bounds.minV;
     this.cellU = Math.max((bounds.maxU - bounds.minU) / this.size, 1e-12);
@@ -318,7 +360,8 @@ export class OcclusionGrid {
     // to the row's strip and take the strip's u-range. Bounding boxes would
     // put a long thin sliver (a fan around a shared vertex) into every cell
     // of its box, which on a dense mesh runs to billions of entries.
-    triangles.forEach((triangle, index) => {
+    for (const index of indices) {
+      const triangle = triangles[index]!;
       const corners = [
         [triangle.u0, triangle.v0],
         [triangle.u1, triangle.v1],
@@ -358,17 +401,116 @@ export class OcclusionGrid {
         for (let i = i0; i <= i1; i += 1)
           this.cells[j * this.size + i]!.push(index);
       }
+    }
+    this.remainingEntries = entryLimit - entries;
+    this.children = new Array<OcclusionGrid | undefined>(this.cells.length);
+    if (level === 0) this.refine(0);
+  }
+
+  /**
+   * Gives each dense cell a finer grid of its own, kept only when it spreads
+   * the cell's triangles out (half the load or less in its fullest cell)
+   * without filing them many times over: a fan of slivers meeting at one
+   * point, or slivers crossing the whole cell, gain nothing from it.
+   */
+  private refine(level: number): void {
+    if (level >= MAX_GRID_LEVEL) return;
+    this.cells.forEach((cell, key) => {
+      if (cell.length <= CELL_SPLIT_LOAD) return;
+      const i = key % this.size;
+      const j = Math.floor(key / this.size);
+      // Over what the cell's triangles occupy of it: a compact solid far
+      // smaller than the cell gets cells of its own size.
+      const box = {
+        minU: Infinity,
+        minV: Infinity,
+        maxU: -Infinity,
+        maxV: -Infinity
+      };
+      for (const index of cell) {
+        const t = this.triangles[index]!;
+        box.minU = Math.min(box.minU, t.u0, t.u1, t.u2);
+        box.maxU = Math.max(box.maxU, t.u0, t.u1, t.u2);
+        box.minV = Math.min(box.minV, t.v0, t.v1, t.v2);
+        box.maxV = Math.max(box.maxV, t.v0, t.v1, t.v2);
+      }
+      const child = new OcclusionGrid(
+        this.triangles,
+        {
+          minU: Math.max(box.minU, this.minU + i * this.cellU),
+          minV: Math.max(box.minV, this.minV + j * this.cellV),
+          maxU: Math.min(box.maxU, this.minU + (i + 1) * this.cellU),
+          maxV: Math.min(box.maxV, this.minV + (j + 1) * this.cellV)
+        },
+        this.coverTolerance,
+        this.remainingEntries,
+        cell,
+        level + 1
+      );
+      if (
+        child.maxCellLoad > cell.length / 2 ||
+        child.entryCount > cell.length * 4
+      )
+        return;
+      child.refine(level + 1);
+      // Parent cells stay allocated: every retained level and sibling shares
+      // the same allowance. A candidate is bounded before it files any row.
+      this.remainingEntries -= child.entryCount;
+      this.children[key] = child;
     });
   }
 
-  /** How many triangle entries the grid holds; for tests. */
+  /** All retained triangle entries, including parent cells; for tests. */
   get entryCount(): number {
-    return this.cells.reduce((sum, cell) => sum + cell.length, 0);
+    return this.cells.reduce(
+      (sum, cell, key) =>
+        sum + cell.length + (this.children[key]?.entryCount ?? 0),
+      0
+    );
   }
 
-  /** The most triangle entries any one cell holds; for tests. */
+  /** The most triangle entries any one of its finest cells holds; for tests. */
   get maxCellLoad(): number {
-    return this.cells.reduce((most, cell) => Math.max(most, cell.length), 0);
+    return this.cells.reduce(
+      (most, cell, key) =>
+        Math.max(most, this.children[key]?.maxCellLoad ?? cell.length),
+      0
+    );
+  }
+
+  /** Adds the triangles of every finest cell segment a→b passes through. */
+  private collect(
+    au: number,
+    av: number,
+    bu: number,
+    bv: number,
+    seen: Set<number>
+  ): void {
+    for (const key of this.cellsAlong(au, av, bu, bv)) {
+      const child = this.children[key];
+      if (!child) {
+        for (const index of this.cells[key]!) seen.add(index);
+        continue;
+      }
+      // Only the stretch over that cell walks its finer grid; a hair of
+      // margin keeps a segment along the cell's edge.
+      const margin = Math.max(this.cellU, this.cellV) * 1e-9;
+      const clipped = clipToBox(au, av, bu, bv, {
+        minU: child.minU - margin,
+        minV: child.minV - margin,
+        maxU: child.maxU + margin,
+        maxV: child.maxV + margin
+      });
+      if (!clipped) continue;
+      const [t0, t1] = clipped;
+      child.collect(
+        au + (bu - au) * t0,
+        av + (bv - av) * t0,
+        au + (bu - au) * t1,
+        av + (bv - av) * t1,
+        seen
+      );
+    }
   }
 
   private column(u: number): number {
@@ -403,12 +545,11 @@ export class OcclusionGrid {
   ): { t: number; depth: boolean; onA?: boolean; onB?: boolean }[] {
     const du = bu - au;
     const dv = bv - av;
-    // Every cell the segment passes through, by an exact supercover walk:
-    // triangles are bucketed by their bounding boxes, so a triangle the
-    // segment crosses is in one of these cells.
+    // Every finest cell the segment passes through, by an exact supercover
+    // walk: triangles are filed under every cell they cover, so a triangle
+    // the segment crosses is in one of these cells.
     const seen = new Set<number>();
-    for (const cell of this.cellsAlong(au, av, bu, bv))
-      for (const index of this.cells[cell]!) seen.add(index);
+    this.collect(au, av, bu, bv, seen);
     const out: { t: number; depth: boolean; onA?: boolean; onB?: boolean }[] =
       [];
     const denomFloor = 1e-18;
@@ -477,7 +618,10 @@ export class OcclusionGrid {
 
   /** True when a triangle covers (u, v) in front of `depth`. */
   occluded(u: number, v: number, depth: number): boolean {
-    const cell = this.cells[this.row(v) * this.size + this.column(u)]!;
+    const key = this.row(v) * this.size + this.column(u);
+    const child = this.children[key];
+    if (child) return child.occluded(u, v, depth);
+    const cell = this.cells[key]!;
     for (const index of cell) {
       const t = this.triangles[index]!;
       // Barycentric weights against the signed projected area. A sample on a

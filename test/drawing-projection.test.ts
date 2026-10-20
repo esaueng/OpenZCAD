@@ -1125,6 +1125,74 @@ describe('D01 occlusion tolerance', () => {
 });
 
 describe('D01 occlusion grid', () => {
+  it('counts parent and refined cells in the shared view entry budget', () => {
+    // Two small tessellated patches in one group exercise refinement of a
+    // concatenated mesh; a second group exercises the view-wide allowance.
+    const triangles: Triangle[] = [];
+    for (const offset of [0, 1000])
+      for (let u = 0; u < 10; u += 1)
+        for (let v = 0; v < 10; v += 1)
+          for (const [a, b, c] of [
+            [
+              [u, v],
+              [u + 1, v],
+              [u + 1, v + 1]
+            ],
+            [
+              [u, v],
+              [u + 1, v + 1],
+              [u, v + 1]
+            ]
+          ] as const)
+            triangles.push({
+              u0: offset + a[0],
+              v0: offset + a[1],
+              d0: 0,
+              u1: offset + b[0],
+              v1: offset + b[1],
+              d1: 0,
+              u2: offset + c[0],
+              v2: offset + c[1],
+              d2: 0,
+              area: 1,
+              tol: 0
+            });
+    const bounds = { minU: 0, minV: 0, maxU: 1010, maxV: 1010 };
+    const ordinary = new OcclusionGrid(triangles, bounds, 1e-9);
+    expect(ordinary.maxCellLoad).toBeLessThan(50);
+    expect(
+      () => new OcclusionGrid(triangles, bounds, 1e-9, triangles.length)
+    ).toThrow(/drawing view.*memory budget/i);
+    const exact = new OcclusionGrid(
+      triangles,
+      bounds,
+      1e-9,
+      ordinary.entryCount
+    );
+    expect(exact.entryCount).toBe(ordinary.entryCount);
+    expect(exact.occluded(5.5, 5.2, 1)).toBe(true);
+    expect(exact.occluded(1005.5, 1005.2, 1)).toBe(true);
+    expect(
+      () => new OcclusionGrid(triangles, bounds, 1e-9, ordinary.entryCount - 1)
+    ).toThrow(/drawing view.*memory budget/i);
+    expect(
+      () =>
+        new OcclusionIndex(
+          [triangles, triangles],
+          1e-9,
+          ordinary.entryCount * 2
+        )
+    ).not.toThrow();
+    expect(
+      () =>
+        new OcclusionIndex(
+          [triangles, triangles],
+          1e-9,
+          ordinary.entryCount * 2 - 1
+        )
+    ).toThrow(/drawing view.*memory budget/i);
+  });
+
   it('shares the view entry budget across its body grids', () => {
     const near: Triangle = {
       u0: 0,
@@ -1222,9 +1290,10 @@ describe('D01 occlusion grid', () => {
 
   it('keeps cells small for dense bodies far apart on the page', () => {
     // Two 100 × 100 meshes of 20 000 triangles each, 10^6 mm apart on both
-    // page axes. One grid
-    // over the view put each body in a single cell, so every segment tested
-    // every triangle of a body; one grid per body keeps cells local.
+    // page axes: two bodies, or two solids of one patterned body (the exact
+    // adapter concatenates a pattern's solids into one body). Cells sized by
+    // the view put each in a single cell, so every segment tested every
+    // triangle; a dense cell now gets a finer grid over what it holds.
     const patch = (offset: number) => {
       const triangles: Triangle[] = [];
       for (let i = 0; i < 100; i += 1)
@@ -1267,20 +1336,24 @@ describe('D01 occlusion grid', () => {
       { minU: 0, minV: 0, maxU: 1e6 + 100, maxV: 1e6 + 100 },
       1e-9
     );
-    expect(single.maxCellLoad).toBeGreaterThan(10000);
+    expect(single.maxCellLoad).toBeLessThan(50);
     const index = new OcclusionIndex([near, far], 1e-9);
     expect(index.maxCellLoad).toBeLessThan(50);
-    // It still answers across both bodies, and finds their outlines.
-    expect(index.occluded(50.5, 50.2, 1)).toBe(true);
-    expect(index.occluded(1e6 + 50.5, 1e6 + 50.2, 1)).toBe(true);
-    expect(index.occluded(5e5, 5e5, 1)).toBe(false);
-    // A diagonal from before the first body to past the second: its
-    // footprint crossings start at the first's corner and end at the
-    // second's far corner.
-    const cuts = index.crossings(-10, -10, 1, 1e6 + 110, 1e6 + 110, 1);
-    const footprint = cuts.filter((cut) => !cut.depth).map((cut) => cut.t);
+    const patterned = new OcclusionIndex([[...near, ...far]], 1e-9);
+    expect(patterned.maxCellLoad).toBeLessThan(50);
     const span = 1e6 + 120;
-    expect(footprint.at(0)! * span - 10).toBeCloseTo(0, 4);
-    expect(footprint.at(-1)! * span - 10).toBeCloseTo(1e6 + 100, 4);
+    for (const query of [single, index, patterned]) {
+      // Each still answers across both solids, and finds their outlines.
+      expect(query.occluded(50.5, 50.2, 1)).toBe(true);
+      expect(query.occluded(1e6 + 50.5, 1e6 + 50.2, 1)).toBe(true);
+      expect(query.occluded(5e5, 5e5, 1)).toBe(false);
+      // A diagonal from before the first solid to past the second: its
+      // footprint crossings start at the first's corner and end at the
+      // second's far corner.
+      const cuts = query.crossings(-10, -10, 1, 1e6 + 110, 1e6 + 110, 1);
+      const footprint = cuts.filter((cut) => !cut.depth).map((cut) => cut.t);
+      expect(footprint.at(0)! * span - 10).toBeCloseTo(0, 4);
+      expect(footprint.at(-1)! * span - 10).toBeCloseTo(1e6 + 100, 4);
+    }
   });
 });
