@@ -117,7 +117,14 @@ export interface FloatGroup<T extends PanelEntry = PanelId> extends Rect {
 
 /** Where a closed panel last lived; its rail button reopens it there. */
 export type PanelHome =
-  | { kind: 'column'; side: DockSide; column: number; index: number }
+  | {
+      kind: 'column';
+      side: DockSide;
+      column: number;
+      index: number;
+      /** It was its column's only panel: reopening recreates that column. */
+      alone?: boolean;
+    }
   | { kind: 'float'; rect: Rect };
 
 export interface PanelLayoutOptions {
@@ -171,8 +178,11 @@ export type PanelLocation =
 export type PanelTarget =
   /** Stack in an existing column at `index`. */
   | { kind: 'column'; side: DockSide; column: number; index?: number }
-  /** A new column next to that side's rail. */
-  | { kind: 'newColumn'; side: DockSide }
+  /**
+   * A new column: at `column`, counted from the screen edge, or next to that
+   * side's rail without one.
+   */
+  | { kind: 'newColumn'; side: DockSide; column?: number }
   /** A new floating window. */
   | { kind: 'float'; rect: Rect }
   /** Stack in an existing floating window at `index`. */
@@ -793,6 +803,8 @@ function insertAt(
     const live = columns.filter((column) => column.length > 0);
     if (live.length >= PANEL_MAX_COLUMNS[target.side]) {
       live[live.length - 1]!.push(entry);
+    } else if (target.kind === 'newColumn') {
+      columns.splice(at(columns.length, target.column), 0, [entry]);
     } else {
       columns.push([entry]);
     }
@@ -839,6 +851,17 @@ function placeEntry(
 ): PanelLayout<PanelEntry> {
   const detached = detach(layout, id, true);
   const next = insertAt(detached, entry, target, stage);
+  const source = findPanel(layout, id);
+  // Only a move to another stack starts the panel at an even share; a
+  // reorder within its own column or window keeps the height it was given.
+  const sameStack =
+    (source?.kind === 'column' &&
+      target.kind === 'column' &&
+      source.side === target.side &&
+      source.column === target.column) ||
+    (source?.kind === 'float' &&
+      target.kind === 'group' &&
+      source.groupId === target.groupId);
   const from = layout.floats.find((group) => group.panels.includes(id));
   if (
     target.kind === 'group' &&
@@ -854,7 +877,9 @@ function placeEntry(
     }
   }
   delete next.homes[id];
-  next.weights[id] = 1;
+  if (!sameStack) {
+    next.weights[id] = 1;
+  }
   return next;
 }
 
@@ -936,11 +961,14 @@ function homeOf(layout: PanelLayout, id: PanelId): PanelHome | null {
     return null;
   }
   if (location.kind === 'column') {
+    const alone =
+      sideColumns(layout, location.side)[location.column]!.length === 1;
     return {
       kind: 'column',
       side: location.side,
       column: location.column,
-      index: location.index
+      index: location.index,
+      ...(alone ? { alone } : {})
     };
   }
   const group = layout.floats.find(
@@ -1002,12 +1030,13 @@ export function openPanel(
       // The phone lane shows an open panel wherever it lives, so a phone
       // stage reopens it at home and a wider stage finds it there again.
       const phone = stage !== undefined && stage.width <= PANEL_PHONE_MAX_WIDTH;
-      next = placeAt(
-        layout,
-        id,
-        home.kind === 'float' ? { kind: 'float', rect: home.rect } : home,
-        phone ? undefined : stage
-      );
+      const target: PanelTarget =
+        home.kind === 'float'
+          ? { kind: 'float', rect: home.rect }
+          : home.alone
+            ? { kind: 'newColumn', side: home.side, column: home.column }
+            : home;
+      next = placeAt(layout, id, target, phone ? undefined : stage);
     }
     if (next === layout) {
       next = openUnpinned(layout, id);
@@ -1759,7 +1788,8 @@ function normalizeHome(value: unknown): PanelHome | null {
         0,
         PANEL_MAX_COLUMNS[side] - 1
       ),
-      index: clamp(Math.trunc(finiteOr(raw.index, 0)), 0, PANEL_IDS.length)
+      index: clamp(Math.trunc(finiteOr(raw.index, 0)), 0, PANEL_IDS.length),
+      ...(raw.alone === true ? { alone: true } : {})
     };
   }
   if (raw.kind === 'float') {

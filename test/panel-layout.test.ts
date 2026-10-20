@@ -11,6 +11,7 @@ import {
   defaultPanelLayout,
   dockFootprint,
   ESSENTIALS_RIGHT_PRESET,
+  findPanel,
   finishDrag,
   FLOAT_GROWTH,
   FLOAT_MAX_WIDTH,
@@ -55,6 +56,7 @@ import {
   togglePanel,
   unpinPanel,
   wouldExceedCap,
+  type PanelId,
   type PanelLayout,
   type PanelLayoutStorage,
   type PanelStage,
@@ -503,7 +505,21 @@ describe('drag preview', () => {
           ].filter((entry) => entry === PANEL_SLOT);
           expect(slots).toHaveLength(1);
           expect(commitPreview(preview, id)).toEqual(placed);
-          // From the drag's own layout too.
+          // From the drag's own layout too, except a reorder within the
+          // panel's own stack: the lifted layout no longer says where the
+          // panel came from, which is why previews take the pre-drag layout.
+          const from = findPanel(layout, id);
+          const ownStack =
+            (from?.kind === 'column' &&
+              target.kind === 'column' &&
+              from.side === target.side &&
+              from.column === target.column) ||
+            (from?.kind === 'float' &&
+              target.kind === 'group' &&
+              from.groupId === target.groupId);
+          if (ownStack) {
+            continue;
+          }
           expect(
             commitPreview(
               previewLayout(beginDrag(layout, id), id, target, stage)!,
@@ -513,6 +529,30 @@ describe('drag preview', () => {
         }
       }
     }
+  });
+
+  it("keeps a panel's height when reordered in its stack", () => {
+    let layout = applyPreset(modelOnly(), 'full');
+    const column = layout.right[0]!;
+    expect(column.length).toBeGreaterThan(1);
+    const [first, second] = column as [PanelId, PanelId];
+    layout = resizeGap(layout, first, second, 60, 600);
+    const weights = { ...layout.weights };
+    expect(weights[first]).not.toBe(1);
+    const reordered = placePanel(layout, first, {
+      kind: 'column',
+      side: 'right',
+      column: 0,
+      index: column.length
+    });
+    expect(reordered.right[0]!.at(-1)).toBe(first);
+    expect(reordered.weights).toEqual(weights);
+    // Into another stack it starts at an even share.
+    const moved = placePanel(layout, first, {
+      kind: 'newColumn',
+      side: 'right'
+    });
+    expect(moved.weights[first]).toBe(1);
   });
 
   it('renders the slot where the panel will land', () => {
@@ -676,6 +716,44 @@ describe('opening, closing and pinning', () => {
   });
 });
 
+describe('reopening a panel that had a column to itself', () => {
+  it('recreates the column where it was', () => {
+    let layout = placePanel(modelOnly(), 'history', {
+      kind: 'newColumn',
+      side: 'right'
+    });
+    layout = placePanel(layout, 'revisions', {
+      kind: 'newColumn',
+      side: 'right'
+    });
+    expect(layout.right).toEqual([['history'], ['revisions']]);
+    const closed = closePanel(layout, 'history');
+    expect(closed.right).toEqual([['revisions']]);
+    expect(closed.homes.history).toMatchObject({ column: 0, alone: true });
+    expect(openPanel(closed, 'history', STAGE).right).toEqual([
+      ['history'],
+      ['revisions']
+    ]);
+    // The flag survives a save and load.
+    const restored = normalizePanelLayout(JSON.parse(JSON.stringify(closed)));
+    expect(openPanel(restored, 'history', STAGE).right).toEqual([
+      ['history'],
+      ['revisions']
+    ]);
+    // A panel that shared its column stacks back into it.
+    const shared = placePanel(layout, 'diagnostics', {
+      kind: 'column',
+      side: 'right',
+      column: 1
+    });
+    const reopened = openPanel(
+      closePanel(shared, 'diagnostics'),
+      'diagnostics'
+    );
+    expect(reopened.right).toEqual([['history'], ['revisions', 'diagnostics']]);
+  });
+});
+
 describe('floating windows', () => {
   const stage: PanelStage = { width: 1200, height: 800 };
   const { top, bottom, gap } = DEFAULT_PANEL_INSETS;
@@ -760,6 +838,7 @@ describe('floating windows', () => {
   });
 
   it('keeps its size when a panel is reordered within it', () => {
+    // (Weights too: see 'keeps a panel's height when reordered in its stack'.)
     let layout = popOutPanel(modelOnly(), 'history', {
       x: 100,
       y: 100,
@@ -1309,7 +1388,8 @@ describe('parked panels in the unpinned slot', () => {
       kind: 'column',
       side: 'left',
       column: 0,
-      index: 0
+      index: 0,
+      alone: true
     });
     // Opening another panel unpinned takes the slot back.
     expect(openPanel(shown, 'history').revealed).toBeNull();
