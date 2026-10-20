@@ -306,12 +306,14 @@ describe('I01 document model', () => {
     expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(30);
     expect(saved.schemaVersion).toBe(30);
     expect(normalizeDocument(saved)).toEqual(manager.document);
+    // One past the current version, whatever later slices have taken.
+    const newer = PROJECT_DOCUMENT_SCHEMA_VERSION + 1;
     expect(() =>
       normalizeDocument({
         ...saved,
-        schemaVersion: 28 as typeof saved.schemaVersion
+        schemaVersion: newer as typeof saved.schemaVersion
       })
-    ).toThrow('Unsupported project schema (v28)');
+    ).toThrow(`Unsupported project schema (v${newer})`);
   });
 
   it('moves every spline point and the ellipse centre with the sketch', () => {
