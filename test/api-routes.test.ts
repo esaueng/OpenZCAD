@@ -1285,6 +1285,74 @@ describe('worker api routes', () => {
     expect(storedSettings.sketching.relationGlyphs).toBe('always');
   });
 
+  it('keeps the stored field of view and X-ray opacity when an older client omits them', async () => {
+    const custom = structuredClone(DEFAULT_APP_SETTINGS);
+    custom.viewport.fieldOfView = 70;
+    custom.viewport.xrayOpacity = 60;
+    let storedSettings = structuredClone(custom);
+    let storedRevision = 1;
+    const prepare = vi.fn((query: string) => {
+      let values: unknown[] = [];
+      const statement = {
+        bind(...next: unknown[]) {
+          values = next;
+          return statement;
+        },
+        async first() {
+          return query.includes('FROM user_settings')
+            ? {
+                settings_json: JSON.stringify(storedSettings),
+                revision: storedRevision
+              }
+            : null;
+        },
+        async run() {
+          if (query.includes('UPDATE user_settings')) {
+            storedSettings = JSON.parse(
+              String(values[0])
+            ) as typeof storedSettings;
+            storedRevision = Number(values[1]);
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        },
+        async all() {
+          return { results: [] };
+        }
+      };
+      return statement;
+    });
+    const workerEnv = { ...env, DB: { prepare } } as never;
+
+    // A tab from before these preferences changes the theme and sends none.
+    const legacy = structuredClone(custom) as unknown as {
+      appearance: { theme: string };
+      viewport: Record<string, unknown>;
+    };
+    delete legacy.viewport.fieldOfView;
+    delete legacy.viewport.xrayOpacity;
+    legacy.appearance.theme = 'dark';
+    const saved = await worker.fetch(
+      patch('/api/settings', { settings: legacy, expectedRevision: 1 }),
+      workerEnv
+    );
+    expect(saved.status).toBe(200);
+    expect(storedSettings.appearance.theme).toBe('dark');
+    expect(storedSettings.viewport.fieldOfView).toBe(70);
+    expect(storedSettings.viewport.xrayOpacity).toBe(60);
+
+    // A client that sends them is honoured.
+    const changed = structuredClone(storedSettings);
+    changed.viewport.fieldOfView = 30;
+    const accepted = await worker.fetch(
+      patch('/api/settings', { settings: changed, expectedRevision: 2 }),
+      workerEnv
+    );
+    expect(accepted.status).toBe(200);
+    expect(storedSettings.viewport.fieldOfView).toBe(30);
+    expect(storedSettings.viewport.xrayOpacity).toBe(60);
+  });
+
   it('leaves rooms alone when a save keeps sharing off', async () => {
     const off = structuredClone(DEFAULT_APP_SETTINGS);
     off.collaboration.enabled = false;

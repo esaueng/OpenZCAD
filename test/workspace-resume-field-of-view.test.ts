@@ -43,12 +43,20 @@ describe('workspace resume X-ray', () => {
     expect(parseWorkspaceResumeState(off)?.settings.xray).toBe(false);
   });
 
-  it('drops an unusable X-ray flag and keeps the state', () => {
+  it('reads an absent or unusable X-ray flag as off and keeps the state', () => {
     const parsed = parseWorkspaceResumeState({
       ...state,
       settings: { ...state.settings, xray: 'on' }
     });
     expect(parsed?.settings.displayMode).toBe('shaded-edges');
-    expect(parsed?.settings).not.toHaveProperty('xray');
+    expect(parsed?.settings.xray).toBe(false);
+    // An older device's state, from before X-ray, carries no flag at all.
+    const { xray: _absent, ...older } = {
+      ...state.settings,
+      xray: undefined
+    };
+    expect(
+      parseWorkspaceResumeState({ ...state, settings: older })?.settings.xray
+    ).toBe(false);
   });
 });

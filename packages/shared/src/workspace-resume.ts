@@ -124,8 +124,10 @@ export function parseWorkspaceResumeState(
       showGrid: settings.showGrid,
       displayMode:
         settings.displayMode as WorkspaceResumeState['settings']['displayMode'],
-      // Optional like the field of view: an older device's state has none.
-      ...(typeof settings.xray === 'boolean' ? { xray: settings.xray } : {})
+      // Always set: an older device's state has none, and an absent flag
+      // must still turn X-ray off where the session resumes, as it was off
+      // where it was left.
+      xray: settings.xray === true
     },
     hiddenBodyIds: [...value.hiddenBodyIds],
     selectedBodyIds: [...value.selectedBodyIds],
