@@ -341,6 +341,39 @@ describe('settings navigation', () => {
 });
 
 describe('assistant data disclosure', () => {
+  it('does not promise free access when a restricted deployment denies the account', () => {
+    const settings = defaultAppSettings();
+    renderSettings(null, {
+      initialSection: 'assistant',
+      session: {
+        userId: toUserId('user_restricted'),
+        displayName: 'Restricted user',
+        email: 'restricted@example.com',
+        mode: 'email-code'
+      },
+      accountState: {
+        settings,
+        revision: 1,
+        synced: true,
+        credential: { stored: false, storageAvailable: true },
+        effectiveAssistant: {
+          configured: false,
+          source: 'deployment',
+          provider: 'openrouter',
+          model: 'minimax/minimax-m3.1-flash:free',
+          reasoningEffort: 'high'
+        }
+      }
+    });
+    expect(screen.getByText('Not configured')).toBeVisible();
+    expect(
+      screen.queryByText(/Free with no personal API key/)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/may retain this data or use it for training/)
+    ).toBeVisible();
+  });
+
   it.each(['openai', 'responses-compatible'] as const)(
     'discloses the effective %s deployment provider instead of OpenRouter',
     (provider) => {

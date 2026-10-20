@@ -1368,11 +1368,12 @@ export function SettingsPage({
 
               {settings.assistant.credentialSource === 'deployment' ? (
                 <Group title="Data use">
-                  {effective?.provider === 'openrouter' &&
+                  {effective?.configured &&
+                  effective.provider === 'openrouter' &&
                   effective.model.endsWith(':free') ? (
                     <Notice>
-                      Free with no personal API key. Sign in to use it. Usage
-                      limits and provider availability apply.
+                      Free with no personal API key. Usage limits and provider
+                      availability apply.
                     </Notice>
                   ) : null}
                   <Notice>
