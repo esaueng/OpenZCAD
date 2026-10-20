@@ -324,9 +324,11 @@ export function ExtrudeForm({
   }, [distanceSetterRef]);
   // A picked face becomes the target, and the depth it gives becomes the
   // dormant distance, so switching back to Distance keeps the same reach.
+  const pendingFace = useRef<ExtrudeToFaceTarget | null>(null);
   const updateFace = useRef((_target: ExtrudeToFaceTarget) => {});
   updateFace.current = (target) => {
     const reach = toFacePicking?.describe(target).distance ?? null;
+    pendingFace.current = reach === null ? target : null;
     change({
       toFace: target,
       endCondition: 'to-face',
@@ -344,6 +346,20 @@ export function ExtrudeForm({
         : {})
     });
   };
+  const faceReach = toFaceInfo?.distance;
+  useEffect(() => {
+    const target = pendingFace.current;
+    if (!target) return;
+    if (!toFace || draft.toFace !== target) {
+      pendingFace.current = null;
+      return;
+    }
+    // An edit pick can arrive before history-position replay finishes.
+    // Publish its preview and dormant distance once that reach is known.
+    if (faceReach !== null && faceReach !== undefined) {
+      updateFace.current(target);
+    }
+  }, [toFace, draft.toFace, faceReach]);
   const faceSetterRef = toFacePicking?.setterRef;
   const cancelPick = useRef(() => {});
   cancelPick.current = () => toFacePicking?.cancel();

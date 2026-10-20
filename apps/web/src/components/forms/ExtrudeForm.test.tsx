@@ -692,6 +692,96 @@ describe('to-face extent and draft (F01, schema v29)', () => {
     );
   });
 
+  it('previews a pending face pick when history replay supplies its reach and keeps that distance when switching back', async () => {
+    const user = userEvent.setup();
+    const onDraft = vi.fn();
+    const onPreview = vi.fn();
+    const onSubmit = vi.fn();
+    const host = picking({
+      describe: () => ({
+        label: 'Ceiling · face',
+        distance: null,
+        pending: true
+      })
+    });
+    const props = {
+      ...base,
+      onDraft,
+      onPreview,
+      onSubmit,
+      onCancel: vi.fn()
+    };
+    const { rerender } = render(
+      <ExtrudeForm {...props} toFacePicking={host} />
+    );
+    act(() => host.setterRef.current?.(face));
+    expect(onPreview).toHaveBeenLastCalledWith(null);
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+
+    rerender(
+      <ExtrudeForm
+        {...props}
+        toFacePicking={{
+          ...host,
+          describe: () => ({ label: 'Ceiling · face', distance: 25 })
+        }}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+    expect(onPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        endCondition: 'to-face',
+        toFace: face,
+        distance: 25
+      })
+    );
+    expect(onDraft).toHaveBeenLastCalledWith(onPreview.mock.lastCall![0]);
+
+    await user.selectOptions(screen.getByLabelText('Extent'), 'blind');
+    expect(screen.getByRole('textbox', { name: 'Distance' })).toHaveValue('25');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ endCondition: 'blind', distance: 25 })
+    );
+  });
+
+  it('does not restore an abandoned face pick when history replay finishes', async () => {
+    const user = userEvent.setup();
+    const onPreview = vi.fn();
+    const host = picking({
+      describe: () => ({
+        label: 'Ceiling · face',
+        distance: null,
+        pending: true
+      })
+    });
+    const props = {
+      ...base,
+      onPreview,
+      onSubmit: vi.fn(),
+      onCancel: vi.fn()
+    };
+    const { rerender } = render(
+      <ExtrudeForm {...props} toFacePicking={host} />
+    );
+    act(() => host.setterRef.current?.(face));
+    await user.selectOptions(screen.getByLabelText('Extent'), 'blind');
+    const previewCount = onPreview.mock.calls.length;
+
+    rerender(
+      <ExtrudeForm
+        {...props}
+        toFacePicking={{
+          ...host,
+          describe: () => ({ label: 'Ceiling · face', distance: 25 })
+        }}
+      />
+    );
+    expect(screen.getByLabelText('Extent')).toHaveValue('blind');
+    expect(screen.getByRole('textbox', { name: 'Distance' })).toHaveValue('-8');
+    expect(onPreview).toHaveBeenCalledTimes(previewCount);
+  });
+
   it('withdraws its pick when the card closes', () => {
     const host = picking({ armed: true });
     const { unmount } = render(
