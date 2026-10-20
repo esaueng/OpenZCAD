@@ -520,7 +520,7 @@ function throughAllSweepFeature(
   data: FeatureDataOf<'extrude'>
 ): FeatureNode {
   const { kernel, document, result } = ctx;
-  validateExtrudeExtent(data);
+  validateExtrudeExtent(data, extrudeParamResolver(document, ctx.scope));
   const targetBodyId = data.targetBodyId!;
   const targetName = bodyName(document, targetBodyId);
   if (result.consumed.has(targetBodyId)) {

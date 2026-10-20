@@ -707,6 +707,37 @@ describe('to-face extent and draft (F01, schema v29)', () => {
     expect(host.cancel).toHaveBeenCalledOnce();
   });
 
+  it.each(['blind', 'through-all'] as const)(
+    'withdraws an armed face pick when the extent changes to %s',
+    async (endCondition) => {
+      const user = userEvent.setup();
+      const host = picking({ armed: true });
+      const onDraft = vi.fn();
+      render(
+        <ExtrudeForm
+          {...base}
+          initial={{
+            ...initial,
+            operation: 'cut',
+            targetBodyId: bodies[0]!.bodyId,
+            endCondition: 'to-face',
+            toFace: face
+          }}
+          toFacePicking={host}
+          onDraft={onDraft}
+          onSubmit={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      );
+      await user.selectOptions(screen.getByLabelText('Extent'), endCondition);
+      expect(host.cancel).toHaveBeenCalledOnce();
+      expect(onDraft).toHaveBeenLastCalledWith(
+        expect.objectContaining({ endCondition })
+      );
+      expect(screen.queryByRole('group', { name: 'Target face' })).toBeNull();
+    }
+  );
+
   it.each([false, true])(
     'refuses an unreachable picked face for preview and submit (creating: %s)',
     async (creating) => {
@@ -828,11 +859,12 @@ describe('to-face extent and draft (F01, schema v29)', () => {
       ((value: ParamValue) => void) | null
     > = { current: null };
     const onDraft = vi.fn();
+    const host = picking({ armed: true });
     render(
       <ExtrudeForm
         {...base}
         initial={{ ...initial, endCondition: 'to-face', toFace: face }}
-        toFacePicking={picking()}
+        toFacePicking={host}
         distanceSetterRef={distanceSetterRef}
         onDraft={onDraft}
         onSubmit={vi.fn()}
@@ -840,6 +872,7 @@ describe('to-face extent and draft (F01, schema v29)', () => {
       />
     );
     act(() => distanceSetterRef.current?.(12));
+    expect(host.cancel).toHaveBeenCalledOnce();
     expect(onDraft).toHaveBeenLastCalledWith(
       expect.objectContaining({ endCondition: 'blind', distance: 12 })
     );

@@ -1052,6 +1052,41 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       );
     });
 
+    it('rebuilds a through-all cut with a zero-valued draft expression and refuses a nonzero draft', async () => {
+      const block = box(
+        setParameter(project('Through-all zero draft'), {
+          name: 'taper',
+          expression: '0'
+        }),
+        'Block',
+        { width: 20, height: 20, depth: 10 }
+      );
+      const sketched = sketch(block.document);
+      const cut = extrudeSketch(sketched.document, {
+        name: 'Through hole',
+        sketchId: sketched.sketchId,
+        distance: 1,
+        operation: 'cut',
+        targetBodyId: block.bodyId,
+        endCondition: 'through-all',
+        throughAllSide: 'forward',
+        draftAngleDeg: 'taper'
+      });
+      const straight = await derive(cut.document);
+      expect(straight.warnings).toEqual([]);
+      expect(straight.bodyRepresentations[cut.bodyId]!.volume).toBeCloseTo(
+        20 * 20 * 10 - 4 * 4 * 10,
+        6
+      );
+      const tapered = setParameter(cut.document, {
+        name: 'taper',
+        expression: '3'
+      });
+      const refused = await derive(tapered);
+      expect(refused.bodyRepresentations[cut.bodyId]).toBeUndefined();
+      expect(refused.warnings.join('\n')).toMatch(/through-all cut has no draft/);
+    });
+
     it('rebuilds a straight extrude unchanged when the draft is cleared', async () => {
       const sketched = sketch(project('Clear draft'), RECT);
       const result = extrudeSketch(sketched.document, {

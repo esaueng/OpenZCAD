@@ -290,6 +290,13 @@ export function ExtrudeForm({
   }
 
   function change(patch: Partial<typeof draft>) {
+    if (
+      toFacePicking?.armed &&
+      patch.endCondition !== undefined &&
+      patch.endCondition !== 'to-face'
+    ) {
+      toFacePicking.cancel();
+    }
     const next = { ...draft, ...patch };
     if (patch.distance !== undefined) setDistanceEdited(true);
     setDraft(next);
