@@ -150,28 +150,43 @@ function polylineEntity(entity: DxfPolyline): string[] {
   return out;
 }
 
+/** The lengths a DXF header can declare, with their `$INSUNITS` codes. */
+export type DxfLengthUnit = 'mm' | 'cm' | 'm' | 'inch';
+
+const INSUNITS_CODE: Record<DxfLengthUnit, string> = {
+  inch: '1',
+  mm: '4',
+  cm: '5',
+  m: '6'
+};
+
 /**
  * Assemble a complete R12 document from 2D entities.
  *
  * The header carries `$ACADVER` plus the two variables that state the unit:
- * `$INSUNITS` 4 is millimetres and `$MEASUREMENT` 1 selects the metric
- * drawing setup. A file whose coordinates are millimetres but whose header
+ * `$INSUNITS` (4 millimetres, 5 centimetres, 6 metres, 1 inches) and
+ * `$MEASUREMENT` (1 metric, 0 imperial drawing setup). A file whose header
  * says nothing is imported at whatever the reader happens to default to,
  * which is how a 50 mm slot arrives at a cutter 25.4 times too large.
  * Everything else stays out: each additional header variable is another
  * thing an importer can choke on. Coordinates are emitted as given; callers
- * are responsible for having scaled them to millimetres.
+ * are responsible for having scaled them to `options.units` (millimetres
+ * unless they say otherwise).
  */
-export function writeDxf(entities: readonly DxfEntity[]): string {
+export function writeDxf(
+  entities: readonly DxfEntity[],
+  options: { units?: DxfLengthUnit } = {}
+): string {
+  const units = options.units ?? 'mm';
   const lines: string[] = [
     ...group(0, 'SECTION'),
     ...group(2, 'HEADER'),
     ...group(9, '$ACADVER'),
     ...group(1, 'AC1009'),
     ...group(9, '$INSUNITS'),
-    ...group(70, '4'),
+    ...group(70, INSUNITS_CODE[units]),
     ...group(9, '$MEASUREMENT'),
-    ...group(70, '1'),
+    ...group(70, units === 'inch' ? '0' : '1'),
     ...group(0, 'ENDSEC'),
     ...group(0, 'SECTION'),
     ...group(2, 'ENTITIES')

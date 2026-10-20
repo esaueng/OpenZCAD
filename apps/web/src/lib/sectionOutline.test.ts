@@ -140,6 +140,27 @@ describe('the exact section asks about the bodies on screen', () => {
     expect(state).toEqual({ kind: 'clipping' });
   });
 
+  it('writes the section in the export unit the preference names', async () => {
+    const exportModel = vi.fn(async () => ({ text: '0\r\nEOF\r\n' }));
+    const visible: BodyId[] = [toBodyId('body_a')];
+    await writeSectionDxf(
+      { exportModel } as never,
+      onScreen(document, visible),
+      plane,
+      exportable,
+      async () => true,
+      'part',
+      () => {},
+      'inch'
+    );
+    expect(exportModel).toHaveBeenCalledWith(
+      'dxf',
+      document,
+      visible,
+      expect.objectContaining({ units: 'inch' })
+    );
+  });
+
   it('writes the DXF of the same bodies the section was cut from', async () => {
     const exportModel = vi.fn(async () => ({ text: '0\r\nEOF\r\n' }));
     const save = vi.fn(async () => true);
@@ -156,8 +177,10 @@ describe('the exact section asks about the bodies on screen', () => {
       (message: string) => announced.push(message)
     );
 
+    // Millimetres unless the export-unit preference says otherwise.
     expect(exportModel).toHaveBeenCalledWith('dxf', document, visible, {
-      section: { origin: [0, 0, 3], normal: [0, 0, 1] }
+      section: { origin: [0, 0, 3], normal: [0, 0, 1] },
+      units: 'mm'
     });
     expect(save).toHaveBeenCalledWith(
       'part-section.dxf',

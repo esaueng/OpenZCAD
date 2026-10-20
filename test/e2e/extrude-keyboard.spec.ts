@@ -3,7 +3,12 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import { test, expect, stubApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  seedUnitlessImportUnits
+} from './openzcad-fixtures';
 
 for (const moveKeyboard of [false, true]) {
   test(`Extrude ${moveKeyboard ? 'keeps a later canvas gesture in control of the keyboard' : 'focuses Distance after the exact operation enables it'}`, async ({
@@ -11,6 +16,7 @@ for (const moveKeyboard of [false, true]) {
   }) => {
     test.setTimeout(90_000);
     await stubApi(page);
+    await seedUnitlessImportUnits(page);
     const document = addSketchFeature(
       createProjectDocument('Extrude keyboard', toUserId('user_e2e')),
       {

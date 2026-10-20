@@ -459,15 +459,52 @@ describe('application settings', () => {
 
   it('carries the autosave preference through the account round trip', () => {
     const settings = deepClone(DEFAULT_APP_SETTINGS);
-    settings.files = { cloudAutosave: false, cloudAutosaveDelaySeconds: 30 };
+    settings.files = {
+      cloudAutosave: false,
+      cloudAutosaveDelaySeconds: 30,
+      unitlessImportUnits: 'inch',
+      exportUnits: 'document'
+    };
     const parsed = parseUpdateAppSettingsRequest(
       { expectedRevision: 1, settings },
       'development'
     );
     expect(parsed.settings.files).toEqual({
       cloudAutosave: false,
-      cloudAutosaveDelaySeconds: 30
+      cloudAutosaveDelaySeconds: 30,
+      unitlessImportUnits: 'inch',
+      exportUnits: 'document'
     });
+  });
+
+  it('defaults the file-unit preferences: ask for unitless files, write millimetres', () => {
+    expect(DEFAULT_APP_SETTINGS.files.unitlessImportUnits).toBe('ask');
+    expect(DEFAULT_APP_SETTINGS.files.exportUnits).toBe('mm');
+    const stored = normalizeAppSettings({
+      files: { unitlessImportUnits: 'cm', exportUnits: 'inch' }
+    });
+    expect(stored.files.unitlessImportUnits).toBe('cm');
+    expect(stored.files.exportUnits).toBe('inch');
+    // An unknown value (a later client's unit, a typo) falls back.
+    const unknown = normalizeAppSettings({
+      files: { unitlessImportUnits: 'furlong', exportUnits: 'ask' }
+    });
+    expect(unknown.files.unitlessImportUnits).toBe('ask');
+    expect(unknown.files.exportUnits).toBe('mm');
+  });
+
+  it('keeps saving file-unit preferences a client never sent', () => {
+    const settings = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      files: Record<string, unknown>;
+    };
+    delete settings.files.unitlessImportUnits;
+    settings.files.exportUnits = 'yard';
+    const parsed = parseUpdateAppSettingsRequest(
+      { expectedRevision: 1, settings },
+      'development'
+    );
+    expect(parsed.settings.files.unitlessImportUnits).toBe('ask');
+    expect(parsed.settings.files.exportUnits).toBe('mm');
   });
 
   it('accepts a payload from a client that predates the preference', () => {
@@ -538,6 +575,7 @@ describe('application settings', () => {
   it('clamps an out-of-range delay at the account boundary too', () => {
     const settings = deepClone(DEFAULT_APP_SETTINGS);
     settings.files = {
+      ...settings.files,
       cloudAutosave: true,
       cloudAutosaveDelaySeconds: 100_000
     };

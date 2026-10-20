@@ -122,3 +122,30 @@ describe('writeDxf', () => {
     expect(open[openPolyAt + 3]).toEqual([70, '0']);
   });
 });
+
+describe('writeDxf units', () => {
+  const header = (text: string) => pairs(text.split('ENTITIES')[0]!);
+
+  it('declares millimetres and a metric drawing by default', () => {
+    expect(header(writeDxf([]))).toEqual(
+      expect.arrayContaining([
+        [9, '$INSUNITS'],
+        [70, '4'],
+        [9, '$MEASUREMENT'],
+        [70, '1']
+      ])
+    );
+  });
+
+  it.each([
+    ['inch', '1', '0'],
+    ['cm', '5', '1'],
+    ['m', '6', '1']
+  ] as const)('declares %s as $INSUNITS %s, $MEASUREMENT %s', (units, code, measurement) => {
+    const lines = header(writeDxf([], { units }));
+    const insunits = lines.findIndex(([, value]) => value === '$INSUNITS');
+    const metric = lines.findIndex(([, value]) => value === '$MEASUREMENT');
+    expect(lines[insunits + 1]).toEqual([70, code]);
+    expect(lines[metric + 1]).toEqual([70, measurement]);
+  });
+});

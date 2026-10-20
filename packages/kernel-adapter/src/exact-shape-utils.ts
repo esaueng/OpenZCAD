@@ -391,12 +391,28 @@ export interface BodyMeshQuality {
   /** Edges used by more than two triangles after position welding. */
   nonManifoldEdges: number;
   watertight: boolean;
+  /** Triangles the export writes for this body at the checked tolerances. */
+  triangleCount: number;
+  /**
+   * Largest measured distance, in millimetres, from those triangles (their
+   * stored vertices, and on curved faces their interiors) to the exact faces.
+   */
+  maxDeviation: number;
+  /** Triangles measured, and how many there were. */
+  sampledTriangles: number;
+  totalTriangles: number;
 }
 
 export interface MeshQualityReport {
   /** True only when every exported body is individually watertight. */
   watertight: boolean;
   bodies: BodyMeshQuality[];
+  /** Triangles across every body. */
+  triangleCount: number;
+  /** The largest body deviation, millimetres. */
+  maxDeviation: number;
+  /** True when a large body was measured on a stride, not every triangle. */
+  sampled: boolean;
 }
 
 /**

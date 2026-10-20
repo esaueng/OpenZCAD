@@ -3290,6 +3290,18 @@ export interface AppSettings {
     cloudAutosave: boolean;
     /** Quiet time before a copy is written, in seconds. */
     cloudAutosaveDelaySeconds: number;
+    /**
+     * How a file that states no length unit (STL, OBJ, PLY, a DXF without
+     * `$INSUNITS`) is read: ask at each import, the project's units, or one
+     * fixed unit.
+     */
+    unitlessImportUnits: UnitlessImportUnits;
+    /**
+     * The length unit exports write where the format can carry one (STEP,
+     * 3MF, DXF) or simply holds numbers (STL, OBJ, PLY). glTF is metres by
+     * definition and SVG states its physical size, so neither follows it.
+     */
+    exportUnits: ExportUnits;
   };
   collaboration: {
     /** Allow project invitations and live collaboration connections. */
@@ -3388,7 +3400,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   files: {
     cloudAutosave: true,
-    cloudAutosaveDelaySeconds: CLOUD_AUTOSAVE_DELAY_BOUNDS.default
+    cloudAutosaveDelaySeconds: CLOUD_AUTOSAVE_DELAY_BOUNDS.default,
+    unitlessImportUnits: 'ask',
+    // Millimetres, what every export wrote before the unit became a choice.
+    exportUnits: 'mm'
   },
   collaboration: {
     enabled: true
@@ -3893,6 +3908,37 @@ export function bodyDisplayColor(
   featureKind?: FeatureKind
 ): string {
   return chosenBodyColor(metadata, featureKind) ?? DEFAULT_BODY_COLOR;
+}
+
+/** Reading a unitless import: ask, the project's units, or a fixed unit. */
+export type UnitlessImportUnits = 'ask' | 'document' | UnitSystem;
+
+export const UNITLESS_IMPORT_UNITS: readonly UnitlessImportUnits[] = [
+  'ask',
+  'document',
+  'mm',
+  'cm',
+  'm',
+  'inch'
+];
+
+/** The unit an export writes: the project's own, or a fixed one. */
+export type ExportUnits = 'document' | UnitSystem;
+
+export const EXPORT_UNITS: readonly ExportUnits[] = [
+  'document',
+  'mm',
+  'cm',
+  'm',
+  'inch'
+];
+
+/** The concrete unit an export preference names for one document. */
+export function resolveExportUnits(
+  preference: ExportUnits,
+  documentUnits: UnitSystem
+): UnitSystem {
+  return preference === 'document' ? documentUnits : preference;
 }
 
 /** Millimetres per document unit, used by exporters that fix a unit. */

@@ -34,6 +34,7 @@
 
 import type { DxfEntity } from '@openzcad/io-dxf';
 import {
+  dxfSampleDeflection,
   edgeDxfEntities,
   type DxfEdgeKernel,
   type DxfPlaneFrame
@@ -205,7 +206,8 @@ function unitNormal(normal: SectionPoint3): SectionPoint3 {
  */
 export function sectionPlaneFrame(
   plane: ExactSectionPlane,
-  millimeterScale = 1
+  millimeterScale = 1,
+  modelUnitMm: number = millimeterScale
 ): DxfPlaneFrame {
   const normal = unitNormal(plane.normal);
   const up: SectionPoint3 = Math.abs(normal[2]) < 0.9 ? [0, 0, 1] : [0, 1, 0];
@@ -220,7 +222,8 @@ export function sectionPlaneFrame(
     origin: plane.origin,
     u: cross(v, normal),
     v,
-    scale: millimeterScale
+    scale: millimeterScale,
+    sampleDeflection: dxfSampleDeflection(modelUnitMm)
   };
 }
 
@@ -520,12 +523,14 @@ export function sectionDxfEntities(
   kernel: ExactSectionKernel,
   faces: readonly number[],
   plane: ExactSectionPlane,
-  millimeterScale: number
+  millimeterScale: number,
+  /** Millimetres per model unit; differs from the scale for a non-mm export. */
+  modelUnitMm: number = millimeterScale
 ): DxfEntity[] {
   if (!(millimeterScale > 0) || !Number.isFinite(millimeterScale)) {
     throw new Error(`DXF export: invalid unit scale ${millimeterScale}.`);
   }
-  const frame = sectionPlaneFrame(plane, millimeterScale);
+  const frame = sectionPlaneFrame(plane, millimeterScale, modelUnitMm);
   const entities: DxfEntity[] = [];
   for (const face of faces) {
     for (const wire of kernel.getFaceWires(face)) {
