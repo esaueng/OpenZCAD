@@ -230,7 +230,8 @@ export interface GeometryWorkerApi {
    */
   drawingTessellation(
     document: ProjectDocument,
-    bodyIds: BodyId[]
+    bodyIds: BodyId[],
+    options?: { signal?: AbortSignal }
   ): Promise<Record<BodyId, DrawingBodyTessellation>>;
   /** Queries live geometry; a stale derived-cache hit restores exact history first. */
   massProperties(
@@ -1132,15 +1133,38 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       }
       return posted.promise;
     },
-    drawingTessellation(document, bodyIds) {
+    drawingTessellation(document, bodyIds, options) {
+      const signal = options?.signal;
+      if (signal?.aborted)
+        return Promise.reject(abortError('Drawing tessellation cancelled.'));
       const posted = postRequest(drawingTessellationRequests.current, {
         type: 'drawing-tessellation',
         document: documentForWorker(document),
         bodyIds
       });
-      return posted.ok
-        ? posted.promise
-        : Promise.reject(new Error('Geometry worker is unavailable.'));
+      if (!posted.ok)
+        return Promise.reject(new Error('Geometry worker is unavailable.'));
+      if (!signal) return posted.promise;
+      // Its only consumer left Draw: a queued job is skipped, a running one
+      // finishes and its answer is dropped, so the viewport's own rebuilds
+      // stop waiting behind it.
+      const onAbort = () => {
+        const pending = drawingTessellationRequests.current.get(
+          posted.requestId
+        );
+        if (!pending) return;
+        drawingTessellationRequests.current.delete(posted.requestId);
+        armedRef.current = true;
+        workerRef.current?.postMessage({
+          type: 'cancel',
+          requestId: posted.requestId
+        });
+        pending.reject(abortError('Drawing tessellation cancelled.'));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      return posted.promise.finally(() => {
+        signal.removeEventListener('abort', onAbort);
+      });
     },
     massProperties(document, bodyId, options) {
       if (options?.signal?.aborted) {

@@ -96,11 +96,14 @@ export interface DrawingWorkspaceProps {
    * Views project from it, never from `bodies`' display meshes: the display
    * mesh holds an earlier deflection through small edits and meshes again at
    * the nominal one after a reload, so the same model could export
-   * different bytes. This one depends only on the exact geometry.
+   * different bytes. This one depends only on the exact geometry. `signal`
+   * aborts when the workspace closes, so the geometry worker drops work
+   * nobody will see.
    */
   requestTessellation: (
     document: ProjectDocument,
-    bodyIds: BodyId[]
+    bodyIds: BodyId[],
+    signal: AbortSignal
   ) => Promise<Record<string, ProjectionBodyInput>>;
   /** Why drawing edits are refused, or null. */
   editDisabledReason: string | null;
@@ -169,6 +172,8 @@ function useViewProjections(
   requestTessellation: DrawingWorkspaceProps['requestTessellation']
 ): Map<DrawingViewId, ViewState> {
   const client = useRef<DrawingProjectionClient | null>(null);
+  /** Aborted on close: abandons tessellations still queued or running. */
+  const closed = useRef<AbortController | null>(null);
   const cache = useRef(new Map<string, ViewState>());
   /**
    * The canonical tessellations of the model the sheet on screen is fenced
@@ -197,11 +202,15 @@ function useViewProjections(
   useEffect(() => {
     mounted.current = true;
     const owned = new DrawingProjectionClient();
+    const lifetime = new AbortController();
     client.current = owned;
+    closed.current = lifetime;
     return () => {
       mounted.current = false;
+      lifetime.abort();
       owned.dispose();
       client.current = null;
+      closed.current = null;
     };
   }, []);
   const fingerprint = status?.kind === 'ready' ? status.fingerprint : null;
@@ -223,7 +232,13 @@ function useViewProjections(
     );
     for (const key of failures.current.keys())
       if (!wanted.has(key)) failures.current.delete(key);
-    if (!sheet || !fingerprint || !client.current || outstanding.current)
+    if (
+      !sheet ||
+      !fingerprint ||
+      !client.current ||
+      !closed.current ||
+      outstanding.current
+    )
       return;
     // Every view this pass still needs goes in one request, with each body's
     // geometry once however many views draw it.
@@ -248,6 +263,7 @@ function useViewProjections(
     if (views.length > 0) {
       outstanding.current = true;
       const owned = client.current;
+      const { signal } = closed.current;
       if (tessellations.current?.fingerprint !== fingerprint)
         tessellations.current = { fingerprint, bodies: new Map() };
       const known = tessellations.current;
@@ -255,7 +271,7 @@ function useViewProjections(
       const { document: current, requestTessellation: tessellate } =
         latest.current;
       (missing.length > 0
-        ? tessellate(current, missing.sort())
+        ? tessellate(current, missing.sort(), signal)
         : Promise.resolve<Record<string, ProjectionBodyInput>>({})
       )
         .then((meshed) => {

@@ -153,12 +153,43 @@ export function canonicalDrawingTessellation(
 }
 
 /**
+ * What one drawing-tessellation request may hold, across all its bodies: the
+ * display projection's admission limit. Charged for the triangle corners and
+ * edge points each solid adds (the arrays canonicalization copies), before
+ * they are copied.
+ */
+export const MAX_DRAWING_TESSELLATION_BYTES = 32 * 1024 * 1024;
+
+/** The bytes a request has left; shared by every body it meshes. */
+export interface DrawingTessellationBudget {
+  remainingBytes: number;
+}
+
+export class DrawingTessellationBudgetError extends Error {
+  constructor() {
+    super(
+      'The model is too detailed to draw: its tessellation exceeds the drawing memory budget.'
+    );
+    this.name = 'DrawingTessellationBudgetError';
+  }
+}
+
+function charge(budget: DrawingTessellationBudget, bytes: number): void {
+  budget.remainingBytes -= bytes;
+  if (budget.remainingBytes < 0) throw new DrawingTessellationBudgetError();
+}
+
+/**
  * The canonical drawing tessellation of one exact body. Throws when the body
- * has no solids, like the display projection.
+ * has no solids, like the display projection, and refuses by name, before
+ * copying, a tessellation that would overrun the request's `budget`.
  */
 export function drawingTessellationOfShape(
   kernel: RemusKernel,
-  shape: ExactShape
+  shape: ExactShape,
+  budget: DrawingTessellationBudget = {
+    remainingBytes: MAX_DRAWING_TESSELLATION_BYTES
+  }
 ): DrawingBodyTessellation {
   if (!shape.solids.length) throw new Error('Exact body contains no solids.');
   const faces: Float32Array[] = [];
@@ -180,6 +211,8 @@ export function drawingTessellationOfShape(
       const positions = ownedMeshPositions(mesh);
       const indices = ownedMeshIndices(mesh);
       const offsets = ownedMeshFaceOffsets(mesh);
+      // Three float32 coordinates per corner.
+      charge(budget, indices.length * 3 * 4);
       for (let f = 0; f + 1 < offsets.length; f += 1)
         faces.push(cornersOf(positions, indices, offsets[f]!, offsets[f + 1]!));
     } finally {
@@ -193,7 +226,9 @@ export function drawingTessellationOfShape(
       tess.angularDeflection
     );
     try {
-      const points = Float32Array.from(lines.positions);
+      const sampled = lines.positions;
+      charge(budget, sampled.length * 4);
+      const points = Float32Array.from(sampled);
       const offsets = [...Array.from(lines.offsets), points.length];
       if (
         edgeHandles.length !== lines.edgeCount ||

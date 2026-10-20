@@ -624,6 +624,41 @@ describe('DrawingWorkspace', () => {
     expect(requestTessellation).toHaveBeenCalledTimes(3);
   });
 
+  it('abandons a tessellation still in the geometry worker when the workspace closes', async () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const base = createProjectDocument('Bracket', toUserId('test'));
+    const signals: AbortSignal[] = [];
+    // Never answers: the model is still meshing when Draw closes.
+    const requestTessellation = vi.fn(
+      (_document: ProjectDocument, _bodyIds: BodyId[], signal: AbortSignal) => {
+        signals.push(signal);
+        return new Promise<Record<string, ProjectionBodyInput>>(() => {});
+      }
+    );
+    const { unmount } = render(
+      <DrawingWorkspace
+        document={{
+          ...base,
+          bodyOrder: [bodyId],
+          drawings: { sheets: [starter(fingerprint)] }
+        }}
+        bodies={{ [bodyId]: cube() }}
+        geometryPending={false}
+        defaultBodyIds={[bodyId]}
+        requestTessellation={requestTessellation}
+        editDisabledReason={null}
+        onCommand={vi.fn(() => true)}
+        onStatus={vi.fn()}
+      />
+    );
+    await waitFor(() => expect(requestTessellation).toHaveBeenCalled());
+    expect(signals.every((signal) => !signal.aborted)).toBe(true);
+    unmount();
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
   it("keeps each sheet's projections when switching between sheets of different bodies", async () => {
     const otherId = 'body_other' as BodyId;
     const other = { ...cube(4), bodyId: otherId, name: 'Small cube' };

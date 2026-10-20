@@ -10,7 +10,12 @@ import {
   updateFeature
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
-import { canonicalDrawingTessellation } from '../packages/kernel-adapter/src/exact-drawing-tessellation';
+import {
+  canonicalDrawingTessellation,
+  DrawingTessellationBudgetError,
+  drawingTessellationOfShape
+} from '../packages/kernel-adapter/src/exact-drawing-tessellation';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import {
   toUserId,
   type BodyId,
@@ -256,6 +261,32 @@ describe('D01 canonical drawing tessellation', () => {
     await expect(
       adapter.drawingTessellation(document, [disc!])
     ).rejects.toThrow(/has no exact geometry to draw/);
+  });
+
+  it('refuses, before copying, a tessellation over the request budget', () => {
+    const kernel = new RemusKernel();
+    try {
+      const shape = { solids: [kernel.makeCylinder(20, 4)] };
+      const fits = { remainingBytes: 32 * 1024 * 1024 };
+      const mesh = drawingTessellationOfShape(kernel, shape, fits);
+      const charged = 32 * 1024 * 1024 - fits.remainingBytes;
+      // Charged for every corner (three float32s per index) and edge point.
+      expect(charged).toBeGreaterThanOrEqual(mesh.indices.length * 12);
+      // The same body with a byte less than it needs is refused by name,
+      // and the budget is shared: a second body draws on what is left.
+      expect(() =>
+        drawingTessellationOfShape(kernel, shape, {
+          remainingBytes: charged - 1
+        })
+      ).toThrow(DrawingTessellationBudgetError);
+      const shared = { remainingBytes: charged + charged / 2 };
+      drawingTessellationOfShape(kernel, shape, shared);
+      expect(() => drawingTessellationOfShape(kernel, shape, shared)).toThrow(
+        /exceeds the drawing memory budget/
+      );
+    } finally {
+      kernel.free();
+    }
   });
 
   it('canonicalizes the order of faces, triangles, corners, vertices and edges', () => {
