@@ -3325,7 +3325,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     linearSnap: 1,
     angleSnap: 15,
     snapTolerancePx: 10,
-    relationGlyphs: 'always'
+    relationGlyphs: 'selected'
   },
   files: {
     cloudAutosave: true,

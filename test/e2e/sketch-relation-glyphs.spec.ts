@@ -1,10 +1,11 @@
 import { expect, stubApi, test } from './openzcad-fixtures';
 
 /**
- * S03 relation glyphs through the real canvas: a corner rectangle's held
- * relations draw on its sides and corners, and the palette's Relation glyphs
- * choice hides them or narrows them to the selection. Layout oracles live in
- * apps/web/src/lib/sketch/relationGlyphs.test.ts; this proves the wiring.
+ * S03 relation glyphs through the real canvas: by default only the selected
+ * entity's relations draw; the palette's Relation glyphs choice shows a
+ * corner rectangle's held relations on all its sides and corners, or hides
+ * them. Layout oracles live in apps/web/src/lib/sketch/relationGlyphs.test.ts;
+ * this proves the wiring.
  */
 test('relation glyphs mark held geometry and follow the visibility choice', async ({
   page
@@ -36,15 +37,12 @@ test('relation glyphs mark held geometry and follow the visibility choice', asyn
     'Sketch 01 started.'
   );
 
-  // Four corner coincidents, two horizontal and two vertical sides.
+  const glyphs = page.locator('.sketch-relation-glyph');
   const glyph = (kind: string) =>
     page.locator(`.sketch-relation-glyph[data-kind="${kind}"]`);
-  await expect(glyph('coincident')).toHaveCount(4);
-  await expect(glyph('horizontal')).toHaveCount(2);
-  await expect(glyph('vertical')).toHaveCount(2);
-  await expect(
-    page.locator('.sketch-relation-chip[data-placement="object"]')
-  ).toHaveCount(4);
+  // The default shows only the selection's relations, and nothing is
+  // selected yet.
+  await expect(glyphs).toHaveCount(0);
 
   const palette = page.getByRole('button', { name: /Sketch palette/ });
   const visibility = page.getByRole('combobox', {
@@ -52,15 +50,27 @@ test('relation glyphs mark held geometry and follow the visibility choice', asyn
     exact: true
   });
   if (!(await visibility.isVisible())) await palette.click();
-  await expect(visibility).toHaveValue('always');
+  await expect(visibility).toHaveValue('selected');
 
-  // Nothing is selected, so "Selected" draws nothing.
-  await visibility.selectOption('selected');
-  await expect(page.locator('.sketch-relation-glyph')).toHaveCount(0);
+  // One side selected: its horizontal or vertical relation and the
+  // coincidents at its two corners.
+  await page
+    .getByRole('region', { name: 'Sketch overview' })
+    .getByLabel('Selected geometry')
+    .selectOption({ index: 1 });
+  await expect(glyphs).toHaveCount(3);
+  await expect(glyph('coincident')).toHaveCount(2);
+
+  // Always: four corner coincidents, two horizontal and two vertical sides.
+  if (!(await visibility.isVisible())) await palette.click();
+  await visibility.selectOption('always');
+  await expect(glyph('coincident')).toHaveCount(4);
+  await expect(glyph('horizontal')).toHaveCount(2);
+  await expect(glyph('vertical')).toHaveCount(2);
+  await expect(
+    page.locator('.sketch-relation-chip[data-placement="object"]')
+  ).toHaveCount(4);
 
   await visibility.selectOption('hidden');
-  await expect(page.locator('.sketch-relation-glyph')).toHaveCount(0);
-
-  await visibility.selectOption('always');
-  await expect(page.locator('.sketch-relation-glyph')).toHaveCount(8);
+  await expect(glyphs).toHaveCount(0);
 });

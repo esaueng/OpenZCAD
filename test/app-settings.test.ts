@@ -141,15 +141,15 @@ describe('application settings', () => {
   });
 
   it('keeps relation glyph visibility, defaulting what is absent or unknown', () => {
-    expect(defaultAppSettings().sketching.relationGlyphs).toBe('always');
+    expect(defaultAppSettings().sketching.relationGlyphs).toBe('selected');
     expect(
-      normalizeAppSettings({ sketching: { relationGlyphs: 'selected' } })
+      normalizeAppSettings({ sketching: { relationGlyphs: 'always' } })
         .sketching.relationGlyphs
-    ).toBe('selected');
+    ).toBe('always');
     expect(
       normalizeAppSettings({ sketching: { relationGlyphs: 'sometimes' } })
         .sketching.relationGlyphs
-    ).toBe('always');
+    ).toBe('selected');
 
     const older = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
       sketching: Record<string, unknown>;
@@ -160,7 +160,7 @@ describe('application settings', () => {
         { expectedRevision: 0, settings: older },
         'development'
       ).settings.sketching.relationGlyphs
-    ).toBe('always');
+    ).toBe('selected');
     const hidden = deepClone(DEFAULT_APP_SETTINGS);
     hidden.sketching.relationGlyphs = 'hidden';
     expect(
