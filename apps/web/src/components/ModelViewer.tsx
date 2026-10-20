@@ -21,6 +21,8 @@ import {
   avoidSketchDimensionOverlays,
   buildSketchDimensions
 } from './viewer/sketchDimensions';
+import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
+import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
 import type { SketchDimensionIdentity } from '@openzcad/shared';
 import {
@@ -434,6 +436,8 @@ export interface SketchModeState {
   definedObjectIds: string[];
   textOutlineBudgetError?: string | null;
   dimensions: SketchDimensionAnnotation[];
+  /** Relation glyph chips, already filtered by the visibility setting. */
+  relations?: SketchRelationGlyphChip[];
   /**
    * The text card's draft while the text tool composes. Its outline follows
    * the pointer over the plane and a click places it; nothing is placed
@@ -11229,6 +11233,19 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [sketchBasis, sketchDimensions]);
+  const sketchRelations = sketchMode?.relations;
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !sketchBasis || !sketchRelations?.length) return;
+    const overlay = buildSketchRelationGlyphs(sketchRelations, sketchBasis);
+    context.scene.add(overlay.group);
+    context.requestRender();
+    return () => {
+      context.scene.remove(overlay.group);
+      overlay.dispose();
+      context.requestRender();
+    };
+  }, [sketchBasis, sketchRelations]);
   const sketchEntryFrameRef = useRef<SketchEntryFrame | null>(null);
   sketchEntryFrameRef.current = sketchMode?.frame ?? null;
   useEffect(() => {

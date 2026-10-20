@@ -243,6 +243,7 @@ import {
   type DrivingDimensionKind
 } from './lib/sketch/constraints';
 import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
+import { sketchRelationGlyphs } from './lib/sketch/relationGlyphs';
 import {
   sketchGeometryDeleteRefusal,
   sketchSolveEvidenceKey
@@ -14292,16 +14293,6 @@ export function App() {
     };
   }
   const [sketchSolving, setSketchSolving] = useState(false);
-  // The viewport's copy of the session also knows whether a solve or rebuild
-  // owns the sketch, so a click cannot place text the card has disabled.
-  const sketchModeForViewer = useMemo(
-    () =>
-      sketchModeState && {
-        ...sketchModeState,
-        textDraftBusy: sketchSolving || geometryBusy
-      },
-    [sketchModeState, sketchSolving, geometryBusy]
-  );
   const [sketchDimensionDraft, setSketchDimensionDraft] = useState<{
     kind: DrivingDimensionKind | 'radius';
     picks: ConstraintPick[];
@@ -14339,6 +14330,44 @@ export function App() {
     interaction.mode === 'sketch' && interaction.session.sketchId && doc
       ? (findSketch(doc, interaction.session.sketchId as SketchId) ?? null)
       : null;
+  const sketchRelationChips = useMemo(
+    () =>
+      sketchModeState && doc
+        ? sketchRelationGlyphs(
+            sketchModeState.objects,
+            editingSketchNode?.constraints ?? [],
+            (value) =>
+              evalParamValue(value, parameterScope.scope, doc.units) ??
+              undefined,
+            {
+              visibility: appSettings.sketching.relationGlyphs,
+              selectedObjectId: sketchModeState.selectedObjectId,
+              conflictingConstraintIds: new Set(
+                sketchSolveStatus?.conflictingConstraintIds ?? []
+              )
+            }
+          )
+        : [],
+    [
+      sketchModeState,
+      doc,
+      editingSketchNode,
+      parameterScope.scope,
+      appSettings.sketching.relationGlyphs,
+      sketchSolveStatus
+    ]
+  );
+  // The viewport's copy of the session also knows whether a solve or rebuild
+  // owns the sketch, so a click cannot place text the card has disabled.
+  const sketchModeForViewer = useMemo(
+    () =>
+      sketchModeState && {
+        ...sketchModeState,
+        relations: sketchRelationChips,
+        textDraftBusy: sketchSolving || geometryBusy
+      },
+    [sketchModeState, sketchRelationChips, sketchSolving, geometryBusy]
+  );
 
   const sketchOverview = useMemo(() => {
     const objects =

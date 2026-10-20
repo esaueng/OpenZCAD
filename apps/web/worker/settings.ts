@@ -41,6 +41,7 @@ const PROJECTIONS = ['perspective', 'orthographic'] as const;
 const DISPLAY_MODES = ['shaded-edges', 'shaded', 'wireframe'] as const;
 const MIDDLE_DRAGS = ['pan', 'orbit', 'zoom'] as const;
 const POINTER_NAVIGATIONS = ['auto', 'mouse', 'trackpad'] as const;
+const RELATION_GLYPHS = ['always', 'selected', 'hidden'] as const;
 const PROVIDERS = ['openrouter', 'openai', 'responses-compatible'] as const;
 const CREDENTIAL_SOURCES = ['deployment', 'personal'] as const;
 const REASONING_EFFORTS = [
@@ -327,7 +328,14 @@ export function parseUpdateAppSettingsRequest(
         snapTolerancePx:
           typeof sketching.snapTolerancePx === 'number'
             ? requiredNumber(sketching, 'snapTolerancePx', 4, 24)
-            : DEFAULT_APP_SETTINGS.sketching.snapTolerancePx
+            : DEFAULT_APP_SETTINGS.sketching.snapTolerancePx,
+        // Optional: a client that predates this setting must still save.
+        relationGlyphs: optionalMember(
+          sketching,
+          'relationGlyphs',
+          RELATION_GLYPHS,
+          DEFAULT_APP_SETTINGS.sketching.relationGlyphs
+        )
       },
       files: {
         cloudAutosave:

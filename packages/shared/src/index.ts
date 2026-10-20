@@ -3156,6 +3156,11 @@ export type SettingsMiddleDrag = 'pan' | 'orbit' | 'zoom';
  * a device's meaning for hardware the classification reads wrongly.
  */
 export type SettingsPointerNavigation = 'auto' | 'mouse' | 'trackpad';
+/**
+ * Which sketch relations draw a glyph on their geometry: all of them, only
+ * those that mention the selected entity, or none. Presentation only.
+ */
+export type SketchRelationGlyphVisibility = 'always' | 'selected' | 'hidden';
 export type AssistantProvider =
   'openrouter' | 'openai' | 'responses-compatible';
 export type AssistantCredentialSource = 'deployment' | 'personal';
@@ -3214,6 +3219,7 @@ export interface AppSettings {
     angleSnap: number;
     /** Screen-space radius used for sketch snap candidates. */
     snapTolerancePx: number;
+    relationGlyphs: SketchRelationGlyphVisibility;
   };
   /**
    * How work reaches the account. There is no toggle for the device write —
@@ -3318,7 +3324,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     inferenceEnabled: true,
     linearSnap: 1,
     angleSnap: 15,
-    snapTolerancePx: 10
+    snapTolerancePx: 10,
+    relationGlyphs: 'always'
   },
   files: {
     cloudAutosave: true,
