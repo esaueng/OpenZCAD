@@ -1086,6 +1086,34 @@ describe('CameraController field of view', () => {
     controller.dispose();
   });
 
+  it('widens the clipping range for a pose reopened at a narrower field of view', () => {
+    const first = createController();
+    first.controller.setFieldOfView(90);
+    const saved = first.controller.capture();
+    first.controller.dispose();
+
+    const { controller } = createController();
+    controller.setFieldOfView(15);
+    const { near, far } = controller.perspective;
+    controller.restore(saved, 'perspective');
+    const distance = controller.perspective.position.distanceTo(
+      controller.controls.target
+    );
+    expect(controller.perspective.far).toBeGreaterThan(far);
+    expect(controller.perspective.far).toBeGreaterThan(distance * 1.5);
+    expect(controller.perspective.near).toBe(near);
+
+    // Back the other way the planes keep their range rather than shrink.
+    const wide = createController();
+    wide.controller.setFieldOfView(90);
+    const before = { ...wide.controller.perspective };
+    wide.controller.restore({ ...saved, fieldOfView: 15 }, 'perspective');
+    expect(wide.controller.perspective.far).toBe(before.far);
+    expect(wide.controller.perspective.near).toBeLessThan(before.near);
+    wide.controller.dispose();
+    controller.dispose();
+  });
+
   it('restores a pose saved before the field of view was recorded as given', () => {
     const first = createController();
     const { fieldOfView: _unrecorded, ...legacy } = first.controller.capture();

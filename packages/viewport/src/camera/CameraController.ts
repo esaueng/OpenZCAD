@@ -1116,6 +1116,20 @@ export class CameraController {
         .sub(this.orbit.target)
         .multiplyScalar(ratio)
         .add(this.orbit.target);
+      // The clipping range follows the dolly, as in `setFieldOfView`, but
+      // only ever widens: these planes were not set for this pose, and a
+      // restored camera counts as fitted, so a model pushed past `far` (a
+      // 90° pose reopened at 15° stands about 7.6 times further back) would
+      // stay clipped away.
+      this.perspective.near = Math.min(
+        this.perspective.near,
+        this.perspective.near * ratio
+      );
+      this.perspective.far = Math.max(
+        this.perspective.far,
+        this.perspective.far * ratio
+      );
+      this.perspective.updateProjectionMatrix();
     }
     this.perspective.lookAt(this.orbit.target);
     this.perspective.updateMatrixWorld(true);
