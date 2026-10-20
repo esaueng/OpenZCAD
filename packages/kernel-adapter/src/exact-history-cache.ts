@@ -101,6 +101,25 @@ export function historyCheckpointIndices(
 }
 
 /**
+ * A face-drag preview's checkpoint positions: the stable ones before the
+ * dragged edit, then the feature right before it. Every tick of a drag
+ * restores that checkpoint and replays only the edit, so the edited body
+ * keeps its handles and a prepared face move can engage however sparse the
+ * stable positions are. The edit's own position is dropped because its
+ * digest changes on every tick. The next sync that is not a drag preview
+ * finds the extra position mismatched and discards that checkpoint.
+ */
+export function dragPreviewCheckpointIndices(
+  indices: readonly number[],
+  editIndex: number
+): number[] {
+  if (indices.length === 0 || editIndex < 1) return [...indices];
+  const kept = indices.filter((index) => index < editIndex - 1);
+  kept.push(editIndex - 1);
+  return kept;
+}
+
+/**
  * Deterministic serializer for history-cache digests: keys sorted,
  * `undefined`-valued properties dropped. The same canonical form the
  * worker's whole-document rebuild cache uses, with the same accepted

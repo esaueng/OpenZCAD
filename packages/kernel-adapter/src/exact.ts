@@ -203,6 +203,7 @@ import {
   MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES,
   MAX_HISTORY_REPLAY_WORK,
   cloneBuildState,
+  dragPreviewCheckpointIndices,
   featureAwaitsEnvironment,
   historyCheckpointIndices,
   historyFeatureDigest,
@@ -1307,10 +1308,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.historyKernel !== null &&
       this.historyReplayWork >= MAX_HISTORY_REPLAY_WORK;
     if (recycled) this.invalidateHistoryCache();
-    const checkpointIndices = historyCheckpointIndices(
+    const stableCheckpointIndices = historyCheckpointIndices(
       features.length,
       this.maxHistoryCheckpoints
     );
+    const checkpointIndices = deferredDirectEditFeatureId
+      ? dragPreviewCheckpointIndices(
+          stableCheckpointIndices,
+          features.length - 1
+        )
+      : stableCheckpointIndices;
     const checkpointIndexSet = new Set(checkpointIndices);
     const cachingEnabled = checkpointIndices.length > 0;
     const scopeKey = cachingEnabled ? historyScopeDigest(document) : null;
