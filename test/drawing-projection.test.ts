@@ -719,6 +719,72 @@ describe('D01 occlusion tolerance', () => {
     ]);
   });
 
+  it('does not widen the depth tolerance of a steep face far along the view', () => {
+    // A face receding 100 mm per mm across the front view, 10^4 mm deep, and
+    // an edge 0.1 mm behind it. Page-coordinate noise times that slope is
+    // the face's depth uncertainty; the depth coordinate is not page noise,
+    // and counting it there (0.48 mm) called the edge visible.
+    const y = 1e4;
+    const face = {
+      vertices: Float64Array.from([
+        0,
+        y,
+        0,
+        1,
+        y + 100,
+        0,
+        1,
+        y + 100,
+        10,
+        0,
+        y,
+        10
+      ]),
+      indices: Uint32Array.from([0, 1, 2, 0, 2, 3]),
+      faces: [{ triangleStart: 0, triangleCount: 2 }],
+      edges: []
+    };
+    const edge = {
+      vertices: new Float64Array(),
+      indices: new Uint32Array(),
+      edges: [[0.5, y + 50.1, 2, 0.5, y + 50.1, 8]]
+    };
+    const result = projectView({
+      orientation: 'front',
+      hiddenLines: true,
+      bodies: [face, edge]
+    });
+    const behind = (u: number, v: number) =>
+      Math.abs(Math.abs(u) - 0.5) < 1e-9 && v >= 2 - 1e-9 && v <= 8 + 1e-9;
+    expect(onLine(result.visible, behind)).toEqual([]);
+    expect(onLine(result.hidden, behind)).toHaveLength(1);
+  });
+
+  it('keeps a small opening in the outline over a very long hidden edge', () => {
+    // A 10^7 mm hidden line, covered by 1000 mm visible segments either side
+    // of a 1 mm opening: the opening is real at the covering segments'
+    // scale, though a millionth of the hidden line would swallow it.
+    const out = dropCoincidentHidden(
+      [Float64Array.from([0, 0, 1e7, 0])],
+      [
+        Float64Array.from([5e6 - 1000, 0, 5e6, 0]),
+        Float64Array.from([5e6 + 1, 0, 5e6 + 1001, 0])
+      ],
+      100
+    );
+    const expected = [
+      [0, 0, 5e6 - 1000, 0],
+      [5e6, 0, 5e6 + 1, 0],
+      [5e6 + 1001, 0, 1e7, 0]
+    ];
+    expect(out).toHaveLength(expected.length);
+    out.forEach((line, index) =>
+      Array.from(line).forEach((value, k) =>
+        expect(value).toBeCloseTo(expected[index]![k]!, 6)
+      )
+    );
+  });
+
   it('keeps a hidden line wherever a visible outline over it has a gap', () => {
     // A hidden line under a visible one broken by a 0.3 mm gap that falls
     // between the hidden run's ends and quarter points.

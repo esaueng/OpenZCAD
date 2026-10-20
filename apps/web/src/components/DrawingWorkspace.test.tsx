@@ -502,6 +502,63 @@ describe('DrawingWorkspace', () => {
     }
   });
 
+  it("keeps each sheet's projections when switching between sheets of different bodies", async () => {
+    const otherId = 'body_other' as BodyId;
+    const other = { ...cube(4), bodyId: otherId, name: 'Small cube' };
+    const bodies = { [bodyId]: cube(), [otherId]: other };
+    const first = starter(drawingSourceFingerprint(bodies, [bodyId])!);
+    const second = createStarterSheet({
+      name: 'Sheet 2',
+      bodyIds: [otherId],
+      bodies,
+      units: 'mm',
+      paper: { size: 'A3', orientation: 'landscape' },
+      projectionAngle: 'first',
+      fingerprint: drawingSourceFingerprint(bodies, [otherId])!
+    });
+    const project = vi.spyOn(DrawingProjectionClient.prototype, 'project');
+    try {
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      render(
+        <DrawingWorkspace
+          document={{
+            ...base,
+            bodyOrder: [bodyId, otherId],
+            drawings: { sheets: [first, second] }
+          }}
+          bodies={bodies}
+          geometryPending={false}
+          defaultBodyIds={[bodyId]}
+          editDisabledReason={null}
+          onCommand={vi.fn(() => true)}
+          onStatus={vi.fn()}
+        />
+      );
+      const settled = (name: string) =>
+        waitFor(() =>
+          expect(
+            screen
+              .getByRole('application', { name: `Sheet ${name}` })
+              .querySelectorAll('.drawing-view.is-placeholder')
+          ).toHaveLength(0)
+        );
+      const list = screen.getByRole('listbox', { name: 'Drawing sheets' });
+      await settled('Sheet 1');
+      await userEvent.click(
+        within(list).getByRole('option', { name: 'Sheet 2' })
+      );
+      await settled('Sheet 2');
+      await userEvent.click(
+        within(list).getByRole('option', { name: 'Sheet 1' })
+      );
+      await settled('Sheet 1');
+      // One request per sheet: going back to the first reuses its views.
+      expect(project).toHaveBeenCalledTimes(2);
+    } finally {
+      project.mockRestore();
+    }
+  });
+
   it('names a body the sheet draws that is gone', () => {
     const sheet = starter('v1:0000000000000000');
     sheet.views[0]!.bodyIds = ['body_gone' as BodyId];

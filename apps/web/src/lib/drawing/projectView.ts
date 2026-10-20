@@ -749,18 +749,21 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       // the noise of the coordinates along the view direction, plus the
       // in-plane noise times how steeply the face recedes — a face square to
       // the view far along the page is as exact as one at the origin.
-      const along = [0, 0, 0];
-      let across = 0;
+      const largest = [0, 0, 0];
       for (let k = 0; k < 3; k += 1)
-        for (let c = 0; c < 3; c += 1) {
-          const value = Math.abs(vertices[indices[t + k]! * 3 + c]!);
-          along[c] = Math.max(along[c]!, value);
-          across = Math.max(across, value);
-        }
-      const depthNoise =
-        Math.abs(frame.direction.x) * along[0]! +
-        Math.abs(frame.direction.y) * along[1]! +
-        Math.abs(frame.direction.z) * along[2]!;
+        for (let c = 0; c < 3; c += 1)
+          largest[c] = Math.max(
+            largest[c]!,
+            Math.abs(vertices[indices[t + k]! * 3 + c]!)
+          );
+      // Each projected coordinate's noise: the world coordinates' noise,
+      // weighted by how much of each that axis takes.
+      const noiseAlong = (axis: { x: number; y: number; z: number }) =>
+        Math.abs(axis.x) * largest[0]! +
+        Math.abs(axis.y) * largest[1]! +
+        Math.abs(axis.z) * largest[2]!;
+      const depthNoise = noiseAlong(frame.direction);
+      const across = Math.max(noiseAlong(frame.x), noiseAlong(frame.up));
       const eu = u1 - u0;
       const ev = v1 - v0;
       const ed = d1 - d0;
@@ -1090,7 +1093,8 @@ export function dropCoincidentHidden(
           for (const s of grid.get(clamp(j) * cells + clamp(i)) ?? [])
             candidates.add(s);
     }
-    const covered: [number, number][] = [];
+    /** Covered intervals, each with its covering segment's own coincidence distance. */
+    const covered: [number, number, number][] = [];
     for (const s of candidates) {
       const ends = [
         [segments[s]!, segments[s + 1]!],
@@ -1121,24 +1125,27 @@ export function dropCoincidentHidden(
       // end (the same edge turning hidden) loses nothing.
       const t0 = Math.max(0, Math.min(t[0]!, t[1]!));
       const t1 = Math.min(1, Math.max(t[0]!, t[1]!));
-      if (t1 > t0) covered.push([t0, t1]);
+      if (t1 > t0) covered.push([t0, t1, near]);
     }
-    covered.sort((a, b) => a[0] - b[0]);
-    const gaps: [number, number][] = [];
-    let at = 0;
-    for (const [t0, t1] of covered) {
-      if (t0 > at) gaps.push([at, t0]);
-      at = Math.max(at, t1);
-    }
-    if (at < 1) gaps.push([at, 1]);
     // Nothing covers it: the whole segment stays, however short.
     if (covered.length === 0) return [[0, 1]];
-    // Between or beside coverage, a gap no longer than the tolerance is the
-    // same line, not a gap.
-    return gaps.filter(
-      ([t0, t1]) =>
-        (t1 - t0) * length > Math.min(tolerance, LOCAL_COINCIDENCE * length)
-    );
+    covered.sort((a, b) => a[0] - b[0]);
+    // Between or beside coverage, a gap no longer than the coincidence
+    // distance of the coverage on either side of it is the same line, not a
+    // gap: judged by those visible segments, not by the whole hidden one,
+    // whose length says nothing about a small opening in its outline.
+    const gaps: [number, number][] = [];
+    let at = 0;
+    let atNear = Infinity;
+    for (const [t0, t1, near] of covered) {
+      if ((t0 - at) * length > Math.min(atNear, near)) gaps.push([at, t0]);
+      if (t1 > at) {
+        at = t1;
+        atNear = near;
+      }
+    }
+    if ((1 - at) * length > atNear) gaps.push([at, 1]);
+    return gaps;
   };
 
   const out: Float64Array[] = [];

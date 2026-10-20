@@ -108,7 +108,8 @@ type ViewState =
 function sheetStatus(
   sheet: DrawingSheet,
   bodies: DrawingWorkspaceProps['bodies'],
-  geometryPending: boolean
+  geometryPending: boolean,
+  fingerprint: string | null
 ): SheetStatus {
   const ids = sheetBodyIds(sheet);
   // While the model rebuilds, `bodies` may not have caught up with the
@@ -121,7 +122,6 @@ function sheetStatus(
       kind: 'missing',
       bodyNames: missing.map((id) => bodies[id]?.name ?? 'a deleted body')
     };
-  const fingerprint = drawingSourceFingerprint(bodies, ids);
   if (!fingerprint) return { kind: 'pending' };
   return fingerprint === sheet.source.fingerprint
     ? { kind: 'ready', fingerprint }
@@ -137,7 +137,8 @@ const PAPER_SIZES = Object.keys(DRAWING_PAPER_SIZES_MM) as DrawingPaperSize[];
 /** Projections for the sheet's views, cached by model and view intent. */
 function useViewProjections(
   sheet: DrawingSheet | null,
-  sheets: readonly DrawingSheet[],
+  /** Every projection key some sheet draws of the current model. */
+  wanted: ReadonlySet<string>,
   status: SheetStatus | null,
   bodies: DrawingWorkspaceProps['bodies']
 ): Map<DrawingViewId, ViewState> {
@@ -242,18 +243,13 @@ function useViewProjections(
     }
     // Keep the cache to what this model's sheets still draw: a deleted view,
     // or one whose bodies or hidden lines changed, frees its projection.
-    const wanted = new Set(
-      sheets.flatMap((entry) =>
-        entry.views.map((view) => projectionKey(fingerprint, view))
-      )
-    );
     for (const key of cache.current.keys())
       if (!wanted.has(key)) cache.current.delete(key);
     for (const key of failures.current.keys())
       if (!wanted.has(key)) failures.current.delete(key);
     // `revision` re-runs this pass after each answer, which re-requests any
     // view whose request was dropped.
-  }, [sheet, sheets, fingerprint, bodies, revision]);
+  }, [sheet, wanted, fingerprint, bodies, revision]);
   const states = new Map<DrawingViewId, ViewState>();
   if (sheet && fingerprint)
     for (const view of sheet.views) {
@@ -397,11 +393,44 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const editable = editDisabledReason === null;
   // Fingerprinting sorts every face and edge hash: once per model or sheet
   // change, never per pointer move of a drag.
-  const status = useMemo(
-    () => (sheet ? sheetStatus(sheet, bodies, props.geometryPending) : null),
-    [sheet, bodies, props.geometryPending]
+  // Each sheet under its own bodies' fingerprint: sheets drawing different
+  // bodies keep their projections apart, and switching between them reuses
+  // them.
+  const fingerprints = useMemo(
+    () =>
+      new Map(
+        sheets.map((entry) => [
+          entry.sheetId,
+          props.geometryPending
+            ? null
+            : drawingSourceFingerprint(bodies, sheetBodyIds(entry))
+        ])
+      ),
+    [sheets, bodies, props.geometryPending]
   );
-  const projections = useViewProjections(sheet, sheets, status, bodies);
+  const wanted = useMemo(() => {
+    const keys = new Set<string>();
+    for (const entry of sheets) {
+      const fingerprint = fingerprints.get(entry.sheetId);
+      if (fingerprint)
+        for (const view of entry.views)
+          keys.add(projectionKey(fingerprint, view));
+    }
+    return keys;
+  }, [sheets, fingerprints]);
+  const status = useMemo(
+    () =>
+      sheet
+        ? sheetStatus(
+            sheet,
+            bodies,
+            props.geometryPending,
+            fingerprints.get(sheet.sheetId) ?? null
+          )
+        : null,
+    [sheet, bodies, props.geometryPending, fingerprints]
+  );
+  const projections = useViewProjections(sheet, wanted, status, bodies);
   const liveBodies = useMemo(
     () =>
       document.bodyOrder.filter((id) => {
