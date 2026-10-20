@@ -14,7 +14,10 @@ import type {
 import type { ProjectDocument } from '@openzcad/shared';
 // Type-only on purpose: a value import would pull the WASM-bearing module
 // into the main bundle and fail the build's bundle-size check.
-import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
+import type {
+  SketchSolveAnchor,
+  SketchSolveOutcome
+} from '@openzcad/kernel-adapter/exact';
 import type { SnapTargetKind, UnreferencedSnap } from './session';
 
 /** Constraint tools exposed by the sketch rail. */
@@ -1036,6 +1039,24 @@ export function definedPointKey(
   point: 'start' | 'end' | 'center'
 ): string {
   return `${objectId}.${point}`;
+}
+
+/**
+ * What a relation holds while it is applied as it is added: the first pick,
+ * so the later picks move to meet it (ZC-041). A point pick holds that point
+ * alone, an object pick the whole object. A single-pick relation has nothing
+ * to hold against, so it solves free.
+ */
+export function relationSolveAnchor(
+  picks: readonly ConstraintPick[]
+): SketchSolveAnchor | undefined {
+  const first = picks[0];
+  if (!first || picks.length < 2) return undefined;
+  return first.kind === 'point'
+    ? {
+        points: [{ objectId: first.objectId as EntityId, point: first.point }]
+      }
+    : { objectIds: [first.objectId] };
 }
 
 export type SelectionConstraintPlan =

@@ -187,6 +187,7 @@ import type {
   ProjectOrganization,
   ProjectStatus,
   ProjectSummary,
+  SketchConstraintData,
   SketchId,
   SketchNode,
   SketchObjectData,
@@ -237,6 +238,7 @@ import {
   refusePick,
   residualConstraintObjectIds,
   sketchDefinedState,
+  relationSolveAnchor,
   topResidualConstraints,
   unreferencedSnapRefusal,
   type ConstraintPick,
@@ -14573,20 +14575,7 @@ export function App() {
       return;
     }
     if (plan.action === 'add') {
-      if (
-        executeCommand(
-          commandFactories.addSketchConstraint(
-            {
-              sketchId: editingSketchNode.sketchId,
-              constraint: plan.data
-            },
-            `Add ${plan.label.toLowerCase()} constraint`
-          )
-        )
-      ) {
-        setSketchSolveStatus(null);
-        setStatus(`${plan.label} constraint added · Solve applies it.`);
-      }
+      void applySketchRelation(plan.data, [], plan.label);
       return;
     }
     dispatchInteraction({ type: 'sketch-constraint-tool', kind });
@@ -14740,22 +14729,115 @@ export function App() {
     );
     if ('error' in built) {
       setStatus(built.error);
-    } else if (
-      executeCommand(
-        commandFactories.addSketchConstraint(
-          {
-            sketchId: editingSketchNode.sketchId,
-            constraint: built.data
-          },
-          `Add ${spec.label.toLowerCase()} constraint`
-        )
-      )
-    ) {
-      setSketchSolveStatus(null);
-      setStatus(`${spec.label} constraint added · Solve applies it.`);
+    } else {
+      void applySketchRelation(built.data, picks, spec.label);
     }
     dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
     return true;
+  }
+
+  /**
+   * Adds a relation and applies it in the same edit, holding its first pick
+   * so the others move to meet it (ZC-041). When the hold makes it
+   * unsatisfiable (only the first pick can move), it applies free and says
+   * so; when it cannot solve at all, nothing changes, as with a driving
+   * dimension.
+   */
+  async function applySketchRelation(
+    data: SketchConstraintData,
+    picks: readonly ConstraintPick[],
+    label: string
+  ) {
+    if (!doc || !editingSketchNode || sketchSolving) return;
+    const base = doc;
+    const sketchId = editingSketchNode.sketchId;
+    const verb = `Add ${label.toLowerCase()} constraint`;
+    const add = commandFactories.addSketchConstraint(
+      { sketchId, constraint: data },
+      verb
+    );
+    let prospective: ProjectDocument;
+    try {
+      add.validate(base);
+      prospective = add.apply(base);
+    } catch (error) {
+      setStatus(errorMessage(error, `${label} constraint is invalid.`));
+      return;
+    }
+    setSketchSolving(true);
+    setSketchEditError(null);
+    setStatus(`Applying ${label.toLowerCase()}…`);
+    try {
+      const anchor = relationSolveAnchor(picks);
+      const solves = (outcome: SketchSolveOutcome) =>
+        outcome.converged && !outcome.rolledBack;
+      let outcome = await geometry.solveSketch(
+        prospective,
+        sketchId,
+        anchor ? { anchor } : undefined
+      );
+      const held = Boolean(anchor) && solves(outcome);
+      if (anchor && !held) {
+        outcome = await geometry.solveSketch(prospective, sketchId);
+      }
+      const live = managerRef.current?.document;
+      const liveSession = interactionRef.current;
+      if (
+        !live ||
+        live.projectId !== base.projectId ||
+        live.version !== base.version ||
+        liveSession.mode !== 'sketch' ||
+        liveSession.session.sketchId !== sketchId
+      ) {
+        setStatus(
+          `The sketch changed while the ${label.toLowerCase()} was applied. Try again.`
+        );
+        return;
+      }
+      if (!solves(outcome)) {
+        setSketchSolveStatus(
+          solveStatusFor(outcome, findSketch(prospective, sketchId))
+        );
+        const culprits = topResidualConstraints(
+          prospective,
+          findSketch(prospective, sketchId),
+          outcome.constraintResiduals,
+          2
+        );
+        const culpritSuffix =
+          culprits.length > 0 ? ` Likely culprit: ${culprits.join('; ')}.` : '';
+        setSketchEditError(
+          `${label} conflicts with existing constraints.${culpritSuffix} Edit or remove a conflicting constraint; no change was applied.`
+        );
+        setStatus(
+          `${label} refused: ${solveStatusLabel(outcome)};${culpritSuffix} no change was applied.`
+        );
+        return;
+      }
+      const solved = solvedSketchCommands(prospective, sketchId, outcome);
+      if (await commitSketchEdit(base, sketchId, [add, ...solved], verb)) {
+        // A held solve counts the held points as fixed, so its DOF is not
+        // the sketch's; only a free solve's status is shown.
+        setSketchSolveStatus(
+          held
+            ? null
+            : solveStatusFor(outcome, findSketch(prospective, sketchId))
+        );
+        setStatus(
+          anchor && !held
+            ? `${label} constraint added and applied · the first pick had to move to meet it.`
+            : `${label} constraint added and applied.`
+        );
+      }
+    } catch (error) {
+      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
+      setSketchEditError(errorMessage(error, `${label} could not be applied.`));
+      setStatus(
+        `${label} could not be applied: ${errorMessage(error, 'solve failed')}; no change was applied.`
+      );
+    } finally {
+      setSketchSolving(false);
+    }
   }
 
   /**

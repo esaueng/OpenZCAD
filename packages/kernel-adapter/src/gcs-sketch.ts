@@ -91,6 +91,16 @@ export interface SketchSolveOutcome {
   objects: SolvedSketchObject[];
 }
 
+/**
+ * Geometry a solve holds where it is: every point (and a circle's radius) of
+ * each listed object, and each listed point alone. Used when a relation is
+ * applied as it is added, so its first pick stays put; never persisted.
+ */
+export interface SketchSolveAnchor {
+  objectIds?: readonly string[];
+  points?: readonly SketchPointRef[];
+}
+
 interface ObjectHandles {
   kind: 'line' | 'circle' | 'arc';
   entity: number;
@@ -134,18 +144,38 @@ export function solveSketchWithGcs(
   objects: ResolvedSketchObject[],
   constraints: SketchConstraint[],
   resolveValue: (value: number | string, label: string) => number,
-  options: { maxIterations?: number; tolerance?: number } = {}
+  options: {
+    maxIterations?: number;
+    tolerance?: number;
+    anchor?: SketchSolveAnchor;
+  } = {}
 ): SketchSolveOutcome {
   const sketch = kernel.gcsNew();
   const handles = new Map<EntityId, ObjectHandles>();
+  const anchoredObjects = new Set(options.anchor?.objectIds ?? []);
+  const anchoredPoints = new Set(
+    (options.anchor?.points ?? []).map((ref) => `${ref.objectId}:${ref.point}`)
+  );
+  const held = (objectId: string, point: 'start' | 'end' | 'center') =>
+    anchoredObjects.has(objectId) || anchoredPoints.has(`${objectId}:${point}`);
 
   for (const object of objects) {
     if (handles.has(object.objectId)) {
       throw new Error(`Sketch object ${object.objectId} appears twice.`);
     }
     if (object.kind === 'line') {
-      const start = kernel.gcsAddPoint(sketch, object.x1, object.y1, false);
-      const end = kernel.gcsAddPoint(sketch, object.x2, object.y2, false);
+      const start = kernel.gcsAddPoint(
+        sketch,
+        object.x1,
+        object.y1,
+        held(object.objectId, 'start')
+      );
+      const end = kernel.gcsAddPoint(
+        sketch,
+        object.x2,
+        object.y2,
+        held(object.objectId, 'end')
+      );
       handles.set(object.objectId, {
         kind: 'line',
         entity: kernel.gcsAddLine(sketch, start, end),
@@ -156,7 +186,7 @@ export function solveSketchWithGcs(
         sketch,
         object.centerX,
         object.centerY,
-        false
+        held(object.objectId, 'center')
       );
       handles.set(object.objectId, {
         kind: 'circle',
@@ -170,19 +200,19 @@ export function solveSketchWithGcs(
         sketch,
         object.centerX,
         object.centerY,
-        false
+        held(object.objectId, 'center')
       );
       const start = kernel.gcsAddPoint(
         sketch,
         object.centerX + object.radius * Math.cos(startAngle),
         object.centerY + object.radius * Math.sin(startAngle),
-        false
+        held(object.objectId, 'start')
       );
       const end = kernel.gcsAddPoint(
         sketch,
         object.centerX + object.radius * Math.cos(endAngle),
         object.centerY + object.radius * Math.sin(endAngle),
-        false
+        held(object.objectId, 'end')
       );
       handles.set(object.objectId, {
         kind: 'arc',
@@ -220,6 +250,22 @@ export function solveSketchWithGcs(
       handle: kernel.gcsAddConstraint(sketch, JSON.stringify(payload))
     });
   };
+
+  // A circle's radius is a solver parameter, not a point, so a held circle
+  // also gets a radius constraint at its current value. It has no document
+  // id, so it never appears in the residuals read back below.
+  for (const object of objects) {
+    if (object.kind === 'circle' && anchoredObjects.has(object.objectId)) {
+      kernel.gcsAddConstraint(
+        sketch,
+        JSON.stringify({
+          type: 'circleRadius',
+          circle: objectHandles(object.objectId).entity,
+          value: object.radius
+        })
+      );
+    }
+  }
 
   for (const constraint of constraints) {
     const data = constraint.data;

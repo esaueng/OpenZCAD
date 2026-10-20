@@ -25,6 +25,7 @@ import type {
   SectionOutlineReport,
   SketchPlanarOperation,
   SketchPlanarResult,
+  SketchSolveAnchor,
   SketchSolveOutcome,
   DxfFaceSelector
 } from '@openzcad/kernel-adapter/exact';
@@ -234,7 +235,8 @@ export interface GeometryWorkerApi {
    */
   solveSketch(
     document: ProjectDocument,
-    sketchId: SketchId
+    sketchId: SketchId,
+    options?: { anchor?: SketchSolveAnchor }
   ): Promise<SketchSolveOutcome>;
   /**
    * Runs one planar sketch edit — corner fillet, corner chamfer, or closed
@@ -1134,11 +1136,12 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         });
       });
     },
-    solveSketch(document, sketchId) {
+    solveSketch(document, sketchId, options) {
       const posted = postRequest(solveSketchRequests.current, {
         type: 'solve-sketch',
         document: documentForWorker(document),
-        sketchId
+        sketchId,
+        ...(options?.anchor ? { anchor: options.anchor } : {})
       });
       return posted.ok
         ? posted.promise

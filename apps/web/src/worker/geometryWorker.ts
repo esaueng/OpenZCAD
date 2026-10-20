@@ -23,6 +23,7 @@ import type {
   SectionOutlineReport,
   SketchPlanarOperation,
   SketchPlanarResult,
+  SketchSolveAnchor,
   SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
 import {
@@ -134,6 +135,7 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       sketchId: SketchId;
+      anchor?: SketchSolveAnchor;
     }
   | {
       /** One planar sketch edit: corner fillet, corner chamfer, or offset. */
@@ -789,7 +791,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         return;
       }
       if (request.type === 'solve-sketch') {
-        const outcome = await exact.solveSketch(document, request.sketchId);
+        const outcome = await exact.solveSketch(document, request.sketchId, {
+          anchor: request.anchor
+        });
         post({
           type: 'solve-sketch',
           ok: true,
