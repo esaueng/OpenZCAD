@@ -36,6 +36,28 @@ describe('required validation gate', () => {
     expect(pinned, 'Re-pin ci.yml after changing fleet-ci.yml.').toBe(ci);
   });
 
+  it('keeps the pinned runner policy resolvable after its PR branch is deleted', () => {
+    // Actions cannot resolve a reusable workflow at a commit reachable only
+    // through refs/pull/N/head, so every ci run fails at startup once a merged
+    // PR's branch is deleted. A lightweight tag keeps the pin reachable; it
+    // must name the commit itself, so an annotated tag object does not pass.
+    const [, repo, pin] =
+      caller.match(
+        /uses: ([\w.-]+\/[\w.-]+)\/\.github\/workflows\/fleet-ci\.yml@([0-9a-f]{40})/
+      ) ?? [];
+    expect(pin).toBeDefined();
+    const tag = `refs/tags/fleet-ci/${pin}`;
+    const listed = execFileSync(
+      'git',
+      ['ls-remote', `https://github.com/${repo}`, tag],
+      { encoding: 'utf8', timeout: 30_000 }
+    );
+    expect(
+      listed,
+      `Push the pin's tag before enqueueing: git push origin ${pin}:${tag}`
+    ).toBe(`${pin}\t${tag}\n`);
+  }, 40_000);
+
   it('pins runner policy independently of PR edits and retains both dependencies', () => {
     expect(caller).toMatch(
       /uses: esaueng\/OpenZCAD\/\.github\/workflows\/fleet-ci\.yml@[0-9a-f]{40}\n/

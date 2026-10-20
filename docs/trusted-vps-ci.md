@@ -29,7 +29,10 @@ The runner-group allowlist must include the exact `fleet-ci.yml@<commit>` used
 by `ci.yml`. Never grant access to PR merge refs or arbitrary branch versions of
 that workflow. Changing its policy requires a new reviewed commit, an explicit
 runner-group allowlist update, and an update to the caller pin. Editing the local
-workflow file alone does not change the executed policy.
+workflow file alone does not change the executed policy. Each pinned commit
+also carries a lightweight `fleet-ci/<commit>` tag, which keeps it resolvable
+after its PR branch is deleted (see `.github/merge-queue.md`). The tag grants
+nothing: the SHA pin and the allowlist entry still decide what runs.
 
 Unit tests, parity, builds, and the browser shards remain hosted. The stable
 required `validate` check requires both the reusable quality workflow and hosted

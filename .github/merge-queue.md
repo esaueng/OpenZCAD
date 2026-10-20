@@ -71,6 +71,45 @@ continues to trigger the repository's existing automatic deployment workflows.
    check fails and the entry is removed, inspect the failure, repair or retry
    as appropriate, and revalidate the head and reviews before re-enqueueing.
 
+## Change the pinned fleet workflow
+
+`ci.yml` calls `fleet-ci.yml` at a commit SHA, and
+`test/trusted-pr-policy.test.ts` requires the file at that commit to equal the
+working-tree `fleet-ci.yml`. A PR that changes `fleet-ci.yml` therefore pins
+`ci.yml` to a commit on its own branch. GitHub deletes that branch at merge,
+and Actions cannot resolve a reusable workflow at a commit reachable only
+through `refs/pull/N/head`: every new `ci` run, PR or queue candidate, then
+fails at startup with no jobs, and `checks / validate` and `checks / e2e`
+never report. A durable tag prevents that outage.
+
+1. Commit the final `fleet-ci.yml` change. In a later commit, pin `ci.yml` to
+   that commit's full SHA.
+2. Before pushing the branch, push a lightweight tag at the pinned commit:
+
+   ```bash
+   PIN=<pinned sha>
+   git push origin "$PIN:refs/tags/fleet-ci/$PIN"
+   ```
+
+   Use a lightweight tag, not `git tag -a`: the policy test requires the tag
+   to name the commit itself, and a lightweight tag carries no tagger
+   identity for history privacy to audit. A tag push runs `Commit privacy`
+   and `History privacy request` on the pinned commit; `ci`, Cloudflare and
+   the deployment workflows do not run on tags.
+3. The policy test fails on any PR or queue candidate whose pin has no
+   `fleet-ci/<sha>` tag, and its message gives the push command. Do not enqueue
+   until it passes.
+4. No follow-up re-pin to the squash commit is needed: the tag keeps the
+   branch commit resolvable after the branch is deleted. A re-pin is an
+   ordinary pin change and needs its own tag, plus a runner-group allowlist
+   update (see `docs/trusted-vps-ci.md`).
+
+The tag grants nothing. The SHA in `ci.yml` and the runner-group allowlist
+still decide what runs, so moving a tag cannot change the executed policy.
+Deleting one breaks CI for every ref that pins it, so never delete or move a
+`fleet-ci/*` tag. If `ci` runs start failing with no jobs, check that the
+pinned SHA has its tag, push the missing tag, then re-run or re-enqueue.
+
 ## Guide sources
 
 The repository’s `AGENTS.md` is the canonical project guide, and `CLAUDE.md`

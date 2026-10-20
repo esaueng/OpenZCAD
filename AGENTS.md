@@ -144,6 +144,15 @@ in `.github/workflows/macos-desktop.yml`.
   lockfile update; do not hand-edit the
   resolved SHA. Any kernel update still needs the full CI matrix, especially
   `pnpm test:parity-corpus` and Playwright.
+- `ci.yml` calls `fleet-ci.yml` at a commit SHA. `test/trusted-pr-policy.test.ts`
+  requires the pinned file to equal the working tree, and requires a
+  lightweight tag `fleet-ci/<sha>` naming the pinned commit. A PR that changes
+  `fleet-ci.yml` pins its own branch commit. Push that tag before pushing the
+  branch: `git push origin "$PIN:refs/tags/fleet-ci/$PIN"`. Without the tag,
+  the pin becomes unresolvable once GitHub deletes the merged branch, and every
+  later `ci` run fails at startup with no jobs. No re-pin to the squash commit
+  is needed. Never delete or move a `fleet-ci/*` tag. The procedure is in
+  [.github/merge-queue.md](.github/merge-queue.md).
 
 ## Enforced boundaries
 
