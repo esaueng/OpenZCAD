@@ -1860,13 +1860,17 @@ export function withMatchingLocalDerived(
   ) {
     return remote;
   }
+  // Everything the geometry derives (meshes, exportable bodies, datum
+  // frames and axes), not just the meshes: room documents travel without
+  // any of it, and an unchanged model is never rebuilt to bring it back.
+  const {
+    warnings: _warnings,
+    updatedAt: _updatedAt,
+    ...geometry
+  } = local.derived;
   return {
     ...remote,
-    derived: {
-      ...remote.derived,
-      bodyRepresentations: local.derived.bodyRepresentations,
-      exportableBodyIds: local.derived.exportableBodyIds
-    }
+    derived: { ...remote.derived, ...geometry }
   };
 }
 

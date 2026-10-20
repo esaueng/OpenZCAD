@@ -261,8 +261,13 @@ describe('choosing between the two copies of a project', () => {
   it('keeps the device meshes for a room document that changed only drawings', () => {
     const local = {
       ...at(4),
-      derived: { ...at(4).derived, exportableBodyIds: ['marker'] }
-    } as ProjectDocument;
+      derived: {
+        ...at(4).derived,
+        exportableBodyIds: ['marker'],
+        datumFrames: { feat_plane: { marker: true } },
+        datumAxes: { feat_axis: { marker: true } }
+      }
+    } as unknown as ProjectDocument;
     const sheet = {
       sheetId: 'dsht_room',
       name: 'Sheet 1',
@@ -285,6 +290,9 @@ describe('choosing between the two copies of a project', () => {
     } as ProjectDocument;
     const merged = withMatchingLocalDerived(remote, local);
     expect(merged.derived.exportableBodyIds).toEqual(['marker']);
+    // Datum planes and axes are geometry the room strips too.
+    expect(merged.derived.datumFrames).toEqual(local.derived.datumFrames);
+    expect(merged.derived.datumAxes).toEqual(local.derived.datumAxes);
     expect(merged.drawings).toEqual(remote.drawings);
     // The drawing edit is still real work: not a metadata-only update.
     expect(projectPreservesLocalWork(local, remote)).toBe(false);

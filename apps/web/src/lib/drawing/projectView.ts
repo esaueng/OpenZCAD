@@ -1333,6 +1333,17 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
  * collinear visible segments cover, so a gap in the visible outline of any
  * width keeps its piece of the hidden line.
  */
+/** Maximum retained segment/cell references in one view's coincidence index. */
+const MAX_SEGMENT_GRID_ENTRIES = 4_000_000;
+
+class SegmentBudgetError extends Error {
+  constructor() {
+    super(
+      'Drawing view exceeds its projection memory budget; show fewer bodies or choose another view.'
+    );
+  }
+}
+
 /** The box around the given segments (offsets into a flat u0 v0 u1 v1 list). */
 function segmentsBox(
   segments: readonly number[],
@@ -1364,6 +1375,8 @@ function segmentsBox(
  */
 export class SegmentGrid {
   private readonly cells: number[][];
+  /** Entries held here and in every kept refinement. */
+  private retained = 0;
   private readonly children: (SegmentGrid | undefined)[];
   private readonly size: number;
   private readonly cellU: number;
@@ -1387,8 +1400,15 @@ export class SegmentGrid {
       maxV: number;
     },
     tolerance: number,
+    entryBudget = MAX_SEGMENT_GRID_ENTRIES,
     level = 0
   ) {
+    if (!Number.isSafeInteger(entryBudget) || entryBudget < 0)
+      throw new Error('Invalid drawing projection memory budget.');
+    // Retained segment/cell references are bounded like the occlusion
+    // index's: long segments crossing many cells, and refined levels, all
+    // draw on one allowance.
+    const entryLimit = Math.min(entryBudget, MAX_SEGMENT_GRID_ENTRIES);
     let reach = 0;
     for (const s of members)
       reach = Math.max(
@@ -1410,8 +1430,9 @@ export class SegmentGrid {
     this.cellU = Math.max((box.maxU - box.minU) / this.size, reach, 1e-12);
     this.cellV = Math.max((box.maxV - box.minV) / this.size, reach, 1e-12);
     this.cells = Array.from({ length: this.size * this.size }, () => []);
-    for (const s of members)
-      for (const key of new Set(
+    let entries = 0;
+    for (const s of members) {
+      const keys = new Set(
         this.cellsAlong(
           segments[s]!,
           segments[s + 1]!,
@@ -1419,8 +1440,12 @@ export class SegmentGrid {
           segments[s + 3]!,
           0
         )
-      ))
-        this.cells[key]!.push(s);
+      );
+      if (keys.size > entryLimit - entries) throw new SegmentBudgetError();
+      entries += keys.size;
+      for (const key of keys) this.cells[key]!.push(s);
+    }
+    this.retained = entries;
     this.children = new Array<SegmentGrid | undefined>(this.cells.length);
     if (level >= MAX_GRID_LEVEL) return;
     this.cells.forEach((cell, key) => {
@@ -1428,24 +1453,42 @@ export class SegmentGrid {
       const i = key % this.size;
       const j = Math.floor(key / this.size);
       const held = segmentsBox(segments, cell);
-      const child = new SegmentGrid(
-        segments,
-        cell,
-        {
-          minU: Math.max(held.minU, box.minU + i * this.cellU),
-          minV: Math.max(held.minV, box.minV + j * this.cellV),
-          maxU: Math.min(held.maxU, box.minU + (i + 1) * this.cellU),
-          maxV: Math.min(held.maxV, box.minV + (j + 1) * this.cellV)
-        },
-        tolerance,
-        level + 1
-      );
+      const build = () =>
+        new SegmentGrid(
+          segments,
+          cell,
+          {
+            minU: Math.max(held.minU, box.minU + i * this.cellU),
+            minV: Math.max(held.minV, box.minV + j * this.cellV),
+            maxU: Math.min(held.maxU, box.minU + (i + 1) * this.cellU),
+            maxV: Math.min(held.maxV, box.minV + (j + 1) * this.cellV)
+          },
+          tolerance,
+          entryLimit - this.retained,
+          level + 1
+        );
+      // A refinement the allowance cannot hold is simply not made: the
+      // coarser cell still answers, only more slowly.
+      let child: SegmentGrid;
+      try {
+        child = build();
+      } catch (error) {
+        if (error instanceof SegmentBudgetError) return;
+        throw error;
+      }
       if (
         child.maxCellLoad <= cell.length / 2 &&
         child.entryCount <= cell.length * 4
-      )
+      ) {
         this.children[key] = child;
+        this.retained += child.retained;
+      }
     });
+  }
+
+  /** Every retained entry, refined levels included; for tests. */
+  get retainedEntries(): number {
+    return this.retained;
   }
 
   /** How many segment entries the finest cells hold; for tests. */

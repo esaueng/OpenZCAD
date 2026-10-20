@@ -1125,6 +1125,28 @@ describe('D01 occlusion tolerance', () => {
   });
 });
 
+describe('D01 coincident-line index budget', () => {
+  it('bounds the entries it keeps, refining only within what is left', () => {
+    // 2000 long diagonals across a square, each crossing about a hundred
+    // cells: a budget that cannot hold the top level refuses the view, and
+    // one that holds only the top level keeps no refinements.
+    const segments: number[] = [];
+    for (let k = 0; k < 2000; k += 1)
+      segments.push(0, k / 20, 100, 100 - k / 20);
+    const members = segments.flatMap((_, index) =>
+      index % 4 === 0 ? [index] : []
+    );
+    const box = { minU: 0, minV: 0, maxU: 100, maxV: 100 };
+    const full = new SegmentGrid(segments, members, box, 1e-6);
+    const top = full.retainedEntries;
+    expect(() => new SegmentGrid(segments, members, box, 1e-6, 10)).toThrow(
+      /projection memory budget/
+    );
+    const tight = new SegmentGrid(segments, members, box, 1e-6, top);
+    expect(tight.retainedEntries).toBeLessThanOrEqual(top);
+  });
+});
+
 describe('D01 occlusion footprint', () => {
   it('does not cover a point a visible distance outside a very tall triangle', () => {
     // A triangle 10^9 mm tall on a 2 mm base: 0.1 mm below the base is a
