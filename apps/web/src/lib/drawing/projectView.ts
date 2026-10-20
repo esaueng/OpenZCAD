@@ -745,14 +745,32 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       // The floor absorbs only float noise: display meshes are float32, so
       // a vertex is good to a few units in the last place of its own
       // coordinates. Neither the body's size nor the triangle's sets it: a
-      // large plate must still hide an edge a hair behind it.
-      let magnitude = 0;
+      // large plate must still hide an edge a hair behind it. Depth takes
+      // the noise of the coordinates along the view direction, plus the
+      // in-plane noise times how steeply the face recedes — a face square to
+      // the view far along the page is as exact as one at the origin.
+      const along = [0, 0, 0];
+      let across = 0;
       for (let k = 0; k < 3; k += 1)
-        for (let c = 0; c < 3; c += 1)
-          magnitude = Math.max(
-            magnitude,
-            Math.abs(vertices[indices[t + k]! * 3 + c]!)
-          );
+        for (let c = 0; c < 3; c += 1) {
+          const value = Math.abs(vertices[indices[t + k]! * 3 + c]!);
+          along[c] = Math.max(along[c]!, value);
+          across = Math.max(across, value);
+        }
+      const depthNoise =
+        Math.abs(frame.direction.x) * along[0]! +
+        Math.abs(frame.direction.y) * along[1]! +
+        Math.abs(frame.direction.z) * along[2]!;
+      const eu = u1 - u0;
+      const ev = v1 - v0;
+      const ed = d1 - d0;
+      const fu = u2 - u0;
+      const fv = v2 - v0;
+      const fd = d2 - d0;
+      // |∇d| over the page: the in-plane part of the normal over its depth part.
+      const slope =
+        Math.hypot(ev * fd - ed * fv, ed * fu - eu * fd) / Math.abs(area);
+      const floor = (depthNoise + slope * across) * FLOAT32_NOISE;
       triangles.push({
         u0,
         v0,
@@ -764,7 +782,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
         v2,
         d2,
         area,
-        tol: Math.max(magnitude * FLOAT32_NOISE, 1e-12) + sag[t / 3]!
+        tol: Math.max(floor, 1e-12) + sag[t / 3]!
       });
     }
   });
@@ -1130,29 +1148,29 @@ export function dropCoincidentHidden(
       if (run.length >= 4) out.push(Float64Array.from(run));
       run = [];
     };
+    /** Whether the run reaches the polyline vertex the next segment starts at. */
+    let atVertex = false;
     for (let i = 2; i + 1 < line.length; i += 2) {
       const pu = line[i - 2]!;
       const pv = line[i - 1]!;
       const qu = line[i]!;
       const qv = line[i + 1]!;
-      for (const [t0, t1] of uncovered(pu, pv, qu, qv)) {
+      const pieces = uncovered(pu, pv, qu, qv);
+      for (const [t0, t1] of pieces) {
         const au = pu + (qu - pu) * t0;
         const av = pv + (qv - pv) * t0;
         const bu = pu + (qu - pu) * t1;
         const bv = pv + (qv - pv) * t1;
-        const lastU = run.at(-2);
-        const lastV = run.at(-1);
-        // Continue the run across a polyline vertex; start anew after a gap.
-        if (
-          lastU === undefined ||
-          lastV === undefined ||
-          Math.hypot(lastU - au, lastV - av) > tolerance
-        ) {
+        // Continue the run only across the vertex both pieces actually
+        // share; any covered stretch between them, however short, is a gap.
+        if (!(atVertex && t0 === 0)) {
           flush();
           run.push(au, av);
         }
         run.push(bu, bv);
+        atVertex = false;
       }
+      atVertex = pieces.at(-1)?.[1] === 1;
     }
     flush();
   }

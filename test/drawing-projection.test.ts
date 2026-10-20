@@ -620,15 +620,15 @@ describe('D01 occlusion tolerance', () => {
       hiddenLines: true,
       bodies: [sheet, rod]
     });
-    // The tolerance is the float32 floor (four units in the last place of
-    // the covering triangle's largest coordinate, 10) plus the sag;
+    // The tolerance is the float32 floor — none here: the covering
+    // triangles lie flat in z = 0, square to the view — plus the sag;
     // z = 1 − (x − 2) / 3 along the edge, so it turns hidden at z = −tol.
     const visibleRun = result.visible.find(
       (line) =>
         Math.abs(line[0]! - 2) < 1e-9 || Math.abs(line.at(-2)! - 2) < 1e-9
     )!;
     const end = Math.max(visibleRun[0]!, visibleRun.at(-2)!);
-    const tol = 10 * 2 ** -21 + sag;
+    const tol = 1e-12 + sag;
     expect(end).toBeCloseTo(5 + 3 * tol, 4);
     expect(
       result.hidden.some(
@@ -663,6 +663,60 @@ describe('D01 occlusion tolerance', () => {
       u >= 5000 && u <= 5001 && Math.abs(v - 5000) < 1e-6;
     expect(onLine(result.visible, under)).toEqual([]);
     expect(onLine(result.hidden, under)).toHaveLength(1);
+  });
+
+  it('does not widen the depth tolerance for a body far along the page', () => {
+    // A face square to the front view at x = 10^6, and an edge 0.1 mm
+    // behind it. The x coordinate says nothing about depth, which runs
+    // along y; a floor from the largest coordinate (0.48 mm) called the
+    // edge visible.
+    const plate = {
+      vertices: Float64Array.from([
+        1e6,
+        0,
+        0,
+        1e6 + 10,
+        0,
+        0,
+        1e6 + 10,
+        0,
+        10,
+        1e6,
+        0,
+        10
+      ]),
+      indices: Uint32Array.from([0, 1, 2, 0, 2, 3]),
+      faces: [{ triangleStart: 0, triangleCount: 2 }],
+      edges: []
+    };
+    const edge = {
+      vertices: new Float64Array(),
+      indices: new Uint32Array(),
+      edges: [[1e6 + 2, 0.1, 5, 1e6 + 8, 0.1, 5]]
+    };
+    const result = projectView({
+      orientation: 'front',
+      hiddenLines: true,
+      bodies: [plate, edge]
+    });
+    const behind = (u: number, v: number) =>
+      Math.abs(Math.abs(u) - 1e6 - 5) <= 3.001 && Math.abs(v - 5) < 1e-6;
+    expect(onLine(result.visible, behind)).toEqual([]);
+    expect(onLine(result.hidden, behind)).toHaveLength(1);
+  });
+
+  it('breaks a hidden polyline where visible coverage cuts its corner', () => {
+    // A hidden L whose corner is covered by a visible one: the two
+    // uncovered legs meet no vertex, so they stay two lines — not one with
+    // a dashed shortcut across the covered corner, which a wide tolerance
+    // (another body far across the sheet) once joined.
+    const hidden = [Float64Array.from([0, 0, 10, 0, 10, 10])];
+    const visible = [Float64Array.from([9, 0, 10, 0, 10, 1])];
+    const out = dropCoincidentHidden(hidden, visible, 5);
+    expect(out.map((line) => Array.from(line))).toEqual([
+      [0, 0, 9, 0],
+      [10, 1, 10, 10]
+    ]);
   });
 
   it('keeps a hidden line wherever a visible outline over it has a gap', () => {
@@ -873,17 +927,18 @@ describe('D01 occlusion tolerance', () => {
     // start a corner of the plate and merged the prefix away.
     const plate = {
       vertices: Float64Array.from([
-        -10, -1, 0, 100, -1, 0, 100, 1, 0, -10, 1, 0
+        -10, -1, 100, 100, -1, 100, 100, 1, 100, -10, 1, 100
       ]),
       indices: Uint32Array.from([0, 1, 2, 0, 2, 3]),
       faces: [{ triangleStart: 0, triangleCount: 2 }],
       edges: []
     };
+    // The plate's float32 floor: four units in the last place of z = 100.
     const tol = 100 * 2 ** -21;
     const edge = {
       vertices: new Float64Array(),
       indices: new Uint32Array(),
-      edges: [[0, 0, tol / 2, 1000, 0, tol / 2 - 1]]
+      edges: [[0, 0, 100 + tol / 2, 1000, 0, 99 + tol / 2]]
     };
     const result = projectView({
       orientation: 'top',
