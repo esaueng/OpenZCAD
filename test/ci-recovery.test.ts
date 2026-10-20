@@ -34,6 +34,8 @@ describe('superseded CI recovery', () => {
     expect(gates).toContain(
       'needs: [quality, unit, validation]\n    if: always()'
     );
-    expect(gates).toContain('needs: e2e-tests\n    if: always()');
+    expect(gates).toContain(
+      'needs: [e2e-tests, e2e-tests-pr]\n    if: always()'
+    );
   });
 });
