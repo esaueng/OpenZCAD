@@ -522,6 +522,12 @@ export function PanelDock({
         window.removeEventListener('pointerup', onUp, true);
         window.removeEventListener('pointercancel', onCancel, true);
         window.removeEventListener('keydown', onKey, true);
+        window.removeEventListener('blur', onAbandon);
+        document.removeEventListener('visibilitychange', onAbandon);
+        layer.removeEventListener('lostpointercapture', onLost);
+        if (layer.hasPointerCapture?.(drag.pointerId)) {
+          layer.releasePointerCapture(drag.pointerId);
+        }
         if (drag.frame !== null) cancelAnimationFrame(drag.frame);
         drag.frame = null;
       }
@@ -577,6 +583,14 @@ export function PanelDock({
         drag.base = latest.current.layout;
         drag.lifted = beginDrag(drag.base, id);
         drag.liftedGeometry = computePanelGeometry(drag.lifted, stageNow);
+        // The layer outlives the header the press began on (lifting the
+        // panel unmounts it), so it holds the pointer: a release outside
+        // the window still arrives, and losing it cancels the drag.
+        try {
+          layer.setPointerCapture(drag.pointerId);
+        } catch {
+          // The pointer is already up: its release ends the drag anyway.
+        }
       }
       pointer.preventDefault();
       if (drag.frame === null) drag.frame = requestAnimationFrame(show);
@@ -628,12 +642,30 @@ export function PanelDock({
       key.stopPropagation();
       end(false);
     };
+    // The page losing the pointer — capture taken away, the window losing
+    // focus or hidden mid-drag — cancels: no release may ever come.
+    const onLost = (pointer: PointerEvent) => {
+      if (pointer.pointerId === drag.pointerId && dragRef.current === drag) {
+        end(false);
+      }
+    };
+    const onAbandon = (event: Event) => {
+      if (dragRef.current !== drag) return;
+      // The window's own blur (focus moving within the page does not reach
+      // a non-capturing listener on the window), or the page hidden.
+      if (event.type === 'blur' || document.visibilityState === 'hidden') {
+        end(false);
+      }
+    };
 
     dragRef.current = drag;
     window.addEventListener('pointermove', onMove, true);
     window.addEventListener('pointerup', onUp, true);
     window.addEventListener('pointercancel', onCancel, true);
     window.addEventListener('keydown', onKey, true);
+    window.addEventListener('blur', onAbandon);
+    document.addEventListener('visibilitychange', onAbandon);
+    layer.addEventListener('lostpointercapture', onLost);
   };
 
   useImperativeHandle(handleRef, () => ({

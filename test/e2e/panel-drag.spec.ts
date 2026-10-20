@@ -274,6 +274,60 @@ test('a drop on the model floats the panel where it lands, and a rail drag-out o
   await expect(modelPanel(page, 'History')).toHaveClass(/is-unpinned/);
 });
 
+test('a drag the page loses ends as a cancel and leaves the layout as it was', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Lost drag', {
+    right: [['parameters', 'history']]
+  });
+  const arrangement = async () => {
+    const stored = await storedLayout(page);
+    return { left: stored!.left, right: stored!.right, floats: stored!.floats };
+  };
+  const before = await arrangement();
+  const layer = page.locator('.panel-dock-layer');
+  const lost = [
+    // The window losing focus mid-drag: no release may ever arrive.
+    () => page.evaluate(() => window.dispatchEvent(new Event('blur'))),
+    // The pointer taken from the layer that holds it.
+    () =>
+      layer.evaluate((element) =>
+        element.dispatchEvent(
+          new PointerEvent('lostpointercapture', { pointerId: 1 })
+        )
+      )
+  ];
+  for (const lose of lost) {
+    await pickUp(page, 'History');
+    await page.mouse.move(160, 400, { steps: 8 });
+    await expect(page.locator('.panel-drop-slot')).toBeVisible();
+    // The layer holds the pointer, so a release outside the window reaches it.
+    expect(
+      await layer.evaluate((element) => element.hasPointerCapture(1))
+    ).toBe(true);
+    await lose();
+    await expect(page.locator('.panel-drag-chip')).toHaveCount(0);
+    await expect(page.locator('.panel-drag-shield')).toHaveCount(0);
+    await expect(modelPanel(page, 'History')).toHaveClass(/is-docked/);
+    expect(
+      await layer.evaluate((element) => element.hasPointerCapture(1))
+    ).toBe(false);
+    // The release that follows does nothing.
+    await page.mouse.up();
+    expect(await dockedTitles(page, 'right')).toEqual([
+      ['Parameters', 'History']
+    ]);
+    expect(await dockedTitles(page, 'left')).toEqual([]);
+    expect(await arrangement()).toEqual(before);
+  }
+  // Nothing is left holding the stage: the model takes the pointer again.
+  expect(
+    await page.evaluate(
+      () => document.elementFromPoint(700, 400)?.tagName ?? null
+    )
+  ).toBe('CANVAS');
+});
+
 /** Opens a panel's Move menu from its grip and picks an item, by keys. */
 async function moveByKeys(page: Page, title: PanelTitle, item: string) {
   const grip = modelPanel(page, title).getByRole('button', {
