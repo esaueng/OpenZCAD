@@ -130,6 +130,29 @@ Milliseconds over the 26 accepted warm ticks. The other 14 ticks were refused
     digest, so the adapter can skip the witness, the key and the measurement
     for faces that are unchanged.
 
+- **Drag previews now checkpoint the feature right before the dragged edit.**
+  - Before, a drag past the first 16 features restored the nearest stable
+    checkpoint and replayed everything after it on every tick. The edited
+    body then got new handles each tick, so the prepared move never engaged
+    (finding 3).
+  - A drag preview now also checkpoints the feature right before the edit.
+    Every later tick restores that checkpoint and replays only the edit. The
+    next sync that is not a drag preview discards the extra checkpoint, and
+    the stable positions are unchanged.
+  - Holder behind 200 unrelated boxes, 2026.1.68 overlay, 12 ticks (6
+    accepted), one run each, same host:
+
+    | Run    | Accepted wall p50 / p95 | Kernel p50 / p95 | Move                                 | Linear memory growth |
+    | ------ | ----------------------: | ---------------: | ------------------------------------ | -------------------: |
+    | Before |           405.1 / 483.1 |    202.7 / 251.0 | `moveFacesJournaled` 27.6 ms         |              21.2 MB |
+    | After  |           259.5 / 392.2 |    148.6 / 227.0 | `moveFacesPreparedJournaled` 28.8 ms |               8.8 MB |
+
+  - `deserializeSolids` no longer runs per tick. Each tick still meshes 57
+    bodies, because the measured-body cache only refills on a complete sync
+    and those bodies got new handles on the drag's first tick.
+  - Regression: `test/drag-source-checkpoint.test.ts`. With the change
+    reverted, every tick replays the dragged extrusion.
+
 ## Not measured here
 
 - `postMessage` costs.
