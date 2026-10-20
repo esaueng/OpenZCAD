@@ -20,6 +20,7 @@ import type { CommandManager } from '@openzcad/command-system';
 import { mark, measure, timed } from '../lib/perf';
 import { faceDragTraceEnabled, traceFaceDrag } from '../lib/faceDragTrace';
 import type {
+  DrawingBodyTessellation,
   ExactSectionPlane,
   MeshQualityReport,
   MassPropertiesRead,
@@ -221,6 +222,16 @@ export interface GeometryWorkerApi {
       onState?(state: GeometryWorkerState): void;
     }
   ): Promise<MeshQualityReport>;
+  /**
+   * D01: each body's canonical drawing tessellation — meshed at its nominal
+   * deflection in an order that depends only on the exact geometry, so the
+   * same model always projects to the same lines (and export bytes), unlike
+   * the display mesh, which holds its deflection through small edits.
+   */
+  drawingTessellation(
+    document: ProjectDocument,
+    bodyIds: BodyId[]
+  ): Promise<Record<BodyId, DrawingBodyTessellation>>;
   /** Queries live geometry; a stale derived-cache hit restores exact history first. */
   massProperties(
     document: ProjectDocument,
@@ -292,6 +303,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const meshQualityRequests = useRef(
     new Map<string, PendingRequest<MeshQualityReport>>()
   );
+  const drawingTessellationRequests = useRef(
+    new Map<string, PendingRequest<Record<BodyId, DrawingBodyTessellation>>>()
+  );
   const massPropertiesRequests = useRef(
     new Map<string, PendingRequest<MassPropertiesRead>>()
   );
@@ -346,6 +360,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
     (): Map<string, PendingRequest<never>>[] => [
       exportRequests.current,
       meshQualityRequests.current,
+      drawingTessellationRequests.current,
       massPropertiesRequests.current,
       solveSketchRequests.current,
       sectionRequests.current,
@@ -716,6 +731,16 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           } else {
             pending.reject(new Error(message.error));
           }
+          return;
+        }
+        if (message.type === 'drawing-tessellation') {
+          const pending = drawingTessellationRequests.current.get(
+            message.requestId
+          );
+          if (!pending) return;
+          drawingTessellationRequests.current.delete(message.requestId);
+          if (message.ok) pending.resolve(message.bodies);
+          else pending.reject(new Error(message.error));
           return;
         }
         if (message.type === 'mass-properties') {
@@ -1106,6 +1131,16 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         stateSubscribers.current.set(posted.requestId, options.onState);
       }
       return posted.promise;
+    },
+    drawingTessellation(document, bodyIds) {
+      const posted = postRequest(drawingTessellationRequests.current, {
+        type: 'drawing-tessellation',
+        document: documentForWorker(document),
+        bodyIds
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
     },
     massProperties(document, bodyId, options) {
       if (options?.signal?.aborted) {

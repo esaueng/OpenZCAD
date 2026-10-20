@@ -23481,6 +23481,9 @@ export function App() {
                 bodies={doc.derived.bodyRepresentations}
                 geometryPending={!geometry.isReadyFor(doc)}
                 defaultBodyIds={drawingDefaultBodyIds}
+                requestTessellation={(source, bodyIds) =>
+                  geometry.drawingTessellation(source, bodyIds)
+                }
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}
                 onStatus={(message) => setStatus(message)}

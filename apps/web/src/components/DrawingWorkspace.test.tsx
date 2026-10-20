@@ -20,8 +20,10 @@ import { DrawingWorkspace } from './DrawingWorkspace';
 import { DrawingProjectionClient } from '../lib/drawing/projectionClient';
 import {
   createStarterSheet,
-  drawingSourceFingerprint
+  drawingSourceFingerprint,
+  projectionBodyInput
 } from '../lib/drawing/sheetSources';
+import type { ProjectionBodyInput } from '../lib/drawing/projectView';
 import type * as SheetSources from '../lib/drawing/sheetSources';
 
 // Pass-through, counted: fingerprinting is the costly step a drag must skip.
@@ -102,6 +104,27 @@ function cube(size = 10): BodyRepresentation {
   };
 }
 
+/**
+ * The geometry worker's canonical tessellation, stood in for by each body's
+ * display mesh: these synthetic cubes have no exact geometry to mesh.
+ */
+function displayTessellation(
+  bodies: Record<string, BodyRepresentation>
+): (
+  document: ProjectDocument,
+  bodyIds: BodyId[]
+) => Promise<Record<string, ProjectionBodyInput>> {
+  return (_document, bodyIds) =>
+    Promise.resolve(
+      Object.fromEntries(
+        bodyIds.flatMap((id) => {
+          const input = bodies[id] ? projectionBodyInput(bodies[id]) : null;
+          return input ? [[id, input]] : [];
+        })
+      )
+    );
+}
+
 function setup(
   options: {
     sheet?: DrawingSheet;
@@ -125,6 +148,7 @@ function setup(
       bodies={bodies}
       geometryPending={options.geometryPending ?? false}
       defaultBodyIds={[bodyId]}
+      requestTessellation={displayTessellation(bodies)}
       editDisabledReason={options.editDisabledReason ?? null}
       onCommand={onCommand}
       onStatus={onStatus}
@@ -176,6 +200,7 @@ describe('DrawingWorkspace', () => {
         bodies={{ [bodyId]: cube() }}
         geometryPending={false}
         defaultBodyIds={[]}
+        requestTessellation={displayTessellation({ [bodyId]: cube() })}
         editDisabledReason={null}
         onCommand={onCommand}
         onStatus={onStatus}
@@ -405,6 +430,7 @@ describe('DrawingWorkspace', () => {
       bodies: { [bodyId]: cube() },
       geometryPending: false,
       defaultBodyIds: [bodyId],
+      requestTessellation: displayTessellation({ [bodyId]: cube() }),
       editDisabledReason: null,
       onCommand,
       onStatus: vi.fn()
@@ -468,6 +494,7 @@ describe('DrawingWorkspace', () => {
         bodies: { [bodyId]: cube() },
         geometryPending: false,
         defaultBodyIds: [bodyId],
+        requestTessellation: displayTessellation({ [bodyId]: cube() }),
         editDisabledReason: null,
         onCommand: vi.fn(() => true),
         onStatus: vi.fn()
@@ -502,6 +529,101 @@ describe('DrawingWorkspace', () => {
     }
   });
 
+  it('projects from the canonical tessellation, meshed once per model, never the display mesh', async () => {
+    const project = vi.spyOn(DrawingProjectionClient.prototype, 'project');
+    try {
+      const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+        bodyId
+      ])!;
+      const sheet = starter(fingerprint);
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const document = (shown: DrawingSheet): ProjectDocument => ({
+        ...base,
+        bodyOrder: [bodyId],
+        drawings: { sheets: [shown] }
+      });
+      // Told apart by size: the display mesh is the 10 mm cube, the
+      // canonical tessellation a 12 mm one.
+      const canonical = displayTessellation({ [bodyId]: cube(12) });
+      const requestTessellation = vi.fn(canonical);
+      const props = {
+        bodies: { [bodyId]: cube() },
+        geometryPending: false,
+        defaultBodyIds: [bodyId],
+        requestTessellation,
+        editDisabledReason: null,
+        onCommand: vi.fn(() => true),
+        onStatus: vi.fn()
+      };
+      const settled = () =>
+        waitFor(() =>
+          expect(
+            screen
+              .getByRole('application', { name: 'Sheet Sheet 1' })
+              .querySelectorAll('.drawing-view.is-placeholder')
+          ).toHaveLength(0)
+        );
+      const { rerender } = render(
+        <DrawingWorkspace document={document(sheet)} {...props} />
+      );
+      await settled();
+      expect(requestTessellation).toHaveBeenCalledTimes(1);
+      expect(requestTessellation.mock.calls[0]![1]).toEqual([bodyId]);
+      const [inputs] = project.mock.calls[0]!;
+      expect(Math.max(...inputs[bodyId]!.vertices)).toBe(12);
+      // A hidden-line toggle projects again from the same tessellation.
+      rerender(
+        <DrawingWorkspace
+          document={document({
+            ...sheet,
+            views: sheet.views.map((view, index) =>
+              index === 0 ? { ...view, hiddenLines: !view.hiddenLines } : view
+            )
+          })}
+          {...props}
+        />
+      );
+      await settled();
+      await waitFor(() => expect(project).toHaveBeenCalledTimes(2));
+      expect(requestTessellation).toHaveBeenCalledTimes(1);
+    } finally {
+      project.mockRestore();
+    }
+  });
+
+  it('shows the refusal when the model cannot be meshed for drawing', async () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const base = createProjectDocument('Bracket', toUserId('test'));
+    const requestTessellation = vi.fn(() =>
+      Promise.reject(new Error('Body body_cube has no exact geometry to draw.'))
+    );
+    render(
+      <DrawingWorkspace
+        document={{
+          ...base,
+          bodyOrder: [bodyId],
+          drawings: { sheets: [starter(fingerprint)] }
+        }}
+        bodies={{ [bodyId]: cube() }}
+        geometryPending={false}
+        defaultBodyIds={[bodyId]}
+        requestTessellation={requestTessellation}
+        editDisabledReason={null}
+        onCommand={vi.fn(() => true)}
+        onStatus={vi.fn()}
+      />
+    );
+    // Two retries, then the views say why rather than asking for ever.
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(/has no exact geometry to draw/).length
+      ).toBeGreaterThan(0)
+    );
+    expect(requestTessellation).toHaveBeenCalledTimes(3);
+  });
+
   it("keeps each sheet's projections when switching between sheets of different bodies", async () => {
     const otherId = 'body_other' as BodyId;
     const other = { ...cube(4), bodyId: otherId, name: 'Small cube' };
@@ -529,6 +651,7 @@ describe('DrawingWorkspace', () => {
           bodies={bodies}
           geometryPending={false}
           defaultBodyIds={[bodyId]}
+          requestTessellation={displayTessellation(bodies)}
           editDisabledReason={null}
           onCommand={vi.fn(() => true)}
           onStatus={vi.fn()}
@@ -589,6 +712,7 @@ describe('DrawingWorkspace', () => {
         bodies: { [bodyId]: cube() },
         geometryPending: false,
         defaultBodyIds: [bodyId],
+        requestTessellation: displayTessellation({ [bodyId]: cube() }),
         editDisabledReason: null,
         onCommand: vi.fn(() => true),
         onStatus: vi.fn()
@@ -641,6 +765,7 @@ describe('DrawingWorkspace', () => {
           bodies={bodies}
           geometryPending={false}
           defaultBodyIds={[bodyId]}
+          requestTessellation={displayTessellation(bodies)}
           editDisabledReason={null}
           onCommand={vi.fn(() => true)}
           onStatus={vi.fn()}
@@ -672,6 +797,7 @@ describe('DrawingWorkspace', () => {
       bodies: { [bodyId]: cube() },
       geometryPending: false,
       defaultBodyIds: [bodyId],
+      requestTessellation: displayTessellation({ [bodyId]: cube() }),
       editDisabledReason: null,
       onCommand: vi.fn(() => true),
       onStatus: vi.fn()
