@@ -1263,15 +1263,6 @@ export function togglePanel(
 ): PanelLayout {
   if (
     stage &&
-    stage.width <= PANEL_PHONE_MAX_WIDTH &&
-    !layout.options.hidden &&
-    isPanelOpen(layout, id) &&
-    computePanelGeometry(layout, stage).phonePanel !== id
-  ) {
-    return notePanelUsed(layout, id);
-  }
-  if (
-    stage &&
     !layout.options.hidden &&
     layout.revealed === id &&
     isPanelParked(layout, id, stage)
