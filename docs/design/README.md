@@ -16,7 +16,7 @@ The accepted workspace concept is [`openzcad-workspace-concept.png`](./openzcad-
 - Flexible viewport with a contextual inspector.
 - Bottom AI rail with proposal summary and approval controls.
 - Compact status bar.
-- Small-laptop layouts may collapse either side rail into a drawer, but the viewport and AI approval boundary remain visible.
+- Small-laptop layouts may collapse either side rail into a drawer, but the viewport and AI approval boundary remain visible. As built, the model browsers are dockable panels (see [Model panels](#model-panels)), and a stage 720 px wide or less shows one panel at a time instead of docking.
 
 ## Visual system
 
@@ -76,6 +76,28 @@ All visible controls and text are code-native. The concept image is a visual spe
 - Selection-order adaptation: fillet and chamfer accept either edge-first or tool-first workflows while still storing stable exact edge hashes in the canonical feature.
 - QA result: the implemented layout, rail hierarchy, control density, typography, graphite/blue visual system, and core viewport-first workflow remain faithful to the concept. The live QA capture uses actual exact fillet and pattern geometry rather than concept-only sample content.
 - Compact breakpoints preserve the model and viewport first; the inspector hides only below 820 px, where full CAD editing is not the primary target.
+- Layout adaptation (U08): the model tree and its sibling browsers are five independent model panels rather than one rail or drawer, so Parameters and Objects can be open side by side and the model keeps at least 40% of the stage width for the docked layout.
+
+## Model panels
+
+Parameters, Objects, History, Revisions and Diagnostics are independent panels (U08). The contract is the [dockable model panels plan](../plans/dockable-panels-plan-2026-10-20.md); the [roadmap row](../../ROADMAP.md#u08) records what shipped.
+
+- **Header.** Drag grip (also the keyboard **Move** menu), icon, title and count, **Pin**, **Pop out** and **Close**. Panels never fold; room comes from resizing, closing or moving them.
+- **Unpinned.** A rail press opens a panel beside the rail's inner edge. One panel is unpinned at a time, the next one replaces it, and clicking the model leaves it open; its footer offers Pin.
+- **Docked.** Pin docks a panel. The right dock holds up to three columns and the left up to two, each dock's rail on its inner edge. Columns stack panels, and the gap between two resizes them (90 px minimum) or, on a double-click, splits them evenly. Close remembers where a panel was, and its rail button reopens it there.
+- **Floating.** Pop out, or a drop on the model, floats a panel as a window that moves by its header and resizes from its corner (260–600 px wide, at least 160 px tall). Dropping a panel on a window stacks the two; a press, focus, rail press or ⌘K brings a window to the front.
+- **Dragging.** A header or a rail icon dragged 4 px or more lifts the panel to a title chip, and a slot preview shows where it will land: a column, a new column past either rail, a window, or a new window. The Move menu (Dock left/right, New column left/right, Float, Move to, Move up/down, Close) and `Alt+↑`/`Alt+↓` reach every slot from the keyboard.
+- **View options.** The rail's View options menu picks a preset — **Essentials** (Objects left, Parameters right, a new device's layout), Full workspace, Modeling, Review or Model only — and holds Hide all panels (`Ctrl+\`, `⌘\` on macOS), Lock layout, Compact rows and Panel width S/M/L (256/296/360 px).
+- **Narrow stages.** The docks take at most 60% of the stage width; columns that do not fit are parked (left before right, outermost first) and open from their rail buttons. At 720 px and below nothing docks or floats: one panel shows at a time in the phone lane.
+- **Persistence.** The layout is per device, in `openzcad-panel-layout:v1`, beside the older `openzcad-panel-state:v1`, which it migrated from.
+
+![Build workspace in the default Essentials layout: Objects docked left, Parameters docked right](./readme-mounting-bracket.png)
+
+![History and Revisions stacked in one floating window over the model](./readme-panels-floating-window.png)
+
+![The View options menu, with Essentials checked](./readme-panels-view-options.png)
+
+The captures are 1600 × 1000 and come from `test/e2e/docs-captures.spec.ts`, which seeds each layout and runs only with `OZ_CAPTURE=1` (`OZ_CAPTURE=1 pnpm exec playwright test test/e2e/docs-captures.spec.ts`); the committed PNGs were then re-saved with lossless optimisation.
 
 ## Viewport chrome studies
 

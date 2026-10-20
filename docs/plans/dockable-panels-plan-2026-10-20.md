@@ -1,6 +1,7 @@
 # Dockable model panels (U08)
 
-Status: planned; no slice merged. Roadmap row: [U08](../../ROADMAP.md#u08).
+Status: slices 1 (#766) and 2 (#767) merged; slices 3 (#771), 4 (#788), 5
+and 6 in review. Roadmap row: [U08](../../ROADMAP.md#u08).
 Replaces the single model drawer from [U04](../../ROADMAP.md#u04) slice 4 once
 slice 3 below merges. Every other quiet-stage decision in the
 [quiet-stage plan](quiet-stage-workspace-plan.md) still applies.
