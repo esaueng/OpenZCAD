@@ -60,6 +60,12 @@ it.
     panel.
   - Double-clicking the gap splits those two neighbours evenly; the rest of the
     stack keeps its share.
+  - **Short stages.** When a column can't give every panel its 90 px minimum
+    (five panels need 450 px plus gaps; the 390 px short-window height can't
+    fit them), the column scrolls as one, with each panel held at its minimum
+    and gap resizing off until it fits again. Every header and control stays
+    reachable. Stored weights are untouched, so a taller window gets the
+    split back. Floating windows are clamped to the stage height the same way.
 - **Column width** is one setting: S/M/L = 256/296/360 px. 296 px is today's
   drawer width.
 
@@ -108,8 +114,12 @@ The menu replaces the rail's Layout button.
   - **Review**: History over Revisions, right
   - **Model only**
 - **Settings:**
-  - **Hide all panels** (layout kept, key `Tab`, a "Panels hidden · Show" pill
-    while active)
+  - **Hide all panels** (layout kept, a "Panels hidden · Show" pill while
+    active). The default key is `Ctrl+\` (`⌘\` on macOS), not `Tab`: the
+    global keymap calls `preventDefault()` for bare-key commands when focus
+    is on a button, so binding `Tab` would break keyboard focus traversal.
+    `Ctrl+\` is unbound today, and a Ctrl chord also works while a field has
+    focus.
   - **Lock layout** (no drags or resizes; pin, pop-out and close still work)
   - **Compact rows**
   - **Panel width**
@@ -138,6 +148,10 @@ The menu replaces the rail's Layout button.
    - First load migrates: a device whose drawer was open starts with a right
      column of the sections it had open; a device whose drawer was closed starts
      in Model only. New devices start in Essentials.
+   - Migration runs in the same slice that first reads the new layout
+     (slice 3), before anything writes the new key. Its absence is the signal
+     to migrate, so a stored default must never come first and hide the old
+     state.
 3. **Keyboard.**
    - The grip is a focusable button, "Move <Name>", that opens a menu: Dock
      left, Dock right, New column left, New column right, Float, Close.
@@ -249,6 +263,9 @@ Each slice is one PR and records its evidence in the U08 row.
   - The instrument rail moves to the dock's inner edge and gains Revisions and
     Diagnostics (with its badge).
   - The inspector lane, obstacles, suspension and search hand-off as above.
+  - The column scroll for short stages.
+  - The first-load migration from `openzcad-panel-state:v1`, run before the
+    new key is ever written.
 - **Deletions.**
   - `drawerOpen` and `sidebarSections` stop being read for the UI (the v1 key
     keeps them for rollback).
@@ -282,6 +299,10 @@ Each slice is one PR and records its evidence in the U08 row.
   - sketch hides and restores the dock
   - ⌘K opens a parameter
   - the rail is reachable at 1280×720
+  - a five-panel column at the supported 390 px window height scrolls and
+    keeps every header and control reachable inside the stage
+  - devices seeded with an open and a closed v1 drawer migrate as above,
+    and a reload after migration keeps the new layout
 
 ### 4. Drag and drop, left dock, floating windows
 
@@ -299,15 +320,16 @@ Each slice is one PR and records its evidence in the U08 row.
 ### 5. View options and small screens
 
 - **Behaviour.**
-  - The menu: presets, Hide all (`Tab`, registered with the app's existing
-    shortcut handling so U05 can list and remap it), Lock, Compact, Width.
+  - The menu: presets, Hide all (`Ctrl+\`, added to `lib/keymap.ts` as a
+    global command so U05 can list and remap it), Lock, Compact, Width.
   - The combined 50% cap.
   - The no-dock policy below 720 px.
-  - The first-load migration switched on.
-- **Tests.** E2E at 1440×900, 1280×720 and 600×800, plus the boundary widths
-  1184 px and 1183 px (Essentials fully docked, then its second column
-  floating) and 721 px and 720 px (one column docked, then no docks). Migration
-  fixtures are seeded through the v1 key.
+- **Tests.**
+  - E2E at 1440×900, 1280×720 and 600×800, plus the boundary widths 1184 px
+    and 1183 px (Essentials fully docked, then its second column floating)
+    and 721 px and 720 px (one column docked, then no docks).
+  - Tabbing from the rail through the panel headers, gaps and menu moves focus
+    without hiding the panels; `Ctrl+\` hides and shows them.
 
 ### 6. Documentation
 
