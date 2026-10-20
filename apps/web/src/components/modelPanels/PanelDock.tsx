@@ -14,7 +14,8 @@ import {
   type GapGeometry,
   type PanelId,
   type PanelLayout,
-  type PanelStage
+  type PanelStage,
+  unpinnedSlotReserves
 } from '../../lib/panelLayout';
 import type { PanelPlacement } from './PanelFrame';
 import { PANEL_TITLES } from './panelMeta';
@@ -84,6 +85,8 @@ export function PanelDock({
   const layerRef = useRef<HTMLDivElement | null>(null);
   const [stage, setStage] = useState<PanelStage | null>(null);
   const [dragLayout, setDragLayout] = useState<PanelLayout | null>(null);
+  /** The lane's card width (`--context-w`) the unpinned slot must leave. */
+  const [laneMin, setLaneMin] = useState(330);
   const dragRef = useRef<GapDrag | null>(null);
   const onStageRef = useRef(onStage);
   onStageRef.current = onStage;
@@ -105,6 +108,7 @@ export function PanelDock({
         }
       };
       setStage((current) => (sameStage(current, next) ? current : next));
+      setLaneMin(pixels(style.getPropertyValue('--context-w'), 330));
     };
     measure();
     if (typeof ResizeObserver === 'undefined') return;
@@ -129,7 +133,13 @@ export function PanelDock({
       )
     : undefined;
   const dockWidth = docked ? docked.dockWidth.right : 0;
-  const peekWidth = docked && slot ? docked.columnWidth + docked.insets.gap : 0;
+  const slotWidth = docked && slot ? docked.columnWidth + docked.insets.gap : 0;
+  const peekWidth =
+    stage &&
+    slotWidth > 0 &&
+    unpinnedSlotReserves(stage, dockWidth, slotWidth, laneMin)
+      ? slotWidth
+      : 0;
 
   useLayoutEffect(() => {
     const workspace = layerRef.current?.closest<HTMLElement>('.workspace');
@@ -209,7 +219,10 @@ export function PanelDock({
   };
 
   return (
-    <div className="panel-dock-layer" ref={layerRef}>
+    <div
+      className={`panel-dock-layer${slotWidth > 0 && peekWidth === 0 ? ' slot-over-lane' : ''}`}
+      ref={layerRef}
+    >
       {columns.map((column) => (
         <div
           key={`${column.side}-${column.column}`}

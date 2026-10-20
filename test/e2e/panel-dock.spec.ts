@@ -381,6 +381,39 @@ test('the inspector and the right lane stay clear of the dock, inside the rail',
   expect(shifted.x + shifted.width).toBeLessThanOrEqual(peek.x);
 });
 
+test('on a stage too narrow for both, an unpinned panel covers the lane instead of squeezing it', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Narrow lane', ALL_PANELS_DOCKED, {
+    width: 900,
+    height: 720
+  });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  const inspector = page.locator('.stage-right > .inspector-float');
+  await expect(inspector).toBeVisible();
+  const full = await box(inspector);
+  await modelPanel(page, 'History')
+    .getByRole('button', { name: 'Pin History' })
+    .click();
+  const peek = page.locator('.panel-unpinned');
+  await expect(peek).toBeVisible();
+  // Reserving the slot here would have left the inspector a sliver; it keeps
+  // its width and the unpinned panel stands over it until it closes.
+  const kept = await box(inspector);
+  expect(Math.abs(kept.width - full.width)).toBeLessThan(1);
+  const slot = await box(peek);
+  expect(
+    await page.evaluate(
+      ({ x, y }) =>
+        document.elementFromPoint(x, y)?.closest('.panel-unpinned') !== null,
+      { x: slot.x + slot.width / 2, y: slot.y + 60 }
+    )
+  ).toBe(true);
+  await railPanelButton(page, 'History').click();
+  await expect(peek).toHaveCount(0);
+  await expect(inspector).toBeVisible();
+});
+
 test('a sketch hides the dock and an open unpinned panel and restores both', async ({
   page
 }) => {

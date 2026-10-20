@@ -1947,6 +1947,12 @@ button.command-rail:disabled {
   pointer-events: none;
 }
 
+/* An unpinned panel too wide to stand beside the lane covers it instead, as a
+   float would, and stands over the inspector it covers until it closes. */
+.panel-dock-layer.slot-over-lane {
+  z-index: calc(var(--z-inspector-float) + 1);
+}
+
 /* A docked column against the screen edge. It scrolls as one when the
    stage is too short for every panel's 90px minimum (PanelDock draws each
    at its minimum then), so every header stays reachable. */
@@ -2018,8 +2024,9 @@ button.command-rail:disabled {
 }
 
 /* The unpinned panel stands beside the rail's inner edge (and past the
-   relations while sketching), the full height of the band. The right lane
-   steps past it (--right-peek-w), so it never covers the inspector. */
+   relations while sketching), the full height of the band. Where the stage
+   leaves the lane its full card width beside it, the lane steps past it
+   (--right-peek-w); on a narrower stage it covers the lane. */
 .panel-unpinned {
   position: absolute;
   top: 0;
