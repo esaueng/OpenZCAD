@@ -11,9 +11,11 @@ import {
   listFeaturesInOrder,
   resolveParamValue,
   validateExtrudeExtent,
+  extrudeParamResolver,
   validateKeepOriginals
 } from '@openzcad/document-core';
 import { throughAllSpan, unionBounds } from './through-all';
+import { toFaceSweepFeature } from './extrude-options';
 import {
   axisRotationMatrix,
   geometryTolerance,
@@ -518,7 +520,7 @@ function throughAllSweepFeature(
   data: FeatureDataOf<'extrude'>
 ): FeatureNode {
   const { kernel, document, result } = ctx;
-  validateExtrudeExtent(data);
+  validateExtrudeExtent(data, extrudeParamResolver(document, ctx.scope));
   const targetBodyId = data.targetBodyId!;
   const targetName = bodyName(document, targetBodyId);
   if (result.consumed.has(targetBodyId)) {
@@ -574,16 +576,22 @@ function buildExtrudeFeature(
 ): void {
   const { kernel, document, scope, result } = ctx;
   // Every stored extent, blind included: an unknown end condition or a
-  // stray side must fail closed, not rebuild at the dormant distance.
-  validateExtrudeExtent(data);
+  // stray side must fail closed, not rebuild at the dormant distance. Zeroes
+  // resolve as at entry, so a draft whose parameter has since left 0 beside
+  // a back distance refuses here by name.
+  validateExtrudeExtent(data, extrudeParamResolver(document, scope));
   if (feature.bodyId) {
     // A through-all cut sweeps a derived blind span; everything after this
     // point (the overlap check, the boolean, the coplanar retry) treats it as
     // the ordinary cut it then is. The stored feature is never rewritten.
+    // A to-face extrude likewise sweeps the blind distance its face resolves
+    // to here, or refuses as unresolved when the face no longer does.
     const sweepFeature =
       data.endCondition === 'through-all'
         ? throughAllSweepFeature(ctx, feature, data)
-        : feature;
+        : data.endCondition === 'to-face'
+          ? toFaceSweepFeature(kernel, document, feature, data, result)
+          : feature;
     const extrusion = buildSweep(
       kernel,
       document,
@@ -596,13 +604,21 @@ function buildExtrudeFeature(
     if (operation === 'new-body') {
       // Recorded so a later boolean can rebuild this exact tool with pierce
       // travel (`exact-pierce-tool.ts`) while these handles are still it.
-      result.shapes.set(feature.bodyId, {
-        ...extrusion,
-        sweepSource: {
-          featureId: feature.featureId,
-          solids: [...extrusion.solids]
-        }
-      });
+      // Not for a to-face extrude: that rebuild reads the stored feature,
+      // whose distance is dormant, and the face it derives one from need not
+      // be where it was by the boolean's position.
+      result.shapes.set(
+        feature.bodyId,
+        data.endCondition === 'to-face'
+          ? extrusion
+          : {
+              ...extrusion,
+              sweepSource: {
+                featureId: feature.featureId,
+                solids: [...extrusion.solids]
+              }
+            }
+      );
       return;
     }
     const targetBodyId = data.targetBodyId;

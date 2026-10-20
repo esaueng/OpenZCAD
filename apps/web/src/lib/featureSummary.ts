@@ -78,6 +78,16 @@ export function featureValueSummary(
           ? 'Through all, both sides'
           : 'Through all';
       }
+      // F01 (v29): a draft rides after the extent, in degrees.
+      const angle =
+        data.draftAngleDeg === undefined ? null : num(data.draftAngleDeg);
+      const drafted = (extent: string) =>
+        angle !== null && angle !== '0'
+          ? `${extent} · ${angle}° draft`
+          : extent;
+      if (data.endCondition === 'to-face') {
+        return drafted('To face');
+      }
       const distance = lengthValue(data.distance);
       if (distance === null) {
         return null;
@@ -92,7 +102,7 @@ export function featureValueSummary(
       }
       return back !== '0'
         ? `${distance} + ${back} ${unit}`
-        : `${distance} ${unit}`;
+        : drafted(`${distance} ${unit}`);
     }
     case 'revolve': {
       // Absent means a full turn (see FeatureData).

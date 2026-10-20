@@ -943,6 +943,12 @@ export interface ModelViewerProps {
     | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
   regionHandle: RegionHandleTarget | null;
+  /**
+   * F01: a host waiting for a body face (an extrude's to-face target). A
+   * click then resolves to the nearest face under the pointer only — never
+   * a sketch region, ghost plane or datum drawn in front of it.
+   */
+  facePickOnly?: boolean;
   /** In-viewport sketch session; null when not sketching. */
   sketchMode: SketchModeState | null;
   /**
@@ -1849,6 +1855,7 @@ export function ModelViewer({
   onPickDatum,
   onMeasurePreview,
   regionHandle,
+  facePickOnly = false,
   sketchMode,
   sketchTextAnchorRef,
   onSketchCommit,
@@ -1880,6 +1887,8 @@ export function ModelViewer({
   const topologyPickListRef = useRef<TopologyPickList | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
+  const facePickOnlyRef = useRef(facePickOnly);
+  facePickOnlyRef.current = facePickOnly;
   const topologyPicksHeldRef = useRef(topologyPicksHeld);
   topologyPicksHeldRef.current = topologyPicksHeld;
   const onSelectEdgeChainRef = useRef(onSelectEdgeChain);
@@ -5224,7 +5233,12 @@ export function ModelViewer({
     }
 
     function selectAtPointer(event: PointerEvent) {
-      const stack = picker.pickAll(event);
+      const facesOnly = facePickOnlyRef.current;
+      const stack = facesOnly
+        ? picker
+            .pickAll(event)
+            .filter((candidate) => candidate.selection?.kind === 'face')
+        : picker.pickAll(event);
       const stepped = cycleDepthPick(
         stack,
         depthCycle,
@@ -5235,7 +5249,7 @@ export function ModelViewer({
       const result = stepped.candidate;
       // A ghost plane in front of whatever the stack resolved starts the
       // sketch instead: it is armed precisely to be clicked.
-      const ghost = pickGhostPlane(event);
+      const ghost = facesOnly ? null : pickGhostPlane(event);
       if (ghost && (!result || ghost.distance < result.distance)) {
         planePickerRigRef.current?.setHover(null);
         onPickPlaneRef.current(ghost.plane);
@@ -5244,7 +5258,7 @@ export function ModelViewer({
       // A datum plane is chosen only where nothing in the model is under
       // the pointer: its quad is translucent and often passes through the
       // part, so it must never steal a click meant for a face behind it.
-      if (!result && onPickDatumRef.current) {
+      if (!result && !facesOnly && onPickDatumRef.current) {
         const datum = datumPlaneRigRef.current;
         if (datum) {
           picker.setRayFromEvent(event);

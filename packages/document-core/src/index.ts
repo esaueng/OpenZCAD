@@ -86,6 +86,8 @@ import {
   type ExtrudeEndCondition,
   type ExtrudeOperation,
   type ThroughAllSide,
+  type ExtrudeToFaceTarget,
+  type FeatureWarning,
   type FeatureId,
   type FeatureKind,
   type FeatureNode,
@@ -340,6 +342,10 @@ export interface ExtrudeInput {
   /** F01: absent is blind; see the stored feature's `endCondition`. */
   endCondition?: ExtrudeEndCondition;
   throughAllSide?: ThroughAllSide;
+  /** F01 (v29): required with `to-face`; see the stored feature's `toFace`. */
+  toFace?: ExtrudeToFaceTarget;
+  /** F01 (v29): wall draft in degrees; absent or zero is straight walls. */
+  draftAngleDeg?: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -2075,19 +2081,144 @@ export function featureKeepsInputBody(
   );
 }
 
+/** A stored zero (literal or the text "0") is the absent one-sided default. */
+function isZeroParam(value: unknown): boolean {
+  return value === undefined || value === 0 || value === '0';
+}
+
 /**
- * F01 through-all, first slice: a cut through exactly one explicit target,
- * with an explicit side. Everything else fails closed rather than guessing a
- * target, an operation, or which side was meant.
+ * A value that resolves to zero (`0 mm`, or a parameter at 0) is the absent
+ * default too; without a resolver only a literal zero is.
  */
-export function validateExtrudeExtent(data: {
-  endCondition?: unknown;
-  throughAllSide?: unknown;
-  operation?: unknown;
-  targetBodyId?: unknown;
-  symmetric?: unknown;
-  backDistance?: unknown;
-}): void {
+function resolvedZero(
+  resolve: ParamZeroResolver | undefined
+): (value: unknown) => boolean {
+  return (value) =>
+    isZeroParam(value) ||
+    (resolve !== undefined &&
+      (typeof value === 'string' || typeof value === 'number') &&
+      resolve(value) === 0);
+}
+
+/**
+ * F01 (v29): the structure of a `to-face` target. Whether the face still
+ * resolves, is planar and is parallel to the sketch needs the exact build,
+ * which refuses by name at the feature's history position.
+ */
+function validateToFaceTarget(target: unknown): void {
+  const face = target as Partial<ExtrudeToFaceTarget> | undefined;
+  const finite = (value: unknown) =>
+    typeof value === 'object' &&
+    value !== null &&
+    ['x', 'y', 'z'].every((axis) =>
+      Number.isFinite((value as Record<string, unknown>)[axis])
+    );
+  if (
+    !face ||
+    face.type !== 'face' ||
+    typeof face.bodyId !== 'string' ||
+    !face.bodyId ||
+    face.faceReference?.kind !== 'face' ||
+    !finite(face.sourceCentroid) ||
+    !finite(face.sourceNormal) ||
+    !finite(face.sourceCenter) ||
+    !face.frame
+  ) {
+    throw new Error(
+      'An extrude to a face needs a planar face with a qualified lineage reference; pick an exact planar face.'
+    );
+  }
+}
+
+/**
+ * F01 (v29) draft: finite and inside a right angle when it is a literal (an
+ * expression is checked where it resolves, in the build). It tapers a
+ * one-sided extrusion only.
+ */
+function validateExtrudeDraft(
+  data: {
+    draftAngleDeg?: unknown;
+    endCondition?: unknown;
+    symmetric?: unknown;
+    backDistance?: unknown;
+  },
+  resolve?: ParamZeroResolver
+): void {
+  const zero = resolvedZero(resolve);
+  const angle = data.draftAngleDeg;
+  if (angle === undefined) return;
+  if (typeof angle === 'number') {
+    if (!Number.isFinite(angle) || Math.abs(angle) >= MAX_EXTRUDE_DRAFT_DEG) {
+      throw new Error(
+        `Draft angle must be between -${MAX_EXTRUDE_DRAFT_DEG} and ${MAX_EXTRUDE_DRAFT_DEG} degrees.`
+      );
+    }
+  } else if (typeof angle !== 'string' || !angle.trim()) {
+    throw new Error('Draft angle must be a number or an expression.');
+  }
+  if (zero(angle)) return;
+  if (data.endCondition === 'through-all') {
+    throw new Error(
+      'A through-all cut has no draft yet; use a distance or a face.'
+    );
+  }
+  if (data.symmetric === true || !zero(data.backDistance)) {
+    throw new Error(
+      'Draft applies to a one-sided extrusion; a symmetric or two-sided extrusion has no draft yet.'
+    );
+  }
+}
+
+/**
+ * Resolves a stored value against the document's parameters, or null when it
+ * does not resolve; see `extrudeParamResolver`.
+ */
+export type ParamZeroResolver = (value: ParamValue) => number | null;
+
+/**
+ * The resolver `validateExtrudeExtent` reads zeroes through, for `document`.
+ * Entry and rebuild both use one, so a `0 mm` back distance or a draft
+ * parameter at 0 is the absent default in both places.
+ */
+export function extrudeParamResolver(
+  document: ProjectDocument,
+  scope: Record<string, number> = getParameterScope(document).scope
+): ParamZeroResolver {
+  return (value) => {
+    try {
+      return resolveParamValue(value, scope, undefined, document.units);
+    } catch {
+      return null;
+    }
+  };
+}
+
+/**
+ * The largest draft, in degrees, a stored literal may carry. The build
+ * refuses a taper that closes the profile up long before this, by name; this
+ * bound only keeps the tangent finite.
+ */
+export const MAX_EXTRUDE_DRAFT_DEG = 89;
+
+/**
+ * F01 extents: blind, through-all (a cut through exactly one explicit target,
+ * with an explicit side) and, from v29, to-face (any operation, up to one
+ * lineage-named planar face, one-sided). Everything else fails closed rather
+ * than guessing a target, an operation, a face, or which side was meant.
+ */
+export function validateExtrudeExtent(
+  data: {
+    endCondition?: unknown;
+    throughAllSide?: unknown;
+    toFace?: unknown;
+    draftAngleDeg?: unknown;
+    operation?: unknown;
+    targetBodyId?: unknown;
+    symmetric?: unknown;
+    backDistance?: unknown;
+  },
+  resolve?: ParamZeroResolver
+): void {
   // Every caller of this check reads the operation next, and an unknown one
   // must not fall through to whichever arm a builder happens to default to.
   if (
@@ -2098,12 +2229,31 @@ export function validateExtrudeExtent(data: {
       `Unknown extrude operation ${JSON.stringify(data.operation)}.`
     );
   }
+  validateExtrudeDraft(data, resolve);
   // Only an absent field is blind: a stored `null` is malformed, not legacy.
   const condition =
     data.endCondition === undefined ? 'blind' : data.endCondition;
+  if (condition !== 'to-face' && data.toFace !== undefined) {
+    throw new Error('Only an extrude to a face names a target face.');
+  }
   if (condition === 'blind') {
     if (data.throughAllSide !== undefined) {
       throw new Error('A blind extrude has no through-all side.');
+    }
+    return;
+  }
+  if (condition === 'to-face') {
+    if (data.throughAllSide !== undefined) {
+      throw new Error('An extrude to a face has no through-all side.');
+    }
+    validateToFaceTarget(data.toFace);
+    if (
+      data.symmetric === true ||
+      !resolvedZero(resolve)(data.backDistance)
+    ) {
+      throw new Error(
+        'An extrude to a face runs one way, from the sketch plane to the face; it is not symmetric or two-sided.'
+      );
     }
     return;
   }
@@ -2151,7 +2301,7 @@ export function extrudeSketch(
       'An extrude cannot be both symmetric and two-sided; set symmetric or backDistance, not both.'
     );
   }
-  validateExtrudeExtent(input);
+  validateExtrudeExtent(input, extrudeParamResolver(document));
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     input.ids ?? createBodyFeatureIds();
@@ -2186,7 +2336,17 @@ export function extrudeSketch(
             endCondition: 'through-all' as const,
             throughAllSide: input.throughAllSide!
           }
-        : {})
+        : {}),
+      ...(input.endCondition === 'to-face'
+        ? {
+            endCondition: 'to-face' as const,
+            toFace: deepClone(input.toFace!)
+          }
+        : {}),
+      // A literal zero is the absent default, so it is never written.
+      ...(isZeroParam(input.draftAngleDeg)
+        ? {}
+        : { draftAngleDeg: input.draftAngleDeg! })
     }
   };
 
@@ -4154,7 +4314,9 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'profile',
     'profiles',
     'endCondition',
-    'throughAllSide'
+    'throughAllSide',
+    'toFace',
+    'draftAngleDeg'
   ],
   revolve: ['sketchId', 'axis', 'angleDeg', 'axisRef'],
   loft: ['sections', 'mode', 'endPoint'],
@@ -4264,7 +4426,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
 const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   Record<FeatureKind, readonly string[]>
 > = {
-  extrude: ['endCondition', 'throughAllSide'],
+  extrude: ['endCondition', 'throughAllSide', 'toFace', 'draftAngleDeg'],
   boolean: ['keepOriginals'],
   split: ['keepOriginal'],
   loft: ['endPoint'],
@@ -4371,7 +4533,7 @@ export function updateFeature(
     }
   }
   if (feature.data.featureKind === 'extrude') {
-    validateExtrudeExtent(feature.data);
+    validateExtrudeExtent(feature.data, extrudeParamResolver(next));
   } else if (
     feature.data.featureKind === 'boolean' ||
     feature.data.featureKind === 'split'
@@ -4426,6 +4588,81 @@ export function updateFeature(
   }
   next.version += 1;
   return next;
+}
+
+/**
+ * F01 (v29): how the exact build words every refusal of a to-face target —
+ * the face was deleted, turned ambiguous, lost its lineage or its planarity,
+ * stopped being parallel to the sketch, or its body is not available at the
+ * extrude's history position. Each is something picking another face fixes,
+ * and all of them read as one explicit state: the extent is unresolved.
+ */
+export const EXTRUDE_TO_FACE_UNRESOLVED = 'Target face is unresolved:';
+
+/**
+ * How far from parallel a to-face target may lean, as the sine of the angle
+ * between its normal and the sketch normal (about 0.2 arc seconds). A face
+ * leaning more meets the profile's walls at different heights — a different
+ * extent (up to a slanted face) than this slice builds.
+ */
+export const TO_FACE_PARALLEL_SINE_LIMIT = 1e-6;
+
+type ToFacePoint = { x: number; y: number; z: number };
+
+/**
+ * The signed distance from the sketch plane to a to-face target along the
+ * unit sketch normal, or null when the face is not parallel to the sketch or
+ * lies on it. The exact build and the extrude card both decide with this, so
+ * the card never offers a face the build refuses. Normals must be unit.
+ */
+export function toFaceSignedDistance(
+  sketch: { origin: ToFacePoint; normal: ToFacePoint },
+  face: { point: ToFacePoint; normal: ToFacePoint }
+): number | null {
+  const alignment =
+    face.normal.x * sketch.normal.x +
+    face.normal.y * sketch.normal.y +
+    face.normal.z * sketch.normal.z;
+  if (
+    !Number.isFinite(alignment) ||
+    Math.sqrt(Math.max(0, 1 - alignment * alignment)) >
+      TO_FACE_PARALLEL_SINE_LIMIT
+  ) {
+    return null;
+  }
+  const distance =
+    (face.point.x - sketch.origin.x) * sketch.normal.x +
+    (face.point.y - sketch.origin.y) * sketch.normal.y +
+    (face.point.z - sketch.origin.z) * sketch.normal.z;
+  return Number.isFinite(distance) &&
+    Math.abs(distance) > 1e-9 * Math.max(1, Math.abs(distance))
+    ? distance
+    : null;
+}
+
+/**
+ * Whether `feature` is a to-face extrude whose target face no longer
+ * resolves, judged from the derived per-feature warnings. Attribution is by
+ * feature id, never the display name: two extrudes may share a name. The
+ * feature is skipped by the fail-soft replay until a re-pick replaces its
+ * `toFace`.
+ */
+export function extrudeToFaceUnresolved(
+  feature: FeatureNode,
+  featureWarnings: readonly FeatureWarning[]
+): boolean {
+  if (
+    feature.data.featureKind !== 'extrude' ||
+    feature.data.endCondition !== 'to-face'
+  ) {
+    return false;
+  }
+  const reason = `: ${EXTRUDE_TO_FACE_UNRESOLVED}`;
+  return featureWarnings.some(
+    (warning) =>
+      warning.featureId === feature.featureId &&
+      warning.message.includes(reason)
+  );
 }
 
 /** Direct-edit kinds whose source pins a re-picked face can fully refresh. */
