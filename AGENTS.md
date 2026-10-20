@@ -81,8 +81,10 @@ pnpm build
 They run as three parallel jobs: `quality` (lint, typecheck), `unit` (the root
 Vitest project, `pnpm exec vitest run`) and `validation` (the web Vitest
 project via `pnpm test:web`, the parity corpus, the build). Together `unit`
-and `validation` are `pnpm test`. A parallel `e2e-tests` job runs the
-Playwright suite as six shards, each taking the spec files
+and `validation` are `pnpm test`. The Playwright suite runs as six shards:
+in parallel with those jobs for queue candidates (`e2e-tests`), and only
+after `quality` passes on pull requests (`e2e-tests-pr`), so a lint-red or
+superseded push does not hold six runners. Each shard takes the spec files
 `scripts/e2e-shards.mjs` assigns it (every shard runs
 `pnpm exec playwright install --with-deps chromium` first), and an `e2e` gate
 job aggregates the shards for branch protection. Shards are balanced by the
@@ -176,21 +178,26 @@ status checks are disabled: a branch behind main does not need a manual
 merge or rebase solely to enter the queue. Resolve actual conflicts and
 rerun checks on any changed PR head.
 
-- **Inspect the current PR head before enqueueing.** Read its individual
-  check runs, including quality, unit, validation, all six browser shards,
-  `checks / validate`, `checks / e2e`, `commit-privacy`, `history-privacy`, Cloudflare `verify`,
-  Workers Builds, dependency audits (on PRs that change a manifest or
-  lockfile), and public commit metadata. Confirm a
-  CI run exists for that exact head and wait for pending jobs. A passing
-  check suite alone is insufficient. Inspect reviews, comments, and threads;
-  address valid findings and resolve conversations before enqueueing.
-- **Enqueue only authorized PRs with `expectedHeadOid`.** Re-read the head
-  and review state immediately before calling `enqueuePullRequest`, and
-  leave `jump` false. Never use a direct/admin merge, a bypass actor, or
-  `gh pr merge --auto`. Queue configuration is not authorization to enqueue
+- **Arm auto-merge on authorized PRs; GitHub enqueues them.** With the
+  merge queue, auto-merge adds the PR to the queue once its required
+  contexts pass, so there is no polling for green or manual
+  `enqueuePullRequest` call. Before arming it, address reviews, comments
+  and threads, and confirm the head you are authorizing. Arm it with that
+  head pinned: `enablePullRequestAutoMerge` with `expectedHeadOid` and
+  `mergeMethod: SQUASH`, or `gh pr merge <n> --auto --squash
+  --match-head-commit <sha>`. Never use a direct/admin merge, a bypass
+  actor, or `jump`. Queue configuration is not authorization to arm
   unrelated PRs. An authorized merge still triggers the existing automatic
   deployment workflows; standalone deployment or migration needs its own
   authorization.
+- **Auto-merge stays armed across later pushes.** Pushes from users with
+  write access keep it enabled, and the queue then takes the new head once
+  its required contexts pass. Before pushing a change outside the authorized
+  scope, disable auto-merge. Advisory checks (Workers Builds, dependency
+  audits on manifest or lockfile changes, public commit metadata) do not
+  gate the queue: if one fails before the merge, disable auto-merge and
+  address it. A passing check suite alone is still not evidence of a green
+  head; read the individual runs when reporting.
 - **Verify the separate queue run.** Match the `merge_group` run’s head SHA
   to the candidate reported by the queue, not the original PR head. The
   five required checks, including Cloudflare `verify`, must pass on that

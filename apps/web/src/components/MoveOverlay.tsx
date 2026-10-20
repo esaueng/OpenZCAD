@@ -2,7 +2,7 @@ import { CardHeader } from './CardHeader';
 import { displayLengthName, type UnitSystem } from '@openzcad/shared';
 import { CARD_EYEBROWS } from '../lib/cardEyebrows';
 import { moveHasFiniteValues } from '../lib/moveCard';
-import { useEffect, useState, type MutableRefObject } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 
 /*
  * The Move panel. Its own module, loaded only once a Move starts, so its
@@ -72,6 +72,14 @@ interface MoveOverlayProps {
 }
 
 const MOVE_AXES = ['x', 'y', 'z'] as const;
+
+function sameMoveValues(left: MoveOverlayValues, right: MoveOverlayValues) {
+  return MOVE_AXES.every(
+    (axis) =>
+      Object.is(left.translation[axis], right.translation[axis]) &&
+      Object.is(left.rotationDeg[axis], right.rotationDeg[axis])
+  );
+}
 
 /**
  * A number as a field shows it. A geometry snap lands on `point - pivot`, and
@@ -161,9 +169,38 @@ export function MoveOverlay({
     values: MoveOverlayValues;
     snap: { move: number; rotate: number } | null;
   }>({ values: committedValues, snap: committedSnap });
+  const target = targetBodyId ?? bodyName;
+  const translationOnly = hideRotation === true;
+  const committed = useRef({
+    values: committedValues,
+    snap: committedSnap,
+    target,
+    units,
+    translationOnly
+  });
   useEffect(() => {
+    const previous = committed.current;
+    // App recreates the values wrapper on unrelated renders (a resize or a
+    // save finishing). Only a changed transform, snap or target reseeds the
+    // panel; otherwise it would erase the gesture's newer live values.
+    if (
+      sameMoveValues(previous.values, committedValues) &&
+      Object.is(previous.snap?.move, committedSnap?.move) &&
+      Object.is(previous.snap?.rotate, committedSnap?.rotate) &&
+      previous.target === target &&
+      previous.units === units &&
+      previous.translationOnly === translationOnly
+    )
+      return;
+    committed.current = {
+      values: committedValues,
+      snap: committedSnap,
+      target,
+      units,
+      translationOnly
+    };
     setLive({ values: committedValues, snap: committedSnap });
-  }, [committedValues, committedSnap]);
+  }, [committedValues, committedSnap, target, units, translationOnly]);
   useEffect(() => {
     if (!liveValuesRef) {
       return;

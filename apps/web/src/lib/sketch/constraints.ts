@@ -14,7 +14,11 @@ import type {
 import type { ProjectDocument } from '@openzcad/shared';
 // Type-only on purpose: a value import would pull the WASM-bearing module
 // into the main bundle and fail the build's bundle-size check.
-import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
+import type {
+  SketchSolveAnchor,
+  SketchSolveOutcome
+} from '@openzcad/kernel-adapter/exact';
+import type { SnapTargetKind, UnreferencedSnap } from './session';
 
 /** Constraint tools exposed by the sketch rail. */
 export type PendingConstraintKind =
@@ -390,6 +394,54 @@ export function refusePick(
     case 'disconnect':
       return pointPickRefusal(data, pick, constraintToolSpec(kind).label);
   }
+}
+
+const STORED_POINT_RECOVERY =
+  'Pick a line or arc endpoint, or a circle or arc center.';
+
+/**
+ * Why a point-taking tool cannot use the snap under the cursor. The hover
+ * marker already named a point ("Endpoint", "Center"), so repeating the tool
+ * hint reads as an ignored click (project review UX-2). Null for snaps that
+ * name no point (grid, horizontal, vertical); the caller keeps the hint.
+ */
+export function unreferencedSnapRefusal(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  kind: PendingConstraintKind,
+  snap: UnreferencedSnap
+): string | null {
+  const label = constraintToolSpec(kind).label;
+  const data = snap.sourceId
+    ? sketchObjectData(document, sketch, snap.sourceId)
+    : null;
+  if (data?.objectKind === 'rectangle') {
+    const part =
+      snap.kind === 'center'
+        ? 'center'
+        : snap.kind === 'midpoint'
+          ? 'side midpoints'
+          : 'corners';
+    return `${label} can't use this rectangle's ${part}: it is one parametric shape, not four lines. Redraw it with the Rectangle tool to pick its corners.`;
+  }
+  if (data?.objectKind === 'polygon') {
+    return `${label} can't use this polygon's center: it is one parametric shape. Redraw it with the Polygon tool, whose construction circle has a center to pick.`;
+  }
+  if (data?.objectKind === 'text') {
+    return `${label} can't use a text origin. ${STORED_POINT_RECOVERY}`;
+  }
+  const point: Partial<Record<SnapTargetKind, string>> = {
+    midpoint: 'a midpoint',
+    quadrant: 'a quadrant',
+    intersection: 'an intersection',
+    origin: 'the sketch origin',
+    endpoint: 'that point',
+    center: 'that point'
+  };
+  const name = point[snap.kind];
+  return name
+    ? `${label} can't use ${name}: it is not a stored sketch point. ${STORED_POINT_RECOVERY}`
+    : null;
 }
 
 /** A snap point the schema can address: line ends, arc points, circle centers. */
@@ -1046,6 +1098,24 @@ export function definedPointKey(
   point: 'start' | 'end' | 'center'
 ): string {
   return `${objectId}.${point}`;
+}
+
+/**
+ * What a relation holds while it is applied as it is added: the first pick,
+ * so the later picks move to meet it (ZC-041). A point pick holds that point
+ * alone, an object pick the whole object. A single-pick relation has nothing
+ * to hold against, so it solves free.
+ */
+export function relationSolveAnchor(
+  picks: readonly ConstraintPick[]
+): SketchSolveAnchor | undefined {
+  const first = picks[0];
+  if (!first || picks.length < 2) return undefined;
+  return first.kind === 'point'
+    ? {
+        points: [{ objectId: first.objectId as EntityId, point: first.point }]
+      }
+    : { objectIds: [first.objectId] };
 }
 
 export type SelectionConstraintPlan =

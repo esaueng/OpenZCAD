@@ -3,6 +3,7 @@ import {
   documentStructureError,
   documentEnvelopeError,
   assertDocumentTextBudget,
+  drawingSetError,
   hasValidImportedMeshSources,
   hasValidImportedStepSources
 } from '@openzcad/shared';
@@ -36,6 +37,11 @@ import {
   type UnitSystem,
   type UpdateProjectRequest
 } from '@openzcad/shared';
+import {
+  isImportSourceCopyRef,
+  isProjectCopyDocumentDigest,
+  MAX_IMPORT_SOURCE_COPY_REFS
+} from '@openzcad/persistence';
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TYPES,
   MAX_ASSISTANT_ATTACHMENTS,
@@ -169,14 +175,34 @@ export function parseCreateProjectRequest(body: unknown): CreateProjectRequest {
     // transfer its local records to the returned account identity.
     const document = parseProjectDocument(record.document);
     assertDocumentWithinCeiling(document);
-    if (record.adoptionProtocolVersion !== 1) {
+    if (
+      record.adoptionProtocolVersion !== 1 &&
+      record.adoptionProtocolVersion !== 2
+    ) {
       throw new HttpError(
         409,
         'Reload to update before saving this project to your account.'
       );
     }
     request.document = document;
-    request.adoptionProtocolVersion = 1;
+    request.adoptionProtocolVersion = record.adoptionProtocolVersion;
+    if (record.adoptionProtocolVersion === 2) {
+      // The browser re-homed the document (ADR-024 Phase 1); the device id it
+      // came from is the account's retry key.
+      request.localProjectId = requireString(record, 'localProjectId', 200);
+      request.sourceArtifactIds = parseSourceArtifactIds(
+        record.sourceArtifactIds
+      );
+    }
+  }
+  if (
+    request.adoptionProtocolVersion !== 2 &&
+    (record.localProjectId !== undefined ||
+      record.sourceArtifactIds !== undefined)
+  ) {
+    throw badRequest(
+      '"localProjectId" and "sourceArtifactIds" belong to a version 2 adoption.'
+    );
   }
   if (record.initialDocument !== undefined) {
     if (request.document) {
@@ -189,6 +215,26 @@ export function parseCreateProjectRequest(body: unknown): CreateProjectRequest {
     request.initialDocument = initialDocument;
   }
   return request;
+}
+
+const MAX_ADOPTION_SOURCE_ARTIFACT_IDS = 10_000;
+
+function parseSourceArtifactIds(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (
+    !Array.isArray(value) ||
+    value.length > MAX_ADOPTION_SOURCE_ARTIFACT_IDS ||
+    !value.every(
+      (id) =>
+        typeof id === 'string' &&
+        id.length > 0 &&
+        id.length <= 200 &&
+        !id.startsWith('artifact_local_')
+    )
+  ) {
+    throw badRequest('"sourceArtifactIds" must list archived artifact ids.');
+  }
+  return [...new Set(value as string[])];
 }
 
 export function parseUpdateProjectRequest(
@@ -238,10 +284,41 @@ export function parseDuplicateProjectRequest(
   body: unknown,
   projectIdFromPath: string
 ): DuplicateProjectRequest {
-  // An empty body is the common case — the server picks a "(copy)" name.
+  // An empty body is the pre-Phase 1 contract — the server builds the copy.
   const record =
     body === undefined || body === null ? {} : asRecord(body, 'Request body');
+  const copy: Pick<
+    DuplicateProjectRequest,
+    'document' | 'documentDigest' | 'importSources'
+  > = {};
+  if (record.document !== undefined) {
+    // A browser-built copy (ADR-024 Phase 1): the store checks its identity.
+    const document = parseProjectDocument(record.document);
+    assertDocumentWithinCeiling(document);
+    if (!isProjectCopyDocumentDigest(record.documentDigest)) {
+      throw badRequest('"documentDigest" must be a SHA-256 hex digest.');
+    }
+    const importSources = record.importSources ?? [];
+    if (
+      !Array.isArray(importSources) ||
+      importSources.length > MAX_IMPORT_SOURCE_COPY_REFS ||
+      !importSources.every(isImportSourceCopyRef)
+    ) {
+      throw badRequest('"importSources" must list archived import sources.');
+    }
+    copy.document = document;
+    copy.documentDigest = record.documentDigest;
+    copy.importSources = importSources;
+  } else if (
+    record.documentDigest !== undefined ||
+    record.importSources !== undefined
+  ) {
+    throw badRequest(
+      '"documentDigest" and "importSources" describe a "document".'
+    );
+  }
   return {
+    ...copy,
     projectId: toProjectId(projectIdFromPath),
     ...(record.name === undefined
       ? {}
@@ -361,6 +438,12 @@ function parseProjectDocument(
     throw badRequest(
       error instanceof Error ? error.message : 'Invalid project text budget.'
     );
+  }
+  // D01: a malformed drawing section would make the project unopenable on
+  // every device (`normalizeDocument` fails closed on it), so refuse it here.
+  if (record.drawings !== undefined) {
+    const drawingsError = drawingSetError(record.drawings);
+    if (drawingsError) throw badRequest(`"document.drawings": ${drawingsError}`);
   }
   // Undo and redo can restore imports that are absent from current nodes.
   // Validate every copy before the document can be saved or shared.

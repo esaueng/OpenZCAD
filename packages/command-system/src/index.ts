@@ -57,6 +57,7 @@ import {
   type FeatureNode,
   type ParamValue,
   type ParameterKind,
+  type DocumentHistoryEntry,
   type ProjectDocument,
   type SerializedCommand,
   toSketchConstraintId,
@@ -157,6 +158,18 @@ import {
   type PrimitiveInput,
   renameNode,
   renameParameter,
+  addDrawingSheet,
+  updateDrawingSheet,
+  deleteDrawingSheet,
+  addDrawingView,
+  updateDrawingView,
+  deleteDrawingView,
+  type DrawingSheetAddInput,
+  type DrawingSheetUpdateInput,
+  type DrawingSheetDeleteInput,
+  type DrawingViewAddInput,
+  type DrawingViewUpdateInput,
+  type DrawingViewDeleteInput,
   resolveParamValue,
   resolveSketchInput,
   type RevolveInput,
@@ -262,7 +275,13 @@ export type CommandKind =
   | 'import.step'
   | 'import.shapr-guided'
   | 'node.rename'
-  | 'node.metadata.set';
+  | 'node.metadata.set'
+  | 'drawing.sheet.add'
+  | 'drawing.sheet.update'
+  | 'drawing.sheet.delete'
+  | 'drawing.view.add'
+  | 'drawing.view.update'
+  | 'drawing.view.delete';
 
 export interface CommandDefinition<TPayload> {
   kind: CommandKind;
@@ -316,7 +335,13 @@ export type AnyCommand =
   | CommandDefinition<ImportedStepInput>
   | CommandDefinition<ShaprGuidedImportInput>
   | CommandDefinition<NodeRenameInput>
-  | CommandDefinition<NodeMetadataInput>;
+  | CommandDefinition<NodeMetadataInput>
+  | CommandDefinition<DrawingSheetAddInput>
+  | CommandDefinition<DrawingSheetUpdateInput>
+  | CommandDefinition<DrawingSheetDeleteInput>
+  | CommandDefinition<DrawingViewAddInput>
+  | CommandDefinition<DrawingViewUpdateInput>
+  | CommandDefinition<DrawingViewDeleteInput>;
 
 function makeCommand<TPayload>(
   kind: CommandKind,
@@ -608,13 +633,38 @@ function validateBodyTarget(document: ProjectDocument, bodyId: BodyId): void {
   }
 }
 
+/**
+ * F01 (v29): a to-face target must name an existing body other than the
+ * extrude's own result. Where it sits in history is the history-position
+ * gate's question (every body id in the payload must come earlier), and
+ * whether the face itself still resolves there is the exact build's.
+ */
+function validateToFaceBody(
+  document: ProjectDocument,
+  input: Pick<ExtrudeInput, 'toFace'>,
+  ownBodyId: BodyId | undefined
+): void {
+  const bodyId = input.toFace?.bodyId;
+  if (bodyId === undefined) return;
+  if (bodyId === ownBodyId) {
+    throw new Error(
+      'An extrusion cannot extrude up to a face of its own result.'
+    );
+  }
+  if (!document.bodyOrder.includes(bodyId)) {
+    throw new Error(`The target face's body ${bodyId} does not exist.`);
+  }
+}
+
 function validateExtrudeInput(
   document: ProjectDocument,
-  input: ExtrudeInput
+  input: ExtrudeInput,
+  ownBodyId: BodyId | undefined = input.ids?.bodyId
 ): void {
   if (!findSketch(document, input.sketchId)) {
     throw new Error('Extrude requires an existing sketch.');
   }
+  validateToFaceBody(document, input, ownBodyId);
   const operation = input.operation ?? 'new-body';
   if (operation === 'new-body') {
     if (input.targetBodyId !== undefined) {
@@ -915,15 +965,20 @@ function validateModelingFeatureUpdate(
   validateFeatureHistoryPosition(preview, input.featureId);
   switch (feature.data.featureKind) {
     case 'extrude':
-      validateExtrudeInput(preview, {
-        name: feature.name,
-        sketchId: feature.data.sketchId,
-        distance: feature.data.distance,
-        operation: feature.data.operation,
-        targetBodyId: feature.data.targetBodyId,
-        profile: feature.data.profile,
-        profiles: feature.data.profiles
-      });
+      validateExtrudeInput(
+        preview,
+        {
+          name: feature.name,
+          sketchId: feature.data.sketchId,
+          distance: feature.data.distance,
+          operation: feature.data.operation,
+          targetBodyId: feature.data.targetBodyId,
+          profile: feature.data.profile,
+          profiles: feature.data.profiles,
+          ...(feature.data.toFace ? { toFace: feature.data.toFace } : {})
+        },
+        feature.bodyId
+      );
       // The creation-time guard keys off `input.ids`, which an update never
       // carries; the stored feature knows its own result body directly.
       if (
@@ -1844,6 +1899,62 @@ export const commandFactories = {
   ): CommandDefinition<NodeMetadataInput> {
     return makeCommand('node.metadata.set', label, payload, (document) =>
       setNodeMetadata(document, payload)
+    );
+  },
+  addDrawingSheet(
+    payload: DrawingSheetAddInput
+  ): CommandDefinition<DrawingSheetAddInput> {
+    return makeCommand(
+      'drawing.sheet.add',
+      `Add drawing ${payload.sheet.name}`,
+      payload,
+      (document) => addDrawingSheet(document, payload)
+    );
+  },
+  updateDrawingSheet(
+    payload: DrawingSheetUpdateInput,
+    label = payload.source ? 'Update drawing' : 'Edit drawing sheet'
+  ): CommandDefinition<DrawingSheetUpdateInput> {
+    return makeCommand('drawing.sheet.update', label, payload, (document) =>
+      updateDrawingSheet(document, payload)
+    );
+  },
+  deleteDrawingSheet(
+    payload: DrawingSheetDeleteInput
+  ): CommandDefinition<DrawingSheetDeleteInput> {
+    return makeCommand(
+      'drawing.sheet.delete',
+      'Delete drawing',
+      payload,
+      (document) => deleteDrawingSheet(document, payload)
+    );
+  },
+  addDrawingView(
+    payload: DrawingViewAddInput
+  ): CommandDefinition<DrawingViewAddInput> {
+    return makeCommand(
+      'drawing.view.add',
+      'Add drawing view',
+      payload,
+      (document) => addDrawingView(document, payload)
+    );
+  },
+  updateDrawingView(
+    payload: DrawingViewUpdateInput,
+    label = payload.centerMm ? 'Move drawing view' : 'Edit drawing view'
+  ): CommandDefinition<DrawingViewUpdateInput> {
+    return makeCommand('drawing.view.update', label, payload, (document) =>
+      updateDrawingView(document, payload)
+    );
+  },
+  deleteDrawingView(
+    payload: DrawingViewDeleteInput
+  ): CommandDefinition<DrawingViewDeleteInput> {
+    return makeCommand(
+      'drawing.view.delete',
+      'Delete drawing view',
+      payload,
+      (document) => deleteDrawingView(document, payload)
     );
   }
 };
@@ -3286,6 +3397,32 @@ function parameterOnly(kinds: string[] | null): boolean {
   return !!kinds?.length && kinds.every((kind) => kind === 'parameter.set');
 }
 
+/** D01: a command that edits drawing sheets and never the model. */
+export function isDrawingCommandKind(kind: string): boolean {
+  return kind.startsWith('drawing.');
+}
+
+/**
+ * Whether a history entry edits drawing sheets and nothing else. Its kinds
+ * are only a label — a document from disk, an account or a peer may carry
+ * any — so the recorded changes decide: they may touch the drawing section
+ * and append or remove drawing commands in the log, and nothing more.
+ */
+function drawingOnly(entry: DocumentHistoryEntry | undefined): boolean {
+  if (!entry?.commandKinds?.length) return false;
+  if (!entry.commandKinds.every(isDrawingCommandKind)) return false;
+  return entry.changes.every((change) => {
+    if (change.field === 'drawings') return true;
+    if (change.field !== 'commandLog' || change.kind !== 'splice') return false;
+    return [...change.before, ...change.after].every(
+      (command) =>
+        typeof command === 'object' &&
+        command !== null &&
+        isDrawingCommandKind(String((command as { kind?: unknown }).kind))
+    );
+  });
+}
+
 /** Owns the canonical document, including its durable undo/redo position. */
 export class CommandManager {
   constructor(
@@ -3344,6 +3481,16 @@ export class CommandManager {
   /** The same question for the entry redo would apply. */
   get redoIsParameterOnly(): boolean {
     return parameterOnly(this.redoEntryKinds);
+  }
+  /**
+   * Whether undo would revert drawing-sheet edits only — the Drawing
+   * workspace's vocabulary, which leaves the model alone.
+   */
+  get undoIsDrawingOnly(): boolean {
+    return drawingOnly(this.history?.entries[(this.history?.cursor ?? 0) - 1]);
+  }
+  get redoIsDrawingOnly(): boolean {
+    return drawingOnly(this.history?.entries[this.history.cursor]);
   }
   /**
    * Whether undo is available, in a workspace that allows parameter edits
@@ -3749,6 +3896,36 @@ export function replayCommands(
         break;
       case 'node.metadata.set':
         next = setNodeMetadata(next, command.payload as NodeMetadataInput);
+        break;
+      case 'drawing.sheet.add':
+        next = addDrawingSheet(next, command.payload as DrawingSheetAddInput);
+        break;
+      case 'drawing.sheet.update':
+        next = updateDrawingSheet(
+          next,
+          command.payload as DrawingSheetUpdateInput
+        );
+        break;
+      case 'drawing.sheet.delete':
+        next = deleteDrawingSheet(
+          next,
+          command.payload as DrawingSheetDeleteInput
+        );
+        break;
+      case 'drawing.view.add':
+        next = addDrawingView(next, command.payload as DrawingViewAddInput);
+        break;
+      case 'drawing.view.update':
+        next = updateDrawingView(
+          next,
+          command.payload as DrawingViewUpdateInput
+        );
+        break;
+      case 'drawing.view.delete':
+        next = deleteDrawingView(
+          next,
+          command.payload as DrawingViewDeleteInput
+        );
         break;
       default:
         // Unknown kinds are skipped (not fatal) so documents written by newer

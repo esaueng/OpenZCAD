@@ -69,16 +69,16 @@ verification and delivery constraints; this file describes roadmap bookkeeping.
   corpus docs explain why.
 - **Merge gate (OpenZCAD):** follow root `AGENTS.md` and the
   [merge queue procedure](../../.github/merge-queue.md), and verify live
-  protection settings. Before enqueueing an authorized PR, check its exact
-  head, all individual CI jobs (including six browser shards),
-  the four required contexts (`checks / validate`, `checks / e2e`,
-  `commit-privacy`, and Cloudflare `verify`), plus reviews, comments, and
-  resolved conversations. Enqueue with `expectedHeadOid`, then verify required
-  checks on the separate merge-group
-  candidate and the final queued squash merge. The queue checks current main;
-  do not manually merge or rebase merely because the PR branch is behind.
-  Resolve actual conflicts and rerun changed heads. Never direct/admin merge
-  or use `gh pr merge --auto`; never dispatch `apple-silicon` or
+  protection settings. Before arming auto-merge on an authorized PR, address
+  its reviews, comments and threads and confirm the head you authorize. Arm
+  auto-merge with that head pinned (`expectedHeadOid`, or
+  `--match-head-commit`); GitHub enqueues it once the five required contexts
+  (`checks / validate`, `checks / e2e`, `commit-privacy`, `history-privacy`,
+  and Cloudflare `verify`) pass. Then verify required checks on the separate
+  merge-group candidate and the final queued squash merge. The queue checks
+  current main; do not manually merge or rebase merely because the PR branch
+  is behind. Resolve actual conflicts and rerun changed heads. Never
+  direct/admin merge or jump the queue; never dispatch `apple-silicon` or
   `Cloudflare version` manually; `pnpm deploy:beta` is never a validation step.
 - Existing pins are law: the parity corpus (`test/parity/`), kernel-seam
   pins, and `corpus-pins.ts` fail on both unpinned divergence _and_ repaired
@@ -254,7 +254,7 @@ typed refusal, not a hang.
 ## What you must never do
 
 Never merge on a passing check _suite_ alone; never bypass the merge queue
-or use `gh pr merge --auto`;
+or arm auto-merge without the authorized head pinned;
 never dispatch `apple-silicon` unless the maintainer asked; never run
 `pnpm deploy:beta`; never hand-edit the kernel pin; never delete or bypass
 the parity corpus, the distrust harness, or a workaround whose blocking

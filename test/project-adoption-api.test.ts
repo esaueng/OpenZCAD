@@ -66,7 +66,7 @@ describe('account adoption from an unopened device snapshot', () => {
     expect(() =>
       parseCreateProjectRequest({ name: local.name, document: local })
     ).toThrow('Reload to update before saving a project with undo history.');
-    const adopted = await api.adoptProject(local);
+    const adopted = await api.adoptProject(local, owner);
     expect(local).toEqual(original);
     const saved = (await store.loadProject(owner, adopted.document.projectId))!;
     expect(saved.projectId).not.toBe(local.projectId);
@@ -133,7 +133,7 @@ describe('account adoption from an unopened device snapshot', () => {
         )
       );
     });
-    const adopted = await api.adoptProject(local);
+    const adopted = await api.adoptProject(local, owner);
     expect(local).toEqual(original);
     const reopened = new CommandManager(
       (await store.loadProject(owner, adopted.document.projectId))!
@@ -157,7 +157,7 @@ describe('account adoption from an unopened device snapshot', () => {
       ...legacyDocument(),
       schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION + 1
     } as unknown as ProjectDocument;
-    expect(() => api.adoptProject(future)).toThrow(
+    expect(() => api.adoptProject(future, owner)).toThrow(
       'Unsupported project schema'
     );
     expect(desktopFetch).not.toHaveBeenCalled();
@@ -174,7 +174,7 @@ describe('account adoption from an unopened device snapshot', () => {
       expect(request.document?.editHistory).toBeUndefined();
       return Response.json(await store.createProject(owner, request));
     });
-    const adopted = await api.adoptProject(corrupt);
+    const adopted = await api.adoptProject(corrupt, owner);
     const saved = (await store.loadProject(owner, adopted.document.projectId))!;
     expect(saved.name).toBe(corrupt.name);
     expect(saved.editHistory).toBeUndefined();

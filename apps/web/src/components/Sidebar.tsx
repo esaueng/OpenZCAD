@@ -1,24 +1,6 @@
 import type { DiagnosticRow } from '../lib/diagnosticsRows';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { useArrivals } from '../hooks/useArrivals';
-import {
-  AlertTriangle,
-  Axis3d,
-  Box,
-  ChevronRight,
-  Combine,
-  Eye,
-  EyeOff,
-  FileBox,
-  GitBranch,
-  History,
-  Layers,
-  Move3d,
-  PenLine,
-  RotateCw,
-  Search,
-  SquareDashed
-} from 'lucide-react';
+import type { ReactNode } from 'react';
+import { ChevronRight } from 'lucide-react';
 import type {
   BodyId,
   BodyRepresentation,
@@ -30,19 +12,31 @@ import type {
   ProjectDocument,
   UnitSystem
 } from '@openzcad/shared';
-import { datumPlaneRows } from '../lib/datumPlanes';
-import { datumAxisRows } from '../lib/datumAxes';
 import type { PanelState, SidebarSectionId } from '../lib/panelState';
+import type { HistoryRowActions } from './HistoryTimeline';
 import {
-  findRollbackMarkerIndex,
-  HistoryTimeline,
-  type HistoryRowActions
-} from './HistoryTimeline';
-import { AddParameterRow, ParameterRow, parameterTable } from './ParameterRows';
+  DiagnosticsPanel,
+  diagnosticCount
+} from './modelPanels/DiagnosticsPanel';
 import {
-  listLocalSaveStateCheckpoints,
-  onLocalSaveStatesChanged
-} from '../lib/localProjectStore';
+  HistoryFindToggle,
+  HistoryPanel,
+  historyCount,
+  historyScrub,
+  useHistoryFind
+} from './modelPanels/HistoryPanel';
+import {
+  modelBodies,
+  ObjectsPanel,
+  objectCount,
+  useObjectsView
+} from './modelPanels/ObjectsPanel';
+import { ParametersPanel, parameterCount } from './modelPanels/ParametersPanel';
+import {
+  RevisionsPanel,
+  revisionCount,
+  useRevisionCheckpoints
+} from './modelPanels/RevisionsPanel';
 
 /**
  * One collapsible browser section. The count is on the header so a collapsed
@@ -114,7 +108,7 @@ function SidebarSection({
   );
 }
 
-interface SidebarProps {
+export interface SidebarProps {
   parameters: ParameterNode[];
   parameterValues: Record<string, number>;
   features: FeatureNode[];
@@ -204,297 +198,13 @@ interface SidebarProps {
 const DOUBLE_CLICK_OWNERS =
   'button, a, input, textarea, select, label, summary, [contenteditable], [role="listitem"], [role="button"], [role="slider"], .feature-row, .body-row, .revision-row, .diagnostic-row, .param-row, .history-rollback, .feature-history-panel';
 
-/** Body kind icons mirror the feature icons so the two lists read as one. */
-function bodyIcon(body: BodyRepresentation) {
-  const size = 13;
-  switch (body.source) {
-    case 'primitive':
-      return <Box size={size} aria-hidden="true" />;
-    case 'sketch':
-      return <PenLine size={size} aria-hidden="true" />;
-    case 'extrude':
-      return <Layers size={size} aria-hidden="true" />;
-    case 'revolve':
-      return <RotateCw size={size} aria-hidden="true" />;
-    case 'boolean':
-      return <Combine size={size} aria-hidden="true" />;
-    case 'transform':
-      return <Move3d size={size} aria-hidden="true" />;
-    default:
-      return <FileBox size={size} aria-hidden="true" />;
-  }
-}
-
-/** How long a new row keeps `.is-arrival`: its accent wash drains in 900ms. */
-const ARRIVAL_MS = 900;
-
-/**
- * When a save point was made. A same-day save shows its time: Ctrl+S makes a
- * "Manual save" each time, and a list of identical names over identical dates
- * gave no way to tell them apart.
- */
-function revisionTime(createdAt: string): string {
-  const created = new Date(createdAt);
-  return created.toDateString() === new Date().toDateString()
-    ? created.toLocaleTimeString(undefined, {
-        hour: 'numeric',
-        minute: '2-digit'
-      })
-    : created.toLocaleDateString();
-}
-
-export function Sidebar({
-  parameters,
-  parameterValues,
-  parameterMinimums,
-  features,
-  representations,
-  failedFeatureIds,
-  relatedFeatureIds,
-  geometryPending = false,
-  selectedFeatureNodeId,
-  selectedSketchProfileId,
-  selectedBodyIds,
-  hiddenBodyIds,
-  hiddenSketchIds,
-  document,
-  hiddenDatumIds,
-  onHiddenDatumIdsChange,
-  warnings,
-  historyDetails,
-  checkpoints,
-  projectId,
-  documentVersion,
-  restorableCheckpointIds,
-  onSelectFeature,
-  onSelectBody,
-  onToggleBodyVisibility,
-  onToggleSketchVisibility,
-  onFeatureContextMenu,
-  onToggleFeatureSuppression,
-  onRollbackAfterFeature,
-  onResumeHistory,
-  onRenameFeature,
-  units,
-  onConfigureToggle,
-  onSetParameter,
-  onSetParameterQuantity,
-  parameterQuantitySuggestions,
-  onViewActivityLog,
-  onPreviewParameter,
-  onDeleteParameter,
-  onRenameParameter,
-  onExposeParameter,
-  onDescribeParameter,
-  exposedParameterNames,
-  onReorderFeature,
-  onRestoreCheckpoint,
-  onBranchCheckpoint,
-  panelState,
-  onToggleSection,
-  onClose
-}: SidebarProps) {
-  const [localSaveStates, setLocalSaveStates] = useState<{
-    projectId: string;
-    checkpoints: ProjectCheckpoint[];
-  } | null>(null);
-  useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
-    let generation = 0;
-    const refresh = () => {
-      const request = ++generation;
-      void listLocalSaveStateCheckpoints(projectId)
-        .catch(() => [])
-        .then((stored) => {
-          if (!cancelled && request === generation)
-            setLocalSaveStates({ projectId, checkpoints: stored });
-        });
-    };
-    refresh();
-    const stop = onLocalSaveStatesChanged((storedProjectId) => {
-      if (storedProjectId === projectId) refresh();
-    });
-    return () => {
-      cancelled = true;
-      stop();
-    };
-  }, [projectId, restorableCheckpointIds]);
-  const canonicalCheckpointIds = new Set(
-    checkpoints.map((point) => point.checkpointId)
-  );
-  const localCheckpoints =
-    localSaveStates && localSaveStates.projectId === projectId
-      ? localSaveStates.checkpoints
-      : [];
-  const privateCheckpoints = localCheckpoints.filter(
-    (point) => !canonicalCheckpointIds.has(point.checkpointId)
-  );
-  const visibleCheckpoints = privateCheckpoints.length
-    ? [...checkpoints, ...privateCheckpoints].sort((left, right) =>
-        left.createdAt.localeCompare(right.createdAt)
-      )
-    : checkpoints;
-  const [findOpen, setFindOpen] = useState(false);
-  const findToggleRef = useRef<HTMLButtonElement>(null);
-  const [showConsumed, setShowConsumed] = useState(false);
-  const [objectFilter, setObjectFilter] = useState('all');
-  const [objectQuery, setObjectQuery] = useState('');
-  const objectNeedle = objectQuery.trim().toLowerCase();
-  // Name search narrows the rows only: identities, selection and visibility
-  // are untouched, and clearing the field brings back exactly the same list.
-  const matchesObject = (name: string) =>
-    !objectNeedle || name.toLowerCase().includes(objectNeedle);
-  const allSketches = features.filter(
-    (feature) => feature.data.featureKind === 'sketch'
-  );
-  const sketches = allSketches.filter((sketch) => matchesObject(sketch.name));
-  const sketchArrivals = useArrivals(
-    allSketches.map((sketch) => sketch.id),
-    ARRIVAL_MS
-  );
-  // Bodies in feature-history order so the tree matches the timeline below.
-  const bodies: BodyRepresentation[] = [];
-  const seen = new Set<string>();
-  for (const feature of features) {
-    if (feature.bodyId && !seen.has(feature.bodyId)) {
-      const body = representations[feature.bodyId];
-      if (body) {
-        seen.add(feature.bodyId);
-        bodies.push(body);
-      }
-    }
-  }
-  for (const body of Object.values(representations)) {
-    if (!seen.has(body.bodyId)) {
-      seen.add(body.bodyId);
-      bodies.push(body);
-    }
-  }
-  // Consumed bodies live behind a disclosure row: in a model built from
-  // booleans nearly every body is an input to a later feature, and a list
-  // that is mostly dead entries buries the ones that still exist.
-  const bodyArrivals = useArrivals(
-    bodies.map((body) => body.bodyId),
-    ARRIVAL_MS
-  );
-  const allLiveBodies = bodies.filter((body) => !body.consumed);
-  const matchingBodies = bodies.filter((body) => matchesObject(body.name));
-  const liveBodies = matchingBodies.filter((body) => !body.consumed);
-  const consumedBodies = matchingBodies.filter((body) => body.consumed);
-  const showBodies = objectFilter === 'all' || objectFilter === 'bodies';
-  const showSketches = objectFilter === 'all' || objectFilter === 'sketches';
-  const showPlanes = objectFilter === 'all' || objectFilter === 'planes';
-  const showAxes = objectFilter === 'all' || objectFilter === 'axes';
-  // R01 datums: planes, then axes, each in history order, sharing one row.
-  const allPlanes = [
-    ...(document ? datumPlaneRows(document, parameterValues) : []).map(
-      (row) => ({ ...row, datum: 'plane' as const })
-    ),
-    ...(document ? datumAxisRows(document, parameterValues) : []).map(
-      (row) => ({ ...row, datum: 'axis' as const })
-    )
-  ];
-  const planes = allPlanes.filter(
-    (plane) =>
-      matchesObject(plane.name) &&
-      (plane.datum === 'plane' ? showPlanes : showAxes)
-  );
-  const objectCount =
-    allLiveBodies.length + allSketches.length + allPlanes.length;
-  const filteredCount =
-    (showBodies ? matchingBodies.length : 0) +
-    (showSketches ? sketches.length : 0) +
-    planes.length;
-
-  function renderBodyRow(body: BodyRepresentation) {
-    const hidden = hiddenBodyIds.has(body.bodyId);
-    const selected = selectedBodyIds.includes(body.bodyId);
-    return (
-      <div
-        key={body.bodyId}
-        className={`body-row ${selected ? 'selected' : ''} ${body.consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''}${bodyArrivals.has(body.bodyId) ? ' is-arrival' : ''}`}
-        role="listitem"
-      >
-        <button
-          type="button"
-          className="body-row-main"
-          aria-pressed={selected}
-          title={`${body.name}${body.consumed ? ' — combined into a later feature' : ''} — click to select, ⇧click to add`}
-          onClick={(event) =>
-            onSelectBody(
-              body.bodyId,
-              event.shiftKey || event.metaKey || event.ctrlKey
-            )
-          }
-        >
-          <span className="feature-icon">{bodyIcon(body)}</span>
-          <span className="feature-name">{body.name}</span>
-        </button>
-        {!body.consumed && (
-          <button
-            type="button"
-            className={`row-visibility ${hidden ? 'is-hidden' : ''}`}
-            title={hidden ? `Show body ${body.name}` : `Hide body ${body.name}`}
-            aria-label={
-              hidden ? `Show body ${body.name}` : `Hide body ${body.name}`
-            }
-            aria-pressed={hidden}
-            onClick={() => onToggleBodyVisibility(body.bodyId)}
-          >
-            {hidden ? (
-              <EyeOff size={12} aria-hidden="true" />
-            ) : (
-              <Eye size={12} aria-hidden="true" />
-            )}
-          </button>
-        )}
-      </div>
-    );
-  }
-
-  const rollbackMarkerIndex = findRollbackMarkerIndex(features);
-  // The feature the scrub strip points at: the selected one, else the last
-  // one still in the build (the rollback marker), else the newest.
-  const activeFeatureIndex =
-    features.length === 0
-      ? -1
-      : selectedFeatureNodeId !== null &&
-          features.some((feature) => feature.id === selectedFeatureNodeId)
-        ? features.findIndex((feature) => feature.id === selectedFeatureNodeId)
-        : rollbackMarkerIndex >= 0
-          ? rollbackMarkerIndex
-          : features.length - 1;
-  const activeFeature =
-    activeFeatureIndex >= 0 ? features[activeFeatureIndex] : undefined;
-  // Collapsed, History reads as one line of plain text: how many features
-  // there are and which one the history is at — the selected one, the
-  // rollback marker, or the newest. The name takes the ellipsis; the count
-  // never does. The position rides the tooltip and the accessible name.
-  const rolledBack =
-    rollbackMarkerIndex >= 0 &&
-    activeFeatureIndex === rollbackMarkerIndex &&
-    selectedFeatureNodeId !== activeFeature?.id;
-  const historyScrub = activeFeature ? (
-    <span
-      className="history-scrub"
-      title={`Step ${activeFeatureIndex + 1} of ${features.length}: ${activeFeature.name}`}
-    >
-      <span className="history-scrub-count">
-        {features.length} {features.length === 1 ? 'feature' : 'features'}
-      </span>
-      <span className="history-scrub-name">
-        {/* A plain leading space collapses at the start of a flex item. */}
-        {'\u00a0· '}
-        {rolledBack ? 'rolled back to ' : 'at '}
-        {activeFeature.name}
-      </span>
-      <span className="visually-hidden">
-        {`, step ${activeFeatureIndex + 1} of ${features.length}`}
-      </span>
-    </span>
-  ) : undefined;
-  const table = parameterTable(parameters);
+export function Sidebar(props: SidebarProps) {
+  const { features, panelState, onToggleSection, onClose } = props;
+  const objectsView = useObjectsView();
+  const historyFind = useHistoryFind();
+  const revisions = useRevisionCheckpoints(props);
+  const liveBodies = modelBodies(props).filter((body) => !body.consumed);
+  const summary = historyScrub(props);
   return (
     <aside
       className="sidebar"
@@ -512,419 +222,63 @@ export function Sidebar({
       <SidebarSection
         id="parameters"
         title="Parameters"
-        count={parameters.length}
+        count={parameterCount(props.parameters)}
         open={panelState.sidebarSections.parameters}
         onToggle={onToggleSection}
       >
-        <div className="param-list">
-          {parameters.map((parameter) => (
-            <ParameterRow
-              key={parameter.parameterId}
-              parameter={parameter}
-              value={parameterValues[parameter.name]}
-              minimum={parameterMinimums?.[parameter.name]}
-              onSet={onSetParameter}
-              {...(onSetParameterQuantity
-                ? { onSetQuantity: onSetParameterQuantity }
-                : {})}
-              suggestedQuantity={
-                parameterQuantitySuggestions?.[parameter.name] ?? null
-              }
-              onViewDetails={onViewActivityLog}
-              onPreview={onPreviewParameter}
-              onDelete={onDeleteParameter}
-              onRename={onRenameParameter}
-              onExpose={onExposeParameter}
-              exposedInTweak={exposedParameterNames.has(parameter.name)}
-              onDescribe={onDescribeParameter}
-              bodies={allLiveBodies}
-              onConfigureToggle={onConfigureToggle}
-              table={table}
-            />
-          ))}
-          <AddParameterRow
-            existingNames={parameters.map((parameter) => parameter.name)}
-            onSet={onSetParameter}
-            onConfigureToggle={onConfigureToggle}
-            bodies={allLiveBodies}
-          />
-        </div>
-        {parameters.length === 0 && (
-          <p className="muted sidebar-hint">
-            Name a value (<span className="mono">w = 30</span>) and use it in
-            any feature field.
-          </p>
-        )}
+        <ParametersPanel {...props} bodies={liveBodies} />
       </SidebarSection>
 
       <SidebarSection
         id="bodies"
         title="Objects"
-        count={objectCount}
+        count={objectCount(props)}
         open={panelState.sidebarSections.bodies}
         onToggle={onToggleSection}
       >
-        <div className="object-filter">
-          <Layers size={13} aria-hidden="true" />
-          <select
-            aria-label="Filter objects by type"
-            value={objectFilter}
-            onChange={(event) => setObjectFilter(event.target.value)}
-          >
-            <option value="all">All objects</option>
-            <option value="bodies">Bodies</option>
-            <option value="sketches">Sketches</option>
-            <option value="planes">Planes</option>
-            <option value="axes">Axes</option>
-          </select>
-        </div>
-        <div className="object-filter">
-          <Search size={13} aria-hidden="true" />
-          <input
-            type="search"
-            aria-label="Find an object by name"
-            placeholder="Find an object"
-            value={objectQuery}
-            onChange={(event) => setObjectQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape' && objectQuery) {
-                event.preventDefault();
-                event.stopPropagation();
-                setObjectQuery('');
-              }
-            }}
-          />
-        </div>
-        <div className="feature-list" role="list" aria-label="Objects">
-          {geometryPending && (
-            <p className="muted sidebar-hint" role="status">
-              Preparing model details…
-            </p>
-          )}
-          {filteredCount === 0 && !geometryPending && (
-            <p className="muted sidebar-hint" role="listitem">
-              {objectNeedle
-                ? `No objects match “${objectQuery.trim()}”.`
-                : objectFilter === 'all'
-                  ? 'No objects yet. Create a body or sketch to get started.'
-                  : objectFilter === 'bodies'
-                    ? 'No bodies yet. Create a primitive or extrude a sketch.'
-                    : objectFilter === 'planes'
-                      ? 'No planes yet. Use Plane to offset one from a plane or face.'
-                      : objectFilter === 'axes'
-                        ? 'No axes yet. Use Axis to run one through points, an edge or a cylinder.'
-                        : 'No sketches yet. Start a sketch on a plane or face.'}
-            </p>
-          )}
-          {showBodies && liveBodies.map(renderBodyRow)}
-          {showSketches &&
-            sketches.map((sketch) => {
-              if (sketch.data.featureKind !== 'sketch') return null;
-              const sketchId = sketch.data.sketchId;
-              const hidden = hiddenSketchIds.has(sketchId);
-              const selected =
-                selectedFeatureNodeId === sketch.id ||
-                selectedSketchProfileId === sketchId;
-              return (
-                <div
-                  key={sketch.id}
-                  className={`object-row${selected ? ' selected' : ''}${hidden ? ' hidden-body' : ''}${sketchArrivals.has(sketch.id) ? ' is-arrival' : ''}`}
-                  role="listitem"
-                >
-                  <button
-                    type="button"
-                    className="body-row-main"
-                    aria-pressed={selected}
-                    title={`${sketch.name} — click to select sketch`}
-                    onClick={() => onSelectFeature(sketch.id)}
-                  >
-                    <span className="feature-icon">
-                      <PenLine size={13} aria-hidden="true" />
-                    </span>
-                    <span className="feature-name">{sketch.name}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`row-visibility${hidden ? ' is-hidden' : ''}`}
-                    title={
-                      hidden
-                        ? `Show sketch ${sketch.name}`
-                        : `Hide sketch ${sketch.name}`
-                    }
-                    aria-label={
-                      hidden
-                        ? `Show sketch ${sketch.name}`
-                        : `Hide sketch ${sketch.name}`
-                    }
-                    aria-pressed={hidden}
-                    onClick={() => onToggleSketchVisibility(sketchId)}
-                  >
-                    {hidden ? (
-                      <EyeOff size={12} aria-hidden="true" />
-                    ) : (
-                      <Eye size={12} aria-hidden="true" />
-                    )}
-                  </button>
-                </div>
-              );
-            })}
-          {planes.map((plane) => {
-            const hidden = hiddenDatumIds?.has(plane.featureId) ?? false;
-            const selected = selectedFeatureNodeId === plane.nodeId;
-            const noun = plane.datum === 'axis' ? 'axis' : 'plane';
-            const used =
-              plane.dependents.length === 0
-                ? 'Not used yet'
-                : `Used by ${plane.dependents.join(', ')}`;
-            return (
-              <div
-                key={plane.nodeId}
-                className={`object-row${selected ? ' selected' : ''}${hidden ? ' hidden-body' : ''}`}
-                role="listitem"
-              >
-                <button
-                  type="button"
-                  className="body-row-main"
-                  aria-pressed={selected}
-                  aria-description={`${plane.description ?? `Datum ${noun}`}. ${used}.`}
-                  title={`${plane.name} — ${plane.description ?? `datum ${noun}`} · ${used}`}
-                  onClick={() => onSelectFeature(plane.nodeId)}
-                >
-                  <span className="feature-icon">
-                    {plane.datum === 'axis' ? (
-                      <Axis3d size={13} aria-hidden="true" />
-                    ) : (
-                      <SquareDashed size={13} aria-hidden="true" />
-                    )}
-                  </span>
-                  <span className="feature-name">{plane.name}</span>
-                  {plane.suppressed ? (
-                    <span className="feature-flag">suppressed</span>
-                  ) : !plane.resolved && !geometryPending ? (
-                    <span className="feature-flag error">unresolved</span>
-                  ) : plane.dependents.length > 0 ? (
-                    <span className="feature-flag">
-                      {plane.dependents.length} use
-                      {plane.dependents.length === 1 ? '' : 's'}
-                    </span>
-                  ) : null}
-                </button>
-                {onHiddenDatumIdsChange ? (
-                  <button
-                    type="button"
-                    className={`row-visibility${hidden ? ' is-hidden' : ''}`}
-                    title={
-                      hidden
-                        ? `Show ${noun} ${plane.name}`
-                        : `Hide ${noun} ${plane.name}`
-                    }
-                    aria-label={
-                      hidden
-                        ? `Show ${noun} ${plane.name}`
-                        : `Hide ${noun} ${plane.name}`
-                    }
-                    aria-pressed={hidden}
-                    onClick={() => {
-                      const next = new Set(hiddenDatumIds);
-                      if (hidden) next.delete(plane.featureId);
-                      else next.add(plane.featureId);
-                      onHiddenDatumIdsChange(next);
-                    }}
-                  >
-                    {hidden ? (
-                      <EyeOff size={12} aria-hidden="true" />
-                    ) : (
-                      <Eye size={12} aria-hidden="true" />
-                    )}
-                  </button>
-                ) : null}
-              </div>
-            );
-          })}
-          {showBodies && consumedBodies.length > 0 && (
-            <div role="listitem">
-              <button
-                type="button"
-                className="consumed-toggle"
-                aria-expanded={showConsumed}
-                onClick={() => setShowConsumed((current) => !current)}
-                title={
-                  showConsumed
-                    ? 'Hide the earlier bodies this model was built from'
-                    : 'Show the earlier bodies this model was built from — each was combined into a later feature and is no longer separate'
-                }
-              >
-                <ChevronRight
-                  size={12}
-                  className="disclosure-chevron"
-                  aria-hidden="true"
-                />
-                <span>
-                  {consumedBodies.length} source{' '}
-                  {consumedBodies.length === 1 ? 'body' : 'bodies'}
-                </span>
-              </button>
-            </div>
-          )}
-          {showBodies && showConsumed && consumedBodies.map(renderBodyRow)}
-        </div>
+        <ObjectsPanel {...props} view={objectsView} />
       </SidebarSection>
 
       <SidebarSection
         id="history"
         title="History"
-        count={features.length}
+        count={historyCount(features)}
         open={panelState.sidebarSections.history}
         className="grow"
-        {...(historyScrub !== undefined ? { summary: historyScrub } : {})}
+        {...(summary !== undefined ? { summary } : {})}
         actions={
           panelState.sidebarSections.history && features.length > 0 ? (
-            <button
-              ref={findToggleRef}
-              type="button"
-              className="history-find-toggle"
-              title="Find a step"
-              aria-label="Find a step"
-              aria-pressed={findOpen}
-              onClick={() => setFindOpen((open) => !open)}
-            >
-              <Search size={12} aria-hidden="true" />
-            </button>
+            <HistoryFindToggle find={historyFind} />
           ) : undefined
         }
         onToggle={onToggleSection}
       >
-        <HistoryTimeline
-          features={features}
-          representations={representations}
-          failedFeatureIds={failedFeatureIds}
-          relatedFeatureIds={relatedFeatureIds}
-          geometryPending={geometryPending}
-          selectedFeatureNodeId={selectedFeatureNodeId}
-          hiddenBodyIds={hiddenBodyIds}
-          hiddenSketchIds={hiddenSketchIds}
-          parameterValues={parameterValues}
-          units={units}
-          findOpen={findOpen}
-          onCloseFind={() => {
-            setFindOpen(false);
-            // The field unmounts with focus in it; hand focus back to the
-            // toggle that opened it rather than dropping it on the page.
-            findToggleRef.current?.focus();
-          }}
-          onSelectFeature={onSelectFeature}
-          onToggleBodyVisibility={onToggleBodyVisibility}
-          onToggleSketchVisibility={onToggleSketchVisibility}
-          onFeatureContextMenu={onFeatureContextMenu}
-          onToggleFeatureSuppression={onToggleFeatureSuppression}
-          onRollbackAfterFeature={onRollbackAfterFeature}
-          onResumeHistory={onResumeHistory}
-          onReorderFeature={onReorderFeature}
-          onRenameFeature={onRenameFeature}
-        />
-        {/* Below the list, so selecting a row never pushes the rows down. */}
-        {historyDetails}
+        <HistoryPanel {...props} find={historyFind} />
       </SidebarSection>
 
-      {visibleCheckpoints.length > 0 && (
+      {revisionCount(revisions) > 0 && (
         <SidebarSection
           id="revisions"
           title="Revisions"
-          count={visibleCheckpoints.length}
+          count={revisionCount(revisions)}
           open={panelState.sidebarSections.revisions}
           className="revisions"
           onToggle={onToggleSection}
         >
-          <div className="revision-list">
-            {[...visibleCheckpoints].reverse().map((checkpoint, index) => {
-              // The save point the open document is currently sitting on.
-              // Offering to restore what is already loaded would be a no-op
-              // dressed up as an action.
-              const isCurrent =
-                canonicalCheckpointIds.has(checkpoint.checkpointId) &&
-                checkpoint.documentVersion === documentVersion;
-              const stored =
-                restorableCheckpointIds.has(checkpoint.checkpointId) ||
-                localCheckpoints.some(
-                  (point) => point.checkpointId === checkpoint.checkpointId
-                );
-              return (
-                <div
-                  key={checkpoint.checkpointId}
-                  className={`revision-row ${index === 0 ? 'latest' : ''}`}
-                  title={`${checkpoint.reason} · document v${checkpoint.documentVersion} · ${new Date(checkpoint.createdAt).toLocaleString()}${canonicalCheckpointIds.has(checkpoint.checkpointId) ? '' : ' · Stored on this device'}`}
-                >
-                  <span className="revision-dot" aria-hidden="true" />
-                  <span className="revision-reason">{checkpoint.reason}</span>
-                  <small className="revision-time mono">
-                    {revisionTime(checkpoint.createdAt)}
-                  </small>
-                  {stored ? (
-                    <span className="revision-actions">
-                      {!isCurrent && (
-                        <button
-                          type="button"
-                          className="revision-action"
-                          title={`Restore “${checkpoint.reason}”. This is one Undo away, and the current state is saved first.`}
-                          aria-label={`Restore ${checkpoint.reason}`}
-                          onClick={() => onRestoreCheckpoint(checkpoint)}
-                        >
-                          <History size={12} aria-hidden="true" />
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="revision-action"
-                        title={`Branch “${checkpoint.reason}” into a new project. This project is left as it is.`}
-                        aria-label={`Branch ${checkpoint.reason} into a new project`}
-                        onClick={() => onBranchCheckpoint(checkpoint)}
-                      >
-                        <GitBranch size={12} aria-hidden="true" />
-                      </button>
-                    </span>
-                  ) : (
-                    // Retention drops stored documents while the checkpoints
-                    // naming them stay in the document, so some rows are a
-                    // record of a save rather than a save you can open. Saying
-                    // so beats a button that fails when pressed.
-                    <span
-                      className="revision-unavailable"
-                      title="This save is listed in the project's history, but its model is no longer stored."
-                    >
-                      not stored
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          <RevisionsPanel {...props} revisions={revisions} />
         </SidebarSection>
       )}
 
-      {warnings.length > 0 && (
+      {diagnosticCount(props.warnings) > 0 && (
         <SidebarSection
           id="diagnostics"
           title="Diagnostics"
-          count={warnings.length}
+          count={diagnosticCount(props.warnings)}
           open={panelState.sidebarSections.diagnostics}
           className="diagnostics"
           onToggle={onToggleSection}
         >
-          {warnings.map((warning) => (
-            <p
-              key={warning.key}
-              className="diagnostic-row"
-              title={warning.detail}
-            >
-              <AlertTriangle size={12} aria-hidden="true" />
-              <span>
-                {warning.featureName ? (
-                  <strong>{warning.featureName}: </strong>
-                ) : null}
-                {warning.message}
-              </span>
-            </p>
-          ))}
+          <DiagnosticsPanel {...props} />
         </SidebarSection>
       )}
     </aside>

@@ -278,15 +278,7 @@ interface ViewerShellProps {
   sketchMoveEnabled?: ModelViewerProps['sketchMoveEnabled'];
   onSketchMoveChange?: ModelViewerProps['onSketchMoveChange'];
   onSketchMoveCommit?: ModelViewerProps['onSketchMoveCommit'];
-  onSketchSelectObject(
-    objectId: string | null,
-    snapPoint: {
-      objectId: string;
-      point: 'start' | 'end' | 'center';
-    } | null,
-    clickPoint: { x: number; y: number },
-    planePoint: { x: number; y: number } | null
-  ): boolean | void;
+  onSketchSelectObject: ModelViewerProps['onSketchSelectObject'];
   sketchViews: SketchViewData[];
   selectedProfileIds: string[];
   profileSelectionMode: boolean;
@@ -331,6 +323,8 @@ interface ViewerShellProps {
       ) => string | null)
     | null;
   regionHandle: RegionHandleTarget | null;
+  /** F01: a click picks only a body face (see `ModelViewer`). */
+  facePickOnly?: boolean;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onMovePreviewChange(
@@ -476,6 +470,7 @@ export function ViewerShell({
   onDatumOffsetEntry,
   onMeasurePreview,
   regionHandle,
+  facePickOnly,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onMovePreviewChange,
@@ -785,6 +780,7 @@ export function ViewerShell({
         onPickDatum={onPickDatum}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
+        {...(facePickOnly ? { facePickOnly } : {})}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
         onMovePreviewChange={onMovePreviewChange}

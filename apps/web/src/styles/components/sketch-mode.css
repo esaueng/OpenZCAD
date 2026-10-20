@@ -244,6 +244,45 @@
   border-style: dashed;
 }
 
+/* Relation glyphs sit on the curve or point they describe, so they never
+   take a pick; CSS2DRenderer owns transform, so the offset that clears the
+   stroke is a margin. */
+.sketch-relation-chip {
+  display: inline-flex;
+  gap: 2px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.sketch-relation-chip[data-placement='object'] {
+  margin-top: -16px;
+  margin-left: 14px;
+}
+
+.sketch-relation-chip[data-placement='point'] {
+  margin-top: 14px;
+  margin-left: 14px;
+}
+
+.sketch-relation-glyph {
+  display: inline-grid;
+  place-items: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 2px;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-mini);
+  line-height: 1;
+}
+
+.sketch-relation-glyph[data-conflicted='true'] {
+  color: var(--color-error-text);
+  border-color: var(--color-error);
+}
+
 .sketch-reference-dimensions {
   display: grid;
   gap: 8px;

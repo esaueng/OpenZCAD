@@ -88,6 +88,17 @@ describe('regionExtrudeOutcome', () => {
         'mm'
       )
     ).toBe('Cut the region through all of the target.');
+    // F01 (v29): the face, not the dormant distance, set the depth.
+    expect(
+      regionExtrudeOutcome(
+        {
+          ...resolvedAs('add'),
+          command: { payload: { endCondition: 'to-face' } }
+        },
+        26,
+        'mm'
+      )
+    ).toBe('Extruded region up to the face, added to the body.');
     expect(regionExtrudeOutcome(resolvedAs('new-body'), 10, 'mm')).toBe(
       'Extruded region by 10 mm as a new body.'
     );
