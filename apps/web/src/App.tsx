@@ -125,6 +125,7 @@ import {
   duplicateFeatureRefusal,
   isParameterRetype,
   isDrawingCommandKind,
+  isObjectFolderCommandKind,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -139,6 +140,7 @@ import {
   createProjectDocument,
   duplicateProjectDocument,
   findBodyNode,
+  listObjectFolders,
   getParameterHiddenBodyIds,
   findFeature,
   findSketch,
@@ -411,6 +413,12 @@ import {
   type ToolAvailability,
   type ToolId
 } from './lib/tools';
+import {
+  commandContextFor,
+  commandContextLabel,
+  toolApplies,
+  type CommandSelection
+} from './lib/commandContext';
 import { AppShell } from './components/AppShell';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
 import {
@@ -424,6 +432,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { createLazyPanel } from './components/LazyPanel';
 import type { Sidebar as SidebarComponent } from './components/Sidebar';
 import type * as SidebarModule from './components/Sidebar';
+import type { ObjectFolderActions } from './components/modelPanels/ObjectsPanel';
 import type { FeatureHistoryPanel as FeatureHistoryComponent } from './components/FeatureHistoryPanel';
 import type { TweakPanel as TweakPanelComponent } from './components/TweakPanel';
 import type { ViewModeBar as ViewModeBarComponent } from './components/ViewModeBar';
@@ -7039,7 +7048,12 @@ export function App() {
       let next = managerRef.current.execute(command);
       // A drawing-sheet edit leaves the model alone: keep the ready geometry
       // rather than posting a rebuild (and a "Rebuilding" lane) per view move.
-      if (isDrawingCommandKind(command.kind)) geometry.retainReadyGeometry(next);
+      // Filing a body in a folder is organization only, likewise (U06).
+      if (
+        isDrawingCommandKind(command.kind) ||
+        isObjectFolderCommandKind(command.kind)
+      )
+        geometry.retainReadyGeometry(next);
       if (derived) {
         // Validation already rebuilt this exact result; attaching it now
         // renders the new geometry in the same batch instead of flashing the
@@ -10535,6 +10549,7 @@ export function App() {
     // keeps the modeling refusal rather than reverting unseen work.
     const parametersOnly = managerRef.current.undoIsParameterOnly;
     const drawingOnly = managerRef.current.undoIsDrawingOnly;
+    const folderOnly = managerRef.current.undoIsObjectFolderOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('undo')) return;
     } else if (!parametersOnly && !ensureCanEdit('undo')) {
@@ -10546,7 +10561,7 @@ export function App() {
     const label = managerRef.current.undoLabel;
     try {
       const next = managerRef.current.undo();
-      if (drawingOnly) geometry.retainReadyGeometry(next);
+      if (drawingOnly || folderOnly) geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
     } catch (error) {
@@ -10573,6 +10588,7 @@ export function App() {
     // cursor, so its kinds decide — not the undo entry below it.
     const parametersOnly = managerRef.current.redoIsParameterOnly;
     const drawingOnly = managerRef.current.redoIsDrawingOnly;
+    const folderOnly = managerRef.current.redoIsObjectFolderOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('redo')) return;
     } else if (!parametersOnly && !ensureCanEdit('redo')) {
@@ -10584,7 +10600,7 @@ export function App() {
     const label = managerRef.current.redoLabel;
     try {
       const next = managerRef.current.redo();
-      if (drawingOnly) geometry.retainReadyGeometry(next);
+      if (drawingOnly || folderOnly) geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
     } catch (error) {
@@ -18758,6 +18774,117 @@ export function App() {
   }
 
   /**
+   * Renames a body from Objects (ZC-127). Features, booleans and drawing
+   * views reference the body by id, never by name, so nothing downstream
+   * rebinds; one undoable step.
+   */
+  function handleRenameBody(bodyId: BodyId, name: string) {
+    const current = managerRef.current?.document;
+    const body = current && findBodyNode(current, bodyId);
+    const next = name.trim();
+    if (!body || !next || next === body.name) return;
+    executeTransaction(`Rename ${body.name} to ${next}`, [
+      commandFactories.renameNode({ nodeId: body.id, name: next })
+    ]);
+  }
+
+  /**
+   * Objects folders (U06, ZC-128). Filing is organization only: each edit is
+   * one undoable command that keeps the ready geometry, while a folder's eye
+   * and its selection are view state, as a body's are.
+   */
+  const folderName = (folderId: string) => {
+    const current = managerRef.current?.document ?? doc;
+    return (
+      (current &&
+        listObjectFolders(current).find((folder) => folder.id === folderId)
+          ?.name) ??
+      'folder'
+    );
+  };
+  const objectFolderActions: ObjectFolderActions = {
+    create: (input) =>
+      executeCommand(commandFactories.createObjectFolder(input)),
+    rename(folderId, name) {
+      const before = folderName(folderId);
+      const next = name.trim();
+      if (!next || next === before) return;
+      executeCommand(
+        commandFactories.renameObjectFolder(
+          { folderId, name: next },
+          `Rename ${before} to ${next}`
+        )
+      );
+    },
+    remove(folderId) {
+      executeCommand(
+        commandFactories.deleteObjectFolder(
+          { folderId },
+          `Delete folder ${folderName(folderId)}`
+        )
+      );
+    },
+    move(input) {
+      const count =
+        (input.bodyIds?.length ?? 0) + (input.folderIds?.length ?? 0);
+      const what =
+        count === 1 && input.bodyIds?.length === 1 && doc
+          ? (findBodyNode(doc, input.bodyIds[0]!)?.name ?? 'body')
+          : count === 1 && input.folderIds?.length === 1
+            ? folderName(input.folderIds[0]!)
+            : `${count} objects`;
+      executeCommand(
+        commandFactories.moveToObjectFolder(
+          input,
+          input.parentId
+            ? `Move ${what} to ${folderName(input.parentId)}`
+            : `Move ${what} to the top level`
+        )
+      );
+    },
+    setBodiesHidden(bodyIds, hidden) {
+      // A body a toggle parameter switches stays the parameter's to show.
+      const own = bodyIds.filter((id) => !parameterHiddenBodyIds.has(id));
+      setHiddenBodyIds((current) => {
+        const next = new Set(current);
+        for (const id of own) {
+          if (hidden) next.add(id);
+          else next.delete(id);
+        }
+        return next;
+      });
+    },
+    selectBodies(bodyIds, additive) {
+      if (bodyIds.length === 0) return;
+      if (moveHasUnappliedChange(movePreview)) {
+        setStatus('Apply or cancel the move before selecting a folder.');
+        return;
+      }
+      if (movePreview) {
+        setMovePreview(null);
+        setTool(null);
+      }
+      if (interaction.mode !== 'idle') dispatchInteraction({ type: 'clear' });
+      setSelectedEdges([]);
+      setSelectedTopology(null);
+      setSelectedSketchProfileId(null);
+      const nextIds = additive
+        ? [...new Set([...selectedBodyIds, ...bodyIds])]
+        : [...bodyIds];
+      setSelectedBodyIds(nextIds);
+      if (nextIds.length === 1) {
+        setSelectedTopology({ bodyId: nextIds[0]!, kind: 'body' });
+        inferFeatureNodeFor(nextIds[0]!);
+      } else {
+        setSelectedFeatureNode(null);
+      }
+      setStatus(
+        `${nextIds.length} ${nextIds.length === 1 ? 'body' : 'bodies'} selected.`
+      );
+    }
+  };
+
+  /**
    * Moves a History step, keyboard and drag alike. The order gate refuses a
    * producer moved after its consumer at once; a legal order that leaves a
    * later feature unbuildable is refused by name after an exact rebuild of
@@ -20587,6 +20714,15 @@ export function App() {
     mode === modeShortcutTarget
       ? keymap.label('workspace-mode-cycle')
       : undefined;
+  // The rail and the bar read one pick: the rail dims the tools that do not
+  // act on it, and the bar's empty search leaves them out (U05).
+  const commandSelection: CommandSelection = {
+    edgeCount: selectedEdges.length,
+    faceSelected: renderedSelectedTopology?.kind === 'face',
+    bodyCount: selectedBodyIds.length,
+    regionCount: selectedProfiles.length
+  };
+  const commandContext = commandContextFor(commandSelection);
   // No two rows share a name: a repeated one is numbered.
   const paletteCommands = withDistinctLabels<PaletteCommand>([
     // Modeling tools leave the palette entirely in the reading workspaces
@@ -20604,6 +20740,7 @@ export function App() {
               shortcut: keymap.label(toolCommandId(toolId)),
               icon: meta.icon,
               disabledReason: toolDisabledReason(toolId, availability),
+              offPick: !toolApplies(commandContext, toolId),
               run: () => launchTool(toolId)
             };
           })
@@ -21713,6 +21850,8 @@ export function App() {
       onSelectBody={handleSelectBodyFromTree}
       selectedBodyIds={selectedBodyIds}
       onToggleBodyVisibility={toggleBodyVisibility}
+      onRenameBody={handleRenameBody}
+      objectFolderActions={objectFolderActions}
       onToggleSketchVisibility={toggleSketchVisibility}
       onFeatureContextMenu={handleFeatureContextMenu}
       onToggleFeatureSuppression={handleToggleFeatureSuppression}
@@ -21824,12 +21963,7 @@ export function App() {
       sketchRail
     ) : (
       <CommandCard
-        selection={{
-          edgeCount: selectedEdges.length,
-          faceSelected: renderedSelectedTopology?.kind === 'face',
-          bodyCount: selectedBodyIds.length,
-          regionCount: selectedProfiles.length
-        }}
+        selection={commandSelection}
         summary={selectionSummary}
         onClear={
           selectionSummary || selectedProfiles.length > 0
@@ -23556,6 +23690,7 @@ export function App() {
                 }
                 context={assistantAvailable ? assistantActivity.context : null}
                 draft={promptDraft}
+                pick={commandContextLabel(commandSelection)}
               />
             }
           />

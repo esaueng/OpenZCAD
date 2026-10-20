@@ -29,7 +29,8 @@ import {
   modelBodies,
   ObjectsPanel,
   objectCount,
-  useObjectsView
+  useObjectsView,
+  type ObjectFolderActions
 } from './modelPanels/ObjectsPanel';
 import { ParametersPanel, parameterCount } from './modelPanels/ParametersPanel';
 import {
@@ -144,6 +145,10 @@ export interface SidebarProps {
   onSelectFeature(nodeId: string): void;
   onSelectBody(bodyId: string, additive: boolean): void;
   onToggleBodyVisibility(bodyId: string): void;
+  /** Renames a body in place from Objects (ZC-127): one undoable step. */
+  onRenameBody?(bodyId: BodyId, name: string): void;
+  /** Objects folders (ZC-128); absent, folders list but cannot be edited. */
+  objectFolderActions?: ObjectFolderActions;
   onToggleSketchVisibility(sketchId: string): void;
   /** Opens the feature menu at a point: a right-click, or a row's ⋯ button. */
   onFeatureContextMenu(

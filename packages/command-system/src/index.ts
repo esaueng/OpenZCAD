@@ -170,6 +170,14 @@ import {
   type DrawingViewAddInput,
   type DrawingViewUpdateInput,
   type DrawingViewDeleteInput,
+  createObjectFolder,
+  renameObjectFolder,
+  deleteObjectFolder,
+  moveToObjectFolder,
+  type ObjectFolderCreateInput,
+  type ObjectFolderRenameInput,
+  type ObjectFolderDeleteInput,
+  type ObjectFolderMoveInput,
   resolveParamValue,
   resolveSketchInput,
   type RevolveInput,
@@ -281,7 +289,11 @@ export type CommandKind =
   | 'drawing.sheet.delete'
   | 'drawing.view.add'
   | 'drawing.view.update'
-  | 'drawing.view.delete';
+  | 'drawing.view.delete'
+  | 'objectFolder.create'
+  | 'objectFolder.rename'
+  | 'objectFolder.delete'
+  | 'objectFolder.move';
 
 export interface CommandDefinition<TPayload> {
   kind: CommandKind;
@@ -341,7 +353,11 @@ export type AnyCommand =
   | CommandDefinition<DrawingSheetDeleteInput>
   | CommandDefinition<DrawingViewAddInput>
   | CommandDefinition<DrawingViewUpdateInput>
-  | CommandDefinition<DrawingViewDeleteInput>;
+  | CommandDefinition<DrawingViewDeleteInput>
+  | CommandDefinition<ObjectFolderCreateInput>
+  | CommandDefinition<ObjectFolderRenameInput>
+  | CommandDefinition<ObjectFolderDeleteInput>
+  | CommandDefinition<ObjectFolderMoveInput>;
 
 function makeCommand<TPayload>(
   kind: CommandKind,
@@ -1956,6 +1972,40 @@ export const commandFactories = {
       payload,
       (document) => deleteDrawingView(document, payload)
     );
+  },
+  createObjectFolder(
+    payload: ObjectFolderCreateInput
+  ): CommandDefinition<ObjectFolderCreateInput> {
+    return makeCommand(
+      'objectFolder.create',
+      `New folder ${payload.name}`,
+      payload,
+      (document) => createObjectFolder(document, payload)
+    );
+  },
+  renameObjectFolder(
+    payload: ObjectFolderRenameInput,
+    label = `Rename folder to ${payload.name}`
+  ): CommandDefinition<ObjectFolderRenameInput> {
+    return makeCommand('objectFolder.rename', label, payload, (document) =>
+      renameObjectFolder(document, payload)
+    );
+  },
+  deleteObjectFolder(
+    payload: ObjectFolderDeleteInput,
+    label = 'Delete folder'
+  ): CommandDefinition<ObjectFolderDeleteInput> {
+    return makeCommand('objectFolder.delete', label, payload, (document) =>
+      deleteObjectFolder(document, payload)
+    );
+  },
+  moveToObjectFolder(
+    payload: ObjectFolderMoveInput,
+    label = 'Move to folder'
+  ): CommandDefinition<ObjectFolderMoveInput> {
+    return makeCommand('objectFolder.move', label, payload, (document) =>
+      moveToObjectFolder(document, payload)
+    );
   }
 };
 
@@ -3402,6 +3452,11 @@ export function isDrawingCommandKind(kind: string): boolean {
   return kind.startsWith('drawing.');
 }
 
+/** U06: a command that organizes Objects folders and never the model. */
+export function isObjectFolderCommandKind(kind: string): boolean {
+  return kind.startsWith('objectFolder.');
+}
+
 /**
  * Whether a history entry edits drawing sheets and nothing else. Its kinds
  * are only a label — a document from disk, an account or a peer may carry
@@ -3419,6 +3474,25 @@ function drawingOnly(entry: DocumentHistoryEntry | undefined): boolean {
         typeof command === 'object' &&
         command !== null &&
         isDrawingCommandKind(String((command as { kind?: unknown }).kind))
+    );
+  });
+}
+
+/**
+ * Whether a history entry files Objects folders and nothing else: the
+ * recorded changes touch the folder section and folder commands in the log.
+ */
+function objectFolderOnly(entry: DocumentHistoryEntry | undefined): boolean {
+  if (!entry?.commandKinds?.length) return false;
+  if (!entry.commandKinds.every(isObjectFolderCommandKind)) return false;
+  return entry.changes.every((change) => {
+    if (change.field === 'objectFolders') return true;
+    if (change.field !== 'commandLog' || change.kind !== 'splice') return false;
+    return [...change.before, ...change.after].every(
+      (command) =>
+        typeof command === 'object' &&
+        command !== null &&
+        isObjectFolderCommandKind(String((command as { kind?: unknown }).kind))
     );
   });
 }
@@ -3491,6 +3565,15 @@ export class CommandManager {
   }
   get redoIsDrawingOnly(): boolean {
     return drawingOnly(this.history?.entries[this.history.cursor]);
+  }
+  /** Whether undo would only re-file Objects folders: no geometry changes. */
+  get undoIsObjectFolderOnly(): boolean {
+    return objectFolderOnly(
+      this.history?.entries[(this.history?.cursor ?? 0) - 1]
+    );
+  }
+  get redoIsObjectFolderOnly(): boolean {
+    return objectFolderOnly(this.history?.entries[this.history.cursor]);
   }
   /**
    * Whether undo is available, in a workspace that allows parameter edits
@@ -3925,6 +4008,30 @@ export function replayCommands(
         next = deleteDrawingView(
           next,
           command.payload as DrawingViewDeleteInput
+        );
+        break;
+      case 'objectFolder.create':
+        next = createObjectFolder(
+          next,
+          command.payload as ObjectFolderCreateInput
+        );
+        break;
+      case 'objectFolder.rename':
+        next = renameObjectFolder(
+          next,
+          command.payload as ObjectFolderRenameInput
+        );
+        break;
+      case 'objectFolder.delete':
+        next = deleteObjectFolder(
+          next,
+          command.payload as ObjectFolderDeleteInput
+        );
+        break;
+      case 'objectFolder.move':
+        next = moveToObjectFolder(
+          next,
+          command.payload as ObjectFolderMoveInput
         );
         break;
       default:

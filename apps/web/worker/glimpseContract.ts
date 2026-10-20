@@ -75,7 +75,11 @@ export const CAD_OPERATIONS = [
   'drawing.sheet.delete',
   'drawing.view.add',
   'drawing.view.update',
-  'drawing.view.delete'
+  'drawing.view.delete',
+  'objectFolder.create',
+  'objectFolder.rename',
+  'objectFolder.delete',
+  'objectFolder.move'
 ] as const;
 export const EXPANDED: Readonly<Record<string, readonly string[]>> = {
   feature_operation: CAD_OPERATIONS,

@@ -174,8 +174,8 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
         draftAngleDeg: 3
       });
       expect(data).toHaveProperty('toFace.faceReference.kind', 'face');
-      // F01 took v29; D01's drawings are v30.
-      expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(30);
+      // F01 took v29, D01's drawings v30; U06's Objects folders are v34.
+      expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(34);
     });
 
     it('opens an older extrude and a v29 one exactly as written', async () => {

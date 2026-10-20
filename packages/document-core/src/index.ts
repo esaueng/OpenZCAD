@@ -22,6 +22,7 @@ export * from './sketch-reference-dimensions';
 import { assertSketchComposites, compositesWithout } from './sketch-composites';
 export * from './sketch-composites';
 export * from './drawings';
+export * from './object-folders';
 export {
   constantRigidTransform,
   rigidImportedSource
@@ -46,6 +47,7 @@ import {
   createId,
   deepClone,
   assertDrawingSet,
+  assertObjectFolderSet,
   featureColor,
   isProjectCheckpoint,
   isRevisionRecord,
@@ -860,6 +862,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   const document = withReadableHistory(input);
   // Schema v30 drawings: validated as written, never synthesized or rewritten.
   assertDrawingSet(document.drawings);
+  // Schema v34 Objects folders: validated as written, never synthesized.
+  assertObjectFolderSet(document.objectFolders);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch') {
       assertSketchReferenceDimensions(node);

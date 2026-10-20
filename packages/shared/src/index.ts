@@ -9,9 +9,11 @@ export * from './sketch-composites';
 export * from './mass-density';
 export * from './keymap-settings';
 export * from './drawings';
+export * from './object-folders';
 import type { DocumentHistory } from './document-history';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
+import type { ObjectFolderSet } from './object-folders';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
 export type ProjectId = Brand<string, 'ProjectId'>;
@@ -108,8 +110,15 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * model they were last drawn from. Additive: absent means no drawings, and
  * every older document loads unchanged. An older client would drop the
  * section on its next save, so the bump makes it refuse such a document.
+ *
+ * v34 adds the U06 Objects folders (`ProjectDocument.objectFolders`): named,
+ * nestable folders and the bodies placed in them. Organization only — no
+ * rebuild reads it. Additive: absent means no folders. An older client would
+ * drop the section on its next save, so the bump makes it refuse such a
+ * document. (v31–v33 are assigned to D02 annotations, reference images and
+ * sketch projection.)
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 30 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 34 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2927,6 +2936,11 @@ export interface ProjectDocument {
    * project has no drawings.
    */
   drawings?: DrawingSet;
+  /**
+   * U06 Objects folders (schema v34): how the bodies are organized in the
+   * Objects browser. Never read by a rebuild. Absent means no folders.
+   */
+  objectFolders?: ObjectFolderSet;
 }
 
 export interface SerializedCommand<TPayload = unknown> {

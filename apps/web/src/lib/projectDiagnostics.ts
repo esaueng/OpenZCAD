@@ -103,12 +103,14 @@ export function createProjectDiagnosticBundle(
   );
   // Drawing sheets carry title-block text (author, date, drawing number)
   // and add nothing a geometry diagnosis needs: the section and its commands
-  // are left out entirely.
+  // are left out entirely. So are the Objects folders: the user's own names,
+  // which no rebuild reads.
   const commandLog = document.commandLog
     .filter(
       (command) =>
         command.kind !== 'node.metadata.set' &&
-        !command.kind.startsWith('drawing.')
+        !command.kind.startsWith('drawing.') &&
+        !command.kind.startsWith('objectFolder.')
     )
     .map(sanitizeCommand);
   const diagnosticDocument: ProjectDocument = {
@@ -130,6 +132,8 @@ export function createProjectDiagnosticBundle(
 
   delete diagnosticDocument.editHistory;
   delete diagnosticDocument.drawings;
+  // Folder names are the user's own words and no rebuild reads them.
+  delete diagnosticDocument.objectFolders;
 
   const bodies = document.bodyOrder.flatMap((bodyId) => {
     const body = document.derived.bodyRepresentations[bodyId];
