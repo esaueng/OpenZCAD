@@ -2,7 +2,8 @@
 # .env, or a populated .dev.vars file. Never commit a populated secret file.
 AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=
-AI_MODEL=openai/gpt-6-luna
+AI_MODEL=minimax/minimax-m3.1-flash:free
+AI_DEPLOYMENT_FREE_ENABLED=true
 
 # Required only for encrypted per-user API tokens in Settings. Generate a
 # base64-encoded 32-byte key, keep it secret, and use the same key after restarts.
@@ -15,7 +16,7 @@ AI_MODEL=openai/gpt-6-luna
 # Generic secret alternative for OpenAI or responses-compatible: AI_API_KEY=
 # Optional attribution: AI_SITE_URL=http://localhost:5173
 # Optional attribution: AI_APP_NAME=OpenZCAD
-# Hosted deployment-key access: AI_DEPLOYMENT_ALLOWED_EMAILS=owner@example.com
+# Optional paid deployment-key access: AI_DEPLOYMENT_ALLOWED_EMAILS=owner@example.com
 # Scoped collaboration fallback when global flags are off: PROJECT_COLLABORATION_CANARY_EMAILS=owner@example.com,collaborator@example.com
 # Hosted custom endpoints: AI_ALLOWED_BASE_URL_HOSTS=models.example.com
 

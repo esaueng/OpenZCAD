@@ -51,8 +51,16 @@ Invalid or nonpositive overrides use the tier default. Limits are finite
 operational ceilings; the UI does not promise unlimited provider availability.
 Weights use configured output-token budgets and attachments, not token invoices.
 
-Premium grants hosted-AI eligibility alongside `AI_DEPLOYMENT_ALLOWED_EMAILS`.
-Free membership does not newly enable deployment-funded AI for all signups.
+The built-in MiniMax M3.1 Flash free model is available to every verified account
+when `AI_DEPLOYMENT_FREE_ENABLED=true`, the configured provider is OpenRouter,
+the model ID ends in `:free`, and no custom endpoint is set. Official and example
+configurations enable this option. Free requests cap provider prompt, completion
+and per-request prices at zero and retain the exact model through fallback;
+provider rate limits and availability still apply. Missing the OpenRouter key
+fails closed rather than switching the public assistant to a paid provider.
+
+Paid or private deployment models retain the existing eligibility policy:
+Premium membership or `AI_DEPLOYMENT_ALLOWED_EMAILS`.
 Personal credentials still bypass deployment-funded window quotas,
 while retaining concurrency guards. Local modeling and local export remain
 unchanged. File size, upload-session, revision retention, geometry, authentication,

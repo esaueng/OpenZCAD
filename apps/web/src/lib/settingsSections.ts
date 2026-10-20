@@ -182,7 +182,11 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'deployment',
       'test connection',
       'CAD assistant preferences',
-      'custom instructions'
+      'custom instructions',
+      'training',
+      'data use',
+      'free model',
+      'retention'
     ]
   },
   {
