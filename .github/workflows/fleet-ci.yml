@@ -205,12 +205,15 @@ jobs:
           test "$QUALITY_RESULT" = success
           test "$UNIT_RESULT" = success
           test "$VALIDATION_RESULT" = success
+  # Queue candidates, main pushes and manual dispatches start the shards at
+  # once, beside the other checks. Pull requests use `e2e-tests-pr` below.
   e2e-tests:
+    if: github.event_name != 'pull_request'
     runs-on: *fleet-runner
     # Hosted shards ran 14-21 minutes on 19 Oct, against the ~7 the weights
     # below were balanced for; rebalance with `scripts/e2e-shards.mjs --update`.
     timeout-minutes: 45
-    strategy:
+    strategy: &e2e-strategy
       fail-fast: false
       # The suite is ~80 runner-minutes of browser work at Playwright's two
       # workers per hosted runner, so it runs as parallel shards. Each shard
@@ -222,7 +225,7 @@ jobs:
       # count is mirrored in `test/e2e-shards.test.ts`.
       matrix:
         shard: [1, 2, 3, 4, 5, 6]
-    steps:
+    steps: &e2e-steps
       - *fleet-isolation
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -269,19 +272,41 @@ jobs:
           path: ${{ runner.temp }}/e2e-report-${{ matrix.shard }}.json
           if-no-files-found: warn
 
+  # On a pull request the shards wait for lint and typecheck. Hosted runners
+  # are a shared pool of concurrent jobs, and starting six browser shards on
+  # every push let superseded and lint-red pushes hold them while queue
+  # candidates waited 15-20 minutes for a runner. A push that `quality`
+  # rejects, or that a newer push cancels within those minutes, now never
+  # starts a shard. Queue candidates keep the parallel `e2e-tests` above.
+  e2e-tests-pr:
+    if: github.event_name == 'pull_request'
+    needs: quality
+    runs-on: *fleet-runner
+    timeout-minutes: 45
+    strategy: *e2e-strategy
+    steps: *e2e-steps
+
   # A single stable check context for branch protection, so the required-check
-  # list does not depend on the shard count. Runs even when a shard fails:
-  # a skipped job satisfies branch protection, so this job must run and fail
-  # explicitly whenever any shard did not succeed.
+  # list does not depend on the shard count or the event. Runs even when a
+  # shard fails: a skipped job satisfies branch protection, so this job must
+  # run and fail explicitly unless exactly one shard set ran and succeeded.
   e2e:
     timeout-minutes: 15
-    needs: e2e-tests
+    needs: [e2e-tests, e2e-tests-pr]
     if: always()
     runs-on: *fleet-runner
     steps:
       - *fleet-isolation
-      - if: needs.e2e-tests.result != 'success'
+      - name: Require one green shard set
+        env:
+          DIRECT_RESULT: ${{ needs.e2e-tests.result }}
+          PR_RESULT: ${{ needs.e2e-tests-pr.result }}
         run: |
-          echo "e2e shards result: ${{ needs.e2e-tests.result }}"
-          exit 1
-      - run: echo "all e2e shards green"
+          echo "e2e shards: direct $DIRECT_RESULT, pull request $PR_RESULT"
+          case "$DIRECT_RESULT/$PR_RESULT" in
+            success/skipped | skipped/success) echo 'all e2e shards green' ;;
+            skipped/skipped)
+              echo 'No shard ran; pull-request shards start only after quality passes.' >&2
+              exit 1 ;;
+            *) exit 1 ;;
+          esac

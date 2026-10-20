@@ -224,7 +224,16 @@ class DirectFleetTests(unittest.TestCase):
         self.assertNotIn("needs.route", TEXT)
         self.assertIn("&fleet-isolation", TEXT)
         self.assertNotIn("secrets.", TEXT)
-        for job in re.split(r"^  [\w-]+:\s*$", TEXT.split("\njobs:\n", 1)[1], flags=re.M)[1:]:
+        jobs = re.split(r"^  [\w-]+:\s*$", TEXT.split("\njobs:\n", 1)[1], flags=re.M)[1:]
+        for job in jobs:
+            alias = re.search(r"^    steps: \*([\w-]+)$", job, re.M)
+            if alias:
+                # An aliased step list is the anchored job's list verbatim, so
+                # that job's text carries the guard this one runs.
+                anchored = [other for other in jobs if f"\n    steps: &{alias[1]}\n" in other]
+                self.assertEqual(len(anchored), 1, alias[1])
+                self.assertIn("runs-on: *fleet-runner", job)
+                job = anchored[0]
             if not any(
                 marker in job
                 for marker in (
