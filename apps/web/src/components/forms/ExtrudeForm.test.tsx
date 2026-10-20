@@ -1,9 +1,18 @@
-import { createRef } from 'react';
+import { createRef, type MutableRefObject } from 'react';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { toBodyId, toSketchId, type ParamValue } from '@openzcad/shared';
-import { ExtrudeForm, reversedDistance } from './ExtrudeForm';
+import {
+  toBodyId,
+  toSketchId,
+  type ExtrudeToFaceTarget,
+  type ParamValue
+} from '@openzcad/shared';
+import {
+  ExtrudeForm,
+  reversedDistance,
+  type ExtrudeToFacePicking
+} from './ExtrudeForm';
 
 const sketchId = toSketchId('layout');
 const bodies = [{ bodyId: toBodyId('plate'), name: 'Mounting plate' }];
@@ -590,5 +599,419 @@ describe('intersect result intent (ZC-060)', () => {
         choice: { operation: 'intersect', targetBodyId: 'plate' }
       })
     );
+  });
+});
+
+describe('to-face extent and draft (F01, schema v29)', () => {
+  const face = {
+    type: 'face',
+    bodyId: toBodyId('ceiling'),
+    faceHash: 7,
+    faceReference: { kind: 'face' },
+    sourceArea: 400,
+    sourceCenter: { x: 10, y: 10, z: 25 },
+    sourceCentroid: { x: 10, y: 10, z: 25 },
+    sourceNormal: { x: 0, y: 0, z: -1 },
+    frame: {
+      origin: { x: 10, y: 10, z: 25 },
+      xAxis: { x: 1, y: 0, z: 0 },
+      yAxis: { x: 0, y: -1, z: 0 },
+      zAxis: { x: 0, y: 0, z: -1 }
+    }
+  } as unknown as ExtrudeToFaceTarget;
+
+  function picking(overrides: Partial<ExtrudeToFacePicking> = {}) {
+    return {
+      armed: false,
+      onPick: vi.fn(),
+      cancel: vi.fn(),
+      describe: () => ({ label: 'Ceiling · face', distance: 25 }),
+      setterRef: { current: null } satisfies ExtrudeToFacePicking['setterRef'],
+      ...overrides
+    } satisfies ExtrudeToFacePicking;
+  }
+
+  it('waits for the exact reach before enabling Apply and names the pending check', () => {
+    render(
+      <ExtrudeForm
+        {...base}
+        initial={{ ...initial, endCondition: 'to-face', toFace: face }}
+        toFacePicking={picking({
+          describe: () => ({
+            label: 'Ceiling · face',
+            distance: null,
+            pending: true
+          })
+        })}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Checking the target face…')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    expect(
+      screen.queryByText(/This face is not parallel/)
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers To face for any operation, arms the pick, and submits the picked face with its reach as the dormant distance', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const host = picking();
+    render(
+      <ExtrudeForm
+        {...base}
+        toFacePicking={host}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />
+    );
+    // New body: To face is offered, Through all is not.
+    const extent = screen.getByLabelText('Extent');
+    expect(
+      Array.from(extent.querySelectorAll('option'), (option) => option.value)
+    ).toEqual(['blind', 'to-face']);
+    await user.selectOptions(extent, 'to-face');
+    expect(screen.queryByRole('textbox', { name: 'Distance' })).toBeNull();
+    expect(screen.getByText('No face picked yet.')).toBeInTheDocument();
+    // Without a face there is nothing to Apply.
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Pick face' }));
+    expect(host.onPick).toHaveBeenCalledOnce();
+    act(() => host.setterRef.current?.(face));
+    expect(screen.getByText('Up to Ceiling · face')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        endCondition: 'to-face',
+        toFace: face,
+        distance: 25,
+        symmetric: false,
+        backDistance: 0
+      })
+    );
+  });
+
+  it('previews a pending face pick when history replay supplies its reach and keeps that distance when switching back', async () => {
+    const user = userEvent.setup();
+    const onDraft = vi.fn();
+    const onPreview = vi.fn();
+    const onSubmit = vi.fn();
+    const host = picking({
+      describe: () => ({
+        label: 'Ceiling · face',
+        distance: null,
+        pending: true
+      })
+    });
+    const props = {
+      ...base,
+      onDraft,
+      onPreview,
+      onSubmit,
+      onCancel: vi.fn()
+    };
+    const { rerender } = render(
+      <ExtrudeForm {...props} toFacePicking={host} />
+    );
+    act(() => host.setterRef.current?.(face));
+    expect(onPreview).toHaveBeenLastCalledWith(null);
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+
+    rerender(
+      <ExtrudeForm
+        {...props}
+        toFacePicking={{
+          ...host,
+          describe: () => ({ label: 'Ceiling · face', distance: 25 })
+        }}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+    expect(onPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        endCondition: 'to-face',
+        toFace: face,
+        distance: 25
+      })
+    );
+    expect(onDraft).toHaveBeenLastCalledWith(onPreview.mock.lastCall![0]);
+
+    await user.selectOptions(screen.getByLabelText('Extent'), 'blind');
+    expect(screen.getByRole('textbox', { name: 'Distance' })).toHaveValue('25');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ endCondition: 'blind', distance: 25 })
+    );
+  });
+
+  it('does not restore an abandoned face pick when history replay finishes', async () => {
+    const user = userEvent.setup();
+    const onPreview = vi.fn();
+    const host = picking({
+      describe: () => ({
+        label: 'Ceiling · face',
+        distance: null,
+        pending: true
+      })
+    });
+    const props = {
+      ...base,
+      onPreview,
+      onSubmit: vi.fn(),
+      onCancel: vi.fn()
+    };
+    const { rerender } = render(
+      <ExtrudeForm {...props} toFacePicking={host} />
+    );
+    act(() => host.setterRef.current?.(face));
+    await user.selectOptions(screen.getByLabelText('Extent'), 'blind');
+    const previewCount = onPreview.mock.calls.length;
+
+    rerender(
+      <ExtrudeForm
+        {...props}
+        toFacePicking={{
+          ...host,
+          describe: () => ({ label: 'Ceiling · face', distance: 25 })
+        }}
+      />
+    );
+    expect(screen.getByLabelText('Extent')).toHaveValue('blind');
+    expect(screen.getByRole('textbox', { name: 'Distance' })).toHaveValue('-8');
+    expect(onPreview).toHaveBeenCalledTimes(previewCount);
+  });
+
+  it('withdraws its pick when the card closes', () => {
+    const host = picking({ armed: true });
+    const { unmount } = render(
+      <ExtrudeForm
+        {...base}
+        toFacePicking={host}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(host.cancel).not.toHaveBeenCalled();
+    unmount();
+    expect(host.cancel).toHaveBeenCalledOnce();
+  });
+
+  it.each(['blind', 'through-all'] as const)(
+    'withdraws an armed face pick when the extent changes to %s',
+    async (endCondition) => {
+      const user = userEvent.setup();
+      const host = picking({ armed: true });
+      const onDraft = vi.fn();
+      render(
+        <ExtrudeForm
+          {...base}
+          initial={{
+            ...initial,
+            operation: 'cut',
+            targetBodyId: bodies[0]!.bodyId,
+            endCondition: 'to-face',
+            toFace: face
+          }}
+          toFacePicking={host}
+          onDraft={onDraft}
+          onSubmit={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      );
+      await user.selectOptions(screen.getByLabelText('Extent'), endCondition);
+      expect(host.cancel).toHaveBeenCalledOnce();
+      expect(onDraft).toHaveBeenLastCalledWith(
+        expect.objectContaining({ endCondition })
+      );
+      expect(screen.queryByRole('group', { name: 'Target face' })).toBeNull();
+    }
+  );
+
+  it.each([false, true])(
+    'refuses an unreachable picked face for preview and submit (creating: %s)',
+    async (creating) => {
+      const user = userEvent.setup();
+      const onSubmit = vi.fn();
+      const onPreview = vi.fn();
+      const host = picking({
+        describe: (target) => ({
+          label: 'Wall · face',
+          distance: target.faceHash === 7 ? null : 25
+        })
+      });
+      render(
+        <ExtrudeForm
+          {...base}
+          creating={creating}
+          submitLabel={creating ? 'Create' : 'Apply'}
+          initial={{
+            ...initial,
+            distance: creating ? 0 : 8,
+            endCondition: 'to-face'
+          }}
+          toFacePicking={host}
+          onSubmit={onSubmit}
+          onPreview={onPreview}
+          onCancel={vi.fn()}
+        />
+      );
+      act(() => host.setterRef.current?.(face));
+      expect(
+        screen.getByText(/not parallel to the sketch plane, or lies on it/)
+      ).toBeInTheDocument();
+      expect(onPreview).toHaveBeenLastCalledWith(null);
+      expect(
+        screen.getByRole('button', { name: creating ? 'Create' : 'Apply' })
+      ).toBeDisabled();
+      await user.click(screen.getByRole('textbox', { name: 'Name' }));
+      await user.keyboard('{Enter}');
+      expect(onSubmit).not.toHaveBeenCalled();
+
+      // Re-picking a reachable face restores both preview and submit.
+      act(() => host.setterRef.current?.({ ...face, faceHash: 8 }));
+      expect(onPreview).toHaveBeenLastCalledWith(
+        expect.objectContaining({ endCondition: 'to-face', distance: 25 })
+      );
+      await user.click(
+        screen.getByRole('button', { name: creating ? 'Create' : 'Apply' })
+      );
+      expect(onSubmit).toHaveBeenCalledOnce();
+    }
+  );
+
+  it('shows the unresolved state on reopen until a re-pick replaces the face', async () => {
+    const host = picking({ unresolved: true });
+    render(
+      <ExtrudeForm
+        {...base}
+        initial={{ ...initial, endCondition: 'to-face', toFace: face }}
+        toFacePicking={host}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/Target face is unresolved/)).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Re-pick face' })
+    ).toBeInTheDocument();
+    // Applying the unchanged, unresolved face cannot succeed.
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    act(() => host.setterRef.current?.({ ...face, faceHash: 8 }));
+    expect(screen.queryByText(/Target face is unresolved/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+  });
+
+  it('sends a non-zero dormant distance for to-face, whatever zero the field holds', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <ExtrudeForm
+        {...base}
+        initial={{
+          ...initial,
+          distance: '0 mm',
+          endCondition: 'to-face',
+          toFace: face
+        }}
+        toFacePicking={picking()}
+        onSubmit={onSubmit}
+        onCancel={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ endCondition: 'to-face', distance: 1 })
+    );
+  });
+
+  it('keeps the sign of a reach shorter than the field rounding', () => {
+    const host = picking({
+      describe: () => ({ label: 'Ledge · face', distance: -2e-7 })
+    });
+    const onDraft = vi.fn();
+    render(
+      <ExtrudeForm
+        {...base}
+        toFacePicking={host}
+        onDraft={onDraft}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    act(() => host.setterRef.current?.(face));
+    const sent = onDraft.mock.lastCall![0] as { distance: ParamValue };
+    expect(Number(sent.distance)).toBeLessThan(0);
+  });
+
+  it('returns to Distance when the viewport arrow is dragged', async () => {
+    const distanceSetterRef: MutableRefObject<
+      ((value: ParamValue) => void) | null
+    > = { current: null };
+    const onDraft = vi.fn();
+    const host = picking({ armed: true });
+    render(
+      <ExtrudeForm
+        {...base}
+        initial={{ ...initial, endCondition: 'to-face', toFace: face }}
+        toFacePicking={host}
+        distanceSetterRef={distanceSetterRef}
+        onDraft={onDraft}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    act(() => distanceSetterRef.current?.(12));
+    expect(host.cancel).toHaveBeenCalledOnce();
+    expect(onDraft).toHaveBeenLastCalledWith(
+      expect.objectContaining({ endCondition: 'blind', distance: 12 })
+    );
+    expect(screen.getByRole('textbox', { name: 'Distance' })).toHaveValue('12');
+  });
+
+  it('submits a draft angle, omits a zero one, and refuses it beside a back distance', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<ExtrudeForm {...base} onSubmit={onSubmit} onCancel={vi.fn()} />);
+    const angle = screen.getByRole('textbox', { name: 'Draft angle' });
+    expect(angle).toHaveValue('0');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit.mock.lastCall![0]).not.toHaveProperty('draftAngleDeg');
+    await user.clear(angle);
+    await user.type(angle, '5');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onSubmit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ draftAngleDeg: 5, distance: -8 })
+    );
+    const back = screen.getByRole('textbox', { name: 'Back distance' });
+    await user.clear(back);
+    await user.type(back, '2');
+    expect(
+      screen.getByText(/clear Back distance to draft it/)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    await user.clear(angle);
+    await user.type(angle, '95');
+    expect(
+      screen.getByText(/Draft must be between -89° and 89°/)
+    ).toBeInTheDocument();
+  });
+
+  it('hides the draft for a through-all cut', async () => {
+    render(
+      <ExtrudeForm
+        {...base}
+        initial={{
+          ...initial,
+          operation: 'cut',
+          targetBodyId: bodies[0]!.bodyId,
+          endCondition: 'through-all',
+          throughAllSide: 'forward'
+        }}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole('textbox', { name: 'Draft angle' })).toBeNull();
   });
 });

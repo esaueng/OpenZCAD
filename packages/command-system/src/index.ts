@@ -608,13 +608,38 @@ function validateBodyTarget(document: ProjectDocument, bodyId: BodyId): void {
   }
 }
 
+/**
+ * F01 (v29): a to-face target must name an existing body other than the
+ * extrude's own result. Where it sits in history is the history-position
+ * gate's question (every body id in the payload must come earlier), and
+ * whether the face itself still resolves there is the exact build's.
+ */
+function validateToFaceBody(
+  document: ProjectDocument,
+  input: Pick<ExtrudeInput, 'toFace'>,
+  ownBodyId: BodyId | undefined
+): void {
+  const bodyId = input.toFace?.bodyId;
+  if (bodyId === undefined) return;
+  if (bodyId === ownBodyId) {
+    throw new Error(
+      'An extrusion cannot extrude up to a face of its own result.'
+    );
+  }
+  if (!document.bodyOrder.includes(bodyId)) {
+    throw new Error(`The target face's body ${bodyId} does not exist.`);
+  }
+}
+
 function validateExtrudeInput(
   document: ProjectDocument,
-  input: ExtrudeInput
+  input: ExtrudeInput,
+  ownBodyId: BodyId | undefined = input.ids?.bodyId
 ): void {
   if (!findSketch(document, input.sketchId)) {
     throw new Error('Extrude requires an existing sketch.');
   }
+  validateToFaceBody(document, input, ownBodyId);
   const operation = input.operation ?? 'new-body';
   if (operation === 'new-body') {
     if (input.targetBodyId !== undefined) {
@@ -915,15 +940,20 @@ function validateModelingFeatureUpdate(
   validateFeatureHistoryPosition(preview, input.featureId);
   switch (feature.data.featureKind) {
     case 'extrude':
-      validateExtrudeInput(preview, {
-        name: feature.name,
-        sketchId: feature.data.sketchId,
-        distance: feature.data.distance,
-        operation: feature.data.operation,
-        targetBodyId: feature.data.targetBodyId,
-        profile: feature.data.profile,
-        profiles: feature.data.profiles
-      });
+      validateExtrudeInput(
+        preview,
+        {
+          name: feature.name,
+          sketchId: feature.data.sketchId,
+          distance: feature.data.distance,
+          operation: feature.data.operation,
+          targetBodyId: feature.data.targetBodyId,
+          profile: feature.data.profile,
+          profiles: feature.data.profiles,
+          ...(feature.data.toFace ? { toFace: feature.data.toFace } : {})
+        },
+        feature.bodyId
+      );
       // The creation-time guard keys off `input.ids`, which an update never
       // carries; the stored feature knows its own result body directly.
       if (
