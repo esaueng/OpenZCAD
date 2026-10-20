@@ -957,6 +957,8 @@ export interface ModelViewerProps {
     identity: SketchDimensionIdentity,
     offset: { x: number; y: number }
   ): void;
+  /** A relation glyph was clicked: select that relation. */
+  onSelectSketchConstraint?(constraintId: string): void;
   /** Mirrors chain/drag liveness into the interaction machine. */
   onSketchDrawingChange(drawing: boolean): void;
   /**
@@ -1851,6 +1853,7 @@ export function ModelViewer({
   onSketchCommitComposite,
   onEditSketchDimension,
   onMoveSketchDimension,
+  onSelectSketchConstraint,
   onSketchDrawingChange,
   sketchMoveEnabled = false,
   onSketchMoveChange,
@@ -2056,6 +2059,11 @@ export function ModelViewer({
   editSketchDimensionRef.current = onEditSketchDimension;
   const moveSketchDimensionRef = useRef(onMoveSketchDimension);
   moveSketchDimensionRef.current = onMoveSketchDimension;
+  const selectSketchConstraintRef = useRef(onSelectSketchConstraint);
+  selectSketchConstraintRef.current = onSelectSketchConstraint;
+  const sketchRelationsRef = useRef<ReturnType<
+    typeof buildSketchRelationGlyphs
+  > | null>(null);
   /** Separate from direct-edit overlays so body rebuilds do not erase it. */
   const measurementGroupRef = useRef<THREE.Group | null>(null);
   /**
@@ -9317,6 +9325,14 @@ export function ModelViewer({
       }
       updateDimensionLabels(context, canvasWidth(), canvasHeight());
       labelRenderer.render(scene, context.activeCamera);
+      // Relation glyphs stand off their geometry in screen space, so they
+      // are laid out against this frame's camera; a still frame writes no
+      // style and the layout allocates nothing.
+      sketchRelationsRef.current?.layout(
+        context.activeCamera,
+        canvasWidth(),
+        canvasHeight()
+      );
       avoidSketchDimensionOverlays(labelRenderer.domElement);
       if (cylinderRadiusProxyFrame && import.meta.env.OZ_PERF === '1') {
         mark('cylinder-radius.proxy-frame', {
@@ -11547,12 +11563,19 @@ export function ModelViewer({
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !sketchBasis || !sketchRelations?.length) return;
-    const overlay = buildSketchRelationGlyphs(sketchRelations, sketchBasis);
+    const overlay = buildSketchRelationGlyphs(
+      sketchRelations,
+      sketchBasis,
+      (constraintId) => selectSketchConstraintRef.current?.(constraintId)
+    );
     context.scene.add(overlay.group);
+    sketchRelationsRef.current = overlay;
     context.requestRender();
     return () => {
       context.scene.remove(overlay.group);
       overlay.dispose();
+      if (sketchRelationsRef.current === overlay)
+        sketchRelationsRef.current = null;
       context.requestRender();
     };
   }, [sketchBasis, sketchRelations]);

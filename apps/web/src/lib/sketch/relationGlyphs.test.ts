@@ -6,7 +6,7 @@ import {
   type SketchConstraintData,
   type SketchObjectData
 } from '@openzcad/shared';
-import { sketchRelationGlyphs } from './relationGlyphs';
+import { sketchRelationGlyphs, widestGap } from './relationGlyphs';
 
 const id = (value: string) => value as EntityId;
 let next = 0;
@@ -317,5 +317,144 @@ describe('sketchRelationGlyphs', () => {
       { visibility: 'always' }
     );
     expect(chips).toEqual([]);
+  });
+
+  it('hides the kinds the per-kind filter names and nothing else', () => {
+    const chips = sketchRelationGlyphs(objects, rectangle, resolve, {
+      visibility: 'always',
+      hiddenKinds: new Set(['horizontal', 'coincident'] as const)
+    });
+    const kinds = chips.flatMap((chip) => chip.glyphs.map((g) => g.kind));
+    expect(kinds).not.toContain('horizontal');
+    expect(kinds).not.toContain('coincident');
+    expect(new Set(kinds)).toEqual(new Set(['vertical', 'lock', 'parallel']));
+  });
+
+  it('marks the relation picked from its glyph as selected, on every chip it draws on', () => {
+    const parallel = String(rectangle[7]!.constraintId);
+    const chips = sketchRelationGlyphs(objects, rectangle, resolve, {
+      visibility: 'always',
+      selectedConstraintId: parallel
+    });
+    const selected = chips.flatMap((chip) =>
+      chip.glyphs
+        .filter((glyph) => glyph.selected)
+        .map((glyph) => `${chip.key}:${glyph.kind}`)
+    );
+    expect(selected.sort()).toEqual([
+      'object:bottom:parallel',
+      'object:top:parallel'
+    ]);
+  });
+
+  it('stands curve chips off a profile outward and off a circle radially', () => {
+    // The rectangle and the hole inside it; the arc beside it would move the
+    // sketch's centre off the rectangle's.
+    const chips = sketchRelationGlyphs(
+      objects.slice(0, 5),
+      [
+        ...rectangle,
+        constraint({ constraintKind: 'equal', a: id('hole'), b: id('top') })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    const normals = Object.fromEntries(
+      chips.map((chip) => [chip.key, chip.normal])
+    );
+    // Away from the sketch's centre, so the rectangle's chips sit outside it
+    // whichever way each side was drawn (`top` runs right to left).
+    expect(normals['object:bottom']!.y).toBeCloseTo(-1, 12);
+    expect(normals['object:top']!.y).toBeCloseTo(1, 12);
+    expect(normals['object:right']!.x).toBeCloseTo(1, 12);
+    expect(normals['object:left']!.x).toBeCloseTo(-1, 12);
+    expect(normals['object:hole']!.x).toBeCloseTo(Math.SQRT1_2, 12);
+    expect(normals['object:hole']!.y).toBeCloseTo(Math.SQRT1_2, 12);
+  });
+
+  it('stands a line through the sketch centre off its upper side', () => {
+    const [chip] = sketchRelationGlyphs(
+      [
+        {
+          id: 'alone',
+          data: { objectKind: 'line', x1: 5, y1: 2, x2: -5, y2: 2 }
+        }
+      ],
+      [constraint({ constraintKind: 'horizontal', objectId: id('alone') })],
+      resolve,
+      { visibility: 'always' }
+    );
+    expect(chip!.normal.x).toBeCloseTo(0, 12);
+    expect(chip!.normal.y).toBeCloseTo(1, 12);
+  });
+
+  it('stands a corner chip outside the corner, between the curves meeting there', () => {
+    const chips = sketchRelationGlyphs(objects, rectangle, resolve, {
+      visibility: 'always'
+    });
+    const origin = chips.find(
+      (chip) => chip.placement === 'point' && chip.anchor.x === 0
+    )!;
+    // `bottom` leaves the origin along +x and `left` arrives along −y, so
+    // the open side is down-left, away from the rectangle.
+    expect(origin.normal.x).toBeCloseTo(-Math.SQRT1_2, 12);
+    expect(origin.normal.y).toBeCloseTo(-Math.SQRT1_2, 12);
+  });
+
+  it('stands a midpoint chip to one side of the line passing through it', () => {
+    const chips = sketchRelationGlyphs(
+      [
+        ...objects,
+        {
+          id: 'stub',
+          data: { objectKind: 'line', x1: 10, y1: 0, x2: 10, y2: -6 }
+        }
+      ],
+      [
+        constraint({
+          constraintKind: 'midpoint',
+          point: { objectId: id('stub'), point: 'start' },
+          line: id('bottom')
+        })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    const [chip] = chips;
+    // The stub hangs down from the middle of `bottom`, which runs both ways:
+    // the widest gap left is straight up.
+    expect(chip!.normal.x).toBeCloseTo(0, 12);
+    expect(chip!.normal.y).toBeCloseTo(1, 12);
+  });
+
+  it('orders point chips before curve chips, stably, whatever the constraint order', () => {
+    const keys = (list: typeof rectangle) =>
+      sketchRelationGlyphs(objects, list, resolve, {
+        visibility: 'always'
+      }).map((chip) => `${chip.placement}:${chip.anchor.x},${chip.anchor.y}`);
+    const forward = keys(rectangle);
+    expect(keys([...rectangle].reverse())).toEqual(forward);
+    const firstObject = forward.findIndex((key) => key.startsWith('object'));
+    expect(
+      forward.slice(firstObject).every((key) => key.startsWith('object'))
+    ).toBe(true);
+    expect(forward.slice(0, firstObject)).toEqual(['point:0,0', 'point:20,0']);
+  });
+
+  it('bisects the widest gap between leaving directions', () => {
+    // One direction: straight back along it.
+    const back = widestGap([{ x: 1, y: 0 }]);
+    expect(back.x).toBeCloseTo(-1, 12);
+    expect(back.y).toBeCloseTo(0, 12);
+    // Nothing known: the default diagonal, down and to the right.
+    expect(widestGap([])).toEqual({ x: Math.SQRT1_2, y: -Math.SQRT1_2 });
+    // Three curves at 0°, 90° and 180°: the open half is below.
+    const tee = widestGap([
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+      { x: -1, y: 0 }
+    ]);
+    expect(tee.x).toBeCloseTo(0, 12);
+    expect(tee.y).toBeCloseTo(-1, 12);
   });
 });

@@ -73,6 +73,7 @@ import {
   type ControlReferenceGroup
 } from '../lib/controlReference';
 import { KeymapEditor } from './KeymapEditor';
+import { RelationGlyphFilter } from './RelationGlyphFilter';
 import { resolveKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { BrandMark } from './BrandMark';
@@ -1277,6 +1278,23 @@ export function SettingsPage({
                     onChange={(relationGlyphs) =>
                       patch({
                         sketching: { ...settings.sketching, relationGlyphs }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Glyph kinds"
+                  hint="Which relations draw a glyph."
+                >
+                  <RelationGlyphFilter
+                    hidden={settings.sketching.hiddenRelationGlyphs}
+                    disabled={settings.sketching.relationGlyphs === 'hidden'}
+                    onChange={(hiddenRelationGlyphs) =>
+                      patch({
+                        sketching: {
+                          ...settings.sketching,
+                          hiddenRelationGlyphs
+                        }
                       })
                     }
                   />

@@ -1283,6 +1283,52 @@ describe('worker api routes', () => {
     );
     expect(changed.status).toBe(200);
     expect(storedSettings.sketching.relationGlyphs).toBe('always');
+
+    // A tab from before the per-kind filter keeps the stored filter, while a
+    // newer one that sends an empty filter clears it.
+    const filtered = structuredClone(storedSettings);
+    filtered.sketching.hiddenRelationGlyphs = ['coincident', 'lock'];
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', { settings: filtered, expectedRevision: 3 }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    const beforeFilter = structuredClone(storedSettings) as unknown as {
+      appearance: { theme: string };
+      sketching: Record<string, unknown>;
+    };
+    delete beforeFilter.sketching.hiddenRelationGlyphs;
+    beforeFilter.appearance.theme = 'light';
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', {
+            settings: beforeFilter,
+            expectedRevision: 4
+          }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    expect(storedSettings.appearance.theme).toBe('light');
+    expect(storedSettings.sketching.hiddenRelationGlyphs).toEqual([
+      'coincident',
+      'lock'
+    ]);
+    const cleared = structuredClone(storedSettings);
+    cleared.sketching.hiddenRelationGlyphs = [];
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', { settings: cleared, expectedRevision: 5 }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    expect(storedSettings.sketching.hiddenRelationGlyphs).toEqual([]);
   });
 
   it('leaves rooms alone when a save keeps sharing off', async () => {

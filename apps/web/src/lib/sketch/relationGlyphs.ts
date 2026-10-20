@@ -1,8 +1,8 @@
 import type {
   SketchConstraint,
-  SketchConstraintKind,
   SketchObjectData,
   SketchPointRef,
+  SketchRelationGlyphKind,
   SketchRelationGlyphVisibility
 } from '@openzcad/shared';
 import { boundedArcSweepDegrees } from '@openzcad/geometry';
@@ -12,11 +12,7 @@ import { sketchPointPosition } from './dimensionAnnotations';
 type Point = { x: number; y: number };
 type Resolve = (value: number | string) => number | undefined;
 
-/** Relations drawn as glyphs; driving dimensions already have labels. */
-export type SketchRelationGlyphKind = Exclude<
-  SketchConstraintKind,
-  'distance' | 'radius' | 'angle'
->;
+export type { SketchRelationGlyphKind };
 
 // Every symbol must be drawn by a bundled face (test/glyph-coverage.test.ts).
 export const SKETCH_RELATION_GLYPHS: Record<
@@ -44,6 +40,8 @@ export interface SketchRelationGlyph {
   label: string;
   /** Named by a measured non-zero residual in the last solve. */
   conflicted: boolean;
+  /** The relation picked from its glyph; Delete removes it. */
+  selected?: boolean;
 }
 
 /** One cluster of glyphs drawn together at a plane-local anchor. */
@@ -52,6 +50,12 @@ export interface SketchRelationGlyphChip {
   /** On a curve (offset clear of the stroke) or on a point. */
   placement: 'object' | 'point';
   anchor: Point;
+  /**
+   * Plane-local unit direction the chip stands off along, away from the
+   * geometry it describes: a curve's outward side, or the widest gap between
+   * the curves meeting at a point. The viewer projects it every frame.
+   */
+  normal: Point;
   glyphs: SketchRelationGlyph[];
 }
 
@@ -59,6 +63,10 @@ export interface SketchRelationGlyphOptions {
   visibility: SketchRelationGlyphVisibility;
   /** With `selected`, only relations that mention this object are drawn. */
   selectedObjectId?: string | null;
+  /** The relation picked from its glyph, drawn as selected. */
+  selectedConstraintId?: string | null;
+  /** Glyph kinds the per-kind filter hides. */
+  hiddenKinds?: ReadonlySet<SketchRelationGlyphKind>;
   conflictingConstraintIds?: ReadonlySet<string>;
 }
 
@@ -82,16 +90,18 @@ export function sketchRelationGlyphs(
     const result = resolve(value);
     return result !== undefined && Number.isFinite(result) ? result : undefined;
   };
+  const centre = sketchCentre(objects, scalar);
   const chips = new Map<string, SketchRelationGlyphChip>();
   const place = (
     key: string,
     placement: SketchRelationGlyphChip['placement'],
     anchor: Point,
+    normal: Point,
     glyph: SketchRelationGlyph
   ) => {
     let chip = chips.get(key);
     if (!chip) {
-      chip = { key, placement, anchor, glyphs: [] };
+      chip = { key, placement, anchor, normal, glyphs: [] };
       chips.set(key, chip);
     }
     if (
@@ -101,19 +111,36 @@ export function sketchRelationGlyphs(
     }
   };
   const onObject = (objectId: string, glyph: SketchRelationGlyph) => {
-    const anchor = objectAnchor(byId.get(objectId), scalar);
-    if (anchor) place(`object:${objectId}`, 'object', anchor, glyph);
+    const placed = objectAnchor(byId.get(objectId), scalar, centre);
+    if (placed) {
+      place(
+        `object:${objectId}`,
+        'object',
+        placed.anchor,
+        placed.normal,
+        glyph
+      );
+    }
   };
-  // Point glyphs are clustered after every anchor is known, because the
-  // clustering tolerance depends on all of them.
-  const pointGlyphs: { anchor: Point; glyph: SketchRelationGlyph }[] = [];
-  const onPoint = (ref: SketchPointRef, glyph: SketchRelationGlyph) => {
+  // Point glyphs are clustered after every anchor is known, so a corner's
+  // relations read as one chip. `through` is a curve that passes through the
+  // point rather than ending there (a midpoint's line, an on-curve target).
+  const pointGlyphs: {
+    anchor: Point;
+    glyph: SketchRelationGlyph;
+    through?: string;
+  }[] = [];
+  const onPoint = (
+    ref: SketchPointRef,
+    glyph: SketchRelationGlyph,
+    through?: string
+  ) => {
     const anchor = sketchPointPosition(
       byId.get(ref.objectId),
       ref.point,
       scalar
     );
-    if (anchor) pointGlyphs.push({ anchor, glyph });
+    if (anchor) pointGlyphs.push({ anchor, glyph, through });
   };
 
   for (const constraint of constraints) {
@@ -131,12 +158,16 @@ export function sketchRelationGlyphs(
     ) {
       continue;
     }
+    if (options.hiddenKinds?.has(data.constraintKind)) continue;
     const constraintId = String(constraint.constraintId);
     const glyph: SketchRelationGlyph = {
       constraintId,
       kind: data.constraintKind,
       ...SKETCH_RELATION_GLYPHS[data.constraintKind],
-      conflicted: options.conflictingConstraintIds?.has(constraintId) ?? false
+      conflicted: options.conflictingConstraintIds?.has(constraintId) ?? false,
+      ...(options.selectedConstraintId === constraintId
+        ? { selected: true }
+        : {})
     };
     switch (data.constraintKind) {
       case 'horizontal':
@@ -157,7 +188,11 @@ export function sketchRelationGlyphs(
         onPoint(data.b, glyph);
         break;
       case 'midpoint':
+        onPoint(data.point, glyph, data.line);
+        break;
       case 'point-on-object':
+        onPoint(data.point, glyph, data.objectId);
+        break;
       case 'lock':
         onPoint(data.point, glyph);
         break;
@@ -168,11 +203,150 @@ export function sketchRelationGlyphs(
         break;
     }
   }
-  const clusters = clusterPoints(pointGlyphs.map(({ anchor }) => anchor));
-  pointGlyphs.forEach(({ anchor, glyph }, index) => {
-    place(`point:${clusters[index]}`, 'point', anchor, glyph);
+  // Every curve end joins the clustering as a probe, so a point chip knows
+  // which way each curve meeting there leaves it, related or not.
+  const probes: { anchor: Point; direction: Point }[] = [];
+  for (const object of objects) {
+    for (const end of curveEnds(object.data, scalar)) probes.push(end);
+  }
+  const clusters = clusterPoints([
+    ...pointGlyphs.map(({ anchor }) => anchor),
+    ...probes.map(({ anchor }) => anchor)
+  ]);
+  const directions = new Map<number, Point[]>();
+  const leaving = (cluster: number) => {
+    let list = directions.get(cluster);
+    if (!list) {
+      list = [];
+      directions.set(cluster, list);
+    }
+    return list;
+  };
+  probes.forEach(({ direction }, index) => {
+    leaving(clusters[pointGlyphs.length + index]!).push(direction);
   });
-  return [...chips.values()];
+  pointGlyphs.forEach(({ anchor, through }, index) => {
+    if (!through) return;
+    const tangent = tangentThrough(byId.get(through), anchor, scalar);
+    if (!tangent) return;
+    const list = leaving(clusters[index]!);
+    list.push(tangent, { x: -tangent.x, y: -tangent.y });
+  });
+  pointGlyphs.forEach(({ anchor, glyph }, index) => {
+    const cluster = clusters[index]!;
+    place(
+      `point:${cluster}`,
+      'point',
+      anchor,
+      widestGap(directions.get(cluster) ?? []),
+      glyph
+    );
+  });
+  return orderedChips([...chips.values()]);
+}
+
+/**
+ * The anchor order: the order chips claim screen space in. Point chips go
+ * first, since a corner has the least room and the most to say; curve chips
+ * fill in around them. Within a placement the order is by position, so it is
+ * stable across renders and independent of constraint order.
+ */
+function orderedChips(
+  chips: SketchRelationGlyphChip[]
+): SketchRelationGlyphChip[] {
+  return chips.sort(
+    (a, b) =>
+      (a.placement === b.placement ? 0 : a.placement === 'point' ? -1 : 1) ||
+      a.anchor.x - b.anchor.x ||
+      a.anchor.y - b.anchor.y ||
+      (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+  );
+}
+
+/** Standoff for a point with nothing known around it: down and to the right. */
+const DEFAULT_POINT_NORMAL: Point = { x: Math.SQRT1_2, y: -Math.SQRT1_2 };
+
+/**
+ * The bisector of the widest angular gap between the directions curves
+ * leave a point in: opposite a lone line's end, outside a corner, and to
+ * one side of a line passing straight through.
+ */
+export function widestGap(directions: readonly Point[]): Point {
+  const angles = directions
+    .filter(({ x, y }) => Math.hypot(x, y) > 1e-12)
+    .map(({ x, y }) => Math.atan2(y, x))
+    .sort((a, b) => a - b);
+  if (angles.length === 0) return DEFAULT_POINT_NORMAL;
+  let bestGap = -1;
+  let bestStart = 0;
+  for (let index = 0; index < angles.length; index += 1) {
+    const start = angles[index]!;
+    const end =
+      index + 1 < angles.length ? angles[index + 1]! : angles[0]! + 2 * Math.PI;
+    // Ties keep the first gap, so a straight line's standoff side is stable.
+    if (end - start > bestGap + 1e-9) {
+      bestGap = end - start;
+      bestStart = start;
+    }
+  }
+  const angle = bestStart + bestGap / 2;
+  return { x: Math.cos(angle), y: Math.sin(angle) };
+}
+
+/** Each line and arc end, with the unit direction the curve leaves it in. */
+function curveEnds(
+  data: SketchObjectData,
+  scalar: (value: number | string) => number | undefined
+): { anchor: Point; direction: Point }[] {
+  if (data.objectKind === 'line') {
+    const start = sketchPointPosition(data, 'start', scalar);
+    const end = sketchPointPosition(data, 'end', scalar);
+    if (!start || !end) return [];
+    const length = Math.hypot(end.x - start.x, end.y - start.y);
+    if (!(length > 0)) return [];
+    const ux = (end.x - start.x) / length;
+    const uy = (end.y - start.y) / length;
+    return [
+      { anchor: start, direction: { x: ux, y: uy } },
+      { anchor: end, direction: { x: -ux, y: -uy } }
+    ];
+  }
+  if (data.objectKind !== 'arc') return [];
+  const start = sketchPointPosition(data, 'start', scalar);
+  const end = sketchPointPosition(data, 'end', scalar);
+  const startDeg = scalar(data.startAngleDeg);
+  const endDeg = scalar(data.endAngleDeg);
+  if (!start || !end || startDeg === undefined || endDeg === undefined) {
+    return [];
+  }
+  // Arcs run counter-clockwise from start to end: the tangent leaving the
+  // start is the radius turned +90°, the one leaving the end turned −90°.
+  const a = (startDeg * Math.PI) / 180;
+  const b = (endDeg * Math.PI) / 180;
+  return [
+    { anchor: start, direction: { x: -Math.sin(a), y: Math.cos(a) } },
+    { anchor: end, direction: { x: Math.sin(b), y: -Math.cos(b) } }
+  ];
+}
+
+/** A curve's unit tangent at a point on (or near) it. */
+function tangentThrough(
+  data: SketchObjectData | undefined,
+  at: Point,
+  scalar: (value: number | string) => number | undefined
+): Point | null {
+  if (!data) return null;
+  if (data.objectKind === 'line') {
+    const ends = curveEnds(data, scalar);
+    return ends[0]?.direction ?? null;
+  }
+  if (data.objectKind !== 'circle' && data.objectKind !== 'arc') return null;
+  const cx = scalar(data.centerX);
+  const cy = scalar(data.centerY);
+  if (cx === undefined || cy === undefined) return null;
+  const length = Math.hypot(at.x - cx, at.y - cy);
+  if (!(length > 0)) return null;
+  return { x: -(at.y - cy) / length, y: (at.x - cx) / length };
 }
 
 /**
@@ -220,11 +394,51 @@ function clusterPoints(points: readonly Point[]): number[] {
   return ids;
 }
 
-/** Where a curve's own relations sit: a line's middle, a circle's 45°, an arc's mid-sweep. */
-function objectAnchor(
-  data: SketchObjectData | undefined,
+/** The middle of the sketch's line and circle extent, or null when empty. */
+function sketchCentre(
+  objects: readonly { data: SketchObjectData }[],
   scalar: (value: number | string) => number | undefined
 ): Point | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const grow = (x: number, y: number, reach = 0) => {
+    minX = Math.min(minX, x - reach);
+    minY = Math.min(minY, y - reach);
+    maxX = Math.max(maxX, x + reach);
+    maxY = Math.max(maxY, y + reach);
+  };
+  for (const { data } of objects) {
+    if (data.objectKind === 'line') {
+      for (const end of curveEnds(data, scalar))
+        grow(end.anchor.x, end.anchor.y);
+    } else if (data.objectKind === 'circle' || data.objectKind === 'arc') {
+      const cx = scalar(data.centerX);
+      const cy = scalar(data.centerY);
+      const radius = scalar(data.radius);
+      if (cx !== undefined && cy !== undefined && radius !== undefined) {
+        grow(cx, cy, Math.abs(radius));
+      }
+    }
+  }
+  return Number.isFinite(minX)
+    ? { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
+    : null;
+}
+
+/**
+ * Where a curve's own relations sit — a line's middle, a circle's 45°, an
+ * arc's mid-sweep — and the side they stand off to: a circle's or arc's
+ * outside, and a line's side away from the sketch's centre, so a closed
+ * profile's chips sit outside it. A line through the centre takes its upper
+ * side (its right side when vertical).
+ */
+function objectAnchor(
+  data: SketchObjectData | undefined,
+  scalar: (value: number | string) => number | undefined,
+  centre: Point | null
+): { anchor: Point; normal: Point } | null {
   if (!data) return null;
   if (data.objectKind === 'line') {
     const x1 = scalar(data.x1);
@@ -239,7 +453,24 @@ function objectAnchor(
     ) {
       return null;
     }
-    return { x: (x1 + x2) / 2, y: (y1 + y2) / 2 };
+    const length = Math.hypot(x2 - x1, y2 - y1);
+    let normal: Point =
+      length > 0
+        ? { x: -(y2 - y1) / length, y: (x2 - x1) / length }
+        : { x: 0, y: 1 };
+    const anchor = { x: (x1 + x2) / 2, y: (y1 + y2) / 2 };
+    const away = centre
+      ? normal.x * (anchor.x - centre.x) + normal.y * (anchor.y - centre.y)
+      : 0;
+    const tolerance = 1e-9 * Math.max(1, length);
+    if (
+      away < -tolerance ||
+      (Math.abs(away) <= tolerance &&
+        (normal.y < -1e-9 || (Math.abs(normal.y) <= 1e-9 && normal.x < 0)))
+    ) {
+      normal = { x: -normal.x, y: -normal.y };
+    }
+    return { anchor, normal };
   }
   if (data.objectKind !== 'circle' && data.objectKind !== 'arc') return null;
   const cx = scalar(data.centerX);
@@ -258,8 +489,9 @@ function objectAnchor(
     }
   }
   const radians = (angleDeg * Math.PI) / 180;
+  const normal = { x: Math.cos(radians), y: Math.sin(radians) };
   return {
-    x: cx + radius * Math.cos(radians),
-    y: cy + radius * Math.sin(radians)
+    anchor: { x: cx + radius * normal.x, y: cy + radius * normal.y },
+    normal
   };
 }

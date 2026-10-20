@@ -253,7 +253,10 @@ import {
   type DrivingDimensionKind
 } from './lib/sketch/constraints';
 import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
-import { sketchRelationGlyphs } from './lib/sketch/relationGlyphs';
+import {
+  SKETCH_RELATION_GLYPHS,
+  sketchRelationGlyphs
+} from './lib/sketch/relationGlyphs';
 import {
   sketchGeometryDeleteRefusal,
   sketchSolveEvidenceKey
@@ -14773,6 +14776,10 @@ export function App() {
     interaction.mode === 'sketch' && interaction.session.sketchId && doc
       ? (findSketch(doc, interaction.session.sketchId as SketchId) ?? null)
       : null;
+  const selectedSketchConstraintId =
+    interaction.mode === 'sketch'
+      ? (interaction.session.selectedConstraintId ?? null)
+      : null;
   const sketchRelationChips = useMemo(
     () =>
       sketchModeState && doc
@@ -14785,6 +14792,10 @@ export function App() {
             {
               visibility: appSettings.sketching.relationGlyphs,
               selectedObjectId: sketchModeState.selectedObjectId,
+              selectedConstraintId: selectedSketchConstraintId,
+              hiddenKinds: new Set(
+                appSettings.sketching.hiddenRelationGlyphs
+              ),
               conflictingConstraintIds: new Set(
                 sketchSolveStatus?.conflictingConstraintIds ?? []
               )
@@ -14797,6 +14808,8 @@ export function App() {
       editingSketchNode,
       parameterScope.scope,
       appSettings.sketching.relationGlyphs,
+      appSettings.sketching.hiddenRelationGlyphs,
+      selectedSketchConstraintId,
       sketchSolveStatus
     ]
   );
@@ -15955,6 +15968,21 @@ export function App() {
     setStatus(`Selected ${target.label}, referenced by this constraint.`);
   }
 
+  /** A relation glyph was clicked: select that relation for Delete. */
+  function handleSelectSketchConstraint(constraintId: string) {
+    const constraint = editingSketchNode?.constraints?.find(
+      (candidate) => String(candidate.constraintId) === constraintId
+    );
+    if (!constraint || sketchSolving || geometryBusy) return;
+    const kind = constraint.data.constraintKind;
+    const label =
+      kind === 'distance' || kind === 'radius' || kind === 'angle'
+        ? 'dimension'
+        : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
+    dispatchInteraction({ type: 'sketch-select-constraint', constraintId });
+    setStatus(`Selected ${label}. Press Delete to remove it.`);
+  }
+
   function handleDeleteSketchConstraint(constraintId: string) {
     if (!editingSketchNode) {
       return;
@@ -15971,6 +15999,12 @@ export function App() {
       )
     ) {
       setSketchSolveStatus(null);
+      if (selectedSketchConstraintId === constraintId) {
+        dispatchInteraction({
+          type: 'sketch-select-constraint',
+          constraintId: null
+        });
+      }
       setStatus('Deleted constraint.');
     }
   }
@@ -19965,6 +19999,29 @@ export function App() {
           startExtrude(interaction.session.sketchId as SketchId);
           return;
         }
+        // A relation picked from its glyph is the narrower selection, so
+        // Delete removes it before it would remove the entity it sits on.
+        // An undo can remove the relation under its selection; that pick no
+        // longer exists, so the key falls through to the entity.
+        const selectedConstraintId = editingSketchNode?.constraints?.some(
+          (constraint) =>
+            String(constraint.constraintId) ===
+            interaction.session.selectedConstraintId
+        )
+          ? interaction.session.selectedConstraintId
+          : null;
+        if (
+          (event.key === 'Delete' || event.key === 'Backspace') &&
+          !meta &&
+          !event.altKey &&
+          selectedConstraintId
+        ) {
+          event.preventDefault();
+          if (!sketchSolving && !geometryBusy) {
+            handleDeleteSketchConstraint(selectedConstraintId);
+          }
+          return;
+        }
         if (
           (event.key === 'Delete' || event.key === 'Backspace') &&
           !meta &&
@@ -22290,6 +22347,7 @@ export function App() {
             }}
             onEditSketchDimension={handleEditSketchDimension}
             onMoveSketchDimension={handleMoveSketchDimension}
+            onSelectSketchConstraint={handleSelectSketchConstraint}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }

@@ -3484,6 +3484,37 @@ export type SettingsPointerNavigation = 'auto' | 'mouse' | 'trackpad';
  * those that mention the selected entity, or none. Presentation only.
  */
 export type SketchRelationGlyphVisibility = 'always' | 'selected' | 'hidden';
+/** Relations drawn as glyphs; driving dimensions already have labels. */
+export type SketchRelationGlyphKind = Exclude<
+  SketchConstraintKind,
+  'distance' | 'radius' | 'angle'
+>;
+/** Every glyph kind, in the order the per-kind filter lists them. */
+export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [
+  'horizontal',
+  'vertical',
+  'parallel',
+  'perpendicular',
+  'tangent',
+  'coincident',
+  'equal',
+  'concentric',
+  'symmetric',
+  'point-on-object',
+  'midpoint',
+  'lock'
+];
+
+/**
+ * A stored per-kind glyph filter, read leniently: unknown kinds (from a newer
+ * client) and duplicates drop out, and the kinds come back in filter order.
+ */
+export function normalizeHiddenRelationGlyphs(
+  value: unknown
+): SketchRelationGlyphKind[] {
+  if (!Array.isArray(value)) return [];
+  return SKETCH_RELATION_GLYPH_KINDS.filter((kind) => value.includes(kind));
+}
 export type AssistantProvider =
   'openrouter' | 'openai' | 'responses-compatible';
 export type AssistantCredentialSource = 'deployment' | 'personal';
@@ -3543,6 +3574,8 @@ export interface AppSettings {
     /** Screen-space radius used for sketch snap candidates. */
     snapTolerancePx: number;
     relationGlyphs: SketchRelationGlyphVisibility;
+    /** Glyph kinds the per-kind filter hides; presentation only. */
+    hiddenRelationGlyphs: SketchRelationGlyphKind[];
   };
   /**
    * How work reaches the account. There is no toggle for the device write —
@@ -3660,7 +3693,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     linearSnap: 1,
     angleSnap: 15,
     snapTolerancePx: 10,
-    relationGlyphs: 'selected'
+    relationGlyphs: 'selected',
+    hiddenRelationGlyphs: []
   },
   files: {
     cloudAutosave: true,

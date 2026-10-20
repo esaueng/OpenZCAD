@@ -94,6 +94,7 @@ import {
   parseAssistantCredential,
   parseUpdateAppSettingsRequest,
   settingsRequestOmitsKeymap,
+  settingsRequestOmitsHiddenRelationGlyphs,
   settingsRequestOmitsRelationGlyphs,
   resolveUserAssistant,
   saveAssistantCredential,
@@ -1203,10 +1204,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       env,
       session.email,
       // A client from before remapping sends no keymap, and one from before
-      // relation glyphs no glyph preference: keep the stored ones.
+      // relation glyphs (or their per-kind filter) no glyph preference: keep
+      // the stored ones.
       {
         keepStoredKeymap: settingsRequestOmitsKeymap(body),
-        keepStoredRelationGlyphs: settingsRequestOmitsRelationGlyphs(body)
+        keepStoredRelationGlyphs: settingsRequestOmitsRelationGlyphs(body),
+        keepStoredHiddenRelationGlyphs:
+          settingsRequestOmitsHiddenRelationGlyphs(body)
       }
     );
     // Only the switch turning off is news to the rooms. Settings save on every

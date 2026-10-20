@@ -171,6 +171,44 @@ describe('application settings', () => {
     ).toBe('hidden');
   });
 
+  it('keeps the per-kind glyph filter, dropping unknown kinds and absent fields', () => {
+    expect(defaultAppSettings().sketching.hiddenRelationGlyphs).toEqual([]);
+    // Unknown kinds (a newer client's) and duplicates drop out; the kinds come
+    // back in filter order.
+    expect(
+      normalizeAppSettings({
+        sketching: {
+          hiddenRelationGlyphs: ['lock', 'spiral', 'horizontal', 'lock', 3]
+        }
+      }).sketching.hiddenRelationGlyphs
+    ).toEqual(['horizontal', 'lock']);
+    expect(
+      normalizeAppSettings({ sketching: { hiddenRelationGlyphs: 'lock' } })
+        .sketching.hiddenRelationGlyphs
+    ).toEqual([]);
+
+    const older = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      sketching: Record<string, unknown>;
+    };
+    delete older.sketching.hiddenRelationGlyphs;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings: older },
+        'development'
+      ).settings.sketching.hiddenRelationGlyphs
+    ).toEqual([]);
+    const filtered = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      sketching: Record<string, unknown>;
+    };
+    filtered.sketching.hiddenRelationGlyphs = ['coincident', 'future-kind'];
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings: filtered },
+        'development'
+      ).settings.sketching.hiddenRelationGlyphs
+    ).toEqual(['coincident']);
+  });
+
   it('strictly validates account settings and compatible endpoints', () => {
     const settings = deepClone(DEFAULT_APP_SETTINGS);
     settings.assistant.credentialSource = 'personal';
