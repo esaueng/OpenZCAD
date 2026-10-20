@@ -248,6 +248,27 @@ test('wireframe face sweeps take only the faces made visible by X-ray', async ({
   page
 }) => {
   await createBox(page, 'Wireframe Face Sweep');
+  const facePolicy = () =>
+    canvas(page).evaluate(
+      (element) =>
+        new Promise<{ visible: boolean; opacity: number }[]>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-render-policy', {
+              detail: {
+                resolve: (policy: {
+                  bodyFaces: { visible: boolean; opacity: number }[];
+                }) =>
+                  resolve(
+                    policy.bodyFaces.map(({ visible, opacity }) => ({
+                      visible,
+                      opacity
+                    }))
+                  )
+              }
+            })
+          );
+        })
+    );
   await topView(page);
   const display = displayButton(page);
   for (
@@ -259,21 +280,30 @@ test('wireframe face sweeps take only the faces made visible by X-ray', async ({
     await display.click();
   }
   await expect(display).toHaveAttribute('aria-label', /now: Wireframe$/);
+  await expect.poll(facePolicy).toEqual([{ visible: false, opacity: 1 }]);
   await setSelectionFilter(page, 'Face');
   const { minX, minY, maxX, maxY, maxZ, pad } = await boxExtent(page);
   const left: [number, number, number] = [minX - pad, maxY + pad, maxZ];
   const right: [number, number, number] = [maxX + pad, minY - pad, maxZ];
   await sweep(page, left, right);
   await expect(canvas(page)).not.toHaveAttribute('data-e2e-focus-faces', /.+/);
-  await expect(canvas(page)).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+  await expect(canvas(page)).not.toHaveAttribute(
+    'data-e2e-selected-face',
+    /.+/
+  );
 
   await toggleXray(page);
+  await expect.poll(facePolicy).toEqual([{ visible: true, opacity: 0.35 }]);
   await sweep(page, left, right);
   await expect(canvas(page)).toHaveAttribute('data-e2e-focus-faces', '6');
   await toggleXray(page);
+  await expect.poll(facePolicy).toEqual([{ visible: false, opacity: 1 }]);
   await sweep(page, [right[0], left[1], maxZ], [left[0], right[1], maxZ]);
   await expect(canvas(page)).not.toHaveAttribute('data-e2e-focus-faces', /.+/);
-  await expect(canvas(page)).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+  await expect(canvas(page)).not.toHaveAttribute(
+    'data-e2e-selected-face',
+    /.+/
+  );
 });
 
 test('a box takes the faces in view, and every face in X-ray', async ({

@@ -65,7 +65,12 @@ export function makeLabel(className: string, text: string): CSS2DObject {
  * tessellated face mesh. Three's material wireframe exposes every render
  * triangle, which is useful for mesh debugging but is not a CAD wireframe.
  */
-export function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
+export function applyDisplayMode(
+  bodyGroup: THREE.Group,
+  mode: DisplayMode,
+  xray = false
+) {
+  const facesVisible = mode !== 'wireframe' || xray;
   bodyGroup.traverse((child: THREE.Object3D) => {
     if (child.userData.exactSection === true) {
       // Only the cut SURFACE follows the display mode. The section curves
@@ -77,20 +82,20 @@ export function applyDisplayMode(bodyGroup: THREE.Group, mode: DisplayMode) {
       if (child instanceof THREE.Mesh) {
         const material = (child as THREE.Mesh).material;
         if (material instanceof THREE.Material) {
-          material.visible = mode !== 'wireframe';
+          material.visible = facesVisible;
         }
       }
     } else if (isViewerMesh(child) || child.userData.sectionCap === true) {
       const mesh = child as ViewerMesh;
-      mesh.material.visible = mode !== 'wireframe';
+      mesh.material.visible = facesVisible;
       mesh.material.wireframe = false;
     } else if (child.userData.ownColourFill === true) {
-      // A selected face's fill in the body's own material: a wireframe
-      // shows no faces, so it goes with them and the rim carries the pick.
-      child.visible = mode !== 'wireframe';
+      // A selected face follows the body's surfaces, including the
+      // translucent faces X-ray displays over wireframe.
+      child.visible = facesVisible;
       // The fill may have cloned its body's hidden material while in
       // wireframe. Restore both visibility gates when faces return.
-      (child as ViewerMesh).material.visible = mode !== 'wireframe';
+      (child as ViewerMesh).material.visible = facesVisible;
     } else if (child instanceof THREE.LineSegments || child instanceof Line2) {
       child.visible = mode !== 'shaded';
       child.userData.displayMode = mode;

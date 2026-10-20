@@ -48,9 +48,10 @@ export class MoveCopyPreview {
     forEachMesh(this.source, (mesh) => {
       opacity = mesh.material.opacity;
     });
-    forEachMesh(this.copy, (mesh) =>
-      updateBodyMaterialOpacity(mesh.material, opacity)
-    );
+    forEachMesh(this.copy, (mesh) => {
+      updateBodyMaterialOpacity(mesh.material, opacity);
+      mesh.material.visible = mode !== 'wireframe' || xray;
+    });
     this.copy.traverse((child) => {
       if (child instanceof BodyEdgeOverlay) {
         child.setDisplayMode(mode);

@@ -48,6 +48,30 @@ function body(bodyId = 'body_1') {
 }
 
 describe('exact section geometry in the viewport', () => {
+  it('shows an exact cut arriving during wireframe X-ray and hides it again with X-ray off', () => {
+    const { group, mesh } = body();
+    mesh.material.opacity = 0.35;
+    applyDisplayMode(group, 'wireframe', true);
+    applySectionPlane(group, sectionClippingPlane({ plane: 'XY', offset: 1 }), {
+      regions: [region()],
+      displayMode: 'wireframe',
+      xray: true
+    });
+    const fill = group.getObjectByName(`${EXACT_SECTION}-fill`) as THREE.Mesh<
+      THREE.BufferGeometry,
+      THREE.MeshPhongMaterial
+    >;
+    expect(fill.material.visible).toBe(true);
+    expect(fill.material.opacity).toBe(0.35);
+    const curves = group.getObjectByName(`${EXACT_SECTION}-curve`);
+    applyDisplayMode(group, 'wireframe', false);
+    expect(fill.material.visible).toBe(false);
+    expect(curves).toBeDefined();
+    expect(curves!.visible).toBe(true);
+    applyDisplayMode(group, 'wireframe', true);
+    expect(fill.material.visible).toBe(true);
+  });
+
   it('keeps supporting a numeric opacity snapshot', () => {
     const root = new THREE.Group();
     applyExactSection(

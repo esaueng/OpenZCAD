@@ -2591,7 +2591,7 @@ export function ModelViewer({
             edges.setDisplayMode(displayModeRef.current);
             mesh.add(edges);
             copy.add(mesh);
-            applyDisplayMode(copy, displayModeRef.current);
+            applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
             return copy;
           });
           moveCopyPreview.refreshAppearance(
@@ -4679,6 +4679,8 @@ export function ModelViewer({
               bounds: { min: number[]; max: number[] };
             }[];
             bodyFaces: {
+              visible: boolean;
+              opacity: number;
               depthTest: boolean;
               depthWrite: boolean;
               polygonOffset: boolean;
@@ -4709,6 +4711,8 @@ export function ModelViewer({
         return;
       }
       const bodyFaces: {
+        visible: boolean;
+        opacity: number;
         bounds?: { min: number[]; max: number[] };
         worldBounds?: { min: number[]; max: number[] };
         depthTest: boolean;
@@ -4724,6 +4728,8 @@ export function ModelViewer({
           ?.clone()
           .applyMatrix4(mesh.matrixWorld);
         bodyFaces.push({
+          visible: mesh.visible && mesh.material.visible,
+          opacity: mesh.material.opacity,
           depthTest: mesh.material.depthTest,
           depthWrite: mesh.material.depthWrite,
           polygonOffset: mesh.material.polygonOffset,
@@ -10127,10 +10133,11 @@ export function ModelViewer({
           ? VIEWPORT_RENDER_ORDER.SELECTED_FACE_FILL
           : VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
         fill.userData.selectionOverlay = true;
-        // A shaded face in a wireframe would contradict the mode; the rim
-        // still carries the selection there (see applyDisplayMode).
+        // The fill follows the body: ordinary wireframe uses its rim,
+        // while X-ray displays translucent surfaces (see applyDisplayMode).
         fill.userData.ownColourFill = ownColour;
-        fill.visible = !ownColour || displayModeRef.current !== 'wireframe';
+        fill.visible =
+          !ownColour || displayModeRef.current !== 'wireframe' || xrayRef.current;
         fill.raycast = () => undefined;
         context.fadeIns.add(material);
         return fill;
@@ -10393,7 +10400,11 @@ export function ModelViewer({
     }
 
     if (bodiesChanged) {
-      applyDisplayMode(context.bodyGroup, displayModeRef.current);
+      applyDisplayMode(
+        context.bodyGroup,
+        displayModeRef.current,
+        xrayRef.current
+      );
     }
     context.moveCopyPreview.refreshAppearance(
       displayModeRef.current,
@@ -10409,7 +10420,8 @@ export function ModelViewer({
       exactSectionRef.current
         ? {
             regions: exactSectionRef.current,
-            displayMode: displayModeRef.current
+            displayMode: displayModeRef.current,
+            xray: xrayRef.current
           }
         : null
     );
@@ -12246,7 +12258,11 @@ export function ModelViewer({
         context.activeCamera,
         settings.showGrid
       );
-      applyDisplayMode(context.bodyGroup, settings.displayMode);
+      applyDisplayMode(
+        context.bodyGroup,
+        settings.displayMode,
+        settings.xray === true
+      );
       for (const edgeOverlay of context.edgeOverlaysByBodyId.values()) {
         edgeOverlay.setDisplayMode(settings.displayMode);
       }
@@ -12256,7 +12272,7 @@ export function ModelViewer({
       );
       context.requestRender();
     }
-  }, [settings.showGrid, settings.displayMode]);
+  }, [settings.showGrid, settings.displayMode, settings.xray]);
 
   useEffect(() => {
     const context = contextRef.current;
@@ -12270,7 +12286,11 @@ export function ModelViewer({
       // owns a mode CHANGE, and re-running this one for it would rebuild the
       // section geometry to no purpose.
       exactSection
-        ? { regions: exactSection, displayMode: displayModeRef.current }
+        ? {
+            regions: exactSection,
+            displayMode: displayModeRef.current,
+            xray: xrayRef.current
+          }
         : null
     );
     // The frozen ground shadow must follow the cut, not the uncut silhouette.

@@ -24,6 +24,38 @@ function bodyWithEdges() {
 }
 
 describe('applyDisplayMode', () => {
+  it('shows wireframe surfaces only while X-ray is active, including fills and caps', () => {
+    const { group, body, edges } = bodyWithEdges();
+    const surfaces = [body];
+    for (const flag of ['ownColourFill', 'sectionCap', 'exactSection']) {
+      const surface = new THREE.Mesh(
+        body.geometry.clone(),
+        body.material.clone()
+      );
+      surface.userData[flag] = true;
+      if (flag === 'ownColourFill') surface.userData.selectionOverlay = true;
+      body.add(surface);
+      surfaces.push(surface);
+    }
+    for (const xray of [false, true, false, true]) {
+      applyDisplayMode(group, 'wireframe', xray);
+      for (const surface of surfaces) {
+        expect(surface.visible).toBe(
+          surface.userData.ownColourFill ? xray : true
+        );
+        expect(surface.material.visible).toBe(xray);
+        expect(surface.material.wireframe).toBe(false);
+      }
+      expect(edges.visible).toBe(true);
+      expect(edges.material.color.getHex()).toBe(EDGE_WIREFRAME_COLOR);
+    }
+    applyDisplayMode(group, 'shaded');
+    expect(
+      surfaces.every((surface) => surface.visible && surface.material.visible)
+    ).toBe(true);
+    expect(edges.visible).toBe(false);
+  });
+
   it('restores a selected face made while its body was in wireframe', () => {
     const { group, body } = bodyWithEdges();
     applyDisplayMode(group, 'wireframe');

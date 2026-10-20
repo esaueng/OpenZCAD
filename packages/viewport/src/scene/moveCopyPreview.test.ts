@@ -6,6 +6,36 @@ import { createBodyEdgeOverlay } from '../render/edgeOverlay';
 import { toBodyId } from '@openzcad/shared';
 
 describe('a pending Move copy', () => {
+  it('updates cached copy surface visibility when wireframe X-ray changes', () => {
+    const root = new THREE.Group();
+    const source = new THREE.Mesh(
+      new THREE.BoxGeometry(),
+      new THREE.MeshPhongMaterial()
+    );
+    root.add(source);
+    const preview = new MoveCopyPreview();
+    const copy = new THREE.Mesh(
+      new THREE.BoxGeometry(),
+      new THREE.MeshPhongMaterial()
+    );
+    preview.target(source, true, () => copy);
+    copy.position.x = 40;
+    for (const xray of [false, true, false, true]) {
+      source.material.opacity = xray ? 0.35 : 1;
+      preview.refreshAppearance('wireframe', xray);
+      expect(copy.material.visible).toBe(xray);
+      expect(copy.material.opacity).toBe(xray ? 0.35 : 1);
+      expect(copy.position.x).toBe(40);
+      expect(
+        preview.target(source, true, () => {
+          throw new Error('cached copy replaced');
+        })
+      ).toBe(copy);
+    }
+    preview.refreshAppearance('shaded', false);
+    expect(copy.material.visible).toBe(true);
+  });
+
   it.each([1, 0.6])(
     'refreshes the cached copy from source opacity and X-ray (appearance: %s)',
     (appearance) => {

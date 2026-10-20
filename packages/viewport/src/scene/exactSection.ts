@@ -67,6 +67,8 @@ export interface ExactSectionRegionDisplay {
 export type ExactSectionDisplay = {
   readonly regions: readonly ExactSectionRegionDisplay[];
   readonly displayMode: DisplayMode;
+  /** X-ray shows translucent surfaces over any underlying display mode. */
+  readonly xray?: boolean;
 } | null;
 
 function disposeSection(group: THREE.Object3D) {
@@ -113,7 +115,7 @@ export function applyExactSection(
   if (!display || display.regions.length === 0) {
     return;
   }
-  const { regions, displayMode } = display;
+  const { regions, displayMode, xray = false } = display;
   const group = new THREE.Group();
   group.name = EXACT_SECTION;
   group.userData.exactSection = true;
@@ -140,10 +142,9 @@ export function applyExactSection(
         transparent: opacity < 1,
         depthWrite: opacity >= 1,
         // Wireframe shows outlines, and the cut surface is not one. The
-        // display-mode pass writes this same flag, but it only runs when
-        // the MODE changes — a section arriving into wireframe has to be
-        // built hidden or it appears shaded until the next cycle.
-        visible: displayMode !== 'wireframe',
+        // The display-mode pass writes the same flag when mode or X-ray
+        // changes. A newly arriving cut must already match both settings.
+        visible: displayMode !== 'wireframe' || xray,
         // The cut surface lies in the clipping plane itself; without the
         // offset it fights the clipped body's own edge for the same depth.
         polygonOffset: true,
