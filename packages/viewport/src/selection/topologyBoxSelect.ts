@@ -123,8 +123,7 @@ function screenInterval(
  */
 function depthClippingPlanes(camera: THREE.Camera): THREE.Plane[] {
   const { near, far } = camera as
-    | THREE.PerspectiveCamera
-    | THREE.OrthographicCamera;
+    THREE.PerspectiveCamera | THREE.OrthographicCamera;
   const forward = camera.getWorldDirection(new THREE.Vector3());
   const origin = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
   return [
@@ -365,7 +364,12 @@ class DepthGrid {
     return this.originY + (row + 0.5) * this.cell;
   }
 
-  rasterize(bodies: ProjectedBody[]) {
+  /**
+   * `cullBackFaces` follows the renderer: bodies draw front faces only
+   * unless a section switches them to both sides, so without one a wall seen
+   * from inside (past a near plane that cuts the body) hides nothing.
+   */
+  rasterize(bodies: ProjectedBody[], cullBackFaces: boolean) {
     bodies.forEach((projected, bodyIndex) => {
       const { candidate, points, keys } = projected;
       const triangleCount = Math.floor(candidate.indices.length / 3);
@@ -378,6 +382,13 @@ class DepthGrid {
         const c = points[ic];
         // Near-plane clipping is not represented here, as in bodiesInBox.
         if (!a || !b || !c || a.behind || b.behind || c.behind) {
+          continue;
+        }
+        // Screen y runs down, so a front face has a negative signed area.
+        if (
+          cullBackFaces &&
+          (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) >= 0
+        ) {
           continue;
         }
         const minColumn = Math.max(
@@ -756,7 +767,7 @@ export function topologyInBox(
   let grid: DepthGrid | null = null;
   if (!options.selectThrough) {
     grid = new DepthGrid(rect);
-    grid.rasterize(bodies);
+    grid.rasterize(bodies, !options.clippingPlane);
   }
   return options.kind === 'face'
     ? faceSelections(bodies, rect, mode, grid)

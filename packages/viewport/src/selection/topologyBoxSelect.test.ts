@@ -222,6 +222,17 @@ describe('box selection through the camera near plane', () => {
     expect(edges).toContain('edge-vertical-front-left');
     expect(edges).toContain('edge-bottom-front');
   });
+
+  it('takes no inner wall the renderer culls as a back face', () => {
+    // With the lid clipped away the camera looks into the cube, and every wall
+    // it sees is the back of a face: drawn front-side only, none shows.
+    expect(
+      topologyInBox([cube()], rect, 'crossing', {
+        ...options('face'),
+        selectThrough: false
+      })
+    ).toEqual([]);
+  });
 });
 
 describe('box selection through the camera far plane', () => {
