@@ -1,8 +1,10 @@
 import type { ExactSectionPlane } from '@openzcad/kernel-adapter/exact';
-import type {
-  BodyId,
-  GeometryBodyRepresentation,
-  ProjectDocument
+import {
+  resolveExportUnits,
+  type BodyId,
+  type ExportUnits,
+  type GeometryBodyRepresentation,
+  type ProjectDocument
 } from '@openzcad/shared';
 import type { GeometryWorkerApi } from '../hooks/useGeometryWorker';
 import type { MeasurementViewportAnnotation } from './measurements';
@@ -483,7 +485,8 @@ export async function writeSectionDxf(
   outline: SectionOutlineState,
   save: (fileName: string, format: 'dxf', text: string) => Promise<boolean>,
   stem: string,
-  announce: (message: string) => void
+  announce: (message: string) => void,
+  exportUnits: ExportUnits = 'mm'
 ): Promise<void> {
   const source = sectionSourceOf(view);
   if (!source.document || !sectionOutlineExportable(outline)) {
@@ -499,7 +502,10 @@ export async function writeSectionDxf(
       'dxf',
       source.document,
       [...source.bodyIds],
-      { section: sectionPlaneSpec(section) }
+      {
+        section: sectionPlaneSpec(section),
+        units: resolveExportUnits(exportUnits, source.document.units)
+      }
     );
     if (!('text' in result)) {
       throw new Error('The DXF export returned no text.');

@@ -1,7 +1,9 @@
 import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
+  EXPORT_UNITS,
   PANEL_WIDTH_LIMITS,
+  UNITLESS_IMPORT_UNITS,
   normalizeKeymapOverrides,
   type AppSettings,
   type PanelWidthLimits,
@@ -257,6 +259,16 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       cloudAutosaveDelaySeconds: clampedNumber(
         files.cloudAutosaveDelaySeconds,
         CLOUD_AUTOSAVE_DELAY_BOUNDS
+      ),
+      unitlessImportUnits: member(
+        files.unitlessImportUnits,
+        UNITLESS_IMPORT_UNITS,
+        defaults.files.unitlessImportUnits
+      ),
+      exportUnits: member(
+        files.exportUnits,
+        EXPORT_UNITS,
+        defaults.files.exportUnits
       )
     },
     collaboration: {

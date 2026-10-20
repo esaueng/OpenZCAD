@@ -16,6 +16,10 @@ import {
   type RemusMoveFacesRelation
 } from './remus-lineage';
 import { moveFacesJournalFaceMap } from './exact-lineage-builders';
+import {
+  releasePreparedFaceMove,
+  type PreparedFaceMove
+} from './exact-prepared-face-move';
 
 export interface RemusOpposingPlanarFacePair {
   faceA: number;
@@ -169,21 +173,31 @@ function unchangedFaceAfterMove(
  * plain move builds the same solid without it and lineage falls back to
  * unchanged witnesses. Either way the acceptance gates below still prove the
  * geometry before anything is published.
+ *
+ * `prepared`, the same selection of the same source prepared for a drag,
+ * returns the same results and refusals. When it fails, the plain move tells
+ * a refusal (it refuses too) from a source that changed since preparation
+ * (it succeeds, and the preparation is dropped) without reading the error.
  */
 export function journaledMove(
   kernel: RemusKernel,
   solid: number,
   faces: Uint32Array,
-  distance: number
+  distance: number,
+  prepared: PreparedFaceMove | null = null
 ): { solid: number; relation: RemusMoveFacesRelation | null } {
   const sourceFaces = Array.from(kernel.getSolidFaces(solid));
   let journal: { solid: number; op: number };
   try {
     journal = decodeRemusMoveFacesJournal(
-      kernel.moveFacesJournaled(solid, faces, distance)
+      prepared
+        ? prepared.moveJournaled(distance)
+        : kernel.moveFacesJournaled(solid, faces, distance)
     );
   } catch {
-    return { solid: kernel.moveFaces(solid, faces, distance), relation: null };
+    const moved = kernel.moveFaces(solid, faces, distance);
+    if (prepared) releasePreparedFaceMove(kernel);
+    return { solid: moved, relation: null };
   }
   const relation = moveFacesJournalFaceMap(
     kernel,

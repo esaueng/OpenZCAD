@@ -375,6 +375,7 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
     shapes,
     sketchBases: new Map(result.sketchBases),
     datumFrames: new Map(result.datumFrames),
+    datumAxes: new Map(result.datumAxes),
     consumed: new Set(result.consumed),
     importedStepDiagnostics: new Map(result.importedStepDiagnostics),
     meshBodies: new Set(result.meshBodies),

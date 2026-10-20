@@ -5,7 +5,7 @@ import {
   createProjectDocument,
   normalizeDocument
 } from '@openzcad/document-core';
-import type { ProjectDocument } from '@openzcad/shared';
+import type { AppSettings, ProjectDocument } from '@openzcad/shared';
 import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
 import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceSession';
 
@@ -219,18 +219,23 @@ export async function stubApi(
         name: string;
         units?: string;
         document?: ProjectDocument;
+        initialDocument?: ProjectDocument;
       };
+      // The browser builds a new project and the worker stores it as sent
+      // (ADR-024 Phase 1); only an adoption is rewritten.
       const document = payload.document
         ? adoptProjectDocument(
             payload.document,
             toUserId('user_e2e'),
             payload.name
           )
-        : createProjectDocument(
-            payload.name,
-            toUserId('user_e2e'),
-            (payload.units as 'mm' | undefined) ?? 'mm'
-          );
+        : payload.initialDocument
+          ? normalizeDocument(payload.initialDocument)
+          : createProjectDocument(
+              payload.name,
+              toUserId('user_e2e'),
+              (payload.units as 'mm' | undefined) ?? 'mm'
+            );
       return route.fulfill({
         status: 201,
         json: {
@@ -260,17 +265,16 @@ export async function stubApi(
     const payload = route.request().postDataJSON() as {
       reason: string;
       document: ProjectDocument;
+      savedRevisionId?: string;
     };
-    // The worker checkpoints the document it is handed and returns the result,
-    // which is how a save becomes a save point the client can see. Echoing the
-    // payload back unchanged made every explicit save a no-op here — the
-    // history panel could never list more than the save a project is born
-    // with, so nothing that depends on a second one was testable.
+    // The browser appends the save point and the worker stores the document
+    // as sent (ADR-024 Phase 1). A request without one is a pre-Phase 1
+    // client, which the worker still checkpoints itself; echoing that payload
+    // unchanged would make every such save a no-op here.
     return route.fulfill({
-      json: createCheckpoint(
-        normalizeDocument(payload.document),
-        payload.reason
-      )
+      json: payload.savedRevisionId
+        ? normalizeDocument(payload.document)
+        : createCheckpoint(normalizeDocument(payload.document), payload.reason)
     });
   });
   // Cloud autosave writes here continuously once a project is account-backed.
@@ -925,6 +929,40 @@ export async function seedDismissedWorkspaceTour(page: Page) {
       // Unreadable storage falls back to the app's own defaults.
     }
   });
+}
+
+/**
+ * Settles how unitless imports (STL, OBJ, PLY) are read before the app
+ * boots, merged into whatever settings the device already holds — a
+ * returning user who answered "millimetres, always". A fresh device asks at
+ * each import (`exchange-units.spec.ts`); specs about something else that
+ * import an STL call this so the question does not stand in their way. Not
+ * part of `stubApi`: writing the settings key would pre-empt specs that seed
+ * settings only when the key is absent.
+ */
+export async function seedUnitlessImportUnits(
+  page: Page,
+  units: AppSettings['files']['unitlessImportUnits'] = 'mm'
+) {
+  await page.addInitScript((units) => {
+    const key = 'openzcad-app-settings:v1';
+    try {
+      const raw = window.localStorage.getItem(key);
+      const root: Record<string, unknown> = raw
+        ? (JSON.parse(raw) as Record<string, unknown>)
+        : { settings: {}, syncedRevision: null };
+      const settings = (
+        root.settings && typeof root.settings === 'object'
+          ? root.settings
+          : root
+      ) as { files?: Record<string, unknown> };
+      if (typeof settings.files?.unitlessImportUnits === 'string') return;
+      settings.files = { ...settings.files, unitlessImportUnits: units };
+      window.localStorage.setItem(key, JSON.stringify(root));
+    } catch {
+      // Unreadable storage falls back to the app's own defaults.
+    }
+  }, units);
 }
 
 /**

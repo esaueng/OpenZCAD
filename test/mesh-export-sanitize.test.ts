@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  countExportedTriangles,
   sanitizeBinaryPly,
   sanitizeBinaryStl,
   sanitizeThreeMfModel
@@ -97,6 +98,24 @@ function readPlyCounts(bytes: Uint8Array): {
 }
 
 describe('exact mesh export sanitizing', () => {
+  it('counts the triangles a sanitized file keeps, as the export check reports them', () => {
+    // Two real facets and two zero-area ones: a collinear sliver and a
+    // repeated vertex. The STL sanitizer keeps two; so must the count.
+    const positions = [0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 0, 1, 1, 0];
+    const indices = [0, 1, 2, 0, 1, 3, 1, 4, 2, 2, 2, 4];
+    expect(countExportedTriangles(positions, indices)).toBe(2);
+    const facets = (index: number) =>
+      [0, 1, 2].flatMap((corner) => {
+        const vertex = indices[index * 3 + corner]!;
+        return positions.slice(vertex * 3, vertex * 3 + 3);
+      });
+    const sanitized = sanitizeBinaryStl(binaryStl([0, 1, 2, 3].map(facets)));
+    expect(new DataView(sanitized.buffer).getUint32(80, true)).toBe(2);
+    expect(countExportedTriangles(new Float32Array(positions), indices)).toBe(
+      2
+    );
+  });
+
   it('removes only zero-area binary STL facets', () => {
     const bytes = sanitizeBinaryStl(
       binaryStl([

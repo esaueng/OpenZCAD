@@ -10,6 +10,7 @@ import {
   resolveTopologyReference,
   type EdgeTopologyResolutionCandidate,
   type FaceTopologyResolutionCandidate,
+  type TopologyResolutionCandidate,
   type TopologyResolutionFailureReason
 } from './topology-lineage';
 
@@ -28,6 +29,18 @@ export interface ExactPlanarFaceAttachmentData {
  */
 export interface FaceAttachmentCandidate extends FaceTopologyResolutionCandidate {
   readonly plane: ExactPlanarFaceAttachmentData | null;
+  /**
+   * R01 datum axes: the exact axis of a cylindrical or conical face, through
+   * the middle of a cylinder's axial span or a cone's apex. Absent for any
+   * other carrier, or where the kernel publishes no exact axis.
+   */
+  readonly revolution?: ExactRevolutionAxisData | null;
+}
+
+export interface ExactRevolutionAxisData {
+  readonly kind: 'cylinder' | 'cone';
+  readonly point: Vector3;
+  readonly direction: Vector3;
 }
 
 /**
@@ -57,7 +70,7 @@ export interface ResolveFaceAttachmentInput {
   readonly snapshot: FaceAttachmentSnapshot;
   readonly sketchName: string;
   /** What attaches, for messages: a sketch unless an R01 datum says otherwise. */
-  readonly ownerKind?: 'Sketch' | 'Datum plane' | 'Extrude';
+  readonly ownerKind?: 'Sketch' | 'Extrude' | DatumOwnerKind;
   readonly sourceFeatureName: string;
 }
 
@@ -375,7 +388,11 @@ export interface ResolveEdgeVertexInput {
   readonly candidates: readonly EdgeVertexCandidate[];
   readonly datumName: string;
   readonly sourceFeatureName: string;
+  /** Which kind of datum reads the vertex; defaults to a datum plane. */
+  readonly ownerKind?: DatumOwnerKind;
 }
+
+export type DatumOwnerKind = 'Datum plane' | 'Datum axis';
 
 /**
  * R01: the exact vertex a datum's edge-vertex source names, re-found solely
@@ -386,7 +403,7 @@ export interface ResolveEdgeVertexInput {
 export function resolveEdgeVertex(input: ResolveEdgeVertexInput): Vector3 {
   const fail = (detail: string) =>
     new Error(
-      `Datum plane "${named(input.datumName, '<unnamed datum>')}" cannot use a vertex of source feature "${named(input.sourceFeatureName, '<unnamed source feature>')}": ${detail}`
+      `${input.ownerKind ?? 'Datum plane'} "${named(input.datumName, '<unnamed datum>')}" cannot use a vertex of source feature "${named(input.sourceFeatureName, '<unnamed source feature>')}": ${detail}`
     );
   const resolution = resolveTopologyReference(
     input.reference,
@@ -415,4 +432,117 @@ export function resolveEdgeVertex(input: ResolveEdgeVertexInput): Vector3 {
     throw fail('the resolved vertex is not a finite position.');
   }
   return { x: point.x, y: point.y, z: point.z };
+}
+
+/** Resolves a topology reference through verified lineage only, or throws. */
+function lineageCandidate<T extends TopologyResolutionCandidate>(
+  reference: EdgeTopologyReferenceV5 | FaceTopologyReferenceV5,
+  candidates: readonly T[],
+  fail: (detail: string) => Error,
+  what: string
+): T {
+  const resolution = resolveTopologyReference(reference, candidates);
+  if (resolution.status === 'failed') {
+    throw fail(
+      mappedFailureReason(resolution.reason) === 'deleted'
+        ? `its ${what} was deleted or no longer exists. ${resolution.message}`
+        : resolution.message
+    );
+  }
+  if (resolution.via !== 'lineage') {
+    throw fail(
+      'an axis source requires verified lineage; hash fallback is not accepted.'
+    );
+  }
+  const candidate = candidates.find((entry) => entry === resolution.candidate);
+  if (!candidate) {
+    throw fail(`the resolved ${what} has no exact data.`);
+  }
+  return candidate;
+}
+
+export interface ResolveDatumAxisEdgeInput {
+  readonly reference: EdgeTopologyReferenceV5;
+  readonly candidates: readonly EdgeVertexCandidate[];
+  readonly datumName: string;
+  readonly sourceFeatureName: string;
+}
+
+/**
+ * R01: the two ends of the straight edge a datum axis runs along, end 0
+ * first (quantized order, as for a vertex source), re-found solely through
+ * verified lineage at the axis's history position. A deleted, ambiguous,
+ * closed or curved edge refuses by name.
+ */
+export function resolveDatumAxisEdge(
+  input: ResolveDatumAxisEdgeInput
+): [Vector3, Vector3] {
+  const fail = (detail: string) =>
+    new Error(
+      `Datum axis "${named(input.datumName, '<unnamed datum>')}" cannot run along an edge of source feature "${named(input.sourceFeatureName, '<unnamed source feature>')}": ${detail}`
+    );
+  const candidate = lineageCandidate(
+    input.reference,
+    input.candidates,
+    fail,
+    'edge'
+  );
+  if (!candidate.endpoints) {
+    throw fail('the edge is closed, so it is not a straight edge.');
+  }
+  if (candidate.witness.curveType.toLowerCase() !== 'line') {
+    throw fail(
+      `the edge is a ${candidate.witness.curveType.toLowerCase()}, not a straight edge.`
+    );
+  }
+  const start = edgeEndPoint(candidate.endpoints, 0);
+  const end = edgeEndPoint(candidate.endpoints, 1);
+  if (!finiteVector(start) || !finiteVector(end)) {
+    throw fail('the resolved edge has a non-finite end.');
+  }
+  return [
+    { x: start.x, y: start.y, z: start.z },
+    { x: end.x, y: end.y, z: end.z }
+  ];
+}
+
+export interface ResolveDatumAxisFaceInput {
+  readonly reference: FaceTopologyReferenceV5;
+  readonly candidates: readonly FaceAttachmentCandidate[];
+  readonly datumName: string;
+  readonly sourceFeatureName: string;
+}
+
+/**
+ * R01: the exact axis of the cylindrical or conical face a datum axis
+ * follows, re-found solely through verified lineage. A deleted, ambiguous
+ * or non-revolution face refuses by name; no axis is fitted to a mesh.
+ */
+export function resolveDatumAxisFace(
+  input: ResolveDatumAxisFaceInput
+): ExactRevolutionAxisData {
+  const fail = (detail: string) =>
+    new Error(
+      `Datum axis "${named(input.datumName, '<unnamed datum>')}" cannot follow a face of source feature "${named(input.sourceFeatureName, '<unnamed source feature>')}": ${detail}`
+    );
+  const candidate = lineageCandidate(
+    input.reference,
+    input.candidates,
+    fail,
+    'face'
+  );
+  const revolution = candidate.revolution;
+  if (!revolution) {
+    throw fail(
+      `the face is a ${candidate.witness.surfaceType.toLowerCase()}, not an exact cylinder or cone.`
+    );
+  }
+  if (
+    !finiteVector(revolution.point) ||
+    !finiteVector(revolution.direction) ||
+    magnitude(revolution.direction) <= VECTOR_EPSILON
+  ) {
+    throw fail('the resolved axis is not a finite line.');
+  }
+  return revolution;
 }

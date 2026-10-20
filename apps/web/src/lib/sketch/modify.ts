@@ -432,7 +432,7 @@ function lineObject(a: Point2, b: Point2): LineData {
   return { objectKind: 'line', x1: a.x, y1: a.y, x2: b.x, y2: b.y };
 }
 
-function curveObject(
+export function curveObject(
   curve: Curve2,
   source: SketchObjectData
 ): SketchObjectData {
@@ -479,6 +479,10 @@ function compositeRefusal(data: SketchObjectData, verb: string): string | null {
       return `A ${data.objectKind} is one object with no point identity. Draw it as lines to ${verb} part of it.`;
     case 'text':
       return `Text is one object; ${verb} is not available for it.`;
+    case 'ellipse':
+      return `${verb[0]!.toUpperCase()}${verb.slice(1)} is not available for an ellipse yet.`;
+    case 'spline':
+      return `${verb[0]!.toUpperCase()}${verb.slice(1)} is not available for a spline yet.`;
     default:
       return null;
   }
@@ -2246,5 +2250,49 @@ export function resolvePatternPivot(
   return {
     error:
       'Pick a circle or arc whose centre is the pivot, or snap to a line endpoint.'
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Construction
+
+/**
+ * Turn one existing entity into construction geometry, or back into regular
+ * geometry (ZC-024). One `updateSketchObject` with every other field kept,
+ * so it is one undo step and touches no relation: construction geometry
+ * still solves, it only stops bounding profiles. A rectangle or polygon side
+ * changes alone, so marking one side of a closed outline removes that
+ * profile, exactly as it would for any loop of lines.
+ */
+export function planSketchConstructionToggle(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  sketchId: SketchId,
+  objectId: string
+): SketchModifyPlan {
+  const data = sketchObject(document, sketch, objectId);
+  if (!data) {
+    return {
+      status: 'refuse',
+      reason: 'That object is not part of this sketch.'
+    };
+  }
+  const { construction, ...rest } = data;
+  const making = construction !== true;
+  const next = (
+    making ? { ...rest, construction: true } : rest
+  ) as SketchObjectData;
+  return {
+    status: 'commands',
+    label: making ? 'Make construction' : 'Make regular',
+    message: making
+      ? `The ${data.objectKind} is construction geometry now; it no longer bounds a profile.`
+      : `The ${data.objectKind} is regular geometry again.`,
+    commands: [
+      commandFactories.updateSketchObject(
+        { sketchId, objectId: objectId as EntityId, data: next },
+        making ? 'Make construction' : 'Make regular'
+      )
+    ]
   };
 }

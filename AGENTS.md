@@ -179,7 +179,8 @@ rerun checks on any changed PR head.
 - **Inspect the current PR head before enqueueing.** Read its individual
   check runs, including quality, unit, validation, all six browser shards,
   `checks / validate`, `checks / e2e`, `commit-privacy`, `history-privacy`, Cloudflare `verify`,
-  Workers Builds, dependency audits, and public commit metadata. Confirm a
+  Workers Builds, dependency audits (on PRs that change a manifest or
+  lockfile), and public commit metadata. Confirm a
   CI run exists for that exact head and wait for pending jobs. A passing
   check suite alone is insufficient. Inspect reviews, comments, and threads;
   address valid findings and resolve conversations before enqueueing.

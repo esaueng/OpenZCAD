@@ -1,4 +1,6 @@
 import {
+  datumAxisPlaneSources,
+  datumAxisPointSources,
   datumPlaneSources,
   datumPointSources,
   type BodyId,
@@ -355,7 +357,8 @@ const KNOWN_FEATURE_KINDS: ReadonlySet<string> = new Set([
   'direct-edit',
   'imported-step',
   'imported-mesh',
-  'datum-plane'
+  'datum-plane',
+  'datum-axis'
 ]);
 
 /**
@@ -368,6 +371,44 @@ const KNOWN_FEATURE_KINDS: ReadonlySet<string> = new Set([
 function datumTopologySources(
   feature: FeatureNode
 ): { bodyId: BodyId; producingFeatureId: FeatureId }[] {
+  if (feature.data.featureKind === 'datum-axis') {
+    // R01 axes read the same face and vertex sources, plus the straight edge
+    // or cylindrical face they follow.
+    const { definition } = feature.data;
+    const sources = [
+      ...datumAxisPlaneSources(definition).flatMap((source) =>
+        source.type === 'face'
+          ? [
+              {
+                bodyId: source.bodyId,
+                producingFeatureId: source.faceReference.producingFeatureId
+              }
+            ]
+          : []
+      ),
+      ...datumAxisPointSources(definition).flatMap((point) =>
+        point.type === 'edge-vertex'
+          ? [
+              {
+                bodyId: point.bodyId,
+                producingFeatureId: point.edgeReference.producingFeatureId
+              }
+            ]
+          : []
+      )
+    ];
+    if (definition.kind === 'edge')
+      sources.push({
+        bodyId: definition.source.bodyId,
+        producingFeatureId: definition.source.edgeReference.producingFeatureId
+      });
+    if (definition.kind === 'cylinder')
+      sources.push({
+        bodyId: definition.source.bodyId,
+        producingFeatureId: definition.source.faceReference.producingFeatureId
+      });
+    return sources;
+  }
   if (feature.data.featureKind !== 'datum-plane') return [];
   const { definition } = feature.data;
   return [
@@ -494,6 +535,7 @@ function persistedReferenceNamesProducer(
           return true;
         break;
       case 'datum-plane':
+      case 'datum-axis':
         if (
           datumTopologySources(feature).some(
             (source) => source.producingFeatureId === producer
@@ -620,7 +662,10 @@ export function booleanEvolutionProbeNeeded(
     if (downstream.data.featureKind === 'sketch') {
       continue;
     }
-    if (downstream.data.featureKind === 'datum-plane') {
+    if (
+      downstream.data.featureKind === 'datum-plane' ||
+      downstream.data.featureKind === 'datum-axis'
+    ) {
       // A datum reads a face or vertex of an existing body and produces none.
       if (
         datumTopologySources(downstream).some((source) =>

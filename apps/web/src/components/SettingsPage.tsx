@@ -6,6 +6,7 @@ import {
 import {
   Fragment,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -15,22 +16,19 @@ import {
 } from 'react';
 import {
   Bot,
-  Box,
+  ChevronDown,
   ChevronLeft,
-  CircleUserRound,
   CloudOff,
   Cpu,
   Database,
   Eye,
   EyeOff,
   HardDrive,
-  Keyboard,
   LockKeyhole,
   LogIn,
   LogOut,
   Mail,
   Mouse,
-  MousePointer2,
   Move3d,
   Palette,
   PencilRuler,
@@ -78,6 +76,18 @@ import { KeymapEditor } from './KeymapEditor';
 import { resolveKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { BrandMark } from './BrandMark';
+import {
+  Group,
+  Meter,
+  Notice,
+  NumberSetting,
+  Section,
+  Segmented,
+  SettingRow,
+  Status,
+  Toggle,
+  type SegmentOption
+} from './settingsControls';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
 import {
   PersonalInfoToggle,
@@ -101,11 +111,19 @@ function formatBytes(bytes: number): string {
  * the moment a save is refused reads as a bug; a limit stated up front reads as
  * a limit.
  */
-function storageDescription(usage: AccountStorageUsage | null): string {
+function storageHint(usage: AccountStorageUsage | null): string {
   if (!usage) {
-    return 'Sign in to see what your account is storing.';
+    return 'Projects and revisions saved to your account.';
   }
-  return `${countLabel(usage.projectCount, 'project', 'projects')} · ${formatBytes(usage.documentBytes)} current, ${formatBytes(usage.revisionBytes)} across ${countLabel(usage.revisionCount, 'saved revision', 'saved revisions')}. Each project may be up to ${formatBytes(usage.documentLimitBytes)} and keeps its last ${usage.maxRevisionsPerProject} revisions.`;
+  return `${countLabel(usage.projectCount, 'project', 'projects')} · ${countLabel(usage.revisionCount, 'revision', 'revisions')}. Up to ${formatBytes(usage.documentLimitBytes)} and ${usage.maxRevisionsPerProject} revisions per project.`;
+}
+
+/** Cloud file usage against the allowance, naming an overage outright. */
+function fileStorageFigure(usage: AccountStorageUsage): string {
+  const figure = `${formatBytes(usage.artifactBytes)} of ${formatBytes(usage.artifactLimitBytes)}`;
+  return usage.artifactBytes > usage.artifactLimitBytes
+    ? `${figure} · over allowance`
+    : figure;
 }
 
 type SectionId = SettingsSectionId;
@@ -171,164 +189,6 @@ const SECTION_ICONS: Record<SectionId, ReactNode> = {
   advanced: <Cpu size={15} aria-hidden="true" />
 };
 
-/** A quiet label that splits a long settings card into named runs of rows. */
-function Subhead({ children }: { children: ReactNode }) {
-  return <h3 className="settings-subhead">{children}</h3>;
-}
-
-function Scope({ children }: { children: ReactNode }) {
-  return <span className="settings-scope">{children}</span>;
-}
-
-function SettingRow({
-  title,
-  description,
-  scope,
-  children
-}: {
-  title: string;
-  description: string;
-  scope: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="setting-row">
-      <div className="setting-copy">
-        <span className="setting-title">
-          <strong>{title}</strong>
-          <Scope>{scope}</Scope>
-        </span>
-        <small>{description}</small>
-      </div>
-      <div className="setting-control">{children}</div>
-    </div>
-  );
-}
-
-function Toggle({
-  checked,
-  label,
-  disabled = false,
-  onChange
-}: {
-  checked: boolean;
-  label: string;
-  disabled?: boolean;
-  onChange(checked: boolean): void;
-}) {
-  return (
-    <label className="settings-toggle">
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        aria-label={label}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      <span aria-hidden="true" />
-    </label>
-  );
-}
-
-/**
- * A number field that lets the user type through values it would refuse.
- *
- * Bound straight to the setting, a keystroke that passed through an
- * out-of-range value (the "1" of "12" when the floor is 4, the "0" of "0.5")
- * was put back at once, so some values could not be typed at all and others
- * came out wrong. The field keeps its own text while focused, commits each
- * in-range value as it is typed, and on blur pulls anything else to the
- * nearest bound: the bounds storage normalizes to, so what the field shows is
- * what is kept rather than a value later swapped for the default.
- */
-function NumberSetting({
-  value,
-  min,
-  max,
-  step = 1,
-  integer = false,
-  unit = '',
-  label,
-  disabled = false,
-  onCommit
-}: {
-  value: number;
-  min: number;
-  max: number;
-  step?: number;
-  integer?: boolean;
-  unit?: string;
-  label: string;
-  disabled?: boolean;
-  onCommit(value: number): void;
-}) {
-  const [draft, setDraft] = useState<string | null>(null);
-  const settle = (typed: number) => (integer ? Math.round(typed) : typed);
-  // The step grid starts at `min` when there is one. A floor off that grid
-  // (0.001 with step 0.1, 1024 with step 1000) made the default itself a step
-  // mismatch and sent the arrow keys to 1.001, so it is left off then and the
-  // clamp alone holds the floor.
-  const minOnStepGrid = Math.abs(min / step - Math.round(min / step)) < 1e-9;
-  return (
-    <div className="settings-unit-input">
-      <input
-        className="settings-number"
-        type="number"
-        min={minOnStepGrid ? min : undefined}
-        max={max}
-        step={step}
-        disabled={disabled}
-        aria-label={label}
-        value={draft ?? String(value)}
-        onChange={(event) => {
-          const typed = event.currentTarget.valueAsNumber;
-          setDraft(event.currentTarget.value);
-          if (Number.isFinite(typed) && typed >= min && typed <= max) {
-            onCommit(settle(typed));
-          }
-        }}
-        onBlur={(event) => {
-          const typed = event.currentTarget.valueAsNumber;
-          setDraft(null);
-          if (!Number.isFinite(typed)) {
-            return;
-          }
-          const clamped = Math.min(max, Math.max(min, settle(typed)));
-          if (clamped !== value) {
-            onCommit(clamped);
-          }
-        }}
-      />
-      {/* Present even without a unit so every field's right edge lines up. */}
-      <span aria-hidden={unit ? undefined : true}>{unit}</span>
-    </div>
-  );
-}
-
-function Section({
-  title,
-  intro,
-  wide = false,
-  children
-}: {
-  title: string;
-  intro: string;
-  wide?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <section
-      className={`settings-section${wide ? ' settings-section-wide' : ''}`}
-    >
-      <header>
-        <h2>{title}</h2>
-        <p>{intro}</p>
-      </header>
-      <div className="settings-card">{children}</div>
-    </section>
-  );
-}
-
 /**
  * The keyboard reference without its remappable items, which the keymap
  * editor lists with their live keys: what is left keeps one meaning always.
@@ -339,6 +199,12 @@ const FIXED_KEYBOARD_GROUPS: readonly ControlReferenceGroup[] =
     items: group.items.filter((item) => !('commands' in item))
   })).filter((group) => group.items.length > 0);
 
+/**
+ * The keyboard and pointer reference: keys and the action they run. Each
+ * binding's longer explanation is one Details press away rather than a
+ * second line on every row, so the reference scans as a list of keys. A
+ * tooltip alone left it out of reach by touch and by keyboard.
+ */
 function ControlReferenceGroups({
   groups
 }: {
@@ -347,59 +213,126 @@ function ControlReferenceGroups({
   return (
     <div className="settings-control-groups">
       {groups.map((group) => (
-        <section className="settings-control-group" key={group.id}>
-          <header>
-            <h4>{group.title}</h4>
-            <span>{group.items.length} controls</span>
-          </header>
-          <p>{group.description}</p>
-          <dl>
-            {group.items.map((item) => (
-              <div className="settings-control-row" key={item.id}>
-                <dt>
-                  <span className="settings-control-keys">
-                    {item.keys.map((key) => (
-                      <kbd key={key}>{key}</kbd>
-                    ))}
-                  </span>
-                </dt>
-                <dd>
-                  <strong>{item.action}</strong>
-                  <small>{item.detail}</small>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </section>
+        <ControlReferenceGroupCard group={group} key={group.id} />
       ))}
     </div>
   );
 }
 
-function ControlReferenceCollection({
-  icon,
-  title,
-  description,
-  groups
+function ControlReferenceGroupCard({
+  group
 }: {
-  icon: ReactNode;
-  title: string;
-  description: string;
-  groups: readonly ControlReferenceGroup[];
+  group: ControlReferenceGroup;
 }) {
+  const [showDetails, setShowDetails] = useState(false);
+  const listId = useId();
   return (
-    <section className="settings-control-collection">
+    <section className="settings-control-group">
       <header>
-        <span className="settings-control-collection-icon">{icon}</span>
-        <span>
-          <h3>{title}</h3>
-          <p>{description}</p>
-        </span>
+        <h4>{group.title}</h4>
+        <button
+          type="button"
+          className="settings-details-toggle"
+          aria-expanded={showDetails}
+          aria-controls={listId}
+          // The name stays put; aria-expanded carries the state.
+          aria-label={`Details for ${group.title}`}
+          onClick={() => setShowDetails((current) => !current)}
+        >
+          Details
+          <ChevronDown size={12} aria-hidden="true" />
+        </button>
       </header>
-      <ControlReferenceGroups groups={groups} />
+      <dl id={listId}>
+        {group.items.map((item) => (
+          <div
+            className="settings-control-row"
+            key={item.id}
+            title={showDetails ? undefined : item.detail}
+          >
+            <dt>
+              <span className="settings-control-keys">
+                {item.keys.map((key) => (
+                  <kbd key={key}>{key}</kbd>
+                ))}
+              </span>
+            </dt>
+            {showDetails ? (
+              <dd>
+                <strong>{item.action}</strong>
+                <small>{item.detail}</small>
+              </dd>
+            ) : (
+              <dd>{item.action}</dd>
+            )}
+          </div>
+        ))}
+      </dl>
     </section>
   );
 }
+
+const UNIT_OPTIONS: readonly SegmentOption<
+  AppSettings['general']['defaultUnits']
+>[] = [
+  { value: 'mm', label: 'mm', title: 'Millimeters' },
+  { value: 'cm', label: 'cm', title: 'Centimeters' },
+  { value: 'm', label: 'm', title: 'Meters' },
+  { value: 'inch', label: 'in', title: 'Inches' }
+];
+
+const THEME_OPTIONS: readonly SegmentOption<
+  AppSettings['appearance']['theme']
+>[] = [
+  { value: 'system', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' }
+];
+
+const DENSITY_OPTIONS: readonly SegmentOption<
+  AppSettings['appearance']['density']
+>[] = [
+  { value: 'compact', label: 'Compact' },
+  { value: 'comfortable', label: 'Comfortable' }
+];
+
+const PROJECTION_OPTIONS: readonly SegmentOption<
+  AppSettings['viewport']['defaultProjection']
+>[] = [
+  { value: 'perspective', label: 'Perspective' },
+  { value: 'orthographic', label: 'Orthographic' }
+];
+
+const DISPLAY_OPTIONS: readonly SegmentOption<
+  AppSettings['viewport']['displayMode']
+>[] = [
+  { value: 'shaded-edges', label: 'Shaded + edges' },
+  { value: 'shaded', label: 'Shaded' },
+  { value: 'wireframe', label: 'Wireframe' }
+];
+
+const SCROLL_OPTIONS: readonly SegmentOption<
+  AppSettings['viewport']['pointerNavigation']
+>[] = [
+  // "Auto" in the control; the full name stays the accessible one.
+  { value: 'auto', label: 'Auto', title: POINTER_NAVIGATION_LABELS.auto },
+  { value: 'mouse', label: 'Mouse', title: POINTER_NAVIGATION_LABELS.mouse },
+  { value: 'trackpad', label: POINTER_NAVIGATION_LABELS.trackpad }
+];
+
+const MIDDLE_DRAG_OPTIONS: readonly SegmentOption<
+  AppSettings['viewport']['middleDrag']
+>[] = (['pan', 'orbit', 'zoom'] as const).map((value) => ({
+  value,
+  label: MIDDLE_DRAG_LABELS[value]
+}));
+
+const CREDENTIAL_OPTIONS: readonly SegmentOption<
+  AppSettings['assistant']['credentialSource']
+>[] = [
+  { value: 'deployment', label: 'Built-in' },
+  { value: 'personal', label: 'Personal token' }
+];
 
 function providerDefaults(provider: AppSettings['assistant']['provider']) {
   if (provider === 'openai') {
@@ -873,13 +806,11 @@ export function SettingsPage({
                   // decorative, which would otherwise leave the button unnamed.
                   aria-label={section.label}
                   aria-current={active === section.id ? 'page' : undefined}
+                  title={section.detail}
                   onClick={() => setActive(section.id)}
                 >
                   {SECTION_ICONS[section.id]}
-                  <span>
-                    <strong>{section.label}</strong>
-                    <small>{section.detail}</small>
-                  </span>
+                  <span>{section.label}</span>
                 </button>
               </Fragment>
             ))}
@@ -915,7 +846,7 @@ export function SettingsPage({
                         : 'Cloud profile unavailable'
                       : 'Device only'}
               </strong>
-              <small>Local changes save immediately</small>
+              <small>Changes save automatically</small>
             </span>
           </div>
         </aside>
@@ -934,295 +865,259 @@ export function SettingsPage({
             </p>
           )}
           {active === 'general' && anyMatch && (
-            <Section
-              title="General"
-              intro="Choose how OpenZCAD starts and what a new project inherits. Existing document units are never reinterpreted."
-            >
-              <SettingRow
-                title="Default units"
-                description="Used only when creating a new project."
-                scope="New projects"
-              >
-                <select
-                  value={settings.general.defaultUnits}
-                  aria-label="Default units"
-                  onChange={(event) =>
-                    patch({
-                      general: {
-                        ...settings.general,
-                        defaultUnits: event.target
-                          .value as AppSettings['general']['defaultUnits']
-                      }
-                    })
-                  }
+            <Section title="General" intro="Startup and new-project defaults.">
+              <Group>
+                <SettingRow
+                  title="Default units"
+                  hint="For new projects. Existing ones keep theirs."
                 >
-                  <option value="mm">Millimeters</option>
-                  <option value="cm">Centimeters</option>
-                  <option value="m">Meters</option>
-                  <option value="inch">Inches</option>
-                </select>
-              </SettingRow>
-              <SettingRow
-                title="Reopen the last project"
-                description="Return to the most recently active model when OpenZCAD starts."
-                scope="This device"
-              >
-                <Toggle
-                  checked={settings.general.reopenLastProject}
-                  label="Reopen the last project"
-                  onChange={(reopenLastProject) =>
-                    patch({
-                      general: { ...settings.general, reopenLastProject }
-                    })
-                  }
-                />
-              </SettingRow>
-              <SettingRow
-                title="Confirm destructive actions"
-                description="Ask before an action that discards something for good — emptying the trash, resetting preferences, removing a personal credential, or clearing an AI conversation."
-                scope="All devices"
-              >
-                <Toggle
-                  checked={settings.general.confirmDestructiveActions}
-                  label="Confirm destructive actions"
-                  onChange={(confirmDestructiveActions) =>
-                    patch({
-                      general: {
-                        ...settings.general,
-                        confirmDestructiveActions
-                      }
-                    })
-                  }
-                />
-              </SettingRow>
+                  <Segmented
+                    label="Default units"
+                    value={settings.general.defaultUnits}
+                    options={UNIT_OPTIONS}
+                    onChange={(defaultUnits) =>
+                      patch({
+                        general: { ...settings.general, defaultUnits }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Unitless imports"
+                  hint="STL, OBJ, PLY and DXF without units: how to read them."
+                >
+                  <select
+                    value={settings.files.unitlessImportUnits}
+                    aria-label="Unitless imports"
+                    onChange={(event) =>
+                      patch({
+                        files: {
+                          ...settings.files,
+                          unitlessImportUnits: event.target
+                            .value as AppSettings['files']['unitlessImportUnits']
+                        }
+                      })
+                    }
+                  >
+                    <option value="ask">Ask each time</option>
+                    <option value="document">Project units</option>
+                    <option value="mm">Millimeters</option>
+                    <option value="cm">Centimeters</option>
+                    <option value="m">Meters</option>
+                    <option value="inch">Inches</option>
+                  </select>
+                </SettingRow>
+                <SettingRow
+                  title="Export units"
+                  hint="STEP, mesh and DXF files. GLB is always meters."
+                >
+                  <select
+                    value={settings.files.exportUnits}
+                    aria-label="Export units"
+                    onChange={(event) =>
+                      patch({
+                        files: {
+                          ...settings.files,
+                          exportUnits: event.target
+                            .value as AppSettings['files']['exportUnits']
+                        }
+                      })
+                    }
+                  >
+                    <option value="document">Project units</option>
+                    <option value="mm">Millimeters</option>
+                    <option value="cm">Centimeters</option>
+                    <option value="m">Meters</option>
+                    <option value="inch">Inches</option>
+                  </select>
+                </SettingRow>
+                <SettingRow
+                  title="Reopen the last project"
+                  hint="Pick up where you left off on launch."
+                >
+                  <Toggle
+                    checked={settings.general.reopenLastProject}
+                    label="Reopen the last project"
+                    onChange={(reopenLastProject) =>
+                      patch({
+                        general: { ...settings.general, reopenLastProject }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Confirm destructive actions"
+                  hint="Ask before emptying the trash, resetting, or removing data."
+                >
+                  <Toggle
+                    checked={settings.general.confirmDestructiveActions}
+                    label="Confirm destructive actions"
+                    onChange={(confirmDestructiveActions) =>
+                      patch({
+                        general: {
+                          ...settings.general,
+                          confirmDestructiveActions
+                        }
+                      })
+                    }
+                  />
+                </SettingRow>
+              </Group>
             </Section>
           )}
 
           {active === 'appearance' && anyMatch && (
-            <Section
-              title="Appearance"
-              intro="Keep the engineering workspace dense, readable, and predictable."
-            >
-              <SettingRow
-                title="Theme"
-                description="Light and Dark repaint the workspace chrome; System follows your OS appearance. The 3D viewport keeps its dark modeling stage either way."
-                scope="This device"
-              >
-                <select
-                  value={settings.appearance.theme}
-                  aria-label="Theme"
-                  onChange={(event) =>
-                    patch({
-                      appearance: {
-                        ...settings.appearance,
-                        theme: event.target
-                          .value as AppSettings['appearance']['theme']
-                      }
-                    })
-                  }
+            <Section title="Appearance" intro="How the interface looks.">
+              <Group>
+                <SettingRow title="Theme" hint="System follows your OS.">
+                  <Segmented
+                    label="Theme"
+                    value={settings.appearance.theme}
+                    options={THEME_OPTIONS}
+                    onChange={(theme) =>
+                      patch({ appearance: { ...settings.appearance, theme } })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Interface density"
+                  hint="Comfortable adds spacing."
                 >
-                  <option value="system">System</option>
-                  <option value="dark">Dark</option>
-                  <option value="light">Light</option>
-                </select>
-              </SettingRow>
-              <SettingRow
-                title="Interface density"
-                description="Comfortable adds breathing room without changing modeling behavior."
-                scope="This device"
-              >
-                <select
-                  value={settings.appearance.density}
-                  aria-label="Interface density"
-                  onChange={(event) =>
-                    patch({
-                      appearance: {
-                        ...settings.appearance,
-                        density: event.target
-                          .value as AppSettings['appearance']['density']
-                      }
-                    })
-                  }
+                  <Segmented
+                    label="Interface density"
+                    value={settings.appearance.density}
+                    options={DENSITY_OPTIONS}
+                    onChange={(density) =>
+                      patch({
+                        appearance: { ...settings.appearance, density }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Reduce motion"
+                  hint="Turn off non-essential animation."
                 >
-                  <option value="compact">Compact</option>
-                  <option value="comfortable">Comfortable</option>
-                </select>
-              </SettingRow>
-              <SettingRow
-                title="Reduce motion"
-                description="Suppress non-essential panel and selection animations."
-                scope="This device"
-              >
-                <Toggle
-                  checked={settings.appearance.reducedMotion}
-                  label="Reduce motion"
-                  onChange={(reducedMotion) =>
-                    patch({
-                      appearance: { ...settings.appearance, reducedMotion }
-                    })
-                  }
-                />
-              </SettingRow>
+                  <Toggle
+                    checked={settings.appearance.reducedMotion}
+                    label="Reduce motion"
+                    onChange={(reducedMotion) =>
+                      patch({
+                        appearance: { ...settings.appearance, reducedMotion }
+                      })
+                    }
+                  />
+                </SettingRow>
+              </Group>
             </Section>
           )}
 
           {active === 'viewport' && anyMatch && (
-            <Section
-              title="Viewport"
-              intro="How new or previously unopened project views look. Per-project camera state remains local; mouse and trackpad behavior is under Controls."
-            >
-              <SettingRow
-                title="Projection"
-                description="Perspective reads naturally; orthographic is useful for measured views."
-                scope="View default"
-              >
-                <select
-                  value={settings.viewport.defaultProjection}
-                  aria-label="Default projection"
-                  onChange={(event) =>
-                    patch({
-                      viewport: {
-                        ...settings.viewport,
-                        defaultProjection: event.target
-                          .value as AppSettings['viewport']['defaultProjection']
-                      }
-                    })
+            <Section title="Viewport" intro="How new views look.">
+              <Group>
+                <SettingRow title="Projection">
+                  <Segmented
+                    label="Default projection"
+                    value={settings.viewport.defaultProjection}
+                    options={PROJECTION_OPTIONS}
+                    onChange={(defaultProjection) =>
+                      patch({
+                        viewport: { ...settings.viewport, defaultProjection }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow title="Display mode">
+                  <Segmented
+                    label="Default display mode"
+                    value={settings.viewport.displayMode}
+                    options={DISPLAY_OPTIONS}
+                    onChange={(displayMode) =>
+                      patch({
+                        viewport: { ...settings.viewport, displayMode }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Show construction grid"
+                  hint="A view aid; never part of the model."
+                >
+                  <Toggle
+                    checked={settings.viewport.showGrid}
+                    label="Show construction grid"
+                    onChange={(showGrid) =>
+                      patch({
+                        viewport: { ...settings.viewport, showGrid }
+                      })
+                    }
+                  />
+                </SettingRow>
+              </Group>
+              <Group>
+                <SettingRow
+                  title="Current view"
+                  hint={
+                    workspaceOpen
+                      ? 'Apply these defaults to the open project.'
+                      : 'Open a project to apply these defaults to its view.'
                   }
                 >
-                  <option value="perspective">Perspective</option>
-                  <option value="orthographic">Orthographic</option>
-                </select>
-              </SettingRow>
-              <SettingRow
-                title="Display mode"
-                description="Choose the default solid and edge presentation."
-                scope="View default"
-              >
-                <select
-                  value={settings.viewport.displayMode}
-                  aria-label="Default display mode"
-                  onChange={(event) =>
-                    patch({
-                      viewport: {
-                        ...settings.viewport,
-                        displayMode: event.target
-                          .value as AppSettings['viewport']['displayMode']
-                      }
-                    })
-                  }
-                >
-                  <option value="shaded-edges">Shaded + edges</option>
-                  <option value="shaded">Shaded</option>
-                  <option value="wireframe">Wireframe</option>
-                </select>
-              </SettingRow>
-              <SettingRow
-                title="Show construction grid"
-                description="The grid is a viewport aid and never becomes document geometry."
-                scope="View default"
-              >
-                <Toggle
-                  checked={settings.viewport.showGrid}
-                  label="Show construction grid"
-                  onChange={(showGrid) =>
-                    patch({
-                      viewport: { ...settings.viewport, showGrid }
-                    })
-                  }
-                />
-              </SettingRow>
-              <div className="settings-card-action">
-                {workspaceOpen ? null : (
-                  <small className="settings-card-action-note">
-                    Open a project to apply these defaults to its view.
-                  </small>
-                )}
-                <button
-                  className="secondary"
-                  type="button"
-                  disabled={!workspaceOpen}
-                  onClick={onApplyViewportDefaults}
-                >
-                  <Eye size={14} aria-hidden="true" />
-                  Apply defaults to current view
-                </button>
-              </div>
+                  <button
+                    className="secondary"
+                    type="button"
+                    aria-label="Apply defaults to current view"
+                    disabled={!workspaceOpen}
+                    onClick={onApplyViewportDefaults}
+                  >
+                    <Eye size={14} aria-hidden="true" />
+                    Apply defaults
+                  </button>
+                </SettingRow>
+              </Group>
             </Section>
           )}
 
           {active === 'controls' && anyMatch && (
             <Section
               title="Controls"
-              intro="How your mouse, trackpad, and keyboard drive the workspace, with a complete reference for viewport navigation, selection, sketching, and direct modeling."
+              intro="Mouse, trackpad, and keyboard."
               wide
             >
-              <section className="settings-control-collection">
-                <header>
-                  <span className="settings-control-collection-icon">
-                    <Mouse size={18} aria-hidden="true" />
-                  </span>
-                  <span>
-                    <h3>Navigation</h3>
-                    <p>
-                      What the scroll wheel and middle button do in the 3D view.
-                      These apply on this device.
-                    </p>
-                  </span>
-                </header>
+              <Group title="Navigation">
                 <SettingRow
                   title="Scroll wheel"
-                  description="A wheel notch zooms; two fingers on a trackpad pan and a pinch zooms. Detection zooms on any vertical scroll until a diagonal swipe or a pinch proves a trackpad, then remembers it — set it explicitly if your device is read wrongly."
-                  scope="Navigation"
+                  hint="Auto switches to trackpad after a pinch or diagonal swipe."
                 >
-                  <select
-                    aria-label="Scroll wheel"
+                  <Segmented
+                    label="Scroll wheel"
                     value={settings.viewport.pointerNavigation}
-                    onChange={(event) =>
+                    options={SCROLL_OPTIONS}
+                    onChange={(pointerNavigation) =>
                       patch({
-                        viewport: {
-                          ...settings.viewport,
-                          pointerNavigation: event.target
-                            .value as AppSettings['viewport']['pointerNavigation']
-                        }
+                        viewport: { ...settings.viewport, pointerNavigation }
                       })
                     }
-                  >
-                    {(['auto', 'mouse', 'trackpad'] as const).map((mode) => (
-                      <option key={mode} value={mode}>
-                        {POINTER_NAVIGATION_LABELS[mode]}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </SettingRow>
                 <SettingRow
                   title="Middle-button drag"
-                  description="What dragging with the middle mouse button does. Pan matches desktop CAD; zoom is the three.js default."
-                  scope="Navigation"
+                  hint="Pan matches desktop CAD."
                 >
-                  <select
-                    aria-label="Middle-button drag"
+                  <Segmented
+                    label="Middle-button drag"
                     value={settings.viewport.middleDrag}
-                    onChange={(event) =>
+                    options={MIDDLE_DRAG_OPTIONS}
+                    onChange={(middleDrag) =>
                       patch({
-                        viewport: {
-                          ...settings.viewport,
-                          middleDrag: event.target
-                            .value as AppSettings['viewport']['middleDrag']
-                        }
+                        viewport: { ...settings.viewport, middleDrag }
                       })
                     }
-                  >
-                    {(['pan', 'orbit', 'zoom'] as const).map((action) => (
-                      <option key={action} value={action}>
-                        {MIDDLE_DRAG_LABELS[action]}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </SettingRow>
                 <SettingRow
                   title="Zoom toward the pointer"
-                  description="Wheel zoom moves toward whatever is under the cursor, as desktop CAD does. Turn this off to zoom toward the middle of the view instead."
-                  scope="Navigation"
+                  hint="Off zooms toward the middle of the view."
                 >
                   <Toggle
                     checked={settings.viewport.zoomToCursor}
@@ -1234,705 +1129,638 @@ export function SettingsPage({
                     }
                   />
                 </SettingRow>
-              </section>
-              {/* One header for the keyboard half. A banner above it used to
-                  repeat the keyboard icon with its own line of guidance, so
-                  the page opened on two stacked headers. */}
-              <section className="settings-control-collection">
-                <header>
-                  <span className="settings-control-collection-icon">
-                    <Keyboard size={18} aria-hidden="true" />
-                  </span>
-                  <span>
-                    <h3>Keyboard</h3>
-                    <p>
-                      Shortcuts are grouped by the part of the workspace that
-                      owns them, and any of them can be changed. A key can mean
-                      one thing per context: by default C is Cylinder in the
-                      workspace and Circle in a sketch, and M is Move in Build
-                      and Measure in View. Keys pause while you type or while
-                      Settings is open. These preferences follow your account,
-                      never a project.
-                    </p>
-                  </span>
-                </header>
+              </Group>
+              {/* Every remappable command with its live keys. A key can mean
+                  one thing per context (C is Cylinder in the workspace and
+                  Circle in a sketch); the editor's groups are those contexts.
+                  The overrides follow the account, never a project. */}
+              <Group title="Keyboard" note="Paused while you type">
                 <KeymapEditor
                   overrides={settings.keymap.overrides}
                   onChange={(overrides) =>
                     onChange({ ...settings, keymap: { overrides } })
                   }
                 />
-              </section>
-              <ControlReferenceCollection
-                icon={<Keyboard size={18} aria-hidden="true" />}
-                title="Fixed keys"
-                description="Escape always steps back, Enter confirms, Tab moves focus and Delete removes the selection; these keep one meaning everywhere and cannot be reassigned. While a command waits for a value, digits type it."
-                groups={FIXED_KEYBOARD_GROUPS}
-              />
-              <ControlReferenceCollection
-                icon={<MousePointer2 size={18} aria-hidden="true" />}
-                title="Mouse & pointer"
-                description="Directional gestures matter: selection-box behavior changes with drag direction."
-                groups={POINTER_CONTROL_GROUPS}
-              />
+              </Group>
+              <Group title="Fixed keys" note="Can’t be reassigned">
+                <ControlReferenceGroups groups={FIXED_KEYBOARD_GROUPS} />
+              </Group>
+              <Group title="Mouse & pointer">
+                <ControlReferenceGroups groups={POINTER_CONTROL_GROUPS} />
+              </Group>
             </Section>
           )}
 
           {active === 'sketching' && anyMatch && (
-            <Section
-              title="Sketching"
-              intro="Grid placement, geometry snapping, and temporary inferencing are independent. Stored dimensions remain exact document values."
-            >
-              <Subhead>Grid</Subhead>
-              <SettingRow
-                title="Show sketch grid"
-                description="Display an adaptive grid on the active sketch plane."
-                scope="This device"
-              >
-                <Toggle
-                  checked={settings.sketching.gridVisible}
-                  label="Show sketch grid"
-                  onChange={(gridVisible) =>
-                    patch({
-                      sketching: { ...settings.sketching, gridVisible }
-                    })
-                  }
-                />
-              </SettingRow>
-              <SettingRow
-                title="Snap to sketch grid"
-                description="Quantize sketch points to the configured linear increment. Geometry snaps still take priority."
-                scope="This device"
-              >
-                <Toggle
-                  checked={settings.sketching.snapEnabled}
-                  label="Snap to sketch grid"
-                  onChange={(snapEnabled) =>
-                    patch({
-                      sketching: { ...settings.sketching, snapEnabled }
-                    })
-                  }
-                />
-              </SettingRow>
-              <SettingRow
-                title="Linear snap"
-                description="Increment in the current document unit."
-                scope="This device"
-              >
-                <NumberSetting
-                  {...APP_SETTINGS_NUMBER_BOUNDS.linearSnap}
-                  step={0.1}
-                  value={settings.sketching.linearSnap}
-                  label="Linear snap increment"
-                  onCommit={(linearSnap) =>
-                    patch({
-                      sketching: { ...settings.sketching, linearSnap }
-                    })
-                  }
-                />
-              </SettingRow>
-              <Subhead>Snapping</Subhead>
-              <SettingRow
-                title="Geometry snapping"
-                description="Snap to exact origins, endpoints, midpoints, centers, quadrants, and intersections."
-                scope="This device"
-              >
-                <Toggle
-                  checked={settings.sketching.geometrySnapEnabled}
-                  label="Geometry snapping"
-                  onChange={(geometrySnapEnabled) =>
-                    patch({
-                      sketching: {
-                        ...settings.sketching,
-                        geometrySnapEnabled
-                      }
-                    })
-                  }
-                />
-              </SettingRow>
-              <SettingRow
-                title="Snap tolerance"
-                description="Screen-space radius around exact sketch candidates."
-                scope="This device"
-              >
-                <NumberSetting
-                  {...APP_SETTINGS_NUMBER_BOUNDS.snapTolerancePx}
-                  unit="px"
-                  value={settings.sketching.snapTolerancePx}
-                  label="Sketch snap tolerance"
-                  onCommit={(snapTolerancePx) =>
-                    patch({
-                      sketching: { ...settings.sketching, snapTolerancePx }
-                    })
-                  }
-                />
-              </SettingRow>
-              <SettingRow
-                title="Automatic inferencing"
-                description="Offer horizontal and vertical alignment while drawing. Hold Shift to suppress it temporarily."
-                scope="This device"
-              >
-                <Toggle
-                  checked={settings.sketching.inferenceEnabled}
-                  label="Automatic inferencing"
-                  onChange={(inferenceEnabled) =>
-                    patch({
-                      sketching: { ...settings.sketching, inferenceEnabled }
-                    })
-                  }
-                />
-              </SettingRow>
+            <Section title="Sketching" intro="Grid, snapping, and inferencing.">
+              <Group title="Grid">
+                <SettingRow title="Show sketch grid">
+                  <Toggle
+                    checked={settings.sketching.gridVisible}
+                    label="Show sketch grid"
+                    onChange={(gridVisible) =>
+                      patch({
+                        sketching: { ...settings.sketching, gridVisible }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Snap to sketch grid"
+                  hint="Geometry snaps still win."
+                >
+                  <Toggle
+                    checked={settings.sketching.snapEnabled}
+                    label="Snap to sketch grid"
+                    onChange={(snapEnabled) =>
+                      patch({
+                        sketching: { ...settings.sketching, snapEnabled }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow title="Linear snap" hint="In the document’s units.">
+                  <NumberSetting
+                    {...APP_SETTINGS_NUMBER_BOUNDS.linearSnap}
+                    step={0.1}
+                    value={settings.sketching.linearSnap}
+                    label="Linear snap increment"
+                    onCommit={(linearSnap) =>
+                      patch({
+                        sketching: { ...settings.sketching, linearSnap }
+                      })
+                    }
+                  />
+                </SettingRow>
+              </Group>
+              <Group title="Snapping">
+                <SettingRow
+                  title="Geometry snapping"
+                  hint="Endpoints, midpoints, centers, and intersections."
+                >
+                  <Toggle
+                    checked={settings.sketching.geometrySnapEnabled}
+                    label="Geometry snapping"
+                    onChange={(geometrySnapEnabled) =>
+                      patch({
+                        sketching: {
+                          ...settings.sketching,
+                          geometrySnapEnabled
+                        }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow title="Snap tolerance">
+                  <NumberSetting
+                    {...APP_SETTINGS_NUMBER_BOUNDS.snapTolerancePx}
+                    unit="px"
+                    value={settings.sketching.snapTolerancePx}
+                    label="Sketch snap tolerance"
+                    onCommit={(snapTolerancePx) =>
+                      patch({
+                        sketching: { ...settings.sketching, snapTolerancePx }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Automatic inferencing"
+                  hint="Horizontal and vertical hints. Hold Shift to skip."
+                >
+                  <Toggle
+                    checked={settings.sketching.inferenceEnabled}
+                    label="Automatic inferencing"
+                    onChange={(inferenceEnabled) =>
+                      patch({
+                        sketching: { ...settings.sketching, inferenceEnabled }
+                      })
+                    }
+                  />
+                </SettingRow>
+              </Group>
             </Section>
           )}
 
           {active === 'saving' && anyMatch && (
-            <Section
-              title="Saving"
-              intro="Local saves are always on and are not an optional toggle. Cloud copies of projects your account holds are yours to tune."
-            >
-              <SettingRow
-                title="Local autosave"
-                description="Canonical documents are saved to IndexedDB shortly after every edit."
-                scope="Always on"
-              >
-                <span className="settings-state good">Active</span>
-              </SettingRow>
-              <SettingRow
-                title="Cloud autosave"
-                description={`Copy a project your account holds to the account shortly after you stop editing. Turn it off to update your account only when you save a revision${saveKeyCopy}.`}
-                scope="Account"
-              >
-                <Toggle
-                  label="Cloud autosave"
-                  checked={settings.files.cloudAutosave}
-                  disabled={!cloudFunctionsEnabled}
-                  onChange={(cloudAutosave) =>
-                    onChange({
-                      ...settings,
-                      files: { ...settings.files, cloudAutosave }
-                    })
-                  }
-                />
-              </SettingRow>
-              <SettingRow
-                title="Cloud autosave delay"
-                description="Quiet time before the copy is written. A continuous edit is still written at least once a minute."
-                scope="Account"
-              >
-                <NumberSetting
-                  min={CLOUD_AUTOSAVE_DELAY_BOUNDS.min}
-                  max={CLOUD_AUTOSAVE_DELAY_BOUNDS.max}
-                  integer
-                  unit="s"
-                  label="Cloud autosave delay in seconds"
-                  disabled={
-                    !cloudFunctionsEnabled || !settings.files.cloudAutosave
-                  }
-                  value={settings.files.cloudAutosaveDelaySeconds}
-                  onCommit={(cloudAutosaveDelaySeconds) =>
-                    onChange({
-                      ...settings,
-                      files: { ...settings.files, cloudAutosaveDelaySeconds }
-                    })
-                  }
-                />
-              </SettingRow>
-              <SettingRow
-                title="Cloud revisions"
-                description={`Saving a revision${saveKeyCopy} creates an explicit owner-scoped checkpoint. Autosave does not add to this history.`}
-                scope="Current project"
-              >
-                <span className="settings-state">
-                  {cloudFunctionsEnabled ? 'Manual' : 'Disabled'}
-                </span>
-              </SettingRow>
+            <Section title="Saving" intro="Local saves are automatic.">
+              <Group title="This device">
+                <SettingRow
+                  title="Local autosave"
+                  hint="Every edit is saved in this browser."
+                >
+                  <Status tone="good">Always on</Status>
+                </SettingRow>
+              </Group>
+              <Group title="Cloud">
+                <SettingRow
+                  title="Cloud autosave"
+                  hint={`Off: update the cloud copy only when you save a revision${saveKeyCopy}.`}
+                >
+                  <Toggle
+                    label="Cloud autosave"
+                    checked={settings.files.cloudAutosave}
+                    disabled={!cloudFunctionsEnabled}
+                    onChange={(cloudAutosave) =>
+                      onChange({
+                        ...settings,
+                        files: { ...settings.files, cloudAutosave }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Cloud autosave delay"
+                  hint="Quiet time before syncing."
+                >
+                  <NumberSetting
+                    min={CLOUD_AUTOSAVE_DELAY_BOUNDS.min}
+                    max={CLOUD_AUTOSAVE_DELAY_BOUNDS.max}
+                    integer
+                    unit="s"
+                    label="Cloud autosave delay in seconds"
+                    disabled={
+                      !cloudFunctionsEnabled || !settings.files.cloudAutosave
+                    }
+                    value={settings.files.cloudAutosaveDelaySeconds}
+                    onCommit={(cloudAutosaveDelaySeconds) =>
+                      onChange({
+                        ...settings,
+                        files: { ...settings.files, cloudAutosaveDelaySeconds }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Cloud revisions"
+                  hint={`Saving a revision${saveKeyCopy} adds a checkpoint.`}
+                >
+                  <Status>
+                    {cloudFunctionsEnabled ? 'Manual' : 'Disabled'}
+                  </Status>
+                </SettingRow>
+              </Group>
             </Section>
           )}
 
           {active === 'assistant' && cloudFunctionsEnabled && anyMatch && (
             <Section
               title="AI Assistant"
-              intro="Choose a deployment-managed assistant or store an encrypted personal credential. Proposals remain previewable and explicitly applied."
+              intro="Every proposal is previewed before it changes your model."
             >
-              <SettingRow
-                title="AI assistant"
-                description="When off, the assistant is removed from the workspace and the server refuses assistant requests."
-                scope="All devices"
-              >
-                <Toggle
-                  checked={settings.assistant.enabled}
-                  label="AI assistant"
-                  onChange={(enabled) => patchAssistant({ enabled })}
-                />
-              </SettingRow>
-              <SettingRow
-                title="Credential source"
-                description="Deployment credentials are managed by the operator; personal tokens are owner-scoped."
-                scope="Account"
-              >
-                <select
-                  value={settings.assistant.credentialSource}
-                  aria-label="AI credential source"
-                  onChange={(event) =>
-                    patchAssistant({
-                      credentialSource: event.target
-                        .value as AppSettings['assistant']['credentialSource']
-                    })
-                  }
+              <Group>
+                <SettingRow
+                  title="AI assistant"
+                  hint="Off removes it from the workspace."
                 >
-                  <option value="deployment">Deployment default</option>
-                  <option value="personal">Personal token</option>
-                </select>
-              </SettingRow>
+                  <Toggle
+                    checked={settings.assistant.enabled}
+                    label="AI assistant"
+                    onChange={(enabled) => patchAssistant({ enabled })}
+                  />
+                </SettingRow>
+                <SettingRow title="Credential source">
+                  <Segmented
+                    label="AI credential source"
+                    value={settings.assistant.credentialSource}
+                    options={CREDENTIAL_OPTIONS}
+                    onChange={(credentialSource) =>
+                      patchAssistant({ credentialSource })
+                    }
+                  />
+                </SettingRow>
+                {settings.assistant.credentialSource === 'personal' ? null : (
+                  <SettingRow
+                    title="Built-in assistant"
+                    hint={
+                      effective
+                        ? `${effective.provider} · ${effective.model} · ${effective.reasoningEffort} reasoning`
+                        : 'Status appears when the server is reachable.'
+                    }
+                  >
+                    <Status tone={effective?.configured ? 'good' : 'warning'}>
+                      {effective?.configured ? 'Ready' : 'Not configured'}
+                    </Status>
+                  </SettingRow>
+                )}
+              </Group>
 
               {settings.assistant.credentialSource === 'personal' ? (
                 <>
-                  <SettingRow
-                    title="Provider"
-                    description="Known providers use their official Responses endpoint automatically."
-                    scope="Account"
-                  >
-                    <select
-                      value={settings.assistant.provider}
-                      aria-label="AI provider"
-                      onChange={(event) => {
-                        const provider = event.target
-                          .value as AppSettings['assistant']['provider'];
-                        patchAssistant({
-                          provider,
-                          ...providerDefaults(provider)
-                        });
-                      }}
-                    >
-                      <option value="openrouter">OpenRouter</option>
-                      <option value="openai">OpenAI</option>
-                      <option value="responses-compatible">
-                        Responses-compatible
-                      </option>
-                    </select>
-                  </SettingRow>
-                  {settings.assistant.provider === 'responses-compatible' ? (
-                    <SettingRow
-                      title="API endpoint"
-                      description="Beta requires a public HTTPS Responses endpoint; private-network targets are rejected."
-                      scope="Account"
-                    >
+                  <Group title="Model">
+                    <SettingRow title="Provider">
+                      <select
+                        value={settings.assistant.provider}
+                        aria-label="AI provider"
+                        onChange={(event) => {
+                          const provider = event.target
+                            .value as AppSettings['assistant']['provider'];
+                          patchAssistant({
+                            provider,
+                            ...providerDefaults(provider)
+                          });
+                        }}
+                      >
+                        <option value="openrouter">OpenRouter</option>
+                        <option value="openai">OpenAI</option>
+                        <option value="responses-compatible">
+                          Responses-compatible
+                        </option>
+                      </select>
+                    </SettingRow>
+                    {settings.assistant.provider === 'responses-compatible' ? (
+                      <SettingRow
+                        title="API endpoint"
+                        hint="Public HTTPS only."
+                      >
+                        <input
+                          className="settings-text-wide"
+                          type="url"
+                          value={settings.assistant.baseUrl}
+                          placeholder="https://models.example.com/v1/responses"
+                          aria-label="AI API endpoint"
+                          onChange={(event) =>
+                            patchAssistant({ baseUrl: event.target.value })
+                          }
+                        />
+                      </SettingRow>
+                    ) : null}
+                    <SettingRow title="Model" hint="The provider’s exact id.">
                       <input
-                        className="settings-text-wide"
-                        type="url"
-                        value={settings.assistant.baseUrl}
-                        placeholder="https://models.example.com/v1/responses"
-                        aria-label="AI API endpoint"
+                        className="settings-text-wide mono"
+                        value={settings.assistant.model}
+                        aria-label="AI model"
                         onChange={(event) =>
-                          patchAssistant({ baseUrl: event.target.value })
+                          patchAssistant({ model: event.target.value })
                         }
                       />
                     </SettingRow>
-                  ) : null}
-                  <SettingRow
-                    title="Model"
-                    description="Use the provider's exact model identifier."
-                    scope="Account"
-                  >
-                    <input
-                      className="settings-text-wide mono"
-                      value={settings.assistant.model}
-                      aria-label="AI model"
-                      onChange={(event) =>
-                        patchAssistant({ model: event.target.value })
-                      }
-                    />
-                  </SettingRow>
-                  <SettingRow
-                    title="Reasoning level"
-                    description="Higher levels can improve complex CAD planning at greater cost and latency."
-                    scope="Account"
-                  >
-                    <select
-                      value={settings.assistant.reasoningEffort}
-                      aria-label="AI reasoning level"
-                      onChange={(event) =>
-                        patchAssistant({
-                          reasoningEffort: event.target
-                            .value as AppSettings['assistant']['reasoningEffort']
-                        })
-                      }
+                    <SettingRow
+                      title="Reasoning level"
+                      hint="Higher plans better, costs more."
                     >
-                      <option value="provider-default">Provider default</option>
-                      <option value="off">Off</option>
-                      <option value="low">Low</option>
-                      <option value="medium">Medium</option>
-                      <option value="high">High</option>
-                      <option value="xhigh">Extra high</option>
-                    </select>
-                  </SettingRow>
-                  <SettingRow
-                    title="Output budget"
-                    description="Reasoning and patch output share this token ceiling."
-                    scope="Advanced AI"
-                  >
-                    <NumberSetting
-                      {...APP_SETTINGS_NUMBER_BOUNDS.maxOutputTokens}
-                      step={1000}
-                      integer
-                      value={settings.assistant.maxOutputTokens}
-                      label="Output budget (tokens)"
-                      onCommit={(maxOutputTokens) =>
-                        patchAssistant({ maxOutputTokens })
-                      }
-                    />
-                  </SettingRow>
-                  <SettingRow
-                    title="Request timeout"
-                    description="Bounded between 5 and 300 seconds."
-                    scope="Advanced AI"
-                  >
-                    <NumberSetting
-                      min={APP_SETTINGS_NUMBER_BOUNDS.timeoutMs.min / 1000}
-                      max={APP_SETTINGS_NUMBER_BOUNDS.timeoutMs.max / 1000}
-                      unit="s"
-                      value={settings.assistant.timeoutMs / 1000}
-                      label="Request timeout (seconds)"
-                      onCommit={(seconds) =>
-                        patchAssistant({ timeoutMs: seconds * 1000 })
-                      }
-                    />
-                  </SettingRow>
-                  <SettingRow
-                    title="Personal API token"
-                    description={
-                      credential?.stored
-                        ? `Saved as ${credential.hint}. The token cannot be revealed after saving.`
-                        : 'Sent once to the server and encrypted before storage. Never stored in the browser.'
-                    }
-                    scope="Encrypted"
-                  >
-                    <form
-                      className="settings-token-control"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        onSaveCredential(token.trim());
-                        setToken('');
-                      }}
-                    >
-                      <input
-                        type={showToken ? 'text' : 'password'}
-                        value={token}
-                        disabled={!session}
-                        autoComplete="off"
-                        placeholder={
-                          credential?.stored ? credential.hint : 'API token'
-                        }
-                        aria-label="Personal API token"
-                        onChange={(event) => setToken(event.target.value)}
-                      />
-                      {/* The label carries the state, as Show/Hide personal
-                          info does; the icon and tooltip follow it so sighted
-                          users see the state too. */}
-                      <button
-                        className="icon-button"
-                        type="button"
-                        aria-label={showToken ? 'Hide token' : 'Show token'}
-                        title={showToken ? 'Hide token' : 'Show token'}
-                        onClick={() => setShowToken((current) => !current)}
-                      >
-                        {showToken ? (
-                          <EyeOff size={14} aria-hidden="true" />
-                        ) : (
-                          <Eye size={14} aria-hidden="true" />
-                        )}
-                      </button>
-                      <button
-                        className="secondary"
-                        type="submit"
-                        disabled={
-                          busy ||
-                          !session ||
-                          token.trim().length < 8 ||
-                          !credential?.storageAvailable
+                      <select
+                        value={settings.assistant.reasoningEffort}
+                        aria-label="AI reasoning level"
+                        onChange={(event) =>
+                          patchAssistant({
+                            reasoningEffort: event.target
+                              .value as AppSettings['assistant']['reasoningEffort']
+                          })
                         }
                       >
-                        Save token
-                      </button>
-                    </form>
-                  </SettingRow>
-                  {!session ? (
-                    <div className="settings-warning settings-sign-in-warning">
-                      <span>
-                        Sign in to store a personal token in your encrypted
-                        cloud profile.
-                      </span>
-                      <button
-                        className="secondary"
-                        type="button"
-                        onClick={() => setActive('account')}
-                      >
-                        <LogIn size={14} aria-hidden="true" />
-                        Sign in
-                      </button>
-                    </div>
-                  ) : credential && !credential.storageAvailable ? (
-                    <div className="settings-warning">
-                      Personal token storage isn’t available on this server yet.
-                    </div>
-                  ) : null}
-                  <div className="settings-card-action split">
-                    <span
-                      className={
-                        effective?.configured && credentialValidated
-                          ? 'settings-state good'
-                          : 'settings-state warning'
-                      }
-                    >
-                      {!session
-                        ? 'Sign in to use a personal credential'
-                        : effective?.configured
-                          ? `${credentialValidated ? 'Validated' : 'Configured'} · ${effective.model} · ${effective.reasoningEffort}${credentialValidated ? '' : ' · run Test connection'}`
-                          : 'Personal assistant is not ready'}
-                    </span>
-                    <span>
-                      <button
-                        className="secondary"
-                        type="button"
-                        disabled={busy || !session || !credential?.stored}
-                        onClick={onTestAssistant}
-                      >
-                        <Bot size={14} aria-hidden="true" />
-                        Test connection
-                      </button>
-                      <button
-                        className="danger-ghost"
-                        type="button"
-                        disabled={busy || !session || !credential?.stored}
-                        onClick={onDeleteCredential}
-                      >
-                        <Trash2 size={14} aria-hidden="true" />
-                        Remove token
-                      </button>
-                    </span>
-                  </div>
-                  <label className="settings-long-field">
-                    <span>
-                      <strong>CAD assistant preferences</strong>
-                      <Scope>Account</Scope>
-                    </span>
-                    <small>
-                      Optional manufacturing context and typical clearances. It
-                      cannot override schema, safety, or review rules.
-                    </small>
-                    <textarea
-                      rows={5}
-                      maxLength={4000}
-                      value={settings.assistant.customInstructions}
-                      onChange={(event) =>
-                        patchAssistant({
-                          customInstructions: event.target.value
-                        })
-                      }
-                    />
-                  </label>
-                </>
-              ) : (
-                <div className="settings-deployment-summary">
-                  <Bot size={18} aria-hidden="true" />
-                  <span>
-                    <strong>
-                      {effective?.configured
-                        ? 'Deployment assistant ready'
-                        : 'Deployment assistant not configured'}
-                    </strong>
-                    <small>
-                      {effective
-                        ? `${effective.provider} · ${effective.model} · ${effective.reasoningEffort} reasoning`
-                        : 'Configuration status will appear when the API is available.'}
-                    </small>
-                  </span>
-                </div>
-              )}
+                        <option value="provider-default">
+                          Provider default
+                        </option>
+                        <option value="off">Off</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="xhigh">Extra high</option>
+                      </select>
+                    </SettingRow>
+                  </Group>
 
-              <div className="settings-privacy-note">
-                <ShieldCheck size={15} aria-hidden="true" />
-                <span>
-                  <strong>Review boundary stays on</strong>
-                  <small>
-                    The assistant receives compact feature history and active
-                    selection, never embedded STEP text or mesh arrays. Every
-                    proposal must still be previewed or explicitly applied.
-                  </small>
-                </span>
-              </div>
+                  <Group title="Token">
+                    {!session ? (
+                      <Notice
+                        action={
+                          <button
+                            className="secondary"
+                            type="button"
+                            onClick={() => setActive('account')}
+                          >
+                            <LogIn size={14} aria-hidden="true" />
+                            Sign in
+                          </button>
+                        }
+                      >
+                        Sign in to store a personal token.
+                      </Notice>
+                    ) : credential && !credential.storageAvailable ? (
+                      <Notice>
+                        Personal token storage isn’t available on this server
+                        yet.
+                      </Notice>
+                    ) : null}
+                    <SettingRow
+                      title="Personal API token"
+                      hint={
+                        credential?.stored
+                          ? `Saved as ${credential.hint}. Encrypted; it can’t be shown again.`
+                          : 'Encrypted on the server, never kept in the browser.'
+                      }
+                    >
+                      <form
+                        className="settings-token-control"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          onSaveCredential(token.trim());
+                          setToken('');
+                        }}
+                      >
+                        <input
+                          type={showToken ? 'text' : 'password'}
+                          value={token}
+                          disabled={!session}
+                          autoComplete="off"
+                          placeholder={
+                            credential?.stored ? credential.hint : 'API token'
+                          }
+                          aria-label="Personal API token"
+                          onChange={(event) => setToken(event.target.value)}
+                        />
+                        {/* The label carries the state, as Show/Hide personal
+                            info does; the icon and tooltip follow it so sighted
+                            users see the state too. */}
+                        <button
+                          className="icon-button"
+                          type="button"
+                          aria-label={showToken ? 'Hide token' : 'Show token'}
+                          title={showToken ? 'Hide token' : 'Show token'}
+                          onClick={() => setShowToken((current) => !current)}
+                        >
+                          {showToken ? (
+                            <EyeOff size={14} aria-hidden="true" />
+                          ) : (
+                            <Eye size={14} aria-hidden="true" />
+                          )}
+                        </button>
+                        <button
+                          className="secondary"
+                          type="submit"
+                          disabled={
+                            busy ||
+                            !session ||
+                            token.trim().length < 8 ||
+                            !credential?.storageAvailable
+                          }
+                        >
+                          Save token
+                        </button>
+                      </form>
+                    </SettingRow>
+                    <SettingRow
+                      title="Connection"
+                      hint={
+                        <Status
+                          tone={
+                            effective?.configured && credentialValidated
+                              ? 'good'
+                              : 'warning'
+                          }
+                        >
+                          {!session
+                            ? 'Sign in to use a personal credential'
+                            : effective?.configured
+                              ? `${credentialValidated ? 'Validated' : 'Configured'} · ${effective.model} · ${effective.reasoningEffort}${credentialValidated ? '' : ' · run Test connection'}`
+                              : 'Personal assistant is not ready'}
+                        </Status>
+                      }
+                    >
+                      <span className="settings-button-row">
+                        <button
+                          className="secondary"
+                          type="button"
+                          disabled={busy || !session || !credential?.stored}
+                          onClick={onTestAssistant}
+                        >
+                          <Bot size={14} aria-hidden="true" />
+                          Test connection
+                        </button>
+                        <button
+                          className="danger-ghost"
+                          type="button"
+                          disabled={busy || !session || !credential?.stored}
+                          onClick={onDeleteCredential}
+                        >
+                          <Trash2 size={14} aria-hidden="true" />
+                          Remove token
+                        </button>
+                      </span>
+                    </SettingRow>
+                  </Group>
+
+                  <Group title="Limits">
+                    <SettingRow
+                      title="Output budget"
+                      hint="Shared by reasoning and the proposal."
+                    >
+                      <NumberSetting
+                        {...APP_SETTINGS_NUMBER_BOUNDS.maxOutputTokens}
+                        step={1000}
+                        integer
+                        value={settings.assistant.maxOutputTokens}
+                        label="Output budget (tokens)"
+                        onCommit={(maxOutputTokens) =>
+                          patchAssistant({ maxOutputTokens })
+                        }
+                      />
+                    </SettingRow>
+                    <SettingRow title="Request timeout">
+                      <NumberSetting
+                        min={APP_SETTINGS_NUMBER_BOUNDS.timeoutMs.min / 1000}
+                        max={APP_SETTINGS_NUMBER_BOUNDS.timeoutMs.max / 1000}
+                        unit="s"
+                        value={settings.assistant.timeoutMs / 1000}
+                        label="Request timeout (seconds)"
+                        onCommit={(seconds) =>
+                          patchAssistant({ timeoutMs: seconds * 1000 })
+                        }
+                      />
+                    </SettingRow>
+                  </Group>
+
+                  <Group title="Instructions">
+                    <label className="settings-long-field">
+                      <strong>CAD assistant preferences</strong>
+                      <small>
+                        Manufacturing context and typical clearances. Can’t
+                        override review rules.
+                      </small>
+                      <textarea
+                        rows={4}
+                        maxLength={4000}
+                        value={settings.assistant.customInstructions}
+                        onChange={(event) =>
+                          patchAssistant({
+                            customInstructions: event.target.value
+                          })
+                        }
+                      />
+                    </label>
+                  </Group>
+                </>
+              ) : null}
+
+              <p className="settings-footnote">
+                <ShieldCheck size={14} aria-hidden="true" />
+                The assistant sees feature history and your selection, never
+                STEP text or meshes.
+              </p>
             </Section>
           )}
 
           {active === 'account' && anyMatch && (
             <Section
               title="Account"
-              intro="The CAD workspace stays local and usable without an account. Sign in only when you want a cloud profile."
+              intro="Optional. Everything works offline without one."
             >
-              {cloudFunctionsEnabled ? null : (
-                <div className="settings-warning" role="status">
-                  Cloud features are off on this device. Turn them on to sign
-                  in, share projects, or see your storage.
-                </div>
-              )}
               {cloudFunctionsEnabled && projectInvitationPending ? (
-                <div
-                  className="settings-warning settings-sign-in-warning"
-                  role={projectInvitationError ? 'alert' : 'status'}
-                >
-                  <span>
+                <Group>
+                  <Notice
+                    tone="info"
+                    role={projectInvitationError ? 'alert' : 'status'}
+                    action={
+                      <button
+                        className="secondary"
+                        type="button"
+                        disabled={busy}
+                        onClick={onDismissProjectInvitation}
+                      >
+                        Not now
+                      </button>
+                    }
+                  >
                     {projectInvitationError ??
                       'Project invitation ready. Sign in with the email address that received the link and the project will open automatically.'}
                     {projectInvitationError && session
                       ? ' Sign out below to try a different email address.'
                       : ''}
-                  </span>
-                  <button
-                    className="secondary"
-                    type="button"
-                    disabled={busy}
-                    onClick={onDismissProjectInvitation}
-                  >
-                    Not now
-                  </button>
-                </div>
+                  </Notice>
+                </Group>
               ) : null}
-              <Subhead>Cloud</Subhead>
-              <SettingRow
-                title="Cloud features"
-                description="When off, OpenZCAD blocks account, sync, collaboration, artifact archive, and AI requests. Local modeling, autosave, imports, and exports keep working."
-                scope="This device"
-              >
-                <Toggle
-                  checked={cloudFunctionsEnabled}
-                  label="Cloud features"
-                  onChange={onCloudFunctionsEnabledChange}
-                />
-              </SettingRow>
+              <Group>
+                {cloudFunctionsEnabled ? null : (
+                  <Notice>
+                    Cloud features are off on this device. Turn them on to sign
+                    in, share, or see your storage.
+                  </Notice>
+                )}
+                <SettingRow
+                  title="Cloud features"
+                  hint="Sign-in, sync, sharing, and AI. Local modeling works either way."
+                >
+                  <Toggle
+                    checked={cloudFunctionsEnabled}
+                    label="Cloud features"
+                    onChange={onCloudFunctionsEnabledChange}
+                  />
+                </SettingRow>
+              </Group>
               {cloudFunctionsEnabled ? (
                 <>
-                  <Subhead>Profile</Subhead>
-                  {session ? (
-                    <>
-                      <SettingRow
-                        title={
-                          personalInfoVisible
-                            ? session.displayName
-                            : 'Name hidden'
-                        }
-                        description={
-                          personalInfoVisible
-                            ? (session.email ?? session.userId)
-                            : 'Email hidden'
-                        }
-                        scope={
-                          session.mode === 'email-code'
-                            ? 'Email profile'
-                            : 'Development'
-                        }
-                      >
-                        <button
-                          className="secondary"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void onLogout().catch(() => undefined)}
-                        >
-                          <LogOut size={14} aria-hidden="true" />
-                          Sign out
-                        </button>
-                      </SettingRow>
-                      <SettingRow
-                        title="Membership"
-                        description={
-                          session.entitlements
-                            ? `${session.entitlements.projectLimit.toLocaleString()} cloud projects · ${formatBytes(session.entitlements.projectStorageLimitBytes)} cloud project storage · ${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit} hosted AI requests per ${session.entitlements.ai.windowSeconds / 60} minutes · ${session.entitlements.ai.costLimitUnits} weighted AI units per window · ${session.entitlements.ai.concurrencyLimit} concurrent requests. Hosted AI remains subject to service availability and deployment budgets.`
-                            : 'Membership limits are available after refreshing your account connection.'
-                        }
-                        scope="Account"
-                      >
-                        <span className="settings-state">
-                          {session.entitlements?.tier === 'premium'
-                            ? 'Premium'
-                            : 'Free'}
-                        </span>
-                      </SettingRow>
-                      {desktopAuthorizationAttempt ? (
-                        <div
-                          className={
-                            desktopAuthorizationApproved
-                              ? 'settings-warning settings-success'
-                              : 'settings-warning settings-sign-in-warning'
+                  <Group title="Profile">
+                    {session ? (
+                      <>
+                        <SettingRow
+                          title={
+                            personalInfoVisible
+                              ? session.displayName
+                              : 'Name hidden'
                           }
-                          role="status"
+                          hint={
+                            personalInfoVisible
+                              ? (session.email ?? session.userId)
+                              : 'Email hidden'
+                          }
                         >
-                          <span>
+                          <button
+                            className="secondary"
+                            type="button"
+                            disabled={busy}
+                            onClick={() =>
+                              void onLogout().catch(() => undefined)
+                            }
+                          >
+                            <LogOut size={14} aria-hidden="true" />
+                            Sign out
+                          </button>
+                        </SettingRow>
+                        <SettingRow
+                          title="Membership"
+                          hint={
+                            session.entitlements
+                              ? `${countLabel(session.entitlements.projectLimit, 'cloud project', 'cloud projects')} · ${formatBytes(session.entitlements.projectStorageLimitBytes)} project storage · ${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit} hosted AI requests per ${session.entitlements.ai.windowSeconds / 60} minutes`
+                              : 'Limits appear after your account reconnects.'
+                          }
+                          details={
+                            session.entitlements
+                              ? {
+                                  summary: 'AI limits',
+                                  body: `${session.entitlements.ai.costLimitUnits} weighted AI units per window · ${session.entitlements.ai.concurrencyLimit} concurrent requests. Hosted AI is subject to service availability and deployment budgets.`
+                                }
+                              : undefined
+                          }
+                        >
+                          <Status
+                            tone={
+                              session.entitlements?.tier === 'premium'
+                                ? 'good'
+                                : undefined
+                            }
+                          >
+                            {session.entitlements?.tier === 'premium'
+                              ? 'Premium'
+                              : 'Free'}
+                          </Status>
+                        </SettingRow>
+                        {desktopAuthorizationAttempt ? (
+                          <Notice
+                            tone={
+                              desktopAuthorizationApproved ? 'success' : 'info'
+                            }
+                            action={
+                              desktopAuthorizationApproved ? null : (
+                                <span className="settings-button-row">
+                                  <label className="settings-field-inline">
+                                    <span>Desktop code</span>
+                                    <input
+                                      type="text"
+                                      value={desktopAuthorizationCode}
+                                      inputMode="text"
+                                      autoComplete="one-time-code"
+                                      maxLength={11}
+                                      placeholder="ABCD1234"
+                                      onChange={(event) =>
+                                        onDesktopAuthorizationCodeChange(
+                                          event.currentTarget.value.toUpperCase()
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <button
+                                    className="primary"
+                                    type="button"
+                                    disabled={
+                                      busy ||
+                                      desktopAuthorizationCode.trim().length < 8
+                                    }
+                                    onClick={() =>
+                                      void onApproveDesktopLogin().catch(
+                                        () => undefined
+                                      )
+                                    }
+                                  >
+                                    <LogIn size={14} aria-hidden="true" />
+                                    Continue in OpenZCAD
+                                  </button>
+                                </span>
+                              )
+                            }
+                          >
                             {desktopAuthorizationApproved
                               ? 'OpenZCAD for macOS is connected. You can return to the app.'
                               : 'Enter the 8-character code shown in your OpenZCAD for macOS window before connecting this cloud profile.'}
-                          </span>
-                          {!desktopAuthorizationApproved ? (
-                            <>
-                              <label className="settings-field settings-field-inline">
-                                <span>Desktop code</span>
-                                <input
-                                  type="text"
-                                  value={desktopAuthorizationCode}
-                                  inputMode="text"
-                                  autoComplete="one-time-code"
-                                  maxLength={11}
-                                  placeholder="ABCD1234"
-                                  onChange={(event) =>
-                                    onDesktopAuthorizationCodeChange(
-                                      event.currentTarget.value.toUpperCase()
-                                    )
-                                  }
-                                />
-                              </label>
-                              <button
-                                className="primary"
-                                type="button"
-                                disabled={
-                                  busy ||
-                                  desktopAuthorizationCode.trim().length < 8
-                                }
-                                onClick={() =>
-                                  void onApproveDesktopLogin().catch(
-                                    () => undefined
-                                  )
-                                }
-                              >
-                                <LogIn size={14} aria-hidden="true" />
-                                Continue in OpenZCAD
-                              </button>
-                            </>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    <>
-                      <SettingRow
-                        title="Cloud profile"
-                        description="Your projects and device settings remain available locally when signed out."
-                        scope="Optional"
-                      >
-                        <CircleUserRound size={18} aria-hidden="true" />
-                      </SettingRow>
-                      {authConfigStatus === 'loading' ? (
-                        <div className="settings-warning" role="status">
-                          Checking whether email sign-in is available. Device
-                          settings and local CAD projects remain available.
-                        </div>
-                      ) : authConfigStatus === 'unavailable' ? (
-                        <div
-                          className="settings-warning settings-sign-in-warning"
-                          role="alert"
-                        >
-                          <span>
-                            Beta sign-in configuration could not be reached.
-                            Check the connection or retry; local CAD remains
-                            available.
-                          </span>
+                          </Notice>
+                        ) : null}
+                      </>
+                    ) : authConfigStatus === 'loading' ? (
+                      <Notice>Checking whether sign-in is available…</Notice>
+                    ) : authConfigStatus === 'unavailable' ? (
+                      <Notice
+                        role="alert"
+                        action={
                           <button
                             className="secondary"
                             type="button"
@@ -1942,83 +1770,86 @@ export function SettingsPage({
                             <RefreshCcw size={13} aria-hidden="true" />
                             Retry
                           </button>
+                        }
+                      >
+                        Sign-in could not be reached. Local projects are
+                        unaffected.
+                      </Notice>
+                    ) : desktopApp ? (
+                      authConfig?.desktopAuthEnabled ? (
+                        <div className="settings-auth-form">
+                          <span>
+                            <strong>Sign in with your browser</strong>
+                            <small>
+                              The security check and email code stay in your
+                              browser. macOS stores only the rotating refresh
+                              credential in Keychain.
+                            </small>
+                          </span>
+                          <div className="settings-auth-controls">
+                            <button
+                              className="primary"
+                              type="button"
+                              disabled={busy}
+                              onClick={() =>
+                                void onStartDesktopLogin().catch(
+                                  () => undefined
+                                )
+                              }
+                            >
+                              <LogIn size={14} aria-hidden="true" />
+                              Continue in browser
+                            </button>
+                          </div>
                         </div>
-                      ) : desktopApp ? (
-                        authConfig?.desktopAuthEnabled ? (
-                          <div className="settings-auth-form">
-                            <span>
-                              <strong>Sign in with your browser</strong>
-                              <small>
-                                Turnstile and the email code stay in your
-                                browser. macOS stores only the rotating refresh
-                                credential in Keychain.
-                              </small>
-                            </span>
-                            <div className="settings-auth-controls">
-                              <button
-                                className="primary"
-                                type="button"
-                                disabled={busy}
-                                onClick={() =>
-                                  void onStartDesktopLogin().catch(
-                                    () => undefined
-                                  )
-                                }
-                              >
-                                <LogIn size={14} aria-hidden="true" />
-                                Continue in browser
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="settings-warning" role="status">
-                            Desktop sign-in isn’t available on this server yet.
-                            Device settings and local CAD projects remain
-                            available.
-                          </div>
-                        )
-                      ) : authConfig?.emailCodeEnabled &&
-                        authConfig.turnstileSiteKey ? (
-                        loginChallengeId ? (
-                          <form
-                            className="settings-auth-form"
-                            onSubmit={(event) => {
-                              event.preventDefault();
-                              void onVerifyLoginCode(
-                                loginChallengeId,
-                                loginCode.trim()
-                              ).catch(() => undefined);
-                            }}
-                          >
-                            <span>
-                              <strong>Enter the email code</strong>
-                              <small>
-                                We sent a six-digit code to{' '}
-                                {personalInfoVisible
-                                  ? loginEmail
-                                  : 'your email address'}
-                                . It expires in 10 minutes.
-                              </small>
-                            </span>
-                            <div className="settings-auth-controls">
-                              <input
-                                className="mono"
-                                value={loginCode}
-                                inputMode="numeric"
-                                autoComplete="one-time-code"
-                                pattern="[0-9]{6}"
-                                aria-label="Email sign-in code"
-                                placeholder="000000"
-                                // No maxLength: it cuts a pasted " 730418" before
-                                // the digit filter runs and drops the last digit.
-                                onChange={(event) =>
-                                  setLoginCode(
-                                    event.target.value
-                                      .replace(/\D/g, '')
-                                      .slice(0, 6)
-                                  )
-                                }
-                              />
+                      ) : (
+                        <Notice>
+                          Desktop sign-in isn’t available on this server yet.
+                        </Notice>
+                      )
+                    ) : authConfig?.emailCodeEnabled &&
+                      authConfig.turnstileSiteKey ? (
+                      loginChallengeId ? (
+                        <form
+                          className="settings-auth-form"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            void onVerifyLoginCode(
+                              loginChallengeId,
+                              loginCode.trim()
+                            ).catch(() => undefined);
+                          }}
+                        >
+                          <span>
+                            <strong>Enter the email code</strong>
+                            <small>
+                              Sent to{' '}
+                              {personalInfoVisible
+                                ? loginEmail
+                                : 'your email address'}
+                              . It expires in 10 minutes.
+                            </small>
+                          </span>
+                          <div className="settings-auth-controls">
+                            <input
+                              className="mono"
+                              value={loginCode}
+                              inputMode="numeric"
+                              autoComplete="one-time-code"
+                              pattern="[0-9]{6}"
+                              aria-label="Email sign-in code"
+                              placeholder="000000"
+                              // No maxLength: it cuts a pasted " 730418" before
+                              // the digit filter runs and drops the last digit.
+                              onChange={(event) =>
+                                setLoginCode(
+                                  event.target.value
+                                    .replace(/\D/g, '')
+                                    .slice(0, 6)
+                                )
+                              }
+                            />
+                            <span className="settings-button-row">
                               <button
                                 className="primary"
                                 type="submit"
@@ -2038,208 +1869,190 @@ export function SettingsPage({
                               >
                                 Use another email
                               </button>
-                            </div>
-                          </form>
-                        ) : (
-                          <form
-                            className="settings-auth-form"
-                            onSubmit={(event) => {
-                              event.preventDefault();
-                              void onRequestLoginCode(
-                                loginEmail.trim(),
-                                turnstileToken
-                              )
-                                .then((response) =>
-                                  setLoginChallengeId(response.challengeId)
-                                )
-                                .catch(() => undefined)
-                                .finally(() => {
-                                  setTurnstileToken('');
-                                  setTurnstileReset((value) => value + 1);
-                                });
-                            }}
-                          >
-                            <span>
-                              <strong>Email sign-in</strong>
-                              <small>
-                                No password required. We will send a single-use
-                                code.
-                              </small>
                             </span>
-                            <div className="settings-auth-controls">
-                              <label>
-                                <span>Email</span>
-                                <PrivateEmailInput
-                                  visible={personalInfoVisible}
-                                  value={loginEmail}
-                                  autoComplete="email"
-                                  aria-label="Email address"
-                                  placeholder="you@example.com"
-                                  onChange={(event) =>
-                                    setLoginEmail(event.target.value)
-                                  }
-                                />
-                              </label>
-                              <TurnstileWidget
-                                siteKey={authConfig.turnstileSiteKey}
-                                resetSignal={turnstileReset}
-                                onToken={setTurnstileToken}
-                              />
-                              <button
-                                className="primary"
-                                type="submit"
-                                disabled={
-                                  busy || !loginEmail.trim() || !turnstileToken
-                                }
-                              >
-                                <Mail size={14} aria-hidden="true" />
-                                Email me a code
-                              </button>
-                            </div>
-                          </form>
-                        )
+                          </div>
+                        </form>
                       ) : (
-                        <div className="settings-warning" role="status">
-                          Email sign-in isn’t available on this server yet.
-                          Device settings and local CAD projects remain
-                          available.
-                        </div>
-                      )}
-                    </>
-                  )}
-                  <SettingRow
-                    title="Personal information"
-                    description="Names and emails start hidden for screenshots. Showing them here also shows them in project sharing until the page reloads."
-                    scope="This session"
-                  >
-                    <PersonalInfoToggle
-                      visible={personalInfoVisible}
-                      onChange={setPersonalInfoVisible}
-                    />
-                  </SettingRow>
-                  <SettingRow
-                    title="Preference synchronization"
-                    description="Non-secret preferences can follow this account; local persistence remains the offline fallback."
-                    scope="Account"
-                  >
-                    <span
-                      className={
-                        session && accountState
-                          ? 'settings-state good'
-                          : 'settings-state warning'
-                      }
+                        <form
+                          className="settings-auth-form"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            void onRequestLoginCode(
+                              loginEmail.trim(),
+                              turnstileToken
+                            )
+                              .then((response) =>
+                                setLoginChallengeId(response.challengeId)
+                              )
+                              .catch(() => undefined)
+                              .finally(() => {
+                                setTurnstileToken('');
+                                setTurnstileReset((value) => value + 1);
+                              });
+                          }}
+                        >
+                          <span>
+                            <strong>Email sign-in</strong>
+                            <small>No password. We email you a code.</small>
+                          </span>
+                          <div className="settings-auth-controls">
+                            <label>
+                              <span>Email</span>
+                              <PrivateEmailInput
+                                visible={personalInfoVisible}
+                                value={loginEmail}
+                                autoComplete="email"
+                                aria-label="Email address"
+                                placeholder="you@example.com"
+                                onChange={(event) =>
+                                  setLoginEmail(event.target.value)
+                                }
+                              />
+                            </label>
+                            <TurnstileWidget
+                              siteKey={authConfig.turnstileSiteKey}
+                              resetSignal={turnstileReset}
+                              onToken={setTurnstileToken}
+                            />
+                            <button
+                              className="primary"
+                              type="submit"
+                              disabled={
+                                busy || !loginEmail.trim() || !turnstileToken
+                              }
+                            >
+                              <Mail size={14} aria-hidden="true" />
+                              Email me a code
+                            </button>
+                          </div>
+                        </form>
+                      )
+                    ) : (
+                      <Notice>
+                        Email sign-in isn’t available on this server yet.
+                      </Notice>
+                    )}
+                    <SettingRow
+                      title="Personal information"
+                      hint="Names and emails stay hidden for screenshots until you reload."
                     >
-                      {session && accountState?.synced
-                        ? 'Available'
-                        : session
-                          ? 'Ready to save'
-                          : 'Device only'}
-                    </span>
-                  </SettingRow>
-                  <Subhead>Sharing</Subhead>
-                  <SettingRow
-                    title="Project sharing"
-                    description="Allow invitations and live collaboration. Turning this off stops collaboration connections; cloud autosave remains separate."
-                    scope="Account preference"
-                  >
-                    <Toggle
-                      checked={settings.collaboration.enabled}
-                      label="Project sharing"
-                      onChange={(enabled) => patchCollaboration({ enabled })}
-                    />
-                  </SettingRow>
-                  <Subhead>Storage</Subhead>
-                  <SettingRow
-                    title="Account storage"
-                    description={
-                      cloudFunctionsEnabled
-                        ? storageDescription(storageUsage)
-                        : 'Account storage is not contacted while cloud features are disabled.'
-                    }
-                    scope="Account"
-                  >
-                    <span className="settings-state">
-                      {storageUsage
-                        ? formatBytes(
-                            storageUsage.documentBytes +
-                              storageUsage.revisionBytes
-                          )
-                        : '—'}
-                    </span>
-                  </SettingRow>
-                  <SettingRow
-                    title="Cloud file storage"
-                    description="Stored imports and exports count toward the project owner's allowance. Existing files remain available if the account exceeds its allowance."
-                    scope="Account"
-                  >
-                    <span className="settings-state">
-                      {storageUsage
-                        ? `${formatBytes(storageUsage.artifactBytes)} of ${formatBytes(storageUsage.artifactLimitBytes)}`
-                        : '—'}
-                    </span>
-                  </SettingRow>
+                      <PersonalInfoToggle
+                        visible={personalInfoVisible}
+                        onChange={setPersonalInfoVisible}
+                      />
+                    </SettingRow>
+                    <SettingRow
+                      title="Preference synchronization"
+                      hint="Preferences follow your account."
+                    >
+                      <Status
+                        tone={session && accountState ? 'good' : 'warning'}
+                      >
+                        {session && accountState?.synced
+                          ? 'Available'
+                          : session
+                            ? 'Ready to save'
+                            : 'Device only'}
+                      </Status>
+                    </SettingRow>
+                  </Group>
+                  <Group title="Sharing">
+                    <SettingRow
+                      title="Project sharing"
+                      hint="Invitations and live collaboration."
+                    >
+                      <Toggle
+                        checked={settings.collaboration.enabled}
+                        label="Project sharing"
+                        onChange={(enabled) => patchCollaboration({ enabled })}
+                      />
+                    </SettingRow>
+                  </Group>
+                  {/* Usage belongs to a signed-in profile; signed out there
+                      is nothing to measure, so the group would be two dashes. */}
+                  {session ? (
+                    <Group title="Storage">
+                      <SettingRow
+                        title="Account storage"
+                        hint={storageHint(storageUsage)}
+                      >
+                        <Status>
+                          {storageUsage
+                            ? formatBytes(
+                                storageUsage.documentBytes +
+                                  storageUsage.revisionBytes
+                              )
+                            : '—'}
+                        </Status>
+                      </SettingRow>
+                      <SettingRow
+                        title="Cloud file storage"
+                        hint="Imports and exports. Existing files stay if you go over."
+                      >
+                        {storageUsage ? (
+                          <span className="settings-meter-figure">
+                            <Meter
+                              used={storageUsage.artifactBytes}
+                              limit={storageUsage.artifactLimitBytes}
+                              label="Cloud file storage used"
+                              valueText={fileStorageFigure(storageUsage)}
+                            />
+                            <span>{fileStorageFigure(storageUsage)}</span>
+                          </span>
+                        ) : (
+                          <Status>—</Status>
+                        )}
+                      </SettingRow>
+                    </Group>
+                  ) : null}
                 </>
               ) : null}
             </Section>
           )}
 
           {active === 'privacy' && anyMatch && (
-            <Section
-              title="Privacy & data"
-              intro="Choose what leaves this device, and permanently remove your cloud data. Local projects are managed from the Trash on the start screen, and local and cloud copies remain separate."
-            >
-              <Subhead>Analytics</Subhead>
-              <SettingRow
-                title="Optional usage analytics"
-                description={
-                  desktopApp
-                    ? 'Optional usage analytics are available in the web browser. This desktop app does not send usage events.'
-                    : 'Allow Glimpse to count feature categories, workflow steps, exports, diagnostic codes, part-count and project-file-size ranges, transfer-size ranges, and coarse timings. This expanded scope requires a fresh choice. No model contents, geometry, filenames, project names or identity. Off by default. DNT/GPC and turning off cloud features suppress sending while preserving this choice; withdraw here to stop sending immediately. Existing anonymous totals cannot be attributed or removed. Basic server counters measure API activity and reliability. Local operations require opt-in. This browser-only choice is separate for each app.'
-                }
-                scope="This device"
-              >
-                {desktopApp ? (
-                  <span className="settings-card-action-note">
-                    Web browser only
-                  </span>
-                ) : (
-                  <AnalyticsConsent />
-                )}
-              </SettingRow>
-              {session && !desktopApp && (
+            <Section title="Privacy & data" intro="What leaves this device.">
+              <Group title="Analytics">
+                <AnalyticsConsent />
+                {session && !desktopApp ? (
+                  <CloudStatisticsConsent
+                    key={session.userId}
+                    accountKey={session.userId}
+                    cloudEnabled={cloudFunctionsEnabled}
+                  />
+                ) : null}
+              </Group>
+              <Group title="Your data">
                 <SettingRow
-                  title="Cloud account statistics"
-                  description="Separately allow hourly aggregate account, owned-project, revision and known storage-byte snapshots for 30 days, across your devices. Only opted-in accounts are included. No account or project identifiers leave OpenZCAD. Includes retained trash and storage metadata, never model contents. Withdraw here at any time; published aggregates remain up to 90 days. This account-wide permission is separate from browser DNT/GPC and this device’s cloud switch."
-                  scope="This account"
-                >
-                  {cloudFunctionsEnabled ? (
-                    <CloudStatisticsConsent
-                      key={session.userId}
-                      accountKey={session.userId}
-                    />
-                  ) : (
-                    <p className="settings-card-action-note">
-                      Enable cloud features to manage this online permission. An
-                      existing grant remains active until withdrawn or its
-                      30-day expiry.
-                    </p>
-                  )}
-                </SettingRow>
-              )}
-              <Subhead>Your data</Subhead>
-              <SettingRow
-                title="Local project data"
-                description="Local projects stay in this browser's storage. Delete them from the Trash on the start screen. The cloud deletions below never touch projects or settings on this device."
-                scope="This device"
-              >
-                <ShieldCheck size={17} aria-hidden="true" />
-              </SettingRow>
+                  title="Local project data"
+                  hint={
+                    session
+                      ? 'Stays in this browser; delete it from the Trash on the start screen. The cloud deletions below never touch it.'
+                      : 'Stays in this browser; delete it from the Trash on the start screen.'
+                  }
+                />
+                {session ? null : (
+                  <SettingRow
+                    title="Cloud data"
+                    hint="Sign in to review or delete cloud data."
+                  />
+                )}
+              </Group>
               {session ? (
-                <>
+                <Group title="Delete cloud data" tone="danger">
+                  {health?.accountErasureReady !== true ? (
+                    <Notice>
+                      Cloud data deletion isn’t available on this server yet.
+                    </Notice>
+                  ) : health?.projectErasureReady !== true ? (
+                    <Notice>
+                      Project deletion is unavailable until storage cleanup is
+                      ready. Profile-only deletion remains available.
+                    </Notice>
+                  ) : null}
                   <SettingRow
                     title="Delete all cloud projects"
-                    description="Permanently delete every cloud project you own, including revisions, imports, generated files, and collaboration state. Your cloud profile stays active."
-                    scope="Cloud only"
+                    hint="Every project you own, with its revisions and files. Your profile stays."
                   >
                     <button
                       className="secondary danger"
@@ -2253,8 +2066,7 @@ export function SettingsPage({
                   </SettingRow>
                   <SettingRow
                     title="Delete cloud profile"
-                    description="Delete your email profile, synchronized settings, personal AI credential, and all sessions. Owned projects remain under a minimal anonymous ownership record."
-                    scope="All devices"
+                    hint="Your email profile, synced settings, AI credential, and sessions. Projects stay, owned anonymously."
                   >
                     <button
                       className="secondary danger"
@@ -2266,146 +2078,100 @@ export function SettingsPage({
                       Delete profile
                     </button>
                   </SettingRow>
-                  <div className="settings-cloud-delete-all">
-                    <SettingRow
-                      title="Delete all cloud data"
-                      description="Permanently delete your cloud profile and every project you own. Collaborators lose access immediately. This is the complete cloud-data deletion action."
-                      scope="Cannot undo"
+                  <SettingRow
+                    title="Delete all cloud data"
+                    hint="Profile and every project. Collaborators lose access. Can’t be undone."
+                  >
+                    <button
+                      className="secondary danger"
+                      type="button"
+                      disabled={busy || health?.projectErasureReady !== true}
+                      onClick={() => setDeletionScope('all')}
                     >
-                      <button
-                        className="secondary danger"
-                        type="button"
-                        disabled={busy || health?.projectErasureReady !== true}
-                        onClick={() => setDeletionScope('all')}
-                      >
-                        <Trash2 size={14} aria-hidden="true" />
-                        Delete all data
-                      </button>
-                    </SettingRow>
-                  </div>
-                  {health?.accountErasureReady !== true ? (
-                    <div className="settings-warning" role="status">
-                      Cloud data deletion isn’t available on this server yet. No
-                      data can be deleted from this screen until it is.
-                    </div>
-                  ) : health?.projectErasureReady !== true ? (
-                    <div className="settings-warning" role="status">
-                      Cloud project deletion is unavailable until private object
-                      storage and collaboration cleanup pass their readiness
-                      checks. Profile-only deletion remains available.
-                    </div>
-                  ) : null}
-                </>
-              ) : (
-                <SettingRow
-                  title="Cloud data"
-                  description="Sign in before reviewing or deleting cloud profile and project data."
-                  scope="Signed out"
-                >
-                  <ShieldCheck size={17} aria-hidden="true" />
-                </SettingRow>
-              )}
+                      <Trash2 size={14} aria-hidden="true" />
+                      Delete all data
+                    </button>
+                  </SettingRow>
+                </Group>
+              ) : null}
             </Section>
           )}
 
           {active === 'advanced' && anyMatch && (
             <Section
               title="Advanced"
-              intro="An editing fallback, the architectural guarantees that are intentionally visible and non-configurable, and a way back to the defaults."
+              intro="Editing fallback, build details, and reset."
             >
-              <Subhead>Editing</Subhead>
-              <SettingRow
-                title="Direct manipulation"
-                description="Selection-first editing: click a face to arm an offset handle and drag it on the model. Turn this off to fall back to the earlier editing behavior."
-                scope="This device"
-              >
-                <Toggle
-                  checked={settings.experiments.directManipulation}
-                  label="Direct manipulation"
-                  onChange={(directManipulation) =>
-                    patch({
-                      experiments: {
-                        ...settings.experiments,
-                        directManipulation
-                      }
-                    })
-                  }
-                />
-              </SettingRow>
-              <Subhead>Diagnostics</Subhead>
-              <SettingRow
-                title="Geometry kernel"
-                description="Exact B-rep rebuilds and exports run in a dedicated browser worker."
-                scope="Required"
-              >
-                <span className="settings-state good">Exact</span>
-              </SettingRow>
-              <SettingRow
-                title="Kernel version"
-                description="The pinned kernel build this app was compiled against. Quote it when reporting a geometry defect."
-                scope="Diagnostics"
-              >
-                <span
-                  className="settings-state"
-                  title={kernelBuildDetail(KERNEL_BUILD)}
+              <Group title="Editing">
+                <SettingRow
+                  title="Direct manipulation"
+                  hint="Click a face and drag its handle. Off restores the earlier editing flow."
                 >
-                  {kernelBuildLabel(KERNEL_BUILD)}
-                </span>
-              </SettingRow>
-              <SettingRow
-                title="Document authority"
-                description="Canonical feature history is the source of truth; viewport meshes are disposable projections."
-                scope="Required"
-              >
-                <span className="settings-state good">History</span>
-              </SettingRow>
-              <SettingRow
-                title="Exports"
-                description="Exports are generated and validated by the same browser geometry worker as the viewport."
-                scope="Exact pipeline"
-              >
-                <Box size={16} aria-hidden="true" />
-              </SettingRow>
-              <SettingRow
-                title="Settings schema"
-                description="Versioned independently from the project document schema."
-                scope="Diagnostics"
-              >
-                <span className="settings-state">
-                  v{settings.schemaVersion}
-                </span>
-              </SettingRow>
-              <SettingRow
-                title="Cloud project storage"
-                description="This server must be ready to store your projects before they can sync between your devices."
-                scope="Diagnostics"
-              >
-                <span
-                  className={`settings-state ${health?.documentStorageAccountingReady === true && health.projectObjectStorageReady === true ? 'good' : 'warning'}`}
+                  <Toggle
+                    checked={settings.experiments.directManipulation}
+                    label="Direct manipulation"
+                    onChange={(directManipulation) =>
+                      patch({
+                        experiments: {
+                          ...settings.experiments,
+                          directManipulation
+                        }
+                      })
+                    }
+                  />
+                </SettingRow>
+              </Group>
+              <Group title="About this build">
+                <SettingRow compact title="Geometry kernel">
+                  <Status tone="good">Exact</Status>
+                </SettingRow>
+                <SettingRow compact title="Kernel version">
+                  <Status title={kernelBuildDetail(KERNEL_BUILD)}>
+                    {kernelBuildLabel(KERNEL_BUILD)}
+                  </Status>
+                </SettingRow>
+                <SettingRow compact title="Document authority">
+                  <Status tone="good">History</Status>
+                </SettingRow>
+                <SettingRow compact title="Exports">
+                  <Status tone="good">Exact</Status>
+                </SettingRow>
+                <SettingRow compact title="Settings schema">
+                  <Status>v{settings.schemaVersion}</Status>
+                </SettingRow>
+                <SettingRow compact title="Cloud project storage">
+                  <Status
+                    tone={
+                      health?.documentStorageAccountingReady === true &&
+                      health.projectObjectStorageReady === true
+                        ? 'good'
+                        : 'warning'
+                    }
+                  >
+                    {health === null
+                      ? 'Unavailable'
+                      : health.documentStorageAccountingReady === true &&
+                          health.projectObjectStorageReady === true
+                        ? 'Ready'
+                        : 'Not ready'}
+                  </Status>
+                </SettingRow>
+              </Group>
+              <Group title="Reset">
+                <SettingRow
+                  title="Reset application settings"
+                  hint="Restore defaults on this device. Projects are kept."
                 >
-                  {health === null
-                    ? 'Unavailable'
-                    : health.documentStorageAccountingReady === true &&
-                        health.projectObjectStorageReady === true
-                      ? 'Ready'
-                      : 'Not ready'}
-                </span>
-              </SettingRow>
-              <Subhead>Reset</Subhead>
-              <SettingRow
-                title="Reset application settings"
-                description="Restore defaults on this device. Projects and their revision history are not deleted."
-                scope="This device"
-              >
-                <button
-                  className="danger-ghost"
-                  type="button"
-                  onClick={onReset}
-                >
-                  <RefreshCcw size={14} aria-hidden="true" />
-                  Reset settings
-                </button>
-              </SettingRow>
+                  <button
+                    className="danger-ghost"
+                    type="button"
+                    onClick={onReset}
+                  >
+                    <RefreshCcw size={14} aria-hidden="true" />
+                    Reset settings
+                  </button>
+                </SettingRow>
+              </Group>
             </Section>
           )}
         </main>

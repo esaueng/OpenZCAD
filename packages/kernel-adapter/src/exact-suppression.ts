@@ -78,6 +78,7 @@ export function suppressedFeaturePassThroughSource(
     case 'imported-mesh':
     case 'imported-step':
     case 'datum-plane':
+    case 'datum-axis':
       return null;
     default: {
       const unhandled: never = data;

@@ -1,7 +1,10 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
 import {
+  datumAxisPlaneSources,
+  datumAxisPointSources,
   datumPlaneSources,
   datumPointSources,
+  featureDatumAxisRefs,
   isDatumPlaneRef,
   isFeatureSuppressed,
   type DatumPlaneSource,
@@ -45,7 +48,8 @@ const HANDLED_FEATURE_KINDS: ReadonlySet<FeatureKind> = new Set<FeatureKind>([
   'direct-edit',
   'imported-step',
   'imported-mesh',
-  'datum-plane'
+  'datum-plane',
+  'datum-axis'
 ]);
 
 function assertAllFeatureKindsHandled(kind: FeatureKind): void {
@@ -101,9 +105,13 @@ export function affectedFeatureTargets(
   const sourceSketchId =
     source?.data.featureKind === 'sketch' ? source.data.sketchId : undefined;
   // A datum plane builds no body, but every sketch, Split and Mirror on it
-  // (and every datum built from it) moves when it does.
+  // (and every datum built from it) moves when it does; likewise every
+  // revolve, pattern and Move turning about a datum axis.
   const sourceDatumId =
-    source?.data.featureKind === 'datum-plane' ? source.featureId : undefined;
+    source?.data.featureKind === 'datum-plane' ||
+    source?.data.featureKind === 'datum-axis'
+      ? source.featureId
+      : undefined;
   if (
     sourceIndex < 0 ||
     !source ||
@@ -174,6 +182,20 @@ export function affectedFeatureTargets(
           affectedDatums.add(feature.featureId);
         continue;
       }
+      case 'datum-axis': {
+        const { definition } = data;
+        if (
+          datumAxisPlaneSources(definition).some(planeAffected) ||
+          datumAxisPointSources(definition).some(
+            (point) =>
+              point.type === 'edge-vertex' && affectedBodies.has(point.bodyId)
+          ) ||
+          ((definition.kind === 'edge' || definition.kind === 'cylinder') &&
+            affectedBodies.has(definition.source.bodyId))
+        )
+          affectedDatums.add(feature.featureId);
+        continue;
+      }
       case 'extrude':
         affected =
           affectedSketches.has(data.sketchId) ||
@@ -183,7 +205,10 @@ export function affectedFeatureTargets(
           (data.toFace !== undefined && planeAffected(data.toFace));
         break;
       case 'revolve':
-        affected = affectedSketches.has(data.sketchId);
+        affected =
+          affectedSketches.has(data.sketchId) ||
+          (data.axisRef !== undefined &&
+            affectedDatums.has(data.axisRef.datumFeatureId));
         break;
       case 'loft':
         affected = data.sections.some((section) =>
@@ -222,7 +247,11 @@ export function affectedFeatureTargets(
       case 'chamfer':
       case 'pattern':
       case 'direct-edit':
-        affected = affectedBodies.has(data.targetBodyId);
+        affected =
+          affectedBodies.has(data.targetBodyId) ||
+          featureDatumAxisRefs(data).some((ref) =>
+            affectedDatums.has(ref.datumFeatureId)
+          );
         break;
       case 'primitive':
       case 'imported-mesh':

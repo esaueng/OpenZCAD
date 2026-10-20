@@ -46,10 +46,10 @@ describe('settings switches', () => {
   });
 });
 
-describe('settings sign-in rows', () => {
-  it('wraps instead of pushing its action over the code field', () => {
-    expect(rule('.settings-sign-in-warning')).toMatch(/flex-wrap:\s*wrap/);
-    const action = rule('.settings-sign-in-warning > button');
+describe('settings notices', () => {
+  it('wraps instead of pushing its action over the message', () => {
+    expect(rule('.settings-notice')).toMatch(/flex-wrap:\s*wrap/);
+    const action = rule('.settings-notice > button');
     expect(action).toMatch(/flex:\s*none/);
     expect(action).toMatch(/white-space:\s*nowrap/);
   });
