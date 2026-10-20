@@ -971,4 +971,35 @@ describe('D01 sheet page and export', () => {
     const pdf = new TextDecoder('latin1').decode(sheetPageToPdf(page, 'Sheet'));
     expect(pdf).toContain('(Bracket \\(rev\\) \\\\ 2) Tj');
   });
+
+  it('fits title-block text at the font size used by preview and exports', () => {
+    const drawing = {
+      ...sheet([]),
+      views: [],
+      titleBlock: { title: 'M'.repeat(50), author: 'M'.repeat(20) }
+    };
+    const page = composeSheetPage(drawing, [], {
+      projectName: 'Bracket',
+      units: 'mm'
+    });
+    const box = titleBlockBox(drawing);
+    const fitted = page.texts.filter((text) => text.text.startsWith('MMM'));
+    expect(fitted).toHaveLength(2);
+    for (const text of fitted) {
+      // Base-14 Helvetica and Helvetica-Bold both advance M by 833/1000 em
+      // and a period by 278/1000 em. The page stores cap height; all three
+      // renderers use font-size = cap height / 0.718.
+      const advance =
+        ([...text.text].reduce(
+          (sum, char) => sum + (char === 'M' ? 833 : 278),
+          0
+        ) *
+          text.sizeMm) /
+        0.718 /
+        1000;
+      const available = text.bold ? box.width - 4 : box.width * 0.34 - 3;
+      expect(advance).toBeLessThanOrEqual(available);
+      expect(text.text.endsWith('...')).toBe(true);
+    }
+  });
 });

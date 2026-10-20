@@ -157,6 +157,9 @@ export function gridCellsAlong(
   return out;
 }
 
+/** Maximum retained triangle/cell references in one view's spatial index. */
+const MAX_OCCLUSION_GRID_ENTRIES = 4_000_000;
+
 /** Exported for tests. */
 export class OcclusionGrid {
   private readonly cells: number[][];
@@ -169,8 +172,16 @@ export class OcclusionGrid {
   constructor(
     private readonly triangles: Triangle[],
     bounds: { minU: number; minV: number; maxU: number; maxV: number },
-    private readonly coverTolerance: number
+    private readonly coverTolerance: number,
+    entryBudget = MAX_OCCLUSION_GRID_ENTRIES
   ) {
+    if (!Number.isSafeInteger(entryBudget) || entryBudget < 0)
+      throw new Error('Invalid drawing projection memory budget.');
+    // Bound retained triangle/cell references independently of geometric
+    // tolerances. A smaller budget supports bounded boundary tests; callers
+    // cannot raise the production limit.
+    const entryLimit = Math.min(entryBudget, MAX_OCCLUSION_GRID_ENTRIES);
+    let entries = 0;
     this.size = Math.max(
       8,
       Math.min(256, Math.ceil(Math.sqrt(triangles.length / 2)))
@@ -215,6 +226,12 @@ export class OcclusionGrid {
         if (low > high) continue;
         const i0 = this.column(low);
         const i1 = this.column(high);
+        const added = i1 - i0 + 1;
+        if (added > entryLimit - entries)
+          throw new Error(
+            'Drawing view exceeds its projection memory budget; show fewer bodies or choose another view.'
+          );
+        entries += added;
         for (let i = i0; i <= i1; i += 1)
           this.cells[j * this.size + i]!.push(index);
       }

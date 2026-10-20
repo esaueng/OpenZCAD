@@ -103,8 +103,9 @@ export function textWidthMm(
     const code = char.codePointAt(0)!;
     units += HELVETICA_WIDTHS[code - 0x20] ?? 556;
   }
+  // Renderers convert cap height to font size by the same 0.718 factor.
   // Helvetica-Bold runs about 5% wider; this only decides truncation.
-  return ((units * sizeMm) / 1000) * (bold ? 1.05 : 1);
+  return ((units * (sizeMm / 0.718)) / 1000) * (bold ? 1.05 : 1);
 }
 
 /** `text` cut with an ellipsis-free "..." so it fits `widthMm`. */

@@ -1123,6 +1123,37 @@ describe('D01 occlusion tolerance', () => {
 });
 
 describe('D01 occlusion grid', () => {
+  it('refuses a grid before its entry budget is exceeded', () => {
+    const triangles = [
+      {
+        u0: 0,
+        v0: 0,
+        d0: 0,
+        u1: 1,
+        v1: 0,
+        d1: 0,
+        u2: 0,
+        v2: 1,
+        d2: 0,
+        area: 1,
+        tol: 0
+      }
+    ];
+    const bounds = { minU: 0, minV: 0, maxU: 1, maxV: 1 };
+    const ordinary = new OcclusionGrid(triangles, bounds, 1e-9);
+    const exact = new OcclusionGrid(
+      triangles,
+      bounds,
+      1e-9,
+      ordinary.entryCount
+    );
+    expect(exact.entryCount).toBe(ordinary.entryCount);
+    expect(exact.occluded(0.25, 0.25, 1)).toBe(true);
+    expect(
+      () => new OcclusionGrid(triangles, bounds, 1e-9, ordinary.entryCount - 1)
+    ).toThrow(/drawing view.*memory budget/i);
+  });
+
   it('files a thin triangle under the cells it covers, not its whole bounding box', () => {
     // A fan of 2000 slivers around a shared centre: every sliver's bounding
     // box spans a quadrant of the grid, its footprint only a thin wedge.
