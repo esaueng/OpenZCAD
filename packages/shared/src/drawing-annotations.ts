@@ -120,7 +120,7 @@ function isShortText(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= max;
 }
 
-function edgeReferenceError(value: unknown): string | null {
+function edgeReferenceError(value: unknown, hash: number): string | null {
   if (!isRecord(value) || value.kind !== 'edge')
     return 'is not an edge reference';
   if (
@@ -134,6 +134,10 @@ function edgeReferenceError(value: unknown): string | null {
     return 'has a malformed edge reference';
   if (JSON.stringify(value).length > MAX_REFERENCE_JSON_LENGTH)
     return 'has an oversized edge reference';
+  // The reference names the edge the hash fingerprints; one that disagrees
+  // would resolve by its lineage to some other edge.
+  if (value.currentHash !== hash)
+    return 'has an edge reference that contradicts its hash';
   return null;
 }
 
@@ -142,7 +146,8 @@ function edgeRefError(value: unknown): string | null {
   if (!isShortText(value.bodyId, 128)) return 'names no body';
   if (typeof value.hash !== 'number' || !Number.isFinite(value.hash))
     return 'has an invalid edge hash';
-  if (value.reference !== undefined) return edgeReferenceError(value.reference);
+  if (value.reference !== undefined)
+    return edgeReferenceError(value.reference, value.hash);
   return null;
 }
 

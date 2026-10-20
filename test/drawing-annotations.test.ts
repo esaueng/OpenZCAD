@@ -300,6 +300,19 @@ describe('D02 annotation section (schema v31)', () => {
       ],
       [
         {
+          ...good,
+          from: {
+            edge: {
+              ...ref,
+              reference: { ...ref.reference!, currentHash: ref.hash + 1 }
+            },
+            anchor: 'first'
+          }
+        },
+        /contradicts its hash/
+      ],
+      [
+        {
           annotationId: id('n'),
           kind: 'note',
           text: ' ',

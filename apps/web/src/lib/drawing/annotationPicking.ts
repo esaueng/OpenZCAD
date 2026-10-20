@@ -375,10 +375,14 @@ export function edgeRefFor(
   bodyId: BodyId,
   edge: EdgeTopology
 ): DrawingEdgeRef | null {
+  // A reference written for another hash would be refused on save; keep
+  // the pick hash-only then rather than store a contradiction.
   const ref: DrawingEdgeRef = {
     bodyId,
     hash: edge.hash,
-    ...(edge.reference ? { reference: edge.reference } : {})
+    ...(edge.reference && edge.reference.currentHash === edge.hash
+      ? { reference: edge.reference }
+      : {})
   };
   const found = resolveEdge(bodies[bodyId], ref);
   return found.ok && found.entry === edge ? ref : null;
