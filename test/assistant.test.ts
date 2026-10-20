@@ -1198,8 +1198,21 @@ describe('assistant integration', () => {
   it('uses an OpenRouter key, endpoint, headers, and free MiniMax model default', async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        new Response('data: {"type":"response.completed"}\n\n', {
-          headers: { 'content-type': 'text/event-stream' }
+        Response.json({
+          choices: [
+            {
+              finish_reason: 'stop',
+              message: {
+                content: JSON.stringify({
+                  replyKind: 'message',
+                  proposal: null,
+                  questions: null,
+                  message: 'Ready.',
+                  readings: null
+                })
+              }
+            }
+          ]
         })
     );
     vi.stubGlobal('fetch', fetchMock);
@@ -1222,7 +1235,7 @@ describe('assistant integration', () => {
     const response = await streamAssistantProposal(input, env, 'user_test');
     expect(response.status).toBe(200);
     const [url, init] = fetchMock.mock.calls[0]!;
-    expect(url).toBe('https://openrouter.ai/api/v1/responses');
+    expect(url).toBe('https://openrouter.ai/api/v1/chat/completions');
     const headers = new Headers(init?.headers);
     expect(headers.get('authorization')).toBe('Bearer openrouter-test-key');
     expect(headers.get('x-title')).toBe('OpenZCAD Beta');
@@ -1240,7 +1253,8 @@ describe('assistant integration', () => {
         max_price: { prompt: 0, completion: 0, request: 0 }
       },
       reasoning: { effort: 'high' },
-      stream: true
+      stream: false,
+      response_format: { type: 'json_object' }
     });
   });
 
@@ -1262,7 +1276,7 @@ describe('assistant integration', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('keeps the free model and zero price cap through a strict chat fallback', async () => {
+  it('keeps the free model and zero price cap with JSON mode and the exact prompt schema', async () => {
     const output = JSON.stringify({
       replyKind: 'message',
       proposal: null,
@@ -1276,7 +1290,6 @@ describe('assistant integration', () => {
           choices: [{ finish_reason: 'stop', message: { content: output } }]
         })
     );
-    fetchMock.mockResolvedValueOnce(Response.json({}, { status: 404 }));
     vi.stubGlobal('fetch', fetchMock);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
@@ -1285,7 +1298,7 @@ describe('assistant integration', () => {
     });
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('Connection ready.');
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     for (const [, init] of fetchMock.mock.calls) {
       expect(JSON.parse(init?.body as string)).toMatchObject({
         model: DEFAULT_OPENROUTER_MODEL,
@@ -1295,14 +1308,20 @@ describe('assistant integration', () => {
         }
       });
     }
-    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
       'https://openrouter.ai/api/v1/chat/completions'
     );
     expect(
-      JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)
+      JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)
     ).toMatchObject({
-      response_format: { type: 'json_schema', json_schema: { strict: true } }
+      response_format: { type: 'json_object' }
     });
+    const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string) as {
+      messages: Array<{ content: string }>;
+    };
+    expect(body.messages[0].content).toContain(
+      JSON.stringify(assistantReplySchemaFor({}))
+    );
   });
 
   it('uses a strict Chat Completions fallback for an unavailable Sol Responses route', async () => {
@@ -1497,6 +1516,7 @@ describe('assistant integration', () => {
 
     const response = await streamAssistantProposal(input, {
       AI_PROVIDER: 'openrouter',
+      AI_MODEL: 'openai/gpt-6-luna',
       OPENROUTER_API_KEY: 'secret-key'
     });
     const requestId = response.headers.get('x-openzcad-request-id');
@@ -1508,7 +1528,7 @@ describe('assistant integration', () => {
       expect.objectContaining({
         requestId,
         provider: 'openrouter',
-        model: DEFAULT_OPENROUTER_MODEL,
+        model: 'openai/gpt-6-luna',
         upstreamResponseId: 'resp_safe_123',
         classification: 'invalid_json',
         terminalEvent: 'response.completed',
@@ -1563,6 +1583,7 @@ describe('assistant integration', () => {
 
     const response = await streamAssistantProposal(input, {
       AI_PROVIDER: 'openrouter',
+      AI_MODEL: 'openai/gpt-6-luna',
       OPENROUTER_API_KEY: 'secret-key'
     });
     await response.text();
@@ -1587,6 +1608,7 @@ describe('assistant integration', () => {
 
     const response = await streamAssistantProposal(input, {
       AI_PROVIDER: 'openrouter',
+      AI_MODEL: 'openai/gpt-6-luna',
       OPENROUTER_API_KEY: 'secret-key'
     });
     await response.text();
@@ -1621,6 +1643,7 @@ describe('assistant integration', () => {
 
     const response = await streamAssistantProposal(input, {
       AI_PROVIDER: 'openrouter',
+      AI_MODEL: 'openai/gpt-6-luna',
       OPENROUTER_API_KEY: 'secret-key'
     });
     await response.text();

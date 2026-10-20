@@ -1,5 +1,6 @@
 import {
   ASSISTANT_REPLY_JSON_SCHEMA,
+  parseAssistantReply,
   type AssistantAttachment,
   type AssistantHistoryTurn,
   type CadDocumentDigest
@@ -18,6 +19,7 @@ import {
   type AssistantResponseFailureClassification
 } from './assistantStreamDiagnostics';
 import { isPrivateHostname } from './privateNetwork';
+import { matchesAssistantSchema } from './assistantJsonSchema';
 
 export const DEFAULT_AI_MODEL = 'gpt-6-luna';
 export const DEFAULT_OPENROUTER_MODEL = 'minimax/minimax-m3.1-flash:free';
@@ -761,7 +763,8 @@ async function readProviderFailure(
 }
 
 async function translateOpenRouterChatCompletion(
-  response: Response
+  response: Response,
+  validateText?: (text: string) => boolean
 ): Promise<Response> {
   if (!response.ok) {
     return response;
@@ -816,6 +819,30 @@ async function translateOpenRouterChatCompletion(
     typeof choice?.finish_reason === 'string'
       ? choice.finish_reason
       : undefined;
+  if (
+    finishReason !== 'length' &&
+    typeof text === 'string' &&
+    validateText &&
+    !validateText(text)
+  ) {
+    // Return only an allowlisted error. Invalid provider output is neither
+    // forwarded nor logged. The client's existing single retry obtains a new
+    // account quota permit and includes corrective instructions below.
+    return new Response(
+      `data: ${JSON.stringify({
+        type: 'response.failed',
+        response: {
+          status: 'failed',
+          error: {
+            code: 'invalid_contract',
+            message:
+              'The AI provider returned an invalid CAD reply. Try again or choose another model in Settings.'
+          }
+        }
+      })}\n\n`,
+      { headers: { 'content-type': 'text/event-stream' } }
+    );
+  }
   const status =
     finishReason === 'length'
       ? 'incomplete'
@@ -1018,6 +1045,35 @@ function openRouterProviderOptions(model: string) {
   };
 }
 
+function usesPromptedJsonSchema(provider: string, model: string): boolean {
+  // MiniMax advertises JSON output without native JSON-schema enforcement.
+  // Send the enabled schema in the prompt and validate before emitting output.
+  // https://openrouter.ai/minimax/minimax-m3.1-flash:free
+  return (
+    provider === 'openrouter' &&
+    (model === 'minimax/minimax-m3.1-flash:free' ||
+      model === 'minimax/minimax-m3.1-flash')
+  );
+}
+
+function jsonSchemaInstructions(env: CloudflareEnv, retry = false): string {
+  return `\n\n# Required JSON reply\nReturn only one JSON object matching this exact JSON Schema. Include every required field, use null only where allowed, and do not add extra keys.\n${JSON.stringify(assistantReplySchemaFor(env))}${retry ? '\nThe previous reply failed validation. Regenerate the complete reply against this schema; check every operation, required field, value type and enum before answering.' : ''}`;
+}
+
+function jsonReplyValidator(env: CloudflareEnv, digest?: CadDocumentDigest) {
+  const schema = assistantReplySchemaFor(env);
+  return (text: string): boolean => {
+    try {
+      const value: unknown = JSON.parse(text);
+      if (!matchesAssistantSchema(value, schema)) return false;
+      parseAssistantReply(value, digest);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+}
+
 function shouldUseOpenRouterChatFallback(
   provider: string,
   model: string,
@@ -1054,6 +1110,7 @@ export async function streamAssistantProposal(
   env = assistantEnvForClient(env, input.operations);
   const provider = runtime?.provider ?? providerFor(env);
   const model = runtime?.model ?? modelFor(env, provider);
+  const promptedSchema = usesPromptedJsonSchema(provider, model);
   const requestId = crypto.randomUUID();
   const apiKey = runtime?.apiKey ?? apiKeyFor(env, provider);
   if (!apiKey) {
@@ -1127,7 +1184,7 @@ export async function streamAssistantProposal(
         ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
       })
     });
-  const requestOpenRouterChatFallback = () =>
+  const requestOpenRouterChat = () =>
     fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
       method: 'POST',
       redirect: 'manual',
@@ -1141,16 +1198,25 @@ export async function streamAssistantProposal(
             env,
             runtime,
             (input.attachments?.length ?? 0) > 0
-          )
+          ) +
+            (promptedSchema
+              ? jsonSchemaInstructions(env, safetyIdentifier?.endsWith('#r1'))
+              : '')
         ),
         ...reasoningRequest(
           runtime?.reasoningEffort ??
             env.AI_REASONING_EFFORT ??
             DEFAULT_AI_REASONING_EFFORT
         ),
-        response_format: structuredReplyFormat(env),
-        max_completion_tokens:
-          runtime?.maxOutputTokens ?? maxOutputTokensFor(env),
+        response_format: promptedSchema
+          ? { type: 'json_object' }
+          : structuredReplyFormat(env),
+        ...(promptedSchema
+          ? { max_tokens: runtime?.maxOutputTokens ?? maxOutputTokensFor(env) }
+          : {
+              max_completion_tokens:
+                runtime?.maxOutputTokens ?? maxOutputTokensFor(env)
+            }),
         stream: false,
         provider: openRouterProviderOptions(model),
         ...(safetyIdentifier ? { user: safetyIdentifier } : {})
@@ -1159,8 +1225,16 @@ export async function streamAssistantProposal(
 
   let upstream: Response;
   try {
-    upstream = await requestUpstream();
-    if (shouldUseOpenRouterChatFallback(provider, model, upstream.status)) {
+    upstream = promptedSchema
+      ? await translateOpenRouterChatCompletion(
+          await requestOpenRouterChat(),
+          jsonReplyValidator(env, input.digest)
+        )
+      : await requestUpstream();
+    if (
+      !promptedSchema &&
+      shouldUseOpenRouterChatFallback(provider, model, upstream.status)
+    ) {
       const details = await readProviderFailure(upstream);
       console.warn('AI Responses route unavailable; using strict fallback:', {
         requestId,
@@ -1171,7 +1245,7 @@ export async function streamAssistantProposal(
         providerRequestId: details.providerRequestId ?? null
       });
       upstream = await translateOpenRouterChatCompletion(
-        await requestOpenRouterChatFallback()
+        await requestOpenRouterChat()
       );
     }
   } catch (error) {
@@ -1239,6 +1313,10 @@ export async function testAssistantConnection(
     );
   }
   const startedAt = Date.now();
+  const promptedSchema = usesPromptedJsonSchema(
+    runtime.provider,
+    runtime.model
+  );
   const timeoutSignal = AbortSignal.timeout(runtime.timeoutMs);
   const headers = {
     authorization: `Bearer ${runtime.apiKey}`,
@@ -1271,7 +1349,7 @@ export async function testAssistantConnection(
           : {})
       })
     });
-  const requestOpenRouterChatFallback = () =>
+  const requestOpenRouterChat = () =>
     fetch(OPENROUTER_CHAT_COMPLETIONS_URL, {
       method: 'POST',
       redirect: 'manual',
@@ -1283,15 +1361,22 @@ export async function testAssistantConnection(
           {
             role: 'system',
             content:
-              'Return a short connection confirmation as an OpenZCAD message reply.'
+              'Return a short connection confirmation as an OpenZCAD message reply.' +
+              (promptedSchema ? jsonSchemaInstructions(env) : '')
           },
           {
             role: 'user',
             content: 'Test the configured OpenZCAD AI connection.'
           }
         ],
-        response_format: structuredReplyFormat(env),
-        max_completion_tokens: Math.min(runtime.maxOutputTokens, 4_096),
+        response_format: promptedSchema
+          ? { type: 'json_object' }
+          : structuredReplyFormat(env),
+        ...(promptedSchema
+          ? { max_tokens: Math.min(runtime.maxOutputTokens, 4_096) }
+          : {
+              max_completion_tokens: Math.min(runtime.maxOutputTokens, 4_096)
+            }),
         stream: false,
         ...reasoningRequest(runtime.reasoningEffort),
         provider: openRouterProviderOptions(runtime.model)
@@ -1299,8 +1384,14 @@ export async function testAssistantConnection(
     });
   let response: Response;
   try {
-    response = await requestUpstream();
+    response = promptedSchema
+      ? await translateOpenRouterChatCompletion(
+          await requestOpenRouterChat(),
+          jsonReplyValidator(env)
+        )
+      : await requestUpstream();
     if (
+      !promptedSchema &&
       shouldUseOpenRouterChatFallback(
         runtime.provider,
         runtime.model,
@@ -1317,7 +1408,7 @@ export async function testAssistantConnection(
         providerRequestId: details.providerRequestId ?? null
       });
       response = await translateOpenRouterChatCompletion(
-        await requestOpenRouterChatFallback()
+        await requestOpenRouterChat()
       );
     }
   } catch {
