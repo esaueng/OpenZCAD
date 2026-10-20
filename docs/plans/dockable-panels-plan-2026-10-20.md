@@ -137,12 +137,16 @@ The menu replaces the rail's Layout button.
      whether or not it has columns, and each 296 px column adds 306 px:
      - Essentials (732 px) stays fully docked from 1220 px stage width
        upward, which includes 1280 px (57% footprint, 43% model).
-     - At 1219 px its second column floats.
+     - At 1219 px its left column (Objects) floats and Parameters stays
+       docked on the right.
      - One column (426 px) still docks at 721 px.
    - A pin or drop that would go past the cap opens the panel floating instead.
-   - When the window shrinks, the columns that no longer fit render floating,
-     outermost first. This is a projection at render time only: the stored
-     layout keeps them docked, so a wider window gets them back.
+   - When the window shrinks, the columns that no longer fit render floating
+     in a fixed order: **all left-dock columns before any right-dock column**,
+     because the right dock beside the instrument rail is the primary one.
+     Within a side the outermost column goes first. This is a projection at
+     render time only: the stored layout keeps them docked, so a wider window
+     gets them back.
    - At 720 px stage width and below there are no docks: a panel opens one at
      a time in the existing phone lane. Docking starts at 721 px.
 2. **Persistence.**
@@ -343,8 +347,9 @@ Each slice is one PR and records its evidence in the U08 row.
   - E2E with `page.mouse` steps: dock right/left/new column/float/stack/rail
     drag-out, plus the same moves through the keyboard.
   - The cap's boundary widths, computed from the tokens rather than
-    hard-coded: 1220 px and 1219 px today (Essentials fully docked, then its
-    second column floating), and 721 px (one column docked).
+    hard-coded: 1220 px and 1219 px today (Essentials fully docked, then
+    Objects floating while Parameters stays docked on the right), and 721 px
+    (one column docked).
   - Keyboard placement through the Move menu: into a named column at a
     chosen slot (Move to, then Move up/down), into a floating window, a new
     column on each side, and Float.
