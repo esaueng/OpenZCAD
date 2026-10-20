@@ -9,6 +9,7 @@ export * from './sketch-composites';
 export * from './mass-density';
 export * from './keymap-settings';
 export * from './drawings';
+export * from './drawing-annotations';
 import type { DocumentHistory } from './document-history';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
@@ -108,8 +109,15 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * model they were last drawn from. Additive: absent means no drawings, and
  * every older document loads unchanged. An older client would drop the
  * section on its next save, so the bump makes it refuse such a document.
+ *
+ * v31 adds D02 drawing annotations (`DrawingSheet.annotations`): linear,
+ * aligned, radius, diameter and angle dimensions that name the model edges
+ * they measure by persistent reference, and text notes with optional
+ * leaders. Additive: absent means a sheet has none, and every v30 document
+ * loads unchanged. An older client would refuse the unknown field or drop
+ * it on save, so the bump makes it refuse such a document.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 30 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 31 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

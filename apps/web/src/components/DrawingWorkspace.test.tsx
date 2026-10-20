@@ -13,6 +13,8 @@ import {
   toUserId,
   type BodyId,
   type BodyRepresentation,
+  type DrawingAnnotation,
+  type DrawingAnnotationId,
   type DrawingSheet,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -713,5 +715,123 @@ describe('DrawingWorkspace', () => {
     expect(screen.getByRole('status').textContent).toMatch(
       /a deleted body, which no longer exists/
     );
+  });
+
+  describe('D02 annotations', () => {
+    /** The cube's bottom front edge, (0,0,0)–(10,0,0): 10 mm across. */
+    function dimensioned(hash = 210): DrawingSheet {
+      const sheet = starter(
+        drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!
+      );
+      const front = sheet.views.find((view) => view.orientation === 'front')!;
+      const annotation: DrawingAnnotation = {
+        annotationId: 'dann_w' as DrawingAnnotationId,
+        kind: 'linear',
+        viewId: front.viewId,
+        direction: 'horizontal',
+        from: { edge: { bodyId, hash }, anchor: 'first' },
+        to: { edge: { bodyId, hash }, anchor: 'second' },
+        placementMm: { x: 0, y: -15 }
+      };
+      return { ...sheet, annotations: [annotation] };
+    }
+
+    it('draws a dimension with its value read from the model', async () => {
+      setup({ sheet: dimensioned() });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      expect(
+        await within(canvas).findByRole('button', {
+          name: 'Horizontal dimension 10'
+        })
+      ).toBeTruthy();
+      expect(
+        canvas.querySelectorAll(
+          '.drawing-strokes.is-dimension polygon.is-filled'
+        )
+      ).toHaveLength(2);
+      expect(
+        within(
+          screen.getByRole('listbox', { name: 'Annotations on this sheet' })
+        ).getByRole('option', { name: 'Horizontal dimension 10' })
+      ).toBeTruthy();
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
+      ).toBe(false);
+    });
+
+    it('keeps a broken dimension in place, refuses export and offers a re-pick', async () => {
+      const { onCommand } = setup({ sheet: dimensioned(999) });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      await waitFor(() =>
+        expect(canvas.textContent).toContain('Broken dimension')
+      );
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'PDF' }).disabled
+      ).toBe(true);
+      expect(document.body.textContent).toMatch(
+        /An annotation has lost what it measures/
+      );
+      await userEvent.click(
+        screen.getByRole('option', { name: 'Horizontal dimension (broken)' })
+      );
+      expect(screen.getByRole('alert').textContent).toMatch(/no longer exists/);
+      await userEvent.click(screen.getByRole('button', { name: /Re-pick/ }));
+      expect(screen.getByText(/Horizontal dimension: pick/)).toBeTruthy();
+      await userEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
+      const command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.delete');
+      expect(command.payload).toMatchObject({ annotationId: 'dann_w' });
+    });
+
+    it('shows no value and offers no tool until a stale sheet is updated', () => {
+      setup({ sheet: dimensioned(), size: 12 });
+      expect(
+        screen.getByRole('option', { name: 'Horizontal dimension' })
+      ).toBeTruthy();
+      expect(
+        screen.queryByRole('button', { name: /^Horizontal dimension/ })
+      ).toBeNull();
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'Horizontal' })
+          .disabled
+      ).toBe(true);
+    });
+
+    it('moves and deletes the selected annotation from the keyboard, and Escape ends a tool', async () => {
+      const { onCommand } = setup({ sheet: dimensioned() });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      fireEvent.pointerDown(
+        await within(canvas).findByRole('button', {
+          name: 'Horizontal dimension 10'
+        }),
+        { button: 0 }
+      );
+      fireEvent.keyDown(canvas, { key: 'ArrowUp' });
+      let command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.update');
+      expect(command.label).toBe('Move annotation');
+      expect(
+        (command.payload as { annotation: DrawingAnnotation }).annotation
+          .placementMm
+      ).toEqual({ x: 0, y: -14 });
+      fireEvent.keyDown(canvas, { key: 'Delete' });
+      command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.delete');
+
+      await userEvent.click(screen.getByRole('button', { name: 'Vertical' }));
+      expect(screen.getByRole('status').textContent).toMatch(
+        /Vertical dimension: pick a straight edge/
+      );
+      expect(canvas.querySelector('[data-tool="vertical"]')).not.toBeNull();
+      fireEvent.keyDown(canvas, { key: 'Escape' });
+      expect(screen.queryByRole('status')).toBeNull();
+      expect(canvas.querySelector('.drawing-pick-surface')).toBeNull();
+    });
   });
 });

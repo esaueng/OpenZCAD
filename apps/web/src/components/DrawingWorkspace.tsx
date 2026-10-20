@@ -6,11 +6,16 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent
 } from 'react';
-import { FileDown, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { Crosshair, FileDown, Plus, RefreshCw, Trash2, X } from 'lucide-react';
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import { updateDrawingView } from '@openzcad/document-core';
 import {
+  createDrawingAnnotationId,
   createDrawingViewId,
+  MAX_DRAWING_DIMENSION_DECIMALS,
+  MAX_DRAWING_NOTE_LENGTH,
+  type DrawingAnnotation,
+  type DrawingAnnotationId,
   DRAWING_PAPER_LABELS,
   DRAWING_PAPER_SIZES_MM,
   DRAWING_SCALE_PRESETS,
@@ -44,6 +49,7 @@ import type {
 } from '../lib/drawing/projectView';
 import {
   composeSheetPage,
+  type ComposedView,
   sheetViewArea,
   titleBlockBox,
   viewPageBox,
@@ -52,8 +58,34 @@ import {
 import {
   drawingExportFileName,
   sheetPageToPdf,
-  sheetPageToSvg
+  sheetPageToSvg,
+  sheetTextStart
 } from '../lib/drawing/sheetExport';
+import {
+  annotationAnchor,
+  composeSheetAnnotations,
+  defaultDimensionDecimals,
+  resolveDrawingAnnotation,
+  resolveSheetAnnotations,
+  type AnnotationResolution
+} from '../lib/drawing/annotations';
+import {
+  ANNOTATION_TOOL_LABELS,
+  annotationToolHint,
+  applyAnnotationPick,
+  draftAnnotation,
+  draftRefusal,
+  drawnLines,
+  hitEdge,
+  pickableEdges,
+  pickedEnough,
+  repairedAnnotation,
+  repairToolKind,
+  startAnnotationTool,
+  type AnnotationTool,
+  type AnnotationToolKind,
+  type PickableEdge
+} from '../lib/drawing/annotationPicking';
 import {
   createStarterSheet,
   defaultDrawingPaper,
@@ -315,6 +347,7 @@ function TextField(props: {
   value: string;
   placeholder?: string;
   disabled: boolean;
+  maxLength?: number;
   onCommit: (value: string) => void;
 }) {
   const [draft, setDraft] = useState(props.value);
@@ -329,7 +362,7 @@ function TextField(props: {
         type="text"
         value={draft}
         placeholder={props.placeholder}
-        maxLength={MAX_DRAWING_TEXT_LENGTH}
+        maxLength={props.maxLength ?? MAX_DRAWING_TEXT_LENGTH}
         disabled={props.disabled}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
@@ -371,6 +404,246 @@ function NumberField(props: {
         }}
       />
     </label>
+  );
+}
+
+const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
+  'horizontal',
+  'vertical',
+  'aligned',
+  'radius',
+  'diameter',
+  'angle',
+  'note'
+];
+
+const ANNOTATION_KIND_LABELS: Readonly<
+  Record<DrawingAnnotation['kind'], string>
+> = {
+  linear: 'Dimension',
+  radius: 'Radius',
+  diameter: 'Diameter',
+  angle: 'Angle',
+  note: 'Note'
+};
+
+function annotationTitle(annotation: DrawingAnnotation): string {
+  return annotation.kind === 'linear'
+    ? `${ANNOTATION_TOOL_LABELS[annotation.direction]} dimension`
+    : annotation.kind === 'note'
+      ? 'Note'
+      : `${ANNOTATION_KIND_LABELS[annotation.kind]} dimension`;
+}
+
+/** What the list and the canvas call an annotation: its value or text. */
+function annotationName(
+  annotation: DrawingAnnotation,
+  resolution: AnnotationResolution | undefined,
+  ready: boolean
+): string {
+  if (annotation.kind === 'note') return `Note: ${annotation.text}`;
+  const title = annotationTitle(annotation);
+  if (!ready) return title;
+  return resolution?.ok
+    ? `${title} ${resolution.resolved.label}`
+    : `${title} (broken)`;
+}
+
+/**
+ * D02 annotation tools and the selected annotation's properties. Values are
+ * shown only while the sheet is ready: a stale sheet has not been redrawn
+ * from the model they would be read from.
+ */
+function AnnotationPanel(props: {
+  sheet: DrawingSheet;
+  ready: boolean;
+  editable: boolean;
+  units: ProjectDocument['units'];
+  tool: AnnotationTool | null;
+  selected: DrawingAnnotation | null;
+  resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>;
+  onTool: (tool: AnnotationTool | null) => void;
+  onSelect: (annotationId: DrawingAnnotationId | null) => void;
+  onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
+  onDelete: (annotation: DrawingAnnotation) => void;
+}) {
+  const { sheet, ready, editable, tool, selected } = props;
+  const annotations = sheet.annotations ?? [];
+  const canAnnotate = ready && editable && sheet.views.length > 0;
+  const resolution = selected
+    ? props.resolutions.get(selected.annotationId)
+    : undefined;
+  return (
+    <>
+      <div className="drawing-panel-section">
+        <h3>Annotate</h3>
+        <div
+          className="drawing-tool-grid"
+          role="toolbar"
+          aria-label="Annotation tools"
+        >
+          {ANNOTATION_TOOLS.map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              className={`drawing-tool${tool?.kind === kind && !tool.repairId ? ' active' : ''}`}
+              aria-pressed={tool?.kind === kind && !tool.repairId}
+              disabled={!canAnnotate}
+              title={
+                canAnnotate
+                  ? `${ANNOTATION_TOOL_LABELS[kind]} ${kind === 'note' ? '' : 'dimension'}`.trim()
+                  : !editable
+                    ? 'Drawing edits are unavailable.'
+                    : 'Update the sheet to annotate it.'
+              }
+              onClick={() =>
+                props.onTool(
+                  tool?.kind === kind && !tool.repairId
+                    ? null
+                    : startAnnotationTool(kind)
+                )
+              }
+            >
+              {ANNOTATION_TOOL_LABELS[kind]}
+            </button>
+          ))}
+        </div>
+        {tool ? (
+          <div className="drawing-tool-hint" role="status">
+            <span>{annotationToolHint(tool)}</span>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => props.onTool(null)}
+            >
+              <X size={13} aria-hidden="true" /> Cancel
+            </button>
+          </div>
+        ) : (
+          <p className="drawing-hint">
+            Dimensions read their values from the model and follow the
+            sheet&apos;s Update.
+          </p>
+        )}
+        {annotations.length > 0 && (
+          <div
+            className="drawing-view-list"
+            role="listbox"
+            aria-label="Annotations on this sheet"
+          >
+            {annotations.map((annotation) => {
+              const entry = props.resolutions.get(annotation.annotationId);
+              const broken = ready && entry !== undefined && !entry.ok;
+              return (
+                <button
+                  key={annotation.annotationId}
+                  type="button"
+                  role="option"
+                  aria-selected={
+                    annotation.annotationId === selected?.annotationId
+                  }
+                  className={`drawing-sheet-item${annotation.annotationId === selected?.annotationId ? ' active' : ''}${broken ? ' is-broken' : ''}`}
+                  onClick={() => props.onSelect(annotation.annotationId)}
+                >
+                  {annotationName(annotation, entry, ready)}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      {selected && (
+        <div className="drawing-panel-section">
+          <h3>{annotationTitle(selected)}</h3>
+          {!ready ? (
+            <p className="drawing-hint">
+              Update the sheet to read this from the model again.
+            </p>
+          ) : resolution && !resolution.ok ? (
+            <p className="drawing-annotation-status" role="alert">
+              Broken: {resolution.message} Re-pick what it measures, or delete
+              it.
+            </p>
+          ) : resolution?.ok && selected.kind !== 'note' ? (
+            <p className="drawing-annotation-value">
+              {resolution.resolved.label}
+              {selected.kind === 'angle' ? '' : ` ${props.units}`}
+            </p>
+          ) : null}
+          {selected.kind === 'note' ? (
+            <TextField
+              label="Text"
+              value={selected.text}
+              maxLength={MAX_DRAWING_NOTE_LENGTH}
+              disabled={!editable}
+              onCommit={(text) =>
+                text.trim() &&
+                props.onUpdate({ ...selected, text: text.trim() }, 'Edit note')
+              }
+            />
+          ) : (
+            <label className="drawing-field">
+              <span>Decimals</span>
+              <select
+                value={selected.decimals ?? ''}
+                disabled={!editable}
+                onChange={(event) => {
+                  const { decimals: _previous, ...rest } = selected;
+                  props.onUpdate(
+                    event.target.value === ''
+                      ? rest
+                      : { ...rest, decimals: Number(event.target.value) },
+                    'Format dimension'
+                  );
+                }}
+              >
+                <option value="">
+                  Default (
+                  {defaultDimensionDecimals(selected.kind, props.units)})
+                </option>
+                {Array.from(
+                  { length: MAX_DRAWING_DIMENSION_DECIMALS + 1 },
+                  (_, decimals) => (
+                    <option key={decimals} value={decimals}>
+                      {decimals}
+                    </option>
+                  )
+                )}
+              </select>
+            </label>
+          )}
+          <div className="drawing-field-row">
+            {(selected.kind !== 'note' || selected.leader) && (
+              <button
+                type="button"
+                className="secondary"
+                disabled={!canAnnotate}
+                title="Pick the edges this measures again"
+                onClick={() =>
+                  props.onTool(
+                    startAnnotationTool(
+                      repairToolKind(selected),
+                      selected.annotationId,
+                      selected.viewId
+                    )
+                  )
+                }
+              >
+                <Crosshair size={13} aria-hidden="true" /> Re-pick
+              </button>
+            )}
+            <button
+              type="button"
+              className="secondary"
+              disabled={!editable}
+              onClick={() => props.onDelete(selected)}
+            >
+              <Trash2 size={13} aria-hidden="true" /> Delete
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -417,6 +690,34 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     sheet?.sheetId === drag.sheetId &&
     sheet.views.some((view) => view.viewId === drag.viewId)
       ? drag
+      : null;
+  const [tool, setTool] = useState<AnnotationTool | null>(null);
+  const [selectedAnnotationId, setSelectedAnnotationId] =
+    useState<DrawingAnnotationId | null>(null);
+  /** Under the pointer while a tool is active: the edge and paper point. */
+  const [hover, setHover] = useState<{
+    edge: PickableEdge | null;
+    point: [number, number];
+  } | null>(null);
+  const [annotationDrag, setAnnotationDrag] = useState<{
+    sheetId: DrawingSheetId;
+    annotationId: DrawingAnnotationId;
+    start: { x: number; y: number };
+    origin: { x: number; y: number };
+    current: { x: number; y: number };
+    pxPerMm: number;
+  } | null>(null);
+  const selectedAnnotation =
+    sheet?.annotations?.find(
+      (entry) => entry.annotationId === selectedAnnotationId
+    ) ?? null;
+  const liveAnnotationDrag =
+    annotationDrag &&
+    sheet?.sheetId === annotationDrag.sheetId &&
+    sheet.annotations?.some(
+      (entry) => entry.annotationId === annotationDrag.annotationId
+    )
+      ? annotationDrag
       : null;
   const canvasRef = useRef<SVGSVGElement | null>(null);
   const editable = editDisabledReason === null;
@@ -483,17 +784,47 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // The sheet as drawn: during a drag, the moved view (and the projected
   // views it carries) at the pointer, by the same rule the command applies.
   const shownSheet = useMemo(() => {
-    if (!sheet || !liveDrag) return sheet;
-    const moved = updateDrawingView(
-      { ...document, drawings: { sheets: [sheet] } },
-      {
-        sheetId: sheet.sheetId,
-        viewId: liveDrag.viewId,
-        centerMm: liveDrag.current
-      }
-    );
-    return moved.drawings!.sheets[0]!;
-  }, [sheet, liveDrag, document]);
+    if (!sheet) return sheet;
+    let shown = sheet;
+    if (liveDrag)
+      shown = updateDrawingView(
+        { ...document, drawings: { sheets: [sheet] } },
+        {
+          sheetId: sheet.sheetId,
+          viewId: liveDrag.viewId,
+          centerMm: liveDrag.current
+        }
+      ).drawings!.sheets[0]!;
+    if (liveAnnotationDrag && shown.annotations)
+      shown = {
+        ...shown,
+        annotations: shown.annotations.map((entry) =>
+          entry.annotationId === liveAnnotationDrag.annotationId
+            ? { ...entry, placementMm: liveAnnotationDrag.current }
+            : entry
+        )
+      };
+    return shown;
+  }, [sheet, liveDrag, liveAnnotationDrag, document]);
+  // Every annotation against the current model. Only a ready sheet draws
+  // or reports them: a stale one has not been redrawn from this model.
+  const resolutions = useMemo(
+    () =>
+      shownSheet
+        ? resolveSheetAnnotations(shownSheet, bodies, document.units)
+        : new Map<DrawingAnnotationId, AnnotationResolution>(),
+    [shownSheet, bodies, document.units]
+  );
+  const sheetReady = status?.kind === 'ready';
+  // A tool picks from the drawn model; a sheet that stops being ready (a
+  // collaborator's model edit, a rebuild) ends it rather than keep picks
+  // made against geometry it no longer draws.
+  useEffect(() => {
+    if (!sheetReady) setTool(null);
+  }, [sheetReady]);
+  const brokenCount = sheetReady
+    ? [...resolutions.values()].filter((entry) => !entry.ok).length
+    : 0;
 
   const run = (command: AnyCommand) => {
     if (!editable) {
@@ -650,20 +981,26 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
 
   const exportSheet = async (format: 'pdf' | 'svg') => {
     if (!sheet || status?.kind !== 'ready') return;
-    const ready = sheet.views.map((view) => {
+    const viewStates = sheet.views.map((view) => {
       const state = projections.get(view.viewId);
       return state?.state === 'ready'
         ? { view, projection: state.projection }
         : null;
     });
-    if (ready.some((entry) => entry === null)) {
+    if (viewStates.some((entry) => entry === null)) {
       props.onStatus('Wait for every view to finish drawing, then export.');
       return;
     }
+    if (brokenCount > 0) {
+      props.onStatus('Re-pick or delete the broken annotations, then export.');
+      return;
+    }
+    const drawn = viewStates.filter((entry) => entry !== null);
     const page = composeSheetPage(
       sheet,
-      ready.filter((entry) => entry !== null),
-      { projectName: document.name, units: document.units }
+      drawn,
+      { projectName: document.name, units: document.units },
+      composeSheetAnnotations(sheet, drawn, resolutions, document.units)
     );
     const fileName = drawingExportFileName(document.name, sheet.name, format);
     try {
@@ -696,6 +1033,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     view: DrawingView
   ) => {
     setSelectedViewId(view.viewId);
+    setSelectedAnnotationId(null);
     if (!editable || event.button !== 0 || !sheet || !canvasRef.current) return;
     const rect = canvasRef.current.getBoundingClientRect();
     const paper = drawingPaperMm(sheet.paper);
@@ -735,6 +1073,36 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     if (moved) moveView(liveDrag.viewId, liveDrag.current);
   };
   const onCanvasKeyDown = (event: ReactKeyboardEvent<SVGSVGElement>) => {
+    if (event.key === 'Escape' && tool) {
+      event.preventDefault();
+      event.stopPropagation();
+      setTool(null);
+      setHover(null);
+      return;
+    }
+    if (selectedAnnotation && sheet) {
+      const step = event.shiftKey ? 10 : 1;
+      const delta: Record<string, [number, number]> = {
+        ArrowLeft: [-step, 0],
+        ArrowRight: [step, 0],
+        ArrowUp: [0, step],
+        ArrowDown: [0, -step]
+      };
+      const move = delta[event.key];
+      if (move) {
+        event.preventDefault();
+        event.stopPropagation();
+        moveAnnotation(selectedAnnotation, {
+          x: selectedAnnotation.placementMm.x + move[0],
+          y: selectedAnnotation.placementMm.y + move[1]
+        });
+      } else if (event.key === 'Delete' || event.key === 'Backspace') {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteAnnotation(selectedAnnotation);
+      }
+      return;
+    }
     if (!selectedView || !sheet) return;
     const step = event.shiftKey ? 10 : 1;
     const delta: Record<string, [number, number]> = {
@@ -782,19 +1150,299 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     }
   };
 
-  const page: SheetPage | null = useMemo(() => {
+  const drawnViews: ComposedView[] = useMemo(
+    () =>
+      shownSheet
+        ? shownSheet.views.flatMap((view) => {
+            const state = projections.get(view.viewId);
+            return state?.state === 'ready'
+              ? [{ view, projection: state.projection }]
+              : [];
+          })
+        : [],
+    [shownSheet, projections]
+  );
+  const composed = useMemo(() => {
     if (!shownSheet) return null;
-    const ready = shownSheet.views.flatMap((view) => {
-      const state = projections.get(view.viewId);
-      return state?.state === 'ready'
-        ? [{ view, projection: state.projection }]
-        : [];
+    const annotations = composeSheetAnnotations(
+      shownSheet,
+      drawnViews,
+      resolutions,
+      document.units
+    );
+    return {
+      page: composeSheetPage(
+        shownSheet,
+        drawnViews,
+        { projectName: document.name, units: document.units },
+        annotations
+      ),
+      boxes: annotations.boxes
+    };
+  }, [shownSheet, drawnViews, resolutions, document.name, document.units]);
+  const page: SheetPage | null = composed?.page ?? null;
+  // Edges a tool can pick, kept while the drawn views and model are the same
+  // objects: a pointer move re-renders, it must not re-project every edge.
+  const pickCache = useRef<{
+    views: ComposedView[];
+    bodies: DrawingWorkspaceProps['bodies'];
+    edges: PickableEdge[];
+    drawn: ReturnType<typeof drawnLines>;
+  } | null>(null);
+  const currentPickable = (): {
+    edges: PickableEdge[];
+    drawn: ReturnType<typeof drawnLines>;
+  } => {
+    if (!shownSheet || !sheetReady) return { edges: [], drawn: new Map() };
+    const cached = pickCache.current;
+    if (
+      cached &&
+      cached.bodies === bodies &&
+      cached.views.length === drawnViews.length &&
+      cached.views.every(
+        (entry, index) =>
+          entry.view === drawnViews[index]!.view &&
+          entry.projection === drawnViews[index]!.projection
+      )
+    )
+      return cached;
+    const entry = {
+      views: drawnViews,
+      bodies,
+      edges: pickableEdges(shownSheet, drawnViews, bodies, document.units),
+      drawn: drawnLines(shownSheet, drawnViews, document.units)
+    };
+    pickCache.current = entry;
+    return entry;
+  };
+  const edgeAt = (point: [number, number], pxPerMm: number) => {
+    const { edges, drawn } = currentPickable();
+    return hitEdge(edges, point, pickTolerance(pxPerMm), drawn);
+  };
+
+  /** A pointer position in paper millimetres (y up), with the zoom. */
+  const paperPoint = (event: {
+    clientX: number;
+    clientY: number;
+  }): { point: [number, number]; pxPerMm: number } | null => {
+    const svg = canvasRef.current;
+    const ctm = svg?.getScreenCTM?.();
+    if (!svg || !ctm || !shownSheet) return null;
+    const inverse = ctm.inverse();
+    const x = inverse.a * event.clientX + inverse.c * event.clientY + inverse.e;
+    const y = inverse.b * event.clientX + inverse.d * event.clientY + inverse.f;
+    return {
+      point: [x, drawingPaperMm(shownSheet.paper).height - y],
+      pxPerMm: Math.hypot(ctm.a, ctm.b)
+    };
+  };
+  const viewAt = (point: [number, number]): DrawingView | null => {
+    if (!shownSheet) return null;
+    for (const { view, projection } of drawnViews) {
+      if (!projection.bounds) continue;
+      const box = viewPageBox(
+        view,
+        projection.bounds,
+        shownSheet,
+        document.units
+      );
+      if (
+        point[0] >= box.x - 3 &&
+        point[0] <= box.x + box.width + 3 &&
+        point[1] >= box.y - 3 &&
+        point[1] <= box.y + box.height + 3
+      )
+        return view;
+    }
+    return null;
+  };
+  const pickTolerance = (pxPerMm: number) => Math.max(0.8, 8 / pxPerMm);
+
+  const commitAnnotation = (finished: AnnotationTool, at: [number, number]) => {
+    if (!sheet) return;
+    const view = finished.viewId
+      ? sheet.views.find((entry) => entry.viewId === finished.viewId)
+      : undefined;
+    const round = (value: number) => Math.round(value * 10) / 10;
+    const placementMm = view
+      ? { x: round(at[0] - view.centerMm.x), y: round(at[1] - view.centerMm.y) }
+      : { x: round(at[0]), y: round(at[1]) };
+    const annotation = draftAnnotation(
+      finished,
+      createDrawingAnnotationId(),
+      placementMm
+    );
+    if (!annotation) return;
+    const refusal = draftRefusal(annotation, view, bodies, document.units);
+    if (refusal) {
+      props.onStatus(refusal);
+      setTool(startAnnotationTool(finished.kind));
+      return;
+    }
+    if (
+      run(
+        commandFactories.addDrawingAnnotation({
+          sheetId: sheet.sheetId,
+          annotation
+        })
+      )
+    ) {
+      setSelectedAnnotationId(annotation.annotationId);
+      setSelectedViewId(null);
+      // A note is placed and then typed; dimensions keep their tool for the
+      // next one.
+      setTool(
+        finished.kind === 'note' ? null : startAnnotationTool(finished.kind)
+      );
+    }
+  };
+  const commitRepair = (finished: AnnotationTool) => {
+    const previous = sheet?.annotations?.find(
+      (entry) => entry.annotationId === finished.repairId
+    );
+    setTool(null);
+    if (!sheet || !previous) return;
+    const repaired = repairedAnnotation(previous, finished);
+    if (!repaired) {
+      props.onStatus('Re-pick in the view this annotation belongs to.');
+      return;
+    }
+    const view = sheet.views.find((entry) => entry.viewId === repaired.viewId);
+    const refusal = draftRefusal(repaired, view, bodies, document.units);
+    if (refusal) {
+      props.onStatus(refusal);
+      return;
+    }
+    run(
+      commandFactories.updateDrawingAnnotation(
+        { sheetId: sheet.sheetId, annotation: repaired },
+        repaired.kind === 'note' ? 'Re-pick note leader' : 'Re-pick dimension'
+      )
+    );
+  };
+  const onPickPointerMove = (event: ReactPointerEvent<SVGRectElement>) => {
+    const at = paperPoint(event);
+    if (!at || !tool) return;
+    setHover({
+      edge: pickedEnough(tool) ? null : edgeAt(at.point, at.pxPerMm),
+      point: at.point
     });
-    return composeSheetPage(shownSheet, ready, {
-      projectName: document.name,
-      units: document.units
+  };
+  const onPickPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (event.button !== 0 || !tool) return;
+    const at = paperPoint(event);
+    if (!at) return;
+    if (pickedEnough(tool)) {
+      commitAnnotation(tool, at.point);
+      return;
+    }
+    const hit = edgeAt(at.point, at.pxPerMm);
+    const result = applyAnnotationPick(
+      tool,
+      hit,
+      at.point,
+      viewAt(at.point),
+      bodies
+    );
+    if (!result.ok) {
+      props.onStatus(result.message);
+      return;
+    }
+    if (result.tool.repairId && pickedEnough(result.tool)) {
+      commitRepair(result.tool);
+      return;
+    }
+    if (result.tool.placed) {
+      commitAnnotation(result.tool, at.point);
+      return;
+    }
+    setTool(result.tool);
+    setHover({ edge: null, point: at.point });
+  };
+
+  const updateAnnotation = (annotation: DrawingAnnotation, label?: string) => {
+    if (!sheet) return;
+    run(
+      commandFactories.updateDrawingAnnotation(
+        { sheetId: sheet.sheetId, annotation },
+        label
+      )
+    );
+  };
+  const deleteAnnotation = (annotation: DrawingAnnotation) => {
+    if (!sheet) return;
+    if (
+      run(
+        commandFactories.deleteDrawingAnnotation({
+          sheetId: sheet.sheetId,
+          annotationId: annotation.annotationId
+        })
+      )
+    )
+      setSelectedAnnotationId(null);
+  };
+  const moveAnnotation = (
+    annotation: DrawingAnnotation,
+    placementMm: { x: number; y: number }
+  ) =>
+    updateAnnotation(
+      {
+        ...annotation,
+        placementMm: {
+          x: Math.round(placementMm.x * 10) / 10,
+          y: Math.round(placementMm.y * 10) / 10
+        }
+      },
+      'Move annotation'
+    );
+  const onAnnotationPointerDown = (
+    event: ReactPointerEvent<SVGElement>,
+    annotation: DrawingAnnotation
+  ) => {
+    event.stopPropagation();
+    setSelectedAnnotationId(annotation.annotationId);
+    setSelectedViewId(null);
+    if (!editable || event.button !== 0 || !sheet || tool) return;
+    const at = paperPoint(event);
+    if (!at) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setAnnotationDrag({
+      sheetId: sheet.sheetId,
+      annotationId: annotation.annotationId,
+      start: { x: event.clientX, y: event.clientY },
+      origin: annotation.placementMm,
+      current: annotation.placementMm,
+      pxPerMm: at.pxPerMm
     });
-  }, [shownSheet, projections, document.name, document.units]);
+  };
+  const onAnnotationPointerMove = (event: ReactPointerEvent<SVGElement>) => {
+    if (!annotationDrag) return;
+    setAnnotationDrag({
+      ...annotationDrag,
+      current: {
+        x:
+          annotationDrag.origin.x +
+          (event.clientX - annotationDrag.start.x) / annotationDrag.pxPerMm,
+        y:
+          annotationDrag.origin.y -
+          (event.clientY - annotationDrag.start.y) / annotationDrag.pxPerMm
+      }
+    });
+  };
+  const onAnnotationPointerUp = () => {
+    setAnnotationDrag(null);
+    if (!liveAnnotationDrag) return;
+    const annotation = sheet?.annotations?.find(
+      (entry) => entry.annotationId === liveAnnotationDrag.annotationId
+    );
+    const moved =
+      Math.hypot(
+        liveAnnotationDrag.current.x - liveAnnotationDrag.origin.x,
+        liveAnnotationDrag.current.y - liveAnnotationDrag.origin.y
+      ) >= 0.2;
+    if (annotation && moved)
+      moveAnnotation(annotation, liveAnnotationDrag.current);
+  };
 
   if (!sheet || !shownSheet || !page || !status) {
     return (
@@ -828,13 +1476,46 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             (view) => projections.get(view.viewId)?.state !== 'ready'
           )
         ? 'Drawing the views…'
-        : null;
+        : brokenCount > 0
+          ? `${brokenCount === 1 ? 'An annotation has' : `${brokenCount} annotations have`} lost what ${brokenCount === 1 ? 'it measures' : 'they measure'}. Re-pick or delete ${brokenCount === 1 ? 'it' : 'them'} to export.`
+          : null;
   const scaleOptions = DRAWING_SCALE_PRESETS.some(
     (scale) => formatDrawingScale(scale) === formatDrawingScale(sheet.scale)
   )
     ? DRAWING_SCALE_PRESETS
     : [...DRAWING_SCALE_PRESETS, sheet.scale];
   const block = titleBlockBox(sheet);
+  // While a finished tool waits for its placement, the annotation follows
+  // the pointer, laid out by the same rule the page uses.
+  const preview = (() => {
+    if (!tool || !pickedEnough(tool) || tool.repairId || !hover) return null;
+    const view = tool.viewId
+      ? shownSheet.views.find((entry) => entry.viewId === tool.viewId)
+      : undefined;
+    const placementMm = view
+      ? {
+          x: hover.point[0] - view.centerMm.x,
+          y: hover.point[1] - view.centerMm.y
+        }
+      : { x: hover.point[0], y: hover.point[1] };
+    const draft = draftAnnotation(
+      tool,
+      'dann_preview' as DrawingAnnotationId,
+      placementMm
+    );
+    if (!draft) return null;
+    return composeSheetAnnotations(
+      { ...shownSheet, annotations: [draft] },
+      drawnViews,
+      new Map([
+        [
+          draft.annotationId,
+          resolveDrawingAnnotation(draft, view, bodies, document.units)
+        ]
+      ]),
+      document.units
+    );
+  })();
 
   return (
     <section className="drawing-workspace" aria-label="Drawings">
@@ -869,6 +1550,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 onClick={() => {
                   setSelectedSheetId(entry.sheetId);
                   setSelectedViewId(null);
+                  setSelectedAnnotationId(null);
+                  setTool(null);
                 }}
               >
                 {entry.name}
@@ -905,7 +1588,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           preserveAspectRatio="xMidYMid meet"
           onKeyDown={onCanvasKeyDown}
           onPointerDown={(event) => {
-            if (event.target === event.currentTarget) setSelectedViewId(null);
+            if (event.target === event.currentTarget) {
+              setSelectedViewId(null);
+              setSelectedAnnotationId(null);
+            }
           }}
         >
           <rect
@@ -913,37 +1599,53 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             width={paper.width}
             height={paper.height}
           />
-          {(['border', 'thin', 'hidden', 'visible'] as const).map((kind) => (
-            <g key={kind} className={`drawing-strokes is-${kind}`}>
-              {page.strokes
-                .filter((stroke) => stroke.kind === kind)
-                .map((stroke, index) =>
-                  stroke.closed ? (
-                    <polygon
-                      key={index}
-                      points={svgPoints(stroke.points, paper.height)}
-                    />
-                  ) : (
-                    <polyline
-                      key={index}
-                      points={svgPoints(stroke.points, paper.height)}
-                    />
-                  )
-                )}
-            </g>
-          ))}
+          {(['border', 'thin', 'hidden', 'visible', 'dimension'] as const).map(
+            (kind) => (
+              <g key={kind} className={`drawing-strokes is-${kind}`}>
+                {page.strokes
+                  .filter((stroke) => stroke.kind === kind)
+                  .map((stroke, index) =>
+                    stroke.filled ? (
+                      <polygon
+                        key={index}
+                        className="is-filled"
+                        points={svgPoints(stroke.points, paper.height)}
+                      />
+                    ) : stroke.closed ? (
+                      <polygon
+                        key={index}
+                        points={svgPoints(stroke.points, paper.height)}
+                      />
+                    ) : (
+                      <polyline
+                        key={index}
+                        points={svgPoints(stroke.points, paper.height)}
+                      />
+                    )
+                  )}
+              </g>
+            )
+          )}
           <g className="drawing-texts">
-            {page.texts.map((text, index) => (
-              <text
-                key={index}
-                x={text.x}
-                y={paper.height - text.y}
-                fontSize={text.sizeMm / 0.718}
-                fontWeight={text.bold ? 'bold' : undefined}
-              >
-                {text.text}
-              </text>
-            ))}
+            {page.texts.map((text, index) => {
+              const start = sheetTextStart(text);
+              return (
+                <text
+                  key={index}
+                  x={start.x}
+                  y={paper.height - start.y}
+                  fontSize={text.sizeMm / 0.718}
+                  fontWeight={text.bold ? 'bold' : undefined}
+                  transform={
+                    text.angleDeg
+                      ? `rotate(${-text.angleDeg} ${start.x} ${paper.height - start.y})`
+                      : undefined
+                  }
+                >
+                  {text.text}
+                </text>
+              );
+            })}
           </g>
           {shownSheet.views.map((view) => {
             const state = projections.get(view.viewId);
@@ -1005,8 +1707,127 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             y={paper.height - block.y - block.height}
             width={block.width}
             height={block.height}
-            onPointerDown={() => setSelectedViewId(null)}
+            onPointerDown={() => {
+              setSelectedViewId(null);
+              setSelectedAnnotationId(null);
+            }}
           />
+          {(shownSheet.annotations ?? []).map((annotation) => {
+            const id = annotation.annotationId;
+            const box = composed?.boxes.get(id);
+            const resolution = resolutions.get(id);
+            const selectedClass =
+              id === selectedAnnotationId ? ' is-selected' : '';
+            const name = annotationName(annotation, resolution, sheetReady);
+            const handlers = {
+              onPointerDown: (event: ReactPointerEvent<SVGElement>) =>
+                onAnnotationPointerDown(event, annotation),
+              onPointerMove: onAnnotationPointerMove,
+              onPointerUp: onAnnotationPointerUp,
+              onPointerCancel: () => setAnnotationDrag(null)
+            };
+            if (box)
+              return (
+                <rect
+                  key={id}
+                  className={`drawing-annotation-hit${selectedClass}`}
+                  role="button"
+                  aria-label={name}
+                  aria-pressed={id === selectedAnnotationId}
+                  data-annotation={annotation.kind}
+                  x={box.x}
+                  y={paper.height - box.y - box.height}
+                  width={box.width}
+                  height={box.height}
+                  {...handlers}
+                />
+              );
+            // Broken: kept where it was placed, marked, and still
+            // selectable so it can be re-picked or deleted.
+            const view = annotation.viewId
+              ? shownSheet.views.find(
+                  (entry) => entry.viewId === annotation.viewId
+                )
+              : undefined;
+            if (
+              !sheetReady ||
+              !resolution ||
+              resolution.ok ||
+              (view && projections.get(view.viewId)?.state !== 'ready')
+            )
+              return null;
+            const [x, y] = annotationAnchor(annotation, view);
+            return (
+              <g
+                key={id}
+                className={`drawing-annotation-broken${selectedClass}`}
+              >
+                <text x={x} y={paper.height - y}>
+                  {annotation.kind === 'note'
+                    ? 'Broken leader'
+                    : 'Broken dimension'}
+                </text>
+                <rect
+                  className="drawing-annotation-hit"
+                  role="button"
+                  aria-label={name}
+                  aria-pressed={id === selectedAnnotationId}
+                  data-annotation={annotation.kind}
+                  x={x - 1}
+                  y={paper.height - y - 4}
+                  width={30}
+                  height={5.5}
+                  {...handlers}
+                />
+              </g>
+            );
+          })}
+          {tool && preview && (
+            <g className="drawing-annotation-preview">
+              {preview.strokes.map((stroke, index) => (
+                <polyline
+                  key={index}
+                  className={stroke.filled ? 'is-filled' : undefined}
+                  points={`${svgPoints(stroke.points, paper.height)}${stroke.filled ? ` ${svgPoints(stroke.points.slice(0, 2), paper.height)}` : ''}`}
+                />
+              ))}
+              {preview.texts.map((text, index) => {
+                const start = sheetTextStart(text);
+                return (
+                  <text
+                    key={index}
+                    x={start.x}
+                    y={paper.height - start.y}
+                    fontSize={text.sizeMm / 0.718}
+                    transform={
+                      text.angleDeg
+                        ? `rotate(${-text.angleDeg} ${start.x} ${paper.height - start.y})`
+                        : undefined
+                    }
+                  >
+                    {text.text}
+                  </text>
+                );
+              })}
+            </g>
+          )}
+          {tool && hover?.edge && (
+            <polyline
+              className="drawing-pick-highlight"
+              points={svgPoints(hover.edge.page.flat(), paper.height)}
+            />
+          )}
+          {tool && (
+            <rect
+              className="drawing-pick-surface"
+              data-tool={tool.kind}
+              width={paper.width}
+              height={paper.height}
+              onPointerDown={onPickPointerDown}
+              onPointerMove={onPickPointerMove}
+              onPointerLeave={() => setHover(null)}
+            />
+          )}
         </svg>
       </div>
       <aside className="drawing-panel" aria-label="Drawing properties">
@@ -1105,6 +1926,26 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             </label>
           </div>
         </div>
+        <AnnotationPanel
+          sheet={sheet}
+          ready={sheetReady}
+          editable={editable}
+          units={document.units}
+          tool={tool}
+          selected={selectedAnnotation}
+          resolutions={resolutions}
+          onTool={(next) => {
+            setTool(next);
+            setHover(null);
+            if (next) canvasRef.current?.focus();
+          }}
+          onSelect={(annotationId) => {
+            setSelectedAnnotationId(annotationId);
+            setSelectedViewId(null);
+          }}
+          onUpdate={updateAnnotation}
+          onDelete={deleteAnnotation}
+        />
         <div className="drawing-panel-section">
           <h3>Title block</h3>
           {TITLE_FIELDS.map(({ key, label }) => (
@@ -1147,7 +1988,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   role="option"
                   aria-selected={view.viewId === selectedViewId}
                   className={`drawing-sheet-item${view.viewId === selectedViewId ? ' active' : ''}`}
-                  onClick={() => setSelectedViewId(view.viewId)}
+                  onClick={() => {
+                    setSelectedViewId(view.viewId);
+                    setSelectedAnnotationId(null);
+                  }}
                 >
                   {DRAWING_VIEW_LABELS[view.orientation]}
                   {off ? ' (off the page)' : ''}
@@ -1330,6 +2174,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               <FileDown size={13} aria-hidden="true" /> SVG
             </button>
           </div>
+          {brokenCount > 0 && (
+            <p className="drawing-annotation-status" role="status">
+              {exportReason}
+            </p>
+          )}
           <p className="drawing-hint">
             Lines come from the display tessellation and exact edge samples;
             curved outlines are approximate to the display tolerance.
