@@ -1,4 +1,4 @@
-import { lockAccount } from './accountKeys';
+import { lockAccount } from './unlockedKeys';
 import { indexedDbDeviceStore } from './deviceStore';
 
 /**

@@ -671,13 +671,19 @@ export function SettingsPage({
     }
     await onLogout();
   };
+  // The app shell locks the in-memory keys on every session end; this only
+  // carries out the choice about the device key, even if sign-out's own
+  // local cleanup fails after the server session is gone.
   const finishSignOut = async (keepDevice: boolean) => {
     const userId = session?.userId;
     setSignOutChoice(false);
-    await onLogout();
-    if (userId) {
-      const { endKeySession } = await import('../lib/e2ee/signOut');
-      await endKeySession(userId, keepDevice);
+    try {
+      await onLogout();
+    } finally {
+      if (userId) {
+        const { endKeySession } = await import('../lib/e2ee/signOut');
+        await endKeySession(userId, keepDevice);
+      }
     }
   };
 

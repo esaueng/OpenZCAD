@@ -286,6 +286,7 @@ import {
   watchPreloadErrors,
   STALE_CHUNK_MESSAGE
 } from './lib/staleChunk';
+import { lockAccountsExcept } from './lib/e2ee/unlockedKeys';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
@@ -2708,6 +2709,13 @@ export function App() {
   });
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  // End-to-end encryption keys unlocked in this page belong to one session:
+  // however it ends (sign-out, expiry, offline mode, account deletion, or a
+  // different account), no other account's keys stay in memory.
+  const sessionUserId = session?.userId ?? null;
+  useEffect(() => {
+    lockAccountsExcept(sessionUserId);
+  }, [sessionUserId]);
   /**
    * The shelf's preview source. This reads a small device-cached or cloud
    * image and nothing else — deliberately not the project document. Loading
@@ -8953,6 +8961,9 @@ export function App() {
       cloudProjectAutosaveRef.current?.closeProject();
       await cloudSettingsAutosaveRef.current?.flushPending();
       await api.logout();
+      // The server session is gone: no unlocked key outlives it, even if the
+      // local cleanup below fails.
+      lockAccountsExcept(null);
       clearAssistantHistory();
       const listed = await loadProjectSummaries(false);
       remoteVersionsRef.current.clear();

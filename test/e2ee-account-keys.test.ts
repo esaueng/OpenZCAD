@@ -934,3 +934,19 @@ describe('the Worker entry point', () => {
     expect(signedOut.status).toBe(401);
   });
 });
+
+describe('session teardown', () => {
+  it('locks every other account’s keys and zeroes them', async () => {
+    const srv = server();
+    await setUp(srv);
+    const { lockAccountsExcept, unlockedAccount } = await import(
+      '../apps/web/src/lib/e2ee/unlockedKeys'
+    );
+    const held = unlockedAccount(USER)!;
+    lockAccountsExcept(USER);
+    expect(unlockedEncryptionKey(USER)).not.toBeNull();
+    lockAccountsExcept(null);
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+    expect(held.accountKey.every((byte) => byte === 0)).toBe(true);
+  });
+});

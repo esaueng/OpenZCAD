@@ -52,6 +52,12 @@ import type {
 } from '@openzcad/shared';
 import type { E2eeApi } from './e2eeApi';
 import type { DeviceKeyStore, StoredDevice } from './deviceStore';
+import {
+  lockAccount,
+  rememberUnlockedAccount,
+  unlockedAccount,
+  type UnlockedAccount
+} from './unlockedKeys';
 
 /**
  * Account-level key material for end-to-end encryption (ADR-024 Phase 3,
@@ -161,31 +167,17 @@ export type EncryptionState =
   /** The server showed an older or forked device list. */
   | { readonly kind: 'fork'; readonly message: string };
 
-/** The account key and encryption key while this page holds them. */
-interface UnlockedAccount {
-  readonly generation: number;
-  readonly commitment: string;
-  readonly accountKey: Bytes;
-  readonly encryptionPrivateKey: CryptoKey;
-}
-
-const unlockedAccounts = new Map<string, UnlockedAccount>();
 /** Approver nonces of compare-form approvals this page started. */
 const approverNonces = new Map<string, Bytes>();
 
-/** Forgets this page's unlocked keys for the account. */
-export function lockAccount(userId: string): void {
-  const unlocked = unlockedAccounts.get(userId);
-  unlocked?.accountKey.fill(0);
-  unlockedAccounts.delete(userId);
-}
+export { lockAccount };
 
 /**
  * The unlocked encryption private key, for the phases that receive project
  * keys. Null while locked.
  */
 export function unlockedEncryptionKey(userId: string): CryptoKey | null {
-  return unlockedAccounts.get(userId)?.encryptionPrivateKey ?? null;
+  return unlockedAccount(userId)?.encryptionPrivateKey ?? null;
 }
 
 const b64 = toBase64Url;
@@ -529,8 +521,7 @@ async function rememberAccountKey(
       );
     }
     const encryptionPrivateKey = await importEncryptionPrivateKey(pkcs8, false);
-    lockAccount(userId);
-    unlockedAccounts.set(userId, {
+    rememberUnlockedAccount(userId, {
       generation,
       commitment: toHex(commitment),
       accountKey,
@@ -549,7 +540,7 @@ async function unlockThisDevice(
   device: StoredDevice,
   status: 'certified' | 'approved'
 ): Promise<void> {
-  const cached = unlockedAccounts.get(ctx.userId);
+  const cached = unlockedAccount(ctx.userId);
   if (
     cached?.generation === generation &&
     cached.commitment === toHex(list.head.accountKeyCommitment)
@@ -1282,7 +1273,7 @@ function requireUnlockedApprover(
   ctx: E2eeContext,
   account: AccountView
 ): { device: StoredDevice; unlocked: UnlockedAccount } {
-  const unlocked = unlockedAccounts.get(ctx.userId);
+  const unlocked = unlockedAccount(ctx.userId);
   if (!account.device || account.deviceStatus !== 'certified') {
     throw new EncryptionFlowError(
       'not-certified',
