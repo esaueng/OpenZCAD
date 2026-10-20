@@ -76,6 +76,57 @@ describe('required validation gate', () => {
     }
   );
 
+  it('starts pull-request shards after quality and queue shards at once', () => {
+    const job = (name: string) => {
+      const start = ci.indexOf(`\n  ${name}:\n`);
+      expect(start).toBeGreaterThan(-1);
+      const end = ci.slice(start + 1).search(/\n  [a-z0-9-]+:\n/);
+      return ci.slice(start, end === -1 ? undefined : start + 1 + end);
+    };
+    const direct = job('e2e-tests');
+    const pr = job('e2e-tests-pr');
+    expect(direct).toContain("if: github.event_name != 'pull_request'\n");
+    expect(direct).not.toMatch(/^ {4}needs:/m);
+    expect(pr).toContain("if: github.event_name == 'pull_request'\n");
+    expect(pr).toContain('needs: quality\n');
+    // Both shard sets run the same matrix and steps, not drifting copies.
+    expect(direct).toContain('strategy: &e2e-strategy\n');
+    expect(direct).toContain('steps: &e2e-steps\n');
+    expect(pr).toContain('strategy: *e2e-strategy\n');
+    expect(pr).toContain('steps: *e2e-steps\n');
+    expect(job('e2e')).toContain(
+      'needs: [e2e-tests, e2e-tests-pr]\n    if: always()'
+    );
+  });
+
+  it.each([
+    ['success', 'skipped', 0],
+    ['skipped', 'success', 0],
+    ['skipped', 'skipped', 1],
+    ['failure', 'skipped', 1],
+    ['cancelled', 'skipped', 1],
+    ['skipped', 'failure', 1],
+    ['skipped', 'cancelled', 1],
+    ['success', 'success', 1],
+    ['success', 'failure', 1]
+  ])(
+    'requires one green shard set: direct %s, pull request %s',
+    (direct, pr, status) => {
+      const result = spawnSync(
+        'bash',
+        ['-e', '-c', stepScript('Require one green shard set', ci)],
+        {
+          env: {
+            ...process.env,
+            DIRECT_RESULT: String(direct),
+            PR_RESULT: String(pr)
+          }
+        }
+      );
+      expect(result.status).toBe(status);
+    }
+  );
+
   it('runs both halves of `pnpm test` across the unit and validation jobs', () => {
     // `pnpm test` is the root project followed by the web project; the jobs
     // split them, so each half has to appear or a whole project goes untested.

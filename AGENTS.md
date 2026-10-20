@@ -81,8 +81,10 @@ pnpm build
 They run as three parallel jobs: `quality` (lint, typecheck), `unit` (the root
 Vitest project, `pnpm exec vitest run`) and `validation` (the web Vitest
 project via `pnpm test:web`, the parity corpus, the build). Together `unit`
-and `validation` are `pnpm test`. A parallel `e2e-tests` job runs the
-Playwright suite as six shards, each taking the spec files
+and `validation` are `pnpm test`. The Playwright suite runs as six shards:
+in parallel with those jobs for queue candidates (`e2e-tests`), and only
+after `quality` passes on pull requests (`e2e-tests-pr`), so a lint-red or
+superseded push does not hold six runners. Each shard takes the spec files
 `scripts/e2e-shards.mjs` assigns it (every shard runs
 `pnpm exec playwright install --with-deps chromium` first), and an `e2e` gate
 job aggregates the shards for branch protection. Shards are balanced by the
