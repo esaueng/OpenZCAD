@@ -1770,6 +1770,18 @@ export function projectRebuildInputs(document: ProjectDocument): unknown {
   return inputs;
 }
 
+/**
+ * The rebuild inputs that decide geometry: drawing sheets are rebuild inputs
+ * of the document (an edit to them is real work), but no mesh depends on
+ * them.
+ */
+function projectGeometryInputs(document: ProjectDocument): unknown {
+  const { drawings: _drawings, ...inputs } = projectRebuildInputs(
+    document
+  ) as Partial<ProjectDocument>;
+  return inputs;
+}
+
 /** Whether two documents would rebuild to the same geometry. */
 export function projectsHaveSameRebuildInputs(
   left: ProjectDocument,
@@ -1835,7 +1847,14 @@ export function withMatchingLocalDerived(
   remote: ProjectDocument,
   local: ProjectDocument
 ): ProjectDocument {
-  if (!projectsHaveSameRebuildInputs(local, remote)) {
+  // A collaborator's drawing edit arrives without meshes like any room
+  // document, and the local ones still describe its model exactly.
+  if (
+    !jsonValuesEqual(
+      projectGeometryInputs(local),
+      projectGeometryInputs(remote)
+    )
+  ) {
     return remote;
   }
   return {

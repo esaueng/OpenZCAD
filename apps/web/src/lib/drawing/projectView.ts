@@ -1308,6 +1308,184 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
  * collinear visible segments cover, so a gap in the visible outline of any
  * width keeps its piece of the hidden line.
  */
+/** The box around the given segments (offsets into a flat u0 v0 u1 v1 list). */
+function segmentsBox(
+  segments: readonly number[],
+  members: readonly number[]
+): { minU: number; minV: number; maxU: number; maxV: number } {
+  const box = {
+    minU: Infinity,
+    minV: Infinity,
+    maxU: -Infinity,
+    maxV: -Infinity
+  };
+  for (const s of members) {
+    box.minU = Math.min(box.minU, segments[s]!, segments[s + 2]!);
+    box.maxU = Math.max(box.maxU, segments[s]!, segments[s + 2]!);
+    box.minV = Math.min(box.minV, segments[s + 1]!, segments[s + 3]!);
+    box.maxV = Math.max(box.maxV, segments[s + 1]!, segments[s + 3]!);
+  }
+  return box;
+}
+
+/**
+ * Line segments filed under the grid cells they cross, refined where dense
+ * like `OcclusionGrid`: a cell holding more than `CELL_SPLIT_LOAD` segments
+ * gets a finer grid over what it holds. Cells are never smaller than the
+ * coincidence tolerance, so a query that takes each crossed cell's
+ * neighbours finds every segment within that tolerance. Exported for tests.
+ */
+export class SegmentGrid {
+  private readonly cells: number[][];
+  private readonly children: (SegmentGrid | undefined)[];
+  private readonly size: number;
+  private readonly cellU: number;
+  private readonly cellV: number;
+
+  constructor(
+    private readonly segments: readonly number[],
+    members: readonly number[],
+    private readonly box: {
+      minU: number;
+      minV: number;
+      maxU: number;
+      maxV: number;
+    },
+    private readonly tolerance: number,
+    level = 0
+  ) {
+    this.size = Math.max(
+      8,
+      Math.min(256, Math.ceil(Math.sqrt(members.length)))
+    );
+    this.cellU = Math.max((box.maxU - box.minU) / this.size, tolerance, 1e-12);
+    this.cellV = Math.max((box.maxV - box.minV) / this.size, tolerance, 1e-12);
+    this.cells = Array.from({ length: this.size * this.size }, () => []);
+    for (const s of members)
+      for (const key of new Set(
+        this.cellsAlong(
+          segments[s]!,
+          segments[s + 1]!,
+          segments[s + 2]!,
+          segments[s + 3]!,
+          0
+        )
+      ))
+        this.cells[key]!.push(s);
+    this.children = new Array<SegmentGrid | undefined>(this.cells.length);
+    if (level >= MAX_GRID_LEVEL) return;
+    this.cells.forEach((cell, key) => {
+      if (cell.length <= CELL_SPLIT_LOAD) return;
+      const i = key % this.size;
+      const j = Math.floor(key / this.size);
+      const held = segmentsBox(segments, cell);
+      const child = new SegmentGrid(
+        segments,
+        cell,
+        {
+          minU: Math.max(held.minU, box.minU + i * this.cellU),
+          minV: Math.max(held.minV, box.minV + j * this.cellV),
+          maxU: Math.min(held.maxU, box.minU + (i + 1) * this.cellU),
+          maxV: Math.min(held.maxV, box.minV + (j + 1) * this.cellV)
+        },
+        tolerance,
+        level + 1
+      );
+      if (
+        child.maxCellLoad <= cell.length / 2 &&
+        child.entryCount <= cell.length * 4
+      )
+        this.children[key] = child;
+    });
+  }
+
+  /** How many segment entries the finest cells hold; for tests. */
+  get entryCount(): number {
+    return this.cells.reduce(
+      (sum, cell, key) => sum + (this.children[key]?.entryCount ?? cell.length),
+      0
+    );
+  }
+
+  /** The most segments any one finest cell holds; for tests. */
+  get maxCellLoad(): number {
+    return this.cells.reduce(
+      (most, cell, key) =>
+        Math.max(most, this.children[key]?.maxCellLoad ?? cell.length),
+      0
+    );
+  }
+
+  /**
+   * The cells segment a→b crosses, after clipping it to the grid's box
+   * widened by `reach`: a segment outside the box crosses none, and one
+   * partly outside walks only its part over the box.
+   */
+  private cellsAlong(
+    au: number,
+    av: number,
+    bu: number,
+    bv: number,
+    reach: number
+  ): number[] {
+    const margin =
+      reach +
+      Math.max(
+        this.box.maxU - this.box.minU,
+        this.box.maxV - this.box.minV,
+        1e-12
+      ) *
+        1e-9;
+    const clipped = clipToBox(au, av, bu, bv, {
+      minU: this.box.minU - margin,
+      minV: this.box.minV - margin,
+      maxU: this.box.maxU + margin,
+      maxV: this.box.maxV + margin
+    });
+    if (!clipped) return [];
+    const [t0, t1] = clipped;
+    const du = bu - au;
+    const dv = bv - av;
+    return gridCellsAlong(
+      (au + du * t0 - this.box.minU) / this.cellU,
+      (av + dv * t0 - this.box.minV) / this.cellV,
+      (au + du * t1 - this.box.minU) / this.cellU,
+      (av + dv * t1 - this.box.minV) / this.cellV,
+      this.size
+    );
+  }
+
+  /** Adds every segment that may lie within the tolerance of a→b. */
+  query(
+    au: number,
+    av: number,
+    bu: number,
+    bv: number,
+    out: Set<number>,
+    visited: Set<SegmentGrid>
+  ): void {
+    if (visited.has(this)) return;
+    visited.add(this);
+    const clamp = (value: number) =>
+      Math.min(this.size - 1, Math.max(0, value));
+    const seen = new Set<number>();
+    for (const cell of this.cellsAlong(au, av, bu, bv, this.tolerance)) {
+      // The tolerance band can reach one cell further either side.
+      const ci = cell % this.size;
+      const cj = Math.floor(cell / this.size);
+      for (let j = cj - 1; j <= cj + 1; j += 1)
+        for (let i = ci - 1; i <= ci + 1; i += 1) {
+          const key = clamp(j) * this.size + clamp(i);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const child = this.children[key];
+          if (child) child.query(au, av, bu, bv, out, visited);
+          else for (const s of this.cells[key]!) out.add(s);
+        }
+    }
+  }
+}
+
 /** Coincidence tolerance per unit length of the lines compared. */
 const LOCAL_COINCIDENCE = 1e-6;
 
@@ -1321,41 +1499,18 @@ export function dropCoincidentHidden(
   for (const line of visible)
     for (let i = 2; i + 1 < line.length; i += 2)
       segments.push(line[i - 2]!, line[i - 1]!, line[i]!, line[i + 1]!);
-  let minU = Infinity;
-  let minV = Infinity;
-  let maxU = -Infinity;
-  let maxV = -Infinity;
-  for (let i = 0; i < segments.length; i += 2) {
-    minU = Math.min(minU, segments[i]!);
-    maxU = Math.max(maxU, segments[i]!);
-    minV = Math.min(minV, segments[i + 1]!);
-    maxV = Math.max(maxV, segments[i + 1]!);
-  }
-  const cells = 64;
-  const cellU = Math.max((maxU - minU) / cells, tolerance, 1e-12);
-  const cellV = Math.max((maxV - minV) / cells, tolerance, 1e-12);
-  const clamp = (value: number) => Math.min(cells - 1, Math.max(0, value));
+  const members: number[] = [];
+  for (let s = 0; s < segments.length; s += 4) members.push(s);
   // Each visible segment is filed under the cells it crosses (an exact
-  // walk, like the occlusion grid), not its whole bounding box: a long
-  // diagonal would otherwise land in every cell of a square. Lookups take
-  // each crossed cell's neighbours, which covers the tolerance band.
-  const grid = new Map<number, number[]>();
-  for (let s = 0; s < segments.length; s += 4) {
-    const filed = new Set(
-      gridCellsAlong(
-        (segments[s]! - minU) / cellU,
-        (segments[s + 1]! - minV) / cellV,
-        (segments[s + 2]! - minU) / cellU,
-        (segments[s + 3]! - minV) / cellV,
-        cells
-      )
-    );
-    for (const key of filed) {
-      const list = grid.get(key);
-      if (list) list.push(s);
-      else grid.set(key, [s]);
-    }
-  }
+  // walk, like the occlusion grid), not its whole bounding box, in a grid
+  // that refines its dense cells: compact bodies far apart keep cells of
+  // their own size.
+  const grid = new SegmentGrid(
+    segments,
+    members,
+    segmentsBox(segments, members),
+    tolerance
+  );
 
   /** The parts of segment p→q no collinear visible segment covers, as [t0, t1]. */
   const uncovered = (
@@ -1370,21 +1525,7 @@ export function dropCoincidentHidden(
     // A point is not a line; anything longer is judged by its coverage.
     if (length === 0) return [];
     const candidates = new Set<number>();
-    for (const cell of gridCellsAlong(
-      (pu - minU) / cellU,
-      (pv - minV) / cellV,
-      (qu - minU) / cellU,
-      (qv - minV) / cellV,
-      cells
-    )) {
-      // The tolerance band can reach one cell further either side.
-      const ci = cell % cells;
-      const cj = Math.floor(cell / cells);
-      for (let j = cj - 1; j <= cj + 1; j += 1)
-        for (let i = ci - 1; i <= ci + 1; i += 1)
-          for (const s of grid.get(clamp(j) * cells + clamp(i)) ?? [])
-            candidates.add(s);
-    }
+    grid.query(pu, pv, qu, qv, candidates, new Set());
     /** Covered intervals, each with its covering segment's own coincidence distance. */
     const covered: [number, number, number][] = [];
     for (const s of candidates) {

@@ -258,6 +258,33 @@ describe('choosing between the two copies of a project', () => {
     });
   });
 
+  it('keeps the device meshes for a room document that changed only drawings', () => {
+    const local = {
+      ...at(4),
+      derived: { ...at(4).derived, exportableBodyIds: ['marker'] }
+    } as ProjectDocument;
+    const sheet = {
+      sheetId: 'dsht_room',
+      name: 'Sheet 1',
+      paper: { size: 'A3', orientation: 'landscape' },
+      scale: { numerator: 1, denominator: 1 },
+      projectionAngle: 'first',
+      titleBlock: {},
+      source: { fingerprint: 'v1:room' },
+      views: []
+    } as unknown as NonNullable<ProjectDocument['drawings']>['sheets'][number];
+    // A collaborator's sheet edit: the same model, a new sheet, no meshes.
+    const remote = {
+      ...at(5, { name: 'Bracket v4' }),
+      drawings: { sheets: [sheet] }
+    } as ProjectDocument;
+    const merged = withMatchingLocalDerived(remote, local);
+    expect(merged.derived.exportableBodyIds).toEqual(['marker']);
+    expect(merged.drawings).toEqual(remote.drawings);
+    // The drawing edit is still real work: not a metadata-only update.
+    expect(projectPreservesLocalWork(local, remote)).toBe(false);
+  });
+
   it('recognizes the server checkpoint left by an interrupted adoption', () => {
     const local = at(4, { name: 'Offline part' });
     const remote = adoptProjectDocument(local, toUserId('user_account'));

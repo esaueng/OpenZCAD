@@ -17,6 +17,7 @@ import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import {
   OcclusionGrid,
   OcclusionIndex,
+  SegmentGrid,
   dropCoincidentHidden,
   gridCellsAlong,
   projectView,
@@ -1121,6 +1122,57 @@ describe('D01 occlusion tolerance', () => {
     expect(Math.max(...fold(10))).toBeGreaterThan(0);
     // Facets of one curved face carry their chordal sag.
     expect(Math.max(...fold(45, 'one'))).toBeGreaterThan(0);
+  });
+});
+
+describe('D01 coincident-line index', () => {
+  it('keeps cells small for dense outlines far apart, and still finds coincidences', () => {
+    // Two 100 × 100 mesh outlines of 20 000 unit segments each, 10^6 mm
+    // apart on both page axes. Cells sized by the whole extent put each
+    // outline in one cell, so every hidden segment met every visible one.
+    const lines: Float64Array[] = [];
+    for (const offset of [0, 1e6])
+      for (let k = 0; k < 100; k += 1)
+        for (let m = 0; m < 100; m += 1) {
+          lines.push(
+            Float64Array.from([
+              offset + m,
+              offset + k,
+              offset + m + 1,
+              offset + k
+            ])
+          );
+          lines.push(
+            Float64Array.from([
+              offset + k,
+              offset + m,
+              offset + k,
+              offset + m + 1
+            ])
+          );
+        }
+    const segments = lines.flatMap((line) => Array.from(line));
+    const members = segments.flatMap((_, index) =>
+      index % 4 === 0 ? [index] : []
+    );
+    const grid = new SegmentGrid(
+      segments,
+      members,
+      { minU: 0, minV: 0, maxU: 1e6 + 100, maxV: 1e6 + 100 },
+      1e-3
+    );
+    expect(grid.maxCellLoad).toBeLessThan(50);
+    // A hidden line along a row of the far outline vanishes under it; one
+    // just off it, between rows, stays.
+    const onRow = Float64Array.from([1e6 + 10, 1e6 + 40, 1e6 + 20, 1e6 + 40]);
+    const between = Float64Array.from([
+      1e6 + 10.25,
+      1e6 + 40.5,
+      1e6 + 10.75,
+      1e6 + 40.5
+    ]);
+    expect(dropCoincidentHidden([onRow], lines, 1e-3)).toEqual([]);
+    expect(dropCoincidentHidden([between], lines, 1e-3)).toHaveLength(1);
   });
 });
 
