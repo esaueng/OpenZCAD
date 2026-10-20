@@ -1712,6 +1712,22 @@ describe('parked panels in the unpinned slot', () => {
     );
   });
 
+  it('keeps a later parked column parked when a drag empties an earlier one', () => {
+    const layout = layoutWith({
+      right: [['parameters'], ['revisions'], ['diagnostics']]
+    });
+    const stage: PanelStage = {
+      width: Math.ceil(stageFitting(2)),
+      height: 900
+    };
+    const before = computePanelGeometry(layout, stage);
+    expect(before.parked.diagnostics).toBe(true);
+    const lifted = computePanelGeometry(beginDrag(layout, 'parameters'), stage);
+    expect(lifted.parked.diagnostics).toBe(true);
+    expect(lifted.dockWidth).toEqual(before.dockWidth);
+    expect(lifted.rails.right.x).toBe(before.rails.right.x);
+  });
+
   it('lets a layout past the cap consolidate columns', () => {
     const layout = layoutWith({
       left: [['bodies']],

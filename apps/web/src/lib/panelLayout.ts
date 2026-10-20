@@ -1637,50 +1637,42 @@ function dockedCounts(
   if (stageWidth <= PANEL_PHONE_MAX_WIDTH) {
     return { left: 0, right: 0 };
   }
-  // Only columns with something in them count toward the cap: a drag keeps
-  // the column it emptied in place until the drop, and that column must not
-  // park the slot the drop would actually leave room for.
+  // Every column position counts, an emptied one included: a drag keeps the
+  // column it emptied in place, and that must not bring a parked column into
+  // view, widen the dock or move the rail.
+  const fit = (counts: Record<DockSide, number>): Record<DockSide, number> => {
+    const next = { ...counts };
+    while (
+      next.left + next.right > 0 &&
+      overCap(dockFootprint(next, columnWidth, insets), stageWidth)
+    ) {
+      if (next.left > 0) {
+        next.left -= 1;
+      } else {
+        next.right -= 1;
+      }
+    }
+    return next;
+  };
+  const docked = fit({ left: layout.left.length, right: layout.right.length });
+  // A drop preview's slot is the exception: the drop removes the emptied
+  // column, so when the panels it would leave fit, the slot's column shows
+  // even though the emptied position still holds its place until the drop.
   const live = (side: DockSide) =>
     sideColumns(layout, side).filter((column) => column.length > 0).length;
-  const counts = { left: live('left'), right: live('right') };
-  while (
-    counts.left + counts.right > 0 &&
-    overCap(dockFootprint(counts, columnWidth, insets), stageWidth)
-  ) {
-    if (counts.left > 0) {
-      counts.left -= 1;
-    } else {
-      counts.right -= 1;
+  const liveCounts = { left: live('left'), right: live('right') };
+  const liveFit = fit(liveCounts);
+  if (liveFit.left === liveCounts.left && liveFit.right === liveCounts.right) {
+    for (const side of DOCK_SIDES) {
+      const slot = sideColumns(layout, side).findIndex((column) =>
+        column.includes(PANEL_SLOT)
+      );
+      if (slot >= docked[side]) {
+        docked[side] = slot + 1;
+      }
     }
   }
-  // Back to column indices: the first columns holding that many live ones,
-  // with an emptied column among them kept in place. An emptied column past
-  // the last kept one shows only while it still fits, so lifting a parked
-  // panel neither widens the dock nor moves the rail.
-  const prefix = (side: DockSide): number => {
-    const columns = sideColumns(layout, side);
-    let kept = 0;
-    let index = 0;
-    while (index < columns.length && kept < counts[side]) {
-      if (columns[index]!.length > 0) {
-        kept += 1;
-      }
-      index += 1;
-    }
-    const shown = { ...counts, [side]: index };
-    while (
-      index < columns.length &&
-      columns[index]!.length === 0 &&
-      !overCap(
-        dockFootprint({ ...shown, [side]: index + 1 }, columnWidth, insets),
-        stageWidth
-      )
-    ) {
-      index += 1;
-    }
-    return index;
-  };
-  return { left: prefix('left'), right: prefix('right') };
+  return docked;
 }
 
 /** Open panels, most recently used first, then the rest in panel order. */
