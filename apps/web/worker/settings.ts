@@ -821,12 +821,28 @@ export function settingsRequestOmitsKeymap(body: unknown): boolean {
   );
 }
 
+/** True when a client from before relation glyphs saved its settings. */
+export function settingsRequestOmitsRelationGlyphs(body: unknown): boolean {
+  if (!body || typeof body !== 'object') return true;
+  const settings = (body as Record<string, unknown>).settings;
+  if (!settings || typeof settings !== 'object') return true;
+  const sketching = (settings as Record<string, unknown>).sketching;
+  return (
+    !sketching ||
+    typeof sketching !== 'object' ||
+    !Object.prototype.hasOwnProperty.call(sketching, 'relationGlyphs')
+  );
+}
+
 export async function updateAppSettings(
   userId: UserId,
   request: UpdateAppSettingsRequest,
   env: CloudflareEnv,
   email?: string,
-  options: { keepStoredKeymap?: boolean } = {}
+  options: {
+    keepStoredKeymap?: boolean;
+    keepStoredRelationGlyphs?: boolean;
+  } = {}
 ): Promise<AppSettingsUpdate> {
   if (!env.DB) {
     throw new HttpError(503, 'Account settings storage is unavailable.');
@@ -839,9 +855,18 @@ export async function updateAppSettings(
     );
   }
   const nextRevision = current.revision + 1;
-  const settings: AppSettings = options.keepStoredKeymap
+  let settings: AppSettings = options.keepStoredKeymap
     ? { ...request.settings, keymap: current.settings.keymap }
     : request.settings;
+  if (options.keepStoredRelationGlyphs) {
+    settings = {
+      ...settings,
+      sketching: {
+        ...settings.sketching,
+        relationGlyphs: current.settings.sketching.relationGlyphs
+      }
+    };
+  }
   const serialized = JSON.stringify(settings);
   const timestamp = nowIso();
   if (
