@@ -231,9 +231,16 @@ export class OcclusionIndex {
         box.minV = Math.min(box.minV, t.v0, t.v1, t.v2);
         box.maxV = Math.max(box.maxV, t.v0, t.v1, t.v2);
       }
-      // Rounding at the extent's edge must not drop a boundary point.
-      const margin =
-        Math.max(box.maxU - box.minU, box.maxV - box.minV, 1e-12) * 1e-9;
+      // Rounding at the extent's edge must not drop a boundary point, and a
+      // point within a triangle's footprint slack (see `occluded`) must
+      // still reach the grid that tests it.
+      let slack = 0;
+      for (const t of triangles)
+        slack = Math.max(slack, footprintSlack(t, coverTolerance));
+      const margin = Math.max(
+        Math.max(box.maxU - box.minU, box.maxV - box.minV, 1e-12) * 1e-9,
+        slack
+      );
       const grid = new OcclusionGrid(triangles, box, coverTolerance, remaining);
       remaining -= grid.entryCount;
       this.grids.push({
@@ -622,9 +629,28 @@ export class OcclusionGrid {
 
   /** True when a triangle covers (u, v) in front of `depth`. */
   occluded(u: number, v: number, depth: number): boolean {
-    const key = this.row(v) * this.size + this.column(u);
-    const child = this.children[key];
-    if (child) return child.occluded(u, v, depth);
+    // A triangle the point is within footprint slack of may be filed only in
+    // a neighbouring cell. Near the point the triangle's coordinates are the
+    // point's, so twice the point's own slack reaches every such cell.
+    const reach =
+      2 * this.coverTolerance * Math.max(Math.abs(u), Math.abs(v), 1e-300);
+    const j0 = this.row(v - reach);
+    const j1 = this.row(v + reach);
+    const i0 = this.column(u - reach);
+    const i1 = this.column(u + reach);
+    for (let j = j0; j <= j1; j += 1)
+      for (let i = i0; i <= i1; i += 1) {
+        const key = j * this.size + i;
+        const child = this.children[key];
+        if (
+          child ? child.occluded(u, v, depth) : this.coveredIn(key, u, v, depth)
+        )
+          return true;
+      }
+    return false;
+  }
+
+  private coveredIn(key: number, u: number, v: number, depth: number): boolean {
     const cell = this.cells[key]!;
     for (const index of cell) {
       const t = this.triangles[index]!;
@@ -640,18 +666,7 @@ export class OcclusionGrid {
       // — turned into each weight's units: a weight is the distance to the
       // opposite side over the altitude to it, so a fixed weight slack would
       // reach a long way outside a very tall triangle.
-      const slack =
-        (this.coverTolerance *
-          Math.max(
-            Math.abs(t.u0),
-            Math.abs(t.v0),
-            Math.abs(t.u1),
-            Math.abs(t.v1),
-            Math.abs(t.u2),
-            Math.abs(t.v2),
-            1e-300
-          )) /
-        Math.abs(t.area);
+      const slack = footprintSlack(t, this.coverTolerance) / Math.abs(t.area);
       if (
         w0 < -slack * Math.hypot(t.u2 - t.u1, t.v2 - t.v1) ||
         w1 < -slack * Math.hypot(t.u0 - t.u2, t.v0 - t.v2) ||
@@ -944,6 +959,25 @@ function onTriangleBoundary(
       return true;
   }
   return false;
+}
+
+/**
+ * How far outside a triangle a point still counts as on it, as a distance:
+ * roundoff at the triangle's own coordinates.
+ */
+function footprintSlack(t: Triangle, coverTolerance: number): number {
+  return (
+    coverTolerance *
+    Math.max(
+      Math.abs(t.u0),
+      Math.abs(t.v0),
+      Math.abs(t.u1),
+      Math.abs(t.v1),
+      Math.abs(t.u2),
+      Math.abs(t.v2),
+      1e-300
+    )
+  );
 }
 
 /** An altitude below this fraction of the coordinates is roundoff: edge-on. */

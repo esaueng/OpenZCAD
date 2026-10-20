@@ -1179,6 +1179,37 @@ describe('D01 coincident-line index budget', () => {
 });
 
 describe('D01 occlusion footprint', () => {
+  it("reaches a point within a far triangle's slack, through the index and its cells", () => {
+    // A unit triangle at 10^6 mm: its footprint slack is 10^-12 of that, a
+    // micron. The index's own margin (10^-9 of the body) was a thousand
+    // times smaller and dropped the point before the triangle saw it.
+    const o = 1e6;
+    const near: Triangle = {
+      u0: o,
+      v0: o,
+      d0: 0,
+      u1: o + 1,
+      v1: o,
+      d1: 0,
+      u2: o,
+      v2: o + 1,
+      d2: 0,
+      area: 1,
+      tol: 0
+    };
+    const index = new OcclusionIndex([[near]], 1e-12);
+    expect(index.occluded(o + 0.5, o - 0.5e-6, 1)).toBe(true);
+    expect(index.occluded(o + 0.5, o - 3e-6, 1)).toBe(false);
+    // A row boundary 0.1 micron below the triangle: the point lies in the
+    // row beneath, where the triangle is not filed, and is still found.
+    const grid = new OcclusionGrid(
+      [near],
+      { minU: o, minV: o - 8 - 1e-7, maxU: o + 1, maxV: o + 8 - 1e-7 },
+      1e-12
+    );
+    expect(grid.occluded(o + 0.5, o - 0.5e-6, 1)).toBe(true);
+  });
+
   it('does not cover a point a visible distance outside a very tall triangle', () => {
     // A triangle 10^9 mm tall on a 2 mm base: 0.1 mm below the base is a
     // weight of only −10^-10 for the apex, inside a fixed 10^-9 weight
