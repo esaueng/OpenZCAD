@@ -256,6 +256,91 @@ test('a floating window moves on its grip’s arrow keys and resizes with Shift 
   ]);
 });
 
+test('a gap drag or a window resize the page loses is cancelled, and the next one works', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Lost gestures', {
+    ...LONE_WINDOW,
+    right: [['history', 'bodies']]
+  });
+  const stored = () =>
+    page.evaluate(() => {
+      const raw = window.localStorage.getItem('openzcad-panel-layout:v1');
+      const layout = JSON.parse(raw ?? '{}') as {
+        weights: Record<string, number>;
+        floats: unknown[];
+      };
+      return { weights: layout.weights, floats: layout.floats };
+    });
+  const before = await stored();
+  const history = modelPanel(page, 'History');
+  const floating = windowOf(page, 'Parameters');
+  const gap = page.getByRole('separator', {
+    name: 'Resize History and Objects'
+  });
+  const corner = floating.getByRole('button', {
+    name: 'Resize Parameters window'
+  });
+  const heights = async () => (await box(history)).height;
+  const width = async () => (await box(floating)).width;
+  const startHeight = await heights();
+  const startWidth = await width();
+
+  // Each gesture is pressed and moved, then the page loses its pointer
+  // (capture taken from the element holding it, or the window's blur).
+  const gestures = [
+    { control: gap, dx: 0, dy: 60, read: heights, rest: startHeight },
+    { control: corner, dx: 80, dy: 0, read: width, rest: startWidth }
+  ];
+  const losses = [
+    (control: Locator) =>
+      control.evaluate((element) =>
+        element.dispatchEvent(
+          new PointerEvent('lostpointercapture', { pointerId: 1 })
+        )
+      ),
+    () => page.evaluate(() => globalThis.dispatchEvent(new Event('blur')))
+  ];
+  for (const gesture of gestures) {
+    for (const lose of losses) {
+      const handle = await box(gesture.control);
+      const from = {
+        x: handle.x + handle.width / 2,
+        y: handle.y + handle.height / 2
+      };
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(from.x + gesture.dx, from.y + gesture.dy, {
+        steps: 6
+      });
+      await expect.poll(gesture.read).toBeGreaterThan(gesture.rest + 20);
+      await lose(gesture.control);
+      // Back as it was, and the release that follows commits nothing.
+      await expect.poll(gesture.read).toBeCloseTo(gesture.rest, 0);
+      await page.mouse.up();
+      expect(await gesture.read()).toBeCloseTo(gesture.rest, 0);
+      expect(await stored()).toEqual(before);
+    }
+  }
+
+  // Nothing is left holding a gesture: the next ones resize and commit.
+  for (const gesture of gestures) {
+    const handle = await box(gesture.control);
+    const from = {
+      x: handle.x + handle.width / 2,
+      y: handle.y + handle.height / 2
+    };
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x + gesture.dx, from.y + gesture.dy, {
+      steps: 6
+    });
+    await page.mouse.up();
+    await expect.poll(gesture.read).toBeGreaterThan(gesture.rest + 20);
+  }
+  expect(await stored()).not.toEqual(before);
+});
+
 /** The panels' windows from the bottom of the stack to the top. */
 function zOrder(page: Page) {
   return page.locator('.panel-float').evaluateAll((windows) =>
