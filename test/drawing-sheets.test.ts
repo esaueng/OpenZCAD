@@ -627,6 +627,50 @@ describe('D01 drawing section (schema v30)', () => {
     ).toBe(false);
   });
 
+  it("leaves the previous document's command log alone, so undo and replay agree", () => {
+    const document = boxDocument();
+    const manager = new CommandManager(document);
+    const before = manager.document;
+    const logLength = before.commandLog.length;
+    manager.execute(
+      commandFactories.addDrawingSheet({ sheet: sheet(document.bodyOrder) })
+    );
+    // The command went into the new document's log only.
+    expect(before.commandLog).toHaveLength(logLength);
+    manager.undo();
+    expect(manager.document.commandLog).toHaveLength(logLength);
+    expect(
+      manager.document.commandLog.some((command) =>
+        command.kind.startsWith('drawing.')
+      )
+    ).toBe(false);
+    // A replay of the undone document does not bring the sheet back.
+    expect(
+      replayCommands(document, manager.document.commandLog).drawings
+    ).toBeUndefined();
+  });
+
+  it('keeps every view centre on its paper', () => {
+    const document = boxDocument();
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.addDrawingSheet({ sheet: sheet(document.bodyOrder) })
+    );
+    manager.execute(
+      commandFactories.updateDrawingView({
+        sheetId,
+        viewId: 'dvw_iso' as DrawingViewId,
+        centerMm: { x: -500, y: 5000 }
+      })
+    );
+    // A3 landscape is 420 × 297 mm.
+    expect(
+      manager.document.drawings!.sheets[0]!.views.find(
+        (entry) => entry.orientation === 'iso'
+      )!.centerMm
+    ).toEqual({ x: 0, y: 297 });
+  });
+
   it('refuses a view of a body the project does not have', () => {
     const document = boxDocument();
     expect(() =>

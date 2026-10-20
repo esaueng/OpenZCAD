@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { AnyCommand } from '@openzcad/command-system';
@@ -348,6 +348,26 @@ describe('DrawingWorkspace', () => {
       name: 'Body (updating…)'
     });
     expect(pending.disabled).toBe(true);
+  });
+
+  it('lists every view, so one off the page can still be picked', async () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const sheet = starter(fingerprint);
+    // An older document, or a smaller sheet: the isometric left off the page.
+    sheet.views[3]!.centerMm = { x: 900, y: 150 };
+    setup({ sheet });
+    const list = screen.getByRole('listbox', { name: 'Views on this sheet' });
+    const off = within(list).getByRole('option', {
+      name: 'Isometric (off the page)'
+    });
+    await userEvent.click(off);
+    expect(
+      screen.getByRole<HTMLInputElement>('spinbutton', {
+        name: 'Centre X (mm)'
+      }).value
+    ).toBe('900.0');
   });
 
   it('names a body the sheet draws that is gone', () => {

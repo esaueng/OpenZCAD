@@ -1022,6 +1022,35 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               ? `${DRAWING_VIEW_LABELS[selectedView.orientation]} view`
               : 'Views'}
           </h3>
+          {/* Every view, whether or not it is on the page: a view left off
+              the paper (a smaller sheet, an old document) can still be
+              picked here, then moved back or deleted. */}
+          <div
+            className="drawing-view-list"
+            role="listbox"
+            aria-label="Views on this sheet"
+          >
+            {sheet.views.map((view) => {
+              const off =
+                view.centerMm.x < 0 ||
+                view.centerMm.y < 0 ||
+                view.centerMm.x > paper.width ||
+                view.centerMm.y > paper.height;
+              return (
+                <button
+                  key={view.viewId}
+                  type="button"
+                  role="option"
+                  aria-selected={view.viewId === selectedViewId}
+                  className={`drawing-sheet-item${view.viewId === selectedViewId ? ' active' : ''}`}
+                  onClick={() => setSelectedViewId(view.viewId)}
+                >
+                  {DRAWING_VIEW_LABELS[view.orientation]}
+                  {off ? ' (off the page)' : ''}
+                </button>
+              );
+            })}
+          </div>
           {selectedView ? (
             <>
               <div className="drawing-field-row">

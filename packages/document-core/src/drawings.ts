@@ -1,6 +1,7 @@
 import {
   assertDrawingSet,
   deepClone,
+  drawingPaperMm,
   drawingViewAlignment,
   projectedViewSide,
   type BodyId,
@@ -73,8 +74,30 @@ function withDrawings(
   const { drawings: _previous, ...rest } = document;
   return {
     ...rest,
+    // Fresh arrays: the command manager appends this command to the log of
+    // the document returned here, and a shared array would write it into
+    // the previous document too — undo would then keep the command, and a
+    // replay after undo bring the edit back.
+    commandLog: [...document.commandLog],
+    revisions: [...document.revisions],
+    checkpoints: [...document.checkpoints],
     ...(drawings ? { drawings } : {}),
     version: document.version + 1
+  };
+}
+
+/**
+ * Keeps a view's centre on its paper, so some of it — and its handle on the
+ * sheet — always stays where it can be picked, moved or deleted.
+ */
+function onPaper(
+  sheet: DrawingSheet,
+  center: { x: number; y: number }
+): { x: number; y: number } {
+  const { width, height } = drawingPaperMm(sheet.paper);
+  return {
+    x: Math.min(width, Math.max(0, center.x)),
+    y: Math.min(height, Math.max(0, center.y))
   };
 }
 
@@ -192,13 +215,17 @@ export function addDrawingView(
     const parent = view.parentViewId
       ? sheet.views.find((entry) => entry.viewId === view.parentViewId)
       : undefined;
+    view.centerMm = onPaper(sheet, view.centerMm);
     if (parent)
-      view.centerMm = alignedCenter(
-        parent,
-        view,
-        view.centerMm,
-        sheet.projectionAngle,
-        'mirror'
+      view.centerMm = onPaper(
+        sheet,
+        alignedCenter(
+          parent,
+          view,
+          view.centerMm,
+          sheet.projectionAngle,
+          'mirror'
+        )
       );
     sheet.views.push(view);
     return sheets;
@@ -256,15 +283,21 @@ export function updateDrawingView(
       const parent = view.parentViewId
         ? sheet.views.find((entry) => entry.viewId === view.parentViewId)
         : undefined;
+      // On the paper first, then on the base's axis and side; the base is on
+      // the paper too, so the aligned centre stays on it.
+      const requested = onPaper(sheet, input.centerMm);
       const next = parent
-        ? alignedCenter(
-            parent,
-            view,
-            input.centerMm,
-            sheet.projectionAngle,
-            'clamp'
+        ? onPaper(
+            sheet,
+            alignedCenter(
+              parent,
+              view,
+              requested,
+              sheet.projectionAngle,
+              'clamp'
+            )
           )
-        : { ...input.centerMm };
+        : requested;
       const dx = next.x - view.centerMm.x;
       const dy = next.y - view.centerMm.y;
       view.centerMm = next;
@@ -272,12 +305,15 @@ export function updateDrawingView(
       // axis, so the views it folds into stay aligned with it.
       for (const child of sheet.views) {
         if (child.parentViewId !== view.viewId) continue;
-        child.centerMm = alignedCenter(
-          view,
-          child,
-          { x: child.centerMm.x + dx, y: child.centerMm.y + dy },
-          sheet.projectionAngle,
-          'clamp'
+        child.centerMm = onPaper(
+          sheet,
+          alignedCenter(
+            view,
+            child,
+            { x: child.centerMm.x + dx, y: child.centerMm.y + dy },
+            sheet.projectionAngle,
+            'clamp'
+          )
         );
       }
     }

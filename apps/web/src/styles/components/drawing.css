@@ -208,7 +208,8 @@
   justify-content: space-between;
 }
 
-.drawing-sheet-list {
+.drawing-sheet-list,
+.drawing-view-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
