@@ -204,10 +204,13 @@ export function sketchRelationGlyphs(
     }
   }
   // Every curve end joins the clustering as a probe, so a point chip knows
-  // which way each curve meeting there leaves it, related or not.
+  // which way each curve meeting there leaves it, related or not. With no
+  // point chip there is nothing for them to orient.
   const probes: { anchor: Point; direction: Point }[] = [];
-  for (const object of objects) {
-    for (const end of curveEnds(object.data, scalar)) probes.push(end);
+  if (pointGlyphs.length > 0) {
+    for (const object of objects) {
+      for (const end of curveEnds(object.data, scalar)) probes.push(end);
+    }
   }
   const clusters = clusterPoints([
     ...pointGlyphs.map(({ anchor }) => anchor),
@@ -361,36 +364,53 @@ function samePointTolerance(point: Point): number {
 }
 
 /**
- * Cluster id per anchor, by proximity rather than by rounding to a grid, so
- * two coincident points are never split across a cell boundary. A sweep in x
- * keeps it O(n log n) for the usual sparse sketch.
+ * Cluster id per anchor, by proximity. Anchors are bucketed on a grid no finer
+ * than the largest tolerance, and each one is matched against the
+ * representatives in its own and the eight neighbouring cells, so two
+ * coincident points are never split across a cell boundary. That is O(n) for
+ * any layout; a sweep along one axis went quadratic on a column of points.
  */
 function clusterPoints(points: readonly Point[]): number[] {
   const ids = new Array<number>(points.length);
-  const order = points.map((_, index) => index);
-  order.sort((a, b) => points[a]!.x - points[b]!.x);
-  const representatives: { point: Point; tolerance: number; id: number }[] = [];
-  for (const index of order) {
-    const point = points[index]!;
+  let cell = 0;
+  for (const point of points) {
+    cell = Math.max(cell, samePointTolerance(point));
+  }
+  const grid = new Map<
+    string,
+    { point: Point; tolerance: number; id: number }[]
+  >();
+  let next = 0;
+  points.forEach((point, index) => {
     const tolerance = samePointTolerance(point);
+    const cx = Math.floor(point.x / cell);
+    const cy = Math.floor(point.y / cell);
     let id: number | undefined;
-    // Representatives are in ascending x. Once one is out of reach in x, every
-    // earlier one is too: the gap grows faster than the tolerance can.
-    for (let at = representatives.length - 1; at >= 0; at -= 1) {
-      const candidate = representatives[at]!;
-      const reach = Math.max(tolerance, candidate.tolerance);
-      if (point.x - candidate.point.x > reach) break;
-      if (Math.abs(point.y - candidate.point.y) <= reach) {
-        id = candidate.id;
-        break;
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (const candidate of grid.get(`${cx + dx},${cy + dy}`) ?? []) {
+          const reach = Math.max(tolerance, candidate.tolerance);
+          if (
+            Math.abs(point.x - candidate.point.x) <= reach &&
+            Math.abs(point.y - candidate.point.y) <= reach &&
+            (id === undefined || candidate.id < id)
+          ) {
+            id = candidate.id;
+          }
+        }
       }
     }
     if (id === undefined) {
-      id = representatives.length;
-      representatives.push({ point, tolerance, id });
+      id = next;
+      next += 1;
+      const key = `${cx},${cy}`;
+      const bucket = grid.get(key);
+      const representative = { point, tolerance, id };
+      if (bucket) bucket.push(representative);
+      else grid.set(key, [representative]);
     }
     ids[index] = id;
-  }
+  });
   return ids;
 }
 

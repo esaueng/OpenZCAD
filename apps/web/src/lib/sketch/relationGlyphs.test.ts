@@ -304,6 +304,45 @@ describe('sketchRelationGlyphs', () => {
     expect(close[0]!.glyphs).toHaveLength(1);
   });
 
+  it('clusters a column of many curve ends in linear time', () => {
+    // Sixty thousand short vertical lines stacked in one column: every end
+    // shares an x, which made the old sweep compare each against all.
+    const column = Array.from({ length: 60_000 }, (_, index) => ({
+      id: `l${index}`,
+      data: {
+        objectKind: 'line' as const,
+        x1: 0,
+        y1: index * 10,
+        x2: 0,
+        y2: index * 10 + 5
+      }
+    }));
+    const relations = [
+      constraint({
+        constraintKind: 'coincident',
+        a: { objectId: id('l0'), point: 'end' },
+        b: { objectId: id('l1'), point: 'start' }
+      }),
+      constraint({ constraintKind: 'vertical', objectId: id('l59999') })
+    ];
+    const started = performance.now();
+    const chips = sketchRelationGlyphs(column, relations, resolve, {
+      visibility: 'always'
+    });
+    // About half a second here; the quadratic sweep took about 18 s.
+    expect(performance.now() - started).toBeLessThan(4_000);
+    expect(chips.map((chip) => chip.placement).sort()).toEqual([
+      'object',
+      'point',
+      'point'
+    ]);
+    // The lone line end the coincident names stands off opposite its line.
+    const end = chips.find(
+      (chip) => chip.placement === 'point' && chip.anchor.y === 5
+    )!;
+    expect(end.normal.y).toBeCloseTo(1, 12);
+  }, 20_000);
+
   it('skips relations whose geometry does not resolve', () => {
     const chips = sketchRelationGlyphs(
       [
