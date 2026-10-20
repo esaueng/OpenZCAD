@@ -44,14 +44,34 @@ for (const width of [1440, 390]) {
     const columnBounds = await column.boundingBox();
     expect(columnBounds!.y).toBeGreaterThanOrEqual(stageTop - 0.5);
     // The instrument rail rises into place too; within 2px once it has,
-    // since the translate lands on a half pixel for an odd height.
+    // since the translate lands on a half pixel for an odd height. It stands
+    // centred while it fits above the bottom-right corner — the band the
+    // panel docks stand in ends there — and past that it lifts just enough
+    // for its foot to stand on the band's: with Revisions and Diagnostics
+    // it is 522px tall, which at a phone width reached the view cube.
     const rail = page.locator('.instrument-rail');
+    const band = await page.locator('.panel-dock-layer').boundingBox();
+    const bandBottom = band!.y + band!.height;
     await expect
       .poll(async () => {
         const bounds = await rail.boundingBox();
-        return Math.abs(bounds!.y + bounds!.height / 2 - stageMiddle);
+        const centre = Math.min(stageMiddle, bandBottom - bounds!.height / 2);
+        return Math.abs(bounds!.y + bounds!.height / 2 - centre);
       })
       .toBeLessThanOrEqual(2);
+    const cube = await page
+      .getByRole('group', { name: 'View orientation' })
+      .boundingBox();
+    const railBounds = await rail.boundingBox();
+    expect(railBounds!.y + railBounds!.height).toBeLessThanOrEqual(
+      cube!.y - ISLAND_GAP
+    );
+    if (width === 1440) {
+      // A wide stage has the room: centred, as the verb rail is.
+      expect(
+        Math.abs(railBounds!.y + railBounds!.height / 2 - stageMiddle)
+      ).toBeLessThanOrEqual(2);
+    }
     await expect
       .poll(async () => (await column.boundingBox())!.x)
       .toBeCloseTo(ISLAND_GAP, 1);

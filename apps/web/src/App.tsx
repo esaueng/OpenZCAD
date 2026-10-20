@@ -1432,6 +1432,10 @@ import {
   type PanelStage
 } from './lib/panelLayout';
 import {
+  useHistoryFind,
+  useObjectsView
+} from './components/modelPanels/panelViews';
+import {
   loadSettingsViewState,
   updateSettingsViewState
 } from './lib/settingsViewState';
@@ -2187,6 +2191,12 @@ export function App() {
   } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
+  // Held here, not in the panels: a move between the dock and the phone lane
+  // remounts a panel, and its filter, search and Find field outlive that. A
+  // different project starts them afresh.
+  const objectsView = useObjectsView(doc?.projectId ?? null);
+  const historyFind = useHistoryFind(doc?.projectId ?? null);
+  const modelPanelViews = { objects: objectsView, historyFind };
   const textOutlineBudgetError = useMemo(
     () => (doc ? documentTextBudgetError(doc) : null),
     [doc]
@@ -3863,6 +3873,11 @@ export function App() {
       version: current.version,
       error
     });
+    // The record and its dismiss control live in History: bring it into
+    // view (unpinned if closed, out of the parking slot if parked).
+    setPanelLayout((layout) =>
+      presentPanel(layout, 'history', panelStage ?? undefined)
+    );
   }
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
@@ -21779,6 +21794,7 @@ export function App() {
         ...panelControls(id, placement),
         ...(dock ? { dock } : {})
       }}
+      views={modelPanelViews}
       parameters={parameters}
       parameterValues={parameterScope.scope}
       parameterMinimums={liveParameterMinimums}

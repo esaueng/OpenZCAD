@@ -1808,6 +1808,27 @@ function arrangedGeometry(
 }
 
 /**
+ * Whether the unpinned slot reserves its width, so the right lane (the
+ * command card and the inspector) steps past it. It does while the lane
+ * keeps `laneMin` beside it, between the slot and the left dock's columns
+ * (`leftDockWidth`, `--left-dock-w`). On a narrower stage the slot covers
+ * the lane instead, as a float would: like a float it is opened and closed
+ * by one press and sits outside the 40% guarantee, and reserving it there
+ * would squeeze a form in the lane to a sliver.
+ */
+export function unpinnedSlotReserves(
+  stage: PanelStage,
+  dockWidth: number,
+  slotWidth: number,
+  laneMin: number,
+  leftDockWidth = 0
+): boolean {
+  const { rail, gap } = insetsOf(stage);
+  const laneEnd = rail + gap * 2 + dockWidth + slotWidth;
+  return stage.width - laneEnd - gap - leftDockWidth >= laneMin;
+}
+
+/**
  * The rectangles a layout takes on a stage. A projection only: columns past
  * the cap are parked, a phone-width stage shows one panel and no docks or
  * windows, short columns scroll and windows stay inside the stage, all

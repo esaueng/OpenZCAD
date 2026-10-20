@@ -319,6 +319,51 @@ test('the gap between stacked panels resizes them, and a double-click splits the
   await expect(gap).toHaveAttribute('aria-valuenow', '50');
 });
 
+test('a double-click split leaves the rest of the stack its height when a neighbour sat at its minimum', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Split check', {
+    right: [['history', 'parameters', 'revisions']]
+  });
+  const history = modelPanel(page, 'History');
+  const parameters = modelPanel(page, 'Parameters');
+  const revisions = modelPanel(page, 'Revisions');
+  await expect(revisions).toBeVisible();
+
+  const gap = page.getByRole('separator', {
+    name: 'Resize History and Parameters'
+  });
+  const handle = await box(gap);
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 2000, {
+    steps: 6
+  });
+  await page.mouse.up();
+  await expect.poll(async () => (await box(parameters)).height).toBe(90);
+  // A shorter window draws the stack at a smaller scale; Parameters' share
+  // is then under 90px, and it is held at its minimum.
+  const tall = await box(revisions);
+  await page.setViewportSize({ width: 1440, height: 720 });
+  await expect
+    .poll(async () => (await box(revisions)).height)
+    .toBeLessThan(tall.height - 1);
+  await expect.poll(async () => (await box(parameters)).height).toBe(90);
+  const revisionsHeight = (await box(revisions)).height;
+
+  // Splitting the two evenly at the scale the stack is drawn at: weights
+  // split alone redrew the whole stack at another scale, Revisions with it.
+  await gap.dblclick();
+  await expect
+    .poll(async () =>
+      Math.abs((await box(history)).height - (await box(parameters)).height)
+    )
+    .toBeLessThan(1);
+  expect(
+    Math.abs((await box(revisions)).height - revisionsHeight)
+  ).toBeLessThan(1);
+});
+
 test('headers carry the Move grip, Pin, Pop out and Close, and no fold', async ({
   page
 }) => {
@@ -383,6 +428,39 @@ test('the inspector and the right lane stay clear of the dock, inside the rail',
   const shifted = await box(inspector);
   expect(overlaps(shifted, peek)).toBe(false);
   expect(shifted.x + shifted.width).toBeLessThanOrEqual(peek.x);
+});
+
+test('on a stage too narrow for both, an unpinned panel covers the lane instead of squeezing it', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Narrow lane', ALL_PANELS_DOCKED, {
+    width: 900,
+    height: 720
+  });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  const inspector = page.locator('.stage-right > .inspector-float');
+  await expect(inspector).toBeVisible();
+  const full = await box(inspector);
+  await modelPanel(page, 'History')
+    .getByRole('button', { name: 'Pin History' })
+    .click();
+  const peek = page.locator('.panel-unpinned');
+  await expect(peek).toBeVisible();
+  // Reserving the slot here would have left the inspector a sliver; it keeps
+  // its width and the unpinned panel stands over it until it closes.
+  const kept = await box(inspector);
+  expect(Math.abs(kept.width - full.width)).toBeLessThan(1);
+  const slot = await box(peek);
+  expect(
+    await page.evaluate(
+      ({ x, y }) =>
+        document.elementFromPoint(x, y)?.closest('.panel-unpinned') !== null,
+      { x: slot.x + slot.width / 2, y: slot.y + 60 }
+    )
+  ).toBe(true);
+  await railPanelButton(page, 'History').click();
+  await expect(peek).toHaveCount(0);
+  await expect(inspector).toBeVisible();
 });
 
 test('a sketch hides the dock and an open unpinned panel and restores both', async ({

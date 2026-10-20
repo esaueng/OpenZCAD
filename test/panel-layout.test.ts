@@ -59,6 +59,7 @@ import {
   splitGapEvenly,
   togglePanel,
   unpinPanel,
+  unpinnedSlotReserves,
   wouldExceedCap,
   type PanelId,
   type PanelLayout,
@@ -2852,5 +2853,35 @@ describe('panel layout persistence', () => {
     expect(storage.entries.get(PANEL_LAYOUT_STORAGE_KEY)).not.toContain(
       PANEL_SLOT
     );
+  });
+});
+
+describe('the unpinned slot beside the right lane', () => {
+  // Today's tokens: 40px rail, 10px gaps, a 296px column (306px with its
+  // gap) and the 330px card width the lane keeps.
+  const insets = { rail: 40, gap: 10 };
+  const stage = (width: number) => ({ width, height: 720, insets });
+
+  it('reserves its width while the lane keeps a full card beside it', () => {
+    // 60 (rail and gaps) + 306 (dock) + 306 (slot) + 10 + 330 = 1012.
+    expect(unpinnedSlotReserves(stage(1012), 306, 306, 330)).toBe(true);
+    expect(unpinnedSlotReserves(stage(1280), 306, 306, 330)).toBe(true);
+    // No dock: the slot alone needs 60 + 306 + 10 + 330 = 706.
+    expect(unpinnedSlotReserves(stage(721), 0, 306, 330)).toBe(true);
+  });
+
+  it('covers the lane when reserving would squeeze its card', () => {
+    expect(unpinnedSlotReserves(stage(1011), 306, 306, 330)).toBe(false);
+    // Just past the phone breakpoint a docked column and the slot would have
+    // left the inspector about 39px.
+    expect(unpinnedSlotReserves(stage(721), 306, 306, 330)).toBe(false);
+  });
+
+  it('leaves the lane its card between the slot and the left dock', () => {
+    // The left dock's 306px come off the lane too: 1012 + 306 = 1318.
+    expect(unpinnedSlotReserves(stage(1318), 306, 306, 330, 306)).toBe(true);
+    expect(unpinnedSlotReserves(stage(1317), 306, 306, 330, 306)).toBe(false);
+    // Essentials at 1280px: the slot covers the lane rather than squeeze it.
+    expect(unpinnedSlotReserves(stage(1280), 306, 306, 330, 306)).toBe(false);
   });
 });

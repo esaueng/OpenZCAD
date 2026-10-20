@@ -3,12 +3,8 @@ import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { FeatureId, FeatureNode } from '@openzcad/shared';
-import {
-  HistoryFindToggle,
-  HistoryPanel,
-  historyCount,
-  useHistoryFind
-} from './HistoryPanel';
+import { HistoryFindToggle, HistoryPanel, historyCount } from './HistoryPanel';
+import { useHistoryFind } from './panelViews';
 
 function feature(index: number): FeatureNode {
   return {

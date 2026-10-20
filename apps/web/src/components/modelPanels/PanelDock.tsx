@@ -49,7 +49,8 @@ import {
   type PanelStage,
   type PanelTarget,
   type Point,
-  type Rect
+  type Rect,
+  unpinnedSlotReserves
 } from '../../lib/panelLayout';
 import type { ContextMenuItem } from '../ContextMenu';
 import type { PanelDockControls, PanelPlacement } from './PanelFrame';
@@ -204,6 +205,8 @@ export function PanelDock({
   const [stage, setStage] = useState<PanelStage | null>(null);
   const [localLayout, setLocalLayout] = useState<PanelLayout | null>(null);
   const [dragView, setDragView] = useState<DragView | null>(null);
+  /** The lane's card width (`--context-w`) the unpinned slot must leave. */
+  const [laneMin, setLaneMin] = useState(330);
   const localRef = useRef<LocalDrag | null>(null);
   const dragRef = useRef<PanelDrag | null>(null);
   /** A panel whose grip takes focus once it is drawn in its new place. */
@@ -232,6 +235,7 @@ export function PanelDock({
         }
       };
       setStage((current) => (sameStage(current, next) ? current : next));
+      setLaneMin(pixels(style.getPropertyValue('--context-w'), 330));
     };
     measure();
     if (typeof ResizeObserver === 'undefined') return;
@@ -263,9 +267,24 @@ export function PanelDock({
     : undefined;
   const leftWidth = docked ? docked.dockWidth.left : 0;
   const rightWidth = docked ? docked.dockWidth.right : 0;
-  const peekWidth =
+  const slotWidth =
     resting && !resting.phone && restingSlot
       ? resting.columnWidth + resting.insets.gap
+      : 0;
+  // Judged against the resting docks, both of them: the lane keeps its card
+  // width between the left dock and the slot, or the slot covers it.
+  const peekWidth =
+    stage &&
+    resting &&
+    slotWidth > 0 &&
+    unpinnedSlotReserves(
+      stage,
+      resting.dockWidth.right,
+      slotWidth,
+      laneMin,
+      resting.dockWidth.left
+    )
+      ? slotWidth
       : 0;
 
   useLayoutEffect(() => {
@@ -910,7 +929,15 @@ export function PanelDock({
             onKeyDown={(event) => gapKey(event, gap)}
             onDoubleClick={() => {
               if (!gap.enabled) return;
-              const next = splitGapEvenly(layout, gap.above, gap.below);
+              // At the scale the stack is drawn at, as a drag is: split by
+              // weight alone, a neighbour held at its minimum redrew every
+              // other panel in the stack.
+              const next = splitGapEvenly(
+                layout,
+                gap.above,
+                gap.below,
+                gap.pxPerWeight
+              );
               if (next !== layout) onLayout(next);
             }}
           >
@@ -931,7 +958,9 @@ export function PanelDock({
 
   return (
     <div
-      className={`panel-dock-layer${dragView ? ' is-dragging' : ''}`}
+      className={`panel-dock-layer${dragView ? ' is-dragging' : ''}${
+        slot && slotWidth > 0 && peekWidth === 0 ? ' slot-over-lane' : ''
+      }`}
       ref={layerRef}
     >
       {docked?.columns.map((column) => (

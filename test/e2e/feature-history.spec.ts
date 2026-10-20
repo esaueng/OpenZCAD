@@ -1,4 +1,11 @@
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  expectBodyCount,
+  modelPanel,
+  railPanelButton
+} from './openzcad-fixtures';
 
 test('explains a failed downstream edit and opens the exact feature for repair', async ({
   page
@@ -439,4 +446,41 @@ test('renaming a modeling feature closes its stale editor and keeps the new name
     page.getByRole('textbox', { name: 'Wall thickness', exact: true })
   ).toHaveCount(0);
   await expect(renamed.locator('.feature-name')).toHaveText('Renamed wall');
+});
+
+test('a failed edit brings a closed History panel forward with its record', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: /Heat Sink/ }).click();
+  await expectBodyCount(page, 1);
+  await page.locator('.feature-row-main', { hasText: 'Extrude base' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await expect(inspector).toBeVisible();
+  // The record and its dismiss control live only in History.
+  await page.getByRole('button', { name: 'Close History' }).click();
+  await expect(railPanelButton(page, 'History')).toHaveAttribute(
+    'aria-pressed',
+    'false'
+  );
+  await inspector
+    .getByRole('textbox', { name: 'Distance', exact: true })
+    .fill('base_t + 1');
+  await expect(inspector.getByRole('alert')).toContainText(
+    'Base corner fillets',
+    { timeout: 30_000 }
+  );
+  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(railPanelButton(page, 'History')).toHaveAttribute(
+    'aria-pressed',
+    'true',
+    { timeout: 30_000 }
+  );
+  await expect(
+    modelPanel(page, 'History')
+      .getByRole('region', { name: 'History details' })
+      .getByRole('alert')
+  ).toContainText('The previous model is intact');
 });

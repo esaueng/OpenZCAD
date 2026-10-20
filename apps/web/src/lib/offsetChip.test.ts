@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  edgeChipCenterX,
   faceOffsetChipState,
   offsetChipText,
   regionChipState
@@ -77,5 +78,19 @@ describe('offset chip', () => {
         units: 'mm'
       })
     ).toBe('-5 mm');
+  });
+
+  it('keeps an edge chip clear of the right lane only when it fits beside it', () => {
+    expect(edgeChipCenterX(300, null, 60)).toBe(300);
+    // A desktop lane at 900: the chip is left alone short of it and pulled
+    // back to 8px clear of it otherwise.
+    expect(edgeChipCenterX(300, 900, 60)).toBe(300);
+    expect(edgeChipCenterX(880, 900, 60)).toBe(862);
+    // A phone lane starting at the 10px inset leaves no room: dodging it
+    // would put the chip off-screen, so it stays on its anchor.
+    expect(edgeChipCenterX(200, 10, 60)).toBe(200);
+    // The boundary: exactly room for the chip and both margins.
+    expect(edgeChipCenterX(200, 76, 60)).toBe(38);
+    expect(edgeChipCenterX(200, 75, 60)).toBe(200);
   });
 });

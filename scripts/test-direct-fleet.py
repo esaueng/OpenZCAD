@@ -7,16 +7,40 @@ import json
 import re
 import subprocess
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CALLER = (ROOT / ".github/workflows/ci.yml").read_text()
-PIN = re.search(r"fleet-ci\.yml@([a-f0-9]{40})", CALLER)[1]
+CALLEE, PIN = re.search(r"\.github/workflows/(fleet-ci(?:-v[0-9]+)?\.yml)@([a-f0-9]{40})", CALLER).groups()
 try:
-    TEXT = subprocess.check_output(["git", "show", f"{PIN}:.github/workflows/fleet-ci.yml"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL)
+    TEXT = subprocess.check_output(["git", "show", f"{PIN}:.github/workflows/{CALLEE}"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL)
 except subprocess.CalledProcessError:
     subprocess.run(["git", "fetch", "--no-tags", "--depth=1", "origin", PIN], cwd=ROOT, check=True)
-    TEXT = subprocess.check_output(["git", "show", f"{PIN}:.github/workflows/fleet-ci.yml"], cwd=ROOT, text=True)
+    TEXT = subprocess.check_output(["git", "show", f"{PIN}:.github/workflows/{CALLEE}"], cwd=ROOT, text=True)
+
+
+def main_contains(commit):
+    """Whether origin/main reaches `commit`, fetching only the history needed."""
+    def contains():
+        return subprocess.run(
+            ["git", "merge-base", "--is-ancestor", commit, "refs/remotes/origin/main"],
+            cwd=ROOT, capture_output=True,
+        ).returncode == 0
+    if contains():
+        return True
+    fetch = ["git", "fetch", "--no-tags", "--quiet"]
+    shallow = subprocess.check_output(
+        ["git", "rev-parse", "--is-shallow-repository"], cwd=ROOT, text=True
+    ).strip() == "true"
+    if shallow:
+        # Main's commits since a day before the pin are enough to walk to it;
+        # CI checkouts are shallow and full history is tens of megabytes.
+        committed = subprocess.check_output(["git", "show", "-s", "--format=%cI", commit], cwd=ROOT, text=True).strip()
+        since = datetime.fromisoformat(committed) - timedelta(days=1)
+        fetch.append(f"--shallow-since={since.isoformat()}")
+    subprocess.run(fetch + ["origin", "+refs/heads/main:refs/remotes/origin/main"], cwd=ROOT, check=True)
+    return contains()
 EXPRESSIONS = re.findall(
     r"^    runs-on: (?:&fleet-runner )?(\$\{\{ fromJSON\(.+\) \}\})$", TEXT, re.M
 )
@@ -218,13 +242,32 @@ class DirectFleetTests(unittest.TestCase):
                     keys = {evaluate(group, dict(github, run_id=run_id), self.variables) for run_id in (201, 202)}
                     self.assertEqual(keys, {"refs/pull/7/merge"})
 
+    def test_pin_is_a_commit_main_already_contains(self):
+        # GitHub deletes a PR branch at merge, and Actions cannot resolve a
+        # reusable workflow at a commit only refs/pull/N/head still reaches:
+        # every ci run then fails at startup with no jobs. Stage a versioned
+        # callee and activate it from main instead (docs/runner-routing.md).
+        self.assertTrue(
+            main_contains(PIN),
+            f"ci.yml pins {CALLEE}@{PIN}, which main does not contain",
+        )
+
     def test_no_hosted_bootstrap_and_guard_before_checkout(self):
         self.assertNotIn("select-runner.yml", TEXT)
         self.assertNotIn("/routing/v1/target", TEXT)
         self.assertNotIn("needs.route", TEXT)
         self.assertIn("&fleet-isolation", TEXT)
         self.assertNotIn("secrets.", TEXT)
-        for job in re.split(r"^  [\w-]+:\s*$", TEXT.split("\njobs:\n", 1)[1], flags=re.M)[1:]:
+        jobs = re.split(r"^  [\w-]+:\s*$", TEXT.split("\njobs:\n", 1)[1], flags=re.M)[1:]
+        for job in jobs:
+            alias = re.search(r"^    steps: \*([\w-]+)$", job, re.M)
+            if alias:
+                # An aliased step list is the anchored job's list verbatim, so
+                # that job's text carries the guard this one runs.
+                anchored = [other for other in jobs if f"\n    steps: &{alias[1]}\n" in other]
+                self.assertEqual(len(anchored), 1, alias[1])
+                self.assertIn("runs-on: *fleet-runner", job)
+                job = anchored[0]
             if not any(
                 marker in job
                 for marker in (
