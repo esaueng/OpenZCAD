@@ -207,6 +207,8 @@ export function sharedProjectSnapshotDocument(
 ): ProjectDocument {
   // Drawing sheets stay with the owner: their title blocks carry author,
   // date and drawing-number text, and a share link opens no Draw workspace.
+  // Objects folders (U06) are shared: they only organize bodies whose names
+  // the visitor already sees, and carry no author, date or history.
   const {
     editHistory: _editHistory,
     branchedFrom: _branchedFrom,

@@ -18,6 +18,7 @@ import {
   type BodyId,
   type ProjectDocument
 } from '@openzcad/shared';
+import { sharedProjectSnapshotDocument } from '@openzcad/persistence';
 import { geometryContentKey } from '../apps/web/src/worker/exactRebuildCache';
 import { parseSaveProjectDocumentRequest } from '../apps/web/worker/validation';
 import { createProjectDiagnosticBundle } from '../apps/web/src/lib/projectDiagnostics';
@@ -277,6 +278,30 @@ describe('Objects folders (U06, schema v34)', () => {
       JSON.parse(JSON.stringify(manager.document)) as ProjectDocument
     );
     expect(reopened.objectFolders).toEqual(manager.document.objectFolders);
+  });
+
+  it('shares the folders with a share-link visitor, without their history', () => {
+    const { manager, base } = threeBoxes();
+    expect(
+      'objectFolders' in sharedProjectSnapshotDocument(manager.document)
+    ).toBe(false);
+    manager.execute(
+      commandFactories.createObjectFolder({
+        folderId: 'folder_a',
+        name: 'Frame',
+        parentId: null,
+        bodyIds: [base]
+      })
+    );
+    const shared = sharedProjectSnapshotDocument(manager.document);
+    expect(shared.objectFolders).toEqual(manager.document.objectFolders);
+    // The folder commands and their undo entries stay with the owner.
+    expect(shared.commandLog).toEqual([]);
+    expect(shared.editHistory).toBeUndefined();
+    const opened = normalizeDocument(
+      JSON.parse(JSON.stringify(shared)) as ProjectDocument
+    );
+    expect(folderOf(opened, base)).toBe('folder_a');
   });
 
   it('refuses malformed sections by name, on load and at the account edge', () => {
