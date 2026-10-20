@@ -1946,6 +1946,7 @@ button.command-rail:disabled {
 
 .panel-column.is-scrolling {
   overflow-y: auto;
+  scroll-padding-block: 8px;
   overscroll-behavior: contain;
   scrollbar-width: thin;
   pointer-events: auto;
@@ -2134,6 +2135,10 @@ button.command-rail:disabled {
   min-height: 0;
   overflow-y: auto;
   padding: 10px 10px 10px;
+  /* A row scrolled into view (a search hit, the history's end handle) stops
+     short of the edge, so a control's 24px reach stays inside the panel
+     instead of reaching under the gap or the next panel. */
+  scroll-padding-block: 12px;
   scrollbar-width: thin;
 }
 

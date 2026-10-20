@@ -6067,7 +6067,16 @@ export function ModelViewer({
         chip.style.removeProperty('--chip-rotate');
         radiusLabelChip.style.removeProperty('--chip-rotate');
         delete radiusLabelChip.dataset.variant;
-        hud.showAt(chip, screen.x, screen.y);
+        // An edge's chip stays clear of the right lane too (the pin variants
+        // dodge it above): past the dock and the inspector the lane reaches
+        // well into the stage, and a value under it cannot be tapped.
+        hud.showAt(
+          chip,
+          laneLeft !== null && chip.dataset.variant === 'default'
+            ? Math.min(screen.x, laneLeft - 8 - chipWidth / 2)
+            : screen.x,
+          screen.y
+        );
         const offsetSpan =
           offsetHandleRef.current?.totalBaseline ?? offsetExtentRef.current;
         if (rig?.kind === 'cylinder-radius' && !dimensionChipBesidePin) {
