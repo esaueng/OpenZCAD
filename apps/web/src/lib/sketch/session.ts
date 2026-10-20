@@ -1257,6 +1257,10 @@ function positionFields(data: SketchObjectData): [string, string][] {
 
 /** True when every position field is a literal number a drag can rewrite. */
 export function sketchObjectMovable(data: SketchObjectData): boolean {
+  // I01: a linked projection is where its model edge puts it.
+  if (data.projection?.mode === 'linked') {
+    return false;
+  }
   if (data.objectKind === 'spline') {
     // A spline's position is all of its points.
     return data.points.every(

@@ -2,6 +2,7 @@ import type { ExtrudeChoice } from '../extrudeInference';
 import type {
   ParamValue,
   SketchPlaneRef,
+  SketchProjectionMode,
   TextAlign,
   TextFontStyle,
   TopologySelection
@@ -80,7 +81,9 @@ export type SketchToolId =
   | 'polygon'
   | 'ellipse'
   | 'spline'
-  | 'text';
+  | 'text'
+  /** I01: pick model edges or faces to project into the sketch. */
+  | 'project';
 
 /**
  * The curve slot's types (I01): the Ellipse tool draws a full ellipse or an
@@ -298,6 +301,11 @@ export interface SketchSessionState {
   /** The Offset tool's settings; absent is a mitered chain. */
   offsetOptions?: SketchOffsetOptions;
   /**
+   * I01: whether the Project tool keeps what it projects linked to its edge
+   * or copies it once; absent is linked.
+   */
+  projectMode?: SketchProjectionMode;
+  /**
    * The selected object's drag-move, while the pointer holds it. Absent
    * otherwise; a release commits it and Escape cancels it, and neither
    * clears the selection.
@@ -435,6 +443,7 @@ export type InteractionEvent =
   | { type: 'sketch-constraint-pick'; pick: SketchConstraintPick }
   | { type: 'sketch-edit-tool'; kind: SketchEditToolKind | null }
   | { type: 'sketch-offset-options'; options: SketchOffsetOptions }
+  | { type: 'sketch-project-mode'; mode: SketchProjectionMode }
   | { type: 'sketch-edit-pick'; objectId: string }
   | {
       type: 'sketch-move-start';
@@ -974,6 +983,24 @@ function reduceInteraction(
           pendingEdit: event.kind ? { kind: event.kind, picks: [] } : null
         }
       };
+    case 'sketch-project-mode':
+      // Choosing linked or unlinked arms the Project tool, like a circle type
+      // arms the Circle tool.
+      return state.mode === 'sketch'
+        ? {
+            ...state,
+            session: {
+              ...state.session,
+              tool: 'project',
+              projectMode: event.mode,
+              drawing: false,
+              selectedObjectId: null,
+              pendingConstraint: null,
+              pendingEdit: null,
+              textDraft: null
+            }
+          }
+        : state;
     case 'sketch-offset-options':
       // A setting of the tool, like the polygon's side count: it never
       // disarms the tool or drops a pick.

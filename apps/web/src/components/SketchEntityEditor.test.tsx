@@ -1172,4 +1172,85 @@ describe('the construction toggle (ZC-024)', () => {
       screen.getByRole('button', { name: 'Construction' })
     ).toHaveAttribute('aria-pressed', 'true');
   });
+
+  describe('projected entities (I01)', () => {
+    const linked: SketchObjectData = {
+      objectKind: 'line',
+      x1: 0,
+      y1: 0,
+      x2: 4,
+      y2: 0
+    };
+
+    it('holds a linked projection: read-only values, its source, and its two ways out', async () => {
+      const user = userEvent.setup();
+      const onUnlinkProjection = vi.fn();
+      const onRepickProjection = vi.fn();
+      const onApply = vi.fn();
+      render(
+        <SketchEntityEditor
+          data={linked}
+          scope={{}}
+          onApply={onApply}
+          onDelete={vi.fn()}
+          onClose={vi.fn()}
+          projection={{ mode: 'linked', sourceName: 'Block', state: 'current' }}
+          onUnlinkProjection={onUnlinkProjection}
+          onRepickProjection={onRepickProjection}
+        />
+      );
+      expect(screen.getByLabelText('End X')).toBeDisabled();
+      expect(screen.getByRole('button', { name: /apply/i })).toBeDisabled();
+      const section = screen.getByRole('region', { name: 'Projection' });
+      expect(section).toHaveTextContent('Linked to an edge of Block');
+      await user.click(
+        within(section).getByRole('button', { name: /re-pick source/i })
+      );
+      await user.click(within(section).getByRole('button', { name: /unlink/i }));
+      expect(onRepickProjection).toHaveBeenCalledTimes(1);
+      expect(onUnlinkProjection).toHaveBeenCalledTimes(1);
+      expect(onApply).not.toHaveBeenCalled();
+    });
+
+    it('says why a linked projection is broken, and keeps its last position', () => {
+      render(
+        <SketchEntityEditor
+          data={linked}
+          scope={{}}
+          onApply={vi.fn()}
+          onDelete={vi.fn()}
+          onClose={vi.fn()}
+          projection={{
+            mode: 'linked',
+            sourceName: null,
+            state: 'broken',
+            reason: 'its source edge was deleted.'
+          }}
+        />
+      );
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Broken: its source edge was deleted. The sketch keeps its last projected position.'
+      );
+    });
+
+    it('edits an unlinked copy like any geometry, naming where it came from', () => {
+      render(
+        <SketchEntityEditor
+          data={linked}
+          scope={{}}
+          onApply={vi.fn()}
+          onDelete={vi.fn()}
+          onClose={vi.fn()}
+          projection={{ mode: 'unlinked', sourceName: 'Block' }}
+        />
+      );
+      expect(screen.getByLabelText('End X')).toBeEnabled();
+      expect(screen.getByRole('region', { name: 'Projection' })).toHaveTextContent(
+        'Independent copy of an edge of Block'
+      );
+      expect(
+        screen.queryByRole('button', { name: /unlink/i })
+      ).not.toBeInTheDocument();
+    });
+  });
 });

@@ -195,6 +195,14 @@ export class PreparedEditSession {
       !sameMap(result.datumFrames, before.datumFrames) ||
       !sameMap(result.datumAxes, before.datumAxes) ||
       !sameMap(
+        result.sketchProjections ?? new Map(),
+        before.sketchProjections ?? new Map()
+      ) ||
+      !sameMap(
+        result.sketchObjectOverrides ?? new Map(),
+        before.sketchObjectOverrides ?? new Map()
+      ) ||
+      !sameMap(
         result.importedStepDiagnostics,
         before.importedStepDiagnostics
       ) ||

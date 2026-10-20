@@ -20,7 +20,9 @@ import {
 } from './sketch-reference-dimensions';
 export * from './sketch-reference-dimensions';
 import { assertSketchComposites, compositesWithout } from './sketch-composites';
+import { assertSketchObjectProjection } from './sketch-projections';
 export * from './sketch-composites';
+export * from './sketch-projections';
 export * from './drawings';
 export {
   constantRigidTransform,
@@ -865,6 +867,10 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
       assertSketchReferenceDimensions(node);
       assertSketchComposites(node);
     }
+    // Schema v33 projections: validated as written, never synthesized.
+    if (node.kind === 'sketch-object') {
+      assertSketchObjectProjection(node.data, node.id);
+    }
     if (node.kind === 'parameter') assertParameterQuantity(node);
   }
   const revisions = Array.isArray(document.revisions)
@@ -1325,6 +1331,7 @@ export function addSketchFeature(
     objectIds: objectNodeIds
   };
 
+  objects.forEach((object) => assertSketchObjectProjection(object));
   objects.forEach((object, index) => {
     const objectNodeId = objectNodeIds[index]!;
     next.nodes[objectNodeId] = {
@@ -1486,7 +1493,12 @@ export function translateSketch(
         : resolveParamValue(value, scope, label, next.units) + delta;
     for (const objectId of sketch.objectIds) {
       const node = next.nodes[objectId];
-      if (node?.kind !== 'sketch-object') {
+      // A linked projection belongs to its model edge, not to the sketch's
+      // placement: the next rebuild would project it back regardless.
+      if (
+        node?.kind !== 'sketch-object' ||
+        node.data.projection?.mode === 'linked'
+      ) {
         continue;
       }
       const data = node.data;
@@ -1548,6 +1560,7 @@ export function addSketchObjects(
   const objectNodeIds = input.objects.map(
     (_, index) => input.ids?.objectNodeIds[index] ?? toEntityId(createId('ent'))
   );
+  input.objects.forEach((object) => assertSketchObjectProjection(object));
   input.objects.forEach((object, index) => {
     const objectNodeId = objectNodeIds[index]!;
     next.nodes[objectNodeId] = {
@@ -1587,6 +1600,7 @@ export function updateSketchObject(
   document: ProjectDocument,
   input: SketchObjectUpdateInput
 ): ProjectDocument {
+  assertSketchObjectProjection(input.data, input.objectId);
   const next = cloneDocument(document);
   const { objectNode } = requireSketchObject(
     next,

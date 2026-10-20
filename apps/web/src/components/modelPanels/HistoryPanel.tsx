@@ -3,6 +3,7 @@ import { Search } from 'lucide-react';
 import type { FeatureNode } from '@openzcad/shared';
 import { findRollbackMarkerIndex, HistoryTimeline } from '../HistoryTimeline';
 import type { SidebarProps } from '../Sidebar';
+import { sketchesWithBrokenProjections } from '../../lib/sketch/projection';
 
 /**
  * The History step search: whether the field is open, and the header toggle
@@ -118,6 +119,7 @@ export type HistoryPanelProps = Pick<
   | 'selectedFeatureNodeId'
   | 'hiddenBodyIds'
   | 'hiddenSketchIds'
+  | 'document'
   | 'parameterValues'
   | 'units'
   | 'historyDetails'
@@ -141,6 +143,7 @@ export function HistoryPanel({
   selectedFeatureNodeId,
   hiddenBodyIds,
   hiddenSketchIds,
+  document,
   parameterValues,
   units,
   historyDetails,
@@ -166,6 +169,9 @@ export function HistoryPanel({
         selectedFeatureNodeId={selectedFeatureNodeId}
         hiddenBodyIds={hiddenBodyIds}
         hiddenSketchIds={hiddenSketchIds}
+        brokenProjectionSketchIds={
+          document ? sketchesWithBrokenProjections(document) : undefined
+        }
         parameterValues={parameterValues}
         units={units}
         findOpen={find.open}

@@ -127,6 +127,12 @@ export interface HistoryTimelineProps {
   selectedFeatureNodeId: string | null;
   hiddenBodyIds: ReadonlySet<string>;
   hiddenSketchIds: ReadonlySet<string>;
+  /**
+   * I01: sketches holding a linked projection the last build could not
+   * re-find. Their rows say so; the repair (re-pick or unlink) is in the
+   * sketch.
+   */
+  brokenProjectionSketchIds?: ReadonlySet<string>;
   parameterValues: Record<string, number>;
   units: UnitSystem;
   findOpen: boolean;
@@ -332,6 +338,7 @@ export function HistoryTimeline({
   selectedFeatureNodeId,
   hiddenBodyIds,
   hiddenSketchIds,
+  brokenProjectionSketchIds,
   parameterValues,
   units,
   findOpen,
@@ -791,6 +798,10 @@ export function HistoryTimeline({
           const failed =
             !geometryPending &&
             featureNeedsRepair(feature, representations, failedFeatureIds);
+          const projectionBroken =
+            !geometryPending &&
+            sketchId !== null &&
+            brokenProjectionSketchIds?.has(sketchId) === true;
           const selected = selectedFeatureNodeId === feature.id;
           const value = manual
             ? 'suppressed'
@@ -800,7 +811,9 @@ export function HistoryTimeline({
                 ? 'preparing'
                 : failed
                   ? 'needs repair'
-                  : (summaries[index] ?? '');
+                  : projectionBroken
+                    ? 'broken projection'
+                    : (summaries[index] ?? '');
           const delay =
             Math.min(Math.abs(index - end), CASCADE_MAX_STEPS) *
             CASCADE_STEP_MS;
@@ -945,6 +958,14 @@ export function HistoryTimeline({
                     <span
                       className="feature-flag error"
                       title="Feature failed to build"
+                    >
+                      <AlertTriangle size={11} aria-hidden="true" />
+                    </span>
+                  )}
+                  {projectionBroken && !failed && (
+                    <span
+                      className="feature-flag error"
+                      title="A linked projection lost its source edge. Open the sketch to re-pick or unlink it."
                     >
                       <AlertTriangle size={11} aria-hidden="true" />
                     </span>

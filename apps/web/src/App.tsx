@@ -2217,6 +2217,15 @@ export function App() {
   const [datumDragAvailable, setDatumDragAvailable] = useState(false);
   /** The open Plane card's exact entry for its datum's handle. */
   const datumOffsetEntryRef = useRef<(() => boolean) | null>(null);
+  /**
+   * I01: a linked projection whose source edge is being re-picked. While
+   * set, the Project tool's next pick replaces that object's source instead
+   * of adding geometry; leaving the tool disarms it.
+   */
+  const [projectionRepair, setProjectionRepair] = useState<{
+    sketchId: SketchId;
+    objectId: EntityId;
+  } | null>(null);
   /** R01: an offset datum whose source face is being re-picked. */
   /**
    * R01: a datum whose source face is being re-picked. `both` re-picks a
@@ -3107,6 +3116,7 @@ export function App() {
         setMoveCommitHold(null);
         announceSuppression(derived);
         applyTopologyReferenceRepairs(derived);
+        applyProjectionWriteBack(derived);
       }
     },
     onError: (message) => {
@@ -7020,6 +7030,43 @@ export function App() {
     }
   }
 
+  /**
+   * I01: the exact build re-projected a linked projection somewhere new and
+   * already built from it. Write that position back to the object, as a
+   * normalization (no undo step of its own), so every browser view — the
+   * sketch, its regions, exports — reads what the model was built from.
+   */
+  function applyProjectionWriteBack(derived: ProjectDocument['derived']): void {
+    const manager = managerRef.current;
+    if (
+      !manager ||
+      parameterEditDisabledReason ||
+      !Object.values(derived.sketchProjections ?? {}).some(
+        (state) => state.status === 'moved'
+      )
+    )
+      return;
+    const version = manager.document.version;
+    void import('./lib/sketch/projection').then(
+      ({ projectionWriteBackCommand }) => {
+        // A later edit gets its own rebuild, and that rebuild its own verdict.
+        if (
+          managerRef.current !== manager ||
+          manager.document.version !== version
+        )
+          return;
+        const command = projectionWriteBackCommand(manager.document, derived);
+        if (!command) return;
+        try {
+          manager.normalize(command);
+          setDoc(manager.document);
+        } catch {
+          // The stored copy stays as it was; the build still follows the edge.
+        }
+      }
+    );
+  }
+
   function executeCommand(
     command: AnyCommand,
     derived?: ProjectDocument['derived'],
@@ -7050,6 +7097,7 @@ export function App() {
       }
       recordLocalCommit(next, before);
       setDoc(next);
+      if (derived) applyProjectionWriteBack(derived);
       if (isAnalyticsEnabled()) {
         trackUsage('feature_used');
         trackDetail('feature_operation', command.kind);
@@ -7094,6 +7142,7 @@ export function App() {
       }
       recordLocalCommit(next, before);
       setDoc(next);
+      if (derived) applyProjectionWriteBack(derived);
       if (isAnalyticsEnabled()) {
         trackUsage('feature_used');
         for (const command of commands)
@@ -13262,6 +13311,14 @@ export function App() {
       return;
     }
     exactEntryQueue.cancel();
+    // I01: the sketch's Project tool owns every model pick while it is armed.
+    if (
+      interactionRef.current.mode === 'sketch' &&
+      interactionRef.current.session.tool === 'project'
+    ) {
+      void handleSketchProjectPick(selection);
+      return;
+    }
     // An armed face re-pick owns the click outright: the pick answers "which
     // face should this broken edit use", never a selection or a drag handle.
     if (faceRepair) {
@@ -14117,6 +14174,37 @@ export function App() {
     return node?.kind === 'sketch-object' ? node : null;
   }, [interaction, doc]);
 
+  /** I01: the selected entity's projection, as its card describes it. */
+  const selectedEntityProjection = useMemo(() => {
+    const projection = selectedSketchEntity?.data.projection;
+    if (!selectedSketchEntity || !projection || !doc) return null;
+    const producer = projection.source?.edgeReference.producingFeatureId;
+    const state =
+      projection.mode === 'linked'
+        ? doc.derived.sketchProjections?.[selectedSketchEntity.id]
+        : undefined;
+    return {
+      mode: projection.mode,
+      sourceName:
+        (producer &&
+          features.find((feature) => feature.featureId === producer)?.name) ||
+        null,
+      ...(state ? { state: state.status } : {}),
+      ...(state?.status === 'broken' ? { reason: state.reason } : {}),
+      repicking: projectionRepair?.objectId === selectedSketchEntity.id
+    };
+  }, [selectedSketchEntity, doc, features, projectionRepair]);
+
+  // A re-pick lives only while the Project tool it armed does.
+  useEffect(() => {
+    if (
+      projectionRepair &&
+      (interaction.mode !== 'sketch' || interaction.session.tool !== 'project')
+    ) {
+      setProjectionRepair(null);
+    }
+  }, [interaction, projectionRepair]);
+
   /** A drawing gesture finished: commit the entity as a real command. */
   function handleSketchCommit(object: SketchObjectData) {
     if (interaction.mode !== 'sketch') {
@@ -14194,6 +14282,179 @@ export function App() {
     ) {
       selectIfText(session.sketchId as SketchId);
     }
+  }
+
+  /**
+   * I01: the Project tool picked a model edge or face. A linked projection
+   * commits only once the exact build re-finds every new edge at the
+   * sketch's place in the history; an unlinked copy commits like any drawn
+   * entity. With a re-pick armed, the pick replaces that object's source on
+   * the same object, validated the same way before anything changes.
+   */
+  async function handleSketchProjectPick(selection: TopologySelection | null) {
+    const session =
+      interactionRef.current.mode === 'sketch'
+        ? interactionRef.current.session
+        : null;
+    const base = managerRef.current?.document;
+    if (!session || !base || !sketchBasis) return;
+    if (!selection) {
+      setStatus('Click a model edge, or a face for its whole boundary.');
+      return;
+    }
+    if (!exactGeometryReady || geometryBusy || sketchSolving) {
+      setStatus(
+        'Exact geometry is still rebuilding. Pick the edge again when it finishes.'
+      );
+      return;
+    }
+    const sketchId = session.sketchId as SketchId | null;
+    const sketch = sketchId ? (findSketch(base, sketchId) ?? null) : null;
+    const repair = projectionRepair;
+    const mode = repair ? 'linked' : (session.projectMode ?? 'linked');
+    try {
+      const {
+        assertProjectionsResolve,
+        projectionAddCommand,
+        projectionFromPick,
+        repickedProjectionData
+      } = await import('./lib/sketch/projection');
+      const pick = projectionFromPick({
+        document: base,
+        sketch: repair ? null : sketch,
+        selection,
+        basis: sketchBasis,
+        mode,
+        construction: sketchConstruction
+      });
+      const sketchFeature = sketch
+        ? features.find(
+            (feature) =>
+              feature.data.featureKind === 'sketch' &&
+              feature.data.sketchId === sketch.sketchId
+          )
+        : undefined;
+      const targets = sketchFeature
+        ? affectedFeatureTargets(base, sketchFeature.featureId)
+        : [];
+      if (repair) {
+        const node = base.nodes[repair.objectId];
+        if (node?.kind !== 'sketch-object' || pick.objects.length !== 1) {
+          setStatus(
+            'Re-pick one edge: a face projects several, and the object needs one source.'
+          );
+          return;
+        }
+        const data = repickedProjectionData(node.data, pick.objects[0]!);
+        await validatedFeature.runTransaction(
+          [
+            commandFactories.updateSketchObject(
+              {
+                sketchId: repair.sketchId,
+                objectId: repair.objectId,
+                data
+              },
+              'Re-pick projection source'
+            )
+          ],
+          {
+            label: 'Re-pick projection source',
+            targets,
+            validateDerived: (derived) =>
+              assertProjectionsResolve(derived, [repair.objectId]),
+            successMessage: `The projected ${data.objectKind} follows the re-picked edge.`,
+            onSuccess: () => {
+              setProjectionRepair(null);
+              dispatchInteraction({ type: 'sketch-tool', tool: 'select' });
+              dispatchInteraction({
+                type: 'sketch-select-object',
+                objectId: repair.objectId
+              });
+            },
+            // Stay armed: the next pick can try another edge.
+            onFailure: (message) => setStatus(message)
+          }
+        );
+        return;
+      }
+      const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
+      const commit = projectionAddCommand({
+        sketchId: sketch?.sketchId ?? null,
+        ...(sketch ? {} : { newSketch: { name, planeRef: session.plane } }),
+        objects: pick.objects,
+        mode
+      });
+      const left =
+        pick.skipped.length > 0 ? ` Left out: ${pick.skipped.join('; ')}.` : '';
+      const done = () => {
+        if (!sketch) {
+          dispatchInteraction({
+            type: 'sketch-created',
+            sketchId: commit.sketchId
+          });
+        }
+      };
+      if (mode === 'unlinked') {
+        if (executeCommand(commit.command)) {
+          done();
+          setStatus(
+            `Copied ${pick.objects.length} projected ${pick.objects.length === 1 ? 'edge' : 'edges'} into the sketch.${left}`
+          );
+        }
+        return;
+      }
+      await validatedFeature.runTransaction([commit.command], {
+        label: commit.command.label,
+        targets,
+        validateDerived: (derived) =>
+          assertProjectionsResolve(derived, commit.objectIds),
+        successMessage: `Projected ${pick.objects.length} linked ${pick.objects.length === 1 ? 'edge' : 'edges'}.${left}`,
+        onSuccess: done,
+        onFailure: (message) => setStatus(message)
+      });
+    } catch (error) {
+      setStatus(errorMessage(error, 'That pick cannot be projected.'));
+    }
+  }
+
+  /** I01: keep the selected projection's geometry and drop its link. */
+  async function handleUnlinkProjection() {
+    const base = managerRef.current?.document;
+    const target = sketchEntityEditTarget(interactionRef.current);
+    const node = target && base?.nodes[target.objectId as EntityId];
+    if (!base || !target || node?.kind !== 'sketch-object') return;
+    const { unlinkedProjectionData } = await import('./lib/sketch/projection');
+    if (
+      executeCommand(
+        commandFactories.updateSketchObject(
+          {
+            sketchId: target.sketchId as SketchId,
+            objectId: target.objectId as EntityId,
+            data: unlinkedProjectionData(node.data)
+          },
+          'Unlink projection'
+        )
+      )
+    ) {
+      setProjectionRepair(null);
+      setStatus(
+        `The ${node.data.objectKind} is an independent copy now; it no longer follows its edge.`
+      );
+    }
+  }
+
+  /** I01: arm the Project tool to replace the selected projection's source. */
+  function handleRepickProjection() {
+    const target = sketchEntityEditTarget(interactionRef.current);
+    if (!target) return;
+    dispatchInteraction({ type: 'sketch-tool', tool: 'project' });
+    setProjectionRepair({
+      sketchId: target.sketchId as SketchId,
+      objectId: target.objectId as EntityId
+    });
+    setStatus(
+      'Click the model edge that should replace this projection’s source · Esc cancels.'
+    );
   }
 
   /**
@@ -20008,6 +20269,22 @@ export function App() {
           });
           return;
         }
+        // The project key arms Project, and on Project steps between
+        // linked and unlinked.
+        if (sketchCommand === 'sketch-project') {
+          event.preventDefault();
+          const current = interaction.session.projectMode ?? 'linked';
+          dispatchInteraction({
+            type: 'sketch-project-mode',
+            mode:
+              interaction.session.tool === 'project'
+                ? current === 'linked'
+                  ? 'unlinked'
+                  : 'linked'
+                : current
+          });
+          return;
+        }
         // The rectangle key does the same for the rectangle's types.
         if (
           sketchCommand === 'sketch-rectangle' &&
@@ -21498,6 +21775,9 @@ export function App() {
       onResizeComposite={(size, expressions) => {
         void handleResizeSketchComposite(size, expressions);
       }}
+      projection={selectedEntityProjection}
+      onUnlinkProjection={() => void handleUnlinkProjection()}
+      onRepickProjection={handleRepickProjection}
       constraints={selectedEntityConstraints}
       onEditConstraint={handleEditSketchDimension}
       onDeleteConstraint={handleDeleteSketchConstraint}
@@ -21653,6 +21933,16 @@ export function App() {
         onCurveMode={(mode) =>
           dispatchInteraction({ type: 'sketch-curve-mode', mode })
         }
+        projectMode={interaction.session.projectMode ?? 'linked'}
+        onProjectMode={(mode) => {
+          setProjectionRepair(null);
+          dispatchInteraction({ type: 'sketch-project-mode', mode });
+          setStatus(
+            mode === 'linked'
+              ? 'Click a model edge, or a face for its boundary, to project it linked: it follows later edits.'
+              : 'Click a model edge, or a face for its boundary, to copy it into the sketch once.'
+          );
+        }}
         onConstruction={setSketchConstruction}
         onSettings={(sketching) => {
           const current = appSettingsRef.current;

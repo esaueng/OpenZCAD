@@ -596,3 +596,18 @@ describe('HistoryTimeline', () => {
     expect(props.onToggleSketchVisibility).toHaveBeenCalledWith('sketch-1');
   });
 });
+
+it('flags a sketch whose linked projection lost its source edge (I01)', () => {
+  const sketch = feature(1, { featureKind: 'sketch', sketchId: 'sketch_s' });
+  const { rerender, props } = renderTimeline({
+    features: [sketch, feature(2)],
+    brokenProjectionSketchIds: new Set(['sketch_s'])
+  });
+  expect(screen.getByText('broken projection')).toBeInTheDocument();
+  expect(
+    row('Feature 1').querySelector('.feature-flag.error')
+  ).toHaveAttribute('title', expect.stringMatching(/re-pick or unlink/));
+  // Pending geometry has no verdict yet; nothing is called broken.
+  rerender(<HistoryTimeline {...props} geometryPending />);
+  expect(screen.queryByText('broken projection')).not.toBeInTheDocument();
+});

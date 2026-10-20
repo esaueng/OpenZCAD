@@ -459,6 +459,16 @@
   white-space: nowrap;
 }
 
+/* I01: a sketch's projected entities, indented under its Objects row. They
+   say where each came from; selecting happens on the sketch itself. */
+.projection-row {
+  min-height: 24px;
+  gap: 8px;
+  padding: 2px 6px 2px 26px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
 .feature-flag {
   color: var(--color-text-subtle);
   font-family: var(--font-mono);

@@ -421,6 +421,12 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
     referenceRepairs: [...result.referenceRepairs],
     ...(result.faceReferenceRepairs
       ? { faceReferenceRepairs: [...result.faceReferenceRepairs] }
+      : {}),
+    ...(result.sketchProjections
+      ? { sketchProjections: new Map(result.sketchProjections) }
+      : {}),
+    ...(result.sketchObjectOverrides
+      ? { sketchObjectOverrides: new Map(result.sketchObjectOverrides) }
       : {})
   };
 }

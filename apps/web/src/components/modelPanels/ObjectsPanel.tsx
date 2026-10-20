@@ -8,16 +8,23 @@ import {
   EyeOff,
   FileBox,
   Layers,
+  Link2,
+  Link2Off,
   Move3d,
   PenLine,
   RotateCw,
   Search,
   SquareDashed
 } from 'lucide-react';
+import { findSketch } from '@openzcad/document-core';
 import type { BodyRepresentation } from '@openzcad/shared';
 import { useArrivals } from '../../hooks/useArrivals';
 import { datumPlaneRows } from '../../lib/datumPlanes';
 import { datumAxisRows } from '../../lib/datumAxes';
+import {
+  projectionRoleLabel,
+  sketchProjectionRows
+} from '../../lib/sketch/projection';
 import type { SidebarProps } from '../Sidebar';
 
 /** What the Objects list is built from, and all its header count needs. */
@@ -345,7 +352,18 @@ export function ObjectsPanel({
             const selected =
               selectedFeatureNodeId === sketch.id ||
               selectedSketchProfileId === sketchId;
-            return (
+            // I01: what the sketch projects from the model, and how.
+            const sketchNode = document
+              ? findSketch(document, sketchId)
+              : undefined;
+            const projections =
+              document && sketchNode
+                ? sketchProjectionRows(document, sketchNode)
+                : [];
+            const broken = projections.filter(
+              (row) => row.state === 'broken'
+            ).length;
+            return [
               <div
                 key={sketch.id}
                 className={`object-row${selected ? ' selected' : ''}${hidden ? ' hidden-body' : ''}${sketchArrivals.has(sketch.id) ? ' is-arrival' : ''}`}
@@ -362,6 +380,18 @@ export function ObjectsPanel({
                     <PenLine size={13} aria-hidden="true" />
                   </span>
                   <span className="feature-name">{sketch.name}</span>
+                  {broken > 0 && !geometryPending ? (
+                    <span
+                      className="feature-flag error"
+                      title="A linked projection lost its source edge. Open the sketch to re-pick or unlink it."
+                    >
+                      broken projection
+                    </span>
+                  ) : projections.length > 0 ? (
+                    <span className="feature-flag">
+                      {projections.length} projected
+                    </span>
+                  ) : null}
                 </button>
                 <button
                   type="button"
@@ -385,8 +415,42 @@ export function ObjectsPanel({
                     <Eye size={12} aria-hidden="true" />
                   )}
                 </button>
-              </div>
-            );
+              </div>,
+              ...projections.map((row) => {
+                const role = projectionRoleLabel(row);
+                const name = `Projected ${row.objectKind}`;
+                return (
+                  <div
+                    key={`${sketch.id}:${row.objectId}`}
+                    className="object-row projection-row"
+                    role="listitem"
+                    aria-label={`${name}: ${role}`}
+                    title={row.reason ? `${role}: ${row.reason}` : role}
+                  >
+                    <span className="feature-icon">
+                      {row.mode === 'linked' ? (
+                        <Link2 size={12} aria-hidden="true" />
+                      ) : (
+                        <Link2Off size={12} aria-hidden="true" />
+                      )}
+                    </span>
+                    <span className="feature-name">
+                      {name}
+                      {row.sourceName ? ` · ${row.sourceName}` : ''}
+                    </span>
+                    <span
+                      className={`feature-flag${row.state === 'broken' && !geometryPending ? ' error' : ''}`}
+                    >
+                      {row.mode === 'unlinked'
+                        ? 'independent'
+                        : row.state === 'broken' && !geometryPending
+                          ? 'broken'
+                          : 'linked'}
+                    </span>
+                  </div>
+                );
+              })
+            ];
           })}
         {planes.map((plane) => {
           const hidden = hiddenDatumIds?.has(plane.featureId) ?? false;

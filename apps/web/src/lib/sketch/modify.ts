@@ -488,6 +488,21 @@ function compositeRefusal(data: SketchObjectData, verb: string): string | null {
   }
 }
 
+/**
+ * I01: a linked projection is where its model edge puts it, so a tool that
+ * reshapes the picked object in place refuses it by name; unlinking it makes
+ * it ordinary geometry first. Tools that only copy it (offset, mirror,
+ * patterns) take it as their source.
+ */
+export function linkedProjectionRefusal(
+  data: SketchObjectData,
+  verb: string
+): string | null {
+  return data.projection?.mode === 'linked'
+    ? `A linked projection follows its model edge; unlink it to ${verb} it.`
+    : null;
+}
+
 function constraintsOf(sketch: SketchNode): readonly SketchConstraint[] {
   return sketch.constraints ?? [];
 }
@@ -922,7 +937,8 @@ export function planSketchTrim(
       reason: 'That object is not part of this sketch.'
     };
   }
-  const composite = compositeRefusal(data, 'trim');
+  const composite =
+    compositeRefusal(data, 'trim') ?? linkedProjectionRefusal(data, 'trim');
   if (composite) {
     return { status: 'refuse', reason: composite };
   }

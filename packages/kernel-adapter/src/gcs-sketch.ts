@@ -257,7 +257,7 @@ export function solveSketchWithGcs(
         sketch,
         object.centerX,
         object.centerY,
-        false
+        held(object.objectId, 'center')
       );
       handles.set(object.objectId, {
         kind: 'ellipse',

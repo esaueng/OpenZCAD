@@ -117,8 +117,8 @@ function sheet(bodyIds: BodyId[], views?: DrawingView[]): DrawingSheet {
 }
 
 describe('D01 drawing section (schema v30)', () => {
-  it('is schema 30, additive, and never added to a document without drawings', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(30);
+  it('is schema 30 or later, additive, and never added to a document without drawings', () => {
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(33);
     const document = boxDocument();
     expect(document.drawings).toBeUndefined();
     const saved = JSON.parse(JSON.stringify(document)) as ProjectDocument;

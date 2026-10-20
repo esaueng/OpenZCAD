@@ -65,7 +65,7 @@ async function exportObjects(page: Page): Promise<SketchObjectData[]> {
       document: ProjectDocument;
     }
   ).document;
-  expect(document.schemaVersion).toBe(30);
+  expect(document.schemaVersion).toBe(33);
   const sketch = Object.values(document.nodes).find(
     (node) => node.kind === 'sketch'
   );

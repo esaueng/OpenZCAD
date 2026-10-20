@@ -360,6 +360,29 @@ describe('interactionReducer', () => {
     });
   });
 
+  it('arms Project with its linked or unlinked choice, which outlives the tool (I01)', () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    state = interactionReducer(state, {
+      type: 'sketch-select-object',
+      objectId: 'ent_a'
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-project-mode',
+      mode: 'unlinked'
+    });
+    expect(state.mode === 'sketch' && state.session).toMatchObject({
+      tool: 'project',
+      projectMode: 'unlinked',
+      selectedObjectId: null,
+      pendingEdit: null
+    });
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'line' });
+    expect(state.mode === 'sketch' && state.session).toMatchObject({
+      tool: 'line',
+      projectMode: 'unlinked'
+    });
+  });
+
   it('steps the circle type in the strip order, wrapping round', () => {
     expect(nextSketchCircleMode('center-radius')).toBe('two-point-diameter');
     expect(nextSketchCircleMode('two-point-diameter')).toBe('three-point');
