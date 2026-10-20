@@ -1670,6 +1670,24 @@ describe('parked panels in the unpinned slot', () => {
     ]);
   });
 
+  it('shows the slot of a new-column drop that the emptied column makes room for', () => {
+    const layout = layoutWith({ right: [['parameters'], ['revisions']] });
+    const stage: PanelStage = {
+      width: Math.ceil(stageFitting(2)),
+      height: 900
+    };
+    const target: PanelTarget = { kind: 'newColumn', side: 'right' };
+    const preview = previewLayout(layout, 'parameters', target, stage)!;
+    expect(preview.right).toEqual([[], ['revisions'], [PANEL_SLOT]]);
+    const geometry = computePanelGeometry(preview, stage);
+    expect(geometry.panels[PANEL_SLOT]).toBeDefined();
+    expect(geometry.parkedPanels).toEqual([]);
+    expect(commitPreview(preview, 'parameters').right).toEqual([
+      ['revisions'],
+      ['parameters']
+    ]);
+  });
+
   it('lets a layout past the cap consolidate columns', () => {
     const layout = layoutWith({
       left: [['bodies']],

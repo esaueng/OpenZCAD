@@ -1637,7 +1637,12 @@ function dockedCounts(
   if (stageWidth <= PANEL_PHONE_MAX_WIDTH) {
     return { left: 0, right: 0 };
   }
-  const counts = { left: layout.left.length, right: layout.right.length };
+  // Only columns with something in them count toward the cap: a drag keeps
+  // the column it emptied in place until the drop, and that column must not
+  // park the slot the drop would actually leave room for.
+  const live = (side: DockSide) =>
+    sideColumns(layout, side).filter((column) => column.length > 0).length;
+  const counts = { left: live('left'), right: live('right') };
   while (
     counts.left + counts.right > 0 &&
     overCap(dockFootprint(counts, columnWidth, insets), stageWidth)
@@ -1648,7 +1653,21 @@ function dockedCounts(
       counts.right -= 1;
     }
   }
-  return counts;
+  // Back to column indices: the first columns holding that many live ones,
+  // with any emptied column among them kept in place.
+  const prefix = (side: DockSide): number => {
+    const columns = sideColumns(layout, side);
+    let kept = 0;
+    let index = 0;
+    for (; index < columns.length; index++) {
+      if (columns[index]!.length > 0) {
+        if (kept === counts[side]) break;
+        kept += 1;
+      }
+    }
+    return index;
+  };
+  return { left: prefix('left'), right: prefix('right') };
 }
 
 /** Open panels, most recently used first, then the rest in panel order. */
