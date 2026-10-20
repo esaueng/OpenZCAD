@@ -269,10 +269,15 @@ import {
 } from './topology-lineage';
 // Type-only: the solver mapping loads on the first sketch solve, keeping it
 // out of the lazily loaded exact chunk, which sits at its size budget.
-import type { ResolvedSketchObject, SketchSolveOutcome } from './gcs-sketch';
+import type {
+  ResolvedSketchObject,
+  SketchSolveAnchor,
+  SketchSolveOutcome
+} from './gcs-sketch';
 
 export type {
   SketchDofSummary,
+  SketchSolveAnchor,
   SketchSolveOutcome,
   SolvedSketchObject
 } from './gcs-sketch';
@@ -695,11 +700,13 @@ export interface ExactKernelAdapter {
    * Solves one sketch's persisted constraints with the kernel's GCS and
    * returns the solved geometry plus classification, DOF, and per-constraint
    * residuals. Read-only: writing solved positions back into the document is
-   * the caller's command to make.
+   * the caller's command to make. An `anchor` holds that geometry in place
+   * for this solve only; its DOF figures then count the held points as fixed.
    */
   solveSketch(
     document: ProjectDocument,
-    sketchId: SketchId
+    sketchId: SketchId,
+    options?: { anchor?: SketchSolveAnchor }
   ): Promise<SketchSolveOutcome>;
   /**
    * The exact, kernel-computed cross-section at one plane — section CURVES,
@@ -3959,7 +3966,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   // worker boundary and a future off-thread solver need no signature change.
   async solveSketch(
     document: ProjectDocument,
-    sketchId: SketchId
+    sketchId: SketchId,
+    options: { anchor?: SketchSolveAnchor } = {}
   ): Promise<SketchSolveOutcome> {
     const sketch = findSketch(document, sketchId);
     if (!sketch) {
@@ -4077,7 +4085,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         kernel,
         objects,
         sketch.constraints ?? [],
-        (value, label) => resolveParamValue(value, scope, label, document.units)
+        (value, label) =>
+          resolveParamValue(value, scope, label, document.units),
+        options
       );
     } finally {
       kernel.free();

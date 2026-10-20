@@ -1221,6 +1221,70 @@ describe('worker api routes', () => {
     expect(storedSettings.keymap).toEqual({ overrides: {} });
   });
 
+  it('keeps the stored relation-glyph choice when an older client omits it', async () => {
+    const hidden = structuredClone(DEFAULT_APP_SETTINGS);
+    hidden.sketching.relationGlyphs = 'hidden';
+    let storedSettings = structuredClone(hidden);
+    let storedRevision = 1;
+    const prepare = vi.fn((query: string) => {
+      let values: unknown[] = [];
+      const statement = {
+        bind(...next: unknown[]) {
+          values = next;
+          return statement;
+        },
+        async first() {
+          return query.includes('FROM user_settings')
+            ? {
+                settings_json: JSON.stringify(storedSettings),
+                revision: storedRevision
+              }
+            : null;
+        },
+        async run() {
+          if (query.includes('UPDATE user_settings')) {
+            storedSettings = JSON.parse(
+              String(values[0])
+            ) as typeof storedSettings;
+            storedRevision = Number(values[1]);
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        },
+        async all() {
+          return { results: [] };
+        }
+      };
+      return statement;
+    });
+    const workerEnv = { ...env, DB: { prepare } } as never;
+
+    // A tab from before relation glyphs changes the theme and sends none.
+    const legacy = structuredClone(hidden) as unknown as {
+      appearance: { theme: string };
+      sketching: Record<string, unknown>;
+    };
+    delete legacy.sketching.relationGlyphs;
+    legacy.appearance.theme = 'dark';
+    const saved = await worker.fetch(
+      patch('/api/settings', { settings: legacy, expectedRevision: 1 }),
+      workerEnv
+    );
+    expect(saved.status).toBe(200);
+    expect(storedSettings.appearance.theme).toBe('dark');
+    expect(storedSettings.sketching.relationGlyphs).toBe('hidden');
+
+    // A client that sends the choice is honoured.
+    const shown = structuredClone(storedSettings);
+    shown.sketching.relationGlyphs = 'always';
+    const changed = await worker.fetch(
+      patch('/api/settings', { settings: shown, expectedRevision: 2 }),
+      workerEnv
+    );
+    expect(changed.status).toBe(200);
+    expect(storedSettings.sketching.relationGlyphs).toBe('always');
+  });
+
   it('leaves rooms alone when a save keeps sharing off', async () => {
     const off = structuredClone(DEFAULT_APP_SETTINGS);
     off.collaboration.enabled = false;
