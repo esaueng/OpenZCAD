@@ -129,6 +129,81 @@ function distanceToSegment(p: XY, a: XY, b: XY): number {
   return Math.hypot(a[0] + dx * t - p[0], a[1] + dy * t - p[1]);
 }
 
+/** How far a drawn line may stray from the edge it was drawn from, in mm. */
+const DRAWN_COINCIDENCE_MM = 0.05;
+
+/**
+ * The point `along` paper millimetres from the start of a polyline,
+ * clamped to its ends.
+ */
+function pointAtLength(page: readonly XY[], along: number): XY {
+  let remaining = Math.max(0, along);
+  for (let i = 0; i + 1 < page.length; i += 1) {
+    const a = page[i]!;
+    const b = page[i + 1]!;
+    const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (remaining <= length && length > 0) {
+      const t = remaining / length;
+      return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    }
+    remaining -= length;
+  }
+  return page[page.length - 1]!;
+}
+
+/**
+ * Whether the view draws `entry` itself where the click lands — not merely
+ * some other line nearby. The stretch of the edge either side of the point
+ * nearest the click must lie on a drawn line: where an occluded edge only
+ * crosses a visible one, the stretch leaves the drawn line and the edge is
+ * not offered.
+ */
+function drawsEdgeAt(
+  entry: PickableEdge,
+  point: XY,
+  tolerance: number,
+  drawn: ReadonlyMap<DrawingViewId, XY[][]>
+): boolean {
+  const lines = drawn.get(entry.view.viewId) ?? [];
+  const { page } = entry;
+  // Arc length to the point of the edge nearest the click.
+  let best = Infinity;
+  let at = 0;
+  let walked = 0;
+  for (let i = 0; i + 1 < page.length; i += 1) {
+    const a = page[i]!;
+    const b = page[i + 1]!;
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const length = Math.hypot(dx, dy);
+    const t =
+      length > 0
+        ? Math.min(
+            1,
+            Math.max(
+              0,
+              ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) /
+                (length * length)
+            )
+          )
+        : 0;
+    const distance = Math.hypot(
+      a[0] + dx * t - point[0],
+      a[1] + dy * t - point[1]
+    );
+    if (distance < best) {
+      best = distance;
+      at = walked + t * length;
+    }
+    walked += length;
+  }
+  return [at - tolerance, at, at + tolerance].every(
+    (along) =>
+      distanceToPolylines(pointAtLength(page, along), lines) <=
+      DRAWN_COINCIDENCE_MM
+  );
+}
+
 /**
  * The edge nearest `point` within `tolerance` paper millimetres, or null.
  * Edges that lie on the same line in the view (a box's front and back top
@@ -153,11 +228,7 @@ export function hitEdge(
         distanceToSegment(point, page[i]!, page[i + 1]!)
       );
     if (distance > tolerance) continue;
-    if (
-      drawn &&
-      distanceToPolylines(point, drawn.get(entry.view.viewId) ?? []) > tolerance
-    )
-      continue;
+    if (drawn && !drawsEdgeAt(entry, point, tolerance, drawn)) continue;
     const tie = Math.abs(distance - bestDistance) <= 1e-6;
     if (
       distance < bestDistance - 1e-6 ||

@@ -801,6 +801,36 @@ describe('DrawingWorkspace', () => {
       ).toBe(true);
     });
 
+    it("ends a tool when another sheet takes the active one's place", async () => {
+      const first = dimensioned();
+      const second = { ...dimensioned(), name: 'Sheet 2' };
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const props = {
+        bodies: { [bodyId]: cube() },
+        geometryPending: false,
+        defaultBodyIds: [bodyId],
+        editDisabledReason: null,
+        onCommand: vi.fn((_command: AnyCommand) => true),
+        onStatus: vi.fn()
+      };
+      const documentWith = (sheet: DrawingSheet): ProjectDocument => ({
+        ...base,
+        bodyOrder: [bodyId],
+        drawings: { sheets: [sheet] }
+      });
+      const { rerender } = render(
+        <DrawingWorkspace document={documentWith(first)} {...props} />
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'Vertical' }));
+      expect(document.querySelector('.drawing-pick-surface')).not.toBeNull();
+      // An undo or a collaborator replaces the sheet with another, ready one.
+      rerender(<DrawingWorkspace document={documentWith(second)} {...props} />);
+      await waitFor(() =>
+        expect(document.querySelector('.drawing-pick-surface')).toBeNull()
+      );
+      expect(screen.queryByText(/Vertical dimension: pick/)).toBeNull();
+    });
+
     it('moves and deletes the selected annotation from the keyboard, and Escape ends a tool', async () => {
       const { onCommand } = setup({ sheet: dimensioned() });
       const canvas = screen.getByRole('application', {

@@ -816,12 +816,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     [shownSheet, bodies, document.units]
   );
   const sheetReady = status?.kind === 'ready';
-  // A tool picks from the drawn model; a sheet that stops being ready (a
-  // collaborator's model edit, a rebuild) ends it rather than keep picks
-  // made against geometry it no longer draws.
+  // A tool picks from one sheet's drawn model: a sheet that stops being
+  // ready (a collaborator's model edit, a rebuild), or another sheet taking
+  // its place (an undo, a delete, a collaborator's edit), ends it rather
+  // than keep picks made in views that sheet no longer has.
+  const activeSheetId = sheet?.sheetId ?? null;
   useEffect(() => {
-    if (!sheetReady) setTool(null);
-  }, [sheetReady]);
+    setTool(null);
+    setHover(null);
+  }, [sheetReady, activeSheetId]);
   const brokenCount = sheetReady
     ? [...resolutions.values()].filter((entry) => !entry.ok).length
     : 0;
@@ -1263,6 +1266,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const view = finished.viewId
       ? sheet.views.find((entry) => entry.viewId === finished.viewId)
       : undefined;
+    if (finished.viewId && !view) {
+      // The view went away under the tool (an undo, a collaborator).
+      setTool(null);
+      props.onStatus('That view is no longer on this sheet.');
+      return;
+    }
     const round = (value: number) => Math.round(value * 10) / 10;
     const placementMm = view
       ? { x: round(at[0] - view.centerMm.x), y: round(at[1] - view.centerMm.y) }

@@ -882,6 +882,45 @@ describe('D02 picking', () => {
     });
   });
 
+  it('offers an occluded edge only where the view draws it, not where it crosses a drawn line', () => {
+    const front = view(frontId, 'front', ['body_a' as BodyId]);
+    const edge = (hash: number) => ({
+      topologyId: `e${hash}`,
+      hash,
+      points: []
+    });
+    // A visible horizontal edge, and a hidden vertical one crossing it
+    // nearer the viewer's side of the click.
+    const visible = {
+      view: front,
+      bodyId: 'body_a' as BodyId,
+      edge: edge(1),
+      page: [
+        [0, 0],
+        [20, 0]
+      ] as [number, number][],
+      depth: 5
+    };
+    const hidden = {
+      view: front,
+      bodyId: 'body_a' as BodyId,
+      edge: edge(2),
+      page: [
+        [10, -5],
+        [10, 5]
+      ] as [number, number][],
+      depth: 1
+    };
+    const click: [number, number] = [10, 0.1];
+    const drawn = new Map([[frontId, [visible.page]]]);
+    // Without the drawn lines, the nearer hidden edge would win.
+    expect(hitEdge([visible, hidden], click, 1)?.edge.hash).toBe(2);
+    expect(hitEdge([visible, hidden], click, 1, drawn)?.edge.hash).toBe(1);
+    // Drawn, the vertical edge is offered again.
+    const both = new Map([[frontId, [visible.page, hidden.page]]]);
+    expect(hitEdge([visible, hidden], [10, 2], 1, both)?.edge.hash).toBe(2);
+  });
+
   it('refuses an edge that shares its identity with another', async () => {
     const { bodies, bodyId, top } = await boxModel();
     expect(edgeRefFor(bodies, bodyId, top)).not.toBeNull();
