@@ -8384,6 +8384,14 @@ export function ModelViewer({
         // A Face or Edge filter says what the sweep is for; every other
         // filter keeps taking whole bodies.
         if ((filter === 'face' || filter === 'edge') && onTopology) {
+          if (
+            filter === 'face' &&
+            displayModeRef.current === 'wireframe' &&
+            !xrayRef.current
+          ) {
+            onTopology([], filter);
+            return;
+          }
           onTopology(
             timed('viewer.boxSelectTopology', () =>
               topologyInBox(

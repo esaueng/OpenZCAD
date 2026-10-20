@@ -244,6 +244,38 @@ test('wireframe edge sweeps select the rear edges drawn without X-ray', async ({
   });
 });
 
+test('wireframe face sweeps take only the faces made visible by X-ray', async ({
+  page
+}) => {
+  await createBox(page, 'Wireframe Face Sweep');
+  await topView(page);
+  const display = displayButton(page);
+  for (
+    let count = 0;
+    count < 3 &&
+    !/now: Wireframe$/.test((await display.getAttribute('aria-label')) ?? '');
+    count += 1
+  ) {
+    await display.click();
+  }
+  await expect(display).toHaveAttribute('aria-label', /now: Wireframe$/);
+  await setSelectionFilter(page, 'Face');
+  const { minX, minY, maxX, maxY, maxZ, pad } = await boxExtent(page);
+  const left: [number, number, number] = [minX - pad, maxY + pad, maxZ];
+  const right: [number, number, number] = [maxX + pad, minY - pad, maxZ];
+  await sweep(page, left, right);
+  await expect(canvas(page)).not.toHaveAttribute('data-e2e-focus-faces', /.+/);
+  await expect(canvas(page)).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+
+  await toggleXray(page);
+  await sweep(page, left, right);
+  await expect(canvas(page)).toHaveAttribute('data-e2e-focus-faces', '6');
+  await toggleXray(page);
+  await sweep(page, [right[0], left[1], maxZ], [left[0], right[1], maxZ]);
+  await expect(canvas(page)).not.toHaveAttribute('data-e2e-focus-faces', /.+/);
+  await expect(canvas(page)).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+});
+
 test('a box takes the faces in view, and every face in X-ray', async ({
   page
 }) => {
