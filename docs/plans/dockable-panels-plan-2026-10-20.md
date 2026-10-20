@@ -77,6 +77,11 @@ it.
   - The window grows by 240 px, within the stage.
   - A grip bar on the window's frame moves the whole stack.
   - The gap between its panels resizes like a docked column's gap.
+- **Stacking order.** Floating windows keep a stored z-order (the order of
+  the float groups in the layout, last on top). A window comes to the front
+  when it is pressed, when focus moves into it, when its panel is activated
+  from the rail or from ⌘K, and when a panel is dropped or moved into it.
+  The order survives a reload.
 
 ### Dragging
 
@@ -120,7 +125,10 @@ The menu replaces the rail's Layout button.
     is on a button, so binding `Tab` would break keyboard focus traversal.
     `Ctrl+\` is unbound today, and a Ctrl chord also works while a field has
     focus.
-  - **Lock layout** (no drags or resizes; pin, pop-out and close still work)
+  - **Lock layout**: no rearranging or resizing by any input. Pointer drags,
+    the Move menu's placement items (Dock, New column, Move to, Move
+    up/down, Float), gap and floating-window resizing, and the keyboard move
+    and resize keys are all off. Pin, Pop out and Close still work.
   - **Compact rows**
   - **Panel width**
 - Picking a preset keeps the settings and turns Hide off.
@@ -405,6 +413,9 @@ Each slice is one PR and records its evidence in the U08 row.
     column on each side, and Float.
   - Keyboard moving and resizing of a floating window, from the grip and
     from the resize control, stopping at the bounds.
+  - Two overlapping floating windows: pressing, focusing, and activating the
+    covered one from the rail and from ⌘K each bring it to the front, and
+    the order survives a reload.
   - At 720 px a stored floating layout shows one panel in the phone lane,
     Pop out is not offered, and widening the window restores the windows.
   - Unit tests for the hit-test thresholds.
@@ -419,6 +430,9 @@ Each slice is one PR and records its evidence in the U08 row.
 - **Tests.**
   - E2E for every preset, Hide all, Lock and Compact at 1440×900 and
     1280×720, and Width L at 1280×720 parking the outer column.
+  - With Lock on, a header drag, a gap drag, the Move menu's placement items
+    and the keyboard move/resize keys all leave the layout unchanged, while
+    Pin, Pop out and Close still act.
   - With Hide all on, picking a feature and a parameter in ⌘K turns Hide off
     and shows and focuses the target panel.
   - Tabbing from the rail through the panel headers, gaps and menu moves focus
