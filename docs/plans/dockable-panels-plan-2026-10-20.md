@@ -279,10 +279,14 @@ The menu replaces the rail's Layout button.
   - `PanelDock` publishes `--left-dock-w` and `--right-dock-w` on `.workspace`.
   - The instrument rail, sketch relations rail and verb rail are positioned
     from those variables.
-- **Bundle.** The entry chunk is at 498,234 of 512,000 bytes.
-  - Panel bodies stay lazy, as `Sidebar` is today. The dock shell and the
-    layout module go in the entry chunk and must fit.
-  - Each slice reports `scripts/report-bundle-sizes.mjs` before and after.
+- **Bundle.** The default raw entry-chunk budget is **1 MiB (1,048,576 bytes)**
+  in `scripts/report-bundle-sizes.mjs`, raised on 2026-10-18 at the maintainer's
+  direction to prioritize speed once loaded and continuity across deployments.
+  - Panel bodies keep `Sidebar`'s existing lazy loading. The dock shell and
+    layout module can stay in the entry chunk within the current budget;
+    do not add UI splits merely to fit the former 512,000-byte limit.
+  - Each slice reports `scripts/report-bundle-sizes.mjs` before and after,
+    measuring its own base and head rather than reusing an earlier size snapshot.
 
 ## Slices
 
