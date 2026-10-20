@@ -981,7 +981,7 @@ describe('D02 picking', () => {
         [0, 0],
         [20, 0]
       ] as [number, number][],
-      depth: 5
+      depths: [5, 5]
     };
     const hidden = {
       view: front,
@@ -991,7 +991,7 @@ describe('D02 picking', () => {
         [10, -5],
         [10, 5]
       ] as [number, number][],
-      depth: 1
+      depths: [1, 1]
     };
     const click: [number, number] = [10, 0.1];
     const drawn = new Map([[frontId, [visible.page]]]);
@@ -1001,6 +1001,36 @@ describe('D02 picking', () => {
     // Drawn, the vertical edge is offered again.
     const both = new Map([[frontId, [visible.page, hidden.page]]]);
     expect(hitEdge([visible, hidden], [10, 2], 1, both)?.edge.hash).toBe(2);
+  });
+
+  it("breaks a tie by depth at the click, not by the edge's nearest end", () => {
+    const front = view(frontId, 'front', ['body_a' as BodyId]);
+    const edge = (hash: number) => ({
+      topologyId: `e${hash}`,
+      hash,
+      points: []
+    });
+    // Two edges drawn on one line. The sloped one comes very near the
+    // viewer at its far end, but is behind the level one where clicked.
+    const level = {
+      view: front,
+      bodyId: 'body_a' as BodyId,
+      edge: edge(1),
+      page: [
+        [0, 0],
+        [20, 0]
+      ] as [number, number][],
+      depths: [5, 5]
+    };
+    const sloped = {
+      ...level,
+      edge: edge(2),
+      depths: [10, 0]
+    };
+    expect(hitEdge([level, sloped], [2, 0], 1)?.edge.hash).toBe(1);
+    expect(hitEdge([sloped, level], [2, 0], 1)?.edge.hash).toBe(1);
+    // Near its close end, the sloped edge is in front.
+    expect(hitEdge([level, sloped], [18, 0], 1)?.edge.hash).toBe(2);
   });
 
   it('refuses an edge that shares its identity with another', async () => {

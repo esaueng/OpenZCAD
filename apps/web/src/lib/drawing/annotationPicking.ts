@@ -37,8 +37,8 @@ export interface PickableEdge {
   edge: EdgeTopology;
   /** The edge's polyline on the paper, in millimetres. */
   page: XY[];
-  /** Its nearest point's distance into the view, in model units. */
-  depth: number;
+  /** Each polyline point's distance into the view, in model units. */
+  depths: number[];
 }
 
 /** Every physical edge of every drawn view, placed on the paper. */
@@ -59,7 +59,7 @@ export function pickableEdges(
       for (const edge of body.topology.edges) {
         if (edge.displayRole === 'seam' || edge.points.length < 6) continue;
         const page: XY[] = [];
-        let depth = Infinity;
+        const depths: number[] = [];
         for (let i = 0; i + 2 < edge.points.length; i += 3) {
           const projected = projectToView(frame, {
             x: edge.points[i]!,
@@ -67,9 +67,9 @@ export function pickableEdges(
             z: edge.points[i + 2]!
           });
           page.push(toPage(projected.u, projected.v));
-          depth = Math.min(depth, projected.depth);
+          depths.push(projected.depth);
         }
-        out.push({ view, bodyId, edge, page, depth });
+        out.push({ view, bodyId, edge, page, depths });
       }
     }
   }
@@ -205,6 +205,44 @@ function drawsEdgeAt(
 }
 
 /**
+ * How far `point` is from an edge on the paper, and the edge's depth into
+ * the view at its point nearest `point` — interpolated there, not the
+ * edge's nearest anywhere, so a sloped edge whose far end is close to the
+ * viewer does not win a tie it is behind at the click.
+ */
+function nearestOnEdge(
+  entry: PickableEdge,
+  point: XY
+): { distance: number; depth: number } {
+  const { page, depths } = entry;
+  let distance = Infinity;
+  let depth = Infinity;
+  for (let i = 0; i + 1 < page.length; i += 1) {
+    const a = page[i]!;
+    const b = page[i + 1]!;
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const lengthSquared = dx * dx + dy * dy;
+    const t =
+      lengthSquared > 0
+        ? Math.min(
+            1,
+            Math.max(
+              0,
+              ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / lengthSquared
+            )
+          )
+        : 0;
+    const d = Math.hypot(a[0] + dx * t - point[0], a[1] + dy * t - point[1]);
+    if (d < distance) {
+      distance = d;
+      depth = depths[i]! + (depths[i + 1]! - depths[i]!) * t;
+    }
+  }
+  return { distance, depth };
+}
+
+/**
  * The edge nearest `point` within `tolerance` paper millimetres, or null.
  * Edges that lie on the same line in the view (a box's front and back top
  * edges, seen from the front) tie, and the one nearest the viewer wins: it
@@ -219,22 +257,18 @@ export function hitEdge(
 ): PickableEdge | null {
   let best: PickableEdge | null = null;
   let bestDistance = Infinity;
+  let bestDepth = Infinity;
   for (const entry of edges) {
-    const { page } = entry;
-    let distance = Infinity;
-    for (let i = 0; i + 1 < page.length; i += 1)
-      distance = Math.min(
-        distance,
-        distanceToSegment(point, page[i]!, page[i + 1]!)
-      );
+    const { distance, depth } = nearestOnEdge(entry, point);
     if (distance > tolerance) continue;
     if (drawn && !drawsEdgeAt(entry, point, tolerance, drawn)) continue;
     const tie = Math.abs(distance - bestDistance) <= 1e-6;
     if (
       distance < bestDistance - 1e-6 ||
-      (tie && best !== null && entry.depth < best.depth)
+      (tie && best !== null && depth < bestDepth)
     ) {
       bestDistance = distance;
+      bestDepth = depth;
       best = entry;
     }
   }
