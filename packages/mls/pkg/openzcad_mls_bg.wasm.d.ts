@@ -1,0 +1,38 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const __wbg_mlssession_free: (a: number, b: number) => void;
+export const buildInfo: (a: number) => void;
+export const decodeEpochRecord: (a: number, b: number, c: number) => void;
+export const leafCertificationPayload: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+export const mlssession_certificationPayload: (a: number, b: number) => void;
+export const mlssession_certify: (a: number, b: number, c: number, d: number) => void;
+export const mlssession_commit: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+export const mlssession_confirmCommit: (a: number, b: number) => void;
+export const mlssession_createGroup: (a: number, b: number, c: number) => void;
+export const mlssession_discardCommit: (a: number, b: number) => void;
+export const mlssession_epochAuthenticator: (a: number, b: number) => void;
+export const mlssession_export: (a: number, b: number) => void;
+export const mlssession_generate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+export const mlssession_groupInfo: (a: number, b: number) => void;
+export const mlssession_import: (a: number, b: number, c: number, d: number, e: number) => void;
+export const mlssession_insecureSkipSendChecksForTests: (a: number, b: number) => void;
+export const mlssession_inspectGroupInfo: (a: number, b: number, c: number, d: number) => void;
+export const mlssession_inspectWelcome: (a: number, b: number, c: number, d: number) => void;
+export const mlssession_join: (a: number, b: number, c: number, d: number) => void;
+export const mlssession_keyPackage: (a: number, b: number) => void;
+export const mlssession_process: (a: number, b: number, c: number, d: number) => void;
+export const mlssession_projectKey: (a: number, b: number) => void;
+export const mlssession_proposeSelfRemove: (a: number, b: number) => void;
+export const mlssession_proposeUpdate: (a: number, b: number) => void;
+export const mlssession_rejoin: (a: number, b: number, c: number, d: number, e: bigint, f: number, g: number, h: number) => void;
+export const mlssession_rejoinPsk: (a: number, b: number) => void;
+export const mlssession_setDirectory: (a: number, b: number, c: number, d: number) => void;
+export const mlssession_signatureKey: (a: number, b: number) => void;
+export const mlssession_status: (a: number, b: number) => void;
+export const rejoinPskId: (a: number, b: bigint) => void;
+export const __wbindgen_export: (a: number) => void;
+export const __wbindgen_add_to_stack_pointer: (a: number) => number;
+export const __wbindgen_export2: (a: number, b: number, c: number) => void;
+export const __wbindgen_export3: (a: number, b: number) => number;
+export const __wbindgen_export4: (a: number, b: number, c: number, d: number) => number;
