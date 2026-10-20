@@ -25,15 +25,16 @@ pub enum CredentialStatus {
 /// Authentication Service).
 pub trait DeviceListVerifier: Send + Sync {
     fn credential_status(&self, user_id: &[u8], device_id: &[u8], signature_key: &[u8]) -> CredentialStatus;
-    /// First epoch of this group whose rejoin PSK the user's newest revoked
-    /// device must not know; a rejoin PSK must be from this epoch or later.
-    fn revocation_cutoff(&self, user_id: &[u8]) -> Option<u64>;
+    /// The newest revocation cutoff among the user's revoked devices, except
+    /// `except`: the first epoch of this group whose rejoin PSK that device
+    /// must not know. A rejoin PSK must be from this epoch or later.
+    fn revocation_cutoff(&self, user_id: &[u8], except: Option<&[u8]>) -> Option<u64>;
     /// The group epoch from which this leaf key's certification counts, if
     /// the device list records one.
     fn certified_epoch(&self, user_id: &[u8], device_id: &[u8], signature_key: &[u8]) -> Option<u64>;
-    /// The revoked device this device was certified to replace, if the
-    /// revocation entry named it as the replacement.
-    fn replaces(&self, user_id: &[u8], device_id: &[u8]) -> Option<Vec<u8>>;
+    /// Every revoked device whose revocation named this device as its
+    /// replacement.
+    fn replaces(&self, user_id: &[u8], device_id: &[u8]) -> Vec<Vec<u8>>;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -43,12 +44,13 @@ pub struct DeviceEntry {
     /// took effect in, when the device list records one.
     pub leaf_keys: Vec<(Vec<u8>, Option<u64>)>,
     pub replaced_by: Option<Vec<u8>>,
+    /// For a revoked device: the per-project cutoff its revocation carries.
+    pub revocation_cutoff: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct UserDevices {
     pub devices: BTreeMap<Vec<u8>, DeviceEntry>,
-    pub revocation_cutoff: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -70,8 +72,14 @@ impl DeviceListVerifier for DeviceDirectory {
         }
     }
 
-    fn revocation_cutoff(&self, user_id: &[u8]) -> Option<u64> {
-        self.users.get(user_id).and_then(|u| u.revocation_cutoff)
+    fn revocation_cutoff(&self, user_id: &[u8], except: Option<&[u8]>) -> Option<u64> {
+        self.users.get(user_id).and_then(|u| {
+            u.devices
+                .iter()
+                .filter(|(id, d)| d.revoked && Some(id.as_slice()) != except)
+                .filter_map(|(_, d)| d.revocation_cutoff)
+                .max()
+        })
     }
 
     fn certified_epoch(&self, user_id: &[u8], device_id: &[u8], signature_key: &[u8]) -> Option<u64> {
@@ -82,12 +90,17 @@ impl DeviceListVerifier for DeviceDirectory {
             .and_then(|(_, epoch)| *epoch)
     }
 
-    fn replaces(&self, user_id: &[u8], device_id: &[u8]) -> Option<Vec<u8>> {
-        let user = self.users.get(user_id)?;
-        user.devices
-            .iter()
-            .find(|(_, d)| d.revoked && d.replaced_by.as_deref() == Some(device_id))
-            .map(|(id, _)| id.clone())
+    fn replaces(&self, user_id: &[u8], device_id: &[u8]) -> Vec<Vec<u8>> {
+        self.users
+            .get(user_id)
+            .map(|user| {
+                user.devices
+                    .iter()
+                    .filter(|(_, d)| d.revoked && d.replaced_by.as_deref() == Some(device_id))
+                    .map(|(id, _)| id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -125,8 +138,6 @@ struct DirectoryJson {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct UserJson {
     user_id: String,
-    #[serde(default)]
-    revocation_cutoff_epoch: Option<u64>,
     devices: Vec<DeviceJson>,
 }
 
@@ -139,6 +150,8 @@ struct DeviceJson {
     leaf_keys: Vec<LeafKeyJson>,
     #[serde(default)]
     replaced_by: Option<String>,
+    #[serde(default)]
+    revocation_cutoff_epoch: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -175,15 +188,13 @@ impl DeviceDirectory {
                     revoked,
                     leaf_keys,
                     replaced_by: device.replaced_by.map(String::into_bytes),
+                    revocation_cutoff: device.revocation_cutoff_epoch,
                 };
                 if devices.insert(device.device_id.into_bytes(), entry).is_some() {
                     return Err(Error::input("device listed twice"));
                 }
             }
-            let entry = UserDevices {
-                devices,
-                revocation_cutoff: user.revocation_cutoff_epoch,
-            };
+            let entry = UserDevices { devices };
             if directory.users.insert(user.user_id.into_bytes(), entry).is_some() {
                 return Err(Error::input("user listed twice"));
             }

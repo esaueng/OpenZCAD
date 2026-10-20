@@ -368,6 +368,13 @@ impl ProjectRules {
             }
         }
 
+        // Users losing a leaf in this Commit: for them the removal cutoff of a
+        // recovery Add is this Commit's new epoch.
+        let losing: Vec<Vec<u8>> = removed
+            .iter()
+            .filter_map(|index| leaf(roster, *index).ok())
+            .map(|(_, credential)| credential.user_id)
+            .collect();
         for (identity, sender_role) in adds {
             let credential = match DeviceCredential::from_identity(&identity) {
                 Ok(credential) => credential,
@@ -410,7 +417,8 @@ impl ProjectRules {
             // a key certified earlier and held back cannot return without a
             // fresh rejoin proof.
             if sender_role != Role::Owner {
-                if let Some(cutoff) = removals.identity_cutoff(&credential.user_id) {
+                let projected = losing.contains(&credential.user_id).then_some(next_epoch);
+                if let Some(cutoff) = removals.identity_cutoff(&credential.user_id).max(projected) {
                     let certified = directory.certified_epoch(
                         &credential.user_id,
                         &credential.device_id,
@@ -531,30 +539,34 @@ impl ProjectRules {
             }
         }
 
-        let last_leaf_exception = status == CredentialStatus::Certified
-            && directory
-                .replaces(&joiner.user_id, &joiner.device_id)
-                .is_some_and(|revoked_device| {
-                    let own: Vec<Member> = roster
-                        .members()
-                        .into_iter()
-                        .filter(|m| {
-                            DeviceCredential::from_identity(&m.signing_identity)
-                                .is_ok_and(|c| c.user_id == joiner.user_id)
-                        })
-                        .collect();
-                    let [only] = own.as_slice() else { return false };
-                    let Ok(only_credential) = DeviceCredential::from_identity(&only.signing_identity) else {
-                        return false;
-                    };
-                    only_credential.device_id == revoked_device
+        // The last-leaf exception waives only the stale leaf's own revocation:
+        // the user's only remaining leaf is revoked, its revocation named this
+        // joiner as the replacement, and this Commit removes it.
+        let replaced = if status == CredentialStatus::Certified {
+            directory.replaces(&joiner.user_id, &joiner.device_id)
+        } else {
+            Vec::new()
+        };
+        let own: Vec<Member> = roster
+            .members()
+            .into_iter()
+            .filter(|m| DeviceCredential::from_identity(&m.signing_identity).is_ok_and(|c| c.user_id == joiner.user_id))
+            .collect();
+        let exempt_device: Option<Vec<u8>> = match own.as_slice() {
+            [only] => DeviceCredential::from_identity(&only.signing_identity)
+                .ok()
+                .filter(|c| {
+                    replaced.contains(&c.device_id)
                         && directory.credential_status(
-                            &only_credential.user_id,
-                            &only_credential.device_id,
+                            &c.user_id,
+                            &c.device_id,
                             only.signing_identity.signature_key.as_bytes(),
                         ) == CredentialStatus::Revoked
                         && removed.as_ref().is_some_and(|(index, _, _)| *index == only.index)
-                });
+                })
+                .map(|c| c.device_id),
+            _ => None,
+        };
 
         match psk_epochs.as_slice() {
             [] => reasons.push(Reason::new(
@@ -576,14 +588,12 @@ impl ProjectRules {
                         format!("PSK epoch {epoch} is outside the {window}-epoch window (now {now})"),
                     ));
                 }
-                if !last_leaf_exception {
-                    if let Some(cutoff) = directory.revocation_cutoff(&joiner.user_id) {
-                        if epoch < cutoff {
-                            reasons.push(Reason::new(
-                                "rejoin-psk-before-revocation",
-                                format!("PSK epoch {epoch} is before the newest device revocation (epoch {cutoff})"),
-                            ));
-                        }
+                if let Some(cutoff) = directory.revocation_cutoff(&joiner.user_id, exempt_device.as_deref()) {
+                    if epoch < cutoff {
+                        reasons.push(Reason::new(
+                            "rejoin-psk-before-revocation",
+                            format!("PSK epoch {epoch} is before the newest device revocation (epoch {cutoff})"),
+                        ));
                     }
                 }
                 if let Some(entry) = entry {

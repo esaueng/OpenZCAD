@@ -162,7 +162,6 @@ function directoryJson(directory: DeviceDirectory): string {
   return JSON.stringify({
     users: directory.users.map((user) => ({
       userId: user.userId,
-      revocationCutoffEpoch: user.revocationCutoffEpoch ?? null,
       devices: user.devices.map((device) => ({
         deviceId: device.deviceId,
         status: device.status,
@@ -170,7 +169,8 @@ function directoryJson(directory: DeviceDirectory): string {
           key: toHex(leaf.key),
           certifiedEpoch: leaf.certifiedEpoch ?? null
         })),
-        replacedBy: device.replacedBy ?? null
+        replacedBy: device.replacedBy ?? null,
+        revocationCutoffEpoch: device.revocationCutoffEpoch ?? null
       }))
     }))
   });

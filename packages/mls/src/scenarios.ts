@@ -132,12 +132,12 @@ interface DeviceRecord {
   status: 'active' | 'revoked';
   leafKeys: LeafKeyCertification[];
   replacedBy?: string;
+  cutoff?: number;
 }
 
 class World {
   readonly devices: Device[] = [];
   private readonly directory = new Map<string, Map<string, DeviceRecord>>();
-  private readonly cutoffs = new Map<string, number>();
   /** Each user's rejoin PSKs as that user's devices store them on the
    * server, wrapped under the account key (ADR-024, "Long-offline devices"). */
   private readonly accountPsks = new Map<string, Map<number, Uint8Array>>();
@@ -151,14 +151,12 @@ class World {
     return {
       users: [...this.directory].map(([userId, devices]) => ({
         userId,
-        ...(this.cutoffs.has(userId)
-          ? { revocationCutoffEpoch: this.cutoffs.get(userId)! }
-          : {}),
         devices: [...devices].map(([deviceId, d]) => ({
           deviceId,
           status: d.status,
           leafKeys: d.leafKeys,
-          ...(d.replacedBy ? { replacedBy: d.replacedBy } : {})
+          ...(d.replacedBy ? { replacedBy: d.replacedBy } : {}),
+          ...(d.cutoff === undefined ? {} : { revocationCutoffEpoch: d.cutoff })
         }))
       }))
     };
@@ -241,7 +239,7 @@ class World {
     const record = this.record(userId, deviceId);
     record.status = 'revoked';
     if (replacedBy) record.replacedBy = replacedBy;
-    this.cutoffs.set(userId, Math.max(cutoff, this.cutoffs.get(userId) ?? 0));
+    record.cutoff = cutoff;
     await this.publish();
   }
 
@@ -1261,6 +1259,64 @@ const lastLeaf = suite<LastLeafCast>({
   ]
 });
 
+interface LaterRevocationCast {
+  world: World;
+  a1: Device;
+  c1: Device;
+}
+
+const laterRevocation = suite<LaterRevocationCast>({
+  name: 'last-leaf recovery with a later revocation of another device',
+  async setup(mls) {
+    const world = new World(mls, project('lastleaf-later'));
+    const a1 = await world.device('A', 'A1');
+    const c1 = await world.device('C', 'C1');
+    await createProject(world, a1);
+    await addDevices(world, a1, [], [c1], {
+      setRoles: [{ userId: 'C', role: 'editor' }]
+    });
+    await tick(world, c1, [a1], 2);
+    return { world, a1, c1 };
+  },
+  steps: [
+    {
+      name: "the exception waives only the stale leaf's own revocation, not a later one",
+      async run({ world, a1, c1 }) {
+        const first = (await epochOf(a1)) + 1;
+        await world.revoke('C', 'C1', first, 'C2');
+        await tick(world, a1, [c1], 2);
+        // A later revocation of C3, a device that never joined this group.
+        const later = (await epochOf(a1)) + 1;
+        await world.device('C', 'C3');
+        await world.revoke('C', 'C3', later);
+        await tick(world, a1, [c1], 2);
+        const c2 = await world.device('C', 'C2');
+        const between = await world.copy(c2, 'C2 (between cutoffs)');
+        const fresh = await world.copy(c2, 'C2 (fresh PSK)');
+        const stale = await indexOf(c1);
+        const beforeFirst = await refused(
+          () => tryRejoin(c2, a1, world.newestPsk('C', first), [a1], stale),
+          ...only('rejoin-psk-before-revocation')
+        );
+        const betweenRefusal = await refused(
+          () => tryRejoin(between, a1, world.psk('C', first), [a1], stale),
+          ...only('rejoin-psk-before-revocation')
+        );
+        const accepted = await rejoin(
+          world,
+          fresh,
+          a1,
+          world.newestPsk('C'),
+          [a1],
+          stale
+        );
+        world.retire(c1);
+        return `before both: ${beforeFirst}; between: ${betweenRefusal}; ${accepted}`;
+      }
+    }
+  ]
+});
+
 // ---------------------------------------------------------------------------
 // Viewer and editor limits
 
@@ -1368,6 +1424,36 @@ const roleLimits = suite<RolesCast>({
           remove: [await indexOf(fresh)]
         });
         return `own client ${local}; receivers ${receivers}; certified after: ${agreed}`;
+      }
+    },
+    {
+      name: 'refused: a recovery Add in the Commit that removes a leaf of that identity, with a key certified before it',
+      async run({ world, a1, e1, v1 }) {
+        const viewers = world.devices.filter(
+          (d) => d.userId === 'V' && d.live && d !== v1
+        );
+        const e5 = await world.device('E', 'E5');
+        await addDevices(world, a1, [e1, v1, ...viewers], [e5]);
+        // E6 was certified now: after every earlier removal of E, but
+        // before the removal this Commit makes.
+        const e6 = await world.device('E', 'E6', true, await epochOf(a1));
+        const request = {
+          remove: [await indexOf(e5)],
+          add: [await e6.session.keyPackage()]
+        };
+        const local = await refused(
+          () => e1.session.commit(request),
+          ['leaf-certified-before-removal']
+        );
+        const receivers = await refused(
+          () => tryCommit(e1, request, [a1, v1]),
+          ['leaf-certified-before-removal']
+        );
+        world.retire(e6);
+        await advance(world, a1, [e1, v1, ...viewers, e5], {
+          remove: [await indexOf(e5)]
+        });
+        return `own client ${local}; receivers ${receivers}`;
       }
     },
     {
@@ -1532,7 +1618,8 @@ export const scenarioSuites: ScenarioSuite[] = [
   readd,
   lastLeaf,
   roleLimits,
-  carriedRecords
+  carriedRecords,
+  laterRevocation
 ];
 
 /** Run every suite in order; used by the browser harness. */

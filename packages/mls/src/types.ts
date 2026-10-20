@@ -37,12 +37,6 @@ export interface DeviceDirectory {
 
 export interface DirectoryUser {
   userId: string;
-  /**
-   * First epoch of this project's group whose rejoin PSK the user's newest
-   * revoked device must not know (the device list's per-project cutoff). A
-   * rejoin PSK must be from this epoch or later.
-   */
-  revocationCutoffEpoch?: number;
   devices: DirectoryDevice[];
 }
 
@@ -53,6 +47,13 @@ export interface DirectoryDevice {
   leafKeys: LeafKeyCertification[];
   /** For a revoked device: the device its revocation named as replacement. */
   replacedBy?: string;
+  /**
+   * For a revoked device: the first epoch of this project's group whose
+   * rejoin PSK it must not know (the revocation's per-project cutoff). A
+   * rejoin PSK must be no earlier than the newest of the user's cutoffs; the
+   * last-leaf exception waives only the stale leaf's own.
+   */
+  revocationCutoffEpoch?: number;
 }
 
 export interface LeafKeyCertification {
