@@ -20,7 +20,7 @@ import {
 import { isPrivateHostname } from './privateNetwork';
 
 export const DEFAULT_AI_MODEL = 'gpt-6-luna';
-export const DEFAULT_OPENROUTER_MODEL = 'openai/gpt-6-luna';
+export const DEFAULT_OPENROUTER_MODEL = 'minimax/minimax-m3.1-flash:free';
 export const DEFAULT_AI_REASONING_EFFORT = 'high';
 export const DEFAULT_AI_MAX_OUTPUT_TOKENS = 32_000;
 export const DEFAULT_AI_TIMEOUT_MS = 90_000;
@@ -273,6 +273,7 @@ function providerFor(env: CloudflareEnv) {
   }
   if (
     env.AI_PROVIDER === 'openrouter' &&
+    !isCloudflareFeatureEnabled(env, 'AI_DEPLOYMENT_FREE_ENABLED') &&
     !genericKey &&
     !openRouterKey &&
     openAiKey
@@ -1008,7 +1009,16 @@ function openRouterChatMessages(
   ];
 }
 
-function shouldUseOpenRouterSolChatFallback(
+function openRouterProviderOptions(model: string) {
+  return {
+    require_parameters: true,
+    ...(model.endsWith(':free')
+      ? { max_price: { prompt: 0, completion: 0, request: 0 } }
+      : {})
+  };
+}
+
+function shouldUseOpenRouterChatFallback(
   provider: string,
   model: string,
   status: number
@@ -1016,7 +1026,9 @@ function shouldUseOpenRouterSolChatFallback(
   return (
     provider === 'openrouter' &&
     status === 404 &&
-    (model === 'openai/gpt-5.6-sol' || model === 'openai/gpt-5.6-sol-pro')
+    (model.endsWith(':free') ||
+      model === 'openai/gpt-5.6-sol' ||
+      model === 'openai/gpt-5.6-sol-pro')
   );
 }
 
@@ -1110,7 +1122,7 @@ export async function streamAssistantProposal(
         store: false,
         stream: true,
         ...(provider === 'openrouter'
-          ? { provider: { require_parameters: true } }
+          ? { provider: openRouterProviderOptions(model) }
           : {}),
         ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
       })
@@ -1140,7 +1152,7 @@ export async function streamAssistantProposal(
         max_completion_tokens:
           runtime?.maxOutputTokens ?? maxOutputTokensFor(env),
         stream: false,
-        provider: { require_parameters: true },
+        provider: openRouterProviderOptions(model),
         ...(safetyIdentifier ? { user: safetyIdentifier } : {})
       })
     });
@@ -1148,7 +1160,7 @@ export async function streamAssistantProposal(
   let upstream: Response;
   try {
     upstream = await requestUpstream();
-    if (shouldUseOpenRouterSolChatFallback(provider, model, upstream.status)) {
+    if (shouldUseOpenRouterChatFallback(provider, model, upstream.status)) {
       const details = await readProviderFailure(upstream);
       console.warn('AI Responses route unavailable; using strict fallback:', {
         requestId,
@@ -1255,7 +1267,7 @@ export async function testAssistantConnection(
         stream: true,
         ...reasoningRequest(runtime.reasoningEffort),
         ...(runtime.provider === 'openrouter'
-          ? { provider: { require_parameters: true } }
+          ? { provider: openRouterProviderOptions(runtime.model) }
           : {})
       })
     });
@@ -1282,14 +1294,14 @@ export async function testAssistantConnection(
         max_completion_tokens: Math.min(runtime.maxOutputTokens, 4_096),
         stream: false,
         ...reasoningRequest(runtime.reasoningEffort),
-        provider: { require_parameters: true }
+        provider: openRouterProviderOptions(runtime.model)
       })
     });
   let response: Response;
   try {
     response = await requestUpstream();
     if (
-      shouldUseOpenRouterSolChatFallback(
+      shouldUseOpenRouterChatFallback(
         runtime.provider,
         runtime.model,
         response.status

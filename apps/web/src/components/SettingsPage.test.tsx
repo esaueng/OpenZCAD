@@ -340,6 +340,53 @@ describe('settings navigation', () => {
   });
 });
 
+describe('assistant data disclosure', () => {
+  it('explains the free built-in model and data use, then keeps the personal model option', async () => {
+    const user = userEvent.setup();
+    const settings = defaultAppSettings();
+    renderStatefulSettings({
+      initialSection: 'assistant',
+      accountState: {
+        settings,
+        revision: 1,
+        synced: true,
+        credential: { stored: false, storageAvailable: true },
+        effectiveAssistant: {
+          configured: true,
+          source: 'deployment',
+          provider: 'openrouter',
+          model: 'minimax/minimax-m3.1-flash:free',
+          reasoningEffort: 'high'
+        }
+      }
+    });
+
+    expect(screen.getByText(/Free with no personal API key/)).toBeVisible();
+    expect(
+      screen.getByText(/may retain this data or use it for training/)
+    ).toBeVisible();
+    expect(
+      screen.getByText(/The built-in assistant sends your prompts/)
+    ).toHaveTextContent('conversation, model context, and any attachments');
+    expect(
+      screen.getByRole('link', { name: 'OpenRouter data policies' })
+    ).toHaveAttribute(
+      'href',
+      'https://openrouter.ai/docs/guides/privacy/provider-logging'
+    );
+    await user.click(screen.getByRole('radio', { name: 'Personal token' }));
+    expect(screen.getByLabelText('AI provider')).toBeVisible();
+    expect(screen.getByLabelText('AI model')).toBeVisible();
+    expect(screen.getByLabelText('Personal API token')).toBeVisible();
+    expect(
+      screen.getByText(/That provider’s data retention, training policies/)
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/Free with no personal API key/)
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe('settings accessible names', () => {
   it('start each control name with its visible title', async () => {
     const user = userEvent.setup();

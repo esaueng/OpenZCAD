@@ -1319,7 +1319,10 @@ export function SettingsPage({
                     onChange={(enabled) => patchAssistant({ enabled })}
                   />
                 </SettingRow>
-                <SettingRow title="Credential source">
+                <SettingRow
+                  title="Credential source"
+                  hint="Use the built-in model, or your own API key and model."
+                >
                   <Segmented
                     label="AI credential source"
                     value={settings.assistant.credentialSource}
@@ -1344,6 +1347,40 @@ export function SettingsPage({
                   </SettingRow>
                 )}
               </Group>
+
+              {settings.assistant.credentialSource === 'deployment' ? (
+                <Group title="Data use">
+                  {effective?.provider === 'openrouter' &&
+                  effective.model.endsWith(':free') ? (
+                    <Notice>
+                      Free with no personal API key. Sign in to use it. Usage
+                      limits and provider availability apply.
+                    </Notice>
+                  ) : null}
+                  <Notice>
+                    The built-in assistant sends your prompts, conversation,
+                    model context, and any attachments to the configured AI
+                    provider. OpenRouter and the model provider may retain this
+                    data or use it for training and service improvement under
+                    their policies. Avoid sending sensitive or confidential
+                    data. Use a personal API key to choose another model; that
+                    provider’s data policies and charges apply.{' '}
+                    <a
+                      href="https://openrouter.ai/docs/guides/privacy/provider-logging"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      OpenRouter data policies
+                    </a>
+                  </Notice>
+                </Group>
+              ) : (
+                <Notice>
+                  Requests use your selected provider and model. That provider’s
+                  data retention, training policies, usage limits, and charges
+                  apply to prompts, model context, and attachments.
+                </Notice>
+              )}
 
               {settings.assistant.credentialSource === 'personal' ? (
                 <>
@@ -1595,8 +1632,9 @@ export function SettingsPage({
 
               <p className="settings-footnote">
                 <ShieldCheck size={14} aria-hidden="true" />
-                The assistant sees feature history and your selection, never
-                STEP text or meshes.
+                The assistant receives feature history, model summaries, your
+                selection, and attachments you choose to send. Raw STEP files
+                and meshes are not sent.
               </p>
             </Section>
           )}

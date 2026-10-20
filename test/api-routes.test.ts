@@ -1343,10 +1343,30 @@ describe('worker api routes', () => {
     });
   });
 
-  // wrangler.jsonc deliberately leaves AI_DEPLOYMENT_ALLOWED_EMAILS out of
-  // secrets.required, which is only safe because an unset allowlist denies
-  // every account rather than admitting them. A regression here would hand the
-  // deployment's provider key to any authenticated session.
+  it('reports free built-in availability to a signed-in Free account without an allowlist', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/status', {
+        headers: { cookie: '__Host-openzcad_session=test-session' }
+      }),
+      withEnabledDeploymentAssistant({
+        ENVIRONMENT: 'beta',
+        AUTH_MODE: 'email-code',
+        AI_PROVIDER: 'openrouter',
+        AI_MODEL: 'minimax/minimax-m3.1-flash:free',
+        AI_DEPLOYMENT_FREE_ENABLED: 'true',
+        OPENROUTER_API_KEY: 'secret-test-value'
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      configured: true,
+      source: 'deployment',
+      model: 'minimax/minimax-m3.1-flash:free'
+    });
+  });
+
+  // Paid or non-public deployments still require an explicit eligibility grant.
   it('denies deployment assistant funding when no allowlist is configured', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status', {

@@ -184,7 +184,7 @@ Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a rea
 - follow the [project cloud-sync release runbook](docs/runbooks/project-cloud-sync-release.md) for the migration gate and authenticated two-device canary;
 - set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM=noreply@zcad.esau.app`, `PROJECT_INVITATION_EMAIL_FROM=noreply@zcad.esau.app`, and the canonical `PUBLIC_APP_ORIGIN=https://zcad.app` used for invitation links (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
 - provide secrets, generated with `openssl rand -base64 32` where appropriate and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), and `AI_IDENTITY_PEPPER`. The deployment preflight lists these required secret names without reading their values; verify the remote Worker secret list before deploying;
-- funding AI from the deployment's own provider key needs the provider secret. Premium accounts can use that key; `AI_DEPLOYMENT_ALLOWED_EMAILS` optionally grants Free accounts access. Without the provider key, users supply their own tokens instead.
+- funding AI from the deployment's own provider key needs the provider secret. The built-in free OpenRouter model admits every verified account with `AI_DEPLOYMENT_FREE_ENABLED`; paid or private models require Premium membership or `AI_DEPLOYMENT_ALLOWED_EMAILS`. Without the provider key, users supply their own tokens instead.
 
 Login codes are single-use and expire after ten minutes. Requests are rate limited per IP, per email and IP, and per email; a throttled request sends no email and answers with the requester's own pending challenge, and a new code never voids an earlier one (a successful sign-in voids them all). Profile or account deletion clears that email's requester limits as well as its pending codes, while preserving the shared IP limit and other emails' limits. After 20 wrong codes for an email in 24 hours, each of its codes allows one try instead of five. Failure counts conservatively remain active until 24 hours after each code expires (at most ten extra minutes), so guesses near expiry cannot age out early. Sessions use a `Secure`, `HttpOnly`, `SameSite=Lax` host cookie; only a SHA-256 hash of the opaque token is stored. Turnstile responses must carry the `email-code` action, and every non-development verification pins the response hostname to the request hostname. `AUTH_LEGACY_OWNER_EMAIL` maps historical `user_beta_dev` projects to their owner's verified email without rewriting documents.
 
@@ -326,7 +326,8 @@ OpenRouter is the default provider. For local development, export the key in the
 ```dotenv
 AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=your_key_here
-AI_MODEL=openai/gpt-6-luna
+AI_MODEL=minimax/minimax-m3.1-flash:free
+AI_DEPLOYMENT_FREE_ENABLED=true
 ```
 
 Runtime bindings are configured as Wrangler vars or secrets:
@@ -334,19 +335,24 @@ Runtime bindings are configured as Wrangler vars or secrets:
 - `AI_PROVIDER` — `openrouter`, `openai`, or `responses-compatible`.
 - `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `AI_API_KEY` — the server-side secret for the configured provider; `AI_API_KEY` is never sent to OpenRouter (see below). Never shipped to the browser or committed.
 - `AI_BASE_URL` — optional endpoint override; required for `responses-compatible`.
-- `AI_MODEL` — defaults to `openai/gpt-6-luna` on OpenRouter or `gpt-6-luna` on direct OpenAI. Set another exact provider model identifier to override it.
+- `AI_MODEL` — defaults to `minimax/minimax-m3.1-flash:free` on OpenRouter or `gpt-6-luna` on direct OpenAI. Personal model settings remain independent; users can choose another exact provider model identifier with their own key.
 - `AI_REASONING_EFFORT` — `low`/`medium`/`high`/`xhigh`, default `high`.
 - `AI_MAX_OUTPUT_TOKENS` — default `32000`; reasoning shares the budget, and too low a ceiling truncates patches mid-stream as a normal incomplete response.
 - `AI_SITE_URL` / `AI_APP_NAME` — optional OpenRouter attribution.
 - `AI_ALLOWED_BASE_URL_HOSTS` — exact, comma-separated hostnames approved for saved Responses-compatible endpoints outside development. Redirects are never followed.
 - `AI_ACCOUNT_RATE_LIMIT_REQUESTS` / `AI_ACCOUNT_COST_LIMIT_UNITS` / `AI_ACCOUNT_CONCURRENCY_LIMIT` — Free account limits; defaults are 6 requests and 24 weighted units per 10 minutes, with 2 concurrent requests. Premium account limits default to 600 requests and 2,400 weighted units per 10 minutes, with 8 concurrent requests. See [account tiers](docs/plans/account-tiers.md) for overrides.
-- `AI_DEPLOYMENT_ALLOWED_EMAILS` — optional secret, comma-separated email allowlist for Free accounts permitted to spend the deployment provider key. Premium membership also grants access.
+- `AI_DEPLOYMENT_FREE_ENABLED` — opt in to built-in AI for every signed-in account, only with an OpenRouter `:free` model and the standard endpoint. Enabled in the checked-in configurations. A missing `OPENROUTER_API_KEY` leaves the public free assistant unavailable, without falling back to a paid provider.
+- `AI_DEPLOYMENT_ALLOWED_EMAILS` — optional secret, comma-separated email allowlist for accounts permitted to use a paid or private deployment model. Premium membership also grants this access.
 
-Signed-in users can instead store a personal provider token (Settings → AI). Tokens are encrypted with AES-GCM by the Worker (`SETTINGS_ENCRYPTION_KEY`) and never enter project documents or browser storage. `GET /api/assistant/status` never exposes provider secrets or deployment availability to a signed-out or non-allowlisted request. Public request identities use HMAC-SHA-256 values keyed by `AI_IDENTITY_PEPPER`.
+Signed-in users can instead store a personal provider token (Settings → AI). Tokens are encrypted with AES-GCM by the Worker (`SETTINGS_ENCRYPTION_KEY`) and never enter project documents or browser storage. `GET /api/assistant/status` never exposes provider secrets or deployment availability to a signed-out or ineligible request. Public request identities use HMAC-SHA-256 values keyed by `AI_IDENTITY_PEPPER`.
+
+The built-in assistant uses **MiniMax M3.1 Flash (free)** through OpenRouter. It has no personal-key requirement or model usage charge, but account quotas, shared OpenRouter free-tier limits and provider availability apply; free access is not unlimited or guaranteed. Free-model requests keep the exact `:free` model identifier and cap prompt, completion and per-request provider prices at zero, including the strict Chat Completions fallback. They never substitute a paid model.
+
+Settings → AI Assistant explains that prompts, conversation, compact model context and user-selected attachments go to the AI service. OpenRouter and its model providers may retain data or use it for training and service improvement according to their [data policies](https://openrouter.ai/docs/guides/privacy/provider-logging). The notice does not claim zero retention or that a personal key prevents training; the selected provider’s policies and charges apply. Raw STEP files and meshes are not sent.
 
 Current assistant limitations and gates:
 
-- **Assistant usage is bounded before provider dispatch** — beta requests require server-granted hosted-AI access, D1-backed per-account request and token-weighted cost quotas, and per-account expiring concurrency leases. There is no shared deployment usage cap; provider-side billing controls remain separate.
+- **Assistant usage is bounded before provider dispatch** — beta requests require a verified account and server-granted hosted-AI access, D1-backed per-account request and token-weighted cost quotas, and per-account expiring concurrency leases. There is no shared deployment usage cap; provider-side billing controls remain separate.
 - Deterministic contracts are implemented for face-attached sketches, multi-profile extrudes, mirror, shell, solid offset, transforms, edge modifiers, patterns, and the existing validated direct-edit subset. The checked-in beta configuration enables the mature operation families, partial revolve, and datum-plane proposals behind independent `AI_PATCH_*_ENABLED` flags; client capability negotiation also limits the operations offered to each browser. Growing-holder hole controls remain disabled. Topology-dependent proposals must repeat the exact digest witness and are rejected when stale. Configuration describes rollout intent; it is not proof of a live deployment.
 - Exact `add_direct_edit` coordination for proved imported blind holes, counterbores, and countersinks is enabled in `AI_CAD_OPERATION_CAPABILITIES`; the standalone `recognized_imported_feature` operation name remains unsupported. Diameter changes re-cut ordinary proved holes, while blind/counterbore depth changes, countersink angle changes, and diameter changes on a counterbore with an entry chamfer fail with an explicit not-yet-supported error. Proposals cannot import geometry or perform collaboration actions.
 
