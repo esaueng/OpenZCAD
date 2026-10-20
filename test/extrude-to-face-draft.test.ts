@@ -3,6 +3,7 @@ import {
   addPrimitiveFeature,
   addSketchFeature,
   attachDerivedState,
+  booleanBodies,
   createProjectDocument,
   deleteFeature,
   extrudeSketch,
@@ -783,6 +784,59 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
         expect(built).toEqual(before);
       }
     );
+
+    it('traces a face carried through a later Boolean back to the body the extrude reads', async () => {
+      const result = await post(25);
+      const feature = listFeaturesInOrder(result.document).at(-1)!;
+      // A later Boolean consumes the ceiling: only the union is on screen.
+      const beside = box(result.document, 'Beam', {
+        width: 30,
+        height: 4,
+        depth: 2
+      });
+      const lifted = commandFactories
+        .transformBody({
+          name: 'Lift beam',
+          targetBodyId: beside.bodyId,
+          translation: { x: -5, y: 8, z: 26 }
+        })
+        .apply(beside.document);
+      const united = booleanBodies(lifted, {
+        name: 'Join',
+        operation: 'union',
+        targetBodyIds: [result.ceilingId, beside.bodyId]
+      });
+      const built = await synced(united.document);
+      expect(built.derived.warnings).toEqual([]);
+      const underside = built.derived.bodyRepresentations[
+        united.bodyId
+      ]!.topology!.faces.find(
+        (candidate) =>
+          (candidate.geometry?.normal?.z ?? 0) < -0.99 &&
+          Math.abs((candidate.geometry?.center.z ?? 0) - 25) < 1e-6
+      )!;
+      const target = extrudeToFaceTargetFromPick(
+        built,
+        {
+          bodyId: united.bodyId,
+          kind: 'face',
+          topologyId: underside.topologyId,
+          hash: underside.hash
+        },
+        feature
+      );
+      expect(target.bodyId).toBe(result.ceilingId);
+      // The repaired target validates and rebuilds at the extrude's position.
+      const repaired = commandFactories.updateFeature({
+        featureId: feature.featureId,
+        data: { toFace: target }
+      });
+      repaired.validate(built);
+      const derived = await derive(repaired.apply(built));
+      expect(
+        derived.warnings.filter((warning) => warning.includes('"Post"'))
+      ).toEqual([]);
+    });
 
     it('refuses as unresolved when the face is no longer parallel', async () => {
       const result = await post(25);

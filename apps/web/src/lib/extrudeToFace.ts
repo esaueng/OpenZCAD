@@ -45,51 +45,98 @@ export function extrudeToFaceTargetFromPick(
   const face = document.derived.bodyRepresentations[
     selection.bodyId
   ]?.topology?.faces.find((candidate) => candidate.hash === selection.hash);
-  if (
-    editing?.bodyId !== undefined &&
-    selection.bodyId === editing.bodyId &&
-    editing.data.featureKind === 'extrude'
-  ) {
-    return carriedInputFace(document, editing, face);
+  if (editing) {
+    const earlier = faceAtHistoryPosition(
+      document,
+      editing,
+      selection.bodyId,
+      face
+    );
+    return targetForFace(document, earlier.bodyId, earlier.face);
   }
   return targetForFace(document, selection.bodyId, face);
 }
 
-/** The prefix the add/cut/intersect lineage puts on its input body's faces. */
-const CARRIED_TARGET_FACE = 'boolean.face.target.';
+/**
+ * The lineage a boolean (an add/cut/intersect extrude or a Boolean feature)
+ * gives the faces it carries from an input: `boolean.face.<slot>.<input
+ * lineage>`, where the slot is `target`, `tool` or `operand.<index>`.
+ */
+const CARRIED_FACE = /^boolean\.face\.(target|tool|operand\.(\d+))\.(.+)$/;
 
-function carriedInputFace(
+/** Where a body comes from in history: its producing feature's position. */
+function producerIndex(document: ProjectDocument, bodyId: BodyId): number {
+  const body = Object.values(document.nodes).find(
+    (node) => node.kind === 'body' && node.bodyId === bodyId
+  );
+  return body?.kind === 'body'
+    ? document.featureOrder.indexOf(body.featureId)
+    : -1;
+}
+
+/**
+ * A face picked on today's model, re-found on the body the edited extrude
+ * reads at its own history position. The viewport shows only live bodies,
+ * so a face of a body consumed at or after the extrude (by the extrude
+ * itself, or by a later Boolean or add/cut) is picked on its consumer's
+ * result; its carried lineage names the input slot it came from, and the
+ * face with the inner lineage on that input body is the one the extrude
+ * reaches. The walk repeats until the body comes from before the extrude.
+ * A face the extrusion itself creates, or one whose lineage does not lead
+ * back, is refused by name.
+ */
+function faceAtHistoryPosition(
   document: ProjectDocument,
   editing: FeatureNode,
+  bodyId: BodyId,
   face: FaceTopology | undefined
-): ExtrudeToFaceTarget {
-  const input =
-    editing.data.featureKind === 'extrude'
-      ? editing.data.targetBodyId
+): { bodyId: BodyId; face: FaceTopology | undefined } {
+  const position = document.featureOrder.indexOf(editing.featureId);
+  const features = listFeaturesInOrder(document);
+  let current = { bodyId, face };
+  for (let step = 0; step < features.length; step += 1) {
+    const at = producerIndex(document, current.bodyId);
+    if (at >= 0 && at < position) return current;
+    const reference = current.face?.reference;
+    const match = reference ? CARRIED_FACE.exec(reference.lineageName) : null;
+    const producer = features.find(
+      (feature) => feature.featureId === reference?.producingFeatureId
+    );
+    if (!match || !producer) break;
+    const [, slot, index, inner] = match;
+    if (producer.featureId === editing.featureId && slot === 'tool') {
+      throw new Error(
+        'That face is made by this extrusion itself; pick a face it does not create.'
+      );
+    }
+    const data = producer.data;
+    const input =
+      data.featureKind === 'boolean'
+        ? data.targetBodyIds[
+            index !== undefined ? Number(index) : slot === 'target' ? 0 : -1
+          ]
+        : data.featureKind === 'extrude' && slot === 'target'
+          ? data.targetBodyId
+          : undefined;
+    const original = input
+      ? document.derived.bodyRepresentations[input]?.topology?.faces.find(
+          (candidate) => candidate.reference?.lineageName === inner
+        )
       : undefined;
-  const reference = face?.reference;
+    if (!input || !original) break;
+    current = { bodyId: input, face: original };
+  }
   if (
-    !input ||
-    !reference ||
-    reference.producingFeatureId !== editing.featureId ||
-    !reference.lineageName.startsWith(CARRIED_TARGET_FACE)
+    current.face?.reference?.producingFeatureId === editing.featureId ||
+    current.bodyId === editing.bodyId
   ) {
     throw new Error(
       'That face is made by this extrusion itself; pick a face it does not create.'
     );
   }
-  const lineageName = reference.lineageName.slice(CARRIED_TARGET_FACE.length);
-  const original = document.derived.bodyRepresentations[
-    input
-  ]?.topology?.faces.find(
-    (candidate) => candidate.reference?.lineageName === lineageName
+  throw new Error(
+    'That face cannot be traced back to a body made before this extrusion; pick a face that existed when it was made.'
   );
-  if (!original) {
-    throw new Error(
-      'That face cannot be found on the body this extrusion consumes; pick another face.'
-    );
-  }
-  return targetForFace(document, input, original);
 }
 
 function targetForFace(
