@@ -1639,6 +1639,26 @@ describe('parked panels in the unpinned slot', () => {
     ]);
   });
 
+  it('refuses a new column on a full dock whose outermost column is parked', () => {
+    const layout = layoutWith({
+      right: [['parameters'], ['revisions'], ['diagnostics']]
+    });
+    expect(layout.right).toHaveLength(PANEL_MAX_COLUMNS.right);
+    const geometry = computePanelGeometry(layout, STAGE);
+    expect(geometry.parked.diagnostics).toBe(true);
+    const target: PanelTarget = { kind: 'newColumn', side: 'right' };
+    const unpinned = openPanel(layout, 'history');
+    expect(wouldExceedCap(unpinned, 'history', target, STAGE)).toBe(true);
+    expect(placePanel(unpinned, 'history', target, STAGE)).toBe(unpinned);
+    // Wide enough for all three, the same drop stacks in the outermost one.
+    const wide: PanelStage = { width: 2400, height: 900 };
+    expect(placePanel(unpinned, 'history', target, wide).right).toEqual([
+      ['parameters'],
+      ['revisions'],
+      ['diagnostics', 'history']
+    ]);
+  });
+
   it('draws a panel in one place only as the width changes', () => {
     const shown = togglePanel(essentials(), 'bodies', narrow);
     for (const width of [narrow.width, 1440, narrow.width, 1600]) {

@@ -761,7 +761,9 @@ export function wouldExceedCap(
       stage.width
     );
   }
-  if (target.kind !== 'column') {
+  // A new column on a full dock stacks in its outermost column instead, which
+  // can be parked just like an existing column target.
+  if (target.kind !== 'column' && target.kind !== 'newColumn') {
     return false;
   }
   const placed = finishDrag(placeEntry(layout, id, id, target, stage));
