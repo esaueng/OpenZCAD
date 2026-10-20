@@ -26,8 +26,7 @@ function fixture() {
 }
 
 function outcome(
-  partial: Partial<SketchSolveOutcome> &
-    Pick<SketchSolveOutcome, 'objects'>
+  partial: Partial<SketchSolveOutcome> & Pick<SketchSolveOutcome, 'objects'>
 ): SketchSolveOutcome {
   return {
     classification: 'solved',
@@ -94,6 +93,70 @@ describe('solvedSketchCommands', () => {
       })
     );
     expect(commands).toHaveLength(0);
+  });
+
+  it('reads arc angles as directions, so an unmoved arc keeps its stored values', () => {
+    // Stored outside atan2's range: one arc wound past a full turn and
+    // driven by an expression, one crossing 0°. The solver reads both back
+    // in (-180°, 180°] form; neither moved, so neither is rewritten.
+    const { document, sketchId } = addSketchFeature(
+      createProjectDocument('Arc angles', toUserId('user_sketch')),
+      {
+        name: 'Arcs',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          {
+            objectKind: 'arc',
+            radius: 4,
+            centerX: 0,
+            centerY: 0,
+            startAngleDeg: '360 + 40',
+            endAngleDeg: 500
+          },
+          {
+            objectKind: 'arc',
+            radius: 2,
+            centerX: 10,
+            centerY: 0,
+            startAngleDeg: 350,
+            endAngleDeg: 370
+          }
+        ]
+      }
+    );
+    const [wound, crossing] = findSketch(document, sketchId)!.objectIds;
+    const arc = (
+      objectId: EntityId,
+      centerX: number,
+      radius: number,
+      startAngleDeg: number,
+      endAngleDeg: number
+    ) => ({
+      objectId,
+      kind: 'arc' as const,
+      centerX,
+      centerY: 0,
+      radius,
+      startAngleDeg,
+      endAngleDeg
+    });
+    expect(
+      solvedSketchCommands(
+        document,
+        sketchId,
+        outcome({
+          objects: [arc(wound!, 0, 4, 40, 140), arc(crossing!, 10, 2, -10, 10)]
+        })
+      )
+    ).toEqual([]);
+    // A real turn is still a move.
+    expect(
+      solvedSketchCommands(
+        document,
+        sketchId,
+        outcome({ objects: [arc(crossing!, 10, 2, -10, 15)] })
+      )
+    ).toHaveLength(1);
   });
 
   it('returns nothing for non-converged or rolled-back solves', () => {

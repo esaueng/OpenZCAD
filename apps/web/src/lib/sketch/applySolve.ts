@@ -43,6 +43,22 @@ function movedField(
 }
 
 /**
+ * An arc angle compared as a direction: the solver reads angles back in
+ * atan2's range, so a stored 400° or a 350°→370° arc crossing 0° is the same
+ * unmoved arc, and rewriting it would drop its expressions.
+ */
+function movedAngle(
+  current: ParamValue,
+  solved: number,
+  resolve: (value: ParamValue) => number
+): boolean {
+  const resolved = resolve(current);
+  if (!Number.isFinite(resolved)) return true;
+  const turn = ((((resolved - solved) % 360) + 540) % 360) - 180;
+  return Math.abs(turn) > APPLY_EPSILON;
+}
+
+/**
  * Commands that write the solved geometry back, one `updateSketchObject`
  * per moved object, spreading over the existing data so `construction` and
  * unrelated fields survive. Empty when the solve did not converge or the
@@ -116,8 +132,8 @@ export function solvedSketchCommands(
         movedField(data.centerX, solved.centerX, resolve) ||
         movedField(data.centerY, solved.centerY, resolve) ||
         movedField(data.radius, solved.radius, resolve) ||
-        movedField(data.startAngleDeg, solved.startAngleDeg, resolve) ||
-        movedField(data.endAngleDeg, solved.endAngleDeg, resolve)
+        movedAngle(data.startAngleDeg, solved.startAngleDeg, resolve) ||
+        movedAngle(data.endAngleDeg, solved.endAngleDeg, resolve)
       ) {
         next = {
           ...data,
