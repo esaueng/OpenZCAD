@@ -128,18 +128,23 @@ The menu replaces the rail's Layout button.
 ### Defaults chosen 2026-10-20 (owner: "use your defaults")
 
 1. **Small screens.**
-   - The **combined** width of the docked columns, left and right together, is
-     capped at 50% of the stage width, so at least half the stage stays for the
-     model. Rails and gaps are not counted; they are always there.
+   - The **complete dock footprint** is capped at 60% of the stage width, so
+     the model always keeps at least 40%. The footprint is everything between
+     the screen edges and the model: both sides' columns, both rails, and
+     every gap. It is measured from the real tokens (`--rail-w`,
+     `--island-gap`), not assumed.
+   - With today's 40 px rails and 10 px gaps, each side's rail costs 60 px
+     whether or not it has columns, and each 296 px column adds 306 px:
+     - Essentials (732 px) stays fully docked from 1220 px stage width
+       upward, which includes 1280 px (57% footprint, 43% model).
+     - At 1219 px its second column floats.
+     - One column (426 px) still docks at 721 px.
    - A pin or drop that would go past the cap opens the panel floating instead.
    - When the window shrinks, the columns that no longer fit render floating,
      outermost first. This is a projection at render time only: the stored
      layout keeps them docked, so a wider window gets them back.
-   - Essentials (two 296 px columns, 592 px) stays fully docked from 1184 px
-     stage width upward, which includes 1280 px. At 721 px only one column
-     docks.
-   - Below 720 px stage width there are no docks: a panel opens one at a time in
-     the existing phone lane.
+   - At 720 px stage width and below there are no docks: a panel opens one at
+     a time in the existing phone lane. Docking starts at 721 px.
 2. **Persistence.**
    - Layouts are per device, Build only. View and Tweak keep their own rails.
    - A new storage key, `openzcad-panel-layout:v1`, sits beside
@@ -158,8 +163,17 @@ The menu replaces the rail's Layout button.
      to migrate, so a stored default must never come first and hide the old
      state.
 3. **Keyboard.**
-   - The grip is a focusable button, "Move <Name>", that opens a menu: Dock
-     left, Dock right, New column left, New column right, Float, Close.
+   - The grip is a focusable button, "Move <Name>", that opens a menu. The
+     menu is the keyboard equivalent of every drop target:
+     - **Dock left / Dock right** put the panel at the end of that side's
+       first column. **New column left / right**, **Float**, **Close**.
+     - **Move to ▸** lists every docked column and floating window by the
+       panels in it, e.g. "Right 1: Parameters, Revisions" or "Window:
+       History". Choosing a column puts the panel at its end; choosing a
+       window stacks the panel into it.
+     - **Move up / Move down** reorder the panel within its column or
+       window, so any slot is reachable. The same moves are on
+       `Alt+↑`/`Alt+↓` while the grip has focus.
    - Gaps are `role="separator"` with `aria-valuenow`; arrow keys resize them
      and Home splits evenly.
    - Floating windows move with arrow keys while the grip has focus.
@@ -241,7 +255,7 @@ Each slice is one PR and records its evidence in the U08 row.
   - home restored after close
   - float growth, clamp and resize bounds
   - gap weights with minimums, and the even split
-  - the combined 50% cap across both docks: a pin past it becomes a float,
+  - the 60% dock-footprint cap (columns, rails and gaps): a pin past it becomes a float,
     and a shrunken stage projects its outermost columns as floats without
     changing the stored layout
   - migration from sample v1 states
@@ -269,7 +283,7 @@ Each slice is one PR and records its evidence in the U08 row.
     Diagnostics (with its badge).
   - The inspector lane, obstacles, suspension and search hand-off as above.
   - The column scroll for short stages.
-  - The no-dock policy below 720 px stage width (one panel at a time in the
+  - The no-dock policy at 720 px stage width and below (one panel at a time in the
     phone lane), since the drawer's small-screen behaviour goes away here.
   - The transitional right-only Essentials default for new devices.
   - The first-load migration from `openzcad-panel-state:v1`, run before the
@@ -322,14 +336,18 @@ Each slice is one PR and records its evidence in the U08 row.
     both sides with the rail slide, emptied columns holding their place.
   - Floating windows and stacks, the frame grip, corner resize.
   - The keyboard Move menu, separator keys, floating-window arrow keys.
-  - The combined 50% cap, which matters from this slice on because it adds
+  - The 60% dock-footprint cap, which matters from this slice on because it adds
     extra columns and the left dock.
   - The two-sided Essentials default for devices with no stored layout.
 - **Tests.**
   - E2E with `page.mouse` steps: dock right/left/new column/float/stack/rail
     drag-out, plus the same moves through the keyboard.
-  - The cap's boundary widths: 1184 px and 1183 px (Essentials fully docked,
-    then its second column floating) and 721 px (one column docked).
+  - The cap's boundary widths, computed from the tokens rather than
+    hard-coded: 1220 px and 1219 px today (Essentials fully docked, then its
+    second column floating), and 721 px (one column docked).
+  - Keyboard placement through the Move menu: into a named column at a
+    chosen slot (Move to, then Move up/down), into a floating window, a new
+    column on each side, and Float.
   - Unit tests for the hit-test thresholds.
   - A render-count check that `ModelViewer` doesn't re-render during a drag.
 
