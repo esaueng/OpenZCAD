@@ -1105,6 +1105,15 @@ export function togglePanel(
   if (layout.options.hidden || !isPanelOpen(layout, id)) {
     return openPanel(layout, id, stage);
   }
+  // The phone lane shows one open panel; a press on another open one brings
+  // it there rather than closing what nobody can see.
+  if (
+    stage &&
+    stage.width <= PANEL_PHONE_MAX_WIDTH &&
+    computePanelGeometry(layout, stage).phonePanel !== id
+  ) {
+    return notePanelUsed(layout, id);
+  }
   if (stage && isPanelParked(layout, id, stage)) {
     return notePanelUsed(revealPanel(layout, id), id);
   }
@@ -1212,26 +1221,31 @@ export function resizeGap(
   ) {
     return layout;
   }
-  const total = layout.weights[above] + layout.weights[below];
-  const minWeight = PANEL_MIN_HEIGHT / pxPerWeight;
-  if (total < minWeight * 2) {
-    return layout;
-  }
   if (Math.abs(deltaPx) < 1e-9) {
     return layout;
   }
-  // A neighbour already under the minimum (held there on a short stage) is
-  // not pushed up by the clamp alone; only the drag moves weight.
-  const floorAbove = Math.min(minWeight, layout.weights[above]);
-  const floorBelow = Math.min(minWeight, layout.weights[below]);
-  const next = copyLayout(layout);
-  const resized = clamp(
-    layout.weights[above] + deltaPx / pxPerWeight,
-    floorAbove,
-    total - floorBelow
+  // Work in rendered pixels: a panel whose share is under the minimum shows
+  // at the minimum, so adding delta / pxPerWeight to its weight would not
+  // move its edge. Setting both weights to their new heights over
+  // pxPerWeight leaves the stack's pxPerWeight unchanged, so the gap tracks
+  // the pointer exactly.
+  const shownAbove = Math.max(
+    PANEL_MIN_HEIGHT,
+    layout.weights[above] * pxPerWeight
   );
-  next.weights[above] = resized;
-  next.weights[below] = total - resized;
+  const shownBelow = Math.max(
+    PANEL_MIN_HEIGHT,
+    layout.weights[below] * pxPerWeight
+  );
+  const pair = shownAbove + shownBelow;
+  const heightAbove = clamp(
+    shownAbove + deltaPx,
+    PANEL_MIN_HEIGHT,
+    pair - PANEL_MIN_HEIGHT
+  );
+  const next = copyLayout(layout);
+  next.weights[above] = heightAbove / pxPerWeight;
+  next.weights[below] = (pair - heightAbove) / pxPerWeight;
   return next;
 }
 
