@@ -707,7 +707,9 @@ function overCap(footprint: number, stageWidth: number): boolean {
 
 /**
  * Whether placing `id` at `target` would take the docks' footprint past the
- * cap on this stage. Only a new column adds to it.
+ * cap on this stage, or land it in a column that is parked there. Only a new
+ * column adds to the footprint; an existing column can already be parked
+ * after the stage shrank, and a panel put there would not be drawn.
  */
 export function wouldExceedCap(
   layout: PanelLayout,
@@ -717,15 +719,22 @@ export function wouldExceedCap(
 ): boolean {
   const detached = detach(layout, id, false);
   const side = addsColumn(detached, target);
-  if (!side) {
+  if (side) {
+    const columns = {
+      left: detached.left.length,
+      right: detached.right.length
+    };
+    columns[side] += 1;
+    return overCap(
+      dockFootprint(columns, columnWidthOf(layout.options), insetsOf(stage)),
+      stage.width
+    );
+  }
+  if (target.kind !== 'column') {
     return false;
   }
-  const columns = { left: detached.left.length, right: detached.right.length };
-  columns[side] += 1;
-  return overCap(
-    dockFootprint(columns, columnWidthOf(layout.options), insetsOf(stage)),
-    stage.width
-  );
+  const placed = finishDrag(placeEntry(layout, id, id, target, stage));
+  return computePanelGeometry(placed, stage).parked[id] === true;
 }
 
 /**
@@ -823,6 +832,20 @@ function placeEntry(
 ): PanelLayout<PanelEntry> {
   const detached = detach(layout, id, true);
   const next = insertAt(detached, entry, target, stage);
+  const from = layout.floats.find((group) => group.panels.includes(id));
+  if (
+    target.kind === 'group' &&
+    from?.id === target.groupId &&
+    from.panels.length > 1
+  ) {
+    // A reorder within one window keeps its rectangle: detaching shrank it
+    // by the panel's share and inserting grew it by FLOAT_GROWTH, which differ.
+    // A window of one closed on detach, so the drop made a new one instead.
+    const group = next.floats.find((candidate) => candidate.id === from.id);
+    if (group) {
+      Object.assign(group, { x: from.x, y: from.y, w: from.w, h: from.h });
+    }
+  }
   delete next.homes[id];
   next.weights[id] = 1;
   return next;
@@ -861,7 +884,9 @@ function placeAt(
  * The layout a drop at `target` would give, with `PANEL_SLOT` where the panel
  * lands and emptied columns still in place, for rendering the slot preview;
  * null when the drop would be refused (past the cap, or the layout locked). `commitPreview` of it is exactly
- * `placePanel` with the same arguments.
+ * `placePanel` with the same arguments. Pass the layout from before the drag:
+ * from `beginDrag`'s, a reorder within the panel's own window cannot be told
+ * apart from a drop into another window and would grow it.
  */
 export function previewLayout(
   layout: PanelLayout,
@@ -1232,14 +1257,17 @@ export function resizeFloat(
 ): PanelLayout {
   return updateFloat(layout, groupId, (group) => {
     const bounds = floatBounds(stage);
+    // From where the window shows: a stored position a smaller stage clamps
+    // would otherwise pin the width to its minimum and make the window jump.
+    const shown = clampFloatRect(group, stage);
     return {
-      x: group.x,
-      y: group.y,
+      x: shown.x,
+      y: shown.y,
       w: Math.max(
         FLOAT_MIN_WIDTH,
-        Math.min(FLOAT_MAX_WIDTH, size.w, bounds.right - group.x)
+        Math.min(FLOAT_MAX_WIDTH, size.w, bounds.right - shown.x)
       ),
-      h: Math.max(FLOAT_MIN_HEIGHT, Math.min(size.h, bounds.bottom - group.y))
+      h: Math.max(FLOAT_MIN_HEIGHT, Math.min(size.h, bounds.bottom - shown.y))
     };
   });
 }

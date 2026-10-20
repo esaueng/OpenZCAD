@@ -744,6 +744,49 @@ describe('floating windows', () => {
     );
   });
 
+  it('resizes from where a window shows when the stage clamps it', () => {
+    const layout = popOutPanel(modelOnly(), 'history', {
+      x: 1100,
+      y: 100,
+      w: 400,
+      h: 300
+    });
+    const id = layout.floats[0]!.id;
+    const small: PanelStage = { width: 800, height: 800 };
+    const shown = computePanelGeometry(layout, small).floats[0]!;
+    const resized = resizeFloat(layout, id, { w: 300, h: 300 }, small)
+      .floats[0]!;
+    expect(resized).toMatchObject({ x: shown.x, y: shown.y, w: 300, h: 300 });
+  });
+
+  it('keeps its size when a panel is reordered within it', () => {
+    let layout = popOutPanel(modelOnly(), 'history', {
+      x: 100,
+      y: 100,
+      w: 300,
+      h: 300
+    });
+    const groupId = layout.floats[0]!.id;
+    layout = placePanel(layout, 'revisions', { kind: 'group', groupId }, stage);
+    const before = layout.floats[0]!;
+    expect(before.panels).toEqual(['history', 'revisions']);
+    for (const index of [0, 2, 0]) {
+      layout = placePanel(
+        layout,
+        'revisions',
+        { kind: 'group', groupId, index },
+        stage
+      );
+      expect(layout.floats[0]).toMatchObject({
+        x: before.x,
+        y: before.y,
+        w: before.w,
+        h: before.h
+      });
+    }
+    expect(layout.floats[0]!.panels).toEqual(['revisions', 'history']);
+  });
+
   it('moves within the stage and comes to the front', () => {
     let layout = popOutPanel(modelOnly(), 'history', {
       x: 100,
@@ -1207,6 +1250,31 @@ describe('parked panels in the unpinned slot', () => {
     expect(computePanelGeometry(hidden, narrow).panels.bodies).toBeUndefined();
     // Opening it (⌘K, say) shows it the same way.
     expect(openPanel(essentials(), 'bodies', narrow).revealed).toBe('bodies');
+  });
+
+  it('never places a panel into a parked column', () => {
+    // Objects and History share the left column; at this width it parks.
+    const shared = placePanel(essentials(), 'history', {
+      kind: 'column',
+      side: 'left',
+      column: 0
+    });
+    expect(shared.left).toEqual([['bodies', 'history']]);
+    const closed = closePanel(shared, 'history');
+    const target: PanelTarget = { kind: 'column', side: 'left', column: 0 };
+    expect(wouldExceedCap(closed, 'history', target, narrow)).toBe(true);
+    expect(placePanel(closed, 'history', target, narrow)).toBe(closed);
+    // Its home is in the parked column, so the rail opens it unpinned.
+    const opened = openPanel(closed, 'history', narrow);
+    expect(opened.unpinned).toBe('history');
+    expect(opened.left).toEqual([['bodies']]);
+    expect(computePanelGeometry(opened, narrow).panels.history!.mode).toBe(
+      'unpinned'
+    );
+    // On a stage where the column docks, the home is used.
+    expect(openPanel(closed, 'history', STAGE).left).toEqual([
+      ['bodies', 'history']
+    ]);
   });
 
   it('draws a panel in one place only as the width changes', () => {
