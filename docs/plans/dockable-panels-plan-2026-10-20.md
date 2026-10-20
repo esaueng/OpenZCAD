@@ -156,15 +156,21 @@ The menu replaces the rail's Layout button.
      side the outermost column goes first. Parking happens at render time
      only: the stored layout keeps them docked, so a wider window gets them
      back.
+   - **One place per panel.** Every width change re-runs the projection
+     from the stored layout, and a panel is drawn in exactly one place. A
+     parked panel shown in the unpinned slot goes back to its column the
+     moment the column fits again: the slot closes and the panel appears
+     docked, never both.
    - A pin or drop that would go past the cap docks nothing: the panel stays
      where it was (unpinned, if it came from the rail) and a status line says
      the docks are full at this width.
    - At 720 px stage width and below there are no docks and no floating
      windows: a panel opens one at a time in the existing phone lane. Docking
      starts at 721 px.
-     - Docked and floating panels, stored or arrived at by resizing, are
-       projected into that lane: only the panel opened or focused most
-       recently shows, and the stored layout is kept for a wider window.
+     - Every open panel — docked, floating or unpinned, stored or arrived at
+       by resizing — is projected into that lane: only the panel opened or
+       focused most recently shows, and the stored layout (including the
+       unpinned panel) is kept for a wider window.
        The layout stores that recency (an ordered list of panel ids, updated
        on open, focus and rail press), so the choice survives a reload and is
        the same after any resize.
@@ -388,7 +394,12 @@ Each slice is one PR and records its evidence in the U08 row.
     to at least 40%.
   - A pin past the cap docks nothing and shows the status line.
   - At 720 px a seeded layout with several open panels shows the one at the
-    head of the stored recency list, before and after a reload.
+    head of the stored recency list, before and after a reload; the same
+    holds when one of them is the unpinned panel, and resizing back to
+    1440 px restores every panel to its stored place, the unpinned one
+    included.
+  - With Objects parked at 1219 px and opened from its rail, widening to
+    1220 px closes the slot and shows Objects docked, exactly once.
   - Keyboard placement through the Move menu: into a named column at a
     chosen slot (Move to, then Move up/down), into a floating window, a new
     column on each side, and Float.
