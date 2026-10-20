@@ -843,9 +843,18 @@ test('a stored dock shows one panel in the lane at a 720px stage and docks at 72
     .getAttribute('aria-label');
   const other = shown === 'History' ? 'Parameters' : 'History';
   await railPanelButton(page, other).click();
-  await expect(
-    page.locator('.panel-lane-float').getByRole('region', { name: other })
-  ).toBeVisible();
+  const laneRegion = page
+    .locator('.panel-lane-float')
+    .getByRole('region', { name: other });
+  await expect(laneRegion).toBeVisible();
+  // Its saved dock stands: the lane's Pin reads unpinned, and a press is
+  // refused rather than unpinning it out of the column.
+  const pin = laneRegion.getByRole('button', { name: `Pin ${other}` });
+  await expect(pin).toHaveAttribute('aria-pressed', 'false');
+  await pin.click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Panels do not dock at this width'
+  );
   await page.setViewportSize({ width: 721, height: 800 });
   await expect(page.locator('.panel-column')).toBeVisible();
   expect(await dockedTitles(page)).toEqual([['History', 'Parameters']]);
