@@ -11,7 +11,8 @@ import {
   documentEnvelopeError,
   hasValidImportedMeshSources,
   hasValidImportedStepSources,
-  isDocumentHistory
+  isDocumentHistory,
+  objectFolderSetError
 } from '@openzcad/shared';
 import { DurableObject } from 'cloudflare:workers';
 import {
@@ -8070,6 +8071,18 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
     return {
       code: 'document-invalid',
       message: 'Collaboration document has invalid imported mesh data.'
+    };
+  }
+  // `normalizeDocument` fails closed on a malformed U06 folder section; say
+  // so here, as the account route does, rather than fail the room.
+  const foldersError =
+    value.objectFolders === undefined
+      ? null
+      : objectFolderSetError(value.objectFolders);
+  if (foldersError) {
+    return {
+      code: 'document-invalid',
+      message: `Collaboration document has invalid Objects folders: ${foldersError}`
     };
   }
   return null;
