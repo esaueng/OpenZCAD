@@ -11,6 +11,8 @@ export interface WorkspaceResumeState {
   settings: {
     showGrid: boolean;
     displayMode: 'shaded-edges' | 'shaded' | 'wireframe';
+    /** X-ray over the display mode. Absent from older devices' state. */
+    xray?: boolean;
   };
   hiddenBodyIds: string[];
   selectedBodyIds: string[];
@@ -121,7 +123,9 @@ export function parseWorkspaceResumeState(
     settings: {
       showGrid: settings.showGrid,
       displayMode:
-        settings.displayMode as WorkspaceResumeState['settings']['displayMode']
+        settings.displayMode as WorkspaceResumeState['settings']['displayMode'],
+      // Optional like the field of view: an older device's state has none.
+      ...(typeof settings.xray === 'boolean' ? { xray: settings.xray } : {})
     },
     hiddenBodyIds: [...value.hiddenBodyIds],
     selectedBodyIds: [...value.selectedBodyIds],
