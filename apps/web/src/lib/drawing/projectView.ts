@@ -332,6 +332,10 @@ export class OcclusionGrid {
   constructor(
     private readonly triangles: Triangle[],
     bounds: { minU: number; minV: number; maxU: number; maxV: number },
+    /**
+     * How far outside a triangle a point still counts as on it, as a
+     * fraction of the triangle's largest coordinate: roundoff, not a halo.
+     */
     private readonly coverTolerance: number,
     entryBudget = MAX_OCCLUSION_GRID_ENTRIES,
     members?: readonly number[],
@@ -632,8 +636,28 @@ export class OcclusionGrid {
       const w0 = ((t.u1 - u) * (t.v2 - v) - (t.u2 - u) * (t.v1 - v)) / t.area;
       const w1 = ((t.u2 - u) * (t.v0 - v) - (t.u0 - u) * (t.v2 - v)) / t.area;
       const w2 = 1 - w0 - w1;
-      const edge = this.coverTolerance;
-      if (w0 < -edge || w1 < -edge || w2 < -edge) continue;
+      // The slack is a distance — roundoff at the triangle's own coordinates
+      // — turned into each weight's units: a weight is the distance to the
+      // opposite side over the altitude to it, so a fixed weight slack would
+      // reach a long way outside a very tall triangle.
+      const slack =
+        (this.coverTolerance *
+          Math.max(
+            Math.abs(t.u0),
+            Math.abs(t.v0),
+            Math.abs(t.u1),
+            Math.abs(t.v1),
+            Math.abs(t.u2),
+            Math.abs(t.v2),
+            1e-300
+          )) /
+        Math.abs(t.area);
+      if (
+        w0 < -slack * Math.hypot(t.u2 - t.u1, t.v2 - t.v1) ||
+        w1 < -slack * Math.hypot(t.u0 - t.u2, t.v0 - t.v2) ||
+        w2 < -slack * Math.hypot(t.u1 - t.u0, t.v1 - t.v0)
+      )
+        continue;
       const surface = w0 * t.d0 + w1 * t.d1 + w2 * t.d2;
       if (surface < depth - t.tol) return true;
     }
@@ -1108,7 +1132,8 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   if (!Number.isFinite(bounds.minU))
     return { visible: [], hidden: [], bounds: null };
 
-  const grid = new OcclusionIndex(bodyTriangles, 1e-9);
+  // Footprint slack: roundoff, at 10^-12 of the coordinates.
+  const grid = new OcclusionIndex(bodyTriangles, 1e-12);
   // Thresholds on drawn (projected) lines scale with what is drawn.
   const span = Math.max(
     Math.hypot(bounds.maxU - bounds.minU, bounds.maxV - bounds.minV),

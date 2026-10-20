@@ -1125,6 +1125,58 @@ describe('D01 occlusion tolerance', () => {
   });
 });
 
+describe('D01 occlusion footprint', () => {
+  it('does not cover a point a visible distance outside a very tall triangle', () => {
+    // A triangle 10^9 mm tall on a 2 mm base: 0.1 mm below the base is a
+    // weight of only −10^-10 for the apex, inside a fixed 10^-9 weight
+    // slack, so the point counted as covered.
+    const tall: Triangle = {
+      u0: -1,
+      v0: 0,
+      d0: 0,
+      u1: 1,
+      v1: 0,
+      d1: 0,
+      u2: 0,
+      v2: 1e9,
+      d2: 0,
+      area: 2e9,
+      tol: 0
+    };
+    const box = { minU: -1, minV: -1, maxU: 1, maxV: 1e9 };
+    const grid = new OcclusionGrid([tall], box, 1e-12);
+    expect(grid.occluded(0, -0.1, 1)).toBe(false);
+    expect(grid.occluded(0, 0.1, 1)).toBe(true);
+    // A point on its base, as on a diagonal two triangles share, still is.
+    expect(grid.occluded(0.5, 0, 1)).toBe(true);
+    const index = new OcclusionIndex([[tall]], 1e-12);
+    expect(index.occluded(0, -0.1, 1)).toBe(false);
+    // Through the projection: an edge 0.1 mm below that face, behind it,
+    // is in the clear.
+    const result = projectView({
+      orientation: 'front',
+      hiddenLines: true,
+      bodies: [
+        {
+          vertices: Float64Array.from([-1, 0, 0, 1, 0, 0, 0, 0, 1e9]),
+          indices: Uint32Array.from([0, 1, 2]),
+          faces: [{ triangleStart: 0, triangleCount: 1 }],
+          edges: []
+        },
+        {
+          vertices: new Float64Array(),
+          indices: new Uint32Array(),
+          edges: [[-0.5, 5, -0.1, 0.5, 5, -0.1]]
+        }
+      ]
+    });
+    const below = (u: number, v: number) =>
+      Math.abs(Math.abs(u) - 0.5) < 1e-9 && Math.abs(v + 0.1) < 1e-9;
+    expect(onLine(result.visible, below)).toHaveLength(1);
+    expect(onLine(result.hidden, below)).toEqual([]);
+  });
+});
+
 describe('D01 coincident-line index', () => {
   it('keeps cells small for dense outlines far apart, and still finds coincidences', () => {
     // Two 100 × 100 mesh outlines of 20 000 unit segments each, 10^6 mm
