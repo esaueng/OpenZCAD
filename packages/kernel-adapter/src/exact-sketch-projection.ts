@@ -100,6 +100,14 @@ function resolveOne(
     status: 'broken',
     reason
   });
+  // A body a Boolean, transform or other feature has consumed is still in
+  // `shapes`, but it is no longer part of the model at this point: its
+  // edges are not projected.
+  if (result.consumed.has(source.bodyId)) {
+    return broken(
+      `its source body was consumed by a feature before the sketch (source feature "${sourceFeatureName}"); re-pick the edge on the body that replaced it.`
+    );
+  }
   const shape = result.shapes.get(source.bodyId);
   if (!shape) {
     return broken(

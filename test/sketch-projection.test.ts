@@ -1,7 +1,9 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
+  addSketchConstraint,
   addSketchFeature,
+  booleanBodies,
   addSketchObjects,
   createProjectDocument,
   deleteFeature,
@@ -204,6 +206,36 @@ describe('sketch projection in the document (v33)', () => {
     expect(() => normalizeDocument(corrupt)).toThrow(
       /without a verified source/
     );
+    // A witness that only looks like one is refused on load too, not left
+    // for the exact build to trip over.
+    for (const witness of [
+      {},
+      { ...source.edgeReference.witness, curveType: '' },
+      { ...source.edgeReference.witness, length: 0.5 },
+      { ...source.edgeReference.witness, endpoints: [[0, 0, 0]] },
+      { curveType: 'CIRCLE', length: 1, closed: true, center: [0, 0] }
+    ]) {
+      expect(() =>
+        add(
+          objectOf('linked', {
+            source: {
+              ...source,
+              edgeReference: { ...source.edgeReference, witness }
+            }
+          })
+        )
+      ).toThrow(/without a verified source/);
+    }
+    expect(() =>
+      add(
+        objectOf('linked', {
+          source: {
+            ...source,
+            edgeReference: { ...source.edgeReference, currentHash: -1 }
+          }
+        })
+      )
+    ).toThrow(/without a verified source/);
   });
 });
 
@@ -454,6 +486,114 @@ describe('sketch projection in the exact build', () => {
     if (state?.status === 'broken') {
       expect(state.reason).toMatch(/unavailable at the sketch's place/);
     }
+  });
+
+  it('breaks on a body a Boolean consumed before the sketch', async () => {
+    // The block's edges still sit in the build's shapes once a union has
+    // consumed it; they are not part of the model there and must not project.
+    const source = block();
+    const derived = await adapter.syncDocument(source.document);
+    const [edge] = topEdges(derived, source.bodyId);
+    const second = addPrimitiveFeature(source.document, {
+      name: 'Second',
+      primitiveKind: 'box',
+      dimensions: { width: 4, height: 4, depth: 4 }
+    });
+    const fused = booleanBodies(second, {
+      name: 'Union',
+      operation: 'union',
+      targetBodyIds: [source.bodyId, second.bodyOrder.at(-1)!]
+    });
+    const sketched = addSketchFeature(fused.document, {
+      name: 'After',
+      planeRef: above,
+      objects: [projected(edge!, source.bodyId, 'linked')]
+    });
+    const built = await adapter.syncDocument(sketched.document);
+    const [objectId] = findSketch(
+      sketched.document,
+      sketched.sketchId
+    )!.objectIds;
+    const state = built.sketchProjections?.[objectId!];
+    expect(state?.status).toBe('broken');
+    if (state?.status === 'broken') {
+      expect(state.reason).toMatch(/consumed by a feature before the sketch/);
+    }
+  });
+
+  it('holds a linked ellipse whole in the solver', async () => {
+    // A free ellipse made equal to a linked one takes the linked one's
+    // radii; the linked one keeps its centre, semiaxes and rotation.
+    const linked = {
+      objectKind: 'ellipse' as const,
+      centerX: 0,
+      centerY: 0,
+      radiusX: 10,
+      radiusY: 4,
+      rotationDeg: 20,
+      projection: {
+        mode: 'linked' as const,
+        source: {
+          bodyId: 'body_any' as BodyId,
+          edgeReference: {
+            kind: 'edge' as const,
+            producingFeatureId: 'feat_any' as never,
+            lineageName: 'edge.any',
+            currentHash: 1,
+            witnessVersion: 1 as const,
+            witness: {
+              curveType: 'CIRCLE',
+              length: 1,
+              closed: true as const,
+              center: [0, 0, 0] as [number, number, number],
+              axis: null
+            }
+          }
+        }
+      }
+    };
+    const sketched = addSketchFeature(blank(), {
+      name: 'Solve',
+      planeRef: above,
+      objects: [
+        linked,
+        {
+          objectKind: 'ellipse',
+          centerX: 30,
+          centerY: 0,
+          radiusX: 6,
+          radiusY: 5,
+          rotationDeg: 0
+        }
+      ]
+    });
+    const [a, b] = findSketch(sketched.document, sketched.sketchId)!
+      .objectIds;
+    const { document: constrained } = addSketchConstraint(sketched.document, {
+      sketchId: sketched.sketchId,
+      constraint: {
+        constraintKind: 'equal',
+        a: a!,
+        b: b!
+      }
+    });
+    const outcome = await adapter.solveSketch(
+      constrained,
+      sketched.sketchId
+    );
+    expect(outcome.converged).toBe(true);
+    const [held, free] = outcome.objects as {
+      radiusX: number;
+      radiusY: number;
+      rotationDeg: number;
+      centerX: number;
+    }[];
+    expect(held!.radiusX).toBeCloseTo(10, 8);
+    expect(held!.radiusY).toBeCloseTo(4, 8);
+    expect(held!.rotationDeg).toBeCloseTo(20, 8);
+    expect(held!.centerX).toBeCloseTo(0, 8);
+    expect(free!.radiusX).toBeCloseTo(10, 6);
+    expect(free!.radiusY).toBeCloseTo(4, 6);
   });
 
   it('projects a cylinder rim as an exact circle', async () => {

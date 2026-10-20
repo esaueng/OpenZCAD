@@ -12,6 +12,44 @@ function nonEmptyString(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isQuantum(value: unknown): boolean {
+  return typeof value === 'number' && Number.isSafeInteger(value);
+}
+
+/** An ADR-011 quantized point: three safe integers. */
+function isQuantizedPoint(value: unknown): boolean {
+  return Array.isArray(value) && value.length === 3 && value.every(isQuantum);
+}
+
+/**
+ * The shape of an `EdgeWitnessV1`, checked field by field: the exact build
+ * reads every one of them while resolving the reference, so a record that
+ * only looks like a witness must be refused here, on load.
+ */
+function isEdgeWitness(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !nonEmptyString(value.curveType) ||
+    !isQuantum(value.length) ||
+    (value.length as number) < 0
+  ) {
+    return false;
+  }
+  if (value.closed === false) {
+    return (
+      Array.isArray(value.endpoints) &&
+      value.endpoints.length === 2 &&
+      value.endpoints.every(isQuantizedPoint) &&
+      isQuantizedPoint(value.midpoint)
+    );
+  }
+  return (
+    value.closed === true &&
+    isQuantizedPoint(value.center) &&
+    (value.axis === null || isQuantizedPoint(value.axis))
+  );
+}
+
 function isProjectionSource(value: unknown): value is SketchProjectionSource {
   if (!isRecord(value) || !nonEmptyString(value.bodyId)) return false;
   const reference = value.edgeReference;
@@ -20,9 +58,10 @@ function isProjectionSource(value: unknown): value is SketchProjectionSource {
     reference.kind === 'edge' &&
     nonEmptyString(reference.producingFeatureId) &&
     nonEmptyString(reference.lineageName) &&
-    typeof reference.currentHash === 'number' &&
+    isQuantum(reference.currentHash) &&
+    (reference.currentHash as number) >= 0 &&
     reference.witnessVersion === 1 &&
-    isRecord(reference.witness)
+    isEdgeWitness(reference.witness)
   );
 }
 

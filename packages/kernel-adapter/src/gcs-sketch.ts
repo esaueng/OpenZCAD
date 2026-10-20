@@ -354,6 +354,22 @@ export function solveSketchWithGcs(
         })
       );
     }
+    // A held ellipse keeps its two semiaxes and its rotation the same way:
+    // its centre alone leaves its shape free to the other relations.
+    if (object.kind === 'ellipse' && anchoredObjects.has(object.objectId)) {
+      const ellipse = objectHandles(object.objectId).entity;
+      for (const payload of [
+        { type: 'ellipseAxisA', ellipse, value: object.radiusX },
+        { type: 'ellipseAxisB', ellipse, value: object.radiusY },
+        {
+          type: 'ellipseAngle',
+          ellipse,
+          value: object.rotationDeg * RADIANS_PER_DEGREE
+        }
+      ]) {
+        kernel.gcsAddConstraint(sketch, JSON.stringify(payload));
+      }
+    }
   }
 
   for (const constraint of constraints) {
