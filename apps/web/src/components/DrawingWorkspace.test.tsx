@@ -559,6 +559,20 @@ describe('DrawingWorkspace', () => {
     }
   });
 
+  it('offers the large-model scales, so a fitted 1:500 can be picked again', () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    setup({ sheet: starter(fingerprint) });
+    const scale = screen.getByRole<HTMLSelectElement>('combobox', {
+      name: 'Scale'
+    });
+    const options = Array.from(scale.options, (option) => option.value);
+    expect(options).toEqual(
+      expect.arrayContaining(['1:200', '1:500', '1:1000'])
+    );
+  });
+
   it('names a body the sheet draws that is gone', () => {
     const sheet = starter('v1:0000000000000000');
     sheet.views[0]!.bodyIds = ['body_gone' as BodyId];

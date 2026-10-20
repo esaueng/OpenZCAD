@@ -5,6 +5,32 @@ import {
   type SheetPage,
   type SheetStrokeKind
 } from './sheetPage';
+import { exportFileStem } from '../model';
+
+/** The longest file name the desktop save dialog accepts, in bytes. */
+export const MAX_EXPORT_FILE_NAME_BYTES = 160;
+/** The sheet's share of an export name, so the project keeps a readable part. */
+const SHEET_STEM_LIMIT = 60;
+
+/**
+ * `project-sheet.ext`, bounded to what the desktop save dialog accepts:
+ * each name is valid on its own, but two long ones together are not.
+ * Stems are ASCII, so characters are bytes.
+ */
+export function drawingExportFileName(
+  projectName: string,
+  sheetName: string,
+  format: 'pdf' | 'svg'
+): string {
+  const extension = `.${format}`;
+  const room = MAX_EXPORT_FILE_NAME_BYTES - extension.length - 1;
+  const trim = (stem: string) => stem.replace(/[-. ]+$/, '');
+  const sheet = trim(exportFileStem(sheetName).slice(0, SHEET_STEM_LIMIT));
+  const project = trim(
+    exportFileStem(projectName).slice(0, room - sheet.length)
+  );
+  return `${project || 'openzcad-part'}-${sheet || 'sheet'}${extension}`;
+}
 
 /**
  * Sheet export: the composed page as SVG text or PDF bytes. Both are pure,

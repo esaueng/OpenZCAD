@@ -141,17 +141,10 @@ export interface StarterSheetInput {
   fingerprint: string;
 }
 
-/** Standard reductions past the presets, down to the smallest a sheet holds. */
-const LARGE_MODEL_SCALES: readonly DrawingScale[] = [
-  { numerator: 1, denominator: 200 },
-  { numerator: 1, denominator: 500 },
-  { numerator: 1, denominator: MAX_DRAWING_SCALE_TERM }
-];
-
 /**
- * The largest scale at which the starter's two columns and two rows fit the
- * view area with gaps: a preset, or past them a standard reduction down to
- * 1:1000. Null when even that does not fit.
+ * The largest preset scale at which the starter's two columns and two rows
+ * fit the view area with gaps, down to 1:1000. Null when even that does not
+ * fit.
  */
 function fittingScale(
   needU: number,
@@ -159,7 +152,7 @@ function fittingScale(
   area: { width: number; height: number },
   units: UnitSystem
 ): DrawingScale | null {
-  for (const scale of [...DRAWING_SCALE_PRESETS, ...LARGE_MODEL_SCALES]) {
+  for (const scale of DRAWING_SCALE_PRESETS) {
     const k = drawingPaperPerModelUnit(scale, units);
     if (
       needU * k + 3 * VIEW_GAP_MM <= area.width &&

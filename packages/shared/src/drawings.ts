@@ -227,7 +227,12 @@ export const DRAWING_SCALE_PRESETS: readonly DrawingScale[] = [
   { numerator: 1, denominator: 10 },
   { numerator: 1, denominator: 20 },
   { numerator: 1, denominator: 50 },
-  { numerator: 1, denominator: 100 }
+  { numerator: 1, denominator: 100 },
+  // Large models: the starter falls back to these, and they must stay
+  // pickable after the user tries another scale.
+  { numerator: 1, denominator: 200 },
+  { numerator: 1, denominator: 500 },
+  { numerator: 1, denominator: 1000 }
 ];
 
 export const MAX_DRAWING_SCALE_TERM = 1000;

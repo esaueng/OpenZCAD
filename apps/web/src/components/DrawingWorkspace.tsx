@@ -48,7 +48,11 @@ import {
   viewPageBox,
   type SheetPage
 } from '../lib/drawing/sheetPage';
-import { sheetPageToPdf, sheetPageToSvg } from '../lib/drawing/sheetExport';
+import {
+  drawingExportFileName,
+  sheetPageToPdf,
+  sheetPageToSvg
+} from '../lib/drawing/sheetExport';
 import {
   createStarterSheet,
   defaultDrawingPaper,
@@ -57,7 +61,6 @@ import {
   projectionBodyInput,
   sheetBodyIds
 } from '../lib/drawing/sheetSources';
-import { exportFileStem } from '../lib/model';
 import { saveCadBinaryFile, saveCadTextFile } from '../lib/desktopBridge';
 
 /**
@@ -625,7 +628,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       ready.filter((entry) => entry !== null),
       { projectName: document.name, units: document.units }
     );
-    const fileName = `${exportFileStem(document.name)}-${exportFileStem(sheet.name)}.${format}`;
+    const fileName = drawingExportFileName(document.name, sheet.name, format);
     try {
       const saved =
         format === 'pdf'
