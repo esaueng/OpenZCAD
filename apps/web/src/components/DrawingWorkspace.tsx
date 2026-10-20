@@ -825,6 +825,22 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     setTool(null);
     setHover(null);
   }, [sheetReady, activeSheetId]);
+  // Within one sheet, a tool also ends when the view it picked in, or the
+  // annotation it is re-picking, goes away (a delete, an undo, a
+  // collaborator): otherwise every later pick is refused as the wrong view.
+  const toolOrphaned =
+    tool !== null &&
+    ((tool.viewId !== undefined &&
+      !sheet?.views.some((view) => view.viewId === tool.viewId)) ||
+      (tool.repairId !== undefined &&
+        !sheet?.annotations?.some(
+          (annotation) => annotation.annotationId === tool.repairId
+        )));
+  useEffect(() => {
+    if (!toolOrphaned) return;
+    setTool(null);
+    setHover(null);
+  }, [toolOrphaned]);
   const brokenCount = sheetReady
     ? [...resolutions.values()].filter((entry) => !entry.ok).length
     : 0;

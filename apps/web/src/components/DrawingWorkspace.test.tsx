@@ -831,6 +831,48 @@ describe('DrawingWorkspace', () => {
       expect(screen.queryByText(/Vertical dimension: pick/)).toBeNull();
     });
 
+    it('ends a tool when the view it picks in is deleted', async () => {
+      const sheet = dimensioned(999);
+      const viewId = sheet.annotations![0]!.viewId!;
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const props = {
+        bodies: { [bodyId]: cube() },
+        geometryPending: false,
+        defaultBodyIds: [bodyId],
+        editDisabledReason: null,
+        onCommand: vi.fn((_command: AnyCommand) => true),
+        onStatus: vi.fn()
+      };
+      const documentWith = (entry: DrawingSheet): ProjectDocument => ({
+        ...base,
+        bodyOrder: [bodyId],
+        drawings: { sheets: [entry] }
+      });
+      const { rerender } = render(
+        <DrawingWorkspace document={documentWith(sheet)} {...props} />
+      );
+      // Re-picking the broken dimension pins the tool to its view.
+      await userEvent.click(
+        screen.getByRole('option', { name: 'Horizontal dimension (broken)' })
+      );
+      await userEvent.click(screen.getByRole('button', { name: /Re-pick/ }));
+      expect(document.querySelector('.drawing-pick-surface')).not.toBeNull();
+      // Another view keeps the sheet ready; this one, and its dimension, go.
+      const without: DrawingSheet = {
+        ...sheet,
+        views: sheet.views
+          .filter((view) => view.viewId !== viewId)
+          .map(({ parentViewId: _base, ...view }) => view),
+        annotations: undefined
+      };
+      rerender(
+        <DrawingWorkspace document={documentWith(without)} {...props} />
+      );
+      await waitFor(() =>
+        expect(document.querySelector('.drawing-pick-surface')).toBeNull()
+      );
+    });
+
     it('moves and deletes the selected annotation from the keyboard, and Escape ends a tool', async () => {
       const { onCommand } = setup({ sheet: dimensioned() });
       const canvas = screen.getByRole('application', {
