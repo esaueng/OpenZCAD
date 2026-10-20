@@ -18,10 +18,10 @@
   --lane-end: calc(
     var(--rail-w) + var(--island-gap) * 2 + var(--right-panels-w)
   );
-  /* The bottom lanes' right edge: symmetric with the column on a wide stage
-     so they stay centred, the window edge on a phone. The left dock only
-     moves their start. */
-  --lane-right: var(--lane-start);
+  /* The bottom lanes' right edge: symmetric with the left on a wide stage
+     so they stay centred (and the bar clear of the ruler beside the cube),
+     the window edge on a phone. */
+  --lane-right: var(--lane-inset);
   /* The readout under the column, and what the column leaves it. */
   --readout-h: 32px;
   --readout-reserve: var(--readout-h);
@@ -896,6 +896,15 @@
      lanes' own insets, which the tour card below can narrow. */
   --lane-base: calc(var(--island-gap) + var(--command-bar-h) + 8px);
   --notice-start: var(--lane-inset);
+  /* The tour card starts where the lanes would without a left dock, and
+     with one it stands over the dock's column at the screen's edge instead
+     (296px, the card's width, at the default panel width). Past the dock,
+     in the band between the docks, it ran under the inspector and an
+     unpinned panel at 1280px with both docks in use. */
+  --tour-left: calc(
+    var(--lane-start) -
+      min(var(--left-dock-w, 0px), var(--lane-start) - var(--island-gap))
+  );
   --notice-end: var(--lane-right);
 }
 
@@ -958,7 +967,10 @@
   .workspace.column-layout
     .viewer-area:has(.workspace-tour)
     :is(.workspace-toast, .activity-lane, .toast) {
-    --notice-start: calc(var(--lane-inset) + 296px + 12px);
+    --notice-start: max(
+      var(--lane-inset),
+      calc(var(--tour-left) + 296px + 12px)
+    );
   }
 }
 
@@ -974,7 +986,10 @@
 }
 
 .workspace-tour {
-  left: var(--lane-inset);
+  left: var(--tour-left);
+  /* Over the model panels' layer, since with a left dock it stands over that
+     dock's column. */
+  z-index: calc(var(--z-inspector-float) + 1);
 }
 
 /* The Move instruction shares the viewport's overlay slot with the
