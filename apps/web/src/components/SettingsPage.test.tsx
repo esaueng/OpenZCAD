@@ -341,6 +341,65 @@ describe('settings navigation', () => {
 });
 
 describe('assistant data disclosure', () => {
+  it.each(['openai', 'responses-compatible'] as const)(
+    'discloses the effective %s deployment provider instead of OpenRouter',
+    (provider) => {
+      const settings = defaultAppSettings();
+      renderSettings(null, {
+        initialSection: 'assistant',
+        accountState: {
+          settings,
+          revision: 1,
+          synced: true,
+          credential: { stored: false, storageAvailable: true },
+          effectiveAssistant: {
+            configured: true,
+            source: 'deployment',
+            provider,
+            model: 'deployment-model',
+            reasoningEffort: 'high'
+          }
+        }
+      });
+
+      expect(screen.queryByText(/OpenRouter/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/Free with no personal API key/)
+      ).not.toBeInTheDocument();
+      if (provider === 'openai') {
+        expect(
+          screen.getByText(/OpenAI may retain API data/)
+        ).toHaveTextContent(
+          'API data is not used for training unless the deployment operator opts in'
+        );
+        expect(
+          screen.getByRole('link', { name: 'OpenAI API data policies' })
+        ).toHaveAttribute(
+          'href',
+          'https://developers.openai.com/api/docs/guides/your-data'
+        );
+      } else {
+        expect(
+          screen.getByText(/The configured AI provider may retain this data/)
+        ).toHaveTextContent(
+          'Ask your deployment operator which service and data policies apply.'
+        );
+        expect(
+          screen.queryByRole('link', { name: /data policies/ })
+        ).not.toBeInTheDocument();
+      }
+    }
+  );
+
+  it('does not assume a provider before deployment status is available', () => {
+    renderSettings(null, { initialSection: 'assistant' });
+    expect(screen.getByText(/Ask your deployment operator/)).toBeVisible();
+    expect(screen.queryByText(/OpenRouter/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: /data policies/ })
+    ).not.toBeInTheDocument();
+  });
+
   it('explains the free built-in model and data use, then keeps the personal model option', async () => {
     const user = userEvent.setup();
     const settings = defaultAppSettings();

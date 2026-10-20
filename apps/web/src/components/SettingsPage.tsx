@@ -716,6 +716,24 @@ export function SettingsPage({
 
   const credential = accountState?.credential;
   const effective = accountState?.effectiveAssistant;
+  const builtInDataPolicy =
+    effective?.provider === 'openrouter'
+      ? {
+          text: 'OpenRouter and the model provider may retain this data or use it for training and service improvement under their policies.',
+          href: 'https://openrouter.ai/docs/guides/privacy/provider-logging',
+          label: 'OpenRouter data policies'
+        }
+      : effective?.provider === 'openai'
+        ? {
+            text: 'OpenAI may retain API data for safety and service operation. API data is not used for training unless the deployment operator opts in to sharing.',
+            href: 'https://developers.openai.com/api/docs/guides/your-data',
+            label: 'OpenAI API data policies'
+          }
+        : {
+            text: 'The configured AI provider may retain this data or use it for training and service improvement under its policies. Ask your deployment operator which service and data policies apply.',
+            href: null,
+            label: ''
+          };
   const credentialValidated = Boolean(credential?.lastValidatedAt);
   // From the start screen there is no workspace behind Settings to go back to.
   const backLabel = workspaceOpen ? 'Back to workspace' : 'Back to projects';
@@ -1360,18 +1378,19 @@ export function SettingsPage({
                   <Notice>
                     The built-in assistant sends your prompts, conversation,
                     model context, and any attachments to the configured AI
-                    provider. OpenRouter and the model provider may retain this
-                    data or use it for training and service improvement under
-                    their policies. Avoid sending sensitive or confidential
-                    data. Use a personal API key to choose another model; that
-                    provider’s data policies and charges apply.{' '}
-                    <a
-                      href="https://openrouter.ai/docs/guides/privacy/provider-logging"
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      OpenRouter data policies
-                    </a>
+                    provider. {builtInDataPolicy.text} Avoid sending sensitive
+                    or confidential data. Use a personal API key to choose
+                    another model; that provider’s data policies and charges
+                    apply.{' '}
+                    {builtInDataPolicy.href ? (
+                      <a
+                        href={builtInDataPolicy.href}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {builtInDataPolicy.label}
+                      </a>
+                    ) : null}
                   </Notice>
                 </Group>
               ) : (
