@@ -131,9 +131,9 @@ export interface PanelLayoutOptions {
   /** Every panel hidden, layout kept. */
   hidden: boolean;
   /**
-   * No drags, moves or resizes: placing, dragging, gap and window resizing
-   * return the layout unchanged. Pin, unpin, pop-out, open, close, presets
-   * and settings still work.
+   * No drags, moves or resizes: placing, dragging, gap and window resizing,
+   * presets and the panel width return the layout unchanged. Pin, unpin,
+   * pop-out, open, close and the other settings still work.
    */
   locked: boolean;
   compact: boolean;
@@ -546,6 +546,9 @@ export function applyPreset(
   layout: PanelLayout,
   name: PanelPreset
 ): PanelLayout {
+  if (layout.options.locked) {
+    return layout;
+  }
   const next = presetLayout(name, { ...layout.options, hidden: false });
   next.recent = layout.recent.slice();
   return next;
@@ -586,6 +589,10 @@ export function setOption<K extends keyof PanelLayoutOptions>(
   key: K,
   value: PanelLayoutOptions[K]
 ): PanelLayout {
+  // A width change resizes every column, which the lock refuses.
+  if (key === 'width' && layout.options.locked) {
+    return layout;
+  }
   const next = copyLayout(layout);
   next.options[key] = value;
   return next;
@@ -720,7 +727,7 @@ function overCap(footprint: number, stageWidth: number): boolean {
  * cap on this stage, or land it in a column that is parked there. Only a new
  * column adds to the footprint; an existing column can already be parked
  * after the stage shrank, and a panel put there would not be drawn. On a
- * phone-width stage every dock target is refused.
+ * phone-width stage every target is refused, windows included.
  */
 export function wouldExceedCap(
   layout: PanelLayout,
@@ -728,11 +735,10 @@ export function wouldExceedCap(
   target: PanelTarget,
   stage: PanelStage
 ): boolean {
-  if (target.kind === 'column' || target.kind === 'newColumn') {
-    // At phone width nothing docks, and the phone geometry parks nothing.
-    if (stage.width <= PANEL_PHONE_MAX_WIDTH) {
-      return true;
-    }
+  // At phone width nothing docks or floats: the phone lane shows the panel,
+  // and the phone geometry parks nothing.
+  if (stage.width <= PANEL_PHONE_MAX_WIDTH) {
+    return true;
   }
   const detached = detach(layout, id, false);
   const side = addsColumn(detached, target);
