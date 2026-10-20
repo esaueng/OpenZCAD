@@ -16,10 +16,12 @@ import {
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import {
   OcclusionGrid,
+  OcclusionIndex,
   dropCoincidentHidden,
   gridCellsAlong,
   projectView,
   triangleSag,
+  type Triangle,
   type ViewProjection
 } from '../apps/web/src/lib/drawing/projectView';
 import { projectionBodyInput } from '../apps/web/src/lib/drawing/sheetSources';
@@ -1160,5 +1162,69 @@ describe('D01 occlusion grid', () => {
     // And it still answers: the centre is covered, a point outside is not.
     expect(grid.occluded(10, 10, 1)).toBe(true);
     expect(grid.occluded(90, 90, 1)).toBe(false);
+  });
+
+  it('keeps cells small for dense bodies far apart on the page', () => {
+    // Two 100 × 100 meshes of 20 000 triangles each, 10^6 mm apart on both
+    // page axes. One grid
+    // over the view put each body in a single cell, so every segment tested
+    // every triangle of a body; one grid per body keeps cells local.
+    const patch = (offset: number) => {
+      const triangles: Triangle[] = [];
+      for (let i = 0; i < 100; i += 1)
+        for (let j = 0; j < 100; j += 1) {
+          const u = offset + i;
+          const v = offset + j;
+          for (const [a, b, c] of [
+            [
+              [u, v],
+              [u + 1, v],
+              [u + 1, v + 1]
+            ],
+            [
+              [u, v],
+              [u + 1, v + 1],
+              [u, v + 1]
+            ]
+          ] as const)
+            triangles.push({
+              u0: a[0],
+              v0: a[1],
+              d0: 0,
+              u1: b[0],
+              v1: b[1],
+              d1: 0,
+              u2: c[0],
+              v2: c[1],
+              d2: 0,
+              area:
+                (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]),
+              tol: 0
+            });
+        }
+      return triangles;
+    };
+    const near = patch(0);
+    const far = patch(1e6);
+    const single = new OcclusionGrid(
+      [...near, ...far],
+      { minU: 0, minV: 0, maxU: 1e6 + 100, maxV: 1e6 + 100 },
+      1e-9
+    );
+    expect(single.maxCellLoad).toBeGreaterThan(10000);
+    const index = new OcclusionIndex([near, far], 1e-9);
+    expect(index.maxCellLoad).toBeLessThan(50);
+    // It still answers across both bodies, and finds their outlines.
+    expect(index.occluded(50.5, 50.2, 1)).toBe(true);
+    expect(index.occluded(1e6 + 50.5, 1e6 + 50.2, 1)).toBe(true);
+    expect(index.occluded(5e5, 5e5, 1)).toBe(false);
+    // A diagonal from before the first body to past the second: its
+    // footprint crossings start at the first's corner and end at the
+    // second's far corner.
+    const cuts = index.crossings(-10, -10, 1, 1e6 + 110, 1e6 + 110, 1);
+    const footprint = cuts.filter((cut) => !cut.depth).map((cut) => cut.t);
+    const span = 1e6 + 120;
+    expect(footprint.at(0)! * span - 10).toBeCloseTo(0, 4);
+    expect(footprint.at(-1)! * span - 10).toBeCloseTo(1e6 + 100, 4);
   });
 });
