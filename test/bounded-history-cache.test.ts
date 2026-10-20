@@ -29,6 +29,7 @@ import {
 import { RemusKernel } from "../packages/kernel-adapter/src/remus-runtime";
 import {
   historyCheckpointIndices,
+  tailCheckpointIndices,
   type HistoryCheckpointEntry,
 } from "../packages/kernel-adapter/src/exact-history-cache";
 
@@ -157,8 +158,13 @@ function opaqueCheckpoints(adapter: ExactKernelAdapter) {
   return { allocation, restoration, discarding };
 }
 
+// A complete sync retains the stable positions and its last feature.
 function retained(count: number, limit = 32) {
-  return historyCheckpointIndices(count, limit);
+  return tailCheckpointIndices(
+    historyCheckpointIndices(count, limit),
+    count - 1,
+    limit
+  );
 }
 
 function restoredBefore(count: number, changedIndex: number) {
@@ -378,11 +384,11 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
         data: { dimensions: { width: 'width', height: 8, depth: 6 } }
       });
       const before = await adapter.syncDocument(document);
-      const kernel = ownership(adapter, 26)!;
+      const kernel = ownership(adapter, retained(100).length)!;
       const makeBox = vi.spyOn(kernel, 'makeBox');
       const changed = setParameter(document, { name: 'width', expression: '12' });
       const actual = await adapter.syncDocument(changed);
-      expect(ownership(adapter, 26)).toBe(kernel);
+      expect(ownership(adapter, retained(100).length)).toBe(kernel);
       expect(makeBox).toHaveBeenCalledOnce();
       expect(events.at(-1)).toEqual({
         kind: 'independent-reuse', restored: 2, replayed: 1,
@@ -417,13 +423,16 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
         translation: { x: 7, y: 0, z: 0 }
       }).document;
       await equivalent(document, await adapter.syncDocument(document));
+      // The previous sync's last feature is restored; only the move replays.
       expect(events.at(-1)).toMatchObject({
-        kind: 'independent-reuse', restored: 2, replayed: 1, reusedPrimitives: 4
+        kind: 'prefix-restore', restored: 6, replayed: 1
       });
       document = edit(document, 3, 14);
       await equivalent(document, await adapter.syncDocument(document));
+      // Under a limit of 2 the last feature's checkpoint takes the place of
+      // position 1, so the restore point is the first feature.
       expect(events.at(-1)).toMatchObject({
-        kind: 'independent-reuse', restored: 2, replayed: 2, reusedPrimitives: 3
+        kind: 'independent-reuse', restored: 1, replayed: 2, reusedPrimitives: 4
       });
     } finally {
       adapter.dispose();
@@ -531,10 +540,11 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
         metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
       });
       for (const [document, restored] of [
+        // Appending restores the short history's last feature (30).
         [short, 0],
-        [long, 28],
+        [long, 31],
         [short, 28],
-        [long, 28],
+        [long, 31],
         [reordered, 10],
         [suppressed, 8],
         [reordered, 8],
@@ -570,17 +580,20 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
         await adapter.syncDocument(document);
         expect(events.at(-1)).toMatchObject({ restored: 80, replayed: 1, reusedPrimitives: 19 });
       }
-      const old = ownership(adapter, 26)!;
+      const old = ownership(adapter, retained(100).length)!;
       const free = vi.spyOn(old, 'free');
       const step = await adapter.exportStep(document, [document.bodyOrder[99]!]);
       expect(step).toContain('MANIFOLD_SOLID_BREP');
       expect(free).toHaveBeenCalledOnce();
-      expect(ownership(adapter, 26)).not.toBe(old);
+      expect(ownership(adapter, retained(100).length)).not.toBe(old);
       expect(originalMesh.vertices.byteLength).toBeGreaterThan(0);
       expect(originalMesh.indices.byteLength).toBeGreaterThan(0);
       await equivalent(document, await adapter.syncDocument(document));
+      expect(events.at(-1)).toMatchObject({ restored: 100, replayed: 0 });
 
-      for (let i = 0; i < 492; i++) {
+      // The export restored the last feature's checkpoint, so the sync
+      // above replayed nothing; 512 one-feature replays exhaust the budget.
+      for (let i = 0; i < 512; i++) {
         document = edit(base, 99, 13 + (i % 2));
         await adapter.syncDocument(document);
       }
@@ -592,7 +605,7 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
         replayed: 100
       });
       await equivalent(document, next);
-      ownership(adapter, 26);
+      ownership(adapter, retained(100).length);
       const manager = new CommandManager(base);
       manager.applyDocumentEdit(document, 'Resize late box');
       const undone = manager.undo();
@@ -622,8 +635,9 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
         const retained = Number.isNaN(limit)
           ? 0
           : Math.min(5, Math.max(0, Math.floor(limit)));
+        // Any retained checkpoint includes the last feature's.
         expect(events.at(-1)).toMatchObject({
-          restored: retained,
+          restored: retained > 0 ? 5 : 0,
           replayed: retained > 0 ? 0 : 5,
           reusedMeasurements: retained > 0 ? 5 : 0
         });
@@ -683,7 +697,11 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
       for (let i = 0; i < 3; i++) {
         const actual = await adapter.syncDocument(changed);
         expect(actual.featureWarnings).toEqual(initial.featureWarnings);
-        expect(events.at(-1)).toMatchObject({ restored: 2, replayed: i === 0 ? 1 : 0 });
+        // The first sync restores the first feature (the last feature's
+        // checkpoint holds the limit's second slot); later ones restore it.
+        expect(events.at(-1)).toMatchObject(
+          i === 0 ? { restored: 1, replayed: 2 } : { restored: 5, replayed: 0 }
+        );
         ownership(adapter, 2);
         await equivalent(changed, actual);
       }
@@ -779,9 +797,9 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
       document = edit(document, 5, 11);
       const changed = await adapter.syncDocument(document);
       expect(events.at(-1)).toMatchObject({
-        restored: 2,
+        restored: 1,
         replayed: 1,
-        reusedPrimitives: 3,
+        reusedPrimitives: 4,
         reusedMeasurements: 5
       });
       const bodyId = document.bodyOrder[0]!;
@@ -944,7 +962,7 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
       for (const next of [changed, manager.undo(), manager.redo()]) {
         const actual = await adapter.syncDocument(next);
         await equivalent(next, actual);
-        expect(events.at(-1)).toMatchObject({ restored: 2, replayed: 1 });
+        expect(events.at(-1)).toMatchObject({ restored: 1, replayed: 1 });
         const ids = actual.exportableBodyIds;
         const step = await adapter.exportStep(next, ids);
         ownership(adapter, 2);

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { SyncReadMemo, withSyncReadMemo } from './exact-sync-memo';
 import {
   edgeFingerprint,
   edgeSampleOf,
+  faceWitnessOf,
   legacyEdgeFingerprint
 } from './exact-witnesses';
 import { RemusKernel } from './remus-runtime';
@@ -53,5 +55,30 @@ describe('persisted edge fingerprint domain', () => {
       { fingerprint: 2125444546, legacy: 2125444546 },
       { fingerprint: 2143579052, legacy: 2143579052 }
     ]);
+  });
+});
+
+describe('face witnesses in a sync memo', () => {
+  it('read each edge length once and match witnesses measured cold', () => {
+    const kernel = new RemusKernel();
+    try {
+      const box = kernel.makeBox(30, 20, 8);
+      const faces = Array.from(kernel.getSolidFaces(box));
+      const cold = faces.map((face) => faceWitnessOf(kernel, face));
+      const edgeLength = kernel.edgeLength.bind(kernel);
+      let reads = 0;
+      kernel.edgeLength = (edge: number) => {
+        reads += 1;
+        return edgeLength(edge);
+      };
+      const memoized = withSyncReadMemo(new SyncReadMemo(kernel), () =>
+        faces.map((face) => faceWitnessOf(kernel, face))
+      );
+      // Every box edge bounds two faces; each length is read once.
+      expect(reads).toBe(kernel.getSolidEdges(box).length);
+      expect(memoized).toEqual(cold);
+    } finally {
+      kernel.free();
+    }
   });
 });
