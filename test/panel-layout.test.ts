@@ -8,6 +8,7 @@ import {
   commitPreview,
   computePanelGeometry,
   DEFAULT_PANEL_INSETS,
+  DROP_SUPPRESSED,
   defaultPanelLayout,
   dockFootprint,
   ESSENTIALS_RIGHT_PRESET,
@@ -2059,6 +2060,10 @@ describe('rails and hit-testing', () => {
         { x: startPoint.x - 59, y },
         { fromRail: true, startPoint }
       )
+    ).toBe(DROP_SUPPRESSED);
+    // Not the same as an empty spot on the stage, which floats the panel.
+    expect(
+      hitTest(geometry, { x: 720, y }, { fromRail: true, startPoint })
     ).toBeNull();
     expect(
       hitTest(
@@ -2166,7 +2171,7 @@ describe('rails and hit-testing', () => {
       const rail = geometry.rails[side];
       const target = hitTest(geometry, { x: rail.x + rail.w / 2, y: 400 });
       expect(target).toEqual({ kind: 'newColumn', side });
-      const placed = placePanel(layout, 'bodies', target!, stage);
+      const placed = placePanel(layout, 'bodies', target as PanelTarget, stage);
       expect(placed[side]).toEqual([...columns.slice(1), ['bodies']]);
       expect(placed[side]).toHaveLength(PANEL_MAX_COLUMNS[side]);
     }
@@ -2237,7 +2242,11 @@ describe('rails and hit-testing', () => {
     // Where the left column would be, only the left rail's new-column span.
     for (let x = 0; x < narrow.stage.width; x += 5) {
       const target = hitTest(narrow, { x, y: 400 });
-      expect(target?.kind === 'column' && target.side === 'left').toBe(false);
+      expect(
+        typeof target === 'object' &&
+          target?.kind === 'column' &&
+          target.side === 'left'
+      ).toBe(false);
     }
   });
 });
