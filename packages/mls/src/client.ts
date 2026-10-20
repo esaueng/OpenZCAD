@@ -145,6 +145,11 @@ export class MlsSession {
     return this.api.discardCommit(this.id);
   }
 
+  /** An Add by reference, for another member to commit. */
+  proposeAdd(keyPackage: Uint8Array): Promise<Uint8Array> {
+    return this.api.proposeAdd(this.id, keyPackage);
+  }
+
   proposeUpdate(): Promise<Uint8Array> {
     return this.api.proposeUpdate(this.id);
   }

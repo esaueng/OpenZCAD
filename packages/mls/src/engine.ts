@@ -55,6 +55,7 @@ export interface EngineApi {
   commit(id: number, request: CommitRequest): PendingCommit;
   confirmCommit(id: number): EpochChange;
   discardCommit(id: number): void;
+  proposeAdd(id: number, keyPackage: Uint8Array): Uint8Array;
   proposeUpdate(id: number): Uint8Array;
   proposeSelfRemove(id: number): Uint8Array;
   process(id: number, message: Uint8Array): Processed;
@@ -335,6 +336,10 @@ export class MlsEngine implements EngineApi {
 
   discardCommit(id: number): void {
     this.run(() => this.session(id).discardCommit());
+  }
+
+  proposeAdd(id: number, keyPackage: Uint8Array): Uint8Array {
+    return this.run(() => this.session(id).proposeAdd(keyPackage));
   }
 
   proposeUpdate(id: number): Uint8Array {

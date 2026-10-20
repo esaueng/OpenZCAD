@@ -571,7 +571,13 @@ impl Session {
         }
 
         let roster = self.roster_snapshot()?;
-        let adding = !key_packages.is_empty();
+        // Adds received by reference (cached proposals) produce a Welcome too.
+        let adding = !key_packages.is_empty()
+            || self
+                .group()?
+                .get_cached_proposals()
+                .iter()
+                .any(|cached| matches!(cached.proposal(), Proposal::Add(_)));
         // A joiner learns removal cutoffs only from the Welcome's GroupInfo,
         // and the new tree no longer shows leaves this Commit removes, so the
         // records include this Commit's own removals: explicit Removes, the
@@ -649,6 +655,13 @@ impl Session {
         self.group_mut()?.clear_pending_commit();
         self.pending = None;
         self.write()
+    }
+
+    /// An Add by reference, for another member to commit.
+    pub fn propose_add(&mut self, key_package: &[u8]) -> Res<Vec<u8>> {
+        let key_package = MlsMessage::from_bytes(key_package)?;
+        let message = self.group_mut()?.propose_add(key_package, Vec::new())?;
+        self.remember_own_proposal(message)
     }
 
     pub fn propose_update(&mut self) -> Res<Vec<u8>> {
@@ -816,9 +829,14 @@ impl Session {
                     .collect()
             })
             .unwrap_or_default();
-        // Merged only once the external Commit has verified the GroupInfo:
-        // a forged GroupInfo must not leave cutoffs behind.
+        // The carried records apply to this Commit's own policy check, and are
+        // rolled back if the external Commit fails (a forged GroupInfo must
+        // not leave cutoffs behind).
         let carried = info.extensions().get_as::<LeafRemovals>().ok().flatten();
+        let records_before = self.policy.removals.lock().unwrap().clone();
+        if let Some(records) = &carried {
+            self.policy.removals.lock().unwrap().merge(records);
+        }
         self.psks.restore(Vec::new());
         self.psks.insert(psk_epoch, psk.to_vec(), u64::MAX);
         let mut builder = self
@@ -834,13 +852,11 @@ impl Session {
             Err(e) => {
                 self.psks.restore(Vec::new());
                 self.groups.restore(None);
+                *self.policy.removals.lock().unwrap() = records_before;
                 return Err(e.into());
             }
         };
         self.group = Some(group);
-        if let Some(records) = carried {
-            self.policy.removals.lock().unwrap().merge(&records);
-        }
         let mut removed = Vec::new();
         if let Some(index) = remove {
             if let Some(leaf) = prior.iter().find(|l| l.index == index) {

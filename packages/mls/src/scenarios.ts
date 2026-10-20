@@ -1358,6 +1358,60 @@ const carriedRecords = suite<RecordsCast>({
       }
     },
     {
+      name: 'refused by a member added through a cached Add proposal in the Commit that removed the leaf',
+      async run({ world, a1, b1 }) {
+        const a5 = await world.device('A', 'A5');
+        await addDevices(world, a1, [b1], [a5]);
+        const removedBefore = await epochOf(a1);
+        const b2 = await world.device('B', 'B2');
+        // B1 proposes the Add by reference; A1 commits it with a Remove of A5.
+        const proposal = await b1.session.proposeAdd(
+          await b2.session.keyPackage()
+        );
+        await deliver(proposal, [a1, a5]);
+        const { welcome } = await advance(world, a1, [b1, a5], {
+          remove: [await indexOf(a5)]
+        });
+        await join(world, welcome, [b2]);
+        assert(!a5.live, 'A5 removed');
+        const copy = await world.copy(a5, 'A5 (own PSK)');
+        return refused(
+          () => tryRejoin(copy, a1, world.psk('A', removedBefore), [b2]),
+          ...only('rejoin-psk-before-leaf-removal')
+        );
+      }
+    },
+    {
+      name: "a recreated device's own client refuses a stale rejoin using the GroupInfo's records, then rejoins",
+      async run({ world, a1, b1 }) {
+        const a6 = await world.device('A', 'A6');
+        await addDevices(world, a1, [b1], [a6]);
+        const joined = await epochOf(a1);
+        await advance(world, a1, [b1, a6], { remove: [await indexOf(a6)] });
+        // The browser storage of A6 is wiped: a fresh session for the same
+        // device, with no removal history of its own.
+        const fresh = await world.device('A', 'A6');
+        const groupInfo = await a1.session.groupInfo();
+        const local = await refused(
+          () =>
+            fresh.session.rejoin(groupInfo, { psk: world.psk('A', joined) }),
+          ...only('rejoin-psk-before-leaf-removal')
+        );
+        assert(
+          !(await fresh.session.status()).inGroup,
+          'no group is left behind'
+        );
+        const accepted = await rejoin(
+          world,
+          fresh,
+          a1,
+          world.psk('A', await epochOf(a1)),
+          [a1, b1]
+        );
+        return `${local}; ${accepted}`;
+      }
+    },
+    {
       name: 'a forged GroupInfo leaves no removal records behind',
       async run({ world, a1, b1 }) {
         // Another group under the same project id, where a device "A/A4" was

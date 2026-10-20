@@ -183,6 +183,11 @@ impl MlsSession {
         self.inner.discard_commit().map_err(to_js)
     }
 
+    #[wasm_bindgen(js_name = proposeAdd)]
+    pub fn propose_add(&mut self, key_package: &[u8]) -> Result<Vec<u8>, JsValue> {
+        self.inner.propose_add(key_package).map_err(to_js)
+    }
+
     #[wasm_bindgen(js_name = proposeUpdate)]
     pub fn propose_update(&mut self) -> Result<Vec<u8>, JsValue> {
         self.inner.propose_update().map_err(to_js)

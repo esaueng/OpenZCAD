@@ -37,6 +37,7 @@ export class MlsSession {
     keyPackage(): Uint8Array;
     process(message: Uint8Array): string;
     projectKey(): Uint8Array;
+    proposeAdd(key_package: Uint8Array): Uint8Array;
     proposeSelfRemove(): Uint8Array;
     proposeUpdate(): Uint8Array;
     /**
@@ -96,6 +97,7 @@ export interface InitOutput {
     readonly mlssession_keyPackage: (a: number, b: number) => void;
     readonly mlssession_process: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_projectKey: (a: number, b: number) => void;
+    readonly mlssession_proposeAdd: (a: number, b: number, c: number, d: number) => void;
     readonly mlssession_proposeSelfRemove: (a: number, b: number) => void;
     readonly mlssession_proposeUpdate: (a: number, b: number) => void;
     readonly mlssession_rejoin: (a: number, b: number, c: number, d: number, e: bigint, f: number, g: number, h: number) => void;

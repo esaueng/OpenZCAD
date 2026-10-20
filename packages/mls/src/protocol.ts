@@ -48,6 +48,7 @@ const METHODS = new Set<string>([
   'commit',
   'confirmCommit',
   'discardCommit',
+  'proposeAdd',
   'proposeUpdate',
   'proposeSelfRemove',
   'process',
