@@ -136,29 +136,28 @@ function buildDatums({
 }
 
 // The header count and the panel both need the datum rows, and building them
-// scans the whole history for each datum's dependents. One entry keyed on the
-// (immutable) document and parameter scope lets a render build them once.
-let lastDatums: {
-  document: ObjectsSource['document'];
-  parameterValues: ObjectsSource['parameterValues'];
-  rows: DatumRows;
-} | null = null;
+// scans the whole history for each datum's dependents. Rows are cached per
+// (immutable) document and parameter scope so a render builds them once; the
+// WeakMap lets a closed project's document be collected.
+const datumCache = new WeakMap<
+  object,
+  { parameterValues: ObjectsSource['parameterValues']; rows: DatumRows }
+>();
 
 function modelDatums(
   source: Pick<ObjectsSource, 'document' | 'parameterValues'>
 ): DatumRows {
-  if (
-    !lastDatums ||
-    lastDatums.document !== source.document ||
-    lastDatums.parameterValues !== source.parameterValues
-  ) {
-    lastDatums = {
-      document: source.document,
-      parameterValues: source.parameterValues,
-      rows: buildDatums(source)
-    };
+  const { document } = source;
+  if (!document) {
+    return buildDatums(source);
   }
-  return lastDatums.rows;
+  const cached = datumCache.get(document);
+  if (cached?.parameterValues === source.parameterValues) {
+    return cached.rows;
+  }
+  const rows = buildDatums(source);
+  datumCache.set(document, { parameterValues: source.parameterValues, rows });
+  return rows;
 }
 
 /**
