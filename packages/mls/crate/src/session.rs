@@ -571,8 +571,36 @@ impl Session {
         }
 
         let roster = self.roster_snapshot()?;
-        let removals = self.policy.removals.lock().unwrap().clone();
         let adding = !key_packages.is_empty();
+        // A joiner learns removal cutoffs only from the Welcome's GroupInfo,
+        // and the new tree no longer shows leaves this Commit removes, so the
+        // records include this Commit's own removals: explicit Removes, the
+        // dropped users' leaves, and cached Remove and SelfRemove proposals.
+        let mut removals = self.policy.removals.lock().unwrap().clone();
+        if adding {
+            let mut leaving = remove.clone();
+            for cached in self.group()?.get_cached_proposals() {
+                match (cached.proposal(), cached.sender()) {
+                    (Proposal::Remove(r), _) => leaving.push(r.to_remove()),
+                    (Proposal::SelfRemove(_), mls_rs::group::Sender::Member(index)) => leaving.push(*index),
+                    _ => {}
+                }
+            }
+            let records = roster
+                .iter()
+                .filter(|leaf| leaving.contains(&leaf.index))
+                .filter_map(|leaf| {
+                    let credential = DeviceCredential::from_identity(&leaf.identity).ok()?;
+                    Some(LeafRemoval {
+                        user_id: credential.user_id,
+                        device_id: credential.device_id,
+                        signature_key: leaf.identity.signature_key.to_vec(),
+                        epoch: next_epoch,
+                    })
+                })
+                .collect();
+            removals.merge(&LeafRemovals { records });
+        }
         let group = self.group_mut()?;
         let mut builder = group.commit_builder();
         for key_package in key_packages {
@@ -788,9 +816,9 @@ impl Session {
                     .collect()
             })
             .unwrap_or_default();
-        if let Ok(Some(records)) = info.extensions().get_as::<LeafRemovals>() {
-            self.policy.removals.lock().unwrap().merge(&records);
-        }
+        // Merged only once the external Commit has verified the GroupInfo:
+        // a forged GroupInfo must not leave cutoffs behind.
+        let carried = info.extensions().get_as::<LeafRemovals>().ok().flatten();
         self.psks.restore(Vec::new());
         self.psks.insert(psk_epoch, psk.to_vec(), u64::MAX);
         let mut builder = self
@@ -810,6 +838,9 @@ impl Session {
             }
         };
         self.group = Some(group);
+        if let Some(records) = carried {
+            self.policy.removals.lock().unwrap().merge(&records);
+        }
         let mut removed = Vec::new();
         if let Some(index) = remove {
             if let Some(leaf) = prior.iter().find(|l| l.index == index) {

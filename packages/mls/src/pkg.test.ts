@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest';
 
 const read = (path: string) => readFileSync(new URL(path, import.meta.url));
 const text = (path: string) => read(path).toString('utf8');
+const escapeRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 describe('@openzcad/mls build', () => {
   it('pkg/ matches BUILD.json, which build.sh --check reproduces', () => {
@@ -45,7 +47,7 @@ describe('@openzcad/mls build', () => {
     for (const [name, version] of Object.entries(pins)) {
       expect(cargo).toMatch(
         new RegExp(
-          `^${name} = (\\{ version = )?"=${version.replace(/\./g, '\\.')}"`,
+          `^${name} = (\\{ version = )?"=${escapeRegExp(version)}"`,
           'm'
         )
       );

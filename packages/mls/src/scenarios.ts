@@ -1314,12 +1314,88 @@ const roleLimits = suite<RolesCast>({
   ]
 });
 
+// ---------------------------------------------------------------------------
+// Removal records carried in GroupInfo (review regressions)
+
+interface RecordsCast {
+  world: World;
+  a1: Device;
+  a2: Device;
+  b1: Device;
+}
+
+const carriedRecords = suite<RecordsCast>({
+  name: 'removal records carried in GroupInfo',
+  async setup(mls) {
+    const world = new World(mls, project('records'));
+    const a1 = await world.device('A', 'A1');
+    const a2 = await world.device('A', 'A2');
+    const b1 = await world.device('B', 'B1');
+    await createProject(world, a1, 8);
+    await addDevices(world, a1, [], [a2, b1], {
+      setRoles: [{ userId: 'B', role: 'editor' }]
+    });
+    await tick(world, a2, [a1, b1]);
+    return { world, a1, a2, b1 };
+  },
+  steps: [
+    {
+      name: 'refused by a member whose Welcome came from the Commit that removed the leaf',
+      async run({ world, a1, a2, b1 }) {
+        const before = await epochOf(a1);
+        const d1 = await world.device('D', 'D1');
+        // One Commit adds D1 and removes A2.
+        await addDevices(world, a1, [a2, b1], [d1], {
+          remove: [await indexOf(a2)],
+          setRoles: [{ userId: 'D', role: 'viewer' }]
+        });
+        assert(!a2.live, 'A2 removed');
+        const copy = await world.copy(a2, 'A2 (own PSK)');
+        return refused(
+          () => tryRejoin(copy, a1, world.psk('A', before), [d1]),
+          ...only('rejoin-psk-before-leaf-removal')
+        );
+      }
+    },
+    {
+      name: 'a forged GroupInfo leaves no removal records behind',
+      async run({ world, a1, b1 }) {
+        // Another group under the same project id, where a device "A/A4" was
+        // removed late: its GroupInfo carries a high cutoff for A4.
+        const other = new World(world.mls, world.projectId);
+        const z1 = await other.device('A', 'Z1');
+        const z4 = await other.device('A', 'A4');
+        await createProject(other, z1, 8);
+        await addDevices(other, z1, [], [z4]);
+        await tick(other, z1, [z4], 12);
+        await advance(other, z1, [z4], { remove: [await indexOf(z4)] });
+        const forged = await z1.session.groupInfo();
+        forged[forged.length - 1]! ^= 1; // break the signature only
+        const a4 = await world.device('A', 'A4');
+        const psk = world.psk('A', await epochOf(a1));
+        // Refused while verifying the GroupInfo (its tree or its signature).
+        let refusal = '';
+        try {
+          await a4.session.rejoin(forged, { psk });
+        } catch (error) {
+          assert(error instanceof MlsError, String(error));
+          refusal = error.kind;
+        }
+        assert(refusal, 'the forged GroupInfo was accepted');
+        const accepted = await rejoin(world, a4, a1, psk, [a1, b1]);
+        return `forged GroupInfo refused (${refusal}); ${accepted}`;
+      }
+    }
+  ]
+});
+
 export const scenarioSuites: ScenarioSuite[] = [
   main,
   rejoinRules,
   readd,
   lastLeaf,
-  roleLimits
+  roleLimits,
+  carriedRecords
 ];
 
 /** Run every suite in order; used by the browser harness. */
