@@ -614,7 +614,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'e-nurbs-fillet-plate',
     metric: 'volume',
-    remus: 9539.115868770154,
+    remus: 9539.18785770401,
     occt: 9499.999999999998,
     owner: 'K0.1',
     note:
@@ -627,7 +627,8 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'the file content is exactly 9540.0 mm³, +0.181% over the 9522.7433 ' +
       'intent. Remus converges on 9540.0: the B20 exact-measurement pin ' +
       '(2.130.23, remus #457) moved the read from 9537.866 to 9539.116, ' +
-      'halving the residual inscribed undercount; the +0.17% pinned here ' +
+      'halving the residual inscribed undercount, and Remus 2026.1.69 ' +
+      'brought it to 9539.188; the +0.17% pinned here ' +
       'remains the file deviation minus that undercount. ' +
       'OCCT is -0.24%, at a suspiciously round 9500.0 that matches neither ' +
       'the file nor the intent. Both REFERENCE_DEVIATIONS entries below ' +
@@ -861,7 +862,7 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
   {
     subject: 'boolean-on-nurbs-import',
     metric: 'volume',
-    remus: 9428.718990728843,
+    remus: 9428.763182916013,
     occt: 9546.002960523074,
     owner: 'OCCT-defect',
     note:
@@ -876,7 +877,8 @@ export const KERNEL_DELTAS: KernelDeltaPin[] = [
       'bounded by their arc) drops the full-circle box of the r4 bore ' +
       'from the body box, so the measuring mesh is finer: 9428.680 -> ' +
       '9428.719, toward the 9429.19 that mesh converges to at deflection ' +
-      '1e-4. OCCT returns MORE volume ' +
+      '1e-4. Remus 2026.1.69 moves it on toward that limit, 9428.719 -> ' +
+      '9428.763. OCCT returns MORE volume ' +
       'after a SUBTRACT than its own ' +
       'import of the same body (9500.0), which is not a tolerance question. ' +
       'Both produce 10 exact faces with no mesh fallback, so the K0.5 ' +
@@ -1045,14 +1047,15 @@ export const REFERENCE_DEVIATIONS: ReferenceDeviationPin[] = [
     subject: 'e-nurbs-fillet-plate',
     kernel: 'remus',
     referenceMm3: 40 * 24 * 10 - 4 * (1 - Math.PI / 4) * 9 * 10,
-    reported: 9539.115868770154,
+    reported: 9539.18785770401,
     owner: 'K0.1',
     note:
       'Reads 0.17% over the closed-form INTENT because the FILE is 0.181% ' +
       'over it: the corner bands are non-rational quadratic B-splines ' +
       '(parabolas), and the file content is exactly 9540.0 mm³. Remus is ' +
       'FAITHFUL to the file, and the B20 exact-measurement pin (2.130.23, ' +
-      'remus #457) brought the read from 9537.866 to 9539.116 — the ' +
+      'remus #457) brought the read from 9537.866 to 9539.116, and Remus ' +
+      '2026.1.69 to 9539.188 — the ' +
       'residue vs 9540 is the ordinary inscribed undercount, now smaller. ' +
       'Resolved by remus PR #62; the pin stays because the corpus compares ' +
       'against the design intent, which no honest reader of this file can ' +
