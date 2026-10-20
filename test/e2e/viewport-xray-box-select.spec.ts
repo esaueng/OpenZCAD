@@ -543,6 +543,52 @@ test('X-ray keeps shaded edges after installing new body geometry', async ({
 });
 
 for (const operation of ['Shell', 'Draft']) {
+  test(`${operation} refreshes face highlights when sweeping into its open card`, async ({
+    page
+  }, testInfo) => {
+    await createBox(page, 'Open Card Face Sweep');
+    await topView(page);
+    await page
+      .getByRole('toolbar', { name: 'Viewer bar' })
+      .getByRole('button', { name: /^Orthographic projection/ })
+      .click();
+    await setSelectionFilter(page, 'Face');
+    const { minX, minY, maxX, maxY, maxZ, pad, midX } = await boxExtent(page);
+    const { points } = await project(page, [
+      [(minX + maxX) / 2, (minY + maxY) / 2, maxZ]
+    ]);
+    await page.mouse.click(points[0]!.x, points[0]!.y);
+    await expect(canvas(page)).toHaveAttribute('data-e2e-selected-face', /.+/);
+    await page.getByRole('button', { name: /^More tools/ }).click();
+    await page
+      .getByRole('button', { name: new RegExp(`^${operation}`) })
+      .first()
+      .click();
+    const fold = page.getByRole('button', { name: /^More tools/ });
+    if ((await fold.getAttribute('aria-expanded')) === 'true') {
+      await fold.click();
+    }
+    const faces = page
+      .getByRole('region', { name: 'Feature inspector' })
+      .getByRole('group', {
+        name: operation === 'Shell' ? 'Opening faces' : 'Faces to draft'
+      });
+    await expect(faces.getByRole('button', { pressed: true })).toHaveCount(1);
+    await toggleXray(page);
+    // This window accepts the left side only: the earlier top face extends
+    // outside it and must remain in both the form list and the highlights.
+    await sweep(page, [minX - pad, maxY + pad, maxZ], [midX, minY - pad, maxZ]);
+    await expect(faces.getByRole('button', { pressed: true })).toHaveCount(2);
+    await expect(canvas(page)).not.toHaveAttribute(
+      'data-e2e-selected-face',
+      /.*/
+    );
+    await expect(canvas(page)).toHaveAttribute('data-e2e-focus-faces', '2');
+    await page.screenshot({
+      path: testInfo.outputPath(`${operation.toLowerCase()}-form-sweep.png`)
+    });
+  });
+
   test(`${operation} clears faces on other bodies when seeded from a sweep`, async ({
     page
   }) => {

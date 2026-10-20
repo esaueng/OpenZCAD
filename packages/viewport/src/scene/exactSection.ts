@@ -99,8 +99,11 @@ export function applyExactSection(
    * colour without the section being recomputed.
    */
   bodyColors: ReadonlyMap<string, THREE.Color> = new Map(),
-  /** The body's current appearance opacity, including the X-ray multiplier. */
-  bodyOpacities: ReadonlyMap<string, number> = new Map()
+  /** Live body opacity (including X-ray); numeric snapshots remain supported. */
+  bodyOpacities: ReadonlyMap<
+    string,
+    number | Pick<THREE.Material, 'opacity'>
+  > = new Map()
 ) {
   const previous = root.getObjectByName(EXACT_SECTION);
   if (previous) {
@@ -124,7 +127,12 @@ export function applyExactSection(
       geometry.setIndex(new THREE.BufferAttribute(region.indices, 1));
       geometry.computeVertexNormals();
       const bodyColor = bodyColors.get(region.bodyId);
-      const opacity = bodyOpacities.get(region.bodyId) ?? 1;
+      const bodyOpacity = bodyOpacities.get(region.bodyId);
+      const readOpacity = () =>
+        typeof bodyOpacity === 'number'
+          ? bodyOpacity
+          : (bodyOpacity?.opacity ?? 1);
+      const opacity = readOpacity();
       const fill = new THREE.MeshPhongMaterial({
         color: sectionCutColor(bodyColor),
         side: THREE.DoubleSide,
@@ -143,12 +151,18 @@ export function applyExactSection(
         polygonOffsetUnits: -1
       });
       const mesh = new THREE.Mesh(geometry, fill);
-      if (bodyColor) {
-        // In place, no allocation: this runs every frame the cut is drawn.
-        mesh.onBeforeRender = () => {
+      // Follow live appearance previews and their cleanup without rebuilding
+      // section geometry. This runs in place whenever the cut is drawn.
+      mesh.onBeforeRender = () => {
+        if (bodyColor) {
           fill.color.copy(bodyColor).offsetHSL(0, 0, CUT_LIGHTNESS_SHIFT);
-        };
-      }
+        }
+        const opacity = readOpacity();
+        if (fill.transparent !== opacity < 1) fill.needsUpdate = true;
+        fill.opacity = opacity;
+        fill.transparent = opacity < 1;
+        fill.depthWrite = opacity >= 1;
+      };
       mesh.name = `${EXACT_SECTION}-fill`;
       mesh.userData.exactSection = true;
       mesh.userData.exactSectionRegion = index;

@@ -2192,6 +2192,8 @@ export function App() {
   );
   const [viewportFormFacePick, setViewportFormFacePick] =
     useState<FormFacePick | null>(null);
+  /** The in-card sweep waiting for the form's complete accepted face list. */
+  const pendingFormFaceSweepRef = useRef<FormFacePick | null>(null);
   /** Null means the active tool decides what picking is narrowed to. */
   const [manualSelectionFilter, setManualSelectionFilter] =
     useState<SelectionFilter | null>(null);
@@ -13783,15 +13785,49 @@ export function App() {
       return;
     }
     modelingPreflightRef.current = null;
+    const faceList = formFaceListOperation(operation);
+    pendingFormFaceSweepRef.current = faceList ? result.pick : null;
     setViewportFormFacePick(result.pick);
-    setSelectedBodyIds([targetBodyId]);
-    setSelectedEdges([]);
+    if (faceList) {
+      // The form owns the list: it adds this sweep to earlier selections.
+      // Its committed-state callback below supplies the complete highlight.
+      setSelectedBodyIds([targetBodyId]);
+      setSelectedTopology(null);
+      setBoxFaces(null);
+      setSelectedEdges([]);
+    } else {
+      highlightFormFaces(targetBodyId, [result.pick.hash], false);
+    }
     setFormFacePickTarget(null);
     setStatus(
       `${label}: ${result.added} ${result.added === 1 ? 'face' : 'faces'} from the box${
         result.skipped > 0 ? ` (${result.skipped} left out)` : ''
       } · check the result.`
     );
+  }
+
+  function highlightFormFaces(
+    targetBodyId: BodyId,
+    hashes: readonly number[],
+    multiple: boolean
+  ) {
+    const bodyIds = [targetBodyId];
+    const accepted = new Set(hashes);
+    const faces: TopologySelection[] = (
+      representations[targetBodyId]?.topology?.faces ?? []
+    )
+      .filter((face) => accepted.has(face.hash))
+      .map((face) => ({
+        bodyId: targetBodyId,
+        kind: 'face',
+        topologyId: face.topologyId,
+        hash: face.hash,
+        ...(face.reference ? { reference: face.reference } : {})
+      }));
+    setSelectedBodyIds(bodyIds);
+    setSelectedTopology(multiple ? null : (faces[0] ?? null));
+    setBoxFaces(multiple ? { bodyIds, faces } : null);
+    setSelectedEdges([]);
   }
 
   function handleClearSelectedEdges() {
@@ -22597,6 +22633,21 @@ export function App() {
                         setModelingTargetBodyId(bodyId);
                         setSelectedBodyIds([bodyId]);
                         setSelectedTopology(null);
+                      }}
+                      onFaceListStateChange={(bodyId, hashes) => {
+                        const sweep = pendingFormFaceSweepRef.current;
+                        const accepted = new Set(hashes);
+                        if (
+                          sweep &&
+                          sweep === viewportFormFacePick &&
+                          sweep.bodyId === bodyId &&
+                          (sweep.hashes ?? [sweep.hash]).every((hash) =>
+                            accepted.has(hash)
+                          )
+                        ) {
+                          pendingFormFaceSweepRef.current = null;
+                          highlightFormFaces(bodyId, hashes, true);
+                        }
                       }}
                       onOpeningFaceSelectionChange={(hashes) => {
                         setFormFacePickTarget(null);

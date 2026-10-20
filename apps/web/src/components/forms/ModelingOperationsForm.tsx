@@ -78,6 +78,8 @@ export interface ModelingOperationsFormProps {
   onCancel?: () => void;
   onTargetBodyChange?: (bodyId: BodyId) => void;
   onOpeningFaceSelectionChange?: (hashes: number[]) => void;
+  /** The committed Shell/Draft list, including earlier and viewport picks. */
+  onFaceListStateChange?: (bodyId: BodyId, hashes: readonly number[]) => void;
   onRequestOpeningFaceSelection?: () => void;
   /**
    * The Hole card's values as numbers, on every change, so the viewport can
@@ -561,6 +563,7 @@ export function ModelingOperationsForm({
   onCancel,
   onTargetBodyChange,
   onOpeningFaceSelectionChange,
+  onFaceListStateChange,
   onRequestOpeningFaceSelection,
   onHoleDraftChange,
   holePreviewNotice = null
@@ -687,6 +690,21 @@ export function ModelingOperationsForm({
       }
     });
   }, [viewportFacePick, pickTarget, initialTarget, faceOptions]);
+  const faceListHashes =
+    state.operation === 'shell'
+      ? state.value.openingFaceHashes
+      : state.operation === 'draft'
+        ? state.value.faceHashes
+        : null;
+  const faceListCallback = useRef(onFaceListStateChange);
+  faceListCallback.current = onFaceListStateChange;
+  // Report after React commits the list. Calling a workspace setter from the
+  // pick's state updater would update its parent while this form is rendering.
+  useEffect(() => {
+    if (pickTarget && faceListHashes) {
+      faceListCallback.current?.(pickTarget, faceListHashes);
+    }
+  }, [pickTarget, faceListHashes]);
   const effectivePreflight: ExactPreflightState = unsupportedReason
     ? { status: 'refused', reason: unsupportedReason }
     : preflight;

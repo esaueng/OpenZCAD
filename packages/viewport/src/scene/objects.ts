@@ -178,14 +178,14 @@ export function applySectionPlane(
     showExact ? exact.regions.map((region) => region.bodyId) : []
   );
   const bodyColors = new Map<string, THREE.Color>();
-  const bodyOpacities = new Map<string, number>();
+  const bodyOpacities = new Map<string, Pick<THREE.Material, 'opacity'>>();
   for (const mesh of meshes) {
     const bodyId = findBodyId(mesh) ?? '';
     const replaced = exactBodyIds.has(bodyId);
     updateSectionCap(mesh, replaced ? null : plane);
     if (replaced && !bodyColors.has(bodyId)) {
       bodyColors.set(bodyId, mesh.material.color);
-      bodyOpacities.set(bodyId, mesh.material.opacity);
+      bodyOpacities.set(bodyId, mesh.material);
     }
   }
   applyExactSection(root, showExact ? exact : null, bodyColors, bodyOpacities);

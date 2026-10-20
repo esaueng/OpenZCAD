@@ -48,6 +48,55 @@ function body(bodyId = 'body_1') {
 }
 
 describe('exact section geometry in the viewport', () => {
+  it('keeps supporting a numeric opacity snapshot', () => {
+    const root = new THREE.Group();
+    applyExactSection(
+      root,
+      shaded([region()]),
+      new Map(),
+      new Map([['body_1', 0.6]])
+    );
+    const fill = root.getObjectByName(`${EXACT_SECTION}-fill`) as THREE.Mesh<
+      THREE.BufferGeometry,
+      THREE.MeshPhongMaterial
+    >;
+    fill.onBeforeRender(
+      ...([] as unknown as Parameters<typeof fill.onBeforeRender>)
+    );
+    expect(fill.material.opacity).toBe(0.6);
+    expect(fill.material.transparent).toBe(true);
+    expect(fill.material.depthWrite).toBe(false);
+  });
+
+  it.each([1, 0.35])(
+    'follows opacity previews and their cleanup without rebuilding the cut (X-ray factor: %s)',
+    (xray) => {
+      const { group, mesh } = body();
+      mesh.material.opacity = xray;
+      applySectionPlane(
+        group,
+        sectionClippingPlane({ plane: 'XY', offset: 1 }),
+        shaded([region()])
+      );
+      const fill = group.getObjectByName(`${EXACT_SECTION}-fill`) as THREE.Mesh<
+        THREE.BufferGeometry,
+        THREE.MeshPhongMaterial
+      >;
+      const geometry = fill.geometry;
+      for (const appearance of [0.4, 1]) {
+        // Appearance previews and cancellation mutate the live body material.
+        mesh.material.opacity = appearance * xray;
+        fill.onBeforeRender(
+          ...([] as unknown as Parameters<typeof fill.onBeforeRender>)
+        );
+        expect(fill.material.opacity).toBeCloseTo(appearance * xray, 12);
+        expect(fill.material.transparent).toBe(appearance * xray < 1);
+        expect(fill.material.depthWrite).toBe(appearance * xray >= 1);
+        expect(fill.geometry).toBe(geometry);
+      }
+    }
+  );
+
   it.each([1, 0.6])('uses the body opacity for exact fills when X-ray is toggled (appearance: %s)', (appearance) => {
     const { group, mesh } = body();
     const plane = sectionClippingPlane({ plane: 'XY', offset: 1 });
