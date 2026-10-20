@@ -117,19 +117,26 @@ function screenInterval(
 }
 
 /**
- * The camera's near plane in world space, positive on the side WebGL draws.
- * Topology nearer than it is clipped away on screen, so a sweep must not
- * take it, and a triangle crossing it keeps only its drawn part.
+ * The camera's near and far planes in world space, positive on the side
+ * WebGL draws. Topology outside them is clipped away on screen, so a sweep
+ * must not take it, and a triangle crossing one keeps only its drawn part.
  */
-function nearClippingPlane(camera: THREE.Camera): THREE.Plane {
-  const near = (camera as THREE.PerspectiveCamera | THREE.OrthographicCamera)
-    .near;
+function depthClippingPlanes(camera: THREE.Camera): THREE.Plane[] {
+  const { near, far } = camera as
+    | THREE.PerspectiveCamera
+    | THREE.OrthographicCamera;
   const forward = camera.getWorldDirection(new THREE.Vector3());
   const origin = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
-  return new THREE.Plane().setFromNormalAndCoplanarPoint(
-    forward,
-    origin.addScaledVector(forward, near)
-  );
+  return [
+    new THREE.Plane().setFromNormalAndCoplanarPoint(
+      forward,
+      origin.clone().addScaledVector(forward, near)
+    ),
+    new THREE.Plane().setFromNormalAndCoplanarPoint(
+      forward.clone().negate(),
+      origin.clone().addScaledVector(forward, far)
+    )
+  ];
 }
 
 /** Whether any vertex lies on the clipped side, so clipping can change it. */
@@ -152,7 +159,7 @@ function crossesPlane(
 /**
  * Clip triangles before projection and depth tests. Keep each face's range
  * mapped to its surviving triangles. A section adds its caps, which only
- * occlude and own no face; the near plane draws none.
+ * occlude and own no face; the camera's depth planes draw none.
  */
 function clipBody(
   candidate: TopologyBoxCandidate,
@@ -624,7 +631,7 @@ function edgeSelections(
   grid: DepthGrid | null
 ): TopologySelection[] {
   const { camera, width, height } = options;
-  const nearPlane = nearClippingPlane(camera);
+  const depthPlanes = depthClippingPlanes(camera);
   const world = new THREE.Vector3();
   const view = new THREE.Vector3();
   const project = (x: number, y: number, z: number) => {
@@ -659,9 +666,10 @@ function edgeSelections(
           edge.points[index + 4],
           edge.points[index + 5]
         );
-        const sectioned = clipSegment(a, b, options.clippingPlane);
-        const kept =
-          sectioned && clipSegment(sectioned[0], sectioned[1], nearPlane);
+        let kept = clipSegment(a, b, options.clippingPlane);
+        for (const plane of depthPlanes) {
+          if (kept) kept = clipSegment(kept[0], kept[1], plane);
+        }
         if (kept)
           segments.push(
             kept.map((point) => project(point.x, point.y, point.z)) as [
@@ -727,7 +735,7 @@ export function topologyInBox(
   camera.updateMatrixWorld();
   const perspective =
     (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true;
-  const nearPlane = nearClippingPlane(camera);
+  const depthPlanes = depthClippingPlanes(camera);
   const bodies = candidates
     .filter((candidate) => candidate.topology)
     .map((candidate) =>
@@ -736,9 +744,13 @@ export function topologyInBox(
         : candidate
     )
     .map((candidate) =>
-      crossesPlane(candidate, nearPlane)
-        ? clipBody(candidate, nearPlane, false)
-        : candidate
+      depthPlanes.reduce(
+        (clipped, plane) =>
+          crossesPlane(clipped, plane)
+            ? clipBody(clipped, plane, false)
+            : clipped,
+        candidate
+      )
     )
     .map((candidate) => projectBody(candidate, options, perspective));
   let grid: DepthGrid | null = null;

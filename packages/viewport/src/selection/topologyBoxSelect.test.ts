@@ -224,6 +224,40 @@ describe('box selection through the camera near plane', () => {
   });
 });
 
+describe('box selection through the camera far plane', () => {
+  // Far plane at z = -5: the bottom face (z = -10) and its edges lie wholly
+  // beyond it and are not drawn; the sides cross it and keep their upper part.
+  const camera = lookingDown();
+  camera.far = 105;
+  camera.updateProjectionMatrix();
+  const rect = rectBetween(camera, [-15, 15, 0], [15, -15, 0]);
+  const options = (kind: 'face' | 'edge') => ({
+    camera,
+    width: SIZE,
+    height: SIZE,
+    kind,
+    selectThrough: true
+  });
+
+  it('takes no face beyond it, and the drawn part of one it crosses', () => {
+    const faces = ids(
+      topologyInBox([cube()], rect, 'crossing', options('face'))
+    );
+    expect(faces).not.toContain('face-bottom');
+    expect(faces).toContain('face-top');
+    expect(faces).toContain('face-front');
+  });
+
+  it('takes no edge beyond it, and the drawn part of one it crosses', () => {
+    const edges = ids(
+      topologyInBox([cube()], rect, 'crossing', options('edge'))
+    );
+    expect(edges.filter((id) => id?.startsWith('edge-bottom'))).toEqual([]);
+    expect(edges).toContain('edge-vertical-front-left');
+    expect(edges).toContain('edge-top-front');
+  });
+});
+
 describe('box selection of edges', () => {
   const camera = lookingDown();
   const options = (selectThrough = false) => ({
