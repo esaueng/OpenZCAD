@@ -137,7 +137,9 @@ export function textWidthMm(
 ): number {
   let units = 0;
   for (const char of text) units += glyphWidth(char.codePointAt(0)!, bold);
-  return (units * sizeMm) / 1000;
+  // `sizeMm` is cap height; renderers convert it to font size by the same
+  // 0.718 factor.
+  return (units * (sizeMm / 0.718)) / 1000;
 }
 
 /** `text` cut with an ellipsis-free "..." so it fits `widthMm`. */

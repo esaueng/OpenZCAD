@@ -1125,6 +1125,130 @@ describe('D01 occlusion tolerance', () => {
 });
 
 describe('D01 occlusion grid', () => {
+  it('counts parent and refined cells in the shared view entry budget', () => {
+    // Two small tessellated patches in one group exercise refinement of a
+    // concatenated mesh; a second group exercises the view-wide allowance.
+    const triangles: Triangle[] = [];
+    for (const offset of [0, 1000])
+      for (let u = 0; u < 10; u += 1)
+        for (let v = 0; v < 10; v += 1)
+          for (const [a, b, c] of [
+            [
+              [u, v],
+              [u + 1, v],
+              [u + 1, v + 1]
+            ],
+            [
+              [u, v],
+              [u + 1, v + 1],
+              [u, v + 1]
+            ]
+          ] as const)
+            triangles.push({
+              u0: offset + a[0],
+              v0: offset + a[1],
+              d0: 0,
+              u1: offset + b[0],
+              v1: offset + b[1],
+              d1: 0,
+              u2: offset + c[0],
+              v2: offset + c[1],
+              d2: 0,
+              area: 1,
+              tol: 0
+            });
+    const bounds = { minU: 0, minV: 0, maxU: 1010, maxV: 1010 };
+    const ordinary = new OcclusionGrid(triangles, bounds, 1e-9);
+    expect(ordinary.maxCellLoad).toBeLessThan(50);
+    expect(
+      () => new OcclusionGrid(triangles, bounds, 1e-9, triangles.length)
+    ).toThrow(/drawing view.*memory budget/i);
+    const exact = new OcclusionGrid(
+      triangles,
+      bounds,
+      1e-9,
+      ordinary.entryCount
+    );
+    expect(exact.entryCount).toBe(ordinary.entryCount);
+    expect(exact.occluded(5.5, 5.2, 1)).toBe(true);
+    expect(exact.occluded(1005.5, 1005.2, 1)).toBe(true);
+    expect(
+      () => new OcclusionGrid(triangles, bounds, 1e-9, ordinary.entryCount - 1)
+    ).toThrow(/drawing view.*memory budget/i);
+    expect(
+      () =>
+        new OcclusionIndex(
+          [triangles, triangles],
+          1e-9,
+          ordinary.entryCount * 2
+        )
+    ).not.toThrow();
+    expect(
+      () =>
+        new OcclusionIndex(
+          [triangles, triangles],
+          1e-9,
+          ordinary.entryCount * 2 - 1
+        )
+    ).toThrow(/drawing view.*memory budget/i);
+  });
+
+  it('shares the view entry budget across its body grids', () => {
+    const near: Triangle = {
+      u0: 0,
+      v0: 0,
+      d0: 0,
+      u1: 1,
+      v1: 0,
+      d1: 0,
+      u2: 0,
+      v2: 1,
+      d2: 0,
+      area: 1,
+      tol: 0
+    };
+    const far = { ...near, u0: 2, u1: 3, u2: 2 };
+    const bounds = { minU: 0, minV: 0, maxU: 1, maxV: 1 };
+    const perBody = new OcclusionGrid([near], bounds, 1e-9).entryCount;
+    const index = new OcclusionIndex([[near], [far]], 1e-9, perBody * 2);
+    expect(index.occluded(0.25, 0.25, 1)).toBe(true);
+    expect(index.occluded(2.25, 0.25, 1)).toBe(true);
+    expect(
+      () => new OcclusionIndex([[near], [far]], 1e-9, perBody * 2 - 1)
+    ).toThrow(/drawing view.*memory budget/i);
+  });
+
+  it('refuses a grid before its entry budget is exceeded', () => {
+    const triangles = [
+      {
+        u0: 0,
+        v0: 0,
+        d0: 0,
+        u1: 1,
+        v1: 0,
+        d1: 0,
+        u2: 0,
+        v2: 1,
+        d2: 0,
+        area: 1,
+        tol: 0
+      }
+    ];
+    const bounds = { minU: 0, minV: 0, maxU: 1, maxV: 1 };
+    const ordinary = new OcclusionGrid(triangles, bounds, 1e-9);
+    const exact = new OcclusionGrid(
+      triangles,
+      bounds,
+      1e-9,
+      ordinary.entryCount
+    );
+    expect(exact.entryCount).toBe(ordinary.entryCount);
+    expect(exact.occluded(0.25, 0.25, 1)).toBe(true);
+    expect(
+      () => new OcclusionGrid(triangles, bounds, 1e-9, ordinary.entryCount - 1)
+    ).toThrow(/drawing view.*memory budget/i);
+  });
+
   it('files a thin triangle under the cells it covers, not its whole bounding box', () => {
     // A fan of 2000 slivers around a shared centre: every sliver's bounding
     // box spans a quadrant of the grid, its footprint only a thin wedge.

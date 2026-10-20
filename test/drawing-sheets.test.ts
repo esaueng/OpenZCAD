@@ -14,6 +14,7 @@ import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   drawingPaperMm,
   drawingSetError,
+  MAX_PROJECT_NAME_LENGTH,
   projectedViewSide,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
@@ -853,15 +854,18 @@ describe('D01 sheet page and export', () => {
   });
 
   it('measures title-block text with the real Helvetica widths, Latin-1 included', () => {
+    // Width at a 10 mm cap height (font size = cap height / 0.718) of
+    // `units` thousandths of an em.
+    const em = (units: number) => (units * 10) / 0.718 / 1000;
     // Ø is 778/1000 em and Æ 1000 in Helvetica; a flat 556 for every
     // character past ASCII let a title of them run into the next cell.
-    expect(textWidthMm('ØØØØ', 10)).toBeCloseTo(31.12, 9);
-    expect(textWidthMm('ÆÆ', 10)).toBeCloseTo(20, 9);
+    expect(textWidthMm('ØØØØ', 10)).toBeCloseTo(em(4 * 778), 9);
+    expect(textWidthMm('ÆÆ', 10)).toBeCloseTo(em(2000), 9);
     // Bold has its own widths, not regular plus 5%: i is 278, not 233.
-    expect(textWidthMm('iiii', 10, true)).toBeCloseTo(11.12, 9);
-    expect(textWidthMm('é', 10, true)).toBeCloseTo(5.56, 9);
+    expect(textWidthMm('iiii', 10, true)).toBeCloseTo(em(4 * 278), 9);
+    expect(textWidthMm('é', 10, true)).toBeCloseTo(em(556), 9);
     // Anything sheetSafeText turns into "?" is measured as one.
-    expect(textWidthMm('\u4e2d', 10)).toBeCloseTo(5.56, 9);
+    expect(textWidthMm('\u4e2d', 10)).toBeCloseTo(em(556), 9);
     const fitted = fitText('Æ'.repeat(40), 3.5, 40);
     expect(textWidthMm(fitted, 3.5)).toBeLessThanOrEqual(40);
   });
@@ -884,6 +888,17 @@ describe('D01 sheet page and export', () => {
     expect(drawingExportFileName('Bracket', 'Sheet 1', 'pdf')).toBe(
       'Bracket-Sheet-1.pdf'
     );
+  });
+
+  it('reserves the fallback sheet name inside the export file name budget', () => {
+    const project = 'P'.repeat(MAX_PROJECT_NAME_LENGTH);
+    for (const format of ['pdf', 'svg'] as const) {
+      const name = drawingExportFileName(project, '---', format);
+      expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(
+        MAX_EXPORT_FILE_NAME_BYTES
+      );
+      expect(name.endsWith(`-sheet.${format}`)).toBe(true);
+    }
   });
 
   it('maps model spans to paper through one transform: 1:2 halves them, inches scale by 25.4', async () => {
@@ -1008,5 +1023,36 @@ describe('D01 sheet page and export', () => {
     expect(number.text.endsWith('...')).toBe(true);
     const pdf = new TextDecoder('latin1').decode(sheetPageToPdf(page, 'Sheet'));
     expect(pdf).toContain('(Bracket \\(rev\\) \\\\ 2) Tj');
+  });
+
+  it('fits title-block text at the font size used by preview and exports', () => {
+    const drawing = {
+      ...sheet([]),
+      views: [],
+      titleBlock: { title: 'M'.repeat(50), author: 'M'.repeat(20) }
+    };
+    const page = composeSheetPage(drawing, [], {
+      projectName: 'Bracket',
+      units: 'mm'
+    });
+    const box = titleBlockBox(drawing);
+    const fitted = page.texts.filter((text) => text.text.startsWith('MMM'));
+    expect(fitted).toHaveLength(2);
+    for (const text of fitted) {
+      // Base-14 Helvetica and Helvetica-Bold both advance M by 833/1000 em
+      // and a period by 278/1000 em. The page stores cap height; all three
+      // renderers use font-size = cap height / 0.718.
+      const advance =
+        ([...text.text].reduce(
+          (sum, char) => sum + (char === 'M' ? 833 : 278),
+          0
+        ) *
+          text.sizeMm) /
+        0.718 /
+        1000;
+      const available = text.bold ? box.width - 4 : box.width * 0.34 - 3;
+      expect(advance).toBeLessThanOrEqual(available);
+      expect(text.text.endsWith('...')).toBe(true);
+    }
   });
 });

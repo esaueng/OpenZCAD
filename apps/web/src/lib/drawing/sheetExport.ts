@@ -25,11 +25,12 @@ export function drawingExportFileName(
   const extension = `.${format}`;
   const room = MAX_EXPORT_FILE_NAME_BYTES - extension.length - 1;
   const trim = (stem: string) => stem.replace(/[-. ]+$/, '');
-  const sheet = trim(exportFileStem(sheetName).slice(0, SHEET_STEM_LIMIT));
+  const sheet =
+    trim(exportFileStem(sheetName).slice(0, SHEET_STEM_LIMIT)) || 'sheet';
   const project = trim(
     exportFileStem(projectName).slice(0, room - sheet.length)
   );
-  return `${project || 'openzcad-part'}-${sheet || 'sheet'}${extension}`;
+  return `${project || 'openzcad-part'}-${sheet}${extension}`;
 }
 
 /**

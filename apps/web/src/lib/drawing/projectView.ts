@@ -157,6 +157,9 @@ export function gridCellsAlong(
   return out;
 }
 
+/** Maximum retained triangle/cell references in one view's spatial index. */
+const MAX_OCCLUSION_GRID_ENTRIES = 4_000_000;
+
 /**
  * The parameter range of segment a→b inside the box, by Liang–Barsky, or
  * null when it misses the box.
@@ -204,7 +207,16 @@ export class OcclusionIndex {
     margin: number;
   }[] = [];
 
-  constructor(groups: readonly Triangle[][], coverTolerance: number) {
+  constructor(
+    groups: readonly Triangle[][],
+    coverTolerance: number,
+    entryBudget = MAX_OCCLUSION_GRID_ENTRIES
+  ) {
+    if (!Number.isSafeInteger(entryBudget) || entryBudget < 0)
+      throw new Error('Invalid drawing projection memory budget.');
+    // Body-local grids share the view's bound rather than each receiving a
+    // fresh allowance. The grid checks each row before retaining its entries.
+    let remaining = Math.min(entryBudget, MAX_OCCLUSION_GRID_ENTRIES);
     for (const triangles of groups) {
       if (triangles.length === 0) continue;
       const box = {
@@ -222,8 +234,10 @@ export class OcclusionIndex {
       // Rounding at the extent's edge must not drop a boundary point.
       const margin =
         Math.max(box.maxU - box.minU, box.maxV - box.minV, 1e-12) * 1e-9;
+      const grid = new OcclusionGrid(triangles, box, coverTolerance, remaining);
+      remaining -= grid.entryCount;
       this.grids.push({
-        grid: new OcclusionGrid(triangles, box, coverTolerance),
+        grid,
         ...box,
         margin
       });
@@ -313,14 +327,23 @@ export class OcclusionGrid {
   private readonly maxV: number;
   private readonly cellU: number;
   private readonly cellV: number;
+  private remainingEntries: number;
 
   constructor(
     private readonly triangles: Triangle[],
     bounds: { minU: number; minV: number; maxU: number; maxV: number },
     private readonly coverTolerance: number,
+    entryBudget = MAX_OCCLUSION_GRID_ENTRIES,
     members?: readonly number[],
     level = 0
   ) {
+    if (!Number.isSafeInteger(entryBudget) || entryBudget < 0)
+      throw new Error('Invalid drawing projection memory budget.');
+    // Bound retained triangle/cell references independently of geometric
+    // tolerances. A smaller budget supports bounded boundary tests; callers
+    // cannot raise the production limit.
+    const entryLimit = Math.min(entryBudget, MAX_OCCLUSION_GRID_ENTRIES);
+    let entries = 0;
     const indices = members ?? triangles.map((_, index) => index);
     this.size = Math.max(
       8,
@@ -369,10 +392,17 @@ export class OcclusionGrid {
         if (low > high) continue;
         const i0 = this.column(low);
         const i1 = this.column(high);
+        const added = i1 - i0 + 1;
+        if (added > entryLimit - entries)
+          throw new Error(
+            'Drawing view exceeds its projection memory budget; show fewer bodies or choose another view.'
+          );
+        entries += added;
         for (let i = i0; i <= i1; i += 1)
           this.cells[j * this.size + i]!.push(index);
       }
     }
+    this.remainingEntries = entryLimit - entries;
     this.children = new Array<OcclusionGrid | undefined>(this.cells.length);
     if (level === 0) this.refine(0);
   }
@@ -413,6 +443,7 @@ export class OcclusionGrid {
           maxV: Math.min(box.maxV, this.minV + (j + 1) * this.cellV)
         },
         this.coverTolerance,
+        this.remainingEntries,
         cell,
         level + 1
       );
@@ -422,14 +453,18 @@ export class OcclusionGrid {
       )
         return;
       child.refine(level + 1);
+      // Parent cells stay allocated: every retained level and sibling shares
+      // the same allowance. A candidate is bounded before it files any row.
+      this.remainingEntries -= child.entryCount;
       this.children[key] = child;
     });
   }
 
-  /** How many triangle entries the grid's finest cells hold; for tests. */
+  /** All retained triangle entries, including parent cells; for tests. */
   get entryCount(): number {
     return this.cells.reduce(
-      (sum, cell, key) => sum + (this.children[key]?.entryCount ?? cell.length),
+      (sum, cell, key) =>
+        sum + cell.length + (this.children[key]?.entryCount ?? 0),
       0
     );
   }
