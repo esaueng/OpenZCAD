@@ -10,11 +10,14 @@ has started. Extends [ADR-012](ADR-012-email-code-identity.md),
 [ADR-019](ADR-019-durable-collaboration-authorization.md). Supersedes the
 server-side document handling they describe once Phase 8 lands.
 
-**Group key management is under reassessment (2026-10-19).** Review kept
-finding flaws in the custom membership and key-rotation protocol, so changes
-to it are paused. [MLS assessment](#mls-assessment) recommends replacing those
-parts with Messaging Layer Security (RFC 9420). The sections it would replace
-are marked there. Everything else in this record stands.
+**Group key management uses MLS (decided 2026-10-19).** Review kept finding
+flaws in the custom membership and key-rotation protocol. Group membership,
+epochs, member key distribution and device removal therefore use Messaging
+Layer Security (RFC 9420) through `mls-rs`; see
+[MLS assessment](#mls-assessment). The custom sections that MLS replaces,
+[Signed roster](#signed-roster) and [Epoch rotation](#epoch-rotation), are
+marked superseded. They stay as the record of the review findings that shaped
+the MLS policy rules. Everything else in this record stands.
 
 ## Context
 
@@ -593,6 +596,10 @@ comparison, which is safe only because of its commitment step.
 
 ### Signed roster
 
+> **Superseded by MLS.** Membership and roles are the MLS group and its roles
+> extension (see [MLS assessment](#mls-assessment)). This section is kept for
+> the rules it established, which the MLS commit policy must enforce.
+
 Each encrypted project has a roster: a chain of typed entries. Each type has
 its own signer rule and its own limits on what it may change. A browser
 rejects an entry whose signer or content breaks its type's rule:
@@ -686,6 +693,10 @@ access only after a person has verified it. Two roster rules cover this.
 
 ### Epoch rotation
 
+> **Superseded by MLS.** Epochs are MLS epochs and any member's Commit rotates
+> the key (see [MLS assessment](#mls-assessment)). The writer and reader rules
+> below carry over as MLS policy.
+
 A new project-key epoch is an entry in the roster chain that carries no
 content. It holds the new project key wrapped to the current certified
 encryption key of every member the roster lists. It is signed by a device key
@@ -734,6 +745,7 @@ request.
 | Encrypt project names?             | Yes; invitation emails no longer name the project.                                                                                                                     |
 | Unrecoverable accounts?            | Accepted. There is no server-held escrow key. A user who loses every unlock method loses their cloud projects; local copies remain.                                    |
 | Turn encryption off again?         | Only during the beta, and not while a project is shared. After default-on, the exit is `.openzcad` export plus cloud deletion, which needs no plaintext server path.   |
+| MLS library?                       | `mls-rs` 0.56 with the RustCrypto provider, pinned exactly; OpenMLS is the fallback. The Phase 8 outside review covers the MLS integration and the pinned version.     |
 | Accounts that never sign in again? | Kept and encrypted on their next sign-in; product copy says encryption starts at the first sign-in after the switch. Deletion after notice is revisited at default-on. |
 
 ## MLS assessment
@@ -964,22 +976,44 @@ primitive on P-256, SHA-256 and AES-GCM, all native to WebCrypto. The
 mandatory-to-implement X25519/Ed25519 suite (0x0001) is the fallback if a
 library's P-256 path is weaker.
 
-### Recommendation
+### Decision
 
-Adopt MLS for group membership, epochs, member key distribution and device
-removal. Keep this record's storage format, identity and verification layer,
-recovery, share links and document version chain. Rust is already
-built in this repository for the desktop shell, and the kernel already ships
-as WASM, so a Rust WASM library adds a dependency, not a new toolchain.
+Decided 2026-10-19, on the evidence of the library spike
+([PR #748](https://github.com/esaueng/OpenZCAD/pull/748)). The report and its
+re-runnable harness are not on main yet; they land with that PR as
+`docs/plans/mls-spike-2026-10.md` and `spikes/mls/`. Until then, the evidence
+this decision rests on is
+[the report at commit 1e65de4a](https://github.com/esaueng/OpenZCAD/blob/1e65de4a4b9646bcfd83d2a8a34f3c8ef116d74b/docs/plans/mls-spike-2026-10.md).
 
-Before Phase 3, a one-PR spike builds a two-member, three-device group in a
-worker with `mls-rs` (WebCrypto provider) and OpenMLS. It measures lazy-chunk
-size, IndexedDB state handling, suite 0x0002 support, external rejoin,
-self-removal support and commit cost, then picks one. If adopted, the custom
-pieces marked Replaced above are removed from this record, and Phases 3 and 5
-are rewritten around MLS group operations. Phase 2 keeps only the envelope,
-nonce, wrapping, decompression, dedupe and fingerprint work. Changes to the
-custom key-management protocol stay paused until that decision.
+- **Library.** `mls-rs` 0.56 with its RustCrypto provider
+  (`mls-rs-crypto-rustcrypto`), built to WASM and run in a lazily loaded
+  module Worker on cipher suite 0x0002. Every MLS crate is pinned to an exact
+  version (`=0.56.0` and its matching companions). A version bump is a
+  reviewed change of its own, never a range update. Licences are
+  permissive (the spike found no copyleft in the dependency tree).
+- **Why `mls-rs`.** The spike ran every scenario, including all the rejoin
+  rules, in Node, Chrome, WebKit and Safari. Compared with OpenMLS it has
+  smaller state (about 4 KB against 25–30 KB) and a smaller lazy WASM (407 KB
+  gzip against 579 KB). Role and device checks run in one policy callback
+  (`MlsRules::filter_proposals`) on both send and receive. It supports
+  SelfRemove, and a wiped device replaces its own stale leaf in one external
+  Commit.
+- **The departure from WebCrypto only.** The `mls-rs` WebCrypto provider
+  fails every Commit in Safari and WKWebView, so MLS primitives run in
+  RustCrypto inside WASM. Everything else (envelopes, wrapping, signatures,
+  dedupe) stays on WebCrypto, as Phase 2 builds it. The spike harness can be
+  re-run, and the WebCrypto provider is adopted once it passes the WebKit
+  run.
+- **The accepted risk.** `mls-rs` has no third-party audit and publishes no
+  security advisories. OpenMLS has more outside scrutiny and passed the same
+  scenarios, so it stays the fallback. The Phase 8 outside review explicitly
+  covers the MLS integration and the exact pinned `mls-rs` version: the
+  policy callbacks, the rejoin rules, the history-archive replay, and the
+  crate itself at that version.
+
+The pieces marked Replaced above are superseded, and Phases 3 and 5 are
+scoped around MLS group operations. Phase 2 keeps only the envelope, nonce,
+wrapping, decompression, dedupe and fingerprint work.
 
 ## Delivery phases
 
@@ -988,17 +1022,17 @@ so the existing Vitest, parity and Playwright suites prove the behavior before
 any encryption lands. After that, encryption is a storage-format change.
 Estimates are judgment, not measurement.
 
-| Phase | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Estimate     |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| 0     | This ADR and roadmap row L11. A privacy policy page is a prerequisite for any public encryption claim; OpenZCAD has none yet.                                                                                                                                                                                                                                                                                                                                                                                                                                                         | 1 PR (this)  |
-| 1     | Thin server, still plaintext: the browser creates projects, mints revisions and checkpoints, duplicates, branches and adopts, splits import assets and runs the room merge. Copy rollback and finalize compare client-supplied digests. The room conflict reply carries the base version. The server keeps size and envelope checks.                                                                                                                                                                                                                                                  | 5–6 PRs      |
-| 2     | Crypto core package: envelope v1 with algorithm versioning, project envelopes and project-free content blobs, STREAM chunk nonces with one key per envelope, AES-256-GCM, HKDF, ECDH wrapping, authenticated-data binding, chunked blobs that detect truncation, fixed test vectors and a fuzzed envelope parser.                                                                                                                                                                                                                                                                     | 1 PR         |
-| 3     | Keys and devices: identity keys, device lists with per-project revocation cutoffs, identity-signed contacts lists, certified device signing keys, D1 key tables, setup with a required recovery key, passkey unlock, device approval by QR scan or commitment-based code comparison, desktop Keychain storage and an Encryption section in Settings with identity-key certification of devices, device removal and recovery-key replacement with the rotations they require, and the sign-out choice. Setup screens load lazily (entry budget). Playwright fixtures seed device keys. | 4–5 PRs      |
-| 4     | Encrypted projects, opt-in per account: documents, revisions, assets, names, thumbnails, measurements, view state and archived exports; the room relay; version-integrity checks. Each project records a format version so older builds say "update to open". Breaking storage and API change.                                                                                                                                                                                                                                                                                        | 2–3 PRs      |
-| 5     | Sharing: owner-signed invitations, member key wraps, share links with fragment keys, the owner-signed roster with client-side role checks, new epochs on removal, member-started epoch rotation enforced by writers, seen and verified key pins, fingerprints, and the project state code.                                                                                                                                                                                                                                                                                            | 2–3 PRs      |
-| 6     | Assistant consent on encrypted projects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | 1 PR         |
-| 7     | Migrate existing projects: each owner's browser encrypts every revision and asset, then the server deletes the plaintext, including legacy `document_json` rows and the room's retained history. Beta-only reverse path for turning encryption off. Needs its own production authorization.                                                                                                                                                                                                                                                                                           | 1–2 PRs      |
-| 8     | Default on; delete the server document pipeline and the off switch; keep a browser read path for legacy plaintext projects; update `docs/SELF_HOSTING.md`; outside review of the crypto and key flows.                                                                                                                                                                                                                                                                                                                                                                                | 1 PR, review |
+| Phase | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Estimate     |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| 0     | This ADR and roadmap row L11. A privacy policy page is a prerequisite for any public encryption claim; OpenZCAD has none yet.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | 1 PR (this)  |
+| 1     | Thin server, still plaintext: the browser creates projects, mints revisions and checkpoints, duplicates, branches and adopts, splits import assets and runs the room merge. Copy rollback and finalize compare client-supplied digests. The room conflict reply carries the base version. The server keeps size and envelope checks.                                                                                                                                                                                                                                                                                                                                                                                        | 5–6 PRs      |
+| 2     | Crypto core package: envelope v1 with algorithm versioning, project envelopes and project-free content blobs, STREAM chunk nonces with one key per envelope, AES-256-GCM, HKDF, ECDH wrapping, authenticated-data binding, chunked blobs that detect truncation, fixed test vectors and a fuzzed envelope parser.                                                                                                                                                                                                                                                                                                                                                                                                           | 1 PR         |
+| 3     | Keys and devices: identity keys, device lists with per-project revocation cutoffs, identity-signed contacts lists, certified device signing keys, D1 key tables, setup with a required recovery key, passkey unlock, device approval by QR scan or commitment-based code comparison, desktop Keychain storage and an Encryption section in Settings with identity-key certification of devices, device removal and recovery-key replacement with the rotations they require, and the sign-out choice. Setup screens load lazily (entry budget). Playwright fixtures seed device keys. With MLS: the `mls-rs` Worker, sealed MLS client state in IndexedDB, KeyPackages, and leaf credentials certified by the identity key. | 4–5 PRs      |
+| 4     | Encrypted projects, opt-in per account: documents, revisions, assets, names, thumbnails, measurements, view state and archived exports; the room relay; version-integrity checks. Each project records a format version so older builds say "update to open". Breaking storage and API change.                                                                                                                                                                                                                                                                                                                                                                                                                              | 2–3 PRs      |
+| 5     | Sharing: owner-signed invitations, member key wraps, share links with fragment keys, the owner-signed roster with client-side role checks, new epochs on removal, member-started epoch rotation enforced by writers, seen and verified key pins, fingerprints, and the project state code. With MLS this phase is built on group operations: one MLS group per project with the roles-extension commit policy, Welcome-based invitations, SelfRemove, exporter-derived project keys with the key and epoch-record archive, and rejoin with exporter PSKs. The custom roster and epoch entries are not built.                                                                                                                | 2–3 PRs      |
+| 6     | Assistant consent on encrypted projects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | 1 PR         |
+| 7     | Migrate existing projects: each owner's browser encrypts every revision and asset, then the server deletes the plaintext, including legacy `document_json` rows and the room's retained history. Beta-only reverse path for turning encryption off. Needs its own production authorization.                                                                                                                                                                                                                                                                                                                                                                                                                                 | 1–2 PRs      |
+| 8     | Default on; delete the server document pipeline and the off switch; keep a browser read path for legacy plaintext projects; update `docs/SELF_HOSTING.md`; outside review of the crypto and key flows. The review explicitly covers the MLS integration and the exact pinned `mls-rs` version.                                                                                                                                                                                                                                                                                                                                                                                                                              | 1 PR, review |
 
 Total: 18–23 PRs.
 
