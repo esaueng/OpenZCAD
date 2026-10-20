@@ -57,7 +57,7 @@ describe('the instrument rail over the cube', () => {
   const css = sheet('quiet-stage.css');
 
   it('lets only its islands take the pointer, never the box around them', () => {
-    // Side by side at 600px and shorter, the box's empty corner under the
+    // Side by side at 540px and shorter, the box's empty corner under the
     // Model panels island sat on the cube and swallowed every facet's click.
     expect(rules(css, '.instrument-rail').join('\n')).toMatch(
       /pointer-events:\s*none/

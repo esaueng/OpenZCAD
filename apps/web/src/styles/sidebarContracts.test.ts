@@ -97,6 +97,21 @@ describe('model panels', () => {
     );
   });
 
+  it('fits the taller rail in one column down to 541px by compacting it', () => {
+    // Revisions and Diagnostics made one column 522px tall. Side by side
+    // from 600px instead, the islands squeezed a 320 × 568 phone's sketch
+    // flyouts to 68px; the buttons give up 4px each there instead.
+    const block = stage.slice(
+      stage.indexOf('@media (min-height: 541px) and (max-height: 600px)')
+    );
+    expect(
+      rule(block, '.workspace.column-layout .instrument-rail .rail-button')
+    ).toMatch(/height:\s*26px/);
+    expect(stage).toContain(
+      '@media (max-height: 540px) {\n  .workspace.column-layout .instrument-rail {'
+    );
+  });
+
   it('moves the rail to the dock’s inner edge and the lanes past both', () => {
     expect(rule(stage, '\n.instrument-rail')).toMatch(
       /right:\s*calc\(var\(--island-gap\) \+ var\(--right-dock-w, 0px\)\)/

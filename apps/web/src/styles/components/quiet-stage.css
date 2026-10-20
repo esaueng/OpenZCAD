@@ -1471,10 +1471,10 @@
    bottom at 390px) stands the two islands side by side, the viewer bar at
    the edge. Not a scroller: the bar's panels hang from anchors inside it,
    and a scrolling bar clipped them to its own 40px. The right lane steps
-   left by the second island. 600px since Revisions and Diagnostics joined
-   the panels' buttons: one column of both islands is 522px tall and ran
-   to the window's edge by 592px. */
-@media (max-height: 600px) {
+   left by the second island. 540px since Measure joined the bar: one
+   column of both islands was 458px tall and ran to the window's edge
+   by 501px. */
+@media (max-height: 540px) {
   .workspace.column-layout .instrument-rail {
     flex-direction: row-reverse;
     align-items: flex-start;
@@ -1919,6 +1919,18 @@ button.command-rail:disabled {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* Revisions and Diagnostics made one column of both islands 522px tall,
+   past a 541–600px window. Rather than stand the islands side by side
+   there too (which took 50px more of a phone's width and squeezed the
+   sketch flyouts beside the relations to 68px at 320 × 568), the buttons
+   give up 4px of height each and the column fits again, 24px targets
+   kept. */
+@media (min-height: 541px) and (max-height: 600px) {
+  .workspace.column-layout .instrument-rail .rail-button {
+    height: 26px;
+  }
 }
 
 /* The band the docks stand in: under the top islands and above the
@@ -2708,9 +2720,9 @@ button.command-rail:disabled {
   }
 }
 
-/* From 600px the instrument rail stands two islands wide as well, and the
-   relations (packed into their grid there) step left past both. */
-@media (max-height: 600px) {
+/* From the same height the instrument rail stands two islands wide as well,
+   and the relations step left past both. */
+@media (max-height: 540px) {
   .workspace.column-layout .viewer-area:has(.sketch-relations) {
     --lane-end: calc(
       var(--rail-w) * 2 + 72px + var(--island-gap) * 4 + var(--right-panels-w)
