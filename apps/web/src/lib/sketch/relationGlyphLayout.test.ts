@@ -16,7 +16,7 @@ type Chip = {
   visible?: boolean;
 };
 
-function solve(chips: Chip[]) {
+function solve(chips: Chip[], width = 0, height = 0) {
   const layout = new RelationGlyphLayout(chips.length);
   chips.forEach((chip, index) =>
     layout.set(
@@ -31,13 +31,14 @@ function solve(chips: Chip[]) {
       chip.visible ?? true
     )
   );
-  layout.solve(chips.length);
+  layout.solve(chips.length, width, height);
   return chips.map((chip, index) => {
     const cx = chip.ax + layout.offset[index * 2]!;
     const cy = chip.ay + layout.offset[index * 2 + 1]!;
     const halfW = relationChipWidth(chip.glyphs) / 2;
     const halfH = RELATION_GLYPH_PX / 2;
     return {
+      shown: layout.shown[index] === 1,
       dx: layout.offset[index * 2]!,
       dy: layout.offset[index * 2 + 1]!,
       left: cx - halfW,
@@ -111,7 +112,7 @@ describe('relation glyph layout', () => {
     }
   });
 
-  it('still finds free space when every ring candidate is taken', () => {
+  it('never commits an occupied spot when every ring candidate is taken', () => {
     // Forty-one overlapping curves and a point projecting onto one spot, each
     // with a wide chip: far more than the ring candidates can hold.
     const pile: Chip[] = [
@@ -125,18 +126,123 @@ describe('relation glyph layout', () => {
         point: false
       }))
     ];
-    const chips = solve(pile);
-    for (let a = 0; a < chips.length; a += 1) {
-      expect(covers(chips[a]!, 300, 300), `chip ${a} covers the anchor`).toBe(
+    const chips = solve(pile, 600, 600);
+    const shown = chips.filter((chip) => chip.shown);
+    // The rings and the straight-out steps place over half of them (24
+    // here); the rest are hidden until zooming makes room, never overlapped.
+    expect(shown.length).toBeGreaterThan(20);
+    for (let a = 0; a < shown.length; a += 1) {
+      expect(covers(shown[a]!, 300, 300), `chip ${a} covers the anchor`).toBe(
         false
       );
-      for (let b = a + 1; b < chips.length; b += 1) {
-        expect(overlaps(chips[a]!, chips[b]!), `chips ${a} and ${b}`).toBe(
+      for (let b = a + 1; b < shown.length; b += 1) {
+        expect(overlaps(shown[a]!, shown[b]!), `chips ${a} and ${b}`).toBe(
           false
         );
       }
     }
   });
+
+  it('turns a chip inward rather than off the viewport edge', () => {
+    // A curve near the right edge whose outward side points off-screen.
+    const [chip] = solve(
+      [{ ax: 395, ay: 200, nx: 1, ny: 0, glyphs: 2, point: false }],
+      400,
+      400
+    );
+    expect(chip!.left).toBeGreaterThanOrEqual(0);
+    expect(chip!.right).toBeLessThanOrEqual(400);
+    expect(covers(chip!, 395, 200)).toBe(false);
+  });
+
+  it('hides what has no room in a crowded corner instead of overlapping or leaving the view', () => {
+    const pile: Chip[] = Array.from({ length: 60 }, () => ({
+      ax: 390,
+      ay: 390,
+      nx: 1,
+      ny: 1,
+      glyphs: 2,
+      point: false
+    }));
+    const chips = solve(pile, 400, 400);
+    const shown = chips.filter((chip) => chip.shown);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.length).toBeLessThan(60);
+    for (const [a, chip] of shown.entries()) {
+      expect(chip.left).toBeGreaterThanOrEqual(0);
+      expect(chip.top).toBeGreaterThanOrEqual(0);
+      expect(chip.right).toBeLessThanOrEqual(400);
+      expect(chip.bottom).toBeLessThanOrEqual(400);
+      for (const other of shown.slice(a + 1)) {
+        expect(overlaps(chip, other)).toBe(false);
+      }
+    }
+  });
+
+  it('leaves a chip whose anchor is off the viewport alone', () => {
+    const chips = solve(
+      [
+        { ax: -40, ay: 100, nx: 0, ny: -1, glyphs: 1, point: false },
+        { ax: 100, ay: 100, nx: 0, ny: -1, glyphs: 1, point: false }
+      ],
+      400,
+      400
+    );
+    expect(chips[0]!.dx).toBe(0);
+    expect(chips[0]!.dy).toBe(0);
+    expect(chips[1]!.dy).toBeLessThan(0);
+  });
+
+  it('lays out thousands of separate chips in about linear time', () => {
+    // A 150 × 150 lattice of curve anchors 26 px apart: every chip finds
+    // its first spot free, so the cost is the neighbour search alone.
+    const lattice: Chip[] = [];
+    for (let row = 0; row < 150; row += 1) {
+      for (let column = 0; column < 150; column += 1) {
+        lattice.push({
+          ax: 20 + column * 40,
+          ay: 20 + row * 40,
+          nx: 0,
+          ny: -1,
+          glyphs: 1,
+          point: false
+        });
+      }
+    }
+    const layout = new RelationGlyphLayout(lattice.length);
+    lattice.forEach((chip, index) =>
+      layout.set(index, chip.ax, chip.ay, chip.nx, chip.ny, 16, 16, false, true)
+    );
+    const started = performance.now();
+    layout.solve(lattice.length, 6000, 6000);
+    // About 15 ms here; scanning every anchor per chip took about 1 s.
+    expect(performance.now() - started).toBeLessThan(250);
+  }, 20_000);
+
+  it('bounds the cost of a lattice too dense for its glyphs', () => {
+    // Anchors 26 px apart: less than a chip and its standoff need, so most
+    // chips search their whole bounded neighbourhood and some are hidden.
+    const layout = new RelationGlyphLayout(150 * 150);
+    for (let row = 0; row < 150; row += 1) {
+      for (let column = 0; column < 150; column += 1) {
+        layout.set(
+          row * 150 + column,
+          13 + column * 26,
+          13 + row * 26,
+          0,
+          -1,
+          16,
+          16,
+          row % 2 === 0,
+          true
+        );
+      }
+    }
+    const started = performance.now();
+    layout.solve(150 * 150, 3900, 3900);
+    // About 0.1 s here; an unbounded overflow search took about 0.8 s.
+    expect(performance.now() - started).toBeLessThan(500);
+  }, 20_000);
 
   it('keeps every chip off every anchor, not just its own', () => {
     // A short line: its middle chip would sit on the end point beside it.

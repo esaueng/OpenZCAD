@@ -7,8 +7,16 @@
  * that would cover an earlier chip, or any anchor, tries the next candidate —
  * slid along its curve or swung round its point, then one ring further out.
  *
- * Everything lives in typed arrays sized once per overlay, so a frame
- * allocates nothing however many chips the sketch has.
+ * Only spots inside the viewport count, so a chip near an edge turns inward
+ * rather than leaving the canvas, and a chip whose anchor is off-screen is
+ * left alone. A chip with no room within a bounded search is hidden for the
+ * frame rather than drawn over another (see `shown`). Anchors and placed
+ * chips sit in a uniform screen grid, so a candidate is checked against its
+ * neighbours only and a frame costs about linear time in the chips.
+ *
+ * Everything lives in typed arrays sized once per overlay (grown, rarely,
+ * when the viewport or a pile outgrows them), so a steady frame allocates
+ * nothing however many chips the sketch has.
  */
 
 /** One glyph's box edge, in CSS pixels; matches `.sketch-relation-glyph`. */
@@ -22,6 +30,12 @@ const KEEP_OUT_PX = 5;
 /** Clear space between two chips. */
 const CHIP_GAP_PX = 2;
 const RINGS = 4;
+/** Further straight-out steps tried after the rings, before giving up. */
+const EXTRA_RINGS = 8;
+/** Grid cell edge for the neighbour search. */
+const CELL_PX = 48;
+/** The grid's extent when no viewport is given (tests); queries stay exact. */
+const UNBOUNDED_PX = 4096;
 
 /** A chip's box for `glyphs` glyphs in one row. */
 export function relationChipWidth(glyphs: number): number {
@@ -51,14 +65,37 @@ export class RelationGlyphLayout {
   readonly input: Float64Array;
   /** Per chip: the solved [dx, dy] from the anchor to the chip's centre. */
   readonly offset: Float64Array;
+  /**
+   * Per chip: 1 when it was placed, 0 when it has no room near its geometry
+   * this frame and must not be drawn. An off-viewport or off-camera chip is
+   * left where it is and counts as placed (it is clipped anyway).
+   */
+  readonly shown: Uint8Array;
   // Placed boxes as [left, top, right, bottom], in anchor order.
   private readonly placed: Float64Array;
+  // The grid: anchors bucketed per cell by a counting sort each frame, and
+  // placed boxes as per-cell linked lists (a box joins every cell it spans).
+  private cols = 1;
+  private rows = 1;
+  private width = 0;
+  private height = 0;
+  private anchorStart = new Int32Array(2);
+  private anchorCursor = new Int32Array(1);
+  private readonly anchorItems: Int32Array;
+  private placedHead = new Int32Array(1);
+  private placedNext: Int32Array;
+  private placedItem: Int32Array;
+  private placedEntries = 0;
 
   constructor(capacity: number) {
     this.capacity = capacity;
     this.input = new Float64Array(capacity * IN);
     this.offset = new Float64Array(capacity * 2);
+    this.shown = new Uint8Array(capacity);
     this.placed = new Float64Array(capacity * 4);
+    this.anchorItems = new Int32Array(capacity);
+    this.placedNext = new Int32Array(Math.max(4, capacity * 4));
+    this.placedItem = new Int32Array(Math.max(4, capacity * 4));
   }
 
   /** Writes chip `index`'s projected inputs; call before `solve`. */
@@ -87,17 +124,47 @@ export class RelationGlyphLayout {
     input[at + 6] = (visible ? VISIBLE : 0) | (point ? POINT : 0);
   }
 
-  /** Places chips 0…count−1 in index order (the anchor order). */
-  solve(count: number) {
+  /**
+   * Places chips 0…count−1 in index order (the anchor order), inside a
+   * `width` × `height` viewport when one is given.
+   */
+  solve(count: number, width = 0, height = 0) {
     const input = this.input;
     const offset = this.offset;
+    const shown = this.shown;
     const placed = this.placed;
+    const bounded = width > 0 && height > 0;
+    this.width = bounded ? width : 0;
+    this.height = bounded ? height : 0;
+    // An anchor off the viewport has nowhere on screen to stand off to: its
+    // chip is left alone (clipped with it) and takes no part in the layout.
+    for (let index = 0; index < count; index += 1) {
+      const at = index * IN;
+      if (
+        bounded &&
+        input[at + 6]! & VISIBLE &&
+        !(
+          input[at]! >= 0 &&
+          input[at]! <= width &&
+          input[at + 1]! >= 0 &&
+          input[at + 1]! <= height
+        )
+      ) {
+        input[at + 6] = input[at + 6]! & ~VISIBLE;
+      }
+    }
+    this.index(
+      count,
+      bounded ? width : UNBOUNDED_PX,
+      bounded ? height : UNBOUNDED_PX
+    );
     let placedCount = 0;
     for (let index = 0; index < count; index += 1) {
       const at = index * IN;
       const flags = input[at + 6]!;
       offset[index * 2] = 0;
       offset[index * 2 + 1] = 0;
+      shown[index] = 1;
       if (!(flags & VISIBLE)) continue;
       const ax = input[at]!;
       const ay = input[at + 1]!;
@@ -139,16 +206,7 @@ export class RelationGlyphLayout {
               cx += -dy * slide;
               cy += dx * slide;
             }
-            if (
-              this.free(
-                cx - halfW,
-                cy - halfH,
-                cx + halfW,
-                cy + halfH,
-                count,
-                placedCount
-              )
-            ) {
+            if (this.free(cx - halfW, cy - halfH, cx + halfW, cy + halfH)) {
               chosenX = cx;
               chosenY = cy;
               found = true;
@@ -158,32 +216,33 @@ export class RelationGlyphLayout {
         }
       }
       if (!found) {
-        // Every candidate is taken (a pile of curves projecting onto one
-        // spot): stand off along the preferred direction past every placed
-        // chip and anchor. Beyond all of them along that axis, the box can
-        // overlap none of them, so the fallback is always free.
-        const support = Math.abs(nx) * halfW + Math.abs(ny) * halfH;
-        let reach =
-          RELATION_CHIP_STANDOFF_PX + (point ? KEEP_OUT_PX : 0) + support;
-        for (let other = 0; other < placedCount; other += 1) {
-          const p = other * 4;
-          const far =
-            Math.max((placed[p]! - ax) * nx, (placed[p + 2]! - ax) * nx) +
-            Math.max((placed[p + 1]! - ay) * ny, (placed[p + 3]! - ay) * ny);
-          reach = Math.max(reach, far + CHIP_GAP_PX + support + 1);
+        // Keep stepping out along the preferred direction, a few rings more,
+        // through the grid: a dense patch is usually only a few rings deep,
+        // and each step looks at its neighbours only.
+        const standoff = Math.abs(nx) * halfW + Math.abs(ny) * halfH;
+        const base = RELATION_CHIP_STANDOFF_PX + (point ? KEEP_OUT_PX : 0);
+        for (let ring = RINGS; ring < RINGS + EXTRA_RINGS; ring += 1) {
+          const reach = base + ring * (2 * halfH + CHIP_GAP_PX) + standoff;
+          const cx = ax + nx * reach;
+          const cy = ay + ny * reach;
+          if (this.free(cx - halfW, cy - halfH, cx + halfW, cy + halfH)) {
+            chosenX = cx;
+            chosenY = cy;
+            found = true;
+            break;
+          }
         }
-        for (let other = 0; other < count; other += 1) {
-          const o = other * IN;
-          if (!(input[o + 6]! & VISIBLE)) continue;
-          const far =
-            (input[o]! - ax) * nx +
-            (input[o + 1]! - ay) * ny +
-            KEEP_OUT_PX * (Math.abs(nx) + Math.abs(ny));
-          reach = Math.max(reach, far + support + 1);
-        }
-        chosenX = ax + nx * reach;
-        chosenY = ay + ny * reach;
       }
+      if (!found) {
+        // No room near its geometry (more relations than the view has space
+        // for, such as a dense sketch zoomed far out): the chip is hidden
+        // until zooming in makes room, rather than drawn over another glyph
+        // or far from what it describes. The search is bounded, so a crowded
+        // frame costs no more than a sparse one per chip.
+        shown[index] = 0;
+        continue;
+      }
+      shown[index] = 1;
       offset[index * 2] = chosenX - ax;
       offset[index * 2 + 1] = chosenY - ay;
       const p = placedCount * 4;
@@ -191,7 +250,90 @@ export class RelationGlyphLayout {
       placed[p + 1] = chosenY - halfH;
       placed[p + 2] = chosenX + halfW;
       placed[p + 3] = chosenY + halfH;
+      this.insertPlaced(placedCount);
       placedCount += 1;
+    }
+  }
+
+  private column(x: number): number {
+    const cell = Math.floor(x / CELL_PX);
+    return cell < 0 ? 0 : cell >= this.cols ? this.cols - 1 : cell;
+  }
+
+  private row(y: number): number {
+    const cell = Math.floor(y / CELL_PX);
+    return cell < 0 ? 0 : cell >= this.rows ? this.rows - 1 : cell;
+  }
+
+  /**
+   * Sizes the grid to the viewport and buckets this frame's visible anchors.
+   * Anything off the grid clamps into its border cells, and queries clamp the
+   * same way, so the search stays exact; the grid only decides how much of it
+   * a query has to look at.
+   */
+  private index(count: number, width: number, height: number) {
+    this.cols = Math.max(1, Math.ceil(width / CELL_PX));
+    this.rows = Math.max(1, Math.ceil(height / CELL_PX));
+    const cells = this.cols * this.rows;
+    if (this.anchorStart.length < cells + 1) {
+      this.anchorStart = new Int32Array(cells + 1);
+      this.anchorCursor = new Int32Array(cells);
+      this.placedHead = new Int32Array(cells);
+    }
+    const start = this.anchorStart;
+    const input = this.input;
+    start.fill(0, 0, cells + 1);
+    for (let index = 0; index < count; index += 1) {
+      const at = index * IN;
+      if (!(input[at + 6]! & VISIBLE)) continue;
+      start[
+        this.row(input[at + 1]!) * this.cols + this.column(input[at]!) + 1
+      ]! += 1;
+    }
+    for (let cell = 0; cell < cells; cell += 1) {
+      start[cell + 1]! += start[cell]!;
+    }
+    // Copied by hand: `subarray` would allocate a view every frame.
+    for (let cell = 0; cell < cells; cell += 1) {
+      this.anchorCursor[cell] = start[cell]!;
+    }
+    for (let index = 0; index < count; index += 1) {
+      const at = index * IN;
+      if (!(input[at + 6]! & VISIBLE)) continue;
+      const cell =
+        this.row(input[at + 1]!) * this.cols + this.column(input[at]!);
+      this.anchorItems[this.anchorCursor[cell]!] = index;
+      this.anchorCursor[cell]! += 1;
+    }
+    this.placedHead.fill(-1, 0, cells);
+    this.placedEntries = 0;
+  }
+
+  /** Links placed box `index` into every cell it spans. */
+  private insertPlaced(index: number) {
+    const p = index * 4;
+    const c0 = this.column(this.placed[p]!);
+    const c1 = this.column(this.placed[p + 2]!);
+    const r0 = this.row(this.placed[p + 1]!);
+    const r1 = this.row(this.placed[p + 3]!);
+    for (let row = r0; row <= r1; row += 1) {
+      for (let column = c0; column <= c1; column += 1) {
+        if (this.placedEntries === this.placedItem.length) {
+          // A rare growth step, never a steady-frame allocation.
+          const grownNext = new Int32Array(this.placedItem.length * 2);
+          const grownItem = new Int32Array(this.placedItem.length * 2);
+          grownNext.set(this.placedNext);
+          grownItem.set(this.placedItem);
+          this.placedNext = grownNext;
+          this.placedItem = grownItem;
+        }
+        const cell = row * this.cols + column;
+        const entry = this.placedEntries;
+        this.placedItem[entry] = index;
+        this.placedNext[entry] = this.placedHead[cell]!;
+        this.placedHead[cell] = entry;
+        this.placedEntries += 1;
+      }
     }
   }
 
@@ -199,37 +341,62 @@ export class RelationGlyphLayout {
     left: number,
     top: number,
     right: number,
-    bottom: number,
-    chips: number,
-    placedCount: number
+    bottom: number
   ): boolean {
+    if (
+      this.width > 0 &&
+      (left < 0 || top < 0 || right > this.width || bottom > this.height)
+    ) {
+      return false;
+    }
     const placed = this.placed;
-    for (let index = 0; index < placedCount; index += 1) {
-      const p = index * 4;
-      if (
-        left < placed[p + 2]! + CHIP_GAP_PX &&
-        right > placed[p]! - CHIP_GAP_PX &&
-        top < placed[p + 3]! + CHIP_GAP_PX &&
-        bottom > placed[p + 1]! - CHIP_GAP_PX
-      ) {
-        return false;
+    const c0 = this.column(left - CHIP_GAP_PX);
+    const c1 = this.column(right + CHIP_GAP_PX);
+    const r0 = this.row(top - CHIP_GAP_PX);
+    const r1 = this.row(bottom + CHIP_GAP_PX);
+    for (let row = r0; row <= r1; row += 1) {
+      for (let column = c0; column <= c1; column += 1) {
+        for (
+          let entry = this.placedHead[row * this.cols + column]!;
+          entry >= 0;
+          entry = this.placedNext[entry]!
+        ) {
+          const p = this.placedItem[entry]! * 4;
+          if (
+            left < placed[p + 2]! + CHIP_GAP_PX &&
+            right > placed[p]! - CHIP_GAP_PX &&
+            top < placed[p + 3]! + CHIP_GAP_PX &&
+            bottom > placed[p + 1]! - CHIP_GAP_PX
+          ) {
+            return false;
+          }
+        }
       }
     }
     // Every visible anchor keeps a small square clear: no chip sits on a
     // point, its own or another chip's.
     const input = this.input;
-    for (let index = 0; index < chips; index += 1) {
-      const at = index * IN;
-      if (!(input[at + 6]! & VISIBLE)) continue;
-      const ax = input[at]!;
-      const ay = input[at + 1]!;
-      if (
-        left < ax + KEEP_OUT_PX &&
-        right > ax - KEEP_OUT_PX &&
-        top < ay + KEEP_OUT_PX &&
-        bottom > ay - KEEP_OUT_PX
-      ) {
-        return false;
+    const start = this.anchorStart;
+    const a0 = this.column(left - KEEP_OUT_PX);
+    const a1 = this.column(right + KEEP_OUT_PX);
+    const b0 = this.row(top - KEEP_OUT_PX);
+    const b1 = this.row(bottom + KEEP_OUT_PX);
+    for (let row = b0; row <= b1; row += 1) {
+      for (let column = a0; column <= a1; column += 1) {
+        const cell = row * this.cols + column;
+        for (let item = start[cell]!; item < start[cell + 1]!; item += 1) {
+          const at = this.anchorItems[item]! * IN;
+          const ax = input[at]!;
+          const ay = input[at + 1]!;
+          if (
+            left < ax + KEEP_OUT_PX &&
+            right > ax - KEEP_OUT_PX &&
+            top < ay + KEEP_OUT_PX &&
+            bottom > ay - KEEP_OUT_PX
+          ) {
+            return false;
+          }
+        }
       }
     }
     return true;

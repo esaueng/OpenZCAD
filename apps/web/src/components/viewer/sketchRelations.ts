@@ -26,15 +26,16 @@ export function buildSketchRelationGlyphs(
   const group = new THREE.Group();
   group.name = 'sketch-relation-glyphs';
   const count = chips.length;
-  // World anchor and anchor + normal per chip, fixed for the overlay's life.
+  // World anchor and world normal per chip, fixed for the overlay's life.
   const anchors = new Float64Array(count * 3);
-  const tips = new Float64Array(count * 3);
+  const normals = new Float64Array(count * 3);
   const widths = new Float64Array(count);
   const elements: HTMLElement[] = [];
   // The last offset written per chip, so a still frame writes no style.
   const written = new Float64Array(count * 2).fill(Number.NaN);
+  // Whether each chip was last drawn (1) or hidden for want of room (0).
+  const writtenShown = new Int8Array(count).fill(-1);
   const layout = new RelationGlyphLayout(count);
-  const tipLength = probeLength(chips, basis);
   const toWorld = (x: number, y: number, out: Float64Array, at: number) => {
     out[at] = basis.origin.x + basis.u.x * x + basis.v.x * y;
     out[at + 1] = basis.origin.y + basis.u.y * x + basis.v.y * y;
@@ -74,12 +75,10 @@ export function buildSketchRelationGlyphs(
     elements.push(element);
     widths[index] = relationChipWidth(chip.glyphs.length);
     toWorld(chip.anchor.x, chip.anchor.y, anchors, index * 3);
-    toWorld(
-      chip.anchor.x + chip.normal.x * tipLength,
-      chip.anchor.y + chip.normal.y * tipLength,
-      tips,
-      index * 3
-    );
+    const at = index * 3;
+    normals[at] = basis.u.x * chip.normal.x + basis.v.x * chip.normal.y;
+    normals[at + 1] = basis.u.y * chip.normal.x + basis.v.y * chip.normal.y;
+    normals[at + 2] = basis.u.z * chip.normal.x + basis.v.z * chip.normal.y;
     const label = new CSS2DObject(element);
     label.position.set(
       anchors[index * 3]!,
@@ -91,7 +90,8 @@ export function buildSketchRelationGlyphs(
   group.traverse((child) => {
     child.raycast = () => undefined;
   });
-  const scratch = new THREE.Vector3();
+  const clip = new THREE.Vector4();
+  const step = new THREE.Vector4();
   return {
     group,
     /**
@@ -101,30 +101,47 @@ export function buildSketchRelationGlyphs(
      */
     layout(camera: THREE.Camera, width: number, height: number) {
       if (count === 0) return;
+      // The screen direction of each normal is the projection's derivative
+      // along it, taken exactly in clip space: no probe point, so nothing
+      // can cross the eye plane and flip, however far the sketch sits from
+      // the origin or however close the camera is.
+      const view = camera.matrixWorldInverse;
+      const projection = camera.projectionMatrix;
       for (let index = 0; index < count; index += 1) {
         const at = index * 3;
-        scratch.set(anchors[at]!, anchors[at + 1]!, anchors[at + 2]);
-        scratch.project(camera);
-        const visible = scratch.z >= -1 && scratch.z <= 1;
-        const ax = (scratch.x * 0.5 + 0.5) * width;
-        const ay = (-scratch.y * 0.5 + 0.5) * height;
-        scratch.set(tips[at]!, tips[at + 1]!, tips[at + 2]);
-        scratch.project(camera);
+        clip
+          .set(anchors[at]!, anchors[at + 1]!, anchors[at + 2]!, 1)
+          .applyMatrix4(view)
+          .applyMatrix4(projection);
+        step
+          .set(normals[at]!, normals[at + 1]!, normals[at + 2]!, 0)
+          .applyMatrix4(view)
+          .applyMatrix4(projection);
+        const w = clip.w;
+        const visible = w > 0 && Math.abs(clip.z / w) <= 1;
+        // d(ndc) = (d·w − clip·dw) / w²; w² > 0 only scales it, so drop it.
         layout.set(
           index,
-          ax,
-          ay,
-          (scratch.x * 0.5 + 0.5) * width - ax,
-          (-scratch.y * 0.5 + 0.5) * height - ay,
+          (clip.x / w) * 0.5 * width + 0.5 * width,
+          (-clip.y / w) * 0.5 * height + 0.5 * height,
+          (step.x * w - clip.x * step.w) * width,
+          -(step.y * w - clip.y * step.w) * height,
           widths[index]!,
           RELATION_GLYPH_PX,
           chips[index]!.placement === 'point',
           visible
         );
       }
-      layout.solve(count);
+      layout.solve(count, width, height);
       const offset = layout.offset;
+      const shown = layout.shown;
       for (let index = 0; index < count; index += 1) {
+        if (writtenShown[index] !== shown[index]) {
+          writtenShown[index] = shown[index]!;
+          // `visibility`, not `display`: CSS2DRenderer owns `display` for
+          // its frustum test. A hidden glyph takes no clicks either.
+          elements[index]!.style.visibility = shown[index] ? '' : 'hidden';
+        }
         const dx = Math.round(offset[index * 2]!);
         const dy = Math.round(offset[index * 2 + 1]!);
         if (written[index * 2] === dx && written[index * 2 + 1] === dy) {
@@ -139,39 +156,4 @@ export function buildSketchRelationGlyphs(
       clearGroup(group);
     }
   };
-}
-
-/**
- * How far along its normal a chip's direction probe reaches: a thousandth of
- * the chips' span, so it stays beside the geometry (and in front of a
- * perspective camera looking at it) however far the sketch sits from the
- * plane or world origin. The floor keeps a lone chip's probe nonzero, and the
- * magnitude term keeps it well above rounding at large coordinates.
- */
-export function probeLength(
-  chips: readonly SketchRelationGlyphChip[],
-  basis: PlaneBasis
-): number {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const { anchor } of chips) {
-    minX = Math.min(minX, anchor.x);
-    minY = Math.min(minY, anchor.y);
-    maxX = Math.max(maxX, anchor.x);
-    maxY = Math.max(maxY, anchor.y);
-  }
-  if (!Number.isFinite(minX)) return 1e-3;
-  const span = Math.max(maxX - minX, maxY - minY);
-  const magnitude = Math.max(
-    Math.abs(minX),
-    Math.abs(minY),
-    Math.abs(maxX),
-    Math.abs(maxY),
-    Math.abs(basis.origin.x),
-    Math.abs(basis.origin.y),
-    Math.abs(basis.origin.z)
-  );
-  return Math.max(span * 1e-3, 1e-6, magnitude * 1e-9);
 }

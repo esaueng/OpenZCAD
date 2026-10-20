@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { SketchRelationGlyphChip } from '../../lib/sketch/relationGlyphs';
-import { buildSketchRelationGlyphs, probeLength } from './sketchRelations';
+import { buildSketchRelationGlyphs } from './sketchRelations';
 
 // The XZ plane at y = 5: plane (10, 0) is world (10, 5, 0).
 const basis = {
@@ -116,8 +116,10 @@ describe('sketch relation glyph overlay', () => {
     const setProperty = vi.spyOn(element.style, 'setProperty');
     const camera = topCamera();
     overlay.layout(camera, 400, 400);
-    expect(setProperty).toHaveBeenCalledTimes(1);
-    const [property, value] = setProperty.mock.calls[0]!;
+    const translates = () =>
+      setProperty.mock.calls.filter(([property]) => property === 'translate');
+    expect(translates()).toHaveLength(1);
+    const [property, value] = translates()[0]!;
     expect(property).toBe('translate');
     // Plane +v (the line's upper side) is screen up: the chip rises straight
     // off the line by its standoff plus half its height, and does not slide.
@@ -126,55 +128,55 @@ describe('sketch relation glyph overlay', () => {
       .map((part) => parseFloat(part));
     expect(dx).toBe(0);
     expect(dy).toBeLessThanOrEqual(-(6 + 8));
+    const calls = setProperty.mock.calls.length;
     overlay.layout(camera, 400, 400);
-    expect(setProperty).toHaveBeenCalledTimes(1);
+    expect(setProperty).toHaveBeenCalledTimes(calls);
     overlay.dispose();
   });
 
-  it('sizes the direction probe from the chips, not their distance from the origin', () => {
-    const far = (x: number, y: number): SketchRelationGlyphChip => ({
-      ...bottom,
-      key: `object:${x}`,
-      anchor: { x, y }
-    });
-    // A 10-unit sketch a billion units out: a span-sized probe, not a
-    // million-unit one.
-    const length = probeLength([far(1e9, 1e9), far(1e9 + 10, 1e9)], basis);
-    expect(length).toBeGreaterThan(1e-3);
-    expect(length).toBeLessThan(10);
-    // A lone chip still gets a nonzero probe.
-    expect(probeLength([far(0, 0)], basis)).toBeGreaterThan(0);
-  });
+  it.each([1e9, 1e12])(
+    'keeps the standoff direction for a sketch at %d under a close, tilted perspective camera',
+    (far) => {
+      // Plane (far, far) is world (far, 5, -far). The chip stands off along
+      // plane -v, world +z: partly toward a camera 20 units away and tilted
+      // back over it. Any probe point long enough to survive rounding at this
+      // magnitude would cross the eye plane and flip; the clip-space
+      // derivative has no probe.
+      const chip: SketchRelationGlyphChip = {
+        ...bottom,
+        anchor: { x: far, y: far },
+        normal: { x: 0, y: -1 }
+      };
+      const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
+      camera.position.set(far, 30, -far + 20);
+      camera.lookAt(far, 5, -far);
+      camera.updateMatrixWorld();
+      camera.updateProjectionMatrix();
+      const overlay = buildSketchRelationGlyphs([chip], basis);
+      const element = (overlay.group.children[0] as CSS2DObject).element;
+      overlay.layout(camera, 400, 400);
+      const [dx, dy] = element.style
+        .getPropertyValue('translate')
+        .split(' ')
+        .map((part) => parseFloat(part));
+      // The anchor is at the screen centre and world +z leans toward the
+      // camera's bottom edge: the chip drops straight down the screen.
+      expect(dx).toBe(0);
+      expect(dy).toBeGreaterThan(0);
+      overlay.dispose();
+    }
+  );
 
-  it('keeps the standoff direction for a far-off sketch under an orbited perspective camera', () => {
-    // Plane (1e9, 1e9) is world (1e9, 5, -1e9). The chip stands off along
-    // plane -v, world +z: toward a camera tilted back over it, so a probe a
-    // million units long would land behind the camera and flip.
-    const chip: SketchRelationGlyphChip = {
-      ...bottom,
-      anchor: { x: 1e9, y: 1e9 },
-      normal: { x: 0, y: -1 }
-    };
-    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
-    camera.position.set(1e9, 30, -1e9 + 20);
-    camera.lookAt(1e9, 5, -1e9);
-    camera.updateMatrixWorld();
-    camera.updateProjectionMatrix();
-    const overlay = buildSketchRelationGlyphs([chip], basis);
+  it('leaves a chip whose anchor is off the viewport where it is', () => {
+    const camera = topCamera();
+    // Plane (200, 0) is far right of the 100-unit-wide view.
+    const overlay = buildSketchRelationGlyphs(
+      [{ ...bottom, anchor: { x: 200, y: 0 } }],
+      basis
+    );
     const element = (overlay.group.children[0] as CSS2DObject).element;
     overlay.layout(camera, 400, 400);
-    const [dx, dy] = element.style
-      .getPropertyValue('translate')
-      .split(' ')
-      .map((part) => parseFloat(part));
-    // Ground truth: the screen direction of a tiny step along the normal.
-    const screen = (z: number) => {
-      const point = new THREE.Vector3(1e9, 5, z).project(camera);
-      return { x: point.x * 200 + 200, y: -point.y * 200 + 200 };
-    };
-    const from = screen(-1e9);
-    const to = screen(-1e9 + 1e-3);
-    expect(dx! * (to.x - from.x) + dy! * (to.y - from.y)).toBeGreaterThan(0);
+    expect(element.style.getPropertyValue('translate')).toBe('0px 0px');
     overlay.dispose();
   });
 });
