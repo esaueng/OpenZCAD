@@ -1,7 +1,8 @@
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   adoptProjectDocument,
-  createProjectDocument
+  createProjectDocument,
+  reidentifyProjectDocument
 } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
@@ -30,6 +31,9 @@ test('saves unopened legacy projects with undo history from the library', async 
     } as unknown as ProjectDocument;
   });
   const saved: ProjectDocument[] = [];
+  // The browser re-homes each document (ADR-024 Phase 1); the device id it
+  // came from travels beside it.
+  const savedFrom = new Map<string, string>();
   await stubApi(page);
   await page.route('**/api/projects', async (route) => {
     if (route.request().method() !== 'POST') return route.fallback();
@@ -44,6 +48,7 @@ test('saves unopened legacy projects with undo history from the library', async 
         toUserId('user_e2e')
       );
       saved.push(document);
+      savedFrom.set(document.projectId, request.localProjectId!);
       await route.fulfill({
         status: 201,
         json: {
@@ -106,13 +111,16 @@ test('saves unopened legacy projects with undo history from the library', async 
   await expect(page.locator('.start-account-text')).toHaveText(
     'All 3 parts saved'
   );
-  expect(saved.map((document) => document.projectId).sort()).toEqual(
-    documents.map((document) => document.projectId).sort()
-  );
+  expect(
+    saved.map((document) => savedFrom.get(document.projectId)).sort()
+  ).toEqual(documents.map((document) => document.projectId).sort());
   for (const document of saved) {
-    const original = documents.find(
-      (snapshot) => snapshot.projectId === document.projectId
-    )!;
+    const original = reidentifyProjectDocument(
+      documents.find(
+        (snapshot) => snapshot.projectId === savedFrom.get(document.projectId)
+      )!,
+      document.projectId
+    );
     expect(document.editHistory?.cursor).toBe(original.editHistory?.cursor);
     expect(document.editHistory?.entries).toEqual(
       original.editHistory?.entries
@@ -238,8 +246,10 @@ for (const destination of ['account', 'device', 'refused'] as const) {
     if (destination !== 'device') {
       expect(saved).toHaveLength(1);
       expect(saved[0]!.version).toBe(recovery.version);
+      // The browser re-homed the history along with the project.
       expect(saved[0]!.editHistory?.entries).toEqual(
-        recovery.editHistory?.entries
+        reidentifyProjectDocument(recovery, saved[0]!.projectId).editHistory
+          ?.entries
       );
     }
     // The first explicit save owns a checkpoint even when recovery stripped
@@ -275,8 +285,11 @@ for (const destination of ['account', 'device', 'refused'] as const) {
         (checkpoint) => checkpoint.reason === 'Manual save'
       )
     ).toBe(true);
+    // An account save re-homes the history with the project (ADR-024
+    // Phase 1); either way it is the recovery's history.
     expect(document.editHistory?.entries).toEqual(
-      recovery.editHistory?.entries
+      reidentifyProjectDocument(recovery, document.projectId).editHistory
+        ?.entries
     );
   });
 }

@@ -4,7 +4,9 @@ This is the bounded design and kernel qualification for the through-all slice
 of F01. It does not add an end-condition field or UI.
 
 > **Implemented (2026-10-18, schema v20).** `endCondition` ships as
-> `'blind' | 'through-all'` only; the other values listed below stay design
+> `'blind' | 'through-all'` only; schema v29 (2026-10-19) adds `'to-face'`
+> with a lineage-named `toFace` target and an extrude `draftAngleDeg` (see the
+> F01 row). The other values listed below stay design
 > intent until their slices land, so a document cannot carry an end
 > condition no build implements. The UI offers Through all whenever Cut is
 > chosen explicitly, when creating or editing; never while the operation

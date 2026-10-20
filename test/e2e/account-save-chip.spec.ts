@@ -32,15 +32,18 @@ test('Save to my account uploads a device project that has no revisions', async 
   );
   const accountProjectId = toProjectId('proj_account_recovery');
   let posted: ProjectDocument | undefined;
+  let postedLocalId: string | undefined;
   let adopted: ProjectDocument | undefined;
   await page.route('**/api/projects', (route) => {
     if (route.request().method() !== 'POST') return route.fallback();
     const payload = route.request().postDataJSON() as {
       name: string;
       document?: ProjectDocument;
+      localProjectId?: string;
     };
     if (!payload.document) return route.fallback();
     posted = payload.document;
+    postedLocalId = payload.localProjectId;
     adopted = adoptProjectDocument(
       reidentifyProjectDocument(payload.document, accountProjectId),
       toUserId('user_e2e'),
@@ -136,7 +139,9 @@ test('Save to my account uploads a device project that has no revisions', async 
   await expect(
     page.getByRole('button', { name: 'Save to my account', exact: true })
   ).toHaveCount(0);
-  expect(posted?.projectId).toBe(recovery.projectId);
+  // The browser re-homes the document and names the device id it came from.
+  expect(postedLocalId).toBe(recovery.projectId);
+  expect(posted?.projectId).not.toBe(recovery.projectId);
   // The save point the chip made travelled with the upload.
   expect(posted?.revisions.length).toBeGreaterThan(0);
   expect(posted?.checkpoints.length).toBeGreaterThan(0);

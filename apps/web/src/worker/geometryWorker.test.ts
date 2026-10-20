@@ -1629,6 +1629,24 @@ describe('geometry worker rebuild coordination', () => {
       )
     );
     expect(solveSketch).toHaveBeenCalledWith(document, 'sketch_a');
+
+    // A relation applied on add holds its first pick through the worker.
+    const anchor = { objectIds: ['line_a'] };
+    post(scope, {
+      type: 'solve-sketch',
+      requestId: 'solve-2',
+      document,
+      sketchId: toSketchId('sketch_a'),
+      anchor
+    });
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'solve-sketch', requestId: 'solve-2' })
+      )
+    );
+    expect(solveSketch).toHaveBeenLastCalledWith(document, 'sketch_a', {
+      anchor
+    });
   });
 
   it('answers mesh-quality requests with the adapter report', async () => {

@@ -36,7 +36,8 @@ export interface ExtrudeCapAncestor {
  * Only the extrude's own output body qualifies: a modifier downstream
  * republishes the cap under its own vocabulary, and the primitive ancestry
  * helpers already decide what a drag means there. Two-sided extrusions are
- * refused because the far cap is one of two faces the distance moves.
+ * refused because the far cap is one of two faces the distance moves, and
+ * derived extents (F01) because no stored distance moves the cap.
  */
 export function extrudeCapAncestor(
   document: ProjectDocument,
@@ -62,8 +63,13 @@ export function extrudeCapAncestor(
   ) {
     return null;
   }
-  const { distance, symmetric, backDistance, operation } = feature.data;
+  const { distance, symmetric, backDistance, operation, endCondition } =
+    feature.data;
   if (
+    // A to-face or through-all extent derives its depth from a face or a
+    // target on every rebuild; its stored distance is dormant, so a drag
+    // that changed it would move nothing.
+    endCondition !== undefined ||
     symmetric ||
     (backDistance !== undefined && backDistance !== 0) ||
     typeof distance !== 'number' ||

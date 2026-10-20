@@ -31,6 +31,41 @@ export interface SketchDimensionAnnotation {
   lines: Point[][];
 }
 
+/**
+ * Plane-local position of one constraint-schema point: a line's start or
+ * end, a circle's center, an arc's center or sweep end. Null when the object
+ * has no such point or a value does not resolve.
+ */
+export function sketchPointPosition(
+  data: SketchObjectData | undefined,
+  pointName: SketchPointRef['point'],
+  scalar: (value: number | string) => number | undefined
+): Point | null {
+  if (!data) return null;
+  if (data.objectKind === 'line') {
+    if (pointName === 'center') return null;
+    const x = scalar(pointName === 'start' ? data.x1 : data.x2);
+    const y = scalar(pointName === 'start' ? data.y1 : data.y2);
+    return x === undefined || y === undefined ? null : { x, y };
+  }
+  if (data.objectKind !== 'circle' && data.objectKind !== 'arc') return null;
+  const x = scalar(data.centerX);
+  const y = scalar(data.centerY);
+  if (x === undefined || y === undefined) return null;
+  if (pointName === 'center') return { x, y };
+  if (data.objectKind !== 'arc') return null;
+  const radius = scalar(data.radius);
+  const angle = scalar(
+    pointName === 'start' ? data.startAngleDeg : data.endAngleDeg
+  );
+  if (radius === undefined || radius <= 0 || angle === undefined) return null;
+  const radians = (angle * Math.PI) / 180;
+  return {
+    x: x + radius * Math.cos(radians),
+    y: y + radius * Math.sin(radians)
+  };
+}
+
 /** Layout is derived from document geometry; it never becomes constraint identity. */
 export function sketchDimensionAnnotations(
   objects: readonly { id: string; data: SketchObjectData }[],
@@ -45,32 +80,8 @@ export function sketchDimensionAnnotations(
     const result = resolve(value);
     return result !== undefined && Number.isFinite(result) ? result : undefined;
   };
-  const point = (ref: SketchPointRef): Point | null => {
-    const data = byId.get(ref.objectId);
-    if (!data) return null;
-    if (data.objectKind === 'line') {
-      if (ref.point === 'center') return null;
-      const x = scalar(ref.point === 'start' ? data.x1 : data.x2);
-      const y = scalar(ref.point === 'start' ? data.y1 : data.y2);
-      return x === undefined || y === undefined ? null : { x, y };
-    }
-    if (data.objectKind !== 'circle' && data.objectKind !== 'arc') return null;
-    const x = scalar(data.centerX);
-    const y = scalar(data.centerY);
-    if (x === undefined || y === undefined) return null;
-    if (ref.point === 'center') return { x, y };
-    if (data.objectKind !== 'arc') return null;
-    const radius = scalar(data.radius);
-    const angle = scalar(
-      ref.point === 'start' ? data.startAngleDeg : data.endAngleDeg
-    );
-    if (radius === undefined || radius <= 0 || angle === undefined) return null;
-    const radians = (angle * Math.PI) / 180;
-    return {
-      x: x + radius * Math.cos(radians),
-      y: y + radius * Math.sin(radians)
-    };
-  };
+  const point = (ref: SketchPointRef): Point | null =>
+    sketchPointPosition(byId.get(ref.objectId), ref.point, scalar);
   const format = (raw: number | string, value: number, suffix: string) =>
     `${typeof raw === 'string' ? `${raw} = ` : ''}${formatNumber(value)}${suffix}`;
   const result: SketchDimensionAnnotation[] = [];
