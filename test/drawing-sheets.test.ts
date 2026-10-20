@@ -14,6 +14,7 @@ import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   drawingPaperMm,
   drawingSetError,
+  MAX_PROJECT_NAME_LENGTH,
   projectedViewSide,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
@@ -36,6 +37,8 @@ import {
   viewPageBox
 } from '../apps/web/src/lib/drawing/sheetPage';
 import {
+  drawingExportFileName,
+  MAX_EXPORT_FILE_NAME_BYTES,
   sheetPageToPdf,
   sheetPageToSvg
 } from '../apps/web/src/lib/drawing/sheetExport';
@@ -846,6 +849,37 @@ describe('D01 sheet page and export', () => {
     }
     // A kilometre does not fit A3 even at 1:1000.
     expect(await make(1e6)).toThrow(/too large for a sheet/);
+  });
+
+  it('bounds the export file name to what the desktop save dialog accepts', () => {
+    // Two valid 120-character names make a 245-byte file name together.
+    const project = 'Gearbox housing '.repeat(8).slice(0, 120);
+    const sheet = 'Assembly sheet '.repeat(8).slice(0, 120);
+    for (const format of ['pdf', 'svg'] as const) {
+      const name = drawingExportFileName(project, sheet, format);
+      expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(
+        MAX_EXPORT_FILE_NAME_BYTES
+      );
+      expect(name.endsWith(`.${format}`)).toBe(true);
+      expect(name.startsWith('Gearbox-housing-')).toBe(true);
+      expect(name).toContain('-Assembly-sheet');
+      expect(name).not.toMatch(/[-.]{2}/);
+    }
+    // Short names are unchanged.
+    expect(drawingExportFileName('Bracket', 'Sheet 1', 'pdf')).toBe(
+      'Bracket-Sheet-1.pdf'
+    );
+  });
+
+  it('reserves the fallback sheet name inside the export file name budget', () => {
+    const project = 'P'.repeat(MAX_PROJECT_NAME_LENGTH);
+    for (const format of ['pdf', 'svg'] as const) {
+      const name = drawingExportFileName(project, '---', format);
+      expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(
+        MAX_EXPORT_FILE_NAME_BYTES
+      );
+      expect(name.endsWith(`-sheet.${format}`)).toBe(true);
+    }
   });
 
   it('maps model spans to paper through one transform: 1:2 halves them, inches scale by 25.4', async () => {
