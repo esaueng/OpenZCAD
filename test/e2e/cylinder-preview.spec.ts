@@ -138,7 +138,9 @@ for (const dimension of ['radius', 'height', 'bottom-height'] as const) {
 test('rounded cylinder rapid bottom, top, and radius edits survive reload', async ({
   page
 }) => {
-  test.setTimeout(90_000);
+  // The drag specs' budget: this one also reframes clear of the lane's card
+  // and reloads, about 100 s on a loaded runner.
+  test.setTimeout(180_000);
   const { canvas, errors } = await setupRoundedCylinder(page, true);
   let framed = false;
   for (const [surface, change, minZ, maxZ, radius] of [
