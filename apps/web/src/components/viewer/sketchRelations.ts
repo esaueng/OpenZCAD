@@ -34,13 +34,7 @@ export function buildSketchRelationGlyphs(
   // The last offset written per chip, so a still frame writes no style.
   const written = new Float64Array(count * 2).fill(Number.NaN);
   const layout = new RelationGlyphLayout(count);
-  let extent = 1;
-  for (const chip of chips) {
-    extent = Math.max(extent, Math.abs(chip.anchor.x), Math.abs(chip.anchor.y));
-  }
-  // A tip one-thousandth of the sketch's reach away: far enough to survive
-  // rounding, near enough to stay in front of a perspective camera.
-  const tipLength = extent * 1e-3;
+  const tipLength = probeLength(chips, basis);
   const toWorld = (x: number, y: number, out: Float64Array, at: number) => {
     out[at] = basis.origin.x + basis.u.x * x + basis.v.x * y;
     out[at + 1] = basis.origin.y + basis.u.y * x + basis.v.y * y;
@@ -145,4 +139,39 @@ export function buildSketchRelationGlyphs(
       clearGroup(group);
     }
   };
+}
+
+/**
+ * How far along its normal a chip's direction probe reaches: a thousandth of
+ * the chips' span, so it stays beside the geometry (and in front of a
+ * perspective camera looking at it) however far the sketch sits from the
+ * plane or world origin. The floor keeps a lone chip's probe nonzero, and the
+ * magnitude term keeps it well above rounding at large coordinates.
+ */
+export function probeLength(
+  chips: readonly SketchRelationGlyphChip[],
+  basis: PlaneBasis
+): number {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const { anchor } of chips) {
+    minX = Math.min(minX, anchor.x);
+    minY = Math.min(minY, anchor.y);
+    maxX = Math.max(maxX, anchor.x);
+    maxY = Math.max(maxY, anchor.y);
+  }
+  if (!Number.isFinite(minX)) return 1e-3;
+  const span = Math.max(maxX - minX, maxY - minY);
+  const magnitude = Math.max(
+    Math.abs(minX),
+    Math.abs(minY),
+    Math.abs(maxX),
+    Math.abs(maxY),
+    Math.abs(basis.origin.x),
+    Math.abs(basis.origin.y),
+    Math.abs(basis.origin.z)
+  );
+  return Math.max(span * 1e-3, 1e-6, magnitude * 1e-9);
 }

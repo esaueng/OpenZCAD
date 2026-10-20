@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { SketchRelationGlyphChip } from '../../lib/sketch/relationGlyphs';
-import { buildSketchRelationGlyphs } from './sketchRelations';
+import { buildSketchRelationGlyphs, probeLength } from './sketchRelations';
 
 // The XZ plane at y = 5: plane (10, 0) is world (10, 5, 0).
 const basis = {
@@ -128,6 +128,53 @@ describe('sketch relation glyph overlay', () => {
     expect(dy).toBeLessThanOrEqual(-(6 + 8));
     overlay.layout(camera, 400, 400);
     expect(setProperty).toHaveBeenCalledTimes(1);
+    overlay.dispose();
+  });
+
+  it('sizes the direction probe from the chips, not their distance from the origin', () => {
+    const far = (x: number, y: number): SketchRelationGlyphChip => ({
+      ...bottom,
+      key: `object:${x}`,
+      anchor: { x, y }
+    });
+    // A 10-unit sketch a billion units out: a span-sized probe, not a
+    // million-unit one.
+    const length = probeLength([far(1e9, 1e9), far(1e9 + 10, 1e9)], basis);
+    expect(length).toBeGreaterThan(1e-3);
+    expect(length).toBeLessThan(10);
+    // A lone chip still gets a nonzero probe.
+    expect(probeLength([far(0, 0)], basis)).toBeGreaterThan(0);
+  });
+
+  it('keeps the standoff direction for a far-off sketch under an orbited perspective camera', () => {
+    // Plane (1e9, 1e9) is world (1e9, 5, -1e9). The chip stands off along
+    // plane -v, world +z: toward a camera tilted back over it, so a probe a
+    // million units long would land behind the camera and flip.
+    const chip: SketchRelationGlyphChip = {
+      ...bottom,
+      anchor: { x: 1e9, y: 1e9 },
+      normal: { x: 0, y: -1 }
+    };
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
+    camera.position.set(1e9, 30, -1e9 + 20);
+    camera.lookAt(1e9, 5, -1e9);
+    camera.updateMatrixWorld();
+    camera.updateProjectionMatrix();
+    const overlay = buildSketchRelationGlyphs([chip], basis);
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(camera, 400, 400);
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    // Ground truth: the screen direction of a tiny step along the normal.
+    const screen = (z: number) => {
+      const point = new THREE.Vector3(1e9, 5, z).project(camera);
+      return { x: point.x * 200 + 200, y: -point.y * 200 + 200 };
+    };
+    const from = screen(-1e9);
+    const to = screen(-1e9 + 1e-3);
+    expect(dx! * (to.x - from.x) + dy! * (to.y - from.y)).toBeGreaterThan(0);
     overlay.dispose();
   });
 });
