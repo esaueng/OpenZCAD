@@ -316,6 +316,10 @@ describe('partial revolve geometry', () => {
    * 270 degrees, whose box was already nearly the full circle's, is
    * unchanged. Every error went down, none changed sign.
    *
+   * Remus 2026.1.69 lowered the 0.001x floors again, still LOW: 90 degrees
+   * from 1.6967e-5 to 1.4283e-5 and 270 degrees from 3.4452e-5 to
+   * 2.8156e-5. The table above predates that and was not re-measured.
+   *
    * That angle-dependence is why this is NOT the same thing as historical BrepKit #59's
    * `Tolerance::linear / min_radius` note. That ratio is angle-independent —
    * the profile's inner radius is 2*scale whatever the sweep — so it would
@@ -330,8 +334,8 @@ describe('partial revolve geometry', () => {
    * and so nobody "fixes" it by loosening the 1x and 1000x cases above.
    */
   it.each([
-    [90, 1.6967e-5],
-    [270, 3.4452e-5]
+    [90, 1.42834e-5],
+    [270, 2.81565e-5]
   ])(
     'records the small-scale volume error at 0.001x and %s degrees',
     async (angleDeg, expectedRelativeError) => {
