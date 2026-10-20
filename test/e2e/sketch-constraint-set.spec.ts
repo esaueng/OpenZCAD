@@ -101,4 +101,12 @@ test('point relations arm from the rail and act on snap-point picks', async ({
   await expect(status).toContainText('Point on curve: pick 2 of 2.');
   await page.mouse.click((p0.x + p1.x) / 2, (p0.y + p1.y) / 2);
   await expect(status).toContainText('Point on curve constraint added');
+
+  // UX-2: the hover marker offers a midpoint, which is no stored point, so
+  // Lock names it instead of repeating its hint.
+  await pointTool('Lock');
+  await page.mouse.click((p2.x + p3.x) / 2, (p2.y + p3.y) / 2);
+  await expect(status).toContainText(
+    "Lock can't use a midpoint: it is not a stored sketch point."
+  );
 });

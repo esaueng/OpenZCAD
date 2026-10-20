@@ -265,7 +265,8 @@ import {
   snapSketchPoint,
   type SketchPoint,
   type SnapTarget,
-  type SnapTargetKind
+  type SnapTargetKind,
+  type UnreferencedSnap
 } from '../lib/sketch/session';
 import {
   canPlaceTextDraft,
@@ -972,7 +973,13 @@ export interface ModelViewerProps {
      * The click on the sketch plane, unsnapped: where along a curve the
      * click fell, which Trim needs and a snap would move to an end.
      */
-    planePoint: { x: number; y: number } | null
+    planePoint: { x: number; y: number } | null,
+    /**
+     * The active snap when it had no constraint-schema identity (a
+     * parametric rectangle corner, a midpoint…), so a point-taking tool can
+     * say why it refused it.
+     */
+    unreferencedSnap: UnreferencedSnap | null
   ): boolean | void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
@@ -8132,7 +8139,15 @@ export function ModelViewer({
             objectId,
             snapPoint,
             { x: event.clientX, y: event.clientY },
-            planePoint ? { x: planePoint.x, y: planePoint.y } : null
+            planePoint ? { x: planePoint.x, y: planePoint.y } : null,
+            activeSketchSnap && !snapPoint
+              ? {
+                  kind: activeSketchSnap.kind,
+                  ...(activeSketchSnap.sourceId
+                    ? { sourceId: activeSketchSnap.sourceId }
+                    : {})
+                }
+              : null
           );
           if (!objectId && consumed !== true) {
             const profile = picker.pick(event)?.region;

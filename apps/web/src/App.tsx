@@ -238,6 +238,7 @@ import {
   residualConstraintObjectIds,
   sketchDefinedState,
   topResidualConstraints,
+  unreferencedSnapRefusal,
   type ConstraintPick,
   type DrivingDimensionKind
 } from './lib/sketch/constraints';
@@ -252,7 +253,10 @@ import {
   solveStatusLabel,
   solvedSketchCommands
 } from './lib/sketch/applySolve';
-import { sketchContentFramePoints } from './lib/sketch/session';
+import {
+  sketchContentFramePoints,
+  type UnreferencedSnap
+} from './lib/sketch/session';
 import type { CompositeShape } from './lib/sketch/composites';
 import { resolvedSketchPlaneBasis } from './lib/sketch/planeBasis';
 import { sketchEntityEditTarget } from './lib/sketch/editTarget';
@@ -14570,7 +14574,8 @@ export function App() {
   function handleSketchConstraintPick(
     objectId: string | null,
     snapPoint: { objectId: string; point: 'start' | 'end' | 'center' } | null,
-    clickPoint: { x: number; y: number }
+    clickPoint: { x: number; y: number },
+    unreferencedSnap: UnreferencedSnap | null
   ): boolean {
     if (
       interaction.mode !== 'sketch' ||
@@ -14622,7 +14627,16 @@ export function App() {
           ? { kind: 'object', objectId }
           : null;
     if (!pick) {
-      setStatus(spec.hint);
+      setStatus(
+        (expectedPickKind === 'point' && unreferencedSnap
+          ? unreferencedSnapRefusal(
+              doc,
+              editingSketchNode,
+              pending.kind,
+              unreferencedSnap
+            )
+          : null) ?? spec.hint
+      );
       return true;
     }
     const refusal = refusePick(
@@ -21516,13 +21530,15 @@ export function App() {
               objectId,
               snapPoint,
               clickPoint,
-              planePoint
+              planePoint,
+              unreferencedSnap
             ) => {
               if (
                 handleSketchConstraintPick(
                   objectId,
                   snapPoint ?? null,
-                  clickPoint
+                  clickPoint,
+                  unreferencedSnap
                 ) ||
                 handleSketchEditPick(objectId, clickPoint, {
                   at: planePoint,
