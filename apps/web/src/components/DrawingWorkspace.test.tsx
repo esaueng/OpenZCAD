@@ -616,6 +616,44 @@ describe('DrawingWorkspace', () => {
     }
   });
 
+  it("asks for a view's bodies in key order, whatever order the view stores", async () => {
+    const otherId = 'body_a_first' as BodyId;
+    const bodies = {
+      [bodyId]: cube(),
+      [otherId]: { ...cube(4), bodyId: otherId, name: 'Small cube' }
+    };
+    const sheet = starter(drawingSourceFingerprint(bodies, [bodyId, otherId])!);
+    // Removed and re-added: the stored order differs from the sorted key.
+    sheet.views = sheet.views.map((view) => ({
+      ...view,
+      bodyIds: [bodyId, otherId]
+    }));
+    const project = vi.spyOn(DrawingProjectionClient.prototype, 'project');
+    try {
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      render(
+        <DrawingWorkspace
+          document={{
+            ...base,
+            bodyOrder: [bodyId, otherId],
+            drawings: { sheets: [sheet] }
+          }}
+          bodies={bodies}
+          geometryPending={false}
+          defaultBodyIds={[bodyId]}
+          editDisabledReason={null}
+          onCommand={vi.fn(() => true)}
+          onStatus={vi.fn()}
+        />
+      );
+      await waitFor(() => expect(project).toHaveBeenCalled());
+      const [, views] = project.mock.calls[0]!;
+      for (const view of views) expect(view.bodyIds).toEqual([otherId, bodyId]);
+    } finally {
+      project.mockRestore();
+    }
+  });
+
   it('names a body the sheet draws that is gone', () => {
     const sheet = starter('v1:0000000000000000');
     sheet.views[0]!.bodyIds = ['body_gone' as BodyId];

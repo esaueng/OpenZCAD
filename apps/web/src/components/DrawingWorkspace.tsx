@@ -33,6 +33,7 @@ import {
   type DrawingViewOrientation,
   type ProjectDocument
 } from '@openzcad/shared';
+import { pruneProjectionCache } from '../lib/drawing/projectionCache';
 import {
   DrawingProjectionClient,
   type DrawingProjectionViewRequest
@@ -137,6 +138,17 @@ function projectionKey(fingerprint: string, view: DrawingView): string {
 
 const PAPER_SIZES = Object.keys(DRAWING_PAPER_SIZES_MM) as DrawingPaperSize[];
 
+/** What sheets not on screen may keep of their projections. */
+const INACTIVE_PROJECTION_BYTES = 32 * 1024 * 1024;
+
+function viewStateBytes(entry: ViewState): number {
+  if (entry.state !== 'ready') return 0;
+  let bytes = 0;
+  for (const line of entry.projection.visible) bytes += line.byteLength;
+  for (const line of entry.projection.hidden) bytes += line.byteLength;
+  return bytes;
+}
+
 /** Projections for the sheet's views, cached by model and view intent. */
 function useViewProjections(
   sheet: DrawingSheet | null,
@@ -172,9 +184,19 @@ function useViewProjections(
   useEffect(() => {
     // Keep the cache to what this model's sheets still draw: a deleted view
     // or sheet (the last one included), or a view whose bodies or hidden
-    // lines changed, frees its projection.
-    for (const key of cache.current.keys())
-      if (!wanted.has(key)) cache.current.delete(key);
+    // lines changed, frees its projection. Sheets not on screen keep theirs
+    // only within a byte budget, least recently shown first out.
+    pruneProjectionCache(
+      cache.current,
+      wanted,
+      new Set(
+        sheet && fingerprint
+          ? sheet.views.map((view) => projectionKey(fingerprint, view))
+          : []
+      ),
+      INACTIVE_PROJECTION_BYTES,
+      viewStateBytes
+    );
     for (const key of failures.current.keys())
       if (!wanted.has(key)) failures.current.delete(key);
     if (!sheet || !fingerprint || !client.current || outstanding.current)
@@ -197,7 +219,10 @@ function useViewProjections(
         key,
         orientation: view.orientation,
         hiddenLines: view.hiddenLines,
-        bodyIds: [...view.bodyIds]
+        // In the key's order: the lines come out in body order, and a view
+        // whose bodies were removed and re-added must export the same bytes
+        // whether its projection was cached or made after a reload.
+        bodyIds: [...view.bodyIds].sort()
       });
       cache.current.set(key, { state: 'projecting' });
     }
