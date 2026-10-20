@@ -30,6 +30,7 @@ import {
 import type { PanelId } from '../../lib/panelLayout';
 import { ModelPanel, type ModelPanelProps } from './ModelPanel';
 import type { PanelControls } from './PanelFrame';
+import { useHistoryFind, useObjectsView } from './panelViews';
 
 function feature(
   index: number,
@@ -58,7 +59,7 @@ function controls(overrides: Partial<PanelControls> = {}): PanelControls {
   };
 }
 
-type PanelSource = Omit<ModelPanelProps, 'id' | 'controls'>;
+type PanelSource = Omit<ModelPanelProps, 'id' | 'controls' | 'views'>;
 
 function source(overrides: Partial<PanelSource> = {}): PanelSource {
   return {
@@ -108,10 +109,17 @@ function Panels({
   props: PanelSource;
   frame: PanelControls;
 }) {
+  const views = { objects: useObjectsView(), historyFind: useHistoryFind() };
   return (
     <>
       {ids.map((id) => (
-        <ModelPanel key={id} id={id} controls={frame} {...props} />
+        <ModelPanel
+          key={id}
+          id={id}
+          controls={frame}
+          views={views}
+          {...props}
+        />
       ))}
     </>
   );
@@ -399,6 +407,48 @@ describe('ModelPanel', () => {
       'aria-pressed',
       'true'
     );
+  });
+
+  it('keeps its search and Find field through a move that remounts it', async () => {
+    const sketches = ['Base profile', 'Rib outline'].map((name, index) =>
+      feature(index + 1, {
+        name,
+        featureKind: 'sketch',
+        data: { featureKind: 'sketch', sketchId: `sketch-${index + 1}` }
+      } as Partial<FeatureNode>)
+    );
+    const props = source({ features: sketches });
+    // A move between the dock and the phone lane draws the panel under a
+    // different parent; only its hoisted view state carries across.
+    function Moving({ inLane }: { inLane: boolean }) {
+      const views = {
+        objects: useObjectsView(),
+        historyFind: useHistoryFind()
+      };
+      const panels = (['bodies', 'history'] as const).map((id) => (
+        <ModelPanel
+          key={id}
+          id={id}
+          controls={controls()}
+          views={views}
+          {...props}
+        />
+      ));
+      return inLane ? <section>{panels}</section> : <div>{panels}</div>;
+    }
+    const { rerender } = render(<Moving inLane={false} />);
+    await userEvent.type(
+      screen.getByRole('searchbox', { name: 'Find an object by name' }),
+      'rib'
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Find a step' }));
+    rerender(<Moving inLane />);
+    expect(
+      screen.getByRole('searchbox', { name: 'Find an object by name' })
+    ).toHaveValue('rib');
+    expect(
+      screen.getByRole('searchbox', { name: 'Find a step' })
+    ).toBeInTheDocument();
   });
 
   it('keeps every body in the parameter toggle editor while an object search is active', async () => {

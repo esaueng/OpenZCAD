@@ -1,19 +1,10 @@
 import type { PanelId } from '../../lib/panelLayout';
 import { DiagnosticsPanel, diagnosticCount } from './DiagnosticsPanel';
-import {
-  HistoryFindToggle,
-  HistoryPanel,
-  historyCount,
-  useHistoryFind
-} from './HistoryPanel';
+import { HistoryFindToggle, HistoryPanel, historyCount } from './HistoryPanel';
 import type { ModelPanelSource } from './modelPanelProps';
-import {
-  modelBodies,
-  ObjectsPanel,
-  objectCount,
-  useObjectsView
-} from './ObjectsPanel';
+import { modelBodies, ObjectsPanel, objectCount } from './ObjectsPanel';
 import { PanelFrame, type PanelControls } from './PanelFrame';
+import type { ModelPanelViews } from './panelViews';
 import { ParametersPanel, parameterCount } from './ParametersPanel';
 import {
   RevisionsPanel,
@@ -24,13 +15,15 @@ import {
 export interface ModelPanelProps extends ModelPanelSource {
   id: PanelId;
   controls: PanelControls;
+  views: ModelPanelViews;
 }
 
 /**
- * One model panel in its frame. Each panel owns its own view state — the
+ * One model panel in its frame. Each panel has its own view state — the
  * Objects filter and search, the History step search, the Revisions device
- * save states — so two panels open side by side never share it. Loaded
- * lazily with the panel bodies, off the entry chunk.
+ * save states — so two panels open side by side never share it; the first
+ * two come from `views`, held above the panel so a move that remounts it
+ * keeps them. Loaded lazily with the panel bodies, off the entry chunk.
  */
 export function ModelPanel(props: ModelPanelProps) {
   switch (props.id) {
@@ -71,20 +64,19 @@ function ParametersFrame(props: ModelPanelProps) {
 }
 
 function ObjectsFrame(props: ModelPanelProps) {
-  const view = useObjectsView();
   return (
     <PanelFrame
       id="bodies"
       count={objectCount(props)}
       controls={props.controls}
     >
-      <ObjectsPanel {...props} view={view} />
+      <ObjectsPanel {...props} view={props.views.objects} />
     </PanelFrame>
   );
 }
 
 function HistoryFrame(props: ModelPanelProps) {
-  const find = useHistoryFind();
+  const find = props.views.historyFind;
   return (
     <PanelFrame
       id="history"

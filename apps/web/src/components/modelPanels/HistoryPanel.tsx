@@ -1,36 +1,8 @@
-import { useRef, useState, type RefObject } from 'react';
 import { Search } from 'lucide-react';
 import type { FeatureNode } from '@openzcad/shared';
 import { HistoryTimeline } from '../HistoryTimeline';
 import type { ModelPanelSource } from './modelPanelProps';
-
-/**
- * The History step search: whether the field is open, and the header toggle
- * that opens it. The panel's frame holds it, because the toggle sits in the
- * header rather than the body.
- */
-export interface HistoryFind {
-  open: boolean;
-  toggleRef: RefObject<HTMLButtonElement | null>;
-  toggle(): void;
-  close(): void;
-}
-
-export function useHistoryFind(): HistoryFind {
-  const [findOpen, setFindOpen] = useState(false);
-  const findToggleRef = useRef<HTMLButtonElement>(null);
-  return {
-    open: findOpen,
-    toggleRef: findToggleRef,
-    toggle: () => setFindOpen((open) => !open),
-    close: () => {
-      setFindOpen(false);
-      // The field unmounts with focus in it; hand focus back to the
-      // toggle that opened it rather than dropping it on the page.
-      findToggleRef.current?.focus();
-    }
-  };
-}
+import type { HistoryFind } from './panelViews';
 
 /** The header's Find toggle, shown while the list has something to find. */
 export function HistoryFindToggle({ find }: { find: HistoryFind }) {

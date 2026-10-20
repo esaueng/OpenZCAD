@@ -1,4 +1,3 @@
-import { useState, type Dispatch, type SetStateAction } from 'react';
 import {
   Axis3d,
   Box,
@@ -19,32 +18,13 @@ import { useArrivals } from '../../hooks/useArrivals';
 import { datumPlaneRows } from '../../lib/datumPlanes';
 import { datumAxisRows } from '../../lib/datumAxes';
 import type { ModelPanelSource } from './modelPanelProps';
+import type { ObjectsView } from './panelViews';
 
 /** What the Objects list is built from, and all its header count needs. */
 export type ObjectsSource = Pick<
   ModelPanelSource,
   'features' | 'representations' | 'document' | 'parameterValues'
 >;
-
-/**
- * The Objects list's type filter, name search and source-body disclosure,
- * held by the panel's frame around the list.
- */
-export interface ObjectsView {
-  filter: string;
-  setFilter(filter: string): void;
-  query: string;
-  setQuery(query: string): void;
-  showConsumed: boolean;
-  setShowConsumed: Dispatch<SetStateAction<boolean>>;
-}
-
-export function useObjectsView(): ObjectsView {
-  const [showConsumed, setShowConsumed] = useState(false);
-  const [filter, setFilter] = useState('all');
-  const [query, setQuery] = useState('');
-  return { filter, setFilter, query, setQuery, showConsumed, setShowConsumed };
-}
 
 export type ObjectsPanelProps = ObjectsSource &
   Pick<

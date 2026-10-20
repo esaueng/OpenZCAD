@@ -1428,6 +1428,10 @@ import {
   type PanelStage
 } from './lib/panelLayout';
 import {
+  useHistoryFind,
+  useObjectsView
+} from './components/modelPanels/panelViews';
+import {
   loadSettingsViewState,
   updateSettingsViewState
 } from './lib/settingsViewState';
@@ -2036,6 +2040,11 @@ export function App() {
     loadPanelLayout()
   );
   const [panelStage, setPanelStage] = useState<PanelStage | null>(null);
+  // Held here, not in the panels: a move between the dock and the phone lane
+  // remounts a panel, and its filter, search and Find field outlive that.
+  const objectsView = useObjectsView();
+  const historyFind = useHistoryFind();
+  const modelPanelViews = { objects: objectsView, historyFind };
   // Collapsing the assistant is chrome layout, so it is remembered with the
   // rest of it rather than reset on every reload.
   const assistantCollapsed = panelState.assistantCollapsed;
@@ -21769,6 +21778,7 @@ export function App() {
     <ModelPanel
       id={id}
       controls={panelControls(id, placement)}
+      views={modelPanelViews}
       parameters={parameters}
       parameterValues={parameterScope.scope}
       parameterMinimums={liveParameterMinimums}
