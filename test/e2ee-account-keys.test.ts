@@ -990,3 +990,29 @@ describe('session teardown', () => {
     expect(held.accountKey.every((byte) => byte === 0)).toBe(true);
   });
 });
+
+describe('profile deletion', () => {
+  it('erases every key row although the users row survives', async () => {
+    const srv = server();
+    await setUp(srv);
+    await requestApproval(device(srv), null, 'Phone');
+    const { deleteAccountData } =
+      await import('../apps/web/worker/accountDeletion');
+    const result = await deleteAccountData(
+      { userId: USER as never, displayName: 'Alice', mode: 'development' },
+      { scope: 'profile', confirmation: 'DELETE CLOUD PROFILE' },
+      { DB: d1Database(srv.db) },
+      {} as never
+    );
+    expect(result.scope).toBe('profile');
+    expect(count(srv.db, 'SELECT COUNT(*) AS n FROM users')).toBe(1);
+    for (const table of [
+      'e2ee_identities',
+      'e2ee_device_list_entries',
+      'e2ee_key_wraps',
+      'e2ee_device_approvals'
+    ]) {
+      expect(count(srv.db, `SELECT COUNT(*) AS n FROM ${table}`)).toBe(0);
+    }
+  });
+});

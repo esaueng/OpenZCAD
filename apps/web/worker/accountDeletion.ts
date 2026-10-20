@@ -1,3 +1,4 @@
+import { isE2eeKeyStorageReady } from './e2ee';
 import type {
   AccountDeletionPreview,
   AccountDeletionScope,
@@ -240,7 +241,8 @@ function profileCleanupStatements(
   userId: UserId,
   email: string | undefined,
   authRateBucket: string | undefined,
-  scope: 'profile' | 'all'
+  scope: 'profile' | 'all',
+  e2eeKeysReady: boolean
 ): D1PreparedStatement[] {
   const statements: D1PreparedStatement[] = [];
   if (email) {
@@ -274,6 +276,21 @@ function profileCleanupStatements(
           `DELETE FROM auth_rate_limits WHERE bucket = ? OR bucket GLOB ?`
         )
         .bind(authRateBucket, `${authRateBucket}:ip:*`)
+    );
+  }
+  if (e2eeKeysReady) {
+    // End-to-end encryption keys are profile data: device labels and public
+    // keys besides the wrapped keys. The users row survives a profile
+    // deletion, so its cascade cannot be relied on here. Children first.
+    statements.push(
+      ...[
+        'e2ee_key_wraps',
+        'e2ee_device_list_entries',
+        'e2ee_identities',
+        'e2ee_device_approvals'
+      ].map((table) =>
+        db.prepare(`DELETE FROM ${table} WHERE user_id = ?`).bind(userId)
+      )
     );
   }
   statements.push(
@@ -422,7 +439,10 @@ export async function deleteAccountData(
         session.userId,
         email,
         authRateBucket,
-        input.scope
+        input.scope,
+        // Before migration 0029 the tables do not exist, and deletion must
+        // keep working.
+        await isE2eeKeyStorageReady(db)
       )
     );
   }
