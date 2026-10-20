@@ -109,7 +109,10 @@ import {
   measureOwnedFaceGeometry,
   withFaceGeometryMemo
 } from './exact-measure';
-import { PreviewFaceGeometryCache } from './preview-face-geometry-cache';
+import {
+  PreviewFaceGeometryCache,
+  faceContentDigestsOf
+} from './preview-face-geometry-cache';
 import {
   hasRefusingFeatureWarning,
   raiseFeatureWarning
@@ -2777,25 +2780,28 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           // Display face ranges keep the dragged highlight and analytic
           // dimensions current. Edge topology, recognition and persistent
           // output references remain pending; picks are held in the UI.
+          const digests = faceContentDigestsOf(
+            kernel,
+            Uint32Array.from(projection.faceGroups, (group) => group.handle)
+          );
           const faces = withSyncReadMemo(readMemo, () =>
-            projection.faceGroups.map((group) => {
-              const witness = faceWitnessOf(kernel, group.handle);
+            projection.faceGroups.map((group, index) => {
+              // NURBS area integration is completion metadata, not a display
+              // requirement, so B-spline faces carry no geometry. Picks are
+              // held for this snapshot.
+              const { witness, geometry } = this.previewFaceGeometry.describe(
+                kernel,
+                group.handle,
+                digests?.[index],
+                faceWitnessOf
+              );
               const hash = topologyHashOfWitness('face', witness);
               return {
                 topologyId: `face:${hash}`,
                 hash,
                 triangleStart: group.triangleStart,
                 triangleCount: group.triangleCount,
-                // NURBS area integration is completion metadata, not a
-                // display requirement. Picks are held for this snapshot.
-                geometry:
-                  witness.surfaceType === 'bspline'
-                    ? undefined
-                    : this.previewFaceGeometry.measure(
-                        kernel,
-                        group.handle,
-                        witness
-                      )
+                geometry
               };
             })
           );

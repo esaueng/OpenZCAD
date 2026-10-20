@@ -1,6 +1,7 @@
 import type { RemusKernel } from './remus-runtime';
 import type { FaceGeometry, FaceWitnessV1 } from '@openzcad/shared';
 import { measureFaceGeometry } from './exact-measure';
+import { syncReadMemoFor } from './exact-sync-memo';
 import { quantizeCoordinate } from './topology-fingerprint';
 
 /** Entries kept before the cache starts over; a few drags' worth of faces. */
@@ -23,6 +24,36 @@ export type FaceShapeKernel = Pick<
   | 'evaluateEdgeCurve'
   | 'getEdgeNurbsData'
 >;
+
+/** A face as a drag preview publishes it. */
+export interface PreviewFace {
+  witness: FaceWitnessV1;
+  /** Undefined for B-spline faces, which the preview never measures. */
+  geometry: FaceGeometry | undefined;
+}
+
+interface FaceDigestBindings {
+  faceContentDigests(faces: Uint32Array): string[];
+}
+
+/**
+ * Remus's exact per-face content digests (esaueng/remus#1188), one per face
+ * in order. Null when the kernel predates them or refuses the call; callers
+ * then fall back to reading each face.
+ */
+export function faceContentDigestsOf(
+  kernel: RemusKernel,
+  faces: Uint32Array
+): readonly string[] | null {
+  const bindings = kernel as unknown as Partial<FaceDigestBindings>;
+  if (typeof bindings.faceContentDigests !== 'function') return null;
+  try {
+    const digests = bindings.faceContentDigests(faces);
+    return digests.length === faces.length ? digests : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Fractions of an edge's trimmed span sampled into its signature. */
 const EDGE_SAMPLES = [0, 0.25, 0.5, 0.75, 1];
@@ -49,8 +80,10 @@ const EDGE_SAMPLES = [0, 0.25, 0.5, 0.75, 1];
  */
 export class PreviewFaceGeometryCache {
   private readonly entries = new Map<string, FaceGeometry | undefined>();
+  private readonly byDigest = new Map<string, PreviewFace>();
   hits = 0;
   misses = 0;
+  digestHits = 0;
 
   constructor(
     private readonly capacity = DEFAULT_CAPACITY,
@@ -86,8 +119,46 @@ export class PreviewFaceGeometryCache {
     return geometry;
   }
 
+  /**
+   * A face's witness and measurement. Given the face's exact content digest,
+   * a face seen before, under any handle, skips the witness, the shape key
+   * and the measurement: all of them read only the face's own surface,
+   * boundary and vertices, which the digest covers bit for bit.
+   */
+  describe(
+    kernel: RemusKernel,
+    face: number,
+    digest: string | undefined,
+    witnessOf: (kernel: RemusKernel, face: number) => FaceWitnessV1
+  ): PreviewFace {
+    const known = digest === undefined ? undefined : this.byDigest.get(digest);
+    if (known) {
+      this.digestHits += 1;
+      // As `witnessOf` would have: later reads of this handle share it.
+      syncReadMemoFor(kernel)?.recordFaceWitness(face, known.witness);
+      return {
+        witness: known.witness,
+        geometry: structuredClone(known.geometry)
+      };
+    }
+    const witness = witnessOf(kernel, face);
+    const geometry =
+      witness.surfaceType === 'bspline'
+        ? undefined
+        : this.measure(kernel, face, witness);
+    if (digest !== undefined) {
+      if (this.byDigest.size >= this.capacity) this.byDigest.clear();
+      this.byDigest.set(digest, {
+        witness,
+        geometry: structuredClone(geometry)
+      });
+    }
+    return { witness, geometry };
+  }
+
   clear(): void {
     this.entries.clear();
+    this.byDigest.clear();
   }
 }
 
