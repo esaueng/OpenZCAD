@@ -1016,3 +1016,53 @@ describe('profile deletion', () => {
     }
   });
 });
+
+describe('identity replacement races', () => {
+  it('conflicts when the device list moves between check and write', async () => {
+    const srv = server();
+    const { laptop, account } = await setUp(srv);
+    const base = d1Database(srv.db);
+    // A device-list append (a removal of the signing device, say) commits
+    // after the Worker verified the transition and before its batch runs.
+    const racing = {
+      prepare: (sql: string) => base.prepare(sql),
+      batch: async (statements: D1PreparedStatement[]) => {
+        srv.db
+          .prepare(
+            `INSERT INTO e2ee_device_list_entries (user_id, generation, sequence, entry, signature, entry_hash, created_at)
+             SELECT user_id, generation, sequence + 1, entry, signature, ?, created_at
+             FROM e2ee_device_list_entries WHERE generation = 1 ORDER BY sequence DESC LIMIT 1`
+          )
+          .run('f'.repeat(64));
+        return base.batch(statements);
+      }
+    };
+    const api = createE2eeApi((path, init) =>
+      handleE2eeRequest(
+        new Request(`https://zcad.test${path}`, init),
+        { DB: racing },
+        { userId: USER },
+        true
+      )
+    );
+    const refused = await refusal(
+      replaceRecoveryKey(
+        { ...laptop, api },
+        account,
+        (await generateRecoveryKey()).secret,
+        null
+      )
+    );
+    expect([refused.status, refused.code]).toEqual([
+      409,
+      'E2EE_GENERATION_CONFLICT'
+    ]);
+    expect(count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_identities')).toBe(1);
+    expect(
+      count(
+        srv.db,
+        'SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE generation = 1'
+      )
+    ).toBeGreaterThan(0);
+  });
+});

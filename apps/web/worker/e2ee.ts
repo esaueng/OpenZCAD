@@ -380,7 +380,9 @@ function checkWrapTargets(
             ? wrap.targetId === ENCRYPTION_KEY_TARGET
             : false;
     if (!ok) {
-      invalid(`A ${wrap.purpose} wrap names ${wrap.targetId}, which is not listed`);
+      invalid(
+        `A ${wrap.purpose} wrap names ${wrap.targetId}, which is not listed`
+      );
     }
   }
 }
@@ -453,14 +455,12 @@ async function loadAccount(
             signature: current.transition_signature
           }
         : null,
-    wraps: (wraps.results ?? []).map(
-      (row): E2eeWrapRecord => ({
-        purpose: row.purpose,
-        targetId: row.target_id,
-        keySequence: row.key_sequence,
-        wrapped: row.wrapped
-      })
-    )
+    wraps: (wraps.results ?? []).map((row): E2eeWrapRecord => ({
+      purpose: row.purpose,
+      targetId: row.target_id,
+      keySequence: row.key_sequence,
+      wrapped: row.wrapped
+    }))
   };
   return { current: currentRecord, previous: previousRecords };
 }
@@ -477,9 +477,17 @@ async function writeGeneration(
     entryHash: string;
     wraps: readonly E2eeWrapInput[];
     transition: { statement: string; signature: string } | null;
+    /**
+     * For a replacement: the previous generation's head the Worker verified
+     * the transition against. A device-list write that lands in between (a
+     * revocation of the signing device, say) makes the replacement conflict
+     * instead of slipping past it.
+     */
+    previousHead: { sequence: number; entryHash: string } | null;
   }
 ): Promise<boolean> {
   const now = new Date().toISOString();
+  const previousHead = input.previousHead;
   const guard = {
     sql: `EXISTS (SELECT 1 FROM e2ee_identities
                   WHERE user_id = ? AND generation = ? AND identity_key = ?)`,
@@ -501,7 +509,16 @@ async function writeGeneration(
             transition_signature, created_at)
          SELECT ?, ?, ?, ?, ?, ?
          WHERE (SELECT COALESCE(MAX(generation), 0) FROM e2ee_identities
-                WHERE user_id = ?) = ?`
+                WHERE user_id = ?) = ?
+           AND ${
+             previousHead
+               ? `(SELECT entry_hash FROM e2ee_device_list_entries
+                   WHERE user_id = ? AND generation = ?
+                   ORDER BY sequence DESC LIMIT 1) = ?
+                  AND (SELECT MAX(sequence) FROM e2ee_device_list_entries
+                       WHERE user_id = ? AND generation = ?) = ?`
+               : '1 = 1'
+           }`
       )
       .bind(
         userId,
@@ -511,7 +528,17 @@ async function writeGeneration(
         input.transition?.signature ?? null,
         now,
         userId,
-        input.generation - 1
+        input.generation - 1,
+        ...(previousHead
+          ? [
+              userId,
+              input.generation - 1,
+              previousHead.entryHash,
+              userId,
+              input.generation - 1,
+              previousHead.sequence
+            ]
+          : [])
       ),
     db
       .prepare(
@@ -580,7 +607,8 @@ async function handleSetup(
     signatureText,
     entryHash: toHex(list.headHash),
     wraps,
-    transition: null
+    transition: null,
+    previousHead: null
   });
   if (!written) {
     refuse(409, 'E2EE_ALREADY_SET_UP', 'Encryption keys are already set up.');
@@ -652,14 +680,15 @@ async function handleReplaceIdentity(
   ) {
     invalid('The identity transition does not describe this replacement');
   }
+  // Verify the old list once, and bind the write to its head below.
+  const oldList = await verifiedChain(
+    oldIdentityKey,
+    (await entryRows(db, userId, current.generation)).map(toSigned)
+  );
   let signerKey: Uint8Array | undefined;
   if (decoded.signer === 'identity') {
     signerKey = oldIdentityKey;
   } else {
-    const oldList = await verifiedChain(
-      oldIdentityKey,
-      (await entryRows(db, userId, current.generation)).map(toSigned)
-    );
     signerKey = oldList.devices.find(
       (d) => toHex(d.signingKeyHash) === toHex(decoded.signerKeyHash)
     )?.signingKey;
@@ -693,6 +722,10 @@ async function handleReplaceIdentity(
     transition: {
       statement: transitionBody.statement as string,
       signature: transitionBody.signature as string
+    },
+    previousHead: {
+      sequence: oldList.head.sequence,
+      entryHash: toHex(oldList.headHash)
     }
   });
   if (!written) {
@@ -763,7 +796,11 @@ async function handleAppend(
     (device) => !previous.devices.some((d) => d.deviceId === device.deviceId)
   );
   for (const device of newDevices) {
-    if (!wraps.some((w) => w.purpose === 'account-key' && w.targetId === device.deviceId)) {
+    if (
+      !wraps.some(
+        (w) => w.purpose === 'account-key' && w.targetId === device.deviceId
+      )
+    ) {
       invalid(`The account key is not sealed to ${device.deviceId}`);
     }
   }
@@ -946,7 +983,11 @@ async function approvalRow(
     .bind(id, userId, now)
     .first<ApprovalRow>();
   if (!row) {
-    refuse(404, 'E2EE_APPROVAL_NOT_FOUND', 'This approval request has expired.');
+    refuse(
+      404,
+      'E2EE_APPROVAL_NOT_FOUND',
+      'This approval request has expired.'
+    );
   }
   return row;
 }
@@ -963,7 +1004,8 @@ async function handleCreateApproval(
   body: Record<string, unknown>
 ): Promise<E2eeApprovalRecord> {
   if (!isId(body.deviceId)) invalid('deviceId is not an id');
-  if (!isApprovalLabel(body.label)) invalid('label must be 1..64 bytes of text');
+  if (!isApprovalLabel(body.label))
+    invalid('label must be 1..64 bytes of text');
   const signingKey = bytesField(body.signingKey, 'signingKey', { exact: 65 });
   const unlockKey = bytesField(body.unlockKey, 'unlockKey', { exact: 65 });
   await p256(signingKey, 'ECDSA', 'signingKey');
@@ -1118,7 +1160,10 @@ async function handleCompleteApproval(
     );
   }
   try {
-    await verifyDeviceApprovalGrant({ statement, signature }, approver.signingKey);
+    await verifyDeviceApprovalGrant(
+      { statement, signature },
+      approver.signingKey
+    );
   } catch (error) {
     if (error instanceof E2eeError) {
       refuse(403, 'E2EE_APPROVER_UNKNOWN', 'The grant signature is not valid.');
@@ -1201,7 +1246,11 @@ function approvalIdOf(segment: string): string {
   try {
     return decodeURIComponent(segment);
   } catch {
-    refuse(404, 'E2EE_APPROVAL_NOT_FOUND', 'This approval request has expired.');
+    refuse(
+      404,
+      'E2EE_APPROVAL_NOT_FOUND',
+      'This approval request has expired.'
+    );
   }
 }
 
