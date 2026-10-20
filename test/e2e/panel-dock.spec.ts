@@ -618,6 +618,20 @@ for (const [label, layout] of [
       width: 1280,
       height: 720
     });
+    // The rail slides in 16px from the right as the workspace enters
+    // (`mode-in-right`); read at the slide's start, a button's right edge
+    // was 1281px instead of the 1265px it lands at. Measure once it has
+    // landed: two reads in a row agree.
+    const rail = page.locator('.instrument-rail');
+    let landed = '';
+    await expect
+      .poll(async () => {
+        const at = JSON.stringify(await rail.boundingBox());
+        const settled = at === landed;
+        landed = at;
+        return settled;
+      })
+      .toBe(true);
     const buttons = page.locator('.instrument-rail button');
     const count = await buttons.count();
     expect(count).toBeGreaterThan(10);
