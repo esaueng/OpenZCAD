@@ -118,11 +118,18 @@ The menu replaces the rail's Layout button.
 ### Defaults chosen 2026-10-20 (owner: "use your defaults")
 
 1. **Small screens.**
-   - Docked width is capped at 45% of the stage width. A pin or drop that would
-     go past the cap opens the panel floating instead.
+   - The **combined** width of the docked columns, left and right together, is
+     capped at 50% of the stage width, so at least half the stage stays for the
+     model. Rails and gaps are not counted; they are always there.
+   - A pin or drop that would go past the cap opens the panel floating instead.
+   - When the window shrinks, the columns that no longer fit render floating,
+     outermost first. This is a projection at render time only: the stored
+     layout keeps them docked, so a wider window gets them back.
+   - Essentials (two 296 px columns, 592 px) stays fully docked from 1184 px
+     stage width upward, which includes 1280 px. At 721 px only one column
+     docks.
    - Below 720 px stage width there are no docks: a panel opens one at a time in
      the existing phone lane.
-   - The stored layout is untouched, so a wider window gets it back.
 2. **Persistence.**
    - Layouts are per device, Build only. View and Tweak keep their own rails.
    - A new storage key, `openzcad-panel-layout:v1`, sits beside
@@ -215,7 +222,9 @@ Each slice is one PR and records its evidence in the U08 row.
   - home restored after close
   - float growth, clamp and resize bounds
   - gap weights with minimums, and the even split
-  - the 45% cap turning a dock into a float
+  - the combined 50% cap across both docks: a pin past it becomes a float,
+    and a shrunken stage projects its outermost columns as floats without
+    changing the stored layout
   - migration from sample v1 states
   - hostile or corrupt storage
 
@@ -292,11 +301,13 @@ Each slice is one PR and records its evidence in the U08 row.
 - **Behaviour.**
   - The menu: presets, Hide all (`Tab`, registered with the app's existing
     shortcut handling so U05 can list and remap it), Lock, Compact, Width.
-  - The 45% cap.
+  - The combined 50% cap.
   - The no-dock policy below 720 px.
   - The first-load migration switched on.
-- **Tests.** E2E at 1440×900, 1280×720 and 600×800, plus migration fixtures
-  seeded through the v1 key.
+- **Tests.** E2E at 1440×900, 1280×720 and 600×800, plus the boundary widths
+  1184 px and 1183 px (Essentials fully docked, then its second column
+  floating) and 721 px and 720 px (one column docked, then no docks). Migration
+  fixtures are seeded through the v1 key.
 
 ### 6. Documentation
 
