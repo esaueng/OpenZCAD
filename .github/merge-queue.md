@@ -71,6 +71,29 @@ continues to trigger the repository's existing automatic deployment workflows.
    check fails and the entry is removed, inspect the failure, repair or retry
    as appropriate, and revalidate the head and reviews before re-enqueueing.
 
+## Recover superseded PR CI
+
+A canceled PR run can retain queued `always()` validation/E2E gates and hold
+its concurrency slot while a newer head waits. Keep those required gates
+fail-closed: skipping them on cancellation can satisfy branch protection
+without a successful validation result.
+
+`ci-recovery.yml` observes newly requested `ci` runs from the protected default
+branch. It executes no PR code, checks out no repository, reads no artifacts or
+caches, and uses only Actions-write and pull-request-read permissions. After
+matching the workflow, PR, source repository and branch, it re-reads the live
+run and current open PR before force-canceling an unfinished run whose commit
+has been superseded. Current heads, completed runs, other workflows and
+`merge_group` candidates are excluded. Delayed recovery events use the live PR
+head, not the triggering event's head. Concurrent completion is harmless;
+other cancellation errors fail visibly. Recovery becomes active after this
+workflow reaches the default branch.
+
+For an existing backlog before activation, apply the same identity and head
+checks immediately before using the Actions force-cancel endpoint for an
+obsolete PR run. Then verify that it finishes canceled and the replacement CI
+starts. A run still waiting for a hosted runner is not evidence of a test hang.
+
 ## Guide sources
 
 The repository’s `AGENTS.md` is the canonical project guide, and `CLAUDE.md`
