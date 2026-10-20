@@ -25,6 +25,14 @@ import {
   settleOptionalRelations,
   type SketchModifyPlan
 } from '../apps/web/src/lib/sketch/modify';
+import {
+  compositeCommands,
+  cornerRectangleShape
+} from '../apps/web/src/lib/sketch/composites';
+import {
+  planSketchOffset,
+  type SketchOffsetPick
+} from '../apps/web/src/lib/sketch/offset';
 
 /**
  * S05 Trim, Mirror and patterns on the pinned kernel's solver: the relations
@@ -558,5 +566,73 @@ describe('S05 Mirror holds an on-axis joint only when the solver needs it', () =
     );
     expect(holds).toEqual(['start', 'end']);
     expectGood(await fixture.solve());
+  });
+});
+
+describe('S05 Offset on the pinned kernel', () => {
+  const offsetPlan = (
+    fixture: ReturnType<typeof sketchWith>,
+    seed: string,
+    distance: number,
+    pick: SketchOffsetPick
+  ) =>
+    planSketchOffset(
+      fixture.manager.document,
+      fixture.sketch(),
+      fixture.sketchId,
+      seed,
+      distance,
+      pick,
+      resolve
+    );
+
+  for (const join of ['miter', 'round'] as const) {
+    it(`links a ${join} offset of a drawn rectangle without a redundant relation`, async () => {
+      const fixture = sketchWith([]);
+      const shape = cornerRectangleShape({ x: 0, y: 0 }, { x: 20, y: 12 })!;
+      const drawn = compositeCommands(shape, {
+        kind: 'sketch',
+        sketchId: fixture.sketchId
+      });
+      fixture.manager.execute(composeCommands(drawn.label, drawn.commands));
+      expectGood(await fixture.solve());
+      await fixture.commit(
+        offsetPlan(fixture, String(drawn.edgeIds[0]!), 1, {
+          join,
+          chain: true,
+          side: 1
+        })
+      );
+      const outcome = await fixture.solve();
+      expectGood(outcome);
+      // Every new line still sits 1 from its side: the solve moved nothing.
+      const added = fixture
+        .sketch()
+        .objectIds.map(String)
+        .filter((id) => !fixture.ids.includes(id))
+        .filter((id) => !drawn.edgeIds.map(String).includes(id))
+        .map((id) => solved(outcome, id));
+      const xs = added.flatMap((object) =>
+        'x1' in object ? [object.x1, object.x2!] : []
+      );
+      expect(Math.min(...xs)).toBeCloseTo(-1, 9);
+      expect(Math.max(...xs)).toBeCloseTo(21, 9);
+    });
+  }
+
+  it('holds an offset circle concentric with its source through an edit', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }
+    ]);
+    const source = fixture.ids[0]!;
+    await fixture.commit(
+      offsetPlan(fixture, source, 1, { join: 'miter', chain: true, side: 1 })
+    );
+    const copy = fixture.sketch().objectIds.map(String).at(-1)!;
+    fixture.constrain(lock(source, 'center', 3, 4));
+    const outcome = await fixture.solve();
+    expectGood(outcome);
+    expect(solved(outcome, copy).centerX).toBeCloseTo(3, 9);
+    expect(solved(outcome, copy).centerY).toBeCloseTo(4, 9);
   });
 });

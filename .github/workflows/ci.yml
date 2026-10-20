@@ -2,8 +2,9 @@ name: ci
 
 on:
   pull_request:
-    # `labeled`/`unlabeled` re-run the kernel-bump guard below when the
-    # `kernel-bump` label is applied or removed, without needing a push.
+    # Label events re-run the kernel-bump guard without needing a push.
+    # Keep the reusable caller running: skipping it replaces the latest
+    # check suite without publishing its required validate/e2e contexts.
     types: [opened, synchronize, reopened, labeled, unlabeled]
   merge_group:
     types: [checks_requested]
@@ -21,4 +22,4 @@ jobs:
   checks:
     permissions:
       contents: read
-    uses: esaueng/OpenZCAD/.github/workflows/fleet-ci.yml@2481ddc3afd4845da0cf737ba07bced7ca713ad7
+    uses: esaueng/OpenZCAD/.github/workflows/fleet-ci.yml@f593505b95dfe7f2d8efd67021d703d02b52c2c9

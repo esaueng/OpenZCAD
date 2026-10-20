@@ -1,0 +1,433 @@
+import {
+  ByteWriter,
+  asBytes,
+  copyBytes,
+  equalBytes,
+  fromBase32,
+  isUint,
+  label,
+  toBase32,
+  toDigitGroups,
+  toHex,
+  type Bytes
+} from './bytes';
+import { E2eeError } from './errors';
+import { HASH_BYTES } from './header';
+import { P256_PUBLIC_KEY_BYTES } from './keys';
+import {
+  KEY_BYTES,
+  sha256,
+  subtle,
+  systemRandom,
+  type RandomSource
+} from './primitives';
+
+// --- Asset de-duplication -------------------------------------------------
+
+/**
+ * A fresh random per-project dedupe secret. It is not derived from the
+ * project key, so dedupe hashes stay stable across key epochs: carry it
+ * into each new epoch wrapped under that epoch's project key
+ * (`wrapKey`, purpose `dedupe-secret`).
+ */
+export function generateAssetDedupeSecret(): Bytes {
+  return systemRandom(KEY_BYTES);
+}
+
+/** The HMAC-SHA256 key for a project's dedupe secret (non-extractable). */
+export async function importAssetDedupeSecret(
+  secret: Uint8Array
+): Promise<CryptoKey> {
+  if (!(secret instanceof Uint8Array) || secret.byteLength !== KEY_BYTES) {
+    throw new E2eeError('invalid-argument', 'A dedupe secret is 32 bytes');
+  }
+  return subtle().importKey(
+    'raw',
+    asBytes(secret),
+    { name: 'HMAC', hash: 'SHA-256', length: 256 },
+    false,
+    ['sign']
+  );
+}
+
+/**
+ * Lowercase hex HMAC-SHA256 of an asset's plaintext: an index value stored
+ * beside the content blob, never inside an envelope. Equal content in one
+ * project dedupes across epochs; the server cannot test for a known file.
+ */
+export async function assetDedupeHash(
+  dedupeKey: CryptoKey,
+  content: Uint8Array
+): Promise<string> {
+  // WebCrypto uses the hash bound into the key, so a SHA-1 HMAC key would
+  // silently yield a different, incompatible index.
+  const algorithm = dedupeKey?.algorithm as HmacKeyAlgorithm | undefined;
+  if (
+    algorithm?.name !== 'HMAC' ||
+    algorithm.hash?.name !== 'SHA-256' ||
+    // A shorter key would let the server enumerate the secret and test
+    // for known files; require the 256 bits importAssetDedupeSecret uses.
+    algorithm.length !== KEY_BYTES * 8 ||
+    !dedupeKey.usages.includes('sign')
+  ) {
+    throw new E2eeError(
+      'invalid-argument',
+      'Expected a 256-bit HMAC-SHA-256 signing key from importAssetDedupeSecret'
+    );
+  }
+  return toHex(
+    new Uint8Array(await subtle().sign('HMAC', dedupeKey, asBytes(content)))
+  );
+}
+
+// --- Key hashes and the codes people compare ------------------------------
+
+/**
+ * A raw key people will verify must be a real P-256 point: otherwise a
+ * fingerprint or approval code could vouch for bytes that no import accepts.
+ * WebCrypto checks that the point lies on the curve. Returns the snapshot
+ * it validated (copied before the first `await`), which is what callers
+ * hash, so a caller editing its array meanwhile cannot slip other bytes in.
+ */
+async function validPublicKey(
+  raw: Uint8Array,
+  what = 'Public key'
+): Promise<Bytes> {
+  const refuse = (cause?: unknown): never => {
+    throw new E2eeError(
+      'invalid-argument',
+      `${what} must be a 65-byte uncompressed P-256 point`,
+      cause === undefined ? undefined : { cause }
+    );
+  };
+  if (
+    !(raw instanceof Uint8Array) ||
+    raw.byteLength !== P256_PUBLIC_KEY_BYTES ||
+    raw[0] !== 0x04
+  ) {
+    refuse();
+  }
+  const bytes = copyBytes(raw);
+  try {
+    await subtle().importKey(
+      'raw',
+      bytes,
+      { name: 'ECDH', namedCurve: 'P-256' },
+      true,
+      []
+    );
+  } catch (cause) {
+    refuse(cause);
+  }
+  return bytes;
+}
+
+/**
+ * The full 256-bit hash of one or more raw public keys: a member's
+ * encryption and signing keys in that order, or one device key. This is
+ * what a QR code carries, what a verified pin records, and,
+ * through `formatComparisonCode`, what people compare. It is never
+ * shortened: a truncated hash of a key the server can see invites grinding.
+ */
+export async function publicKeyHash(
+  publicKeys: Uint8Array | readonly Uint8Array[]
+): Promise<Bytes> {
+  const keys =
+    publicKeys instanceof Uint8Array ? [publicKeys] : [...publicKeys];
+  if (keys.length === 0 || keys.length > 255) {
+    throw new E2eeError(
+      'invalid-argument',
+      'A key hash covers 1..255 public keys'
+    );
+  }
+  const writer = new ByteWriter()
+    .bytes(label('v1 public key hash'))
+    .u8(keys.length);
+  // Start every validation now: each copies its key before its first
+  // await, so no key can be swapped while an earlier one is checked.
+  for (const key of await Promise.all(keys.map((key) => validPublicKey(key)))) {
+    writer.bytes(key);
+  }
+  return sha256(writer.finish());
+}
+
+/**
+ * A 256-bit hash as 40 digits in eight groups of five (132.9 bits), the
+ * form shown for fingerprints and project state codes.
+ */
+export function formatComparisonCode(hash: Uint8Array): string {
+  if (!(hash instanceof Uint8Array) || hash.byteLength !== HASH_BYTES) {
+    throw new E2eeError(
+      'invalid-argument',
+      'Comparison codes come from a 32-byte hash'
+    );
+  }
+  return toDigitGroups(hash);
+}
+
+/**
+ * The fingerprint people verify for a user: the hash of their long-term
+ * identity key, which survives device changes and key rotation. Show
+ * `code`; `hash` is the QR form and the value a verified pin records.
+ */
+export async function identityFingerprint(
+  identityPublicKey: Uint8Array
+): Promise<{ hash: Bytes; code: string }> {
+  const hash = await publicKeyHash(identityPublicKey);
+  return { hash, code: formatComparisonCode(hash) };
+}
+
+/**
+ * What two people compare to verify a contact: the contact's identity key
+ * together with their current device-list head, so a server cannot pair the
+ * right identity with an old device list. Show `code`; `hash` is the QR
+ * payload. The verifier pins the head with the identity.
+ */
+export async function contactVerificationCode(
+  identityPublicKey: Uint8Array,
+  deviceListHead: Uint8Array
+): Promise<{ hash: Bytes; code: string }> {
+  if (
+    !(deviceListHead instanceof Uint8Array) ||
+    deviceListHead.byteLength !== HASH_BYTES
+  ) {
+    throw new E2eeError('invalid-argument', 'deviceListHead must be 32 bytes');
+  }
+  const head = copyBytes(deviceListHead);
+  const hash = await sha256(
+    new ByteWriter()
+      .bytes(label('v1 contact verification'))
+      .bytes(await publicKeyHash(identityPublicKey))
+      .bytes(head)
+      .finish()
+  );
+  return { hash, code: formatComparisonCode(hash) };
+}
+
+export interface ProjectStateInput {
+  /** `versionHash` of the newest version. */
+  readonly versionHash: Uint8Array;
+  readonly documentVersion: number;
+  /** Identity key hash of the member who signed that version. */
+  readonly signerKeyHash: Uint8Array;
+}
+
+/**
+ * The project state code members compare outside OpenZCAD to detect a
+ * split view or rollback, which version chains alone cannot (they give
+ * fork consistency only). Show `code`; `hash` is the QR form.
+ */
+export async function projectStateCode(
+  input: ProjectStateInput
+): Promise<{ hash: Bytes; code: string }> {
+  for (const [name, value] of [
+    ['versionHash', input.versionHash],
+    ['signerKeyHash', input.signerKeyHash]
+  ] as const) {
+    if (!(value instanceof Uint8Array) || value.byteLength !== HASH_BYTES) {
+      throw new E2eeError('invalid-argument', `${name} must be 32 bytes`);
+    }
+  }
+  if (!isUint(input.documentVersion, Number.MAX_SAFE_INTEGER)) {
+    throw new E2eeError(
+      'invalid-argument',
+      'documentVersion must be a safe integer'
+    );
+  }
+  const hash = await sha256(
+    new ByteWriter()
+      .bytes(label('v1 project state'))
+      .bytes(input.versionHash)
+      .u64(input.documentVersion)
+      .bytes(input.signerKeyHash)
+      .finish()
+  );
+  return { hash, code: formatComparisonCode(hash) };
+}
+
+// --- Device approval ------------------------------------------------------
+
+/**
+ * Scan form: the new device shows `publicKeyHash(devicePublicKey)` as a QR
+ * code; the approving device wraps the account key only if the key the
+ * server delivered hashes to the scanned value.
+ */
+export async function verifyScannedDeviceKey(
+  devicePublicKey: Uint8Array,
+  scannedHash: Uint8Array
+): Promise<boolean> {
+  if (!(scannedHash instanceof Uint8Array)) {
+    throw new E2eeError(
+      'invalid-argument',
+      'Scanned hash must be a Uint8Array'
+    );
+  }
+  // A scan of the wrong length can never match; copy only a real one.
+  const scanned =
+    scannedHash.byteLength === HASH_BYTES ? copyBytes(scannedHash) : null;
+  const hash = await publicKeyHash(devicePublicKey);
+  return scanned !== null && equalBytes(hash, scanned);
+}
+
+/**
+ * Compare form, a commitment-based short authentication string:
+ *
+ * 1. New device: `commitDeviceApproval(newDevicePublicKey)`; sends its key
+ *    and `commitment`, keeps `nonce` back.
+ * 2. Approving device: sends its own public key and `createApprovalNonce()`.
+ * 3. New device: having received those, reveals `nonce`.
+ * 4. Approving device: `verifyDeviceApprovalCommitment` must hold.
+ * 5. Both show `deviceApprovalCode(...)`; the user approves only if equal.
+ *
+ * The commitment fixes the new side's key and nonce before the server sees
+ * the approver's, so it cannot grind; a substituted key matches with
+ * probability 10⁻⁶ per visible attempt.
+ */
+export interface DeviceApprovalCommitment {
+  readonly nonce: Bytes;
+  readonly commitment: Bytes;
+}
+
+/** A private copy of a 32-byte nonce. */
+function validNonce(nonce: Uint8Array, what: string): Bytes {
+  if (!(nonce instanceof Uint8Array) || nonce.byteLength !== KEY_BYTES) {
+    throw new E2eeError('invalid-argument', `${what} must be 32 bytes`);
+  }
+  return copyBytes(nonce);
+}
+
+async function commitmentFor(
+  newDevicePublicKey: Uint8Array,
+  nonce: Uint8Array
+): Promise<Bytes> {
+  const nonceBytes = validNonce(nonce, 'New device nonce');
+  const key = await validPublicKey(newDevicePublicKey, 'New device key');
+  return sha256(
+    new ByteWriter()
+      .bytes(label('v1 device approval commitment'))
+      .bytes(key)
+      .bytes(nonceBytes)
+      .finish()
+  );
+}
+
+/** @internal Tests inject the nonce; production uses `commitDeviceApproval`. */
+export async function commitDeviceApprovalWith(
+  newDevicePublicKey: Uint8Array,
+  random: RandomSource
+): Promise<DeviceApprovalCommitment> {
+  const nonce = random(KEY_BYTES);
+  return { nonce, commitment: await commitmentFor(newDevicePublicKey, nonce) };
+}
+
+export async function commitDeviceApproval(
+  newDevicePublicKey: Uint8Array
+): Promise<DeviceApprovalCommitment> {
+  return commitDeviceApprovalWith(newDevicePublicKey, systemRandom);
+}
+
+export function createApprovalNonce(): Bytes {
+  return systemRandom(KEY_BYTES);
+}
+
+export async function verifyDeviceApprovalCommitment(
+  newDevicePublicKey: Uint8Array,
+  newDeviceNonce: Uint8Array,
+  commitment: Uint8Array
+): Promise<boolean> {
+  if (!(commitment instanceof Uint8Array)) {
+    throw new E2eeError('invalid-argument', 'Commitment must be a Uint8Array');
+  }
+  // A commitment of the wrong length can never match; copy only a real one.
+  const expected =
+    commitment.byteLength === HASH_BYTES ? copyBytes(commitment) : null;
+  const actual = await commitmentFor(newDevicePublicKey, newDeviceNonce);
+  return expected !== null && equalBytes(actual, expected);
+}
+
+export interface DeviceApprovalCodeInput {
+  readonly newDevicePublicKey: Uint8Array;
+  readonly approverPublicKey: Uint8Array;
+  readonly newDeviceNonce: Uint8Array;
+  readonly approverNonce: Uint8Array;
+}
+
+/** Six digits from H(pk_new ‖ pk_app ‖ n_new ‖ n_app), shown as `123 456`. */
+export async function deviceApprovalCode(
+  input: DeviceApprovalCodeInput
+): Promise<string> {
+  const newDeviceNonce = validNonce(input.newDeviceNonce, 'New device nonce');
+  const approverNonce = validNonce(input.approverNonce, 'Approver nonce');
+  const newDeviceKey = validPublicKey(
+    input.newDevicePublicKey,
+    'New device key'
+  );
+  const approverKey = validPublicKey(input.approverPublicKey, 'Approver key');
+  // Both keys are copied above, before anything is awaited.
+  const [newKey, approver] = await Promise.all([newDeviceKey, approverKey]);
+  const digest = await sha256(
+    new ByteWriter()
+      .bytes(label('v1 device approval code'))
+      .bytes(newKey)
+      .bytes(approver)
+      .bytes(newDeviceNonce)
+      .bytes(approverNonce)
+      .finish()
+  );
+  const value = new DataView(digest.buffer).getUint32(0) % 1_000_000;
+  const digits = value.toString().padStart(6, '0');
+  return `${digits.slice(0, 3)} ${digits.slice(3)}`;
+}
+
+// --- Recovery key ---------------------------------------------------------
+
+const RECOVERY_CHECKSUM_BYTES = 3;
+
+/**
+ * Formats a 32-byte recovery secret as 56 Crockford base32 characters in
+ * hyphenated groups of four: 256 secret bits and a 24-bit SHA-256 checksum
+ * that catches typing mistakes before an unlock attempt.
+ */
+export async function formatRecoveryKey(secret: Uint8Array): Promise<string> {
+  if (!(secret instanceof Uint8Array) || secret.byteLength !== KEY_BYTES) {
+    throw new E2eeError('invalid-argument', 'Recovery secret must be 32 bytes');
+  }
+  // Checksum and encode one copy: an edit mid-hash must not yield a key
+  // that `parseRecoveryKey` rejects.
+  secret = copyBytes(secret);
+  const checksum = (await sha256(secret)).subarray(0, RECOVERY_CHECKSUM_BYTES);
+  const payload = new Uint8Array(KEY_BYTES + RECOVERY_CHECKSUM_BYTES);
+  payload.set(secret);
+  payload.set(checksum, KEY_BYTES);
+  return toBase32(payload).match(/.{4}/g)!.join('-');
+}
+
+/** Parses a typed recovery key; spaces, hyphens and case do not matter. */
+export async function parseRecoveryKey(text: string): Promise<Bytes> {
+  if (typeof text !== 'string') {
+    throw new E2eeError('invalid-argument', 'Recovery key must be text');
+  }
+  // A key is 69 characters (14 groups of four); allow generous spacing,
+  // but refuse anything far longer before normalising it.
+  if (text.length > 256) {
+    throw new E2eeError('malformed', 'Recovery key is too long');
+  }
+  const payload = fromBase32(
+    text.replace(/[\s-]/g, ''),
+    KEY_BYTES + RECOVERY_CHECKSUM_BYTES
+  );
+  const secret = payload.slice(0, KEY_BYTES);
+  const checksum = (await sha256(secret)).subarray(0, RECOVERY_CHECKSUM_BYTES);
+  if (!equalBytes(checksum, payload.subarray(KEY_BYTES))) {
+    throw new E2eeError('malformed', 'Recovery key checksum does not match');
+  }
+  return secret;
+}
+
+export async function generateRecoveryKey(): Promise<{
+  secret: Bytes;
+  formatted: string;
+}> {
+  const secret = systemRandom(KEY_BYTES);
+  return { secret, formatted: await formatRecoveryKey(secret) };
+}

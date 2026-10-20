@@ -12,8 +12,7 @@ import {
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import type {
   SketchChamferGeometry,
-  SketchFilletGeometry,
-  SketchOffsetCurve
+  SketchFilletGeometry
 } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
@@ -33,11 +32,9 @@ import {
   runSketchEdit,
   type SketchEditHost,
   resolveSketchCorner,
-  resolveSketchLoop,
   sketchChamferCommands,
   sketchEditToolSpec,
-  sketchFilletCommands,
-  sketchOffsetCommands
+  sketchFilletCommands
 } from './edits';
 
 const resolve = (value: ParamValue) =>
@@ -493,56 +490,37 @@ describe('sketch chamfer', () => {
 });
 
 describe('sketch offset', () => {
-  it('walks the closed loop the picked line belongs to', () => {
-    const { document, sketch, loopSeed } = fixture();
-    const result = resolveSketchLoop(document, sketch, loopSeed, resolve);
-    if ('error' in result) throw new Error(result.error);
-    expect(result.loop.objectIds).toHaveLength(4);
-    expect(result.loop.points).toHaveLength(4);
-    expect(result.loop.points[0]).toEqual({ x: 100, y: 0 });
-  });
-
-  it('refuses an open run of lines', () => {
-    const { document, sketch, legA } = fixture();
-    expect(resolveSketchLoop(document, sketch, legA, resolve)).toEqual({
-      error:
-        'That run of lines is not closed. Offset needs a closed loop; close the profile first.'
-    });
-  });
-
-  it('refuses a rectangle object and a circle', () => {
-    const { document, sketch, rectangle, circle } = fixture();
-    expect(refuseEditPick(document, sketch, 'offset', [], rectangle)).toMatch(
-      /A rectangle is one object/
-    );
-    expect(refuseEditPick(document, sketch, 'offset', [], circle)).toBe(
-      'Offset works on a closed loop of lines. Pick one of its lines.'
-    );
-  });
-
-  it('adds the offset curves and chains them into a loop, in one undo step', async () => {
+  // The fuller geometry (chains, arcs, joins, refusals) is in offset.test.ts;
+  // these pin the path the rail's tool takes through this module.
+  it('plans a closed loop as one app-side transaction, mitered by default', () => {
     const { document, sketch, sketchId, loopSeed } = fixture();
-    const loop = resolveSketchLoop(document, sketch, loopSeed, resolve);
-    if ('error' in loop) throw new Error(loop.error);
-    const result = await withAdapter((adapter) =>
-      adapter.sketchPlanarOperation({
-        kind: 'offset',
-        loop: loop.loop.points,
-        distance: 2,
-        join: 'arc'
-      })
+    const plan = planSketchEdit(
+      document,
+      sketch,
+      sketchId,
+      'offset',
+      [loopSeed],
+      2,
+      '2',
+      resolve
     );
-    if (result.kind !== 'offset') throw new Error('Expected an offset result.');
-    const curves: SketchOffsetCurve[] = result.curves;
-    expect(curves.filter((curve) => curve.kind === 'arc')).toHaveLength(4);
-
+    if (plan.status !== 'commands') throw new Error(plan.status);
     const manager = new CommandManager(document);
-    manager.runTransaction('Offset', sketchOffsetCommands(sketchId, curves));
+    manager.runTransaction(plan.label, [
+      ...plan.commands,
+      ...(plan.optional ?? [])
+    ]);
     const next = findSketch(manager.document, sketchId)!;
-    expect(next.objectIds).toHaveLength(sketch.objectIds.length + 8);
-    // Eight curves chained end to end is eight coincidences, including the
-    // one that closes the loop.
-    expect(next.constraints ?? []).toHaveLength(8);
+    const added = next.objectIds
+      .filter((id) => !sketch.objectIds.includes(id))
+      .map((id) => sketchObject(manager.document, id));
+    expect(added).toHaveLength(4);
+    expect(added.every((object) => object.objectKind === 'line')).toBe(true);
+    const xs = added.flatMap((line) =>
+      line.objectKind === 'line' ? [Number(line.x1), Number(line.x2)] : []
+    );
+    expect(Math.min(...xs)).toBeCloseTo(98, 9);
+    expect(Math.max(...xs)).toBeCloseTo(112, 9);
     expect(manager.undoLabel).toBe('Offset');
     manager.undo();
     expect(findSketch(manager.document, sketchId)!.objectIds).toEqual(
@@ -551,28 +529,7 @@ describe('sketch offset', () => {
     expect(manager.canUndo).toBe(false);
   });
 
-  it('offsets inward without the corner arcs that would cross the result', async () => {
-    const { document, sketch, loopSeed } = fixture();
-    const loop = resolveSketchLoop(document, sketch, loopSeed, resolve);
-    if ('error' in loop) throw new Error(loop.error);
-    const result = await withAdapter((adapter) =>
-      adapter.sketchPlanarOperation({
-        kind: 'offset',
-        loop: loop.loop.points,
-        distance: -2,
-        join: 'arc'
-      })
-    );
-    if (result.kind !== 'offset') throw new Error('Expected an offset result.');
-    expect(result.curves).toHaveLength(4);
-    expect(result.curves.every((curve) => curve.kind === 'line')).toBe(true);
-  });
-
-  it('offsets a concave L profile outward, through the tool the UI arms', async () => {
-    // The whole path the Offset tool takes: resolve the loop from one picked
-    // line, plan the edit (which is where the join is chosen), run it on the
-    // kernel and commit. Before the reflex-join repair this refused at every
-    // distance, so a concave profile could not be offset outward at all.
+  it('offsets a concave L profile outward with round corners', () => {
     const { document, sketch, sketchId, concaveSeed } = fixture();
     for (const distance of [0.5, 1, 2]) {
       const plan = planSketchEdit(
@@ -583,29 +540,22 @@ describe('sketch offset', () => {
         [concaveSeed],
         distance,
         String(distance),
-        resolve
+        resolve,
+        undefined,
+        { join: 'round', chain: true, side: 1 }
       );
-      if (plan.status !== 'operation')
+      if (plan.status !== 'commands')
         throw new Error('reason' in plan ? plan.reason : plan.status);
-      const result = await withAdapter((adapter) =>
-        adapter.sketchPlanarOperation(plan.operation)
-      );
-      if (result.kind !== 'offset') {
-        throw new Error('Expected an offset result.');
-      }
-      // Five convex corners keep an arc; the reflex corner is mitered away.
-      expect(
-        result.curves.filter((curve) => curve.kind === 'arc')
-      ).toHaveLength(5);
-      expect(
-        result.curves.filter((curve) => curve.kind === 'line')
-      ).toHaveLength(6);
       const manager = new CommandManager(document);
-      manager.runTransaction('Offset', plan.commit(result));
+      manager.runTransaction(plan.label, plan.commands);
       const next = findSketch(manager.document, sketchId)!;
-      expect(next.objectIds).toHaveLength(sketch.objectIds.length + 11);
+      const added = next.objectIds
+        .filter((id) => !sketch.objectIds.includes(id))
+        .map((id) => sketchObject(manager.document, id).objectKind);
+      // Five convex corners take an arc; the reflex corner is trimmed.
+      expect(added.filter((kind) => kind === 'arc')).toHaveLength(5);
+      expect(added.filter((kind) => kind === 'line')).toHaveLength(6);
       expect(next.constraints ?? []).toHaveLength(11);
-      expect(manager.undoLabel).toBe('Offset');
     }
   });
 });
@@ -733,12 +683,22 @@ describe('the pick sequence and plan the rail drives', () => {
       reason:
         'Those two lines do not meet at an endpoint. Join them first — this tool does not extend geometry.'
     });
+    // An open run offsets towards the click: legA runs (0,10) to (0,0), so
+    // a click at x < 0 is on its right.
     expect(
-      advanceSketchEditPick(document, sketch, 'offset', [], legA, resolve)
+      advanceSketchEditPick(document, sketch, 'offset', [], legA, resolve, {
+        at: { x: -0.1, y: 5 },
+        offset: { join: 'round', chain: false }
+      })
     ).toEqual({
-      status: 'refuse',
-      reason:
-        'That run of lines is not closed. Offset needs a closed loop; close the profile first.'
+      status: 'value',
+      picks: [legA],
+      label: 'Offset distance',
+      unitKind: 'length',
+      initial: 1,
+      message:
+        'Offset: enter the distance. Positive goes to the side you clicked.',
+      offset: { join: 'round', chain: false, side: -1 }
     });
     expect(
       advanceSketchEditPick(document, sketch, 'offset', [], rectangle, resolve)
@@ -752,7 +712,8 @@ describe('the pick sequence and plan the rail drives', () => {
       label: 'Offset distance',
       unitKind: 'length',
       initial: 1,
-      message: 'Offset: enter the distance. Positive is outward.'
+      message: 'Offset: enter the distance. Positive is outward.',
+      offset: { join: 'miter', chain: true, side: 1 }
     });
   });
 
@@ -806,13 +767,8 @@ describe('the pick sequence and plan the rail drives', () => {
       '2',
       resolve
     );
-    if (offset.status !== 'operation')
-      throw new Error('reason' in offset ? offset.reason : offset.status);
-    expect(offset.operation).toMatchObject({
-      kind: 'offset',
-      distance: 2,
-      join: 'arc'
-    });
+    // Offset is app-side geometry: the plan is already the transaction.
+    expect(offset.status).toBe('commands');
 
     // The plan refuses to build a fillet out of a chamfer answer rather than
     // reading whatever fields happen to line up.

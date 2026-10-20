@@ -19,6 +19,7 @@ import {
   type HealthResponse
 } from '@openzcad/shared';
 import { SettingsPage } from './SettingsPage';
+import { POINTER_CONTROL_GROUPS } from '../lib/controlReference';
 import { api } from '../lib/api';
 
 // Account loads storage usage for a signed-in profile; no test reaches a server.
@@ -391,7 +392,7 @@ describe('settings offline mode', () => {
 
     await user.click(screen.getByRole('button', { name: 'Saving' }));
     expect(screen.getByText('Local autosave')).toBeInTheDocument();
-    expect(screen.getByText('Active')).toBeInTheDocument();
+    expect(screen.getByText('Always on')).toBeInTheDocument();
     expect(
       screen.getByRole('checkbox', { name: 'Cloud autosave' })
     ).toBeDisabled();
@@ -416,12 +417,10 @@ describe('settings viewport copy', () => {
     renderSettings();
 
     await user.click(screen.getByRole('button', { name: 'Controls' }));
+    expect(screen.getByText('Pan matches desktop CAD.')).toBeInTheDocument();
     expect(
-      screen.getByText(
-        /toward whatever is under the cursor, as desktop CAD does/
-      )
+      screen.getByText('Off zooms toward the middle of the view.')
     ).toBeInTheDocument();
-    expect(screen.getByText(/Pan matches desktop CAD;/)).toBeInTheDocument();
   });
 });
 
@@ -435,22 +434,46 @@ describe('settings controls section', () => {
     expect(screen.queryByText('Shortcuts are fixed and context-aware.')).toBe(
       null
     );
-    const headers = container.querySelectorAll(
-      '.settings-control-collection > header'
-    );
+    const headers = container.querySelectorAll('.settings-group-head');
     // The remappable keys under one header, then the keys that keep one
     // meaning everywhere, then the pointer.
     expect([...headers].map((header) => header.textContent)).toEqual([
-      expect.stringContaining('Navigation'),
+      'Navigation',
       expect.stringContaining('Keyboard'),
       expect.stringContaining('Fixed keys'),
-      expect.stringContaining('Mouse & pointer')
+      'Mouse & pointer'
     ]);
     expect(
       screen.getByRole('button', { name: 'Reset all shortcuts' })
     ).toBeDisabled();
-    // The banner's guidance lives on in the one header.
-    expect(headers[1]).toHaveTextContent(/pause while you type/);
+    // The banner's guidance lives on beside the one header.
+    expect(headers[1]).toHaveTextContent(/Paused while you type/);
+  });
+});
+
+describe('settings control reference details', () => {
+  it('shows each binding’s explanation from a button, not only a tooltip', async () => {
+    const user = userEvent.setup();
+    renderSettings(null, { initialSection: 'controls' });
+
+    const pointer = POINTER_CONTROL_GROUPS[0];
+    const sample = pointer.items[0];
+    const toggle = screen.getByRole('button', {
+      name: `Details for ${pointer.title}`
+    });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(sample.detail)).toBeNull();
+
+    // Reachable by keyboard: focus it and press Enter.
+    toggle.focus();
+    await user.keyboard('{Enter}');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(sample.detail)).toBeVisible();
+    // The name does not change with the state.
+    expect(toggle).toHaveAccessibleName(`Details for ${pointer.title}`);
+
+    await user.click(toggle);
+    expect(screen.queryByText(sample.detail)).toBeNull();
   });
 });
 
@@ -617,9 +640,6 @@ describe('settings advanced section', () => {
     await user.click(screen.getByRole('button', { name: 'Advanced' }));
 
     expect(screen.getByText('Cloud project storage')).toBeInTheDocument();
-    expect(
-      screen.getByText(/ready to store your projects before they can sync/)
-    ).toBeInTheDocument();
     expect(screen.getByText('Not ready')).toHaveClass(
       'settings-state',
       'warning'
@@ -839,6 +859,58 @@ describe('settings privacy and data section', () => {
     expect(screen.getByText(/cloud deletions below never touch/)).toBeVisible();
   });
 
+  it('keeps the file meter in range when the account is over its allowance', async () => {
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      ...storageUsage,
+      artifactBytes: 120 * 1_048_576
+    });
+    renderSettings(readyHealth, { initialSection: 'account', session });
+
+    const meter = await screen.findByRole('meter', {
+      name: 'Cloud file storage used'
+    });
+    const limit = String(storageUsage.artifactLimitBytes);
+    // The bar is full, never past full; the text says by how much.
+    expect(meter).toHaveAttribute('aria-valuemax', limit);
+    expect(meter).toHaveAttribute('aria-valuenow', limit);
+    expect(meter).toHaveAttribute(
+      'aria-valuetext',
+      '120.0 MB of 100.0 MB · over allowance'
+    );
+    expect(
+      screen.getByText('120.0 MB of 100.0 MB · over allowance')
+    ).toBeVisible();
+  });
+
+  it('reports in-range file usage as it is', async () => {
+    renderSettings(readyHealth, { initialSection: 'account', session });
+
+    const meter = await screen.findByRole('meter', {
+      name: 'Cloud file storage used'
+    });
+    expect(meter).toHaveAttribute('aria-valuenow', String(5 * 1_048_576));
+    expect(meter).toHaveAttribute('aria-valuetext', '5.0 MB of 100.0 MB');
+  });
+
+  it('names the diagnostic download for what it downloads', () => {
+    renderSettings(readyHealth, { initialSection: 'privacy', session });
+
+    expect(
+      screen.getByRole('button', { name: 'Download diagnostic report' })
+    ).toBeInTheDocument();
+  });
+
+  it('keeps the full analytics disclosure, local operations included', async () => {
+    const user = userEvent.setup();
+    renderSettings(readyHealth, { initialSection: 'privacy', session });
+
+    await user.click(screen.getByText('What’s collected'));
+    expect(screen.getByText(/Local operations require opt-in\./)).toBeVisible();
+    expect(
+      screen.getByText(/This expanded scope requires a fresh choice\./)
+    ).toBeVisible();
+  });
+
   it('shows storage usage on Account, where the profile that owns it is', async () => {
     renderSettings(readyHealth, { initialSection: 'account', session });
 
@@ -965,5 +1037,57 @@ describe('settings project invitation handoff', () => {
     expect(screen.getByText(/Project invitation ready/)).toBeInTheDocument();
     expect(screen.queryByText(/invite=/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Not now' })).toBeEnabled();
+  });
+});
+
+describe('settings page pattern', () => {
+  it('shows a short choice whole, as one option per radio', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn<ComponentProps<typeof SettingsPage>['onChange']>();
+    renderSettings(null, { initialSection: 'appearance', onChange });
+
+    const theme = screen.getByRole('radiogroup', { name: 'Theme' });
+    const options = within(theme).getAllByRole('radio');
+    expect(
+      options.map((option) => option.closest('label')?.textContent)
+    ).toEqual(['System', 'Light', 'Dark']);
+    expect(within(theme).getByRole('radio', { name: 'System' })).toBeChecked();
+
+    await user.click(within(theme).getByRole('radio', { name: 'Light' }));
+    expect(onChange.mock.calls[0]?.[0].appearance.theme).toBe('light');
+  });
+
+  it('names an abbreviated unit in full for assistive technology', () => {
+    renderSettings(null, { initialSection: 'general' });
+    const units = screen.getByRole('radiogroup', { name: 'Default units' });
+    expect(
+      within(units).getByRole('radio', { name: 'Millimeters' })
+    ).toBeChecked();
+    expect(within(units).getByRole('radio', { name: 'Inches' })).toBeVisible();
+  });
+
+  /**
+   * Settings had grown a paragraph under every row. Each row now carries at
+   * most one short line; anything longer belongs behind a disclosure.
+   */
+  it('keeps every row hint to one short line on every page', async () => {
+    const user = userEvent.setup();
+    const { container } = renderSettings();
+    const nav = screen.getByRole('complementary', {
+      name: 'Settings sections'
+    });
+    const labels = within(nav)
+      .getAllByRole('button')
+      .map((button) => button.getAttribute('aria-label'))
+      .filter((label): label is string => Boolean(label));
+    expect(labels.length).toBeGreaterThanOrEqual(10);
+
+    for (const label of labels) {
+      await user.click(within(nav).getByRole('button', { name: label }));
+      const tooLong = [...container.querySelectorAll('.setting-copy > small')]
+        .map((hint) => hint.textContent ?? '')
+        .filter((hint) => hint.length === 0 || hint.length > 100);
+      expect({ label, tooLong }).toEqual({ label, tooLong: [] });
+    }
   });
 });
