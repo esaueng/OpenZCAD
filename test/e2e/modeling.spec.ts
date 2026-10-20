@@ -4157,6 +4157,18 @@ test('dragging the move gizmo streams live values and commits what was dragged',
     .toBe(true);
   const liveValues = await draggedValues();
 
+  // Window resizing re-renders the workspace without committing the gesture.
+  // Its unchanged props must not overwrite the panel's live drag values.
+  const viewport = page.viewportSize()!;
+  await page.setViewportSize({ ...viewport, width: viewport.width - 1 });
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      })
+  );
+  expect(await draggedValues()).toEqual(liveValues);
+
   await page.mouse.up();
   await page.waitForTimeout(150);
 
