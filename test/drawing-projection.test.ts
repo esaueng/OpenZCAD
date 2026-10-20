@@ -866,6 +866,94 @@ describe('D01 occlusion tolerance', () => {
     expect(prefix).toHaveLength(1);
   });
 
+  it('keeps a short prefix that ends near, not on, an unrelated face', () => {
+    // An edge starts half a tolerance above a plate it does not belong to,
+    // well inside one of the plate's triangles, and sinks under it: its
+    // short visible prefix is real. Plane distance alone once called the
+    // start a corner of the plate and merged the prefix away.
+    const plate = {
+      vertices: Float64Array.from([
+        -10, -1, 0, 100, -1, 0, 100, 1, 0, -10, 1, 0
+      ]),
+      indices: Uint32Array.from([0, 1, 2, 0, 2, 3]),
+      faces: [{ triangleStart: 0, triangleCount: 2 }],
+      edges: []
+    };
+    const tol = 100 * 2 ** -21;
+    const edge = {
+      vertices: new Float64Array(),
+      indices: new Uint32Array(),
+      edges: [[0, 0, tol / 2, 1000, 0, tol / 2 - 1]]
+    };
+    const result = projectView({
+      orientation: 'top',
+      hiddenLines: true,
+      bodies: [plate, edge]
+    });
+    const prefix = result.visible.filter(
+      (line) =>
+        Math.abs(line[1]!) < 1e-9 &&
+        Math.min(line[0]!, line.at(-2)!) < 1e-9 &&
+        Math.max(line[0]!, line.at(-2)!) < 0.1
+    );
+    expect(prefix).toHaveLength(1);
+  });
+
+  it('keeps the silhouettes of a long, thin cylinder', () => {
+    // 10^6 mm long and 0.1 mm across: a ten-millionth of its diagonal is the
+    // whole diameter, which welded each rim to a point and left the side
+    // with no normals, so no silhouette.
+    const n = 24;
+    const r = 0.05;
+    const length = 1e6;
+    const vertices: number[] = [];
+    for (const x of [0, length])
+      for (let k = 0; k < n; k += 1) {
+        const a = (2 * Math.PI * k) / n;
+        vertices.push(x, r * Math.cos(a), r * Math.sin(a));
+      }
+    vertices.push(0, 0, 0, length, 0, 0);
+    const indices: number[] = [];
+    for (let k = 0; k < n; k += 1) {
+      const j = (k + 1) % n;
+      indices.push(k, j, n + j, k, n + j, n + k);
+    }
+    for (let k = 0; k < n; k += 1) {
+      const j = (k + 1) % n;
+      indices.push(2 * n, j, k);
+      indices.push(2 * n + 1, n + k, n + j);
+    }
+    const rim = (x: number) =>
+      Array.from({ length: n + 1 }, (_, k) => {
+        const a = (2 * Math.PI * k) / n;
+        return [x, r * Math.cos(a), r * Math.sin(a)];
+      }).flat();
+    const rod = {
+      vertices: Float64Array.from(vertices),
+      indices: Uint32Array.from(indices),
+      faces: [
+        { triangleStart: 0, triangleCount: 2 * n },
+        { triangleStart: 2 * n, triangleCount: 2 * n }
+      ],
+      edges: [rim(0), rim(length)]
+    };
+    const result = projectView({
+      orientation: 'top',
+      hiddenLines: true,
+      bodies: [rod]
+    });
+    const long = result.visible.filter((line) => {
+      let min = Infinity;
+      let max = -Infinity;
+      for (let i = 0; i < line.length; i += 2) {
+        min = Math.min(min, line[i]!);
+        max = Math.max(max, line[i]!);
+      }
+      return Math.abs(max - min) > length / 2;
+    });
+    expect(long).toHaveLength(2);
+  });
+
   it('keeps an occluded interval shorter than the sliver threshold', () => {
     // A 1000 mm edge under a 0.05 mm strip: 5e-5 of the view, below the
     // corner-sliver threshold, but bounded by the strip's own footprint.

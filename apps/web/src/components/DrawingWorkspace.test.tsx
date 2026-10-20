@@ -22,6 +22,16 @@ import {
   createStarterSheet,
   drawingSourceFingerprint
 } from '../lib/drawing/sheetSources';
+import type * as SheetSources from '../lib/drawing/sheetSources';
+
+// Pass-through, counted: fingerprinting is the costly step a drag must skip.
+vi.mock('../lib/drawing/sheetSources', async (importOriginal) => {
+  const actual = await importOriginal<typeof SheetSources>();
+  return {
+    ...actual,
+    drawingSourceFingerprint: vi.fn(actual.drawingSourceFingerprint)
+  };
+});
 
 const bodyId = 'body_cube' as BodyId;
 
@@ -418,6 +428,78 @@ describe('DrawingWorkspace', () => {
     fireEvent.pointerUp(screen.getByRole('button', { name: 'Front view' }));
     expect(onCommand).not.toHaveBeenCalled();
     rect.mockRestore();
+  });
+
+  it('fingerprints the model once, not on every pointer move of a drag', () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const rect = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockReturnValue(new DOMRect(0, 0, 840, 594));
+    try {
+      setup({ sheet: starter(fingerprint) });
+      const counted = vi.mocked(drawingSourceFingerprint);
+      counted.mockClear();
+      const iso = screen.getByRole('button', { name: 'Isometric view' });
+      fireEvent.pointerDown(iso, { button: 0, clientX: 100, clientY: 100 });
+      for (let step = 1; step <= 5; step += 1)
+        fireEvent.pointerMove(iso, { clientX: 100 + step * 10, clientY: 100 });
+      expect(counted).not.toHaveBeenCalled();
+    } finally {
+      rect.mockRestore();
+    }
+  });
+
+  it('frees the projection of a view intent no sheet draws any more', async () => {
+    const project = vi.spyOn(DrawingProjectionClient.prototype, 'project');
+    try {
+      const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+        bodyId
+      ])!;
+      const sheet = starter(fingerprint);
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const document = (shown: DrawingSheet): ProjectDocument => ({
+        ...base,
+        bodyOrder: [bodyId],
+        drawings: { sheets: [shown] }
+      });
+      const props = {
+        bodies: { [bodyId]: cube() },
+        geometryPending: false,
+        defaultBodyIds: [bodyId],
+        editDisabledReason: null,
+        onCommand: vi.fn(() => true),
+        onStatus: vi.fn()
+      };
+      const settled = () =>
+        waitFor(() =>
+          expect(
+            screen
+              .getByRole('application', { name: 'Sheet Sheet 1' })
+              .querySelectorAll('.drawing-view.is-placeholder')
+          ).toHaveLength(0)
+        );
+      const { rerender } = render(
+        <DrawingWorkspace document={document(sheet)} {...props} />
+      );
+      await settled();
+      const toggled = {
+        ...sheet,
+        views: sheet.views.map((view, index) =>
+          index === 3 ? { ...view, hiddenLines: !view.hiddenLines } : view
+        )
+      };
+      rerender(<DrawingWorkspace document={document(toggled)} {...props} />);
+      await settled();
+      // Back to the first setting: its projection was freed with the
+      // intent, so it is asked for again rather than kept for ever.
+      rerender(<DrawingWorkspace document={document(sheet)} {...props} />);
+      await settled();
+      await waitFor(() => expect(project).toHaveBeenCalledTimes(3));
+    } finally {
+      project.mockRestore();
+    }
   });
 
   it('names a body the sheet draws that is gone', () => {

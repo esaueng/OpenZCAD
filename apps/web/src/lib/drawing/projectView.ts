@@ -301,12 +301,19 @@ export class OcclusionGrid {
       const f1 = plane(bu, bv) - bd + t.tol;
       if ((f0 < 0 && f1 > 0) || (f0 > 0 && f1 < 0)) {
         const s = f0 / (f0 - f1);
+        // Near the plane is not enough: the end must be on this triangle's
+        // boundary, as an edge's end vertex is on the faces that meet it.
+        // An unrelated occluder whose plane passes by the end bounds a real
+        // interval, however short.
         if (s > 0 && s < 1)
           out.push({
             t: s,
             depth: true,
-            onA: Math.abs(f0 - t.tol) <= t.tol,
-            onB: Math.abs(f1 - t.tol) <= t.tol
+            onA:
+              Math.abs(f0 - t.tol) <= t.tol &&
+              onTriangleBoundary(t, au, av, ad),
+            onB:
+              Math.abs(f1 - t.tol) <= t.tol && onTriangleBoundary(t, bu, bv, bd)
           });
       }
     }
@@ -588,8 +595,71 @@ export function bodySilhouettes(
   }));
 }
 
+/** True when (u, v, d) lies within the triangle's tolerance of one of its sides. */
+function onTriangleBoundary(
+  t: Triangle,
+  u: number,
+  v: number,
+  d: number
+): boolean {
+  const corners = [
+    [t.u0, t.v0, t.d0],
+    [t.u1, t.v1, t.d1],
+    [t.u2, t.v2, t.d2]
+  ] as const;
+  for (let e = 0; e < 3; e += 1) {
+    const p = corners[e]!;
+    const q = corners[(e + 1) % 3]!;
+    const eu = q[0] - p[0];
+    const ev = q[1] - p[1];
+    const ed = q[2] - p[2];
+    const lengthSq = eu * eu + ev * ev + ed * ed;
+    const f =
+      lengthSq > 0
+        ? Math.min(
+            1,
+            Math.max(
+              0,
+              ((u - p[0]) * eu + (v - p[1]) * ev + (d - p[2]) * ed) / lengthSq
+            )
+          )
+        : 0;
+    if (
+      Math.hypot(u - p[0] - eu * f, v - p[1] - ev * f, d - p[2] - ed * f) <=
+      t.tol
+    )
+      return true;
+  }
+  return false;
+}
+
 /** Four float32 units in the last place, relative to the coordinate. */
 const FLOAT32_NOISE = 2 ** -21;
+
+/**
+ * How close two mesh vertices must be to count as one: a ten-millionth of
+ * the body, but never more than a hundredth of its shortest triangle side,
+ * so a long thin body never welds a rim of its own vertices into a point.
+ */
+export function weldQuantum(
+  body: ProjectionBodyInput,
+  diagonal: number
+): number {
+  const { vertices, indices } = body;
+  let shortest = Infinity;
+  for (let t = 0; t + 2 < indices.length; t += 3)
+    for (let k = 0; k < 3; k += 1) {
+      const a = indices[t + k]! * 3;
+      const b = indices[t + ((k + 1) % 3)]! * 3;
+      const length = Math.hypot(
+        vertices[b]! - vertices[a]!,
+        vertices[b + 1]! - vertices[a + 1]!,
+        vertices[b + 2]! - vertices[a + 2]!
+      );
+      if (length > 0 && length < shortest) shortest = length;
+    }
+  return Math.min(diagonal * 1e-7, shortest * 1e-2);
+}
 
 /** The diagonal of a body's display-mesh bounding box (never zero). */
 function bodyDiagonal(body: ProjectionBodyInput): number {
@@ -634,8 +704,11 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   // Every scale that only absorbs float noise is the body's own: bodies far
   // apart (along the view or across it) must not coarsen each other.
   const scales = input.bodies.map(bodyDiagonal);
+  const welds = input.bodies.map((body, bodyIndex) =>
+    weldQuantum(body, scales[bodyIndex]!)
+  );
   const meshes = input.bodies.map((body, bodyIndex) =>
-    analyzeMesh(body, scales[bodyIndex]! * 1e-7)
+    analyzeMesh(body, welds[bodyIndex]!)
   );
   input.bodies.forEach((body, bodyIndex) => {
     const { vertices, indices } = body;
@@ -706,7 +779,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     for (const silhouette of bodySilhouettes(
       body,
       frame,
-      scale * 1e-7,
+      welds[bodyIndex]!,
       meshes[bodyIndex]
     ))
       lines.push({ points: silhouette.points, scale });
@@ -817,12 +890,16 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
         if (cut.t - last.t > 1e-12) cuts.push(cut);
         else if (cut.kind === 'vertex' || cut.kind === 'end')
           cuts[cuts.length - 1] = cut;
-        // Coincident cuts: a footprint crossing outranks a depth one.
+        // Coincident cuts: a footprint crossing outranks a depth one, and
+        // the face at the line's end outranks other triangles of its plane
+        // that do not touch the end.
         else if (
           cut.kind === 'edge' &&
           (last.kind === 'depth' || last.kind === 'corner')
         )
           last.kind = 'edge';
+        else if (cut.kind === 'corner' && last.kind === 'depth')
+          last.kind = 'corner';
       }
       for (let k = 0; k + 1 < cuts.length; k += 1) {
         const t0 = cuts[k]!.t;
