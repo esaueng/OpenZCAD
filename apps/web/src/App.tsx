@@ -8454,21 +8454,24 @@ export function App() {
     referenceImagePlaneRef.current = null;
     setStatus(`Placing ${file.name}…`);
     try {
-      const { prepareReferenceImage } = await import(
-        './lib/referenceImageInsert'
-      );
+      const { discardReferenceImageBytes, prepareReferenceImage } =
+        await import('./lib/referenceImageInsert');
       const image = await prepareReferenceImage({
         file,
         document: current,
         plane,
         archive: archiveArtifact
       });
-      if (managerRef.current?.document.projectId !== current.projectId) return;
-      if (executeCommand(commandFactories.addReferenceImage({ image }))) {
+      if (
+        managerRef.current?.document.projectId === current.projectId &&
+        executeCommand(commandFactories.addReferenceImage({ image }))
+      ) {
         openReferenceImage(image.imageId);
         setStatus(
           `${image.name} placed. Scale it from two points, or set its width.`
         );
+      } else {
+        await discardReferenceImageBytes(image);
       }
     } catch (error) {
       setStatus(errorMessage(error, 'The image could not be placed.'));
@@ -10320,7 +10323,7 @@ export function App() {
         try {
           // The browser builds the copy and the account stores it (ADR-024
           // Phase 1). Loaded on demand: only Duplicate and Branch get here.
-          const { buildCloudProjectCopy } =
+          const { buildCloudProjectCopy, publishCopyPictures } =
             await import('./lib/cloudProjectCopy');
           const request = await buildCloudProjectCopy(
             {
@@ -10349,22 +10352,46 @@ export function App() {
             project.projectId,
             request
           );
+          // Reference images arrive under device-local ids (the account
+          // copies import sources only): upload them into the copy now, so
+          // no other device opens it without its pictures.
+          const { archiveArtifact: archiveArtifactBody } =
+            await import('./lib/archiveArtifact');
+          const pictures = await publishCopyPictures(
+            response.document,
+            response.project.documentVersion ?? response.document.version,
+            {
+              loadSourceBytes: loadSourceBlob,
+              archive: (input) =>
+                archiveArtifactBody(api, response.document.projectId, input),
+              save: (document, expectedVersion) =>
+                api.saveProjectDocument({
+                  projectId: document.projectId,
+                  expectedVersion,
+                  document
+                })
+            }
+          ).catch(() => null);
+          const copied = pictures?.document ?? response.document;
+          const pictureWarning = pictures
+            ? sourceUploadMessage(pictures.result)
+            : 'Its images are still on this device only; open the copy and save it to upload them.';
           const localSource = await loadLocalProject(project.projectId).catch(
             () => null
           );
           let localCopy = restoreDuplicateDerivedProjection(
-            response.document,
+            copied,
             localSource
           );
-          if (localCopy === response.document) {
+          if (localCopy === copied) {
             // This device may not have the exact source revision cached. The
             // kernel stays in the browser, so rebuild the copy here rather
             // than asking cloud persistence to store a derived projection.
             const derived = await geometry
-              .syncOnce(response.document)
+              .syncOnce(copied)
               .catch(() => null);
             if (derived) {
-              localCopy = { ...response.document, derived };
+              localCopy = { ...copied, derived };
             }
           }
           // Kept on the device too, so the copy opens offline exactly like the
@@ -10380,9 +10407,12 @@ export function App() {
             [...current, response.project].sort(compareProjectSummaries)
           );
           setStatus(
-            saveState
-              ? `Branched ${project.name} from “${saveState.reason}” as ${response.project.name}.`
-              : `Duplicated ${project.name} as ${response.project.name}.`
+            [
+              saveState
+                ? `Branched ${project.name} from “${saveState.reason}” as ${response.project.name}.`
+                : `Duplicated ${project.name} as ${response.project.name}.`,
+              ...(pictureWarning ? [pictureWarning] : [])
+            ].join(' ')
           );
           return;
         } catch (error) {

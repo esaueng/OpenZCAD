@@ -315,7 +315,8 @@ import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
 import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
 import {
   buildReferenceImageRig,
-  referenceImageTexture
+  ReferenceTextureCache,
+  type ReferenceTextureRequest
 } from './viewer/referenceImageRig';
 import type { DatumAxisDisplay } from '../lib/datumAxisDisplay';
 import { sketchValueResolver } from '../lib/sketch/valueResolver';
@@ -11388,64 +11389,39 @@ export function ModelViewer({
   // I05 reference images (viewer/referenceImageRig). One texture per picture,
   // decoded once and kept while any shown image uses it; the rig is rebuilt
   // when the set, a placement, the selection or a finished decode changes.
-  const referenceTexturesRef = useRef(new Map<string, THREE.Texture>());
-  const referenceTextureLoadsRef = useRef(new Set<string>());
+  const referenceTexturesRef = useRef<ReferenceTextureCache | null>(null);
+  referenceTexturesRef.current ??= new ReferenceTextureCache();
   const [referenceTextureVersion, setReferenceTextureVersion] = useState(0);
   const loadReferenceImageRef = useRef(loadReferenceImage);
   loadReferenceImageRef.current = loadReferenceImage;
   const referenceImageKey = JSON.stringify(referenceImages ?? []);
-  const referenceChecksumKey = [
-    ...new Set((referenceImages ?? []).map((image) => image.checksumSha256))
-  ]
-    .sort()
-    .join(',');
-  const referenceChecksumKeyRef = useRef(referenceChecksumKey);
-  referenceChecksumKeyRef.current = referenceChecksumKey;
+  // Where each picture can be read from, not just which: an archive rewrite
+  // changes this and retries a picture that was not yet available.
+  const referenceTextureKey = JSON.stringify(
+    [
+      ...new Map(
+        (referenceImages ?? []).map(({ checksumSha256, artifactId }) => [
+          `${checksumSha256}|${artifactId}`,
+          { checksumSha256, artifactId }
+        ])
+      ).values()
+    ].sort((a, b) =>
+      `${a.checksumSha256}|${a.artifactId}`.localeCompare(
+        `${b.checksumSha256}|${b.artifactId}`
+      )
+    )
+  );
   useEffect(() => {
-    const needed = new Set(
-      referenceChecksumKey ? referenceChecksumKey.split(',') : []
+    const load = loadReferenceImageRef.current;
+    referenceTexturesRef.current!.sync(
+      JSON.parse(referenceTextureKey) as ReferenceTextureRequest[],
+      (checksum) => (load ? load(checksum) : Promise.resolve(null)),
+      () => setReferenceTextureVersion((version) => version + 1)
     );
-    const textures = referenceTexturesRef.current;
-    for (const [checksum, texture] of textures) {
-      if (needed.has(checksum)) continue;
-      texture.dispose();
-      textures.delete(checksum);
-    }
-    const loads = referenceTextureLoadsRef.current;
-    for (const checksum of needed) {
-      if (textures.has(checksum) || loads.has(checksum)) continue;
-      const load = loadReferenceImageRef.current;
-      if (!load) continue;
-      loads.add(checksum);
-      void load(checksum)
-        .then((bytes) => (bytes ? referenceImageTexture(bytes) : null))
-        .then(
-          (texture) => {
-            if (!texture) return;
-            // Unmounted, or no shown image needs this picture any more.
-            if (
-              loads !== referenceTextureLoadsRef.current ||
-              !referenceChecksumKeyRef.current.split(',').includes(checksum)
-            ) {
-              texture.dispose();
-              return;
-            }
-            textures.set(checksum, texture);
-            setReferenceTextureVersion((version) => version + 1);
-          },
-          () => undefined
-        )
-        .finally(() => loads.delete(checksum));
-    }
-  }, [referenceChecksumKey]);
+  }, [referenceTextureKey]);
   useEffect(() => {
-    const textures = referenceTexturesRef.current;
-    return () => {
-      for (const texture of textures.values()) texture.dispose();
-      textures.clear();
-      // Loads still in flight see a different set and drop their texture.
-      referenceTextureLoadsRef.current = new Set();
-    };
+    const cache = referenceTexturesRef.current!;
+    return () => cache.clear();
   }, []);
   useEffect(() => {
     const context = contextRef.current;
@@ -11453,7 +11429,7 @@ export function ModelViewer({
     if (!context || images.length === 0) {
       return;
     }
-    const textures = referenceTexturesRef.current;
+    const textures = referenceTexturesRef.current!.textures;
     const rig = buildReferenceImageRig(images, textures);
     context.scene.add(rig.group);
     const canvas = context.renderer.domElement;

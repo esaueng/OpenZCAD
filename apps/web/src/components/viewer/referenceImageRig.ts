@@ -115,3 +115,82 @@ export async function referenceImageTexture(
   texture.addEventListener('dispose', () => bitmap.close());
   return texture;
 }
+
+/** A picture the viewport wants: its bytes' identity and where they live. */
+export interface ReferenceTextureRequest {
+  checksumSha256: string;
+  /**
+   * Where the bytes can come from. A load that found nothing is retried when
+   * this changes — a collaborator's device-only picture becomes resolvable
+   * the moment its owner archives it and the id is rewritten.
+   */
+  artifactId: string;
+}
+
+/**
+ * One texture per picture, decoded once and kept while any shown image uses
+ * it. `sync` starts the loads a request set needs; a load that comes back
+ * empty or fails is forgotten, so the next `sync` naming a different
+ * location for the same bytes tries again. `clear` drops every texture and
+ * orphans the loads in flight, which then dispose what they decode; the
+ * cache stays usable, as a remounted viewer needs it to be.
+ */
+export class ReferenceTextureCache {
+  readonly textures = new Map<string, THREE.Texture>();
+  private loads = new Set<string>();
+  private wanted = new Set<string>();
+  private generation = 0;
+
+  constructor(
+    private readonly decode: (
+      bytes: Blob
+    ) => Promise<THREE.Texture> = referenceImageTexture
+  ) {}
+
+  sync(
+    requests: readonly ReferenceTextureRequest[],
+    load: (checksumSha256: string) => Promise<Blob | null>,
+    onReady: () => void
+  ): void {
+    this.wanted = new Set(requests.map((request) => request.checksumSha256));
+    for (const [checksum, texture] of this.textures) {
+      if (this.wanted.has(checksum)) continue;
+      texture.dispose();
+      this.textures.delete(checksum);
+    }
+    const generation = this.generation;
+    for (const { checksumSha256, artifactId } of requests) {
+      const key = `${checksumSha256}|${artifactId}`;
+      if (this.textures.has(checksumSha256) || this.loads.has(key)) continue;
+      this.loads.add(key);
+      const loads = this.loads;
+      void load(checksumSha256)
+        .then((bytes) => (bytes ? this.decode(bytes) : null))
+        .then(
+          (texture) => {
+            if (!texture) return;
+            if (
+              generation !== this.generation ||
+              !this.wanted.has(checksumSha256) ||
+              this.textures.has(checksumSha256)
+            ) {
+              texture.dispose();
+              return;
+            }
+            this.textures.set(checksumSha256, texture);
+            onReady();
+          },
+          () => undefined
+        )
+        .finally(() => loads.delete(key));
+    }
+  }
+
+  clear(): void {
+    this.generation += 1;
+    for (const texture of this.textures.values()) texture.dispose();
+    this.textures.clear();
+    this.loads = new Set();
+    this.wanted = new Set();
+  }
+}

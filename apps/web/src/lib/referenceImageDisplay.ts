@@ -88,6 +88,8 @@ export interface ReferenceImageDisplay {
   opacity: number;
   /** The bytes' identity, so the viewer can cache one texture per picture. */
   checksumSha256: string;
+  /** Where the bytes are archived; a change retries an unavailable picture. */
+  artifactId: string;
   selected: boolean;
 }
 
@@ -116,6 +118,7 @@ export function referenceImageDisplays(
         height: referenceImageHeight(image),
         opacity: image.opacity,
         checksumSha256: image.source.checksumSha256,
+        artifactId: image.artifactId,
         selected: image.imageId === selectedImageId
       }
     ];

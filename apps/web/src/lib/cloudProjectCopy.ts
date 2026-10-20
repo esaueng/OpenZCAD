@@ -3,7 +3,16 @@
  * Phase 1), so the Worker stores a copy it never had to construct. Loaded on
  * demand: only Duplicate and Branch reach it.
  */
-import { duplicateProjectDocument } from '@openzcad/document-core';
+import {
+  duplicateProjectDocument,
+  withoutDerivedProjection
+} from '@openzcad/document-core';
+import { archiveAccountImportSources } from './accountImportSources';
+import type { ArchiveArtifactInput } from './archiveArtifact';
+import {
+  listLocalOnlyImportSources,
+  type ArchiveLocalSourcesResult
+} from './importArchival';
 import {
   importSourceCopyRefs,
   projectCopyDocumentDigest
@@ -80,5 +89,57 @@ export async function buildCloudProjectCopy(
     documentDigest: await projectCopyDocumentDigest(copy),
     importSources: importSourceCopyRefs(document, copy),
     ...(saveState ? { revisionId: toRevisionId(saveState.revisionId) } : {})
+  };
+}
+
+export interface CopyPicturePublisher {
+  /** Bytes from this device's source store (the copy cached them). */
+  loadSourceBytes(checksumSha256: string): Promise<Uint8Array | null>;
+  /** Uploads one picture as an artifact of the copy's own project. */
+  archive(input: ArchiveArtifactInput): Promise<string>;
+  /** Stores the rewritten copy over the version the account just created. */
+  save(
+    document: ProjectDocument,
+    expectedVersion: number
+  ): Promise<{ version: number; updatedAt: string }>;
+}
+
+/**
+ * Finishes an account copy that holds reference images: the account carries
+ * import sources across itself, but the pictures arrive under device-local
+ * ids, so this uploads each one into the copy's own project, rewrites the ids
+ * everywhere (undo history included) and stores the result before the copy is
+ * reported made. Every other device can then draw them at once. A picture
+ * that cannot be uploaded keeps its local id — the copy's next account save
+ * retries it — and is reported in `result`.
+ */
+export async function publishCopyPictures(
+  copy: ProjectDocument,
+  expectedVersion: number,
+  publisher: CopyPicturePublisher
+): Promise<{ document: ProjectDocument; result: ArchiveLocalSourcesResult }> {
+  const empty = { archived: [], missing: [], failed: [] };
+  if (
+    !listLocalOnlyImportSources(copy).some(
+      (source) => source.kind === 'reference-image'
+    )
+  )
+    return { document: copy, result: empty };
+  const prepared = await archiveAccountImportSources(copy, {
+    loadSourceBytes: publisher.loadSourceBytes,
+    archive: (input) => publisher.archive(input)
+  });
+  if (prepared.document === copy) return prepared;
+  const saved = await publisher.save(
+    withoutDerivedProjection(prepared.document),
+    expectedVersion
+  );
+  return {
+    document: {
+      ...prepared.document,
+      version: saved.version,
+      derived: { ...prepared.document.derived, updatedAt: saved.updatedAt }
+    },
+    result: prepared.result
   };
 }

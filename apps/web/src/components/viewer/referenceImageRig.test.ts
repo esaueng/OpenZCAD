@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { buildReferenceImageRig } from './referenceImageRig';
+import {
+  buildReferenceImageRig,
+  ReferenceTextureCache
+} from './referenceImageRig';
 import type { ReferenceImageDisplay } from '../../lib/referenceImageDisplay';
 
 const display = (
@@ -18,6 +21,7 @@ const display = (
   height: 40,
   opacity: 0.4,
   checksumSha256: 'c'.repeat(64),
+  artifactId: 'artifact_one',
   selected: false,
   ...extra
 });
@@ -79,5 +83,83 @@ describe('buildReferenceImageRig', () => {
     for (const object of rig.group.children)
       expect(object.userData.referenceImageId).toBe('rimg_one');
     rig.dispose();
+  });
+});
+
+describe('ReferenceTextureCache', () => {
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const sum = 'c'.repeat(64);
+
+  it('decodes a picture once and retries one that was not available when its location changes', async () => {
+    const decode = vi.fn(async () => new THREE.Texture());
+    const cache = new ReferenceTextureCache(decode);
+    const onReady = vi.fn();
+    // A collaborator's device-only picture: nothing to load yet.
+    const load = vi.fn(async () => null as Blob | null);
+    cache.sync(
+      [{ checksumSha256: sum, artifactId: 'artifact_local_x' }],
+      load,
+      onReady
+    );
+    await flush();
+    expect(cache.textures.size).toBe(0);
+    // The same location again does not hammer the store.
+    load.mockClear();
+    cache.sync(
+      [{ checksumSha256: sum, artifactId: 'artifact_local_x' }],
+      load,
+      onReady
+    );
+    await flush();
+    expect(onReady).not.toHaveBeenCalled();
+    // The owner archives it: the rewritten id makes it loadable.
+    load.mockResolvedValue(new Blob([new Uint8Array([1])]));
+    cache.sync(
+      [{ checksumSha256: sum, artifactId: 'artifact_cloud' }],
+      load,
+      onReady
+    );
+    await flush();
+    expect(cache.textures.has(sum)).toBe(true);
+    expect(onReady).toHaveBeenCalledTimes(1);
+    // Loaded once: a later sync for the same picture loads nothing.
+    load.mockClear();
+    cache.sync(
+      [{ checksumSha256: sum, artifactId: 'artifact_cloud' }],
+      load,
+      onReady
+    );
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it('drops pictures no image needs, and loads that finish after a clear', async () => {
+    const texture = new THREE.Texture();
+    const dispose = vi.spyOn(texture, 'dispose');
+    const cache = new ReferenceTextureCache(async () => texture);
+    let resolve: (blob: Blob) => void = () => undefined;
+    const pending = new Promise<Blob>((done) => (resolve = done));
+    cache.sync(
+      [{ checksumSha256: sum, artifactId: 'a' }],
+      () => pending,
+      vi.fn()
+    );
+    cache.clear();
+    resolve(new Blob([new Uint8Array([1])]));
+    await flush();
+    expect(cache.textures.size).toBe(0);
+    expect(dispose).toHaveBeenCalled();
+    // Still usable after a clear, as a remounted viewer needs.
+    const kept = new ReferenceTextureCache(async () => new THREE.Texture());
+    kept.sync(
+      [{ checksumSha256: sum, artifactId: 'a' }],
+      async () => new Blob([new Uint8Array([1])]),
+      vi.fn()
+    );
+    await flush();
+    const loaded = kept.textures.get(sum)!;
+    const disposeLoaded = vi.spyOn(loaded, 'dispose');
+    kept.sync([], vi.fn(), vi.fn());
+    expect(kept.textures.size).toBe(0);
+    expect(disposeLoaded).toHaveBeenCalled();
   });
 });

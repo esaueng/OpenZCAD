@@ -13,10 +13,13 @@ import {
 import type { ArchiveArtifactInput } from './archiveArtifact';
 import { LOCAL_ARTIFACT_ID_PREFIX } from './importArchival';
 import {
+  deleteSourceBlobIfUnreferenced,
   ensureLocalProjectStorage,
   loadSourceBlob,
-  putSourceBlob
+  putSourceBlob,
+  sha256Hex
 } from './localProjectStore';
+import { addReferenceImage } from '@openzcad/document-core';
 
 /*
  * I05: reading a picture into a reference image, and its bytes back out.
@@ -109,6 +112,32 @@ export async function prepareReferenceImage({
       `${file.name} is ${size.width} × ${size.height} pixels; pictures up to ${MAX_REFERENCE_IMAGE_PIXELS} pixels on a side can be placed.`
     );
   }
+  // The whole insert is checked before a byte is stored or uploaded: a
+  // refusal (the project already holds the most images it may, a plane the
+  // section cannot hold) must not leave an unreferenced picture behind on
+  // this device or in the account.
+  const candidate: ReferenceImage = {
+    imageId: createReferenceImageId(),
+    name: imageName(file.name, document),
+    contentType,
+    source: {
+      marker: 'openzcad-source-ref',
+      version: 1,
+      hashAlgorithm: 'sha256',
+      checksumSha256: await sha256Hex(bytes),
+      logicalBytes: bytes.byteLength
+    },
+    artifactId:
+      `${LOCAL_ARTIFACT_ID_PREFIX}${crypto.randomUUID()}` as ArtifactId,
+    pixelWidth: size.width,
+    pixelHeight: size.height,
+    plane,
+    center: { u: 0, v: 0 },
+    rotationDeg: 0,
+    width: DEFAULT_WIDTH_MM / UNIT_TO_MM[document.units],
+    opacity: 0.6
+  };
+  addReferenceImage(document, { image: candidate });
   if ((await ensureLocalProjectStorage()) !== 'ready') {
     // Never embedded: without the blob store the picture has nowhere to live.
     throw new Error(
@@ -116,7 +145,7 @@ export async function prepareReferenceImage({
     );
   }
   const source = await putSourceBlob(bytes);
-  let artifactId: string;
+  let artifactId: string = candidate.artifactId;
   try {
     artifactId = await archive({
       fileName: file.name || 'image',
@@ -126,22 +155,24 @@ export async function prepareReferenceImage({
       metadata: { checksumSha256: source.checksumSha256 }
     });
   } catch {
-    artifactId = `${LOCAL_ARTIFACT_ID_PREFIX}${crypto.randomUUID()}`;
+    // Kept on this device; the next account save archives it.
   }
-  return {
-    imageId: createReferenceImageId(),
-    name: imageName(file.name, document),
-    contentType,
-    source,
-    artifactId: artifactId as ArtifactId,
-    pixelWidth: size.width,
-    pixelHeight: size.height,
-    plane,
-    center: { u: 0, v: 0 },
-    rotationDeg: 0,
-    width: DEFAULT_WIDTH_MM / UNIT_TO_MM[document.units],
-    opacity: 0.6
-  };
+  return { ...candidate, source, artifactId: artifactId as ArtifactId };
+}
+
+/**
+ * Releases the bytes an insert stored when its command did not commit after
+ * all (the project was locked or changed underneath it). Cleanup keeps them
+ * while any saved project or undo history still names the checksum. The
+ * account artifact, if one was made, stays: like a refused import's upload,
+ * it is unreferenced and counts toward storage until the project goes.
+ */
+export async function discardReferenceImageBytes(
+  image: ReferenceImage
+): Promise<void> {
+  await deleteSourceBlobIfUnreferenced({
+    checksumSha256: image.source.checksumSha256
+  }).catch(() => false);
 }
 
 /**

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import {
+  MAX_REFERENCE_IMAGES,
   MAX_REFERENCE_IMAGE_BYTES,
   toUserId,
   type ImportedSourceReference
@@ -12,7 +13,8 @@ const store = vi.hoisted(
     ready: Readiness;
     blobs: Map<string, Uint8Array>;
     puts: Uint8Array[];
-  } => ({ ready: 'ready', blobs: new Map(), puts: [] })
+    deleted: string[];
+  } => ({ ready: 'ready', blobs: new Map(), puts: [], deleted: [] })
 );
 
 vi.mock('./localProjectStore', () => ({
@@ -31,6 +33,13 @@ vi.mock('./localProjectStore', () => ({
   }),
   loadSourceBlob: vi.fn(
     async (checksum: string) => store.blobs.get(checksum) ?? null
+  ),
+  sha256Hex: vi.fn(async () => 'e'.repeat(64)),
+  deleteSourceBlobIfUnreferenced: vi.fn(
+    async ({ checksumSha256 }: { checksumSha256: string }) => {
+      store.deleted.push(checksumSha256);
+      return true;
+    }
   )
 }));
 
@@ -39,8 +48,11 @@ const resolver = vi.hoisted(() => ({
 }));
 vi.mock('./exactSourceResolver', () => resolver);
 
-const { loadReferenceImageBlob, prepareReferenceImage } =
-  await import('./referenceImageInsert');
+const {
+  discardReferenceImageBytes,
+  loadReferenceImageBlob,
+  prepareReferenceImage
+} = await import('./referenceImageInsert');
 
 const PNG = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2
@@ -57,6 +69,7 @@ beforeEach(() => {
   store.ready = 'ready';
   store.blobs.clear();
   store.puts = [];
+  store.deleted = [];
   measure.mockClear();
   resolver.resolveExactSourceBytes.mockClear();
 });
@@ -171,6 +184,53 @@ describe('prepareReferenceImage', () => {
     // Nothing was stored or uploaded for a refused picture.
     expect(store.puts).toHaveLength(0);
     expect(archive).not.toHaveBeenCalled();
+  });
+});
+
+describe('reference-image capacity', () => {
+  it('refuses a picture past the limit before storing or uploading it', async () => {
+    const first = await prepareReferenceImage({
+      file: file(PNG),
+      document: createProjectDocument('Images', toUserId('test')),
+      plane,
+      archive: async () => 'artifact_one',
+      measure
+    });
+    store.puts = [];
+    const full = {
+      ...createProjectDocument('Images', toUserId('test')),
+      referenceImages: {
+        images: Array.from({ length: MAX_REFERENCE_IMAGES }, (_, index) => ({
+          ...first,
+          imageId: `rimg_${index}` as typeof first.imageId,
+          name: `Image ${index}`
+        }))
+      }
+    };
+    const archive = vi.fn(async () => 'artifact_two');
+    await expect(
+      prepareReferenceImage({
+        file: file(PNG),
+        document: full,
+        plane,
+        archive,
+        measure
+      })
+    ).rejects.toThrow(/at most 64 reference images/);
+    expect(store.puts).toHaveLength(0);
+    expect(archive).not.toHaveBeenCalled();
+  });
+
+  it('releases stored bytes when the insert cannot commit', async () => {
+    const image = await prepareReferenceImage({
+      file: file(PNG),
+      document: createProjectDocument('Images', toUserId('test')),
+      plane,
+      archive: async () => 'artifact_one',
+      measure
+    });
+    await discardReferenceImageBytes(image);
+    expect(store.deleted).toEqual([image.source.checksumSha256]);
   });
 });
 

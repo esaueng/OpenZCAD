@@ -46,6 +46,7 @@ import {
   listLocalOnlyImportSources
 } from '../apps/web/src/lib/importArchival';
 import { applyAccountSourceArchives } from '../apps/web/src/lib/accountImportSources';
+import { publishCopyPictures } from '../apps/web/src/lib/cloudProjectCopy';
 import * as webGlimpse from '../apps/web/src/lib/glimpseContract';
 import * as workerGlimpse from '../apps/web/worker/glimpseContract';
 
@@ -461,6 +462,73 @@ describe('reference-image archives', () => {
       artifactId: 'artifact_cloud',
       opacity: 0.9
     });
+  });
+
+  it("publishes an account copy's pictures into the copy before it is reported made", async () => {
+    const source = new CommandManager(boxDocument());
+    source.execute(
+      commandFactories.addReferenceImage({
+        image: image({ artifactId: 'artifact_source' as ArtifactId })
+      })
+    );
+    const copy = {
+      ...duplicateProjectDocument(
+        source.document,
+        'Bracket (copy)',
+        toUserId('test')
+      ),
+      version: 3
+    };
+    const archived: { kind: string; contentType: string }[] = [];
+    const saves: { document: ProjectDocument; expectedVersion: number }[] = [];
+    const published = await publishCopyPictures(copy, 3, {
+      loadSourceBytes: async () => new Uint8Array(1234),
+      archive: async (input) => {
+        archived.push(input);
+        return 'artifact_copy';
+      },
+      save: async (document, expectedVersion) => {
+        saves.push({ document, expectedVersion });
+        return { version: 4, updatedAt: '2026-10-20T00:00:00.000Z' };
+      }
+    });
+    expect(archived).toEqual([
+      expect.objectContaining({
+        kind: 'reference-image',
+        contentType: 'image/png'
+      })
+    ]);
+    // Stored over the version the account created, with no device-local id
+    // and no derived projection.
+    expect(saves).toHaveLength(1);
+    expect(saves[0]!.expectedVersion).toBe(3);
+    expect(JSON.stringify(saves[0]!.document)).not.toContain('artifact_local_');
+    expect(saves[0]!.document.derived.bodyRepresentations).toEqual({});
+    expect(published.document.version).toBe(4);
+    expect(published.document.referenceImages!.images[0]!.artifactId).toBe(
+      'artifact_copy'
+    );
+    expect(published.result.archived).toEqual(['Bracket drawing']);
+    // A copy without pictures is left alone; a missing picture is reported
+    // and keeps its local id for the copy's next save.
+    const plain = duplicateProjectDocument(boxDocument(), 'Box', toUserId('t'));
+    const untouched = await publishCopyPictures(plain, 1, {
+      loadSourceBytes: async () => null,
+      archive: async () => 'never',
+      save: async () => {
+        throw new Error('not saved');
+      }
+    });
+    expect(untouched.document).toBe(plain);
+    const missing = await publishCopyPictures(copy, 3, {
+      loadSourceBytes: async () => null,
+      archive: async () => 'never',
+      save: async () => {
+        throw new Error('not saved');
+      }
+    });
+    expect(missing.result.missing).toEqual(['Bracket drawing']);
+    expect(missing.document).toBe(copy);
   });
 
   it('gives a duplicate its own device-local picture id, cached first', async () => {
