@@ -137,22 +137,33 @@ The menu replaces the rail's Layout button.
      whether or not it has columns, and each 296 px column adds 306 px:
      - Essentials (732 px) stays fully docked from 1220 px stage width
        upward, which includes 1280 px (57% footprint, 43% model).
-     - At 1219 px its left column (Objects) floats and Parameters stays
-       docked on the right.
+     - At 1219 px its left column (Objects) is parked (below) and Parameters
+       stays docked on the right.
      - One column (426 px) still docks at 721 px.
-   - A pin or drop that would go past the cap opens the panel floating instead.
-   - When the window shrinks, the columns that no longer fit render floating
-     in a fixed order: **all left-dock columns before any right-dock column**,
-     because the right dock beside the instrument rail is the primary one.
-     Within a side the outermost column goes first. This is a projection at
-     render time only: the stored layout keeps them docked, so a wider window
-     gets them back.
+   - The 40% guarantee covers everything the app places on its own. Floating
+     windows are only ever created by the user (Pop out, Float, a drop), who
+     can move or close them; the app never turns a column into a float.
+   - **Parking.** When the window shrinks, the columns that no longer fit are
+     **parked**: not drawn, and their panels' rail buttons show a parked
+     state. Clicking a parked panel's rail button shows it in the unpinned
+     slot, one at a time, as any unpinned panel. Columns park in a fixed
+     order: **all left-dock columns before any right-dock column**, because
+     the right dock beside the instrument rail is the primary one; within a
+     side the outermost column goes first. Parking happens at render time
+     only: the stored layout keeps them docked, so a wider window gets them
+     back.
+   - A pin or drop that would go past the cap docks nothing: the panel stays
+     where it was (unpinned, if it came from the rail) and a status line says
+     the docks are full at this width.
    - At 720 px stage width and below there are no docks and no floating
      windows: a panel opens one at a time in the existing phone lane. Docking
      starts at 721 px.
      - Docked and floating panels, stored or arrived at by resizing, are
-       projected into that lane: only the panel opened most recently shows,
-       and the stored layout is kept for a wider window.
+       projected into that lane: only the panel opened or focused most
+       recently shows, and the stored layout is kept for a wider window.
+       The layout stores that recency (an ordered list of panel ids, updated
+       on open, focus and rail press), so the choice survives a reload and is
+       the same after any resize.
      - Pop out, Float and drop-to-float are not offered there. A drag ends
        back in the lane.
 2. **Persistence.**
@@ -212,7 +223,9 @@ The menu replaces the rail's Layout button.
   sketch-dimension occluders read the dock and float selectors in place of
   `.stage-right > .model-drawer-float`.
 - **Search.** Picking a feature or parameter in ⌘K opens History or Parameters
-  unpinned if the panel is closed, and focuses it if it is open.
+  unpinned if the panel is closed, and focuses it if it is open. It always
+  makes the target visible: it turns Hide all off, and a parked or
+  phone-projected target shows in the unpinned slot or the phone lane.
 - **No document change.** No document format, unit or tolerance changes. Only
   the per-device preference key above is new.
 
@@ -220,7 +233,7 @@ The menu replaces the rail's Layout button.
 
 - **`apps/web/src/lib/panelLayout.ts`** (new, pure). It holds:
   - `PanelId`, `DockSide`, `PanelLayout` (left and right columns, float
-    groups, weights, the unpinned id, homes, options)
+    groups, weights, the unpinned id, homes, the recency list, options)
   - the operations: `open`, `close`, `pin`, `unpin`, `popOut`, `place(target)`,
     `previewOf(target)`, `resizeGap`, `resizeFloat`, `applyPreset`,
     `clampToStage`
@@ -268,9 +281,10 @@ Each slice is one PR and records its evidence in the U08 row.
   - home restored after close
   - float growth, clamp and resize bounds
   - gap weights with minimums, and the even split
-  - the 60% dock-footprint cap (columns, rails and gaps): a pin past it becomes a float,
-    and a shrunken stage projects its outermost columns as floats without
-    changing the stored layout
+  - the 60% dock-footprint cap (columns, rails and gaps): a pin past it docks
+    nothing, and a shrunken stage parks columns (left before right, outermost
+    first) without changing the stored layout
+  - the recency list, and the phone-lane choice it drives after a reload
   - migration from sample v1 states
   - hostile or corrupt storage
 
@@ -362,8 +376,13 @@ Each slice is one PR and records its evidence in the U08 row.
     drag-out, plus the same moves through the keyboard.
   - The cap's boundary widths, computed from the tokens rather than
     hard-coded: 1220 px and 1219 px today (Essentials fully docked, then
-    Objects floating while Parameters stays docked on the right), and 721 px
-    (one column docked).
+    Objects parked while Parameters stays docked on the right), and 721 px
+    (one column docked). At each width the model keeps at least 40% of the
+    stage unobscured, measured from the rendered dock rectangles, and a
+    parked panel opens from its rail button in the unpinned slot.
+  - A pin past the cap docks nothing and shows the status line.
+  - At 720 px a seeded layout with several open panels shows the one at the
+    head of the stored recency list, before and after a reload.
   - Keyboard placement through the Move menu: into a named column at a
     chosen slot (Move to, then Move up/down), into a floating window, a new
     column on each side, and Float.
@@ -379,11 +398,12 @@ Each slice is one PR and records its evidence in the U08 row.
 - **Behaviour.**
   - The menu: presets, Hide all (`Ctrl+\`, added to `lib/keymap.ts` as a
     global command so U05 can list and remap it), Lock, Compact, Width.
-  - Width changes re-run the cap, so a wider setting can project a column as
-    floating.
+  - Width changes re-run the cap, so a wider setting can park a column.
 - **Tests.**
   - E2E for every preset, Hide all, Lock and Compact at 1440×900 and
-    1280×720, and Width L at 1280×720 projecting the outer column.
+    1280×720, and Width L at 1280×720 parking the outer column.
+  - With Hide all on, picking a feature and a parameter in ⌘K turns Hide off
+    and shows and focuses the target panel.
   - Tabbing from the rail through the panel headers, gaps and menu moves focus
     without hiding the panels; `Ctrl+\` hides and shows them.
 
