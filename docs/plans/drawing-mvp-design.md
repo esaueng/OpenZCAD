@@ -320,8 +320,11 @@ notes to D01 sheets:
 - **Values and the fence.** Values are computed every time a ready sheet is
   drawn from exact edge vertices and the kernel's published circle data,
   projected into the view; nothing typed, nothing stored. A stale sheet
-  shows no values and offers no tools until its explicit Update. Lengths and
-  angles are refused on the isometric view, which foreshortens them.
+  shows no values and offers no tools until its explicit Update. An aligned
+  span between points at different depths, or an angle with an edge that
+  slopes into the view, is refused as foreshortened, as is any length or
+  angle on the isometric view; horizontal and vertical spans in a principal
+  view measure along a model axis and stay exact.
 - **Page and export.** Dimension lines, extension lines and filled
   arrowheads are a `dimension` stroke class (0.25 mm); text may be centred
   and rotated, placed from its measured Helvetica start so preview, SVG and

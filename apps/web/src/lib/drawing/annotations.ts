@@ -110,7 +110,7 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
     case 'degenerate':
       return 'The two points this measured now coincide in this view.';
     case 'foreshortened':
-      return 'The isometric view foreshortens lengths and angles; dimension a principal view instead.';
+      return 'This view does not see what this measures true size (it slopes into the view, or the view is isometric); dimension it where it lies parallel to the view.';
   }
 }
 
@@ -186,6 +186,21 @@ export function edgeEndsInPageOrder(
   view: DrawingView,
   edge: EdgeTopology
 ): [UV, UV] | null {
+  const ends = edgeEndsWithDepth(view, edge);
+  return ends ? [ends[0].uv, ends[1].uv] : null;
+}
+
+interface ViewPoint {
+  uv: UV;
+  /** Distance into the view along its direction, in model units. */
+  depth: number;
+}
+
+/** {@link edgeEndsInPageOrder}, keeping each end's depth. */
+function edgeEndsWithDepth(
+  view: DrawingView,
+  edge: EdgeTopology
+): [ViewPoint, ViewPoint] | null {
   const p = edge.points;
   if (p.length < 6 || isClosed(edge)) return null;
   const a = projectPoint(view, p, 0);
@@ -199,9 +214,17 @@ export function edgeEndsInPageOrder(
       : !level(a.v, b.v)
         ? a.v < b.v
         : a.depth <= b.depth;
-  const ua: UV = [a.u, a.v];
-  const ub: UV = [b.u, b.v];
+  const ua: ViewPoint = { uv: [a.u, a.v], depth: a.depth };
+  const ub: ViewPoint = { uv: [b.u, b.v], depth: b.depth };
   return aFirst ? [ua, ub] : [ub, ua];
+}
+
+/**
+ * Whether two points lie in one plane parallel to the view, so the span
+ * between them is drawn true length. `span` is their projected distance.
+ */
+function parallelToView(a: ViewPoint, b: ViewPoint, span: number): boolean {
+  return Math.abs(b.depth - a.depth) <= 1e-6 * Math.max(1, span);
 }
 
 /** A circle's centre and radius when the view sees it face-on. */
@@ -209,7 +232,7 @@ function faceOnCircle(
   view: DrawingView,
   edge: EdgeTopology
 ):
-  | { ok: true; center: UV; radius: number }
+  | { ok: true; center: UV; depth: number; radius: number }
   | { ok: false; reason: AnnotationBreak } {
   const circle = edge.curve?.circle;
   if (!circle) return { ok: false, reason: 'not-circular' };
@@ -221,19 +244,26 @@ function faceOnCircle(
   if (Math.abs(Math.abs(facing) - 1) > 1e-6)
     return { ok: false, reason: 'edge-on' };
   const c = projectToView(DRAWING_VIEW_FRAMES[view.orientation], circle.center);
-  return { ok: true, center: [c.u, c.v], radius: circle.radius };
+  return {
+    ok: true,
+    center: [c.u, c.v],
+    depth: c.depth,
+    radius: circle.radius
+  };
 }
 
 function pointOf(
   view: DrawingView,
   edge: EdgeTopology,
   anchor: DrawingPointAnchor
-): { ok: true; point: UV } | { ok: false; reason: AnnotationBreak } {
+): { ok: true; point: ViewPoint } | { ok: false; reason: AnnotationBreak } {
   if (anchor === 'center') {
     const circle = faceOnCircle(view, edge);
-    return circle.ok ? { ok: true, point: circle.center } : circle;
+    return circle.ok
+      ? { ok: true, point: { uv: circle.center, depth: circle.depth } }
+      : circle;
   }
-  const ends = edgeEndsInPageOrder(view, edge);
+  const ends = edgeEndsWithDepth(view, edge);
   if (!ends) return { ok: false, reason: 'closed-edge' };
   return { ok: true, point: anchor === 'first' ? ends[0] : ends[1] };
 }
@@ -253,11 +283,16 @@ function straightEnds(
   edge: EdgeTopology
 ): { ok: true; ends: [UV, UV] } | { ok: false; reason: AnnotationBreak } {
   if (edge.curve?.type !== 'LINE') return { ok: false, reason: 'not-straight' };
-  const ends = edgeEndsInPageOrder(view, edge);
+  const ends = edgeEndsWithDepth(view, edge);
   if (!ends) return { ok: false, reason: 'not-straight' };
-  const length = Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]);
+  const [a, b] = ends;
+  const length = Math.hypot(b.uv[0] - a.uv[0], b.uv[1] - a.uv[1]);
   if (length < 1e-9) return { ok: false, reason: 'edge-on' };
-  return { ok: true, ends };
+  // An edge sloping into the view draws shorter than it is, and the angle
+  // it makes on the page is not the part's.
+  if (!parallelToView(a, b, length))
+    return { ok: false, reason: 'foreshortened' };
+  return { ok: true, ends: [a.uv, b.uv] };
 }
 
 /**
@@ -306,14 +341,20 @@ export function resolveDrawingAnnotation(
       if (!from.ok) return failure(from.reason);
       const to = pointOf(view, toEdge.edge, annotation.to.anchor);
       if (!to.ok) return failure(to.reason);
-      const du = to.point[0] - from.point[0];
-      const dv = to.point[1] - from.point[1];
+      const du = to.point.uv[0] - from.point.uv[0];
+      const dv = to.point.uv[1] - from.point.uv[1];
       let axis: UV;
+      // Horizontal and vertical spans are distances along a model axis in
+      // a principal view, true whatever the depths. An aligned span is the
+      // points' true distance only when they lie in one plane parallel to
+      // the view.
       if (annotation.direction === 'horizontal') axis = [1, 0];
       else if (annotation.direction === 'vertical') axis = [0, 1];
       else {
         const length = Math.hypot(du, dv);
         if (length < 1e-9) return failure('degenerate');
+        if (!parallelToView(from.point, to.point, length))
+          return failure('foreshortened');
         axis = [du / length, dv / length];
       }
       const value = Math.abs(du * axis[0] + dv * axis[1]);
@@ -322,8 +363,8 @@ export function resolveDrawingAnnotation(
         resolved: {
           kind: 'linear',
           axis,
-          from: from.point,
-          to: to.point,
+          from: from.point.uv,
+          to: to.point.uv,
           value,
           label: formatDrawingNumber(value, decimals)
         }

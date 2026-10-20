@@ -728,6 +728,88 @@ describe('D02 values from the model', () => {
     ]);
   });
 
+  it('refuses an aligned span or an angle that slopes into a principal view', async () => {
+    const { bodies, bodyId, body, top, right } = await boxModel();
+    const front = view(frontId, 'front', [bodyId]);
+    const { min, max } = body.bbox;
+    // The bottom edge at the back: its ends lie deeper in the front view
+    // than the top front edge's.
+    const backBottom = edgeWhere(
+      body,
+      (a, b) =>
+        near(a[1]!, max.y) &&
+        near(b[1]!, max.y) &&
+        near(a[2]!, min.z) &&
+        near(b[2]!, min.z)
+    );
+    const t = refOf(bodyId, top);
+    const back = refOf(bodyId, backBottom);
+    expect(
+      resolveDrawingAnnotation(
+        linear(id('s'), 'aligned', t, 'first', back, 'second'),
+        front,
+        bodies,
+        'mm'
+      )
+    ).toMatchObject({ ok: false, reason: 'foreshortened' });
+    // Along a model axis the same two points are still exact.
+    const across = resolveDrawingAnnotation(
+      linear(id('x'), 'horizontal', t, 'first', back, 'second'),
+      front,
+      bodies,
+      'mm'
+    );
+    expect(
+      across.ok && across.resolved.kind === 'linear' && across.resolved.value
+    ).toBeCloseTo(max.x - min.x, 12);
+    // A straight edge that slopes into the view gives no true angle.
+    const sloped: EdgeTopology = {
+      topologyId: 'sloped',
+      hash: 777,
+      curve: { type: 'LINE' },
+      vertexIds: [900, 901],
+      points: [max.x, min.y, max.z, max.x + 5, max.y, max.z + 10]
+    };
+    const withSlope: AnnotationBodies = {
+      [bodyId]: {
+        ...body,
+        topology: {
+          ...body.topology!,
+          edges: [...body.topology!.edges, sloped]
+        }
+      }
+    };
+    expect(
+      resolveDrawingAnnotation(
+        {
+          annotationId: id('a'),
+          kind: 'angle',
+          viewId: frontId,
+          edges: [t, { bodyId, hash: 777 }],
+          placementMm: { x: 0, y: 0 }
+        },
+        front,
+        withSlope,
+        'mm'
+      )
+    ).toMatchObject({ ok: false, reason: 'foreshortened' });
+    // Edges in the view's plane still measure.
+    expect(
+      resolveDrawingAnnotation(
+        {
+          annotationId: id('a'),
+          kind: 'angle',
+          viewId: frontId,
+          edges: [t, refOf(bodyId, right)],
+          placementMm: { x: 0, y: 0 }
+        },
+        front,
+        withSlope,
+        'mm'
+      )
+    ).toMatchObject({ ok: true });
+  });
+
   it('refuses lengths and angles read off the isometric view', async () => {
     const { bodies, bodyId, top } = await boxModel();
     const t = refOf(bodyId, top);
