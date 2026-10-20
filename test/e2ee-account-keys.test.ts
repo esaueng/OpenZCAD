@@ -189,7 +189,9 @@ describe('setup', () => {
     expect(stored?.unlock.privateKey.extractable).toBe(false);
     // The account key never reaches the server unwrapped: the only place a
     // 32-byte value derived from it appears is the commitment.
-    expect(account.wraps.map((w) => `${w.purpose}:${w.targetId}`).sort()).toEqual(
+    expect(
+      account.wraps.map((w) => `${w.purpose}:${w.targetId}`).sort()
+    ).toEqual(
       [
         `account-key:${account.list.devices[0]!.deviceId}`,
         `account-key:${account.list.unlockTargets[0]!.targetId}`,
@@ -339,8 +341,9 @@ describe('removing a device', () => {
     const { recovery, laptop } = await setUp(srv);
     await enrolled(srv, recovery.secret, 'Phone');
     const account = ready(await loadEncryption(laptop));
-    const phoneId = account.list.devices.find((d) => d.label === 'Phone')!
-      .deviceId;
+    const phoneId = account.list.devices.find(
+      (d) => d.label === 'Phone'
+    )!.deviceId;
     await flowRefusal(
       removeDevice(laptop, account, phoneId, generateSymmetricKey()),
       'wrong-recovery-key'
@@ -357,12 +360,16 @@ describe('refusing what a server substitutes', () => {
     const srv = server();
     const { laptop } = await setUp(srv);
     const stored = (await laptop.store.loadDevice(USER))!;
-    const forged = await sealKey(stored.unlockPublicKey, generateSymmetricKey(), {
-      purpose: 'account-key',
-      userId: USER,
-      method: 'device',
-      unlockId: stored.deviceId
-    });
+    const forged = await sealKey(
+      stored.unlockPublicKey,
+      generateSymmetricKey(),
+      {
+        purpose: 'account-key',
+        userId: USER,
+        method: 'device',
+        unlockId: stored.deviceId
+      }
+    );
     srv.db
       .prepare(
         `UPDATE e2ee_key_wraps SET wrapped = ? WHERE purpose = 'account-key' AND target_id = ?`
@@ -388,6 +395,42 @@ describe('refusing what a server substitutes', () => {
     const rolledBack = await loadEncryption(laptop);
     expect(rolledBack.kind).toBe('fork');
     expect(unlockedEncryptionKey(USER)).toBeNull();
+  });
+
+  it('refuses a write answered with an older prefix and keeps the pin', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    await enrolled(srv, recovery.secret, 'Phone');
+    const before = ready(await loadEncryption(laptop));
+    const pinned = await laptop.store.loadPin(USER);
+    expect(pinned?.sequence).toBe(1);
+    srv.tamper = (path, body) => {
+      if (path !== '/api/e2ee/device-list') return body;
+      const account = body as { current: { entries: unknown[] } };
+      account.current.entries = account.current.entries.slice(0, 1);
+      return account;
+    };
+    const phoneId = before.list.devices.find(
+      (d) => d.label === 'Phone'
+    )!.deviceId;
+    await expect(
+      removeDevice(laptop, before, phoneId, recovery.secret)
+    ).rejects.toThrow();
+    expect(await laptop.store.loadPin(USER)).toEqual(pinned);
+    // Answered with a list missing the entry just written, it refuses too.
+    srv.tamper = undefined;
+    const tablet = device(srv);
+    const current = ready(await loadEncryption(tablet));
+    srv.tamper = (path, body) => {
+      if (path !== '/api/e2ee/device-list') return body;
+      const account = body as { current: { entries: unknown[] } };
+      account.current.entries = account.current.entries.slice(0, -1);
+      return account;
+    };
+    await flowRefusal(
+      enrollWithRecoveryKey(tablet, current, recovery.secret, 'Tablet'),
+      'key-mismatch'
+    );
   });
 
   it('lets a fresh browser trust the newest identity, which the old recovery key cannot open', async () => {
@@ -696,7 +739,10 @@ describe('device approval', () => {
         null
       )
     );
-    expect([skipped.status, skipped.code]).toEqual([409, 'E2EE_APPROVAL_STATE']);
+    expect([skipped.status, skipped.code]).toEqual([
+      409,
+      'E2EE_APPROVAL_STATE'
+    ]);
 
     srv.db
       .prepare('UPDATE e2ee_device_approvals SET expires_at = ? WHERE id = ?')
@@ -824,9 +870,9 @@ describe('the Worker refuses malformed device-list writes', () => {
       )
     );
     expect(decoded.sequence).toBe(0);
-    expect(
-      await accountKeyCommitment(generateSymmetricKey())
-    ).not.toEqual(decoded.accountKeyCommitment);
+    expect(await accountKeyCommitment(generateSymmetricKey())).not.toEqual(
+      decoded.accountKeyCommitment
+    );
   });
 
   it('refuses oversized bodies', async () => {
@@ -888,10 +934,7 @@ describe('the Worker entry point', () => {
     init?: RequestInit
   ) {
     const { default: worker } = await import('../apps/web/worker/index');
-    return worker.fetch(
-      new Request(`https://example.com${path}`, init),
-      env
-    );
+    return worker.fetch(new Request(`https://example.com${path}`, init), env);
   }
 
   const devEnv = (extra: Record<string, unknown> = {}) => ({
@@ -904,16 +947,14 @@ describe('the Worker entry point', () => {
   it('keeps the routes closed until E2EE_KEYS_ENABLED is set', async () => {
     const closed = await workerFetch(devEnv(), '/api/e2ee/config');
     expect(await closed.json()).toEqual({ enabled: false });
-    expect((await workerFetch(devEnv(), '/api/e2ee/account')).status).toBe(
-      501
-    );
+    expect((await workerFetch(devEnv(), '/api/e2ee/account')).status).toBe(501);
     const open = devEnv({ E2EE_KEYS_ENABLED: 'true' });
-    expect(await (await workerFetch(open, '/api/e2ee/config')).json()).toEqual(
-      { enabled: true }
+    expect(await (await workerFetch(open, '/api/e2ee/config')).json()).toEqual({
+      enabled: true
+    });
+    expect(await (await workerFetch(open, '/api/e2ee/account')).json()).toEqual(
+      { current: null, previous: [] }
     );
-    expect(
-      await (await workerFetch(open, '/api/e2ee/account')).json()
-    ).toEqual({ current: null, previous: [] });
   });
 
   it('refuses cross-origin writes and unauthenticated reads', async () => {
@@ -939,9 +980,8 @@ describe('session teardown', () => {
   it('locks every other account’s keys and zeroes them', async () => {
     const srv = server();
     await setUp(srv);
-    const { lockAccountsExcept, unlockedAccount } = await import(
-      '../apps/web/src/lib/e2ee/unlockedKeys'
-    );
+    const { lockAccountsExcept, unlockedAccount } =
+      await import('../apps/web/src/lib/e2ee/unlockedKeys');
     const held = unlockedAccount(USER)!;
     lockAccountsExcept(USER);
     expect(unlockedEncryptionKey(USER)).not.toBeNull();

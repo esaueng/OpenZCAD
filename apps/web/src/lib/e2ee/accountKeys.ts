@@ -38,6 +38,7 @@ import {
   wrapKey,
   type Bytes,
   type DeviceListEntry,
+  type DeviceListPin,
   type ListedDevice,
   type UnlockTarget,
   type VerifiedDeviceList
@@ -160,7 +161,10 @@ export interface AccountView {
 }
 
 export type EncryptionState =
-  | { readonly kind: 'not-set-up'; readonly previous: readonly PreviousKeySet[] }
+  | {
+      readonly kind: 'not-set-up';
+      readonly previous: readonly PreviousKeySet[];
+    }
   | { readonly kind: 'ready'; readonly account: AccountView }
   /** The identity differs from the one this device pinned. */
   | { readonly kind: 'identity-changed'; readonly account: AccountView }
@@ -765,17 +769,47 @@ async function openIdentity(
   }
 }
 
-async function acceptResponse(
+/**
+ * Accepts the device list a write returned, never on the server's word: it
+ * must be under the identity this browser expects, contain the pin the
+ * write was built on (so it cannot be an older prefix), and hold the exact
+ * entry this browser just signed. Only then does the pin move.
+ */
+async function acceptWrite(
   ctx: E2eeContext,
-  response: E2eeAccountResponse
-): Promise<void> {
+  response: E2eeAccountResponse,
+  expected: {
+    readonly identityKey: Uint8Array;
+    /** The verified head the write extended; absent for a new identity. */
+    readonly pin?: DeviceListPin;
+    /** The canonical entry bytes this browser signed and sent. */
+    readonly written: Uint8Array;
+  }
+): Promise<VerifiedDeviceList> {
   const current = response.current;
-  if (!current) return;
+  if (
+    !current ||
+    !sameBytes(fromBase64Url(current.identityKey), expected.identityKey)
+  ) {
+    throw new EncryptionFlowError(
+      'key-mismatch',
+      'The server answered with a different identity than the one written.'
+    );
+  }
   const list = await verifyDeviceList(
-    fromBase64Url(current.identityKey),
-    decodeChain(current)
+    expected.identityKey,
+    decodeChain(current),
+    expected.pin ? { pin: expected.pin } : {}
   );
+  const writtenHash = await deviceListEntryHash(expected.written);
+  if (!list.entries.some((entry) => sameBytes(entry.hash, writtenHash))) {
+    throw new EncryptionFlowError(
+      'key-mismatch',
+      'The server answered without the device-list entry just written.'
+    );
+  }
   await ctx.store.savePin(ctx.userId, list.pin);
+  return list;
 }
 
 // --- Setup, enrolment, removal and replacement ----------------------------
@@ -805,7 +839,10 @@ export async function setUpEncryption(
     signature: b64(created.signed.signature),
     wraps: created.wraps
   });
-  await acceptResponse(ctx, response);
+  await acceptWrite(ctx, response, {
+    identityKey: created.identityKey,
+    written: created.signed.entry
+  });
   return loadEncryption(ctx);
 }
 
@@ -856,7 +893,11 @@ export async function enrollWithRecoveryKey(
     signature: b64(signed.signature),
     wraps
   });
-  await acceptResponse(ctx, response);
+  await acceptWrite(ctx, response, {
+    identityKey: account.list.identityKey,
+    pin: account.list.pin,
+    written: signed.entry
+  });
   return loadEncryption(ctx);
 }
 
@@ -905,7 +946,11 @@ export async function removeDevice(
     signature: b64(signed.signature),
     wraps
   });
-  await acceptResponse(ctx, response);
+  await acceptWrite(ctx, response, {
+    identityKey: account.list.identityKey,
+    pin: account.list.pin,
+    written: signed.entry
+  });
   return loadEncryption(ctx);
 }
 
@@ -972,7 +1017,10 @@ export async function replaceRecoveryKey(
       signature: b64(transition.signature)
     }
   });
-  await acceptResponse(ctx, response);
+  await acceptWrite(ctx, response, {
+    identityKey: created.identityKey,
+    written: created.signed.entry
+  });
   return loadEncryption(ctx);
 }
 
@@ -1165,7 +1213,10 @@ async function finishApproval(
   approval: E2eeApprovalRecord
 ): Promise<EncryptionState> {
   if (!approval.grant) {
-    throw new EncryptionFlowError('grant-invalid', 'The approval has no grant.');
+    throw new EncryptionFlowError(
+      'grant-invalid',
+      'The approval has no grant.'
+    );
   }
   if (
     approval.approverKey &&
@@ -1205,9 +1256,14 @@ async function finishApproval(
   // device list, with the same first-sight trust as any fresh browser.
   let claimedApprover: Uint8Array;
   try {
-    claimedApprover = decodeDeviceApprovalGrant(signed.statement).approverKeyHash;
+    claimedApprover = decodeDeviceApprovalGrant(
+      signed.statement
+    ).approverKeyHash;
   } catch {
-    throw new EncryptionFlowError('grant-invalid', 'The approval is malformed.');
+    throw new EncryptionFlowError(
+      'grant-invalid',
+      'The approval is malformed.'
+    );
   }
   const approverKey = approval.approverKey
     ? fromBase64Url(approval.approverKey)
@@ -1436,12 +1492,11 @@ export async function approveDevice(
         }
       ]
     });
-    list = await verifyDeviceList(
-      fromBase64Url(response.current!.identityKey),
-      decodeChain(response.current!),
-      { pin: list.pin }
-    );
-    await ctx.store.savePin(ctx.userId, list.pin);
+    list = await acceptWrite(ctx, response, {
+      identityKey: list.identityKey,
+      pin: list.pin,
+      written: signed.entry
+    });
     certified = true;
   } else {
     sealedAccountKey = b64(
