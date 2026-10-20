@@ -791,9 +791,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         return;
       }
       if (request.type === 'solve-sketch') {
-        const outcome = await exact.solveSketch(document, request.sketchId, {
-          anchor: request.anchor
-        });
+        const outcome = request.anchor
+          ? await exact.solveSketch(document, request.sketchId, {
+              anchor: request.anchor
+            })
+          : await exact.solveSketch(document, request.sketchId);
         post({
           type: 'solve-sketch',
           ok: true,

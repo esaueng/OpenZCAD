@@ -236,9 +236,9 @@ import {
   measureDrivingDimension,
   planConstraintFromSelection,
   refusePick,
+  relationSolveAnchor,
   residualConstraintObjectIds,
   sketchDefinedState,
-  relationSolveAnchor,
   topResidualConstraints,
   unreferencedSnapRefusal,
   type ConstraintPick,
@@ -14748,7 +14748,13 @@ export function App() {
     picks: readonly ConstraintPick[],
     label: string
   ) {
-    if (!doc || !editingSketchNode || sketchSolving) return;
+    if (!doc || !editingSketchNode) return;
+    if (sketchSolving) {
+      setStatus(
+        `${label} not added: the sketch is still solving. Try again when it finishes.`
+      );
+      return;
+    }
     const base = doc;
     const sketchId = editingSketchNode.sketchId;
     const verb = `Add ${label.toLowerCase()} constraint`;
