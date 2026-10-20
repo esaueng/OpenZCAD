@@ -875,6 +875,17 @@ describe('opening, closing and pinning', () => {
   });
 });
 
+describe('closing a closed panel', () => {
+  it('changes nothing and keeps its home', () => {
+    const closed = closePanel(essentials(), 'parameters');
+    expect(closed.homes.parameters).toBeDefined();
+    expect(closePanel(closed, 'parameters')).toBe(closed);
+    expect(
+      openPanel(closePanel(closed, 'parameters'), 'parameters').right
+    ).toEqual(essentials().right);
+  });
+});
+
 describe('reopening a panel that had a column to itself', () => {
   it('recreates the column where it was', () => {
     let layout = placePanel(modelOnly(), 'history', {
@@ -1657,6 +1668,26 @@ describe('parked panels in the unpinned slot', () => {
       ['revisions'],
       ['diagnostics', 'history']
     ]);
+  });
+
+  it('lets a layout past the cap consolidate columns', () => {
+    const layout = layoutWith({
+      left: [['bodies']],
+      right: [['parameters'], ['revisions']]
+    });
+    const stage: PanelStage = {
+      width: Math.ceil(stageFitting(2)),
+      height: 900
+    };
+    // Three columns do not fit here, so the left one is parked.
+    expect(computePanelGeometry(layout, stage).parked.bodies).toBe(true);
+    const target: PanelTarget = { kind: 'column', side: 'right', column: 1 };
+    expect(wouldExceedCap(layout, 'parameters', target, stage)).toBe(false);
+    const merged = placePanel(layout, 'parameters', target, stage);
+    expect(merged.right).toEqual([['revisions', 'parameters']]);
+    expect(merged.left).toEqual([['bodies']]);
+    // Two columns now fit, so nothing is parked any more.
+    expect(computePanelGeometry(merged, stage).parkedPanels).toEqual([]);
   });
 
   it('draws a panel in one place only as the width changes', () => {

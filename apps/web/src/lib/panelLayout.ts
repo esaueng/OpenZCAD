@@ -687,26 +687,6 @@ export function beginDrag(layout: PanelLayout, id: PanelId): PanelLayout {
   return layout.options.locked ? layout : detach(layout, id, true);
 }
 
-/** Whether a target would add a column to `side` rather than stack in one. */
-function addsColumn(
-  layout: PanelLayout<PanelEntry>,
-  target: PanelTarget
-): DockSide | null {
-  if (target.kind !== 'column' && target.kind !== 'newColumn') {
-    return null;
-  }
-  const columns = sideColumns(layout, target.side);
-  if (
-    target.kind === 'column' &&
-    target.column >= 0 &&
-    target.column < columns.length
-  ) {
-    return null;
-  }
-  const live = columns.filter((column) => column.length > 0).length;
-  return live >= PANEL_MAX_COLUMNS[target.side] ? null : target.side;
-}
-
 /**
  * Everything between the screen edges and the model: each side's
  * `gap + rail + gap`, whether or not it has columns, and `columnWidth + gap`
@@ -748,25 +728,32 @@ export function wouldExceedCap(
   if (stage.width <= PANEL_PHONE_MAX_WIDTH) {
     return true;
   }
-  const detached = detach(layout, id, false);
-  const side = addsColumn(detached, target);
-  if (side) {
-    const columns = {
-      left: detached.left.length,
-      right: detached.right.length
-    };
-    columns[side] += 1;
-    return overCap(
-      dockFootprint(columns, columnWidthOf(layout.options), insetsOf(stage)),
-      stage.width
-    );
-  }
-  // A new column on a full dock stacks in its outermost column instead, which
-  // can be parked just like an existing column target.
   if (target.kind !== 'column' && target.kind !== 'newColumn') {
     return false;
   }
+  // Judge the layout the drop would actually leave: target indices refer to
+  // the columns before the panel is lifted, and lifting a panel can empty a
+  // column, so counting from a detached layout misreads which column it is.
   const placed = finishDrag(placeEntry(layout, id, id, target, stage));
+  const count = (l: PanelLayout<PanelEntry>) => ({
+    left: l.left.length,
+    right: l.right.length
+  });
+  const before = count(layout);
+  const after = count(placed);
+  // Only a drop that adds a column can take the footprint past the cap; a
+  // layout already past it (columns parked) may still be consolidated.
+  if (after.left + after.right > before.left + before.right) {
+    if (
+      overCap(
+        dockFootprint(after, columnWidthOf(layout.options), insetsOf(stage)),
+        stage.width
+      )
+    ) {
+      return true;
+    }
+  }
+  // An existing column, or a full dock's outermost one, may be parked.
   return computePanelGeometry(placed, stage).parked[id] === true;
 }
 
@@ -1163,6 +1150,10 @@ function homeOf(layout: PanelLayout, id: PanelId): PanelHome | null {
 
 /** Closes a panel and remembers where it was, so reopening returns it there. */
 export function closePanel(layout: PanelLayout, id: PanelId): PanelLayout {
+  // Closing a closed panel again must not forget where it lives.
+  if (!isPanelOpen(layout, id)) {
+    return layout;
+  }
   const home = homeOf(layout, id);
   const next = detach(layout, id, false);
   if (home) {
