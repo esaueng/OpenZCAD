@@ -273,10 +273,15 @@ describe('choosing between the two copies of a project', () => {
       source: { fingerprint: 'v1:room' },
       views: []
     } as unknown as NonNullable<ProjectDocument['drawings']>['sheets'][number];
-    // A collaborator's sheet edit: the same model, a new sheet, no meshes.
+    // A collaborator's sheet edit: the same model, a new sheet, the undo
+    // entry that edit records, no meshes.
     const remote = {
       ...at(5, { name: 'Bracket v4' }),
-      drawings: { sheets: [sheet] }
+      drawings: { sheets: [sheet] },
+      editHistory: {
+        undo: [{ actor: 'user_collaborator', kinds: ['drawing.sheet.add'] }],
+        redo: []
+      } as unknown as ProjectDocument['editHistory']
     } as ProjectDocument;
     const merged = withMatchingLocalDerived(remote, local);
     expect(merged.derived.exportableBodyIds).toEqual(['marker']);
