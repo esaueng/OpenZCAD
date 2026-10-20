@@ -35,6 +35,12 @@ const MIDDLE_DRAGS: AppSettings['viewport']['middleDrag'][] = [
   'zoom'
 ];
 
+const RELATION_GLYPHS: AppSettings['sketching']['relationGlyphs'][] = [
+  'always',
+  'selected',
+  'hidden'
+];
+
 const POINTER_NAVIGATIONS: AppSettings['viewport']['pointerNavigation'][] = [
   'auto',
   'mouse',
@@ -260,6 +266,11 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         defaults.sketching.snapTolerancePx,
         APP_SETTINGS_NUMBER_BOUNDS.snapTolerancePx.min,
         APP_SETTINGS_NUMBER_BOUNDS.snapTolerancePx.max
+      ),
+      relationGlyphs: member(
+        sketching.relationGlyphs,
+        RELATION_GLYPHS,
+        defaults.sketching.relationGlyphs
       )
     },
     files: {

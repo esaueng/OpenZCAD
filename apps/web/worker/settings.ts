@@ -48,6 +48,7 @@ const PROJECTIONS = ['perspective', 'orthographic'] as const;
 const DISPLAY_MODES = ['shaded-edges', 'shaded', 'wireframe'] as const;
 const MIDDLE_DRAGS = ['pan', 'orbit', 'zoom'] as const;
 const POINTER_NAVIGATIONS = ['auto', 'mouse', 'trackpad'] as const;
+const RELATION_GLYPHS = ['always', 'selected', 'hidden'] as const;
 const PROVIDERS = ['openrouter', 'openai', 'responses-compatible'] as const;
 const CREDENTIAL_SOURCES = ['deployment', 'personal'] as const;
 const REASONING_EFFORTS = [
@@ -345,7 +346,14 @@ export function parseUpdateAppSettingsRequest(
         snapTolerancePx:
           typeof sketching.snapTolerancePx === 'number'
             ? requiredNumber(sketching, 'snapTolerancePx', 4, 24)
-            : DEFAULT_APP_SETTINGS.sketching.snapTolerancePx
+            : DEFAULT_APP_SETTINGS.sketching.snapTolerancePx,
+        // Optional: a client that predates this setting must still save.
+        relationGlyphs: optionalMember(
+          sketching,
+          'relationGlyphs',
+          RELATION_GLYPHS,
+          DEFAULT_APP_SETTINGS.sketching.relationGlyphs
+        )
       },
       files: {
         cloudAutosave:
@@ -858,12 +866,28 @@ export function settingsRequestOmitsKeymap(body: unknown): boolean {
   );
 }
 
+/** True when a client from before relation glyphs saved its settings. */
+export function settingsRequestOmitsRelationGlyphs(body: unknown): boolean {
+  if (!body || typeof body !== 'object') return true;
+  const settings = (body as Record<string, unknown>).settings;
+  if (!settings || typeof settings !== 'object') return true;
+  const sketching = (settings as Record<string, unknown>).sketching;
+  return (
+    !sketching ||
+    typeof sketching !== 'object' ||
+    !Object.prototype.hasOwnProperty.call(sketching, 'relationGlyphs')
+  );
+}
+
 export async function updateAppSettings(
   userId: UserId,
   request: UpdateAppSettingsRequest,
   env: CloudflareEnv,
   email?: string,
-  options: { keepStoredKeymap?: boolean } = {}
+  options: {
+    keepStoredKeymap?: boolean;
+    keepStoredRelationGlyphs?: boolean;
+  } = {}
 ): Promise<AppSettingsUpdate> {
   if (!env.DB) {
     throw new HttpError(503, 'Account settings storage is unavailable.');
@@ -876,9 +900,18 @@ export async function updateAppSettings(
     );
   }
   const nextRevision = current.revision + 1;
-  const settings: AppSettings = options.keepStoredKeymap
+  let settings: AppSettings = options.keepStoredKeymap
     ? { ...request.settings, keymap: current.settings.keymap }
     : request.settings;
+  if (options.keepStoredRelationGlyphs) {
+    settings = {
+      ...settings,
+      sketching: {
+        ...settings.sketching,
+        relationGlyphs: current.settings.sketching.relationGlyphs
+      }
+    };
+  }
   const serialized = JSON.stringify(settings);
   const timestamp = nowIso();
   if (

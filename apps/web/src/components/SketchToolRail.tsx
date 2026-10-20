@@ -1226,6 +1226,22 @@ export function SketchToolRail({
               />
               Show adaptive grid
             </label>
+            <label className="sketch-palette-number sketch-palette-select">
+              <span>Relation glyphs</span>
+              <select
+                value={settings.relationGlyphs}
+                onChange={(event) =>
+                  patchSettings({
+                    relationGlyphs: event.currentTarget
+                      .value as AppSettings['sketching']['relationGlyphs']
+                  })
+                }
+              >
+                <option value="always">Always</option>
+                <option value="selected">Selected</option>
+                <option value="hidden">Hidden</option>
+              </select>
+            </label>
           </fieldset>
           <fieldset>
             <legend>Snapping</legend>

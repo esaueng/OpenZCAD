@@ -88,6 +88,8 @@ interface TopBarProps {
    * cannot change parameters either, so the reason usually matches Build's.
    */
   tweakModeDisabledReason: string | null;
+  /** Why the Drawing workspace cannot open, or null (absent: never locked). */
+  drawingModeDisabledReason?: string | null;
   onWorkspaceMode(mode: WorkspaceMode): void;
   saveToAccount?: boolean;
   /**
@@ -145,6 +147,7 @@ export function TopBar({
   canRenameProject,
   buildModeDisabledReason,
   tweakModeDisabledReason,
+  drawingModeDisabledReason = null,
   onWorkspaceMode,
   saveToAccount = false,
   knownDeviceOnly = false,
@@ -455,7 +458,7 @@ export function TopBar({
         role="group"
         aria-label="Workspace mode"
         title={labelWithKey(
-          'Switch between viewing, tweaking parameters and modeling',
+          'Switch between viewing, tweaking parameters, modeling and drawing',
           keymap.label('workspace-mode-cycle')
         )}
       >
@@ -465,7 +468,9 @@ export function TopBar({
               ? buildModeDisabledReason
               : mode === 'tweak'
                 ? tweakModeDisabledReason
-                : null;
+                : mode === 'drawing'
+                  ? drawingModeDisabledReason
+                  : null;
           return (
             <button
               key={mode}

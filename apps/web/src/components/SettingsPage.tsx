@@ -313,6 +313,14 @@ const DISPLAY_OPTIONS: readonly SegmentOption<
   { value: 'wireframe', label: 'Wireframe' }
 ];
 
+const RELATION_GLYPH_OPTIONS: readonly SegmentOption<
+  AppSettings['sketching']['relationGlyphs']
+>[] = [
+  { value: 'always', label: 'Always' },
+  { value: 'selected', label: 'Selected' },
+  { value: 'hidden', label: 'Hidden' }
+];
+
 const SCROLL_OPTIONS: readonly SegmentOption<
   AppSettings['viewport']['pointerNavigation']
 >[] = [
@@ -1291,6 +1299,23 @@ export function SettingsPage({
                     onChange={(inferenceEnabled) =>
                       patch({
                         sketching: { ...settings.sketching, inferenceEnabled }
+                      })
+                    }
+                  />
+                </SettingRow>
+              </Group>
+              <Group title="Relations">
+                <SettingRow
+                  title="Relation glyphs"
+                  hint="Marks on sketch geometry for each relation."
+                >
+                  <Segmented
+                    label="Relation glyphs"
+                    value={settings.sketching.relationGlyphs}
+                    options={RELATION_GLYPH_OPTIONS}
+                    onChange={(relationGlyphs) =>
+                      patch({
+                        sketching: { ...settings.sketching, relationGlyphs }
                       })
                     }
                   />

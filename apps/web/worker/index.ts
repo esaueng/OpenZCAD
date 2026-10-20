@@ -94,6 +94,7 @@ import {
   parseAssistantCredential,
   parseUpdateAppSettingsRequest,
   settingsRequestOmitsKeymap,
+  settingsRequestOmitsRelationGlyphs,
   resolveUserAssistant,
   saveAssistantCredential,
   updateAppSettings
@@ -1201,8 +1202,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       payload,
       env,
       session.email,
-      // A client from before remapping sends no keymap: keep the stored one.
-      { keepStoredKeymap: settingsRequestOmitsKeymap(body) }
+      // A client from before remapping sends no keymap, and one from before
+      // relation glyphs no glyph preference: keep the stored ones.
+      {
+        keepStoredKeymap: settingsRequestOmitsKeymap(body),
+        keepStoredRelationGlyphs: settingsRequestOmitsRelationGlyphs(body)
+      }
     );
     // Only the switch turning off is news to the rooms. Settings save on every
     // cosmetic change, and each owned project costs a Durable Object call, so

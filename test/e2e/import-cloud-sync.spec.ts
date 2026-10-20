@@ -97,16 +97,23 @@ for (const {
       const payload = route.request().postDataJSON() as {
         name: string;
         document?: ProjectDocument;
+        localProjectId?: string;
+        sourceArtifactIds?: string[];
       };
       if (!payload.document) return route.fallback();
       if (cachedAccountProject) {
-        expect(payload.document.ownerUserId).toBe('previous-account');
-        expect(JSON.stringify(payload.document)).toContain(
+        // The browser re-homes the cached project for this account
+        // (ADR-024 Phase 1) and lists the archive ids it localized.
+        expect(payload.document.ownerUserId).toBe('user_e2e');
+        expect(JSON.stringify(payload.document)).not.toContain(
+          'artifact_previous_account_cube'
+        );
+        expect(payload.sourceArtifactIds).toContain(
           'artifact_previous_account_cube'
         );
       }
       adoptionAttempts++;
-      deviceProjectId = payload.document.projectId;
+      deviceProjectId = payload.localProjectId;
       if (adopted)
         return route.fulfill({
           status: 409,

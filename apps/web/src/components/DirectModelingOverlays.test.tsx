@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import type { MutableRefObject } from 'react';
+import type { ComponentProps, MutableRefObject } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { MoveInstruction } from './DirectModelingOverlays';
 import { MoveOverlay } from './MoveOverlay';
@@ -19,6 +19,93 @@ type LiveSnap = MutableRefObject<
 const zero = { x: 0, y: 0, z: 0 };
 
 describe('Move overlay', () => {
+  it('keeps streamed values when a parent recreates unchanged committed props', () => {
+    const liveValuesRef: LiveValues = { current: null };
+    const props: ComponentProps<typeof MoveOverlay> = {
+      bodyName: 'Box',
+      targetBodyId: 'box',
+      values: { translation: zero, rotationDeg: zero },
+      units: 'mm',
+      snap: { move: 1, rotate: 15 },
+      onChange: vi.fn(),
+      onConfirm: vi.fn(),
+      onCancel: vi.fn(),
+      liveValuesRef
+    };
+    const { rerender } = render(<MoveOverlay {...props} />);
+    act(() => {
+      liveValuesRef.current?.(
+        { x: 5, y: 0, z: 0 },
+        { x: 0, y: 0, z: 10 },
+        { move: 5, rotate: 10 }
+      );
+    });
+    rerender(
+      <MoveOverlay
+        {...props}
+        values={{ translation: { ...zero }, rotationDeg: { ...zero } }}
+        snap={{ move: 1, rotate: 15 }}
+      />
+    );
+    expect(screen.getByLabelText('Move X in mm')).toHaveValue(5);
+    expect(screen.getByLabelText('Move X in mm')).toHaveAttribute('step', '5');
+    expect(screen.getByLabelText('Rotate Z in degrees')).toHaveValue(10);
+  });
+
+  it.each<[string, Partial<ComponentProps<typeof MoveOverlay>>]>([
+    [
+      'translation',
+      { values: { translation: { x: 12, y: 0, z: 0 }, rotationDeg: zero } }
+    ],
+    [
+      'rotation',
+      { values: { translation: zero, rotationDeg: { x: 0, y: 0, z: 20 } } }
+    ],
+    ['snap', { snap: { move: 2, rotate: 30 } }],
+    ['target', { targetBodyId: 'other' }],
+    ['units', { units: 'inch' }],
+    ['target kind', { hideRotation: true }]
+  ])(
+    'reseeds streamed values when the committed %s changes',
+    (_name, patch) => {
+      const liveValuesRef: LiveValues = { current: null };
+      const props: ComponentProps<typeof MoveOverlay> = {
+        bodyName: 'Box',
+        targetBodyId: 'box',
+        values: { translation: zero, rotationDeg: zero },
+        units: 'mm',
+        snap: { move: 1, rotate: 15 },
+        onChange: vi.fn(),
+        onConfirm: vi.fn(),
+        onCancel: vi.fn(),
+        liveValuesRef
+      };
+      const { rerender } = render(<MoveOverlay {...props} />);
+      act(() => {
+        liveValuesRef.current?.({ x: 5, y: 0, z: 0 }, zero, {
+          move: 5,
+          rotate: 15
+        });
+      });
+      rerender(<MoveOverlay {...props} {...patch} />);
+      const unit = patch.units === 'inch' ? 'inch' : 'mm';
+      expect(screen.getByLabelText(`Move X in ${unit}`)).toHaveValue(
+        patch.values?.translation.x ?? 0
+      );
+      expect(screen.getByLabelText(`Move X in ${unit}`)).toHaveAttribute(
+        'step',
+        String(patch.snap?.move ?? 1)
+      );
+      if (patch.hideRotation) {
+        expect(screen.queryByRole('group', { name: 'Rotation' })).toBeNull();
+      } else {
+        expect(screen.getByLabelText('Rotate Z in degrees')).toHaveValue(
+          patch.values?.rotationDeg.z ?? 0
+        );
+      }
+    }
+  );
+
   // The panel anchors in the right lane and the banner rides the viewport,
   // so they are two elements; the one drag sink still reaches both.
   it('renders the panel without the banner, and forwards live snaps to it', () => {

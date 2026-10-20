@@ -8,8 +8,10 @@ export * from './sketch-reference-dimensions';
 export * from './sketch-composites';
 export * from './mass-density';
 export * from './keymap-settings';
+export * from './drawings';
 import type { DocumentHistory } from './document-history';
 import type { KeymapOverrides } from './keymap-settings';
+import type { DrawingSet } from './drawings';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
 export type ProjectId = Brand<string, 'ProjectId'>;
@@ -99,8 +101,15 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * walls from the sketch plane. An older client would replay either at its
  * stale blind distance or with straight walls, so the bump makes it refuse
  * such a document. Both are optional; absent is the v28 extrude.
+ *
+ * v30 adds the D01 drawing section (`ProjectDocument.drawings`): sheets with
+ * paper, scale, projection angle and title-block text, each holding placed
+ * orthographic and isometric views of named bodies and a fingerprint of the
+ * model they were last drawn from. Additive: absent means no drawings, and
+ * every older document loads unchanged. An older client would drop the
+ * section on its next save, so the bump makes it refuse such a document.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 29 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 30 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2912,6 +2921,12 @@ export interface ProjectDocument {
    * Absent on every project created the ordinary way.
    */
   branchedFrom?: ProjectBranchPoint;
+  /**
+   * D01 drawing sheets (schema v30). Canonical user content: the sheets'
+   * paper, scale and view placement, never projected lines. Absent means the
+   * project has no drawings.
+   */
+  drawings?: DrawingSet;
 }
 
 export interface SerializedCommand<TPayload = unknown> {
@@ -3154,8 +3169,22 @@ export interface CreateProjectRequest {
    * the document when present.
    */
   document?: ProjectDocument;
-  /** Client can transfer local records to the returned cloud identity. */
-  adoptionProtocolVersion?: 1;
+  /**
+   * Client can transfer local records to the returned cloud identity. With 2
+   * (ADR-024 Phase 1) the browser already re-homed `document`: it carries its
+   * new `proj_<uuid>` id, the caller as owner, the request name and a closing
+   * "Saved to account" checkpoint, and `localProjectId` is the device id the
+   * account binds for retry recovery. Version 1 is kept for one release.
+   */
+  adoptionProtocolVersion?: 1 | 2;
+  /** The device project id a version 2 adoption came from. */
+  localProjectId?: string;
+  /**
+   * Archived import ids the device document held before the browser localized
+   * them for its new home (version 2 only), so a discarded mesh upload still
+   * refuses the adoption.
+   */
+  sourceArtifactIds?: string[];
   /**
    * A new project the browser built (ADR-024 Phase 1). The account stores it
    * under its own id after the checks an adoption gets; unlike `document`, it
@@ -3196,6 +3225,29 @@ export interface DuplicateProjectRequest {
    * source project is not touched either way.
    */
   revisionId?: RevisionId;
+  /**
+   * The copy the browser built with `duplicateProjectDocument` (ADR-024
+   * Phase 1). The account keeps its `proj_<uuid>` id and stores it after the
+   * checks a created or adopted project gets. Requests without it are the
+   * pre-Phase 1 contract, kept for one release: the server builds the copy.
+   */
+  document?: ProjectDocument;
+  /** `projectCopyDocumentDigest(document)`; required with `document`. */
+  documentDigest?: string;
+  /**
+   * The source project's archived imports the copy references, which the
+   * server copies byte for byte without reading either document.
+   */
+  importSources?: ImportSourceCopyRef[];
+}
+
+/** One archived import source a browser-built copy needs under its own id. */
+export interface ImportSourceCopyRef {
+  /** The source project's archive of these bytes. */
+  artifactId: string;
+  kind: 'step-import' | 'mesh-payload';
+  checksumSha256: string;
+  logicalBytes: number;
 }
 
 export type DuplicateProjectResponse = CreateProjectResponse;
@@ -3427,6 +3479,11 @@ export type SettingsMiddleDrag = 'pan' | 'orbit' | 'zoom';
  * a device's meaning for hardware the classification reads wrongly.
  */
 export type SettingsPointerNavigation = 'auto' | 'mouse' | 'trackpad';
+/**
+ * Which sketch relations draw a glyph on their geometry: all of them, only
+ * those that mention the selected entity, or none. Presentation only.
+ */
+export type SketchRelationGlyphVisibility = 'always' | 'selected' | 'hidden';
 export type AssistantProvider =
   'openrouter' | 'openai' | 'responses-compatible';
 export type AssistantCredentialSource = 'deployment' | 'personal';
@@ -3492,6 +3549,7 @@ export interface AppSettings {
     angleSnap: number;
     /** Screen-space radius used for sketch snap candidates. */
     snapTolerancePx: number;
+    relationGlyphs: SketchRelationGlyphVisibility;
   };
   /**
    * How work reaches the account. There is no toggle for the device write —
@@ -3631,7 +3689,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     inferenceEnabled: true,
     linearSnap: 1,
     angleSnap: 15,
-    snapTolerancePx: 10
+    snapTolerancePx: 10,
+    relationGlyphs: 'selected'
   },
   files: {
     cloudAutosave: true,

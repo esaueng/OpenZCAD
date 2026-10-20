@@ -142,6 +142,37 @@ describe('application settings', () => {
     });
   });
 
+  it('keeps relation glyph visibility, defaulting what is absent or unknown', () => {
+    expect(defaultAppSettings().sketching.relationGlyphs).toBe('selected');
+    expect(
+      normalizeAppSettings({ sketching: { relationGlyphs: 'always' } })
+        .sketching.relationGlyphs
+    ).toBe('always');
+    expect(
+      normalizeAppSettings({ sketching: { relationGlyphs: 'sometimes' } })
+        .sketching.relationGlyphs
+    ).toBe('selected');
+
+    const older = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      sketching: Record<string, unknown>;
+    };
+    delete older.sketching.relationGlyphs;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings: older },
+        'development'
+      ).settings.sketching.relationGlyphs
+    ).toBe('selected');
+    const hidden = deepClone(DEFAULT_APP_SETTINGS);
+    hidden.sketching.relationGlyphs = 'hidden';
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings: hidden },
+        'development'
+      ).settings.sketching.relationGlyphs
+    ).toBe('hidden');
+  });
+
   it('strictly validates account settings and compatible endpoints', () => {
     const settings = deepClone(DEFAULT_APP_SETTINGS);
     settings.assistant.credentialSource = 'personal';

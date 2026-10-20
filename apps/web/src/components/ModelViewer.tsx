@@ -21,6 +21,8 @@ import {
   avoidSketchDimensionOverlays,
   buildSketchDimensions
 } from './viewer/sketchDimensions';
+import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
+import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
 import type { SketchDimensionIdentity } from '@openzcad/shared';
 import {
@@ -275,7 +277,8 @@ import {
   snapSketchPoint,
   type SketchPoint,
   type SnapTarget,
-  type SnapTargetKind
+  type SnapTargetKind,
+  type UnreferencedSnap
 } from '../lib/sketch/session';
 import {
   canPlaceTextDraft,
@@ -450,6 +453,8 @@ export interface SketchModeState {
   definedObjectIds: string[];
   textOutlineBudgetError?: string | null;
   dimensions: SketchDimensionAnnotation[];
+  /** Relation glyph chips, already filtered by the visibility setting. */
+  relations?: SketchRelationGlyphChip[];
   /**
    * The text card's draft while the text tool composes. Its outline follows
    * the pointer over the plane and a click places it; nothing is placed
@@ -1013,7 +1018,13 @@ export interface ModelViewerProps {
      * The click on the sketch plane, unsnapped: where along a curve the
      * click fell, which Trim needs and a snap would move to an end.
      */
-    planePoint: { x: number; y: number } | null
+    planePoint: { x: number; y: number } | null,
+    /**
+     * The active snap when it had no constraint-schema identity (a
+     * parametric rectangle corner, a midpoint…), so a point-taking tool can
+     * say why it refused it.
+     */
+    unreferencedSnap: UnreferencedSnap | null
   ): boolean | void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
@@ -8557,7 +8568,15 @@ export function ModelViewer({
             objectId,
             snapPoint,
             { x: event.clientX, y: event.clientY },
-            planePoint ? { x: planePoint.x, y: planePoint.y } : null
+            planePoint ? { x: planePoint.x, y: planePoint.y } : null,
+            activeSketchSnap && !snapPoint
+              ? {
+                  kind: activeSketchSnap.kind,
+                  ...(activeSketchSnap.sourceId
+                    ? { sourceId: activeSketchSnap.sourceId }
+                    : {})
+                }
+              : null
           );
           if (!objectId && consumed !== true) {
             const profile = picker.pick(event)?.region;
@@ -11721,6 +11740,19 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [sketchBasis, sketchDimensions]);
+  const sketchRelations = sketchMode?.relations;
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !sketchBasis || !sketchRelations?.length) return;
+    const overlay = buildSketchRelationGlyphs(sketchRelations, sketchBasis);
+    context.scene.add(overlay.group);
+    context.requestRender();
+    return () => {
+      context.scene.remove(overlay.group);
+      overlay.dispose();
+      context.requestRender();
+    };
+  }, [sketchBasis, sketchRelations]);
   const sketchEntryFrameRef = useRef<SketchEntryFrame | null>(null);
   sketchEntryFrameRef.current = sketchMode?.frame ?? null;
   useEffect(() => {

@@ -283,15 +283,7 @@ interface ViewerShellProps {
   sketchMoveEnabled?: ModelViewerProps['sketchMoveEnabled'];
   onSketchMoveChange?: ModelViewerProps['onSketchMoveChange'];
   onSketchMoveCommit?: ModelViewerProps['onSketchMoveCommit'];
-  onSketchSelectObject(
-    objectId: string | null,
-    snapPoint: {
-      objectId: string;
-      point: 'start' | 'end' | 'center';
-    } | null,
-    clickPoint: { x: number; y: number },
-    planePoint: { x: number; y: number } | null
-  ): boolean | void;
+  onSketchSelectObject: ModelViewerProps['onSketchSelectObject'];
   sketchViews: SketchViewData[];
   selectedProfileIds: string[];
   profileSelectionMode: boolean;

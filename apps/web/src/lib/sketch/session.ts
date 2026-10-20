@@ -701,6 +701,16 @@ export interface SnapTarget extends SketchPoint {
   pointRef?: 'start' | 'end' | 'center';
 }
 
+/**
+ * A snap with no constraint-schema point: a parametric rectangle's corners,
+ * center and side midpoints, a parametric polygon's center, a text origin, a
+ * midpoint, a quadrant, an intersection or the sketch origin.
+ */
+export interface UnreferencedSnap {
+  kind: SnapTargetKind;
+  sourceId?: string;
+}
+
 export type SketchInferenceSegment = readonly [SketchPoint, SketchPoint];
 
 export const SKETCH_SNAP_PRIORITY: Record<SnapTargetKind, number> = {
