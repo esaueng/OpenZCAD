@@ -70,7 +70,9 @@ export async function cacheCopySources(
  * I05 pictures: a copy re-archives them from this device into its own
  * project, so their bytes must be here before the copy drops the source
  * project's artifact ids. The account copy carries imports across itself and
- * needs only this half.
+ * needs only this half. Only the images the copy keeps: a duplicate drops
+ * the undo history, so a picture deleted before copying is never needed and
+ * must not block the copy when this device cannot fetch it.
  */
 export async function cacheCopyPictures(
   document: ProjectDocument,
@@ -78,7 +80,7 @@ export async function cacheCopyPictures(
   hash: (bytes: Uint8Array<ArrayBuffer>) => Promise<string>
 ): Promise<void> {
   const seen = new Set<string>();
-  for (const image of referenceImagesWithHistory(document)) {
+  for (const image of document.referenceImages?.images ?? []) {
     const ref = image.source;
     const key = `reference-image:${ref.checksumSha256}:${ref.logicalBytes}`;
     if (seen.has(key)) continue;

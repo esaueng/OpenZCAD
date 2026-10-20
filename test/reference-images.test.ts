@@ -276,6 +276,15 @@ describe('I05 reference-image section (schema v32)', () => {
       '2026-10-20T00:00:00.000Z'
     );
     expect('referenceImages' in bundle.document).toBe(false);
+    // Nor do its commands: names, checksums and artifact ids identify the
+    // user's pictures.
+    expect(
+      bundle.document.commandLog.some((command) =>
+        command.kind.startsWith('reference-image.')
+      )
+    ).toBe(false);
+    expect(JSON.stringify(bundle)).not.toContain(checksum);
+    expect(JSON.stringify(bundle)).not.toContain('Bracket drawing');
     // Images are never features or bodies: nothing the build reads changes.
     expect(placed.document.featureOrder).toEqual(document.featureOrder);
     expect(placed.document.bodyOrder).toEqual(document.bodyOrder);
@@ -568,5 +577,22 @@ describe('reference-image archives', () => {
         async () => 'b'.repeat(64)
       )
     ).rejects.toThrow(/failed its integrity check/);
+    // A picture deleted before copying lives only in undo history, which a
+    // copy drops: it is not fetched, and cannot block the copy.
+    source.execute(commandFactories.deleteReferenceImage({ imageId }));
+    const fetched: string[] = [];
+    await cacheCopyPictures(
+      source.document,
+      async (sum) => {
+        fetched.push(sum);
+        return null;
+      },
+      async () => checksum
+    );
+    expect(fetched).toEqual([]);
+    expect(
+      duplicateProjectDocument(source.document, 'Copy', toUserId('test'))
+        .referenceImages
+    ).toBeUndefined();
   });
 });
