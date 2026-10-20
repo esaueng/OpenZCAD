@@ -8456,12 +8456,13 @@ export function App() {
     try {
       const { discardReferenceImageBytes, prepareReferenceImage } =
         await import('./lib/referenceImageInsert');
-      const image = await prepareReferenceImage({
+      const prepared = await prepareReferenceImage({
         file,
         document: current,
         plane,
         archive: archiveArtifact
       });
+      const { image } = prepared;
       if (
         managerRef.current?.document.projectId === current.projectId &&
         executeCommand(commandFactories.addReferenceImage({ image }))
@@ -8471,7 +8472,9 @@ export function App() {
           `${image.name} placed. Scale it from two points, or set its width.`
         );
       } else {
-        await discardReferenceImageBytes(image);
+        await discardReferenceImageBytes(prepared, [
+          managerRef.current?.document
+        ]);
       }
     } catch (error) {
       setStatus(errorMessage(error, 'The image could not be placed.'));
@@ -8503,17 +8506,23 @@ export function App() {
     }
   }, [doc, tool, openReferenceImageId]);
 
-  /** A picture's bytes for the viewport, by checksum; lazy-loaded. */
+  /**
+   * A picture's bytes for the viewport, by checksum; lazy-loaded. Every
+   * image placing that picture is offered, so one record's unavailable
+   * artifact never hides another's.
+   */
   const loadReferenceImage = useCallback(
     async (checksumSha256: string): Promise<Blob | null> => {
-      const image = managerRef.current?.document.referenceImages?.images.find(
+      const images = (
+        managerRef.current?.document.referenceImages?.images ?? []
+      ).filter(
         (candidate) => candidate.source.checksumSha256 === checksumSha256
       );
-      if (!image) return null;
+      if (images.length === 0) return null;
       const { loadReferenceImageBlob } = await import(
         './lib/referenceImageInsert'
       );
-      return loadReferenceImageBlob(image);
+      return loadReferenceImageBlob(images);
     },
     []
   );

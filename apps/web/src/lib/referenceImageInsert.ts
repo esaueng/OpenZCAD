@@ -16,9 +16,10 @@ import {
   deleteSourceBlobIfUnreferenced,
   ensureLocalProjectStorage,
   loadSourceBlob,
-  putSourceBlob,
+  putSourceBlobIfAbsent,
   sha256Hex
 } from './localProjectStore';
+import { importSourceChecksums } from './sourceBlobClaims';
 import { addReferenceImage } from '@openzcad/document-core';
 
 /*
@@ -83,7 +84,7 @@ export async function prepareReferenceImage({
   plane,
   archive,
   measure = measureBitmap
-}: PrepareReferenceImageInput): Promise<ReferenceImage> {
+}: PrepareReferenceImageInput): Promise<PreparedReferenceImage> {
   if (file.size > MAX_REFERENCE_IMAGE_BYTES) {
     throw new Error(
       `${file.name} is larger than ${MAX_REFERENCE_IMAGE_BYTES / (1024 * 1024)} MB. Insert a smaller picture.`
@@ -144,7 +145,8 @@ export async function prepareReferenceImage({
       'This browser is not letting OpenZCAD store files, so the picture cannot be kept with the project.'
     );
   }
-  const source = await putSourceBlob(bytes);
+  const { ref: source, created: bytesCreated } =
+    await putSourceBlobIfAbsent(bytes);
   let artifactId: string = candidate.artifactId;
   try {
     artifactId = await archive({
@@ -157,36 +159,72 @@ export async function prepareReferenceImage({
   } catch {
     // Kept on this device; the next account save archives it.
   }
-  return { ...candidate, source, artifactId: artifactId as ArtifactId };
+  return {
+    image: { ...candidate, source, artifactId: artifactId as ArtifactId },
+    bytesCreated
+  };
+}
+
+export interface PreparedReferenceImage {
+  image: ReferenceImage;
+  /**
+   * Whether this insert wrote the bytes. False when the device already held
+   * them — another image, an import or a project uses the same file — and
+   * then an insert that does not commit must leave them alone.
+   */
+  bytesCreated: boolean;
 }
 
 /**
  * Releases the bytes an insert stored when its command did not commit after
- * all (the project was locked or changed underneath it). Cleanup keeps them
- * while any saved project or undo history still names the checksum. The
- * account artifact, if one was made, stays: like a refused import's upload,
- * it is unreferenced and counts toward storage until the project goes.
+ * all (the project was locked or changed underneath it). Only bytes this
+ * insert created, and only while no live document — saved or not — names
+ * them; cleanup itself also keeps them while any saved project, undo history
+ * or import claim does. The account artifact, if one was made, stays: like a
+ * refused import's upload, it is unreferenced and counts toward storage until
+ * the project goes.
  */
 export async function discardReferenceImageBytes(
-  image: ReferenceImage
+  prepared: PreparedReferenceImage,
+  liveDocuments: readonly (ProjectDocument | null | undefined)[]
 ): Promise<void> {
-  await deleteSourceBlobIfUnreferenced({
-    checksumSha256: image.source.checksumSha256
-  }).catch(() => false);
+  const checksumSha256 = prepared.image.source.checksumSha256;
+  if (
+    !prepared.bytesCreated ||
+    liveDocuments.some(
+      (document) =>
+        document && importSourceChecksums(document).has(checksumSha256)
+    )
+  )
+    return;
+  await deleteSourceBlobIfUnreferenced({ checksumSha256 }).catch(() => false);
 }
 
 /**
- * A picture's bytes: this device's source store first, then the image's
- * archived artifact (checksum-verified and cached here by the resolver).
- * Null when neither has them — a device-only image opened elsewhere.
+ * A picture's bytes, given every image record holding them (one picture may
+ * be placed several times, each record with its own artifact): this device's
+ * source store first, then each record's archived artifact in turn
+ * (checksum-verified and cached here by the resolver), so one unavailable
+ * device-only record never hides a copy another record can reach. Null when
+ * none has them.
  */
 export async function loadReferenceImageBlob(
-  image: ReferenceImage
+  images: readonly ReferenceImage[]
 ): Promise<Blob | null> {
+  const [first] = images;
+  if (!first) return null;
   let bytes: Uint8Array | null = await loadSourceBlob(
-    image.source.checksumSha256
+    first.source.checksumSha256
   );
-  if (!bytes && !image.artifactId.startsWith(LOCAL_ARTIFACT_ID_PREFIX)) {
+  const tried = new Set<string>();
+  for (const image of images) {
+    if (bytes) break;
+    if (
+      image.artifactId.startsWith(LOCAL_ARTIFACT_ID_PREFIX) ||
+      tried.has(image.artifactId)
+    )
+      continue;
+    tried.add(image.artifactId);
     const { resolveExactSourceBytes } = await import('./exactSourceResolver');
     bytes = await resolveExactSourceBytes(image.source, {
       artifactId: image.artifactId,
@@ -194,6 +232,6 @@ export async function loadReferenceImageBlob(
     }).catch(() => null);
   }
   return bytes
-    ? new Blob([bytes as Uint8Array<ArrayBuffer>], { type: image.contentType })
+    ? new Blob([bytes as Uint8Array<ArrayBuffer>], { type: first.contentType })
     : null;
 }

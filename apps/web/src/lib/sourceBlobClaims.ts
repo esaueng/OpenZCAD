@@ -3,7 +3,7 @@ import {
   importedSourceReferenceOf,
   referenceImagesWithHistory
 } from '@openzcad/shared';
-import type { ProjectDocument } from '@openzcad/shared';
+import type { ProjectDocument, ReferenceImage } from '@openzcad/shared';
 
 /**
  * Every source checksum the document needs: STEP sources and mesh payloads
@@ -79,27 +79,44 @@ export async function cacheCopyPictures(
   load: (checksum: string) => Promise<Uint8Array | null>,
   hash: (bytes: Uint8Array<ArrayBuffer>) => Promise<string>
 ): Promise<void> {
-  const seen = new Set<string>();
+  // One picture may be placed several times, each record with its own
+  // artifact: any record that can produce the bytes will do, so a
+  // device-only first record never refuses a copy a later one can serve.
+  const byContent = new Map<string, ReferenceImage[]>();
   for (const image of document.referenceImages?.images ?? []) {
-    const ref = image.source;
-    const key = `reference-image:${ref.checksumSha256}:${ref.logicalBytes}`;
-    if (seen.has(key)) continue;
+    const key = `${image.source.checksumSha256}:${image.source.logicalBytes}`;
+    byContent.set(key, [...(byContent.get(key) ?? []), image]);
+  }
+  for (const images of byContent.values()) {
+    const [first] = images as [ReferenceImage, ...ReferenceImage[]];
+    const ref = first.source;
     let bytes = await load(ref.checksumSha256);
-    if (!bytes) {
+    let failure: unknown = null;
+    for (const image of images) {
+      if (bytes) break;
       const { resolveExactSourceBytes } = await import('./exactSourceResolver');
       bytes = await resolveExactSourceBytes(ref, {
         artifactId: image.artifactId,
         sourceName: image.name
+      }).catch((error: unknown) => {
+        failure = error;
+        return null;
       });
+    }
+    if (!bytes) {
+      throw failure instanceof Error
+        ? failure
+        : new Error(
+            `The picture for image "${first.name}" is not available. The copy was not created.`
+          );
     }
     if (
       bytes.byteLength !== ref.logicalBytes ||
       (await hash(bytes as Uint8Array<ArrayBuffer>)) !== ref.checksumSha256
     )
       throw new Error(
-        `The picture for image "${image.name}" failed its integrity check. The copy was not created.`
+        `The picture for image "${first.name}" failed its integrity check. The copy was not created.`
       );
-    seen.add(key);
   }
 }
 
