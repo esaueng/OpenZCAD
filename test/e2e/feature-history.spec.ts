@@ -346,8 +346,8 @@ test('undo inside a text field edits the text, not the document', async ({
   await page.getByRole('button', { name: /Heat Sink/ }).click();
   await expectBodyCount(page, 1);
   const rows = page.locator('.feature-row');
-  // The drawer's browser loads as its own chunk, so its rows can land a
-  // moment after the model; a bare count() would read the empty drawer.
+  // The panels' bodies load as their own chunk, so the rows can land a
+  // moment after the model; a bare count() would read an empty list.
   await expect(rows.first()).toBeVisible();
   const featureCount = await rows.count();
   expect(featureCount).toBeGreaterThan(0);

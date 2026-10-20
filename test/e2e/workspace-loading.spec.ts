@@ -1,4 +1,10 @@
-import { test, expect, createProject, stubApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  createProject,
+  MODEL_ONLY,
+  stubApi
+} from './openzcad-fixtures';
 
 for (const width of [1440, 390]) {
   test(`cold workspace loading stays in its viewport and rail at ${width}px`, async ({
@@ -7,7 +13,7 @@ for (const width of [1440, 390]) {
   }, testInfo) => {
     await page.setViewportSize({ width, height: 844 });
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    await stubApi(page, { modelDrawer: false, commandFoldClosed: true });
+    await stubApi(page, { panelLayout: MODEL_ONLY, commandFoldClosed: true });
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     let releaseViewport!: () => void;

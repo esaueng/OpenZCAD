@@ -19,7 +19,7 @@ import {
   createProject,
   expectBodyCount,
   expect,
-  seedOpenModelDrawer,
+  seedPanelLayout,
   seedUnitlessImportUnits,
   setSelectionFilter,
   stubApi,
@@ -175,7 +175,7 @@ class SharedCloudProjectApi {
   projectLoadAttempts = 0;
 
   async install(page: Page): Promise<void> {
-    await seedOpenModelDrawer(page);
+    await seedPanelLayout(page);
     const settings = structuredClone(DEFAULT_APP_SETTINGS);
     settings.assistant.enabled = false;
     settings.files.cloudAutosaveDelaySeconds = 1;

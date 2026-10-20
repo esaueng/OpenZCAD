@@ -17,7 +17,7 @@ import {
   type ProjectDocument,
   type SketchSectionReference
 } from '@openzcad/shared';
-import { test, expect, stubApi } from './openzcad-fixtures';
+import { test, expect, stubApi, revealModelPanel } from './openzcad-fixtures';
 
 function section(
   document: ProjectDocument,
@@ -240,9 +240,7 @@ for (const kind of ['loft', 'sweep', 'helical-sweep'] as const) {
       );
     };
     const volume = async () => {
-      const bodies = page.getByRole('button', { name: /^Objects \d/ });
-      if ((await bodies.getAttribute('aria-expanded')) === 'false')
-        await bodies.click();
+      await revealModelPanel(page, 'Objects');
       await page
         .locator('.body-row:not(.consumed) .body-row-main')
         .last()
