@@ -3629,7 +3629,8 @@ export class CommandManager {
   }
 
   archiveSource(
-    featureId: string,
+    /** The owning feature; null for a reference image, named by `source`. */
+    featureId: string | null,
     artifactId: string,
     source?: ImportedSourceArchiveIdentity
   ): ProjectDocument {

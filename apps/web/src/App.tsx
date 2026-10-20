@@ -21,6 +21,7 @@ import {
   earlierDatumPlanes
 } from './lib/datumPlaneDisplay';
 import { referenceImageDisplays } from './lib/referenceImageDisplay';
+import { referenceImagesWithHistory } from '@openzcad/shared';
 import type {
   ReferenceImage,
   ReferenceImageId,
@@ -1264,7 +1265,10 @@ import {
   sha256Hex,
   withMatchingLocalDerived
 } from './lib/localProjectStore';
-import { cacheCopySources } from './lib/sourceBlobClaims';
+import {
+  cacheCopyPictures,
+  cacheCopySources
+} from './lib/sourceBlobClaims';
 import { reconcileRemoteOrganizations } from './lib/projectOrganizationMirror';
 import {
   applyLocalProjectOrganizations,
@@ -10333,7 +10337,9 @@ export function App() {
             },
             session.userId,
             projects.map((summary) => summary.name),
-            api
+            api,
+            (document) =>
+              cacheCopyPictures(document, loadSourceBlob, sha256Hex)
           );
           if (!request) {
             // The account no longer stores that save state; this device may.
@@ -12418,6 +12424,14 @@ export function App() {
           source
         );
         setDoc(next);
+        if (source.kind === 'reference-image') {
+          return [...referenceImagesWithHistory(next)].some(
+            (image) =>
+              image.artifactId === artifactId &&
+              image.source.checksumSha256 === source.checksumSha256 &&
+              image.source.logicalBytes === source.logicalBytes
+          );
+        }
         return [...documentNodesWithHistory(next)].some((node) => {
           if (
             node.kind !== 'feature' ||

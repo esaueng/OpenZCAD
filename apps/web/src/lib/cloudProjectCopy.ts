@@ -45,13 +45,20 @@ export async function buildCloudProjectCopy(
   source: CloudProjectCopySource,
   ownerUserId: UserId,
   existingNames: Iterable<string>,
-  store: CloudProjectCopyStore
+  store: CloudProjectCopyStore,
+  /**
+   * Brings the source's reference-image pictures onto this device: the copy
+   * holds them under device-local ids and archives them into itself, since
+   * the account copies import sources only.
+   */
+  cachePictures: (document: ProjectDocument) => Promise<void> = async () => {}
 ): Promise<Omit<DuplicateProjectRequest, 'projectId'> | null> {
   const { saveState } = source;
   const document = saveState
     ? await store.loadRevision(source.projectId, saveState.revisionId)
     : await store.loadProject(source.projectId);
   if (!document) return null;
+  await cachePictures(document);
   // The copy is named after the project, not after the save state it starts
   // from: "Bracket (copy)" is what the user is looking for on the shelf.
   const copy = duplicateProjectDocument(

@@ -28,7 +28,10 @@ export function importSourceChecksums(document: ProjectDocument): Set<string> {
   return checksums;
 }
 
-/** Preserve rebuild bytes before a local copy drops cloud artifact identities. */
+/**
+ * Preserve rebuild bytes — and reference-image pictures — before a copy drops
+ * cloud artifact identities.
+ */
 export async function cacheCopySources(
   document: ProjectDocument,
   load: (checksum: string) => Promise<Uint8Array | null>,
@@ -57,6 +60,42 @@ export async function cacheCopySources(
     )
       throw new Error(
         `The source file for "${node.data.sourceName}" failed its integrity check. The copy was not created.`
+      );
+    seen.add(key);
+  }
+  await cacheCopyPictures(document, load, hash);
+}
+
+/**
+ * I05 pictures: a copy re-archives them from this device into its own
+ * project, so their bytes must be here before the copy drops the source
+ * project's artifact ids. The account copy carries imports across itself and
+ * needs only this half.
+ */
+export async function cacheCopyPictures(
+  document: ProjectDocument,
+  load: (checksum: string) => Promise<Uint8Array | null>,
+  hash: (bytes: Uint8Array<ArrayBuffer>) => Promise<string>
+): Promise<void> {
+  const seen = new Set<string>();
+  for (const image of referenceImagesWithHistory(document)) {
+    const ref = image.source;
+    const key = `reference-image:${ref.checksumSha256}:${ref.logicalBytes}`;
+    if (seen.has(key)) continue;
+    let bytes = await load(ref.checksumSha256);
+    if (!bytes) {
+      const { resolveExactSourceBytes } = await import('./exactSourceResolver');
+      bytes = await resolveExactSourceBytes(ref, {
+        artifactId: image.artifactId,
+        sourceName: image.name
+      });
+    }
+    if (
+      bytes.byteLength !== ref.logicalBytes ||
+      (await hash(bytes as Uint8Array<ArrayBuffer>)) !== ref.checksumSha256
+    )
+      throw new Error(
+        `The picture for image "${image.name}" failed its integrity check. The copy was not created.`
       );
     seen.add(key);
   }

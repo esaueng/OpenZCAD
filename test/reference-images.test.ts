@@ -7,6 +7,7 @@ import {
 import {
   addPrimitiveFeature,
   createProjectDocument,
+  duplicateProjectDocument,
   normalizeDocument,
   normalizedReferenceImageRotation
 } from '@openzcad/document-core';
@@ -36,7 +37,15 @@ import {
   parseSaveProjectDocumentRequest
 } from '../apps/web/worker/validation';
 import { createProjectDiagnosticBundle } from '../apps/web/src/lib/projectDiagnostics';
-import { importSourceChecksums } from '../apps/web/src/lib/sourceBlobClaims';
+import {
+  cacheCopyPictures,
+  importSourceChecksums
+} from '../apps/web/src/lib/sourceBlobClaims';
+import {
+  archiveLocalOnlyImportSources,
+  listLocalOnlyImportSources
+} from '../apps/web/src/lib/importArchival';
+import { applyAccountSourceArchives } from '../apps/web/src/lib/accountImportSources';
 import * as webGlimpse from '../apps/web/src/lib/glimpseContract';
 import * as workerGlimpse from '../apps/web/worker/glimpseContract';
 
@@ -357,5 +366,139 @@ describe('reference-image measures', () => {
     expect(
       sniffReferenceImageType(new TextEncoder().encode('<svg></svg>'))
     ).toBeNull();
+  });
+});
+
+describe('reference-image archives', () => {
+  const local = 'artifact_local_one' as ArtifactId;
+
+  function placedLocally(): CommandManager {
+    const manager = new CommandManager(boxDocument());
+    manager.execute(
+      commandFactories.addReferenceImage({
+        image: image({ artifactId: local })
+      })
+    );
+    manager.execute(
+      commandFactories.updateReferenceImage({ imageId, width: 40 })
+    );
+    return manager;
+  }
+
+  it('lists a device-only picture and archives it into every copy of its record', async () => {
+    const manager = placedLocally();
+    expect(listLocalOnlyImportSources(manager.document)).toEqual([
+      {
+        featureId: null,
+        sourceName: 'Bracket drawing',
+        checksumSha256: checksum,
+        logicalBytes: 1234,
+        kind: 'reference-image',
+        contentType: 'image/png'
+      }
+    ]);
+    const uploads: { kind: string; contentType: string; fileName: string }[] =
+      [];
+    const result = await archiveLocalOnlyImportSources({
+      document: manager.document,
+      loadSourceBytes: async (sum) =>
+        sum === checksum ? new Uint8Array(1234) : null,
+      archive: async (input) => {
+        uploads.push(input);
+        return 'artifact_cloud';
+      },
+      applyArtifactId(featureId, artifactId, source) {
+        manager.archiveSource(featureId, artifactId, source);
+        return true;
+      }
+    });
+    expect(result).toEqual({
+      archived: ['Bracket drawing'],
+      missing: [],
+      failed: []
+    });
+    expect(uploads).toEqual([
+      expect.objectContaining({
+        kind: 'reference-image',
+        contentType: 'image/png',
+        fileName: 'Bracket drawing.png'
+      })
+    ]);
+    // The section, its undo snapshots and its insert command all name the
+    // archive, so undo can never bring back a device-only id.
+    expect(listLocalOnlyImportSources(manager.document)).toEqual([]);
+    expect(JSON.stringify(manager.document)).not.toContain(local);
+    expect(manager.document.referenceImages!.images[0]!.artifactId).toBe(
+      'artifact_cloud'
+    );
+    manager.undo();
+    manager.undo();
+    manager.redo();
+    expect(manager.document.referenceImages!.images[0]!.artifactId).toBe(
+      'artifact_cloud'
+    );
+    // And it never touched the image's placement.
+    manager.redo();
+    expect(manager.document.referenceImages!.images[0]!.width).toBe(40);
+  });
+
+  it('carries an archive acknowledged during a save into edits made meanwhile', () => {
+    const before = placedLocally();
+    const acknowledged = new CommandManager(before.document);
+    acknowledged.archiveSource(null, 'artifact_cloud', {
+      kind: 'reference-image',
+      checksumSha256: checksum,
+      logicalBytes: 1234
+    });
+    before.execute(
+      commandFactories.updateReferenceImage({ imageId, opacity: 0.9 })
+    );
+    const merged = applyAccountSourceArchives(
+      before.document,
+      acknowledged.document
+    );
+    expect(merged.referenceImages!.images[0]).toMatchObject({
+      artifactId: 'artifact_cloud',
+      opacity: 0.9
+    });
+  });
+
+  it('gives a duplicate its own device-local picture id, cached first', async () => {
+    const source = new CommandManager(boxDocument());
+    source.execute(
+      commandFactories.addReferenceImage({
+        image: image({ artifactId: 'artifact_source' as ArtifactId })
+      })
+    );
+    const copy = duplicateProjectDocument(
+      source.document,
+      'Bracket (copy)',
+      toUserId('test')
+    );
+    // The copy never depends on the source project's artifact.
+    expect(JSON.stringify(copy)).not.toContain('artifact_source');
+    expect(copy.referenceImages!.images[0]!.artifactId).toBe(
+      `artifact_local_${checksum}`
+    );
+    expect(listLocalOnlyImportSources(copy)).toHaveLength(1);
+    // Its bytes are made local before the copy is built; a damaged picture
+    // refuses the copy rather than leaving it a placeholder.
+    const loaded: string[] = [];
+    await cacheCopyPictures(
+      source.document,
+      async (sum) => {
+        loaded.push(sum);
+        return new Uint8Array(1234);
+      },
+      async () => checksum
+    );
+    expect(loaded).toEqual([checksum]);
+    await expect(
+      cacheCopyPictures(
+        source.document,
+        async () => new Uint8Array(1234),
+        async () => 'b'.repeat(64)
+      )
+    ).rejects.toThrow(/failed its integrity check/);
   });
 });
