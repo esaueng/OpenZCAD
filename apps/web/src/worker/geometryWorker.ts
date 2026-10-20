@@ -30,7 +30,7 @@ import type {
 import {
   ExactRebuildCache,
   LatestBroadcastGate,
-  canonicalProjectContentKey
+  geometryContentKey
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
 import { geometryYield } from './geometryYield';
@@ -667,7 +667,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           epoch: null
         };
       } else {
-        const key = canonicalProjectContentKey(document);
+        const key = geometryContentKey(document);
         if (exactKernelStatus !== 'ready')
           post(stateFor('loading-remus', request, { stale: true }));
         const exact = await loadExactKernel();
@@ -957,7 +957,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
 
     const contentKey = isGeometryEmpty(document)
       ? null
-      : canonicalProjectContentKey(document);
+      : geometryContentKey(document);
     const lineageDemandKey =
       // A request carrying a demand (even an empty one) opted into the idle
       // probe skip, so it must never share a cache entry with a full-lineage

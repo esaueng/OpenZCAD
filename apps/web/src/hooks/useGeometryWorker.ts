@@ -7,7 +7,7 @@ import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { documentForWorker, documentForRebuild } from '../lib/meshTransport';
-import { canonicalProjectContentKey } from '../worker/exactRebuildCache';
+import { geometryContentKey } from '../worker/exactRebuildCache';
 import { describeWorkerFailure } from '../lib/workerFailure';
 import type {
   BodyId,
@@ -1216,8 +1216,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         state.projectId !== completed.projectId ||
         state.version !== completed.version ||
         completed.projectId !== document.projectId ||
-        canonicalProjectContentKey(completed) !==
-          canonicalProjectContentKey(document)
+        geometryContentKey(completed) !==
+          geometryContentKey(document)
       ) {
         return false;
       }

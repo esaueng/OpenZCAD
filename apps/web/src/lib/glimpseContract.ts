@@ -69,7 +69,13 @@ export const CAD_OPERATIONS = [
   'import.step',
   'import.shapr-guided',
   'node.rename',
-  'node.metadata.set'
+  'node.metadata.set',
+  'drawing.sheet.add',
+  'drawing.sheet.update',
+  'drawing.sheet.delete',
+  'drawing.view.add',
+  'drawing.view.update',
+  'drawing.view.delete'
 ] as const;
 export const EXPANDED: Readonly<Record<string, readonly string[]>> = {
   feature_operation: CAD_OPERATIONS,

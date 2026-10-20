@@ -85,6 +85,7 @@ import {
 import { ExportDialogBoundary } from './components/ExportDialogBoundary';
 import {
   Box,
+  DraftingCompass,
   Camera,
   Check,
   CirclePause,
@@ -123,6 +124,7 @@ import {
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
   isParameterRetype,
+  isDrawingCommandKind,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -1052,6 +1054,13 @@ const LazyExportDialog = lazyWithStaleChunkNotice(() =>
     default: module.ExportDialog
   }))
 );
+// D01: the drawing workspace, its projection worker client and its PDF/SVG
+// writers stay out of the entry chunk until the Draw mode opens.
+const LazyDrawingWorkspace = lazyWithStaleChunkNotice(() =>
+  import('./components/DrawingWorkspace').then((module) => ({
+    default: module.DrawingWorkspace
+  }))
+);
 const LazyImageExportDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ImageExportDialog').then((module) => ({
     default: module.ImageExportDialog
@@ -1389,7 +1398,8 @@ import {
   toggleSidebarSection,
   type PanelState,
   type SidebarSectionId,
-  type WorkspaceMode
+  type WorkspaceMode,
+  WORKSPACE_MODE_ORDER
 } from './lib/panelState';
 import {
   loadSettingsViewState,
@@ -2585,6 +2595,19 @@ export function App() {
     () => new Set<string>([...localHiddenBodyIds, ...parameterHiddenBodyIds]),
     [localHiddenBodyIds, parameterHiddenBodyIds]
   );
+  // D01: a new drawing sheet shows the live bodies on screen. Deliberately
+  // not the export scope, which follows the Build selection and the mesh
+  // dialog's include-hidden choice.
+  const drawingDefaultBodyIds = useMemo(
+    () =>
+      doc
+        ? doc.bodyOrder.filter((id) => {
+            const body = doc.derived.bodyRepresentations[id];
+            return body !== undefined && !body.consumed && !hiddenBodyIds.has(id);
+          })
+        : [],
+    [doc, hiddenBodyIds]
+  );
   // Not persisted: isolation is a temporary view, and a reload shows the
   // user's own hidden set.
   const [bodyIsolation, setBodyIsolation] = useState<
@@ -2630,7 +2653,12 @@ export function App() {
       return {
         ...view,
         selectedBodyIds,
-        workspaceMode: panelState.workspaceMode,
+        // The synced resume record predates the Draw workspace and other
+        // devices validate it; a drawing session resumes in Build there.
+        workspaceMode:
+          panelState.workspaceMode === 'drawing'
+            ? 'build'
+            : panelState.workspaceMode,
         panels: {
           sidebarSections: panelState.sidebarSections,
           assistantCollapsed: panelState.assistantCollapsed,
@@ -4222,25 +4250,60 @@ export function App() {
   // The stored preference resolves against what the project allows: a
   // read-only share pins the workspace to View whatever this device prefers,
   // and a shared link lands in Tweak unless the visitor chose View.
+  // D01: drawings read the account's document, which a shared link does not
+  // carry as an editable copy; read-only seats may still open and export
+  // sheets, with sheet edits refused by the project guard.
+  const drawingModeDisabledReason = shareSession
+    ? 'Drawings are not available on a shared link'
+    : null;
   const resolvedWorkspaceMode: WorkspaceMode = shareSession
     ? panelState.workspaceMode === 'view'
       ? 'view'
       : 'tweak'
     : buildModeDisabledReason !== null
-      ? 'view'
+      ? panelState.workspaceMode === 'drawing'
+        ? 'drawing'
+        : 'view'
       : panelState.workspaceMode;
   const viewMode = resolvedWorkspaceMode === 'view';
   const tweakMode = resolvedWorkspaceMode === 'tweak';
+  const drawingMode = resolvedWorkspaceMode === 'drawing';
+  // Ctrl+Shift+M steps View → Tweak → Build → Draw past whatever the project
+  // locks. The shortcut and the palette row that advertises it both read
+  // this, so the row always names where the key goes.
+  const workspaceModeLock = (mode: WorkspaceMode): string | null =>
+    mode === 'build'
+      ? buildModeDisabledReason
+      : mode === 'tweak'
+        ? tweakModeDisabledReason
+        : mode === 'drawing'
+          ? drawingModeDisabledReason
+          : null;
+  const nextWorkspaceMode: WorkspaceMode | null =
+    [1, 2, 3]
+      .map(
+        (step) =>
+          WORKSPACE_MODE_ORDER[
+            (WORKSPACE_MODE_ORDER.indexOf(resolvedWorkspaceMode) + step) %
+              WORKSPACE_MODE_ORDER.length
+          ]!
+      )
+      .find((mode) => workspaceModeLock(mode) === null) ?? null;
   // Undo/redo affordances for the toolbar and the palette. In Tweak each is
   // live only for a parameter-only entry — the one that command would apply.
   // Computed at render from the manager's tracked kinds — unknown (pre-kind
   // histories) reads as unavailable, matching handleUndo and handleRedo.
-  const undoAvailable = managerRef.current?.canUndoIn(tweakMode) ?? false;
-  const redoAvailable = managerRef.current?.canRedoIn(tweakMode) ?? false;
+  // The Draw workspace undoes its own sheet edits only.
+  const undoAvailable = drawingMode
+    ? (managerRef.current?.undoIsDrawingOnly ?? false)
+    : (managerRef.current?.canUndoIn(tweakMode) ?? false);
+  const redoAvailable = drawingMode
+    ? (managerRef.current?.redoIsDrawingOnly ?? false)
+    : (managerRef.current?.canRedoIn(tweakMode) ?? false);
   // Both reading workspaces disarm every modeling surface — tools, handles,
   // sketches, the inspector. Tweak differs from View in one thing only: the
   // parameter guard below lets `parameter.set` commands through.
-  const modelingLocked = viewMode || tweakMode;
+  const modelingLocked = viewMode || tweakMode || drawingMode;
   // The activity log in the column layout: opened from the dock's button or
   // the toast; the panel itself is App's so both can reach it.
   const [activityLogOpen, setActivityLogOpen] = useState(false);
@@ -4289,7 +4352,17 @@ export function App() {
         'View mode is read-only — switch to Build to edit')
       : tweakMode
         ? 'Tweak mode adjusts parameters only — switch to Build to edit'
-        : projectEditDisabledReason;
+        : drawingMode
+          ? 'Draw mode edits drawing sheets only — switch to Build to model'
+          : projectEditDisabledReason;
+  // D01 sheet edits answer to the project's own locks in Draw and Build (a
+  // read-only seat or a second tab refuses them), and to the reading
+  // workspaces' locks in View and Tweak, where a drawing-only undo or redo
+  // must not edit sheets either.
+  const drawingEditDisabledReason =
+    !projectOpenElsewhere && (viewMode || tweakMode)
+      ? editDisabledReason
+      : projectEditDisabledReason;
   // The parameter guard: the same chain, except Tweak deliberately passes —
   // adjusting a published dimension is the one edit that workspace allows.
   const parameterEditDisabledReason = projectOpenElsewhere
@@ -4297,7 +4370,11 @@ export function App() {
     : viewMode
       ? (buildModeDisabledReason ??
         'View mode is read-only — switch to Tweak or Build to change parameters')
-      : projectEditDisabledReason;
+      : drawingMode
+        ? // Draw edits sheets only; a parameter-only undo or redo would
+          // otherwise change the model from there.
+          'Draw mode edits drawing sheets only — switch to Tweak or Build to change parameters'
+        : projectEditDisabledReason;
   const ownsOpenProject = Boolean(
     doc &&
     (doc.ownerUserId === session?.userId ||
@@ -4320,6 +4397,8 @@ export function App() {
   editDisabledReasonRef.current = editDisabledReason;
   const parameterEditDisabledReasonRef = useRef(parameterEditDisabledReason);
   parameterEditDisabledReasonRef.current = parameterEditDisabledReason;
+  const drawingEditDisabledReasonRef = useRef(drawingEditDisabledReason);
+  drawingEditDisabledReasonRef.current = drawingEditDisabledReason;
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
 
@@ -4357,7 +4436,28 @@ export function App() {
    * smuggle a feature edit through Tweak mode by pairing it with a
    * parameter change.
    */
+  function ensureCanEditDrawings(action = 'edit this drawing'): boolean {
+    const reason = drawingEditDisabledReasonRef.current;
+    if (!reason) {
+      return true;
+    }
+    setStatus(
+      projectOpenElsewhereRef.current
+        ? PROJECT_OPEN_ELSEWHERE_NOTICE
+        : `Cannot ${action}: ${reason}.`
+    );
+    return false;
+  }
+
   function ensureCanExecute(commands: AnyCommand[], action: string): boolean {
+    // A batch of drawing-sheet commands never touches the model, so it
+    // passes in the Draw workspace on the project's own locks alone.
+    if (
+      commands.length > 0 &&
+      commands.every((command) => isDrawingCommandKind(command.kind))
+    ) {
+      return ensureCanEditDrawings(action);
+    }
     const parametersOnly =
       commands.length > 0 &&
       commands.every(
@@ -6937,6 +7037,9 @@ export function App() {
       setPreviewDoc(null);
       const before = managerRef.current.document.derived.bodyRepresentations;
       let next = managerRef.current.execute(command);
+      // A drawing-sheet edit leaves the model alone: keep the ready geometry
+      // rather than posting a rebuild (and a "Rebuilding" lane) per view move.
+      if (isDrawingCommandKind(command.kind)) geometry.retainReadyGeometry(next);
       if (derived) {
         // Validation already rebuilt this exact result; attaching it now
         // renders the new geometry in the same batch instead of flashing the
@@ -7712,7 +7815,13 @@ export function App() {
   function handleWorkspaceMode(mode: WorkspaceMode) {
     if (mode !== workspaceModeRef.current)
       trackUsage(mode === 'build' ? 'workflow_model' : 'workflow_setup');
-    if (mode === 'view' || mode === 'tweak') {
+    if (mode === 'view' || mode === 'tweak' || mode === 'drawing') {
+      // The sheet covers the viewport, so nothing can be measured there, and
+      // a measurement selected before would stay a hidden Delete target.
+      if (mode === 'drawing') {
+        setMeasuring(false);
+        setActiveMeasurementId(null);
+      }
       cancelDirectManipulationRef.current?.();
       cylinderRadiusPreview.clear();
       edgePreview.clear();
@@ -7724,7 +7833,9 @@ export function App() {
       setStatus(
         mode === 'view'
           ? 'View mode · the model is read-only here.'
-          : 'Tweak mode · adjust parameters; the design stays locked.',
+          : mode === 'drawing'
+            ? 'Draw mode · lay out drawing sheets; the model is read-only here.'
+            : 'Tweak mode · adjust parameters; the design stays locked.',
         { unlogged: true }
       );
     } else {
@@ -10423,7 +10534,10 @@ export function App() {
     // feature edit, a mixed batch, or an entry from before kind tracking —
     // keeps the modeling refusal rather than reverting unseen work.
     const parametersOnly = managerRef.current.undoIsParameterOnly;
-    if (!parametersOnly && !ensureCanEdit('undo')) {
+    const drawingOnly = managerRef.current.undoIsDrawingOnly;
+    if (drawingOnly) {
+      if (!ensureCanEditDrawings('undo')) return;
+    } else if (!parametersOnly && !ensureCanEdit('undo')) {
       return;
     }
     if (parametersOnly && !ensureCanEditParameters('undo')) {
@@ -10432,6 +10546,7 @@ export function App() {
     const label = managerRef.current.undoLabel;
     try {
       const next = managerRef.current.undo();
+      if (drawingOnly) geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
     } catch (error) {
@@ -10457,7 +10572,10 @@ export function App() {
     // redoing anything else is modeling. Redo applies the entry at the
     // cursor, so its kinds decide — not the undo entry below it.
     const parametersOnly = managerRef.current.redoIsParameterOnly;
-    if (!parametersOnly && !ensureCanEdit('redo')) {
+    const drawingOnly = managerRef.current.redoIsDrawingOnly;
+    if (drawingOnly) {
+      if (!ensureCanEditDrawings('redo')) return;
+    } else if (!parametersOnly && !ensureCanEdit('redo')) {
       return;
     }
     if (parametersOnly && !ensureCanEditParameters('redo')) {
@@ -10466,6 +10584,7 @@ export function App() {
     const label = managerRef.current.redoLabel;
     try {
       const next = managerRef.current.redo();
+      if (drawingOnly) geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
     } catch (error) {
@@ -19688,30 +19807,14 @@ export function App() {
 
       if (global === 'workspace-mode-cycle') {
         event.preventDefault();
-        // Cycle View → Tweak → Build, skipping whatever the project locks.
-        const order: readonly WorkspaceMode[] = ['view', 'tweak', 'build'];
-        const at = order.indexOf(resolvedWorkspaceMode);
-        for (let step = 1; step <= order.length; step += 1) {
-          const next = order[(at + step) % order.length]!;
-          const reason =
-            next === 'build'
-              ? buildModeDisabledReason
-              : next === 'tweak'
-                ? tweakModeDisabledReason
-                : null;
-          if (reason !== null) {
-            continue;
-          }
-          if (next === resolvedWorkspaceMode) {
-            // Every other mode is locked; say why instead of "switching"
-            // to where we already are.
-            setStatus(
-              `Workspace pinned to View: ${buildModeDisabledReason ?? 'other modes are unavailable'}.`
-            );
-          } else {
-            handleWorkspaceMode(next);
-          }
-          return;
+        if (nextWorkspaceMode === null) {
+          // Every other mode is locked; say why instead of "switching" to
+          // where we already are.
+          setStatus(
+            `Workspace pinned to View: ${buildModeDisabledReason ?? 'other modes are unavailable'}.`
+          );
+        } else {
+          handleWorkspaceMode(nextWorkspaceMode);
         }
         return;
       }
@@ -20478,24 +20581,8 @@ export function App() {
     }));
     if (hidden) panels.release('drawer');
   };
-  // Ctrl+Shift+M steps View → Tweak → Build past whatever the project locks,
-  // so only the row it would land on carries it as its shortcut.
-  const modeCycle: readonly WorkspaceMode[] = ['view', 'tweak', 'build'];
-  const modeShortcutTarget = [1, 2]
-    .map(
-      (step) =>
-        modeCycle[
-          (modeCycle.indexOf(resolvedWorkspaceMode) + step) % modeCycle.length
-        ]!
-    )
-    .find(
-      (mode) =>
-        (mode === 'build'
-          ? buildModeDisabledReason
-          : mode === 'tweak'
-            ? tweakModeDisabledReason
-            : null) === null
-    );
+  // Only the row Ctrl+Shift+M would land on carries it as its shortcut.
+  const modeShortcutTarget = nextWorkspaceMode;
   const modeShortcut = (mode: WorkspaceMode) =>
     mode === modeShortcutTarget
       ? keymap.label('workspace-mode-cycle')
@@ -20809,6 +20896,19 @@ export function App() {
           } satisfies PaletteCommand
         ]
       : []),
+    ...(!drawingMode
+      ? [
+          {
+            id: 'workspace-mode-drawing',
+            label: 'Switch to Draw mode',
+            group: 'General',
+            shortcut: modeShortcut('drawing'),
+            icon: <DraftingCompass size={16} aria-hidden="true" />,
+            disabledReason: drawingModeDisabledReason,
+            run: () => handleWorkspaceMode('drawing')
+          } satisfies PaletteCommand
+        ]
+      : []),
     {
       id: 'app-settings',
       label: 'Open settings',
@@ -20933,7 +21033,9 @@ export function App() {
       : 'This model has no parameters · Build mode is where they are defined';
   // Measuring writes the lane in Build too: it is the command of the moment.
   const readingHints = viewMode || measuring;
-  const workspacePrompt = readingHints
+  const workspacePrompt = drawingMode
+    ? 'Drag a view to place it · arrow keys nudge it · Update redraws a stale sheet'
+    : readingHints
     ? viewModeHint
     : tweakMode
       ? tweakModeHint
@@ -21851,6 +21953,7 @@ export function App() {
           canRenameProject={canRenameProject}
           buildModeDisabledReason={buildModeDisabledReason}
           tweakModeDisabledReason={tweakModeDisabledReason}
+          drawingModeDisabledReason={drawingModeDisabledReason}
           onWorkspaceMode={handleWorkspaceMode}
           onSave={() => void handleSave()}
           onSaveAs={openSaveNameDialog}
@@ -21875,7 +21978,7 @@ export function App() {
         />
       }
       toolBar={
-        modelingLocked ? (
+        drawingMode ? null : modelingLocked ? (
           <ViewModeBar
             settings={viewerSettings}
             projection={projection}
@@ -21910,7 +22013,7 @@ export function App() {
         ) : null
       }
       sidebar={
-        viewMode ? null : tweakMode ? (
+        viewMode || drawingMode ? null : tweakMode ? (
           <TweakPanel
             modelError={parameterModelError}
             parameters={exposedParameters}
@@ -22484,7 +22587,7 @@ export function App() {
         </ErrorBoundary>
       }
       drawer={
-        !viewMode && !tweakMode && panels.drawerOpen ? modelBrowser : null
+        !modelingLocked && panels.drawerOpen ? modelBrowser : null
       }
       // Every command card anchors at the top of the right lane, the
       // drawer yielding below it. The same precedence as the viewport's
@@ -23369,6 +23472,23 @@ export function App() {
       }
       assistantHidden={assistantHidden}
       assistantCollapsed={assistantCollapsed}
+      stage={
+        drawingMode ? (
+          <ErrorBoundary label="Drawings" resetKey={doc.projectId}>
+            <Suspense fallback={null}>
+              <LazyDrawingWorkspace
+                document={doc}
+                bodies={doc.derived.bodyRepresentations}
+                geometryPending={!geometry.isReadyFor(doc)}
+                defaultBodyIds={drawingDefaultBodyIds}
+                editDisabledReason={drawingEditDisabledReason}
+                onCommand={(command) => executeCommand(command)}
+                onStatus={(message) => setStatus(message)}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        ) : null
+      }
       readout={
         <>
           {/* The same lane as the status toast, and in front of it: while a

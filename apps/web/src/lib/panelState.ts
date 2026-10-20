@@ -29,13 +29,23 @@ export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = [
  * view controls, with the document locked against edits. `tweak` sits between
  * them: the reading workspace plus the parameter table, so the model's driving
  * dimensions can be adjusted and the result exported while the design itself —
- * sketches, features, history — stays locked.
+ * sketches, features, history — stays locked. `drawing` (D01, labelled Draw)
+ * is the drawing workspace: the sheet canvas replaces the viewport, and the
+ * only edits it makes are to drawing sheets.
  *
  * Named `workspaceMode` rather than "viewer" because that word already means
  * both the 3D viewport (`ViewerShell`) and the collaboration role in this
  * codebase, and a third meaning would make either impossible to grep for.
  */
-export type WorkspaceMode = 'view' | 'tweak' | 'build';
+export type WorkspaceMode = 'view' | 'tweak' | 'build' | 'drawing';
+
+/** The order the workspace switch shows the modes and Ctrl+Shift+M cycles them. */
+export const WORKSPACE_MODE_ORDER: readonly WorkspaceMode[] = [
+  'view',
+  'tweak',
+  'build',
+  'drawing'
+];
 
 export interface PanelState {
   /** Section id to open/closed. Absent means open. */
@@ -166,7 +176,8 @@ export function normalizePanelState(value: unknown): PanelState {
   if (
     root.workspaceMode === 'view' ||
     root.workspaceMode === 'tweak' ||
-    root.workspaceMode === 'build'
+    root.workspaceMode === 'build' ||
+    root.workspaceMode === 'drawing'
   ) {
     state.workspaceMode = root.workspaceMode;
   }

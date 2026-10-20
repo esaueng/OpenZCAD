@@ -118,6 +118,12 @@ interface AppShellProps {
   sidebarResizer?: ReactNode;
   /** The status toast and the activity log, over the viewport. */
   readout?: ReactNode;
+  /**
+   * A workspace that takes the whole stage over the viewport (the D01
+   * drawing sheet). The viewer stays mounted beneath it, so returning to the
+   * model costs no rebuild of the 3D scene.
+   */
+  stage?: ReactNode;
   overlays?: ReactNode;
   /**
    * Files dropped on the viewer area from outside the page. Absent, the
@@ -154,6 +160,7 @@ export function AppShell({
   workspaceRef,
   sidebarResizer,
   readout,
+  stage = null,
   overlays,
   onDropFiles,
   parameterDefinition = null
@@ -192,6 +199,9 @@ export function AppShell({
             }${command ? ' has-command' : ''}${drawer ? ' has-drawer' : ''}`}
           >
             {viewer}
+            {/* Over the viewer, under the toast lane: a takeover still
+              reports through the same status readout. */}
+            {stage && <div className="stage-takeover">{stage}</div>}
             {columnExit.rendered && (
               <ExitingFloat
                 className={`workspace-column-float${columnExit.closing ? ' closing' : ''}`}

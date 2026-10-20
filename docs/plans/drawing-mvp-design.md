@@ -1,6 +1,9 @@
 # D01 drawing MVP: sheet/view contract and projection qualification
 
-Status: design and consumer-artifact qualification only (2026-09-20). This note closes
+Status: design and consumer-artifact qualification (2026-09-20); the
+foundation slice is implemented (2026-10-19, schema v30) — see
+[Implementation decisions](#implementation-decisions-d01-foundation-schema-v30)
+for where it departs from this design. This note originally closed
 the design-first slice of [D01](../../ROADMAP.md#d01). It does not add a
 drawing editor, a PDF dependency, a new persisted schema, or a production
 projection adapter.
@@ -243,3 +246,49 @@ Dependencies remain narrow: R01's datum-plane identity can later supply custom
 view frames; M08's exact section work is for D03 and does not gate these four
 standard views; S04's composite identity design must not be copied into this
 sheet schema without a reviewed source-reference contract.
+
+## Implementation decisions (D01 foundation, schema v30)
+
+The first implementation (research-audit Stage 7, schema v30) follows the
+sheet/view contract above with these recorded departures:
+
+- **Shape.** `ProjectDocument.drawings = { sheets: DrawingSheet[] }`, absent
+  when a project has no drawings and never synthesized on load. A view stores
+  its orientation (`front`, `back`, `left`, `right`, `top`, `bottom`, `iso`)
+  rather than free frame vectors; custom angles can add an optional frame
+  later. Frames are Z-up and follow the glass-box fold about the front view,
+  so `up = x × direction` matches the kernel's handedness: front looks along
+  +Y with +Z up, top along −Z with +Y up, right along −X with +Y right, and the
+  isometric from (1, −1, 1). `centerMm` is the centre of the view's projected
+  extent rather than the image of a stored origin, so a view does not jump
+  when the part sits far from the world origin. A projected view names its
+  base (`parentViewId`) and keeps its row or column when either moves. Paper
+  sizes are ISO A4–A0 and ANSI A–D; the scale is one shared sheet scale.
+- **Model fence.** Instead of replaying an exact checkpoint, a sheet stores a
+  fingerprint of its source bodies' persistent face and edge hashes and
+  extents. When the derived model does not match it, the sheet says so, draws
+  outlines only and refuses export; an explicit, undoable Update rebinds it.
+  Nothing older is ever drawn as current, but a sheet cannot yet show a model
+  state other than the current one; checkpoint replay remains open.
+- **Projection.** Measured against the pin, `projectEdges` decides occlusion
+  by stepping a point `1e-4 · diagonal` toward the camera, so walls further
+  along the ray and other bodies never hide anything, and curved faces get no
+  silhouettes. The implementation projects in its own worker from the
+  display projection instead: kernel-sampled feature-edge polylines plus
+  display-mesh silhouettes of curved faces, with occlusion against every
+  body's triangles, each projected edge segment split exactly where it
+  crosses an occluding triangle's edge. It is approximate to the display
+  tolerance and is labelled so in the sheet panel. `test/drawing-projection.test.ts`
+  keeps the box bounds and isometric known-run oracles above and records the
+  pinned kernel's gaps as a diagnostic.
+- **PDF and fonts.** A dependency-free single-page PDF 1.4 writer and an SVG
+  writer serialize the same page model the preview draws. Text uses the
+  base-14 Helvetica faces with WinAnsi encoding and is not embedded; any other
+  character becomes "?" before layout so preview and exports agree. Output has
+  no timestamps or ids and is byte-stable for a document and kernel pin.
+- **Workspace.** Peter chose this placement and accepted the fence and
+  projection departures above (2026-10-19). Drawings open as a fourth
+  workspace mode, Draw: sheets in a left column, properties on the right, and
+  the sheet canvas between them, which draws
+  the sheet over the stage and allows only `drawing.*` commands (undo included);
+  the model stays read-only there.

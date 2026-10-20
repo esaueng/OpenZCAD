@@ -8,8 +8,10 @@ export * from './sketch-reference-dimensions';
 export * from './sketch-composites';
 export * from './mass-density';
 export * from './keymap-settings';
+export * from './drawings';
 import type { DocumentHistory } from './document-history';
 import type { KeymapOverrides } from './keymap-settings';
+import type { DrawingSet } from './drawings';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
 export type ProjectId = Brand<string, 'ProjectId'>;
@@ -99,8 +101,15 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * walls from the sketch plane. An older client would replay either at its
  * stale blind distance or with straight walls, so the bump makes it refuse
  * such a document. Both are optional; absent is the v28 extrude.
+ *
+ * v30 adds the D01 drawing section (`ProjectDocument.drawings`): sheets with
+ * paper, scale, projection angle and title-block text, each holding placed
+ * orthographic and isometric views of named bodies and a fingerprint of the
+ * model they were last drawn from. Additive: absent means no drawings, and
+ * every older document loads unchanged. An older client would drop the
+ * section on its next save, so the bump makes it refuse such a document.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 29 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 30 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2912,6 +2921,12 @@ export interface ProjectDocument {
    * Absent on every project created the ordinary way.
    */
   branchedFrom?: ProjectBranchPoint;
+  /**
+   * D01 drawing sheets (schema v30). Canonical user content: the sheets'
+   * paper, scale and view placement, never projected lines. Absent means the
+   * project has no drawings.
+   */
+  drawings?: DrawingSet;
 }
 
 export interface SerializedCommand<TPayload = unknown> {
