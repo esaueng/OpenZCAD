@@ -669,6 +669,15 @@ describe('D01 occlusion tolerance', () => {
         10
       )
     ).toHaveLength(1);
+    // A unit hidden edge 0.1 from a very long visible line stays: the
+    // shorter line sets how close counts as the same.
+    expect(
+      dropCoincidentHidden(
+        [Float64Array.from([0, 0, 1, 0])],
+        [Float64Array.from([-5e6, 0.1, 5e6, 0.1])],
+        10
+      )
+    ).toHaveLength(1);
     // A hidden line wholly under a visible one is dropped.
     expect(
       dropCoincidentHidden(hidden, [Float64Array.from([0, 0, 100, 0])], 1e-6)

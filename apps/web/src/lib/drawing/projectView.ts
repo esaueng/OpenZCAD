@@ -996,9 +996,11 @@ export function dropCoincidentHidden(
         segments[s + 2]! - segments[s]!,
         segments[s + 3]! - segments[s + 1]!
       );
+      // The shorter of the two sets it: a long visible line must not make a
+      // short hidden edge beside it look like the same line.
       const near = Math.min(
         tolerance,
-        LOCAL_COINCIDENCE * Math.max(length, visibleLength)
+        LOCAL_COINCIDENCE * Math.min(length, visibleLength)
       );
       if (off[0]! > near || off[1]! > near) continue;
       const t = ends.map(

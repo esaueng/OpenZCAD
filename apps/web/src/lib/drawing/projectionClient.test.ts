@@ -56,4 +56,29 @@ describe('DrawingProjectionClient', () => {
     await expect(third).resolves.toEqual({});
     client.dispose();
   });
+
+  it('does not leave a phantom request in flight when sending throws', async () => {
+    class ThrowingWorker extends FakeWorker {
+      static throwNext = true;
+      override postMessage(message: DrawingProjectionRequest) {
+        if (ThrowingWorker.throwNext) {
+          ThrowingWorker.throwNext = false;
+          throw new DOMException('could not be cloned', 'DataCloneError');
+        }
+        super.postMessage(message);
+      }
+    }
+    vi.stubGlobal('Worker', ThrowingWorker);
+    const client = new DrawingProjectionClient();
+    await expect(client.project({}, [view('a')])).rejects.toMatchObject({
+      name: 'DataCloneError'
+    });
+    // The next request goes straight out rather than waiting forever.
+    const next = client.project({}, [view('b')]);
+    const worker = FakeWorker.last!;
+    expect(worker.sent.map((message) => message.views[0]!.key)).toEqual(['b']);
+    worker.answer(0);
+    await expect(next).resolves.toEqual({});
+    client.dispose();
+  });
 });

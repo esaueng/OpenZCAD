@@ -71,14 +71,26 @@ export class DrawingProjectionClient {
   }
 
   private send(request: Pending): void {
-    this.inFlight = request;
     const message: DrawingProjectionRequest = {
       type: 'project',
       requestId: request.requestId,
       bodies: request.bodies,
       views: request.views
     };
-    this.ensureWorker().postMessage(message);
+    try {
+      // A worker that cannot start (a blocked policy) or a payload that
+      // cannot be cloned throws here; nothing is in flight then, so the
+      // next request is not left waiting behind a phantom one.
+      this.ensureWorker().postMessage(message);
+      this.inFlight = request;
+    } catch (error) {
+      this.worker?.terminate();
+      this.worker = null;
+      request.reject(
+        error instanceof Error ? error : new Error('Projection failed.')
+      );
+      this.next();
+    }
   }
 
   private ensureWorker(): Worker {
