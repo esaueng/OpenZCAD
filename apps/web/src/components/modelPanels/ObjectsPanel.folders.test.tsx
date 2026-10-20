@@ -164,7 +164,7 @@ describe('Objects folders (U06, ZC-128)', () => {
   it('files every selected body, including those a search hides', async () => {
     const user = userEvent.setup();
     const manager = model();
-    const [, lug, pin] = manager.document.bodyOrder as BodyId[];
+    const [, lug, pin] = manager.document.bodyOrder;
     render(<Harness manager={manager} selected={[lug!, pin!]} spy={{}} />);
     await user.type(
       screen.getByRole('searchbox', { name: 'Find an object by name' }),
@@ -176,15 +176,16 @@ describe('Objects folders (U06, ZC-128)', () => {
     await user.keyboard('{Enter}');
     // Both selected bodies went in, and the cleared search shows them there.
     expect(rowNames()).toEqual(['Folder 1', 'Lug', 'Pin', 'Base']);
+    const [folder] = manager.document.objectFolders?.folders ?? [];
     expect(manager.document.objectFolders?.placements).toEqual({
-      [lug!]: expect.any(String),
-      [pin!]: expect.any(String)
+      [lug!]: folder?.id,
+      [pin!]: folder?.id
     });
   });
 
   it('drags the whole selection, including bodies a search hides', () => {
     const manager = model();
-    const [, lug, pin] = manager.document.bodyOrder as BodyId[];
+    const [, lug, pin] = manager.document.bodyOrder;
     manager.execute(
       commandFactories.createObjectFolder({
         folderId: 'folder_a',
