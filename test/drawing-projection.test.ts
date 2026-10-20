@@ -1166,9 +1166,10 @@ describe('D01 occlusion grid', () => {
 
   it('keeps cells small for dense bodies far apart on the page', () => {
     // Two 100 × 100 meshes of 20 000 triangles each, 10^6 mm apart on both
-    // page axes. One grid
-    // over the view put each body in a single cell, so every segment tested
-    // every triangle of a body; one grid per body keeps cells local.
+    // page axes: two bodies, or two solids of one patterned body (the exact
+    // adapter concatenates a pattern's solids into one body). Cells sized by
+    // the view put each in a single cell, so every segment tested every
+    // triangle; a dense cell now gets a finer grid over what it holds.
     const patch = (offset: number) => {
       const triangles: Triangle[] = [];
       for (let i = 0; i < 100; i += 1)
@@ -1211,20 +1212,24 @@ describe('D01 occlusion grid', () => {
       { minU: 0, minV: 0, maxU: 1e6 + 100, maxV: 1e6 + 100 },
       1e-9
     );
-    expect(single.maxCellLoad).toBeGreaterThan(10000);
+    expect(single.maxCellLoad).toBeLessThan(50);
     const index = new OcclusionIndex([near, far], 1e-9);
     expect(index.maxCellLoad).toBeLessThan(50);
-    // It still answers across both bodies, and finds their outlines.
-    expect(index.occluded(50.5, 50.2, 1)).toBe(true);
-    expect(index.occluded(1e6 + 50.5, 1e6 + 50.2, 1)).toBe(true);
-    expect(index.occluded(5e5, 5e5, 1)).toBe(false);
-    // A diagonal from before the first body to past the second: its
-    // footprint crossings start at the first's corner and end at the
-    // second's far corner.
-    const cuts = index.crossings(-10, -10, 1, 1e6 + 110, 1e6 + 110, 1);
-    const footprint = cuts.filter((cut) => !cut.depth).map((cut) => cut.t);
+    const patterned = new OcclusionIndex([[...near, ...far]], 1e-9);
+    expect(patterned.maxCellLoad).toBeLessThan(50);
     const span = 1e6 + 120;
-    expect(footprint.at(0)! * span - 10).toBeCloseTo(0, 4);
-    expect(footprint.at(-1)! * span - 10).toBeCloseTo(1e6 + 100, 4);
+    for (const query of [single, index, patterned]) {
+      // Each still answers across both solids, and finds their outlines.
+      expect(query.occluded(50.5, 50.2, 1)).toBe(true);
+      expect(query.occluded(1e6 + 50.5, 1e6 + 50.2, 1)).toBe(true);
+      expect(query.occluded(5e5, 5e5, 1)).toBe(false);
+      // A diagonal from before the first solid to past the second: its
+      // footprint crossings start at the first's corner and end at the
+      // second's far corner.
+      const cuts = query.crossings(-10, -10, 1, 1e6 + 110, 1e6 + 110, 1);
+      const footprint = cuts.filter((cut) => !cut.depth).map((cut) => cut.t);
+      expect(footprint.at(0)! * span - 10).toBeCloseTo(0, 4);
+      expect(footprint.at(-1)! * span - 10).toBeCloseTo(1e6 + 100, 4);
+    }
   });
 });
