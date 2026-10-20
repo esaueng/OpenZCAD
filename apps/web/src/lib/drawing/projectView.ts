@@ -684,18 +684,22 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     }
   });
 
-  const lines: number[][] = [];
+  // Each line keeps its body's scale: a cutoff for degenerate or sliver
+  // output must not grow with empty paper between bodies far apart.
+  const lines: { points: number[]; scale: number }[] = [];
   input.bodies.forEach((body, bodyIndex) => {
-    for (const edge of body.edges) lines.push(Array.from(edge));
+    const scale = scales[bodyIndex]!;
+    for (const edge of body.edges)
+      lines.push({ points: Array.from(edge), scale });
     for (const silhouette of bodySilhouettes(
       body,
       frame,
-      scales[bodyIndex]! * 1e-7,
+      scale * 1e-7,
       meshes[bodyIndex]
     ))
-      lines.push(silhouette.points);
+      lines.push({ points: silhouette.points, scale });
   });
-  for (const line of lines)
+  for (const { points: line } of lines)
     for (let i = 0; i + 2 < line.length; i += 3) {
       const [u, v] = project(line[i]!, line[i + 1]!, line[i + 2]!);
       bounds.minU = Math.min(bounds.minU, u);
@@ -719,7 +723,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
 
   const visible: Float64Array[] = [];
   const hidden: Float64Array[] = [];
-  const emit = (points: number[], isHidden: boolean) => {
+  const emit = (points: number[], isHidden: boolean, scale: number) => {
     if (points.length < 6) return;
     let length = 0;
     for (let i = 3; i < points.length; i += 3)
@@ -728,7 +732,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
         points[i + 1]! - points[i - 2]!,
         points[i + 2]! - points[i - 1]!
       );
-    if (length <= span * 1e-9) return;
+    if (length <= scale * 1e-9) return;
     if (isHidden && !input.hiddenLines) return;
     const flat = new Float64Array((points.length / 3) * 2);
     let drawn = 0;
@@ -739,16 +743,16 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       if (j > 0) drawn += Math.hypot(u - flat[j - 2]!, v - flat[j - 1]!);
     }
     // An edge running along the view direction projects to a point.
-    if (drawn <= span * 1e-9) return;
+    if (drawn <= scale * 1e-9) return;
     (isHidden ? hidden : visible).push(flat);
   };
 
   // Corner artifacts shorter than this, in projection, take their
   // neighbours' state: where an edge meets a face's plane at its own end,
   // the occlusion tolerance leaves a sliver that is neither clearly in front
-  // nor behind, and no drawing wants it.
-  const minPiece = span * 1e-4;
-  for (const line of lines) {
+  // nor behind, and no drawing wants it. The cutoff is the line's own body's.
+  for (const { points: line, scale } of lines) {
+    const minPiece = scale * 1e-4;
     const count = Math.floor(line.length / 3);
     if (count < 2) continue;
     const point = (index: number, f: number) => [
@@ -883,7 +887,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
           kinds[p] === 'end'
         )
           run.push(points[p * 3]!, points[p * 3 + 1]!, points[p * 3 + 2]!);
-      emit(run, pieces[index]!.hidden);
+      emit(run, pieces[index]!.hidden, scale);
       start = index + 1;
     }
   }

@@ -684,48 +684,48 @@ describe('D01 occlusion tolerance', () => {
     ).toEqual([]);
   });
 
-  it('keeps small bodies far apart along the view occluding each other', () => {
-    /** An axis-aligned box as a projection body: 12 outward triangles, 12 edges. */
-    const cuboid = (o: number[], s: number) => {
-      const c = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => [
-        o[0]! + (k & 1 ? s : 0),
-        o[1]! + (k & 2 ? s : 0),
-        o[2]! + (k & 4 ? s : 0)
-      ]);
-      const quads = [
-        [0, 2, 3, 1],
-        [4, 5, 7, 6],
-        [0, 1, 5, 4],
-        [2, 6, 7, 3],
-        [1, 3, 7, 5],
-        [0, 4, 6, 2]
-      ];
-      const pairs = [
-        [0, 1],
-        [2, 3],
-        [4, 5],
-        [6, 7],
-        [0, 2],
-        [1, 3],
-        [4, 6],
-        [5, 7],
-        [0, 4],
-        [1, 5],
-        [2, 6],
-        [3, 7]
-      ];
-      return {
-        vertices: Float64Array.from(c.flat()),
-        indices: Uint32Array.from(
-          quads.flatMap(([a, b, cc, d]) => [a!, b!, cc!, a!, cc!, d!])
-        ),
-        faces: quads.map((_, k) => ({
-          triangleStart: k * 2,
-          triangleCount: 2
-        })),
-        edges: pairs.map(([a, b]) => [...c[a!]!, ...c[b!]!])
-      };
+  /** An axis-aligned box as a projection body: 12 outward triangles, 12 edges. */
+  const cuboid = (o: number[], s: number) => {
+    const c = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => [
+      o[0]! + (k & 1 ? s : 0),
+      o[1]! + (k & 2 ? s : 0),
+      o[2]! + (k & 4 ? s : 0)
+    ]);
+    const quads = [
+      [0, 2, 3, 1],
+      [4, 5, 7, 6],
+      [0, 1, 5, 4],
+      [2, 6, 7, 3],
+      [1, 3, 7, 5],
+      [0, 4, 6, 2]
+    ];
+    const pairs = [
+      [0, 1],
+      [2, 3],
+      [4, 5],
+      [6, 7],
+      [0, 2],
+      [1, 3],
+      [4, 6],
+      [5, 7],
+      [0, 4],
+      [1, 5],
+      [2, 6],
+      [3, 7]
+    ];
+    return {
+      vertices: Float64Array.from(c.flat()),
+      indices: Uint32Array.from(
+        quads.flatMap(([a, b, cc, d]) => [a!, b!, cc!, a!, cc!, d!])
+      ),
+      faces: quads.map((_, k) => ({
+        triangleStart: k * 2,
+        triangleCount: 2
+      })),
+      edges: pairs.map(([a, b]) => [...c[a!]!, ...c[b!]!])
     };
+  };
+  it('keeps small bodies far apart along the view occluding each other', () => {
     // A 2 mm cube at the origin, and a 1 mm cube 10^7 mm behind it.
     const near = cuboid([0, 0, 0], 2);
     const far = cuboid([0.5, 1e7, 0.5], 1);
@@ -738,6 +738,22 @@ describe('D01 occlusion tolerance', () => {
       u > 0.49 && u < 1.51 && v > 0.49 && v < 1.51;
     expect(onLine(result.visible, insideFar)).toEqual([]);
     expect(onLine(result.hidden, insideFar).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('keeps the short edges of a small body far across the view', () => {
+    // A 0.005 mm cube at the origin and a 1 mm cube 10^7 mm along the page:
+    // a view-wide cutoff (10^-9 of the span is 0.01 mm) would drop every
+    // edge of the small one.
+    const small = cuboid([0, 0, 0], 0.005);
+    const big = cuboid([1e7, 0, 0], 1);
+    const result = projectView({
+      orientation: 'front',
+      hiddenLines: true,
+      bodies: [small, big]
+    });
+    const insideSmall = (u: number, v: number) =>
+      u > -1e-4 && u < 0.0051 && v > -1e-4 && v < 0.0051;
+    expect(onLine(result.visible, insideSmall)).toHaveLength(4);
   });
 
   it('keeps a short visible gap beside an interior sample of a curved edge', () => {
