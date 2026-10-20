@@ -754,7 +754,7 @@ export function wouldExceedCap(
     }
   }
   // An existing column, or a full dock's outermost one, may be parked.
-  return computePanelGeometry(placed, stage).parked[id] === true;
+  return arrangedGeometry(placed, stage).parked[id] === true;
 }
 
 /**
@@ -765,7 +765,7 @@ export function defaultFloatRect(
   layout: PanelLayout<PanelEntry>,
   stage: PanelStage
 ): Rect {
-  const geometry = computePanelGeometry(layout, stage);
+  const geometry = arrangedGeometry(layout, stage);
   const w = clamp(geometry.columnWidth, FLOAT_MIN_WIDTH, FLOAT_MAX_WIDTH);
   return clampFloatRect(
     {
@@ -1225,7 +1225,7 @@ export function isPanelParked(
   id: PanelId,
   stage: PanelStage
 ): boolean {
-  return computePanelGeometry(layout, stage).parked[id];
+  return arrangedGeometry(layout, stage).parked[id];
 }
 
 /**
@@ -1270,7 +1270,7 @@ export function togglePanel(
   if (
     stage &&
     stage.width <= PANEL_PHONE_MAX_WIDTH &&
-    computePanelGeometry(layout, stage).phonePanel !== id
+    arrangedGeometry(layout, stage).phonePanel !== id
   ) {
     return notePanelUsed(layout, id);
   }
@@ -1685,6 +1685,23 @@ function openByRecency(layout: PanelLayout<PanelEntry>): PanelId[] {
 }
 
 /**
+ * The geometry as arranged, ignoring Hide all: what parking, placement and
+ * the phone lane are judged against, so hiding the panels cannot change
+ * where they go.
+ */
+function arrangedGeometry(
+  layout: PanelLayout<PanelEntry>,
+  stage: PanelStage
+): PanelGeometry {
+  return computePanelGeometry(
+    layout.options.hidden
+      ? { ...layout, options: { ...layout.options, hidden: false } }
+      : layout,
+    stage
+  );
+}
+
+/**
  * The rectangles a layout takes on a stage. A projection only: columns past
  * the cap are parked, a phone-width stage shows one panel and no docks or
  * windows, short columns scroll and windows stay inside the stage, all
@@ -1697,7 +1714,12 @@ export function computePanelGeometry(
   const insets = insetsOf(stage);
   const columnWidth = columnWidthOf(layout.options);
   const phone = stage.width <= PANEL_PHONE_MAX_WIDTH;
-  const docked = dockedCounts(layout, stage.width, columnWidth, insets);
+  // Hide all projects nothing: no rectangles, no reserved dock width, rails
+  // at the screen edges. The stored arrangement is untouched.
+  const hidden = layout.options.hidden;
+  const docked = hidden
+    ? { left: 0, right: 0 }
+    : dockedCounts(layout, stage.width, columnWidth, insets);
   const dock = {
     top: insets.top,
     bottom: Math.max(insets.top, stage.height - insets.bottom)
@@ -1784,6 +1806,9 @@ export function computePanelGeometry(
         column * insets.gap
       : insets.gap + column * step;
 
+  if (hidden) {
+    return geometry;
+  }
   if (phone) {
     geometry.phonePanels = openByRecency(layout);
     geometry.phonePanel = geometry.phonePanels[0] ?? null;
