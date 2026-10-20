@@ -12,6 +12,7 @@ export type PolicyReasonCode =
   | 'external-commit-foreign-removal'
   | 'external-commit-proposal'
   | 'identity-not-listed'
+  | 'leaf-certified-before-removal'
   | 'leaf-key-reused'
   | 'leaf-without-role'
   | 'proposal-forbidden'

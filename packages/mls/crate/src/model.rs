@@ -306,6 +306,15 @@ impl LeafRemovals {
             .max()
     }
 
+    /// The newest removal of any leaf of this identity.
+    pub fn identity_cutoff(&self, user_id: &[u8]) -> Option<u64> {
+        self.records
+            .iter()
+            .filter(|r| r.user_id == user_id)
+            .map(|r| r.epoch)
+            .max()
+    }
+
     pub fn key_was_removed(&self, signature_key: &[u8]) -> bool {
         self.records.iter().any(|r| r.signature_key == signature_key)
     }

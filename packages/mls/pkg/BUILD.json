@@ -5,7 +5,7 @@
   "files": {
     "openzcad_mls.d.ts": "f1e8a5c4fc16eba7f6d8de82160a9a3d1dae85929c96afd65204af79b8e14c22",
     "openzcad_mls.js": "bd37ce8abe8663742d4ca14f64e1dcc151b76c80f8cdc18adfc806d29fa63294",
-    "openzcad_mls_bg.wasm": "3eaee5ea0f026bfc97f8e1c6167c4e9258e127b6617c27c912d3f9cd3493282e",
+    "openzcad_mls_bg.wasm": "e4d44bc72aa5200f50bf8e229db3b9f6fcb9f143b8f10a5b09f7874d75e45f72",
     "openzcad_mls_bg.wasm.d.ts": "e90c4bb17f51bf4bc7d846aa0b5b80057eaf4b0f3dee5b0839eef55d10fc1a00",
     "snippets/mls-rs-core-f99cdecbb456b09c/inline0.js": "6739cfe5b7f2a23d65a1c2a0912a691701e50793dca7c0f95c89dae38861c2f6"
   }

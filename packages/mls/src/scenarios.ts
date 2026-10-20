@@ -10,6 +10,7 @@ import { MlsError, type PolicyReasonCode } from './errors';
 import { generateStateKey } from './sealed';
 import type {
   CommitRequest,
+  LeafKeyCertification,
   DeviceDirectory,
   EpochChange,
   RejoinPsk
@@ -129,7 +130,7 @@ interface Device {
 
 interface DeviceRecord {
   status: 'active' | 'revoked';
-  leafKeys: Uint8Array[];
+  leafKeys: LeafKeyCertification[];
   replacedBy?: string;
 }
 
@@ -183,7 +184,8 @@ class World {
   async device(
     userId: string,
     deviceId: string,
-    certified = true
+    certified = true,
+    certifiedEpoch?: number
   ): Promise<Device> {
     const session = await this.mls.generate({
       projectId: this.projectId,
@@ -195,7 +197,11 @@ class World {
     // policy only reads the verified directory, so any bytes stand in here.
     const payload = await session.certificationPayload();
     await session.certify(payload.slice(-16));
-    if (certified) this.record(userId, deviceId).leafKeys.push(key);
+    if (certified) {
+      this.record(userId, deviceId).leafKeys.push(
+        certifiedEpoch === undefined ? { key } : { key, certifiedEpoch }
+      );
+    }
     const device: Device = {
       name: deviceId,
       userId,
@@ -214,7 +220,7 @@ class World {
     const self = {
       deviceId: d.deviceId,
       status: 'active' as const,
-      leafKeys: [await d.session.signatureKey()]
+      leafKeys: [{ key: await d.session.signatureKey() }]
     };
     const user = snapshot.users.find((u) => u.userId === d.userId);
     if (user)
@@ -1334,6 +1340,34 @@ const roleLimits = suite<RolesCast>({
         const v2 = await world.device('V', 'V2');
         await addDevices(world, v1, [a1, e1], [v2]);
         return agree([a1, e1, v1, v2]);
+      }
+    },
+    {
+      name: "refused: a recovery Add of a key certified before the identity's latest leaf removal; accepted when certified after",
+      async run({ world, a1, e1, v1 }) {
+        // E2 left by SelfRemove in an earlier step. E3's key was certified at
+        // epoch 1, before that, and held back.
+        const early = await world.device('E', 'E3', true, 1);
+        const kp = await early.session.keyPackage();
+        const local = await refused(
+          () => e1.session.commit({ add: [kp] }),
+          ['leaf-certified-before-removal']
+        );
+        const receivers = await refused(
+          () => tryCommit(e1, { add: [kp] }, [a1, v1]),
+          ['leaf-certified-before-removal']
+        );
+        world.retire(early);
+        const viewers = world.devices.filter(
+          (d) => d.userId === 'V' && d.live && d !== v1
+        );
+        const fresh = await world.device('E', 'E4', true, await epochOf(a1));
+        await addDevices(world, e1, [a1, v1, ...viewers], [fresh]);
+        const agreed = await agree([a1, e1, v1, ...viewers, fresh]);
+        await advance(world, a1, [e1, v1, ...viewers, fresh], {
+          remove: [await indexOf(fresh)]
+        });
+        return `own client ${local}; receivers ${receivers}; certified after: ${agreed}`;
       }
     },
     {

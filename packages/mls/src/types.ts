@@ -50,9 +50,20 @@ export interface DirectoryDevice {
   deviceId: string;
   status: 'active' | 'revoked';
   /** Leaf signing keys whose certification by this device was verified. */
-  leafKeys: Uint8Array[];
+  leafKeys: LeafKeyCertification[];
   /** For a revoked device: the device its revocation named as replacement. */
   replacedBy?: string;
+}
+
+export interface LeafKeyCertification {
+  /** The per-project leaf signing key. */
+  key: Uint8Array;
+  /**
+   * The group epoch from which the certification counts, as the device list
+   * records it. A recovery Add by a non-owner needs one no earlier than the
+   * identity's latest leaf removal.
+   */
+  certifiedEpoch?: number;
 }
 
 export interface RemovedLeaf {

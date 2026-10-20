@@ -166,7 +166,10 @@ function directoryJson(directory: DeviceDirectory): string {
       devices: user.devices.map((device) => ({
         deviceId: device.deviceId,
         status: device.status,
-        leafKeys: device.leafKeys.map(toHex),
+        leafKeys: device.leafKeys.map((leaf) => ({
+          key: toHex(leaf.key),
+          certifiedEpoch: leaf.certifiedEpoch ?? null
+        })),
         replacedBy: device.replacedBy ?? null
       }))
     }))

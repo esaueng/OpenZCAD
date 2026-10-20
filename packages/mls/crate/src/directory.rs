@@ -28,6 +28,9 @@ pub trait DeviceListVerifier: Send + Sync {
     /// First epoch of this group whose rejoin PSK the user's newest revoked
     /// device must not know; a rejoin PSK must be from this epoch or later.
     fn revocation_cutoff(&self, user_id: &[u8]) -> Option<u64>;
+    /// The group epoch from which this leaf key's certification counts, if
+    /// the device list records one.
+    fn certified_epoch(&self, user_id: &[u8], device_id: &[u8], signature_key: &[u8]) -> Option<u64>;
     /// The revoked device this device was certified to replace, if the
     /// revocation entry named it as the replacement.
     fn replaces(&self, user_id: &[u8], device_id: &[u8]) -> Option<Vec<u8>>;
@@ -36,7 +39,9 @@ pub trait DeviceListVerifier: Send + Sync {
 #[derive(Clone, Debug, Default)]
 pub struct DeviceEntry {
     pub revoked: bool,
-    pub leaf_keys: Vec<Vec<u8>>,
+    /// Verified leaf keys, each with the group epoch its certification
+    /// took effect in, when the device list records one.
+    pub leaf_keys: Vec<(Vec<u8>, Option<u64>)>,
     pub replaced_by: Option<Vec<u8>>,
 }
 
@@ -58,7 +63,7 @@ impl DeviceListVerifier for DeviceDirectory {
         };
         if device.revoked {
             CredentialStatus::Revoked
-        } else if device.leaf_keys.iter().any(|k| k == signature_key) {
+        } else if device.leaf_keys.iter().any(|(k, _)| k == signature_key) {
             CredentialStatus::Certified
         } else {
             CredentialStatus::Unknown
@@ -67,6 +72,14 @@ impl DeviceListVerifier for DeviceDirectory {
 
     fn revocation_cutoff(&self, user_id: &[u8]) -> Option<u64> {
         self.users.get(user_id).and_then(|u| u.revocation_cutoff)
+    }
+
+    fn certified_epoch(&self, user_id: &[u8], device_id: &[u8], signature_key: &[u8]) -> Option<u64> {
+        self.users
+            .get(user_id)
+            .and_then(|u| u.devices.get(device_id))
+            .and_then(|d| d.leaf_keys.iter().find(|(k, _)| k == signature_key))
+            .and_then(|(_, epoch)| *epoch)
     }
 
     fn replaces(&self, user_id: &[u8], device_id: &[u8]) -> Option<Vec<u8>> {
@@ -123,9 +136,17 @@ struct DeviceJson {
     device_id: String,
     status: String,
     #[serde(default)]
-    leaf_keys: Vec<String>,
+    leaf_keys: Vec<LeafKeyJson>,
     #[serde(default)]
     replaced_by: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct LeafKeyJson {
+    key: String,
+    #[serde(default)]
+    certified_epoch: Option<u64>,
 }
 
 impl DeviceDirectory {
@@ -144,7 +165,11 @@ impl DeviceDirectory {
                 let leaf_keys = device
                     .leaf_keys
                     .iter()
-                    .map(|k| hex::decode(k).map_err(|_| Error::input("leaf key is not hex")))
+                    .map(|k| {
+                        hex::decode(&k.key)
+                            .map(|key| (key, k.certified_epoch))
+                            .map_err(|_| Error::input("leaf key is not hex"))
+                    })
                     .collect::<Res<Vec<_>>>()?;
                 let entry = DeviceEntry {
                     revoked,

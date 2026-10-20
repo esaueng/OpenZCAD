@@ -405,6 +405,31 @@ impl ProjectRules {
                 )),
                 Some(_) => {}
             }
+            // A recovery Add (by a non-owner) must bring a credential
+            // certified after the identity's latest leaf removal (ADR-024), so
+            // a key certified earlier and held back cannot return without a
+            // fresh rejoin proof.
+            if sender_role != Role::Owner {
+                if let Some(cutoff) = removals.identity_cutoff(&credential.user_id) {
+                    let certified = directory.certified_epoch(
+                        &credential.user_id,
+                        &credential.device_id,
+                        identity.signature_key.as_bytes(),
+                    );
+                    if certified.is_none_or(|epoch| epoch < cutoff) {
+                        reasons.push(Reason::new(
+                            "leaf-certified-before-removal",
+                            format!(
+                                "{} was certified {} the identity's latest leaf removal (epoch {cutoff})",
+                                describe(&credential),
+                                certified.map_or("at no recorded epoch, not after".to_string(), |e| format!(
+                                    "at epoch {e}, before"
+                                ))
+                            ),
+                        ));
+                    }
+                }
+            }
         }
 
         // Nobody stays in the tree without a role: dropping an identity from
