@@ -35,6 +35,15 @@ and `OFFSET_PERF_AREA` (default: the largest +X planar face) choose the edit.
 `OFFSET_PERF_TRACE=1` also attributes the expensive kernel methods to their
 calling frames; it is off by default because it is noisy and inflates the
 methods it traces. `OFFSET_PERF_FULL=1` also times a second edit and the undo.
+`OFFSET_PERF_PREVIEW=1` with `OFFSET_PERF_PREVIEW_TICKS=N` runs N
+source-relative drag ticks. Above three ticks it prints a drag summary:
+accepted and refused tick quantiles, per-method medians, and the growth of the
+adapter kernel's arena slots and linear memory. `OFFSET_PERF_CALLS_OUT` writes
+each report's ordered kernel calls as JSONL. `OFFSET_PERF_BACKGROUND_BODIES`
+adds unrelated box bodies ahead of the import, so work that grows with the
+document shows up. The
+[2026-10-19 drag baseline](qa/face-drag-kernel-calls-2026-10-19.md) uses all
+three.
 `REMUS_WASM_PKG` and `REMUS_WASM_IO_PKG` run it against a local Remus build
 through the `vitest.config.ts` overlay, without touching the pin or lockfile:
 

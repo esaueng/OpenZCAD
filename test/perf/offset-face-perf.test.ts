@@ -25,8 +25,24 @@
  *   OFFSET_PERF_KERNEL_PHASES=1  Drain opt-in kernel substage timings.
  *   OFFSET_PERF_PREVIEW=1 Time geometry-only previews where supported; legacy
  *                         builds use their complete-sync preview path.
+ *   OFFSET_PERF_PREVIEW_TICKS  Warm previews after the first (default 3). Each
+ *                         is source-relative, like a drag tick. Distances walk
+ *                         0.2 apart away from the offset and back every 20
+ *                         ticks, so long drags revisit values as real ones do.
+ *                         With more than 3, a drag summary reports per-tick
+ *                         wall/kernel quantiles, per-method medians and the
+ *                         kernel's slot and linear-memory growth.
  *   OFFSET_PERF_DEFER_TOPOLOGY=1 Use the drag path with display faces and
  *                         deferred edge topology/recognition/output naming.
+ *   OFFSET_PERF_BACKGROUND_BODIES  Unrelated box bodies created before the
+ *                         import (default 0), to expose work that grows with
+ *                         the document rather than with the edit.
+ *   OFFSET_PERF_CALLS_OUT Optional JSONL of each report's ordered kernel calls,
+ *                         consecutive repeats of a method merged into one
+ *                         `{ method, count, ms }` run.
+ *   OFFSET_PERF_BROADCAST=1  After the edited sync, time the app's follow-up
+ *                         broadcast sync of the same document (empty lineage
+ *                         demand).
  *   OFFSET_PERF_FULL=1    Also time a second edit from the same base and the
  *                         undo back to the import.
  *   OFFSET_PERF_SAMPLES  Alternating warm edits (default 0). A fresh exact
@@ -87,6 +103,9 @@ const targetArea =
 const traceCallers = process.env.OFFSET_PERF_TRACE === '1';
 const fullRun = process.env.OFFSET_PERF_FULL === '1';
 const kernelPhases = process.env.OFFSET_PERF_KERNEL_PHASES === '1';
+const previewTicks = Number(process.env.OFFSET_PERF_PREVIEW_TICKS ?? 3);
+const backgroundBodies = Number(process.env.OFFSET_PERF_BACKGROUND_BODIES ?? 0);
+const callsOut = process.env.OFFSET_PERF_CALLS_OUT;
 let phaseProbe:
   | (RemusKernel & {
       setPerformanceTracing?: (enabled: boolean) => void;
@@ -119,14 +138,67 @@ interface Tally {
   count: number;
 }
 
+interface CallRun {
+  method: string;
+  count: number;
+  ms: number;
+}
+
 const methodTotals = new Map<string, Tally>();
 const callerTotals = new Map<string, Tally>();
+/** Ordered calls since the last report, repeats merged into runs. */
+const callRuns: CallRun[] = [];
+/** The adapter kernel that last restored or took a history checkpoint. */
+let adapterKernel: RemusKernel | undefined;
+/** Set while the harness itself queries the kernel, so it goes untallied. */
+let untallied = false;
 
 function tally(map: Map<string, Tally>, key: string, elapsed: number) {
   const entry = map.get(key) ?? { time: 0, count: 0 };
   entry.time += elapsed;
   entry.count += 1;
   map.set(key, entry);
+}
+
+function recordCall(method: string, elapsed: number) {
+  const last = callRuns.at(-1);
+  if (last?.method === method) {
+    last.count += 1;
+    last.ms += elapsed;
+  } else {
+    callRuns.push({ method, count: 1, ms: elapsed });
+  }
+}
+
+function resetTallies() {
+  methodTotals.clear();
+  callerTotals.clear();
+  callRuns.length = 0;
+}
+
+interface KernelMemory {
+  allocatedSlots: number;
+  retiredSlots: number;
+  linearMemoryBytes: number;
+  estimatedBytes: number;
+  checkpoints: number;
+}
+
+/** The adapter kernel's accounted arena state, read outside any report. */
+function kernelMemory(): KernelMemory | undefined {
+  if (!adapterKernel) return undefined;
+  untallied = true;
+  try {
+    return JSON.parse(adapterKernel.checkpointMemoryStats()) as KernelMemory;
+  } finally {
+    untallied = false;
+  }
+}
+
+/** Nearest-rank percentile of an unsorted sample. */
+function percentile(values: readonly number[], percent: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.max(0, Math.ceil((sorted.length * percent) / 100) - 1)]!;
 }
 
 /** `name <- caller < caller ...`, with paths relative to the repository. */
@@ -165,12 +237,19 @@ function instrumentKernel(): () => void {
     Object.defineProperty(proto, name, {
       ...descriptor,
       value(this: unknown, ...args: unknown[]) {
+        if (untallied) return original.apply(this, args);
+        // The adapter can also run short-lived kernels; the one that keeps
+        // the history checkpoints is the session whose arena a drag grows.
+        if (name === 'restore' || name === 'checkpoint') {
+          adapterKernel = this as RemusKernel;
+        }
         const start = performance.now();
         try {
           return original.apply(this, args);
         } finally {
           const elapsed = performance.now() - start;
           tally(methodTotals, name, elapsed);
+          recordCall(name, elapsed);
           if (traceCallers && TRACED_METHODS.has(name)) {
             tally(callerTotals, callerKey(name), elapsed);
           }
@@ -185,6 +264,7 @@ function instrumentKernel(): () => void {
     phaseProbe?.setPerformanceTracing?.(false);
     phaseProbe?.free();
     phaseProbe = undefined;
+    adapterKernel = undefined;
   };
 }
 
@@ -214,17 +294,29 @@ function stageRecorder() {
   };
 }
 
+interface Report {
+  wall: number;
+  kernel: number;
+  methods: Map<string, Tally>;
+}
+
 function report(
   label: string,
   wall: number,
   stages: string[],
   geometryReadyMs: number | null,
   derived: DerivedState | GeometryReadyState
-): void {
+): Report {
   const methods = [...methodTotals.entries()].sort(
     (a, b) => b[1].time - a[1].time
   );
   const kernel = methods.reduce((sum, [, entry]) => sum + entry.time, 0);
+  if (callsOut) {
+    appendFileSync(
+      callsOut,
+      `${JSON.stringify({ label, wallMs: wall, kernelMs: kernel, calls: callRuns })}\n`
+    );
+  }
   if (process.env.OFFSET_PERF_OUT) {
     appendFileSync(
       process.env.OFFSET_PERF_OUT,
@@ -271,8 +363,9 @@ function report(
     );
   }
   console.log(`\n${lines.join('\n')}`);
-  methodTotals.clear();
-  callerTotals.clear();
+  const result = { wall, kernel, methods: new Map(methods) };
+  resetTallies();
+  return result;
 }
 
 /** Times one sync and prints its report. */
@@ -280,10 +373,10 @@ async function timedSync(
   adapter: ExactKernelAdapter,
   document: ProjectDocument,
   label: string,
-  stages: ReturnType<typeof stageRecorder>
+  stages: ReturnType<typeof stageRecorder>,
+  lineageDemand?: readonly BodyId[]
 ): Promise<DerivedState> {
-  methodTotals.clear();
-  callerTotals.clear();
+  resetTallies();
   stages.reset();
   const start = performance.now();
   let geometryReadyMs: number | null = null;
@@ -293,6 +386,7 @@ async function timedSync(
     undefined,
     undefined,
     {
+      ...(lineageDemand ? { lineageDemand } : {}),
       onGeometryReady: (geometry) => {
         geometryReadyMs = performance.now() - start;
         console.log(
@@ -339,10 +433,10 @@ async function timedFacePreview(
   adapter: ExactKernelAdapter,
   document: ProjectDocument,
   label: string,
-  stages: ReturnType<typeof stageRecorder>
-) {
-  methodTotals.clear();
-  callerTotals.clear();
+  stages: ReturnType<typeof stageRecorder>,
+  allowRefusal = false
+): Promise<Report & { refused: boolean }> {
+  resetTallies();
   stages.reset();
   const start = performance.now();
   const result =
@@ -352,9 +446,90 @@ async function timedFacePreview(
         })
       : await adapter.syncDocument(document, stages.listener);
   const elapsed = performance.now() - start;
-  report(label, elapsed, stages.lines(), elapsed, result);
-  expect(result.warnings).toEqual([]);
-  return result;
+  const timing = report(label, elapsed, stages.lines(), elapsed, result);
+  // A drag keeps the last accepted shape through kernel refusals, so warm
+  // ticks record them instead of failing.
+  if (!allowRefusal) expect(result.warnings).toEqual([]);
+  return { ...timing, refused: result.warnings.length > 0 };
+}
+
+/** Per-tick quantiles of a drag, and the kernel's arena growth across it. */
+function summarizeDrag(
+  ticks: readonly (Report & { refused: boolean })[],
+  before: KernelMemory | undefined,
+  after: KernelMemory | undefined
+): void {
+  // Refused ticks skip display work, so they are summarized apart from the
+  // accepted ones rather than pulling their quantiles down.
+  const accepted = ticks.filter((tick) => !tick.refused);
+  const refused = ticks.filter((tick) => tick.refused);
+  const quantiles = (values: readonly number[]) =>
+    values.length === 0
+      ? null
+      : {
+          p50: percentile(values, 50),
+          p95: percentile(values, 95),
+          max: Math.max(...values)
+        };
+  const names = new Set(accepted.flatMap((tick) => [...tick.methods.keys()]));
+  const methods = [...names]
+    .map((name) => {
+      const per = accepted.map((tick) => tick.methods.get(name));
+      return {
+        name,
+        p50: percentile(
+          per.map((entry) => entry?.time ?? 0),
+          50
+        ),
+        calls: percentile(
+          per.map((entry) => entry?.count ?? 0),
+          50
+        )
+      };
+    })
+    .sort((a, b) => b.p50 - a.p50);
+  const summary = {
+    label: 'drag summary',
+    ticks: ticks.length,
+    refused: refused.length,
+    wallMs: quantiles(accepted.map((tick) => tick.wall)),
+    kernelMs: quantiles(accepted.map((tick) => tick.kernel)),
+    refusedWallMs: quantiles(refused.map((tick) => tick.wall)),
+    methodsP50: methods,
+    memoryBefore: before,
+    memoryAfter: after
+  };
+  if (process.env.OFFSET_PERF_OUT) {
+    appendFileSync(process.env.OFFSET_PERF_OUT, `${JSON.stringify(summary)}\n`);
+  }
+  const line = (label: string, value: ReturnType<typeof quantiles>): string =>
+    value
+      ? `${label} p50 ${value.p50.toFixed(1)}  p95 ${value.p95.toFixed(1)}  max ${value.max.toFixed(1)} ms`
+      : `${label} none`;
+  const growth = (key: keyof KernelMemory) =>
+    before && after ? `${before[key]} -> ${after[key]}` : 'n/a';
+  console.log(
+    [
+      `\n=== drag summary: ${accepted.length} accepted, ${refused.length} refused warm ticks ===`,
+      line('accepted wall  ', summary.wallMs),
+      line('accepted kernel', summary.kernelMs),
+      line('refused wall   ', summary.refusedWallMs),
+      `allocated slots ${growth('allocatedSlots')}, retired slots ${growth('retiredSlots')}, linear memory ${growth('linearMemoryBytes')} bytes`,
+      '--- accepted per-tick method medians ---',
+      ...methods
+        .slice(0, METHOD_ROWS)
+        .map(
+          ({ name, p50, calls }) =>
+            `${name.padEnd(40)} ${p50.toFixed(1).padStart(9)} ms  x${calls}`
+        )
+    ].join('\n')
+  );
+}
+
+/** Distance of warm tick `index`: away from `offset` and back every 20. */
+function dragDistance(index: number): number {
+  const phase = (index + 1) % 20;
+  return offset - 0.2 * (phase <= 10 ? phase : 20 - phase);
 }
 
 /** The +X planar face nearest `area` in area, else the largest. */
@@ -380,7 +555,7 @@ function pickFace(faces: readonly FaceTopology[]): FaceTopology | undefined {
 it('records SDK calls made by the selected exact adapter', async () => {
   const restoreKernel = instrumentKernel();
   let adapter: ExactKernelAdapter | undefined;
-  methodTotals.clear();
+  resetTallies();
   try {
     adapter = await createExactKernelAdapter();
     const document = addPrimitiveFeature(
@@ -398,8 +573,7 @@ it('records SDK calls made by the selected exact adapter', async () => {
   } finally {
     adapter?.dispose();
     restoreKernel();
-    methodTotals.clear();
-    callerTotals.clear();
+    resetTallies();
   }
 });
 
@@ -411,9 +585,18 @@ it.skipIf(!stepPath)(
     try {
       adapter = await createExactKernelAdapter();
       const stages = stageRecorder();
-      const manager = new CommandManager(
-        createProjectDocument('Offset perf', toUserId('local_offset_perf'))
+      let initial = createProjectDocument(
+        'Offset perf',
+        toUserId('local_offset_perf')
       );
+      for (let index = 0; index < backgroundBodies; index++) {
+        initial = addPrimitiveFeature(initial, {
+          name: `Background box ${index + 1}`,
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 8, depth: 6 }
+        });
+      }
+      const manager = new CommandManager(initial);
       const sourceName = 'offset-perf.step';
       manager.execute(
         commandFactories.importStep({
@@ -435,7 +618,11 @@ it.skipIf(!stepPath)(
         stages
       );
       expect(derived0.warnings).toEqual([]);
-      const bodyId = derived0.exportableBodyIds[0] as BodyId;
+      // The edited body is the one the import added, not a background box.
+      const background = new Set<BodyId>(initial.bodyOrder);
+      const bodyId = derived0.exportableBodyIds.find(
+        (id) => !background.has(id)
+      ) as BodyId;
       const body0 = derived0.bodyRepresentations[bodyId]!;
       const faces = body0.topology?.faces ?? [];
       const bspline = faces.filter(
@@ -465,18 +652,25 @@ it.skipIf(!stepPath)(
       ]);
       if (process.env.OFFSET_PERF_PREVIEW === '1') {
         await timedFacePreview(adapter, edited, 'first face preview', stages);
-        for (let index = 0; index < 3; index++) {
-          const distance = offset - 0.2 * (index + 1);
-          const previewPlan = planAt(distance);
+        const memoryBefore = kernelMemory();
+        const ticks: (Report & { refused: boolean })[] = [];
+        for (let index = 0; index < previewTicks; index++) {
+          const previewPlan = planAt(dragDistance(index));
           expect(previewPlan?.kind).toBe('direct-edit');
-          await timedFacePreview(
-            adapter,
-            new CommandManager(base).runTransaction('Offset', [
-              previewPlan!.command
-            ]),
-            `warm face preview ${index + 1}`,
-            stages
+          ticks.push(
+            await timedFacePreview(
+              adapter,
+              new CommandManager(base).runTransaction('Offset', [
+                previewPlan!.command
+              ]),
+              `warm face preview ${index + 1}`,
+              stages,
+              previewTicks > 3
+            )
           );
+        }
+        if (previewTicks > 3) {
+          summarizeDrag(ticks, memoryBefore, kernelMemory());
         }
       }
       const derived1 = await timedSync(
@@ -485,6 +679,17 @@ it.skipIf(!stepPath)(
         `offset ${offset} sync`,
         stages
       );
+      if (process.env.OFFSET_PERF_BROADCAST === '1') {
+        // The app commits with a full-lineage sync, then the new document
+        // version triggers a broadcast sync that carries a lineage demand.
+        await timedSync(
+          adapter,
+          edited,
+          `offset ${offset} broadcast sync`,
+          stages,
+          []
+        );
+      }
       const body1 = derived1.bodyRepresentations[bodyId]!;
       let lastDocument = edited;
       let lastDerived = derived1;

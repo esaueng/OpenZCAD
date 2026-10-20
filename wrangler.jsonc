@@ -39,9 +39,10 @@
     "AUTH_SESSION_DAYS": "30",
     "DESKTOP_AUTH_ENABLED": "true",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAD_j6Y7NvXKtcxNX",
-    "AI_PROVIDER": "openai",
-    "AI_MODEL": "gpt-6-luna",
+    "AI_PROVIDER": "openrouter",
+    "AI_MODEL": "minimax/minimax-m3.1-flash:free",
     "AI_REASONING_EFFORT": "high",
+    "AI_DEPLOYMENT_FREE_ENABLED": "true",
     // Collaboration is open to every authenticated beta account. Authorization
     // still comes from project ownership/membership, and editor writes still
     // require the persisted project-wide lease.
@@ -72,11 +73,10 @@
   //   AUTH_OTP_PEPPER, TURNSTILE_SECRET_KEY, SETTINGS_ENCRYPTION_KEY,
   //   AI_IDENTITY_PEPPER
   // PREMIUM_USER_EMAILS is a server secret listing manually granted Premium accounts.
-  // AI_DEPLOYMENT_ALLOWED_EMAILS is deliberately absent: it is the allowlist
-  // for Free accounts spending the deployment's own provider key.
-  // Without either an allowlist or Premium membership, deployment-funded AI
-  // is unavailable.
-  // Premium membership also grants deployment-funded AI eligibility.
+  // OPENROUTER_API_KEY supplies the built-in free assistant. All verified
+  // accounts are eligible while AI_DEPLOYMENT_FREE_ENABLED is true and the
+  // configured model is an OpenRouter :free model. Paid models still require
+  // AI_DEPLOYMENT_ALLOWED_EMAILS or Premium membership.
   // PROJECT_COLLABORATION_CANARY_EMAILS is not required while the global beta
   // rollout above is enabled. It remains an optional scoped fallback if those
   // flags are closed again.

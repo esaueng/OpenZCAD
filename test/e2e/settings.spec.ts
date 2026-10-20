@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import { DEFAULT_APP_SETTINGS } from '@openzcad/shared';
 import {
   askAssistant,
   createProject,
@@ -11,6 +12,61 @@ import {
   test,
   waitForSurfacesToSettle
 } from './openzcad-fixtures';
+
+test('discloses free built-in AI data use and lets users choose a personal model', async ({
+  page
+}) => {
+  await stubApi(page, { assistantEnabled: true });
+  await page.route('**/api/settings', (route) =>
+    route.fulfill({
+      json: {
+        settings: {
+          ...DEFAULT_APP_SETTINGS,
+          assistant: { ...DEFAULT_APP_SETTINGS.assistant, enabled: true }
+        },
+        revision: 1,
+        synced: true,
+        credential: { stored: false, storageAvailable: true },
+        effectiveAssistant: {
+          configured: true,
+          source: 'deployment',
+          provider: 'openrouter',
+          model: 'minimax/minimax-m3.1-flash:free',
+          reasoningEffort: 'high'
+        }
+      }
+    })
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'AI Assistant', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settings).toContainText('minimax/minimax-m3.1-flash:free');
+  await expect(
+    settings.getByText(/Free with no personal API key/)
+  ).toBeVisible();
+  await expect(
+    settings.getByText(/may retain this data or use it for training/)
+  ).toBeVisible();
+  await expect(
+    settings.getByRole('link', { name: 'OpenRouter data policies' })
+  ).toHaveAttribute(
+    'href',
+    'https://openrouter.ai/docs/guides/privacy/provider-logging'
+  );
+  await settings.getByRole('radio', { name: 'Personal token' }).click();
+  await expect(settings.getByLabel('AI model', { exact: true })).toBeVisible();
+  await settings.getByLabel('AI model', { exact: true }).fill('another/model');
+  await expect(settings.getByLabel('AI model', { exact: true })).toHaveValue(
+    'another/model'
+  );
+  await expect(
+    settings.getByLabel('Personal API token', { exact: true })
+  ).toBeVisible();
+  await expect(
+    settings.getByText(/That provider’s data retention, training policies/)
+  ).toBeVisible();
+});
 
 test('hides profile details by default, keeps disclosure across reopen and resets it on reload', async ({
   page

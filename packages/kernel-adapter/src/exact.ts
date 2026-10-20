@@ -102,7 +102,9 @@ import type {
   DxfFaceSelector,
   ExactBuildResult,
   ExactShape,
+  ImportedStepDiagnostics,
   MeasuredShape,
+  MeasurementWitness,
   PreparedShapeMeasurement
 } from './exact-types';
 export type { DxfFaceSelector } from './exact-types';
@@ -113,7 +115,10 @@ import {
   measureOwnedFaceGeometry,
   withFaceGeometryMemo
 } from './exact-measure';
-import { PreviewFaceGeometryCache } from './preview-face-geometry-cache';
+import {
+  PreviewFaceGeometryCache,
+  faceContentDigestsOf
+} from './preview-face-geometry-cache';
 import {
   hasRefusingFeatureWarning,
   raiseFeatureWarning
@@ -231,8 +236,11 @@ import {
   measuredShapeBytes,
   measurementWitness,
   measurementProvenanceKey,
+  tailCheckpointIndices,
   type HistoryCheckpointEntry,
   type MeasuredBodyCacheEntry,
+  type PreviewDisplay,
+  type PreviewDisplayCacheEntry,
   type CheckpointMemoryStats,
   type RebuildCacheEvent
 } from './exact-history-cache';
@@ -1150,6 +1158,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   >();
   private measuredShapeCacheBytes = 0;
   /**
+   * Drag previews' own display projections, for bodies whose last complete
+   * measurement no longer matches: a body a drag rebuilt with new handles is
+   * otherwise meshed again on every tick. Same lifetime, key and witness check
+   * as {@link measuredShapeCache}, under its own byte budget of the same size.
+   */
+  private readonly previewDisplayCache = new Map<
+    BodyId,
+    PreviewDisplayCacheEntry
+  >();
+  private previewDisplayCacheBytes = 0;
+  /**
    * Per body, the linear display deflection each of its solids was last
    * meshed at (see `heldDisplayTessellation`). A display policy, not a
    * geometry cache: it survives history-cache invalidation (a sync whose
@@ -1194,10 +1213,151 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     this.primitiveBuildCache.clear();
     this.measuredShapeCache.clear();
     this.measuredShapeCacheBytes = 0;
+    this.previewDisplayCache.clear();
+    this.previewDisplayCacheBytes = 0;
     this.topologyWitnessStore.clear();
     if (this.historyKernel) {
       this.historyKernel.free();
       this.historyKernel = null;
+    }
+  }
+
+  /**
+   * What a drag preview can publish for a body without meshing it: its last
+   * complete measurement, else the display a previous preview projected,
+   * when the body is the same entity it was then. That means the same solid
+   * handles (handles are never reused, see {@link MeasuredBodyCacheEntry}),
+   * lineage and import diagnostics, and a recounted handle/validation
+   * witness that matches. Any disagreement returns null and the preview
+   * meshes the body as before. The result shares the cached buffers: the
+   * preview's final `structuredClone` detaches everything it publishes, so
+   * callers never alias the cache.
+   */
+  private reusedPreviewDisplay(
+    kernel: RemusKernel,
+    bodyId: BodyId,
+    shape: ExactShape,
+    strict: boolean,
+    imported: ImportedStepDiagnostics | undefined
+  ): PreviewDisplay | null {
+    const solidKey = shape.solids.join(',');
+    const provenanceKey = measurementProvenanceKey(shape, imported);
+    const keyed = (entry: {
+      strict: boolean;
+      solidKey: string;
+      provenanceKey: string;
+    }) =>
+      entry.strict === strict &&
+      entry.solidKey === solidKey &&
+      entry.provenanceKey === provenanceKey;
+    const complete = this.measuredShapeCache.get(bodyId);
+    const completeKeyed =
+      complete !== undefined &&
+      complete.analysisKey === undefined &&
+      keyed(complete);
+    const previewed = this.previewDisplayCache.get(bodyId);
+    if (!completeKeyed && !(previewed && keyed(previewed))) return null;
+    let witness: string;
+    try {
+      witness = JSON.stringify(measurementWitness(kernel, shape, strict));
+    } catch {
+      return null;
+    }
+    if (completeKeyed && witness === JSON.stringify(complete.witness)) {
+      const measured = complete.measured;
+      return {
+        vertices: measured.vertices,
+        indices: measured.indices,
+        bbox: measured.bbox,
+        faceCount: measured.faceCount,
+        faces: measured.topology.faces.map((face) => ({
+          topologyId: face.topologyId,
+          hash: face.hash,
+          triangleStart: face.triangleStart,
+          triangleCount: face.triangleCount,
+          geometry:
+            face.geometry?.surfaceType === 'bspline' ? undefined : face.geometry
+        }))
+      };
+    }
+    if (
+      previewed &&
+      keyed(previewed) &&
+      witness === JSON.stringify(previewed.witness)
+    ) {
+      return previewed.display;
+    }
+    return null;
+  }
+
+  /**
+   * Keeps a preview's display projection of a body for later previews. The
+   * witness is the one a matching body recounts: the gate above admitted the
+   * body only with zero relaxed (and, when strict, strict) errors, so a body
+   * whose live verdict differs simply misses.
+   */
+  private storePreviewDisplay(
+    kernel: RemusKernel,
+    bodyId: BodyId,
+    shape: ExactShape,
+    strict: boolean,
+    imported: ImportedStepDiagnostics | undefined,
+    display: PreviewDisplay
+  ): void {
+    this.evictPreviewDisplay(bodyId);
+    const handles = (values: Uint32Array) =>
+      Array.from(values).sort((a, b) => a - b);
+    let witness: MeasurementWitness;
+    try {
+      witness = {
+        solids: shape.solids.map((solid) => ({
+          solid,
+          faces: handles(kernel.getSolidFaces(solid)),
+          edges: handles(kernel.getSolidEdges(solid)),
+          vertices: handles(kernel.getSolidVertices(solid)),
+          relaxedErrors: 0,
+          strictErrors: strict ? 0 : null
+        }))
+      };
+    } catch {
+      return;
+    }
+    const solidKey = shape.solids.join(',');
+    const provenanceKey = measurementProvenanceKey(shape, imported);
+    const bytes =
+      display.vertices.byteLength +
+      display.indices.byteLength +
+      new TextEncoder().encode(
+        JSON.stringify(display.faces) +
+          JSON.stringify(witness) +
+          provenanceKey +
+          solidKey
+      ).byteLength;
+    if (bytes > this.maxMeasuredShapeCacheBytes) return;
+    this.previewDisplayCache.set(bodyId, {
+      provenanceKey,
+      witness,
+      solidKey,
+      strict,
+      bytes,
+      display
+    });
+    this.previewDisplayCacheBytes += bytes;
+    for (const [key, existing] of this.previewDisplayCache) {
+      if (this.previewDisplayCacheBytes <= this.maxMeasuredShapeCacheBytes) {
+        break;
+      }
+      if (key === bodyId) continue;
+      this.previewDisplayCache.delete(key);
+      this.previewDisplayCacheBytes -= existing.bytes;
+    }
+  }
+
+  private evictPreviewDisplay(bodyId: BodyId): void {
+    const entry = this.previewDisplayCache.get(bodyId);
+    if (entry) {
+      this.previewDisplayCache.delete(bodyId);
+      this.previewDisplayCacheBytes -= entry.bytes;
     }
   }
 
@@ -1214,6 +1374,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     entry: MeasuredBodyCacheEntry
   ): void {
     this.evictMeasuredShape(bodyId);
+    // A complete measurement supersedes any preview display of the body.
+    this.evictPreviewDisplay(bodyId);
     if (
       entry.bytes > this.maxMeasuredShapeCacheBytes ||
       !entry.measured.valid ||
@@ -1312,8 +1474,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.historyKernel !== null &&
       this.historyReplayWork >= MAX_HISTORY_REPLAY_WORK;
     if (recycled) this.invalidateHistoryCache();
-    const checkpointIndices = historyCheckpointIndices(
+    const stableCheckpointIndices = historyCheckpointIndices(
       features.length,
+      this.maxHistoryCheckpoints
+    );
+    // A drag's tail is the edit's source; a complete sync's is its last
+    // feature. See `tailCheckpointIndices`.
+    const checkpointIndices = tailCheckpointIndices(
+      stableCheckpointIndices,
+      features.length - (deferredDirectEditFeatureId ? 2 : 1),
       this.maxHistoryCheckpoints
     );
     const checkpointIndexSet = new Set(checkpointIndices);
@@ -1401,18 +1570,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.historyScopeKey === scopeKey
     ) {
       let prefix = -1;
-      const limit = Math.min(
-        this.historyCheckpoints.length,
-        checkpointIndices.length
-      );
-      for (let index = 0; index < limit; index += 1) {
+      // A previous sync's tail that this one no longer schedules. It is the
+      // last retained checkpoint; it is restored and then discarded, so the
+      // checkpoints this replay takes stay aligned with the schedule.
+      let staleTail = false;
+      for (let index = 0; index < this.historyCheckpoints.length; index += 1) {
         const entry = this.historyCheckpoints[index]!;
         const from =
           index === 0
             ? 0
             : this.historyCheckpoints[index - 1]!.featureIndex + 1;
         if (
-          entry.featureIndex !== checkpointIndices[index] ||
           entry.digests.length !== entry.featureIndex - from + 1 ||
           entry.digests.some(
             (digest, offset) =>
@@ -1420,6 +1588,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               digest !== probedDigests[from + offset]
           )
         ) {
+          break;
+        }
+        if (entry.featureIndex !== checkpointIndices[index]) {
+          if (index === this.historyCheckpoints.length - 1) {
+            prefix = index;
+            staleTail = true;
+          }
           break;
         }
         prefix = index;
@@ -1433,25 +1608,28 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       );
       if (prefix >= 0 || reusePrimitiveTail) {
         try {
+          const restoredEntry =
+            prefix >= 0 ? this.historyCheckpoints[prefix]! : undefined;
+          // Checkpoints from here on are dropped; a stale tail drops itself.
+          const kept = staleTail ? prefix : prefix + 1;
           if (reusePrimitiveTail) {
             // Preserve independent tail handles. Dropping checkpoints frees
             // snapshots without rolling the current topology back.
-            if (this.historyCheckpoints.length > prefix + 1) {
+            if (this.historyCheckpoints.length > kept) {
               kernel.discardCheckpoint(
-                this.historyCheckpoints[prefix + 1]!.checkpointId
+                this.historyCheckpoints[kept]!.checkpointId
               );
             }
           } else {
-            kernel.restore(this.historyCheckpoints[prefix]!.checkpointId);
+            kernel.restore(restoredEntry!.checkpointId);
+            if (staleTail)
+              kernel.discardCheckpoint(restoredEntry!.checkpointId);
             this.primitiveBuildCache.restoredThrough(restoredFeatures - 1);
           }
-          for (const entry of this.historyCheckpoints.slice(prefix + 1)) {
+          for (const entry of this.historyCheckpoints.slice(kept)) {
             this.historyCheckpointOwners.delete(entry.checkpointId);
           }
-          this.historyCheckpoints = this.historyCheckpoints.slice(
-            0,
-            prefix + 1
-          );
+          this.historyCheckpoints = this.historyCheckpoints.slice(0, kept);
           if (kernel.checkpointCount() !== this.historyCheckpoints.length) {
             throw new HistoryCacheIntegrityError(
               'History restore did not truncate checkpoints.'
@@ -1460,10 +1638,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           startIndex = restoredFeatures;
           // Two copies deep: the snapshot must survive this replay's in-place
           // mutation, and the replay must not share containers with it.
-          initial =
-            prefix >= 0
-              ? cloneBuildState(this.historyCheckpoints[prefix]!.snapshot)
-              : null;
+          initial = restoredEntry
+            ? cloneBuildState(restoredEntry.snapshot)
+            : null;
           // Restore may succeed even when an entity was retired before the
           // checkpoint barrier. Never replay builders from stale JS handles.
           for (const shape of initial?.shapes.values() ?? []) {
@@ -2472,6 +2649,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           this.evictMeasuredShape(bodyId);
         }
       }
+      for (const bodyId of [...this.previewDisplayCache.keys()]) {
+        if (!build.shapes.has(bodyId)) {
+          this.evictPreviewDisplay(bodyId);
+        }
+      }
       // Same for the held display deflections: a body this build no longer
       // produces will never be measured again under that id.
       for (const bodyId of [...this.heldDisplayDeflections.keys()]) {
@@ -2537,6 +2719,42 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             !isFeatureSuppressed(feature);
           // Hidden unions still need the normal display-closure gate.
           if (strict && hiddenBodies.has(bodyId)) break deferredTopology;
+          if (!consumed && !hiddenBodies.has(bodyId)) {
+            const reused = this.reusedPreviewDisplay(
+              kernel,
+              bodyId,
+              shape,
+              strict,
+              imported
+            );
+            if (reused) {
+              publishImportDiagnostics();
+              geometryRepresentations[bodyId] = {
+                bodyId,
+                name: body.name,
+                source: feature?.featureKind ?? 'primitive',
+                faceCount: reused.faceCount,
+                color: bodyDisplayColor(body.metadata, feature?.featureKind),
+                opacity: bodyOpacityFromMetadata(
+                  body.metadata?.[BODY_OPACITY_METADATA_KEY]
+                ),
+                exportableStep: body.exportableStep,
+                consumed,
+                mesh: {
+                  kind: 'mesh',
+                  vertices: reused.vertices,
+                  indices: reused.indices
+                },
+                bbox: reused.bbox,
+                // The same shape as a meshed preview body: display faces
+                // only, NURBS geometry and edge topology left pending.
+                topology: { faces: reused.faces, edges: [] }
+              };
+              reusedMeasurements += 1;
+              measurementDone();
+              continue;
+            }
+          }
           for (const solid of shape.solids) {
             const verdict = strictVerdicts.get(solid);
             const relaxedErrors = kernel.validateSolidRelaxed(solid);
@@ -2615,39 +2833,47 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           )
             break deferredTopology;
           publishImportDiagnostics();
+          // Display face ranges keep the dragged highlight and analytic
+          // dimensions current. Edge topology, recognition and persistent
+          // output references remain pending; picks are held in the UI.
+          const digests = faceContentDigestsOf(
+            kernel,
+            Uint32Array.from(projection.faceGroups, (group) => group.handle)
+          );
+          const faces = withSyncReadMemo(readMemo, () =>
+            projection.faceGroups.map((group, index) => {
+              // NURBS area integration is completion metadata, not a display
+              // requirement, so B-spline faces carry no geometry. Picks are
+              // held for this snapshot.
+              const { witness, geometry } = this.previewFaceGeometry.describe(
+                kernel,
+                group.handle,
+                digests?.[index],
+                faceWitnessOf
+              );
+              const hash = topologyHashOfWitness('face', witness);
+              return {
+                topologyId: `face:${hash}`,
+                hash,
+                triangleStart: group.triangleStart,
+                triangleCount: group.triangleCount,
+                geometry
+              };
+            })
+          );
           geometryRepresentations[bodyId] = {
             ...metadata,
             mesh: projection.mesh,
             bbox: projection.bbox,
-            // Display face ranges keep the dragged highlight and analytic
-            // dimensions current. Edge topology, recognition and persistent
-            // output references remain pending; picks are held in the UI.
-            topology: {
-              faces: withSyncReadMemo(readMemo, () =>
-                projection.faceGroups.map((group) => {
-                  const witness = faceWitnessOf(kernel, group.handle);
-                  const hash = topologyHashOfWitness('face', witness);
-                  return {
-                    topologyId: `face:${hash}`,
-                    hash,
-                    triangleStart: group.triangleStart,
-                    triangleCount: group.triangleCount,
-                    // NURBS area integration is completion metadata, not a
-                    // display requirement. Picks are held for this snapshot.
-                    geometry:
-                      witness.surfaceType === 'bspline'
-                        ? undefined
-                        : this.previewFaceGeometry.measure(
-                            kernel,
-                            group.handle,
-                            witness
-                          )
-                  };
-                })
-              ),
-              edges: []
-            }
+            topology: { faces, edges: [] }
           };
+          this.storePreviewDisplay(kernel, bodyId, shape, strict, imported, {
+            vertices: projection.mesh.vertices,
+            indices: projection.mesh.indices,
+            bbox: projection.bbox,
+            faceCount: metadata.faceCount,
+            faces
+          });
           measurementDone();
           await scheduling.checkpoint();
           throwIfBuildCancelled(cancellation);
@@ -2915,8 +3141,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
       if (geometryOnly) {
         // This is deliberately not a measured-shape cache entry or a mass
-        // snapshot. A release must complete current-revision analysis before
-        // committing; a preview never creates quantities or analysis proofs.
+        // snapshot (only the preview display cache keeps its meshes). A
+        // release must complete current-revision analysis before committing;
+        // a preview never creates quantities or analysis proofs.
         const pending = yieldControl?.();
         if (pending) await pending;
         throwIfBuildCancelled(cancellation);
