@@ -439,6 +439,56 @@ describe('placing panels', () => {
     expect(left.left).toEqual([['parameters'], ['bodies', 'history']]);
   });
 
+  it.each(['left', 'right'] as const)(
+    'keeps resized weights and preview heights when reordering a %s column',
+    (side) => {
+      let layout = layoutWith({
+        [side]: [['parameters', 'bodies', 'history']]
+      });
+      const gap = computePanelGeometry(layout, STAGE).gaps[0]!;
+      layout = resizeGap(layout, 'parameters', 'bodies', 60, gap.pxPerWeight);
+      const before = computePanelGeometry(layout, STAGE);
+      const target: PanelTarget = { kind: 'column', side, column: 0, index: 2 };
+      const placed = placePanel(layout, 'parameters', target, STAGE);
+      expect(placed[side]).toEqual([['bodies', 'history', 'parameters']]);
+      expect(placed.weights).toEqual(layout.weights);
+      const after = computePanelGeometry(placed, STAGE);
+      for (const id of ['parameters', 'bodies', 'history'] as const) {
+        expect(after.panels[id]!.h).toBeCloseTo(before.panels[id]!.h);
+      }
+      const preview = previewLayout(layout, 'parameters', target, STAGE)!;
+      expect(
+        computePanelGeometry(preview, STAGE).panels[PANEL_SLOT]!.h
+      ).toBeCloseTo(after.panels.parameters!.h);
+      expect(commitPreview(preview, 'parameters')).toEqual(placed);
+    }
+  );
+
+  it('keeps resized weights and preview heights within a floating stack', () => {
+    let layout = popOutPanel(modelOnly(), 'history', {
+      x: 100,
+      y: 100,
+      w: 300,
+      h: 300
+    });
+    const groupId = layout.floats[0]!.id;
+    layout = placePanel(layout, 'revisions', { kind: 'group', groupId });
+    const gap = computePanelGeometry(layout, STAGE).gaps[0]!;
+    layout = resizeGap(layout, 'history', 'revisions', 50, gap.pxPerWeight);
+    const before = computePanelGeometry(layout, STAGE);
+    const target: PanelTarget = { kind: 'group', groupId, index: 1 };
+    const placed = placePanel(layout, 'history', target, STAGE);
+    expect(placed.weights).toEqual(layout.weights);
+    const after = computePanelGeometry(placed, STAGE);
+    expect(after.panels.history!.h).toBeCloseTo(before.panels.history!.h);
+    expect(after.panels.revisions!.h).toBeCloseTo(before.panels.revisions!.h);
+    const preview = previewLayout(layout, 'history', target, STAGE)!;
+    expect(
+      computePanelGeometry(preview, STAGE).panels[PANEL_SLOT]!.h
+    ).toBeCloseTo(after.panels.history!.h);
+    expect(commitPreview(preview, 'history')).toEqual(placed);
+  });
+
   it('gives a placed panel a fresh weight and forgets its home', () => {
     let layout = applyPreset(modelOnly(), 'review');
     layout = closePanel(layout, 'history');
@@ -597,7 +647,8 @@ describe('opening, closing and pinning', () => {
       kind: 'column',
       side: 'right',
       column: 0,
-      index: 0
+      index: 0,
+      peers: ['history', 'parameters']
     });
     const reopened = togglePanel(layout, 'history');
     expect(reopened.right).toEqual([['history', 'parameters']]);
@@ -609,6 +660,114 @@ describe('opening, closing and pinning', () => {
     expect(closed.left).toEqual([['bodies']]);
     expect(openPanel(closed, 'history').left).toEqual([['bodies', 'history']]);
   });
+
+  it.each(['left', 'right'] as const)(
+    'restores a closed singleton %s column before its former neighbour, including after reload',
+    (side) => {
+      const layout = layoutWith({ [side]: [['bodies'], ['history']] });
+      const closed = closePanel(layout, 'bodies');
+      expect(closed[side]).toEqual([['history']]);
+      for (const input of [
+        closed,
+        normalizePanelLayout(JSON.parse(JSON.stringify(closed)))
+      ]) {
+        const opened = openPanel(input, 'bodies', STAGE);
+        expect(opened[side]).toEqual(layout[side]);
+        expect(opened.unpinned).toBeNull();
+      }
+    }
+  );
+
+  it.each([
+    ['bodies', 'history', 'revisions'],
+    ['revisions', 'bodies', 'history'],
+    ['history', 'revisions', 'bodies']
+  ] as const)(
+    'restores separately closed columns in their original order: %s, %s, %s',
+    (...order) => {
+      const layout = layoutWith({
+        right: [['bodies'], ['history'], ['revisions']]
+      });
+      let closed = layout;
+      for (const id of ['bodies', 'revisions', 'history'] as const)
+        closed = closePanel(closed, id);
+      const storage = memoryStorage();
+      savePanelLayout(closed, storage);
+      let opened = loadPanelLayout(storage);
+      for (const id of order) opened = openPanel(opened, id);
+      expect(opened.right).toEqual(layout.right);
+    }
+  );
+
+  it('returns separately closed stack peers to the same column and original order', () => {
+    const layout = layoutWith({ right: [['bodies', 'history', 'revisions']] });
+    let closed = layout;
+    for (const id of ['bodies', 'revisions', 'history'] as const)
+      closed = closePanel(closed, id);
+    const storage = memoryStorage();
+    savePanelLayout(closed, storage);
+    let opened = loadPanelLayout(storage);
+    for (const id of ['revisions', 'bodies', 'history'] as const)
+      opened = openPanel(opened, id);
+    expect(opened.right).toEqual(layout.right);
+  });
+
+  it.each(['left', 'right'] as const)(
+    'restores original %s stacks through every close/reopen order',
+    (side) => {
+      const orders = <T>(items: readonly T[]): T[][] =>
+        items.length === 0
+          ? [[]]
+          : items.flatMap((item, k) =>
+              orders(items.filter((_, index) => index !== k)).map((rest) => [
+                item,
+                ...rest
+              ])
+            );
+      const ids = ['bodies', 'history', 'revisions'] as const;
+      const arrangements: PanelId[][][] = [
+        [['bodies', 'history', 'revisions']],
+        [['bodies', 'history'], ['revisions']],
+        [['bodies'], ['history', 'revisions']]
+      ];
+      if (side === 'right')
+        arrangements.push([['bodies'], ['history'], ['revisions']]);
+      for (const columns of arrangements) {
+        const layout = layoutWith({ [side]: columns });
+        for (const closeOrder of orders(ids)) {
+          let closed = layout;
+          for (const id of closeOrder) closed = closePanel(closed, id);
+          const storage = memoryStorage();
+          savePanelLayout(closed, storage);
+          for (const openOrder of orders(ids)) {
+            let opened = loadPanelLayout(storage);
+            for (const id of openOrder) opened = openPanel(opened, id);
+            expect(
+              opened[side],
+              JSON.stringify({ columns, closeOrder, openOrder })
+            ).toEqual(columns);
+          }
+        }
+      }
+    }
+  );
+
+  it.each(['left', 'right'] as const)(
+    'retains resized height weights when reopening a closed %s panel',
+    (side) => {
+      let layout = layoutWith({ [side]: [['bodies', 'history']] });
+      const gap = computePanelGeometry(layout, STAGE).gaps[0]!;
+      layout = resizeGap(layout, 'bodies', 'history', 80, gap.pxPerWeight);
+      const before = computePanelGeometry(layout, STAGE);
+      const storage = memoryStorage();
+      savePanelLayout(closePanel(layout, 'bodies'), storage);
+      const opened = openPanel(loadPanelLayout(storage), 'bodies', STAGE);
+      expect(opened.weights).toEqual(layout.weights);
+      const after = computePanelGeometry(opened, STAGE);
+      expect(after.panels.bodies!.h).toBeCloseTo(before.panels.bodies!.h);
+      expect(after.panels.history!.h).toBeCloseTo(before.panels.history!.h);
+    }
+  );
 
   it('closes a floating panel and reopens it in its window’s place', () => {
     let layout = popOutPanel(essentials(), 'history', {
@@ -1147,6 +1306,56 @@ describe('gaps between panels', () => {
     expect(splitGapEvenly(layout, 'parameters', 'history')).toBe(layout);
   });
 
+  it('keeps held-at-minimum weights on a zero or clamped gap drag', () => {
+    const weighted = layoutWith({
+      right: [['parameters', 'history']],
+      weights: { ...modelOnly().weights, parameters: 0.1, history: 3 }
+    });
+    const small = { width: 1440, height: 390 };
+    const shown = computePanelGeometry(weighted, small);
+    expect(shown.panels.parameters!.h).toBe(PANEL_MIN_HEIGHT);
+    for (const delta of [0, -30]) {
+      const resized = resizeGap(
+        weighted,
+        'parameters',
+        'history',
+        delta,
+        shown.gaps[0]!.pxPerWeight
+      );
+      expect(resized).toBe(weighted);
+      expect(computePanelGeometry(resized, STAGE)).toEqual(
+        computePanelGeometry(weighted, STAGE)
+      );
+    }
+  });
+
+  it('resizes from held minimum heights without changing a third panel', () => {
+    const weighted = layoutWith({
+      right: [['parameters', 'bodies', 'history']],
+      weights: {
+        ...modelOnly().weights,
+        parameters: 0.1,
+        bodies: 3,
+        history: 3
+      }
+    });
+    const small = { width: 1440, height: 500 };
+    const before = computePanelGeometry(weighted, small);
+    const resized = resizeGap(
+      weighted,
+      'parameters',
+      'bodies',
+      30,
+      before.gaps[0]!.pxPerWeight
+    );
+    const after = computePanelGeometry(resized, small);
+    expect(after.panels.parameters!.h).toBeCloseTo(
+      before.panels.parameters!.h + 30
+    );
+    expect(after.panels.bodies!.h).toBeCloseTo(before.panels.bodies!.h - 30);
+    expect(after.panels.history!.h).toBeCloseTo(before.panels.history!.h);
+  });
+
   it('splits two neighbours evenly, the rest keeping its share', () => {
     const skewed: PanelLayout = {
       ...layout,
@@ -1156,6 +1365,32 @@ describe('gaps between panels', () => {
     expect(even.weights.parameters).toBeCloseTo(1);
     expect(even.weights.bodies).toBeCloseTo(1);
     expect(even.weights.history).toBe(2);
+  });
+
+  it('splits shown neighbours evenly when one is held at its minimum', () => {
+    const weighted = layoutWith({
+      right: [['parameters', 'bodies', 'history']],
+      weights: {
+        ...modelOnly().weights,
+        parameters: 0.1,
+        bodies: 3,
+        history: 3
+      }
+    });
+    const small = { width: 1440, height: 500 };
+    const before = computePanelGeometry(weighted, small);
+    const even = splitGapEvenly(
+      weighted,
+      'parameters',
+      'bodies',
+      before.gaps[0]!.pxPerWeight
+    );
+    const after = computePanelGeometry(even, small);
+    expect(after.panels.parameters!.h).toBeCloseTo(after.panels.bodies!.h);
+    expect(after.panels.parameters!.h).toBeCloseTo(
+      (before.panels.parameters!.h + before.panels.bodies!.h) / 2
+    );
+    expect(after.panels.history!.h).toBeCloseTo(before.panels.history!.h);
   });
 
   it('resizes the gaps inside a floating window too', () => {
@@ -1437,7 +1672,8 @@ describe('parked panels in the unpinned slot', () => {
       side: 'left',
       column: 0,
       index: 0,
-      alone: true
+      alone: true,
+      peers: ['bodies']
     });
     // Opening another panel unpinned takes the slot back.
     expect(openPanel(shown, 'history').revealed).toBeNull();
@@ -1807,6 +2043,26 @@ describe('rails and hit-testing', () => {
     });
   });
 
+  it.each(['left', 'right'] as const)(
+    'offers a new %s column after lifting a singleton at the column limit',
+    (side) => {
+      const columns: PanelId[][] =
+        side === 'left'
+          ? [['bodies'], ['history']]
+          : [['bodies'], ['history'], ['revisions']];
+      const layout = layoutWith({ [side]: columns });
+      const stage = { width: 3000, height: 900 };
+      const lifted = beginDrag(layout, 'bodies');
+      const geometry = computePanelGeometry(lifted, stage);
+      const rail = geometry.rails[side];
+      const target = hitTest(geometry, { x: rail.x + rail.w / 2, y: 400 });
+      expect(target).toEqual({ kind: 'newColumn', side });
+      const placed = placePanel(layout, 'bodies', target!, stage);
+      expect(placed[side]).toEqual([...columns.slice(1), ['bodies']]);
+      expect(placed[side]).toHaveLength(PANEL_MAX_COLUMNS[side]);
+    }
+  );
+
   it('keeps an emptied column a drop target during the drag', () => {
     const dragging = computePanelGeometry(
       beginDrag(essentials(), 'bodies'),
@@ -2175,6 +2431,63 @@ describe('panel layout persistence', () => {
     // Objects is open in a window, so its home is dropped.
     expect(layout.homes.bodies).toBeUndefined();
     expect(layout.unpinned).toBeNull();
+  });
+
+  it.each(['float-9007199254740992', 'float-99999999999999999999999999'])(
+    'allocates a unique window id after loading %s',
+    (id) => {
+      const layout = normalizePanelLayout({
+        floats: [{ id, x: 100, y: 100, w: 300, h: 300, panels: ['history'] }]
+      });
+      const added = popOutPanel(layout, 'revisions', {
+        x: 150,
+        y: 150,
+        w: 300,
+        h: 300
+      });
+      const ids = added.floats.map((group) => group.id);
+      expect(new Set(ids).size).toBe(2);
+      expect(ids.every((value) => /^[A-Za-z0-9_-]{1,32}$/.test(value))).toBe(
+        true
+      );
+      const moved = moveFloat(added, ids[1]!, { x: 500, y: 200 }, STAGE);
+      expect(
+        moved.floats.find((group) => group.panels.includes('history'))!.x
+      ).toBe(100);
+      expect(
+        moved.floats.find((group) => group.panels.includes('revisions'))!.x
+      ).toBe(500);
+      const storage = memoryStorage();
+      savePanelLayout(added, storage);
+      expect(loadPanelLayout(storage).floats.map((group) => group.id)).toEqual(
+        ids
+      );
+    }
+  );
+
+  it('normalizes remembered column identities to distinct known panels', () => {
+    const layout = normalizePanelLayout({
+      homes: {
+        history: {
+          kind: 'column',
+          side: 'right',
+          column: 0,
+          index: 0,
+          peers: ['history', 'bogus', 'history', 'bodies'],
+          preceding: ['parameters', 'parameters', null, 'history'],
+          following: ['revisions', 'parameters', 'history', 'bogus']
+        }
+      }
+    });
+    expect(layout.homes.history).toEqual({
+      kind: 'column',
+      side: 'right',
+      column: 0,
+      index: 0,
+      peers: ['history', 'bodies'],
+      preceding: ['parameters'],
+      following: ['revisions']
+    });
   });
 
   it('never stores a preview slot', () => {

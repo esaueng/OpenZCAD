@@ -122,8 +122,13 @@ export type PanelHome =
       side: DockSide;
       column: number;
       index: number;
-      /** It was its column's only panel: reopening recreates that column. */
+      /** Legacy marker for a removed singleton column. */
       alone?: boolean;
+      /** Original stack order, including peers closed before this panel. */
+      peers?: PanelId[];
+      /** Other columns' panels, so removed columns return in order. */
+      preceding?: PanelId[];
+      following?: PanelId[];
     }
   | { kind: 'float'; rect: Rect };
 
@@ -147,7 +152,10 @@ export interface PanelLayout<T extends PanelEntry = PanelId> {
   /** In z-order: the last is on top. */
   floats: FloatGroup<T>[];
   /** Relative heights within a column or window. */
-  weights: Record<PanelId, number>;
+  weights: Record<PanelId, number> & {
+    /** Transient slot height in a drag preview; never persisted. */
+    [PANEL_SLOT]?: number;
+  };
   unpinned: PanelId | null;
   /**
    * Panels by last use, most recent first: opened, pressed on the rail or
@@ -292,7 +300,9 @@ function sideColumns<T extends PanelEntry>(
 }
 
 function weightOf(layout: PanelLayout<PanelEntry>, id: PanelEntry): number {
-  return id === PANEL_SLOT ? 1 : layout.weights[id];
+  return id === PANEL_SLOT
+    ? (layout.weights[PANEL_SLOT] ?? 1)
+    : layout.weights[id];
 }
 
 function insetsOf(stage: PanelStage): PanelInsets {
@@ -347,14 +357,12 @@ export function grownFloatRect(rect: Rect, stage?: PanelStage): Rect {
 }
 
 function nextFloatId(layout: PanelLayout<PanelEntry>): string {
-  let max = 0;
-  for (const group of layout.floats) {
-    const match = /^float-(\d+)$/.exec(group.id);
-    if (match) {
-      max = Math.max(max, Number(match[1]));
-    }
-  }
-  return `float-${max + 1}`;
+  const used = new Set(layout.floats.map((group) => group.id));
+  // At most one id per known panel: a free small integer always exists.
+  // Parsing a stored suffix could round max + 1 back to the same id.
+  let candidate = 1;
+  while (used.has(`float-${candidate}`)) candidate += 1;
+  return `float-${candidate}`;
 }
 
 /**
@@ -886,6 +894,7 @@ function placeEntry(
   if (!sameStack) {
     next.weights[id] = 1;
   }
+  if (entry === PANEL_SLOT) next.weights[PANEL_SLOT] = next.weights[id];
   return next;
 }
 
@@ -948,7 +957,7 @@ export function commitPreview(
 ): PanelLayout {
   const fill = (entries: PanelEntry[]): PanelId[] =>
     entries.map((entry) => (entry === PANEL_SLOT ? id : entry));
-  return finishDrag({
+  const next = {
     ...copyLayout(preview),
     left: preview.left.map(fill),
     right: preview.right.map(fill),
@@ -956,10 +965,174 @@ export function commitPreview(
       ...group,
       panels: fill(group.panels)
     }))
-  });
+  };
+  delete next.weights[PANEL_SLOT];
+  return finishDrag(next);
 }
 
 // ── Rail and header actions ────────────────────────────────
+
+/** The insertion slot among the remembered peers that are still present. */
+function rememberedIndex(
+  entries: readonly PanelId[],
+  id: PanelId,
+  order: readonly PanelId[],
+  fallback: number
+): number {
+  const position = order.indexOf(id);
+  if (position >= 0) {
+    const following = order
+      .slice(position + 1)
+      .find((peer) => entries.includes(peer));
+    if (following) return entries.indexOf(following);
+    const preceding = order
+      .slice(0, position)
+      .reverse()
+      .find((peer) => entries.includes(peer));
+    if (preceding) return entries.indexOf(preceding) + 1;
+  }
+  return clamp(fallback, 0, entries.length);
+}
+
+/** Preserve the column's identity and order while its panels are closed. */
+function columnHome(
+  layout: PanelLayout,
+  id: PanelId,
+  location: Extract<PanelLocation, { kind: 'column' }>
+): Extract<PanelHome, { kind: 'column' }> {
+  const columns = sideColumns(layout, location.side);
+  const peers = columns[location.column]!.slice();
+  const homes = Object.entries(layout.homes).flatMap(([panel, home]) =>
+    home.kind === 'column' && home.side === location.side
+      ? [{ panel: panel as PanelId, home }]
+      : []
+  );
+  // A previously closed peer remembers the original order even after the
+  // last live peer leaves and the column itself disappears.
+  for (const { home } of homes) {
+    if (!home.peers?.some((peer) => peers.includes(peer))) continue;
+    for (const peer of home.peers) {
+      if (!peers.includes(peer) && !isPanelOpen(layout, peer)) {
+        peers.splice(
+          rememberedIndex(peers, peer, home.peers, peers.length),
+          0,
+          peer
+        );
+      }
+    }
+  }
+  const preceding = new Set(columns.slice(0, location.column).flat());
+  const following = new Set(columns.slice(location.column + 1).flat());
+  // Include closed columns as anchors too. The graph has only five panel
+  // identities, so five passes cover every remembered ordering relation.
+  for (let pass = 0; pass < PANEL_IDS.length; pass++) {
+    for (const { panel, home } of homes) {
+      if (home.peers?.some((peer) => peers.includes(peer))) {
+        home.preceding?.forEach((peer) => preceding.add(peer));
+        home.following?.forEach((peer) => following.add(peer));
+      } else {
+        if (
+          home.following?.some(
+            (peer) => peers.includes(peer) || preceding.has(peer)
+          )
+        ) {
+          preceding.add(panel);
+          home.peers?.forEach((peer) => preceding.add(peer));
+        }
+        if (
+          home.preceding?.some(
+            (peer) => peers.includes(peer) || following.has(peer)
+          )
+        ) {
+          following.add(panel);
+          home.peers?.forEach((peer) => following.add(peer));
+        }
+      }
+    }
+  }
+  peers.forEach((peer) => {
+    preceding.delete(peer);
+    following.delete(peer);
+  });
+  return {
+    kind: 'column',
+    side: location.side,
+    column: location.column,
+    index: peers.indexOf(id),
+    ...(columns[location.column]!.length === 1 ? { alone: true } : {}),
+    peers,
+    ...(preceding.size ? { preceding: [...preceding] } : {}),
+    ...(following.size ? { following: [...following] } : {})
+  };
+}
+
+/** Restore an existing stack, or recreate its removed column in place. */
+function reopenColumn(
+  layout: PanelLayout,
+  id: PanelId,
+  home: Extract<PanelHome, { kind: 'column' }>,
+  stage: PanelStage | undefined
+): PanelLayout {
+  // Older stored homes only recorded numeric positions.
+  if (!home.peers) {
+    return placeAt(
+      layout,
+      id,
+      home.alone
+        ? { kind: 'newColumn', side: home.side, column: home.column }
+        : home,
+      stage
+    );
+  }
+  const columns = sideColumns(layout, home.side);
+  const column = columns.findIndex((entries) =>
+    entries.some((peer) => home.peers!.includes(peer))
+  );
+  if (column >= 0) {
+    return placeAt(
+      layout,
+      id,
+      {
+        kind: 'column',
+        side: home.side,
+        column,
+        index: rememberedIndex(columns[column]!, id, home.peers, home.index)
+      },
+      stage
+    );
+  }
+  if (columns.length >= PANEL_MAX_COLUMNS[home.side]) return layout;
+  const counts = { left: layout.left.length, right: layout.right.length };
+  counts[home.side] += 1;
+  if (
+    stage &&
+    overCap(
+      dockFootprint(counts, columnWidthOf(layout.options), insetsOf(stage)),
+      stage.width
+    )
+  )
+    return layout;
+  const before = columns.findIndex((entries) =>
+    entries.some((peer) => home.following?.includes(peer))
+  );
+  let at = before;
+  if (at < 0) {
+    const after = columns.reduce(
+      (last, entries, index) =>
+        entries.some((peer) => home.preceding?.includes(peer)) ? index : last,
+      -1
+    );
+    at = after < 0 ? clamp(home.column, 0, columns.length) : after + 1;
+  }
+  const next = copyLayout(layout);
+  sideColumns(next, home.side).splice(at, 0, []);
+  return placeAt(
+    next,
+    id,
+    { kind: 'column', side: home.side, column: at, index: 0 },
+    stage
+  );
+}
 
 function homeOf(layout: PanelLayout, id: PanelId): PanelHome | null {
   const location = findPanel(layout, id);
@@ -967,15 +1140,7 @@ function homeOf(layout: PanelLayout, id: PanelId): PanelHome | null {
     return null;
   }
   if (location.kind === 'column') {
-    const alone =
-      sideColumns(layout, location.side)[location.column]!.length === 1;
-    return {
-      kind: 'column',
-      side: location.side,
-      column: location.column,
-      index: location.index,
-      ...(alone ? { alone } : {})
-    };
+    return columnHome(layout, id, location);
   }
   const group = layout.floats.find(
     (candidate) => candidate.id === location.groupId
@@ -1036,13 +1201,15 @@ export function openPanel(
       // The phone lane shows an open panel wherever it lives, so a phone
       // stage reopens it at home and a wider stage finds it there again.
       const phone = stage !== undefined && stage.width <= PANEL_PHONE_MAX_WIDTH;
-      const target: PanelTarget =
+      next =
         home.kind === 'float'
-          ? { kind: 'float', rect: home.rect }
-          : home.alone
-            ? { kind: 'newColumn', side: home.side, column: home.column }
-            : home;
-      next = placeAt(layout, id, target, phone ? undefined : stage);
+          ? placeAt(
+              layout,
+              id,
+              { kind: 'float', rect: home.rect },
+              phone ? undefined : stage
+            )
+          : reopenColumn(layout, id, home, phone ? undefined : stage);
       if (next !== layout) {
         // Back where it was, at the height it was given there.
         next.weights[id] = layout.weights[id];
@@ -1243,20 +1410,43 @@ export function resizeGap(
     PANEL_MIN_HEIGHT,
     pair - PANEL_MIN_HEIGHT
   );
+  if (heightAbove === shownAbove) return layout;
   const next = copyLayout(layout);
   next.weights[above] = heightAbove / pxPerWeight;
   next.weights[below] = (pair - heightAbove) / pxPerWeight;
   return next;
 }
 
-/** A double-click on a gap: its two neighbours split evenly. */
+/**
+ * A double-click on a gap: its two neighbours split evenly. Pass the shown
+ * gap's scale to preserve the other panels' heights when minimums are held;
+ * without a scale this retains the original stored-weight split behavior.
+ */
 export function splitGapEvenly(
   layout: PanelLayout,
   above: PanelId,
-  below: PanelId
+  below: PanelId,
+  pxPerWeight?: number
 ): PanelLayout {
   if (layout.options.locked || !neighbours(layout, above, below)) {
     return layout;
+  }
+  if (pxPerWeight !== undefined) {
+    const shownAbove = Math.max(
+      PANEL_MIN_HEIGHT,
+      layout.weights[above] * pxPerWeight
+    );
+    const shownBelow = Math.max(
+      PANEL_MIN_HEIGHT,
+      layout.weights[below] * pxPerWeight
+    );
+    return resizeGap(
+      layout,
+      above,
+      below,
+      (shownBelow - shownAbove) / 2,
+      pxPerWeight
+    );
   }
   const next = copyLayout(layout);
   const half = (layout.weights[above] + layout.weights[below]) / 2;
@@ -1816,6 +2006,15 @@ function normalizeHome(value: unknown): PanelHome | null {
   const raw = value as Record<string, unknown>;
   if (raw.kind === 'column' && (raw.side === 'left' || raw.side === 'right')) {
     const side: DockSide = raw.side;
+    const panelIds = (value: unknown): PanelId[] =>
+      Array.isArray(value) ? [...new Set(value.filter(isPanelId))] : [];
+    const peers = panelIds(raw.peers);
+    const preceding = panelIds(raw.preceding).filter(
+      (id) => !peers.includes(id)
+    );
+    const following = panelIds(raw.following).filter(
+      (id) => !peers.includes(id) && !preceding.includes(id)
+    );
     return {
       kind: 'column',
       side,
@@ -1825,7 +2024,10 @@ function normalizeHome(value: unknown): PanelHome | null {
         PANEL_MAX_COLUMNS[side] - 1
       ),
       index: clamp(Math.trunc(finiteOr(raw.index, 0)), 0, PANEL_IDS.length),
-      ...(raw.alone === true ? { alone: true } : {})
+      ...(raw.alone === true ? { alone: true } : {}),
+      ...(peers.length ? { peers } : {}),
+      ...(preceding.length ? { preceding } : {}),
+      ...(following.length ? { following } : {})
     };
   }
   if (raw.kind === 'float') {
