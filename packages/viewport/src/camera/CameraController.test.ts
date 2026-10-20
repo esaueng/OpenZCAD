@@ -1127,6 +1127,21 @@ describe('CameraController field of view', () => {
     controller.dispose();
   });
 
+  it('restores a pose with an out-of-range field of view as unrecorded', () => {
+    const first = createController();
+    const saved = first.controller.capture();
+    first.controller.dispose();
+    const { controller } = createController();
+    controller.setFieldOfView(70);
+    for (const fieldOfView of [179, 5, 120]) {
+      controller.restore({ ...saved, fieldOfView }, 'perspective');
+      controller.perspective.position.toArray().forEach((value, axis) => {
+        expect(value).toBeCloseTo(saved.position[axis]!, 9);
+      });
+    }
+    controller.dispose();
+  });
+
   it('keeps the framing while the depth cue changes', () => {
     const { controller, onViewChange } = createController();
     const span = spanAtTarget(controller);

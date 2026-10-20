@@ -1100,13 +1100,15 @@ export class CameraController {
     this.orbit.target.fromArray(state.target);
     // A pose framed at another field of view (the preference changed since
     // it was saved) is dollied as a live change would be, so it shows the
-    // same span at the target rather than appearing zoomed in or out.
+    // same span at the target rather than appearing zoomed in or out. Only an
+    // angle the preference can hold counts: near 180° the tangent ratio would
+    // throw the camera out of sight, so anything else restores as unrecorded.
     const savedFov = state.fieldOfView;
     if (
       savedFov !== undefined &&
       Number.isFinite(savedFov) &&
-      savedFov > 0 &&
-      savedFov < 180 &&
+      savedFov >= VIEWPORT_FIELD_OF_VIEW_BOUNDS.min &&
+      savedFov <= VIEWPORT_FIELD_OF_VIEW_BOUNDS.max &&
       Math.abs(savedFov - this.perspective.fov) > 1e-9
     ) {
       const ratio =

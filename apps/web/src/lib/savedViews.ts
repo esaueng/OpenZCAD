@@ -60,6 +60,14 @@ const isVector = (value: unknown): boolean =>
 const isPositive = (value: unknown): boolean =>
   typeof value === 'number' && Number.isFinite(value) && value > 0;
 
+/** Absent, or an angle the field-of-view preference could have produced. */
+const isFieldOfView = (value: unknown): boolean =>
+  value === undefined ||
+  (typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= VIEWPORT_FIELD_OF_VIEW_BOUNDS.min &&
+    value <= VIEWPORT_FIELD_OF_VIEW_BOUNDS.max);
+
 const DISPLAY_MODES: readonly unknown[] = [
   'shaded-edges',
   'shaded',
@@ -99,11 +107,8 @@ function isSavedView(value: unknown): value is SavedView {
     DISPLAY_MODES.includes(view.displayMode) &&
     isSection(view.sectionView) &&
     (view.xray === undefined || typeof view.xray === 'boolean') &&
-    (view.fieldOfView === undefined ||
-      (typeof view.fieldOfView === 'number' &&
-        Number.isFinite(view.fieldOfView) &&
-        view.fieldOfView >= VIEWPORT_FIELD_OF_VIEW_BOUNDS.min &&
-        view.fieldOfView <= VIEWPORT_FIELD_OF_VIEW_BOUNDS.max))
+    isFieldOfView(view.fieldOfView) &&
+    isFieldOfView(view.camera.fieldOfView)
   );
 }
 
