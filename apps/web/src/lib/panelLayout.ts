@@ -709,7 +709,8 @@ function overCap(footprint: number, stageWidth: number): boolean {
  * Whether placing `id` at `target` would take the docks' footprint past the
  * cap on this stage, or land it in a column that is parked there. Only a new
  * column adds to the footprint; an existing column can already be parked
- * after the stage shrank, and a panel put there would not be drawn.
+ * after the stage shrank, and a panel put there would not be drawn. On a
+ * phone-width stage every dock target is refused.
  */
 export function wouldExceedCap(
   layout: PanelLayout,
@@ -717,6 +718,12 @@ export function wouldExceedCap(
   target: PanelTarget,
   stage: PanelStage
 ): boolean {
+  if (target.kind === 'column' || target.kind === 'newColumn') {
+    // At phone width nothing docks, and the phone geometry parks nothing.
+    if (stage.width <= PANEL_PHONE_MAX_WIDTH) {
+      return true;
+    }
+  }
   const detached = detach(layout, id, false);
   const side = addsColumn(detached, target);
   if (side) {
@@ -992,11 +999,14 @@ export function openPanel(
   } else if (!isPanelOpen(layout, id)) {
     const home = layout.homes[id];
     if (home) {
+      // The phone lane shows an open panel wherever it lives, so a phone
+      // stage reopens it at home and a wider stage finds it there again.
+      const phone = stage !== undefined && stage.width <= PANEL_PHONE_MAX_WIDTH;
       next = placeAt(
         layout,
         id,
         home.kind === 'float' ? { kind: 'float', rect: home.rect } : home,
-        stage
+        phone ? undefined : stage
       );
     }
     if (next === layout) {
