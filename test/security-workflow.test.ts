@@ -14,8 +14,7 @@ describe('workflow runner policy', () => {
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'macos-desktop.yml': ['macos-26'],
       'production-health.yml': ['ubuntu-latest'],
-      'update-remus.yml': ['ubuntu-latest'],
-      'trusted-vps.yml': ['ubuntu-latest'],
+      'update-remus.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'dependency-audit.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'dependency-review.yml': ['ubuntu-latest']
     };
@@ -34,12 +33,6 @@ describe('workflow runner policy', () => {
       ].map((match) => match[1]);
 
       expect(runners).toEqual(expectedRunners[workflowPath]);
-      if (workflowPath === 'trusted-vps.yml') {
-        expect(workflow).toContain('workflow_dispatch:');
-        expect(workflow).not.toMatch(
-          /ci-trusted-main|self-hosted|actions\/checkout|workflow_call|workflow_run|pull_request|secrets\./
-        );
-      }
       if (workflowPath === 'public-commit-metadata.yml') {
         expect(workflow).toContain('push:\n    branches: [main]');
         expect(workflow).not.toMatch(/^[ \t]+merge_group:/m);

@@ -72,7 +72,66 @@ export interface RegionTarget {
 }
 
 export type SketchToolId =
-  'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'polygon' | 'text';
+  | 'select'
+  | 'line'
+  | 'arc'
+  | 'circle'
+  | 'rectangle'
+  | 'polygon'
+  | 'ellipse'
+  | 'spline'
+  | 'text';
+
+/**
+ * The curve slot's types (I01): the Ellipse tool draws a full ellipse or an
+ * elliptical arc, the Spline tool a fit or a control-point spline.
+ */
+export type SketchCurveMode =
+  'ellipse' | 'elliptical-arc' | 'fit-spline' | 'control-spline';
+
+/** The curve types in the order the rail's strip shows them. */
+export const SKETCH_CURVE_MODES: readonly SketchCurveMode[] = [
+  'ellipse',
+  'elliptical-arc',
+  'fit-spline',
+  'control-spline'
+];
+
+/** Which tool draws a curve type. */
+export function sketchCurveModeTool(
+  mode: SketchCurveMode
+): 'ellipse' | 'spline' {
+  return mode === 'ellipse' || mode === 'elliptical-arc' ? 'ellipse' : 'spline';
+}
+
+/**
+ * The curve type a tool draws: the session's when it belongs to that tool,
+ * otherwise the tool's first type. The key pressed again steps between a
+ * tool's two types.
+ */
+export function sketchCurveModeFor(
+  tool: 'ellipse' | 'spline',
+  mode: SketchCurveMode | undefined
+): SketchCurveMode {
+  if (mode && sketchCurveModeTool(mode) === tool) {
+    return mode;
+  }
+  return tool === 'ellipse' ? 'ellipse' : 'fit-spline';
+}
+
+/** The other type of the same tool. */
+export function nextSketchCurveMode(mode: SketchCurveMode): SketchCurveMode {
+  switch (mode) {
+    case 'ellipse':
+      return 'elliptical-arc';
+    case 'elliptical-arc':
+      return 'ellipse';
+    case 'fit-spline':
+      return 'control-spline';
+    case 'control-spline':
+      return 'fit-spline';
+  }
+}
 
 /** How the Rectangle tool places its shape (S04: drawn as held lines). */
 export type SketchRectangleMode = 'corner' | 'center' | 'three-point';
@@ -161,6 +220,18 @@ export interface PendingSketchEdit {
   picks: string[];
 }
 
+/** How the Offset tool closes the corner where two offsets part. */
+export type SketchOffsetJoin = 'miter' | 'round';
+
+/**
+ * The Offset tool's settings: the corner join, and whether a pick offsets
+ * the whole run of joined curves or only the picked one.
+ */
+export interface SketchOffsetOptions {
+  join: SketchOffsetJoin;
+  chain: boolean;
+}
+
 /**
  * How a selected sketch object is being dragged: `translate` by its grab
  * point (circle, rectangle and polygon centre, text baseline origin, or any
@@ -214,6 +285,8 @@ export interface SketchSessionState {
   rectangleMode?: SketchRectangleMode;
   /** The Polygon tool's side count; absent is {@link DEFAULT_SKETCH_POLYGON_SIDES}. */
   polygonSides?: number;
+  /** The curve slot's type (I01); read through `sketchCurveModeFor`. */
+  curveMode?: SketchCurveMode;
   /** True while a drawing gesture (drag or line/arc chain) is in flight. */
   drawing: boolean;
   /** Stable document id of the entity selected for editing. */
@@ -222,6 +295,8 @@ export interface SketchSessionState {
   pendingConstraint: PendingSketchConstraint | null;
   /** Armed modify tool, if any; picking routes here instead of select. */
   pendingEdit: PendingSketchEdit | null;
+  /** The Offset tool's settings; absent is a mitered chain. */
+  offsetOptions?: SketchOffsetOptions;
   /**
    * The selected object's drag-move, while the pointer holds it. Absent
    * otherwise; a release commits it and Escape cancels it, and neither
@@ -349,6 +424,7 @@ export type InteractionEvent =
   | { type: 'sketch-circle-mode'; mode: SketchCircleMode }
   | { type: 'sketch-rectangle-mode'; mode: SketchRectangleMode }
   | { type: 'sketch-polygon-sides'; sides: number }
+  | { type: 'sketch-curve-mode'; mode: SketchCurveMode }
   | { type: 'sketch-created'; sketchId: string }
   | { type: 'sketch-drawing'; drawing: boolean }
   | { type: 'sketch-select-object'; objectId: string | null }
@@ -358,6 +434,7 @@ export type InteractionEvent =
     }
   | { type: 'sketch-constraint-pick'; pick: SketchConstraintPick }
   | { type: 'sketch-edit-tool'; kind: SketchEditToolKind | null }
+  | { type: 'sketch-offset-options'; options: SketchOffsetOptions }
   | { type: 'sketch-edit-pick'; objectId: string }
   | {
       type: 'sketch-move-start';
@@ -774,6 +851,23 @@ function reduceInteraction(
           pendingEdit: null
         }
       };
+    case 'sketch-curve-mode':
+      if (state.mode !== 'sketch') {
+        return state;
+      }
+      return {
+        ...state,
+        session: {
+          ...state.session,
+          tool: sketchCurveModeTool(event.mode),
+          curveMode: event.mode,
+          drawing: false,
+          selectedObjectId: null,
+          pendingConstraint: null,
+          pendingEdit: null,
+          textDraft: null
+        }
+      };
     case 'sketch-rectangle-mode':
       if (state.mode !== 'sketch') {
         return state;
@@ -810,6 +904,14 @@ function reduceInteraction(
         session: {
           ...state.session,
           tool: event.tool,
+          ...(event.tool === 'ellipse' || event.tool === 'spline'
+            ? {
+                curveMode: sketchCurveModeFor(
+                  event.tool,
+                  state.session.curveMode
+                )
+              }
+            : {}),
           drawing: false,
           selectedObjectId:
             event.tool === 'select' ? state.session.selectedObjectId : null,
@@ -872,6 +974,15 @@ function reduceInteraction(
           pendingEdit: event.kind ? { kind: event.kind, picks: [] } : null
         }
       };
+    case 'sketch-offset-options':
+      // A setting of the tool, like the polygon's side count: it never
+      // disarms the tool or drops a pick.
+      return state.mode === 'sketch'
+        ? {
+            ...state,
+            session: { ...state.session, offsetOptions: event.options }
+          }
+        : state;
     case 'sketch-edit-pick':
       if (state.mode !== 'sketch' || !state.session.pendingEdit) {
         return state;
@@ -1413,7 +1524,16 @@ export function toolCardFor(state: InteractionState): ToolCardModel | null {
                       : 'Place two opposite corners. Tab switches width and height.'
                   : state.session.tool === 'polygon'
                     ? 'Place the center, then a vertex: its distance is the circumradius.'
-                    : 'Draw with exact geometry snaps. Esc ends a chain.'
+                    : state.session.tool === 'ellipse'
+                      ? sketchCurveModeFor(
+                          'ellipse',
+                          state.session.curveMode
+                        ) === 'elliptical-arc'
+                        ? 'Place the center, an axis end, the other radius, then the arc’s start and end.'
+                        : 'Place the center, an axis end, then the other radius.'
+                      : state.session.tool === 'spline'
+                        ? 'Click the spline’s points. Enter finishes; clicking the first point closes it.'
+                        : 'Draw with exact geometry snaps. Esc ends a chain.'
       };
     case 'idle':
       return null;

@@ -158,9 +158,13 @@ function loopSignature(loop: RegionLoop): string {
           .map((point) => `${quantize(point.x)},${quantize(point.y)}`)
           .join(',')}`;
       }
-      return `A${quantize(curve.center.x)},${quantize(curve.center.y)},${quantize(
-        curve.radius
-      )}`;
+      if (curve.kind === 'arc') {
+        return `A${quantize(curve.center.x)},${quantize(curve.center.y)},${quantize(
+          curve.radius
+        )}`;
+      }
+      // Glyph outlines are lines and beziers; I01 curves never reach here.
+      throw new Error(`A text outline cannot contain a ${curve.kind}.`);
     })
     .join('|');
 }

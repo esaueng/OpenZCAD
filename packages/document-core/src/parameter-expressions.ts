@@ -219,6 +219,25 @@ function sketchObject(data: SketchObjectData, rewrite: Rewrite): void {
       fields(data, ['radius', 'centerX', 'centerY'], rewrite, 'length');
       fields(data, ['startAngleDeg', 'endAngleDeg'], rewrite, 'angle');
       return;
+    case 'ellipse':
+      fields(
+        data,
+        ['centerX', 'centerY', 'radiusX', 'radiusY'],
+        rewrite,
+        'length'
+      );
+      fields(
+        data,
+        ['rotationDeg', 'startParamDeg', 'endParamDeg'],
+        rewrite,
+        'angle'
+      );
+      return;
+    case 'spline':
+      for (const point of data.points) {
+        fields(point, ['x', 'y'], rewrite, 'length');
+      }
+      return;
     case 'text':
       fields(data, ['size', 'x', 'y'], rewrite, 'length');
       fields(data, ['rotation'], rewrite, 'angle');

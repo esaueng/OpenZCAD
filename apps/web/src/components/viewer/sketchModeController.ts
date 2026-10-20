@@ -180,6 +180,20 @@ export function sketchObjectMarkerPoints(
   if (data.objectKind === 'circle') {
     return [{ x: resolve(data.centerX), y: resolve(data.centerY) }];
   }
+  if (data.objectKind === 'ellipse') {
+    return [{ x: resolve(data.centerX), y: resolve(data.centerY) }];
+  }
+  if (data.objectKind === 'spline') {
+    if (data.closed === true || data.points.length === 0) {
+      return [];
+    }
+    const first = data.points[0]!;
+    const last = data.points[data.points.length - 1]!;
+    return [
+      { x: resolve(first.x), y: resolve(first.y) },
+      { x: resolve(last.x), y: resolve(last.y) }
+    ];
+  }
   if (data.objectKind === 'arc') {
     const centerX = resolve(data.centerX);
     const centerY = resolve(data.centerY);

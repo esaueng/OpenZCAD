@@ -37,9 +37,13 @@ jobs:
       - run: pnpm --filter @openzcad/web exec wrangler deploy --dry-run --config ../../wrangler.jsonc
 
   upload:
-    # Queue candidates get the dry-run verification, never a version upload.
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    # Queue candidates get the dry-run verification, never a version upload,
+    # and a manual dispatch uploads only from main.
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     needs: verify
+    # Keep the Cloudflare credentials as secrets of this environment, limited
+    # to the main branch, so a workflow on any other ref cannot read them.
+    environment: cloudflare-versions
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

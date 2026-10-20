@@ -1,8 +1,16 @@
 name: Dependency audit
 on:
-  pull_request: {}
-  merge_group:
-    types: [checks_requested]
+  # New advisories arrive through the daily schedule; pull requests run the
+  # audit only when they change a dependency manifest or lockfile.
+  pull_request:
+    paths:
+      - pnpm-lock.yaml
+      - '**/package.json'
+      - apps/desktop/src-tauri/Cargo.toml
+      - apps/desktop/src-tauri/Cargo.lock
+      - apps/desktop/src-tauri/vendor/**
+      - apps/desktop/glib-regression/**
+      - .github/workflows/dependency-audit.yml
   push:
     branches: [main]
   schedule:

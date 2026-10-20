@@ -25,6 +25,14 @@ export interface GcsKernelSurface {
   gcsAddLine(sketch: number, p1: number, p2: number): number;
   gcsAddCircle(sketch: number, center: number, radius: number): number;
   gcsAddArc(sketch: number, center: number, start: number, end: number): number;
+  gcsAddEllipse(
+    sketch: number,
+    center: number,
+    a: number,
+    b: number,
+    angle: number
+  ): number;
+  gcsEllipseParams(sketch: number, ellipse: number): Float64Array;
   gcsAddConstraint(sketch: number, json: string): number;
   gcsSolveDetailed(
     sketch: number,
@@ -61,6 +69,31 @@ export type ResolvedSketchObject =
       radius: number;
       startAngleDeg: number;
       endAngleDeg: number;
+    }
+  | {
+      /**
+       * I01. Solved as the kernel's full ellipse, so an elliptical arc is
+       * held by its centre and carrier; its parameter range rides along.
+       */
+      objectId: EntityId;
+      kind: 'ellipse';
+      centerX: number;
+      centerY: number;
+      radiusX: number;
+      radiusY: number;
+      rotationDeg: number;
+    }
+  | {
+      /**
+       * I01. Every fit or control point is a solver point; an open spline's
+       * first and last points are its constrainable `start` and `end`. No
+       * curve relation exists for spline points on the pinned kernel, so
+       * points nothing constrains stay where they are.
+       */
+      objectId: EntityId;
+      kind: 'spline';
+      points: { x: number; y: number }[];
+      closed: boolean;
     };
 
 /** Solved geometry read back from the kernel, same shapes as the input. */
@@ -92,9 +125,12 @@ export interface SketchSolveOutcome {
 }
 
 interface ObjectHandles {
-  kind: 'line' | 'circle' | 'arc';
+  kind: 'line' | 'circle' | 'arc' | 'ellipse' | 'spline';
+  /** The solver entity; −1 for a spline, which is points only. */
   entity: number;
   points: Partial<Record<'start' | 'end' | 'center', number>>;
+  /** A spline's every point, in order. */
+  pointList?: number[];
 }
 
 const RADIANS_PER_DEGREE = Math.PI / 180;
@@ -120,6 +156,29 @@ function requireNumber(record: Record<string, unknown>, key: string): number {
     throw new Error(`The kernel solve result is missing a numeric "${key}".`);
   }
   return value;
+}
+
+/** The size whose collapse means the solve degenerated the entity. */
+function solvedEntitySize(object: ResolvedSketchObject): number {
+  switch (object.kind) {
+    case 'line':
+      return Math.hypot(object.x2 - object.x1, object.y2 - object.y1);
+    case 'circle':
+    case 'arc':
+      return object.radius;
+    case 'ellipse':
+      return Math.min(object.radiusX, object.radiusY);
+    case 'spline': {
+      const first = object.points[0];
+      return first
+        ? Math.max(
+            ...object.points.map((point) =>
+              Math.hypot(point.x - first.x, point.y - first.y)
+            )
+          )
+        : 0;
+    }
+  }
 }
 
 /**
@@ -162,6 +221,36 @@ export function solveSketchWithGcs(
         kind: 'circle',
         entity: kernel.gcsAddCircle(sketch, center, object.radius),
         points: { center }
+      });
+    } else if (object.kind === 'ellipse') {
+      const center = kernel.gcsAddPoint(
+        sketch,
+        object.centerX,
+        object.centerY,
+        false
+      );
+      handles.set(object.objectId, {
+        kind: 'ellipse',
+        entity: kernel.gcsAddEllipse(
+          sketch,
+          center,
+          object.radiusX,
+          object.radiusY,
+          object.rotationDeg * RADIANS_PER_DEGREE
+        ),
+        points: { center }
+      });
+    } else if (object.kind === 'spline') {
+      const pointList = object.points.map((point) =>
+        kernel.gcsAddPoint(sketch, point.x, point.y, false)
+      );
+      handles.set(object.objectId, {
+        kind: 'spline',
+        entity: -1,
+        points: object.closed
+          ? {}
+          : { start: pointList[0]!, end: pointList[pointList.length - 1]! },
+        pointList
       });
     } else {
       const startAngle = object.startAngleDeg * RADIANS_PER_DEGREE;
@@ -261,7 +350,13 @@ export function solveSketchWithGcs(
       case 'equal': {
         const a = objectHandles(data.a);
         const b = objectHandles(data.b);
-        if (a.kind === 'line' && b.kind === 'line') {
+        if (a.kind === 'ellipse' && b.kind === 'ellipse') {
+          add(id, {
+            type: 'equalEllipseRadii',
+            ellipse1: a.entity,
+            ellipse2: b.entity
+          });
+        } else if (a.kind === 'line' && b.kind === 'line') {
           add(id, { type: 'equalLength', l1: a.entity, l2: b.entity });
         } else if (a.kind === 'circle' && b.kind === 'circle') {
           add(id, {
@@ -316,7 +411,29 @@ export function solveSketchWithGcs(
       case 'concentric': {
         const a = objectHandles(data.a);
         const b = objectHandles(data.b);
-        if (a.kind === 'arc' && b.kind === 'arc') {
+        if (a.kind === 'ellipse' || b.kind === 'ellipse') {
+          const [ellipse, other] = a.kind === 'ellipse' ? [a, b] : [b, a];
+          add(
+            id,
+            other.kind === 'ellipse'
+              ? {
+                  type: 'concentricEllipseEllipse',
+                  ellipse1: ellipse.entity,
+                  ellipse2: other.entity
+                }
+              : other.kind === 'circle'
+                ? {
+                    type: 'concentricEllipseCircle',
+                    ellipse: ellipse.entity,
+                    circle: other.entity
+                  }
+                : {
+                    type: 'concentricEllipseArc',
+                    ellipse: ellipse.entity,
+                    arc: other.entity
+                  }
+          );
+        } else if (a.kind === 'arc' && b.kind === 'arc') {
           add(id, {
             type: 'concentricArcArc',
             arc1: a.entity,
@@ -402,6 +519,9 @@ export function solveSketchWithGcs(
           });
         } else if (target.kind === 'circle') {
           add(id, { type: 'pointOnCircle', point, circle: target.entity });
+        } else if (target.kind === 'ellipse') {
+          // An elliptical arc holds the point on its carrier ellipse.
+          add(id, { type: 'pointOnEllipse', point, ellipse: target.entity });
         } else {
           add(id, { type: 'pointOnArc', point, arc: target.entity });
         }
@@ -481,6 +601,27 @@ export function solveSketchWithGcs(
         radius: kernel.gcsCircleRadius(sketch, entry.entity)
       };
     }
+    if (entry.kind === 'ellipse') {
+      const center = readPoint(entry.points.center!);
+      const params = kernel.gcsEllipseParams(sketch, entry.entity);
+      return {
+        objectId: object.objectId,
+        kind: 'ellipse',
+        centerX: center.x,
+        centerY: center.y,
+        radiusX: params[2] ?? 0,
+        radiusY: params[3] ?? 0,
+        rotationDeg: (params[4] ?? 0) / RADIANS_PER_DEGREE
+      };
+    }
+    if (entry.kind === 'spline') {
+      return {
+        objectId: object.objectId,
+        kind: 'spline',
+        points: entry.pointList!.map(readPoint),
+        closed: object.kind === 'spline' && object.closed
+      };
+    }
     const center = readPoint(entry.points.center!);
     const start = readPoint(entry.points.start!);
     const end = readPoint(entry.points.end!);
@@ -510,14 +651,11 @@ export function solveSketchWithGcs(
     const numbers = Object.values(solved).filter(
       (value): value is number => typeof value === 'number'
     );
-    const originalSize =
-      original.kind === 'line'
-        ? Math.hypot(original.x2 - original.x1, original.y2 - original.y1)
-        : original.radius;
-    const solvedSize =
-      solved.kind === 'line'
-        ? Math.hypot(solved.x2 - solved.x1, solved.y2 - solved.y1)
-        : solved.radius;
+    const originalSize = solvedEntitySize(original);
+    const solvedSize = solvedEntitySize(solved);
+    if (solved.kind === 'spline') {
+      numbers.push(...solved.points.flatMap((point) => [point.x, point.y]));
+    }
     // Relative to the input entity and read-back precision, not project units.
     const floor = Math.max(
       originalSize * 1e-10,

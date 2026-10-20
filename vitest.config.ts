@@ -14,7 +14,8 @@ const WORKSPACE_PACKAGES = [
   'io-freecad',
   'io-stl',
   'persistence',
-  'cloudflare-adapters'
+  'cloudflare-adapters',
+  'crypto'
 ] as const;
 
 const workspaceAliases = Object.fromEntries(

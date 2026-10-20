@@ -297,6 +297,18 @@ export function kernelReadsBezierAsCircle(
   const samples = Array.from({ length: RECOGNITION_SAMPLES }, (_, index) =>
     bezierPointAt(points, index / (RECOGNITION_SAMPLES - 1))
   );
+  return kernelReadsSamplesAsCircle(samples, tolerance);
+}
+
+/**
+ * The kernel's recognition verdict on sixteen parameter-uniform samples of
+ * any NURBS profile edge: true when it would build a cylinder wall. Shared
+ * by beziers and the I01 spline edges.
+ */
+export function kernelReadsSamplesAsCircle(
+  samples: readonly Vec2Like[],
+  tolerance = KERNEL_EXTRUDE_RECOGNITION_TOLERANCE
+): boolean {
   if (recognizedAsLine(samples, tolerance)) return false;
   const first = samples[0]!;
   // The kernel needs one sample triple spanning a plane before it fits.

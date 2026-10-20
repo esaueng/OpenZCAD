@@ -77,8 +77,15 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * leave four unrelated lines, so the bump makes it refuse such a document.
  * Absent means no composites: every older rectangle and polygon object loads
  * unchanged and is never decomposed.
+ *
+ * v27 adds the I01 curve entities: the `ellipse` sketch object (a full
+ * ellipse, or an elliptical arc when it carries a parameter range) and the
+ * `spline` object (a fit spline through points or a control-point B-spline).
+ * An older client would refuse or drop such an object and every profile it
+ * bounds, so the bump makes it refuse the document instead. Existing objects
+ * are unchanged.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 26 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 27 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -117,7 +124,24 @@ export type FeatureKind =
   | 'imported-mesh'
   | 'datum-plane';
 export type SketchObjectKind =
-  'rectangle' | 'circle' | 'polygon' | 'line' | 'arc' | 'text';
+  | 'rectangle'
+  | 'circle'
+  | 'polygon'
+  | 'line'
+  | 'arc'
+  | 'ellipse'
+  | 'spline'
+  | 'text';
+/**
+ * How a spline is defined (I01, schema v27): `fit` interpolates its points,
+ * `control` treats them as the control polygon of a clamped B-spline.
+ */
+export type SketchSplineMethod = 'fit' | 'control';
+/**
+ * Control-spline degrees the sketch offers. A fit spline sets its own: cubic,
+ * or quadratic through only three open points.
+ */
+export type SketchSplineDegree = 2 | 3;
 /**
  * Font style of a text sketch object. Each style is a distinct bundled font
  * file — never a synthetic shear or emboldening — so the letterforms are the
@@ -176,6 +200,8 @@ export function isVariableFilletLaw(law: unknown): law is VariableFilletLaw {
 export type ParamValue = number | string;
 export const MAX_SKETCH_POLYGON_SIDES = 64;
 export const MAX_SKETCH_ARC_SWEEP_DEGREES = 360;
+/** Fit points or control points one spline may hold. */
+export const MAX_SKETCH_SPLINE_POINTS = 64;
 export const MAX_HELICAL_SWEEP_TURNS = 100;
 
 export interface Vector3 {
@@ -989,6 +1015,46 @@ export type SketchObjectData = (
       /** Counter-clockwise sweep from start to end, in degrees. */
       startAngleDeg: ParamValue;
       endAngleDeg: ParamValue;
+    }
+  | {
+      /**
+       * I01 (schema v27). The point at parameter `t` is
+       * `center + radiusX·cos t·u + radiusY·sin t·v`, where `u` is the sketch
+       * x axis turned counter-clockwise by `rotationDeg` and `v` is `u` turned
+       * a further 90°. Either radius may be the larger one; which is the major
+       * axis is a property of the values, not of the field names.
+       */
+      objectKind: 'ellipse';
+      centerX: ParamValue;
+      centerY: ParamValue;
+      radiusX: ParamValue;
+      radiusY: ParamValue;
+      rotationDeg: ParamValue;
+      /**
+       * An elliptical arc: the counter-clockwise parameter range from
+       * `startParamDeg` to `endParamDeg`, in degrees of the parameter `t`
+       * above (the eccentric anomaly, not the polar angle). Both present or
+       * both absent; absent is the full ellipse.
+       */
+      startParamDeg?: ParamValue;
+      endParamDeg?: ParamValue;
+    }
+  | {
+      /**
+       * I01 (schema v27). A non-rational B-spline. A `fit` spline passes
+       * through every point (cubic, chord-length parameterized; quadratic
+       * through only three open points); a `control`
+       * spline is the clamped uniform B-spline of `degree` over the points as
+       * its control polygon. A `closed` spline is periodic: the curve joins
+       * itself smoothly and no endpoint is repeated in `points`. The curve is
+       * re-derived from these fields on every rebuild, never stored.
+       */
+      objectKind: 'spline';
+      method: SketchSplineMethod;
+      /** Control-spline degree; ignored for a fit spline. */
+      degree?: SketchSplineDegree;
+      points: { x: ParamValue; y: ParamValue }[];
+      closed?: boolean;
     }
   | {
       objectKind: 'text';
