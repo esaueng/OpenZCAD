@@ -118,7 +118,9 @@ function modelSketches({ features }: Pick<ObjectsSource, 'features'>) {
   return features.filter((feature) => feature.data.featureKind === 'sketch');
 }
 
-function modelDatums({
+type DatumRows = ReturnType<typeof buildDatums>;
+
+function buildDatums({
   document,
   parameterValues
 }: Pick<ObjectsSource, 'document' | 'parameterValues'>) {
@@ -131,6 +133,32 @@ function modelDatums({
       (row) => ({ ...row, datum: 'axis' as const })
     )
   ];
+}
+
+// The header count and the panel both need the datum rows, and building them
+// scans the whole history for each datum's dependents. One entry keyed on the
+// (immutable) document and parameter scope lets a render build them once.
+let lastDatums: {
+  document: ObjectsSource['document'];
+  parameterValues: ObjectsSource['parameterValues'];
+  rows: DatumRows;
+} | null = null;
+
+function modelDatums(
+  source: Pick<ObjectsSource, 'document' | 'parameterValues'>
+): DatumRows {
+  if (
+    !lastDatums ||
+    lastDatums.document !== source.document ||
+    lastDatums.parameterValues !== source.parameterValues
+  ) {
+    lastDatums = {
+      document: source.document,
+      parameterValues: source.parameterValues,
+      rows: buildDatums(source)
+    };
+  }
+  return lastDatums.rows;
 }
 
 /**
