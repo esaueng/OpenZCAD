@@ -127,6 +127,11 @@ in `.github/workflows/macos-desktop.yml`.
 
 - Root Vitest and web Vitest are separate projects. `pnpm test` runs both;
   invoking root Vitest directly does not cover the web happy-dom suites.
+- Never edit the active fleet workflow (the `fleet-ci*.yml` that `ci.yml`
+  pins) in place, and never pin `ci.yml` to a PR branch commit: GitHub
+  deletes the branch at merge and every `ci` run then fails at startup.
+  Stage a new `fleet-ci-vN.yml`, then activate it from main in a second PR,
+  as [docs/runner-routing.md](docs/runner-routing.md) describes.
 - Parity files intentionally use `test/parity/**/*.spec.ts`. Renaming one to
   `*.test.ts` silently moves it into the root pool instead of the serial parity
   job configured by `test/parity/vitest.corpus.config.ts`.
