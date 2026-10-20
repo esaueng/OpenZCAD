@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { AnyCommand } from '@openzcad/command-system';
@@ -368,6 +374,50 @@ describe('DrawingWorkspace', () => {
         name: 'Centre X (mm)'
       }).value
     ).toBe('900.0');
+  });
+
+  it('drops a drag whose view is deleted before the pointer is released', () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const sheet = starter(fingerprint);
+    const base = createProjectDocument('Bracket', toUserId('test'));
+    const document = (sheets: DrawingSheet[]): ProjectDocument => ({
+      ...base,
+      bodyOrder: [bodyId],
+      drawings: { sheets }
+    });
+    const onCommand = vi.fn((_command: AnyCommand) => true);
+    const rect = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockReturnValue(new DOMRect(0, 0, 840, 594));
+    const props = {
+      bodies: { [bodyId]: cube() },
+      geometryPending: false,
+      defaultBodyIds: [bodyId],
+      editDisabledReason: null,
+      onCommand,
+      onStatus: vi.fn()
+    };
+    const { rerender } = render(
+      <DrawingWorkspace document={document([sheet])} {...props} />
+    );
+    const iso = screen.getByRole('button', { name: 'Isometric view' });
+    fireEvent.pointerDown(iso, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(iso, { clientX: 140, clientY: 100 });
+    // Delete (or an undo, or a collaborator) removes the view mid-drag.
+    const without = {
+      ...sheet,
+      views: sheet.views.filter((view) => view.orientation !== 'iso')
+    };
+    rerender(<DrawingWorkspace document={document([without])} {...props} />);
+    expect(
+      screen.getByRole('application', { name: 'Sheet Sheet 1' })
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Isometric view' })).toBeNull();
+    fireEvent.pointerUp(screen.getByRole('button', { name: 'Front view' }));
+    expect(onCommand).not.toHaveBeenCalled();
+    rect.mockRestore();
   });
 
   it('names a body the sheet draws that is gone', () => {

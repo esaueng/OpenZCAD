@@ -368,12 +368,22 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const [addOrientation, setAddOrientation] =
     useState<DrawingViewOrientation>('front');
   const [drag, setDrag] = useState<{
+    sheetId: DrawingSheetId;
     viewId: DrawingViewId;
     start: { x: number; y: number };
     origin: { x: number; y: number };
     current: { x: number; y: number };
     pxPerMm: number;
   } | null>(null);
+  // A drag only counts while its view is still on the sheet shown: a delete,
+  // an undo or a sheet switch mid-drag must not move (or preview) a view
+  // that is gone.
+  const liveDrag =
+    drag &&
+    sheet?.sheetId === drag.sheetId &&
+    sheet.views.some((view) => view.viewId === drag.viewId)
+      ? drag
+      : null;
   const canvasRef = useRef<SVGSVGElement | null>(null);
   const editable = editDisabledReason === null;
   const status = sheet
@@ -392,13 +402,17 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // The sheet as drawn: during a drag, the moved view (and the projected
   // views it carries) at the pointer, by the same rule the command applies.
   const shownSheet = useMemo(() => {
-    if (!sheet || !drag) return sheet;
+    if (!sheet || !liveDrag) return sheet;
     const moved = updateDrawingView(
       { ...document, drawings: { sheets: [sheet] } },
-      { sheetId: sheet.sheetId, viewId: drag.viewId, centerMm: drag.current }
+      {
+        sheetId: sheet.sheetId,
+        viewId: liveDrag.viewId,
+        centerMm: liveDrag.current
+      }
     );
     return moved.drawings!.sheets[0]!;
-  }, [sheet, drag, document]);
+  }, [sheet, liveDrag, document]);
 
   const run = (command: AnyCommand) => {
     if (!editable) {
@@ -603,6 +617,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     if (!(pxPerMm > 0)) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
     setDrag({
+      sheetId: sheet.sheetId,
       viewId: view.viewId,
       start: { x: event.clientX, y: event.clientY },
       origin: view.centerMm,
@@ -621,14 +636,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     });
   };
   const onViewPointerUp = () => {
-    if (!drag) return;
+    setDrag(null);
+    if (!liveDrag) return;
     const moved =
       Math.hypot(
-        drag.current.x - drag.origin.x,
-        drag.current.y - drag.origin.y
+        liveDrag.current.x - liveDrag.origin.x,
+        liveDrag.current.y - liveDrag.origin.y
       ) >= 0.2;
-    setDrag(null);
-    if (moved) moveView(drag.viewId, drag.current);
+    if (moved) moveView(liveDrag.viewId, liveDrag.current);
   };
   const onCanvasKeyDown = (event: ReactKeyboardEvent<SVGSVGElement>) => {
     if (!selectedView || !sheet) return;
