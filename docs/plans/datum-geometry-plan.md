@@ -49,6 +49,36 @@
 > (`face-attachment.ts`). Vertex re-pick repair and AI operations for these
 > kinds remain open.
 
+> **Datum axes (2026-10-19, schema v28):** a datum axis is a `datum-axis`
+> feature in `featureOrder`, resolved once at its own history position into a
+> line (origin and unit direction) published as `ExactBuildResult.datumAxes`
+> and `DerivedState.datumAxes`, exactly as planes publish frames. Four
+> constructors: `two-point` (from the first point toward the second; the
+> plane card's point sources), `edge` (a straight edge by schema-v5 lineage,
+> from end 0 toward end 1 in the quantized end order a vertex source uses),
+> `cylinder` (a cylindrical or conical face by lineage, through the middle
+> of a cylinder's axial span or a cone's apex, in a canonical sense: the
+> first component beyond the 1e-6 direction quantum is positive, so neither
+> kernel's surface parametrisation decides it) and `plane-intersection` (two
+> plane sources of any kind, along nA × nB through the line's point nearest
+> A's origin). `reverseDirection` turns any of them end for end. Coincident
+> points, a curved or closed edge, a non-revolution face, a missing source
+> and parallel or antiparallel planes (the Midplane parallelism tolerance,
+> tested on both sides) are refused by name with no line published. Three
+> consumers hold a `{ type: 'datum-axis', datumFeatureId }` reference: a
+> revolve's `axisRef` (the axis must lie in the sketch plane; one that leaves
+> it is refused, not projected), a circular pattern's `axisRef` (copies turn
+> about the datum line through its own origin, always on the
+> copy-and-transform path because the kernel's ring turns about a
+> world-origin axis) and a Move's `axisRotation` (`{ axis, angleDeg }`,
+> applied before the authored transform). Deleting an axis something turns
+> about is refused with the dependents named; an edge or face source that no
+> longer resolves offers a re-pick through one validated, undoable edit. The
+> pure rules live in `packages/geometry` and the source resolvers in
+> `face-attachment.ts`, shared by the Remus build and the OCCT reference.
+> Axis-perpendicular-to-face, axes from circular edges, AI operations and
+> datum points/coordinate systems remain open.
+
 This revision replaces the earlier canonical-offset-only first slice.
 [ROADMAP.md](../../ROADMAP.md#r01) owns delivery status. This document proposes
 contracts and acceptance evidence; it adds no runtime capability or schema bump.

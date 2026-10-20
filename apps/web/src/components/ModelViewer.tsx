@@ -307,7 +307,9 @@ import type { PlaneBasis } from '@openzcad/geometry';
 import type { PlaneId, SketchObjectData } from '@openzcad/shared';
 import { buildPlanePickerRig } from './viewer/planePickerRig';
 import { buildDatumPlaneRig, type DatumPlaneRig } from './viewer/datumPlaneRig';
+import { buildDatumAxisRig, type DatumAxisRig } from './viewer/datumAxisRig';
 import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
+import type { DatumAxisDisplay } from '../lib/datumAxisDisplay';
 import { sketchValueResolver } from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
 import { traceFaceDrag } from '../lib/faceDragTrace';
@@ -907,6 +909,11 @@ export interface ModelViewerProps {
    * Hidden, suppressed and unresolved datums are simply absent.
    */
   datumPlanes?: readonly DatumPlaneDisplay[];
+  /**
+   * Committed R01 datum axes, drawn along the lines the exact build
+   * resolved. Hidden, suppressed and unresolved axes are simply absent.
+   */
+  datumAxes?: readonly DatumAxisDisplay[];
   /**
    * What measuring the hovered target would report, for the preview chip.
    * Null when measuring is off or the pick has nothing honest to say.
@@ -1814,6 +1821,7 @@ export function ModelViewer({
   holeGhost = null,
   primitiveGhost = null,
   datumPlanes,
+  datumAxes,
   planePickerOffset,
   onPickPlane,
   onPickDatum,
@@ -2011,6 +2019,7 @@ export function ModelViewer({
   const planePickerOffsetRef = useRef(planePickerOffset);
   planePickerOffsetRef.current = planePickerOffset;
   const datumPlaneRigRef = useRef<DatumPlaneRig | null>(null);
+  const datumAxisRigRef = useRef<DatumAxisRig | null>(null);
   const planePickerRigRef = useRef<ReturnType<
     typeof buildPlanePickerRig
   > | null>(null);
@@ -9024,6 +9033,7 @@ export function ModelViewer({
       // Ghost planes hold their screen size, so they stay a target rather
       // than a backdrop as the camera dollies.
       datumPlaneRigRef.current?.setScale(worldPerPixelAtDepth);
+      datumAxisRigRef.current?.setScale(worldPerPixelAtDepth);
       const planePicker = planePickerRigRef.current;
       if (planePicker) {
         // Scale first: the offset is expressed in world units and has to be
@@ -11323,6 +11333,41 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [datumPlaneKey]);
+
+  // Committed datum axes (viewer/datumAxisRig), rebuilt when the set, a line
+  // or the selection changes; the render loop keeps their length.
+  const datumAxisKey = JSON.stringify(
+    (datumAxes ?? []).map(({ featureId, axis, selected }) => ({
+      featureId,
+      axis,
+      selected
+    }))
+  );
+  useEffect(() => {
+    const context = contextRef.current;
+    const axes = JSON.parse(datumAxisKey) as DatumAxisDisplay[];
+    if (!context || axes.length === 0) {
+      return;
+    }
+    const rig = buildDatumAxisRig(axes);
+    rig.setScale(() => 0.05);
+    context.scene.add(rig.group);
+    datumAxisRigRef.current = rig;
+    const canvas = context.renderer.domElement;
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      canvas.dataset.e2eDatumAxes = JSON.stringify(
+        axes.map(({ featureId, axis }) => ({ featureId, ...axis }))
+      );
+    }
+    context.requestRender();
+    return () => {
+      context.scene.remove(rig.group);
+      rig.dispose();
+      if (datumAxisRigRef.current === rig) datumAxisRigRef.current = null;
+      delete canvas.dataset.e2eDatumAxes;
+      context.requestRender();
+    };
+  }, [datumAxisKey]);
 
   // The open Hole card's bore (viewer/holeGhostRig): an opening on the entry
   // face and a barrel that is a faint ghost inside the body, so it reads as a

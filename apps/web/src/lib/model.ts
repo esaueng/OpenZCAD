@@ -194,7 +194,8 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   'direct-edit': 'Direct edit',
   'imported-step': 'Imported STEP',
   'imported-mesh': 'Imported mesh',
-  'datum-plane': 'Datum plane'
+  'datum-plane': 'Datum plane',
+  'datum-axis': 'Datum axis'
 };
 
 /**

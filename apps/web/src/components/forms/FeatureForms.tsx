@@ -8,7 +8,9 @@ import {
   type BodyId,
   type BooleanKeepOriginals,
   type BooleanOperation,
+  type DatumAxisRef,
   type EdgeTopologyReferenceV5,
+  type FeatureId,
   type ParamValue,
   type ParametricVector3,
   type PatternKind,
@@ -44,6 +46,42 @@ export interface BodyOption {
   bodyId: BodyId;
   name: string;
   consumed: boolean;
+}
+
+/** R01: a datum axis a revolve, circular pattern or Move can turn about. */
+export interface DatumAxisChoice {
+  featureId: FeatureId;
+  name: string;
+}
+
+const DATUM_AXIS_VALUE = 'datum-axis:';
+
+const axisRefOf = (value: string): DatumAxisRef | undefined =>
+  value.startsWith(DATUM_AXIS_VALUE)
+    ? {
+        type: 'datum-axis',
+        datumFeatureId: value.slice(DATUM_AXIS_VALUE.length) as FeatureId
+      }
+    : undefined;
+
+/**
+ * The datum axes a select offers, plus an axis the feature already turns
+ * about but that is no longer offered (suppressed, say), so the select can
+ * still show what is stored.
+ */
+function datumAxisOptions(
+  axes: readonly DatumAxisChoice[],
+  stored: DatumAxisRef | undefined
+): ReactNode[] {
+  const shown =
+    stored && !axes.some((axis) => axis.featureId === stored.datumFeatureId)
+      ? [...axes, { featureId: stored.datumFeatureId, name: 'Stored axis' }]
+      : axes;
+  return shown.map((axis) => (
+    <option key={axis.featureId} value={`${DATUM_AXIS_VALUE}${axis.featureId}`}>
+      {axis.name}
+    </option>
+  ));
 }
 
 /**
@@ -913,15 +951,20 @@ interface RevolveFormProps {
     sketchId: SketchId;
     axis: RevolveAxis;
     angleDeg?: ParamValue;
+    axisRef?: DatumAxisRef;
   };
   /** Pre-selected sketch for new features, e.g. the one picked in the tree. */
   initialSketchId?: SketchId;
+  /** R01: earlier datum axes the profile may turn about instead. */
+  datumAxes?: readonly DatumAxisChoice[];
   submitLabel: string;
   onSubmit(value: {
     name: string;
     sketchId: SketchId;
     axis: RevolveAxis;
     angleDeg: ParamValue;
+    /** Absent turns about the sketch `axis`. */
+    axisRef?: DatumAxisRef;
   }): void;
   onCancel?: () => void;
 }
@@ -931,6 +974,7 @@ export function RevolveForm({
   sketches,
   initial,
   initialSketchId,
+  datumAxes = [],
   submitLabel,
   onSubmit,
   onCancel
@@ -940,6 +984,13 @@ export function RevolveForm({
     initial?.sketchId ?? initialSketchId ?? sketches.at(-1)?.sketchId ?? ''
   );
   const [axis, setAxis] = useState<RevolveAxis>(initial?.axis ?? 'vertical');
+  // The select's value: a sketch axis, or a datum axis by its feature id.
+  const [axisChoice, setAxisChoice] = useState<string>(
+    initial?.axisRef
+      ? `${DATUM_AXIS_VALUE}${initial.axisRef.datumFeatureId}`
+      : (initial?.axis ?? 'vertical')
+  );
+  const axisRef = axisRefOf(axisChoice);
   const [angleDeg, setAngleDeg] = useState(
     paramValueText(initial?.angleDeg ?? FULL_REVOLVE_ANGLE_DEG)
   );
@@ -973,7 +1024,8 @@ export function RevolveForm({
           name: name.trim(),
           sketchId: sketchId as SketchId,
           axis,
-          angleDeg: coerceParamValue(angleDeg)
+          angleDeg: coerceParamValue(angleDeg),
+          ...(axisRef ? { axisRef } : {})
         })
       }
       onCancel={onCancel}
@@ -987,16 +1039,28 @@ export function RevolveForm({
       <label className="field">
         <span>Revolve around</span>
         <select
-          value={axis}
-          onChange={(event) => setAxis(event.target.value as RevolveAxis)}
+          value={axisChoice}
+          onChange={(event) => {
+            setAxisChoice(event.target.value);
+            // A sketch axis is also what `axis` keeps under a datum axis, so
+            // clearing the datum later restores it.
+            if (!axisRefOf(event.target.value))
+              setAxis(event.target.value as RevolveAxis);
+          }}
         >
           {(Object.keys(REVOLVE_AXIS_LABELS) as RevolveAxis[]).map((id) => (
             <option key={id} value={id}>
               {REVOLVE_AXIS_LABELS[id]}
             </option>
           ))}
+          {datumAxisOptions(datumAxes, initial?.axisRef)}
         </select>
       </label>
+      {axisRef ? (
+        <p className="muted">
+          The datum axis must lie in the sketch&apos;s plane.
+        </p>
+      ) : null}
       <ExprInput
         label="Angle (°)"
         value={angleDeg}
@@ -1270,6 +1334,11 @@ export interface TransformFormValue {
    * only when creating; a stored Move cannot become a copy or stop being one.
    */
   copy?: boolean;
+  /**
+   * R01: first turn the body about a datum axis. Absent turns about none;
+   * an edit that clears it removes the stored turn.
+   */
+  axisRotation?: { axis: DatumAxisRef; angleDeg: ParamValue };
 }
 
 interface TransformFormProps {
@@ -1286,6 +1355,13 @@ interface TransformFormProps {
    * refused there.
    */
   units?: UnitSystem;
+  /** R01: earlier datum axes the body may turn about. */
+  datumAxes?: readonly DatumAxisChoice[];
+  /**
+   * The Rotate about axis card: only the body, the axis, the angle and Copy;
+   * the move, rotation, scale and pivot stay at their identity values.
+   */
+  axisOnly?: boolean;
   submitLabel: string;
   onSubmit(value: TransformFormValue): void;
   onCancel?: () => void;
@@ -1300,6 +1376,8 @@ export function TransformForm({
   initialTarget,
   defaultName = 'Move',
   units,
+  datumAxes = [],
+  axisOnly = false,
   submitLabel,
   onSubmit,
   onCancel
@@ -1322,6 +1400,19 @@ export function TransformForm({
     pz: paramValueText(initial?.pivot?.z ?? 0)
   }));
   const [copy, setCopy] = useState(initial?.copy ?? false);
+  const [turnAxis, setTurnAxis] = useState<string>(
+    initial?.axisRotation
+      ? `${DATUM_AXIS_VALUE}${initial.axisRotation.axis.datumFeatureId}`
+      : axisOnly && datumAxes[0]
+        ? `${DATUM_AXIS_VALUE}${datumAxes[0].featureId}`
+        : ''
+  );
+  const [turnAngle, setTurnAngle] = useState(
+    paramValueText(initial?.axisRotation?.angleDeg ?? 90)
+  );
+  const turnRef = axisRefOf(turnAxis);
+  const showTurn =
+    axisOnly || datumAxes.length > 0 || initial?.axisRotation !== undefined;
   const setValue = (key: string) => (value: string) =>
     setValues((current) => ({ ...current, [key]: value }));
 
@@ -1345,7 +1436,9 @@ export function TransformForm({
     fieldsValid(scope, [...pick('t'), ...pick('p')], length) &&
     fieldsValid(scope, pick('r'), angle) &&
     fieldsValid(scope, [values.scale ?? ''], number) &&
-    !scaleError;
+    !scaleError &&
+    (axisOnly ? turnRef !== undefined : true) &&
+    (turnRef ? fieldsValid(scope, [turnAngle], angle) : true);
 
   return (
     <FormShell
@@ -1380,7 +1473,15 @@ export function TransformForm({
           },
           ...(scale === 1 ? {} : { scale }),
           ...(atOrigin ? {} : { pivot }),
-          ...(copy ? { copy: true } : {})
+          ...(copy ? { copy: true } : {}),
+          ...(turnRef
+            ? {
+                axisRotation: {
+                  axis: turnRef,
+                  angleDeg: coerceParamValue(turnAngle)
+                }
+              }
+            : {})
         });
       }}
       onCancel={onCancel}
@@ -1415,59 +1516,97 @@ export function TransformForm({
           <span>Copy (keep the original)</span>
         </label>
       )}
-      {/* The labels the Move gizmo's card uses (F19): a Move is created
+      {showTurn ? (
+        <>
+          <label className="field">
+            <span>About axis</span>
+            <select
+              value={turnAxis}
+              aria-label="Rotate about axis"
+              onChange={(event) => setTurnAxis(event.target.value)}
+            >
+              {axisOnly ? null : <option value="">None</option>}
+              {datumAxes.length === 0 && !initial?.axisRotation ? (
+                <option value="">Create an axis first</option>
+              ) : null}
+              {datumAxisOptions(datumAxes, initial?.axisRotation?.axis)}
+            </select>
+          </label>
+          {turnRef ? (
+            <ExprInput
+              label="Angle (°)"
+              ariaLabel="Angle about axis in degrees"
+              value={turnAngle}
+              scope={scope}
+              quantity={angle}
+              autoFocus={axisOnly}
+              onChange={setTurnAngle}
+            />
+          ) : null}
+          {turnRef && !axisOnly ? (
+            <p className="field-hint">
+              Turns about the axis first; the move below then applies.
+            </p>
+          ) : null}
+        </>
+      ) : null}
+      {axisOnly ? null : (
+        <>
+          {/* The labels the Move gizmo's card uses (F19): a Move is created
           there and edited here, and the two named the same fields
           "dX" and "Move X". */}
-      <div className="field-triple">
-        {TRANSFORM_AXES.map((axis, index) => (
+          <div className="field-triple">
+            {TRANSFORM_AXES.map((axis, index) => (
+              <ExprInput
+                key={`t${axis}`}
+                label={`d${axis.toUpperCase()}`}
+                ariaLabel={`Move ${axis.toUpperCase()}${units ? ` in ${units}` : ''}`}
+                value={values[`t${axis}`] ?? ''}
+                scope={scope}
+                quantity={length}
+                autoFocus={index === 0}
+                onChange={setValue(`t${axis}`)}
+              />
+            ))}
+          </div>
+          <div className="field-triple">
+            {TRANSFORM_AXES.map((axis) => (
+              <ExprInput
+                key={`r${axis}`}
+                label={`r${axis.toUpperCase()}`}
+                ariaLabel={`Rotate ${axis.toUpperCase()} in degrees`}
+                value={values[`r${axis}`] ?? ''}
+                scope={scope}
+                quantity={angle}
+                onChange={setValue(`r${axis}`)}
+              />
+            ))}
+          </div>
           <ExprInput
-            key={`t${axis}`}
-            label={`d${axis.toUpperCase()}`}
-            ariaLabel={`Move ${axis.toUpperCase()}${units ? ` in ${units}` : ''}`}
-            value={values[`t${axis}`] ?? ''}
+            label="Scale ×"
+            value={values.scale ?? ''}
             scope={scope}
-            quantity={length}
-            autoFocus={index === 0}
-            onChange={setValue(`t${axis}`)}
+            quantity={number}
+            onChange={setValue('scale')}
+            error={scaleError}
           />
-        ))}
-      </div>
-      <div className="field-triple">
-        {TRANSFORM_AXES.map((axis) => (
-          <ExprInput
-            key={`r${axis}`}
-            label={`r${axis.toUpperCase()}`}
-            ariaLabel={`Rotate ${axis.toUpperCase()} in degrees`}
-            value={values[`r${axis}`] ?? ''}
-            scope={scope}
-            quantity={angle}
-            onChange={setValue(`r${axis}`)}
-          />
-        ))}
-      </div>
-      <ExprInput
-        label="Scale ×"
-        value={values.scale ?? ''}
-        scope={scope}
-        quantity={number}
-        onChange={setValue('scale')}
-        error={scaleError}
-      />
-      {/* Rotation and scale turn about this point; the gizmo fills it with
+          {/* Rotation and scale turn about this point; the gizmo fills it with
           the body's centre, and 0, 0, 0 is the world origin. */}
-      <div className="field-triple">
-        {TRANSFORM_AXES.map((axis) => (
-          <ExprInput
-            key={`p${axis}`}
-            label={`p${axis.toUpperCase()}`}
-            ariaLabel={`Pivot ${axis.toUpperCase()}${units ? ` in ${units}` : ''}`}
-            value={values[`p${axis}`] ?? ''}
-            scope={scope}
-            quantity={length}
-            onChange={setValue(`p${axis}`)}
-          />
-        ))}
-      </div>
+          <div className="field-triple">
+            {TRANSFORM_AXES.map((axis) => (
+              <ExprInput
+                key={`p${axis}`}
+                label={`p${axis.toUpperCase()}`}
+                ariaLabel={`Pivot ${axis.toUpperCase()}${units ? ` in ${units}` : ''}`}
+                value={values[`p${axis}`] ?? ''}
+                scope={scope}
+                quantity={length}
+                onChange={setValue(`p${axis}`)}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </FormShell>
   );
 }
@@ -1940,6 +2079,8 @@ export interface PatternFormValue {
   spacing2?: ParamValue;
   /** Grid only: instance count along `axis2`. */
   count2?: ParamValue;
+  /** R01, circular only: turn about this datum axis instead of `axis`. */
+  axisRef?: DatumAxisRef;
 }
 
 interface PatternFormProps {
@@ -1948,6 +2089,8 @@ interface PatternFormProps {
   bodies: BodyOption[];
   selectedBodyId?: BodyId | null;
   initial?: PatternFormValue;
+  /** R01, circular only: earlier datum axes the copies may turn about. */
+  datumAxes?: readonly DatumAxisChoice[];
   submitLabel: string;
   onSubmit(value: PatternFormValue): void;
   onCancel?: () => void;
@@ -1959,6 +2102,7 @@ export function PatternForm({
   bodies,
   selectedBodyId,
   initial,
+  datumAxes = [],
   submitLabel,
   onSubmit,
   onCancel
@@ -1979,6 +2123,13 @@ export function PatternForm({
   );
   const [count, setCount] = useState(paramValueText(initial?.count ?? 3));
   const [axis, setAxis] = useState<AxisId>(initial?.axis ?? 'x');
+  // Circular only: a world axis, or a datum axis by its feature id.
+  const [axisChoice, setAxisChoice] = useState<string>(
+    initial?.axisRef
+      ? `${DATUM_AXIS_VALUE}${initial.axisRef.datumFeatureId}`
+      : (initial?.axis ?? 'x')
+  );
+  const axisRef = kind === 'circular' ? axisRefOf(axisChoice) : undefined;
   const [spacing, setSpacing] = useState(
     paramValueText(initial?.spacing ?? 20)
   );
@@ -2067,7 +2218,8 @@ export function PatternForm({
                 spacing2: coerceParamValue(spacing2),
                 count2: coerceParamValue(count2)
               }
-            : {})
+            : {}),
+          ...(axisRef ? { axisRef } : {})
         })
       }
       onCancel={onCancel}
@@ -2098,12 +2250,19 @@ export function PatternForm({
         <label className="field">
           <span>Axis</span>
           <select
-            value={axis}
-            onChange={(event) => setAxis(event.target.value as AxisId)}
+            value={kind === 'circular' ? axisChoice : axis}
+            onChange={(event) => {
+              setAxisChoice(event.target.value);
+              if (!axisRefOf(event.target.value))
+                setAxis(event.target.value as AxisId);
+            }}
           >
             <option value="x">X</option>
             <option value="y">Y</option>
             <option value="z">Z</option>
+            {kind === 'circular'
+              ? datumAxisOptions(datumAxes, initial?.axisRef)
+              : null}
           </select>
         </label>
       </div>

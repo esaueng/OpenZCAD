@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import {
   ArrowUpFromLine,
+  Axis3d,
   Box,
   Combine,
   Cone,
@@ -18,6 +19,7 @@ import {
   PenLine,
   Pyramid,
   Radius,
+  Rotate3d,
   RotateCw,
   Scaling,
   Scissors,
@@ -40,6 +42,7 @@ export type ToolId =
   | 'torus'
   | 'sketch'
   | 'datum-plane'
+  | 'datum-axis'
   | 'extrude'
   | 'revolve'
   | 'loft'
@@ -50,6 +53,7 @@ export type ToolId =
   | 'intersect'
   | 'transform'
   | 'scale'
+  | 'axis-rotate'
   | 'mirror'
   | 'split'
   | 'shell'
@@ -116,6 +120,12 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     icon: icon(<SquareDashed size={16} aria-hidden="true" />),
     group: 'create',
     hint: 'Offset plane or midplane to sketch, split or mirror on'
+  },
+  'datum-axis': {
+    label: 'Axis',
+    icon: icon(<Axis3d size={16} aria-hidden="true" />),
+    group: 'create',
+    hint: 'Axis through points, along an edge or cylinder, or where planes meet'
   },
   box: {
     label: 'Box',
@@ -238,6 +248,13 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'bodies',
     hint: 'Uniformly resize a body about the origin'
   },
+  'axis-rotate': {
+    label: 'Rotate about axis',
+    short: 'Rotate',
+    icon: icon(<Rotate3d size={16} aria-hidden="true" />),
+    group: 'bodies',
+    hint: 'Turn a body, or a copy of it, about a datum axis'
+  },
   mirror: {
     label: 'Mirror',
     icon: icon(<FlipHorizontal2 size={16} aria-hidden="true" />),
@@ -299,7 +316,7 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
     {
       id: 'create',
       label: 'Create',
-      tools: ['sketch', 'datum-plane', ...PRIMITIVE_TOOLS]
+      tools: ['sketch', 'datum-plane', 'datum-axis', ...PRIMITIVE_TOOLS]
     },
     {
       id: 'from-sketch',
@@ -325,6 +342,7 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
       tools: [
         'transform',
         'scale',
+        'axis-rotate',
         'mirror',
         'split',
         'union',
@@ -416,6 +434,7 @@ export function toolDisabledReason(
   }
   if (
     (tool === 'scale' ||
+      tool === 'axis-rotate' ||
       tool === 'mirror' ||
       tool === 'split' ||
       tool === 'shell' ||
