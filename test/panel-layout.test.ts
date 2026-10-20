@@ -1790,6 +1790,48 @@ describe('parked panels in the unpinned slot', () => {
   });
 });
 
+describe('Hide all', () => {
+  it('projects no panels and reserves no dock width', () => {
+    let layout = popOutPanel(essentials(), 'history', {
+      x: 400,
+      y: 200,
+      w: 300,
+      h: 300
+    });
+    layout = openPanel(layout, 'revisions');
+    const shown = computePanelGeometry(layout, STAGE);
+    const hidden = setOption(layout, 'hidden', true);
+    const geometry = computePanelGeometry(hidden, STAGE);
+    expect(geometry.panels).toEqual({});
+    expect(geometry.columns).toEqual([]);
+    expect(geometry.floats).toEqual([]);
+    expect(geometry.gaps).toEqual([]);
+    expect(geometry.dockWidth).toEqual({ left: 0, right: 0 });
+    expect(geometry.rails.right.x + geometry.rails.right.w).toBe(
+      STAGE.width - GAP
+    );
+    expect(
+      computePanelGeometry(hidden, { width: 600, height: 844 }).phonePanel
+    ).toBeNull();
+    // The arrangement is kept, and unhiding draws it as before.
+    expect(
+      computePanelGeometry(setOption(hidden, 'hidden', false), STAGE)
+    ).toEqual(shown);
+  });
+
+  it('judges parking against the arrangement, not the hidden projection', () => {
+    const narrow: PanelStage = {
+      width: Math.ceil(stageFitting(2)) - 1,
+      height: 900
+    };
+    const hidden = setOption(essentials(), 'hidden', true);
+    // Objects is parked at this width; opening it while hidden reveals it.
+    const opened = openPanel(hidden, 'bodies', narrow);
+    expect(opened.options.hidden).toBe(false);
+    expect(opened.revealed).toBe('bodies');
+  });
+});
+
 describe('phone-width stages', () => {
   it('docks nothing at 720px and below', () => {
     for (const width of [PANEL_PHONE_MAX_WIDTH, 600, 390]) {
