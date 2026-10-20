@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { FaceGeometry, FaceWitnessV1 } from '@openzcad/shared';
 import {
   PreviewFaceGeometryCache,
+  faceContentDigestsOf,
   type FaceShapeKernel
 } from './preview-face-geometry-cache';
 import type { RemusKernel } from './remus-runtime';
@@ -14,8 +15,8 @@ interface FakeFace {
 
 /**
  * A fake kernel whose faces share one seam vertex, one closed edge of the
- * same type and length, one plane and one domain: only what the face list
- * gives them differs.
+ * same type, one plane and one domain: only what the face list gives them
+ * differs.
  */
 function kernelWith(faces: Record<number, FakeFace>): FaceShapeKernel {
   return {
@@ -29,7 +30,6 @@ function kernelWith(faces: Record<number, FakeFace>): FaceShapeKernel {
     getWireEdges: (wire: number) => Uint32Array.from([wire]),
     isEdgeForwardInWire: () => true,
     getEdgeCurveType: () => 'ELLIPSE',
-    edgeLength: () => 62.83,
     getEdgeParamSpan: () => Float64Array.from([0, 1]),
     evaluateEdgeCurve: (edge: number, t: number) =>
       Float64Array.from(faces[edge]!.curve(t)),
@@ -91,7 +91,7 @@ describe('preview face geometry cache', () => {
   });
 
   it('keeps boundaries of equal perimeter but different shape apart', () => {
-    // Same seam vertex, curve type, length, plane and domain; the second
+    // Same seam vertex, curve type, plane and domain; the second
     // boundary is a different ellipse through the same seam point.
     const kernel = kernelWith({
       1: { normal: [0, 0, 1], curve: ellipse(10, 10) },
@@ -119,5 +119,78 @@ describe('preview face geometry cache', () => {
     // Nothing unreadable is cached: each frame measures it again.
     expect(measured).toEqual([1, 1]);
     expect(cache.hits).toBe(0);
+  });
+
+  it('reuses a face by content digest without reading it again', () => {
+    const kernel = kernelWith({
+      1: { normal: [0, 0, 1], curve: ellipse(10, 10) },
+      2: { normal: [0, 0, 1], curve: ellipse(10, 10) },
+      3: { normal: [0, 0, 1], curve: ellipse(10, 6) }
+    });
+    const { cache, measured } = recordingCache(kernel);
+    const witnessed: number[] = [];
+    const witnessOf = (_: RemusKernel, face: number) => {
+      witnessed.push(face);
+      return witness;
+    };
+    const first = cache.describe(kernel as RemusKernel, 1, 'a', witnessOf);
+    // A later tick's handle for the same content reads nothing.
+    const again = cache.describe(kernel as RemusKernel, 2, 'a', witnessOf);
+    expect(again).toEqual(first);
+    expect(again.geometry).not.toBe(first.geometry);
+    again.geometry!.area = -1;
+    expect(cache.describe(kernel as RemusKernel, 2, 'a', witnessOf)).toEqual(
+      first
+    );
+    // A different digest, or none, reads the face as before.
+    cache.describe(kernel as RemusKernel, 3, 'b', witnessOf);
+    cache.describe(kernel as RemusKernel, 3, undefined, witnessOf);
+    expect(witnessed).toEqual([1, 3, 3]);
+    expect(measured).toEqual([1, 3]);
+    expect(cache.digestHits).toBe(2);
+  });
+
+  it('never measures a B-spline face, with or without a digest', () => {
+    const kernel = kernelWith({
+      1: { normal: [0, 0, 1], curve: ellipse(10, 10) }
+    });
+    const { cache, measured } = recordingCache(kernel);
+    const spline: FaceWitnessV1 = { ...witness, surfaceType: 'bspline' };
+    const witnessOf = () => spline;
+    for (const digest of ['s', 's', undefined]) {
+      expect(
+        cache.describe(kernel as RemusKernel, 1, digest, witnessOf)
+      ).toEqual({ witness: spline, geometry: undefined });
+    }
+    expect(measured).toEqual([]);
+  });
+});
+
+describe('faceContentDigestsOf', () => {
+  const faces = Uint32Array.from([4, 5]);
+  it('is null on kernels without the binding, or when it refuses', () => {
+    expect(faceContentDigestsOf({} as RemusKernel, faces)).toBeNull();
+    const refusing = {
+      faceContentDigests: () => {
+        throw new Error('invalid face handle');
+      }
+    };
+    expect(
+      faceContentDigestsOf(refusing as unknown as RemusKernel, faces)
+    ).toBeNull();
+    const short = { faceContentDigests: () => ['x'] };
+    expect(
+      faceContentDigestsOf(short as unknown as RemusKernel, faces)
+    ).toBeNull();
+  });
+
+  it('returns one digest per face, in order', () => {
+    const kernel = {
+      faceContentDigests: (handles: Uint32Array) =>
+        Array.from(handles, (face) => `d${face}`)
+    };
+    expect(
+      faceContentDigestsOf(kernel as unknown as RemusKernel, faces)
+    ).toEqual(['d4', 'd5']);
   });
 });

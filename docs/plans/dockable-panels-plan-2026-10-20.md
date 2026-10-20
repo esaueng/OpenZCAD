@@ -240,8 +240,12 @@ The menu replaces the rail's Layout button.
 - **Bottom lanes.** The command bar, toasts, activity lane and tour start after
   the left dock: `--lane-inset` grows by the left dock's width.
 - **Obstacles.** The selection callout, fit frame, keypad, drag-chip clamp and
-  sketch-dimension occluders read the dock and float selectors in place of
-  `.stage-right > .model-drawer-float`.
+  sketch-dimension occluders read the dock, floating-window and open-unpinned
+  panel selectors in place of `.stage-right > .model-drawer-float`. They use
+  every visible panel's rendered rectangle, including the phone lane; hidden
+  or suspended panels contribute no obstacle. Allowing a transient panel to
+  cover the model does not allow interactive overlays or fitted geometry to
+  be placed underneath that panel.
 - **Search.** Picking a feature or parameter in ⌘K opens History or Parameters
   unpinned if the panel is closed, and focuses it if it is open. It always
   makes the target visible: it turns Hide all off, and a parked or
@@ -372,6 +376,10 @@ Each slice is one PR and records its evidence in the U08 row.
   - two pinned panels stack
   - gap drag and double-click split
   - the inspector stays clear of the dock
+  - with a panel open unpinned, the keypad, selection callout and sketch
+    dimensions stay clear of its rendered rectangle, and Fit uses the
+    remaining frame; repeat in the phone lane and after closing or suspending
+    the panel so a stale obstacle cannot remain
   - sketch hides and restores the dock and an open unpinned panel, and a
     drag on the model suspends both
   - headers carry Pin and Close but no Pop out

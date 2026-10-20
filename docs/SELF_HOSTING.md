@@ -40,6 +40,18 @@ resource names owned by your Cloudflare account. `PUBLIC_APP_ORIGIN` must be a
 complete HTTPS origin with no trailing slash, for example
 `https://cad.example.com` or the `workers.dev` URL Wrangler assigns.
 
+The example enables `AI_DEPLOYMENT_FREE_ENABLED` and selects the free MiniMax
+model through OpenRouter. Once you add `OPENROUTER_API_KEY`, **every verified
+account can use your deployment's built-in assistant**, without Premium
+membership or an email allowlist. Account quotas and shared OpenRouter free-tier
+limits still apply. Prompts, context and selected attachments are sent to the AI
+service under its data policies, as disclosed in Settings.
+
+For a restricted assistant, set `AI_DEPLOYMENT_FREE_ENABLED` to `"false"` or
+remove it before deploying, then grant access through Premium membership or
+`AI_DEPLOYMENT_ALLOWED_EMAILS`. Paid models and custom endpoints always require
+those access grants, even when the free rollout flag is enabled.
+
 Run the offline preflight whenever the file changes:
 
 ```bash
@@ -106,19 +118,24 @@ pnpm --filter @openzcad/web exec wrangler secret put SETTINGS_ENCRYPTION_KEY --c
 pnpm --filter @openzcad/web exec wrangler secret put AI_IDENTITY_PEPPER --config ../../wrangler.selfhost.jsonc
 ```
 
-Deployment-funded AI is optional. It needs the provider key selected by
-`AI_PROVIDER` and an authenticated Premium account or a Free account in
-`AI_DEPLOYMENT_ALLOWED_EMAILS`. Without a provider key, signed-in users may
-instead store their own provider token. To enable hosted AI for selected Free
-accounts, set the provider secret and an explicit email allowlist:
+Deployment-funded AI is optional. The example's public free assistant needs an
+`OPENROUTER_API_KEY` allowed to use `minimax/minimax-m3.1-flash:free`:
 
 ```bash
-pnpm --filter @openzcad/web exec wrangler secret put OPENAI_API_KEY --config ../../wrangler.selfhost.jsonc
+pnpm --filter @openzcad/web exec wrangler secret put OPENROUTER_API_KEY --config ../../wrangler.selfhost.jsonc
+```
+
+For a restricted assistant, disable the public free rollout flag as described
+above. Then use the provider key selected by `AI_PROVIDER` and an authenticated
+Premium account or a Free account in the optional allowlist:
+
+```bash
 pnpm --filter @openzcad/web exec wrangler secret put AI_DEPLOYMENT_ALLOWED_EMAILS --config ../../wrangler.selfhost.jsonc
 ```
 
-Use `OPENROUTER_API_KEY` or `AI_API_KEY` instead when the selected provider
-requires it. Review the secret names before every deployment:
+Use `OPENAI_API_KEY` or `AI_API_KEY` instead when the selected provider requires
+it. Without a deployment provider key, signed-in users may instead store their
+own provider token. Review the secret names before every deployment:
 
 ```bash
 pnpm --filter @openzcad/web exec wrangler secret list --config ../../wrangler.selfhost.jsonc
