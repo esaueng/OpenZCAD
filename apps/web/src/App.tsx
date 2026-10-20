@@ -15,7 +15,10 @@ import type {
 } from '@openzcad/shared';
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
-import { datumFaceAttachFailed } from './lib/datumPlaneDisplay';
+import {
+  datumAxisSourceFailed,
+  datumFaceAttachFailed
+} from './lib/datumPlaneDisplay';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
 import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
 import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
@@ -1082,6 +1085,11 @@ const LazyDatumPlaneCard = lazyWithStaleChunkNotice(() =>
     default: module.DatumPlaneWorkspaceCard
   }))
 );
+const LazyDatumAxisCard = lazyWithStaleChunkNotice(() =>
+  import('./components/forms/DatumAxisForm').then((module) => ({
+    default: module.DatumAxisWorkspaceCard
+  }))
+);
 
 const AssistantPanel = withSuspense(LazyAssistantPanel);
 
@@ -1184,6 +1192,8 @@ const ModelingOperationsForm = withSuspense(LazyModelingOperationsForm);
 const SketchPlanePrompt = withSuspense(LazySketchPlanePrompt);
 
 const DatumPlaneCard = withSuspense(LazyDatumPlaneCard);
+
+const DatumAxisCard = withSuspense(LazyDatumAxisCard);
 import {
   chooseProjectDocument,
   projectsHaveSameRebuildInputs,
@@ -7329,7 +7339,10 @@ export function App() {
     }
     const data = feature?.data as
       | EditableModelingFeatureData
-      | Extract<FeatureNode['data'], { featureKind: 'datum-plane' }>
+      | Extract<
+          FeatureNode['data'],
+          { featureKind: 'datum-plane' | 'datum-axis' }
+        >
       | undefined;
     const nextTool = data?.featureKind ?? request.tool;
     const reason = toolDisabledReason(nextTool, availability);
@@ -13005,6 +13018,30 @@ export function App() {
       const { feature: repair, slot, both, first } = datumRepair;
       const attempt = datumRepairAttempt.current;
       const withdrawn = () => datumRepairAttempt.current !== attempt;
+      if (repair.data.featureKind === 'datum-axis') {
+        void import('./lib/datumAxes').then(({ datumAxisSourceRepairEdit }) => {
+          if (withdrawn()) return;
+          try {
+            const edit = datumAxisSourceRepairEdit(
+              base,
+              repair.featureId,
+              selection
+            );
+            void validatedFeature.runTransaction([edit.command], {
+              label: edit.label,
+              cancelled: withdrawn,
+              targets: affectedFeatureTargets(base, repair.featureId),
+              validateDerived: edit.validateDerived,
+              successMessage: `"${repair.name}" follows the re-picked source.`,
+              onSuccess: () => setDatumRepair(null),
+              onFailure: (message) => setStatus(message)
+            });
+          } catch (error) {
+            setStatus(errorMessage(error, 'That pick cannot carry this axis.'));
+          }
+        });
+        return;
+      }
       void import('./lib/datumPlanes').then(
         ({ datumFaceRepairEdit, datumFaceSourceFromPick }) => {
           if (withdrawn()) return;
@@ -13089,9 +13126,12 @@ export function App() {
     if (handleMeasurementPick(selection, additive, detail)) {
       return;
     }
-    // The Plane card asks for faces and edge ends: such a click is its next
-    // source pick, not a selection that closes the card it was waiting for.
-    if (tool === 'datum-plane' && selection.kind !== 'body') {
+    // The Plane and Axis cards ask for faces and edges: such a click is
+    // their next source pick, not a selection that closes the card.
+    if (
+      (tool === 'datum-plane' || tool === 'datum-axis') &&
+      selection.kind !== 'body'
+    ) {
       setSelectedTopology(selection);
       return;
     }
@@ -18989,6 +19029,41 @@ export function App() {
               : []
           )
         : []),
+      // R01: an axis along an edge or a cylinder whose source was lost.
+      ...(feature.data.featureKind === 'datum-axis' &&
+      (feature.data.definition.kind === 'edge' ||
+        feature.data.definition.kind === 'cylinder') &&
+      !isFeatureSuppressed(feature) &&
+      !doc?.derived.datumAxes?.[feature.featureId] &&
+      datumAxisSourceFailed(
+        feature,
+        doc && featureAttribution?.derived === doc.derived
+          ? featureAttribution.featureWarnings
+          : []
+      )
+        ? [
+            {
+              item: {
+                id: 'repair-datum-axis-source',
+                label:
+                  feature.data.definition.kind === 'edge'
+                    ? 'Re-pick source edge…'
+                    : 'Re-pick source face…',
+                icon: <Crosshair size={13} aria-hidden="true" />
+              },
+              run: () => {
+                if (!ensureCanEdit('repair a feature')) return;
+                setTool(null);
+                clearSelection();
+                setFaceRepair(null);
+                setDatumRepair({ feature, slot: 0 });
+                setStatus(
+                  `Re-pick the source for "${feature.name}": click ${feature.data.featureKind === 'datum-axis' && feature.data.definition.kind === 'edge' ? 'a straight edge' : 'a cylindrical or conical face'} · Esc cancels.`
+                );
+              }
+            }
+          ]
+        : []),
       ...(bodyId && body && !body.consumed
         ? [
             {
@@ -22367,6 +22442,33 @@ export function App() {
                   setDatumDragAvailable
                 }}
               />
+            ) : tool === 'datum-axis' && doc ? (
+              <DatumAxisCard
+                key={modelingEditFeature?.featureId ?? 'new'}
+                document={doc}
+                editFeature={modelingEditFeature}
+                scope={parameterScope.scope}
+                selection={selectedTopology}
+                pickPoint={lastPickDetailRef.current?.point ?? null}
+                editDisabledReason={editDisabledReason}
+                exactGeometryReady={exactGeometryReady}
+                app={{
+                  managerRef,
+                  geometry,
+                  validatedFeature,
+                  ensureCanEdit,
+                  newFeatureName,
+                  setStatus,
+                  editCardSessionRef,
+                  editSessionIsCurrent,
+                  finishFeatureEdit,
+                  finishFeatureCreation,
+                  validateSelectionEdit,
+                  handleDeleteFeature,
+                  cancelPanel,
+                  closeFeaturePanel
+                }}
+              />
             ) : (
               <Inspector
                 tool={tool}
@@ -22468,6 +22570,9 @@ export function App() {
                         : {}),
                       ...(value.copy
                         ? { copy: true, bodyName: newCopyBodyName(value.targetBodyId) }
+                        : {}),
+                      ...(value.axisRotation
+                        ? { axisRotation: value.axisRotation }
                         : {})
                     });
                   createValidatedFeature(
@@ -22653,8 +22758,11 @@ export function App() {
                           featureKind: 'revolve',
                           sketchId: value.sketchId,
                           axis: value.axis,
-                          angleDeg: value.angleDeg
-                        }
+                          angleDeg: value.angleDeg,
+                          ...(value.axisRef ? { axisRef: value.axisRef } : {})
+                        },
+                        // R01: the sketch axis is the absent datum axis.
+                        ...(value.axisRef ? {} : { clearData: ['axisRef'] })
                       },
                       `Edit ${value.name}`
                     ),
@@ -22706,8 +22814,15 @@ export function App() {
                             ...(value.pivot !== undefined
                               ? { pivot: value.pivot }
                               : {})
-                          }
-                        }
+                          },
+                          ...(value.axisRotation
+                            ? { axisRotation: value.axisRotation }
+                            : {})
+                        },
+                        // R01: no datum axis turn is the absent field.
+                        ...(value.axisRotation
+                          ? {}
+                          : { clearData: ['axisRotation'] })
                       },
                       `Edit ${value.name}`
                     ),
@@ -22741,8 +22856,11 @@ export function App() {
                             : {}),
                           ...(value.count2 !== undefined
                             ? { count2: value.count2 }
-                            : {})
-                        }
+                            : {}),
+                          ...(value.axisRef ? { axisRef: value.axisRef } : {})
+                        },
+                        // R01: the world axis is the absent datum axis.
+                        ...(value.axisRef ? {} : { clearData: ['axisRef'] })
                       },
                       `Edit ${value.name}`
                     ),

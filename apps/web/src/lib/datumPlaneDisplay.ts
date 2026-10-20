@@ -124,6 +124,27 @@ export function datumFaceAttachFailed(
   );
 }
 
+/**
+ * True when the build reports that this datum axis's edge or face source
+ * could not be found: the one failure a re-picked edge or face can repair.
+ */
+export function datumAxisSourceFailed(
+  feature: FeatureNode,
+  warnings: readonly FeatureWarning[]
+): boolean {
+  const prefix = `Datum axis "${feature.name}" cannot `;
+  return warnings.some(
+    (warning) =>
+      warning.featureId === feature.featureId &&
+      [
+        'run along an edge',
+        'follow a face',
+        'use an edge of body',
+        'use a face of body'
+      ].some((failure) => warning.message.includes(prefix + failure))
+  );
+}
+
 /** A datum plane as the viewport draws it: presentation only. */
 export interface DatumPlaneDisplay {
   featureId: FeatureId;

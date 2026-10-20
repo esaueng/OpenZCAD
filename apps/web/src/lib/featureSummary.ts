@@ -129,6 +129,17 @@ export function featureValueSummary(
       const offset = lengthValue(data.definition.offset);
       return offset === null ? null : `${offset} ${unit}${flip}`;
     }
+    case 'datum-axis': {
+      const reversed = data.definition.reverseDirection ? ' reversed' : '';
+      return `${
+        {
+          'two-point': '2 points',
+          edge: 'along edge',
+          cylinder: 'cylinder axis',
+          'plane-intersection': 'planes meet'
+        }[data.definition.kind]
+      }${reversed}`;
+    }
     case 'draft': {
       const angle = num(data.angleDeg);
       return angle === null ? null : `${angle}°`;

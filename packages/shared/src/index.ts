@@ -84,8 +84,16 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * An older client would refuse or drop such an object and every profile it
  * bounds, so the bump makes it refuse the document instead. Existing objects
  * are unchanged.
+ *
+ * v28 adds R01 datum axes: the `datum-axis` feature kind (through two points,
+ * along a straight edge, the axis of a cylinder or cone, or where two planes
+ * meet) and the references that turn geometry about one: a revolve's
+ * `axisRef`, a circular pattern's `axisRef` and a Move's `axisRotation`. An
+ * older client would build those features about their stored sketch or world
+ * axis instead, so the bump makes it refuse such a document. Every field is
+ * optional; absent is the v27 behaviour.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 27 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 28 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -122,7 +130,8 @@ export type FeatureKind =
   | 'direct-edit'
   | 'imported-step'
   | 'imported-mesh'
-  | 'datum-plane';
+  | 'datum-plane'
+  | 'datum-axis';
 export type SketchObjectKind =
   | 'rectangle'
   | 'circle'
@@ -335,6 +344,17 @@ export function isDatumPlaneRef(
   plane: ModelingPlaneReference | SketchPlaneRef
 ): plane is DatumPlaneRef {
   return (plane as { type?: unknown }).type === 'datum';
+}
+
+/**
+ * Schema v28: a reference to an R01 datum axis by the feature that defines
+ * it. Like a datum plane, the axis resolves once at its own history position
+ * and every consumer reads that line; nothing re-derives it from final
+ * topology.
+ */
+export interface DatumAxisRef {
+  type: 'datum-axis';
+  datumFeatureId: FeatureId;
 }
 
 export type FaceDistanceMoveMode =
@@ -714,6 +734,116 @@ export type DatumPlaneDefinition =
       point: DatumPointSource;
       reverseNormal?: boolean;
     };
+
+/**
+ * Schema v28: a straight model edge, by its schema-v5 lineage, that a datum
+ * axis runs along. The axis runs from the edge's end 0 to its end 1 (the
+ * same quantized end order an `edge-vertex` uses), so neither kernel's edge
+ * orientation decides its direction.
+ */
+export interface DatumAxisEdgeSource {
+  type: 'edge';
+  bodyId: BodyId;
+  edgeReference: EdgeTopologyReferenceV5;
+}
+
+/**
+ * Schema v28: a cylindrical or conical model face, by its schema-v5 lineage,
+ * whose axis a datum axis follows.
+ */
+export interface DatumAxisFaceSource {
+  type: 'face';
+  bodyId: BodyId;
+  faceReference: FaceTopologyReferenceV5;
+}
+
+/**
+ * Schema v28: how a datum axis is built. Each is refused by name rather than
+ * guessed when it has no single line: coincident points, an edge that is not
+ * straight, a face that is not a cylinder or cone, parallel planes.
+ * `reverseDirection` turns the axis end for end without moving it, which
+ * reverses the sense of every angle measured about it.
+ */
+export type DatumAxisDefinition =
+  | {
+      /** From the first point toward the second; the origin is the first. */
+      kind: 'two-point';
+      points: [DatumPointSource, DatumPointSource];
+      reverseDirection?: boolean;
+    }
+  | {
+      /** Along a straight edge, from its end 0 toward its end 1. */
+      kind: 'edge';
+      source: DatumAxisEdgeSource;
+      reverseDirection?: boolean;
+    }
+  | {
+      /**
+       * The axis of a cylindrical or conical face. A surface axis has no
+       * preferred sense of its own, so the direction is canonical (its first
+       * component beyond the direction quantum is positive) and kernel-neutral.
+       */
+      kind: 'cylinder';
+      source: DatumAxisFaceSource;
+      reverseDirection?: boolean;
+    }
+  | {
+      /**
+       * Where two planes meet, along A's normal × B's normal. The origin is
+       * the point of the line nearest A's origin. Parallel planes have no
+       * intersection line and are refused.
+       */
+      kind: 'plane-intersection';
+      sources: [DatumPlaneSource, DatumPlaneSource];
+      reverseDirection?: boolean;
+    };
+
+/** The plane sources a datum axis definition reads, in role order. */
+export function datumAxisPlaneSources(
+  definition: DatumAxisDefinition
+): DatumPlaneSource[] {
+  return definition.kind === 'plane-intersection'
+    ? [...definition.sources]
+    : [];
+}
+
+/** The point sources a datum axis definition reads, in role order. */
+export function datumAxisPointSources(
+  definition: DatumAxisDefinition
+): DatumPointSource[] {
+  return definition.kind === 'two-point' ? [...definition.points] : [];
+}
+
+/** The bodies whose topology a datum axis reads, like {@link datumSourceBodyIds}. */
+export function datumAxisSourceBodyIds(
+  definition: DatumAxisDefinition
+): BodyId[] {
+  const bodies = new Set<BodyId>();
+  if (definition.kind === 'edge' || definition.kind === 'cylinder')
+    bodies.add(definition.source.bodyId);
+  for (const source of datumAxisPlaneSources(definition))
+    if (source.type === 'face') bodies.add(source.bodyId);
+  for (const point of datumAxisPointSources(definition))
+    if (point.type === 'edge-vertex') bodies.add(point.bodyId);
+  return [...bodies];
+}
+
+/**
+ * Every datum axis a feature turns about: a revolve's or circular pattern's
+ * `axisRef` and a Move's `axisRotation`. Suppressed features count; their
+ * references are still live.
+ */
+export function featureDatumAxisRefs(data: FeatureData): DatumAxisRef[] {
+  switch (data.featureKind) {
+    case 'revolve':
+    case 'pattern':
+      return data.axisRef ? [data.axisRef] : [];
+    case 'transform':
+      return data.axisRotation ? [data.axisRotation.axis] : [];
+    default:
+      return [];
+  }
+}
 
 /** The plane sources a datum definition reads, in role order. */
 export function datumPlaneSources(
@@ -1192,6 +1322,15 @@ export type FeatureData =
       definition: DatumPlaneDefinition;
     }
   | {
+      /**
+       * R01 (schema v28): a datum axis. Like a datum plane it owns no body;
+       * its resolved line is published at its history position for the
+       * revolves, circular patterns and Moves that turn about it.
+       */
+      featureKind: 'datum-axis';
+      definition: DatumAxisDefinition;
+    }
+  | {
       featureKind: 'primitive';
       primitiveKind: PrimitiveKind;
       dimensions: Record<string, ParamValue>;
@@ -1261,6 +1400,13 @@ export type FeatureData =
        * `PARTIAL_REVOLVE_HASH_ONLY_REASON` in the kernel adapter.
        */
       angleDeg?: ParamValue;
+      /**
+       * R01 (schema v28): turn the profile about a datum axis instead of the
+       * sketch's `axis`. The axis must lie in the sketch plane; one that
+       * leaves it is refused by name rather than projected. `axis` is kept,
+       * so clearing this restores the sketch axis the revolve had.
+       */
+      axisRef?: DatumAxisRef;
     }
   | {
       featureKind: 'loft';
@@ -1333,6 +1479,13 @@ export type FeatureData =
        * holds: it rewrites `targetBodyId` and has no body of its own.
        */
       copy?: true;
+      /**
+       * R01 (schema v28): turn the body `angleDeg` degrees about a datum
+       * axis, right-handed about its direction, before `transform` applies
+       * (so a translation then moves the turned body). Absent is the
+       * Move every older document holds.
+       */
+      axisRotation?: { axis: DatumAxisRef; angleDeg: ParamValue };
     }
   | {
       featureKind: 'mirror';
@@ -1504,6 +1657,12 @@ export type FeatureData =
       spacing2?: ParamValue;
       /** Grid patterns: instance count along `axis2`. Absent reads as `count`. */
       count2?: ParamValue;
+      /**
+       * R01 (schema v28), circular patterns only: turn the copies about a
+       * datum axis, through its own origin, instead of the world `axis`
+       * through the origin. Absent is the world axis every older pattern uses.
+       */
+      axisRef?: DatumAxisRef;
     }
   | {
       featureKind: 'direct-edit';
@@ -2653,6 +2812,12 @@ export interface DatumFrame {
   normal: Vector3;
 }
 
+/** A resolved datum axis: a point on the line and its unit direction. */
+export interface DatumAxisLine {
+  origin: Vector3;
+  direction: Vector3;
+}
+
 export interface DerivedState {
   editAnalysis?: EditAnalysisRequest;
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
@@ -2662,6 +2827,11 @@ export interface DerivedState {
    * as the kernel did. A datum that failed or is suppressed is absent.
    */
   datumFrames?: Record<FeatureId, DatumFrame>;
+  /**
+   * R01 (schema v28): each datum axis as the exact build resolved it at its
+   * own history position. A datum axis that failed or is suppressed is absent.
+   */
+  datumAxes?: Record<FeatureId, DatumAxisLine>;
   exportableBodyIds: BodyId[];
   warnings: string[];
   updatedAt: string;
@@ -3871,7 +4041,8 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff',
-  'datum-plane': '#9aa5b8'
+  'datum-plane': '#9aa5b8',
+  'datum-axis': '#9aa5b8'
 };
 
 export const featureColor = (kind: FeatureKind): string =>
