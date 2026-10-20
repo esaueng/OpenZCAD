@@ -287,7 +287,15 @@ export function PanelDock({
                     onPointerCancel={(event) => endGapDrag(event, false)}
                     onDoubleClick={() => {
                       if (!gap.enabled) return;
-                      const next = splitGapEvenly(layout, gap.above, gap.below);
+                      // At the scale the stack is drawn at, as a drag is:
+                      // split by weight alone, a neighbour held at its
+                      // minimum redrew every other panel in the stack.
+                      const next = splitGapEvenly(
+                        layout,
+                        gap.above,
+                        gap.below,
+                        gap.pxPerWeight
+                      );
                       if (next !== layout) onLayout(next);
                     }}
                   >

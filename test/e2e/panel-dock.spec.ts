@@ -318,6 +318,51 @@ test('the gap between stacked panels resizes them, and a double-click splits the
   await expect(gap).toHaveAttribute('aria-valuenow', '50');
 });
 
+test('a double-click split leaves the rest of the stack its height when a neighbour sat at its minimum', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Split check', {
+    right: [['history', 'parameters', 'revisions']]
+  });
+  const history = modelPanel(page, 'History');
+  const parameters = modelPanel(page, 'Parameters');
+  const revisions = modelPanel(page, 'Revisions');
+  await expect(revisions).toBeVisible();
+
+  const gap = page.getByRole('separator', {
+    name: 'Resize History and Parameters'
+  });
+  const handle = await box(gap);
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 2000, {
+    steps: 6
+  });
+  await page.mouse.up();
+  await expect.poll(async () => (await box(parameters)).height).toBe(90);
+  // A shorter window draws the stack at a smaller scale; Parameters' share
+  // is then under 90px, and it is held at its minimum.
+  const tall = await box(revisions);
+  await page.setViewportSize({ width: 1440, height: 720 });
+  await expect
+    .poll(async () => (await box(revisions)).height)
+    .toBeLessThan(tall.height - 1);
+  await expect.poll(async () => (await box(parameters)).height).toBe(90);
+  const revisionsHeight = (await box(revisions)).height;
+
+  // Splitting the two evenly at the scale the stack is drawn at: weights
+  // split alone redrew the whole stack at another scale, Revisions with it.
+  await gap.dblclick();
+  await expect
+    .poll(async () =>
+      Math.abs((await box(history)).height - (await box(parameters)).height)
+    )
+    .toBeLessThan(1);
+  expect(
+    Math.abs((await box(revisions)).height - revisionsHeight)
+  ).toBeLessThan(1);
+});
+
 test('headers carry Pin and Close but no Pop out, and no fold', async ({
   page
 }) => {
