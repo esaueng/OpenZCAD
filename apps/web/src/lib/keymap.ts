@@ -146,6 +146,9 @@ export const KEYMAP_COMMANDS: readonly KeymapCommand[] = [
   // Pressed again on the rectangle tool, it steps the rectangle type.
   command('sketch-rectangle', 'Rectangle', 'sketch-mode', 'sketch', 'R'),
   command('sketch-polygon', 'Polygon', 'sketch-mode', 'sketch', 'P'),
+  // Pressed again on its tool, each steps between that tool's two types.
+  command('sketch-ellipse', 'Ellipse', 'sketch-mode', 'sketch', 'O'),
+  command('sketch-spline', 'Spline', 'sketch-mode', 'sketch', 'S'),
   command('sketch-text', 'Text', 'sketch-mode', 'sketch', 'T'),
   command('sketch-extrude', 'Extrude the sketch', 'sketch-mode', 'sketch', 'E')
 ];

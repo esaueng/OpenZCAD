@@ -9,6 +9,8 @@ import {
   newCanonicalPlaneRef
 } from '@openzcad/geometry';
 import {
+  datumAxisPlaneSources,
+  datumAxisSourceBodyIds,
   datumPlaneSources,
   datumSourceBodyIds,
   isFeatureSuppressed,
@@ -670,7 +672,9 @@ export function datumPlaneCommand(
 export function requireResolvedDatum(
   derived: ProjectDocument['derived'],
   featureId: FeatureId,
-  name: string
+  name: string,
+  /** R01 axes publish a line, not a frame. */
+  kind: 'datum-plane' | 'datum-axis' = 'datum-plane'
 ): void {
   const failure = derived.featureWarnings?.find(
     (warning) =>
@@ -678,6 +682,12 @@ export function requireResolvedDatum(
       (warning.kind === 'build-failed' || warning.kind === 'refusal')
   );
   if (failure) throw new Error(failure.message);
+  if (kind === 'datum-axis') {
+    if (!derived.datumAxes?.[featureId]) {
+      throw new Error(`${name} did not resolve to an axis.`);
+    }
+    return;
+  }
   if (!derived.datumFrames?.[featureId]) {
     throw new Error(`${name} did not resolve to a plane.`);
   }
@@ -707,14 +717,27 @@ export function downstreamDatumIds(
       after = true;
       continue;
     }
-    if (!after || feature.data.featureKind !== 'datum-plane') continue;
-    const { definition } = feature.data;
+    if (!after) continue;
+    const data = feature.data;
+    const planeSources =
+      data.featureKind === 'datum-plane'
+        ? datumPlaneSources(data.definition)
+        : data.featureKind === 'datum-axis'
+          ? datumAxisPlaneSources(data.definition)
+          : null;
+    if (!planeSources) continue;
+    const bodyIds =
+      data.featureKind === 'datum-plane'
+        ? datumSourceBodyIds(data.definition)
+        : data.featureKind === 'datum-axis'
+          ? datumAxisSourceBodyIds(data.definition)
+          : [];
     if (
-      datumPlaneSources(definition).some(
+      planeSources.some(
         (source) =>
           source.type === 'datum' && affected.has(source.datumFeatureId)
       ) ||
-      datumSourceBodyIds(definition).some((bodyId) => affected.has(bodyId))
+      bodyIds.some((bodyId) => affected.has(bodyId))
     ) {
       affected.add(feature.featureId);
       downstream.push(feature.featureId);
@@ -732,15 +755,28 @@ export function requireResolvedDatums(
   before: ProjectDocument,
   derived: ProjectDocument['derived'],
   featureId: FeatureId,
-  name: string
+  name: string,
+  /** What `featureId` is; read from `before` when absent (a new datum is not there). */
+  kind?: 'datum-plane' | 'datum-axis'
 ): void {
-  requireResolvedDatum(derived, featureId, name);
+  const kindOf = (id: FeatureId) =>
+    listFeaturesInOrder(before).find((feature) => feature.featureId === id)
+      ?.data.featureKind === 'datum-axis'
+      ? ('datum-axis' as const)
+      : ('datum-plane' as const);
+  requireResolvedDatum(derived, featureId, name, kind ?? kindOf(featureId));
   for (const id of downstreamDatumIds(before, featureId)) {
-    if (!before.derived.datumFrames?.[id]) continue;
+    if (!before.derived.datumFrames?.[id] && !before.derived.datumAxes?.[id])
+      continue;
     const datum = listFeaturesInOrder(before).find(
       (feature) => feature.featureId === id
     );
-    requireResolvedDatum(derived, id, datum?.name ?? 'A later plane');
+    requireResolvedDatum(
+      derived,
+      id,
+      datum?.name ?? 'A later datum',
+      kindOf(id)
+    );
   }
 }
 
@@ -837,3 +873,11 @@ export function datumFaceRepairEdit(
       requireResolvedDatums(document, derived, featureId, feature.name)
   };
 }
+
+// The point-slot rules, shared with the Axis card (R01 datum axes).
+export {
+  pointDraft as datumPointDraftOf,
+  pointDraftKey as datumPointDraftKey,
+  pointSource as datumPointSourceOf,
+  pointValidation as datumPointValidation
+};

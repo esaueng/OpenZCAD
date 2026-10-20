@@ -1,0 +1,57 @@
+{
+  "entry": "index-Ca2Ox2au.js",
+  "entryBytes": {
+    "raw": 1587,
+    "gzip9": 862,
+    "brotli11": 740
+  },
+  "entryReferencesWasm": false,
+  "entryReferencesLibraries": false,
+  "files": {
+    "index-Ca2Ox2au.js": {
+      "raw": 1587,
+      "gzip9": 862,
+      "brotli11": 740
+    },
+    "openzcad_mls_spike_mls_rs-BNPr8jmJ.js": {
+      "raw": 10164,
+      "gzip9": 3753,
+      "brotli11": 3356
+    },
+    "openzcad_mls_spike_mls_rs_bg-CAAkeaOo.wasm": {
+      "raw": 1016262,
+      "gzip9": 340076,
+      "brotli11": 264028
+    },
+    "openzcad_mls_spike_mls_rs_rustcrypto-Dh7mpqlG.js": {
+      "raw": 8485,
+      "gzip9": 3295,
+      "brotli11": 2952
+    },
+    "openzcad_mls_spike_mls_rs_rustcrypto_bg-hjdzMSpJ.wasm": {
+      "raw": 1241156,
+      "gzip9": 407288,
+      "brotli11": 311358
+    },
+    "openzcad_mls_spike_openmls-DriqLmar.js": {
+      "raw": 8471,
+      "gzip9": 3215,
+      "brotli11": 2875
+    },
+    "openzcad_mls_spike_openmls_bg-DP6eEmEN.wasm": {
+      "raw": 1651071,
+      "gzip9": 578820,
+      "brotli11": 442972
+    },
+    "rolldown-runtime-DK3Fl9T5.js": {
+      "raw": 158,
+      "gzip9": 154,
+      "brotli11": 116
+    },
+    "worker-DI0Ni1T9.js": {
+      "raw": 3149,
+      "gzip9": 1476,
+      "brotli11": 1327
+    }
+  }
+}

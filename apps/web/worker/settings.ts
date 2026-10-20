@@ -3,11 +3,13 @@ import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
   deepClone,
+  EXPORT_UNITS,
   normalizeKeymapOverrides,
   nowIso,
   PANEL_WIDTH_LIMITS,
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
+  UNITLESS_IMPORT_UNITS,
   type AppSettings,
   type PanelWidthLimits,
   type AppSettingsResponse,
@@ -351,6 +353,20 @@ export function parseUpdateAppSettingsRequest(
         cloudAutosaveDelaySeconds: optionalBoundedNumber(
           files.cloudAutosaveDelaySeconds,
           CLOUD_AUTOSAVE_DELAY_BOUNDS
+        ),
+        // Optional for the same reason: settings saved before these existed
+        // keep saving, and an unknown value falls back to the default.
+        unitlessImportUnits: optionalMember(
+          files,
+          'unitlessImportUnits',
+          UNITLESS_IMPORT_UNITS,
+          DEFAULT_APP_SETTINGS.files.unitlessImportUnits
+        ),
+        exportUnits: optionalMember(
+          files,
+          'exportUnits',
+          EXPORT_UNITS,
+          DEFAULT_APP_SETTINGS.files.exportUnits
         )
       },
       collaboration: {

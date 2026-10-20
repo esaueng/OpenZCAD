@@ -13,7 +13,11 @@ import {
   toolCardFor,
   type FaceTarget,
   type InteractionState,
-  type RegionTarget
+  type RegionTarget,
+  SKETCH_CURVE_MODES,
+  nextSketchCurveMode,
+  sketchCurveModeFor,
+  sketchCurveModeTool
 } from './machine';
 import { commandPrompt } from './prompt';
 import type {
@@ -295,6 +299,43 @@ describe('interactionReducer', () => {
     expect(state.mode === 'sketch' && state.session.drawing).toBe(true);
     expect(state.mode === 'sketch' && state.session.polygonSides).toBe(8);
     expect(state.mode === 'sketch' && state.session.tool).toBe('polygon');
+  });
+
+  it('arms the ellipse and spline tools by curve type (I01)', () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'spline' });
+    expect(state.mode === 'sketch' && state.session.tool).toBe('spline');
+    expect(state.mode === 'sketch' && state.session.curveMode).toBe(
+      'fit-spline'
+    );
+    state = interactionReducer(state, {
+      type: 'sketch-curve-mode',
+      mode: 'elliptical-arc'
+    });
+    expect(state.mode === 'sketch' && state.session.tool).toBe('ellipse');
+    expect(state.mode === 'sketch' && state.session.curveMode).toBe(
+      'elliptical-arc'
+    );
+    // Re-arming the ellipse keeps its type; the spline falls back to fit.
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'line' });
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'ellipse' });
+    expect(state.mode === 'sketch' && state.session.curveMode).toBe(
+      'elliptical-arc'
+    );
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'spline' });
+    expect(state.mode === 'sketch' && state.session.curveMode).toBe(
+      'fit-spline'
+    );
+    expect(nextSketchCurveMode('fit-spline')).toBe('control-spline');
+    expect(nextSketchCurveMode('control-spline')).toBe('fit-spline');
+    expect(nextSketchCurveMode('ellipse')).toBe('elliptical-arc');
+    expect(sketchCurveModeFor('ellipse', 'control-spline')).toBe('ellipse');
+    expect(SKETCH_CURVE_MODES.map(sketchCurveModeTool)).toEqual([
+      'ellipse',
+      'ellipse',
+      'spline',
+      'spline'
+    ]);
   });
 
   it("keeps Offset's settings without disarming it or dropping a pick", () => {

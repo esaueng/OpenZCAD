@@ -86,6 +86,7 @@ import {
   addSketchConstraint,
   addSketchFeature,
   addSketchObjects,
+  addDatumAxis,
   addDatumPlane,
   addSplitFeature,
   appendRevision,
@@ -98,6 +99,7 @@ import {
   createParameterIds,
   createSketchFeatureIds,
   createSplitFeatureIds,
+  type DatumAxisInput,
   type DatumPlaneInput,
   deleteFeature,
   deleteParameter,
@@ -189,13 +191,15 @@ import {
   updateFeature,
   updateSketch,
   updateSketchObject,
+  validateDatumAxisDefinition,
+  validateDatumAxisRef,
   validateDatumPlaneDefinition,
   validateModelingPlane
 } from '@openzcad/document-core';
 import {
   expandEditCandidateProposal,
   unmodifiedImportedSource,
-  isSketchDimensionField,
+  sketchObjectExposesDimension,
   isLocalBodyRef,
   normalizeLocalId,
   type CadDatumPlaneSource,
@@ -235,6 +239,7 @@ export type CommandKind =
   | 'feature.mirror'
   | 'feature.split'
   | 'feature.datum-plane'
+  | 'feature.datum-axis'
   | 'feature.hole'
   | 'feature.shell'
   | 'feature.solid-offset'
@@ -1377,6 +1382,8 @@ export const commandFactories = {
         if (!findSketch(document, payload.sketchId)) {
           throw new Error('Revolve requires an existing sketch.');
         }
+        if (payload.axisRef)
+          validateDatumAxisRef(document, payload.axisRef, null);
       }
     );
   },
@@ -1494,6 +1501,8 @@ export const commandFactories = {
             `Transform target body ${payload.targetBodyId} not found.`
           );
         }
+        if (payload.axisRotation)
+          validateDatumAxisRef(document, payload.axisRotation.axis, null);
       }
     );
   },
@@ -1531,6 +1540,22 @@ export const commandFactories = {
       (document) => addDatumPlane(document, withIds).document,
       (document) =>
         validateDatumPlaneDefinition(document, withIds.definition, null)
+    );
+  },
+  addDatumAxis(payload: DatumAxisInput): CommandDefinition<DatumAxisInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createFeatureOnlyIds() };
+    return makeCommand(
+      'feature.datum-axis',
+      {
+        'two-point': 'Add axis through two points',
+        edge: 'Add axis along edge',
+        cylinder: 'Add cylinder axis',
+        'plane-intersection': 'Add axis where planes meet'
+      }[payload.definition.kind],
+      withIds,
+      (document) => addDatumAxis(document, withIds).document,
+      (document) =>
+        validateDatumAxisDefinition(document, withIds.definition, null)
     );
   },
   holeBody(payload: HoleInput): CommandDefinition<HoleInput> {
@@ -1655,7 +1680,15 @@ export const commandFactories = {
       } pattern`,
       withIds,
       (document) => patternBody(document, withIds).document,
-      (document) => validateBodyTarget(document, payload.targetBodyId)
+      (document) => {
+        validateBodyTarget(document, payload.targetBodyId);
+        if (payload.axisRef) {
+          if (payload.patternKind !== 'circular') {
+            throw new Error('Only a circular pattern turns about a datum axis.');
+          }
+          validateDatumAxisRef(document, payload.axisRef, null);
+        }
+      }
     );
   },
   updateFeature(
@@ -1972,16 +2005,33 @@ function assertOperationExpressions(
     'text',
     'fontFamily',
     'fontStyle',
-    'align'
+    'align',
+    // A spline's method is a word; its points are checked one by one below.
+    'method'
   ]);
   const sketchObjects = (name: string, objects: SketchObjectData[]) => {
     objects.forEach((object, index) => {
       Object.entries(object).forEach(([key, value]) => {
+        if (key === 'points' && Array.isArray(value)) {
+          (value as { x: ParamValue; y: ParamValue }[]).forEach(
+            (point, pointIndex) => {
+              for (const axis of ['x', 'y'] as const) {
+                assertEvaluableExpression(
+                  scope,
+                  `${name} objects[${index}].points[${pointIndex}].${axis}`,
+                  point[axis],
+                  documentUnits
+                );
+              }
+            }
+          );
+          return;
+        }
         if (!nonDimensionKeys.has(key) && typeof value !== 'boolean') {
           assertEvaluableExpression(
             scope,
             `${name} objects[${index}].${key}`,
-            value,
+            value as ParamValue,
             documentUnits
           );
         }
@@ -2602,7 +2652,7 @@ export function commandsForCadPatch(
             `Sketch object ${operation.objectId} is not available on ${operation.sketchId}.`
           );
         }
-        if (!isSketchDimensionField(object.data.objectKind, operation.field)) {
+        if (!sketchObjectExposesDimension(object.data, operation.field)) {
           throw new Error(
             `${object.data.objectKind} sketch object ${operation.objectId} does not expose an editable ${operation.field} dimension.`
           );
@@ -3600,6 +3650,9 @@ export function replayCommands(
         break;
       case 'feature.datum-plane':
         next = addDatumPlane(next, command.payload as DatumPlaneInput).document;
+        break;
+      case 'feature.datum-axis':
+        next = addDatumAxis(next, command.payload as DatumAxisInput).document;
         break;
       case 'feature.hole':
         next = holeBody(next, command.payload as HoleInput).document;

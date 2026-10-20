@@ -320,6 +320,20 @@ export const KEYBOARD_CONTROL_GROUPS = [
         detail: 'Drag from the center to a vertex; the strip sets the sides.'
       },
       {
+        id: 'sketch-ellipse',
+        ...bound('sketch-ellipse'),
+        action: 'Ellipse',
+        detail:
+          'Place the center, an axis end, then the other radius; again steps to an elliptical arc.'
+      },
+      {
+        id: 'sketch-spline',
+        ...bound('sketch-spline'),
+        action: 'Spline',
+        detail:
+          'Click its points and press Enter; again steps between fit and control-point splines.'
+      },
+      {
         id: 'sketch-text',
         ...bound('sketch-text'),
         action: 'Text',

@@ -222,6 +222,34 @@ describe('SketchToolRail', () => {
     ).toHaveAttribute('aria-pressed', 'false');
   });
 
+  it('shares one curve slot between the ellipse and spline tools (I01)', async () => {
+    const user = userEvent.setup();
+    const onCurveMode = vi.fn();
+    const { props, rerender } = renderRail({ tool: 'line', onCurveMode });
+    // Idle, the slot shows the ellipse and opens no strip.
+    const slot = screen.getByRole('button', { name: 'Curve: Ellipse' });
+    expect(slot).toHaveAttribute('aria-pressed', 'false');
+    expect(
+      screen.queryByRole('radiogroup', { name: 'Curve type' })
+    ).not.toBeInTheDocument();
+    await user.click(slot);
+    expect(onCurveMode).toHaveBeenLastCalledWith('ellipse');
+
+    rerender(
+      <SketchToolRail {...props} tool="spline" curveMode="control-spline" />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Curve: Control-point spline' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    const strip = screen.getByRole('radiogroup', { name: 'Curve type' });
+    expect(within(strip).getByRole('radio', { name: 'Control' })).toBeChecked();
+    await user.click(within(strip).getByRole('radio', { name: 'Arc' }));
+    expect(onCurveMode).toHaveBeenLastCalledWith('elliptical-arc');
+    // The chip steps to the tool's other type.
+    await user.click(screen.getByRole('button', { name: 'Next curve type' }));
+    expect(onCurveMode).toHaveBeenLastCalledWith('fit-spline');
+  });
+
   it('shows the rectangle types and the polygon as one shape strip, with the polygon’s sides', async () => {
     const user = userEvent.setup();
     const onRectangleMode = vi.fn();

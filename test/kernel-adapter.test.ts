@@ -497,8 +497,17 @@ describe('kernel export', { timeout: 30_000 }, () => {
         bodyId,
         boundaryEdges: 0,
         nonManifoldEdges: 0,
-        watertight: true
+        watertight: true,
+        // A box at the origin: twelve triangles whose stored corners are
+        // exactly on their planes, every one of them measured.
+        triangleCount: 12,
+        maxDeviation: 0,
+        sampledTriangles: 12,
+        totalTriangles: 12
       }
     ]);
+    expect(report.triangleCount).toBe(12);
+    expect(report.maxDeviation).toBe(0);
+    expect(report.sampled).toBe(false);
   });
 });

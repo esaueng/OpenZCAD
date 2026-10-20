@@ -32,6 +32,7 @@ import type {
   BodyId,
   BodyMassProperties,
   BodyRepresentation,
+  DatumAxisRef,
   FaceGeometry,
   FeatureId,
   FeatureNode,
@@ -80,6 +81,7 @@ import {
   previewExpression
 } from '../lib/model';
 import { edgeLabel, edgeLength, faceLabel } from '../lib/topologyLabels';
+import { datumAxisChoices } from '../lib/datumAxisChoices';
 import type { CommandSession } from '../lib/interaction/machine';
 import {
   inspectorHeadingForFeature,
@@ -132,6 +134,7 @@ export interface InspectorCallbacks {
     sketchId: SketchId;
     axis: RevolveAxis;
     angleDeg: ParamValue;
+    axisRef?: DatumAxisRef;
   }): void;
   onCreateBoolean(value: BooleanFormValue): void;
   onCreateTransform(value: TransformFormValue): void;
@@ -179,6 +182,7 @@ export interface InspectorCallbacks {
       sketchId: SketchId;
       axis: RevolveAxis;
       angleDeg: ParamValue;
+      axisRef?: DatumAxisRef;
     }
   ): void;
   onApplyBoolean(feature: FeatureNode, value: BooleanFormValue): void;
@@ -1507,6 +1511,7 @@ export function Inspector(props: InspectorProps) {
           scope={scope}
           sketches={sketches}
           initialSketchId={preferredSketchId ?? undefined}
+          datumAxes={datumAxisChoices(props.document, null)}
           submitLabel="Create"
           onSubmit={props.onCreateRevolve}
           onCancel={props.onCancel}
@@ -1533,6 +1538,28 @@ export function Inspector(props: InspectorProps) {
       // make a Move now that it carries the Name field and body picker this
       // form existed for (WF-07). Editing an existing Move still uses
       // TransformForm, below.
+    } else if (tool === 'axis-rotate') {
+      // R01: a Move whose turn is about a datum axis. It creates the same
+      // transform feature, with only its axis rotation set.
+      body = (
+        <TransformForm
+          key="create-axis-rotate"
+          scope={scope}
+          bodies={bodies}
+          units={units}
+          initialTarget={
+            selectedTopology?.bodyId ??
+            selectedBodyIds.at(-1) ??
+            selectedBody?.bodyId
+          }
+          defaultName="Rotate"
+          axisOnly
+          datumAxes={datumAxisChoices(props.document, null)}
+          submitLabel="Create"
+          onSubmit={props.onCreateTransform}
+          onCancel={props.onCancel}
+        />
+      );
     } else if (tool === 'scale') {
       // Scale has no gizmo: the factor is parametric, so the form is the
       // right UI. It creates the same transform feature a Move does.
@@ -1627,6 +1654,7 @@ export function Inspector(props: InspectorProps) {
           kind={patternKind}
           scope={scope}
           bodies={bodies}
+          datumAxes={datumAxisChoices(props.document, null)}
           selectedBodyId={
             selectedTopology?.bodyId ??
             selectedBodyIds.at(-1) ??
@@ -1820,8 +1848,13 @@ export function Inspector(props: InspectorProps) {
             name: selectedFeature.name,
             sketchId: data.sketchId,
             axis: data.axis,
-            angleDeg: data.angleDeg
+            angleDeg: data.angleDeg,
+            ...(data.axisRef ? { axisRef: data.axisRef } : {})
           }}
+          datumAxes={datumAxisChoices(
+            props.document,
+            selectedFeature.featureId
+          )}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyRevolve(selectedFeature, value)}
           onCancel={props.onCancel}
@@ -1863,8 +1896,13 @@ export function Inspector(props: InspectorProps) {
             ...(data.transform.pivot !== undefined
               ? { pivot: data.transform.pivot }
               : {}),
-            ...(data.copy ? { copy: true } : {})
+            ...(data.copy ? { copy: true } : {}),
+            ...(data.axisRotation ? { axisRotation: data.axisRotation } : {})
           }}
+          datumAxes={datumAxisChoices(
+            props.document,
+            selectedFeature.featureId
+          )}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyTransform(selectedFeature, value)}
           onCancel={props.onCancel}
@@ -1999,8 +2037,13 @@ export function Inspector(props: InspectorProps) {
             ...(data.direction ? { direction: data.direction } : {}),
             ...(data.axis2 ? { axis2: data.axis2 } : {}),
             ...(data.spacing2 !== undefined ? { spacing2: data.spacing2 } : {}),
-            ...(data.count2 !== undefined ? { count2: data.count2 } : {})
+            ...(data.count2 !== undefined ? { count2: data.count2 } : {}),
+            ...(data.axisRef ? { axisRef: data.axisRef } : {})
           }}
+          datumAxes={datumAxisChoices(
+            props.document,
+            selectedFeature.featureId
+          )}
           submitLabel="Apply"
           onSubmit={(value) => props.onApplyPattern(selectedFeature, value)}
           onCancel={props.onCancel}
@@ -2223,7 +2266,8 @@ export function Inspector(props: InspectorProps) {
             this only shows when that was refused — exact geometry still
             loading, say — and is the way to retry once it is ready. */}
         {(modelingFeatureIsEditable(data.featureKind) ||
-          data.featureKind === 'datum-plane') &&
+          data.featureKind === 'datum-plane' ||
+          data.featureKind === 'datum-axis') &&
           props.onEditModelingFeature && (
             <button
               type="button"

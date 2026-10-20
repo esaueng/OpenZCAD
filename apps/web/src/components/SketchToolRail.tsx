@@ -12,6 +12,7 @@ import {
   Construction,
   Columns3,
   Diameter,
+  Ellipse,
   Ellipsis,
   FlipHorizontal2,
   Grid3x3,
@@ -27,6 +28,7 @@ import {
   ScanSearch,
   Scissors,
   Slice,
+  Spline,
   Square,
   SquareDashed,
   SquareDot,
@@ -38,10 +40,14 @@ import {
 import { MAX_SKETCH_POLYGON_SIDES, type AppSettings } from '@openzcad/shared';
 import {
   nextSketchCircleMode,
+  nextSketchCurveMode,
   nextSketchRectangleMode,
+  sketchCurveModeFor,
+  sketchCurveModeTool,
   type PendingSketchConstraint,
   type PendingSketchEdit,
   type SketchCircleMode,
+  type SketchCurveMode,
   type SketchRectangleMode,
   type SketchConstraintToolKind,
   type SketchEditToolKind,
@@ -105,6 +111,8 @@ interface SketchToolRailProps {
   rectangleMode?: SketchRectangleMode;
   /** The Polygon tool's side count; absent is 6. */
   polygonSides?: number;
+  /** The curve slot's type (I01); absent is each tool's first type. */
+  curveMode?: SketchCurveMode;
   construction: boolean;
   settings: AppSettings['sketching'];
   units: string;
@@ -131,6 +139,7 @@ interface SketchToolRailProps {
   onCircleMode(mode: SketchCircleMode): void;
   onRectangleMode?(mode: SketchRectangleMode): void;
   onPolygonSides?(sides: number): void;
+  onCurveMode?(mode: SketchCurveMode): void;
   onConstruction(value: boolean): void;
   onSettings(settings: AppSettings['sketching']): void;
   /** The hint travels with the tool: the rail already holds the specs. */
@@ -147,7 +156,10 @@ interface SketchToolRailProps {
 }
 
 const TOOLS: {
-  id: Exclude<SketchToolId, 'circle' | 'rectangle' | 'polygon'>;
+  id: Exclude<
+    SketchToolId,
+    'circle' | 'rectangle' | 'polygon' | 'ellipse' | 'spline'
+  >;
   label: string;
   /** The keymap command whose live key the tooltip names. */
   command: string;
@@ -284,6 +296,92 @@ const SHAPE_MODES: {
   }
 ];
 
+/** An elliptical arc between its two ends, drawn like lucide. */
+function EllipticalArc({ size }: { size: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2 12a10 6 0 0 1 20 0" />
+      <circle cx="2" cy="12" r="1" fill="currentColor" />
+      <circle cx="22" cy="12" r="1" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** A curve under its control polygon. */
+function ControlSpline({ size }: { size: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 20 8 5l8 14 5-15" strokeDasharray="2 3" strokeWidth={1.5} />
+      <path d="M3 20C6 9 10 9 12 13s5 4 9-9" />
+    </svg>
+  );
+}
+
+/**
+ * The curve slot's types (I01): the Ellipse tool's two and the Spline
+ * tool's two, sharing one rail slot the way the rectangle and polygon do.
+ */
+const CURVE_MODES: {
+  mode: SketchCurveMode;
+  label: string;
+  tile: string;
+  detail: string;
+  icon: typeof Ellipse | typeof EllipticalArc;
+}[] = [
+  {
+    mode: 'ellipse',
+    label: 'Ellipse',
+    tile: 'Ellipse',
+    detail: 'Center, an axis end, then the other radius',
+    icon: Ellipse
+  },
+  {
+    mode: 'elliptical-arc',
+    label: 'Elliptical arc',
+    tile: 'Arc',
+    detail: 'An ellipse, then the arc’s start and end',
+    icon: EllipticalArc
+  },
+  {
+    mode: 'fit-spline',
+    label: 'Fit spline',
+    tile: 'Fit',
+    detail: 'A smooth curve through every point',
+    icon: Spline
+  },
+  {
+    mode: 'control-spline',
+    label: 'Control-point spline',
+    tile: 'Control',
+    detail: 'A cubic B-spline pulled by its control points',
+    icon: ControlSpline
+  }
+];
+
+function curveModeSpec(mode: SketchCurveMode) {
+  return CURVE_MODES.find((spec) => spec.mode === mode) ?? CURVE_MODES[0]!;
+}
+
 const MIN_POLYGON_SIDES = 3;
 
 function shapeModeSpec(mode: SketchRectangleMode | 'polygon') {
@@ -382,7 +480,8 @@ function circleModeSpec(mode: SketchCircleMode) {
 export function sketchDrawToolLabel(
   tool: SketchToolId,
   circleMode: SketchCircleMode,
-  rectangleMode: SketchRectangleMode = 'corner'
+  rectangleMode: SketchRectangleMode = 'corner',
+  curveMode?: SketchCurveMode
 ): string {
   return tool === 'circle'
     ? circleModeSpec(circleMode).label
@@ -390,7 +489,9 @@ export function sketchDrawToolLabel(
       ? shapeModeSpec(rectangleMode).label
       : tool === 'polygon'
         ? shapeModeSpec('polygon').label
-        : (TOOLS.find((entry) => entry.id === tool)?.label ?? tool);
+        : tool === 'ellipse' || tool === 'spline'
+          ? curveModeSpec(sketchCurveModeFor(tool, curveMode)).label
+          : (TOOLS.find((entry) => entry.id === tool)?.label ?? tool);
 }
 
 /**
@@ -480,6 +581,7 @@ export function SketchToolRail({
   circleMode,
   rectangleMode = 'corner',
   polygonSides = 6,
+  curveMode,
   construction,
   settings,
   units,
@@ -498,6 +600,7 @@ export function SketchToolRail({
   onCircleMode,
   onRectangleMode,
   onPolygonSides,
+  onCurveMode,
   onConstruction,
   onSettings,
   onEditTool,
@@ -512,6 +615,8 @@ export function SketchToolRail({
   const circleKey = keymap.label('sketch-circle');
   const rectangleKey = keymap.label('sketch-rectangle');
   const polygonKey = keymap.label('sketch-polygon');
+  const ellipseKey = keymap.label('sketch-ellipse');
+  const splineKey = keymap.label('sketch-spline');
   // The sketch's overview and settings open beside the rail; closed until asked.
   const [paletteOpenState, setPaletteOpenState] = useState(false);
   const paletteOpen = paletteOpenProp ?? paletteOpenState;
@@ -592,6 +697,14 @@ export function SketchToolRail({
     tool === 'polygon' ? 'polygon' : rectangleMode
   );
   const ShapeIcon = shapeSpec.icon;
+  const curveOn = tool === 'ellipse' || tool === 'spline';
+  const curveSpec = curveModeSpec(
+    curveOn ? sketchCurveModeFor(tool, curveMode) : (curveMode ?? 'ellipse')
+  );
+  const CurveIcon = curveSpec.icon;
+  const curveKey =
+    sketchCurveModeTool(curveSpec.mode) === 'ellipse' ? ellipseKey : splineKey;
+  const chooseCurve = (mode: SketchCurveMode) => onCurveMode?.(mode);
   const drawTools = (
     <>
       {TOOLS.slice(0, 3).map(drawTool)}
@@ -760,6 +873,82 @@ export function SketchToolRail({
                 </button>
               </Tooltip>
             )}
+          </span>
+        ) : null}
+      </span>
+      <span className="sketch-circle-tool">
+        <Tooltip
+          label={curveSpec.label}
+          shortcut={curveKey}
+          description={
+            curveKey
+              ? `${platformShortcutLabel(curveKey)} again steps to the tool’s other type`
+              : 'The type strip picks an ellipse or a spline'
+          }
+        >
+          <button
+            type="button"
+            className={curveOn ? 'active' : undefined}
+            aria-pressed={curveOn}
+            aria-label={`Curve: ${curveSpec.label}`}
+            onClick={() => chooseCurve(curveSpec.mode)}
+          >
+            <CurveIcon size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+        {curveOn ? (
+          // Like the shape slot: the types ride beside the rail while the
+          // ellipse or spline tool is live, and leave with it.
+          <span
+            className="sketch-type-strip"
+            role="radiogroup"
+            aria-label="Curve type"
+            data-rail-flyout=""
+          >
+            {CURVE_MODES.map(
+              ({ mode, label, tile, detail, icon: Icon }, index) => {
+                const checked = curveSpec.mode === mode;
+                return (
+                  <Tooltip key={mode} label={label} description={detail}>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={checked}
+                      tabIndex={checked ? 0 : -1}
+                      className={`sketch-type-tile${checked ? ' active' : ''}`}
+                      onClick={() => chooseCurve(mode)}
+                      onKeyDown={(event) => {
+                        const next = radioGroupKeyStep(
+                          event,
+                          CURVE_MODES.length,
+                          index
+                        );
+                        if (next !== null) {
+                          chooseCurve(CURVE_MODES[next]!.mode);
+                        }
+                      }}
+                    >
+                      <Icon size={16} aria-hidden="true" />
+                      <span>{tile}</span>
+                    </button>
+                  </Tooltip>
+                );
+              }
+            )}
+            <Tooltip label="Next curve type" shortcut={curveKey}>
+              <button
+                type="button"
+                className="sketch-type-cycle"
+                aria-label="Next curve type"
+                onClick={() => chooseCurve(nextSketchCurveMode(curveSpec.mode))}
+              >
+                {curveKey ? (
+                  <kbd>{platformShortcutLabel(curveKey)}</kbd>
+                ) : (
+                  <RotateCw size={12} aria-hidden="true" />
+                )}
+              </button>
+            </Tooltip>
           </span>
         ) : null}
       </span>

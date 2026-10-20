@@ -13,6 +13,7 @@ import {
   datumPlaneDisplays,
   shiftedDatumFrame
 } from '../lib/datumPlaneDisplay';
+import { datumAxisDisplays } from '../lib/datumAxisDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
 import {
   useMemo,
@@ -783,6 +784,15 @@ export function ViewerShell({
                       )
                     }
                   : plane
+              )
+            : []
+        }
+        datumAxes={
+          datumDocument
+            ? datumAxisDisplays(
+                datumDocument,
+                hiddenDatumIds ?? new Set(),
+                selectedFeatureId
               )
             : []
         }

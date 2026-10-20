@@ -228,6 +228,14 @@ export function profilePoints(
       throw new Error(
         `A ${data.objectKind} is not a closed profile and cannot be extruded on its own.`
       );
+    case 'ellipse':
+    case 'spline':
+      // I01 curves are exact only through region analysis, which splits them
+      // where other curves cross and hands the kernel true ellipse and NURBS
+      // edges; this legacy path would facet them.
+      throw new Error(
+        `An ${data.objectKind} builds only through its detected sketch regions; select its region to extrude it.`
+      );
     case 'text':
       // This legacy path sweeps a single polygonal profile. Text is many
       // regions with holes and exact beziers; approximating it here would
@@ -299,6 +307,32 @@ export function transformMatrix(
     0,
     1
   ]);
+}
+
+/** A row-major 3×4 affine transform as the kernel's row-major 4×4 matrix. */
+export function affineMatrix(rows: readonly number[]): Float64Array {
+  if (rows.length !== 12) {
+    throw new Error('An affine transform has 12 entries.');
+  }
+  return new Float64Array([...rows, 0, 0, 0, 1]);
+}
+
+/** `outer · inner`: the affine transform applying `inner` first. */
+export function composeAffine(
+  outer: Float64Array,
+  inner: Float64Array
+): Float64Array {
+  const result = new Float64Array(16);
+  for (let row = 0; row < 4; row += 1) {
+    for (let column = 0; column < 4; column += 1) {
+      let sum = 0;
+      for (let k = 0; k < 4; k += 1) {
+        sum += outer[row * 4 + k]! * inner[k * 4 + column]!;
+      }
+      result[row * 4 + column] = sum;
+    }
+  }
+  return result;
 }
 
 export function uniformScaleMatrix(factor: number): Float64Array {

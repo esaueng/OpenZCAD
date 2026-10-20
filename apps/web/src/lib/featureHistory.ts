@@ -1,7 +1,10 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
 import {
+  datumAxisPlaneSources,
+  datumAxisPointSources,
   datumPlaneSources,
   datumPointSources,
+  featureDatumAxisRefs,
   isDatumPlaneRef,
   isInPlaceTransform
 } from '@openzcad/shared';
@@ -75,12 +78,24 @@ export function featureHistory(document: ProjectDocument) {
           if (point.type === 'edge-vertex') body(point.bodyId);
         datumOwners.add(feature.featureId);
         break;
+      case 'datum-axis':
+        datumAxisPlaneSources(data.definition).forEach(planeSource);
+        for (const point of datumAxisPointSources(data.definition))
+          if (point.type === 'edge-vertex') body(point.bodyId);
+        if (
+          data.definition.kind === 'edge' ||
+          data.definition.kind === 'cylinder'
+        )
+          body(data.definition.source.bodyId);
+        datumOwners.add(feature.featureId);
+        break;
       case 'extrude':
         sketch(data.sketchId);
         body(data.targetBodyId);
         break;
       case 'revolve':
         sketch(data.sketchId);
+        if (data.axisRef) datum(data.axisRef.datumFeatureId);
         break;
       case 'loft':
         data.sections.forEach((section) => sketch(section.sketchId));
@@ -112,6 +127,7 @@ export function featureHistory(document: ProjectDocument) {
       case 'pattern':
       case 'direct-edit':
         body(data.targetBodyId);
+        for (const ref of featureDatumAxisRefs(data)) datum(ref.datumFeatureId);
         break;
       case 'primitive':
       case 'imported-mesh':

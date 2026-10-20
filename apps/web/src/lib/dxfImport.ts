@@ -9,6 +9,7 @@ import {
   type SketchObjectData,
   type UnitSystem
 } from '@openzcad/shared';
+import { sketchObjectsExtent } from './importUnits';
 
 /**
  * DXF sketch import (D04): an ASCII DXF's 2D geometry becomes one sketch's
@@ -1031,18 +1032,51 @@ export function describeDxfCounts(counts: Record<string, number>): string {
 }
 
 /**
+ * Whether a DXF states its units, read from the header alone, and how large
+ * its drawing is in the file's own numbers (width, height) for sizing the
+ * unit prompt. Nothing here validates the geometry at any scale: a reading
+ * that has not been chosen yet must not refuse a file that the chosen one
+ * would accept. The extent is null when the drawing cannot be measured at
+ * its own numbers; the prompt then offers the units without sizes.
+ */
+export function inspectDxfUnits(text: string): {
+  declaresUnits: boolean;
+  extent: number[] | null;
+} {
+  refuseOversizedDxf(text.length);
+  const unitCode = insUnits(sectionsOf(readPairs(text)).get('HEADER'));
+  const declaresUnits = unitCode !== null && unitCode !== 0;
+  if (declaresUnits) return { declaresUnits, extent: null };
+  try {
+    // Millimetres in a millimetre frame: a scale of one, the file's numbers.
+    return {
+      declaresUnits,
+      extent: sketchObjectsExtent(importDxfSketch(text, 'mm', 'mm').objects)
+    };
+  } catch (error) {
+    if (error instanceof DxfImportError) return { declaresUnits, extent: null };
+    throw error;
+  }
+}
+
+/**
  * What importing `fileName` commits: one undoable sketch on Top (XY) named
  * after the file, and the status line that says what was read, converted and
  * left out. Throws a {@link DxfImportError} when nothing in the file is
  * sketch geometry.
+ *
+ * `unitless` is how a file without `$INSUNITS` is read (the project's units
+ * unless the user chose otherwise; {@link inspectDxfUnits} says whether to
+ * ask). Every scale-sensitive check runs once, at that reading.
  */
 export function dxfSketchImportPlan(
   document: ProjectDocument,
   fileName: string,
   text: string,
-  nameFeature: (name: string) => string
-): { command: AnyCommand; status: string } {
-  const result = importDxfSketch(text, document.units);
+  nameFeature: (name: string) => string,
+  unitless: UnitSystem = document.units
+): { command: AnyCommand; status: string; objects: SketchObjectData[] } {
+  const result = importDxfSketch(text, document.units, unitless);
   const left = [
     describeDxfCounts(result.dropped),
     describeDxfCounts(result.refused)
@@ -1059,7 +1093,9 @@ export function dxfSketchImportPlan(
     ? result.sourceUnit === unitName(document.units)
       ? ''
       : `, converted from ${result.sourceUnit}`
-    : `; it declares no units, so they were read as ${unitName(document.units)}`;
+    : unitless === document.units
+      ? `; it declares no units, so they were read as ${unitName(document.units)}`
+      : `; it declares no units, so they were read as ${unitName(unitless)} and converted`;
   const parts = [
     result.dropped && Object.keys(result.dropped).length
       ? `left out ${describeDxfCounts(result.dropped)}`
@@ -1075,6 +1111,7 @@ export function dxfSketchImportPlan(
       planeRef: newCanonicalPlaneRef('XY', 0),
       objects: result.objects
     }),
+    objects: result.objects,
     status: `Imported ${curves} ${curves === 1 ? 'curve' : 'curves'} from ${fileName} as sketch "${name}"${units}${parts.length ? ` · ${parts.join('; ')}` : ''}.`
   };
 }

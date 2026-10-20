@@ -12,6 +12,7 @@ function emptyBuildResult(): ExactBuildResult {
     shapes: new Map(),
     sketchBases: new Map(),
     datumFrames: new Map(),
+    datumAxes: new Map(),
     consumed: new Set(),
     importedStepDiagnostics: new Map(),
     meshBodies: new Set(),

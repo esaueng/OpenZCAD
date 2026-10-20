@@ -254,17 +254,23 @@ export function refusePick(
       if (
         data.objectKind !== 'line' &&
         data.objectKind !== 'circle' &&
-        data.objectKind !== 'arc'
+        data.objectKind !== 'arc' &&
+        data.objectKind !== 'ellipse'
       ) {
-        return 'Equal applies to two lines or two circles/arcs.';
+        return 'Equal applies to two lines, two circles/arcs or two ellipses.';
       }
       const first = existing[0];
       if (first) {
         const firstData = sketchObjectData(document, sketch, first.objectId);
-        const firstIsLine = firstData?.objectKind === 'line';
-        const currentIsLine = data.objectKind === 'line';
-        if (firstData && firstIsLine !== currentIsLine) {
-          return 'Equal needs another line, or another circle/arc.';
+        const group = (kind: SketchObjectData['objectKind'] | undefined) =>
+          kind === 'line' ? 'line' : kind === 'ellipse' ? 'ellipse' : 'round';
+        if (
+          firstData &&
+          group(firstData.objectKind) !== group(data.objectKind)
+        ) {
+          return firstData.objectKind === 'ellipse'
+            ? 'Equal needs another ellipse.'
+            : 'Equal needs another line, or another circle/arc.';
         }
       }
       return null;
@@ -289,12 +295,17 @@ export function refusePick(
         ? null
         : 'A radius constraint applies to circles and arcs.';
     case 'concentric':
-      return data.objectKind === 'circle' || data.objectKind === 'arc'
+      return data.objectKind === 'circle' ||
+        data.objectKind === 'arc' ||
+        data.objectKind === 'ellipse'
         ? null
-        : 'Concentric applies to circles and arcs.';
+        : 'Concentric applies to circles, arcs and ellipses.';
     case 'coincident': {
       if (data.objectKind === 'line' || data.objectKind === 'arc') {
         return null;
+      }
+      if (data.objectKind === 'ellipse' || data.objectKind === 'spline') {
+        return curvePointRefusal(data, pick);
       }
       if (data.objectKind === 'circle') {
         return pick.kind === 'point' && pick.point === 'center'
@@ -312,6 +323,9 @@ export function refusePick(
           return pick.kind === 'point' && pick.point === 'center'
             ? null
             : 'A circle contributes only its center point.';
+        }
+        if (data.objectKind === 'ellipse' || data.objectKind === 'spline') {
+          return curvePointRefusal(data, pick);
         }
         return 'Midpoint starts from a line/arc point or a circle center.';
       }
@@ -335,6 +349,9 @@ export function refusePick(
         return pick.kind === 'point' && pick.point === 'center'
           ? null
           : 'A circle contributes only its center point.';
+      }
+      if (data.objectKind === 'ellipse' || data.objectKind === 'spline') {
+        return curvePointRefusal(data, pick);
       }
       return 'Distance applies to line and arc points and circle centers.';
     }
@@ -360,9 +377,10 @@ export function refusePick(
       if (
         data.objectKind !== 'line' &&
         data.objectKind !== 'circle' &&
-        data.objectKind !== 'arc'
+        data.objectKind !== 'arc' &&
+        data.objectKind !== 'ellipse'
       ) {
-        return 'A point can lie on a line, circle or arc.';
+        return 'A point can lie on a line, circle, arc or ellipse.';
       }
       return existing[0]?.objectId === pick.objectId
         ? 'The point and the curve must be different objects.'
@@ -391,7 +409,31 @@ function pointPickRefusal(
       ? null
       : 'A circle contributes only its center point.';
   }
+  if (data.objectKind === 'ellipse' || data.objectKind === 'spline') {
+    return curvePointRefusal(data, pick);
+  }
   return `${label} applies to line and arc points and circle centers.`;
+}
+
+/**
+ * I01 solver points: an ellipse (or elliptical arc) by its centre, an open
+ * spline by its two end points. A closed spline has no end to hold.
+ */
+function curvePointRefusal(
+  data: Extract<SketchObjectData, { objectKind: 'ellipse' | 'spline' }>,
+  pick: ConstraintPick
+): string | null {
+  if (data.objectKind === 'ellipse') {
+    return pick.kind === 'point' && pick.point === 'center'
+      ? null
+      : 'An ellipse contributes only its center point.';
+  }
+  if (data.closed === true) {
+    return 'A closed spline has no end point to constrain.';
+  }
+  return pick.kind === 'point' && pick.point !== 'center'
+    ? null
+    : 'A spline contributes its start or end point.';
 }
 
 /**
@@ -668,6 +710,21 @@ function pointPosition(
       y: centerY + radius * Math.sin(angle)
     };
   }
+  if (data.objectKind === 'ellipse' && pick.point === 'center') {
+    const x = resolve(data.centerX);
+    const y = resolve(data.centerY);
+    return x === undefined || y === undefined ? null : { x, y };
+  }
+  if (data.objectKind === 'spline' && pick.point !== 'center') {
+    // An open spline passes through its first and last points.
+    const point =
+      pick.point === 'start'
+        ? data.points[0]
+        : data.points[data.points.length - 1];
+    const x = point ? resolve(point.x) : undefined;
+    const y = point ? resolve(point.y) : undefined;
+    return x === undefined || y === undefined ? null : { x, y };
+  }
   return null;
 }
 
@@ -789,7 +846,9 @@ export function constraintToolsForObject(
         ? ['equal', 'tangent', 'concentric', 'radius']
         : objectKind === 'arc'
           ? ['equal', 'concentric', 'radius']
-          : [];
+          : objectKind === 'ellipse'
+            ? ['equal', 'concentric']
+            : [];
   return kinds.map(constraintToolSpec);
 }
 

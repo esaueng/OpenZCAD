@@ -885,6 +885,55 @@ export function SettingsPage({
                   />
                 </SettingRow>
                 <SettingRow
+                  title="Unitless imports"
+                  hint="STL, OBJ, PLY and DXF without units: how to read them."
+                >
+                  <select
+                    value={settings.files.unitlessImportUnits}
+                    aria-label="Unitless imports"
+                    onChange={(event) =>
+                      patch({
+                        files: {
+                          ...settings.files,
+                          unitlessImportUnits: event.target
+                            .value as AppSettings['files']['unitlessImportUnits']
+                        }
+                      })
+                    }
+                  >
+                    <option value="ask">Ask each time</option>
+                    <option value="document">Project units</option>
+                    <option value="mm">Millimeters</option>
+                    <option value="cm">Centimeters</option>
+                    <option value="m">Meters</option>
+                    <option value="inch">Inches</option>
+                  </select>
+                </SettingRow>
+                <SettingRow
+                  title="Export units"
+                  hint="STEP, mesh and DXF files. GLB is always meters."
+                >
+                  <select
+                    value={settings.files.exportUnits}
+                    aria-label="Export units"
+                    onChange={(event) =>
+                      patch({
+                        files: {
+                          ...settings.files,
+                          exportUnits: event.target
+                            .value as AppSettings['files']['exportUnits']
+                        }
+                      })
+                    }
+                  >
+                    <option value="document">Project units</option>
+                    <option value="mm">Millimeters</option>
+                    <option value="cm">Centimeters</option>
+                    <option value="m">Meters</option>
+                    <option value="inch">Inches</option>
+                  </select>
+                </SettingRow>
+                <SettingRow
                   title="Reopen the last project"
                   hint="Pick up where you left off on launch."
                 >

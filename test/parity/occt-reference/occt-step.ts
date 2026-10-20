@@ -35,12 +35,19 @@ import {
   circleProfile,
   frameForPlaneRef,
   mergeAdjacentProfiles,
+  axisRotationMatrix,
+  edgeDatumAxis,
   midDatumPlane,
   offsetDatumPlane,
   parallelDatumPlane,
+  planeIntersectionDatumAxis,
   polygonProfile,
   rectangleProfile,
+  requireRevolveAxisInPlane,
+  surfaceDatumAxis,
   threePointDatumPlane,
+  twoPointDatumAxis,
+  type DatumAxis,
   type PlaneBasis,
   type SketchRegion,
   type Vec2,
@@ -55,6 +62,9 @@ import {
   type BodyId,
   type BodyRepresentation,
   type BodyTopology,
+  type DatumAxisEdgeSource,
+  type DatumAxisFaceSource,
+  type DatumAxisRef,
   type DatumPointSource,
   type DirectEditOperation,
   type DerivedState,
@@ -85,6 +95,10 @@ import {
   flattenBezierCurve,
   flattenedOutlineWarning
 } from '../../../packages/kernel-adapter/src/profile-bezier-edges';
+import {
+  ellipseEdgePlan,
+  splineEdgePieces
+} from '../../../packages/kernel-adapter/src/profile-curve-edges';
 import {
   analyzeUnionConnectivity,
   disconnectedUnionWarning
@@ -122,6 +136,8 @@ import {
   type SweepSemanticDescriptor
 } from './occt-lineage';
 import {
+  resolveDatumAxisEdge,
+  resolveDatumAxisFace,
   resolveEdgeVertex,
   resolveFaceAttachment,
   type EdgeVertexCandidate,
@@ -146,8 +162,44 @@ interface OcctBuildResult {
   lineages: Map<BodyId, OcctLineageState>;
   sketchBases: Map<SketchId, PlaneBasis>;
   datumFrames: Map<FeatureId, PlaneBasis>;
+  datumAxes: Map<FeatureId, DatumAxis>;
   consumed: Set<BodyId>;
   warnings: string[];
+}
+
+/** Row-major 3×4 affine `outer · inner`: `inner` applies first. */
+function composeAffine12(outer: number[], inner: number[]): number[] {
+  const at = (m: number[], row: number, column: number) =>
+    column === 3 && row === 3 ? 1 : row === 3 ? 0 : m[row * 4 + column]!;
+  const result: number[] = [];
+  for (let row = 0; row < 3; row += 1) {
+    for (let column = 0; column < 4; column += 1) {
+      let sum = 0;
+      for (let k = 0; k < 4; k += 1)
+        sum += at(outer, row, k) * at(inner, k, column);
+      result.push(sum);
+    }
+  }
+  return result;
+}
+
+/** Mirrors the production datum-axis reference resolver. */
+function datumAxisAt(
+  document: ProjectDocument,
+  ref: DatumAxisRef,
+  owner: string,
+  result: OcctBuildResult
+): DatumAxis {
+  const axis = result.datumAxes.get(ref.datumFeatureId);
+  if (!axis) {
+    const datum = listFeaturesInOrder(document).find(
+      (candidate) => candidate.featureId === ref.datumFeatureId
+    );
+    throw new Error(
+      `${owner} cannot use datum axis "${datum?.name ?? ref.datumFeatureId}" because it is unavailable at this point in history.`
+    );
+  }
+  return axis;
 }
 
 interface ThroughHoleGeometry extends FaceGeometry {
@@ -555,6 +607,15 @@ function faceAttachmentCandidatesForShape(
       ...candidate,
       witnessVersion: 1 as const,
       plane,
+      // R01 axes: only full cylindrical sections publish an exact axis here.
+      revolution:
+        geometry.axisStart && geometry.axisEnd
+          ? {
+              kind: 'cylinder' as const,
+              point: midpoint(geometry.axisStart, geometry.axisEnd),
+              direction: subtract(geometry.axisEnd, geometry.axisStart)
+            }
+          : null,
       ...(reference
         ? {
             lineage: {
@@ -986,6 +1047,11 @@ function profilePoints(
       throw new Error(
         `A ${data.objectKind} is not a closed profile and cannot be extruded on its own.`
       );
+    case 'ellipse':
+    case 'spline':
+      throw new Error(
+        `An ${data.objectKind} builds only through its detected sketch regions; select its region to extrude it.`
+      );
     case 'text':
       // Text is many regions with holes; a single polygonal profile cannot
       // represent it. It builds through the region path instead.
@@ -1218,7 +1284,8 @@ export class OcctStepKernelAdapter {
     point: DatumPointSource,
     datumName: string,
     result: OcctBuildResult,
-    scope: Record<string, number>
+    scope: Record<string, number>,
+    ownerKind: 'Datum plane' | 'Datum axis' = 'Datum plane'
   ): Vec3 {
     if (point.type === 'point') {
       const axis = (value: ParamValue, name: string) =>
@@ -1232,7 +1299,7 @@ export class OcctStepKernelAdapter {
     const shape = result.shapes.get(point.bodyId);
     if (!shape) {
       throw new Error(
-        `Datum plane "${datumName}" cannot use a vertex of body ${point.bodyId} because it is unavailable at the datum's history position.`
+        `${ownerKind} "${datumName}" cannot use a vertex of body ${point.bodyId} because it is unavailable at the datum's history position.`
       );
     }
     const sourceFeature = listFeaturesInOrder(document).find(
@@ -1248,9 +1315,56 @@ export class OcctStepKernelAdapter {
         result.lineages.get(point.bodyId)
       ),
       datumName,
+      ownerKind,
       sourceFeatureName:
         sourceFeature?.name ?? String(point.edgeReference.producingFeatureId)
     });
+  }
+
+  /** Mirrors the production edge and face datum-axis source resolver. */
+  private resolveDatumAxisSource(
+    document: ProjectDocument,
+    source: DatumAxisEdgeSource | DatumAxisFaceSource,
+    datumName: string,
+    result: OcctBuildResult,
+    reverseDirection: boolean | undefined
+  ): DatumAxis {
+    const shape = result.shapes.get(source.bodyId);
+    const reference =
+      source.type === 'edge' ? source.edgeReference : source.faceReference;
+    if (!shape) {
+      throw new Error(
+        `Datum axis "${datumName}" cannot use ${source.type === 'edge' ? 'an edge' : 'a face'} of body ${source.bodyId} because it is unavailable at the datum's history position.`
+      );
+    }
+    const sourceFeatureName =
+      listFeaturesInOrder(document).find(
+        (candidate) => candidate.featureId === reference.producingFeatureId
+      )?.name ?? String(reference.producingFeatureId);
+    if (source.type === 'edge') {
+      const [start, end] = resolveDatumAxisEdge({
+        reference: source.edgeReference,
+        candidates: edgeVertexCandidatesForShape(
+          this.kernel,
+          shape,
+          result.lineages.get(source.bodyId)
+        ),
+        datumName,
+        sourceFeatureName
+      });
+      return edgeDatumAxis(start, end, reverseDirection);
+    }
+    const axis = resolveDatumAxisFace({
+      reference: source.faceReference,
+      candidates: faceAttachmentCandidatesForShape(
+        this.kernel,
+        shape,
+        result.lineages.get(source.bodyId)
+      ),
+      datumName,
+      sourceFeatureName
+    });
+    return surfaceDatumAxis(axis.point, axis.direction, reverseDirection);
   }
 
   private makeProfileFace(
@@ -1331,6 +1445,75 @@ export class OcctStepKernelAdapter {
   }
 
   /**
+   * Ellipse edges cut exactly as the Remus adapter cuts them
+   * (`ellipseEdgePlan`). OpenCascade picks an ellipse's major-axis direction
+   * from the normal alone, so each edge is turned about its own axis until
+   * that direction is the planned one; the parameter then means the same
+   * point on both kernels.
+   */
+  private ellipseEdges(
+    curve: Extract<
+      SketchRegion['outer']['curves'][number],
+      { kind: 'ellipse' }
+    >,
+    basis: PlaneBasis
+  ): ShapeHandle[] {
+    const plan = ellipseEdgePlan(curve);
+    const center = OcctStepKernelAdapter.planePoint3(basis, curve.center);
+    const normal = {
+      x: basis.normal.x * plan.sign,
+      y: basis.normal.y * plan.sign,
+      z: basis.normal.z * plan.sign
+    };
+    const cos = Math.cos(plan.rotation);
+    const sin = Math.sin(plan.rotation);
+    const want = {
+      x: basis.u.x * cos + basis.v.x * sin,
+      y: basis.u.y * cos + basis.v.y * sin,
+      z: basis.u.z * cos + basis.v.z * sin
+    };
+    const probe = this.kernel.makeEllipseEdge(
+      center,
+      normal,
+      plan.major,
+      plan.minor
+    );
+    const at = this.kernel.curvePointAtParam(probe, 0);
+    const have = {
+      x: at.x - center.x,
+      y: at.y - center.y,
+      z: at.z - center.z
+    };
+    const cross = {
+      x: have.y * want.z - have.z * want.y,
+      y: have.z * want.x - have.x * want.z,
+      z: have.x * want.y - have.y * want.x
+    };
+    const angle = Math.atan2(
+      cross.x * normal.x + cross.y * normal.y + cross.z * normal.z,
+      have.x * want.x + have.y * want.y + have.z * want.z
+    );
+    const axis = { point: center, direction: normal };
+    if (plan.full) {
+      return [this.kernel.rotate(probe, axis, angle)];
+    }
+    return plan.ranges.map(([from, to]) =>
+      this.kernel.rotate(
+        this.kernel.makeEllipseArc(
+          center,
+          normal,
+          plan.major,
+          plan.minor,
+          from,
+          to
+        ),
+        axis,
+        angle
+      )
+    );
+  }
+
+  /**
    * Build an exact planar face for a detected region: outer wire plus hole
    * wires from the region's line/arc/bezier curves. Mirrors the Remus
    * adapter's construction — including the identical ≤ 90° arc subdivision —
@@ -1371,6 +1554,43 @@ export class OcctStepKernelAdapter {
               this.kernel.makeLineEdge(
                 OcctStepKernelAdapter.planePoint3(basis, points[index]!),
                 OcctStepKernelAdapter.planePoint3(basis, points[index + 1]!)
+              )
+            );
+          }
+          continue;
+        }
+        if (curve.kind === 'ellipse') {
+          edges.push(...this.ellipseEdges(curve, basis));
+          continue;
+        }
+        if (curve.kind === 'spline') {
+          // The same pieces, knots and control points the Remus adapter
+          // lifts, so the two kernels' vertices coincide.
+          for (const piece of splineEdgePieces(curve)) {
+            const knots: number[] = [];
+            const multiplicities: number[] = [];
+            for (const knot of piece.knots) {
+              if (knots.length > 0 && knots[knots.length - 1] === knot) {
+                multiplicities[multiplicities.length - 1]! += 1;
+              } else {
+                knots.push(knot);
+                multiplicities.push(1);
+              }
+            }
+            edges.push(
+              this.kernel.makeBSplineEdge(
+                piece.controls.flatMap((point) => {
+                  const lifted = OcctStepKernelAdapter.planePoint3(
+                    basis,
+                    point
+                  );
+                  return [lifted.x, lifted.y, lifted.z];
+                }),
+                piece.controls.map(() => 1),
+                knots,
+                multiplicities,
+                piece.degree,
+                false
               )
             );
           }
@@ -1497,7 +1717,8 @@ export class OcctStepKernelAdapter {
     feature: FeatureNode,
     scope: Record<string, number>,
     sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
-    warn: (message: string) => void
+    warn: (message: string) => void,
+    revolveAxis?: DatumAxis
   ): ShapeHandle {
     if (
       feature.data.featureKind !== 'extrude' &&
@@ -1564,6 +1785,14 @@ export class OcctStepKernelAdapter {
       );
     }
 
+    if (revolveAxis) {
+      requireRevolveAxisInPlane(revolveAxis, basis, sketch.name);
+      return this.kernel.revolve(
+        face,
+        { point: revolveAxis.origin, direction: revolveAxis.direction },
+        Math.PI * 2
+      );
+    }
     const direction = feature.data.axis === 'vertical' ? basis.v : basis.u;
     return this.kernel.revolve(
       face,
@@ -1582,6 +1811,7 @@ export class OcctStepKernelAdapter {
       lineages: new Map(),
       sketchBases: new Map(),
       datumFrames: new Map(),
+      datumAxes: new Map(),
       consumed: new Set(),
       warnings: [...errors]
     };
@@ -1682,7 +1912,15 @@ export class OcctStepKernelAdapter {
                 scope,
                 result.sketchBases,
                 (message) =>
-                  result.warnings.push(`Feature "${feature.name}": ${message}`)
+                  result.warnings.push(`Feature "${feature.name}": ${message}`),
+                feature.data.featureKind === 'revolve' && feature.data.axisRef
+                  ? datumAxisAt(
+                      document,
+                      feature.data.axisRef,
+                      `Revolve "${feature.name}"`,
+                      result
+                    )
+                  : undefined
               );
               result.shapes.set(feature.bodyId, shape);
               result.lineages.set(
@@ -1808,7 +2046,30 @@ export class OcctStepKernelAdapter {
               },
               scaleFactor
             );
-            const transformed = this.kernel.transform(target, matrix);
+            // R01: the turn about a datum axis applies first, as in production.
+            const axisRotation = feature.data.axisRotation;
+            const transformed = this.kernel.transform(
+              target,
+              axisRotation
+                ? composeAffine12(
+                    matrix,
+                    axisRotationMatrix(
+                      datumAxisAt(
+                        document,
+                        axisRotation.axis,
+                        `Move "${feature.name}"`,
+                        result
+                      ),
+                      resolveParamValue(
+                        axisRotation.angleDeg,
+                        scope,
+                        'rotate about axis',
+                        document.units
+                      )
+                    )
+                  )
+                : matrix
+            );
             if (feature.data.copy && !feature.bodyId) {
               throw new Error('Copy has no result body.');
             }
@@ -1878,6 +2139,51 @@ export class OcctStepKernelAdapter {
                         reverse
                       )
             );
+            break;
+          }
+          case 'datum-axis': {
+            const { definition } = feature.data;
+            const reverse = definition.reverseDirection;
+            let axis: DatumAxis;
+            if (definition.kind === 'two-point') {
+              const point = (pointSource: DatumPointSource) =>
+                this.resolveDatumPointAtHistory(
+                  document,
+                  pointSource,
+                  feature.name,
+                  result,
+                  scope,
+                  'Datum axis'
+                );
+              axis = twoPointDatumAxis(
+                point(definition.points[0]),
+                point(definition.points[1]),
+                reverse
+              );
+            } else if (definition.kind === 'plane-intersection') {
+              const source = (planeRef: SketchPlaneRef) =>
+                this.resolvePlaneRefAtHistory(
+                  document,
+                  planeRef,
+                  feature.name,
+                  result,
+                  scope
+                );
+              axis = planeIntersectionDatumAxis(
+                source(definition.sources[0]),
+                source(definition.sources[1]),
+                reverse
+              );
+            } else {
+              axis = this.resolveDatumAxisSource(
+                document,
+                definition.source,
+                feature.name,
+                result,
+                reverse
+              );
+            }
+            result.datumAxes.set(feature.featureId, axis);
             break;
           }
           case 'mirror': {
@@ -2266,11 +2572,19 @@ export class OcctStepKernelAdapter {
                 Math.abs(Math.abs(angle) - 360) <= GEOMETRY_EPSILON
                   ? angle / count
                   : angle / (count - 1);
+              const turn = feature.data.axisRef
+                ? datumAxisAt(
+                    document,
+                    feature.data.axisRef,
+                    `Pattern "${feature.name}"`,
+                    result
+                  )
+                : { origin: { x: 0, y: 0, z: 0 }, direction: axis };
               for (let index = 1; index < count; index += 1) {
                 instances.push(
                   this.kernel.rotate(
                     target,
-                    { point: { x: 0, y: 0, z: 0 }, direction: axis },
+                    { point: turn.origin, direction: turn.direction },
                     (step * index * Math.PI) / 180
                   )
                 );

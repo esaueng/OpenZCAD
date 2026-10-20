@@ -198,6 +198,52 @@ test('a box takes edges by its direction, and through faces in X-ray', async ({
   await expect(status).toContainText('4 edges selected.');
 });
 
+test('wireframe edge sweeps select the rear edges drawn without X-ray', async ({
+  page
+}, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await createBox(page, 'Wireframe Edge Sweep Part');
+  await topView(page);
+  const display = displayButton(page);
+  for (
+    let count = 0;
+    count < 3 &&
+    !/now: Wireframe$/.test((await display.getAttribute('aria-label')) ?? '');
+    count += 1
+  ) {
+    await display.click();
+  }
+  await expect(display).toHaveAttribute('aria-label', /now: Wireframe$/);
+  await expect(canvas(page)).not.toHaveAttribute('data-e2e-xray', /.*/);
+  await setSelectionFilter(page, 'Edge');
+  const { minX, minY, maxY, maxZ, pad, midX } = await boxExtent(page);
+  await sweep(
+    page,
+    [minX - pad, maxY + pad, maxZ],
+    [midX, minY - pad, maxZ]
+  );
+  await expect(page.getByRole('contentinfo')).toContainText('4 edges selected.');
+  await page.keyboard.press('Escape');
+  await sweep(
+    page,
+    [midX, maxY + pad, maxZ],
+    [minX - pad, minY - pad, maxZ]
+  );
+  await expect(page.getByRole('contentinfo')).toContainText('8 edges selected.');
+  await expect(canvas(page)).toHaveAttribute(
+    'data-e2e-selected-edges',
+    /^[^,]+(,[^,]+){7}$/
+  );
+  expect(errors).toEqual([]);
+  const screenshot = testInfo.outputPath('wireframe-edge-sweep.png');
+  await page.screenshot({ path: screenshot });
+  await testInfo.attach('wireframe-edge-sweep', {
+    path: screenshot,
+    contentType: 'image/png'
+  });
+});
+
 test('a box takes the faces in view, and every face in X-ray', async ({
   page
 }) => {

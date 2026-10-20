@@ -40,7 +40,7 @@ import type {
   TopologySelection,
   Vector3
 } from '@openzcad/shared';
-import { isSketchDimensionField } from './sketch-dimensions';
+import { sketchObjectExposesDimension } from './sketch-dimensions';
 export {
   createAllEdgesFilletProposal,
   parseAllEdgesFilletRequest
@@ -66,6 +66,7 @@ export {
 
 export {
   isSketchDimensionField,
+  sketchObjectExposesDimension,
   SKETCH_DIMENSION_FIELDS
 } from './sketch-dimensions';
 
@@ -4678,13 +4679,16 @@ export function validateCadPatchProposalAgainstDigest(
             : null;
         if (
           !object ||
-          !['rectangle', 'circle', 'polygon', 'line', 'arc', 'text'].includes(
-            String(object.objectKind)
-          ) ||
-          !isSketchDimensionField(
-            object.objectKind as SketchObjectData['objectKind'],
-            operation.field
-          )
+          ![
+            'rectangle',
+            'circle',
+            'polygon',
+            'line',
+            'arc',
+            'ellipse',
+            'text'
+          ].includes(String(object.objectKind)) ||
+          !sketchObjectExposesDimension(object, operation.field)
         ) {
           throw new Error(
             `set_sketch_dimension contains a stale or unavailable field for object ${operation.objectId}. Refresh the proposal from the current document digest.`
