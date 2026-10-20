@@ -48,6 +48,29 @@ export {
   assertCopiedSourcesArchived,
   type CopiedImportArchive
 } from './copied-source-reconciliation';
+export {
+  decodeProjectStorageBody,
+  hydrateProjectStorageSnapshot,
+  openProjectStorageUpload,
+  prepareClientProjectStorageSnapshot,
+  prepareProjectStorageSnapshot,
+  PROJECT_OBJECT_STORAGE_FORMAT,
+  PROJECT_OBJECT_STORAGE_PREFIX,
+  PROJECT_OBJECT_STORAGE_VERSION,
+  ProjectObjectStorageError,
+  ProjectStorageUploadError,
+  sha256Hex,
+  splitProjectStorageAssets,
+  splitProjectStorageUpload,
+  type ClientProjectStorage,
+  type PreparedProjectStorageSnapshot,
+  type ProjectStorageAssetKind,
+  type ProjectStorageAssetObject,
+  type ProjectStorageAssetReference,
+  type ProjectStorageSnapshot,
+  type ProjectStorageSplit
+} from './project-storage-snapshot';
+import type { ClientProjectStorage } from './project-storage-snapshot';
 import { importArtifactIds } from './mesh-artifact-discard';
 export {
   importArtifactIds,
@@ -440,6 +463,15 @@ interface StoredRevision {
   document: ProjectDocument;
 }
 
+/** How a document write reached the account. */
+export interface ProjectWriteOptions {
+  /**
+   * The browser's storage projection of the document, verified by the
+   * Worker (ADR-024 Phase 1). Stores without object storage ignore it.
+   */
+  storage?: ClientProjectStorage;
+}
+
 export interface PersistenceService {
   requireProjectRead(userId: UserId, projectId: string): Promise<ProjectAccess>;
   requireProjectEdit(userId: UserId, projectId: string): Promise<ProjectAccess>;
@@ -519,9 +551,14 @@ export interface PersistenceService {
     artifactId: string
   ): Promise<SharedProjectImportDownload | null>;
   listProjects(userId: UserId): Promise<ListProjectsResponse>;
+  /**
+   * `options.storage` is a browser-split write the Worker already verified
+   * (ADR-024 Phase 1); `request.document` is then its hydrated document.
+   */
   createProject(
     userId: UserId,
-    request: CreateProjectRequest
+    request: CreateProjectRequest,
+    options?: ProjectWriteOptions
   ): Promise<CreateProjectResponse>;
   /**
    * Copies a project, including its feature history, into a new one.
@@ -529,7 +566,8 @@ export interface PersistenceService {
    */
   duplicateProject(
     userId: UserId,
-    request: DuplicateProjectRequest
+    request: DuplicateProjectRequest,
+    options?: ProjectWriteOptions
   ): Promise<CreateProjectResponse>;
   /**
    * Moves a project between shelves, pins it, or repositions it.
@@ -562,7 +600,8 @@ export interface PersistenceService {
   /** @throws ProjectNotFoundError when the project does not exist. */
   saveRevision(
     userId: UserId,
-    request: SaveRevisionRequest
+    request: SaveRevisionRequest,
+    options?: ProjectWriteOptions
   ): Promise<ProjectDocument>;
   /**
    * The project's retained save states, newest first, without their documents.
@@ -597,7 +636,8 @@ export interface PersistenceService {
    */
   saveDocument(
     userId: UserId,
-    request: SaveProjectDocumentRequest
+    request: SaveProjectDocumentRequest,
+    options?: ProjectWriteOptions
   ): Promise<SaveProjectDocumentResponse>;
   /** What this account currently stores, and the limits it is measured against. */
   getStorageUsage(userId: UserId): Promise<AccountStorageUsage>;
@@ -1350,7 +1390,7 @@ export class InMemoryPersistenceService implements PersistenceService {
             expectedVersion: current.version,
             document: copied
           },
-          current
+          { expectedDocument: current }
         );
         copied = {
           ...copied,
@@ -1855,8 +1895,9 @@ export class InMemoryPersistenceService implements PersistenceService {
   async saveDocument(
     userId: UserId,
     request: SaveProjectDocumentRequest,
-    expectedDocument?: ProjectDocument
+    options?: ProjectWriteOptions & { expectedDocument?: ProjectDocument }
   ): Promise<SaveProjectDocumentResponse> {
+    const expectedDocument = options?.expectedDocument;
     const existing = this.projects.get(request.projectId);
     if (!existing) {
       throw new ProjectNotFoundError(request.projectId);
