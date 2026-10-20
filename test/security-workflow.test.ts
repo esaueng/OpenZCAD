@@ -11,6 +11,7 @@ describe('workflow runner policy', () => {
       'ci.yml': [],
       'public-commit-metadata.yml': ['ubuntu-24.04'],
       'fleet-ci.yml': Array(6).fill('*fleet-runner'),
+      'fleet-ci-pin.yml': ['ubuntu-24.04'],
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'macos-desktop.yml': ['macos-26'],
       'production-health.yml': ['ubuntu-latest'],

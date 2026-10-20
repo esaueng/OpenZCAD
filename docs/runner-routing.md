@@ -5,6 +5,17 @@ immutable commit from `ci.yml`. GitHub evaluates the runner expression before
 scheduling each job. There is no GitHub-hosted authorization or routing job in
 front of the Linux checks, and no routing HTTP request from Actions.
 
+Changing `fleet-ci.yml` takes two PRs. The first pins `ci.yml` to its own
+branch commit, so its CI runs the new file; after it merges, a second PR
+re-pins to the squash commit on main. GitHub deletes the first PR's branch at
+merge, and Actions cannot resolve a reusable workflow at a commit only
+`refs/pull/N/head` reaches: every `ci` run failed at startup, with no jobs,
+until the re-pin landed (19 October after #756, and 20 October after #769).
+`fleet-ci-pin.yml` closes that window. When a same-repository PR changes
+`ci.yml` to pin a commit its base branch lacks, it creates a
+`fleet-ci-pin/<sha>` branch at that commit, so the pin stays reachable after
+merge. Keep those branches; the re-pin PR is then clean-up, not an outage fix.
+
 Only the approved owner's open, same-repository PR merge refs are eligible.
 Main pushes and manual dispatches also require protected main. Repository name
 and numeric identity, PR author, event actor and rerun actor are checked in the

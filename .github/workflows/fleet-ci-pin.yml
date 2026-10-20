@@ -1,0 +1,30 @@
+name: Fleet CI pin keeper
+
+on:
+  # The trusted base-branch definition runs; PR code is never checked out.
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    paths: [.github/workflows/ci.yml]
+
+permissions: {}
+
+jobs:
+  keep-pin:
+    # A fork's commits never become fleet-ci pins.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/fleet-pin
+      - name: Keep the pinned fleet-ci.yml commit reachable after merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: python3 .github/fleet-pin/keep_pin.py
