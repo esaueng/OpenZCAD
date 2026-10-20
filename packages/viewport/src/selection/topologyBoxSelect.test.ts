@@ -462,6 +462,45 @@ describe('box selection of faces', () => {
     ).toEqual(['cover']);
   });
 
+  it('takes a back face corner only while a section draws both sides', () => {
+    const ortho = new THREE.OrthographicCamera(-200, 200, 200, -200, 0.1, 1000);
+    ortho.position.set(0, 0, 100);
+    ortho.lookAt(0, 0, 0);
+    ortho.updateMatrixWorld(true);
+    // Wound clockwise from the camera: the back of the face is seen.
+    const triangle: TopologyBoxCandidate = {
+      bodyId: 'corner',
+      positions: [-100, 100, 0, -100, 0, 0, 0, 100, 0],
+      indices: [0, 2, 1],
+      topology: {
+        edges: [],
+        faces: [
+          {
+            topologyId: 'triangle',
+            hash: 1,
+            triangleStart: 0,
+            triangleCount: 1
+          }
+        ]
+      }
+    };
+    const rect = rectFromDrag(1995, 995, 3990, 3990);
+    const opts = {
+      camera: ortho,
+      width: 4000,
+      height: 4000,
+      kind: 'face' as const
+    };
+    expect(topologyInBox([triangle], rect, 'crossing', opts)).toEqual([]);
+    // A section that keeps the whole triangle still switches to both sides.
+    const clippingPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 50);
+    expect(
+      ids(
+        topologyInBox([triangle], rect, 'crossing', { ...opts, clippingPlane })
+      )
+    ).toEqual(['triangle']);
+  });
+
   const camera = lookingDown();
   const options = (selectThrough = false) => ({
     camera,

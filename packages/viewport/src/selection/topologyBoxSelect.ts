@@ -294,12 +294,14 @@ function projectBody(
  * How thick a projected triangle is on screen — its least altitude, in
  * pixels — when it faces the camera, and 0 when it faces away. Screen y runs
  * down, so a triangle wound counter-clockwise from outside, as exact kernels
- * wind every face, faces the camera when its signed area is negative.
+ * wind every face, faces the camera when its signed area is negative. When
+ * bodies draw both sides (a section is active), either winding counts.
  */
 function facingThickness(
   a: ProjectedPoint,
   b: ProjectedPoint,
-  c: ProjectedPoint
+  c: ProjectedPoint,
+  doubleSided = false
 ): number {
   const doubled = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
   const longest = Math.max(
@@ -307,7 +309,8 @@ function facingThickness(
     Math.hypot(c.x - b.x, c.y - b.y),
     Math.hypot(a.x - c.x, a.y - c.y)
   );
-  return doubled < 0 && longest > 0 ? -doubled / longest : 0;
+  const facing = doubleSided ? Math.abs(doubled) : -doubled;
+  return facing > 0 && longest > 0 ? facing / longest : 0;
 }
 
 /** Barycentric weights of (x, y) in a screen triangle; null if degenerate. */
@@ -548,7 +551,8 @@ function faceSelections(
   bodies: ProjectedBody[],
   rect: ScreenRect,
   mode: BoxSelectMode,
-  grid: DepthGrid | null
+  grid: DepthGrid | null,
+  doubleSided: boolean
 ): TopologySelection[] {
   const owned = grid?.visibleFaces(rect, bodies) ?? null;
   const selected: TopologySelection[] = [];
@@ -600,7 +604,7 @@ function faceSelections(
           owned &&
           !sampleVisible &&
           !owned.has(`${bodyIndex}:${faceIndex}`) &&
-          facingThickness(a, b, c) >= MIN_FACING_THICKNESS_PX
+          facingThickness(a, b, c, doubleSided) >= MIN_FACING_THICKNESS_PX
         ) {
           const sample = faceSampleInRect(a, b, c, rect);
           const weights = sample
@@ -770,6 +774,6 @@ export function topologyInBox(
     grid.rasterize(bodies, !options.clippingPlane);
   }
   return options.kind === 'face'
-    ? faceSelections(bodies, rect, mode, grid)
+    ? faceSelections(bodies, rect, mode, grid, Boolean(options.clippingPlane))
     : edgeSelections(bodies, rect, mode, options, perspective, grid);
 }
