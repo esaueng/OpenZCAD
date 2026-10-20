@@ -9,7 +9,7 @@ import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { createNativeHolderStages } from './fixtures/hammer-holder/native-document';
 
 interface CacheProbe {
-  previewFaceGeometry: { hits: number; misses: number };
+  previewFaceGeometry: { hits: number; misses: number; digestHits: number };
 }
 
 function offsetCandidate(
@@ -84,9 +84,10 @@ it('reuses unchanged face measurements across drag previews without changing the
       }
     }
     // Most faces are untouched by the move and were measured only once.
-    expect(probe.previewFaceGeometry.hits).toBeGreaterThan(
-      probe.previewFaceGeometry.misses
-    );
+    // A kernel with exact face digests reuses them by digest before the
+    // shape key is ever built, so both kinds of reuse count.
+    const { hits, digestHits, misses } = probe.previewFaceGeometry;
+    expect(hits + digestHits).toBeGreaterThan(misses);
   } finally {
     dragging.dispose();
   }
