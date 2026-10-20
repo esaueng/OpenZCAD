@@ -2,6 +2,7 @@ import {
   createDrawingSheetId,
   createDrawingViewId,
   DRAWING_SCALE_PRESETS,
+  MAX_DRAWING_SCALE_TERM,
   drawingPaperPerModelUnit,
   type BodyId,
   type BodyRepresentation,
@@ -140,17 +141,25 @@ export interface StarterSheetInput {
   fingerprint: string;
 }
 
+/** Standard reductions past the presets, down to the smallest a sheet holds. */
+const LARGE_MODEL_SCALES: readonly DrawingScale[] = [
+  { numerator: 1, denominator: 200 },
+  { numerator: 1, denominator: 500 },
+  { numerator: 1, denominator: MAX_DRAWING_SCALE_TERM }
+];
+
 /**
- * The largest preset scale at which the starter's two columns and two rows
- * fit the view area with gaps, or the smallest preset when none does.
+ * The largest scale at which the starter's two columns and two rows fit the
+ * view area with gaps: a preset, or past them a standard reduction down to
+ * 1:1000. Null when even that does not fit.
  */
 function fittingScale(
   needU: number,
   needV: number,
   area: { width: number; height: number },
   units: UnitSystem
-): DrawingScale {
-  for (const scale of DRAWING_SCALE_PRESETS) {
+): DrawingScale | null {
+  for (const scale of [...DRAWING_SCALE_PRESETS, ...LARGE_MODEL_SCALES]) {
     const k = drawingPaperPerModelUnit(scale, units);
     if (
       needU * k + 3 * VIEW_GAP_MM <= area.width &&
@@ -158,10 +167,14 @@ function fittingScale(
     )
       return scale;
   }
-  return DRAWING_SCALE_PRESETS.at(-1)!;
+  return null;
 }
 
-/** A new sheet with the four-view starter, scaled to fit its paper. */
+/**
+ * A new sheet with the four-view starter, scaled to fit its paper. Throws,
+ * with a message for the user, when the model is too large to fit at any
+ * scale a sheet can hold.
+ */
 export function createStarterSheet(input: StarterSheetInput): DrawingSheet {
   const { side, topRow } = starterOrientations(input.projectionAngle);
   const extent = (orientation: DrawingViewOrientation) => {
@@ -193,6 +206,10 @@ export function createStarterSheet(input: StarterSheetInput): DrawingSheet {
     area,
     input.units
   );
+  if (!scale)
+    throw new Error(
+      `The model is too large for a sheet: its views do not fit ${input.paper.size} paper even at 1:${MAX_DRAWING_SCALE_TERM}.`
+    );
   const k = drawingPaperPerModelUnit(scale, input.units);
   const gapU = Math.max(0, (area.width - (leftColumn + rightColumn) * k) / 3);
   const gapV = Math.max(0, (area.height - (frontRow + topRowHeight) * k) / 3);

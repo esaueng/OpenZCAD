@@ -456,15 +456,23 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return;
     }
     const paper = defaultDrawingPaper(document.units);
-    const created = createStarterSheet({
-      name: `Sheet ${sheets.length + 1}`,
-      bodyIds,
-      bodies,
-      units: document.units,
-      paper: { size: paper.size, orientation: 'landscape' },
-      projectionAngle: paper.projectionAngle,
-      fingerprint
-    });
+    let created: DrawingSheet;
+    try {
+      created = createStarterSheet({
+        name: `Sheet ${sheets.length + 1}`,
+        bodyIds,
+        bodies,
+        units: document.units,
+        paper: { size: paper.size, orientation: 'landscape' },
+        projectionAngle: paper.projectionAngle,
+        fingerprint
+      });
+    } catch (error) {
+      props.onStatus(
+        error instanceof Error ? error.message : 'The sheet could not be made.'
+      );
+      return;
+    }
     if (run(commandFactories.addDrawingSheet({ sheet: created })))
       setSelectedSheetId(created.sheetId);
   };

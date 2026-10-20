@@ -12,6 +12,7 @@ import {
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
+  drawingPaperMm,
   drawingSetError,
   projectedViewSide,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -507,6 +508,38 @@ describe('D01 drawing section (schema v30)', () => {
     expect(manager.document.drawings!.sheets[0]!.projectionAngle).toBe('third');
   });
 
+  it('keeps mirrored views on the paper when the projection angle changes', () => {
+    const document = boxDocument();
+    const ids = document.bodyOrder;
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.addDrawingSheet({
+        sheet: sheet(ids, [
+          view('front', ids, { centerMm: { x: 100, y: 100 } }),
+          view('top', ids, {
+            centerMm: { x: 100, y: 280 },
+            parentViewId: baseId
+          }),
+          view('right', ids, {
+            centerMm: { x: 400, y: 100 },
+            parentViewId: baseId
+          })
+        ])
+      })
+    );
+    // Mirrored across the front these land at y = −80 and x = −200: off the
+    // A3 sheet. They stop at its edge, still on first angle's sides.
+    manager.execute(
+      commandFactories.updateDrawingSheet({ sheetId, projectionAngle: 'first' })
+    );
+    const views = manager.document.drawings!.sheets[0]!.views;
+    expect(views.map((entry) => entry.centerMm)).toEqual([
+      { x: 100, y: 100 },
+      { x: 100, y: 0 },
+      { x: 0, y: 100 }
+    ]);
+  });
+
   it('lets a view drop, or keep beside a new one, a body the model deleted', () => {
     const document = addPrimitiveFeature(boxDocument(), {
       name: 'Second',
@@ -785,6 +818,34 @@ describe('D01 sheet page and export', () => {
     expect(l!.orientation).toBe('left');
     expect(t!.centerMm.y).toBeLessThan(f!.centerMm.y);
     expect(l!.centerMm.x).toBeGreaterThan(f!.centerMm.x);
+  });
+
+  it('scales a large model past the presets, and refuses one no sheet holds', async () => {
+    const make = async (width: number) => {
+      const document = boxDocument(width);
+      const bodies = (await adapter.syncDocument(document)).bodyRepresentations;
+      const ids = document.bodyOrder;
+      return () =>
+        createStarterSheet({
+          name: 'Sheet 1',
+          bodyIds: ids,
+          bodies,
+          units: 'mm',
+          paper: { size: 'A3', orientation: 'landscape' },
+          projectionAngle: 'third',
+          fingerprint: drawingSourceFingerprint(bodies, ids)!
+        });
+    };
+    // A 30 m part needs more than 1:100 on A3; 1:200 fits it.
+    const large = (await make(30000))();
+    expect(large.scale).toEqual({ numerator: 1, denominator: 200 });
+    const paper = drawingPaperMm(large.paper);
+    for (const entry of large.views) {
+      expect(entry.centerMm.x).toBeGreaterThan(0);
+      expect(entry.centerMm.x).toBeLessThan(paper.width);
+    }
+    // A kilometre does not fit A3 even at 1:1000.
+    expect(await make(1e6)).toThrow(/too large for a sheet/);
   });
 
   it('maps model spans to paper through one transform: 1:2 halves them, inches scale by 25.4', async () => {

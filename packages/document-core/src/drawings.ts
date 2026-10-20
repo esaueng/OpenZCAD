@@ -179,16 +179,23 @@ function mirrorProjectedViews(sheet: DrawingSheet): void {
     const base = view.parentViewId ? byId.get(view.parentViewId) : undefined;
     if (!base) continue;
     const alignment = drawingViewAlignment(base.orientation, view.orientation);
-    if (alignment === 'row')
-      view.centerMm = {
-        x: 2 * base.centerMm.x - view.centerMm.x,
-        y: base.centerMm.y
-      };
-    else if (alignment === 'column')
-      view.centerMm = {
-        x: base.centerMm.x,
-        y: 2 * base.centerMm.y - view.centerMm.y
-      };
+    const mirrored =
+      alignment === 'row'
+        ? { x: 2 * base.centerMm.x - view.centerMm.x, y: base.centerMm.y }
+        : alignment === 'column'
+          ? { x: base.centerMm.x, y: 2 * base.centerMm.y - view.centerMm.y }
+          : null;
+    if (!mirrored) continue;
+    // Kept on the paper like any other placement, then held on its side of
+    // the base (bases never move here, and have no projected views of their
+    // own, so nothing else needs to follow).
+    view.centerMm = alignedCenter(
+      base,
+      view,
+      onPaper(sheet, mirrored),
+      sheet.projectionAngle,
+      'clamp'
+    );
   }
 }
 
