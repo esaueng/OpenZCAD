@@ -3154,8 +3154,22 @@ export interface CreateProjectRequest {
    * the document when present.
    */
   document?: ProjectDocument;
-  /** Client can transfer local records to the returned cloud identity. */
-  adoptionProtocolVersion?: 1;
+  /**
+   * Client can transfer local records to the returned cloud identity. With 2
+   * (ADR-024 Phase 1) the browser already re-homed `document`: it carries its
+   * new `proj_<uuid>` id, the caller as owner, the request name and a closing
+   * "Saved to account" checkpoint, and `localProjectId` is the device id the
+   * account binds for retry recovery. Version 1 is kept for one release.
+   */
+  adoptionProtocolVersion?: 1 | 2;
+  /** The device project id a version 2 adoption came from. */
+  localProjectId?: string;
+  /**
+   * Archived import ids the device document held before the browser localized
+   * them for its new home (version 2 only), so a discarded mesh upload still
+   * refuses the adoption.
+   */
+  sourceArtifactIds?: string[];
   /**
    * A new project the browser built (ADR-024 Phase 1). The account stores it
    * under its own id after the checks an adoption gets; unlike `document`, it
@@ -3196,6 +3210,29 @@ export interface DuplicateProjectRequest {
    * source project is not touched either way.
    */
   revisionId?: RevisionId;
+  /**
+   * The copy the browser built with `duplicateProjectDocument` (ADR-024
+   * Phase 1). The account keeps its `proj_<uuid>` id and stores it after the
+   * checks a created or adopted project gets. Requests without it are the
+   * pre-Phase 1 contract, kept for one release: the server builds the copy.
+   */
+  document?: ProjectDocument;
+  /** `projectCopyDocumentDigest(document)`; required with `document`. */
+  documentDigest?: string;
+  /**
+   * The source project's archived imports the copy references, which the
+   * server copies byte for byte without reading either document.
+   */
+  importSources?: ImportSourceCopyRef[];
+}
+
+/** One archived import source a browser-built copy needs under its own id. */
+export interface ImportSourceCopyRef {
+  /** The source project's archive of these bytes. */
+  artifactId: string;
+  kind: 'step-import' | 'mesh-payload';
+  checksumSha256: string;
+  logicalBytes: number;
 }
 
 export type DuplicateProjectResponse = CreateProjectResponse;

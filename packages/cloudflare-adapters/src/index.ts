@@ -17,9 +17,14 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   ArtifactQuotaError,
   ArtifactStorageError,
+  assertClientAdoption,
+  assertClientProjectCopy,
+  assertImportSourceCopyRefsComplete,
   assertPersistableDocument,
-  copyImportedSources,
-  copiedImportArchives,
+  copyImportSourceArtifacts,
+  importSourceCopyRefs,
+  type ImportSourceCopyRef,
+  projectCopyDocumentDigest,
   reconcileCopiedImportSources,
   verifyCopiedImportArchives,
   assertCopiedSourcesArchived,
@@ -378,6 +383,15 @@ export interface ProjectCopyCleanupIdentity {
   documentObjectId: string | null;
 }
 
+/** A copy ready to insert, with what its import-source copy needs. */
+interface PreparedProjectCopy {
+  document: ProjectDocument;
+  documentDigest: string;
+  importSources: readonly ImportSourceCopyRef[];
+  /** Set for a browser-listed copy: sources must belong to this project. */
+  sourceProjectId?: ProjectId;
+}
+
 interface ProjectCopyStoredHead {
   documentJson: string;
   documentObjectId: string | null;
@@ -390,24 +404,9 @@ export interface ProjectCopyFinalizeRequest {
   archives: readonly CopiedImportArchive[];
 }
 
-/** Exact canonical identity; presentation caches never count as owner edits. */
-export async function projectCopyDocumentDigest(
-  document: ProjectDocument
-): Promise<string> {
-  const { derived: _derived, ...canonical } = withoutDerivedProjection(
-    normalizeDocument(document)
-  );
-  const json = JSON.stringify(canonical, (_key, value: unknown) =>
-    isRecord(value)
-      ? Object.fromEntries(
-          Object.keys(value)
-            .sort()
-            .map((key) => [key, value[key]])
-        )
-      : value
-  );
-  return sha256Hex(new TextEncoder().encode(json));
-}
+// Moved to @openzcad/persistence so the browser that builds a copy computes
+// it (ADR-024 Phase 1); re-exported for existing server callers.
+export { projectCopyDocumentDigest };
 
 export class D1R2PersistenceService implements PersistenceService {
   constructor(private readonly env: CloudflareEnv) {}
@@ -1304,8 +1303,14 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().createProject(userId, request);
     }
+    const localProjectId =
+      request.adoptionProtocolVersion === 2
+        ? request.localProjectId
+        : request.document?.projectId;
     const document = request.document
-      ? await this.prepareAdoption(userId, request.document, request.name)
+      ? request.adoptionProtocolVersion === 2
+        ? await this.prepareClientAdoption(userId, request)
+        : await this.prepareAdoption(userId, request.document, request.name)
       : request.initialDocument
         ? await this.prepareInitialDocument(
             userId,
@@ -1320,24 +1325,52 @@ export class D1R2PersistenceService implements PersistenceService {
           userId,
           document,
           DEFAULT_PROJECT_ORGANIZATION,
-          request.document?.projectId,
+          localProjectId,
           undefined,
-          request.document
+          request.document,
+          request.sourceArtifactIds
         ),
         document
       };
     } catch (error) {
       // A concurrent request or a lost commit acknowledgement may have won.
       // Only this account's binding is consulted for recovery.
-      if (request.document) {
-        const mappedId = await this.adoptedProjectId(
-          userId,
-          request.document.projectId
-        );
+      if (localProjectId) {
+        const mappedId = await this.adoptedProjectId(userId, localProjectId);
         if (mappedId) throw this.alreadyAdopted(mappedId);
       }
       throw error;
     }
+  }
+
+  /**
+   * A device project the browser already re-homed (ADR-024 Phase 1). The
+   * device id binds the adoption as before; the account keeps the browser's
+   * new id once it is shown to be free.
+   */
+  private async prepareClientAdoption(
+    userId: UserId,
+    request: CreateProjectRequest
+  ): Promise<ProjectDocument> {
+    const localProjectId = request.localProjectId!;
+    const owned = await this.env
+      .DB!.prepare('SELECT id FROM projects WHERE id = ? AND user_id = ?')
+      .bind(localProjectId, userId)
+      .first<{ id: string }>();
+    if (owned) throw this.alreadyAdopted(owned.id);
+    const mappedId = await this.adoptedProjectId(userId, localProjectId);
+    if (mappedId) throw this.alreadyAdopted(mappedId);
+    assertClientAdoption(request.document!, {
+      userId,
+      name: request.name,
+      localProjectId
+    });
+    const document = withoutDerivedProjection(
+      normalizeDocument(request.document!)
+    );
+    this.assertDocumentCanBeStored(document);
+    if (await this.projectIdInUse(document)) throw projectIdTaken();
+    return document;
   }
 
   private async projectIdInUse(document: ProjectDocument): Promise<boolean> {
@@ -1437,23 +1470,10 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().duplicateProject(userId, request);
     }
-    const head = await this.loadProject(userId, request.projectId);
-    if (!head) {
-      throw new ProjectNotFoundError(request.projectId);
-    }
-    const branch = request.revisionId
-      ? await this.branchPointFor(request.projectId, request.revisionId, head)
-      : null;
-    // The copy is named after the project, not after the save state it starts
-    // from: "Bracket (copy)" is what the user is looking for on the shelf.
-    const name = request.name ?? (await this.copyNameFor(userId, head.name));
-    const source = branch?.document ?? head;
-    const document = duplicateProjectDocument(
-      source,
-      name,
-      userId,
-      branch?.origin
-    );
+    const prepared = request.document
+      ? await this.prepareClientCopy(userId, request)
+      : await this.prepareServerCopy(userId, request);
+    const { document } = prepared;
     // A copy lands next to its original rather than at the top of the shelf,
     // which is where you go looking for it. It starts unpinned and active: the
     // point of a duplicate is to diverge from the original, not to inherit its
@@ -1480,7 +1500,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!initialHead.value)
       throw new ArtifactStorageError('The project copy could not be created.');
     const initialIdentity: ProjectCopyCleanupIdentity = {
-      documentDigest: await projectCopyDocumentDigest(document),
+      documentDigest: prepared.documentDigest,
       documentJsonDigest: await sha256Hex(
         new TextEncoder().encode(initialHead.value.documentJson)
       ),
@@ -1488,11 +1508,11 @@ export class D1R2PersistenceService implements PersistenceService {
     };
     let sourcesCopiedSuccessfully = false;
     try {
-      const copied = await copyImportedSources(
+      const archives = await copyImportSourceArtifacts(
         this,
         userId,
-        source,
-        document,
+        document.projectId,
+        prepared.importSources,
         () => {
           const hash = createHash('sha256');
           return {
@@ -1502,18 +1522,19 @@ export class D1R2PersistenceService implements PersistenceService {
             digest: () => hash.digest('hex')
           };
         },
-        (archive) => this.recordVerifiedCopiedImportArchive(userId, archive)
+        (archive) => this.recordVerifiedCopiedImportArchive(userId, archive),
+        prepared.sourceProjectId
       );
       sourcesCopiedSuccessfully = true;
-      if (copied !== document) {
+      if (archives.length) {
         return await this.finalizeImportedSourceCopy(userId, {
           projectId: document.projectId,
           expectedVersion: document.version,
           initialIdentity,
-          archives: copiedImportArchives(copied)
+          archives
         });
       }
-      return { project, document: copied };
+      return { project, document };
     } catch (error) {
       // Publication may already have journaled archives in the room, even
       // when D1 still has its initial head. Keep those owned bytes for recovery.
@@ -1534,6 +1555,83 @@ export class D1R2PersistenceService implements PersistenceService {
       }
       throw error;
     }
+  }
+
+  /**
+   * A copy the browser built (ADR-024 Phase 1). The source is only checked for
+   * read access and, for a branch, for holding the save state; neither
+   * document is read. The copy keeps its id once it is shown to be free.
+   */
+  private async prepareClientCopy(
+    userId: UserId,
+    request: DuplicateProjectRequest
+  ): Promise<PreparedProjectCopy> {
+    await this.requireProjectRead(userId, request.projectId);
+    if (request.revisionId) {
+      const stored = await this.env
+        .DB!.prepare(
+          'SELECT 1 AS found FROM revisions WHERE id = ? AND project_id = ?'
+        )
+        .bind(request.revisionId, request.projectId)
+        .first<{ found: number }>();
+      if (!stored)
+        throw new RevisionNotFoundError(request.projectId, request.revisionId);
+    }
+    const revision = assertClientProjectCopy(request.document!, {
+      userId,
+      sourceProjectId: request.projectId,
+      revisionId: request.revisionId,
+      name: request.name
+    });
+    const document = withoutDerivedProjection(
+      normalizeDocument(request.document!)
+    );
+    this.assertDocumentCanBeStored(document);
+    if (await this.projectIdInUse(document)) throw projectIdTaken();
+    await this.assertRevisionIdUnused(document.projectId, revision.revisionId);
+    const documentDigest = await projectCopyDocumentDigest(document);
+    if (documentDigest !== request.documentDigest) {
+      throw new SavePointRequestError(
+        'The copy digest does not match its document.'
+      );
+    }
+    const importSources = request.importSources ?? [];
+    assertImportSourceCopyRefsComplete(document, importSources);
+    return {
+      document,
+      documentDigest,
+      importSources,
+      sourceProjectId: request.projectId
+    };
+  }
+
+  /** The pre-Phase 1 copy the server builds itself; kept for one release. */
+  private async prepareServerCopy(
+    userId: UserId,
+    request: DuplicateProjectRequest
+  ): Promise<PreparedProjectCopy> {
+    const head = await this.loadProject(userId, request.projectId);
+    if (!head) {
+      throw new ProjectNotFoundError(request.projectId);
+    }
+    const branch = request.revisionId
+      ? await this.branchPointFor(request.projectId, request.revisionId, head)
+      : null;
+    // The copy is named after the project, not after the save state it starts
+    // from: "Bracket (copy)" is what the user is looking for on the shelf.
+    const name = request.name ?? (await this.copyNameFor(userId, head.name));
+    const source = branch?.document ?? head;
+    const document = duplicateProjectDocument(
+      source,
+      name,
+      userId,
+      branch?.origin
+    );
+    return {
+      document,
+      documentDigest: await projectCopyDocumentDigest(document),
+      importSources: importSourceCopyRefs(source, document)
+    };
   }
 
   /**
@@ -4719,12 +4817,17 @@ export class D1R2PersistenceService implements PersistenceService {
     organization: ProjectOrganization = DEFAULT_PROJECT_ORGANIZATION,
     localProjectId?: string,
     captureInitialHead?: (head: ProjectCopyStoredHead) => void,
-    adoptionSource?: ProjectDocument
+    adoptionSource?: ProjectDocument,
+    adoptionSourceArtifactIds: readonly string[] = []
   ): Promise<ProjectSummary> {
     this.assertDocumentCanBeStored(document);
     // Keep the pre-localization IDs in the atomic insert guard: a discard may
-    // win while R2 stores this adoption's new account document.
-    const discardGuard = meshDiscardCommitGuard(adoptionSource ?? document);
+    // win while R2 stores this adoption's new account document. A browser
+    // that localized them itself lists them alongside.
+    const discardGuard = meshDiscardCommitGuard(
+      adoptionSource ?? document,
+      adoptionSourceArtifactIds
+    );
     const insertGuard = discardGuard.sql
       ? ` WHERE 1 = 1${discardGuard.sql}`
       : '';
