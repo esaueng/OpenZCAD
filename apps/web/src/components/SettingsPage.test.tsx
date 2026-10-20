@@ -340,6 +340,145 @@ describe('settings navigation', () => {
   });
 });
 
+describe('assistant data disclosure', () => {
+  it('does not promise free access when a restricted deployment denies the account', () => {
+    const settings = defaultAppSettings();
+    renderSettings(null, {
+      initialSection: 'assistant',
+      session: {
+        userId: toUserId('user_restricted'),
+        displayName: 'Restricted user',
+        email: 'restricted@example.com',
+        mode: 'email-code'
+      },
+      accountState: {
+        settings,
+        revision: 1,
+        synced: true,
+        credential: { stored: false, storageAvailable: true },
+        effectiveAssistant: {
+          configured: false,
+          source: 'deployment',
+          provider: 'openrouter',
+          model: 'minimax/minimax-m3.1-flash:free',
+          reasoningEffort: 'high'
+        }
+      }
+    });
+    expect(screen.getByText('Not configured')).toBeVisible();
+    expect(
+      screen.queryByText(/Free with no personal API key/)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/may retain this data or use it for training/)
+    ).toBeVisible();
+  });
+
+  it.each(['openai', 'responses-compatible'] as const)(
+    'discloses the effective %s deployment provider instead of OpenRouter',
+    (provider) => {
+      const settings = defaultAppSettings();
+      renderSettings(null, {
+        initialSection: 'assistant',
+        accountState: {
+          settings,
+          revision: 1,
+          synced: true,
+          credential: { stored: false, storageAvailable: true },
+          effectiveAssistant: {
+            configured: true,
+            source: 'deployment',
+            provider,
+            model: 'deployment-model',
+            reasoningEffort: 'high'
+          }
+        }
+      });
+
+      expect(screen.queryByText(/OpenRouter/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/Free with no personal API key/)
+      ).not.toBeInTheDocument();
+      if (provider === 'openai') {
+        expect(
+          screen.getByText(/OpenAI may retain API data/)
+        ).toHaveTextContent(
+          'API data is not used for training unless the deployment operator opts in'
+        );
+        expect(
+          screen.getByRole('link', { name: 'OpenAI API data policies' })
+        ).toHaveAttribute(
+          'href',
+          'https://developers.openai.com/api/docs/guides/your-data'
+        );
+      } else {
+        expect(
+          screen.getByText(/The configured AI provider may retain this data/)
+        ).toHaveTextContent(
+          'Ask your deployment operator which service and data policies apply.'
+        );
+        expect(
+          screen.queryByRole('link', { name: /data policies/ })
+        ).not.toBeInTheDocument();
+      }
+    }
+  );
+
+  it('does not assume a provider before deployment status is available', () => {
+    renderSettings(null, { initialSection: 'assistant' });
+    expect(screen.getByText(/Ask your deployment operator/)).toBeVisible();
+    expect(screen.queryByText(/OpenRouter/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: /data policies/ })
+    ).not.toBeInTheDocument();
+  });
+
+  it('explains the free built-in model and data use, then keeps the personal model option', async () => {
+    const user = userEvent.setup();
+    const settings = defaultAppSettings();
+    renderStatefulSettings({
+      initialSection: 'assistant',
+      accountState: {
+        settings,
+        revision: 1,
+        synced: true,
+        credential: { stored: false, storageAvailable: true },
+        effectiveAssistant: {
+          configured: true,
+          source: 'deployment',
+          provider: 'openrouter',
+          model: 'minimax/minimax-m3.1-flash:free',
+          reasoningEffort: 'high'
+        }
+      }
+    });
+
+    expect(screen.getByText(/Free with no personal API key/)).toBeVisible();
+    expect(
+      screen.getByText(/may retain this data or use it for training/)
+    ).toBeVisible();
+    expect(
+      screen.getByText(/The built-in assistant sends your prompts/)
+    ).toHaveTextContent('conversation, model context, and any attachments');
+    expect(
+      screen.getByRole('link', { name: 'OpenRouter data policies' })
+    ).toHaveAttribute(
+      'href',
+      'https://openrouter.ai/docs/guides/privacy/provider-logging'
+    );
+    await user.click(screen.getByRole('radio', { name: 'Personal token' }));
+    expect(screen.getByLabelText('AI provider')).toBeVisible();
+    expect(screen.getByLabelText('AI model')).toBeVisible();
+    expect(screen.getByLabelText('Personal API token')).toBeVisible();
+    expect(
+      screen.getByText(/That provider’s data retention, training policies/)
+    ).toBeVisible();
+    expect(
+      screen.queryByText(/Free with no personal API key/)
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe('settings accessible names', () => {
   it('start each control name with its visible title', async () => {
     const user = userEvent.setup();

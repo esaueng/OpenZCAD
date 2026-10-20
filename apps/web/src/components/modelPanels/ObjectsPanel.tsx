@@ -117,7 +117,9 @@ function modelSketches({ features }: Pick<ObjectsSource, 'features'>) {
   return features.filter((feature) => feature.data.featureKind === 'sketch');
 }
 
-function modelDatums({
+type DatumRows = ReturnType<typeof buildDatums>;
+
+function buildDatums({
   document,
   parameterValues
 }: Pick<ObjectsSource, 'document' | 'parameterValues'>) {
@@ -130,6 +132,31 @@ function modelDatums({
       (row) => ({ ...row, datum: 'axis' as const })
     )
   ];
+}
+
+// The header count and the panel both need the datum rows, and building them
+// scans the whole history for each datum's dependents. Rows are cached per
+// (immutable) document and parameter scope so a render builds them once; the
+// WeakMap lets a closed project's document be collected.
+const datumCache = new WeakMap<
+  object,
+  { parameterValues: ObjectsSource['parameterValues']; rows: DatumRows }
+>();
+
+function modelDatums(
+  source: Pick<ObjectsSource, 'document' | 'parameterValues'>
+): DatumRows {
+  const { document } = source;
+  if (!document) {
+    return buildDatums(source);
+  }
+  const cached = datumCache.get(document);
+  if (cached?.parameterValues === source.parameterValues) {
+    return cached.rows;
+  }
+  const rows = buildDatums(source);
+  datumCache.set(document, { parameterValues: source.parameterValues, rows });
+  return rows;
 }
 
 /**

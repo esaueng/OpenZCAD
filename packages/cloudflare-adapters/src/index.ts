@@ -231,6 +231,8 @@ export interface CloudflareEnv {
   AI_IDENTITY_PEPPER?: string;
   /** Comma-separated authenticated emails allowed to use deployment AI spend. */
   AI_DEPLOYMENT_ALLOWED_EMAILS?: string;
+  /** Allow all verified accounts to use a free OpenRouter deployment model. */
+  AI_DEPLOYMENT_FREE_ENABLED?: string;
   /** Server-only comma-separated verified account emails with Premium access. */
   PREMIUM_USER_EMAILS?: string;
   PREMIUM_ARTIFACT_LIMIT_BYTES?: string;
@@ -260,6 +262,7 @@ export interface CloudflareEnv {
 }
 
 export const CLOUDFLARE_BOOLEAN_FLAGS = [
+  'AI_DEPLOYMENT_FREE_ENABLED',
   'DESKTOP_AUTH_ENABLED',
   'PROJECT_SHARING_ENABLED',
   'PROJECT_EDIT_LEASES_ENFORCED',

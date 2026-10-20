@@ -117,16 +117,28 @@ export interface FloatGroup<T extends PanelEntry = PanelId> extends Rect {
 
 /** Where a closed panel last lived; its rail button reopens it there. */
 export type PanelHome =
-  | { kind: 'column'; side: DockSide; column: number; index: number }
+  | {
+      kind: 'column';
+      side: DockSide;
+      column: number;
+      index: number;
+      /** Legacy marker for a removed singleton column. */
+      alone?: boolean;
+      /** Original stack order, including peers closed before this panel. */
+      peers?: PanelId[];
+      /** Other columns' panels, so removed columns return in order. */
+      preceding?: PanelId[];
+      following?: PanelId[];
+    }
   | { kind: 'float'; rect: Rect };
 
 export interface PanelLayoutOptions {
   /** Every panel hidden, layout kept. */
   hidden: boolean;
   /**
-   * No drags, moves or resizes: placing, dragging, gap and window resizing
-   * return the layout unchanged. Pin, unpin, pop-out, open, close, presets
-   * and settings still work.
+   * No drags, moves or resizes: placing, dragging, gap and window resizing,
+   * presets and the panel width return the layout unchanged. Pin, unpin,
+   * pop-out, open, close and the other settings still work.
    */
   locked: boolean;
   compact: boolean;
@@ -140,7 +152,10 @@ export interface PanelLayout<T extends PanelEntry = PanelId> {
   /** In z-order: the last is on top. */
   floats: FloatGroup<T>[];
   /** Relative heights within a column or window. */
-  weights: Record<PanelId, number>;
+  weights: Record<PanelId, number> & {
+    /** Transient slot height in a drag preview; never persisted. */
+    [PANEL_SLOT]?: number;
+  };
   unpinned: PanelId | null;
   /**
    * Panels by last use, most recent first: opened, pressed on the rail or
@@ -171,8 +186,11 @@ export type PanelLocation =
 export type PanelTarget =
   /** Stack in an existing column at `index`. */
   | { kind: 'column'; side: DockSide; column: number; index?: number }
-  /** A new column next to that side's rail. */
-  | { kind: 'newColumn'; side: DockSide }
+  /**
+   * A new column: at `column`, counted from the screen edge, or next to that
+   * side's rail without one.
+   */
+  | { kind: 'newColumn'; side: DockSide; column?: number }
   /** A new floating window. */
   | { kind: 'float'; rect: Rect }
   /** Stack in an existing floating window at `index`. */
@@ -282,7 +300,9 @@ function sideColumns<T extends PanelEntry>(
 }
 
 function weightOf(layout: PanelLayout<PanelEntry>, id: PanelEntry): number {
-  return id === PANEL_SLOT ? 1 : layout.weights[id];
+  return id === PANEL_SLOT
+    ? (layout.weights[PANEL_SLOT] ?? 1)
+    : layout.weights[id];
 }
 
 function insetsOf(stage: PanelStage): PanelInsets {
@@ -337,14 +357,12 @@ export function grownFloatRect(rect: Rect, stage?: PanelStage): Rect {
 }
 
 function nextFloatId(layout: PanelLayout<PanelEntry>): string {
-  let max = 0;
-  for (const group of layout.floats) {
-    const match = /^float-(\d+)$/.exec(group.id);
-    if (match) {
-      max = Math.max(max, Number(match[1]));
-    }
-  }
-  return `float-${max + 1}`;
+  const used = new Set(layout.floats.map((group) => group.id));
+  // At most one id per known panel: a free small integer always exists.
+  // Parsing a stored suffix could round max + 1 back to the same id.
+  let candidate = 1;
+  while (used.has(`float-${candidate}`)) candidate += 1;
+  return `float-${candidate}`;
 }
 
 /**
@@ -536,6 +554,9 @@ export function applyPreset(
   layout: PanelLayout,
   name: PanelPreset
 ): PanelLayout {
+  if (layout.options.locked) {
+    return layout;
+  }
   const next = presetLayout(name, { ...layout.options, hidden: false });
   next.recent = layout.recent.slice();
   return next;
@@ -576,6 +597,10 @@ export function setOption<K extends keyof PanelLayoutOptions>(
   key: K,
   value: PanelLayoutOptions[K]
 ): PanelLayout {
+  // A width change resizes every column, which the lock refuses.
+  if (key === 'width' && layout.options.locked) {
+    return layout;
+  }
   const next = copyLayout(layout);
   next.options[key] = value;
   return next;
@@ -662,26 +687,6 @@ export function beginDrag(layout: PanelLayout, id: PanelId): PanelLayout {
   return layout.options.locked ? layout : detach(layout, id, true);
 }
 
-/** Whether a target would add a column to `side` rather than stack in one. */
-function addsColumn(
-  layout: PanelLayout<PanelEntry>,
-  target: PanelTarget
-): DockSide | null {
-  if (target.kind !== 'column' && target.kind !== 'newColumn') {
-    return null;
-  }
-  const columns = sideColumns(layout, target.side);
-  if (
-    target.kind === 'column' &&
-    target.column >= 0 &&
-    target.column < columns.length
-  ) {
-    return null;
-  }
-  const live = columns.filter((column) => column.length > 0).length;
-  return live >= PANEL_MAX_COLUMNS[target.side] ? null : target.side;
-}
-
 /**
  * Everything between the screen edges and the model: each side's
  * `gap + rail + gap`, whether or not it has columns, and `columnWidth + gap`
@@ -707,7 +712,10 @@ function overCap(footprint: number, stageWidth: number): boolean {
 
 /**
  * Whether placing `id` at `target` would take the docks' footprint past the
- * cap on this stage. Only a new column adds to it.
+ * cap on this stage, or land it in a column that is parked there. Only a new
+ * column adds to the footprint; an existing column can already be parked
+ * after the stage shrank, and a panel put there would not be drawn. On a
+ * phone-width stage every target is refused, windows included.
  */
 export function wouldExceedCap(
   layout: PanelLayout,
@@ -715,17 +723,38 @@ export function wouldExceedCap(
   target: PanelTarget,
   stage: PanelStage
 ): boolean {
-  const detached = detach(layout, id, false);
-  const side = addsColumn(detached, target);
-  if (!side) {
+  // At phone width nothing docks or floats: the phone lane shows the panel,
+  // and the phone geometry parks nothing.
+  if (stage.width <= PANEL_PHONE_MAX_WIDTH) {
+    return true;
+  }
+  if (target.kind !== 'column' && target.kind !== 'newColumn') {
     return false;
   }
-  const columns = { left: detached.left.length, right: detached.right.length };
-  columns[side] += 1;
-  return overCap(
-    dockFootprint(columns, columnWidthOf(layout.options), insetsOf(stage)),
-    stage.width
-  );
+  // Judge the layout the drop would actually leave: target indices refer to
+  // the columns before the panel is lifted, and lifting a panel can empty a
+  // column, so counting from a detached layout misreads which column it is.
+  const placed = finishDrag(placeEntry(layout, id, id, target, stage));
+  const count = (l: PanelLayout<PanelEntry>) => ({
+    left: l.left.length,
+    right: l.right.length
+  });
+  const before = count(layout);
+  const after = count(placed);
+  // Only a drop that adds a column can take the footprint past the cap; a
+  // layout already past it (columns parked) may still be consolidated.
+  if (after.left + after.right > before.left + before.right) {
+    if (
+      overCap(
+        dockFootprint(after, columnWidthOf(layout.options), insetsOf(stage)),
+        stage.width
+      )
+    ) {
+      return true;
+    }
+  }
+  // An existing column, or a full dock's outermost one, may be parked.
+  return arrangedGeometry(placed, stage).parked[id] === true;
 }
 
 /**
@@ -736,7 +765,7 @@ export function defaultFloatRect(
   layout: PanelLayout<PanelEntry>,
   stage: PanelStage
 ): Rect {
-  const geometry = computePanelGeometry(layout, stage);
+  const geometry = arrangedGeometry(layout, stage);
   const w = clamp(geometry.columnWidth, FLOAT_MIN_WIDTH, FLOAT_MAX_WIDTH);
   return clampFloatRect(
     {
@@ -777,6 +806,8 @@ function insertAt(
     const live = columns.filter((column) => column.length > 0);
     if (live.length >= PANEL_MAX_COLUMNS[target.side]) {
       live[live.length - 1]!.push(entry);
+    } else if (target.kind === 'newColumn') {
+      columns.splice(at(columns.length, target.column), 0, [entry]);
     } else {
       columns.push([entry]);
     }
@@ -822,9 +853,41 @@ function placeEntry(
   stage: PanelStage | undefined
 ): PanelLayout<PanelEntry> {
   const detached = detach(layout, id, true);
-  const next = insertAt(detached, entry, target, stage);
+  const from = layout.floats.find((group) => group.panels.includes(id));
+  const ownWindow = target.kind === 'group' && from?.id === target.groupId;
+  let next: PanelLayout<PanelEntry>;
+  if (ownWindow && from.panels.length === 1) {
+    // A window of one closes on detach; dropping its panel back into it
+    // restores the same window rather than opening a new one at the origin.
+    next = copyLayout(detached);
+    next.floats.push({ ...from, panels: [entry] });
+  } else {
+    next = insertAt(detached, entry, target, stage);
+  }
+  const source = findPanel(layout, id);
+  // Only a move to another stack starts the panel at an even share; a
+  // reorder within its own column or window keeps the height it was given.
+  const sameStack =
+    (source?.kind === 'column' &&
+      target.kind === 'column' &&
+      source.side === target.side &&
+      source.column === target.column) ||
+    (source?.kind === 'float' &&
+      target.kind === 'group' &&
+      source.groupId === target.groupId);
+  if (ownWindow && from.panels.length > 1) {
+    // A reorder within one window keeps its rectangle: detaching shrank it
+    // by the panel's share and inserting grew it by FLOAT_GROWTH, which differ.
+    const group = next.floats.find((candidate) => candidate.id === from.id);
+    if (group) {
+      Object.assign(group, { x: from.x, y: from.y, w: from.w, h: from.h });
+    }
+  }
   delete next.homes[id];
-  next.weights[id] = 1;
+  if (!sameStack) {
+    next.weights[id] = 1;
+  }
+  if (entry === PANEL_SLOT) next.weights[PANEL_SLOT] = next.weights[id];
   return next;
 }
 
@@ -861,7 +924,9 @@ function placeAt(
  * The layout a drop at `target` would give, with `PANEL_SLOT` where the panel
  * lands and emptied columns still in place, for rendering the slot preview;
  * null when the drop would be refused (past the cap, or the layout locked). `commitPreview` of it is exactly
- * `placePanel` with the same arguments.
+ * `placePanel` with the same arguments. Pass the layout from before the drag:
+ * from `beginDrag`'s, a reorder within the panel's own window cannot be told
+ * apart from a drop into another window and would grow it.
  */
 export function previewLayout(
   layout: PanelLayout,
@@ -885,7 +950,7 @@ export function commitPreview(
 ): PanelLayout {
   const fill = (entries: PanelEntry[]): PanelId[] =>
     entries.map((entry) => (entry === PANEL_SLOT ? id : entry));
-  return finishDrag({
+  const next = {
     ...copyLayout(preview),
     left: preview.left.map(fill),
     right: preview.right.map(fill),
@@ -893,10 +958,174 @@ export function commitPreview(
       ...group,
       panels: fill(group.panels)
     }))
-  });
+  };
+  delete next.weights[PANEL_SLOT];
+  return finishDrag(next);
 }
 
 // ── Rail and header actions ────────────────────────────────
+
+/** The insertion slot among the remembered peers that are still present. */
+function rememberedIndex(
+  entries: readonly PanelId[],
+  id: PanelId,
+  order: readonly PanelId[],
+  fallback: number
+): number {
+  const position = order.indexOf(id);
+  if (position >= 0) {
+    const following = order
+      .slice(position + 1)
+      .find((peer) => entries.includes(peer));
+    if (following) return entries.indexOf(following);
+    const preceding = order
+      .slice(0, position)
+      .reverse()
+      .find((peer) => entries.includes(peer));
+    if (preceding) return entries.indexOf(preceding) + 1;
+  }
+  return clamp(fallback, 0, entries.length);
+}
+
+/** Preserve the column's identity and order while its panels are closed. */
+function columnHome(
+  layout: PanelLayout,
+  id: PanelId,
+  location: Extract<PanelLocation, { kind: 'column' }>
+): Extract<PanelHome, { kind: 'column' }> {
+  const columns = sideColumns(layout, location.side);
+  const peers = columns[location.column]!.slice();
+  const homes = Object.entries(layout.homes).flatMap(([panel, home]) =>
+    home.kind === 'column' && home.side === location.side
+      ? [{ panel: panel as PanelId, home }]
+      : []
+  );
+  // A previously closed peer remembers the original order even after the
+  // last live peer leaves and the column itself disappears.
+  for (const { home } of homes) {
+    if (!home.peers?.some((peer) => peers.includes(peer))) continue;
+    for (const peer of home.peers) {
+      if (!peers.includes(peer) && !isPanelOpen(layout, peer)) {
+        peers.splice(
+          rememberedIndex(peers, peer, home.peers, peers.length),
+          0,
+          peer
+        );
+      }
+    }
+  }
+  const preceding = new Set(columns.slice(0, location.column).flat());
+  const following = new Set(columns.slice(location.column + 1).flat());
+  // Include closed columns as anchors too. The graph has only five panel
+  // identities, so five passes cover every remembered ordering relation.
+  for (let pass = 0; pass < PANEL_IDS.length; pass++) {
+    for (const { panel, home } of homes) {
+      if (home.peers?.some((peer) => peers.includes(peer))) {
+        home.preceding?.forEach((peer) => preceding.add(peer));
+        home.following?.forEach((peer) => following.add(peer));
+      } else {
+        if (
+          home.following?.some(
+            (peer) => peers.includes(peer) || preceding.has(peer)
+          )
+        ) {
+          preceding.add(panel);
+          home.peers?.forEach((peer) => preceding.add(peer));
+        }
+        if (
+          home.preceding?.some(
+            (peer) => peers.includes(peer) || following.has(peer)
+          )
+        ) {
+          following.add(panel);
+          home.peers?.forEach((peer) => following.add(peer));
+        }
+      }
+    }
+  }
+  peers.forEach((peer) => {
+    preceding.delete(peer);
+    following.delete(peer);
+  });
+  return {
+    kind: 'column',
+    side: location.side,
+    column: location.column,
+    index: peers.indexOf(id),
+    ...(columns[location.column]!.length === 1 ? { alone: true } : {}),
+    peers,
+    ...(preceding.size ? { preceding: [...preceding] } : {}),
+    ...(following.size ? { following: [...following] } : {})
+  };
+}
+
+/** Restore an existing stack, or recreate its removed column in place. */
+function reopenColumn(
+  layout: PanelLayout,
+  id: PanelId,
+  home: Extract<PanelHome, { kind: 'column' }>,
+  stage: PanelStage | undefined
+): PanelLayout {
+  // Older stored homes only recorded numeric positions.
+  if (!home.peers) {
+    return placeAt(
+      layout,
+      id,
+      home.alone
+        ? { kind: 'newColumn', side: home.side, column: home.column }
+        : home,
+      stage
+    );
+  }
+  const columns = sideColumns(layout, home.side);
+  const column = columns.findIndex((entries) =>
+    entries.some((peer) => home.peers!.includes(peer))
+  );
+  if (column >= 0) {
+    return placeAt(
+      layout,
+      id,
+      {
+        kind: 'column',
+        side: home.side,
+        column,
+        index: rememberedIndex(columns[column]!, id, home.peers, home.index)
+      },
+      stage
+    );
+  }
+  if (columns.length >= PANEL_MAX_COLUMNS[home.side]) return layout;
+  const counts = { left: layout.left.length, right: layout.right.length };
+  counts[home.side] += 1;
+  if (
+    stage &&
+    overCap(
+      dockFootprint(counts, columnWidthOf(layout.options), insetsOf(stage)),
+      stage.width
+    )
+  )
+    return layout;
+  const before = columns.findIndex((entries) =>
+    entries.some((peer) => home.following?.includes(peer))
+  );
+  let at = before;
+  if (at < 0) {
+    const after = columns.reduce(
+      (last, entries, index) =>
+        entries.some((peer) => home.preceding?.includes(peer)) ? index : last,
+      -1
+    );
+    at = after < 0 ? clamp(home.column, 0, columns.length) : after + 1;
+  }
+  const next = copyLayout(layout);
+  sideColumns(next, home.side).splice(at, 0, []);
+  return placeAt(
+    next,
+    id,
+    { kind: 'column', side: home.side, column: at, index: 0 },
+    stage
+  );
+}
 
 function homeOf(layout: PanelLayout, id: PanelId): PanelHome | null {
   const location = findPanel(layout, id);
@@ -904,12 +1133,7 @@ function homeOf(layout: PanelLayout, id: PanelId): PanelHome | null {
     return null;
   }
   if (location.kind === 'column') {
-    return {
-      kind: 'column',
-      side: location.side,
-      column: location.column,
-      index: location.index
-    };
+    return columnHome(layout, id, location);
   }
   const group = layout.floats.find(
     (candidate) => candidate.id === location.groupId
@@ -930,6 +1154,10 @@ function homeOf(layout: PanelLayout, id: PanelId): PanelHome | null {
 
 /** Closes a panel and remembers where it was, so reopening returns it there. */
 export function closePanel(layout: PanelLayout, id: PanelId): PanelLayout {
+  // Closing a closed panel again must not forget where it lives.
+  if (!isPanelOpen(layout, id)) {
+    return layout;
+  }
   const home = homeOf(layout, id);
   const next = detach(layout, id, false);
   if (home) {
@@ -967,12 +1195,22 @@ export function openPanel(
   } else if (!isPanelOpen(layout, id)) {
     const home = layout.homes[id];
     if (home) {
-      next = placeAt(
-        layout,
-        id,
-        home.kind === 'float' ? { kind: 'float', rect: home.rect } : home,
-        stage
-      );
+      // The phone lane shows an open panel wherever it lives, so a phone
+      // stage reopens it at home and a wider stage finds it there again.
+      const phone = stage !== undefined && stage.width <= PANEL_PHONE_MAX_WIDTH;
+      next =
+        home.kind === 'float'
+          ? placeAt(
+              layout,
+              id,
+              { kind: 'float', rect: home.rect },
+              phone ? undefined : stage
+            )
+          : reopenColumn(layout, id, home, phone ? undefined : stage);
+      if (next !== layout) {
+        // Back where it was, at the height it was given there.
+        next.weights[id] = layout.weights[id];
+      }
     }
     if (next === layout) {
       next = openUnpinned(layout, id);
@@ -991,7 +1229,7 @@ export function isPanelParked(
   id: PanelId,
   stage: PanelStage
 ): boolean {
-  return computePanelGeometry(layout, stage).parked[id];
+  return arrangedGeometry(layout, stage).parked[id];
 }
 
 /**
@@ -1042,6 +1280,15 @@ export function togglePanel(
   }
   if (layout.options.hidden || !isPanelOpen(layout, id)) {
     return openPanel(layout, id, stage);
+  }
+  // The phone lane shows one open panel; a press on another open one brings
+  // it there rather than closing what nobody can see.
+  if (
+    stage &&
+    stage.width <= PANEL_PHONE_MAX_WIDTH &&
+    arrangedGeometry(layout, stage).phonePanel !== id
+  ) {
+    return notePanelUsed(layout, id);
   }
   if (stage && isPanelParked(layout, id, stage)) {
     return notePanelUsed(revealPanel(layout, id), id);
@@ -1172,30 +1419,65 @@ export function resizeGap(
   ) {
     return layout;
   }
-  const total = layout.weights[above] + layout.weights[below];
-  const minWeight = PANEL_MIN_HEIGHT / pxPerWeight;
-  if (total < minWeight * 2) {
+  if (Math.abs(deltaPx) < 1e-9) {
     return layout;
   }
-  const next = copyLayout(layout);
-  const resized = clamp(
-    layout.weights[above] + deltaPx / pxPerWeight,
-    minWeight,
-    total - minWeight
+  // Work in rendered pixels: a panel whose share is under the minimum shows
+  // at the minimum, so adding delta / pxPerWeight to its weight would not
+  // move its edge. Setting both weights to their new heights over
+  // pxPerWeight leaves the stack's pxPerWeight unchanged, so the gap tracks
+  // the pointer exactly.
+  const shownAbove = Math.max(
+    PANEL_MIN_HEIGHT,
+    layout.weights[above] * pxPerWeight
   );
-  next.weights[above] = resized;
-  next.weights[below] = total - resized;
+  const shownBelow = Math.max(
+    PANEL_MIN_HEIGHT,
+    layout.weights[below] * pxPerWeight
+  );
+  const pair = shownAbove + shownBelow;
+  const heightAbove = clamp(
+    shownAbove + deltaPx,
+    PANEL_MIN_HEIGHT,
+    pair - PANEL_MIN_HEIGHT
+  );
+  if (heightAbove === shownAbove) return layout;
+  const next = copyLayout(layout);
+  next.weights[above] = heightAbove / pxPerWeight;
+  next.weights[below] = (pair - heightAbove) / pxPerWeight;
   return next;
 }
 
-/** A double-click on a gap: its two neighbours split evenly. */
+/**
+ * A double-click on a gap: its two neighbours split evenly. Pass the shown
+ * gap's scale to preserve the other panels' heights when minimums are held;
+ * without a scale this retains the original stored-weight split behavior.
+ */
 export function splitGapEvenly(
   layout: PanelLayout,
   above: PanelId,
-  below: PanelId
+  below: PanelId,
+  pxPerWeight?: number
 ): PanelLayout {
   if (layout.options.locked || !neighbours(layout, above, below)) {
     return layout;
+  }
+  if (pxPerWeight !== undefined) {
+    const shownAbove = Math.max(
+      PANEL_MIN_HEIGHT,
+      layout.weights[above] * pxPerWeight
+    );
+    const shownBelow = Math.max(
+      PANEL_MIN_HEIGHT,
+      layout.weights[below] * pxPerWeight
+    );
+    return resizeGap(
+      layout,
+      above,
+      below,
+      (shownBelow - shownAbove) / 2,
+      pxPerWeight
+    );
   }
   const next = copyLayout(layout);
   const half = (layout.weights[above] + layout.weights[below]) / 2;
@@ -1266,14 +1548,17 @@ export function resizeFloat(
 ): PanelLayout {
   return updateFloat(layout, groupId, (group) => {
     const bounds = floatBounds(stage);
+    // From where the window shows: a stored position a smaller stage clamps
+    // would otherwise pin the width to its minimum and make the window jump.
+    const shown = clampFloatRect(group, stage);
     return {
-      x: group.x,
-      y: group.y,
+      x: shown.x,
+      y: shown.y,
       w: Math.max(
         FLOAT_MIN_WIDTH,
-        Math.min(FLOAT_MAX_WIDTH, size.w, bounds.right - group.x)
+        Math.min(FLOAT_MAX_WIDTH, size.w, bounds.right - shown.x)
       ),
-      h: Math.max(FLOAT_MIN_HEIGHT, Math.min(size.h, bounds.bottom - group.y))
+      h: Math.max(FLOAT_MIN_HEIGHT, Math.min(size.h, bounds.bottom - shown.y))
     };
   });
 }
@@ -1283,7 +1568,9 @@ export function clampFloatsToStage(
   layout: PanelLayout,
   stage: PanelStage
 ): PanelLayout {
-  if (layout.options.locked) {
+  // No window shows at phone width, so there is nothing to clamp; rewriting
+  // them to phone bounds would lose where they go on a wider stage.
+  if (layout.options.locked || stage.width <= PANEL_PHONE_MAX_WIDTH) {
     return layout;
   }
   const next = copyLayout(layout);
@@ -1390,18 +1677,42 @@ function dockedCounts(
   if (stageWidth <= PANEL_PHONE_MAX_WIDTH) {
     return { left: 0, right: 0 };
   }
-  const counts = { left: layout.left.length, right: layout.right.length };
-  while (
-    counts.left + counts.right > 0 &&
-    overCap(dockFootprint(counts, columnWidth, insets), stageWidth)
-  ) {
-    if (counts.left > 0) {
-      counts.left -= 1;
-    } else {
-      counts.right -= 1;
+  // Every column position counts, an emptied one included: a drag keeps the
+  // column it emptied in place, and that must not bring a parked column into
+  // view, widen the dock or move the rail.
+  const fit = (counts: Record<DockSide, number>): Record<DockSide, number> => {
+    const next = { ...counts };
+    while (
+      next.left + next.right > 0 &&
+      overCap(dockFootprint(next, columnWidth, insets), stageWidth)
+    ) {
+      if (next.left > 0) {
+        next.left -= 1;
+      } else {
+        next.right -= 1;
+      }
+    }
+    return next;
+  };
+  const docked = fit({ left: layout.left.length, right: layout.right.length });
+  // A drop preview's slot is the exception: the drop removes the emptied
+  // column, so when the panels it would leave fit, the slot's column shows
+  // even though the emptied position still holds its place until the drop.
+  const live = (side: DockSide) =>
+    sideColumns(layout, side).filter((column) => column.length > 0).length;
+  const liveCounts = { left: live('left'), right: live('right') };
+  const liveFit = fit(liveCounts);
+  if (liveFit.left === liveCounts.left && liveFit.right === liveCounts.right) {
+    for (const side of DOCK_SIDES) {
+      const slot = sideColumns(layout, side).findIndex((column) =>
+        column.includes(PANEL_SLOT)
+      );
+      if (slot >= docked[side]) {
+        docked[side] = slot + 1;
+      }
     }
   }
-  return counts;
+  return docked;
 }
 
 /** Open panels, most recently used first, then the rest in panel order. */
@@ -1411,6 +1722,23 @@ function openByRecency(layout: PanelLayout<PanelEntry>): PanelId[] {
     ...layout.recent.filter((id) => open.includes(id)),
     ...open.filter((id) => !layout.recent.includes(id))
   ];
+}
+
+/**
+ * The geometry as arranged, ignoring Hide all: what parking, placement and
+ * the phone lane are judged against, so hiding the panels cannot change
+ * where they go.
+ */
+function arrangedGeometry(
+  layout: PanelLayout<PanelEntry>,
+  stage: PanelStage
+): PanelGeometry {
+  return computePanelGeometry(
+    layout.options.hidden
+      ? { ...layout, options: { ...layout.options, hidden: false } }
+      : layout,
+    stage
+  );
 }
 
 /**
@@ -1426,7 +1754,12 @@ export function computePanelGeometry(
   const insets = insetsOf(stage);
   const columnWidth = columnWidthOf(layout.options);
   const phone = stage.width <= PANEL_PHONE_MAX_WIDTH;
-  const docked = dockedCounts(layout, stage.width, columnWidth, insets);
+  // Hide all projects nothing: no rectangles, no reserved dock width, rails
+  // at the screen edges. The stored arrangement is untouched.
+  const hidden = layout.options.hidden;
+  const docked = hidden
+    ? { left: 0, right: 0 }
+    : dockedCounts(layout, stage.width, columnWidth, insets);
   const dock = {
     top: insets.top,
     bottom: Math.max(insets.top, stage.height - insets.bottom)
@@ -1513,6 +1846,9 @@ export function computePanelGeometry(
         column * insets.gap
       : insets.gap + column * step;
 
+  if (hidden) {
+    return geometry;
+  }
   if (phone) {
     geometry.phonePanels = openByRecency(layout);
     geometry.phonePanel = geometry.phonePanels[0] ?? null;
@@ -1632,8 +1968,15 @@ function slotIndex(
 }
 
 /**
+ * What a drop at `point` should do: a rail drag still within its clearance
+ * of the start, which a release ignores (the panel stays where it was).
+ */
+export const DROP_SUPPRESSED = 'suppressed';
+
+/**
  * The drop target under `point`, or null to float the panel where it is
- * dropped. Pass the geometry of the layout without the preview (from
+ * dropped, or `DROP_SUPPRESSED` while a rail drag has not yet cleared
+ * `PANEL_RAIL_DRAG_CLEARANCE`. Pass the geometry of the layout without the preview (from
  * `beginDrag`), so the preview making room cannot move the target away from
  * the cursor. Windows win over docks, the topmost first; then the docked
  * columns (a parked column is not a target); then each side's new-column span, which covers the rail plus one
@@ -1643,13 +1986,13 @@ export function hitTest(
   geometry: PanelGeometry,
   point: Point,
   options: HitTestOptions = {}
-): PanelTarget | null {
+): PanelTarget | typeof DROP_SUPPRESSED | null {
   if (
     options.fromRail &&
     options.startPoint &&
     distance(point, options.startPoint) < PANEL_RAIL_DRAG_CLEARANCE
   ) {
-    return null;
+    return DROP_SUPPRESSED;
   }
   const current = options.current;
   for (let k = geometry.floats.length - 1; k >= 0; k--) {
@@ -1695,15 +2038,20 @@ export function hitTest(
     geometry.insets.gap +
     geometry.columnWidth +
     geometry.insets.gap;
+  // A drag keeps the column it emptied until the drop, so count only the
+  // columns with something in them, as placement does.
+  const live = (side: DockSide): number =>
+    sideColumns(geometry.layout, side).filter((column) => column.length > 0)
+      .length;
   const right = geometry.rails.right;
-  if (geometry.columnCount.right < PANEL_MAX_COLUMNS.right) {
+  if (live('right') < PANEL_MAX_COLUMNS.right) {
     const outer = right.x + right.w;
     if (point.x >= outer - span && point.x <= outer) {
       return { kind: 'newColumn', side: 'right' };
     }
   }
   const left = geometry.rails.left;
-  if (geometry.columnCount.left < PANEL_MAX_COLUMNS.left) {
+  if (live('left') < PANEL_MAX_COLUMNS.left) {
     if (point.x >= left.x && point.x <= left.x + span) {
       return { kind: 'newColumn', side: 'left' };
     }
@@ -1747,6 +2095,15 @@ function normalizeHome(value: unknown): PanelHome | null {
   const raw = value as Record<string, unknown>;
   if (raw.kind === 'column' && (raw.side === 'left' || raw.side === 'right')) {
     const side: DockSide = raw.side;
+    const panelIds = (value: unknown): PanelId[] =>
+      Array.isArray(value) ? [...new Set(value.filter(isPanelId))] : [];
+    const peers = panelIds(raw.peers);
+    const preceding = panelIds(raw.preceding).filter(
+      (id) => !peers.includes(id)
+    );
+    const following = panelIds(raw.following).filter(
+      (id) => !peers.includes(id) && !preceding.includes(id)
+    );
     return {
       kind: 'column',
       side,
@@ -1755,7 +2112,11 @@ function normalizeHome(value: unknown): PanelHome | null {
         0,
         PANEL_MAX_COLUMNS[side] - 1
       ),
-      index: clamp(Math.trunc(finiteOr(raw.index, 0)), 0, PANEL_IDS.length)
+      index: clamp(Math.trunc(finiteOr(raw.index, 0)), 0, PANEL_IDS.length),
+      ...(raw.alone === true ? { alone: true } : {}),
+      ...(peers.length ? { peers } : {}),
+      ...(preceding.length ? { preceding } : {}),
+      ...(following.length ? { following } : {})
     };
   }
   if (raw.kind === 'float') {

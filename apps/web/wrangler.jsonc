@@ -26,8 +26,9 @@
     "PRODUCTION_GUARD": "enabled",
     "DESKTOP_AUTH_ENABLED": "true",
     "AI_PROVIDER": "openrouter",
-    "AI_MODEL": "openai/gpt-6-luna",
+    "AI_MODEL": "minimax/minimax-m3.1-flash:free",
     "AI_REASONING_EFFORT": "high",
+    "AI_DEPLOYMENT_FREE_ENABLED": "true",
     "PROJECT_SHARING_ENABLED": "false",
     "PROJECT_EDIT_LEASES_ENFORCED": "false"
   },
