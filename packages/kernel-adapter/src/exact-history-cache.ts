@@ -106,15 +106,19 @@ export function historyCheckpointIndices(
  * restores that checkpoint and replays only the edit, so the edited body
  * keeps its handles and a prepared face move can engage however sparse the
  * stable positions are. The edit's own position is dropped because its
- * digest changes on every tick. The next sync that is not a drag preview
- * finds the extra position mismatched and discards that checkpoint.
+ * digest changes on every tick. A schedule already at `limit` gives up its
+ * latest position before the source, so the count stays within the limit.
+ * The next sync that is not a drag preview finds the extra position
+ * mismatched and discards that checkpoint.
  */
 export function dragPreviewCheckpointIndices(
   indices: readonly number[],
-  editIndex: number
+  editIndex: number,
+  limit: number
 ): number[] {
   if (indices.length === 0 || editIndex < 1) return [...indices];
   const kept = indices.filter((index) => index < editIndex - 1);
+  if (kept.length >= limit) kept.length = Math.max(0, Math.floor(limit) - 1);
   kept.push(editIndex - 1);
   return kept;
 }

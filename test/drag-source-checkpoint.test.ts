@@ -19,13 +19,26 @@ describe('dragPreviewCheckpointIndices', () => {
     // 22 features: the stable sparse positions skip 20, the edit's source.
     const stable = historyCheckpointIndices(22, 32);
     expect(stable.slice(15)).toEqual([15, 17, 19, 21]);
-    expect(dragPreviewCheckpointIndices(stable, 21).slice(15)).toEqual([
+    expect(dragPreviewCheckpointIndices(stable, 21, 32).slice(15)).toEqual([
       15, 17, 19, 20
     ]);
     // Dense: the edit's own position goes, its source is already there.
-    expect(dragPreviewCheckpointIndices([0, 1, 2, 3], 3)).toEqual([0, 1, 2]);
-    expect(dragPreviewCheckpointIndices([], 21)).toEqual([]);
-    expect(dragPreviewCheckpointIndices([0], 0)).toEqual([0]);
+    expect(dragPreviewCheckpointIndices([0, 1, 2, 3], 3, 32)).toEqual([
+      0, 1, 2
+    ]);
+    expect(dragPreviewCheckpointIndices([], 21, 32)).toEqual([]);
+    expect(dragPreviewCheckpointIndices([0], 0, 32)).toEqual([0]);
+  });
+
+  it('stays within the checkpoint limit', () => {
+    // A full schedule gives up its latest position before the source.
+    expect(dragPreviewCheckpointIndices([0, 1], 21, 2)).toEqual([0, 20]);
+    expect(dragPreviewCheckpointIndices([0], 21, 1)).toEqual([20]);
+    const full = historyCheckpointIndices(600, 32);
+    const drag = dragPreviewCheckpointIndices(full, 599, 32);
+    expect(drag).toHaveLength(32);
+    expect(drag.slice(0, 31)).toEqual(full.slice(0, 31));
+    expect(drag.at(-1)).toBe(598);
   });
 });
 
@@ -46,7 +59,7 @@ function countExtrusions(): { count: () => number; restore: () => void } {
   };
 }
 
-it('drag previews past the dense checkpoints replay only the dragged edit', async () => {
+async function dragScenario(historyCheckpointLimit?: number) {
   let document: ProjectDocument = createProjectDocument(
     'Drag source checkpoint',
     toUserId('drag_checkpoint')
@@ -71,7 +84,12 @@ it('drag previews past the dense checkpoints replay only the dragged edit', asyn
     distance: 4
   }).document;
   const edited = document.bodyOrder.at(-1) as BodyId;
-  const adapter = await createExactKernelAdapter();
+  const adapter = await createExactKernelAdapter(
+    historyCheckpointLimit === undefined ? {} : { historyCheckpointLimit }
+  );
+  const kernel = () =>
+    (adapter as unknown as { historyKernel: RemusKernel | null })
+      .historyKernel!;
   const extrusions = countExtrusions();
   try {
     const base = await adapter.syncDocument(document);
@@ -106,6 +124,9 @@ it('drag previews past the dense checkpoints replay only the dragged edit', asyn
           base.bodyRepresentations[edited]!.bbox.max.z
       ).toBeCloseTo(offset, 9);
       rebuiltExtrusions.push(extrusions.count() - before);
+      expect(kernel().checkpointCount()).toBeLessThanOrEqual(
+        historyCheckpointLimit ?? 32
+      );
     }
     // The first tick replays the extrusion from the stable checkpoint after
     // the sketch and checkpoints it; every later tick restores that and
@@ -133,4 +154,12 @@ it('drag previews past the dense checkpoints replay only the dragged edit', asyn
     extrusions.restore();
     adapter.dispose();
   }
+}
+
+it('drag previews past the dense checkpoints replay only the dragged edit', async () => {
+  await dragScenario();
+});
+
+it('drag previews keep the drag checkpoint within a tight checkpoint limit', async () => {
+  await dragScenario(2);
 });

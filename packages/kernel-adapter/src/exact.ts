@@ -1315,7 +1315,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const checkpointIndices = deferredDirectEditFeatureId
       ? dragPreviewCheckpointIndices(
           stableCheckpointIndices,
-          features.length - 1
+          features.length - 1,
+          this.maxHistoryCheckpoints
         )
       : stableCheckpointIndices;
     const checkpointIndexSet = new Set(checkpointIndices);
