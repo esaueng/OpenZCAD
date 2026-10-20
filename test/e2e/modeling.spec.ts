@@ -14,7 +14,8 @@ import {
   setSelectionFilter,
   shiftSelectTwoVisibleBoxEdges,
   stubApi,
-  test
+  test,
+  seedUnitlessImportUnits
 } from './openzcad-fixtures';
 
 test('suppresses features and rolls the timeline back as one undoable edit', async ({
@@ -4207,6 +4208,7 @@ test('imports an STL mesh and measures the body the worker rebuilt', async ({
     }
   });
   await stubApi(page);
+  await seedUnitlessImportUnits(page);
   await page.goto('/');
   await expect(page.getByLabel('Project name')).toBeVisible();
   expect(meshPayloadRequests).toEqual([]);
@@ -4262,6 +4264,7 @@ test('an STL import that outlives its project does not land in the next one', as
 }) => {
   test.setTimeout(90_000);
   await stubApi(page);
+  await seedUnitlessImportUnits(page);
 
   // Hold the import's archive upload open so the project can be switched
   // underneath it, the way a user does while watching a slow upload.
@@ -4444,6 +4447,7 @@ test('an archive that outlives its project stays out of the next project’s Fil
   // badge, into whichever project was showing when the upload settled.
   test.setTimeout(90_000);
   await stubApi(page);
+  await seedUnitlessImportUnits(page);
 
   const importUploadSessionId = 'upload_import_switch_e2e';
   const importArtifactId = 'artifact_import_switch_e2e';

@@ -15,11 +15,15 @@ import {
 } from '@openzcad/document-core';
 import { throughAllSpan, unionBounds } from './through-all';
 import {
+  axisRotationMatrix,
   geometryTolerance,
   midDatumPlane,
   offsetDatumPlane,
   parallelDatumPlane,
+  planeIntersectionDatumAxis,
   threePointDatumPlane,
+  twoPointDatumAxis,
+  type DatumAxis,
   type PlaneBasis,
   type Vec3
 } from '@openzcad/geometry';
@@ -110,7 +114,9 @@ import {
 import {
   DIRECT_EDIT_TOLERANCE,
   GEOMETRY_EPSILON,
+  affineMatrix,
   axisDirection,
+  composeAffine,
   cross,
   dot,
   errorText,
@@ -195,6 +201,8 @@ import {
   buildLoft,
   buildProfileSweep,
   buildHelicalSweep,
+  resolveDatumAxisRefAtHistory,
+  resolveDatumAxisSourceAtHistory,
   resolveDatumPointAtHistory,
   resolvePlaneRefAtHistory,
   resolveSketchBasisAtHistory
@@ -870,7 +878,14 @@ function buildRevolveFeature(
         feature,
         scope,
         result.sketchBases,
-        (message) => raiseFeatureWarning(result, feature, message, 'advisory')
+        (message) => raiseFeatureWarning(result, feature, message, 'advisory'),
+        data.axisRef &&
+          resolveDatumAxisRefAtHistory(
+            document,
+            data.axisRef,
+            `Revolve "${feature.name}"`,
+            result
+          )
       )
     );
     if (resolveRevolveAngleDeg(data.angleDeg, scope) < FULL_REVOLVE_ANGLE_DEG) {
@@ -965,29 +980,50 @@ function buildTransformFeature(
     throw new Error('Copy has no result body.');
   }
   const resultBodyId = data.copy ? feature.bodyId! : data.targetBodyId;
+  // R01: a turn about a datum axis applies first; the authored transform
+  // then scales, rotates and moves the turned body.
+  const axisTurn =
+    data.axisRotation &&
+    affineMatrix(
+      axisRotationMatrix(
+        resolveDatumAxisRefAtHistory(
+          document,
+          data.axisRotation.axis,
+          `Move "${feature.name}"`,
+          result
+        ),
+        resolveParamValue(
+          data.axisRotation.angleDeg,
+          scope,
+          'rotate about axis',
+          document.units
+        )
+      )
+    );
+  const authored = transformMatrix(
+    {
+      x: resolveParamValue(translation.x, scope, 'X', document.units),
+      y: resolveParamValue(translation.y, scope, 'Y', document.units),
+      z: resolveParamValue(translation.z, scope, 'Z', document.units)
+    },
+    {
+      x: resolveParamValue(rotation.x, scope, 'rotate X', document.units),
+      y: resolveParamValue(rotation.y, scope, 'rotate Y', document.units),
+      z: resolveParamValue(rotation.z, scope, 'rotate Z', document.units)
+    },
+    scaleFactor,
+    pivot && {
+      x: resolveParamValue(pivot.x, scope, 'pivot X', document.units),
+      y: resolveParamValue(pivot.y, scope, 'pivot Y', document.units),
+      z: resolveParamValue(pivot.z, scope, 'pivot Z', document.units)
+    }
+  );
   result.shapes.set(
     resultBodyId,
     copyShapeWithVerifiedLineage(
       kernel,
       target,
-      transformMatrix(
-        {
-          x: resolveParamValue(translation.x, scope, 'X', document.units),
-          y: resolveParamValue(translation.y, scope, 'Y', document.units),
-          z: resolveParamValue(translation.z, scope, 'Z', document.units)
-        },
-        {
-          x: resolveParamValue(rotation.x, scope, 'rotate X', document.units),
-          y: resolveParamValue(rotation.y, scope, 'rotate Y', document.units),
-          z: resolveParamValue(rotation.z, scope, 'rotate Z', document.units)
-        },
-        scaleFactor,
-        pivot && {
-          x: resolveParamValue(pivot.x, scope, 'pivot X', document.units),
-          y: resolveParamValue(pivot.y, scope, 'pivot Y', document.units),
-          z: resolveParamValue(pivot.z, scope, 'pivot Z', document.units)
-        }
-      ),
+      axisTurn ? composeAffine(authored, axisTurn) : authored,
       // Both primitive planners convert world-space drags through uniform scale.
       ['cylinder', 'box'].includes(
         modifierChainRootPrimitive(document, data.targetBodyId) ?? ''
@@ -1100,6 +1136,68 @@ function buildDatumPlaneFeature(
       break;
   }
   ctx.result.datumFrames.set(feature.featureId, frame);
+}
+
+/**
+ * R01: resolves a datum axis once at its history position, for every later
+ * revolve, circular pattern and Move to turn about. It makes no body.
+ */
+function buildDatumAxisFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'datum-axis'>
+): void {
+  const { definition } = data;
+  let axis: DatumAxis;
+  switch (definition.kind) {
+    case 'two-point': {
+      const point = (pointSource: DatumPointSource) =>
+        resolveDatumPointAtHistory(
+          ctx.kernel,
+          ctx.document,
+          pointSource,
+          feature.name,
+          ctx.result,
+          ctx.scope,
+          'Datum axis'
+        );
+      axis = twoPointDatumAxis(
+        point(definition.points[0]),
+        point(definition.points[1]),
+        definition.reverseDirection
+      );
+      break;
+    }
+    case 'edge':
+    case 'cylinder':
+      axis = resolveDatumAxisSourceAtHistory(
+        ctx.kernel,
+        ctx.document,
+        definition.source,
+        feature.name,
+        ctx.result,
+        definition.reverseDirection
+      );
+      break;
+    case 'plane-intersection': {
+      const source = (planeRef: DatumPlaneSource) =>
+        resolvePlaneRefAtHistory(
+          ctx.kernel,
+          ctx.document,
+          planeRef,
+          { kind: 'Datum axis', name: feature.name },
+          ctx.result,
+          ctx.scope
+        );
+      axis = planeIntersectionDatumAxis(
+        source(definition.sources[0]),
+        source(definition.sources[1]),
+        definition.reverseDirection
+      );
+      break;
+    }
+  }
+  ctx.result.datumAxes.set(feature.featureId, axis);
 }
 
 function buildMirrorFeature(
@@ -2593,6 +2691,26 @@ function circularPatternArm(
   };
 }
 
+/**
+ * R01: the circular arm about a datum axis. The kernel's ring turns about a
+ * world-origin axis only, so every arrangement here is the copy-and-transform
+ * build, each instance turned about the datum line through its own origin.
+ */
+function datumAxisCircularPatternArm(
+  axis: DatumAxis,
+  angleDeg: number,
+  count: number
+): PatternArm {
+  const fullTurn = Math.abs(Math.abs(angleDeg) - 360) <= GEOMETRY_EPSILON;
+  const step = fullTurn ? angleDeg / count : angleDeg / (count - 1);
+  return {
+    total: count,
+    label: (index) => String(index),
+    matrix: (index) => affineMatrix(axisRotationMatrix(axis, step * index)),
+    kernelCopies: null
+  };
+}
+
 /** Records a kernel refusal alongside whatever lineage the build published. */
 function withPatternDiagnostic(
   state: RemusLineageState,
@@ -2721,7 +2839,18 @@ function buildPatternFeature(
     if (Math.abs(angle) <= GEOMETRY_EPSILON) {
       throw new Error('Pattern angle cannot be zero.');
     }
-    arm = circularPatternArm(kernel, data.axis, angle, count);
+    arm = data.axisRef
+      ? datumAxisCircularPatternArm(
+          resolveDatumAxisRefAtHistory(
+            ctx.document,
+            data.axisRef,
+            `Pattern "${feature.name}"`,
+            result
+          ),
+          angle,
+          count
+        )
+      : circularPatternArm(kernel, data.axis, angle, count);
   }
 
   const matrices = Array.from({ length: arm.total }, (_unused, index) =>
@@ -2970,6 +3099,9 @@ export function buildFeature(
       break;
     case 'datum-plane':
       buildDatumPlaneFeature(ctx, feature, feature.data);
+      break;
+    case 'datum-axis':
+      buildDatumAxisFeature(ctx, feature, feature.data);
       break;
   }
 }

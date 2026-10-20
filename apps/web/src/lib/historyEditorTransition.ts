@@ -12,12 +12,17 @@ import {
 
 /**
  * Feature kinds whose card is their creation card, reopened to edit: the
- * modeling operations, and the R01 datum plane, whose tool id is its kind.
+ * modeling operations, and the R01 datum plane and axis, whose tool ids are
+ * their kinds.
  */
 export function featureOpensEditCard(
   kind: FeatureKind
-): kind is EditableModelingKind | 'datum-plane' {
-  return kind === 'datum-plane' || modelingFeatureIsEditable(kind);
+): kind is EditableModelingKind | 'datum-plane' | 'datum-axis' {
+  return (
+    kind === 'datum-plane' ||
+    kind === 'datum-axis' ||
+    modelingFeatureIsEditable(kind)
+  );
 }
 
 export interface HistoryEditorRequest {

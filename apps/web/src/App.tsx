@@ -15,7 +15,10 @@ import type {
 } from '@openzcad/shared';
 import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
-import { datumFaceAttachFailed } from './lib/datumPlaneDisplay';
+import {
+  datumAxisSourceFailed,
+  datumFaceAttachFailed
+} from './lib/datumPlaneDisplay';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
 import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
 import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
@@ -54,6 +57,7 @@ import {
   datumPlaneSources,
   documentNodesWithHistory,
   documentTextBudgetError,
+  resolveExportUnits,
   resolveSketchComposite,
   sketchCompositeOf,
   sketchCompositeSizeDimensions
@@ -1057,6 +1061,11 @@ const LazyShaprImportDialog = lazyWithStaleChunkNotice(() =>
     default: module.ShaprImportDialog
   }))
 );
+const LazyImportUnitsDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/ImportUnitsDialog').then((module) => ({
+    default: module.ImportUnitsDialog
+  }))
+);
 /**
  * The edit panel, which only exists while something is being edited.
  *
@@ -1083,6 +1092,11 @@ const LazySketchPlanePrompt = lazyWithStaleChunkNotice(() =>
 const LazyDatumPlaneCard = lazyWithStaleChunkNotice(() =>
   import('./components/forms/DatumPlaneForm').then((module) => ({
     default: module.DatumPlaneWorkspaceCard
+  }))
+);
+const LazyDatumAxisCard = lazyWithStaleChunkNotice(() =>
+  import('./components/forms/DatumAxisForm').then((module) => ({
+    default: module.DatumAxisWorkspaceCard
   }))
 );
 
@@ -1172,6 +1186,8 @@ function ImageExportDialog(
 
 const ShaprImportDialog = withSuspense(LazyShaprImportDialog);
 
+const ImportUnitsDialog = withSuspense(LazyImportUnitsDialog);
+
 function Inspector(props: ComponentProps<typeof LazyInspector>) {
   return (
     <Suspense fallback={<CardSkeleton />}>
@@ -1185,6 +1201,8 @@ const ModelingOperationsForm = withSuspense(LazyModelingOperationsForm);
 const SketchPlanePrompt = withSuspense(LazySketchPlanePrompt);
 
 const DatumPlaneCard = withSuspense(LazyDatumPlaneCard);
+
+const DatumAxisCard = withSuspense(LazyDatumAxisCard);
 import {
   chooseProjectDocument,
   projectsHaveSameRebuildInputs,
@@ -2038,6 +2056,15 @@ export function App() {
   });
   const [sharingOpen, setSharingOpen] = useState(false);
   const [meshExportOpen, setMeshExportOpen] = useState(false);
+  /** A unitless import waiting for the user to say what its numbers mean. */
+  const [importUnitsPrompt, setImportUnitsPrompt] = useState<Omit<
+    ComponentProps<typeof LazyImportUnitsDialog>,
+    'onChoose'
+  > | null>(null);
+  /** Its answer's receiver; a newer prompt cancels an older one. */
+  const importUnitsAnswerRef = useRef<
+    ((units: UnitSystem | null) => void) | null
+  >(null);
   /** The view's size when Export image… opened; null while it is closed. */
   const [imageExportView, setImageExportView] = useState<{
     width: number;
@@ -7415,7 +7442,10 @@ export function App() {
     }
     const data = feature?.data as
       | EditableModelingFeatureData
-      | Extract<FeatureNode['data'], { featureKind: 'datum-plane' }>
+      | Extract<
+          FeatureNode['data'],
+          { featureKind: 'datum-plane' | 'datum-axis' }
+        >
       | undefined;
     const nextTool = data?.featureKind ?? request.tool;
     const reason = toolDisabledReason(nextTool, availability);
@@ -8182,7 +8212,8 @@ export function App() {
       sectionOutline,
       saveCadTextFile,
       exportFileStem(view.document.name),
-      setStatus
+      setStatus,
+      appSettingsRef.current.files.exportUnits
     );
   }
 
@@ -11194,6 +11225,38 @@ export function App() {
     }));
   }
 
+  /**
+   * How to read a file that states no unit: the unit the user settled on in
+   * Settings, or their answer to the prompt (null when they cancelled).
+   * `extent` is the file's own numbers, for sizing each choice.
+   */
+  async function readUnitlessImportAs(input: {
+    fileName: string;
+    kind: 'mesh' | 'dxf';
+    extent: number[] | null;
+    documentUnits: UnitSystem;
+  }): Promise<UnitSystem | null> {
+    const units = await import('./lib/importUnits');
+    const settled = units.settledUnitlessReading(
+      appSettingsRef.current.files.unitlessImportUnits,
+      input.documentUnits
+    );
+    if (settled) return settled;
+    importUnitsAnswerRef.current?.(null);
+    return new Promise((resolve) => {
+      importUnitsAnswerRef.current = resolve;
+      setImportUnitsPrompt({
+        fileName: input.fileName,
+        extent: input.extent,
+        documentUnits: input.documentUnits,
+        initialUnit: units.historicalUnitlessReading(
+          input.kind,
+          input.documentUnits
+        )
+      });
+    });
+  }
+
   async function handleImportFile(file: File) {
     if (!managerRef.current || !doc || !ensureCanEdit('import geometry')) {
       return;
@@ -11291,18 +11354,36 @@ export function App() {
     }
     if (lowerName.endsWith('.dxf')) {
       try {
-        const { dxfSketchImportPlan, refuseOversizedDxf } = await import(
-          './lib/dxfImport'
-        );
+        const { dxfSketchImportPlan, inspectDxfUnits, refuseOversizedDxf } =
+          await import('./lib/dxfImport');
         // By bytes, before the file is read into memory at all.
         refuseOversizedDxf(file.size);
         const text = await file.text();
         if (managerRef.current !== importManager) return;
+        // The unit first, from the header alone; the geometry is then built
+        // and checked once, at the reading that will actually be stored.
+        const inspection = inspectDxfUnits(text);
+        let reading: UnitSystem = importManager.document.units;
+        if (!inspection.declaresUnits) {
+          const chosen = await readUnitlessImportAs({
+            fileName: file.name,
+            kind: 'dxf',
+            extent: inspection.extent,
+            documentUnits: importManager.document.units
+          });
+          if (!chosen) {
+            setStatus(`${file.name} was not imported: you cancelled it.`);
+            return;
+          }
+          if (managerRef.current !== importManager) return;
+          reading = chosen;
+        }
         const plan = dxfSketchImportPlan(
           importManager.document,
           file.name,
           text,
-          newFeatureName
+          newFeatureName,
+          reading
         );
         if (executeCommand(plan.command)) setStatus(plan.status);
       } catch (error) {
@@ -11363,6 +11444,37 @@ export function App() {
           finishImportAbort(abort);
           return;
         }
+        // STL states no unit: the file's numbers are read the way the user
+        // says (millimetres, as they always were, is the preselected answer).
+        let parsed = parseStl(contents, file.name);
+        const importUnits = await import('./lib/importUnits');
+        const reading = await readUnitlessImportAs({
+          fileName: file.name,
+          kind: 'mesh',
+          extent: importUnits.meshExtent(parsed.vertices),
+          documentUnits: doc.units
+        });
+        if (!reading || abort.signal.aborted) {
+          progress.finish({ tone: 'cancelled', message: 'nothing was added' });
+          setStatus(`${file.name} was not imported: you cancelled it.`);
+          return;
+        }
+        if (managerRef.current !== importManager) {
+          const message = 'The project changed while the import was waiting.';
+          progress.finish({ tone: 'warning', message });
+          setStatus(message);
+          return;
+        }
+        if (reading !== 'mm') {
+          parsed = {
+            ...parsed,
+            vertices: importUnits.verticesReadAs(parsed.vertices, reading)
+          };
+        }
+        const readingNote =
+          reading === 'mm'
+            ? ''
+            : `, read as ${importUnits.IMPORT_UNIT_LABELS[reading].toLowerCase()}`;
         // Taken only around the validated run itself — never across the read.
         // The run's own busy check still refuses a concurrent second drop,
         // and the shelf stays navigable for the switch the run then refuses
@@ -11377,7 +11489,6 @@ export function App() {
           return;
         }
         try {
-          const parsed = parseStl(contents, file.name);
           progress.update({ phase: 'building', fraction: null });
           const [{ createBodyFeatureIds }, meshImport] = await Promise.all([
             import('@openzcad/document-core'),
@@ -11419,7 +11530,7 @@ export function App() {
                 signal: abort.signal,
                 validatingMessage: `Checking ${file.name} against exact geometry…`,
                 successMessage: () =>
-                  `Imported ${parsed.triangleCount} triangles from ${file.name}${note}`,
+                  `Imported ${parsed.triangleCount} triangles from ${file.name}${readingNote}${note}`,
                 // No revalidation: an import appends a feature to a project,
                 // and a project switch mid-rebuild must refuse (or cancel), not
                 // rebuild the candidate against a document it was never meant
@@ -11562,6 +11673,29 @@ export function App() {
         trackDetail('error_import');
         setStatus(errorMessage(error, `${file.name} import failed.`));
         return;
+      }
+      // OBJ and PLY state no unit (3MF and glTF do, and arrive converted).
+      const importUnits = await import('./lib/importUnits');
+      if (!mesh.sourceUnit && importUnits.isUnitlessMeshFileName(file.name)) {
+        const reading = await readUnitlessImportAs({
+          fileName: file.name,
+          kind: 'mesh',
+          extent: importUnits.meshExtent(mesh.vertices),
+          documentUnits: doc.units
+        });
+        if (!reading) {
+          setStatus(`${file.name} was not imported: you cancelled it.`);
+          return;
+        }
+        if (reading !== 'mm') {
+          // A uniform enlargement: the worker's rebuild check, run on the
+          // millimetre reading, still holds for every larger unit.
+          mesh = {
+            ...mesh,
+            vertices: importUnits.verticesReadAs(mesh.vertices, reading),
+            sourceUnit: importUnits.IMPORT_UNIT_LABELS[reading].toLowerCase()
+          };
+        }
       }
       await commitImportedMesh({
         file,
@@ -12080,6 +12214,10 @@ export function App() {
         doc,
         [target.bodyId as BodyId],
         {
+          units: resolveExportUnits(
+            appSettingsRef.current.files.exportUnits,
+            doc.units
+          ),
           face: {
             bodyId: target.bodyId as BodyId,
             faceHash: face.hash,
@@ -12469,12 +12607,13 @@ export function App() {
         units: doc.units
       },
       produce: async (options) => {
-        const result = await geometry.exportModel(
-          'step',
-          doc,
-          exportBodyIds,
-          options
-        );
+        const result = await geometry.exportModel('step', doc, exportBodyIds, {
+          ...options,
+          units: resolveExportUnits(
+            appSettingsRef.current.files.exportUnits,
+            doc.units
+          )
+        });
         if (!('text' in result)) {
           throw new Error('The STEP export returned no text.');
         }
@@ -12494,7 +12633,8 @@ export function App() {
    */
   function handleExportMesh(
     format: MeshExportDialogFormat,
-    deflection: number
+    deflection: number,
+    tolerances: { angularTolerance?: number } = {}
   ) {
     if (currentGeometrySnapshot !== null) {
       setStatus(
@@ -12523,6 +12663,11 @@ export function App() {
       produce: async (options) => {
         const result = await geometry.exportModel(format, doc, exportBodyIds, {
           deflection,
+          ...tolerances,
+          units: resolveExportUnits(
+            appSettingsRef.current.files.exportUnits,
+            doc.units
+          ),
           ...options
         });
         return 'data' in result
@@ -12543,7 +12688,11 @@ export function App() {
 
   function handleCheckMeshQuality(
     deflection: number,
-    options?: { onProgress?(progress: ExportProgress): void }
+    options?: {
+      angularTolerance?: number;
+      units?: UnitSystem;
+      onProgress?(progress: ExportProgress): void;
+    }
   ) {
     if (!doc || exportBodyIds.length === 0) {
       return Promise.reject(
@@ -12551,6 +12700,10 @@ export function App() {
       );
     }
     return geometry.meshQuality(doc, exportBodyIds, deflection, {
+      ...(options?.angularTolerance !== undefined
+        ? { angularTolerance: options.angularTolerance }
+        : {}),
+      ...(options?.units !== undefined ? { units: options.units } : {}),
       onState: (state) => {
         const progress = exportProgressFor(state);
         if (progress) {
@@ -12984,6 +13137,30 @@ export function App() {
       const { feature: repair, slot, both, first } = datumRepair;
       const attempt = datumRepairAttempt.current;
       const withdrawn = () => datumRepairAttempt.current !== attempt;
+      if (repair.data.featureKind === 'datum-axis') {
+        void import('./lib/datumAxes').then(({ datumAxisSourceRepairEdit }) => {
+          if (withdrawn()) return;
+          try {
+            const edit = datumAxisSourceRepairEdit(
+              base,
+              repair.featureId,
+              selection
+            );
+            void validatedFeature.runTransaction([edit.command], {
+              label: edit.label,
+              cancelled: withdrawn,
+              targets: affectedFeatureTargets(base, repair.featureId),
+              validateDerived: edit.validateDerived,
+              successMessage: `"${repair.name}" follows the re-picked source.`,
+              onSuccess: () => setDatumRepair(null),
+              onFailure: (message) => setStatus(message)
+            });
+          } catch (error) {
+            setStatus(errorMessage(error, 'That pick cannot carry this axis.'));
+          }
+        });
+        return;
+      }
       void import('./lib/datumPlanes').then(
         ({ datumFaceRepairEdit, datumFaceSourceFromPick }) => {
           if (withdrawn()) return;
@@ -13068,9 +13245,12 @@ export function App() {
     if (handleMeasurementPick(selection, additive, detail)) {
       return;
     }
-    // The Plane card asks for faces and edge ends: such a click is its next
-    // source pick, not a selection that closes the card it was waiting for.
-    if (tool === 'datum-plane' && selection.kind !== 'body') {
+    // The Plane and Axis cards ask for faces and edges: such a click is
+    // their next source pick, not a selection that closes the card.
+    if (
+      (tool === 'datum-plane' || tool === 'datum-axis') &&
+      selection.kind !== 'body'
+    ) {
       setSelectedTopology(selection);
       return;
     }
@@ -18968,6 +19148,41 @@ export function App() {
               : []
           )
         : []),
+      // R01: an axis along an edge or a cylinder whose source was lost.
+      ...(feature.data.featureKind === 'datum-axis' &&
+      (feature.data.definition.kind === 'edge' ||
+        feature.data.definition.kind === 'cylinder') &&
+      !isFeatureSuppressed(feature) &&
+      !doc?.derived.datumAxes?.[feature.featureId] &&
+      datumAxisSourceFailed(
+        feature,
+        doc && featureAttribution?.derived === doc.derived
+          ? featureAttribution.featureWarnings
+          : []
+      )
+        ? [
+            {
+              item: {
+                id: 'repair-datum-axis-source',
+                label:
+                  feature.data.definition.kind === 'edge'
+                    ? 'Re-pick source edge…'
+                    : 'Re-pick source face…',
+                icon: <Crosshair size={13} aria-hidden="true" />
+              },
+              run: () => {
+                if (!ensureCanEdit('repair a feature')) return;
+                setTool(null);
+                clearSelection();
+                setFaceRepair(null);
+                setDatumRepair({ feature, slot: 0 });
+                setStatus(
+                  `Re-pick the source for "${feature.name}": click ${feature.data.featureKind === 'datum-axis' && feature.data.definition.kind === 'edge' ? 'a straight edge' : 'a cylindrical or conical face'} · Esc cancels.`
+                );
+              }
+            }
+          ]
+        : []),
       ...(bodyId && body && !body.consumed
         ? [
             {
@@ -19100,6 +19315,7 @@ export function App() {
     !sharingOpen &&
     !pendingShaprImport &&
     !meshExportOpen &&
+    !importUnitsPrompt &&
     !pendingFeatureDelete &&
     !activeSuppressionPrompt(pendingSuppression, doc?.projectId) &&
     !pendingToolSwitch;
@@ -22329,6 +22545,33 @@ export function App() {
                   setDatumDragAvailable
                 }}
               />
+            ) : tool === 'datum-axis' && doc ? (
+              <DatumAxisCard
+                key={modelingEditFeature?.featureId ?? 'new'}
+                document={doc}
+                editFeature={modelingEditFeature}
+                scope={parameterScope.scope}
+                selection={selectedTopology}
+                pickPoint={lastPickDetailRef.current?.point ?? null}
+                editDisabledReason={editDisabledReason}
+                exactGeometryReady={exactGeometryReady}
+                app={{
+                  managerRef,
+                  geometry,
+                  validatedFeature,
+                  ensureCanEdit,
+                  newFeatureName,
+                  setStatus,
+                  editCardSessionRef,
+                  editSessionIsCurrent,
+                  finishFeatureEdit,
+                  finishFeatureCreation,
+                  validateSelectionEdit,
+                  handleDeleteFeature,
+                  cancelPanel,
+                  closeFeaturePanel
+                }}
+              />
             ) : (
               <Inspector
                 tool={tool}
@@ -22430,6 +22673,9 @@ export function App() {
                         : {}),
                       ...(value.copy
                         ? { copy: true, bodyName: newCopyBodyName(value.targetBodyId) }
+                        : {}),
+                      ...(value.axisRotation
+                        ? { axisRotation: value.axisRotation }
                         : {})
                     });
                   createValidatedFeature(
@@ -22615,8 +22861,11 @@ export function App() {
                           featureKind: 'revolve',
                           sketchId: value.sketchId,
                           axis: value.axis,
-                          angleDeg: value.angleDeg
-                        }
+                          angleDeg: value.angleDeg,
+                          ...(value.axisRef ? { axisRef: value.axisRef } : {})
+                        },
+                        // R01: the sketch axis is the absent datum axis.
+                        ...(value.axisRef ? {} : { clearData: ['axisRef'] })
                       },
                       `Edit ${value.name}`
                     ),
@@ -22668,8 +22917,15 @@ export function App() {
                             ...(value.pivot !== undefined
                               ? { pivot: value.pivot }
                               : {})
-                          }
-                        }
+                          },
+                          ...(value.axisRotation
+                            ? { axisRotation: value.axisRotation }
+                            : {})
+                        },
+                        // R01: no datum axis turn is the absent field.
+                        ...(value.axisRotation
+                          ? {}
+                          : { clearData: ['axisRotation'] })
                       },
                       `Edit ${value.name}`
                     ),
@@ -22703,8 +22959,11 @@ export function App() {
                             : {}),
                           ...(value.count2 !== undefined
                             ? { count2: value.count2 }
-                            : {})
-                        }
+                            : {}),
+                          ...(value.axisRef ? { axisRef: value.axisRef } : {})
+                        },
+                        // R01: the world axis is the absent datum axis.
+                        ...(value.axisRef ? {} : { clearData: ['axisRef'] })
                       },
                       `Edit ${value.name}`
                     ),
@@ -23066,6 +23325,29 @@ export function App() {
                 onClose={() => setAccountConflict(null)}
               />
             )}
+          {importUnitsPrompt && (
+            <ImportUnitsDialog
+              fileName={importUnitsPrompt.fileName}
+              extent={importUnitsPrompt.extent}
+              documentUnits={importUnitsPrompt.documentUnits}
+              initialUnit={importUnitsPrompt.initialUnit}
+              onChoose={(choice) => {
+                const answer = importUnitsAnswerRef.current;
+                importUnitsAnswerRef.current = null;
+                setImportUnitsPrompt(null);
+                if (choice?.remember) {
+                  handleAppSettingsChange({
+                    ...appSettingsRef.current,
+                    files: {
+                      ...appSettingsRef.current.files,
+                      unitlessImportUnits: choice.units
+                    }
+                  });
+                }
+                answer?.(choice?.units ?? null);
+              }}
+            />
+          )}
           {meshExportOpen &&
             doc &&
             // Stays open while hidden bodies are switched off, even when
@@ -23101,6 +23383,14 @@ export function App() {
               }}
               onExport={handleExportMesh}
               onCheckQuality={handleCheckMeshQuality}
+              exportUnits={appSettings.files.exportUnits}
+              documentUnits={doc.units}
+              onExportUnitsChange={(exportUnits) =>
+                handleAppSettingsChange({
+                  ...appSettingsRef.current,
+                  files: { ...appSettingsRef.current.files, exportUnits }
+                })
+              }
             />
           )}
           {imageExportView && doc && (

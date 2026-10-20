@@ -5,6 +5,15 @@ import type { MeshQualityReport } from '@openzcad/kernel-adapter/exact';
 import { toBodyId } from '@openzcad/shared';
 import { ExportDialog, type ExportDialogProps } from './ExportDialog';
 
+function measured(triangleCount: number, maxDeviation: number) {
+  return {
+    triangleCount,
+    maxDeviation,
+    sampledTriangles: triangleCount,
+    totalTriangles: triangleCount
+  };
+}
+
 function renderDialog(overrides: Partial<ExportDialogProps> = {}) {
   const props: ExportDialogProps = {
     scopeLabel: 'all bodies (2)',
@@ -17,18 +26,23 @@ function renderDialog(overrides: Partial<ExportDialogProps> = {}) {
     onExport: vi.fn(),
     onCheckQuality: vi.fn(async (): Promise<MeshQualityReport> => ({
       watertight: true,
+      triangleCount: 1_248,
+      maxDeviation: 0.0712,
+      sampled: false,
       bodies: [
         {
           bodyId: toBodyId('body_a'),
           boundaryEdges: 0,
           nonManifoldEdges: 0,
-          watertight: true
+          watertight: true,
+          ...measured(1_000, 0.0712)
         },
         {
           bodyId: toBodyId('body_b'),
           boundaryEdges: 3,
           nonManifoldEdges: 1,
-          watertight: false
+          watertight: false,
+          ...measured(248, 0)
         }
       ]
     })),
@@ -44,11 +58,15 @@ function renderDialog(overrides: Partial<ExportDialogProps> = {}) {
 
 const watertight = (...bodyIds: string[]): MeshQualityReport => ({
   watertight: true,
+  triangleCount: 12 * bodyIds.length,
+  maxDeviation: 0,
+  sampled: false,
   bodies: bodyIds.map((bodyId) => ({
     bodyId: toBodyId(bodyId),
     boundaryEdges: 0,
     nonManifoldEdges: 0,
-    watertight: true
+    watertight: true,
+    ...measured(12, 0)
   }))
 });
 
@@ -208,6 +226,137 @@ describe('ExportDialog', () => {
     expect(
       screen.getByText('3 open edges, 1 non-manifold edge')
     ).toBeInTheDocument();
+  });
+
+  it('reports the measured deviation and triangle count of the checked mesh', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+
+    expect(
+      await screen.findByText(
+        '1,248 triangles · measured deviation 0.071 mm of 0.08 mm allowed'
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('sends a tighter facet angle to the check and the export, in radians', async () => {
+    const user = userEvent.setup();
+    const props = renderDialog();
+
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'Max facet angle' }),
+      '5'
+    );
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    await waitFor(() =>
+      expect(props.onCheckQuality).toHaveBeenCalledWith(
+        0.08,
+        expect.objectContaining({ angularTolerance: (5 * Math.PI) / 180 })
+      )
+    );
+    await user.click(screen.getByRole('button', { name: /Export 3MF/ }));
+    expect(props.onExport).toHaveBeenCalledWith('3mf', 0.08, {
+      angularTolerance: (5 * Math.PI) / 180
+    });
+  });
+
+  it('keeps the default angle off the wire so default exports are unchanged', async () => {
+    const user = userEvent.setup();
+    const props = renderDialog();
+
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    await waitFor(() => expect(props.onCheckQuality).toHaveBeenCalledOnce());
+    const [deflection, options] = vi.mocked(props.onCheckQuality).mock
+      .calls[0]!;
+    expect(deflection).toBe(0.08);
+    expect(options).not.toHaveProperty('angularTolerance');
+  });
+
+  it('checks in the unit the file will be meshed in, and goes stale when it changes', async () => {
+    const user = userEvent.setup();
+    const props = renderDialog({
+      exportUnits: 'inch',
+      documentUnits: 'mm',
+      onExportUnitsChange: vi.fn()
+    });
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    await waitFor(() =>
+      expect(props.onCheckQuality).toHaveBeenCalledWith(
+        0.08,
+        expect.objectContaining({ units: 'inch' })
+      )
+    );
+    await screen.findByText(/measured deviation/);
+    // Another export unit is another float32 mesh: the verdict is stale.
+    props.rerender({ exportUnits: 'cm' });
+    expect(screen.queryByText(/measured deviation/)).toBeNull();
+    expect(screen.getByText(/Quality changed/)).toBeVisible();
+    // glTF meshes in millimetres whatever the preference says.
+    await user.click(screen.getByRole('radio', { name: 'glTF (GLB)' }));
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    await waitFor(() => expect(props.onCheckQuality).toHaveBeenCalledTimes(2));
+    expect(
+      vi.mocked(props.onCheckQuality).mock.calls[1]![1]
+    ).not.toHaveProperty('units');
+  });
+
+  it('marks a report stale when the facet angle changes', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    await screen.findByText(/measured deviation/);
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'Max facet angle' }),
+      '10'
+    );
+    expect(screen.queryByText(/measured deviation/)).toBeNull();
+    expect(screen.getByText(/Quality changed/)).toBeVisible();
+  });
+
+  it('writes in the export unit and offers the preference beside the format', async () => {
+    const user = userEvent.setup();
+    const onExportUnitsChange = vi.fn();
+    const props = renderDialog({
+      exportUnits: 'document',
+      documentUnits: 'inch',
+      onExportUnitsChange
+    });
+
+    expect(
+      screen.getByText(/in inches, declared in the package\./)
+    ).toBeInTheDocument();
+    const units = screen.getByRole('combobox', { name: 'Units' });
+    expect(units).toHaveValue('document');
+    expect(
+      screen.getByRole('option', { name: 'Project (inches)' })
+    ).toBeInTheDocument();
+    await user.selectOptions(units, 'mm');
+    expect(onExportUnitsChange).toHaveBeenCalledWith('mm');
+
+    props.rerender({ exportUnits: 'cm' });
+    await user.click(screen.getByRole('radio', { name: 'OBJ' }));
+    expect(
+      screen.getByText(/in centimeters\. The file does not record its unit\./)
+    ).toBeInTheDocument();
+    // glTF is metres by definition: the unit choice stands aside.
+    await user.click(screen.getByRole('radio', { name: 'glTF (GLB)' }));
+    expect(screen.getByText(/in meters, the unit glTF defines/)).toBeVisible();
+    expect(screen.getByRole('combobox', { name: 'Units' })).toBeDisabled();
   });
 
   it('marks a report stale when the quality changes', async () => {

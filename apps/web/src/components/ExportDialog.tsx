@@ -7,6 +7,11 @@ import {
   TriangleAlert
 } from 'lucide-react';
 import type { MeshQualityReport } from '@openzcad/kernel-adapter/exact';
+import {
+  resolveExportUnits,
+  type ExportUnits,
+  type UnitSystem
+} from '@openzcad/shared';
 import { countLabel } from '../lib/toasts';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
@@ -60,6 +65,34 @@ type QualityPresetId = (typeof QUALITY_PRESETS)[number]['id'] | 'custom';
 
 const CUSTOM_DEFLECTION_MIN = 0.001;
 const CUSTOM_DEFLECTION_MAX = 1;
+
+/**
+ * The largest angle a facet may turn along a curved face. 20° is the kernel's
+ * own default (0.35 rad), sent as no angle at all so a default export stays
+ * byte-for-byte what it was; tighter angles add facets on small radii, where
+ * the chord deviation alone leaves a visibly polygonal hole.
+ */
+const ANGLE_OPTIONS = [20, 15, 10, 5] as const;
+type AngleOption = (typeof ANGLE_OPTIONS)[number];
+
+function angularToleranceFor(angle: AngleOption): number | undefined {
+  return angle === 20 ? undefined : (angle * Math.PI) / 180;
+}
+
+const UNIT_NAMES: Record<UnitSystem, string> = {
+  mm: 'millimeters',
+  cm: 'centimeters',
+  m: 'meters',
+  inch: 'inches'
+};
+
+/** Formats whose numbers follow the export unit; glTF is metres by spec. */
+const UNIT_FREE_FORMATS: ReadonlySet<MeshExportDialogFormat> = new Set(['glb']);
+
+function formatDeviation(value: number): string {
+  if (value === 0) return '0';
+  return value >= 0.01 ? value.toFixed(3) : value.toPrecision(2);
+}
 
 const FORMAT_OPTIONS: {
   format: MeshExportDialogFormat;
@@ -121,11 +154,27 @@ export interface ExportDialogProps {
    * outcome are the host's to report, in the activity pill, so the workspace
    * is live while the mesh builds.
    */
-  onExport(format: MeshExportDialogFormat, deflection: number): void;
+  onExport(
+    format: MeshExportDialogFormat,
+    deflection: number,
+    options?: { angularTolerance?: number }
+  ): void;
+  /**
+   * Checks the mesh the export would write. `units` is the space its writer
+   * tessellates in: the export unit, or millimetres for glTF.
+   */
   onCheckQuality(
     deflection: number,
-    options?: { onProgress?(progress: ExportProgress): void }
+    options?: {
+      angularTolerance?: number;
+      units?: UnitSystem;
+      onProgress?(progress: ExportProgress): void;
+    }
   ): Promise<MeshQualityReport>;
+  /** The export-unit preference, and the project units it may defer to. */
+  exportUnits?: ExportUnits;
+  documentUnits?: UnitSystem;
+  onExportUnitsChange?(units: ExportUnits): void;
 }
 
 /**
@@ -142,7 +191,10 @@ export function ExportDialog({
   revision,
   onClose,
   onExport,
-  onCheckQuality
+  onCheckQuality,
+  exportUnits = 'mm',
+  documentUnits = 'mm',
+  onExportUnitsChange
 }: ExportDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   // Escape must still close the dialog when focus has fallen out of it (a
@@ -153,11 +205,14 @@ export function ExportDialog({
   const [format, setFormat] = useState<MeshExportDialogFormat>('3mf');
   const [preset, setPreset] = useState<QualityPresetId>('standard');
   const [customDeflection, setCustomDeflection] = useState('0.05');
+  const [angle, setAngle] = useState<AngleOption>(20);
   const [phase, setPhase] = useState<'idle' | 'checking'>('idle');
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<{
     deflection: number;
+    angle: AngleOption;
+    units: UnitSystem;
     scope: string;
     result: MeshQualityReport;
   } | null>(null);
@@ -199,6 +254,11 @@ export function ExportDialog({
         : null
       : presetDeflection!;
 
+  // The space the chosen writer tessellates in: glTF's root node scales a
+  // millimetre mesh, every other format meshes in the export unit itself.
+  const tessellationUnits: UnitSystem = UNIT_FREE_FORMATS.has(format)
+    ? 'mm'
+    : resolveExportUnits(exportUnits, documentUnits);
   const bodyName = (bodyId: string) =>
     bodies.find((body) => body.bodyId === bodyId)?.name ?? bodyId;
   const staleReason =
@@ -206,7 +266,9 @@ export function ExportDialog({
       ? null
       : report.scope !== scope
         ? 'scope'
-        : report.deflection !== deflection
+        : report.deflection !== deflection ||
+            report.angle !== angle ||
+            report.units !== tessellationUnits
           ? 'quality'
           : null;
   const staleReport = staleReason !== null;
@@ -218,14 +280,25 @@ export function ExportDialog({
     // Bound to what was asked, not what is current when the answer lands:
     // a verdict that arrives after the scope moved must read as stale.
     const checkedScope = scope;
+    const checkedAngle = angle;
+    const checkedUnits = tessellationUnits;
+    const angularTolerance = angularToleranceFor(checkedAngle);
     setPhase('checking');
     setProgress('preparing');
     setError(null);
     try {
       const result = await onCheckQuality(deflection, {
-        onProgress: setProgress
+        onProgress: setProgress,
+        ...(angularTolerance === undefined ? {} : { angularTolerance }),
+        ...(checkedUnits === 'mm' ? {} : { units: checkedUnits })
       });
-      setReport({ deflection, scope: checkedScope, result });
+      setReport({
+        deflection,
+        angle: checkedAngle,
+        units: checkedUnits,
+        scope: checkedScope,
+        result
+      });
     } catch (checkError) {
       setReport(null);
       setError(
@@ -243,9 +316,15 @@ export function ExportDialog({
     if (deflection === null || phase !== 'idle') {
       return;
     }
-    onExport(format, deflection);
+    const angularTolerance = angularToleranceFor(angle);
+    if (angularTolerance === undefined) onExport(format, deflection);
+    else onExport(format, deflection, { angularTolerance });
     onClose();
   }
+
+  const writtenUnits = UNIT_FREE_FORMATS.has(format)
+    ? 'm'
+    : resolveExportUnits(exportUnits, documentUnits);
 
   return (
     <div className="modal-backdrop">
@@ -272,7 +351,11 @@ export function ExportDialog({
           Exports {scopeLabel}{' '}
           {format === 'glb'
             ? 'in meters, the unit glTF defines.'
-            : 'in millimeters, ready for slicing.'}
+            : writtenUnits === 'mm'
+              ? 'in millimeters, ready for slicing.'
+              : format === '3mf'
+                ? `in ${UNIT_NAMES[writtenUnits]}, declared in the package.`
+                : `in ${UNIT_NAMES[writtenUnits]}. The file does not record its unit.`}
         </p>
         {hiddenBodies > 0 && onIncludeHiddenChange && (
           <label className="export-dialog-custom">
@@ -352,6 +435,43 @@ export function ExportDialog({
               {CUSTOM_DEFLECTION_MAX} mm.
             </p>
           ) : null}
+          <div className="export-dialog-fields">
+            <label className="export-dialog-custom">
+              <span>Max facet angle</span>
+              <select
+                value={angle}
+                onChange={(event) =>
+                  setAngle(Number(event.target.value) as AngleOption)
+                }
+              >
+                {ANGLE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option === 20 ? '20° (default)' : `${option}°`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {onExportUnitsChange ? (
+              <label className="export-dialog-custom">
+                <span>Units</span>
+                <select
+                  value={exportUnits}
+                  disabled={UNIT_FREE_FORMATS.has(format)}
+                  onChange={(event) =>
+                    onExportUnitsChange(event.target.value as ExportUnits)
+                  }
+                >
+                  <option value="document">
+                    Project ({UNIT_NAMES[documentUnits]})
+                  </option>
+                  <option value="mm">Millimeters</option>
+                  <option value="cm">Centimeters</option>
+                  <option value="m">Meters</option>
+                  <option value="inch">Inches</option>
+                </select>
+              </label>
+            ) : null}
+          </div>
         </fieldset>
 
         <section className="export-dialog-group export-dialog-quality">
@@ -391,6 +511,11 @@ export function ExportDialog({
               </StableLabel>
             </button>
           </header>
+          {report && !staleReport ? (
+            <p className="export-dialog-measure" role="status">
+              {`${report.result.triangleCount.toLocaleString('en-US')} ${report.result.triangleCount === 1 ? 'triangle' : 'triangles'} · measured deviation ${formatDeviation(report.result.maxDeviation)} mm of ${report.deflection} mm allowed${report.result.sampled ? ' (sampled)' : ''}`}
+            </p>
+          ) : null}
           {report && !staleReport ? (
             <ul className="export-dialog-report">
               {report.result.bodies.map((body) => (
