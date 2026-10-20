@@ -69,7 +69,8 @@ export const MAX_HISTORY_REPLAY_WORK = 512;
  * on document length: appending a feature must not invalidate earlier kernel
  * checkpoints. Keep short histories dense, spend four slots at the first
  * sparse spacing, then two at each doubling. This retains prefixes 32 and 80
- * without spending 80 full snapshots. Any tail beyond the last slot replays.
+ * without spending 80 full snapshots. Each sync adds one tail checkpoint
+ * (see `tailCheckpointIndices`), so only features after it replay.
  */
 export function historyCheckpointIndices(
   featureCount: number,
@@ -101,27 +102,32 @@ export function historyCheckpointIndices(
 }
 
 /**
- * A face-drag preview's checkpoint positions: the stable ones before the
- * dragged edit, then the feature right before it. Every tick of a drag
- * restores that checkpoint and replays only the edit, so the edited body
- * keeps its handles and a prepared face move can engage however sparse the
- * stable positions are. The edit's own position is dropped because its
- * digest changes on every tick. A schedule already at `limit` gives up its
- * latest position before the source, so the count stays within the limit.
- * The next sync that is not a drag preview finds the extra position
- * mismatched and discards that checkpoint.
+ * A sync's checkpoint positions: the stable ones before `tail`, then `tail`.
+ *
+ * A complete sync's tail is its last feature, and a face-drag preview's is
+ * the feature right before the dragged edit, whose own digest changes on
+ * every tick. Appending a feature, or starting a drag, then restores the
+ * previous sync's tail and replays only what follows it, however sparse the
+ * stable positions are. Every other body keeps its handles, so its
+ * measurement is reused and a prepared face move can engage. The commit
+ * after a drag restores the drag's tail the same way.
+ *
+ * A schedule already at `limit` gives up its latest position before the
+ * tail, so the count stays within the limit. A tail that later syncs no
+ * longer schedule is the last retained checkpoint; the next sync restores
+ * it when its digests still match, then discards it (see `buildHistory`).
  */
-export function dragPreviewCheckpointIndices(
+export function tailCheckpointIndices(
   indices: readonly number[],
-  editIndex: number,
+  tail: number,
   limit: number
 ): number[] {
-  if (indices.length === 0 || editIndex < 1) return [...indices];
-  const kept = indices.filter((index) => index < editIndex - 1);
+  if (indices.length === 0 || tail < 0) return [...indices];
+  const kept = indices.filter((index) => index < tail);
   // The same count semantics as `historyCheckpointIndices`: 2.5 allows two.
   const count = Math.floor(limit);
   if (kept.length >= count) kept.length = Math.max(0, count - 1);
-  kept.push(editIndex - 1);
+  kept.push(tail);
   return kept;
 }
 

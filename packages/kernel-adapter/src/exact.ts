@@ -207,7 +207,6 @@ import {
   MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES,
   MAX_HISTORY_REPLAY_WORK,
   cloneBuildState,
-  dragPreviewCheckpointIndices,
   featureAwaitsEnvironment,
   historyCheckpointIndices,
   historyFeatureDigest,
@@ -215,6 +214,7 @@ import {
   measuredShapeBytes,
   measurementWitness,
   measurementProvenanceKey,
+  tailCheckpointIndices,
   type HistoryCheckpointEntry,
   type MeasuredBodyCacheEntry,
   type PreviewDisplay,
@@ -1430,13 +1430,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       features.length,
       this.maxHistoryCheckpoints
     );
-    const checkpointIndices = deferredDirectEditFeatureId
-      ? dragPreviewCheckpointIndices(
-          stableCheckpointIndices,
-          features.length - 1,
-          this.maxHistoryCheckpoints
-        )
-      : stableCheckpointIndices;
+    // A drag's tail is the edit's source; a complete sync's is its last
+    // feature. See `tailCheckpointIndices`.
+    const checkpointIndices = tailCheckpointIndices(
+      stableCheckpointIndices,
+      features.length - (deferredDirectEditFeatureId ? 2 : 1),
+      this.maxHistoryCheckpoints
+    );
     const checkpointIndexSet = new Set(checkpointIndices);
     const cachingEnabled = checkpointIndices.length > 0;
     const scopeKey = cachingEnabled ? historyScopeDigest(document) : null;
@@ -1522,18 +1522,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.historyScopeKey === scopeKey
     ) {
       let prefix = -1;
-      const limit = Math.min(
-        this.historyCheckpoints.length,
-        checkpointIndices.length
-      );
-      for (let index = 0; index < limit; index += 1) {
+      // A previous sync's tail that this one no longer schedules. It is the
+      // last retained checkpoint; it is restored and then discarded, so the
+      // checkpoints this replay takes stay aligned with the schedule.
+      let staleTail = false;
+      for (let index = 0; index < this.historyCheckpoints.length; index += 1) {
         const entry = this.historyCheckpoints[index]!;
         const from =
           index === 0
             ? 0
             : this.historyCheckpoints[index - 1]!.featureIndex + 1;
         if (
-          entry.featureIndex !== checkpointIndices[index] ||
           entry.digests.length !== entry.featureIndex - from + 1 ||
           entry.digests.some(
             (digest, offset) =>
@@ -1541,6 +1540,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               digest !== probedDigests[from + offset]
           )
         ) {
+          break;
+        }
+        if (entry.featureIndex !== checkpointIndices[index]) {
+          if (index === this.historyCheckpoints.length - 1) {
+            prefix = index;
+            staleTail = true;
+          }
           break;
         }
         prefix = index;
@@ -1554,25 +1560,28 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       );
       if (prefix >= 0 || reusePrimitiveTail) {
         try {
+          const restoredEntry =
+            prefix >= 0 ? this.historyCheckpoints[prefix]! : undefined;
+          // Checkpoints from here on are dropped; a stale tail drops itself.
+          const kept = staleTail ? prefix : prefix + 1;
           if (reusePrimitiveTail) {
             // Preserve independent tail handles. Dropping checkpoints frees
             // snapshots without rolling the current topology back.
-            if (this.historyCheckpoints.length > prefix + 1) {
+            if (this.historyCheckpoints.length > kept) {
               kernel.discardCheckpoint(
-                this.historyCheckpoints[prefix + 1]!.checkpointId
+                this.historyCheckpoints[kept]!.checkpointId
               );
             }
           } else {
-            kernel.restore(this.historyCheckpoints[prefix]!.checkpointId);
+            kernel.restore(restoredEntry!.checkpointId);
+            if (staleTail)
+              kernel.discardCheckpoint(restoredEntry!.checkpointId);
             this.primitiveBuildCache.restoredThrough(restoredFeatures - 1);
           }
-          for (const entry of this.historyCheckpoints.slice(prefix + 1)) {
+          for (const entry of this.historyCheckpoints.slice(kept)) {
             this.historyCheckpointOwners.delete(entry.checkpointId);
           }
-          this.historyCheckpoints = this.historyCheckpoints.slice(
-            0,
-            prefix + 1
-          );
+          this.historyCheckpoints = this.historyCheckpoints.slice(0, kept);
           if (kernel.checkpointCount() !== this.historyCheckpoints.length) {
             throw new HistoryCacheIntegrityError(
               'History restore did not truncate checkpoints.'
@@ -1581,10 +1590,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           startIndex = restoredFeatures;
           // Two copies deep: the snapshot must survive this replay's in-place
           // mutation, and the replay must not share containers with it.
-          initial =
-            prefix >= 0
-              ? cloneBuildState(this.historyCheckpoints[prefix]!.snapshot)
-              : null;
+          initial = restoredEntry
+            ? cloneBuildState(restoredEntry.snapshot)
+            : null;
           // Restore may succeed even when an entity was retired before the
           // checkpoint barrier. Never replay builders from stale JS handles.
           for (const shape of initial?.shapes.values() ?? []) {

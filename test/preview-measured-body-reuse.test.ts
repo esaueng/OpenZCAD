@@ -142,8 +142,10 @@ it('drag previews mesh a body the drag rebuilt once, not on every tick', async (
     });
   }
   // Features 17-20, then the edit at 21. The stable checkpoints are at 17
-  // and 19, so the drag's first tick replays the untouched extrusion (20)
-  // with new handles, and its committed measurement no longer applies.
+  // and 19. Once another document's sync has replaced the base's
+  // last-feature checkpoint, the drag's first tick replays the untouched
+  // extrusion (20) with new handles, and its committed measurement no
+  // longer applies.
   document = circleExtrusion(document, 'Edited', 40);
   document = circleExtrusion(document, 'Untouched', 80);
   const [edited, untouched] = document.bodyOrder.slice(-2) as [BodyId, BodyId];
@@ -151,6 +153,13 @@ it('drag previews mesh a body the drag rebuilt once, not on every tick', async (
   const tessellations = countTessellations();
   try {
     const base = await adapter.syncDocument(document);
+    await adapter.syncDocument(
+      addPrimitiveFeature(document, {
+        name: 'Late box',
+        primitiveKind: 'box',
+        dimensions: { width: 2, height: 2, depth: 2 }
+      })
+    );
     const top = base.bodyRepresentations[edited]!.topology!.faces.find(
       (face) => (face.geometry?.normal?.z ?? 0) > 0.99
     )!;

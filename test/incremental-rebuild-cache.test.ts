@@ -609,6 +609,13 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       const { document } = chainDocument();
       const first = await adapter.syncDocument(document);
       const second = await adapter.syncDocument(document);
+      // The last feature's checkpoint holds the limit's second slot.
+      const pattern = listFeaturesInOrder(document).at(-1)!;
+      const changed = updateFeature(document, {
+        featureId: pattern.featureId,
+        data: { spacing: 12 }
+      });
+      const third = await adapter.syncDocument(changed);
       expect(events).toEqual([
         {
           kind: 'full-rebuild',
@@ -619,8 +626,17 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
         },
         {
           kind: 'prefix-restore',
+          replayed: 0,
+          restored: 5,
+          remeasured: 0,
+          reusedMeasurements: 3
+        },
+        {
+          // The move is reused; the sketch, puck and row replay.
+          kind: 'independent-reuse',
+          reusedPreparedFeatures: 1,
           replayed: 3,
-          restored: 2,
+          restored: 1,
           remeasured: 2,
           reusedMeasurements: 1
         }
@@ -628,6 +644,9 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
       expect(normalized(second)).toEqual(normalized(first));
       expect(normalized(first)).toEqual(
         normalized(await freshDerived(document))
+      );
+      expect(normalized(third)).toEqual(
+        normalized(await freshDerived(changed))
       );
     } finally {
       adapter.dispose();
