@@ -1043,6 +1043,10 @@ export function openPanel(
             ? { kind: 'newColumn', side: home.side, column: home.column }
             : home;
       next = placeAt(layout, id, target, phone ? undefined : stage);
+      if (next !== layout) {
+        // Back where it was, at the height it was given there.
+        next.weights[id] = layout.weights[id];
+      }
     }
     if (next === layout) {
       next = openUnpinned(layout, id);
@@ -1213,11 +1217,18 @@ export function resizeGap(
   if (total < minWeight * 2) {
     return layout;
   }
+  if (Math.abs(deltaPx) < 1e-9) {
+    return layout;
+  }
+  // A neighbour already under the minimum (held there on a short stage) is
+  // not pushed up by the clamp alone; only the drag moves weight.
+  const floorAbove = Math.min(minWeight, layout.weights[above]);
+  const floorBelow = Math.min(minWeight, layout.weights[below]);
   const next = copyLayout(layout);
   const resized = clamp(
     layout.weights[above] + deltaPx / pxPerWeight,
-    minWeight,
-    total - minWeight
+    floorAbove,
+    total - floorBelow
   );
   next.weights[above] = resized;
   next.weights[below] = total - resized;
@@ -1734,15 +1745,20 @@ export function hitTest(
     geometry.insets.gap +
     geometry.columnWidth +
     geometry.insets.gap;
+  // A drag keeps the column it emptied until the drop, so count only the
+  // columns with something in them, as placement does.
+  const live = (side: DockSide): number =>
+    sideColumns(geometry.layout, side).filter((column) => column.length > 0)
+      .length;
   const right = geometry.rails.right;
-  if (geometry.columnCount.right < PANEL_MAX_COLUMNS.right) {
+  if (live('right') < PANEL_MAX_COLUMNS.right) {
     const outer = right.x + right.w;
     if (point.x >= outer - span && point.x <= outer) {
       return { kind: 'newColumn', side: 'right' };
     }
   }
   const left = geometry.rails.left;
-  if (geometry.columnCount.left < PANEL_MAX_COLUMNS.left) {
+  if (live('left') < PANEL_MAX_COLUMNS.left) {
     if (point.x >= left.x && point.x <= left.x + span) {
       return { kind: 'newColumn', side: 'left' };
     }
