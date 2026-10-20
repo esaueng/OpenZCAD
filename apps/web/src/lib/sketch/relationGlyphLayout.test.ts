@@ -111,6 +111,33 @@ describe('relation glyph layout', () => {
     }
   });
 
+  it('still finds free space when every ring candidate is taken', () => {
+    // Forty-one overlapping curves and a point projecting onto one spot, each
+    // with a wide chip: far more than the ring candidates can hold.
+    const pile: Chip[] = [
+      { ax: 300, ay: 300, nx: 0, ny: -1, glyphs: 2, point: true },
+      ...Array.from({ length: 41 }, () => ({
+        ax: 300,
+        ay: 300,
+        nx: 0.6,
+        ny: -0.8,
+        glyphs: 3,
+        point: false
+      }))
+    ];
+    const chips = solve(pile);
+    for (let a = 0; a < chips.length; a += 1) {
+      expect(covers(chips[a]!, 300, 300), `chip ${a} covers the anchor`).toBe(
+        false
+      );
+      for (let b = a + 1; b < chips.length; b += 1) {
+        expect(overlaps(chips[a]!, chips[b]!), `chips ${a} and ${b}`).toBe(
+          false
+        );
+      }
+    }
+  });
+
   it('keeps every chip off every anchor, not just its own', () => {
     // A short line: its middle chip would sit on the end point beside it.
     const chips = solve([

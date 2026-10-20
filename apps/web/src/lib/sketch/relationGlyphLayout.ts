@@ -108,6 +108,7 @@ export class RelationGlyphLayout {
       const point = (flags & POINT) !== 0;
       let chosenX = Number.NaN;
       let chosenY = 0;
+      let found = false;
       search: for (let ring = 0; ring < RINGS; ring += 1) {
         const reach =
           RELATION_CHIP_STANDOFF_PX +
@@ -138,10 +139,6 @@ export class RelationGlyphLayout {
               cx += -dy * slide;
               cy += dx * slide;
             }
-            if (Number.isNaN(chosenX)) {
-              chosenX = cx;
-              chosenY = cy;
-            }
             if (
               this.free(
                 cx - halfW,
@@ -154,10 +151,38 @@ export class RelationGlyphLayout {
             ) {
               chosenX = cx;
               chosenY = cy;
+              found = true;
               break search;
             }
           }
         }
+      }
+      if (!found) {
+        // Every candidate is taken (a pile of curves projecting onto one
+        // spot): stand off along the preferred direction past every placed
+        // chip and anchor. Beyond all of them along that axis, the box can
+        // overlap none of them, so the fallback is always free.
+        const support = Math.abs(nx) * halfW + Math.abs(ny) * halfH;
+        let reach =
+          RELATION_CHIP_STANDOFF_PX + (point ? KEEP_OUT_PX : 0) + support;
+        for (let other = 0; other < placedCount; other += 1) {
+          const p = other * 4;
+          const far =
+            Math.max((placed[p]! - ax) * nx, (placed[p + 2]! - ax) * nx) +
+            Math.max((placed[p + 1]! - ay) * ny, (placed[p + 3]! - ay) * ny);
+          reach = Math.max(reach, far + CHIP_GAP_PX + support + 1);
+        }
+        for (let other = 0; other < count; other += 1) {
+          const o = other * IN;
+          if (!(input[o + 6]! & VISIBLE)) continue;
+          const far =
+            (input[o]! - ax) * nx +
+            (input[o + 1]! - ay) * ny +
+            KEEP_OUT_PX * (Math.abs(nx) + Math.abs(ny));
+          reach = Math.max(reach, far + support + 1);
+        }
+        chosenX = ax + nx * reach;
+        chosenY = ay + ny * reach;
       }
       offset[index * 2] = chosenX - ax;
       offset[index * 2 + 1] = chosenY - ay;
