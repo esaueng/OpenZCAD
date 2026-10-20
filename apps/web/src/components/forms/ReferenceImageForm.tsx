@@ -437,10 +437,14 @@ function TwoPointScale({
   const loadRef = useRef(loadPicture);
   loadRef.current = loadPicture;
 
+  // Loaded again whenever the picture's location changes: a device-only
+  // picture archived by its owner while the scaler is open becomes readable.
+  const location = image.artifactId;
   useEffect(() => {
     if (!open) return;
     let live = true;
     let created: string | null = null;
+    setMissing(false);
     void loadRef.current().then(
       (blob) => {
         if (!live) return;
@@ -451,6 +455,7 @@ function TwoPointScale({
         // An object URL, never a data URL: the CSP allows `blob:` images.
         created = URL.createObjectURL(blob);
         setUrl(created);
+        setMissing(false);
       },
       () => live && setMissing(true)
     );
@@ -459,7 +464,7 @@ function TwoPointScale({
       if (created) URL.revokeObjectURL(created);
       setUrl(null);
     };
-  }, [open]);
+  }, [open, location]);
 
   const known = Number(distance.trim());
   const width =

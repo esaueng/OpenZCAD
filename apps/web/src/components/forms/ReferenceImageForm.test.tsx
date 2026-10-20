@@ -33,6 +33,8 @@ const stored: ReferenceImage = {
   opacity: 0.6
 };
 
+let rerender: ReturnType<typeof render>['rerender'] = () => undefined;
+
 function setup(
   extra: Partial<Parameters<typeof ReferenceImageWorkspaceCard>[0]> = {}
 ) {
@@ -53,7 +55,7 @@ function setup(
     onClose: vi.fn(),
     ...extra
   };
-  render(<ReferenceImageWorkspaceCard {...props} />);
+  rerender = render(<ReferenceImageWorkspaceCard {...props} />).rerender;
   return props;
 }
 
@@ -148,14 +150,32 @@ describe('ReferenceImageWorkspaceCard', () => {
     expect(screen.getByText(/Height 40 mm/)).toBeTruthy();
   });
 
-  it('says so when the picture is not on this device', async () => {
-    setup({ loadPicture: vi.fn(async () => null) });
+  it('says so when the picture is not on this device, and retries when it is archived', async () => {
+    const loadPicture = vi.fn(async (): Promise<Blob | null> => null);
+    const props = setup({ loadPicture });
     fireEvent.click(
       screen.getByRole('button', { name: 'Scale from two points…' })
     );
     expect(
       await screen.findByText('The picture is not available on this device.')
     ).toBeTruthy();
+    // The owner archives it: the image's artifact id changes under the open
+    // scaler, which loads again and clears the error.
+    loadPicture.mockResolvedValue(new Blob([new Uint8Array([1])]));
+    rerender(
+      <ReferenceImageWorkspaceCard
+        {...props}
+        image={{
+          ...props.image,
+          artifactId: 'artifact_cloud' as ArtifactId
+        }}
+      />
+    );
+    expect(await screen.findByRole('img')).toBeTruthy();
+    expect(
+      screen.queryByText('The picture is not available on this device.')
+    ).toBeNull();
+    expect(loadPicture).toHaveBeenCalledTimes(2);
   });
 
   it('deletes from its menu and closes on Escape', () => {
