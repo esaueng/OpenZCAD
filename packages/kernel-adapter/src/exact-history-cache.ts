@@ -118,7 +118,9 @@ export function dragPreviewCheckpointIndices(
 ): number[] {
   if (indices.length === 0 || editIndex < 1) return [...indices];
   const kept = indices.filter((index) => index < editIndex - 1);
-  if (kept.length >= limit) kept.length = Math.max(0, Math.floor(limit) - 1);
+  // The same count semantics as `historyCheckpointIndices`: 2.5 allows two.
+  const count = Math.floor(limit);
+  if (kept.length >= count) kept.length = Math.max(0, count - 1);
   kept.push(editIndex - 1);
   return kept;
 }

@@ -34,6 +34,8 @@ describe('dragPreviewCheckpointIndices', () => {
     // A full schedule gives up its latest position before the source.
     expect(dragPreviewCheckpointIndices([0, 1], 21, 2)).toEqual([0, 20]);
     expect(dragPreviewCheckpointIndices([0], 21, 1)).toEqual([20]);
+    // Fractional limits count like historyCheckpointIndices: 2.5 allows two.
+    expect(dragPreviewCheckpointIndices([0, 1], 21, 2.5)).toEqual([0, 20]);
     const full = historyCheckpointIndices(600, 32);
     const drag = dragPreviewCheckpointIndices(full, 599, 32);
     expect(drag).toHaveLength(32);
