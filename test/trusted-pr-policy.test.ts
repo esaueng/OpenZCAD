@@ -1,8 +1,9 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { FLEET_CI_PATH, FLEET_CI_PIN } from './fleet-workflow';
 
-const workflow = readFileSync('.github/workflows/fleet-ci.yml', 'utf8');
+const workflow = readFileSync(FLEET_CI_PATH, 'utf8');
 
 function stepScript(name: string, source = workflow): string {
   const step = source.slice(source.indexOf(`- name: ${name}`));
@@ -27,18 +28,19 @@ describe('required validation gate', () => {
     expect(result.status, result.stderr).toBe(0);
   });
   const caller = readFileSync('.github/workflows/ci.yml', 'utf8');
-  const ci = readFileSync('.github/workflows/fleet-ci.yml', 'utf8');
+  const ci = workflow;
 
   it('keeps the immutable runner policy identical to the reviewed source', () => {
-    const pin = caller.match(/fleet-ci\.yml@([0-9a-f]{40})/)?.[1];
-    expect(pin).toBeDefined();
-    const pinned = execFileSync('git', ['show', `${pin}:.github/workflows/fleet-ci.yml`], {encoding:'utf8'});
-    expect(pinned, 'Re-pin ci.yml after changing fleet-ci.yml.').toBe(ci);
+    const pinned = execFileSync('git', ['show', `${FLEET_CI_PIN}:${FLEET_CI_PATH}`], {encoding:'utf8'});
+    expect(
+      pinned,
+      `Edit a new versioned fleet-ci file, not ${FLEET_CI_PATH}; see docs/runner-routing.md.`
+    ).toBe(ci);
   });
 
   it('pins runner policy independently of PR edits and retains both dependencies', () => {
     expect(caller).toMatch(
-      /uses: esaueng\/OpenZCAD\/\.github\/workflows\/fleet-ci\.yml@[0-9a-f]{40}\n/
+      /uses: esaueng\/OpenZCAD\/\.github\/workflows\/fleet-ci(?:-v\d+)?\.yml@[0-9a-f]{40}\n/
     );
     expect(caller).not.toMatch(/secrets: inherit|runs-on:/);
     expect(ci).toContain(
