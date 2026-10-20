@@ -64,7 +64,11 @@ export const SHEET_MARGIN_MM = 10;
 export const TITLE_BLOCK_HEIGHT_MM = 32;
 const TITLE_BLOCK_MAX_WIDTH_MM = 170;
 
-/** Helvetica advance widths for U+0020–U+007E, per 1000 em. */
+/**
+ * Advance widths per 1000 em of the base-14 Helvetica and Helvetica-Bold, from
+ * the core fonts' metrics, for every character `sheetSafeText` keeps: U+0020–
+ * U+007E, then U+00A0–U+00FF (WinAnsi matches Latin-1 there).
+ */
 const HELVETICA_WIDTHS = [
   278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278,
   278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584,
@@ -72,8 +76,41 @@ const HELVETICA_WIDTHS = [
   833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278,
   278, 278, 469, 556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222,
   500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500,
-  500, 334, 260, 334, 584
+  500, 334, 260, 334, 584, 278, 333, 556, 556, 556, 556, 260, 556, 333, 737,
+  370, 556, 584, 333, 737, 333, 400, 584, 333, 333, 333, 556, 537, 278, 333,
+  333, 365, 556, 834, 834, 834, 611, 667, 667, 667, 667, 667, 667, 1000, 722,
+  667, 667, 667, 667, 278, 278, 278, 278, 722, 722, 778, 778, 778, 778, 778,
+  584, 778, 722, 722, 722, 722, 667, 667, 611, 556, 556, 556, 556, 556, 556,
+  889, 500, 556, 556, 556, 556, 278, 278, 278, 278, 556, 556, 556, 556, 556,
+  556, 556, 584, 611, 556, 556, 556, 556, 500, 556, 500
 ];
+const HELVETICA_BOLD_WIDTHS = [
+  278, 333, 474, 556, 556, 889, 722, 238, 333, 333, 389, 584, 278, 333, 278,
+  278, 556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 333, 333, 584, 584,
+  584, 611, 975, 722, 722, 722, 722, 667, 611, 778, 722, 278, 556, 722, 611,
+  833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 333,
+  278, 333, 584, 556, 333, 556, 611, 556, 611, 556, 333, 611, 611, 278, 278,
+  556, 278, 889, 611, 611, 611, 611, 389, 556, 333, 611, 556, 778, 556, 556,
+  500, 389, 280, 389, 584, 278, 333, 556, 556, 556, 556, 280, 556, 333, 737,
+  370, 556, 584, 333, 737, 333, 400, 584, 333, 333, 333, 611, 556, 278, 333,
+  333, 365, 556, 834, 834, 834, 611, 722, 722, 722, 722, 722, 722, 1000, 722,
+  667, 667, 667, 667, 278, 278, 278, 278, 722, 722, 778, 778, 778, 778, 778,
+  584, 778, 722, 722, 722, 722, 667, 667, 611, 556, 556, 556, 556, 556, 556,
+  889, 556, 556, 556, 556, 556, 278, 278, 278, 278, 611, 611, 611, 611, 611,
+  611, 611, 584, 611, 611, 611, 611, 611, 556, 611, 556
+];
+
+function glyphWidth(code: number, bold: boolean): number {
+  const table = bold ? HELVETICA_BOLD_WIDTHS : HELVETICA_WIDTHS;
+  const index =
+    code >= 0x20 && code <= 0x7e
+      ? code - 0x20
+      : code >= 0xa0 && code <= 0xff
+        ? code - 0xa0 + 95
+        : -1;
+  // Anything else is drawn as "?" (see sheetSafeText).
+  return table[index] ?? table[0x3f - 0x20]!;
+}
 
 /**
  * Sheet text is drawn in the PDF base-14 Helvetica, which every reader
@@ -99,12 +136,8 @@ export function textWidthMm(
   bold = false
 ): number {
   let units = 0;
-  for (const char of text) {
-    const code = char.codePointAt(0)!;
-    units += HELVETICA_WIDTHS[code - 0x20] ?? 556;
-  }
-  // Helvetica-Bold runs about 5% wider; this only decides truncation.
-  return ((units * sizeMm) / 1000) * (bold ? 1.05 : 1);
+  for (const char of text) units += glyphWidth(char.codePointAt(0)!, bold);
+  return (units * sizeMm) / 1000;
 }
 
 /** `text` cut with an ellipsis-free "..." so it fits `widthMm`. */

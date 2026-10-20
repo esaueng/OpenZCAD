@@ -31,7 +31,9 @@ import {
 import { projectView } from '../apps/web/src/lib/drawing/projectView';
 import {
   composeSheetPage,
+  fitText,
   sheetSafeText,
+  textWidthMm,
   titleBlockBox,
   viewPageBox
 } from '../apps/web/src/lib/drawing/sheetPage';
@@ -848,6 +850,20 @@ describe('D01 sheet page and export', () => {
     }
     // A kilometre does not fit A3 even at 1:1000.
     expect(await make(1e6)).toThrow(/too large for a sheet/);
+  });
+
+  it('measures title-block text with the real Helvetica widths, Latin-1 included', () => {
+    // Ø is 778/1000 em and Æ 1000 in Helvetica; a flat 556 for every
+    // character past ASCII let a title of them run into the next cell.
+    expect(textWidthMm('ØØØØ', 10)).toBeCloseTo(31.12, 9);
+    expect(textWidthMm('ÆÆ', 10)).toBeCloseTo(20, 9);
+    // Bold has its own widths, not regular plus 5%: i is 278, not 233.
+    expect(textWidthMm('iiii', 10, true)).toBeCloseTo(11.12, 9);
+    expect(textWidthMm('é', 10, true)).toBeCloseTo(5.56, 9);
+    // Anything sheetSafeText turns into "?" is measured as one.
+    expect(textWidthMm('\u4e2d', 10)).toBeCloseTo(5.56, 9);
+    const fitted = fitText('Æ'.repeat(40), 3.5, 40);
+    expect(textWidthMm(fitted, 3.5)).toBeLessThanOrEqual(40);
   });
 
   it('bounds the export file name to what the desktop save dialog accepts', () => {
