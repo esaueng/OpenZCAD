@@ -1055,6 +1055,29 @@ describe('a locked layout', () => {
   });
 });
 
+describe('gap resizing with a held panel', () => {
+  it('changes nothing until the drag moves, and never lifts a held panel', () => {
+    const layout = layoutWith({
+      right: [['parameters', 'revisions']],
+      weights: { ...modelOnly().weights, parameters: 0.5, revisions: 3 }
+    });
+    // 90px at 100px a weight is 0.9: Parameters sits under it, held at 90px.
+    expect(resizeGap(layout, 'parameters', 'revisions', 0, 100)).toBe(layout);
+    const nudged = resizeGap(layout, 'parameters', 'revisions', 10, 100);
+    expect(nudged.weights.parameters).toBeCloseTo(0.6, 9);
+    expect(nudged.weights.revisions).toBeCloseTo(2.9, 9);
+  });
+
+  it('keeps a closed panel’s height when it reopens at home', () => {
+    let layout = applyPreset(modelOnly(), 'full');
+    layout = resizeGap(layout, 'parameters', 'revisions', 60, 600);
+    const weights = { ...layout.weights };
+    const reopened = openPanel(closePanel(layout, 'parameters'), 'parameters');
+    expect(reopened.right).toEqual(layout.right);
+    expect(reopened.weights).toEqual(weights);
+  });
+});
+
 describe('gaps between panels', () => {
   const layout = layoutWith({ right: [['parameters', 'bodies', 'history']] });
 
@@ -1593,6 +1616,30 @@ describe('short stages', () => {
     expect(geometry.panels.history!.h).toBeCloseTo(
       columnHeight - PANEL_MIN_HEIGHT - PANEL_STACK_GAP
     );
+  });
+});
+
+describe('hit-testing a drag out of a full dock', () => {
+  it('offers a new column where the dragged panel’s column emptied', () => {
+    const layout = layoutWith({ left: [['bodies'], ['history']] });
+    expect(layout.left).toHaveLength(PANEL_MAX_COLUMNS.left);
+    const geometry = computePanelGeometry(beginDrag(layout, 'history'), STAGE);
+    const rail = geometry.rails.left;
+    expect(hitTest(geometry, { x: rail.x + 5, y: 400 })).toEqual({
+      kind: 'newColumn',
+      side: 'left'
+    });
+    // A dock that is still full after the lift offers none.
+    const full = computePanelGeometry(
+      beginDrag(
+        layoutWith({ left: [['bodies'], ['history', 'revisions']] }),
+        'revisions'
+      ),
+      STAGE
+    );
+    expect(
+      hitTest(full, { x: full.rails.left.x + 5, y: 400 })
+    ).not.toMatchObject({ kind: 'newColumn' });
   });
 });
 
