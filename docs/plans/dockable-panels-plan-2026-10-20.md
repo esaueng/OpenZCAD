@@ -140,9 +140,13 @@ The menu replaces the rail's Layout button.
      - At 1219 px its left column (Objects) is parked (below) and Parameters
        stays docked on the right.
      - One column (426 px) still docks at 721 px.
-   - The 40% guarantee covers everything the app places on its own. Floating
-     windows are only ever created by the user (Pop out, Float, a drop), who
-     can move or close them; the app never turns a column into a float.
+   - The 40% guarantee covers the resting layout: everything the app places
+     on its own. Two things are outside it by design because the user opens
+     them and closes them with one press, like a menu: floating windows
+     (Pop out, Float, a drop) and the unpinned panel (a rail press, closed by
+     the same button). They may cover the model while open, and closing them
+     restores the guaranteed space. The app never turns a column into a
+     float, and it never opens the unpinned panel on its own.
    - **Parking.** When the window shrinks, the columns that no longer fit are
      **parked**: not drawn, and their panels' rail buttons show a parked
      state. Clicking a parked panel's rail button shows it in the unpinned
@@ -379,7 +383,9 @@ Each slice is one PR and records its evidence in the U08 row.
     Objects parked while Parameters stays docked on the right), and 721 px
     (one column docked). At each width the model keeps at least 40% of the
     stage unobscured, measured from the rendered dock rectangles, and a
-    parked panel opens from its rail button in the unpinned slot.
+    parked panel opens from its rail button in the unpinned slot. Pressing
+    that rail button again closes it, and the measured model space returns
+    to at least 40%.
   - A pin past the cap docks nothing and shows the status line.
   - At 720 px a seeded layout with several open panels shows the one at the
     head of the stored recency list, before and after a reload.
