@@ -195,6 +195,7 @@ import {
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 import {
+  edgeChipCenterX,
   faceOffsetChipState,
   offsetChipText,
   regionChipState,
@@ -6097,8 +6098,8 @@ export function ModelViewer({
         // well into the stage, and a value under it cannot be tapped.
         hud.showAt(
           chip,
-          laneLeft !== null && chip.dataset.variant === 'default'
-            ? Math.min(screen.x, laneLeft - 8 - chipWidth / 2)
+          chip.dataset.variant === 'default'
+            ? edgeChipCenterX(screen.x, laneLeft, chipWidth)
             : screen.x,
           screen.y
         );
