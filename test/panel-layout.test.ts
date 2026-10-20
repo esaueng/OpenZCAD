@@ -1338,6 +1338,35 @@ describe('phone-width stages', () => {
     ).toBe(false);
   });
 
+  it('refuses every dock placement and keeps homes', () => {
+    const phoneStage: PanelStage = {
+      width: PANEL_PHONE_MAX_WIDTH,
+      height: 844
+    };
+    const layout = openPanel(essentials(), 'history');
+    expect(layout.unpinned).toBe('history');
+    for (const target of [
+      { kind: 'column', side: 'right', column: 0 },
+      { kind: 'newColumn', side: 'right' },
+      { kind: 'column', side: 'left', column: 0, index: 0 }
+    ] satisfies PanelTarget[]) {
+      expect(wouldExceedCap(layout, 'history', target, phoneStage)).toBe(true);
+      expect(placePanel(layout, 'history', target, phoneStage)).toBe(layout);
+    }
+    expect(pinPanel(layout, 'history', phoneStage)).toBe(layout);
+    // One pixel wider, the pin docks.
+    expect(
+      pinPanel(layout, 'history', { width: 721, height: 844 }).right
+    ).toEqual([['parameters', 'history']]);
+    // A closed panel reopens at its home, shown in the phone lane.
+    const closed = closePanel(essentials(), 'parameters');
+    const reopened = openPanel(closed, 'parameters', phoneStage);
+    expect(reopened.right).toEqual([['parameters']]);
+    expect(computePanelGeometry(reopened, phoneStage).phonePanel).toBe(
+      'parameters'
+    );
+  });
+
   it('shows no windows and no unpinned panel, only the phone lane', () => {
     let layout = popOutPanel(essentials(), 'history', {
       x: 100,
