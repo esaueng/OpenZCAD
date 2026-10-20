@@ -853,7 +853,17 @@ function placeEntry(
   stage: PanelStage | undefined
 ): PanelLayout<PanelEntry> {
   const detached = detach(layout, id, true);
-  const next = insertAt(detached, entry, target, stage);
+  const from = layout.floats.find((group) => group.panels.includes(id));
+  const ownWindow = target.kind === 'group' && from?.id === target.groupId;
+  let next: PanelLayout<PanelEntry>;
+  if (ownWindow && from.panels.length === 1) {
+    // A window of one closes on detach; dropping its panel back into it
+    // restores the same window rather than opening a new one at the origin.
+    next = copyLayout(detached);
+    next.floats.push({ ...from, panels: [entry] });
+  } else {
+    next = insertAt(detached, entry, target, stage);
+  }
   const source = findPanel(layout, id);
   // Only a move to another stack starts the panel at an even share; a
   // reorder within its own column or window keeps the height it was given.
@@ -865,15 +875,9 @@ function placeEntry(
     (source?.kind === 'float' &&
       target.kind === 'group' &&
       source.groupId === target.groupId);
-  const from = layout.floats.find((group) => group.panels.includes(id));
-  if (
-    target.kind === 'group' &&
-    from?.id === target.groupId &&
-    from.panels.length > 1
-  ) {
+  if (ownWindow && from.panels.length > 1) {
     // A reorder within one window keeps its rectangle: detaching shrank it
     // by the panel's share and inserting grew it by FLOAT_GROWTH, which differ.
-    // A window of one closed on detach, so the drop made a new one instead.
     const group = next.floats.find((candidate) => candidate.id === from.id);
     if (group) {
       Object.assign(group, { x: from.x, y: from.y, w: from.w, h: from.h });
@@ -1530,7 +1534,9 @@ export function clampFloatsToStage(
   layout: PanelLayout,
   stage: PanelStage
 ): PanelLayout {
-  if (layout.options.locked) {
+  // No window shows at phone width, so there is nothing to clamp; rewriting
+  // them to phone bounds would lose where they go on a wider stage.
+  if (layout.options.locked || stage.width <= PANEL_PHONE_MAX_WIDTH) {
     return layout;
   }
   const next = copyLayout(layout);

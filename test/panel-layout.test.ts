@@ -1037,6 +1037,32 @@ describe('floating windows', () => {
     expect(layout.floats[0]!.panels).toEqual(['revisions', 'history']);
   });
 
+  it('keeps a window of one when its panel is placed back into it', () => {
+    const rect = { x: 400, y: 200, w: 320, h: 360 };
+    const layout = popOutPanel(modelOnly(), 'history', rect);
+    const groupId = layout.floats[0]!.id;
+    const placed = placePanel(layout, 'history', {
+      kind: 'group',
+      groupId,
+      index: 0
+    });
+    expect(placed.floats).toEqual([
+      { id: groupId, ...rect, panels: ['history'] }
+    ]);
+  });
+
+  it('leaves stored windows alone on a phone-width stage', () => {
+    const layout = popOutPanel(modelOnly(), 'history', {
+      x: 1100,
+      y: 600,
+      w: 500,
+      h: 400
+    });
+    expect(clampFloatsToStage(layout, { width: 390, height: 844 })).toBe(
+      layout
+    );
+  });
+
   it('moves within the stage and comes to the front', () => {
     let layout = popOutPanel(modelOnly(), 'history', {
       x: 100,
