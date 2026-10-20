@@ -1173,6 +1173,18 @@ describe('D01 coincident-line index', () => {
     ]);
     expect(dropCoincidentHidden([onRow], lines, 1e-3)).toEqual([]);
     expect(dropCoincidentHidden([between], lines, 1e-3)).toHaveLength(1);
+    // A view-wide tolerance wider than either outline (10^-6 of a 1.4·10^7
+    // view is 14 mm) must not set the cells: unit segments only ever reach
+    // a millionth of their own length.
+    const wide = new SegmentGrid(
+      segments,
+      members,
+      { minU: 0, minV: 0, maxU: 1e6 + 100, maxV: 1e6 + 100 },
+      14
+    );
+    expect(wide.maxCellLoad).toBeLessThan(50);
+    expect(dropCoincidentHidden([onRow], lines, 14)).toEqual([]);
+    expect(dropCoincidentHidden([between], lines, 14)).toHaveLength(1);
   });
 });
 

@@ -573,6 +573,49 @@ describe('DrawingWorkspace', () => {
     );
   });
 
+  it('frees the projections of the last sheet when it is deleted', async () => {
+    const project = vi.spyOn(DrawingProjectionClient.prototype, 'project');
+    try {
+      const sheet = starter(
+        drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!
+      );
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const document = (sheets: DrawingSheet[]): ProjectDocument => ({
+        ...base,
+        bodyOrder: [bodyId],
+        ...(sheets.length > 0 ? { drawings: { sheets } } : {})
+      });
+      const props = {
+        bodies: { [bodyId]: cube() },
+        geometryPending: false,
+        defaultBodyIds: [bodyId],
+        editDisabledReason: null,
+        onCommand: vi.fn(() => true),
+        onStatus: vi.fn()
+      };
+      const settled = () =>
+        waitFor(() =>
+          expect(
+            screen
+              .getByRole('application', { name: 'Sheet Sheet 1' })
+              .querySelectorAll('.drawing-view.is-placeholder')
+          ).toHaveLength(0)
+        );
+      const { rerender } = render(
+        <DrawingWorkspace document={document([sheet])} {...props} />
+      );
+      await settled();
+      rerender(<DrawingWorkspace document={document([])} {...props} />);
+      // Undo brings the sheet back: its projections were freed with it, so
+      // they are asked for again rather than kept for as long as Draw is open.
+      rerender(<DrawingWorkspace document={document([sheet])} {...props} />);
+      await settled();
+      await waitFor(() => expect(project).toHaveBeenCalledTimes(2));
+    } finally {
+      project.mockRestore();
+    }
+  });
+
   it('names a body the sheet draws that is gone', () => {
     const sheet = starter('v1:0000000000000000');
     sheet.views[0]!.bodyIds = ['body_gone' as BodyId];

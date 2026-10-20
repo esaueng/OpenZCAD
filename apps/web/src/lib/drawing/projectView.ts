@@ -1332,8 +1332,10 @@ function segmentsBox(
  * Line segments filed under the grid cells they cross, refined where dense
  * like `OcclusionGrid`: a cell holding more than `CELL_SPLIT_LOAD` segments
  * gets a finer grid over what it holds. Cells are never smaller than the
- * coincidence tolerance, so a query that takes each crossed cell's
- * neighbours finds every segment within that tolerance. Exported for tests.
+ * farthest its segments can count as coincident (`reach`), so a query that
+ * takes each crossed cell's neighbours finds every segment that close; a
+ * wide view's tolerance never coarsens a cluster of short segments.
+ * Exported for tests.
  */
 export class SegmentGrid {
   private readonly cells: number[][];
@@ -1341,6 +1343,14 @@ export class SegmentGrid {
   private readonly size: number;
   private readonly cellU: number;
   private readonly cellV: number;
+  /**
+   * The farthest any of its segments can count as coincident: each pair is
+   * judged within the view tolerance and a millionth of the shorter
+   * segment, so short segments reach no further than that however wide the
+   * view. Cells are never smaller than this, and a query's neighbouring
+   * cells cover it.
+   */
+  private readonly reach: number;
 
   constructor(
     private readonly segments: readonly number[],
@@ -1351,15 +1361,29 @@ export class SegmentGrid {
       maxU: number;
       maxV: number;
     },
-    private readonly tolerance: number,
+    tolerance: number,
     level = 0
   ) {
+    let reach = 0;
+    for (const s of members)
+      reach = Math.max(
+        reach,
+        Math.min(
+          tolerance,
+          LOCAL_COINCIDENCE *
+            Math.hypot(
+              segments[s + 2]! - segments[s]!,
+              segments[s + 3]! - segments[s + 1]!
+            )
+        )
+      );
+    this.reach = reach;
     this.size = Math.max(
       8,
       Math.min(256, Math.ceil(Math.sqrt(members.length)))
     );
-    this.cellU = Math.max((box.maxU - box.minU) / this.size, tolerance, 1e-12);
-    this.cellV = Math.max((box.maxV - box.minV) / this.size, tolerance, 1e-12);
+    this.cellU = Math.max((box.maxU - box.minU) / this.size, reach, 1e-12);
+    this.cellV = Math.max((box.maxV - box.minV) / this.size, reach, 1e-12);
     this.cells = Array.from({ length: this.size * this.size }, () => []);
     for (const s of members)
       for (const key of new Set(
@@ -1469,7 +1493,7 @@ export class SegmentGrid {
     const clamp = (value: number) =>
       Math.min(this.size - 1, Math.max(0, value));
     const seen = new Set<number>();
-    for (const cell of this.cellsAlong(au, av, bu, bv, this.tolerance)) {
+    for (const cell of this.cellsAlong(au, av, bu, bv, this.reach)) {
       // The tolerance band can reach one cell further either side.
       const ci = cell % this.size;
       const cj = Math.floor(cell / this.size);

@@ -170,6 +170,13 @@ function useViewProjections(
   }, []);
   const fingerprint = status?.kind === 'ready' ? status.fingerprint : null;
   useEffect(() => {
+    // Keep the cache to what this model's sheets still draw: a deleted view
+    // or sheet (the last one included), or a view whose bodies or hidden
+    // lines changed, frees its projection.
+    for (const key of cache.current.keys())
+      if (!wanted.has(key)) cache.current.delete(key);
+    for (const key of failures.current.keys())
+      if (!wanted.has(key)) failures.current.delete(key);
     if (!sheet || !fingerprint || !client.current || outstanding.current)
       return;
     // Every view this pass still needs goes in one request, with each body's
@@ -244,12 +251,6 @@ function useViewProjections(
           if (mounted.current) setRevision((value) => value + 1);
         });
     }
-    // Keep the cache to what this model's sheets still draw: a deleted view,
-    // or one whose bodies or hidden lines changed, frees its projection.
-    for (const key of cache.current.keys())
-      if (!wanted.has(key)) cache.current.delete(key);
-    for (const key of failures.current.keys())
-      if (!wanted.has(key)) failures.current.delete(key);
     // `revision` re-runs this pass after each answer, which re-requests any
     // view whose request was dropped.
   }, [sheet, wanted, fingerprint, bodies, revision]);
