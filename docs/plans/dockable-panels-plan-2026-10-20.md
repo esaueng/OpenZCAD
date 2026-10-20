@@ -128,7 +128,9 @@ The menu replaces the rail's Layout button.
   - **Lock layout**: no rearranging or resizing by any input. Pointer drags,
     the Move menu's placement items (Dock, New column, Move to, Move
     up/down, Float), gap and floating-window resizing, and the keyboard move
-    and resize keys are all off. Pin, Pop out and Close still work.
+    and resize keys are all off, and so are the presets and Panel width in
+    this menu (disabled, with "Unlock the layout to change it" as their
+    description). Pin, Pop out and Close still work.
   - **Compact rows**
   - **Panel width**
 - Picking a preset keeps the settings and turns Hide off.
@@ -431,8 +433,9 @@ Each slice is one PR and records its evidence in the U08 row.
   - E2E for every preset, Hide all, Lock and Compact at 1440×900 and
     1280×720, and Width L at 1280×720 parking the outer column.
   - With Lock on, a header drag, a gap drag, the Move menu's placement items
-    and the keyboard move/resize keys all leave the layout unchanged, while
-    Pin, Pop out and Close still act.
+    and the keyboard move/resize keys all leave the layout unchanged, the
+    presets and Panel width are disabled, and Pin, Pop out and Close still
+    act.
   - With Hide all on, picking a feature and a parameter in ⌘K turns Hide off
     and shows and focuses the target panel.
   - Tabbing from the rail through the panel headers, gaps and menu moves focus
