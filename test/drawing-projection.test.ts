@@ -620,21 +620,49 @@ describe('D01 occlusion tolerance', () => {
       hiddenLines: true,
       bodies: [sheet, rod]
     });
-    // The tolerance is the floor plus the sag; z = 1 − (x − 2) / 3 along the
-    // edge, so it turns hidden at z = −tol.
+    // The tolerance is the float32 floor (four units in the last place of
+    // the covering triangle's largest coordinate, 10) plus the sag;
+    // z = 1 − (x − 2) / 3 along the edge, so it turns hidden at z = −tol.
     const visibleRun = result.visible.find(
       (line) =>
         Math.abs(line[0]! - 2) < 1e-9 || Math.abs(line.at(-2)! - 2) < 1e-9
     )!;
     const end = Math.max(visibleRun[0]!, visibleRun.at(-2)!);
-    const diagonal = Math.hypot(10, 20, 20 * Math.sin(a));
-    const tol = diagonal * 1e-6 + sag;
+    const tol = 10 * 2 ** -21 + sag;
     expect(end).toBeCloseTo(5 + 3 * tol, 4);
     expect(
       result.hidden.some(
         (line) => Math.abs(Math.min(line[0]!, line.at(-2)!) - end) < 1e-9
       )
     ).toBe(true);
+  });
+
+  it('hides an edge a hair behind a large plate', () => {
+    // A 10 000 mm square plate at z = 1 and a 1 mm edge 0.005 mm under it,
+    // seen from above. A floor scaled by the plate (10^-6 of its diagonal is
+    // 0.014 mm) called the edge visible; only float noise is absorbed now.
+    const plate = {
+      vertices: Float32Array.from([
+        0, 0, 1, 10000, 0, 1, 10000, 10000, 1, 0, 10000, 1
+      ]),
+      indices: Uint32Array.from([0, 1, 2, 0, 2, 3]),
+      faces: [{ triangleStart: 0, triangleCount: 2 }],
+      edges: []
+    };
+    const edge = {
+      vertices: new Float32Array(),
+      indices: new Uint32Array(),
+      edges: [[5000, 5000, 0.995, 5001, 5000, 0.995]]
+    };
+    const result = projectView({
+      orientation: 'top',
+      hiddenLines: true,
+      bodies: [plate, edge]
+    });
+    const under = (u: number, v: number) =>
+      u >= 5000 && u <= 5001 && Math.abs(v - 5000) < 1e-6;
+    expect(onLine(result.visible, under)).toEqual([]);
+    expect(onLine(result.hidden, under)).toHaveLength(1);
   });
 
   it('keeps a hidden line wherever a visible outline over it has a gap', () => {

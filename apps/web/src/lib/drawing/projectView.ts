@@ -588,6 +588,9 @@ export function bodySilhouettes(
   }));
 }
 
+/** Four float32 units in the last place, relative to the coordinate. */
+const FLOAT32_NOISE = 2 ** -21;
+
 /** The diagonal of a body's display-mesh bounding box (never zero). */
 function bodyDiagonal(body: ProjectionBodyInput): number {
   const min = [Infinity, Infinity, Infinity];
@@ -637,8 +640,6 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   input.bodies.forEach((body, bodyIndex) => {
     const { vertices, indices } = body;
     const sag = triangleSag(body, meshes[bodyIndex]);
-    // A floor for flat triangles and float noise, far below any real gap.
-    const depthFloor = scales[bodyIndex]! * 1e-6;
     for (let t = 0; t + 2 < indices.length; t += 3) {
       const [u0, v0, d0] = project(
         vertices[indices[t]! * 3]!,
@@ -668,6 +669,17 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
         (u0 - u2) ** 2 + (v0 - v2) ** 2
       );
       if (Math.abs(area) <= longest * 1e-10) continue;
+      // The floor absorbs only float noise: display meshes are float32, so
+      // a vertex is good to a few units in the last place of its own
+      // coordinates. Neither the body's size nor the triangle's sets it: a
+      // large plate must still hide an edge a hair behind it.
+      let magnitude = 0;
+      for (let k = 0; k < 3; k += 1)
+        for (let c = 0; c < 3; c += 1)
+          magnitude = Math.max(
+            magnitude,
+            Math.abs(vertices[indices[t + k]! * 3 + c]!)
+          );
       triangles.push({
         u0,
         v0,
@@ -679,7 +691,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
         v2,
         d2,
         area,
-        tol: depthFloor + sag[t / 3]!
+        tol: Math.max(magnitude * FLOAT32_NOISE, 1e-12) + sag[t / 3]!
       });
     }
   });
