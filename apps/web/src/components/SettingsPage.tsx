@@ -5,6 +5,7 @@ import {
 } from '@openzcad/viewport/input-bindings';
 import {
   Fragment,
+  Suspense,
   useEffect,
   useId,
   useLayoutEffect,
@@ -51,6 +52,9 @@ import {
   type HealthResponse
 } from '@openzcad/shared';
 import { countLabel } from '../lib/toasts';
+import { fetchEncryptionAvailability } from '../lib/e2ee/availability';
+import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
+import { ErrorBoundary } from './ErrorBoundary';
 import { api } from '../lib/api';
 import { APP_SETTINGS_NUMBER_BOUNDS } from '../lib/appSettings';
 import { isDesktopApp } from '../lib/desktopBridge';
@@ -176,6 +180,16 @@ interface SettingsPageProps {
 
 export type AuthConfigStatus = 'loading' | 'ready' | 'unavailable';
 
+/**
+ * End-to-end encryption keys load with their crypto only when the section
+ * opens, so neither reaches the Settings chunk or the entry chunk.
+ */
+const EncryptionSettings = lazyWithStaleChunkNotice(() =>
+  import('./EncryptionSettings').then((module) => ({
+    default: module.EncryptionSettings
+  }))
+);
+
 const SECTION_ICONS: Record<SectionId, ReactNode> = {
   general: <Settings2 size={15} aria-hidden="true" />,
   appearance: <Palette size={15} aria-hidden="true" />,
@@ -184,6 +198,7 @@ const SECTION_ICONS: Record<SectionId, ReactNode> = {
   sketching: <PencilRuler size={15} aria-hidden="true" />,
   saving: <HardDrive size={15} aria-hidden="true" />,
   account: <UserRound size={15} aria-hidden="true" />,
+  encryption: <ShieldCheck size={15} aria-hidden="true" />,
   assistant: <Bot size={15} aria-hidden="true" />,
   privacy: <LockKeyhole size={15} aria-hidden="true" />,
   advanced: <Cpu size={15} aria-hidden="true" />
@@ -573,6 +588,12 @@ export function SettingsPage({
   );
   const [deletionScope, setDeletionScope] =
     useState<AccountDeletionScope | null>(null);
+  /** Null until the server answers, so a restored Encryption view waits. */
+  const [encryptionAvailable, setEncryptionAvailable] = useState<
+    boolean | null
+  >(null);
+  /** Set while sign-out asks whether to keep this device unlocked. */
+  const [signOutChoice, setSignOutChoice] = useState(false);
   const contentRef = useRef<HTMLElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
   const brandRef = useRef<HTMLButtonElement>(null);
@@ -618,6 +639,47 @@ export function SettingsPage({
       cancelled = true;
     };
   }, [active, cloudFunctionsEnabled, session]);
+
+  // The Encryption section exists only for an account the server opened the
+  // beta to; asked once per signed-in account while Settings is open.
+  const sessionUserId = session?.userId;
+  useEffect(() => {
+    if (!sessionUserId || !cloudFunctionsEnabled) {
+      setEncryptionAvailable(false);
+      return;
+    }
+    setEncryptionAvailable(null);
+    let cancelled = false;
+    void fetchEncryptionAvailability().then((available) => {
+      if (!cancelled) setEncryptionAvailable(available);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [cloudFunctionsEnabled, sessionUserId]);
+
+  // Sign-out asks whether to keep this device unlocked, but only when this
+  // browser holds device keys for the account; otherwise it signs out at once.
+  const signOut = async () => {
+    const userId = session?.userId;
+    if (userId) {
+      const { hasStoredDevice } = await import('../lib/e2ee/deviceStore');
+      if (await hasStoredDevice(userId).catch(() => false)) {
+        setSignOutChoice(true);
+        return;
+      }
+    }
+    await onLogout();
+  };
+  const finishSignOut = async (keepDevice: boolean) => {
+    const userId = session?.userId;
+    setSignOutChoice(false);
+    await onLogout();
+    if (userId) {
+      const { endKeySession } = await import('../lib/e2ee/signOut');
+      await endKeySession(userId, keepDevice);
+    }
+  };
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -690,9 +752,10 @@ export function SettingsPage({
     () =>
       visibleSettingsSections({
         cloudFunctionsEnabled,
+        encryptionAvailable: encryptionAvailable === true && Boolean(session),
         query
       }),
-    [cloudFunctionsEnabled, query]
+    [cloudFunctionsEnabled, encryptionAvailable, query, session]
   );
 
   // A search that matches somewhere other than the open section should take the
@@ -702,10 +765,15 @@ export function SettingsPage({
     if (!first) {
       return;
     }
+    // A restored Encryption view waits for the server's answer rather than
+    // falling back to General while that answer is in flight.
+    if (active === 'encryption' && encryptionAvailable === null) {
+      return;
+    }
     if (!visibleSections.some((section) => section.id === active)) {
       setActive(first.id);
     }
-  }, [active, visibleSections]);
+  }, [active, encryptionAvailable, visibleSections]);
 
   useEffect(() => {
     if (session) {
@@ -1752,14 +1820,59 @@ export function SettingsPage({
                             className="secondary"
                             type="button"
                             disabled={busy}
-                            onClick={() =>
-                              void onLogout().catch(() => undefined)
-                            }
+                            onClick={() => void signOut().catch(() => undefined)}
                           >
                             <LogOut size={14} aria-hidden="true" />
                             Sign out
                           </button>
                         </SettingRow>
+                        {signOutChoice ? (
+                          <Notice
+                            tone="info"
+                            role="alert"
+                            action={
+                              <span className="settings-button-row">
+                                <button
+                                  className="primary"
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    void finishSignOut(true).catch(
+                                      () => undefined
+                                    )
+                                  }
+                                >
+                                  Keep unlocked
+                                </button>
+                                <button
+                                  className="secondary"
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    void finishSignOut(false).catch(
+                                      () => undefined
+                                    )
+                                  }
+                                >
+                                  Remove device keys
+                                </button>
+                                <button
+                                  className="secondary"
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => setSignOutChoice(false)}
+                                >
+                                  Cancel
+                                </button>
+                              </span>
+                            }
+                          >
+                            Keep this device unlocked for your next sign-in?
+                            Removing its keys means approving it again or
+                            entering your recovery key; it stays in your
+                            device list until another device removes it.
+                          </Notice>
+                        ) : null}
                         <SettingRow
                           title="Membership"
                           hint={
@@ -2090,6 +2203,28 @@ export function SettingsPage({
                   ) : null}
                 </>
               ) : null}
+            </Section>
+          )}
+
+          {active === 'encryption' &&
+            anyMatch &&
+            session &&
+            encryptionAvailable && (
+            <Section
+              title="Encryption"
+              intro="Beta. Your keys for end-to-end encrypted projects. The server stores them only wrapped; projects are not encrypted yet."
+            >
+              <ErrorBoundary label="Encryption settings">
+                <Suspense
+                  fallback={
+                    <p className="encryption-loading" role="status">
+                      Loading encryption keys…
+                    </p>
+                  }
+                >
+                  <EncryptionSettings userId={session.userId} />
+                </Suspense>
+              </ErrorBoundary>
             </Section>
           )}
 

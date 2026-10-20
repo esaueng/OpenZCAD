@@ -189,6 +189,18 @@ export interface CloudflareEnv {
    * canary. Missing or empty stays closed; keep this in Worker secrets.
    */
   PROJECT_COLLABORATION_CANARY_EMAILS?: string;
+  /**
+   * Opens the end-to-end encryption key routes (ADR-024 Phase 3): identity
+   * keys, device lists, wrapped keys and device approval. Closed unless set
+   * to a true value; requires migration 0029 in D1 first.
+   */
+  E2EE_KEYS_ENABLED?: string;
+  /**
+   * Comma-separated authenticated email allowlist that opens the key routes
+   * for named accounts while E2EE_KEYS_ENABLED stays off. Keep it in Worker
+   * secrets.
+   */
+  E2EE_CANARY_EMAILS?: string;
   AI_PATCH_DIRECT_EDIT_ENABLED?: string;
   AI_PATCH_GROWING_HOLDER_ENABLED?: string;
   AI_PATCH_HOLE_CONTROL_ENABLED?: string;
@@ -272,6 +284,7 @@ export const CLOUDFLARE_BOOLEAN_FLAGS = [
   'PROJECT_SHARING_ENABLED',
   'PROJECT_EDIT_LEASES_ENFORCED',
   'PROJECT_PERSONAL_SYNC_ENABLED',
+  'E2EE_KEYS_ENABLED',
   'AI_PATCH_DIRECT_EDIT_ENABLED',
   'AI_PATCH_GROWING_HOLDER_ENABLED',
   'AI_PATCH_HOLE_CONTROL_ENABLED',
@@ -346,6 +359,25 @@ export function projectCollaborationRollout(
       canary,
     canary
   };
+}
+
+/**
+ * Whether one authenticated account may use the end-to-end encryption key
+ * routes: the global flag, or the account's email on the canary allowlist.
+ * Both default closed.
+ */
+export function isE2eeKeysEnabled(
+  env: CloudflareEnv,
+  email?: string
+): boolean {
+  if (isCloudflareFeatureEnabled(env, 'E2EE_KEYS_ENABLED')) return true;
+  const normalizedEmail = email?.trim().toLowerCase();
+  return Boolean(
+    normalizedEmail &&
+    env.E2EE_CANARY_EMAILS?.split(',').some(
+      (candidate) => candidate.trim().toLowerCase() === normalizedEmail
+    )
+  );
 }
 
 type UploadReservationState =

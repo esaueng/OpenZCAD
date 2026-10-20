@@ -68,7 +68,8 @@ export type IdentityUnlockMethod = (typeof IDENTITY_UNLOCK_METHODS)[number];
  */
 const PRIVATE_KEY_PURPOSES: readonly WrapPurpose[] = [
   'identity-key',
-  'encryption-private-key'
+  'encryption-private-key',
+  'unlock-target-key'
 ];
 
 const isPrivateKeyPurpose = (purpose: WrapPurpose): boolean =>
@@ -89,13 +90,27 @@ export type WrapContext =
     }
   | {
       /**
-       * The identity private key (PKCS #8), under the recovery key or a
-       * passkey PRF secret only.
+       * The identity private key (PKCS #8), sealed to the certified public
+       * key of the recovery key or of a passkey only; never to a device.
        */
       readonly purpose: 'identity-key';
       readonly userId: string;
       readonly method: IdentityUnlockMethod;
       readonly unlockId: string;
+    }
+  | {
+      /**
+       * The private half (PKCS #8) of an unlock method's ECDH target, under
+       * that method's secret: the recovery key or a passkey PRF output. The
+       * identity key hash binds the target to the identity it was made for,
+       * so a server cannot pair a genuine target with an identity of its own.
+       */
+      readonly purpose: 'unlock-target-key';
+      readonly userId: string;
+      readonly method: IdentityUnlockMethod;
+      readonly unlockId: string;
+      /** Lowercase hex `publicKeyHash` of the identity public key. */
+      readonly identityKeyHash: string;
     }
   | {
       /** The encryption private key (PKCS #8) under the account key. */
@@ -150,25 +165,30 @@ export type WrapContext =
 export type WrapPurpose = WrapContext['purpose'];
 
 /**
- * The only contexts a key may be sealed to a public key under: the account
- * key for a device being approved, and a project key for a member. Long-term
- * private keys never leave their wrap hierarchy this way.
+ * The only contexts a key may be sealed to a public key under. Every unlock
+ * method is a public-key target (ADR-024, Unlock and devices): the account
+ * key is sealed to each certified device unlock key, recovery-key target and
+ * passkey target, and to a device being approved; the identity key only to
+ * the recovery-key and passkey targets (the context schema refuses any other
+ * method); a project key to a member. The encryption private key, version,
+ * share and dedupe keys and unlock-target keys are never sealed.
  */
 export type SealContext =
-  | (Extract<WrapContext, { purpose: 'account-key' }> & {
-      readonly method: 'device-approval';
-    })
+  | Extract<WrapContext, { purpose: 'account-key' }>
+  | Extract<WrapContext, { purpose: 'identity-key' }>
   | Extract<WrapContext, { purpose: 'project-key' }>;
 
+const SEAL_PURPOSES: readonly WrapPurpose[] = [
+  'account-key',
+  'identity-key',
+  'project-key'
+];
+
 function checkSealContext(context: WrapContext): void {
-  const allowed =
-    context?.purpose === 'project-key' ||
-    (context?.purpose === 'account-key' &&
-      context.method === 'device-approval');
-  if (!allowed) {
+  if (!SEAL_PURPOSES.includes(context?.purpose)) {
     throw new E2eeError(
       'invalid-argument',
-      'Only a device-approval account key or a project key may be sealed'
+      'Only an account key, an identity key or a project key may be sealed'
     );
   }
 }
@@ -187,6 +207,12 @@ const CONTEXT_FIELDS: Record<WrapPurpose, Record<string, FieldRule>> = {
     unlockId: 'string'
   },
   'encryption-private-key': { userId: 'string', keyId: 'string' },
+  'unlock-target-key': {
+    userId: 'string',
+    method: IDENTITY_UNLOCK_METHODS,
+    unlockId: 'string',
+    identityKeyHash: 'string'
+  },
   'project-key': { userId: 'string', projectId: 'string', keyEpoch: 'uint' },
   'version-key': {
     projectId: 'string',
@@ -601,9 +627,10 @@ export async function sealKeyWith(
 }
 
 /**
- * Seals a key to someone's ECDH public key: a project key to a member, or
- * the account key to a newly approved device. Output: `u8 version,
- * 65-byte ephemeral public key, 12-byte IV, ciphertext+tag`.
+ * Seals a key to someone's ECDH public key: a project key to a member, the
+ * account key to a certified unlock target or a device being approved, or
+ * the identity key to the recovery-key or a passkey target. Output: `u8
+ * version, 65-byte ephemeral public key, 12-byte IV, ciphertext+tag`.
  */
 export async function sealKey(
   recipientPublicKey: Uint8Array | CryptoKey,

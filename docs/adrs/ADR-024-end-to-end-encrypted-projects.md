@@ -724,8 +724,10 @@ apart. The revoking browser itself always rotates first.
 
 The server still sees account emails and display names, member lists and
 roles, project and revision counts, blob sizes and counts, timestamps, version
-numbers and save cadence, presence during live editing, schema versions and
-the envelope header fields. Project names, checkpoint names, revision reasons,
+numbers and save cadence, presence during live editing, schema versions,
+the envelope header fields, and each user's device list: device labels, when
+devices and unlock methods were added or removed, and their public keys.
+Project names, checkpoint names, revision reasons,
 upload file names, thumbnails, measurements, workspace view state and archived
 exports are encrypted. R2 keys use opaque ids only.
 

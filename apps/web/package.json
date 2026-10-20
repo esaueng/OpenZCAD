@@ -22,6 +22,7 @@
     "@openzcad/ai-contracts": "workspace:*",
     "@openzcad/cloudflare-adapters": "workspace:*",
     "@openzcad/command-system": "workspace:*",
+    "@openzcad/crypto": "workspace:*",
     "@openzcad/document-core": "workspace:*",
     "@openzcad/geometry": "workspace:*",
     "@openzcad/io-freecad": "workspace:*",

@@ -49,6 +49,10 @@
     "PROJECT_SHARING_ENABLED": "true",
     "PROJECT_EDIT_LEASES_ENFORCED": "true",
     "PROJECT_PERSONAL_SYNC_ENABLED": "true",
+    // End-to-end encryption keys (ADR-024 Phase 3) stay closed. Apply D1
+    // migration 0029 to production before turning this on, or the routes
+    // answer 503; E2EE_CANARY_EMAILS (a secret) opens them for named accounts.
+    "E2EE_KEYS_ENABLED": "false",
     // Assistant rollout flags live here, not in the dashboard: a deploy
     // replaces dashboard variables with this block. Each one exposes its
     // operation in the model's output schema, and every one compiles to a

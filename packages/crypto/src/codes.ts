@@ -248,12 +248,53 @@ export async function projectStateCode(
 // --- Device approval ------------------------------------------------------
 
 /**
- * Scan form: the new device shows `publicKeyHash(devicePublicKey)` as a QR
- * code; the approving device wraps the account key only if the key the
- * server delivered hashes to the scanned value.
+ * The keys a device approval authenticates. A new device has two public
+ * keys, its signing key and its unlock key, and both must be bound together:
+ * binding only one would let a server swap the other. Pass them as an array
+ * (signing key first) and the exchange covers `pk_new =
+ * publicKeyHash([signing, unlock])`, the full 256-bit hash; a single raw key
+ * is covered as itself.
+ */
+export type DeviceApprovalKeys = Uint8Array | readonly Uint8Array[];
+
+/**
+ * The bytes an approval exchange binds for `keys`: a single raw key as
+ * itself (65 bytes), or the 32-byte `publicKeyHash` of a key array. The
+ * lengths differ, so the two forms never collide.
+ */
+async function approvalKeyBytes(
+  keys: DeviceApprovalKeys,
+  what: string
+): Promise<Bytes> {
+  if (keys instanceof Uint8Array) return validPublicKey(keys, what);
+  if (!Array.isArray(keys)) {
+    throw new E2eeError(
+      'invalid-argument',
+      `${what} must be a public key or an array of them`
+    );
+  }
+  return publicKeyHash(keys);
+}
+
+/**
+ * `pk_new` for a new device: the full hash of its signing and unlock public
+ * keys, what its QR code carries and what the approver checks.
+ */
+export async function deviceKeysHash(
+  signingPublicKey: Uint8Array,
+  unlockPublicKey: Uint8Array
+): Promise<Bytes> {
+  return publicKeyHash([signingPublicKey, unlockPublicKey]);
+}
+
+/**
+ * Scan form: the new device shows `publicKeyHash` of its keys as a QR code;
+ * the approving device wraps the account key only if the keys the server
+ * delivered hash to the scanned value. Pass the device's key array, or a
+ * single key for a one-key device.
  */
 export async function verifyScannedDeviceKey(
-  devicePublicKey: Uint8Array,
+  deviceKeys: DeviceApprovalKeys,
   scannedHash: Uint8Array
 ): Promise<boolean> {
   if (!(scannedHash instanceof Uint8Array)) {
@@ -265,21 +306,23 @@ export async function verifyScannedDeviceKey(
   // A scan of the wrong length can never match; copy only a real one.
   const scanned =
     scannedHash.byteLength === HASH_BYTES ? copyBytes(scannedHash) : null;
-  const hash = await publicKeyHash(devicePublicKey);
+  const hash = await publicKeyHash(
+    deviceKeys instanceof Uint8Array ? deviceKeys : [...deviceKeys]
+  );
   return scanned !== null && equalBytes(hash, scanned);
 }
 
 /**
  * Compare form, a commitment-based short authentication string:
  *
- * 1. New device: `commitDeviceApproval(newDevicePublicKey)`; sends its key
- *    and `commitment`, keeps `nonce` back.
+ * 1. New device: `commitDeviceApproval(newDeviceKeys)`; sends its keys and
+ *    `commitment`, keeps `nonce` back.
  * 2. Approving device: sends its own public key and `createApprovalNonce()`.
  * 3. New device: having received those, reveals `nonce`.
  * 4. Approving device: `verifyDeviceApprovalCommitment` must hold.
  * 5. Both show `deviceApprovalCode(...)`; the user approves only if equal.
  *
- * The commitment fixes the new side's key and nonce before the server sees
+ * The commitment fixes the new side's keys and nonce before the server sees
  * the approver's, so it cannot grind; a substituted key matches with
  * probability 10⁻⁶ per visible attempt.
  */
@@ -297,11 +340,11 @@ function validNonce(nonce: Uint8Array, what: string): Bytes {
 }
 
 async function commitmentFor(
-  newDevicePublicKey: Uint8Array,
+  newDeviceKeys: DeviceApprovalKeys,
   nonce: Uint8Array
 ): Promise<Bytes> {
   const nonceBytes = validNonce(nonce, 'New device nonce');
-  const key = await validPublicKey(newDevicePublicKey, 'New device key');
+  const key = await approvalKeyBytes(newDeviceKeys, 'New device key');
   return sha256(
     new ByteWriter()
       .bytes(label('v1 device approval commitment'))
@@ -313,17 +356,17 @@ async function commitmentFor(
 
 /** @internal Tests inject the nonce; production uses `commitDeviceApproval`. */
 export async function commitDeviceApprovalWith(
-  newDevicePublicKey: Uint8Array,
+  newDeviceKeys: DeviceApprovalKeys,
   random: RandomSource
 ): Promise<DeviceApprovalCommitment> {
   const nonce = random(KEY_BYTES);
-  return { nonce, commitment: await commitmentFor(newDevicePublicKey, nonce) };
+  return { nonce, commitment: await commitmentFor(newDeviceKeys, nonce) };
 }
 
 export async function commitDeviceApproval(
-  newDevicePublicKey: Uint8Array
+  newDeviceKeys: DeviceApprovalKeys
 ): Promise<DeviceApprovalCommitment> {
-  return commitDeviceApprovalWith(newDevicePublicKey, systemRandom);
+  return commitDeviceApprovalWith(newDeviceKeys, systemRandom);
 }
 
 export function createApprovalNonce(): Bytes {
@@ -331,7 +374,7 @@ export function createApprovalNonce(): Bytes {
 }
 
 export async function verifyDeviceApprovalCommitment(
-  newDevicePublicKey: Uint8Array,
+  newDeviceKeys: DeviceApprovalKeys,
   newDeviceNonce: Uint8Array,
   commitment: Uint8Array
 ): Promise<boolean> {
@@ -341,12 +384,13 @@ export async function verifyDeviceApprovalCommitment(
   // A commitment of the wrong length can never match; copy only a real one.
   const expected =
     commitment.byteLength === HASH_BYTES ? copyBytes(commitment) : null;
-  const actual = await commitmentFor(newDevicePublicKey, newDeviceNonce);
+  const actual = await commitmentFor(newDeviceKeys, newDeviceNonce);
   return expected !== null && equalBytes(actual, expected);
 }
 
 export interface DeviceApprovalCodeInput {
-  readonly newDevicePublicKey: Uint8Array;
+  /** The new device's key array (signing, unlock), or a single raw key. */
+  readonly newDevicePublicKey: DeviceApprovalKeys;
   readonly approverPublicKey: Uint8Array;
   readonly newDeviceNonce: Uint8Array;
   readonly approverNonce: Uint8Array;
@@ -358,12 +402,12 @@ export async function deviceApprovalCode(
 ): Promise<string> {
   const newDeviceNonce = validNonce(input.newDeviceNonce, 'New device nonce');
   const approverNonce = validNonce(input.approverNonce, 'Approver nonce');
-  const newDeviceKey = validPublicKey(
+  const newDeviceKey = approvalKeyBytes(
     input.newDevicePublicKey,
     'New device key'
   );
   const approverKey = validPublicKey(input.approverPublicKey, 'Approver key');
-  // Both keys are copied above, before anything is awaited.
+  // Every key is copied above, before anything is awaited.
   const [newKey, approver] = await Promise.all([newDeviceKey, approverKey]);
   const digest = await sha256(
     new ByteWriter()

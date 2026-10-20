@@ -7,6 +7,7 @@ import {
   generateAssetDedupeSecret,
   importAssetDedupeSecret,
   deviceApprovalCode,
+  deviceKeysHash,
   formatComparisonCode,
   formatRecoveryKey,
   generateRecoveryKey,
@@ -651,6 +652,70 @@ describe('codes people compare', () => {
     );
     await rejectsWith(
       deviceApprovalCode({ ...input, approverPublicKey: relay.subarray(1) }),
+      'invalid-argument'
+    );
+  });
+});
+
+describe('approving a device with two keys', () => {
+  it('binds the signing and unlock keys together', async () => {
+    const signing = await exportPublicKey(
+      (await generateSigningKeyPair(false)).publicKey
+    );
+    const unlock = await exportPublicKey(
+      (await generateEncryptionKeyPair(false)).publicKey
+    );
+    const swapped = await exportPublicKey(
+      (await generateEncryptionKeyPair()).publicKey
+    );
+    const approverPublicKey = await exportPublicKey(
+      (await generateSigningKeyPair()).publicKey
+    );
+    const pkNew = await deviceKeysHash(signing, unlock);
+    expect(pkNew).toEqual(await publicKeyHash([signing, unlock]));
+    // Scan: a server that swaps either key no longer matches.
+    expect(await verifyScannedDeviceKey([signing, unlock], pkNew)).toBe(true);
+    expect(await verifyScannedDeviceKey([signing, swapped], pkNew)).toBe(false);
+    expect(await verifyScannedDeviceKey([swapped, unlock], pkNew)).toBe(false);
+    expect(await verifyScannedDeviceKey([unlock, signing], pkNew)).toBe(false);
+    // Compare: the commitment covers both keys.
+    const { nonce, commitment } = await commitDeviceApproval([signing, unlock]);
+    expect(
+      await verifyDeviceApprovalCommitment([signing, unlock], nonce, commitment)
+    ).toBe(true);
+    expect(
+      await verifyDeviceApprovalCommitment(
+        [signing, swapped],
+        nonce,
+        commitment
+      )
+    ).toBe(false);
+    // The single-key form of the same signing key is a different binding.
+    expect(
+      await verifyDeviceApprovalCommitment(signing, nonce, commitment)
+    ).toBe(false);
+    const approverNonce = createApprovalNonce();
+    const code = await deviceApprovalCode({
+      newDevicePublicKey: [signing, unlock],
+      approverPublicKey,
+      newDeviceNonce: nonce,
+      approverNonce
+    });
+    expect(code).toMatch(/^\d{3} \d{3}$/);
+    expect(
+      await deviceApprovalCode({
+        newDevicePublicKey: [signing, swapped],
+        approverPublicKey,
+        newDeviceNonce: nonce,
+        approverNonce
+      })
+    ).not.toBe(code);
+    await rejectsWith(
+      commitDeviceApproval([signing, swapped.subarray(1)]),
+      'invalid-argument'
+    );
+    await rejectsWith(
+      commitDeviceApproval('not keys' as unknown as Uint8Array),
       'invalid-argument'
     );
   });

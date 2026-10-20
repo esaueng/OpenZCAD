@@ -1,5 +1,6 @@
 import { accountConsent, publishCensus } from './glimpseCensus';
 import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
+import { handleE2eeRequest } from './e2ee';
 import { enforceApiRateLimit, publicRequestBucket } from './apiRateLimit';
 import {
   FREECAD_WORKER_PATH,
@@ -17,6 +18,7 @@ import {
   ProjectObjectStorageError,
   createPersistenceService,
   isCloudflareFeatureEnabled,
+  isE2eeKeysEnabled,
   projectCollaborationRollout,
   type ProjectCollaborationRollout,
   type CloudflareEnv
@@ -1129,6 +1131,15 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     !['GET', 'HEAD', 'OPTIONS'].includes(request.method)
   ) {
     await assertAccountNotErasing(env.DB, userId);
+  }
+
+  if (pathname.startsWith('/api/e2ee/')) {
+    return handleE2eeRequest(
+      request,
+      env,
+      session,
+      isE2eeKeysEnabled(env, session.email)
+    );
   }
 
   if (

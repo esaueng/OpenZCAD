@@ -95,6 +95,9 @@ importers:
       '@openzcad/command-system':
         specifier: workspace:*
         version: link:../../packages/command-system
+      '@openzcad/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@openzcad/document-core':
         specifier: workspace:*
         version: link:../../packages/document-core
