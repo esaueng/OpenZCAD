@@ -31,7 +31,7 @@ import {
   type ProjectDocument,
   type SketchId
 } from '@openzcad/shared';
-import type { BodyId } from '@openzcad/shared';
+import type { BodyId, GeometryBodyRepresentation } from '@openzcad/shared';
 import type {
   ExactBuildResult,
   ExactShape,
@@ -468,6 +468,32 @@ export interface MeasuredBodyCacheEntry {
   /** Owned buffers plus serialized metadata/key/witness estimate. */
   bytes: number;
   measured: MeasuredShape;
+}
+
+/** What a drag preview publishes for an unchanged body. */
+export interface PreviewDisplay {
+  vertices: Float32Array;
+  indices: Uint32Array;
+  bbox: GeometryBodyRepresentation['bbox'];
+  faceCount: number;
+  /** Display faces only: NURBS face geometry and edges stay pending. */
+  faces: NonNullable<GeometryBodyRepresentation['topology']>['faces'];
+}
+
+/**
+ * A drag preview's own display projection of a body, kept so later previews
+ * can publish it again. It has the same handle-identity key and live witness
+ * check as {@link MeasuredBodyCacheEntry}, but it holds no volume, edges or
+ * recognition, so it only ever serves previews, never a complete sync.
+ */
+export interface PreviewDisplayCacheEntry {
+  provenanceKey: string;
+  witness: MeasurementWitness;
+  solidKey: string;
+  strict: boolean;
+  /** Owned buffers plus serialized faces/witness estimate. */
+  bytes: number;
+  display: PreviewDisplay;
 }
 
 /** No hash or traversal-position substitution: compare the complete record. */

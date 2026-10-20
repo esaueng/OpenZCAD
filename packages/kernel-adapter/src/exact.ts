@@ -98,6 +98,7 @@ import type {
   ExactShape,
   ImportedStepDiagnostics,
   MeasuredShape,
+  MeasurementWitness,
   PreparedShapeMeasurement
 } from './exact-types';
 export type { DxfFaceSelector } from './exact-types';
@@ -213,6 +214,8 @@ import {
   measurementProvenanceKey,
   type HistoryCheckpointEntry,
   type MeasuredBodyCacheEntry,
+  type PreviewDisplay,
+  type PreviewDisplayCacheEntry,
   type CheckpointMemoryStats,
   type RebuildCacheEvent
 } from './exact-history-cache';
@@ -1104,6 +1107,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   >();
   private measuredShapeCacheBytes = 0;
   /**
+   * Drag previews' own display projections, for bodies whose last complete
+   * measurement no longer matches: a body a drag rebuilt with new handles is
+   * otherwise meshed again on every tick. Same lifetime, key and witness check
+   * as {@link measuredShapeCache}, under its own byte budget of the same size.
+   */
+  private readonly previewDisplayCache = new Map<
+    BodyId,
+    PreviewDisplayCacheEntry
+  >();
+  private previewDisplayCacheBytes = 0;
+  /**
    * Per body, the linear display deflection each of its solids was last
    * meshed at (see `heldDisplayTessellation`). A display policy, not a
    * geometry cache: it survives history-cache invalidation (a sync whose
@@ -1148,6 +1162,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     this.primitiveBuildCache.clear();
     this.measuredShapeCache.clear();
     this.measuredShapeCacheBytes = 0;
+    this.previewDisplayCache.clear();
+    this.previewDisplayCacheBytes = 0;
     this.topologyWitnessStore.clear();
     if (this.historyKernel) {
       this.historyKernel.free();
@@ -1156,45 +1172,142 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   /**
-   * A drag preview's copy of a body's last complete measurement, when the
-   * body is the same entity it was then: the same solid handles (handles are
-   * never reused, see {@link MeasuredBodyCacheEntry}), lineage and import
-   * diagnostics, and a recounted handle/validation witness that matches. Any
-   * disagreement returns null and the preview meshes the body as before. The
-   * result shares the cached buffers: the preview's final `structuredClone`
-   * detaches everything it publishes, so callers never alias the cache.
+   * What a drag preview can publish for a body without meshing it: its last
+   * complete measurement, else the display a previous preview projected,
+   * when the body is the same entity it was then. That means the same solid
+   * handles (handles are never reused, see {@link MeasuredBodyCacheEntry}),
+   * lineage and import diagnostics, and a recounted handle/validation
+   * witness that matches. Any disagreement returns null and the preview
+   * meshes the body as before. The result shares the cached buffers: the
+   * preview's final `structuredClone` detaches everything it publishes, so
+   * callers never alias the cache.
    */
-  private reusedPreviewMeasurement(
+  private reusedPreviewDisplay(
     kernel: RemusKernel,
     bodyId: BodyId,
     shape: ExactShape,
     strict: boolean,
     imported: ImportedStepDiagnostics | undefined
-  ): Pick<
-    MeasuredShape,
-    'vertices' | 'indices' | 'bbox' | 'topology' | 'faceCount'
-  > | null {
-    const cached = this.measuredShapeCache.get(bodyId);
-    if (
-      !cached ||
-      cached.analysisKey !== undefined ||
-      cached.strict !== strict ||
-      cached.solidKey !== shape.solids.join(',') ||
-      cached.provenanceKey !== measurementProvenanceKey(shape, imported)
-    ) {
-      return null;
-    }
+  ): PreviewDisplay | null {
+    const solidKey = shape.solids.join(',');
+    const provenanceKey = measurementProvenanceKey(shape, imported);
+    const keyed = (entry: {
+      strict: boolean;
+      solidKey: string;
+      provenanceKey: string;
+    }) =>
+      entry.strict === strict &&
+      entry.solidKey === solidKey &&
+      entry.provenanceKey === provenanceKey;
+    const complete = this.measuredShapeCache.get(bodyId);
+    const completeKeyed =
+      complete !== undefined &&
+      complete.analysisKey === undefined &&
+      keyed(complete);
+    const previewed = this.previewDisplayCache.get(bodyId);
+    if (!completeKeyed && !(previewed && keyed(previewed))) return null;
+    let witness: string;
     try {
-      if (
-        JSON.stringify(measurementWitness(kernel, shape, strict)) !==
-        JSON.stringify(cached.witness)
-      ) {
-        return null;
-      }
+      witness = JSON.stringify(measurementWitness(kernel, shape, strict));
     } catch {
       return null;
     }
-    return cached.measured;
+    if (completeKeyed && witness === JSON.stringify(complete.witness)) {
+      const measured = complete.measured;
+      return {
+        vertices: measured.vertices,
+        indices: measured.indices,
+        bbox: measured.bbox,
+        faceCount: measured.faceCount,
+        faces: measured.topology.faces.map((face) => ({
+          topologyId: face.topologyId,
+          hash: face.hash,
+          triangleStart: face.triangleStart,
+          triangleCount: face.triangleCount,
+          geometry:
+            face.geometry?.surfaceType === 'bspline' ? undefined : face.geometry
+        }))
+      };
+    }
+    if (
+      previewed &&
+      keyed(previewed) &&
+      witness === JSON.stringify(previewed.witness)
+    ) {
+      return previewed.display;
+    }
+    return null;
+  }
+
+  /**
+   * Keeps a preview's display projection of a body for later previews. The
+   * witness is the one a matching body recounts: the gate above admitted the
+   * body only with zero relaxed (and, when strict, strict) errors, so a body
+   * whose live verdict differs simply misses.
+   */
+  private storePreviewDisplay(
+    kernel: RemusKernel,
+    bodyId: BodyId,
+    shape: ExactShape,
+    strict: boolean,
+    imported: ImportedStepDiagnostics | undefined,
+    display: PreviewDisplay
+  ): void {
+    this.evictPreviewDisplay(bodyId);
+    const handles = (values: Uint32Array) =>
+      Array.from(values).sort((a, b) => a - b);
+    let witness: MeasurementWitness;
+    try {
+      witness = {
+        solids: shape.solids.map((solid) => ({
+          solid,
+          faces: handles(kernel.getSolidFaces(solid)),
+          edges: handles(kernel.getSolidEdges(solid)),
+          vertices: handles(kernel.getSolidVertices(solid)),
+          relaxedErrors: 0,
+          strictErrors: strict ? 0 : null
+        }))
+      };
+    } catch {
+      return;
+    }
+    const solidKey = shape.solids.join(',');
+    const provenanceKey = measurementProvenanceKey(shape, imported);
+    const bytes =
+      display.vertices.byteLength +
+      display.indices.byteLength +
+      new TextEncoder().encode(
+        JSON.stringify(display.faces) +
+          JSON.stringify(witness) +
+          provenanceKey +
+          solidKey
+      ).byteLength;
+    if (bytes > this.maxMeasuredShapeCacheBytes) return;
+    this.previewDisplayCache.set(bodyId, {
+      provenanceKey,
+      witness,
+      solidKey,
+      strict,
+      bytes,
+      display
+    });
+    this.previewDisplayCacheBytes += bytes;
+    for (const [key, existing] of this.previewDisplayCache) {
+      if (this.previewDisplayCacheBytes <= this.maxMeasuredShapeCacheBytes) {
+        break;
+      }
+      if (key === bodyId) continue;
+      this.previewDisplayCache.delete(key);
+      this.previewDisplayCacheBytes -= existing.bytes;
+    }
+  }
+
+  private evictPreviewDisplay(bodyId: BodyId): void {
+    const entry = this.previewDisplayCache.get(bodyId);
+    if (entry) {
+      this.previewDisplayCache.delete(bodyId);
+      this.previewDisplayCacheBytes -= entry.bytes;
+    }
   }
 
   private evictMeasuredShape(bodyId: BodyId): void {
@@ -1210,6 +1323,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     entry: MeasuredBodyCacheEntry
   ): void {
     this.evictMeasuredShape(bodyId);
+    // A complete measurement supersedes any preview display of the body.
+    this.evictPreviewDisplay(bodyId);
     if (
       entry.bytes > this.maxMeasuredShapeCacheBytes ||
       !entry.measured.valid ||
@@ -2475,6 +2590,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           this.evictMeasuredShape(bodyId);
         }
       }
+      for (const bodyId of [...this.previewDisplayCache.keys()]) {
+        if (!build.shapes.has(bodyId)) {
+          this.evictPreviewDisplay(bodyId);
+        }
+      }
       // Same for the held display deflections: a body this build no longer
       // produces will never be measured again under that id.
       for (const bodyId of [...this.heldDisplayDeflections.keys()]) {
@@ -2541,7 +2661,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           // Hidden unions still need the normal display-closure gate.
           if (strict && hiddenBodies.has(bodyId)) break deferredTopology;
           if (!consumed && !hiddenBodies.has(bodyId)) {
-            const reused = this.reusedPreviewMeasurement(
+            const reused = this.reusedPreviewDisplay(
               kernel,
               bodyId,
               shape,
@@ -2569,19 +2689,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 bbox: reused.bbox,
                 // The same shape as a meshed preview body: display faces
                 // only, NURBS geometry and edge topology left pending.
-                topology: {
-                  faces: reused.topology.faces.map((face) => ({
-                    topologyId: face.topologyId,
-                    hash: face.hash,
-                    triangleStart: face.triangleStart,
-                    triangleCount: face.triangleCount,
-                    geometry:
-                      face.geometry?.surfaceType === 'bspline'
-                        ? undefined
-                        : face.geometry
-                  })),
-                  edges: []
-                }
+                topology: { faces: reused.faces, edges: [] }
               };
               reusedMeasurements += 1;
               measurementDone();
@@ -2666,39 +2774,44 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           )
             break deferredTopology;
           publishImportDiagnostics();
+          // Display face ranges keep the dragged highlight and analytic
+          // dimensions current. Edge topology, recognition and persistent
+          // output references remain pending; picks are held in the UI.
+          const faces = withSyncReadMemo(readMemo, () =>
+            projection.faceGroups.map((group) => {
+              const witness = faceWitnessOf(kernel, group.handle);
+              const hash = topologyHashOfWitness('face', witness);
+              return {
+                topologyId: `face:${hash}`,
+                hash,
+                triangleStart: group.triangleStart,
+                triangleCount: group.triangleCount,
+                // NURBS area integration is completion metadata, not a
+                // display requirement. Picks are held for this snapshot.
+                geometry:
+                  witness.surfaceType === 'bspline'
+                    ? undefined
+                    : this.previewFaceGeometry.measure(
+                        kernel,
+                        group.handle,
+                        witness
+                      )
+              };
+            })
+          );
           geometryRepresentations[bodyId] = {
             ...metadata,
             mesh: projection.mesh,
             bbox: projection.bbox,
-            // Display face ranges keep the dragged highlight and analytic
-            // dimensions current. Edge topology, recognition and persistent
-            // output references remain pending; picks are held in the UI.
-            topology: {
-              faces: withSyncReadMemo(readMemo, () =>
-                projection.faceGroups.map((group) => {
-                  const witness = faceWitnessOf(kernel, group.handle);
-                  const hash = topologyHashOfWitness('face', witness);
-                  return {
-                    topologyId: `face:${hash}`,
-                    hash,
-                    triangleStart: group.triangleStart,
-                    triangleCount: group.triangleCount,
-                    // NURBS area integration is completion metadata, not a
-                    // display requirement. Picks are held for this snapshot.
-                    geometry:
-                      witness.surfaceType === 'bspline'
-                        ? undefined
-                        : this.previewFaceGeometry.measure(
-                            kernel,
-                            group.handle,
-                            witness
-                          )
-                  };
-                })
-              ),
-              edges: []
-            }
+            topology: { faces, edges: [] }
           };
+          this.storePreviewDisplay(kernel, bodyId, shape, strict, imported, {
+            vertices: projection.mesh.vertices,
+            indices: projection.mesh.indices,
+            bbox: projection.bbox,
+            faceCount: metadata.faceCount,
+            faces
+          });
           measurementDone();
           await scheduling.checkpoint();
           throwIfBuildCancelled(cancellation);
@@ -2966,8 +3079,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
       if (geometryOnly) {
         // This is deliberately not a measured-shape cache entry or a mass
-        // snapshot. A release must complete current-revision analysis before
-        // committing; a preview never creates quantities or analysis proofs.
+        // snapshot (only the preview display cache keeps its meshes). A
+        // release must complete current-revision analysis before committing;
+        // a preview never creates quantities or analysis proofs.
         const pending = yieldControl?.();
         if (pending) await pending;
         throwIfBuildCancelled(cancellation);
