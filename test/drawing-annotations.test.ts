@@ -1200,6 +1200,40 @@ describe('D02 page and export', () => {
     ]);
   });
 
+  it('ends a leader on the part of its edge the view draws', () => {
+    const note = {
+      kind: 'note' as const,
+      label: 'HIDDEN END',
+      leader: [0, 0, 20, 0]
+    };
+    const identity = (u: number, v: number): [number, number] => [u, v];
+    const tipOf = (drawn?: [number, number][][]) => {
+      const layout = layoutAnnotation(note, identity, 1, [16, 10], drawn);
+      const arrow = layout.strokes.find((stroke) => stroke.filled);
+      return arrow ? arrow.points[0]! : null;
+    };
+    // The whole edge: the tip lands under the note.
+    expect(tipOf()).toBeGreaterThan(10);
+    // Only its left quarter is drawn: the tip stays on it.
+    expect(
+      tipOf([
+        [
+          [0, 0],
+          [5, 0]
+        ]
+      ])
+    ).toBeLessThanOrEqual(5 + 1e-9);
+    // None of it is drawn: no arrow into blank paper.
+    expect(
+      tipOf([
+        [
+          [0, 3],
+          [20, 3]
+        ]
+      ])
+    ).toBeNull();
+  });
+
   it('exports dimensions and notes in SVG and PDF, byte-stable across a reload', async () => {
     const { document, bodies, sheet } = await dimensioned();
     const context = { projectName: document.name, units: document.units };

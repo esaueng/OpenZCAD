@@ -3,6 +3,7 @@ import {
   drawingPaperPerModelUnit,
   projectToView,
   type DrawingAnnotationId,
+  type DrawingViewId,
   type DrawingSheet,
   type BodyRepresentation,
   type DrawingAnnotation,
@@ -778,10 +779,50 @@ function nearestOnPolyline(points: XY[], to: XY): XY | null {
   return best;
 }
 
+/** How far a drawn line may stray from the edge it was drawn from, in mm. */
+const DRAWN_COINCIDENCE_MM = 0.05;
+
+/**
+ * The parts of an edge's paper polyline the view draws: each drawn segment
+ * lying on the edge. Drawn runs are the edge's own projection split where
+ * it is occluded, so their segments sit on it to rounding.
+ */
+function drawnPieces(polyline: XY[], drawn: readonly XY[][]): XY[][] {
+  const onEdge = (p: XY) => {
+    const nearest = nearestOnPolyline(polyline, p);
+    return (
+      nearest !== null &&
+      Math.hypot(nearest[0] - p[0], nearest[1] - p[1]) <= DRAWN_COINCIDENCE_MM
+    );
+  };
+  const pieces: XY[][] = [];
+  for (const run of drawn)
+    for (let i = 0; i + 1 < run.length; i += 1)
+      if (onEdge(run[i]!) && onEdge(run[i + 1]!))
+        pieces.push([run[i]!, run[i + 1]!]);
+  return pieces;
+}
+
+function nearestOnPieces(pieces: readonly XY[][], to: XY): XY | null {
+  let best: XY | null = null;
+  let bestDistance = Infinity;
+  for (const piece of pieces) {
+    const point = nearestOnPolyline(piece, to);
+    if (!point) continue;
+    const distance = Math.hypot(point[0] - to[0], point[1] - to[1]);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = point;
+    }
+  }
+  return best;
+}
+
 function noteLayout(
   resolved: Extract<ResolvedAnnotation, { kind: 'note' }>,
   toPage: ((u: number, v: number) => XY) | null,
-  anchor: XY
+  anchor: XY,
+  drawn: readonly XY[][] | undefined
 ): AnnotationLayout {
   const placed = placedText(
     resolved.label,
@@ -794,9 +835,12 @@ function noteLayout(
     const polyline: XY[] = [];
     for (let i = 0; i + 1 < resolved.leader.length; i += 2)
       polyline.push(toPage(resolved.leader[i]!, resolved.leader[i + 1]!));
+    // The tip lands only on what the view draws of the edge: a partly
+    // hidden edge, with hidden lines off, is pointed at where it shows.
+    const pieces = drawn ? drawnPieces(polyline, drawn) : [polyline];
     const box = placed.box;
     const middle: XY = [box.x + box.width / 2, box.y + box.height / 2];
-    const rough = nearestOnPolyline(polyline, middle);
+    const rough = nearestOnPieces(pieces, middle);
     if (rough) {
       // From the side of the text facing the edge, to the nearest point of
       // the edge from there.
@@ -804,7 +848,7 @@ function noteLayout(
         rough[0] < middle[0] ? box.x : box.x + box.width,
         middle[1]
       ];
-      const tip = nearestOnPolyline(polyline, from) ?? rough;
+      const tip = nearestOnPieces(pieces, from) ?? rough;
       const length = Math.hypot(tip[0] - from[0], tip[1] - from[1]);
       if (length > ARROW_LENGTH_MM) {
         strokes.push(
@@ -827,9 +871,12 @@ export function layoutAnnotation(
   resolved: ResolvedAnnotation,
   toPage: ((u: number, v: number) => XY) | null,
   k: number,
-  anchor: XY
+  anchor: XY,
+  /** The view's drawn lines on the paper, for a leader's tip. */
+  drawn?: readonly XY[][]
 ): AnnotationLayout {
-  if (resolved.kind === 'note') return noteLayout(resolved, toPage, anchor);
+  if (resolved.kind === 'note')
+    return noteLayout(resolved, toPage, anchor, drawn);
   if (!toPage) throw new Error('A dimension needs its view.');
   switch (resolved.kind) {
     case 'linear':
@@ -853,6 +900,35 @@ export function annotationAnchor(
         view.centerMm.y + annotation.placementMm.y
       ]
     : [annotation.placementMm.x, annotation.placementMm.y];
+}
+
+/**
+ * The lines each drawn view shows, on the paper: its visible runs, and its
+ * hidden runs when it draws them. A pick must land on one of these, and a
+ * leader must end on one, so an edge the view does not show is neither
+ * picked through a face nor pointed at.
+ */
+export function drawnLines(
+  sheet: Pick<DrawingSheet, 'scale'>,
+  views: readonly ComposedView[],
+  units: UnitSystem
+): Map<DrawingViewId, XY[][]> {
+  const out = new Map<DrawingViewId, XY[][]>();
+  for (const { view, projection } of views) {
+    if (!projection.bounds) continue;
+    const toPage = viewPageTransform(view, projection.bounds, sheet, units);
+    const lines: XY[][] = [];
+    for (const run of view.hiddenLines
+      ? [...projection.visible, ...projection.hidden]
+      : projection.visible) {
+      const line: XY[] = [];
+      for (let i = 0; i + 1 < run.length; i += 2)
+        line.push(toPage(run[i]!, run[i + 1]!));
+      lines.push(line);
+    }
+    out.set(view.viewId, lines);
+  }
+  return out;
 }
 
 /** Every annotation of a sheet resolved against the current model. */
@@ -896,6 +972,11 @@ export function composeSheetAnnotations(
   const boxes = new Map<DrawingAnnotationId, AnnotationBox>();
   const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
   const k = drawingPaperPerModelUnit(sheet.scale, units);
+  const linesByView = (sheet.annotations ?? []).some(
+    (annotation) => annotation.kind === 'note' && annotation.leader
+  )
+    ? drawnLines(sheet, views, units)
+    : null;
   for (const annotation of sheet.annotations ?? []) {
     const resolution = resolutions.get(annotation.annotationId);
     if (!resolution?.ok) continue;
@@ -911,7 +992,8 @@ export function composeSheetAnnotations(
       resolution.resolved,
       toPage,
       k,
-      annotationAnchor(annotation, view)
+      annotationAnchor(annotation, view),
+      view ? linesByView?.get(view.viewId) : undefined
     );
     strokes.push(...layout.strokes);
     texts.push(...layout.texts);

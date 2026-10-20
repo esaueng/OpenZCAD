@@ -15,11 +15,14 @@ import {
 } from '@openzcad/shared';
 import { resolveEdge } from '../topologyResolution';
 import {
+  drawnLines,
   edgeEndsInPageOrder,
   resolveDrawingAnnotation,
   type AnnotationBodies
 } from './annotations';
 import { viewPageTransform, type ComposedView } from './sheetPage';
+
+export { drawnLines };
 
 /**
  * D02 picking: which model edge is under a point of the sheet, and how a
@@ -72,34 +75,6 @@ export function pickableEdges(
         out.push({ view, bodyId, edge, page, depths });
       }
     }
-  }
-  return out;
-}
-
-/**
- * The lines each drawn view shows, on the paper: its visible runs, and its
- * hidden runs when it draws them. A pick must land on one of these, so an
- * edge the view does not show cannot be picked through a face.
- */
-export function drawnLines(
-  sheet: Pick<DrawingSheet, 'scale'>,
-  views: readonly ComposedView[],
-  units: UnitSystem
-): Map<DrawingViewId, XY[][]> {
-  const out = new Map<DrawingViewId, XY[][]>();
-  for (const { view, projection } of views) {
-    if (!projection.bounds) continue;
-    const toPage = viewPageTransform(view, projection.bounds, sheet, units);
-    const lines: XY[][] = [];
-    for (const run of view.hiddenLines
-      ? [...projection.visible, ...projection.hidden]
-      : projection.visible) {
-      const line: XY[] = [];
-      for (let i = 0; i + 1 < run.length; i += 2)
-        line.push(toPage(run[i]!, run[i + 1]!));
-      lines.push(line);
-    }
-    out.set(view.viewId, lines);
   }
   return out;
 }
