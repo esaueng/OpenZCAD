@@ -2190,6 +2190,8 @@ button.command-rail:disabled {
 }
 
 .panel-dock-layer.is-dragging {
+  /* The layer holds the pointer for the drag, so its cursor is the one. */
+  cursor: grabbing;
   user-select: none;
 }
 

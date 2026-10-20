@@ -385,3 +385,92 @@ test('at 720px a stored floating layout shows one panel in the phone lane with n
     { x: 700, y: 160, w: 320, h: 300, panels: ['parameters', 'bodies'] }
   ]);
 });
+
+/** A point on the box's face the canvas owns, where a click selects it. */
+async function findFacePoint(page: Page) {
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await box(canvas);
+  for (const yRatio of [0.4, 0.46, 0.52, 0.58, 0.64]) {
+    for (const xRatio of [0.36, 0.43, 0.5, 0.57, 0.64]) {
+      const candidate = {
+        x: bounds.x + bounds.width * xRatio,
+        y: bounds.y + bounds.height * yRatio
+      };
+      const onCanvas = await canvas.evaluate(
+        (element, point) =>
+          document.elementFromPoint(point.x, point.y) === element,
+        candidate
+      );
+      if (!onCanvas) continue;
+      await page.mouse.move(candidate.x, candidate.y);
+      if (
+        (await canvas.evaluate((element) => element.style.cursor)) === 'grab'
+      ) {
+        return candidate;
+      }
+    }
+  }
+  throw new Error('no selectable face found');
+}
+
+function overlaps(a: Box, b: Box) {
+  return (
+    Math.min(a.x + a.width, b.x + b.width) > Math.max(a.x, b.x) + 0.5 &&
+    Math.min(a.y + a.height, b.y + b.height) > Math.max(a.y, b.y) + 0.5
+  );
+}
+
+test('a window floated over a live handle leaves its value chip clear and reachable', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Chip clear', { right: [] });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expectBodyCount(page, 1);
+  await page.keyboard.press('Escape');
+  const face = await findFacePoint(page);
+  await page.mouse.click(face.x, face.y);
+  const chip = page.locator('.handle-value-chip');
+  await expect(chip).toBeVisible();
+  const before = await box(chip);
+
+  // Parameters popped out, then dragged by its header until its window
+  // stands over the chip.
+  await railPanelButton(page, 'Parameters').click();
+  await modelPanel(page, 'Parameters')
+    .getByRole('button', { name: 'Pop out Parameters' })
+    .click();
+  const window = windowOf(page, 'Parameters');
+  await expect(window).toBeVisible();
+  const heading = await box(
+    modelPanel(page, 'Parameters').locator('.model-panel-title')
+  );
+  const centre = {
+    x: before.x + before.width / 2,
+    y: before.y + before.height / 2
+  };
+  await page.mouse.move(heading.x + 24, heading.y + heading.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(heading.x + 40, heading.y + 30, { steps: 3 });
+  await page.mouse.move(centre.x - 60, centre.y - 120, { steps: 12 });
+  await page.mouse.up();
+  const shown = await box(window);
+  // The window now stands where the chip was.
+  expect(overlaps(shown, before)).toBe(true);
+  await expect(chip).toBeVisible();
+  await expect
+    .poll(async () => overlaps(await box(chip), await box(window)))
+    .toBe(false);
+  // Its own: a press on it reaches the chip, not the window.
+  const after = await box(chip);
+  expect(
+    await page.evaluate(
+      ({ x, y }) =>
+        document.elementFromPoint(x, y)?.closest('.handle-value-chip') !== null,
+      { x: after.x + after.width / 2, y: after.y + after.height / 2 }
+    )
+  ).toBe(true);
+});
