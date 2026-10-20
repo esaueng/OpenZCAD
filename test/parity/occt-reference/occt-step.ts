@@ -96,6 +96,10 @@ import {
   flattenedOutlineWarning
 } from '../../../packages/kernel-adapter/src/profile-bezier-edges';
 import {
+  ellipseEdgePlan,
+  splineEdgePieces
+} from '../../../packages/kernel-adapter/src/profile-curve-edges';
+import {
   analyzeUnionConnectivity,
   disconnectedUnionWarning
 } from '../../../packages/kernel-adapter/src/union-connectivity';
@@ -1043,6 +1047,11 @@ function profilePoints(
       throw new Error(
         `A ${data.objectKind} is not a closed profile and cannot be extruded on its own.`
       );
+    case 'ellipse':
+    case 'spline':
+      throw new Error(
+        `An ${data.objectKind} builds only through its detected sketch regions; select its region to extrude it.`
+      );
     case 'text':
       // Text is many regions with holes; a single polygonal profile cannot
       // represent it. It builds through the region path instead.
@@ -1436,6 +1445,75 @@ export class OcctStepKernelAdapter {
   }
 
   /**
+   * Ellipse edges cut exactly as the Remus adapter cuts them
+   * (`ellipseEdgePlan`). OpenCascade picks an ellipse's major-axis direction
+   * from the normal alone, so each edge is turned about its own axis until
+   * that direction is the planned one; the parameter then means the same
+   * point on both kernels.
+   */
+  private ellipseEdges(
+    curve: Extract<
+      SketchRegion['outer']['curves'][number],
+      { kind: 'ellipse' }
+    >,
+    basis: PlaneBasis
+  ): ShapeHandle[] {
+    const plan = ellipseEdgePlan(curve);
+    const center = OcctStepKernelAdapter.planePoint3(basis, curve.center);
+    const normal = {
+      x: basis.normal.x * plan.sign,
+      y: basis.normal.y * plan.sign,
+      z: basis.normal.z * plan.sign
+    };
+    const cos = Math.cos(plan.rotation);
+    const sin = Math.sin(plan.rotation);
+    const want = {
+      x: basis.u.x * cos + basis.v.x * sin,
+      y: basis.u.y * cos + basis.v.y * sin,
+      z: basis.u.z * cos + basis.v.z * sin
+    };
+    const probe = this.kernel.makeEllipseEdge(
+      center,
+      normal,
+      plan.major,
+      plan.minor
+    );
+    const at = this.kernel.curvePointAtParam(probe, 0);
+    const have = {
+      x: at.x - center.x,
+      y: at.y - center.y,
+      z: at.z - center.z
+    };
+    const cross = {
+      x: have.y * want.z - have.z * want.y,
+      y: have.z * want.x - have.x * want.z,
+      z: have.x * want.y - have.y * want.x
+    };
+    const angle = Math.atan2(
+      cross.x * normal.x + cross.y * normal.y + cross.z * normal.z,
+      have.x * want.x + have.y * want.y + have.z * want.z
+    );
+    const axis = { point: center, direction: normal };
+    if (plan.full) {
+      return [this.kernel.rotate(probe, axis, angle)];
+    }
+    return plan.ranges.map(([from, to]) =>
+      this.kernel.rotate(
+        this.kernel.makeEllipseArc(
+          center,
+          normal,
+          plan.major,
+          plan.minor,
+          from,
+          to
+        ),
+        axis,
+        angle
+      )
+    );
+  }
+
+  /**
    * Build an exact planar face for a detected region: outer wire plus hole
    * wires from the region's line/arc/bezier curves. Mirrors the Remus
    * adapter's construction — including the identical ≤ 90° arc subdivision —
@@ -1476,6 +1554,43 @@ export class OcctStepKernelAdapter {
               this.kernel.makeLineEdge(
                 OcctStepKernelAdapter.planePoint3(basis, points[index]!),
                 OcctStepKernelAdapter.planePoint3(basis, points[index + 1]!)
+              )
+            );
+          }
+          continue;
+        }
+        if (curve.kind === 'ellipse') {
+          edges.push(...this.ellipseEdges(curve, basis));
+          continue;
+        }
+        if (curve.kind === 'spline') {
+          // The same pieces, knots and control points the Remus adapter
+          // lifts, so the two kernels' vertices coincide.
+          for (const piece of splineEdgePieces(curve)) {
+            const knots: number[] = [];
+            const multiplicities: number[] = [];
+            for (const knot of piece.knots) {
+              if (knots.length > 0 && knots[knots.length - 1] === knot) {
+                multiplicities[multiplicities.length - 1]! += 1;
+              } else {
+                knots.push(knot);
+                multiplicities.push(1);
+              }
+            }
+            edges.push(
+              this.kernel.makeBSplineEdge(
+                piece.controls.flatMap((point) => {
+                  const lifted = OcctStepKernelAdapter.planePoint3(
+                    basis,
+                    point
+                  );
+                  return [lifted.x, lifted.y, lifted.z];
+                }),
+                piece.controls.map(() => 1),
+                knots,
+                multiplicities,
+                piece.degree,
+                false
               )
             );
           }

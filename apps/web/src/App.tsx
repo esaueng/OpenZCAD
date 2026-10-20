@@ -573,6 +573,8 @@ import {
   isOperationState,
   isStaleSelectionError,
   nextSketchCircleMode,
+  nextSketchCurveMode,
+  sketchCurveModeFor,
   nextSketchRectangleMode,
   DEFAULT_SKETCH_POLYGON_SIDES,
   radialFaceOperationName,
@@ -584,7 +586,8 @@ import {
 } from './lib/interaction/machine';
 import type {
   SketchEditHost,
-  SketchEditPickContext
+  SketchEditPickContext,
+  SketchOffsetPick
 } from './lib/sketch/edits';
 import {
   faceOffsetBaseline,
@@ -6275,9 +6278,14 @@ export function App() {
         // Open curves have no fill; region overlays render them separately.
         return [];
       }
-      if (data.objectKind === 'text') {
+      if (
+        data.objectKind === 'text' ||
+        data.objectKind === 'ellipse' ||
+        data.objectKind === 'spline'
+      ) {
         // Text has no single closed profile — it is many regions with holes,
-        // and the region overlay renders it.
+        // and the region overlay renders it. I01 curves fill through region
+        // analysis too.
         return [];
       }
       const centerX = resolve(data.centerX);
@@ -8903,7 +8911,15 @@ export function App() {
         await createLocal(localUserId);
         return;
       }
-      const response = await api.createProject({ name, units });
+      // The browser builds the new document and the account stores it as
+      // sent (ADR-024 Phase 1). The route trims the name it compares with.
+      const response = await api.createProject({
+        name: name.trim(),
+        units,
+        initialDocument: withoutDerivedProjection(
+          createProjectDocument(name.trim(), session.userId, units)
+        )
+      });
       await saveLocalProject(response.document);
       remoteVersionsRef.current.set(
         response.document.projectId,
@@ -13639,6 +13655,7 @@ export function App() {
       frame,
       tool: session.tool,
       circleMode: session.circleMode,
+      curveMode: session.curveMode,
       rectangleMode: session.rectangleMode ?? 'corner',
       polygonSides: session.polygonSides ?? DEFAULT_SKETCH_POLYGON_SIDES,
       snapStep: appSettings.sketching.snapEnabled
@@ -14111,6 +14128,58 @@ export function App() {
     }
   }
 
+  /** The selected entity to construction geometry or back, one undo step. */
+  async function handleToggleSketchConstruction() {
+    const base = managerRef.current?.document;
+    const target = sketchEntityEditTarget(interactionRef.current);
+    const sketch =
+      target && base && findSketch(base, target.sketchId as SketchId);
+    if (!base || !target || !sketch || sketchSolving || geometryBusy) return;
+    setSketchSolving(true);
+    setSketchEditError(null);
+    setSketchDiagnosticPoints([]);
+    try {
+      const { planSketchConstructionToggle } =
+        await import('./lib/sketch/modify');
+      const plan = planSketchConstructionToggle(
+        base,
+        sketch,
+        sketch.sketchId,
+        target.objectId
+      );
+      if (plan.status === 'refuse') {
+        setSketchEditError(plan.reason);
+        setStatus(plan.reason);
+      } else if (
+        await commitSketchEdit(
+          base,
+          sketch.sketchId,
+          plan.commands,
+          plan.label,
+          target.raceObjectId
+        )
+      ) {
+        setStatus(plan.message);
+        setSketchSolveStatus(null);
+      }
+    } catch (error) {
+      if (error instanceof FeatureBuildError) recordHistoryFailure(error, base);
+      const message = errorMessage(
+        error,
+        'The construction change could not be applied.'
+      );
+      const current = sketchEntityEditTarget(interactionRef.current);
+      if (
+        current?.sketchId === target.sketchId &&
+        current.objectId === target.objectId
+      )
+        setSketchEditError(message);
+      setStatus(message);
+    } finally {
+      setSketchSolving(false);
+    }
+  }
+
   function handleDeleteSketchEntity() {
     if (
       interaction.mode !== 'sketch' ||
@@ -14289,6 +14358,7 @@ export function App() {
     picks: string[];
     values?: number[];
     raws?: string[];
+    offset?: SketchOffsetPick;
     anchor?: { x: number; y: number };
     documentVersion: number;
   } | null>(null);
@@ -14756,16 +14826,20 @@ export function App() {
     clickPoint: { x: number; y: number },
     context: SketchEditPickContext
   ): boolean {
-    const pending =
-      interaction.mode === 'sketch' ? interaction.session.pendingEdit : null;
+    const session = interaction.mode === 'sketch' ? interaction.session : null;
+    const pending = session?.pendingEdit;
     if (!pending) {
       return false;
     }
     if (doc && editingSketchNode) {
       const host = sketchEditHost(doc, clickPoint);
       const sketch = editingSketchNode;
+      const offset = session?.offsetOptions;
       void import('./lib/sketch/edits').then(({ advanceSketchEdit }) =>
-        advanceSketchEdit(host, doc, sketch, pending, objectId, context)
+        advanceSketchEdit(host, doc, sketch, pending, objectId, {
+          ...context,
+          offset
+        })
       );
     }
     return true;
@@ -19233,6 +19307,25 @@ export function App() {
           });
           return;
         }
+        // The ellipse and spline keys step between their tool's two types.
+        if (
+          (sketchCommand === 'sketch-ellipse' &&
+            interaction.session.tool === 'ellipse') ||
+          (sketchCommand === 'sketch-spline' &&
+            interaction.session.tool === 'spline')
+        ) {
+          event.preventDefault();
+          dispatchInteraction({
+            type: 'sketch-curve-mode',
+            mode: nextSketchCurveMode(
+              sketchCurveModeFor(
+                interaction.session.tool,
+                interaction.session.curveMode
+              )
+            )
+          });
+          return;
+        }
         // The rectangle key does the same for the rectangle's types.
         if (
           sketchCommand === 'sketch-rectangle' &&
@@ -19260,9 +19353,13 @@ export function App() {
                     ? ('rectangle' as const)
                     : sketchCommand === 'sketch-polygon'
                       ? ('polygon' as const)
-                      : sketchCommand === 'sketch-text'
-                        ? ('text' as const)
-                        : null;
+                      : sketchCommand === 'sketch-ellipse'
+                        ? ('ellipse' as const)
+                        : sketchCommand === 'sketch-spline'
+                          ? ('spline' as const)
+                          : sketchCommand === 'sketch-text'
+                            ? ('text' as const)
+                            : null;
         if (sketchTool) {
           event.preventDefault();
           dispatchInteraction({ type: 'sketch-tool', tool: sketchTool });
@@ -20714,6 +20811,7 @@ export function App() {
         void handleUpdateSketchEntity(data);
       }}
       onDelete={handleDeleteSketchEntity}
+      onToggleConstruction={() => void handleToggleSketchConstruction()}
       composite={selectedComposite}
       onResizeComposite={(size, expressions) => {
         void handleResizeSketchComposite(size, expressions);
@@ -20827,6 +20925,10 @@ export function App() {
         }
         canConstrain={Boolean(interaction.session.sketchId)}
         pendingEdit={interaction.session.pendingEdit}
+        offsetOptions={interaction.session.offsetOptions}
+        onOffsetOptions={(options) =>
+          dispatchInteraction({ type: 'sketch-offset-options', options })
+        }
         constraints={sketchConstraintItems}
         selectedObjectId={interaction.session.selectedObjectId}
         solveStatus={sketchSolveStatus}
@@ -20864,6 +20966,10 @@ export function App() {
         }
         onPolygonSides={(sides) =>
           dispatchInteraction({ type: 'sketch-polygon-sides', sides })
+        }
+        curveMode={interaction.session.curveMode}
+        onCurveMode={(mode) =>
+          dispatchInteraction({ type: 'sketch-curve-mode', mode })
         }
         onConstruction={setSketchConstruction}
         onSettings={(sketching) => {

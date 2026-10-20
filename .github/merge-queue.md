@@ -40,7 +40,8 @@ continues to trigger the repository's existing automatic deployment workflows.
 2. Inspect the PR’s current head, reviews, comments, resolved threads, and
    individual jobs. The five required contexts are `checks / validate`,
    `checks / e2e`, `commit-privacy`, `history-privacy`, and `verify`. Also wait for Workers Builds,
-   audits, public commit metadata, and all six browser shards. A passing suite
+   dependency audits (when the PR changes a manifest or lockfile), public
+   commit metadata, and all six browser shards. A passing suite
    or checks on an older head are insufficient. Cloudflare `verify` is required
    on both the PR head and the merge-group candidate.
 3. Obtain the PR node ID and current head SHA, then recheck them immediately

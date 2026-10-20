@@ -219,18 +219,23 @@ export async function stubApi(
         name: string;
         units?: string;
         document?: ProjectDocument;
+        initialDocument?: ProjectDocument;
       };
+      // The browser builds a new project and the worker stores it as sent
+      // (ADR-024 Phase 1); only an adoption is rewritten.
       const document = payload.document
         ? adoptProjectDocument(
             payload.document,
             toUserId('user_e2e'),
             payload.name
           )
-        : createProjectDocument(
-            payload.name,
-            toUserId('user_e2e'),
-            (payload.units as 'mm' | undefined) ?? 'mm'
-          );
+        : payload.initialDocument
+          ? normalizeDocument(payload.initialDocument)
+          : createProjectDocument(
+              payload.name,
+              toUserId('user_e2e'),
+              (payload.units as 'mm' | undefined) ?? 'mm'
+            );
       return route.fulfill({
         status: 201,
         json: {
@@ -260,17 +265,16 @@ export async function stubApi(
     const payload = route.request().postDataJSON() as {
       reason: string;
       document: ProjectDocument;
+      savedRevisionId?: string;
     };
-    // The worker checkpoints the document it is handed and returns the result,
-    // which is how a save becomes a save point the client can see. Echoing the
-    // payload back unchanged made every explicit save a no-op here — the
-    // history panel could never list more than the save a project is born
-    // with, so nothing that depends on a second one was testable.
+    // The browser appends the save point and the worker stores the document
+    // as sent (ADR-024 Phase 1). A request without one is a pre-Phase 1
+    // client, which the worker still checkpoints itself; echoing that payload
+    // unchanged would make every such save a no-op here.
     return route.fulfill({
-      json: createCheckpoint(
-        normalizeDocument(payload.document),
-        payload.reason
-      )
+      json: payload.savedRevisionId
+        ? normalizeDocument(payload.document)
+        : createCheckpoint(normalizeDocument(payload.document), payload.reason)
     });
   });
   // Cloud autosave writes here continuously once a project is account-backed.

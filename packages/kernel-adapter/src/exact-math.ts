@@ -228,6 +228,14 @@ export function profilePoints(
       throw new Error(
         `A ${data.objectKind} is not a closed profile and cannot be extruded on its own.`
       );
+    case 'ellipse':
+    case 'spline':
+      // I01 curves are exact only through region analysis, which splits them
+      // where other curves cross and hands the kernel true ellipse and NURBS
+      // edges; this legacy path would facet them.
+      throw new Error(
+        `An ${data.objectKind} builds only through its detected sketch regions; select its region to extrude it.`
+      );
     case 'text':
       // This legacy path sweeps a single polygonal profile. Text is many
       // regions with holes and exact beziers; approximating it here would

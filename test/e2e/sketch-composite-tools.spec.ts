@@ -187,7 +187,8 @@ test('Rectangle types and Polygon draw held lines named as one shape', async ({
     shapeType.getByRole('radio', { name: 'Polygon' })
   ).toHaveAttribute('aria-checked', 'true');
   await rail.getByLabel('Polygon sides').fill('5');
-  const hub = at(0.3, 0.35);
+  // Right of the shape strip, which rides beside the vertically centred rail.
+  const hub = at(0.45, 0.35);
   await page.mouse.click(hub.x, hub.y);
   await page.mouse.move(hub.x, hub.y - 40, { steps: 4 });
   await page.keyboard.type('10');

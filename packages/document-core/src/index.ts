@@ -1494,10 +1494,20 @@ export function translateSketch(
         case 'circle':
         case 'polygon':
         case 'arc':
+        case 'ellipse':
           node.data = {
             ...data,
             centerX: shift(data.centerX, du, 'center X'),
             centerY: shift(data.centerY, dv, 'center Y')
+          };
+          break;
+        case 'spline':
+          node.data = {
+            ...data,
+            points: data.points.map((point) => ({
+              x: shift(point.x, du, 'spline point X'),
+              y: shift(point.y, dv, 'spline point Y')
+            }))
           };
           break;
         case 'text':
@@ -1507,6 +1517,8 @@ export function translateSketch(
             y: shift(data.y, dv, 'text Y')
           };
           break;
+        default:
+          data satisfies never;
       }
     }
   }
@@ -1638,7 +1650,7 @@ function constraintObjectIds(data: SketchConstraintData): EntityId[] {
   }
 }
 
-type ConstrainableKind = 'line' | 'arc' | 'circle';
+type ConstrainableKind = 'line' | 'arc' | 'circle' | 'ellipse' | 'spline';
 
 function requireConstrainableObject(
   document: ProjectDocument,
@@ -1671,14 +1683,26 @@ function requireConstraintPoint(
   const kind = requireConstrainableObject(document, sketch, ref.objectId, [
     'line',
     'arc',
-    'circle'
+    'circle',
+    'ellipse',
+    'spline'
   ]);
+  // I01: an ellipse (or elliptical arc) is held by its centre; an open
+  // spline by its two end points, which the curve passes through. A closed
+  // spline has no end to hold.
+  const node = document.nodes[ref.objectId];
+  const closedSpline =
+    node?.kind === 'sketch-object' &&
+    node.data.objectKind === 'spline' &&
+    node.data.closed === true;
   const legal =
     kind === 'line'
       ? ref.point === 'start' || ref.point === 'end'
-      : kind === 'circle'
+      : kind === 'circle' || kind === 'ellipse'
         ? ref.point === 'center'
-        : true; // arcs expose center, start, and end
+        : kind === 'spline'
+          ? !closedSpline && (ref.point === 'start' || ref.point === 'end')
+          : true; // arcs expose center, start, and end
   if (!legal) {
     throw new Error(`A ${kind} object has no '${ref.point}' point.`);
   }
@@ -1718,13 +1742,21 @@ function validateSketchConstraint(
       const a = requireConstrainableObject(document, sketch, data.a, [
         'line',
         'arc',
-        'circle'
+        'circle',
+        'ellipse'
       ]);
       const b = requireConstrainableObject(document, sketch, data.b, [
         'line',
         'arc',
-        'circle'
+        'circle',
+        'ellipse'
       ]);
+      // Equal ellipses match both semi-axes, which only another ellipse has.
+      if ((a === 'ellipse') !== (b === 'ellipse')) {
+        throw new Error(
+          'An equal constraint pairs an ellipse with an ellipse.'
+        );
+      }
       // Equal length pairs lines; equal radius pairs curves. Mixing the two
       // has no meaning the solver could satisfy.
       if ((a === 'line') !== (b === 'line')) {
@@ -1779,8 +1811,16 @@ function validateSketchConstraint(
       break;
     }
     case 'concentric':
-      requireConstrainableObject(document, sketch, data.a, ['arc', 'circle']);
-      requireConstrainableObject(document, sketch, data.b, ['arc', 'circle']);
+      requireConstrainableObject(document, sketch, data.a, [
+        'arc',
+        'circle',
+        'ellipse'
+      ]);
+      requireConstrainableObject(document, sketch, data.b, [
+        'arc',
+        'circle',
+        'ellipse'
+      ]);
       break;
     case 'midpoint':
       requireConstraintPoint(document, sketch, data.point);
@@ -1828,7 +1868,8 @@ function validateSketchConstraint(
       requireConstrainableObject(document, sketch, data.objectId, [
         'line',
         'arc',
-        'circle'
+        'circle',
+        'ellipse'
       ]);
       if (data.point.objectId === data.objectId) {
         throw new Error(
@@ -4807,6 +4848,32 @@ export function createSavedRevision(
 ): ProjectDocument {
   const appended = appendRevision(document, reason);
   return createCheckpoint({ ...appended, version: document.version }, reason);
+}
+
+/**
+ * A save point that is also a new model version: the shape a live room's
+ * named checkpoint takes, since other members must see the version advance.
+ */
+export function createAdvancingSavePoint(
+  document: ProjectDocument,
+  reason: string
+): ProjectDocument {
+  return createCheckpoint(appendRevision(document, reason), reason);
+}
+
+/**
+ * The reasons {@link createSavedRevision} and {@link createAdvancingSavePoint}
+ * record for a requested reason, so a server can check a save point a browser
+ * minted without re-deriving the clamping rules.
+ */
+export function savePointReasons(reason: string): {
+  revision: string;
+  checkpoint: string;
+} {
+  return {
+    revision: boundedHistoryReason(reason),
+    checkpoint: boundedHistoryReason(reason.trim() || 'Saved')
+  };
 }
 
 /**

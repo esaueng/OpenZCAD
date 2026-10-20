@@ -42,6 +42,9 @@ def evaluate(expression, github, variables):
             return names[node.id]
         if isinstance(node, ast.Attribute) and not node.attr.startswith("_"):
             value = visit(node.value)
+            if value is None:
+                # GitHub dereferences a missing object as null.
+                return None
             if not isinstance(value, dict):
                 raise ValueError("Only context fields are allowed")
             result = value.get(node.attr)
@@ -57,6 +60,8 @@ def evaluate(expression, github, variables):
             return result
         if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.Eq):
             return visit(node.left) == visit(node.comparators[0])
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.NotEq):
+            return visit(node.left) != visit(node.comparators[0])
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
             args = [visit(arg) for arg in node.args]
             if node.func.id == "fromJSON" and len(args) == 1 and isinstance(args[0], str):
@@ -189,12 +194,29 @@ class DirectFleetTests(unittest.TestCase):
             ("push", "refs/heads/feature", False),
             ("push", "refs/heads/main", True),
             ("workflow_dispatch", "refs/heads/main", True),
+            ("workflow_dispatch", "refs/heads/feature", False),
         ):
             github = dict(self.github, event_name=event, ref=ref)
             self.assertEqual(evaluate("${{ " + condition + " }}", github, self.variables), expected)
         verify = cloudflare.split("\n  verify:\n", 1)[1].split("\n  upload:\n", 1)[0]
         self.assertNotRegex(verify, r"(?m)^    if:")
         self.assertIn("wrangler deploy --dry-run", verify)
+        self.assertRegex(upload, r"(?m)^    environment: cloudflare-versions$")
+
+    def test_label_events_keep_required_reusable_checks(self):
+        group = re.search(r"^  group: .*?(\$\{\{.+\}\})$", CALLER, re.M)[1]
+        checks = CALLER.split("\n  checks:\n", 1)[1]
+        # Skipping the reusable caller creates a newer check suite without
+        # validate/e2e. GitHub then marks those required contexts Expected,
+        # even when an older run on the same head passed both gates.
+        self.assertNotRegex(checks, r"(?m)^    if:")
+        for action in ("labeled", "unlabeled"):
+            for label in ("kernel-bump", "documentation"):
+                github = copy.deepcopy(self.github)
+                github["event"].update(action=action, label={"name": label})
+                with self.subTest(action=action, label=label):
+                    keys = {evaluate(group, dict(github, run_id=run_id), self.variables) for run_id in (201, 202)}
+                    self.assertEqual(keys, {"refs/pull/7/merge"})
 
     def test_no_hosted_bootstrap_and_guard_before_checkout(self):
         self.assertNotIn("select-runner.yml", TEXT)

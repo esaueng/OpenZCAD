@@ -234,6 +234,11 @@ import {
   circleObjectFromDiameter,
   circleObjectFromThreePoints,
   circlePreviewPoints,
+  curvePreviewPoints,
+  ellipseObjectFromPoints,
+  ellipticalArcObject,
+  splineClickAction,
+  splineObjectFromPoints,
   centerInferenceSegments,
   collectSketchSnapTargets,
   SketchSnapLimitError,
@@ -242,6 +247,7 @@ import {
   lineObjectFromPoints,
   nearestCenterGuideTarget,
   placeSketchObjectGrabPoint,
+  sketchObjectGrabbedAlongCurve,
   sketchObjectGrabPoint,
   sketchObjectMovable,
   sketchObjectRotatable,
@@ -272,12 +278,15 @@ import {
   textDraftPlaceable,
   textObjectFromPoint
 } from '../lib/sketch/textPlacement';
-import type {
-  InteractionEvent,
-  SketchCircleMode,
-  SketchMoveHandle,
-  SketchRectangleMode,
-  SketchTextDraft
+import {
+  sketchCurveModeFor,
+  type InteractionEvent,
+  type SketchCircleMode,
+  type SketchCurveMode,
+  type SketchMoveHandle,
+  type SketchRectangleMode,
+  type SketchTextDraft,
+  type SketchToolId
 } from '../lib/interaction/machine';
 import {
   compositeSizeLabel,
@@ -404,8 +413,10 @@ export type SketchEntryFrame =
 export interface SketchModeState {
   basis: PlaneBasis;
   frame: SketchEntryFrame | null;
-  tool: 'select' | 'line' | 'arc' | 'circle' | 'rectangle' | 'polygon' | 'text';
+  tool: SketchToolId;
   circleMode: SketchCircleMode;
+  /** The curve slot's type (I01), for the ellipse and spline tools. */
+  curveMode?: SketchCurveMode;
   /** The Rectangle tool's type. */
   rectangleMode: SketchRectangleMode;
   /** The Polygon tool's side count. */
@@ -2141,6 +2152,11 @@ export function ModelViewer({
     arcStart: SketchPoint | null;
     circleFirst: SketchPoint | null;
     circleSecond: SketchPoint | null;
+    /**
+     * The ellipse or spline tool's placed points (I01): an ellipse's centre,
+     * axis end, second radius and arc ends in turn; a spline's points.
+     */
+    curvePoints: SketchPoint[];
     awaitingSecondPoint: boolean;
     pointerId: number | null;
     moved: boolean;
@@ -2153,6 +2169,7 @@ export function ModelViewer({
     arcStart: null,
     circleFirst: null,
     circleSecond: null,
+    curvePoints: [],
     awaitingSecondPoint: false,
     pointerId: null,
     moved: false,
@@ -3201,6 +3218,19 @@ export function ModelViewer({
         } else if (!commitSketchMove()) {
           return;
         }
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (
+        event.key === 'Enter' &&
+        sketchModeRef.current?.tool === 'spline' &&
+        sketchGestureRef.current.curvePoints.length > 0 &&
+        !isTextEntryTarget(event.target)
+      ) {
+        // Enter finishes the spline, open, through the points placed so far,
+        // even with focus still on the curve tile that armed it.
+        finishSketchSpline(false);
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -6438,6 +6468,208 @@ export function ModelViewer({
       return false;
     }
 
+    /** Ends the curve tool's gesture after a commit or a refusal-free reset. */
+    function resetSketchCurve() {
+      sketchGestureRef.current.curvePoints = [];
+      sketchRigRef.current?.setInProgress(null, false);
+      sketchRigRef.current?.setInference(null);
+      hideSketchDimLabel();
+      onSketchDrawingChangeRef.current(false);
+    }
+
+    /**
+     * Commits the spline through the placed points; false (with the reason
+     * on the cursor label) when they cannot make one yet.
+     */
+    function finishSketchSpline(closed: boolean): boolean {
+      const mode = sketchModeRef.current;
+      if (!mode) {
+        return false;
+      }
+      const method =
+        sketchCurveModeFor('spline', mode.curveMode) === 'control-spline'
+          ? 'control'
+          : 'fit';
+      const spline = splineObjectFromPoints(
+        method,
+        sketchGestureRef.current.curvePoints,
+        closed
+      );
+      if (!spline) {
+        if (latestSketchPointerEvent) {
+          positionSketchDimLabel(
+            latestSketchPointerEvent,
+            'A spline needs at least three distinct points',
+            false
+          );
+        }
+        return false;
+      }
+      onSketchCommitRef.current(spline);
+      resetSketchCurve();
+      requestRender();
+      return true;
+    }
+
+    /**
+     * One click of the ellipse or spline tool (I01). An ellipse takes its
+     * centre, an axis end and the other radius, then for an elliptical arc
+     * its start and end. A spline takes points until Enter, a click on its
+     * last point again, or a click on its first point, which closes it.
+     */
+    function placeSketchCurvePoint(event: PointerEvent, point: SketchPoint) {
+      const mode = sketchModeRef.current;
+      if (!mode) {
+        return;
+      }
+      const points = sketchGestureRef.current.curvePoints;
+      const curveMode = sketchCurveModeFor(
+        mode.tool === 'spline' ? 'spline' : 'ellipse',
+        mode.curveMode
+      );
+      if (points.length === 0) {
+        finishSketchNumericEntry();
+        points.push(point);
+        onSketchDrawingChangeRef.current(true);
+        return;
+      }
+      if (mode.tool === 'spline') {
+        const reach = Math.max(
+          0.5,
+          sketchWorldPerPixel(mode.basis.origin) * mode.snapTolerancePx
+        );
+        const action = splineClickAction(points, point, reach);
+        if (action === 'close') {
+          finishSketchSpline(true);
+        } else if (action === 'finish') {
+          finishSketchSpline(false);
+        } else {
+          points.push(point);
+          if (action === 'append-and-finish') {
+            finishSketchSpline(false);
+          }
+        }
+        return;
+      }
+      const [center, axisEnd, radiusPoint, arcStart] = points;
+      if (!axisEnd) {
+        if (Math.hypot(point.x - center!.x, point.y - center!.y) >= 0.5) {
+          points.push(point);
+        }
+        return;
+      }
+      const ellipse = ellipseObjectFromPoints(
+        center!,
+        axisEnd,
+        radiusPoint ?? point
+      );
+      if (!ellipse) {
+        positionSketchDimLabel(
+          event,
+          'Move away from the axis to set the other radius',
+          false
+        );
+        return;
+      }
+      if (!radiusPoint) {
+        if (curveMode === 'ellipse') {
+          onSketchCommitRef.current(ellipse);
+          resetSketchCurve();
+        } else {
+          points.push(point);
+        }
+        return;
+      }
+      if (!arcStart) {
+        points.push(point);
+        return;
+      }
+      const arc = ellipticalArcObject(ellipse, arcStart, point);
+      if (arc) {
+        onSketchCommitRef.current(arc);
+        resetSketchCurve();
+      }
+    }
+
+    /** The in-progress curve under the pointer, with its measure. */
+    function previewSketchCurve(event: PointerEvent, point: SketchPoint) {
+      const mode = sketchModeRef.current;
+      const rig = sketchRigRef.current;
+      if (!mode || !rig) {
+        return;
+      }
+      const points = sketchGestureRef.current.curvePoints;
+      const round = (value: number) => Math.round(value * 1000) / 1000;
+      if (mode.tool === 'spline') {
+        const control =
+          sketchCurveModeFor('spline', mode.curveMode) === 'control-spline';
+        const candidate = [...points, point];
+        const spline = splineObjectFromPoints(
+          control ? 'control' : 'fit',
+          candidate,
+          false
+        );
+        rig.setInProgress(
+          spline ? curvePreviewPoints(spline).points : candidate,
+          false
+        );
+        // A control spline's polygon is the handle it is drawn with.
+        rig.setInference(
+          control
+            ? candidate
+                .slice(1)
+                .map((next, index) => [candidate[index]!, next] as const)
+            : null
+        );
+        positionSketchDimLabel(
+          event,
+          `${candidate.length} points · Enter finishes`,
+          false
+        );
+        return;
+      }
+      const [center, axisEnd, radiusPoint, arcStart] = points;
+      if (!axisEnd) {
+        rig.setInProgress([center!, point], false);
+        positionSketchDimLabel(
+          event,
+          `R ${round(Math.hypot(point.x - center!.x, point.y - center!.y))} ${unitLabelRef.current}`,
+          false
+        );
+        return;
+      }
+      const ellipse = ellipseObjectFromPoints(
+        center!,
+        axisEnd,
+        radiusPoint ?? point
+      );
+      if (!ellipse) {
+        rig.setInProgress([center!, axisEnd], false);
+        return;
+      }
+      if (!radiusPoint || !arcStart) {
+        rig.setInProgress(curvePreviewPoints(ellipse).points, true);
+        rig.setInference(radiusPoint ? [[center!, point]] : null);
+        positionSketchDimLabel(
+          event,
+          radiusPoint
+            ? 'Place the arc start'
+            : `R ${round(Number(ellipse.radiusX))} × ${round(Number(ellipse.radiusY))} ${unitLabelRef.current}`,
+          false
+        );
+        return;
+      }
+      const arc = ellipticalArcObject(ellipse, arcStart, point);
+      if (arc) {
+        rig.setInProgress(curvePreviewPoints(arc).points, false);
+        positionSketchDimLabel(
+          event,
+          `${round(Number(arc.endParamDeg) - Number(arc.startParamDeg))}°`,
+          false
+        );
+      }
+    }
+
     function handleSketchNumericKey(event: KeyboardEvent): boolean {
       const mode = sketchModeRef.current;
       const gesture = sketchGestureRef.current;
@@ -6760,6 +6992,14 @@ export function ModelViewer({
         requestRender();
         return;
       }
+      if (
+        (mode.tool === 'ellipse' || mode.tool === 'spline') &&
+        gesture.curvePoints.length > 0
+      ) {
+        previewSketchCurve(event, point);
+        requestRender();
+        return;
+      }
       if (mode.tool === 'text') {
         // The outline follows the pointer: a pure slide in the plane, laid
         // out again only when the draft changes.
@@ -6864,7 +7104,7 @@ export function ModelViewer({
           handle = 'rotate';
           grab = press;
         }
-      } else if (data.objectKind === 'line' || data.objectKind === 'arc') {
+      } else if (sketchObjectGrabbedAlongCurve(data)) {
         setRayFromEvent(event);
         const hitId = sketchRigRef.current?.pickObject(
           context.raycaster,
@@ -7751,6 +7991,8 @@ export function ModelViewer({
           point &&
           (mode.tool === 'line' ||
             mode.tool === 'arc' ||
+            mode.tool === 'ellipse' ||
+            mode.tool === 'spline' ||
             (mode.tool === 'circle' && mode.circleMode === 'three-point') ||
             (mode.tool === 'rectangle' && mode.rectangleMode === 'three-point'))
         ) {
@@ -8335,6 +8577,15 @@ export function ModelViewer({
             }
           }
           requestRender();
+        }
+        if (
+          (mode.tool === 'ellipse' || mode.tool === 'spline') &&
+          point &&
+          !moved
+        ) {
+          placeSketchCurvePoint(event, point);
+          requestRender();
+          return;
         }
         if (mode.tool === 'arc' && point && !moved) {
           if (!gesture.arcCenter) {
@@ -11276,6 +11527,7 @@ export function ModelViewer({
       arcStart: null,
       circleFirst: null,
       circleSecond: null,
+      curvePoints: [],
       awaitingSecondPoint: false,
       pointerId: null,
       moved: false,
@@ -11660,6 +11912,7 @@ export function ModelViewer({
       gesture.arcStart = null;
       gesture.circleFirst = null;
       gesture.circleSecond = null;
+      gesture.curvePoints = [];
       gesture.awaitingSecondPoint = false;
       sketchRigRef.current?.setInProgress(null, false);
       sketchRigRef.current?.setInference(null);

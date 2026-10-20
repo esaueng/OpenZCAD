@@ -88,6 +88,7 @@ import {
   type FaceTopologyReferenceV5,
   type ImportedSourceReference,
   type OpposingPlanarFacePair,
+  type ParamValue,
   type ProjectDocument,
   type SketchId,
   type Vector3
@@ -101,6 +102,7 @@ import type {
 } from './exact-types';
 export type { DxfFaceSelector } from './exact-types';
 import { diagnoseImportedSolid } from './exact-lineage-builders';
+import { releasePreparedFaceMove } from './exact-prepared-face-move';
 import {
   blendRegionKeyOfHashes,
   measureOwnedFaceGeometry,
@@ -1238,6 +1240,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       terminal.data.operation.kind === 'offset-face'
         ? terminal.featureId
         : undefined;
+    // Only a drag preview keeps a prepared face move; any other sync ends it.
+    if (!deferredDirectEditFeatureId && this.historyKernel) {
+      releasePreparedFaceMove(this.historyKernel);
+    }
 
     // The first feature whose failure would describe this device's moment
     // rather than the document. Nothing at or after it is checkpointed, so
@@ -3547,7 +3553,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         continue;
       }
       const data = node.data;
-      // Rectangles, polygons, and text are not solvable geometry in v1;
+      // Rectangles, polygons, and text are not solvable geometry;
       // document validation refuses constraints that reference them, so
       // skipping them here cannot orphan a constraint.
       if (data.objectKind === 'line') {
@@ -3616,6 +3622,28 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             'endAngleDeg',
             document.units
           )
+        });
+      } else if (data.objectKind === 'ellipse') {
+        const value = (field: ParamValue, label: string) =>
+          resolveParamValue(field, scope, label, document.units);
+        objects.push({
+          objectId,
+          kind: 'ellipse',
+          centerX: value(data.centerX, 'centerX'),
+          centerY: value(data.centerY, 'centerY'),
+          radiusX: value(data.radiusX, 'radiusX'),
+          radiusY: value(data.radiusY, 'radiusY'),
+          rotationDeg: value(data.rotationDeg, 'rotationDeg')
+        });
+      } else if (data.objectKind === 'spline') {
+        objects.push({
+          objectId,
+          kind: 'spline',
+          points: data.points.map((point) => ({
+            x: resolveParamValue(point.x, scope, 'spline x', document.units),
+            y: resolveParamValue(point.y, scope, 'spline y', document.units)
+          })),
+          closed: data.closed === true
         });
       }
     }

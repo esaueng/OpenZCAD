@@ -1727,3 +1727,16 @@
 .tool-card:has(.extrude-form) .tool-card-copy {
   white-space: normal;
 }
+
+/* Offset's strip holds its corner joins as one radio group beside the Chain
+   toggle; the group itself lays out as tiles of the strip. */
+.sketch-offset-joins {
+  display: contents;
+}
+
+/* The entity's construction toggle reads as on while it is construction. */
+.sketch-entity-construction[aria-pressed='true'] {
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+}

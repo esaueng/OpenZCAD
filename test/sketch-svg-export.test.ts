@@ -190,6 +190,57 @@ describe('writeSketchSvg', () => {
     });
   });
 
+  it('writes an ellipse as exact half-turn arc commands with its exact extent', () => {
+    // I01: a 20 × 10 ellipse, its major axis turned 45°. Each axis reaches
+    // √(a²cos²θ + b²sin²θ) = √250 from the centre.
+    const reach = Math.sqrt(250);
+    const svg = writeSketchSvg(
+      [
+        {
+          kind: 'ellipse',
+          center: [0, 0],
+          majorAxis: [20 * Math.SQRT1_2, 20 * Math.SQRT1_2],
+          ratio: 0.5,
+          startParam: 0,
+          endParam: 2 * Math.PI
+        }
+      ],
+      { units: 'mm' }
+    );
+    const [path] = drawn(svg);
+    const d = path!.attrs.d!;
+    // Two arcs of rx 20, ry 10, tilted −45° once v is negated.
+    expect(d.match(/A20 10 -45 0 0 /g)).toHaveLength(2);
+    const [x, y, width, height] = viewBox(svg);
+    expect(x).toBeCloseTo(-reach - 0.125, 9);
+    expect(y).toBeCloseTo(-reach - 0.125, 9);
+    expect(width).toBeCloseTo(2 * reach + 0.25, 9);
+    expect(height).toBeCloseTo(2 * reach + 0.25, 9);
+  });
+
+  it('writes a spline as exact Bézier commands with its exact extent', () => {
+    // One cubic span: its top is at t = ½, y = 7.5, below its controls' 10.
+    const svg = writeSketchSvg(
+      [
+        {
+          kind: 'spline',
+          degree: 3,
+          knots: [0, 0, 0, 0, 1, 1, 1, 1],
+          controls: [
+            [0, 0],
+            [0, 10],
+            [10, 10],
+            [10, 0]
+          ]
+        }
+      ],
+      { units: 'mm' }
+    );
+    const [path] = drawn(svg);
+    expect(path!.attrs.d).toBe('M0 0 C0 -10 10 -10 10 0');
+    expect(viewBox(svg)).toEqual([-0.125, -7.625, 10.25, 7.75]);
+  });
+
   it('escapes the title and refuses an empty drawing', () => {
     const svg = writeSketchSvg([{ kind: 'line', start: [0, 0], end: [1, 0] }], {
       units: 'mm',
@@ -279,6 +330,37 @@ describe('exportSketchSvg', { timeout: 120_000 }, () => {
       'line'
     ]);
     expect(elements(svg).some((e) => e.name === 'rect')).toBe(true);
+  });
+
+  it('draws a saved elliptical arc and spline exactly', async () => {
+    const { document, sketchId } = sketchDocument([
+      {
+        objectKind: 'ellipse',
+        centerX: 0,
+        centerY: 0,
+        radiusX: 10,
+        radiusY: 20,
+        rotationDeg: 0,
+        startParamDeg: 0,
+        endParamDeg: 180
+      },
+      {
+        objectKind: 'spline',
+        method: 'fit',
+        points: [
+          { x: -10, y: 0 },
+          { x: 0, y: -8 },
+          { x: 10, y: 0 }
+        ]
+      }
+    ]);
+    const svg = await adapter.exportSketchSvg(document, sketchId);
+    const [arc, curve] = drawn(svg);
+    // Taller than wide: stated on its 20 major axis, standing at −90°.
+    expect(arc!.attrs.d).toMatch(/^M10 0 A20 10 -90 0 0 -10 0$/);
+    // Three fit points interpolate as one quadratic span: a single exact Q
+    // command through the end point, never sampled L segments.
+    expect(curve!.attrs.d).toMatch(/^M-10 0 Q-?[\d.]+ -?[\d.]+ 10 0$/);
   });
 
   it('refuses the sketches the DXF export refuses, by the same names', async () => {
