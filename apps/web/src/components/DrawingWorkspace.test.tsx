@@ -654,6 +654,58 @@ describe('DrawingWorkspace', () => {
     }
   });
 
+  it('fingerprints each body set once across sheets and drawing edits', () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const sheets = Array.from({ length: 5 }, (_, index) => ({
+      ...starter(fingerprint),
+      name: `Sheet ${index + 1}`
+    }));
+    const base = createProjectDocument('Bracket', toUserId('test'));
+    const document = (entries: DrawingSheet[]): ProjectDocument => ({
+      ...base,
+      bodyOrder: [bodyId],
+      drawings: { sheets: entries }
+    });
+    const props = {
+      bodies: { [bodyId]: cube() },
+      geometryPending: false,
+      defaultBodyIds: [bodyId],
+      editDisabledReason: null,
+      onCommand: vi.fn(() => true),
+      onStatus: vi.fn()
+    };
+    const counted = vi.mocked(drawingSourceFingerprint);
+    counted.mockClear();
+    const { rerender } = render(
+      <DrawingWorkspace document={document(sheets)} {...props} />
+    );
+    // Five sheets of one body: one fingerprint.
+    expect(counted).toHaveBeenCalledTimes(1);
+    // A drawing edit (a rename) replaces every sheet object: still none new.
+    rerender(
+      <DrawingWorkspace
+        document={document(
+          sheets.map((entry, index) =>
+            index === 0 ? { ...entry, name: 'Renamed' } : { ...entry }
+          )
+        )}
+        {...props}
+      />
+    );
+    expect(counted).toHaveBeenCalledTimes(1);
+    // New bodies (a model edit) fingerprint again.
+    rerender(
+      <DrawingWorkspace
+        document={document(sheets)}
+        {...props}
+        bodies={{ [bodyId]: cube() }}
+      />
+    );
+    expect(counted).toHaveBeenCalledTimes(2);
+  });
+
   it('names a body the sheet draws that is gone', () => {
     const sheet = starter('v1:0000000000000000');
     sheet.views[0]!.bodyIds = ['body_gone' as BodyId];

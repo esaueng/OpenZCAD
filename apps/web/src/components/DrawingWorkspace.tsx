@@ -425,18 +425,29 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // Each sheet under its own bodies' fingerprint: sheets drawing different
   // bodies keep their projections apart, and switching between them reuses
   // them.
-  const fingerprints = useMemo(
-    () =>
-      new Map(
-        sheets.map((entry) => [
-          entry.sheetId,
-          props.geometryPending
-            ? null
-            : drawingSourceFingerprint(bodies, sheetBodyIds(entry))
-        ])
-      ),
-    [sheets, bodies, props.geometryPending]
-  );
+  // A drawing edit replaces every sheet but changes no body, so the
+  // fingerprints are kept per body set for as long as the bodies are the
+  // same objects: fifty sheets of one body sort its hashes once, and a sheet
+  // rename sorts nothing.
+  const fingerprintCache = useRef<{
+    bodies: DrawingWorkspaceProps['bodies'];
+    byBodySet: Map<string, string | null>;
+  }>({ bodies, byBodySet: new Map() });
+  const fingerprints = useMemo(() => {
+    if (fingerprintCache.current.bodies !== bodies)
+      fingerprintCache.current = { bodies, byBodySet: new Map() };
+    const { byBodySet } = fingerprintCache.current;
+    return new Map(
+      sheets.map((entry) => {
+        if (props.geometryPending) return [entry.sheetId, null];
+        const ids = sheetBodyIds(entry);
+        const key = [...ids].sort().join(',');
+        if (!byBodySet.has(key))
+          byBodySet.set(key, drawingSourceFingerprint(bodies, ids));
+        return [entry.sheetId, byBodySet.get(key)!];
+      })
+    );
+  }, [sheets, bodies, props.geometryPending]);
   const wanted = useMemo(() => {
     const keys = new Set<string>();
     for (const entry of sheets) {
