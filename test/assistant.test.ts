@@ -1319,7 +1319,7 @@ describe('assistant integration', () => {
     const body = JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string) as {
       messages: Array<{ content: string }>;
     };
-    expect(body.messages[0].content).toContain(
+    expect(body.messages[0]?.content).toContain(
       JSON.stringify(assistantReplySchemaFor({}))
     );
   });
