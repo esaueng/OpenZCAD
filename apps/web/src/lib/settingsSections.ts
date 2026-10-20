@@ -65,8 +65,13 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     label: 'Viewport',
     detail: 'How new views look',
     group: 'Workspace',
-    settings: ['Projection', 'Display mode', 'Show construction grid'],
-    searchTerms: ['wireframe', 'perspective', 'orthographic']
+    settings: [
+      'Projection',
+      'Display mode',
+      'Show construction grid',
+      'Current view'
+    ],
+    searchTerms: ['wireframe', 'perspective', 'orthographic', 'apply defaults']
   },
   {
     id: 'controls',
@@ -127,7 +132,6 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     settings: [
       'Cloud features',
       'Membership',
-      'Cloud profile',
       'Personal information',
       'Preference synchronization',
       'Project sharing',
@@ -147,7 +151,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'password',
       'sync preferences',
       'collaboration',
-      'storage usage'
+      'storage usage',
+      'cloud profile',
+      'email sign-in'
     ]
   },
   {
@@ -158,15 +164,23 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     settings: [
       'AI assistant',
       'Credential source',
+      'Built-in assistant',
       'Provider',
       'API endpoint',
       'Model',
       'Reasoning level',
+      'Personal API token',
+      'Connection',
       'Output budget',
-      'Request timeout',
-      'Personal API token'
+      'Request timeout'
     ],
-    searchTerms: ['api key', 'CAD assistant preferences', 'custom instructions']
+    searchTerms: [
+      'api key',
+      'deployment',
+      'test connection',
+      'CAD assistant preferences',
+      'custom instructions'
+    ]
   },
   {
     id: 'privacy',
@@ -174,17 +188,19 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     detail: 'Analytics and data deletion',
     group: 'Cloud and data',
     settings: [
-      'Optional usage analytics',
+      'Usage analytics',
+      'Diagnostic report',
       'Cloud account statistics',
       'Local project data',
+      'Cloud data',
       'Delete all cloud projects',
       'Delete cloud profile',
-      'Delete all cloud data',
-      'Cloud data'
+      'Delete all cloud data'
     ],
     searchTerms: [
       'delete account',
       'erase account',
+      'optional usage analytics',
       'delete projects',
       'erase cloud',
       'remove profile',

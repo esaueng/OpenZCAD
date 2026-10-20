@@ -1277,11 +1277,16 @@ test('publishes editor checkpoints through the room without an account revision 
       const input = route.request().postDataJSON() as {
         document: ProjectDocument;
         checkpointReason: string;
+        savedRevisionId?: string;
       };
-      const saved = createCheckpoint(
-        appendRevision(input.document, input.checkpointReason),
-        input.checkpointReason
-      );
+      // The browser mints the save point and the room stores it as sent
+      // (ADR-024 Phase 1); only a pre-Phase 1 client leaves it to the room.
+      const saved = input.savedRevisionId
+        ? input.document
+        : createCheckpoint(
+            appendRevision(input.document, input.checkpointReason),
+            input.checkpointReason
+          );
       await page.evaluate((saved) => {
         (
           window as unknown as { __checkpointDocuments: ProjectDocument[] }
@@ -2024,9 +2029,7 @@ test('signs in with an email code only when cloud profile access is requested', 
   const signOut = page.getByRole('button', { name: 'Sign out' });
   await expect(signOut).toBeVisible();
   await expect(
-    page
-      .locator('.setting-row', { has: signOut })
-      .locator('.setting-title strong')
+    page.locator('.setting-row', { has: signOut }).locator('.setting-title')
   ).toHaveText('Name hidden');
   await expect(page.locator('.settings-save-message')).not.toContainText(
     'maker@example.com'
@@ -2078,7 +2081,7 @@ test('explains beta auth and Turnstile readiness failures', async ({
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   await expect(
     page.getByRole('alert').filter({
-      hasText: 'Beta sign-in configuration could not be reached'
+      hasText: 'Sign-in could not be reached'
     })
   ).toBeVisible();
   await expect(page.getByLabel('Email address')).toHaveCount(0);

@@ -7,10 +7,10 @@ import type {
 import { expect, stubApi, test } from './openzcad-fixtures';
 
 /**
- * S05 Trim, Mirror and the linear and circular patterns through the real
- * rail fold, canvas picks and keypad. Each flow is one undoable transaction;
+ * S05 Trim, Mirror, the linear and circular patterns, Offset and the
+ * construction toggle through the real rail fold, canvas picks and keypad. Each flow is one undoable transaction;
  * the exported document proves what it wrote. Geometry and constraint
- * oracles live in apps/web/src/lib/sketch/modify.test.ts and
+ * oracles live in apps/web/src/lib/sketch/modify.test.ts, offset.test.ts and
  * test/sketch-modify-tools.test.ts; this proves the wiring.
  */
 
@@ -71,6 +71,17 @@ async function drawCircle(page: Page, center: Point, radiusPx: number) {
   await page.mouse.down();
   await page.mouse.move(center.x + radiusPx, center.y, { steps: 6 });
   await page.mouse.up();
+}
+
+/** A rectangle from the Rectangle tool: four held lines, `a` to `b`. */
+async function drawRectangle(page: Page, a: Point, b: Point) {
+  await page
+    .getByRole('toolbar', { name: 'Sketch tools' })
+    .getByRole('button', { name: 'Rectangle', exact: true })
+    .click();
+  await page.mouse.click(a.x, a.y);
+  await page.mouse.move(b.x, b.y, { steps: 4 });
+  await page.mouse.click(b.x, b.y);
 }
 
 /** Arm one of the modify tools folded into the rail's "More" slot. */
@@ -312,4 +323,148 @@ test('Circular pattern turns an entity about a picked circle’s centre', async 
     'Sketch 01 finished.'
   );
   await expect(page.getByText('closed profile selected')).toHaveCount(0);
+});
+
+type LineData = Extract<SketchObjectData, { objectKind: 'line' }>;
+
+function lineBounds(objects: { data: SketchObjectData }[]) {
+  const lines = objects
+    .map((object) => object.data)
+    .filter((data): data is LineData => data.objectKind === 'line');
+  const xs = lines.flatMap((line) => [Number(line.x1), Number(line.x2)]);
+  const ys = lines.flatMap((line) => [Number(line.y1), Number(line.y2)]);
+  return {
+    width: Math.max(...xs) - Math.min(...xs),
+    height: Math.max(...ys) - Math.min(...ys)
+  };
+}
+
+async function offsetBy(page: Page, at: Point, distance: string) {
+  await page.mouse.click(at.x, at.y);
+  const field = page.getByRole('textbox', { name: 'Offset distance' });
+  await expect(field).toBeVisible();
+  await field.fill(distance);
+  await field.press('Enter');
+}
+
+test('Offset follows a rectangle, mitered then round, one undo step each', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const at = await startSketch(page, 'Offset');
+  const a = at(0.35, 0.4);
+  const b = at(0.55, 0.65);
+  await drawRectangle(page, a, b);
+  const status = page.getByRole('contentinfo');
+  const side = { x: (a.x + b.x) / 2, y: b.y };
+  const source = await exportSketch(page);
+  expect(kindsOf(source.objects)).toEqual(['line', 'line', 'line', 'line']);
+  const size = lineBounds(source.objects);
+
+  // Miter is the default: a sharp rectangle 1 out on every side.
+  await modifyTool(page, 'Offset');
+  const strip = page.getByRole('group', { name: 'Offset options' });
+  await expect(strip.getByRole('radio', { name: 'Miter' })).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  await expect(strip.getByRole('button', { name: 'Chain' })).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  await offsetBy(page, side, '1');
+  await expect(status).toContainText('Offset added 4 curves at 1.');
+  const mitered = await exportSketch(page);
+  const miterLines = mitered.objects.slice(4);
+  expect(kindsOf(miterLines)).toEqual(['line', 'line', 'line', 'line']);
+  const grown = lineBounds(miterLines);
+  expect(grown.width).toBeCloseTo(size.width + 2, 6);
+  expect(grown.height).toBeCloseTo(size.height + 2, 6);
+
+  // Round: radius-2 arcs about the source corners, chosen on the strip.
+  await modifyTool(page, 'Offset');
+  await strip.getByRole('radio', { name: 'Round' }).click();
+  await offsetBy(page, side, '2');
+  await expect(status).toContainText('Offset added 8 curves at 2.');
+  const rounded = await exportSketch(page);
+  const arcs = rounded.objects
+    .slice(8)
+    .map((object) => object.data)
+    .filter((data) => data.objectKind === 'arc');
+  expect(arcs).toHaveLength(4);
+  for (const arc of arcs) {
+    expect(arc.objectKind === 'arc' && Number(arc.radius)).toBeCloseTo(2, 9);
+  }
+
+  await undo(page);
+  await expect
+    .poll(async () => (await exportSketch(page)).objects.length)
+    .toBe(8);
+});
+
+test('Offset grows a circle, and refuses one that would vanish', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const at = await startSketch(page, 'Offset circle');
+  const center = at(0.45, 0.5);
+  await drawCircle(page, center, 40);
+  const status = page.getByRole('contentinfo');
+  const [circle] = (await exportSketch(page)).objects;
+  const radius = Number(
+    circle!.data.objectKind === 'circle' ? circle!.data.radius : NaN
+  );
+
+  await modifyTool(page, 'Offset');
+  await offsetBy(page, { x: center.x + 40, y: center.y }, `-${radius}`);
+  await expect(status).toContainText('would have no radius left');
+  expect((await exportSketch(page)).objects).toHaveLength(1);
+
+  await modifyTool(page, 'Offset');
+  await offsetBy(page, { x: center.x + 40, y: center.y }, '-1');
+  await expect(status).toContainText('Offset added a circle of radius');
+  const { objects, constraints } = await exportSketch(page);
+  expect(kindsOf(objects)).toEqual(['circle', 'circle']);
+  const copy = objects[1]!.data;
+  expect(copy.objectKind === 'circle' && Number(copy.radius)).toBeCloseTo(
+    radius - 1,
+    6
+  );
+  expect(constraintKinds(constraints)).toEqual(['concentric']);
+});
+
+test('Construction on one side of a rectangle removes its profile; undo restores it', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const at = await startSketch(page, 'Construction');
+  const a = at(0.35, 0.4);
+  const b = at(0.55, 0.65);
+  await drawRectangle(page, a, b);
+  const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
+  const extrude = rail.getByRole('button', { name: 'Extrude' });
+  await expect(extrude).toBeEnabled();
+
+  await rail.getByRole('button', { name: /^Select/ }).click();
+  await page.mouse.click((a.x + b.x) / 2, b.y);
+  const editor = page.getByRole('form', { name: 'Edit line', exact: true });
+  const toggle = editor.getByRole('button', { name: 'Construction' });
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await toggle.click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'The line is construction geometry now'
+  );
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(extrude).toBeDisabled();
+  const marked = await exportSketch(page);
+  expect(
+    marked.objects.filter((object) => object.data.construction === true)
+  ).toHaveLength(1);
+
+  await undo(page);
+  await expect(extrude).toBeEnabled();
+  const restored = await exportSketch(page);
+  expect(
+    restored.objects.filter((object) => object.data.construction === true)
+  ).toHaveLength(0);
 });

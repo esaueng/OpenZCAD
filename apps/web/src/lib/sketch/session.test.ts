@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { SketchObjectData } from '@openzcad/shared';
+import {
+  MAX_SKETCH_SPLINE_POINTS,
+  type SketchObjectData
+} from '@openzcad/shared';
 import {
   PLANE_BASES,
   frameForPlaneRef,
@@ -51,7 +54,14 @@ import {
   sketchMoveChanged,
   rotateTextObject,
   textRotationFromRingDrag,
-  translateSketchObject
+  translateSketchObject,
+  curvePreviewPoints,
+  ellipseObjectFromPoints,
+  ellipseParamDegAt,
+  ellipticalArcObject,
+  splineClickAction,
+  splineObjectFromPoints,
+  sketchObjectGrabbedAlongCurve
 } from './session';
 
 describe('snapSketchPoint / sketchObjectFromDrag', () => {
@@ -1155,5 +1165,283 @@ describe('a full-turn rotation dragged back to its start', () => {
     expect(sameRotation(-360, 0)).toBe(true);
     expect(sameRotation(359.5, 0)).toBe(false);
     expect(sketchMoveChanged(text(360), text(10), resolve)).toBe(true);
+  });
+});
+
+describe('I01 curve construction', () => {
+  it('builds an ellipse from its centre, an axis end and the other radius', () => {
+    const ellipse = ellipseObjectFromPoints(
+      { x: 1, y: 2 },
+      { x: 1 + 10 * Math.cos(Math.PI / 6), y: 2 + 10 * Math.sin(Math.PI / 6) },
+      // 4 units off the axis, wherever along it.
+      {
+        x: 1 + 3 * Math.cos(Math.PI / 6) - 4 * Math.sin(Math.PI / 6),
+        y: 2 + 3 * Math.sin(Math.PI / 6) + 4 * Math.cos(Math.PI / 6)
+      }
+    )!;
+    expect(ellipse.centerX).toBe(1);
+    expect(Number(ellipse.radiusX)).toBeCloseTo(10, 9);
+    expect(Number(ellipse.radiusY)).toBeCloseTo(4, 9);
+    expect(Number(ellipse.rotationDeg)).toBeCloseTo(30, 9);
+    // A third point on the axis has no second radius.
+    expect(
+      ellipseObjectFromPoints({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 4, y: 0 })
+    ).toBeNull();
+  });
+
+  it('turns two clicks into an elliptical arc counter-clockwise between them', () => {
+    const ellipse = ellipseObjectFromPoints(
+      { x: 0, y: 0 },
+      { x: 20, y: 0 },
+      { x: 0, y: 10 }
+    )!;
+    // Clicks on the rays to (0, 5) and (−5, 0): parameters 90° and 180°.
+    expect(ellipseParamDegAt(ellipse, { x: 0, y: 5 })).toBeCloseTo(90, 9);
+    const arc = ellipticalArcObject(ellipse, { x: 0, y: 5 }, { x: -5, y: 0 })!;
+    expect(Number(arc.startParamDeg)).toBeCloseTo(90, 9);
+    expect(Number(arc.endParamDeg)).toBeCloseTo(180, 9);
+    // The other way round is the long way: 270° of sweep.
+    const long = ellipticalArcObject(ellipse, { x: -5, y: 0 }, { x: 0, y: 5 })!;
+    expect(Number(long.endParamDeg) - Number(long.startParamDeg)).toBeCloseTo(
+      270,
+      9
+    );
+    expect(
+      ellipticalArcObject(ellipse, { x: 3, y: 0 }, { x: 4, y: 0 })
+    ).toBeNull();
+  });
+
+  it('makes splines only from points that define one', () => {
+    const points = [
+      { x: 0, y: 0 },
+      { x: 10, y: 8 },
+      { x: 20, y: 0 }
+    ];
+    expect(splineObjectFromPoints('fit', points, false)).toEqual({
+      objectKind: 'spline',
+      method: 'fit',
+      points
+    });
+    expect(splineObjectFromPoints('control', points, true)).toMatchObject({
+      method: 'control',
+      degree: 3,
+      closed: true
+    });
+    expect(splineObjectFromPoints('fit', points.slice(0, 2), false)).toBeNull();
+    expect(
+      splineObjectFromPoints('fit', [points[0]!, points[0]!, points[1]!], false)
+    ).toBeNull();
+    const preview = curvePreviewPoints(
+      splineObjectFromPoints('fit', points, false)!
+    );
+    expect(preview.closed).toBe(false);
+    expect(preview.points[0]).toEqual({ x: 0, y: 0 });
+    expect(preview.points.at(-1)).toEqual({ x: 20, y: 0 });
+  });
+
+  it('offers an ellipse centre and open spline ends as solver points', () => {
+    const resolve = (value: unknown) => Number(value);
+    const ellipse = snapTargetsForObject(
+      {
+        objectKind: 'ellipse',
+        centerX: 0,
+        centerY: 0,
+        radiusX: 10,
+        radiusY: 4,
+        rotationDeg: 90
+      },
+      resolve,
+      'e1'
+    );
+    expect(ellipse[0]).toMatchObject({ kind: 'center', pointRef: 'center' });
+    expect(ellipse.filter((target) => target.kind === 'quadrant')).toHaveLength(
+      4
+    );
+    const quadrant = ellipse[1]!;
+    expect(quadrant.x).toBeCloseTo(0, 9);
+    expect(quadrant.y).toBeCloseTo(10, 9);
+
+    const control = snapTargetsForObject(
+      {
+        objectKind: 'spline',
+        method: 'control',
+        points: [
+          { x: 0, y: 0 },
+          { x: 5, y: 9 },
+          { x: 10, y: 0 }
+        ]
+      },
+      resolve,
+      's1'
+    );
+    // The interior control point is off the curve: no snap there.
+    expect(control.map((target) => target.pointRef)).toEqual(['start', 'end']);
+    const closedFit = snapTargetsForObject(
+      {
+        objectKind: 'spline',
+        method: 'fit',
+        closed: true,
+        points: [
+          { x: 0, y: 0 },
+          { x: 5, y: 9 },
+          { x: 10, y: 0 }
+        ]
+      },
+      resolve,
+      's2'
+    );
+    expect(closedFit).toHaveLength(3);
+    expect(closedFit.every((target) => target.pointRef === undefined)).toBe(
+      true
+    );
+  });
+
+  it('moves a spline by every point and an ellipse by its centre', () => {
+    const resolve = (value: unknown) => Number(value);
+    const spline: SketchObjectData = {
+      objectKind: 'spline',
+      method: 'fit',
+      points: [
+        { x: 0, y: 0 },
+        { x: 5, y: 9 },
+        { x: 10, y: 0 }
+      ]
+    };
+    expect(sketchObjectMovable(spline)).toBe(true);
+    expect(
+      sketchObjectMovable({
+        ...spline,
+        points: [{ x: 'width', y: 0 }, ...spline.points.slice(1)]
+      })
+    ).toBe(false);
+    expect(translateSketchObject(spline, 2, -1, resolve)).toMatchObject({
+      points: [
+        { x: 2, y: -1 },
+        { x: 7, y: 8 },
+        { x: 12, y: -1 }
+      ]
+    });
+    const ellipse: SketchObjectData = {
+      objectKind: 'ellipse',
+      centerX: 1,
+      centerY: 1,
+      radiusX: 10,
+      radiusY: 4,
+      rotationDeg: 0
+    };
+    expect(sketchObjectGrabPoint(ellipse, resolve)).toEqual({ x: 1, y: 1 });
+    expect(
+      sketchObjectGrabPoint(
+        { ...ellipse, startParamDeg: 0, endParamDeg: 90 },
+        resolve
+      )
+    ).toBeNull();
+    expect(placeSketchObjectGrabPoint(ellipse, { x: 4, y: 5 })).toMatchObject({
+      centerX: 4,
+      centerY: 5
+    });
+  });
+});
+
+describe('I01 curves under the drag', () => {
+  const resolve = (value: unknown) => Number(value);
+  const spline: SketchObjectData = {
+    objectKind: 'spline',
+    method: 'fit',
+    points: [
+      { x: 0, y: 0 },
+      { x: 5, y: 9 },
+      { x: 10, y: 0 }
+    ]
+  };
+
+  it('grabs elliptical arcs and splines along the curve, full ellipses by the centre', () => {
+    const ellipse: SketchObjectData = {
+      objectKind: 'ellipse',
+      centerX: 0,
+      centerY: 0,
+      radiusX: 10,
+      radiusY: 4,
+      rotationDeg: 0
+    };
+    expect(sketchObjectGrabbedAlongCurve(spline)).toBe(true);
+    expect(
+      sketchObjectGrabbedAlongCurve({
+        ...ellipse,
+        startParamDeg: 0,
+        endParamDeg: 90
+      })
+    ).toBe(true);
+    expect(sketchObjectGrabbedAlongCurve(ellipse)).toBe(false);
+    expect(sketchObjectGrabPoint(ellipse, resolve)).toEqual({ x: 0, y: 0 });
+    expect(
+      sketchObjectGrabbedAlongCurve({
+        objectKind: 'circle',
+        centerX: 0,
+        centerY: 0,
+        radius: 1
+      })
+    ).toBe(false);
+  });
+
+  it('rebases a spline drag point by point and never writes centre fields', () => {
+    const moved = translateSketchObject(spline, 3, -2, resolve);
+    expect(sketchMoveChanged(spline, moved, resolve)).toBe(true);
+    // A concurrent edit moved the middle point; the drag still applies.
+    const current: SketchObjectData = {
+      ...spline,
+      points: [
+        { x: 0, y: 0 },
+        { x: 6, y: 10 },
+        { x: 10, y: 0 }
+      ]
+    };
+    const rebased = rebaseSketchMove(spline, moved, current, resolve);
+    expect(rebased).toEqual({
+      ...spline,
+      points: [
+        { x: 3, y: -2 },
+        { x: 9, y: 8 },
+        { x: 13, y: -2 }
+      ]
+    });
+    expect(rebased).not.toHaveProperty('centerX');
+    expect(
+      rebaseSketchMove(
+        spline,
+        moved,
+        { ...spline, points: spline.points.slice(0, 2) },
+        resolve
+      )
+    ).toBeNull();
+  });
+});
+
+describe('the Spline tool’s clicks', () => {
+  const at = (x: number, y: number) => ({ x, y });
+  it('closes on the first point, finishes on the last, and adds otherwise', () => {
+    const placed = [at(0, 0), at(10, 5), at(20, 0)];
+    expect(splineClickAction(placed, at(0.1, 0), 0.5)).toBe('close');
+    expect(splineClickAction(placed, at(20, 0.2), 0.5)).toBe('finish');
+    expect(splineClickAction(placed, at(30, 4), 0.5)).toBe('append');
+    // Two points down: a click back on the first is not a close yet.
+    expect(splineClickAction(placed.slice(0, 2), at(0, 0), 0.5)).toBe('append');
+  });
+
+  it('finishes on the last point a spline may hold (review case)', () => {
+    const placed = Array.from(
+      { length: MAX_SKETCH_SPLINE_POINTS - 1 },
+      (_, i) => at(i * 2, i % 2)
+    );
+    expect(splineClickAction(placed, at(500, 0), 0.5)).toBe(
+      'append-and-finish'
+    );
+    expect(
+      splineObjectFromPoints('fit', [...placed, at(500, 0)], false)
+    ).not.toBeNull();
+    // One more would be refused, which is why the tool never collects it.
+    expect(
+      splineObjectFromPoints('fit', [...placed, at(500, 0), at(502, 1)], false)
+    ).toBeNull();
   });
 });

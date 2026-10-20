@@ -1,12 +1,16 @@
 import { cloudFunctionsAreEnabled, cloudRequestSignal } from '../lib/cloudMode';
 import { isDesktopApp } from '../lib/desktopBridge';
 import { useEffect, useState } from 'react';
+import { SettingRow, Status, Toggle } from './settingsControls';
 import {
   hasAnalyticsConsent,
   setAnalyticsEnabled,
   downloadDiagnosticReport
 } from '../lib/analytics';
+// One row per title whichever app renders it: the desktop app explains the
+// web-only choice in the same row rather than a second "Usage analytics".
 export function AnalyticsConsent() {
+  const desktop = isDesktopApp();
   const [enabled, setEnabled] = useState(hasAnalyticsConsent);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -15,45 +19,79 @@ export function AnalyticsConsent() {
     return () => window.removeEventListener('glimpse-consent-changed', update);
   }, []);
   return (
-    <div className="settings-analytics-consent">
-      <label>
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(event) => {
-            const saved = setAnalyticsEnabled(event.currentTarget.checked);
-            setEnabled(hasAnalyticsConsent());
-            setError(
-              saved
-                ? ''
-                : 'Could not save this choice. Analytics are off in this page; clear this site’s stored data if withdrawal cannot be saved.'
-            );
-          }}
-        />{' '}
-        Optional usage analytics
-      </label>
-      <p>
-        <button
-          type="button"
-          className="secondary"
-          disabled={!enabled}
-          onClick={downloadDiagnosticReport}
+    <>
+      <SettingRow
+        title="Usage analytics"
+        hint={
+          desktop ? (
+            'Available in the web browser. This desktop app does not send usage events.'
+          ) : error ? (
+            <span role="status">{error}</span>
+          ) : (
+            'Anonymous feature counts. Never geometry, names, or identity.'
+          )
+        }
+        // The disclosure is the approved consent text word for word: a
+        // shortened copy dropped that local operations need opt-in.
+        details={
+          desktop
+            ? undefined
+            : {
+                summary: 'What’s collected',
+                body: 'Allow Glimpse to count feature categories, workflow steps, exports, diagnostic codes, part-count and project-file-size ranges, transfer-size ranges, and coarse timings. This expanded scope requires a fresh choice. No model contents, geometry, filenames, project names or identity. Off by default. DNT/GPC and turning off cloud features suppress sending while preserving this choice; withdraw here to stop sending immediately. Existing anonymous totals cannot be attributed or removed. Basic server counters measure API activity and reliability. Local operations require opt-in. This browser-only choice is separate for each app.'
+              }
+        }
+      >
+        {desktop ? (
+          <Status>Web only</Status>
+        ) : (
+          <Toggle
+            checked={enabled}
+            label="Optional usage analytics"
+            onChange={(checked) => {
+              const saved = setAnalyticsEnabled(checked);
+              setEnabled(hasAnalyticsConsent());
+              setError(
+                saved
+                  ? ''
+                  : 'Could not save this choice. Analytics are off in this page; clear this site’s stored data if withdrawal cannot be saved.'
+              );
+            }}
+          />
+        )}
+      </SettingRow>
+      {desktop ? null : (
+        <SettingRow
+          title="Diagnostic report"
+          hint="Counts from this page since opt-in, as JSON. Never uploaded."
         >
-          Download diagnostic report
-        </button>
-      </p>
-      <p>
-        Report contains only allowlisted counts from this page since opt-in.
-        Review the JSON before sharing it yourself. No automatic upload.
-      </p>
-      {error && <p role="status">{error}</p>}
-    </div>
+          <button
+            type="button"
+            className="secondary"
+            disabled={!enabled}
+            // The row title is not part of the button's name; on its own
+            // "Download" would not say what it downloads.
+            aria-label="Download diagnostic report"
+            onClick={downloadDiagnosticReport}
+          >
+            Download
+          </button>
+        </SettingRow>
+      )}
+    </>
   );
 }
 
 // This is an account-wide grant, separate from the browser-only choice above.
 // It is never inferred from sign-in, old analytics preferences or another app.
-export function CloudStatisticsConsent({ accountKey }: { accountKey: string }) {
+export function CloudStatisticsConsent({
+  accountKey,
+  cloudEnabled
+}: {
+  accountKey: string;
+  /** The device's cloud switch; while off the row explains the way back. */
+  cloudEnabled: boolean;
+}) {
   const [enabled, setEnabled] = useState(false);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -63,8 +101,10 @@ export function CloudStatisticsConsent({ accountKey }: { accountKey: string }) {
   useEffect(() => {
     const controller = new AbortController();
     setReady(false);
-    if (isDesktopApp() || !cloudFunctionsAreEnabled()) {
-      setStatus('Enable cloud features to manage the account permission.');
+    if (isDesktopApp() || !cloudEnabled || !cloudFunctionsAreEnabled()) {
+      setStatus(
+        'Turn on cloud features to manage this. An existing grant lasts until withdrawn or 30 days.'
+      );
       return () => controller.abort();
     }
     void fetch('/api/glimpse/account-consent', {
@@ -93,7 +133,7 @@ export function CloudStatisticsConsent({ accountKey }: { accountKey: string }) {
           setStatus('Account statistics are unavailable.');
       });
     return () => controller.abort();
-  }, [accountKey]);
+  }, [accountKey, cloudEnabled]);
   async function change(checked: boolean) {
     setBusy(true);
     try {
@@ -127,19 +167,22 @@ export function CloudStatisticsConsent({ accountKey }: { accountKey: string }) {
     }
   }
   return (
-    <div className="settings-analytics-consent">
-      <label>
-        <input
-          type="checkbox"
-          checked={enabled}
-          disabled={!ready || busy}
-          onChange={(e) => {
-            void change(e.currentTarget.checked);
-          }}
-        />{' '}
-        Cloud account statistics for 30 days
-      </label>
-      <p role="status">{status}</p>
-    </div>
+    <SettingRow
+      title="Cloud account statistics"
+      hint={<span role="status">{status}</span>}
+      details={{
+        summary: 'What’s shared',
+        body: 'Separately allow hourly aggregate account, owned-project, revision and known storage-byte snapshots for 30 days, across your devices. Only opted-in accounts are included. No account or project identifiers leave OpenZCAD. Includes retained trash and storage metadata, never model contents. Withdraw here at any time; published aggregates remain up to 90 days. This account-wide permission is separate from browser DNT/GPC and this device’s cloud switch.'
+      }}
+    >
+      <Toggle
+        checked={enabled}
+        disabled={!ready || busy}
+        label="Cloud account statistics for 30 days"
+        onChange={(checked) => {
+          void change(checked);
+        }}
+      />
+    </SettingRow>
   );
 }

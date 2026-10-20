@@ -1,7 +1,7 @@
 /**
- * Pure logic behind the sketch rail's modify tools — fillet, chamfer and
- * offset on the kernel's 2D operations, plus the app-side Trim, Mirror and
- * patterns in `./modify`. What each tool needs picked, which picks it refuses and why, and
+ * Pure logic behind the sketch rail's modify tools — fillet and chamfer on
+ * the kernel's 2D operations, plus the app-side Trim, Mirror and patterns in
+ * `./modify` and Offset in `./offset`. What each tool needs picked, which picks it refuses and why, and
  * how a kernel answer becomes the one transaction that replaces the geometry
  * and re-states what the solver knows about it.
  *
@@ -14,11 +14,13 @@ import type {
   Sketch2dPoint,
   SketchChamferGeometry,
   SketchFilletGeometry,
-  SketchOffsetCurve,
   SketchPlanarOperation,
   SketchPlanarResult
 } from '@openzcad/kernel-adapter/exact';
-import type { SketchEditToolKind } from '../interaction/machine';
+import type {
+  SketchEditToolKind,
+  SketchOffsetOptions
+} from '../interaction/machine';
 import {
   planSketchCircularPattern,
   planSketchLinearPattern,
@@ -30,6 +32,14 @@ import {
   type SketchModifyPlan,
   type SketchRankProbe
 } from './modify';
+import {
+  DEFAULT_SKETCH_OFFSET_OPTIONS,
+  offsetClickSide,
+  offsetFollowsClick,
+  planSketchOffset,
+  resolveOffsetSource,
+  type SketchOffsetPick
+} from './offset';
 import {
   createId,
   toEntityId,
@@ -43,7 +53,7 @@ import {
   type SketchPointRef
 } from '@openzcad/shared';
 
-export type { SketchEditToolKind };
+export type { SketchEditToolKind, SketchOffsetOptions, SketchOffsetPick };
 
 /** What a keypad step measures; a count is a plain whole number. */
 export type SketchEditValueUnit = 'length' | 'angle' | 'count';
@@ -78,7 +88,7 @@ export const SKETCH_EDIT_TOOL_SPECS: readonly SketchEditToolSpec[] = [
     kind: 'offset',
     label: 'Offset',
     picks: 1,
-    hint: 'Click one line of a closed loop, then enter the distance.',
+    hint: 'Click a line, arc or circle on the side to offset towards, then enter the distance. Chain follows the curves joined to it.',
     valueLabel: 'Offset distance'
   },
   {
@@ -108,10 +118,8 @@ export const SKETCH_EDIT_TOOL_SPECS: readonly SketchEditToolSpec[] = [
 ] as const;
 
 /** The modify tools that run on the kernel's 2D operations. */
-function kernelTool(
-  kind: SketchEditToolKind
-): kind is 'fillet' | 'chamfer' | 'offset' {
-  return kind === 'fillet' || kind === 'chamfer' || kind === 'offset';
+function kernelTool(kind: SketchEditToolKind): kind is 'fillet' | 'chamfer' {
+  return kind === 'fillet' || kind === 'chamfer';
 }
 
 export function sketchEditToolSpec(
@@ -161,7 +169,11 @@ const COMPOSITE_REFUSALS: Partial<
     'A rectangle is one object, and its corners carry no constraints. Draw the profile as lines to modify a corner.',
   polygon:
     'A polygon is one object, and its corners carry no constraints. Draw the profile as lines to modify a corner.',
-  text: 'Text is one object with no constrainable outline points.'
+  text: 'Text is one object with no constrainable outline points.',
+  ellipse:
+    'Modify tools work on lines, arcs and circles; they do not take an ellipse yet.',
+  spline:
+    'Modify tools work on lines, arcs and circles; they do not take a spline yet.'
 };
 
 /**
@@ -200,6 +212,13 @@ export function refuseEditPick(
   if (composite) {
     return composite;
   }
+  if (kind === 'offset') {
+    return data.objectKind === 'line' ||
+      data.objectKind === 'arc' ||
+      data.objectKind === 'circle'
+      ? null
+      : 'Offset works on lines, arcs and circles.';
+  }
   if (!kernelTool(kind)) {
     if (
       existing.length === 1 &&
@@ -216,13 +235,9 @@ export function refuseEditPick(
     return null;
   }
   if (data.objectKind === 'arc') {
-    return kind === 'offset'
-      ? 'Offset works on a closed loop of lines; this loop contains an arc.'
-      : `${spec.label} between an arc and another entity is not available yet. Pick two lines.`;
+    return `${spec.label} between an arc and another entity is not available yet. Pick two lines.`;
   }
-  return kind === 'offset'
-    ? 'Offset works on a closed loop of lines. Pick one of its lines.'
-    : `${spec.label} needs two lines that meet at a corner.`;
+  return `${spec.label} needs two lines that meet at a corner.`;
 }
 
 interface LineEnds {
@@ -577,183 +592,6 @@ export function sketchChamferCommands(
   ];
 }
 
-/** A closed run of sketch lines, in loop order. */
-export interface SketchLoopResolution {
-  objectIds: EntityId[];
-  points: Sketch2dPoint[];
-}
-
-export type SketchLoopResult =
-  { loop: SketchLoopResolution } | { error: string };
-
-/**
- * Walk the closed loop of lines that contains the picked one.
- *
- * Straight-sided and closed, both deliberately: the kernel's planar wire
- * offset works on the wire's vertex polygon, so an arc anywhere in the source
- * would be silently straightened and an open chain silently closed. Both are
- * refused here rather than offset into something the user did not draw.
- */
-export function resolveSketchLoop(
-  document: ProjectDocument,
-  sketch: SketchNode,
-  seedId: string,
-  resolve: ResolveParam
-): SketchLoopResult {
-  const seed = sketchObjectData(document, sketch, seedId);
-  if (!seed) {
-    return { error: 'That object is not part of this sketch.' };
-  }
-  if (seed.objectKind !== 'line') {
-    return {
-      error: 'Offset works on a closed loop of lines. Pick one of its lines.'
-    };
-  }
-  const lines = new Map<EntityId, LineEnds>();
-  for (const objectId of sketch.objectIds) {
-    const data = sketchObjectData(document, sketch, objectId);
-    if (!data) {
-      continue;
-    }
-    const ends = lineEnds(data, resolve);
-    if (ends) {
-      lines.set(objectId, ends);
-    }
-  }
-  const seedEnds = lines.get(seedId as EntityId);
-  if (!seedEnds) {
-    return {
-      error: 'The selected line has a dimension that does not evaluate.'
-    };
-  }
-  const objectIds: EntityId[] = [seedId as EntityId];
-  const points: Sketch2dPoint[] = [seedEnds.start];
-  let currentId = seedId as EntityId;
-  let frontier = seedEnds.end;
-  while (!samePoint(frontier, seedEnds.start)) {
-    const joined = [...lines].filter(
-      ([objectId, ends]) =>
-        objectId !== currentId &&
-        (samePoint(ends.start, frontier) || samePoint(ends.end, frontier))
-    );
-    if (joined.length === 0) {
-      return {
-        error:
-          'That run of lines is not closed. Offset needs a closed loop; close the profile first.'
-      };
-    }
-    if (joined.length > 1) {
-      return {
-        error:
-          'More than two lines meet on that loop, so the offset has no single path to follow.'
-      };
-    }
-    const [nextId, nextEnds] = joined[0]!;
-    if (objectIds.includes(nextId)) {
-      return {
-        error:
-          'That run of lines is not closed. Offset needs a closed loop; close the profile first.'
-      };
-    }
-    objectIds.push(nextId);
-    points.push(frontier);
-    currentId = nextId;
-    frontier = samePoint(nextEnds.start, frontier)
-      ? nextEnds.end
-      : nextEnds.start;
-  }
-  if (points.length < 3) {
-    return { error: 'An offset needs a closed loop of at least three lines.' };
-  }
-  return { loop: { objectIds, points } };
-}
-
-function offsetCurveObject(curve: SketchOffsetCurve): SketchObjectData {
-  return curve.kind === 'line'
-    ? {
-        objectKind: 'line',
-        x1: curve.a.x,
-        y1: curve.a.y,
-        x2: curve.b.x,
-        y2: curve.b.y
-      }
-    : {
-        objectKind: 'arc',
-        centerX: curve.center.x,
-        centerY: curve.center.y,
-        radius: curve.radius,
-        startAngleDeg: curve.startAngleDeg,
-        endAngleDeg: curve.endAngleDeg
-      };
-}
-
-function offsetCurveEnds(curve: SketchOffsetCurve): LineEnds {
-  if (curve.kind === 'line') {
-    return { start: curve.a, end: curve.b };
-  }
-  const at = (angleDeg: number): Sketch2dPoint => {
-    const angle = (angleDeg * Math.PI) / 180;
-    return {
-      x: curve.center.x + Math.cos(angle) * curve.radius,
-      y: curve.center.y + Math.sin(angle) * curve.radius
-    };
-  };
-  return { start: at(curve.startAngleDeg), end: at(curve.endAngleDeg) };
-}
-
-/**
- * The one transaction a sketch offset is: every offset curve added, then
- * chained end to end with coincidences so the new loop is a loop the solver
- * knows about rather than a set of curves that happen to touch.
- */
-export function sketchOffsetCommands(
-  sketchId: SketchId,
-  curves: readonly SketchOffsetCurve[]
-): AnyCommand[] {
-  const ids = curves.map(() => newEntityId());
-  const commands: AnyCommand[] = [
-    commandFactories.addSketchObjects(
-      {
-        sketchId,
-        objects: curves.map(offsetCurveObject),
-        ids: { objectNodeIds: ids }
-      },
-      'Add offset geometry'
-    )
-  ];
-  const ends = curves.map(offsetCurveEnds);
-  for (let index = 0; index < curves.length; index += 1) {
-    const nextIndex = (index + 1) % curves.length;
-    const current = ends[index]!;
-    const next = ends[nextIndex]!;
-    const currentPoint = samePoint(current.end, next.start)
-      ? ('end' as const)
-      : samePoint(current.end, next.end)
-        ? ('end' as const)
-        : ('start' as const);
-    const nextPoint = samePoint(current[currentPoint], next.start)
-      ? ('start' as const)
-      : ('end' as const);
-    if (!samePoint(current[currentPoint], next[nextPoint])) {
-      continue;
-    }
-    commands.push(
-      commandFactories.addSketchConstraint(
-        {
-          sketchId,
-          constraint: {
-            constraintKind: 'coincident',
-            a: { objectId: ids[index]!, point: currentPoint },
-            b: { objectId: ids[nextIndex]!, point: nextPoint }
-          }
-        },
-        'Join the offset loop'
-      )
-    );
-  }
-  return commands;
-}
-
 /** One value a finished pick sequence still needs from the keypad. */
 export interface SketchEditValueStep {
   label: string;
@@ -768,6 +606,8 @@ export interface SketchEditPickContext {
   at?: Point2 | null;
   /** The named point the click snapped to, when it had one. */
   snapPoint?: { objectId: string; point: 'start' | 'end' | 'center' } | null;
+  /** The Offset tool's settings when the click landed; absent is the default. */
+  offset?: SketchOffsetOptions;
 }
 
 /**
@@ -783,7 +623,12 @@ export type SketchEditPickOutcome =
   /** The pick is accepted and the tool wants more. */
   | { status: 'pick'; message: string }
   /** The picks are complete; ask for the value, prefilled with `initial`. */
-  | ({ status: 'value'; picks: string[] } & SketchEditValueStep)
+  | ({
+      status: 'value';
+      picks: string[];
+      /** What an Offset pick carries to its value step. */
+      offset?: SketchOffsetPick;
+    } & SketchEditValueStep)
   /** The picks are complete and the tool needs no value: run it now. */
   | { status: 'run'; picks: string[] };
 
@@ -815,7 +660,8 @@ export function sketchEditValueSteps(
   sketch: SketchNode,
   kind: SketchEditToolKind,
   picks: readonly string[],
-  resolve: ResolveParam
+  resolve: ResolveParam,
+  offset?: SketchOffsetPick
 ): SketchEditValueStep[] | { error: string } {
   const spec = sketchEditToolSpec(kind);
   switch (kind) {
@@ -865,16 +711,26 @@ export function sketchEditValueSteps(
       ];
     }
     case 'offset': {
-      const loop = resolveSketchLoop(document, sketch, picks[0]!, resolve);
-      if ('error' in loop) {
-        return { error: loop.error };
+      const resolved = resolveOffsetSource(
+        document,
+        sketch,
+        picks[0]!,
+        (offset ?? DEFAULT_SKETCH_OFFSET_OPTIONS).chain,
+        resolve
+      );
+      if ('error' in resolved) {
+        return { error: resolved.error };
       }
       return [
         {
           label: spec.valueLabel!,
           unitKind: 'length',
           initial: 1,
-          message: `${spec.label}: enter the distance. Positive is outward.`
+          message: `${spec.label}: enter the distance. ${
+            offsetFollowsClick(resolved.source)
+              ? 'Positive goes to the side you clicked.'
+              : 'Positive is outward.'
+          }`
         }
       ];
     }
@@ -958,13 +814,27 @@ export function advanceSketchEditPick(
       message: `${spec.label}: pick ${picks.length + 1} of ${spec.picks}.`
     };
   }
-  const steps = sketchEditValueSteps(document, sketch, kind, picks, resolve);
+  const offset: SketchOffsetPick | undefined =
+    kind === 'offset'
+      ? {
+          ...(context.offset ?? DEFAULT_SKETCH_OFFSET_OPTIONS),
+          side: offsetClickSide(document, sketch, objectId, context.at, resolve)
+        }
+      : undefined;
+  const steps = sketchEditValueSteps(
+    document,
+    sketch,
+    kind,
+    picks,
+    resolve,
+    offset
+  );
   if ('error' in steps) {
     return { status: 'refuse', reason: steps.error };
   }
   const first = steps[0];
   return first
-    ? { status: 'value', picks, ...first }
+    ? { status: 'value', picks, ...first, ...(offset ? { offset } : {}) }
     : { status: 'run', picks };
 }
 
@@ -997,7 +867,8 @@ export function planSketchEdit(
   value: number | readonly number[],
   raw: string,
   resolve: ResolveParam,
-  at?: Point2
+  at?: Point2,
+  offset?: SketchOffsetPick
 ): SketchEditPlan {
   const spec = sketchEditToolSpec(kind);
   const values = typeof value === 'number' ? [value] : value;
@@ -1052,26 +923,15 @@ export function planSketchEdit(
   }
   const amount = values[0]!;
   if (kind === 'offset') {
-    const loop = resolveSketchLoop(document, sketch, picks[0]!, resolve);
-    if ('error' in loop) {
-      return { status: 'refuse', reason: loop.error };
-    }
-    return {
-      status: 'operation',
-      label: spec.label,
-      operation: {
-        kind: 'offset',
-        loop: loop.loop.points,
-        distance: amount,
-        join: 'arc'
-      },
-      commit: (result) => {
-        if (result.kind !== 'offset') {
-          throw new Error('The kernel answered a different operation.');
-        }
-        return sketchOffsetCommands(sketchId, result.curves);
-      }
-    };
+    return planSketchOffset(
+      document,
+      sketch,
+      sketchId,
+      picks[0]!,
+      amount,
+      offset ?? { ...DEFAULT_SKETCH_OFFSET_OPTIONS, side: 1 },
+      resolve
+    );
   }
   const resolved = resolveSketchCorner(
     document,
@@ -1132,6 +992,8 @@ export function planSketchEdit(
 export interface SketchEditAnswers {
   values: number[];
   raws: string[];
+  /** The Offset pick's settings and side, carried to its value step. */
+  offset?: SketchOffsetPick;
 }
 
 /**
@@ -1233,7 +1095,12 @@ export function advanceSketchEdit(
     outcome.picks,
     outcome.label,
     String(outcome.initial),
-    { unitKind: outcome.unitKind, values: [], raws: [] }
+    {
+      unitKind: outcome.unitKind,
+      values: [],
+      raws: [],
+      ...(outcome.offset ? { offset: outcome.offset } : {})
+    }
   );
   host.setStatus(outcome.message);
 }
@@ -1254,12 +1121,14 @@ export async function runSketchEdit(
   earlier?: Partial<SketchEditAnswers>,
   at?: Point2
 ): Promise<void> {
+  const offset = earlier?.offset;
   const steps = sketchEditValueSteps(
     document,
     sketch,
     kind,
     picks,
-    host.resolve
+    host.resolve,
+    offset
   );
   if ('error' in steps) {
     host.setStatus(steps.error);
@@ -1272,7 +1141,8 @@ export async function runSketchEdit(
     host.askValue(kind, [...picks], next.label, String(next.initial), {
       unitKind: next.unitKind,
       values,
-      raws
+      raws,
+      ...(offset ? { offset } : {})
     });
     host.setStatus(next.message);
     return;
@@ -1286,7 +1156,8 @@ export async function runSketchEdit(
     values,
     raws[0] ?? raw,
     host.resolve,
-    at
+    at,
+    offset
   );
   if (plan.status === 'refuse') {
     host.setStatus(plan.reason);

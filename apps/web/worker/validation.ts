@@ -179,6 +179,16 @@ export function parseCreateProjectRequest(body: unknown): CreateProjectRequest {
     request.document = document;
     request.adoptionProtocolVersion = 1;
   }
+  if (record.initialDocument !== undefined) {
+    if (request.document) {
+      throw badRequest(
+        'Send either "document" or "initialDocument", not both.'
+      );
+    }
+    const initialDocument = parseProjectDocument(record.initialDocument);
+    assertDocumentWithinCeiling(initialDocument);
+    request.initialDocument = initialDocument;
+  }
   return request;
 }
 
@@ -409,7 +419,14 @@ export function parseSaveRevisionRequest(
     projectId: toProjectId(projectIdFromPath),
     reason,
     expectedVersion: record.expectedVersion,
-    document
+    document,
+    ...(record.savedRevisionId === undefined
+      ? {}
+      : {
+          savedRevisionId: toRevisionId(
+            requireString(record, 'savedRevisionId', MAX_NAME_LENGTH)
+          )
+        })
   };
 }
 

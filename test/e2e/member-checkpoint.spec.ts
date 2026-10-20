@@ -35,6 +35,7 @@ test('a member editor saves a named checkpoint through the lease-checked room', 
     baseVersion: number;
     leaseId: string;
     checkpointReason: string;
+    savedRevisionId?: string;
   }> = [];
   const checkpointDocuments: ProjectDocument[] = [];
   for (const endpoint of ['document', 'revisions']) {
@@ -58,10 +59,14 @@ test('a member editor saves a named checkpoint through the lease-checked room', 
         .request()
         .postDataJSON() as (typeof checkpointRequests)[number];
       checkpointRequests.push(submitted);
-      const saved = createCheckpoint(
-        appendRevision(submitted.document, submitted.checkpointReason),
-        submitted.checkpointReason
-      );
+      // The browser mints the save point and the room stores it as sent
+      // (ADR-024 Phase 1); only a pre-Phase 1 client leaves it to the room.
+      const saved = submitted.savedRevisionId
+        ? submitted.document
+        : createCheckpoint(
+            appendRevision(submitted.document, submitted.checkpointReason),
+            submitted.checkpointReason
+          );
       checkpointDocuments.push(saved);
       return route.fulfill({
         json: { type: 'ack', version: saved.version, document: saved }

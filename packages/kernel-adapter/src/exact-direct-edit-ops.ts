@@ -95,6 +95,7 @@ import {
   measuredOpposingPlanarFacePair,
   rebuildFaceDistance
 } from './exact-face-distance';
+import { preparedFaceMove } from './exact-prepared-face-move';
 
 /**
  * Reference-first per ADR-013, exactly like fillet/chamfer edges: a stored
@@ -1454,9 +1455,18 @@ export function applyDirectEdit(
       face,
       offset
     );
+    // A drag preview moves the same face of the same restored source every
+    // frame, so it reuses the kernel's distance-independent analysis.
+    const faces = new Uint32Array([face]);
     const moved =
       analytic === null
-        ? journaledMove(kernel, solid, new Uint32Array([face]), offset)
+        ? journaledMove(
+            kernel,
+            solid,
+            faces,
+            offset,
+            deferOutputLineage ? preparedFaceMove(kernel, solid, faces) : null
+          )
         : { solid: analytic, relation: null };
     const output = moved.solid;
     if (kernel.validateSolidRelaxed(output) !== 0) {

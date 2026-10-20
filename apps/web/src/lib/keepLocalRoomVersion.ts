@@ -1,7 +1,9 @@
-import type {
-  ProjectAccessRole,
-  ProjectDocument,
-  ProjectEditLease
+import { createSavedRevision } from '@openzcad/document-core';
+import {
+  KEPT_LOCAL_VERSION_REASON,
+  type ProjectAccessRole,
+  type ProjectDocument,
+  type ProjectEditLease
 } from '@openzcad/shared';
 import {
   clearUnresolvedConflict,
@@ -119,13 +121,24 @@ export async function keepLocalRoomVersion(
   ) {
     throw new Error('Keep my version requires an active project edit lease.');
   }
+  // The kept copy is a new committed choice, so it gets its own save revision
+  // and a version past the room's. The browser mints both and the room only
+  // checks them (ADR-024 Phase 1).
+  const kept = createSavedRevision(
+    {
+      ...collaborationDocument(current),
+      version: Math.max(expectedRemoteVersion, current.version) + 1
+    },
+    KEPT_LOCAL_VERSION_REASON
+  );
   const body = {
     type: 'document' as const,
     clientId: clientId(),
     baseVersion: expectedRemoteVersion,
-    document: collaborationDocument(current),
+    document: kept,
     leaseId: activeLease.leaseId,
-    conflictResolution: 'keep-local' as const
+    conflictResolution: 'keep-local' as const,
+    savedRevisionId: kept.revisions.at(-1)!.revisionId
   };
   const payload = JSON.stringify(body);
   keepMinePendingRef.current = true;
@@ -181,7 +194,8 @@ export async function keepLocalRoomVersion(
           baseVersion: body.baseVersion,
           document: body.document,
           leaseId: body.leaseId,
-          conflictResolution: body.conflictResolution
+          conflictResolution: body.conflictResolution,
+          savedRevisionId: body.savedRevisionId
         })
       }
     );
