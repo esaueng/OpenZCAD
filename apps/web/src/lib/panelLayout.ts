@@ -1903,8 +1903,15 @@ function slotIndex(
 }
 
 /**
+ * What a drop at `point` should do: a rail drag still within its clearance
+ * of the start, which a release ignores (the panel stays where it was).
+ */
+export const DROP_SUPPRESSED = 'suppressed';
+
+/**
  * The drop target under `point`, or null to float the panel where it is
- * dropped. Pass the geometry of the layout without the preview (from
+ * dropped, or `DROP_SUPPRESSED` while a rail drag has not yet cleared
+ * `PANEL_RAIL_DRAG_CLEARANCE`. Pass the geometry of the layout without the preview (from
  * `beginDrag`), so the preview making room cannot move the target away from
  * the cursor. Windows win over docks, the topmost first; then the docked
  * columns (a parked column is not a target); then each side's new-column span, which covers the rail plus one
@@ -1914,13 +1921,13 @@ export function hitTest(
   geometry: PanelGeometry,
   point: Point,
   options: HitTestOptions = {}
-): PanelTarget | null {
+): PanelTarget | typeof DROP_SUPPRESSED | null {
   if (
     options.fromRail &&
     options.startPoint &&
     distance(point, options.startPoint) < PANEL_RAIL_DRAG_CLEARANCE
   ) {
-    return null;
+    return DROP_SUPPRESSED;
   }
   const current = options.current;
   for (let k = geometry.floats.length - 1; k >= 0; k--) {
