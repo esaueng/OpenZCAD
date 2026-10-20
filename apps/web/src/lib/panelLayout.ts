@@ -1654,16 +1654,29 @@ function dockedCounts(
     }
   }
   // Back to column indices: the first columns holding that many live ones,
-  // with any emptied column among them kept in place.
+  // with an emptied column among them kept in place. An emptied column past
+  // the last kept one shows only while it still fits, so lifting a parked
+  // panel neither widens the dock nor moves the rail.
   const prefix = (side: DockSide): number => {
     const columns = sideColumns(layout, side);
     let kept = 0;
     let index = 0;
-    for (; index < columns.length; index++) {
+    while (index < columns.length && kept < counts[side]) {
       if (columns[index]!.length > 0) {
-        if (kept === counts[side]) break;
         kept += 1;
       }
+      index += 1;
+    }
+    const shown = { ...counts, [side]: index };
+    while (
+      index < columns.length &&
+      columns[index]!.length === 0 &&
+      !overCap(
+        dockFootprint({ ...shown, [side]: index + 1 }, columnWidth, insets),
+        stageWidth
+      )
+    ) {
+      index += 1;
     }
     return index;
   };
