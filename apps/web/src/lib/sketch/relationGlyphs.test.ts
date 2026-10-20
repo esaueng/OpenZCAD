@@ -252,6 +252,58 @@ describe('sketchRelationGlyphs', () => {
     ).toEqual(['coincident', 'lock', 'lock']);
   });
 
+  it('clusters by proximity, not by the sketch extent or a rounding grid', () => {
+    const lock = (objectId: string, point: 'start' | 'end') =>
+      constraint({
+        constraintKind: 'lock',
+        point: { objectId: id(objectId), point },
+        x: 0,
+        y: 0
+      });
+    // Anchors at 0, 10 and 1e9 in one sketch: three points, three chips.
+    const wide = sketchRelationGlyphs(
+      [
+        { id: 'a', data: { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 } },
+        {
+          id: 'b',
+          data: { objectKind: 'line', x1: 1e9, y1: 0, x2: 1e9, y2: 5 }
+        }
+      ],
+      [lock('a', 'start'), lock('a', 'end'), lock('b', 'start')],
+      resolve,
+      { visibility: 'always' }
+    );
+    expect(wide.map(label).sort()).toEqual([
+      'point(0,0)',
+      'point(10,0)',
+      'point(1000000000,0)'
+    ]);
+    // Solver-close ends either side of any would-be grid line stay together.
+    const close = sketchRelationGlyphs(
+      [
+        {
+          id: 'p',
+          data: { objectKind: 'line', x1: 0, y1: 0, x2: 4.9999999999, y2: 0 }
+        },
+        {
+          id: 'q',
+          data: { objectKind: 'line', x1: 5.0000000001, y1: 0, x2: 5, y2: 9 }
+        }
+      ],
+      [
+        constraint({
+          constraintKind: 'coincident',
+          a: { objectId: id('p'), point: 'end' },
+          b: { objectId: id('q'), point: 'start' }
+        })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    expect(close).toHaveLength(1);
+    expect(close[0]!.glyphs).toHaveLength(1);
+  });
+
   it('skips relations whose geometry does not resolve', () => {
     const chips = sketchRelationGlyphs(
       [

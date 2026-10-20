@@ -168,35 +168,56 @@ export function sketchRelationGlyphs(
         break;
     }
   }
-  // Solved coincident points agree to far better than this quantum, so they
-  // share one chip. It follows the points' span, so a compact sketch far from
-  // its plane origin keeps distinct points apart, with a floor for the
-  // rounding of coordinates that far out.
-  if (pointGlyphs.length > 0) {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const { anchor } of pointGlyphs) {
-      minX = Math.min(minX, anchor.x);
-      minY = Math.min(minY, anchor.y);
-      maxX = Math.max(maxX, anchor.x);
-      maxY = Math.max(maxY, anchor.y);
-    }
-    const span = Math.max(maxX - minX, maxY - minY);
-    const offset = Math.max(
-      Math.abs(minX),
-      Math.abs(minY),
-      Math.abs(maxX),
-      Math.abs(maxY)
-    );
-    const quantum = Math.max(span * 1e-6, offset * 1e-12, 1e-12);
-    for (const { anchor, glyph } of pointGlyphs) {
-      const key = `point:${Math.round(anchor.x / quantum)},${Math.round(anchor.y / quantum)}`;
-      place(key, 'point', anchor, glyph);
-    }
-  }
+  const clusters = clusterPoints(pointGlyphs.map(({ anchor }) => anchor));
+  pointGlyphs.forEach(({ anchor, glyph }, index) => {
+    place(`point:${clusters[index]}`, 'point', anchor, glyph);
+  });
   return [...chips.values()];
+}
+
+/**
+ * Two anchors closer than this are one point. A solve leaves coincident
+ * points far closer, and distinct points this close are one spot on screen.
+ * It depends only on the points themselves, never on the sketch's extent, so
+ * a large or far-offset sketch does not merge separate points; the relative
+ * term covers coordinate rounding far from the plane origin.
+ */
+function samePointTolerance(point: Point): number {
+  return 1e-6 + 1e-12 * Math.max(Math.abs(point.x), Math.abs(point.y));
+}
+
+/**
+ * Cluster id per anchor, by proximity rather than by rounding to a grid, so
+ * two coincident points are never split across a cell boundary. A sweep in x
+ * keeps it O(n log n) for the usual sparse sketch.
+ */
+function clusterPoints(points: readonly Point[]): number[] {
+  const ids = new Array<number>(points.length);
+  const order = points.map((_, index) => index);
+  order.sort((a, b) => points[a]!.x - points[b]!.x);
+  const representatives: { point: Point; tolerance: number; id: number }[] = [];
+  for (const index of order) {
+    const point = points[index]!;
+    const tolerance = samePointTolerance(point);
+    let id: number | undefined;
+    // Representatives are in ascending x. Once one is out of reach in x, every
+    // earlier one is too: the gap grows faster than the tolerance can.
+    for (let at = representatives.length - 1; at >= 0; at -= 1) {
+      const candidate = representatives[at]!;
+      const reach = Math.max(tolerance, candidate.tolerance);
+      if (point.x - candidate.point.x > reach) break;
+      if (Math.abs(point.y - candidate.point.y) <= reach) {
+        id = candidate.id;
+        break;
+      }
+    }
+    if (id === undefined) {
+      id = representatives.length;
+      representatives.push({ point, tolerance, id });
+    }
+    ids[index] = id;
+  }
+  return ids;
 }
 
 /** Where a curve's own relations sit: a line's middle, a circle's 45°, an arc's mid-sweep. */
