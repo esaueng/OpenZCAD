@@ -120,6 +120,11 @@ function isShortText(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= max;
 }
 
+/** ADR-011 fingerprints are positive safe integers. */
+function isTopologyHash(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0;
+}
+
 function isQuantizedPoint(value: unknown): boolean {
   return (
     Array.isArray(value) &&
@@ -158,8 +163,7 @@ function edgeReferenceError(value: unknown, hash: number): string | null {
   if (
     !isShortText(value.producingFeatureId, 128) ||
     !isShortText(value.lineageName, 256) ||
-    typeof value.currentHash !== 'number' ||
-    !Number.isFinite(value.currentHash) ||
+    !isTopologyHash(value.currentHash) ||
     value.witnessVersion !== 1 ||
     !isEdgeWitness(value.witness)
   )
@@ -176,8 +180,7 @@ function edgeReferenceError(value: unknown, hash: number): string | null {
 function edgeRefError(value: unknown): string | null {
   if (!isRecord(value)) return 'names no edge';
   if (!isShortText(value.bodyId, 128)) return 'names no body';
-  if (typeof value.hash !== 'number' || !Number.isFinite(value.hash))
-    return 'has an invalid edge hash';
+  if (!isTopologyHash(value.hash)) return 'has an invalid edge hash';
   if (value.reference !== undefined)
     return edgeReferenceError(value.reference, value.hash);
   return null;

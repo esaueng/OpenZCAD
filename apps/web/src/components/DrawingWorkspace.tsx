@@ -65,6 +65,7 @@ import {
   annotationAnchor,
   composeSheetAnnotations,
   defaultDimensionDecimals,
+  markHiddenLeaders,
   resolveDrawingAnnotation,
   resolveSheetAnnotations,
   type AnnotationResolution
@@ -813,14 +814,32 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       };
     return shown;
   }, [sheet, liveDrag, liveAnnotationDrag, document]);
+  const drawnViews: ComposedView[] = useMemo(
+    () =>
+      shownSheet
+        ? shownSheet.views.flatMap((view) => {
+            const state = projections.get(view.viewId);
+            return state?.state === 'ready'
+              ? [{ view, projection: state.projection }]
+              : [];
+          })
+        : [],
+    [shownSheet, projections]
+  );
   // Every annotation against the current model. Only a ready sheet draws
-  // or reports them: a stale one has not been redrawn from this model.
+  // or reports them: a stale one has not been redrawn from this model. A
+  // leader whose edge its view no longer draws at all is broken too.
   const resolutions = useMemo(
     () =>
       shownSheet
-        ? resolveSheetAnnotations(shownSheet, bodies, document.units)
+        ? markHiddenLeaders(
+            shownSheet,
+            resolveSheetAnnotations(shownSheet, bodies, document.units),
+            drawnViews,
+            document.units
+          )
         : new Map<DrawingAnnotationId, AnnotationResolution>(),
-    [shownSheet, bodies, document.units]
+    [shownSheet, bodies, document.units, drawnViews]
   );
   const sheetReady = status?.kind === 'ready';
   // A tool picks from one sheet's drawn model: a sheet that stops being
@@ -1190,18 +1209,6 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     }
   };
 
-  const drawnViews: ComposedView[] = useMemo(
-    () =>
-      shownSheet
-        ? shownSheet.views.flatMap((view) => {
-            const state = projections.get(view.viewId);
-            return state?.state === 'ready'
-              ? [{ view, projection: state.projection }]
-              : [];
-          })
-        : [],
-    [shownSheet, projections]
-  );
   const composed = useMemo(() => {
     if (!shownSheet) return null;
     const annotations = composeSheetAnnotations(

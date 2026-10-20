@@ -39,6 +39,7 @@ import {
   composeSheetAnnotations,
   formatDrawingNumber,
   layoutAnnotation,
+  markHiddenLeaders,
   resolveDrawingAnnotation,
   resolveSheetAnnotations,
   type AnnotationBodies
@@ -311,6 +312,25 @@ describe('D02 annotation section (schema v31)', () => {
         },
         /contradicts its hash/
       ],
+      // ADR-011 fingerprints are positive safe integers, even when the two
+      // copies agree.
+      ...[0, -3, 1.5].map(
+        (hash) =>
+          [
+            {
+              ...good,
+              from: {
+                edge: {
+                  ...ref,
+                  hash,
+                  reference: { ...ref.reference!, currentHash: hash }
+                },
+                anchor: 'first'
+              }
+            },
+            /edge hash|malformed edge reference/
+          ] as [unknown, RegExp]
+      ),
       ...(
         [
           {},
@@ -1232,6 +1252,57 @@ describe('D02 page and export', () => {
         ]
       ])
     ).toBeNull();
+  });
+
+  it('breaks a note whose leader edge its view no longer draws at all', async () => {
+    const { bodies, bodyId, top } = await boxModel();
+    const sheet = sheetOf(
+      [bodyId],
+      [
+        {
+          annotationId: id('n'),
+          kind: 'note',
+          text: 'SEE EDGE',
+          viewId: frontId,
+          leader: refOf(bodyId, top),
+          placementMm: { x: -30, y: 20 }
+        }
+      ]
+    );
+    const front = sheet.views[0]!;
+    const projection = projectView({
+      orientation: 'front',
+      hiddenLines: false,
+      bodies: [projectionBodyInput(bodies[bodyId]!)!]
+    });
+    const resolved = resolveSheetAnnotations(sheet, bodies, 'mm');
+    // Drawn: the leader stands.
+    expect(
+      markHiddenLeaders(
+        sheet,
+        resolved,
+        [{ view: front, projection }],
+        'mm'
+      ).get(id('n'))
+    ).toMatchObject({ ok: true });
+    // The view draws nothing of that edge (say it is occluded after an
+    // Update): broken, so export refuses rather than drop the leader.
+    const elsewhere = {
+      ...projection,
+      visible: [Float64Array.from([-500, -500, -499, -500])]
+    };
+    expect(
+      markHiddenLeaders(
+        sheet,
+        resolved,
+        [{ view: front, projection: elsewhere }],
+        'mm'
+      ).get(id('n'))
+    ).toMatchObject({ ok: false, reason: 'leader-hidden' });
+    // A view not drawn yet is left alone.
+    expect(
+      markHiddenLeaders(sheet, resolved, [], 'mm').get(id('n'))
+    ).toMatchObject({ ok: true });
   });
 
   it('exports dimensions and notes in SVG and PDF, byte-stable across a reload', async () => {

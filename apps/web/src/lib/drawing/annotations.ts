@@ -50,7 +50,8 @@ export type AnnotationBreak =
   | 'not-straight'
   | 'parallel'
   | 'degenerate'
-  | 'foreshortened';
+  | 'foreshortened'
+  | 'leader-hidden';
 
 type UV = [number, number];
 
@@ -110,6 +111,8 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
       return 'The two edges are now parallel in this view, so they make no angle.';
     case 'degenerate':
       return 'The two points this measured now coincide in this view.';
+    case 'leader-hidden':
+      return 'The view no longer draws any of the edge this note points at.';
     case 'foreshortened':
       return 'This view does not see what this measures true size (it slopes into the view, or the view is isometric); dimension it where it lies parallel to the view.';
   }
@@ -949,6 +952,51 @@ export function resolveSheetAnnotations(
       )
     ])
   );
+}
+
+/**
+ * `resolutions` with every note marked broken whose leader edge its drawn
+ * view no longer shows at all (occluded after an Update, with hidden lines
+ * off): the leader is the note's intent, and quietly dropping it would hand
+ * off a plain note instead. Views not yet drawn are left alone.
+ */
+export function markHiddenLeaders(
+  sheet: DrawingSheet,
+  resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>,
+  views: readonly ComposedView[],
+  units: UnitSystem
+): Map<DrawingAnnotationId, AnnotationResolution> {
+  const out = new Map(resolutions);
+  const leaders = (sheet.annotations ?? []).filter(
+    (annotation) => annotation.kind === 'note' && annotation.leader
+  );
+  if (leaders.length === 0) return out;
+  const lines = drawnLines(sheet, views, units);
+  const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
+  for (const annotation of leaders) {
+    const resolution = out.get(annotation.annotationId);
+    const entry = annotation.viewId ? drawn.get(annotation.viewId) : undefined;
+    if (
+      !resolution?.ok ||
+      resolution.resolved.kind !== 'note' ||
+      !resolution.resolved.leader ||
+      !entry?.projection.bounds
+    )
+      continue;
+    const toPage = viewPageTransform(
+      entry.view,
+      entry.projection.bounds,
+      sheet,
+      units
+    );
+    const polyline: XY[] = [];
+    const leader = resolution.resolved.leader;
+    for (let i = 0; i + 1 < leader.length; i += 2)
+      polyline.push(toPage(leader[i]!, leader[i + 1]!));
+    if (drawnPieces(polyline, lines.get(entry.view.viewId) ?? []).length === 0)
+      out.set(annotation.annotationId, failure('leader-hidden'));
+  }
+  return out;
 }
 
 /**
