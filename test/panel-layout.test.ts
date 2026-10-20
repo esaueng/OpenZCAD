@@ -1056,16 +1056,35 @@ describe('a locked layout', () => {
 });
 
 describe('gap resizing with a held panel', () => {
-  it('changes nothing until the drag moves, and never lifts a held panel', () => {
+  it('moves a held panel’s edge with the drag, and not before', () => {
     const layout = layoutWith({
       right: [['parameters', 'revisions']],
-      weights: { ...modelOnly().weights, parameters: 0.5, revisions: 3 }
+      weights: { ...modelOnly().weights, parameters: 0.1, revisions: 3 }
     });
-    // 90px at 100px a weight is 0.9: Parameters sits under it, held at 90px.
-    expect(resizeGap(layout, 'parameters', 'revisions', 0, 100)).toBe(layout);
-    const nudged = resizeGap(layout, 'parameters', 'revisions', 10, 100);
-    expect(nudged.weights.parameters).toBeCloseTo(0.6, 9);
-    expect(nudged.weights.revisions).toBeCloseTo(2.9, 9);
+    const before = computePanelGeometry(layout, STAGE);
+    // Parameters' share is under 90px, so it is held there.
+    expect(before.panels.parameters!.h).toBeCloseTo(PANEL_MIN_HEIGHT, 9);
+    const gap = before.gaps.find(
+      (candidate) => candidate.above === 'parameters'
+    )!;
+    expect(gap.enabled).toBe(true);
+    expect(
+      resizeGap(layout, 'parameters', 'revisions', 0, gap.pxPerWeight)
+    ).toBe(layout);
+    for (const delta of [1, 10, 200]) {
+      const after = computePanelGeometry(
+        resizeGap(layout, 'parameters', 'revisions', delta, gap.pxPerWeight),
+        STAGE
+      );
+      expect(after.panels.parameters!.h).toBeCloseTo(
+        before.panels.parameters!.h + delta,
+        6
+      );
+      expect(after.panels.revisions!.h).toBeCloseTo(
+        before.panels.revisions!.h - delta,
+        6
+      );
+    }
   });
 
   it('keeps a closed panel’s height when it reopens at home', () => {
@@ -1483,6 +1502,24 @@ describe('phone-width stages', () => {
     const reopened = openPanel(closed, 'parameters', phoneStage);
     expect(reopened.right).toEqual([['parameters']]);
     expect(computePanelGeometry(reopened, phoneStage).phonePanel).toBe(
+      'parameters'
+    );
+  });
+
+  it('brings an open panel to the lane from the rail, closing only the shown one', () => {
+    const phoneStage: PanelStage = { width: 600, height: 844 };
+    let layout = notePanelUsed(essentials(), 'parameters');
+    expect(computePanelGeometry(layout, phoneStage).phonePanel).toBe(
+      'parameters'
+    );
+    // Objects is open but not shown: the press shows it.
+    layout = togglePanel(layout, 'bodies', phoneStage);
+    expect(panelStatus(layout, 'bodies')).toBe('docked');
+    expect(computePanelGeometry(layout, phoneStage).phonePanel).toBe('bodies');
+    // Pressed again while shown, it closes.
+    layout = togglePanel(layout, 'bodies', phoneStage);
+    expect(panelStatus(layout, 'bodies')).toBe('closed');
+    expect(computePanelGeometry(layout, phoneStage).phonePanel).toBe(
       'parameters'
     );
   });
