@@ -1,4 +1,8 @@
 import { formatNumber } from './model';
+import {
+  selectionCalloutObstacleShift,
+  type ScreenRect
+} from './selectionCalloutView';
 
 /** Which number the offset chip shows: the drag delta, or the whole span. */
 export type OffsetChipMode = 'offset' | 'total';
@@ -74,4 +78,35 @@ export function edgeChipCenterX(
   return dodged - chipWidth / 2 >= EDGE_CHIP_MARGIN_PX
     ? Math.min(anchorX, dodged)
     : anchorX;
+}
+
+/**
+ * How far a handle's chip — its value pill and any tag beside it, as one
+ * box, in the same coordinates as `stage` — moves to come out from under a
+ * model panel the right lane's rule does not cover: a floating window or
+ * the left dock. The right lane keeps its own rule (`edgeChipCenterX`, the
+ * pin's swap to its other side), so while the stage has room left of the
+ * lane no move here takes the chip into it. A chip nothing covers, or one
+ * no move inside the stage clears, stays where it is.
+ */
+export function chipPanelDodge(
+  chip: ScreenRect,
+  panels: readonly ScreenRect[],
+  stage: ScreenRect,
+  laneLeft: number | null
+): { dx: number; dy: number } {
+  if (panels.length === 0) return { dx: 0, dy: 0 };
+  const width = chip.right - chip.left;
+  const laneEdge =
+    laneLeft !== null &&
+    laneLeft - EDGE_CHIP_MARGIN_PX - width >= stage.left + EDGE_CHIP_MARGIN_PX
+      ? Math.min(stage.right, laneLeft - EDGE_CHIP_MARGIN_PX)
+      : stage.right;
+  return selectionCalloutObstacleShift(
+    chip,
+    panels,
+    // A chip the lane rule left over the lane (a phone's) may stay there.
+    { ...stage, right: Math.max(laneEdge, chip.right) },
+    EDGE_CHIP_MARGIN_PX
+  );
 }
