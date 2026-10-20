@@ -295,6 +295,11 @@ export function ObjectsPanel({
   );
   const matchingBodies = bodies.filter((body) => matchesObject(body.name));
   const liveBodies = matchingBodies.filter((body) => !body.consumed);
+  // Every live body, searched for or not: a search narrows the rows, never
+  // the selection that New folder and a drag act on.
+  const allLiveBodyIds = new Set(
+    bodies.filter((body) => !body.consumed).map((body) => body.bodyId)
+  );
   const consumedBodies = matchingBodies.filter((body) => body.consumed);
   const showBodies = objectFilter === 'all' || objectFilter === 'bodies';
   const showSketches = objectFilter === 'all' || objectFilter === 'sketches';
@@ -392,8 +397,9 @@ export function ObjectsPanel({
 
   function createFolder() {
     if (!objectFolderActions || !document) return;
-    const live = new Set(liveBodies.map((body) => body.bodyId));
-    const bodyIds = (selectedBodyIds as BodyId[]).filter((id) => live.has(id));
+    const bodyIds = (selectedBodyIds as BodyId[]).filter((id) =>
+      allLiveBodyIds.has(id)
+    );
     // Selected bodies that share a folder get the new one beside them.
     const homes = new Set(bodyIds.map((id) => placements?.get(id) ?? null));
     const parentId = homes.size === 1 ? [...homes][0]! : null;
@@ -586,10 +592,11 @@ export function ObjectsPanel({
         draggable={draggable}
         onDragStart={(event) => {
           // A selected body carries the rest of the selection with it.
-          const live = new Set(liveBodies.map((b) => b.bodyId));
           const bodyIds =
             selected && selectedBodyIds.length > 1
-              ? (selectedBodyIds as BodyId[]).filter((id) => live.has(id))
+              ? (selectedBodyIds as BodyId[]).filter((id) =>
+                  allLiveBodyIds.has(id)
+                )
               : [body.bodyId];
           startDrag(event, { bodyIds, folderIds: [] }, body.name);
         }}

@@ -161,6 +161,68 @@ describe('Objects folders (U06, ZC-128)', () => {
     expect(manager.document.editHistory?.entries).toHaveLength(5);
   });
 
+  it('files every selected body, including those a search hides', async () => {
+    const user = userEvent.setup();
+    const manager = model();
+    const [, lug, pin] = manager.document.bodyOrder as BodyId[];
+    render(<Harness manager={manager} selected={[lug!, pin!]} spy={{}} />);
+    await user.type(
+      screen.getByRole('searchbox', { name: 'Find an object by name' }),
+      'lug'
+    );
+    expect(rowNames()).toEqual(['Lug']);
+
+    await user.click(screen.getByRole('button', { name: 'New folder' }));
+    await user.keyboard('{Enter}');
+    // Both selected bodies went in, and the cleared search shows them there.
+    expect(rowNames()).toEqual(['Folder 1', 'Lug', 'Pin', 'Base']);
+    expect(manager.document.objectFolders?.placements).toEqual({
+      [lug!]: expect.any(String),
+      [pin!]: expect.any(String)
+    });
+  });
+
+  it('drags the whole selection, including bodies a search hides', () => {
+    const manager = model();
+    const [, lug, pin] = manager.document.bodyOrder as BodyId[];
+    manager.execute(
+      commandFactories.createObjectFolder({
+        folderId: 'folder_a',
+        name: 'Frame',
+        parentId: null
+      })
+    );
+    render(<Harness manager={manager} selected={[lug!, pin!]} spy={{}} />);
+    fireEvent.change(
+      screen.getByRole('searchbox', { name: 'Find an object by name' }),
+      { target: { value: 'lug' } }
+    );
+    const data = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: 'all',
+      dropEffect: 'none',
+      setData: (type: string, value: string) => void data.set(type, value),
+      getData: (type: string) => data.get(type) ?? ''
+    };
+    const lugRow = list()
+      .getByRole('button', { name: /^Lug/ })
+      .closest('[role="listitem"]') as HTMLElement;
+    fireEvent.dragStart(lugRow, { dataTransfer });
+    fireEvent.change(
+      screen.getByRole('searchbox', { name: 'Find an object by name' }),
+      { target: { value: '' } }
+    );
+    const frame = list()
+      .getByRole('button', { name: /^Frame/ })
+      .closest('[role="listitem"]') as HTMLElement;
+    fireEvent.dragOver(frame, { dataTransfer });
+    fireEvent.drop(frame, { dataTransfer });
+    expect(manager.document.objectFolders?.placements).toEqual({
+      [lug!]: 'folder_a',
+      [pin!]: 'folder_a'
+    });
+  });
+
   it('collapses a folder, remembered on this device per project', async () => {
     const user = userEvent.setup();
     const manager = model();
