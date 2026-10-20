@@ -191,6 +191,39 @@ describe('box selection with a section plane', () => {
   });
 });
 
+describe('box selection through the camera near plane', () => {
+  // Near plane at z = 5: the top face (z = 10) and its edges lie wholly in
+  // front of it and are not drawn; the sides cross it and keep their lower part.
+  const camera = lookingDown();
+  camera.near = 95;
+  camera.updateProjectionMatrix();
+  const rect = rectBetween(camera, [-15, 15, 0], [15, -15, 0]);
+  const options = (kind: 'face' | 'edge') => ({
+    camera,
+    width: SIZE,
+    height: SIZE,
+    kind,
+    selectThrough: true
+  });
+
+  it('takes no face the near plane clips away', () => {
+    const faces = ids(
+      topologyInBox([cube()], rect, 'crossing', options('face'))
+    );
+    expect(faces).not.toContain('face-top');
+    expect(faces).toContain('face-bottom');
+  });
+
+  it('takes no edge the near plane clips away, and the drawn part of one it crosses', () => {
+    const edges = ids(
+      topologyInBox([cube()], rect, 'crossing', options('edge'))
+    );
+    expect(edges.filter((id) => id?.startsWith('edge-top'))).toEqual([]);
+    expect(edges).toContain('edge-vertical-front-left');
+    expect(edges).toContain('edge-bottom-front');
+  });
+});
+
 describe('box selection of edges', () => {
   const camera = lookingDown();
   const options = (selectThrough = false) => ({
