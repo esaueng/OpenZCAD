@@ -659,6 +659,16 @@ describe('D01 occlusion tolerance', () => {
     expect(
       dropCoincidentHidden(tiny, [Float64Array.from([0, 5, 100, 5])], 1e-6)
     ).toEqual([]);
+    // Parallel edges 1e-4 apart on a unit-sized body stay distinct even
+    // when the view-wide tolerance (another body far across the sheet)
+    // would be 10 units.
+    expect(
+      dropCoincidentHidden(
+        [Float64Array.from([0, 0, 1, 0])],
+        [Float64Array.from([0, 1e-4, 1, 1e-4])],
+        10
+      )
+    ).toHaveLength(1);
     // A hidden line wholly under a visible one is dropped.
     expect(
       dropCoincidentHidden(hidden, [Float64Array.from([0, 0, 100, 0])], 1e-6)

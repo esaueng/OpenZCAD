@@ -182,9 +182,12 @@ const SHARED_PROJECT_OWNER_USER_ID = toUserId('user_shared');
 export function sharedProjectSnapshotDocument(
   document: ProjectDocument
 ): ProjectDocument {
+  // Drawing sheets stay with the owner: their title blocks carry author,
+  // date and drawing-number text, and a share link opens no Draw workspace.
   const {
     editHistory: _editHistory,
     branchedFrom: _branchedFrom,
+    drawings: _drawings,
     ...current
   } = withoutDerivedProjection(document);
   return {

@@ -902,6 +902,9 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
  * collinear visible segments cover, so a gap in the visible outline of any
  * width keeps its piece of the hidden line.
  */
+/** Coincidence tolerance per unit length of the lines compared. */
+const LOCAL_COINCIDENCE = 1e-6;
+
 export function dropCoincidentHidden(
   hidden: Float64Array[],
   visible: Float64Array[],
@@ -986,7 +989,18 @@ export function dropCoincidentHidden(
       const off = ends.map(
         ([u, v]) => Math.abs((u - pu) * dv - (v - pv) * du) / length
       );
-      if (off[0]! > tolerance || off[1]! > tolerance) continue;
+      // How close counts as the same line is the compared segments' own
+      // business: a view-wide figure would let a unit-sized body's parallel
+      // edges merge when another body sits far across the sheet.
+      const visibleLength = Math.hypot(
+        segments[s + 2]! - segments[s]!,
+        segments[s + 3]! - segments[s + 1]!
+      );
+      const near = Math.min(
+        tolerance,
+        LOCAL_COINCIDENCE * Math.max(length, visibleLength)
+      );
+      if (off[0]! > near || off[1]! > near) continue;
       const t = ends.map(
         ([u, v]) => ((u - pu) * du + (v - pv) * dv) / (length * length)
       );
@@ -1008,7 +1022,10 @@ export function dropCoincidentHidden(
     if (covered.length === 0) return [[0, 1]];
     // Between or beside coverage, a gap no longer than the tolerance is the
     // same line, not a gap.
-    return gaps.filter(([t0, t1]) => (t1 - t0) * length > tolerance);
+    return gaps.filter(
+      ([t0, t1]) =>
+        (t1 - t0) * length > Math.min(tolerance, LOCAL_COINCIDENCE * length)
+    );
   };
 
   const out: Float64Array[] = [];

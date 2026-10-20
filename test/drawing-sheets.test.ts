@@ -45,6 +45,8 @@ import {
   sheetBodyIds
 } from '../apps/web/src/lib/drawing/sheetSources';
 import { parseSaveProjectDocumentRequest } from '../apps/web/worker/validation';
+import { sharedProjectSnapshotDocument } from '@openzcad/persistence';
+import { createProjectDiagnosticBundle } from '../apps/web/src/lib/projectDiagnostics';
 import * as webGlimpse from '../apps/web/src/lib/glimpseContract';
 import * as workerGlimpse from '../apps/web/worker/glimpseContract';
 
@@ -584,6 +586,45 @@ describe('D01 drawing section (schema v30)', () => {
     expect(after).toBe(before);
     expect(after.version).toBe(before.version);
     expect(manager.undoLabel).toBe(`Add drawing Sheet 1`);
+  });
+
+  it('keeps drawing sheets out of share-link snapshots and diagnostic bundles', () => {
+    const document = boxDocument();
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.addDrawingSheet({
+        sheet: {
+          ...sheet(document.bodyOrder),
+          titleBlock: { author: 'Private Person', drawingNumber: 'DWG-SECRET' }
+        }
+      })
+    );
+    manager.execute(commandFactories.deleteDrawingSheet({ sheetId }));
+    manager.execute(
+      commandFactories.addDrawingSheet({
+        sheet: {
+          ...sheet(document.bodyOrder),
+          titleBlock: { date: '2026-10-19' }
+        }
+      })
+    );
+    const drawn = manager.document;
+    expect('drawings' in sharedProjectSnapshotDocument(drawn)).toBe(false);
+    const bundle = createProjectDiagnosticBundle(
+      drawn,
+      { remusVersion: '0', remusCommit: '0' },
+      '2026-10-19T00:00:00.000Z'
+    );
+    expect('drawings' in bundle.document).toBe(false);
+    const text = JSON.stringify(bundle);
+    // Even a deleted sheet's title block stays out through its commands.
+    expect(text).not.toContain('Private Person');
+    expect(text).not.toContain('DWG-SECRET');
+    expect(
+      bundle.document.commandLog.some((command) =>
+        command.kind.startsWith('drawing.')
+      )
+    ).toBe(false);
   });
 
   it('refuses a view of a body the project does not have', () => {
