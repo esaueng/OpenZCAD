@@ -1013,13 +1013,25 @@ function revealPanel(layout: PanelLayout, id: PanelId): PanelLayout {
  * hidden it only shows them (opening the panel if it was closed), so a press
  * never closes something nobody can see. With a stage, a press on a parked
  * panel shows it in the unpinned slot, and a second press hides it again;
- * it stays docked throughout. Every press counts as a use.
+ * it stays docked throughout. On a phone-width stage, where the lane shows
+ * only the most recently used open panel, a press on an open panel the lane
+ * is not showing brings it into the lane rather than closing it unseen.
+ * Every press counts as a use.
  */
 export function togglePanel(
   layout: PanelLayout,
   id: PanelId,
   stage?: PanelStage
 ): PanelLayout {
+  if (
+    stage &&
+    stage.width <= PANEL_PHONE_MAX_WIDTH &&
+    !layout.options.hidden &&
+    isPanelOpen(layout, id) &&
+    computePanelGeometry(layout, stage).phonePanel !== id
+  ) {
+    return notePanelUsed(layout, id);
+  }
   if (
     stage &&
     !layout.options.hidden &&
@@ -1035,6 +1047,28 @@ export function togglePanel(
     return notePanelUsed(revealPanel(layout, id), id);
   }
   return notePanelUsed(closePanel(layout, id), id);
+}
+
+/**
+ * Makes a panel visible for a search result (⌘K): a closed panel opens
+ * unpinned — not at its home, since the person asked for a row in it, not
+ * for a layout — and an open one stays where it is. Either way it becomes the
+ * most recent, so a phone-width lane shows it, a parked one shows in the
+ * unpinned slot, and Hide all turns off.
+ */
+export function presentPanel(
+  layout: PanelLayout,
+  id: PanelId,
+  stage?: PanelStage
+): PanelLayout {
+  let next: PanelLayout = layout;
+  if (!isPanelOpen(layout, id)) {
+    next = openUnpinned(layout, id);
+  } else if (stage && isPanelParked(layout, id, stage)) {
+    next = revealPanel(layout, id);
+  }
+  next = notePanelUsed(next, id);
+  return next.options.hidden ? setOption(next, 'hidden', false) : next;
 }
 
 /**

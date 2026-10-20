@@ -45,6 +45,7 @@ import {
   placePanel,
   popOutPanel,
   popOutRect,
+  presentPanel,
   previewLayout,
   raiseFloat,
   resizeFloat,
@@ -1342,6 +1343,88 @@ describe('phone-width stages', () => {
     expect(computePanelGeometry(modelOnly(), phoneStage).phonePanel).toBeNull();
     // Noting the panel already at the head changes nothing.
     expect(notePanelUsed(layout, 'parameters')).toBe(layout);
+  });
+
+  it('brings an open panel the lane is not showing into it instead of closing it', () => {
+    const phoneStage: PanelStage = { width: 600, height: 800 };
+    const layout = notePanelUsed(essentials(), 'parameters');
+    expect(computePanelGeometry(layout, phoneStage).phonePanel).toBe(
+      'parameters'
+    );
+    // Objects is docked but not shown: the press shows it, docked as before.
+    const shown = togglePanel(layout, 'bodies', phoneStage);
+    expect(computePanelGeometry(shown, phoneStage).phonePanel).toBe('bodies');
+    expect(shown.right).toEqual(layout.right);
+    expect(shown.left).toEqual(layout.left);
+    // A second press on the panel the lane shows closes it, remembering its
+    // place, and the lane falls back to the next open panel.
+    const closed = togglePanel(shown, 'bodies', phoneStage);
+    expect(panelStatus(closed, 'bodies')).toBe('closed');
+    expect(closed.homes.bodies).toMatchObject({
+      kind: 'column',
+      side: 'left',
+      column: 0,
+      index: 0
+    });
+    expect(computePanelGeometry(closed, phoneStage).phonePanel).toBe(
+      'parameters'
+    );
+    // Wider than the phone limit, the same press closes the docked panel.
+    expect(panelStatus(togglePanel(layout, 'bodies', STAGE), 'bodies')).toBe(
+      'closed'
+    );
+  });
+});
+
+describe('search hand-off', () => {
+  it('opens a closed panel unpinned, not at its home', () => {
+    const closed = closePanel(essentials(), 'parameters');
+    expect(closed.homes.parameters).toBeDefined();
+    const shown = presentPanel(closed, 'parameters', STAGE);
+    expect(panelStatus(shown, 'parameters')).toBe('unpinned');
+    expect(shown.recent[0]).toBe('parameters');
+    // A rail press would have gone home instead.
+    expect(
+      panelStatus(openPanel(closed, 'parameters', STAGE), 'parameters')
+    ).toBe('docked');
+  });
+
+  it('leaves an open panel where it is and makes it the most recent', () => {
+    const layout = essentials();
+    const shown = presentPanel(layout, 'bodies', STAGE);
+    expect(shown.left).toEqual(layout.left);
+    expect(shown.right).toEqual(layout.right);
+    expect(shown.recent[0]).toBe('bodies');
+    // So the phone lane shows it.
+    expect(
+      computePanelGeometry(shown, { width: 600, height: 800 }).phonePanel
+    ).toBe('bodies');
+    // Already the most recent and showing: nothing changes.
+    expect(presentPanel(shown, 'bodies', STAGE)).toBe(shown);
+  });
+
+  it('replaces the unpinned panel, turns Hide all off and reveals a parked one', () => {
+    const peeking = openPanel(modelOnly(), 'history', STAGE);
+    const replaced = presentPanel(peeking, 'parameters', STAGE);
+    expect(replaced.unpinned).toBe('parameters');
+    expect(panelStatus(replaced, 'history')).toBe('closed');
+
+    const hidden = setOption(essentials(), 'hidden', true);
+    expect(presentPanel(hidden, 'parameters', STAGE).options.hidden).toBe(
+      false
+    );
+
+    const narrow: PanelStage = {
+      width: Math.floor(stageFitting(2)) - 1,
+      height: 900
+    };
+    expect(computePanelGeometry(essentials(), narrow).parked.bodies).toBe(true);
+    const revealed = presentPanel(essentials(), 'bodies', narrow);
+    expect(revealed.revealed).toBe('bodies');
+    expect(panelStatus(revealed, 'bodies')).toBe('docked');
+    expect(computePanelGeometry(revealed, narrow).panels.bodies?.mode).toBe(
+      'revealed'
+    );
   });
 });
 

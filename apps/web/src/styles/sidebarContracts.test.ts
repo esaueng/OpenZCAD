@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Model-drawer layout rules the happy-dom suite cannot see by rendering: it
+ * Model panel layout rules the happy-dom suite cannot see by rendering: it
  * computes no layout, so these read the stylesheets for the declarations
  * that fixed each defect (sidebar and history review, 8 Oct 2026).
  */
@@ -69,15 +69,48 @@ describe('body rows on touch screens', () => {
   });
 });
 
-describe('collapsed History', () => {
-  it('lets the collapsed rule shrink the section, with no later rule growing it back', () => {
-    expect(
-      rule(sheet('sidebar.css'), '\n.sidebar-section.collapsed.grow')
-    ).toMatch(/flex:\s*0 0 auto/);
-    // workspace-column.css loads later; an equally specific `flex: 1` there
-    // kept a collapsed History filling the drawer above Revisions.
-    expect(sheet('workspace-column.css')).not.toMatch(
-      /\.sidebar-section\.grow\s*\{/
+describe('model panels', () => {
+  const stage = sheet('quiet-stage.css');
+
+  it('keeps the bottom-right corner out of the dock band', () => {
+    // The cube and the scale bar stay in the corner: the band the dock is
+    // projected onto stops above it, as the drawer's lane did.
+    expect(rule(stage, '\n.panel-dock-layer')).toMatch(
+      /bottom:\s*calc\(var\(--stage-corner-h\) \+ var\(--island-gap\)\)/
+    );
+  });
+
+  it('scrolls a column that cannot give every panel its minimum', () => {
+    expect(rule(stage, '\n.panel-column.is-scrolling')).toMatch(
+      /overflow-y:\s*auto/
+    );
+    // Not scrolling, the column clips; the panels themselves scroll inside.
+    expect(rule(stage, '\n.panel-column')).toMatch(/overflow:\s*hidden/);
+    expect(rule(stage, '\n.model-panel-body')).toMatch(/overflow-y:\s*auto/);
+  });
+
+  it('keeps touch scrolling off the gaps and headers', () => {
+    expect(rule(stage, '\n.panel-gap')).toMatch(/touch-action:\s*none/);
+    expect(rule(stage, '\n.panel-gap')).toMatch(/cursor:\s*row-resize/);
+    expect(rule(stage, '\n.model-panel-header')).toMatch(
+      /touch-action:\s*none/
+    );
+  });
+
+  it('moves the rail to the dock’s inner edge and the lanes past both', () => {
+    expect(rule(stage, '\n.instrument-rail')).toMatch(
+      /right:\s*calc\(var\(--island-gap\) \+ var\(--right-dock-w, 0px\)\)/
+    );
+    // Every definition of the lane's end counts the dock and the unpinned
+    // panel, so the inspector and the overlays that keep clear of the lane
+    // never sit under a panel.
+    const ends = [...stage.matchAll(/--lane-end:\s*calc\(([^;]*)\);/g)];
+    expect(ends.length).toBeGreaterThan(2);
+    for (const [, value] of ends) {
+      expect(value).toContain('var(--right-panels-w)');
+    }
+    expect(rule(stage, '\n.panel-unpinned')).toMatch(
+      /right:\s*calc\(var\(--lane-end\) - var\(--right-peek-w, 0px\)\)/
     );
   });
 });

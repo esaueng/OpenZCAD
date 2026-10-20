@@ -18,18 +18,17 @@ import type { BodyRepresentation } from '@openzcad/shared';
 import { useArrivals } from '../../hooks/useArrivals';
 import { datumPlaneRows } from '../../lib/datumPlanes';
 import { datumAxisRows } from '../../lib/datumAxes';
-import type { SidebarProps } from '../Sidebar';
+import type { ModelPanelSource } from './modelPanelProps';
 
 /** What the Objects list is built from, and all its header count needs. */
 export type ObjectsSource = Pick<
-  SidebarProps,
+  ModelPanelSource,
   'features' | 'representations' | 'document' | 'parameterValues'
 >;
 
 /**
- * The Objects list's type filter, name search and source-body disclosure.
- * The composer holds them, so they outlive the list while its section is
- * folded.
+ * The Objects list's type filter, name search and source-body disclosure,
+ * held by the panel's frame around the list.
  */
 export interface ObjectsView {
   filter: string;
@@ -49,7 +48,7 @@ export function useObjectsView(): ObjectsView {
 
 export type ObjectsPanelProps = ObjectsSource &
   Pick<
-    SidebarProps,
+    ModelPanelSource,
     | 'geometryPending'
     | 'selectedFeatureNodeId'
     | 'selectedSketchProfileId'

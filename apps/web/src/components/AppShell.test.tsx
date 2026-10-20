@@ -40,7 +40,7 @@ describe('AppShell', () => {
     expect(container.querySelector('.inspector-float')).not.toBeNull();
   });
 
-  // A tool's create card owns the lane's height; the drawer gives way.
+  // A tool's create card owns the lane's height; a phone-lane panel gives way.
   it('marks a command form in the inspector as owning the lane', () => {
     const { container, rerender } = render(
       <AppShell
@@ -104,14 +104,14 @@ describe('AppShell', () => {
     }
   });
 
-  it('anchors the command card at the top of the right lane, over the inspector and drawer', () => {
+  it('anchors the command card at the top of the right lane, over the inspector and the phone lane', () => {
     const props = {
       topBar: <header>top</header>,
       toolBar: null,
       sidebar: null,
       viewer: <div className="viewer-shell">viewer</div>,
       inspector: <section>panel</section>,
-      drawer: <aside>drawer</aside>,
+      panelLane: <section aria-label="History">panel</section>,
       assistant: null,
       sidebarWidth: 252,
       assistantWidth: 360
@@ -124,12 +124,13 @@ describe('AppShell', () => {
     const lane = [
       ...(container.querySelector('.stage-right')?.children ?? [])
     ].map((child) => child.className);
-    // One lane, the card first and the drawer yielding below it.
+    // One lane, the card first and a phone-width panel yielding below it.
     expect(lane).toEqual([
       'command-float',
       'inspector-float',
-      'model-drawer-float'
+      'panel-lane-float'
     ]);
+    expect(area?.classList.contains('has-panel-lane')).toBe(true);
     // The card is never a viewport overlay.
     expect(container.querySelector('.viewer-shell .tool-card')).toBeNull();
 
@@ -138,6 +139,50 @@ describe('AppShell', () => {
     expect(area?.classList.contains('has-command')).toBe(false);
     expect(container.querySelector('.command-float')).toBeNull();
     // The card leaving does not remount the inspector's form.
+    expect(container.querySelector('.inspector-float section')).toBe(inspector);
+  });
+
+  it('draws the panel dock over the viewport, outside the right lane', () => {
+    const { container, rerender } = render(
+      <AppShell
+        topBar={<header>top</header>}
+        toolBar={null}
+        sidebar={null}
+        viewer={<div className="viewer-shell">viewer</div>}
+        inspector={<section>panel</section>}
+        panels={<div className="panel-dock-layer">dock</div>}
+        assistant={null}
+        sidebarWidth={252}
+        assistantWidth={360}
+      />
+    );
+    const dock = container.querySelector('.viewer-area > .panel-dock-layer');
+    expect(dock).toHaveTextContent('dock');
+    // The inspector keeps the lane; the docked panels never share it.
+    expect(
+      container.querySelector('.stage-right .panel-dock-layer')
+    ).toBeNull();
+    expect(
+      [...(container.querySelector('.stage-right')?.children ?? [])].map(
+        (child) => child.className
+      )
+    ).toEqual(['inspector-float']);
+    const inspector = container.querySelector('.inspector-float section');
+    rerender(
+      <AppShell
+        topBar={<header>top</header>}
+        toolBar={null}
+        sidebar={null}
+        viewer={<div className="viewer-shell">viewer</div>}
+        inspector={<section>panel</section>}
+        panels={null}
+        assistant={null}
+        sidebarWidth={252}
+        assistantWidth={360}
+      />
+    );
+    expect(container.querySelector('.panel-dock-layer')).toBeNull();
+    // The dock leaving does not remount the inspector's form.
     expect(container.querySelector('.inspector-float section')).toBe(inspector);
   });
 

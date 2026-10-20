@@ -58,12 +58,14 @@ describe('sketch flyouts', () => {
     const css = sheet('quiet-stage.css');
     const selector =
       '.viewer-area .workspace-column-float :is(.command-flyout, .sketch-flyouts)';
-    const short = css.slice(css.indexOf('@media (max-height: 600px)'));
+    // The 600px block that holds the flyouts' rule (the instrument rail
+    // stands its islands side by side from the same height, earlier on).
+    const at = css.indexOf(`@media (max-height: 600px) {\n  ${selector} {`);
+    expect(at).toBeGreaterThan(0);
+    const short = css.slice(at);
     const maxHeight =
       rule(short, selector).match(/max-height:\s*([^;]+);/)?.[1] ?? '';
-    expect(css.indexOf('@media (max-height: 600px)')).toBeGreaterThan(
-      css.indexOf(`${selector} {`)
-    );
+    expect(at).toBeGreaterThan(css.indexOf(`${selector} {`));
     expect(maxHeight).toMatch(/var\(--readout-reserve\)\s*\+/);
     expect(maxHeight).not.toMatch(/-\s*var\(--readout-reserve\)/);
   });

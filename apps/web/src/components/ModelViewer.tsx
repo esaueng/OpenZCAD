@@ -204,6 +204,7 @@ import {
   placeSelectionCallouts,
   refreshSelectionCallout,
   renderSelectionCallout,
+  MODEL_PANEL_OBSTACLES,
   SELECTION_CALLOUT_CHIP_CLASS
 } from '../lib/selectionCalloutView';
 import { measureFitFrame } from '../lib/fitFrame';
@@ -5667,13 +5668,23 @@ export function ModelViewer({
       // renders once more, so the next one measures and places them again.
       const chipWidth = chip.offsetWidth;
       const labelWidth = radiusLabelChip.offsetWidth;
-      const lane = renderer.domElement
-        .closest('.viewer-area')
-        ?.querySelector<HTMLElement>('.stage-right > *');
-      const laneLeft = lane
-        ? lane.getBoundingClientRect().left -
-          renderer.domElement.getBoundingClientRect().left
-        : null;
+      // The right lane's inner edge: the leftmost of the command card, the
+      // inspector and every model panel drawn on the right.
+      const laneEdges = [
+        ...(renderer.domElement
+          .closest('.viewer-area')
+          ?.querySelectorAll<HTMLElement>(
+            `.stage-right > *, ${MODEL_PANEL_OBSTACLES}`
+          ) ?? [])
+      ]
+        .map((element) => element.getBoundingClientRect())
+        .filter((rect) => rect.width > 0)
+        .map((rect) => rect.left);
+      const laneLeft =
+        laneEdges.length > 0
+          ? Math.min(...laneEdges) -
+            renderer.domElement.getBoundingClientRect().left
+          : null;
       // Either rig answers the same two questions; only the label differs.
       // In a multi-region extrude the chip rides the arrow last grabbed.
       const regionChipRig =

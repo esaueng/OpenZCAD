@@ -38,7 +38,12 @@ export const SIDEBAR_SECTION_IDS: readonly SidebarSectionId[] = [
 export type WorkspaceMode = 'view' | 'tweak' | 'build';
 
 export interface PanelState {
-  /** Section id to open/closed. Absent means open. */
+  /**
+   * The v1 drawer's folded sections. Nothing reads it for the UI since the
+   * model panels became independent (`panelLayout.ts`, U08): it is kept, and
+   * written back as loaded, so rolling back restores the old drawer, and the
+   * first load of the panel layout migrates from it.
+   */
   sidebarSections: Record<SidebarSectionId, boolean>;
   /**
    * Remembered per device for the same reason panel collapse is: someone who
@@ -77,10 +82,8 @@ export interface PanelState {
    */
   toolGroups: Record<ToolGroup, boolean>;
   /**
-   * The model drawer on the right (parameters, bodies, history, revisions,
-   * diagnostics). Closed to begin with: the quiet stage opens on the model,
-   * and the instrument rail's Objects, History and Parameters buttons open it
-   * on the section they name. Remembered like every other chrome habit.
+   * The v1 model drawer. Like `sidebarSections`, kept for rollback and for
+   * the panel layout's first-load migration, and never read for the UI.
    */
   drawerOpen: boolean;
   /**
@@ -103,9 +106,6 @@ export interface PanelState {
    */
   tweakPanelOpen: boolean;
 }
-
-/** The drawer sections the instrument rail can open directly. */
-export type DrawerSectionId = 'parameters' | 'bodies' | 'history';
 
 export const DEFAULT_PANEL_STATE: PanelState = {
   sidebarSections: {
@@ -229,45 +229,6 @@ export function savePanelState(state: PanelState): boolean {
   }
 }
 
-export function toggleSidebarSection(
-  state: PanelState,
-  id: SidebarSectionId
-): PanelState {
-  return {
-    ...state,
-    sidebarSections: {
-      ...state.sidebarSections,
-      [id]: !state.sidebarSections[id]
-    }
-  };
-}
-
-/**
- * What a rail button does: open the drawer on its section, or close the
- * drawer when that section is already showing in it. Opening folds the other
- * two primary sections so the named one gets the drawer's height, the way
- * opening History always folded the tree above it; Revisions and Diagnostics
- * keep whatever the user left them at.
- */
-export function toggleDrawerSection(
-  state: PanelState,
-  id: DrawerSectionId
-): PanelState {
-  if (state.drawerOpen && state.sidebarSections[id]) {
-    return { ...state, drawerOpen: false };
-  }
-  return {
-    ...state,
-    drawerOpen: true,
-    sidebarSections: {
-      ...state.sidebarSections,
-      parameters: id === 'parameters',
-      bodies: id === 'bodies',
-      history: id === 'history'
-    }
-  };
-}
-
 export function toggleToolGroup(state: PanelState, id: ToolGroup): PanelState {
   return {
     ...state,
@@ -281,28 +242,28 @@ export function defaultPanelState(): PanelState {
 
 /**
  * A mode that wants the stage to itself — a sketch, or a direct-manipulation
- * drag — suspends the model drawer and the command card's "More tools" fold,
- * and gives them back when it ends. Suspension is not a preference: the
- * stored `drawerOpen` and `commandFoldOpen` keep what the user chose, and
- * what shows is `preference && !suspended`. A panel the user toggles while
- * suspended is released for the rest of that mode: their intent wins.
+ * drag — suspends every open model panel (docked, unpinned or in the phone
+ * lane) and the command card's "More tools" fold, and gives them back when
+ * it ends. Suspension is not a preference: the stored panel layout and
+ * `commandFoldOpen` keep what the user chose. A rail press, or a search that
+ * asks for a panel, while suspended releases the panels for the rest of that
+ * mode, and toggling the fold releases the fold: their intent wins.
  */
 export interface PanelSuspension {
   suspended: boolean;
-  drawerReleased: boolean;
+  panelsReleased: boolean;
   foldReleased: boolean;
 }
 
-export type SuspendablePanel = 'drawer' | 'fold';
+export type SuspendablePanel = 'panels' | 'fold';
 
-/** The panels as they show, given what the user chose and the mode. */
+/** What shows, given what the user chose and the mode. */
 export function effectivePanels(
-  state: Pick<PanelState, 'drawerOpen' | 'commandFoldOpen'>,
+  state: Pick<PanelState, 'commandFoldOpen'>,
   suspension: PanelSuspension
-): { drawerOpen: boolean; commandFoldOpen: boolean } {
+): { panelsSuspended: boolean; commandFoldOpen: boolean } {
   return {
-    drawerOpen:
-      state.drawerOpen && (!suspension.suspended || suspension.drawerReleased),
+    panelsSuspended: suspension.suspended && !suspension.panelsReleased,
     commandFoldOpen:
       state.commandFoldOpen &&
       (!suspension.suspended || suspension.foldReleased)
@@ -313,7 +274,7 @@ export function effectivePanels(
  * Whether a drag still holds the stage. It takes it when a gesture engages
  * and keeps it while the pointer stays down — a value the kernel refuses
  * mid-gesture is not the end of the drag — and while that gesture's release
- * is validated, so the drawer does not flash back between letting go and
+ * is validated, so the panels do not flash back between letting go and
  * the result landing. A commit, a cancel, a refusal at release or a cleared
  * selection ends it. Validation no drag started (a typed value, the Extrude
  * form's Create) never takes it.
@@ -327,20 +288,4 @@ export function nextDragSuspension(
     return true;
   }
   return held && phase === 'validating';
-}
-
-/**
- * A rail button pressed while the drawer is suspended acts on the drawer as
- * it shows — closed — so it opens on the section it names instead of
- * closing a drawer nobody can see.
- */
-export function toggleDrawerSectionAsShown(
-  state: PanelState,
-  id: DrawerSectionId,
-  hidden: boolean
-): PanelState {
-  return toggleDrawerSection(
-    hidden ? { ...state, drawerOpen: false } : state,
-    id
-  );
 }

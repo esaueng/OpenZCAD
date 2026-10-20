@@ -1,5 +1,5 @@
 import type { BodyRepresentation, ParameterNode } from '@openzcad/shared';
-import type { SidebarProps } from '../Sidebar';
+import type { ModelPanelSource } from './modelPanelProps';
 import {
   AddParameterRow,
   ParameterRow,
@@ -7,7 +7,7 @@ import {
 } from '../ParameterRows';
 
 export type ParametersPanelProps = Pick<
-  SidebarProps,
+  ModelPanelSource,
   | 'parameters'
   | 'parameterValues'
   | 'parameterMinimums'
