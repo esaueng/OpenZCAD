@@ -100,7 +100,7 @@ async function addPrimitive(page: Page, name: RegExp) {
 async function expectBoxAndSphere(page: Page) {
   await expectBodyCount(page, 2);
   await expect(
-    page.getByRole('button', { name: 'History 2', exact: true })
+    page.getByRole('heading', { name: 'History 2', exact: true })
   ).toBeVisible();
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })

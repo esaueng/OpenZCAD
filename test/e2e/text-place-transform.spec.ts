@@ -15,7 +15,9 @@ import {
   expectBodyCount,
   stubApi,
   test,
-  waitForStillViewport
+  waitForStillViewport,
+  revealModelPanel,
+  MODEL_ONLY
 } from './openzcad-fixtures';
 import {
   OPEN_SANS_AREA_AT_10,
@@ -289,10 +291,7 @@ async function exportedDocument(page: Page): Promise<ProjectDocument> {
 
 /** The plate's volume as the inspector reads it out. */
 async function plateVolume(page: Page): Promise<number> {
-  const bodies = page.getByRole('button', { name: /^Objects \d/ });
-  if ((await bodies.getAttribute('aria-expanded')) === 'false') {
-    await bodies.click();
-  }
+  await revealModelPanel(page, 'Objects');
   await page.locator('.body-row:not(.consumed) .body-row-main').last().click();
   const readout = page
     .getByRole('region', { name: 'Feature inspector' })
@@ -314,7 +313,9 @@ test('text placed on a face engraves exactly, and a re-entry edit rebuilds it', 
   page
 }) => {
   test.setTimeout(180_000);
-  await stubApi(page);
+  // Nothing docked: the Extrude card stands inside the right dock, and with
+  // the dock open it covered the text's region arrow.
+  await stubApi(page, { panelLayout: MODEL_ONLY });
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   const SLAB = { width: 62, height: 50, depth: 10 } as const;

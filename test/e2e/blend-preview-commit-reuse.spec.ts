@@ -90,7 +90,7 @@ test('commits the exact previewed fillet with the same feature IDs and no second
 
   await keypad.getByRole('textbox').press('Enter');
   await expect(keypad).toBeHidden();
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await expect.poll(readBlendRadius, { timeout: 30_000 }).toBeCloseTo(2, 5);
   await expect
     .poll(async () => (await syncs()).some((entry) => entry.requestId === null))

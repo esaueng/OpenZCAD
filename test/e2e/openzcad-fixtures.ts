@@ -47,19 +47,20 @@ export async function stubApi(
     assistantEnabled = false,
     collaborationRole,
     workspaceTour = false,
-    modelDrawer = true,
+    panelLayout = ALL_PANELS_DOCKED,
     commandFoldClosed = false
   }: {
     assistantEnabled?: boolean;
     collaborationRole?: 'owner' | 'editor' | 'viewer';
     /**
-     * The model drawer (parameters, bodies, history) opens on demand from
-     * the instrument rail and starts closed. Most specs exercise what is in
-     * it rather than how it opens, so the suite's baseline is a returning
-     * user who keeps it open; `quiet-stage-drawer.spec.ts` covers the closed
-     * default and the rail buttons.
+     * The model panels' layout to seed. Most specs exercise what is in the
+     * panels rather than where they sit, so the suite's baseline is a
+     * returning user with all five docked in one right column, as the old
+     * drawer showed them. Null seeds nothing: the device's first load
+     * migrates or takes the new-device default, which `panel-dock.spec.ts`
+     * covers along with the rail buttons.
      */
-    modelDrawer?: boolean;
+    panelLayout?: SeedPanelLayout | null;
     /**
      * Every fresh context is a "first run", so without this pre-seed the
      * first-model tour card would float over the lower-left viewport in
@@ -81,8 +82,8 @@ export async function stubApi(
   if (!workspaceTour) {
     await seedDismissedWorkspaceTour(page);
   }
-  if (modelDrawer) {
-    await seedOpenModelDrawer(page);
+  if (panelLayout) {
+    await seedPanelLayout(page, panelLayout);
   }
   if (!commandFoldClosed) {
     await seedOpenCommandFold(page);
@@ -404,7 +405,7 @@ export async function stubApi(
 
 export async function stubAnonymousApi(page: Page) {
   await seedDismissedWorkspaceTour(page);
-  await seedOpenModelDrawer(page);
+  await seedPanelLayout(page);
   await seedOpenCommandFold(page);
   await page.route('**/api/auth/config', (route) =>
     route.fulfill({
@@ -1001,26 +1002,47 @@ export async function seedUnitlessImportUnits(
   }, units);
 }
 
+export type SeedPanelId =
+  'parameters' | 'bodies' | 'history' | 'revisions' | 'diagnostics';
+
 /**
- * Opens the model drawer the way a returning user left it, unless the spec
- * has already said otherwise.
+ * A stored panel layout (`openzcad-panel-layout:v1`) as a spec seeds it; the
+ * app normalizes whatever is left out.
  */
-export async function seedOpenModelDrawer(page: Page) {
-  await page.addInitScript(() => {
-    const key = 'openzcad-panel-state:v1';
+export interface SeedPanelLayout {
+  right?: SeedPanelId[][];
+  left?: SeedPanelId[][];
+  unpinned?: SeedPanelId | null;
+  recent?: SeedPanelId[];
+  weights?: Partial<Record<SeedPanelId, number>>;
+}
+
+/** Every panel docked in one right column, in the old drawer's order. */
+export const ALL_PANELS_DOCKED: SeedPanelLayout = {
+  right: [['parameters', 'bodies', 'history', 'revisions', 'diagnostics']]
+};
+
+/** Nothing open: the model alone. */
+export const MODEL_ONLY: SeedPanelLayout = { right: [] };
+
+/**
+ * Seeds the device's panel layout the way a returning user left it, unless
+ * the device (a reload within the spec) has already stored one.
+ */
+export async function seedPanelLayout(
+  page: Page,
+  layout: SeedPanelLayout = ALL_PANELS_DOCKED
+) {
+  await page.addInitScript((seed) => {
+    const key = 'openzcad-panel-layout:v1';
     try {
-      const raw = window.localStorage.getItem(key);
-      const state: Record<string, unknown> = raw
-        ? (JSON.parse(raw) as Record<string, unknown>)
-        : {};
-      if (typeof state.drawerOpen !== 'boolean') {
-        state.drawerOpen = true;
-        window.localStorage.setItem(key, JSON.stringify(state));
+      if (window.localStorage.getItem(key) === null) {
+        window.localStorage.setItem(key, JSON.stringify(seed));
       }
     } catch {
       // Unreadable storage falls back to the app's own defaults.
     }
-  });
+  }, layout);
 }
 
 /**
@@ -1045,25 +1067,42 @@ export async function seedOpenCommandFold(page: Page) {
   });
 }
 
-/**
- * A sketch (like a drag) takes the stage: the model drawer steps aside while
- * it lasts, whatever the suite seeded. A spec that reads the drawer from
- * inside a sketch asks for it the way a user would — the rail button — which
- * keeps it up for the rest of that sketch. A no-op when it already shows.
- */
-export async function revealModelDrawer(
-  page: Page,
-  section: 'History' | 'Parameters' | 'Objects' = 'History'
-) {
-  const drawer = page.locator('.model-drawer-float');
-  if ((await drawer.count()) > 0) {
-    return;
-  }
-  await page
+/** The instrument rail's button for a panel. */
+export function railPanelButton(page: Page, title: PanelTitle) {
+  return page
     .getByRole('toolbar', { name: 'Model panels' })
-    .getByRole('button', { name: `${section} panel` })
-    .click();
-  await expect(drawer).toBeVisible();
+    .getByRole('button', { name: `${title} panel` });
+}
+
+export type PanelTitle =
+  'History' | 'Parameters' | 'Objects' | 'Revisions' | 'Diagnostics';
+
+/** A model panel's region, wherever it is drawn. */
+export function modelPanel(page: Page, title: PanelTitle) {
+  return page.getByRole('region', { name: title, exact: true });
+}
+
+/**
+ * A sketch (like a drag) takes the stage: every model panel steps aside
+ * while it lasts, whatever the suite seeded. A spec that reads a panel from
+ * inside a sketch asks for it the way a user would — its rail button —
+ * which brings the panels back for the rest of that sketch. A no-op when
+ * the panel already shows.
+ */
+export async function revealModelPanel(
+  page: Page,
+  title: PanelTitle = 'History'
+) {
+  const panel = modelPanel(page, title);
+  // The rail button says whether the panel shows; the panel's own region can
+  // lag behind while its lazy body loads, and a press then would close it.
+  const button = railPanelButton(page, title);
+  await expect(button).toBeVisible();
+  if ((await button.getAttribute('aria-pressed')) !== 'true') {
+    await button.click();
+  }
+  await expect(button).toHaveAttribute('aria-pressed', 'true');
+  await expect(panel).toBeVisible();
 }
 
 /**
@@ -1072,15 +1111,11 @@ export async function revealModelDrawer(
  * nothing selected (design review G15), so a spec that reads the new body's
  * chip asks for it first.
  */
-export async function selectBodyFromItems(page: Page, name?: string) {
-  const items = page
-    .getByRole('toolbar', { name: 'Model panels' })
-    .getByRole('button', { name: 'Objects panel' });
-  if ((await items.getAttribute('aria-pressed')) !== 'true') {
-    await items.click();
-  }
-  await expect(items).toHaveAttribute('aria-pressed', 'true');
-  const rows = page.locator('.body-row:not(.consumed) .body-row-main');
+export async function selectBodyFromObjects(page: Page, name?: string) {
+  await revealModelPanel(page, 'Objects');
+  const rows = modelPanel(page, 'Objects').locator(
+    '.body-row:not(.consumed) .body-row-main'
+  );
   await (name ? rows.filter({ hasText: name }) : rows).first().click();
   await expect(page.locator('.selection-callout-chip')).toBeVisible();
 }

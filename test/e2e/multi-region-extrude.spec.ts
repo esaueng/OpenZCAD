@@ -13,7 +13,9 @@ import {
   expect,
   stubApi,
   expectBodyCount,
-  selectBodyFromItems
+  selectBodyFromObjects,
+  revealModelPanel,
+  MODEL_ONLY
 } from './openzcad-fixtures';
 
 interface RegionHandle {
@@ -107,7 +109,9 @@ test('Shift-picked regions extrude together from any one of their arrows', async
   page
 }) => {
   test.setTimeout(120_000);
-  await stubApi(page);
+  // Nothing docked: the Extrude card stands inside the right dock, and with
+  // the dock open it covered the follower region's arrow at 1440px.
+  await stubApi(page, { panelLayout: MODEL_ONLY });
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   let document = createProjectDocument(
@@ -201,6 +205,7 @@ test('Shift-picked regions extrude together from any one of their arrows', async
     { timeout: 30_000 }
   );
   await expectBodyCount(page, 1);
+  await revealModelPanel(page, 'History');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Extrude' })
   ).toHaveCount(1);
@@ -221,10 +226,7 @@ test('Shift-picked regions extrude together from any one of their arrows', async
   expect(depth).toBeGreaterThan(0);
   expect(depth).toBeLessThanOrEqual(8);
 
-  const bodies = page.getByRole('button', { name: /^Objects \d/ });
-  if ((await bodies.getAttribute('aria-expanded')) === 'false') {
-    await bodies.click();
-  }
+  await revealModelPanel(page, 'Objects');
   await page.locator('.body-row:not(.consumed) .body-row-main').last().click();
   const readout = page
     .getByRole('region', { name: 'Feature inspector' })
@@ -413,7 +415,7 @@ test('a glyph pick selects, arms and builds the whole word', async ({
     { timeout: 30_000 }
   );
   await expectBodyCount(page, 1);
-  await selectBodyFromItems(page);
+  await selectBodyFromObjects(page);
   // The body spans all three letters (about 28 mm at this size), not the one
   // glyph that was clicked (an H alone is under 15 mm).
   const detail =

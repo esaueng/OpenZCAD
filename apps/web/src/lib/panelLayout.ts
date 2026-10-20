@@ -1251,7 +1251,10 @@ function revealPanel(layout: PanelLayout, id: PanelId): PanelLayout {
  * hidden it only shows them (opening the panel if it was closed), so a press
  * never closes something nobody can see. With a stage, a press on a parked
  * panel shows it in the unpinned slot, and a second press hides it again;
- * it stays docked throughout. Every press counts as a use.
+ * it stays docked throughout. On a phone-width stage, where the lane shows
+ * only the most recently used open panel, a press on an open panel the lane
+ * is not showing brings it into the lane rather than closing it unseen.
+ * Every press counts as a use.
  */
 export function togglePanel(
   layout: PanelLayout,
@@ -1282,6 +1285,28 @@ export function togglePanel(
     return notePanelUsed(revealPanel(layout, id), id);
   }
   return notePanelUsed(closePanel(layout, id), id);
+}
+
+/**
+ * Makes a panel visible for a search result (⌘K): a closed panel opens
+ * unpinned — not at its home, since the person asked for a row in it, not
+ * for a layout — and an open one stays where it is. Either way it becomes the
+ * most recent, so a phone-width lane shows it, a parked one shows in the
+ * unpinned slot, and Hide all turns off.
+ */
+export function presentPanel(
+  layout: PanelLayout,
+  id: PanelId,
+  stage?: PanelStage
+): PanelLayout {
+  let next: PanelLayout = layout;
+  if (!isPanelOpen(layout, id)) {
+    next = openUnpinned(layout, id);
+  } else if (stage && isPanelParked(layout, id, stage)) {
+    next = revealPanel(layout, id);
+  }
+  next = notePanelUsed(next, id);
+  return next.options.hidden ? setOption(next, 'hidden', false) : next;
 }
 
 /**
@@ -1713,6 +1738,25 @@ function arrangedGeometry(
  * windows, short columns scroll and windows stay inside the stage, all
  * without touching the layout.
  */
+/**
+ * Whether the unpinned slot reserves its width, so the right lane (the
+ * command card and the inspector) steps past it. It does while the lane
+ * keeps `laneMin` beside it. On a narrower stage the slot covers the lane
+ * instead, as a float would: like a float it is opened and closed by one
+ * press and sits outside the 40% guarantee, and reserving it there would
+ * squeeze a form in the lane to a sliver.
+ */
+export function unpinnedSlotReserves(
+  stage: PanelStage,
+  dockWidth: number,
+  slotWidth: number,
+  laneMin: number
+): boolean {
+  const { rail, gap } = insetsOf(stage);
+  const laneEnd = rail + gap * 2 + dockWidth + slotWidth;
+  return stage.width - laneEnd - gap >= laneMin;
+}
+
 export function computePanelGeometry(
   layout: PanelLayout<PanelEntry>,
   stage: PanelStage

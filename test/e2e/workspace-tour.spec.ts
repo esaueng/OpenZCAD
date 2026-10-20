@@ -1,11 +1,17 @@
-import { test, expect, createProject, stubApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  createProject,
+  modelPanel,
+  stubApi
+} from './openzcad-fixtures';
 
 test('first-model tour rides the real workflow and never returns', async ({
   page
 }) => {
   await stubApi(page, {
     workspaceTour: true,
-    modelDrawer: false,
+    panelLayout: null,
     commandFoldClosed: true
   });
   await createProject(page, 'Tour Part');
@@ -15,7 +21,7 @@ test('first-model tour rides the real workflow and never returns', async ({
   await expect(tour).toContainText('Create your first feature');
   // The step outlines the chrome it talks about.
   await expect(page.locator('.tool-palette')).toHaveClass(/tour-target/);
-  await expect(page.locator('.sidebar')).toHaveCount(0);
+  await expect(modelPanel(page, 'History')).toHaveCount(0);
 
   // Creating the first feature advances the tour by itself.
   await page.getByRole('button', { name: /^Box \(B\)/ }).click();
@@ -34,8 +40,8 @@ test('first-model tour rides the real workflow and never returns', async ({
     position: { x: bounds!.width / 2, y: bounds!.height / 2 }
   });
   await expect(tour).toContainText('The history is the model');
-  // A fresh device starts with its drawer closed. Point to the control that
-  // can reveal History, rather than waiting for a sidebar that does not exist.
+  // A fresh device starts with History closed. Point to the control that
+  // can reveal it, rather than waiting for a panel that does not exist.
   const history = page.getByRole('button', {
     name: 'History panel',
     exact: true
@@ -47,13 +53,12 @@ test('first-model tour rides the real workflow and never returns', async ({
     contentType: 'image/png'
   });
   await history.click();
-  await expect(page.locator('.sidebar')).toBeVisible();
   await expect(
-    page.locator('.sidebar').getByRole('button', { name: /^History/ })
-  ).toHaveAttribute('aria-expanded', 'true');
+    modelPanel(page, 'History').getByRole('heading', { name: 'History 1' })
+  ).toBeVisible();
   await expect(page.locator('.feature-row')).toHaveCount(1);
   await expect(page.getByText(/^Loading feature history/)).toBeHidden();
-  await test.info().attach('history-tour-opened-drawer', {
+  await test.info().attach('history-tour-opened-panel', {
     body: await page.screenshot(),
     contentType: 'image/png'
   });
@@ -84,7 +89,7 @@ test('manual tour advance reveals the History control without moving keyboard fo
 }) => {
   await stubApi(page, {
     workspaceTour: true,
-    modelDrawer: false,
+    panelLayout: null,
     commandFoldClosed: true
   });
   await createProject(page, 'Tour Keyboard Part');
@@ -102,7 +107,7 @@ test('manual tour advance reveals the History control without moving keyboard fo
   await page.keyboard.press('Enter');
   await expect(tour).toContainText('The history is the model');
   await expect(next).toBeFocused();
-  await expect(page.locator('.sidebar')).toHaveCount(0);
+  await expect(modelPanel(page, 'History')).toHaveCount(0);
   const history = page.getByRole('button', {
     name: 'History panel',
     exact: true
@@ -110,7 +115,7 @@ test('manual tour advance reveals the History control without moving keyboard fo
   await expect(history).toBeVisible();
   await expect(history).toHaveClass(/tour-target/);
   await history.click();
-  await expect(page.locator('.sidebar')).toBeVisible();
+  await expect(modelPanel(page, 'History')).toBeVisible();
   await expect(page.locator('.feature-row')).toHaveCount(1);
   await tour.getByRole('button', { name: 'Skip the tour' }).click();
   await expect(tour).toHaveCount(0);

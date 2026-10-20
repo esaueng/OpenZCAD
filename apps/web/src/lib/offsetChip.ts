@@ -54,3 +54,24 @@ export function offsetChipText(input: {
   const value = Math.round(rawValue * 100) / 100;
   return `${value >= 0 ? '+' : ''}${value} ${units}`;
 }
+
+/** The gap kept between an edge chip and the right lane or the stage edge. */
+const EDGE_CHIP_MARGIN_PX = 8;
+
+/**
+ * Where an edge rig's value chip centres horizontally: clear of the right
+ * lane when the space left of it can hold the chip. At a phone width the lane
+ * spans the stage from its left inset, and dodging it would put the chip,
+ * and with it exact entry, off-screen; it stays on its anchor instead.
+ */
+export function edgeChipCenterX(
+  anchorX: number,
+  laneLeft: number | null,
+  chipWidth: number
+): number {
+  if (laneLeft === null) return anchorX;
+  const dodged = laneLeft - EDGE_CHIP_MARGIN_PX - chipWidth / 2;
+  return dodged - chipWidth / 2 >= EDGE_CHIP_MARGIN_PX
+    ? Math.min(anchorX, dodged)
+    : anchorX;
+}

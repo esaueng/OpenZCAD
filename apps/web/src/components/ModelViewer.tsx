@@ -195,6 +195,7 @@ import {
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 import {
+  edgeChipCenterX,
   faceOffsetChipState,
   offsetChipText,
   regionChipState,
@@ -206,6 +207,7 @@ import {
   placeSelectionCallouts,
   refreshSelectionCallout,
   renderSelectionCallout,
+  MODEL_PANEL_OBSTACLES,
   SELECTION_CALLOUT_CHIP_CLASS
 } from '../lib/selectionCalloutView';
 import { measureFitFrame } from '../lib/fitFrame';
@@ -5692,13 +5694,23 @@ export function ModelViewer({
       // renders once more, so the next one measures and places them again.
       const chipWidth = chip.offsetWidth;
       const labelWidth = radiusLabelChip.offsetWidth;
-      const lane = renderer.domElement
-        .closest('.viewer-area')
-        ?.querySelector<HTMLElement>('.stage-right > *');
-      const laneLeft = lane
-        ? lane.getBoundingClientRect().left -
-          renderer.domElement.getBoundingClientRect().left
-        : null;
+      // The right lane's inner edge: the leftmost of the command card, the
+      // inspector and every model panel drawn on the right.
+      const laneEdges = [
+        ...(renderer.domElement
+          .closest('.viewer-area')
+          ?.querySelectorAll<HTMLElement>(
+            `.stage-right > *, ${MODEL_PANEL_OBSTACLES}`
+          ) ?? [])
+      ]
+        .map((element) => element.getBoundingClientRect())
+        .filter((rect) => rect.width > 0)
+        .map((rect) => rect.left);
+      const laneLeft =
+        laneEdges.length > 0
+          ? Math.min(...laneEdges) -
+            renderer.domElement.getBoundingClientRect().left
+          : null;
       // Either rig answers the same two questions; only the label differs.
       // In a multi-region extrude the chip rides the arrow last grabbed.
       const regionChipRig =
@@ -6081,7 +6093,16 @@ export function ModelViewer({
         chip.style.removeProperty('--chip-rotate');
         radiusLabelChip.style.removeProperty('--chip-rotate');
         delete radiusLabelChip.dataset.variant;
-        hud.showAt(chip, screen.x, screen.y);
+        // An edge's chip stays clear of the right lane too (the pin variants
+        // dodge it above): past the dock and the inspector the lane reaches
+        // well into the stage, and a value under it cannot be tapped.
+        hud.showAt(
+          chip,
+          chip.dataset.variant === 'default'
+            ? edgeChipCenterX(screen.x, laneLeft, chipWidth)
+            : screen.x,
+          screen.y
+        );
         const offsetSpan =
           offsetHandleRef.current?.totalBaseline ?? offsetExtentRef.current;
         if (rig?.kind === 'cylinder-radius' && !dimensionChipBesidePin) {

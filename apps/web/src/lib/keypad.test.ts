@@ -249,6 +249,38 @@ describe('keypadClampPosition around docked panels', () => {
     expect(placement.x + SIZE.width).toBeLessThanOrEqual(VIEWPORT.width);
   });
 
+  it('never places it inside a panel that is wider than the free room', () => {
+    // The phone lane's panel under the inspector: both bands span the same
+    // 330px, wider than the 280px left of them. Every pair of edges used to
+    // count as a gap, so the band itself won as the widest one.
+    const viewport = { width: 720, height: 800 };
+    const column = { x: 10, width: 40 };
+    const lane = { x: 330, width: 330 };
+    for (const bands of [
+      [column, lane],
+      [column, lane, lane],
+      [lane, column, { x: 400, width: 100 }]
+    ]) {
+      const placement = keypadClampPosition(
+        { x: 214, y: 320 },
+        { width: 232, height: 288 },
+        viewport,
+        bands
+      );
+      expect(placement.x).toBeGreaterThanOrEqual(50);
+      expect(placement.x + 232).toBeLessThanOrEqual(330);
+    }
+  });
+
+  it('treats overlapping panels as one obstacle', () => {
+    const placement = keypadClampPosition({ x: 640, y: 200 }, SIZE, VIEWPORT, [
+      { x: 500, width: 200 },
+      { x: 600, width: 250 }
+    ]);
+    // 0–500 is the only room; 700–850 lies inside the second panel.
+    expect(placement.x + SIZE.width).toBeLessThanOrEqual(500);
+  });
+
   it('is unchanged when no panels are open', () => {
     expect(keypadClampPosition({ x: 820, y: 200 }, SIZE, VIEWPORT)).toEqual(
       keypadClampPosition({ x: 820, y: 200 }, SIZE, VIEWPORT, [])
