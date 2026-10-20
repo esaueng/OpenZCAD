@@ -3986,6 +3986,18 @@ export const MAX_PERSISTED_DOCUMENT_BYTES = 1_500_000;
  */
 export const MAX_CLOUD_PROJECT_DOCUMENT_BYTES = 24 * 1024 * 1024;
 
+/**
+ * Largest request body a cloud document write may send: the document ceiling
+ * and 1 MiB of request envelope, plus room for a browser-split write
+ * (ADR-024 Phase 1), whose payloads travel gzip-compressed and base64-encoded
+ * — for bytes gzip cannot shrink, a third larger than inside the document,
+ * plus gzip framing. The document ceiling still applies once it is hydrated.
+ */
+export const MAX_CLOUD_PROJECT_WRITE_BYTES =
+  MAX_CLOUD_PROJECT_DOCUMENT_BYTES +
+  1024 * 1024 +
+  Math.ceil((MAX_CLOUD_PROJECT_DOCUMENT_BYTES * 1.01) / 3);
+
 /** Account limits include projects in the recycle bin until hard deletion. */
 export const MAX_ACCOUNT_PROJECTS = 100;
 /** Stored R2 project documents and externalized source assets per owner. */

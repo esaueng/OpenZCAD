@@ -231,6 +231,46 @@ describe('browser-split document writes through the worker (ADR-024 Phase 1)', (
     ).toHaveLength(2);
   });
 
+  it('accepts a valid split write whose base64 uploads exceed the plain JSON ceiling', async () => {
+    const { call } = setup();
+    const document = await created(call);
+    // Printable noise gzip barely shrinks, held once (no command or undo
+    // copy) so the document stays under its ceiling while base64 does not.
+    const alphabet =
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=;:,.()[]{}<>!?#$%&*-_@^|~';
+    const noise = new Uint8Array(23 * 1024 * 1024);
+    let state = 0x2545f491;
+    for (let index = 0; index < noise.length; index += 1) {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      noise[index] = alphabet.charCodeAt((state >>> 0) % alphabet.length);
+    }
+    const nodes = structuredClone(document.nodes);
+    for (const node of Object.values(nodes))
+      if (node.kind === 'feature' && node.data.featureKind === 'imported-step')
+        node.data.stepText = decoder.decode(noise);
+    const next: ProjectDocument = {
+      ...document,
+      nodes,
+      commandLog: [],
+      editHistory: undefined,
+      version: document.version + 1
+    };
+    const payload = {
+      projectId: document.projectId,
+      expectedVersion: document.version,
+      ...(await splitProjectStorageUpload(next))
+    };
+    expect(JSON.stringify(payload).length).toBeGreaterThan(25 * 1024 * 1024);
+    const response = await call(
+      'PUT',
+      `/api/projects/${document.projectId}/document`,
+      payload
+    );
+    expect(response.status).toBe(200);
+  }, 120_000);
+
   it.each([
     [
       'bytes that fail their checksum',

@@ -133,6 +133,7 @@ import {
 import {
   MAX_ARTIFACT_PART_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
+  MAX_CLOUD_PROJECT_WRITE_BYTES,
   toUserId
 } from '@openzcad/shared';
 
@@ -1324,7 +1325,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/projects') {
-    const opened = await openProjectStorageRequest(await readJsonBody(request));
+    const opened = await openProjectStorageRequest(
+      await readJsonBody(request, MAX_CLOUD_PROJECT_WRITE_BYTES)
+    );
     const payload = parseCreateProjectRequest(opened.body);
     return json(
       await persistence.createProject(userId, payload, {
@@ -1568,7 +1571,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const duplicateMatch = PROJECT_DUPLICATE_ROUTE.exec(pathname);
   if (request.method === 'POST' && duplicateMatch) {
-    const opened = await openProjectStorageRequest(await readJsonBody(request));
+    const opened = await openProjectStorageRequest(
+      await readJsonBody(request, MAX_CLOUD_PROJECT_WRITE_BYTES)
+    );
     const payload = parseDuplicateProjectRequest(
       opened.body,
       duplicateMatch[1]!
@@ -1708,7 +1713,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const revisionsMatch = PROJECT_REVISIONS_ROUTE.exec(pathname);
   if (request.method === 'POST' && revisionsMatch) {
     const opened = await openProjectStorageRequest(
-      await readJsonBody(request, MAX_JSON_BODY_BYTES, true),
+      await readJsonBody(request, MAX_CLOUD_PROJECT_WRITE_BYTES, true),
       revisionsMatch[1]
     );
     const payload = parseSaveRevisionRequest(opened.body, revisionsMatch[1]!);
@@ -1741,7 +1746,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const documentMatch = PROJECT_DOCUMENT_ROUTE.exec(pathname);
   if (request.method === 'PUT' && documentMatch) {
     const opened = await openProjectStorageRequest(
-      await readJsonBody(request, MAX_JSON_BODY_BYTES, true),
+      await readJsonBody(request, MAX_CLOUD_PROJECT_WRITE_BYTES, true),
       documentMatch[1]
     );
     const payload = parseSaveProjectDocumentRequest(
