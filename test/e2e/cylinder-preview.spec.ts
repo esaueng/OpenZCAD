@@ -5,7 +5,8 @@ import {
   test,
   expect,
   stubApi,
-  expectConsumedBodyCount
+  expectConsumedBodyCount,
+  waitForStillViewport
 } from './openzcad-fixtures';
 
 for (const dimension of ['radius', 'height', 'bottom-height'] as const) {
@@ -49,6 +50,7 @@ for (const dimension of ['radius', 'height', 'bottom-height'] as const) {
           ? -value
           : original + value;
     await select();
+    await fitClearOfCard(page, canvas);
     const originalBounds = await rendered(canvas);
 
     for (const outcome of ['cancel', 'commit'] as const) {
@@ -138,6 +140,7 @@ test('rounded cylinder rapid bottom, top, and radius edits survive reload', asyn
 }) => {
   test.setTimeout(90_000);
   const { canvas, errors } = await setupRoundedCylinder(page, true);
+  let framed = false;
   for (const [surface, change, minZ, maxZ, radius] of [
     ['bottom-cap', 5, -5, 22, 70],
     ['bottom-cap', 5, -10, 22, 70],
@@ -165,6 +168,10 @@ test('rounded cylinder rapid bottom, top, and radius edits survive reload', asyn
           : 'Cylindrical face'
     );
     await expect(page.getByTestId('direct-manipulation-value')).toBeVisible();
+    // Each card stands in the same lane, so one Fit frames every step.
+    if (framed) await expectHandleOnCanvas(canvas);
+    else await fitClearOfCard(page, canvas);
+    framed = true;
     const handle = await canvas.evaluate((element) => ({
       x: Number(element.dataset.e2eHandleX),
       y: Number(element.dataset.e2eHandleY),
@@ -219,7 +226,10 @@ test('rounded cylinder rapid bottom, top, and radius edits survive reload', asyn
 });
 
 async function setupRoundedCylinder(page: Page, bottomView: boolean) {
-  await stubApi(page);
+  // Fit (`fitClearOfCard`) frames the model between the left column and the
+  // right lane, and the open "More tools" fold reaches past the column over
+  // the wall's arrow. These specs need no tool from the fold.
+  await stubApi(page, { commandFoldClosed: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.addInitScript(() => {
     const scope = window as typeof window & { editSyncs: number };
@@ -261,6 +271,36 @@ async function setupRoundedCylinder(page: Page, bottomView: boolean) {
   }
   const canvas = page.locator('.viewer-host canvas');
   return { canvas, errors };
+}
+
+/**
+ * The selection's card stands in the right lane, inside the docked panels,
+ * over the right of a model framed before it opened: from below, the cap's
+ * arrow lands under it. Fit frames what the card leaves, so the arrow is on
+ * the open canvas, and the press then reaches it.
+ */
+async function fitClearOfCard(page: Page, canvas: ReturnType<Page['locator']>) {
+  await page.keyboard.press('f');
+  await waitForStillViewport(page);
+  await expectHandleOnCanvas(canvas);
+}
+
+/** Nothing stands over the armed arrow: a press there reaches the canvas. */
+async function expectHandleOnCanvas(canvas: ReturnType<Page['locator']>) {
+  await expect
+    .poll(() =>
+      canvas.evaluate((element) => {
+        const data = element.dataset;
+        const box = element.getBoundingClientRect();
+        return (
+          document.elementFromPoint(
+            box.x + Number(data.e2eHandleX),
+            box.y + Number(data.e2eHandleY)
+          ) === element
+        );
+      })
+    )
+    .toBe(true);
 }
 
 interface Handle {
