@@ -692,12 +692,33 @@ describe('D02 values from the model', () => {
     const front = view(frontId, 'front', [bodyId]);
     const t = refOf(bodyId, top);
     const dimension = linear(id('w'), 'horizontal', t, 'first', t, 'second');
-    // Gone from the model: neither the lineage nor the hash names an edge.
-    const gone = {
+    // Gone from the model: no edge carries its hash any more.
+    const gone = { bodyId, hash: 1 };
+    // A reference whose witness does not fingerprint to its hash is not
+    // trusted, whatever its lineage name says.
+    const forged = {
       ...t,
-      hash: 1,
-      reference: { ...t.reference!, lineageName: 'gone', currentHash: 1 }
+      reference: { ...t.reference!, lineageName: 'primitive.box.edge.other' }
     };
+    expect(
+      resolveDrawingAnnotation(
+        linear(
+          id('f'),
+          'horizontal',
+          {
+            ...forged,
+            hash: 99,
+            reference: { ...forged.reference, currentHash: 99 }
+          },
+          'first',
+          t,
+          'second'
+        ),
+        front,
+        bodies,
+        'mm'
+      )
+    ).toMatchObject({ ok: false, reason: 'invalid-reference' });
     expect(
       resolveDrawingAnnotation(
         linear(id('g'), 'horizontal', gone, 'first', gone, 'second'),
@@ -1243,6 +1264,16 @@ describe('D02 page and export', () => {
         ]
       ])
     ).toBeLessThanOrEqual(5 + 1e-9);
+    // Placed right next to the edge, or on it: still an arrow onto it.
+    for (const anchor of [
+      [8, 2],
+      [8, 0]
+    ] as [number, number][]) {
+      const close = layoutAnnotation(note, identity, 1, anchor);
+      const head = close.strokes.find((stroke) => stroke.filled);
+      expect(head).toBeDefined();
+      expect(head!.points[1]).toBeCloseTo(0, 9);
+    }
     // None of it is drawn: no arrow into blank paper.
     expect(
       tipOf([

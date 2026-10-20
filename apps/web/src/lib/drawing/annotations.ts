@@ -14,6 +14,10 @@ import {
   type GeometryBodyRepresentation,
   type UnitSystem
 } from '@openzcad/shared';
+import {
+  inspectTopologyWitness,
+  topologyHashOfWitness
+} from '@openzcad/kernel-adapter/topology-lineage';
 import { resolveEdge, topologyResolutionMessage } from '../topologyResolution';
 import {
   sheetSafeText,
@@ -51,7 +55,8 @@ export type AnnotationBreak =
   | 'parallel'
   | 'degenerate'
   | 'foreshortened'
-  | 'leader-hidden';
+  | 'leader-hidden'
+  | 'invalid-reference';
 
 type UV = [number, number];
 
@@ -111,6 +116,8 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
       return 'The two edges are now parallel in this view, so they make no angle.';
     case 'degenerate':
       return 'The two points this measured now coincide in this view.';
+    case 'invalid-reference':
+      return 'The stored reference to this edge does not match its own fingerprint, so it is not trusted.';
     case 'leader-hidden':
       return 'The view no longer draws any of the edge this note points at.';
     case 'foreshortened':
@@ -145,6 +152,25 @@ function failure(reason: AnnotationBreak): AnnotationResolution {
   return { ok: false, reason, message: annotationBreakMessage(reason) };
 }
 
+/**
+ * Whether an edge reference's lineage may be used: `trusted` when its
+ * witness is supported and fingerprints to its hash, `invalid` when it
+ * contradicts it, `hash-only` when there is no reference or the scheme
+ * cannot check its witness.
+ */
+export function referenceTrust(
+  ref: Pick<DrawingEdgeRef, 'reference'>
+): 'trusted' | 'invalid' | 'hash-only' {
+  if (!ref.reference) return 'hash-only';
+  const inspection = inspectTopologyWitness('edge', ref.reference.witness);
+  if (inspection.status === 'invalid') return 'invalid';
+  if (inspection.status === 'unsupported') return 'hash-only';
+  return topologyHashOfWitness('edge', ref.reference.witness) ===
+    ref.reference.currentHash
+    ? 'trusted'
+    : 'invalid';
+}
+
 type EdgeLookup =
   { ok: true; edge: EdgeTopology } | { ok: false; reason: AnnotationBreak };
 
@@ -157,7 +183,17 @@ function lookupEdge(
   if (!body || body.consumed) return { ok: false, reason: 'body-missing' };
   if (!view.bodyIds.includes(ref.bodyId))
     return { ok: false, reason: 'not-in-view' };
-  const found = resolveEdge(body, ref);
+  // A reference resolves by its lineage name first, so its witness must be
+  // the one its hash fingerprints, as the kernel's own resolver requires:
+  // a corrupted or forged reference is broken, never another edge. A
+  // witness the scheme cannot vouch for (an unsupported curve) resolves by
+  // its hash alone.
+  const trust = referenceTrust(ref);
+  if (trust === 'invalid') return { ok: false, reason: 'invalid-reference' };
+  const found = resolveEdge(
+    body,
+    trust === 'trusted' ? ref : { bodyId: ref.bodyId, hash: ref.hash }
+  );
   return found.ok
     ? { ok: true, edge: found.entry }
     : { ok: false, reason: found.reason };
@@ -473,10 +509,10 @@ export interface AnnotationLayout {
 
 type XY = [number, number];
 
-function arrow(tip: XY, direction: XY): SheetStroke {
+function arrow(tip: XY, direction: XY, length = ARROW_LENGTH_MM): SheetStroke {
   const [dx, dy] = direction;
-  const bx = tip[0] - dx * ARROW_LENGTH_MM;
-  const by = tip[1] - dy * ARROW_LENGTH_MM;
+  const bx = tip[0] - dx * length;
+  const by = tip[1] - dy * length;
   return {
     kind: 'dimension',
     filled: true,
@@ -853,10 +889,24 @@ function noteLayout(
       ];
       const tip = nearestOnPieces(pieces, from) ?? rough;
       const length = Math.hypot(tip[0] - from[0], tip[1] - from[1]);
-      if (length > ARROW_LENGTH_MM) {
+      if (length > ARROW_LENGTH_MM)
         strokes.push(
           line(from, tip),
           arrow(tip, [(tip[0] - from[0]) / length, (tip[1] - from[1]) / length])
+        );
+      else {
+        // Placed close to the edge: still an arrow onto it, never a plain
+        // note. Shorter than the gap allows when there is one; pointing from
+        // the text's middle when the text sits on the edge.
+        const away = Math.hypot(tip[0] - middle[0], tip[1] - middle[1]);
+        const direction: XY =
+          length > 1e-6
+            ? [(tip[0] - from[0]) / length, (tip[1] - from[1]) / length]
+            : away > 1e-6
+              ? [(tip[0] - middle[0]) / away, (tip[1] - middle[1]) / away]
+              : [0, -1];
+        strokes.push(
+          arrow(tip, direction, length > 1e-6 ? Math.max(length, 1) : 2)
         );
       }
     }

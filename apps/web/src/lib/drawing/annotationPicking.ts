@@ -17,6 +17,7 @@ import { resolveEdge } from '../topologyResolution';
 import {
   drawnLines,
   edgeEndsInPageOrder,
+  referenceTrust,
   resolveDrawingAnnotation,
   type AnnotationBodies
 } from './annotations';
@@ -371,7 +372,9 @@ export function edgeRefFor(
   const ref: DrawingEdgeRef = {
     bodyId,
     hash: edge.hash,
-    ...(edge.reference && edge.reference.currentHash === edge.hash
+    ...(edge.reference &&
+    edge.reference.currentHash === edge.hash &&
+    referenceTrust({ reference: edge.reference }) === 'trusted'
       ? { reference: edge.reference }
       : {})
   };
