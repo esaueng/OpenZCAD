@@ -312,6 +312,11 @@ import { buildPlanePickerRig } from './viewer/planePickerRig';
 import { buildDatumPlaneRig, type DatumPlaneRig } from './viewer/datumPlaneRig';
 import { buildDatumAxisRig, type DatumAxisRig } from './viewer/datumAxisRig';
 import type { DatumPlaneDisplay } from '../lib/datumPlaneDisplay';
+import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
+import {
+  buildReferenceImageRig,
+  referenceImageTexture
+} from './viewer/referenceImageRig';
 import type { DatumAxisDisplay } from '../lib/datumAxisDisplay';
 import { sketchValueResolver } from '../lib/sketch/valueResolver';
 import { reducesMotion } from '../lib/reducedMotion';
@@ -919,6 +924,17 @@ export interface ModelViewerProps {
    * resolved. Hidden, suppressed and unresolved axes are simply absent.
    */
   datumAxes?: readonly DatumAxisDisplay[];
+  /**
+   * I05 reference images, laid on their planes. Hidden images and images
+   * whose plane has not resolved are simply absent.
+   */
+  referenceImages?: readonly ReferenceImageDisplay[];
+  /**
+   * The bytes behind a reference image, by checksum: from this device's
+   * source store, else the image's archived artifact. Null when neither has
+   * them; the image then draws as an empty frame.
+   */
+  loadReferenceImage?: (checksumSha256: string) => Promise<Blob | null>;
   /**
    * What measuring the hovered target would report, for the preview chip.
    * Null when measuring is off or the pick has nothing honest to say.
@@ -1839,6 +1855,8 @@ export function ModelViewer({
   primitiveGhost = null,
   datumPlanes,
   datumAxes,
+  referenceImages,
+  loadReferenceImage,
   planePickerOffset,
   onPickPlane,
   onPickDatum,
@@ -11366,6 +11384,101 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [datumPlaneKey]);
+
+  // I05 reference images (viewer/referenceImageRig). One texture per picture,
+  // decoded once and kept while any shown image uses it; the rig is rebuilt
+  // when the set, a placement, the selection or a finished decode changes.
+  const referenceTexturesRef = useRef(new Map<string, THREE.Texture>());
+  const referenceTextureLoadsRef = useRef(new Set<string>());
+  const [referenceTextureVersion, setReferenceTextureVersion] = useState(0);
+  const loadReferenceImageRef = useRef(loadReferenceImage);
+  loadReferenceImageRef.current = loadReferenceImage;
+  const referenceImageKey = JSON.stringify(referenceImages ?? []);
+  const referenceChecksumKey = [
+    ...new Set((referenceImages ?? []).map((image) => image.checksumSha256))
+  ]
+    .sort()
+    .join(',');
+  const referenceChecksumKeyRef = useRef(referenceChecksumKey);
+  referenceChecksumKeyRef.current = referenceChecksumKey;
+  useEffect(() => {
+    const needed = new Set(
+      referenceChecksumKey ? referenceChecksumKey.split(',') : []
+    );
+    const textures = referenceTexturesRef.current;
+    for (const [checksum, texture] of textures) {
+      if (needed.has(checksum)) continue;
+      texture.dispose();
+      textures.delete(checksum);
+    }
+    const loads = referenceTextureLoadsRef.current;
+    for (const checksum of needed) {
+      if (textures.has(checksum) || loads.has(checksum)) continue;
+      const load = loadReferenceImageRef.current;
+      if (!load) continue;
+      loads.add(checksum);
+      void load(checksum)
+        .then((bytes) => (bytes ? referenceImageTexture(bytes) : null))
+        .then(
+          (texture) => {
+            if (!texture) return;
+            // Unmounted, or no shown image needs this picture any more.
+            if (
+              loads !== referenceTextureLoadsRef.current ||
+              !referenceChecksumKeyRef.current.split(',').includes(checksum)
+            ) {
+              texture.dispose();
+              return;
+            }
+            textures.set(checksum, texture);
+            setReferenceTextureVersion((version) => version + 1);
+          },
+          () => undefined
+        )
+        .finally(() => loads.delete(checksum));
+    }
+  }, [referenceChecksumKey]);
+  useEffect(() => {
+    const textures = referenceTexturesRef.current;
+    return () => {
+      for (const texture of textures.values()) texture.dispose();
+      textures.clear();
+      // Loads still in flight see a different set and drop their texture.
+      referenceTextureLoadsRef.current = new Set();
+    };
+  }, []);
+  useEffect(() => {
+    const context = contextRef.current;
+    const images = JSON.parse(referenceImageKey) as ReferenceImageDisplay[];
+    if (!context || images.length === 0) {
+      return;
+    }
+    const textures = referenceTexturesRef.current;
+    const rig = buildReferenceImageRig(images, textures);
+    context.scene.add(rig.group);
+    const canvas = context.renderer.domElement;
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      canvas.dataset.e2eReferenceImages = JSON.stringify(
+        images.map(({ imageId, frame, width, height, opacity }, index) => ({
+          imageId,
+          center: frame.center,
+          xAxis: frame.xAxis,
+          normal: frame.normal,
+          width,
+          height,
+          opacity,
+          textured: textures.has(images[index]!.checksumSha256)
+        }))
+      );
+    }
+    context.requestRender();
+    return () => {
+      context.scene.remove(rig.group);
+      rig.dispose();
+      delete canvas.dataset.e2eReferenceImages;
+      context.requestRender();
+    };
+  }, [referenceImageKey, referenceTextureVersion]);
 
   // Committed datum axes (viewer/datumAxisRig), rebuilt when the set, a line
   // or the selection changes; the render loop keeps their length.

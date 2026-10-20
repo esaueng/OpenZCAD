@@ -303,8 +303,8 @@ describe('I01 document model', () => {
     const saved = JSON.parse(
       JSON.stringify(manager.document)
     ) as ProjectDocument;
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(30);
-    expect(saved.schemaVersion).toBe(30);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(32);
+    expect(saved.schemaVersion).toBe(32);
     expect(normalizeDocument(saved)).toEqual(manager.document);
     // One past the current version, whatever later slices have taken.
     const newer = PROJECT_DOCUMENT_SCHEMA_VERSION + 1;

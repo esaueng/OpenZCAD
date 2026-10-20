@@ -73,6 +73,7 @@ import {
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_THUMBNAIL_BYTES,
   THUMBNAIL_CONTENT_TYPE,
+  isAcceptableReferenceImageArtifact,
   nowIso,
   persistedDocumentBytes,
   projectBranchPoint,
@@ -207,10 +208,13 @@ export function sharedProjectSnapshotDocument(
 ): ProjectDocument {
   // Drawing sheets stay with the owner: their title blocks carry author,
   // date and drawing-number text, and a share link opens no Draw workspace.
+  // Reference images stay too: they are the owner's tracing underlays, and a
+  // share link serves import sources only, never their pictures.
   const {
     editHistory: _editHistory,
     branchedFrom: _branchedFrom,
     drawings: _drawings,
+    referenceImages: _referenceImages,
     ...current
   } = withoutDerivedProjection(document);
   return {
@@ -2157,6 +2161,14 @@ export class InMemoryPersistenceService implements PersistenceService {
     ) {
       throw new ArtifactStorageError(
         'Thumbnail artifact is invalid or too large.'
+      );
+    }
+    if (
+      artifact.kind === 'reference-image' &&
+      !isAcceptableReferenceImageArtifact(artifact.contentType, body.byteLength)
+    ) {
+      throw new ArtifactStorageError(
+        'Reference image artifact is not a PNG or JPEG within the size limit.'
       );
     }
     if (artifact.kind === 'thumbnail') {

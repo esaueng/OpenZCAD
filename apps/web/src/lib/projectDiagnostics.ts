@@ -130,6 +130,7 @@ export function createProjectDiagnosticBundle(
 
   delete diagnosticDocument.editHistory;
   delete diagnosticDocument.drawings;
+  delete diagnosticDocument.referenceImages;
 
   const bodies = document.bodyOrder.flatMap((bodyId) => {
     const body = document.derived.bodyRepresentations[bodyId];

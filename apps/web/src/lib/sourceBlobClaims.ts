@@ -1,15 +1,21 @@
 import {
   documentNodesWithHistory,
-  importedSourceReferenceOf
+  importedSourceReferenceOf,
+  referenceImagesWithHistory
 } from '@openzcad/shared';
 import type { ProjectDocument } from '@openzcad/shared';
 
 /**
- * Every source checksum the document's imports need in order to rebuild:
- * STEP sources and mesh payloads, in the model and in undo/redo history.
+ * Every source checksum the document needs: STEP sources and mesh payloads
+ * its imports rebuild from, and the pictures behind its reference images, in
+ * the model and in undo/redo history. Cleanup keeps any blob listed here.
  */
 export function importSourceChecksums(document: ProjectDocument): Set<string> {
   const checksums = new Set<string>();
+  for (const image of referenceImagesWithHistory(document)) {
+    const checksum = image.source?.checksumSha256;
+    if (typeof checksum === 'string') checksums.add(checksum);
+  }
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind !== 'feature') {
       continue;

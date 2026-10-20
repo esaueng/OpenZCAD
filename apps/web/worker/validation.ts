@@ -14,6 +14,8 @@ import {
   MAX_PROJECT_NAME_LENGTH,
   MAX_PROJECT_CHECKPOINTS,
   THUMBNAIL_CONTENT_TYPE,
+  REFERENCE_IMAGE_CONTENT_TYPES,
+  referenceImageSetError,
   persistedDocumentBytes,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   PROJECT_STATUSES,
@@ -75,6 +77,7 @@ const ARTIFACT_KINDS: readonly ArtifactKind[] = [
   'stl-import',
   'mesh-import',
   'mesh-payload',
+  'reference-image',
   'step-export',
   'stl-export',
   '3mf-export',
@@ -445,6 +448,12 @@ function parseProjectDocument(
     const drawingsError = drawingSetError(record.drawings);
     if (drawingsError) throw badRequest(`"document.drawings": ${drawingsError}`);
   }
+  // I05: the same holds for the reference-image section.
+  if (record.referenceImages !== undefined) {
+    const imagesError = referenceImageSetError(record.referenceImages);
+    if (imagesError)
+      throw badRequest(`"document.referenceImages": ${imagesError}`);
+  }
   // Undo and redo can restore imports that are absent from current nodes.
   // Validate every copy before the document can be saved or shared.
   if (!hasValidImportedStepSources(value as ProjectDocument)) {
@@ -543,6 +552,16 @@ export function parseCreateUploadSessionRequest(
   ) {
     throw badRequest(
       `Thumbnail contentType must be ${THUMBNAIL_CONTENT_TYPE}.`
+    );
+  }
+  if (
+    record.kind === 'reference-image' &&
+    !(REFERENCE_IMAGE_CONTENT_TYPES as readonly unknown[]).includes(
+      record.contentType
+    )
+  ) {
+    throw badRequest(
+      `Reference image contentType must be one of: ${REFERENCE_IMAGE_CONTENT_TYPES.join(', ')}.`
     );
   }
   const metadata =

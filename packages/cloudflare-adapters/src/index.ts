@@ -84,6 +84,7 @@ import {
   KEPT_LOCAL_VERSION_REASON,
   MAX_CHECKPOINT_REASON_LENGTH,
   THUMBNAIL_CONTENT_TYPE,
+  isAcceptableReferenceImageArtifact,
   nowIso,
   isProjectCheckpoint,
   isRevisionRecord,
@@ -3937,6 +3938,14 @@ export class D1R2PersistenceService implements PersistenceService {
     ) {
       throw new ArtifactStorageError(
         'Thumbnail artifact is invalid or too large.'
+      );
+    }
+    if (
+      artifact.kind === 'reference-image' &&
+      !isAcceptableReferenceImageArtifact(artifact.contentType, stored.size)
+    ) {
+      throw new ArtifactStorageError(
+        'Reference image artifact is not a PNG or JPEG within the size limit.'
       );
     }
 
