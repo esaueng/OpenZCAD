@@ -8404,10 +8404,12 @@ export function ModelViewer({
         // A Face or Edge filter says what the sweep is for; every other
         // filter keeps taking whole bodies.
         if ((filter === 'face' || filter === 'edge') && onTopology) {
+          // Without X-ray, wireframe hides every face and shaded hides
+          // every edge: a sweep takes nothing it cannot see.
           if (
-            filter === 'face' &&
-            displayModeRef.current === 'wireframe' &&
-            !xrayRef.current
+            !xrayRef.current &&
+            ((filter === 'face' && displayModeRef.current === 'wireframe') ||
+              (filter === 'edge' && displayModeRef.current === 'shaded'))
           ) {
             onTopology([], filter);
             return;

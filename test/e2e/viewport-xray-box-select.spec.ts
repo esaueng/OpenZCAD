@@ -244,6 +244,43 @@ test('wireframe edge sweeps select the rear edges drawn without X-ray', async ({
   });
 });
 
+test('shaded edge sweeps take only the edges made visible by X-ray', async ({
+  page
+}) => {
+  await createBox(page, 'Shaded Edge Sweep');
+  await topView(page);
+  const display = displayButton(page);
+  for (
+    let count = 0;
+    count < 3 &&
+    !/now: Shaded$/.test((await display.getAttribute('aria-label')) ?? '');
+    count += 1
+  ) {
+    await display.click();
+  }
+  await expect(display).toHaveAttribute('aria-label', /now: Shaded$/);
+  await expect(canvas(page)).not.toHaveAttribute('data-e2e-xray', /.*/);
+  await setSelectionFilter(page, 'Edge');
+  const { minX, minY, maxY, maxZ, pad, midX } = await boxExtent(page);
+  const outerLeft: [number, number, number] = [minX - pad, maxY + pad, maxZ];
+  const middleBelow: [number, number, number] = [midX, minY - pad, maxZ];
+  await sweep(page, outerLeft, middleBelow);
+  await expect(canvas(page)).not.toHaveAttribute(
+    'data-e2e-selected-edges',
+    /.+/
+  );
+
+  await toggleXray(page);
+  await sweep(page, outerLeft, middleBelow);
+  await expect(page.getByRole('contentinfo')).toContainText('4 edges selected.');
+  await toggleXray(page);
+  await sweep(page, outerLeft, middleBelow);
+  await expect(canvas(page)).not.toHaveAttribute(
+    'data-e2e-selected-edges',
+    /.+/
+  );
+});
+
 test('wireframe face sweeps take only the faces made visible by X-ray', async ({
   page
 }) => {
