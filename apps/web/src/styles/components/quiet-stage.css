@@ -10,15 +10,18 @@
      the rail while one is open. */
   --right-panels-w: calc(var(--right-dock-w, 0px) + var(--right-peek-w, 0px));
   /* Where the bottom and top lanes start and end: clear of the column on
-     the left and, on the right, of the instrument rail and the panels
+     the left — and of the left dock outside it (--left-dock-w, also from
+     PanelDock) — and, on the right, of the instrument rail and the panels
      outside it. */
-  --lane-inset: calc(var(--column-w) + var(--island-gap) * 2);
+  --lane-start: calc(var(--column-w) + var(--island-gap) * 2);
+  --lane-inset: calc(var(--lane-start) + var(--left-dock-w, 0px));
   --lane-end: calc(
     var(--rail-w) + var(--island-gap) * 2 + var(--right-panels-w)
   );
-  /* The bottom lanes' right edge: symmetric with the left on a wide stage
-     so they stay centred, the window edge on a phone. */
-  --lane-right: var(--lane-inset);
+  /* The bottom lanes' right edge: symmetric with the column on a wide stage
+     so they stay centred, the window edge on a phone. The left dock only
+     moves their start. */
+  --lane-right: var(--lane-start);
   /* The readout under the column, and what the column leaves it. */
   --readout-h: 32px;
   --readout-reserve: var(--readout-h);
@@ -155,7 +158,9 @@
 
 .workspace-column-float {
   top: var(--stage-top);
-  left: var(--island-gap);
+  /* On the left dock's inner edge, as the instrument rail is on the right
+     dock's. */
+  left: calc(var(--island-gap) + var(--left-dock-w, 0px));
   bottom: var(--island-gap);
   width: min(var(--column-w), calc(100% - var(--island-gap) * 2));
 }
@@ -178,7 +183,8 @@
   top: var(--stage-top);
   bottom: var(--island-gap);
   left: calc(
-    var(--island-gap) + min(var(--column-w), calc(100% - var(--island-gap) * 2))
+    var(--island-gap) + var(--left-dock-w, 0px) +
+      min(var(--column-w), calc(100% - var(--island-gap) * 2))
   );
 }
 
@@ -1411,7 +1417,7 @@
     .workspace-column-float :is(.command-rail, .sketch-rail, .tweak-rail)
   ) {
   --column-w: var(--rail-w);
-  --lane-inset: calc(
+  --lane-start: calc(
     max(var(--column-w), var(--readout-min-w)) + var(--island-gap) * 2
   );
 }
@@ -2029,6 +2035,140 @@ button.command-rail:disabled {
   pointer-events: none;
 }
 
+/* A floating window over the model: its panels stacked as in a column,
+   the corner that resizes it and, over a stack, the grip bar on its frame
+   that moves the whole window. PanelDock orders the windows by z-index from
+   the stored z-order, never by moving their elements. */
+.panel-float {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.panel-float-body {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.panel-float-body.is-scrolling {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  pointer-events: auto;
+}
+
+.panel-float-grip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  cursor: grab;
+  touch-action: none;
+  pointer-events: auto;
+}
+
+.panel-float-grip-bar {
+  width: 48px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-surface);
+  border: var(--border-thin);
+  box-shadow: var(--shadow-1);
+}
+
+.panel-float-grip:hover .panel-float-grip-bar {
+  background: var(--color-accent);
+}
+
+.panel-float-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 0 0 var(--radius-lg) 0;
+  background: linear-gradient(
+    135deg,
+    transparent 50%,
+    var(--color-border-strong) 50%,
+    var(--color-border-strong) 58%,
+    transparent 58%,
+    transparent 72%,
+    var(--color-border-strong) 72%,
+    var(--color-border-strong) 80%,
+    transparent 80%
+  );
+  cursor: nwse-resize;
+  touch-action: none;
+  pointer-events: auto;
+}
+
+.panel-float-resize:hover,
+.panel-float-resize:focus-visible {
+  background-color: var(--color-accent-dim);
+}
+
+/* Where a dragged panel will land: in a column, in a window, or as a new
+   window under the cursor. */
+.panel-drop-slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
+  border: 1.5px dashed var(--color-accent);
+  border-radius: var(--radius-lg);
+  background: var(--color-accent-dim);
+  pointer-events: none;
+}
+
+/* The dragged panel, shrunk to its title beside the cursor. */
+.panel-drag-chip {
+  position: absolute;
+  z-index: 1001;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-3);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Over a target the docks have no room for at this width. */
+.panel-drag-chip.is-refused {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-subtle);
+}
+
+/* Takes the pointer from the model for the length of a drag. */
+.panel-drag-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  cursor: grabbing;
+  pointer-events: auto;
+}
+
+.panel-dock-layer.is-dragging {
+  user-select: none;
+}
+
 /* At a phone width the one panel that shows takes the right lane under the
    command card and the inspector, keeping enough height to read. */
 .panel-lane-float {
@@ -2053,7 +2193,8 @@ button.command-rail:disabled {
 
 /* Over the model, like a menu: it reads as lifted off the stage. */
 .model-panel.is-unpinned,
-.model-panel.is-revealed {
+.model-panel.is-revealed,
+.model-panel.is-floating {
   box-shadow: var(--shadow-3);
 }
 
@@ -2075,6 +2216,34 @@ button.command-rail:disabled {
   display: inline-grid;
   place-items: center;
   color: var(--color-text-subtle);
+}
+
+/* The dock's panels move by their header: the grip is a button (the Move
+   menu), and the bare header takes a drag. */
+.model-panel-header.is-draggable {
+  cursor: grab;
+  user-select: none;
+}
+
+button.model-panel-grip {
+  width: 24px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: grab;
+}
+
+button.model-panel-grip:hover,
+button.model-panel-grip[aria-expanded='true'] {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.model-panel-header.is-draggable
+  :is(.model-panel-action, .history-find-toggle) {
+  cursor: default;
 }
 
 .model-panel-icon {
@@ -2186,6 +2355,8 @@ button.command-rail:disabled {
    panel whose column is parked at this width. */
 .instrument-rail .rail-panels .rail-button {
   position: relative;
+  /* A press can drag the panel out of the rail. */
+  touch-action: none;
 }
 
 .rail-badge {

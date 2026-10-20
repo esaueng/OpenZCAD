@@ -207,8 +207,9 @@ export const PANEL_PRESET_IDS: readonly PanelPresetId[] = [
   'model-only'
 ];
 /**
- * Essentials while only the right dock ships: Objects over Parameters in one
- * right column. A new device's default until the left dock exists; not a menu
+ * Essentials while only the right dock shipped: Objects over Parameters in
+ * one right column. The default for `leftDock: false`, which the app no
+ * longer asks for since the left dock shipped (U08 slice 4); not a menu
  * entry.
  */
 export const ESSENTIALS_RIGHT_PRESET = 'essentials-right';
@@ -1253,8 +1254,9 @@ function revealPanel(layout: PanelLayout, id: PanelId): PanelLayout {
  * panel shows it in the unpinned slot, and a second press hides it again;
  * it stays docked throughout. On a phone-width stage, where the lane shows
  * only the most recently used open panel, a press on an open panel the lane
- * is not showing brings it into the lane rather than closing it unseen.
- * Every press counts as a use.
+ * is not showing brings it into the lane rather than closing it unseen,
+ * and a press on a floating panel whose window another covers brings it to
+ * the front. Every press counts as a use.
  */
 export function togglePanel(
   layout: PanelLayout,
@@ -1284,7 +1286,40 @@ export function togglePanel(
   if (stage && isPanelParked(layout, id, stage)) {
     return notePanelUsed(revealPanel(layout, id), id);
   }
+  // A window another one covers comes to the front instead: the press asks
+  // for the panel, and closing one the person cannot fully see would lose it.
+  if (isFloatCovered(layout, id, stage)) {
+    return notePanelUsed(layout, id);
+  }
   return notePanelUsed(closePanel(layout, id), id);
+}
+
+function rectsOverlap(a: Rect, b: Rect): boolean {
+  return (
+    Math.min(a.x + a.w, b.x + b.w) > Math.max(a.x, b.x) &&
+    Math.min(a.y + a.h, b.y + b.h) > Math.max(a.y, b.y)
+  );
+}
+
+/**
+ * Whether a floating panel's window has another window over it, as they
+ * show on `stage` (or as stored without one).
+ */
+export function isFloatCovered(
+  layout: PanelLayout<PanelEntry>,
+  id: PanelId,
+  stage?: PanelStage
+): boolean {
+  const k = layout.floats.findIndex((group) => group.panels.includes(id));
+  if (k < 0) {
+    return false;
+  }
+  const shown = (rect: Rect): Rect =>
+    stage ? clampFloatRect(rect, stage) : rect;
+  const own = shown(layout.floats[k]!);
+  return layout.floats
+    .slice(k + 1)
+    .some((group) => rectsOverlap(own, shown(group)));
 }
 
 /**
@@ -1326,6 +1361,46 @@ export function pinPanel(
     layout,
     id,
     { kind: 'column', side: 'right', column: 0 },
+    stage
+  );
+}
+
+/**
+ * Moves a docked or floating panel one place up (`-1`) or down (`1`) in its
+ * column or window, the keyboard's way to reach any slot. At either end, or
+ * for a panel in neither, the layout comes back unchanged.
+ */
+export function movePanelInStack(
+  layout: PanelLayout,
+  id: PanelId,
+  step: -1 | 1,
+  stage?: PanelStage
+): PanelLayout {
+  const location = findPanel(layout, id);
+  if (!location || location.kind === 'unpinned') {
+    return layout;
+  }
+  const stack =
+    location.kind === 'column'
+      ? sideColumns(layout, location.side)[location.column]!
+      : layout.floats.find((group) => group.id === location.groupId)!.panels;
+  const index = location.index + step;
+  if (index < 0 || index >= stack.length) {
+    return layout;
+  }
+  // Slots count without the panel itself: lifted out, the one it passes
+  // takes its index.
+  return placePanel(
+    layout,
+    id,
+    location.kind === 'column'
+      ? {
+          kind: 'column',
+          side: location.side,
+          column: location.column,
+          index
+        }
+      : { kind: 'group', groupId: location.groupId, index },
     stage
   );
 }

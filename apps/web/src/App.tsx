@@ -423,9 +423,13 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { createLazyPanel } from './components/LazyPanel';
 import type { ModelPanel as ModelPanelComponent } from './components/modelPanels/ModelPanel';
 import type * as ModelPanelModule from './components/modelPanels/ModelPanel';
-import { PanelDock } from './components/modelPanels/PanelDock';
+import {
+  PanelDock,
+  type PanelDockHandle
+} from './components/modelPanels/PanelDock';
 import type {
   PanelControls,
+  PanelDockControls,
   PanelPlacement
 } from './components/modelPanels/PanelFrame';
 import {
@@ -2031,11 +2035,15 @@ export function App() {
   );
   // Where the model panels live (U08). Read before anything can write the
   // new key: on a device that has none, the v1 drawer state it migrates
-  // from is what `loadPanelState` just read, untouched.
+  // from is what `loadPanelState` just read, untouched. A device with
+  // neither starts in the two-sided Essentials.
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(() =>
-    loadPanelLayout()
+    loadPanelLayout(undefined, undefined, { leftDock: true })
   );
   const [panelStage, setPanelStage] = useState<PanelStage | null>(null);
+  // A drag out of a rail button is the dock's to run, so the App (and the
+  // viewer the rail is drawn in) does not re-render while it moves.
+  const panelDockRef = useRef<PanelDockHandle | null>(null);
   // Collapsing the assistant is chrome layout, so it is remembered with the
   // rest of it rather than reset on every reload.
   const assistantCollapsed = panelState.assistantCollapsed;
@@ -21760,10 +21768,17 @@ export function App() {
         }}
       />
     ) : null;
-  const renderModelPanel = (id: PanelId, placement: PanelPlacement) => (
+  const renderModelPanel = (
+    id: PanelId,
+    placement: PanelPlacement,
+    dock?: PanelDockControls
+  ) => (
     <ModelPanel
       id={id}
-      controls={panelControls(id, placement)}
+      controls={{
+        ...panelControls(id, placement),
+        ...(dock ? { dock } : {})
+      }}
       parameters={parameters}
       parameterValues={parameterScope.scope}
       parameterMinimums={liveParameterMinimums}
@@ -22250,6 +22265,9 @@ export function App() {
                             ? `${label} · ${badge} ${badge === 1 ? 'warning' : 'warnings'}`
                             : label
                         }
+                        onPointerDown={(event) =>
+                          panelDockRef.current?.pressRail(id, event)
+                        }
                         onClick={() => pressRailPanel(id)}
                       >
                         <Icon size={16} aria-hidden="true" />
@@ -22668,7 +22686,9 @@ export function App() {
             hidden={panelsHidden}
             onStage={setPanelStage}
             onLayout={setPanelLayout}
+            onRefuse={setStatus}
             renderPanel={renderModelPanel}
+            handleRef={panelDockRef}
           />
         ) : null
       }

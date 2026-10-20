@@ -206,7 +206,7 @@ import {
   placeSelectionCallouts,
   refreshSelectionCallout,
   renderSelectionCallout,
-  MODEL_PANEL_OBSTACLES,
+  RIGHT_LANE_MODEL_PANELS,
   SELECTION_CALLOUT_CHIP_CLASS
 } from '../lib/selectionCalloutView';
 import { measureFitFrame } from '../lib/fitFrame';
@@ -1674,6 +1674,18 @@ const E2E_CANVAS_HOOKS_ENABLED =
       VITE_E2E?: string;
     }
   ).VITE_E2E === '1';
+/**
+ * Counts the viewer's renders for an e2e probe that assigns an object to
+ * `window.__ozRenderCounts` (a panel drag must not re-render it at all).
+ * E2E builds only, and then a single property read per render.
+ */
+function noteE2ERender() {
+  const counts = (window as { __ozRenderCounts?: Record<string, number> })
+    .__ozRenderCounts;
+  if (counts && typeof counts === 'object') {
+    counts.ModelViewer = (counts.ModelViewer ?? 0) + 1;
+  }
+}
 const SKETCH_COLOR = 0x6798ff;
 /**
  * How far inside the canvas edge a new body must sit to count as on screen,
@@ -1864,6 +1876,7 @@ export function ModelViewer({
   viewportImageRef,
   onContextMenu
 }: ModelViewerProps) {
+  if (E2E_CANVAS_HOOKS_ENABLED) noteE2ERender();
   const drawingBodiesRef = useRef<
     readonly GeometryBodyRepresentation[] | undefined
   >(undefined);
@@ -5694,12 +5707,13 @@ export function ModelViewer({
       const chipWidth = chip.offsetWidth;
       const labelWidth = radiusLabelChip.offsetWidth;
       // The right lane's inner edge: the leftmost of the command card, the
-      // inspector and every model panel drawn on the right.
+      // inspector and every model panel drawn on the right (not the left
+      // dock, nor a window floating over the model).
       const laneEdges = [
         ...(renderer.domElement
           .closest('.viewer-area')
           ?.querySelectorAll<HTMLElement>(
-            `.stage-right > *, ${MODEL_PANEL_OBSTACLES}`
+            `.stage-right > *, ${RIGHT_LANE_MODEL_PANELS}`
           ) ?? [])
       ]
         .map((element) => element.getBoundingClientRect())

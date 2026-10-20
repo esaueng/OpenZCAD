@@ -128,4 +128,18 @@ describe('model panels', () => {
       /right:\s*calc\(var\(--lane-end\) - var\(--right-peek-w, 0px\)\)/
     );
   });
+
+  it('stands the verb rail on the left dock’s inner edge and starts the bottom lanes past it', () => {
+    expect(rule(stage, '\n.workspace-column-float')).toMatch(
+      /left:\s*calc\(var\(--island-gap\) \+ var\(--left-dock-w, 0px\)\)/
+    );
+    expect(stage).toMatch(
+      /--lane-inset:\s*calc\(var\(--lane-start\) \+ var\(--left-dock-w, 0px\)\);/
+    );
+    // Only the lane-start is redefined elsewhere, so no rule drops the dock.
+    expect([...stage.matchAll(/--lane-inset:/g)]).toHaveLength(1);
+    expect(rule(stage, '.workspace.column-layout .sidebar-resizer')).toContain(
+      'var(--left-dock-w, 0px)'
+    );
+  });
 });

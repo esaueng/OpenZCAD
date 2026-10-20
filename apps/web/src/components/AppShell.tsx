@@ -86,9 +86,10 @@ interface AppShellProps {
    */
   inspectorOwnsLane?: boolean;
   /**
-   * The model panels' dock (`PanelDock`): the right dock's columns against
-   * the screen edge and the unpinned panel beside the instrument rail, over
-   * the viewport. The rail and the right lane step inward by its width.
+   * The model panels' docks (`PanelDock`): each dock's columns against its
+   * screen edge, the floating windows and the unpinned panel beside the
+   * instrument rail, over the viewport. The rails and the lanes step inward
+   * by the docks' widths.
    */
   panels?: ReactNode | null;
   /**

@@ -1,0 +1,387 @@
+import {
+  createProject,
+  expect,
+  expectBodyCount,
+  modelPanel,
+  promptField,
+  railPanelButton,
+  stubApi,
+  test,
+  type SeedPanelLayout
+} from './openzcad-fixtures';
+import type { Locator, Page } from '@playwright/test';
+
+/*
+  Floating model panels (U08 slice 4). Pop out floats a panel in a window
+  over the model; the window moves by its header and resizes from its
+  corner within 260–600px wide and from 160px tall, by pointer or by keys.
+  A panel dropped on a window stacks in it, the window grows, and a grip on
+  its frame moves the stack. Windows keep a stored z-order: pressing,
+  focusing or activating a covered one brings it to the front, and a reload
+  keeps the order. At 720px and below a window shows in the phone lane
+  instead.
+*/
+
+type Box = { x: number; y: number; width: number; height: number };
+
+async function box(locator: Locator): Promise<Box> {
+  const bounds = await locator.boundingBox();
+  expect(bounds).not.toBeNull();
+  return bounds!;
+}
+
+async function storedFloats(page: Page) {
+  return page.evaluate(() => {
+    const raw = window.localStorage.getItem('openzcad-panel-layout:v1');
+    return raw
+      ? (
+          JSON.parse(raw) as {
+            floats: Array<{
+              id: string;
+              x: number;
+              y: number;
+              w: number;
+              h: number;
+              panels: string[];
+            }>;
+          }
+        ).floats
+      : [];
+  });
+}
+
+async function openWorkspace(
+  page: Page,
+  name: string,
+  panelLayout: SeedPanelLayout,
+  viewport = { width: 1440, height: 900 }
+) {
+  await page.setViewportSize(viewport);
+  await stubApi(page, { panelLayout });
+  await createProject(page, name);
+  await expect(page.getByRole('toolbar', { name: 'Model panels' })).toBeVisible(
+    { timeout: 30_000 }
+  );
+}
+
+/** The window a panel floats in. */
+function windowOf(page: Page, title: 'Parameters' | 'History' | 'Objects') {
+  return page.locator('.panel-float').filter({ has: modelPanel(page, title) });
+}
+
+/** Presses, moves past the threshold and on by `dx, dy`, and releases. */
+async function dragBy(page: Page, from: Locator, dx: number, dy: number) {
+  const start = await box(from);
+  const x = start.x + Math.min(24, start.width / 2);
+  const y = start.y + start.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + Math.sign(dx || 1) * 8, y + Math.sign(dy) * 8, {
+    steps: 2
+  });
+  await page.mouse.move(x + dx, y + dy, { steps: 10 });
+  await page.mouse.up();
+}
+
+const LONE_WINDOW = {
+  floats: [
+    {
+      id: 'float-1',
+      x: 400,
+      y: 100,
+      w: 300,
+      h: 300,
+      panels: ['parameters' as const]
+    }
+  ]
+};
+
+test('Pop out floats a panel that moves by its header and resizes from its corner within bounds', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Pop out', { right: [['parameters']] });
+  const parameters = modelPanel(page, 'Parameters');
+  await parameters.getByRole('button', { name: 'Pop out Parameters' }).click();
+  await expect(parameters).toHaveClass(/is-floating/);
+  await expect(page.locator('.panel-column')).toHaveCount(0);
+  // Alone in its window it has nothing to pop out of; Pin docks it back.
+  await expect(
+    parameters.getByRole('button', { name: 'Pop out Parameters' })
+  ).toHaveCount(0);
+  await expect(
+    parameters.getByRole('button', { name: 'Move Parameters' })
+  ).toBeFocused();
+  const window = windowOf(page, 'Parameters');
+  const before = await box(window);
+
+  await dragBy(page, parameters.locator('.model-panel-title'), -200, 60);
+  await expect
+    .poll(async () => (await box(window)).x - before.x)
+    .toBeCloseTo(-200, 0);
+  expect((await box(window)).y - before.y).toBeCloseTo(60, 0);
+  expect((await box(window)).width).toBeCloseTo(before.width, 0);
+
+  const corner = window.getByRole('button', {
+    name: 'Resize Parameters window'
+  });
+  await dragBy(page, corner, 500, 120);
+  await expect.poll(async () => (await box(window)).width).toBe(600);
+  const tall = await box(window);
+  expect(tall.height).toBeCloseTo(before.height + 120, 0);
+  await dragBy(page, corner, -1000, -1000);
+  await expect.poll(async () => (await box(window)).width).toBe(260);
+  expect((await box(window)).height).toBe(160);
+  expect(await storedFloats(page)).toMatchObject([
+    { w: 260, h: 160, panels: ['parameters'] }
+  ]);
+
+  await parameters.getByRole('button', { name: 'Pin Parameters' }).click();
+  await expect(parameters).toHaveClass(/is-docked/);
+  await expect(page.locator('.panel-float')).toHaveCount(0);
+});
+
+test('a panel dropped on a window stacks in it, the window grows, and its frame grip moves the stack', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Stack windows', {
+    ...LONE_WINDOW,
+    right: [['history']]
+  });
+  const window = windowOf(page, 'Parameters');
+  const before = await box(window);
+  const heading = await box(
+    modelPanel(page, 'History').locator('.model-panel-title')
+  );
+  await page.mouse.move(heading.x + 24, heading.y + heading.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(heading.x + 10, heading.y + 30, { steps: 3 });
+  await page.mouse.move(
+    before.x + before.width / 2,
+    before.y + before.height - 30,
+    {
+      steps: 12
+    }
+  );
+  // The window shows grown, with the slot under Parameters.
+  const slot = page.locator('.panel-float .panel-drop-slot');
+  await expect(slot).toBeVisible();
+  await expect
+    .poll(async () => (await box(page.locator('.panel-float'))).height)
+    .toBeCloseTo(before.height + 240, 0);
+  expect((await box(slot)).y).toBeGreaterThan(
+    (await box(modelPanel(page, 'Parameters'))).y
+  );
+  await page.mouse.up();
+
+  await expect(window.locator('.model-panel')).toHaveCount(2);
+  const stacked = await box(window);
+  expect(stacked.height).toBeCloseTo(before.height + 240, 0);
+  expect(await storedFloats(page)).toMatchObject([
+    { panels: ['parameters', 'history'] }
+  ]);
+  await expect(page.locator('.panel-column')).toHaveCount(0);
+
+  // The grip on the frame moves the whole stack.
+  const grip = window.locator('.panel-float-grip');
+  await expect(grip).toBeVisible();
+  await dragBy(page, grip, 120, 40);
+  await expect
+    .poll(async () => (await box(window)).x - stacked.x)
+    .toBeCloseTo(120, 0);
+  expect((await box(window)).y - stacked.y).toBeCloseTo(40, 0);
+  await expect(window.locator('.model-panel')).toHaveCount(2);
+
+  // The gap between them resizes as a docked column's does.
+  const gap = window.getByRole('separator', {
+    name: 'Resize Parameters and History'
+  });
+  const top = await box(modelPanel(page, 'Parameters'));
+  const handle = await box(gap);
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 60, {
+    steps: 6
+  });
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await box(modelPanel(page, 'Parameters'))).height)
+    .toBeCloseTo(top.height + 56, 0);
+});
+
+test('a floating window moves on its grip’s arrow keys and resizes with Shift or from its corner control, stopping at the bounds', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Window keys', LONE_WINDOW);
+  const window = windowOf(page, 'Parameters');
+  const start = await box(window);
+  const layer = await box(page.locator('.panel-dock-layer'));
+  const grip = modelPanel(page, 'Parameters').getByRole('button', {
+    name: 'Move Parameters'
+  });
+  await grip.focus();
+  for (let k = 0; k < 3; k++) await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowDown');
+  await expect
+    .poll(async () => (await box(window)).x - start.x)
+    .toBeCloseTo(30, 0);
+  expect((await box(window)).y - start.y).toBeCloseTo(10, 0);
+  await expect(grip).toBeFocused();
+
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.keyboard.press('Shift+ArrowDown');
+  await expect
+    .poll(async () => (await box(window)).width)
+    .toBeCloseTo(start.width + 10, 0);
+  expect((await box(window)).height).toBeCloseTo(start.height + 10, 0);
+  // Narrowed past its minimum, it stops at 260px.
+  for (let k = 0; k < 10; k++) await page.keyboard.press('Shift+ArrowLeft');
+  await expect.poll(async () => (await box(window)).width).toBe(260);
+  // Moved past the stage's edge, it stops a gap inside it.
+  for (let k = 0; k < 50; k++) await page.keyboard.press('ArrowLeft');
+  await expect
+    .poll(async () => (await box(window)).x - layer.x)
+    .toBeCloseTo(10, 0);
+
+  const corner = window.getByRole('button', {
+    name: 'Resize Parameters window'
+  });
+  await corner.focus();
+  for (let k = 0; k < 40; k++) await page.keyboard.press('ArrowRight');
+  await expect.poll(async () => (await box(window)).width).toBe(600);
+  for (let k = 0; k < 30; k++) await page.keyboard.press('ArrowUp');
+  await expect.poll(async () => (await box(window)).height).toBe(160);
+  await expect(corner).toBeFocused();
+  expect(await storedFloats(page)).toMatchObject([
+    { x: 10, w: 600, h: 160, panels: ['parameters'] }
+  ]);
+});
+
+/** The panels' windows from the bottom of the stack to the top. */
+function zOrder(page: Page) {
+  return page.locator('.panel-float').evaluateAll((windows) =>
+    windows
+      .map((element) => ({
+        z: Number((element as HTMLElement).style.zIndex),
+        panel: element.querySelector('.model-panel')?.getAttribute('aria-label')
+      }))
+      .sort((a, b) => a.z - b.z)
+      .map((entry) => entry.panel)
+  );
+}
+
+test('a covered window comes to the front on a press, on focus, from the rail and from ⌘K, and keeps its place after a reload', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Window order', {
+    floats: [
+      { id: 'float-1', x: 300, y: 100, w: 320, h: 360, panels: ['history'] },
+      {
+        id: 'float-2',
+        x: 420,
+        y: 160,
+        w: 320,
+        h: 360,
+        panels: ['parameters']
+      }
+    ]
+  });
+  // A feature for ⌘K to find.
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expectBodyCount(page, 1);
+  await page.keyboard.press('Escape');
+  await expect.poll(() => zOrder(page)).toEqual(['History', 'Parameters']);
+
+  const history = await box(windowOf(page, 'History'));
+  const parameters = await box(windowOf(page, 'Parameters'));
+  /** A point on Parameters' window that History's never covers. */
+  const parametersOnly = {
+    x: parameters.x + parameters.width - 20,
+    y: parameters.y + parameters.height - 40
+  };
+  const lowerParameters = async () => {
+    await page.mouse.click(parametersOnly.x, parametersOnly.y);
+    await expect.poll(() => zOrder(page)).toEqual(['History', 'Parameters']);
+  };
+
+  // Pressed where it shows.
+  await page.mouse.click(history.x + 40, history.y + 80);
+  await expect.poll(() => zOrder(page)).toEqual(['Parameters', 'History']);
+  // Focus moving into it.
+  await lowerParameters();
+  await modelPanel(page, 'History')
+    .getByRole('button', { name: 'Move History' })
+    .focus();
+  await expect.poll(() => zOrder(page)).toEqual(['Parameters', 'History']);
+  // Its rail button brings it forward rather than closing it.
+  await lowerParameters();
+  await railPanelButton(page, 'History').click();
+  await expect.poll(() => zOrder(page)).toEqual(['Parameters', 'History']);
+  await expect(modelPanel(page, 'History')).toBeVisible();
+  await expect(railPanelButton(page, 'History')).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  // A feature picked in ⌘K.
+  await lowerParameters();
+  await page.keyboard.press('ControlOrMeta+k');
+  await expect(promptField(page)).toBeFocused();
+  await page.keyboard.type('/Box');
+  await page.getByRole('option').filter({ hasText: 'Feature' }).first().click();
+  await expect.poll(() => zOrder(page)).toEqual(['Parameters', 'History']);
+
+  // The order is the device's.
+  expect((await storedFloats(page)).map((group) => group.panels[0])).toEqual([
+    'parameters',
+    'history'
+  ]);
+  await page.reload();
+  await expect(modelPanel(page, 'History')).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => zOrder(page)).toEqual(['Parameters', 'History']);
+});
+
+test('at 720px a stored floating layout shows one panel in the phone lane with no Pop out, and widening restores the windows', async ({
+  page
+}) => {
+  await openWorkspace(
+    page,
+    'Phone windows',
+    {
+      floats: [
+        { id: 'float-1', x: 300, y: 100, w: 320, h: 300, panels: ['history'] },
+        {
+          id: 'float-2',
+          x: 700,
+          y: 160,
+          w: 320,
+          h: 300,
+          panels: ['parameters', 'bodies']
+        }
+      ],
+      recent: ['bodies', 'history']
+    },
+    { width: 720, height: 800 }
+  );
+  const lane = page.locator('.stage-right > .panel-lane-float');
+  await expect(lane.getByRole('region', { name: 'Objects' })).toBeVisible();
+  await expect(page.locator('.model-panel')).toHaveCount(1);
+  await expect(page.locator('.panel-float')).toHaveCount(0);
+  await expect(lane.getByRole('button', { name: /^Pop out/ })).toHaveCount(0);
+  await expect(lane.getByRole('button', { name: /^Move / })).toHaveCount(0);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(page.locator('.panel-float')).toHaveCount(2);
+  await expect(page.locator('.panel-lane-float')).toHaveCount(0);
+  await expect(windowOf(page, 'Objects').locator('.model-panel')).toHaveCount(
+    2
+  );
+  await expect(modelPanel(page, 'History')).toHaveClass(/is-floating/);
+  // Untouched by the narrow stage.
+  expect(await storedFloats(page)).toMatchObject([
+    { x: 300, y: 100, w: 320, h: 300, panels: ['history'] },
+    { x: 700, y: 160, w: 320, h: 300, panels: ['parameters', 'bodies'] }
+  ]);
+});
