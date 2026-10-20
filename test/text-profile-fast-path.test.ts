@@ -157,8 +157,11 @@ describe('text objects expand into ready-made profiles', () => {
       for (let index = 0; index < loop.curves.length; index += 1) {
         const current = loop.curves[index]!;
         const next = loop.curves[(index + 1) % loop.curves.length]!;
-        if (current.kind === 'arc' || next.kind === 'arc') {
-          throw new Error('text loops never contain arcs');
+        if (
+          (current.kind !== 'line' && current.kind !== 'bezier') ||
+          (next.kind !== 'line' && next.kind !== 'bezier')
+        ) {
+          throw new Error('text loops hold only lines and beziers');
         }
         // `makeWire` welds at 1e-7. Object identity is a stronger claim than
         // "within tolerance": it means the doubles cannot differ at all,

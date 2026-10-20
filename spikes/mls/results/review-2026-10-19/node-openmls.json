@@ -1,0 +1,239 @@
+{
+  "summary": {
+    "host": "node v24.14.0",
+    "library": "openmls",
+    "failedSteps": [],
+    "medianMs": {
+      "commitCreate": 6.86,
+      "commitProcess": 3.64,
+      "addCommitWithWelcome": 8.78,
+      "welcomeJoin": 7.28,
+      "externalCommit": 11.65
+    },
+    "samples": {
+      "commitCreate": 13,
+      "commitProcess": 62,
+      "welcomeJoin": 7
+    },
+    "sizes": {
+      "commit_path_only": 656,
+      "group_info_with_external_pub": 1370,
+      "key_package": 397,
+      "signature_key_pair_record": 768,
+      "state_a1_1_member": 24948,
+      "state_a1_3_members": 29872,
+      "welcome_1_joiner": 1088,
+      "welcome_4_member_group": 1755
+    },
+    "epochChecks": 27,
+    "finalEpoch": 33,
+    "persistence": [
+      {
+        "label": "openmls/A1",
+        "store": "memory",
+        "stateBytes": 29872,
+        "sealedBytes": 29888,
+        "keyExtractable": false,
+        "exportRefused": true,
+        "roundTripMs": 0.12569699999994555,
+        "identical": true
+      }
+    ]
+  },
+  "report": {
+    "library": "openmls",
+    "version": "0.9.1",
+    "crypto": "openmls_rust_crypto 0.6.0 (RustCrypto, compiled to WASM)",
+    "cipher_suite": 2,
+    "steps": [
+      {
+        "name": "create + add A2 via Welcome",
+        "ok": true,
+        "detail": "epoch 1, 2 members agree"
+      },
+      {
+        "name": "add B1 with editor role",
+        "ok": true,
+        "detail": "epoch 2, 3 members agree"
+      },
+      {
+        "name": "Update proposal by B1, committed by A1",
+        "ok": true,
+        "detail": "epoch 3, 3 members agree"
+      },
+      {
+        "name": "policy: uncertified Update rejected",
+        "ok": true,
+        "detail": "A2 policy rejected: device key not certified for user B"
+      },
+      {
+        "name": "policy: Update changing user rejected",
+        "ok": true,
+        "detail": "A2 policy rejected: proposer changed user"
+      },
+      {
+        "name": "policy: certified same-user Update accepted",
+        "ok": true,
+        "detail": "epoch 4, 2 members agree"
+      },
+      {
+        "name": "timed path-only commits",
+        "ok": true,
+        "detail": "12 rounds"
+      },
+      {
+        "name": "timed Welcome joins",
+        "ok": true,
+        "detail": "epoch 25, 3 members agree"
+      },
+      {
+        "name": "policy: editor Add rejected",
+        "ok": true,
+        "detail": "both A devices rejected: A1 policy rejected: role Editor may not send Add"
+      },
+      {
+        "name": "policy: uncertified external commit rejected",
+        "ok": true,
+        "detail": "A1 rejected: A1 policy rejected: device key not certified for user A"
+      },
+      {
+        "name": "conflicting commits, loser rebases",
+        "ok": true,
+        "detail": "from epoch 25: stale commit refused, rebased; epoch 27, 3 members agree"
+      },
+      {
+        "name": "state persisted, reloaded, commits again",
+        "ok": true,
+        "detail": "29872 B state; epoch 28, 3 members agree"
+      },
+      {
+        "name": "external-commit rejoin of wiped A2",
+        "ok": true,
+        "detail": "stale leaf needed a separate Remove; epoch 30, 3 members agree"
+      },
+      {
+        "name": "remove A2",
+        "ok": true,
+        "detail": "A2 processed removal: true, inactive: true; epoch 32, 2 members agree"
+      },
+      {
+        "name": "B self-removal (SelfRemove)",
+        "ok": true,
+        "detail": "SelfRemove committed; B1 processed: true; epoch 33, 1 members agree"
+      }
+    ],
+    "commit_create_ms": [
+      7.455030999999963,
+      7.23049600000013,
+      6.864553999999998,
+      5.526403000000073,
+      6.884330999999975,
+      6.869723999999906,
+      5.560526999999865,
+      6.95354199999997,
+      6.895281999999952,
+      5.554556000000048,
+      6.68401300000005,
+      6.747661999999991,
+      5.362863000000061
+    ],
+    "commit_process_ms": [
+      7.321327999999994,
+      4.085287000000108,
+      3.6435619999999744,
+      3.8993950000001405,
+      3.880328999999847,
+      3.3866160000000036,
+      3.968466000000035,
+      3.404660000000149,
+      3.4620789999999033,
+      3.3987480000000687,
+      3.91130800000019,
+      3.424526999999898,
+      3.9258760000000166,
+      3.40314699999999,
+      3.380623999999898,
+      3.4100100000000566,
+      3.877954999999929,
+      3.4314710000001014,
+      3.7698300000001836,
+      3.3658869999999297,
+      3.395812999999862,
+      3.3792819999998756,
+      3.8765820000000986,
+      3.5160900000000765,
+      3.8851190000000315,
+      3.4815260000000308,
+      3.638622999999825,
+      3.4341749999998683,
+      5.635739999999942,
+      5.229321000000027,
+      3.947987000000012,
+      3.4090479999999843,
+      5.678321000000096,
+      5.276229999999941,
+      3.909925999999814,
+      3.49421899999993,
+      5.676938000000064,
+      5.180137999999943,
+      3.851955999999973,
+      3.3794020000000273,
+      5.682859000000008,
+      5.2444799999998395,
+      3.8108179999999265,
+      3.5138060000001587,
+      5.6316719999999805,
+      5.151273000000174,
+      3.9023309999997764,
+      3.545365999999831,
+      3.8627160000000913,
+      3.427832999999737,
+      3.4894799999997304,
+      3.3979069999995772,
+      3.7882150000000365,
+      3.3125860000000102,
+      4.677728000000116,
+      5.152546000000257,
+      3.369173000000046,
+      3.316153000000213,
+      3.271498000000065,
+      1.9683929999996508,
+      3.279813000000104,
+      1.884755000000041
+    ],
+    "add_commit_ms": [
+      11.809918000000152,
+      8.599865999999793,
+      8.83151399999997,
+      8.776209999999992,
+      8.827036000000135,
+      8.741023999999925,
+      8.658016000000089
+    ],
+    "welcome_join_ms": [
+      7.207431999999926,
+      5.446290999999974,
+      7.249182000000019,
+      7.3965599999999085,
+      7.378034999999954,
+      7.345833999999968,
+      7.278227000000243
+    ],
+    "external_commit_ms": [
+      11.65358200000037
+    ],
+    "sizes": {
+      "commit_path_only": 656,
+      "group_info_with_external_pub": 1370,
+      "key_package": 397,
+      "signature_key_pair_record": 768,
+      "state_a1_1_member": 24948,
+      "state_a1_3_members": 29872,
+      "welcome_1_joiner": 1088,
+      "welcome_4_member_group": 1755
+    },
+    "epoch_checks": 27,
+    "exporter_sample": "084db8174c354f54",
+    "final_epoch": 33
+  }
+}

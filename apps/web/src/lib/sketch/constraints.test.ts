@@ -144,7 +144,105 @@ describe('sketch constraint picking', () => {
     ).toMatch(/different objects/);
     expect(
       refusePick(document, sketch, 'point-on-object', first, object(rectangle))
-    ).toMatch(/line, circle or arc/);
+    ).toMatch(/line, circle, arc or ellipse/);
+  });
+
+  it('I01: an ellipse joins by its centre and an open spline by its ends', () => {
+    const { document, sketchId } = addSketchFeature(
+      createProjectDocument('Curves', toUserId('user_sketch')),
+      {
+        name: 'Curves',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },
+          {
+            objectKind: 'ellipse',
+            centerX: 0,
+            centerY: 20,
+            radiusX: 8,
+            radiusY: 3,
+            rotationDeg: 0
+          },
+          {
+            objectKind: 'ellipse',
+            centerX: 30,
+            centerY: 20,
+            radiusX: 8,
+            radiusY: 3,
+            rotationDeg: 0
+          },
+          {
+            objectKind: 'spline',
+            method: 'fit',
+            points: [
+              { x: 0, y: -10 },
+              { x: 5, y: -4 },
+              { x: 10, y: -10 }
+            ]
+          },
+          {
+            objectKind: 'spline',
+            method: 'fit',
+            closed: true,
+            points: [
+              { x: 40, y: 0 },
+              { x: 50, y: 0 },
+              { x: 45, y: 8 }
+            ]
+          }
+        ]
+      }
+    );
+    const sketch = findSketch(document, sketchId)!;
+    const [edge, ellipse, ellipseB, open, closed] =
+      sketch.objectIds as string[];
+    const at = [point(edge!, 'start')];
+    expect(
+      refusePick(document, sketch, 'coincident', at, point(ellipse!, 'center'))
+    ).toBeNull();
+    expect(
+      refusePick(document, sketch, 'lock', [], point(ellipse!, 'start'))
+    ).toMatch(/only its center/);
+    expect(
+      refusePick(document, sketch, 'coincident', at, point(open!, 'end'))
+    ).toBeNull();
+    expect(
+      refusePick(document, sketch, 'coincident', at, point(closed!, 'start'))
+    ).toMatch(/closed spline has no end/);
+    expect(
+      refusePick(document, sketch, 'point-on-object', at, object(ellipse!))
+    ).toBeNull();
+    expect(
+      refusePick(document, sketch, 'point-on-object', at, object(open!))
+    ).toMatch(/line, circle, arc or ellipse/);
+    expect(
+      refusePick(document, sketch, 'equal', [object(ellipse!)], object(edge!))
+    ).toMatch(/another ellipse/);
+    expect(
+      refusePick(
+        document,
+        sketch,
+        'equal',
+        [object(ellipse!)],
+        object(ellipseB!)
+      )
+    ).toBeNull();
+    expect(
+      refusePick(document, sketch, 'concentric', [], object(ellipse!))
+    ).toBeNull();
+    expect(
+      constraintToolsForObject('ellipse').map((spec) => spec.kind)
+    ).toEqual(['equal', 'concentric']);
+    expect(constraintToolsForObject('spline')).toEqual([]);
+    expect(
+      measureDrivingDimension(
+        document,
+        sketch,
+        'distance',
+        [point(ellipse!, 'center'), point(open!, 'end')],
+        (value) => Number(value)
+      )
+    ).toEqual({ value: Math.hypot(10, 30) });
   });
 
   it('S07: lock records the resolved position and refuses without one', () => {
@@ -348,7 +446,7 @@ describe('sketch constraint picking', () => {
     ).toBe(null);
     expect(
       refusePick(document, sketch, 'equal', [], object(rectangle))
-    ).toMatch(/two lines or two circles/);
+    ).toMatch(/two lines, two circles\/arcs or two ellipses/);
 
     expect(refusePick(document, sketch, 'concentric', [], object(circle))).toBe(
       null
@@ -364,7 +462,7 @@ describe('sketch constraint picking', () => {
     ).toBe(null);
     expect(
       refusePick(document, sketch, 'concentric', [], object(lineA))
-    ).toMatch(/circles and arcs/);
+    ).toMatch(/circles, arcs and ellipses/);
 
     expect(
       refusePick(document, sketch, 'midpoint', [], point(lineA, 'end'))

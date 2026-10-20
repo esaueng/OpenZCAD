@@ -15,6 +15,7 @@ export interface SketchWorkflowProps {
     | 'tool'
     | 'circleMode'
     | 'rectangleMode'
+    | 'curveMode'
     | 'pendingConstraint'
     | 'pendingEdit'
   >;
@@ -54,7 +55,8 @@ function toolReadout(session: SketchWorkflowProps['tool']): string {
     : sketchDrawToolLabel(
         session.tool,
         session.circleMode,
-        session.rectangleMode
+        session.rectangleMode,
+        session.curveMode
       );
 }
 

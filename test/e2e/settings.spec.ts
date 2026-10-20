@@ -468,14 +468,14 @@ test('theme setting repaints the chrome and follows the system preference', asyn
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Appearance', exact: true }).click();
-  const theme = page.getByLabel('Theme');
-  await theme.selectOption('light');
+  const theme = page.getByRole('radiogroup', { name: 'Theme' });
+  await theme.getByRole('radio', { name: 'Light' }).check();
   await expect(root).toHaveAttribute('data-theme', 'light');
   // The tokens really repaint — the page ground leaves the dark ramp.
   expect(await pageGround(page)).toBe(LIGHT_GROUND);
 
   // 'system' tracks a live OS appearance change without a reload.
-  await theme.selectOption('system');
+  await theme.getByRole('radio', { name: 'System' }).check();
   await expect(root).toHaveAttribute('data-theme', 'system');
   expect(await pageGround(page)).toBe(DARK_GROUND);
   await page.emulateMedia({ colorScheme: 'light' });
@@ -483,7 +483,7 @@ test('theme setting repaints the chrome and follows the system preference', asyn
 
   // The choice persists across a reload from device storage, and an
   // explicit choice ignores the OS.
-  await theme.selectOption('dark');
+  await theme.getByRole('radio', { name: 'Dark' }).check();
   await page.reload();
   await expect(root).toHaveAttribute('data-theme', 'dark');
   expect(await pageGround(page)).toBe(DARK_GROUND);
@@ -964,7 +964,10 @@ test('forcing mouse navigation makes a trackpad-style scroll zoom again', async 
   // it — the escape hatch for hardware the classification reads wrongly.
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Controls', exact: true }).click();
-  await page.getByLabel('Scroll wheel').selectOption('mouse');
+  await page
+    .getByRole('radiogroup', { name: 'Scroll wheel' })
+    .getByRole('radio', { name: 'Mouse wheel' })
+    .check();
   await page
     .getByRole('button', { name: /Back to workspace|Close settings/ })
     .first()

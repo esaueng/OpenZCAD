@@ -1,4 +1,10 @@
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  expectBodyCount,
+  seedUnitlessImportUnits
+} from './openzcad-fixtures';
 import type { Page } from '@playwright/test';
 import { IMPORT_CARD_DELAY_MS } from '../../apps/web/src/lib/importProgress';
 
@@ -42,6 +48,7 @@ for (const signedOut of [true, false]) {
   }) => {
     test.setTimeout(90_000);
     await stubApi(page);
+    await seedUnitlessImportUnits(page);
     if (signedOut)
       await page.route('**/api/session', (route) =>
         route.fulfill({ json: null })
@@ -84,6 +91,7 @@ test('cancels an STL archive without committing and clears its job before switch
 }) => {
   test.setTimeout(90_000);
   await stubApi(page);
+  await seedUnitlessImportUnits(page);
   const archive = await holdArchive(page);
   await page.goto('/');
   await create(page, 'STL cancelled');
@@ -115,6 +123,7 @@ test('settles an STL import that finishes after its project was replaced', async
 }) => {
   test.setTimeout(90_000);
   await stubApi(page);
+  await seedUnitlessImportUnits(page);
   const archive = await holdArchive(page);
   await page.goto('/');
   await create(page, 'STL origin');
@@ -138,6 +147,7 @@ test('settles an STL parse refusal and releases the geometry reservation', async
 }) => {
   test.setTimeout(90_000);
   await stubApi(page);
+  await seedUnitlessImportUnits(page);
   await page.goto('/');
   await create(page, 'STL refused');
   await page.getByLabel(/^Import FreeCAD, STEP or /).setInputFiles({
@@ -159,6 +169,7 @@ for (const originalCleanup of [false, true]) {
   }) => {
     test.setTimeout(90_000);
     await stubApi(page);
+    await seedUnitlessImportUnits(page);
     const originalId = 'artifact_original_cleanup_e2e';
     const payloadId = 'artifact_payload_cleanup_e2e';
     const uploads = new Map<

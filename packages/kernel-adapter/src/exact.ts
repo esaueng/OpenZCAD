@@ -10,7 +10,11 @@ export type {
   RebuildProgress,
   RebuildProgressListener
 } from './rebuild-progress';
-import { RemusKernel, loadRemusTranslators } from './remus-runtime';
+import {
+  RemusKernel,
+  loadRemusTranslators,
+  type RemusIo
+} from './remus-runtime';
 import {
   runSketchPlanarOperation,
   type SketchPlanarOperation,
@@ -88,8 +92,10 @@ import {
   type FaceTopologyReferenceV5,
   type ImportedSourceReference,
   type OpposingPlanarFacePair,
+  type ParamValue,
   type ProjectDocument,
   type SketchId,
+  type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
 import type {
@@ -176,9 +182,25 @@ export { importMeshFile, type ImportedMeshTriangles } from './mesh-file-import';
 import {
   sanitizeBinaryPly,
   sanitizeBinaryStl,
-  sanitizeThreeMf
+  countExportedTriangles,
+  sanitizeThreeMf,
+  sanitizeThreeMfModel
 } from './mesh-export-sanitize';
 import { orientGlbForGltf } from './glb-scene';
+import {
+  declareStepLengthUnit,
+  declareThreeMfUnit,
+  explicitAngularTolerance,
+  exportLengthScale,
+  measureMeshDeviation,
+  type ExportUnitOptions,
+  type MeshExportTolerances
+} from './export-units';
+export {
+  DEFAULT_MESH_ANGULAR_TOLERANCE,
+  type ExportUnitOptions,
+  type MeshExportTolerances
+} from './export-units';
 import { refineBoundsAtSplineFaces, tightenBoundsToMesh } from './exact-bounds';
 import {
   readMeshQuality,
@@ -607,37 +629,59 @@ export interface ExactKernelAdapter {
   }): MassPropertiesRead;
   /** Restores exact history for an older derived-cache hit without measuring meshes. */
   prepareMassPropertiesForDocument(document: ProjectDocument): Promise<number>;
-  exportStep(document: ProjectDocument, bodyIds: BodyId[]): Promise<string>;
   /**
-   * DXF R12 outline of one PLANAR face, in millimetres — the laser-cutting
-   * export. Fails closed on non-planar faces and stale face references.
+   * STEP of the given bodies, in millimetres unless `options.units` names
+   * another unit — then the geometry is scaled to it and the file's length
+   * unit says so.
+   */
+  exportStep(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options?: ExportUnitOptions
+  ): Promise<string>;
+  /**
+   * DXF R12 outline of one PLANAR face, in millimetres (or `options.units`)
+   * — the laser-cutting export. Fails closed on non-planar faces and stale
+   * face references.
    */
   exportFaceDxf(
     document: ProjectDocument,
-    face: DxfFaceSelector
+    face: DxfFaceSelector,
+    options?: ExportUnitOptions
   ): Promise<string>;
   exportStl(
     document: ProjectDocument,
     bodyIds: BodyId[],
-    deflection?: number
+    deflection?: number,
+    options?: MeshExportTolerances
   ): Promise<string>;
   /**
    * Tessellated mesh export at a caller-chosen deflection (millimetres,
-   * applied after unit scaling — the same space every slicer works in).
+   * applied after unit scaling — the same space every slicer works in) and
+   * optional angular tolerance (radians). `units` scales the written numbers
+   * (STL, OBJ, PLY) and the 3MF unit attribute; GLB is always metres.
    */
   exportMesh(
     document: ProjectDocument,
     bodyIds: BodyId[],
-    options: { format: MeshExportFormat; deflection: number }
+    options: {
+      format: MeshExportFormat;
+      deflection: number;
+    } & MeshExportTolerances
   ): Promise<Uint8Array<ArrayBuffer>>;
   /**
-   * Pre-export printability check: tessellates each body at the given
-   * deflection and reports welded-mesh watertightness per body.
+   * Pre-export check of the mesh the export would write: welded-mesh
+   * watertightness, triangle count and the measured deviation from the
+   * exact faces, per body, at the given deflection (mm) and angular
+   * tolerance. `units` is the space the writer tessellates in — the export
+   * unit, or millimetres for GLB — so the float32 mesh measured is the one
+   * saved; deviations are still reported in millimetres.
    */
   meshQuality(
     document: ProjectDocument,
     bodyIds: BodyId[],
-    deflection: number
+    deflection: number,
+    tolerances?: MeshExportTolerances
   ): Promise<MeshQualityReport>;
   /**
    * Solves one sketch's persisted constraints with the kernel's GCS and
@@ -666,7 +710,8 @@ export interface ExactKernelAdapter {
     bodyIds?: BodyId[]
   ): Promise<SectionOutlineReport>;
   /**
-   * The same exact section written as a DXF R12 drawing in millimetres.
+   * The same exact section written as a DXF R12 drawing in millimetres (or
+   * `options.units`, which the header then declares).
    * Fails closed: a body the plane cuts but the kernel cannot section
    * refuses the whole export rather than quietly dropping a region.
    *
@@ -678,10 +723,12 @@ export interface ExactKernelAdapter {
   exportSectionDxf(
     document: ProjectDocument,
     plane: ExactSectionPlane,
-    bodyIds?: BodyId[]
+    bodyIds?: BodyId[],
+    options?: ExportUnitOptions
   ): Promise<string>;
   /**
-   * One saved sketch's own 2D geometry as a DXF R12 drawing in millimetres —
+   * One saved sketch's own 2D geometry as a DXF R12 drawing in millimetres
+   * (or `options.units`) —
    * the manufacturing export. Exact local-plane LINE/CIRCLE/ARC output, with
    * rectangles and polygons lowered to their authored edge lines, construction
    * geometry excluded, and every other case refused by name rather than
@@ -689,7 +736,8 @@ export interface ExactKernelAdapter {
    */
   exportSketchDxf(
     document: ProjectDocument,
-    sketchId: SketchId
+    sketchId: SketchId,
+    options?: ExportUnitOptions
   ): Promise<string>;
   /**
    * The same sketch geometry as `exportSketchDxf`, as an SVG drawing in the
@@ -2955,6 +3003,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ...(build.datumFrames.size > 0
           ? { datumFrames: Object.fromEntries(build.datumFrames) }
           : {}),
+        ...(build.datumAxes.size > 0
+          ? { datumAxes: Object.fromEntries(build.datumAxes) }
+          : {}),
         ...(build.faceReferenceRepairs?.length
           ? { faceReferenceRepairs: build.faceReferenceRepairs }
           : {}),
@@ -3048,7 +3099,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     kernel: RemusKernel,
     build: ExactBuildResult,
     document: ProjectDocument,
-    bodyIds: BodyId[]
+    bodyIds: BodyId[],
+    exportUnits: UnitSystem = 'mm'
   ): number[] {
     const hidden = getParameterHiddenBodyIds(document);
     // Consumed operands keep their retained shapes in the build, but they are
@@ -3068,43 +3120,76 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     if (solids.length === 0) {
       throw new Error('Select at least one body to export.');
     }
-    const millimeterScale = UNIT_TO_MM[document.units];
-    return millimeterScale === 1
+    const scale = exportLengthScale(document.units, exportUnits);
+    return scale === 1
       ? solids
       : solids.map((solid) =>
-          kernel.copyAndTransformSolid(
-            solid,
-            uniformScaleMatrix(millimeterScale)
-          )
+          kernel.copyAndTransformSolid(solid, uniformScaleMatrix(scale))
         );
+  }
+
+  /**
+   * The export solids re-made from their tessellation at an explicit angular
+   * tolerance. The paired writers tessellate at the kernel's default angle
+   * and take no other, so a tighter angle is applied here: each solid is
+   * meshed with it and rebuilt as a mesh-backed solid, which every writer
+   * then passes through triangle for triangle.
+   */
+  private angularExportSolids(
+    kernel: RemusKernel,
+    io: RemusIo,
+    solids: number[],
+    deflection: number,
+    angularTolerance: number
+  ): number[] {
+    return solids.flatMap((solid) => {
+      const mesh = kernel.tessellateSolid(solid, deflection, angularTolerance);
+      try {
+        return [
+          ...kernel.deserializeSolids(
+            io.importIndexedMesh(mesh.positions, mesh.indices)
+          )
+        ];
+      } finally {
+        mesh.free();
+      }
+    });
   }
 
   async exportStep(
     document: ProjectDocument,
-    bodyIds: BodyId[]
+    bodyIds: BodyId[],
+    options: ExportUnitOptions = {}
   ): Promise<string> {
+    const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
       const exportSolids = this.exportSolidsFor(
         kernel,
         build,
         document,
-        bodyIds
+        bodyIds,
+        units
       );
       // Never fuse: a boolean union changes the geometry (overlaps merge,
       // coincident faces weld). Every root of the arena document becomes its
       // own MANIFOLD_SOLID_BREP inside one shape representation, so the
       // bodies stay distinct through a round trip.
-      return decodeText(
-        io.exportStep(kernel.serializeSolids(new Uint32Array(exportSolids)))
+      return declareStepLengthUnit(
+        decodeText(
+          io.exportStep(kernel.serializeSolids(new Uint32Array(exportSolids)))
+        ),
+        units
       );
     });
   }
 
   async exportFaceDxf(
     document: ProjectDocument,
-    face: DxfFaceSelector
+    face: DxfFaceSelector,
+    options: ExportUnitOptions = {}
   ): Promise<string> {
+    const units = options.units ?? 'mm';
     return this.withExportBuild(document, (kernel, build) => {
       const shape = build.shapes.get(face.bodyId);
       if (!shape) {
@@ -3123,9 +3208,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const entities = faceDxfEntities(
         kernel,
         faceHandle,
+        exportLengthScale(document.units, units),
         UNIT_TO_MM[document.units]
       );
-      return writeDxf(entities);
+      return writeDxf(entities, { units });
     });
   }
 
@@ -3226,8 +3312,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   async exportSectionDxf(
     document: ProjectDocument,
     plane: ExactSectionPlane,
-    bodyIds?: BodyId[]
+    bodyIds?: BodyId[],
+    options: ExportUnitOptions = {}
   ): Promise<string> {
+    const units = options.units ?? 'mm';
     return this.withExportBuild(document, (kernel, build) => {
       const hidden = getParameterHiddenBodyIds(document);
       const requested = bodyIds ?? this.sectionableBodyIds(build, hidden);
@@ -3268,20 +3356,29 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // The section reads the UNSCALED build solids; uniform unit scaling
       // commutes with plane projection, so the 2D output is scaled instead.
       return writeDxf(
-        sectionDxfEntities(kernel, faces, plane, UNIT_TO_MM[document.units])
+        sectionDxfEntities(
+          kernel,
+          faces,
+          plane,
+          exportLengthScale(document.units, units),
+          UNIT_TO_MM[document.units]
+        ),
+        { units }
       );
     });
   }
 
   async exportSketchDxf(
     document: ProjectDocument,
-    sketchId: SketchId
+    sketchId: SketchId,
+    options: ExportUnitOptions = {}
   ): Promise<string> {
+    const units = options.units ?? 'mm';
     return this.exportSketchEntities(
       document,
       sketchId,
-      UNIT_TO_MM[document.units],
-      (entities) => writeDxf(entities),
+      exportLengthScale(document.units, units),
+      (entities) => writeDxf(entities, { units }),
       'The DXF writer could not assemble the document.'
     );
   }
@@ -3393,28 +3490,44 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   async exportStl(
     document: ProjectDocument,
     bodyIds: BodyId[],
-    deflection: number = STL_EXPORT_DEFLECTION
+    deflection: number = STL_EXPORT_DEFLECTION,
+    options: MeshExportTolerances = {}
   ): Promise<string> {
+    const units = options.units ?? 'mm';
+    const angular = explicitAngularTolerance(options.angularTolerance);
+    // The deflection is physical millimetres; the solids are in `units`.
+    const unitDeflection = deflection / UNIT_TO_MM[units];
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
-      const exportSolids = this.exportSolidsFor(
+      const scaled = this.exportSolidsFor(
         kernel,
         build,
         document,
-        bodyIds
+        bodyIds,
+        units
       );
+      const exportSolids =
+        angular === null
+          ? scaled
+          : this.angularExportSolids(
+              kernel,
+              io,
+              scaled,
+              unitDeflection,
+              angular
+            );
       if (exportSolids.length === 1) {
         return decodeText(
           io.exportStlAscii(
             kernel.serializeSolids(new Uint32Array(exportSolids)),
-            deflection
+            unitDeflection
           )
         );
       }
       // Several consumers stop at the first `solid` block, so a multi-body
       // export must be one block containing every body's facets.
       const meshes = exportSolids.map((solid, index) => {
-        const mesh = kernel.tessellateSolidGroupedBinary(solid, deflection);
+        const mesh = kernel.tessellateSolidGroupedBinary(solid, unitDeflection);
         try {
           return {
             name: `body_${index + 1}`,
@@ -3432,25 +3545,47 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   async exportMesh(
     document: ProjectDocument,
     bodyIds: BodyId[],
-    options: { format: MeshExportFormat; deflection: number }
+    options: {
+      format: MeshExportFormat;
+      deflection: number;
+    } & MeshExportTolerances
   ): Promise<Uint8Array<ArrayBuffer>> {
     const { format, deflection } = options;
     if (!Number.isFinite(deflection) || deflection <= 0) {
       throw new Error('Mesh export deflection must be a positive number.');
     }
+    // glTF defines metres, which the root node states over a millimetre
+    // tessellation (glb-scene.ts); no other unit can be written into it.
+    const units = format === 'glb' ? 'mm' : (options.units ?? 'mm');
+    const angular = explicitAngularTolerance(options.angularTolerance);
     if (format === 'stl-ascii') {
       return new TextEncoder().encode(
-        await this.exportStl(document, bodyIds, deflection)
+        await this.exportStl(document, bodyIds, deflection, {
+          units,
+          ...(angular === null ? {} : { angularTolerance: angular })
+        })
       );
     }
+    const unitDeflection = deflection / UNIT_TO_MM[units];
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
-      const exportSolids = this.exportSolidsFor(
+      const scaled = this.exportSolidsFor(
         kernel,
         build,
         document,
-        bodyIds
+        bodyIds,
+        units
       );
+      const exportSolids =
+        angular === null
+          ? scaled
+          : this.angularExportSolids(
+              kernel,
+              io,
+              scaled,
+              unitDeflection,
+              angular
+            );
       const bodies = kernel.serializeSolids(new Uint32Array(exportSolids));
       // Every writer takes the whole arena document: bodies stay distinct
       // objects in the 3MF package and merge into one facet stream for the
@@ -3459,18 +3594,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // narrowing holds.
       const bytes =
         format === '3mf'
-          ? io.export3mf(bodies, deflection)
+          ? io.export3mf(bodies, unitDeflection)
           : format === 'obj'
-            ? io.exportObj(bodies, deflection)
+            ? io.exportObj(bodies, unitDeflection)
             : format === 'glb'
-              ? io.exportGlb(bodies, deflection)
+              ? io.exportGlb(bodies, unitDeflection)
               : format === 'ply'
-                ? io.exportPly(bodies, deflection)
-                : io.exportStl(bodies, deflection);
+                ? io.exportPly(bodies, unitDeflection)
+                : io.exportStl(bodies, unitDeflection);
       // glTF is metres and +Y up; the tessellation is model millimetres,
       // +Z up, which the GLB states through its root node (glb-scene.ts).
       return format === '3mf'
-        ? sanitizeThreeMf(bytes)
+        ? sanitizeThreeMf(bytes, (model) =>
+            declareThreeMfUnit(sanitizeThreeMfModel(model), units)
+          )
         : format === 'stl-binary'
           ? sanitizeBinaryStl(bytes)
           : format === 'ply'
@@ -3484,13 +3621,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   async meshQuality(
     document: ProjectDocument,
     bodyIds: BodyId[],
-    deflection: number
+    deflection: number,
+    tolerances: MeshExportTolerances = {}
   ): Promise<MeshQualityReport> {
     if (!Number.isFinite(deflection) || deflection <= 0) {
       throw new Error('Mesh quality deflection must be a positive number.');
     }
+    const angular = explicitAngularTolerance(tolerances.angularTolerance);
+    const units = tolerances.units ?? 'mm';
+    // The writers' space: the export unit, at the deflection that is
+    // `deflection` millimetres there.
+    const unitMm = UNIT_TO_MM[units];
+    const unitDeflection = deflection / unitMm;
     return this.withExportBuild(document, (kernel, build) => {
-      const millimeterScale = UNIT_TO_MM[document.units];
+      const exportScale = exportLengthScale(document.units, units);
       const bodies: BodyMeshQuality[] = bodyIds.map((bodyId) => {
         const shape = build.shapes.get(bodyId);
         if (!shape) {
@@ -3498,32 +3642,88 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         }
         let boundaryEdges = 0;
         let nonManifoldEdges = 0;
+        let triangleCount = 0;
+        let maxDeviation = 0;
+        let sampledTriangles = 0;
+        let totalTriangles = 0;
         // A body with no solids has nothing to print, which is a failed
         // check, not a vacuous pass.
         let watertight = shape.solids.length > 0;
         for (const solid of shape.solids) {
-          // Checked in the same millimetre space the export tessellates, so
-          // the verdict describes the file the user is about to write.
+          // Checked in the same space the export tessellates (scaled into
+          // the export unit before the float32 quantization the file
+          // stores), so the verdict describes the file about to be written.
           const measured =
-            millimeterScale === 1
+            exportScale === 1
               ? solid
               : kernel.copyAndTransformSolid(
                   solid,
-                  uniformScaleMatrix(millimeterScale)
+                  uniformScaleMatrix(exportScale)
                 );
           const quality = readMeshQuality(
-            kernel.meshQuality(measured, deflection)
+            kernel.meshQuality(measured, unitDeflection, angular)
           );
           boundaryEdges += quality.boundaryEdges;
           nonManifoldEdges += quality.nonManifoldEdges;
           watertight &&= quality.isWatertight;
+          // The same tessellation, grouped by face, measured against the
+          // exact faces: what the tolerance promises, checked rather than
+          // assumed.
+          const grouped = kernel.tessellateSolidGroupedBinary(
+            measured,
+            unitDeflection,
+            angular
+          );
+          try {
+            const deviation = measureMeshDeviation({
+              positions: grouped.positions,
+              indices: grouped.indices,
+              faceOffsets: grouped.faceOffsets,
+              faces: kernel.getSolidFaces(measured),
+              isPlanar: (face) => kernel.getSurfaceType(face) === 'plane',
+              distance: (x, y, z, face) =>
+                kernel.pointToFaceDistance(x, y, z, face)[0] ?? 0
+            });
+            // Counted the way the sanitizers filter the written file (zero
+            // area at float32, the precision STL and PLY store), not the
+            // kernel's welded count, which drops a different set.
+            triangleCount += countExportedTriangles(
+              grouped.positions,
+              grouped.indices
+            );
+            maxDeviation = Math.max(
+              maxDeviation,
+              deviation.maxDeviation * unitMm
+            );
+            sampledTriangles += deviation.sampledTriangles;
+            totalTriangles += deviation.totalTriangles;
+          } finally {
+            grouped.free();
+          }
         }
-        return { bodyId, boundaryEdges, nonManifoldEdges, watertight };
+        return {
+          bodyId,
+          boundaryEdges,
+          nonManifoldEdges,
+          watertight,
+          triangleCount,
+          maxDeviation,
+          sampledTriangles,
+          totalTriangles
+        };
       });
       return {
         watertight:
           bodies.length > 0 && bodies.every((body) => body.watertight),
-        bodies
+        bodies,
+        triangleCount: bodies.reduce(
+          (sum, body) => sum + body.triangleCount,
+          0
+        ),
+        maxDeviation: Math.max(0, ...bodies.map((body) => body.maxDeviation)),
+        sampled: bodies.some(
+          (body) => body.sampledTriangles < body.totalTriangles
+        )
       };
     });
   }
@@ -3549,7 +3749,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         continue;
       }
       const data = node.data;
-      // Rectangles, polygons, and text are not solvable geometry in v1;
+      // Rectangles, polygons, and text are not solvable geometry;
       // document validation refuses constraints that reference them, so
       // skipping them here cannot orphan a constraint.
       if (data.objectKind === 'line') {
@@ -3618,6 +3818,28 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             'endAngleDeg',
             document.units
           )
+        });
+      } else if (data.objectKind === 'ellipse') {
+        const value = (field: ParamValue, label: string) =>
+          resolveParamValue(field, scope, label, document.units);
+        objects.push({
+          objectId,
+          kind: 'ellipse',
+          centerX: value(data.centerX, 'centerX'),
+          centerY: value(data.centerY, 'centerY'),
+          radiusX: value(data.radiusX, 'radiusX'),
+          radiusY: value(data.radiusY, 'radiusY'),
+          rotationDeg: value(data.rotationDeg, 'rotationDeg')
+        });
+      } else if (data.objectKind === 'spline') {
+        objects.push({
+          objectId,
+          kind: 'spline',
+          points: data.points.map((point) => ({
+            x: resolveParamValue(point.x, scope, 'spline x', document.units),
+            y: resolveParamValue(point.y, scope, 'spline y', document.units)
+          })),
+          closed: data.closed === true
         });
       }
     }

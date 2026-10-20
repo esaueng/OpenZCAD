@@ -6,7 +6,10 @@ permissions:
 jobs:
   quality:
     runs-on: &fleet-runner ${{ fromJSON(vars.CI_FLEET_ENABLED == 'true' && (github.repository == 'esaueng/OpenZCAD' && github.repository_id == '1334829303' && github.actor == 'petertoday' && github.actor_id == '171875562' && github.triggering_actor == 'petertoday' && ((github.event_name == 'pull_request' && github.event.pull_request.state == 'open' && github.event.pull_request.user.login == 'petertoday' && github.event.pull_request.user.id == 171875562 && github.event.pull_request.head.repo.id == 1334829303 && github.event.pull_request.base.repo.id == 1334829303 && github.event.pull_request.head.repo.fork == false && github.event.pull_request.base.repo.fork == false && github.event.pull_request.base.ref == 'main' && github.ref == format('refs/pull/{0}/merge', github.event.pull_request.number)) || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.ref_protected == true))) && (vars.CI_FLEET_TARGET == 'ci-server-jane' && '{"group":"ci-trusted-main","labels":"ci-server-jane"}' || vars.CI_FLEET_TARGET == 'ci-server-john' && '{"group":"ci-trusted-main","labels":"ci-server-john"}') || '"ubuntu-latest"') }}
-    timeout-minutes: 15
+    # Hosted jobs have hung for 4-14 minutes in "Cleaning up orphan processes"
+    # after every step passed; the timeout counts that tail and turns a green
+    # job into a cancelled required check, so each limit keeps that headroom.
+    timeout-minutes: 30
     steps:
       - &fleet-isolation
         name: Verify runner isolation and fresh storage
@@ -66,7 +69,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm audit --audit-level=high
+      # `pnpm audit` lives in dependency-audit.yml: a newly published advisory
+      # must not turn every PR and queue candidate red in this required gate.
       - run: pnpm lint
       - run: pnpm typecheck
   validation:
@@ -189,7 +193,7 @@ jobs:
     needs: [quality, unit, validation]
     if: always()
     runs-on: *fleet-runner
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - *fleet-isolation
       - name: Require all validation checks
@@ -203,7 +207,9 @@ jobs:
           test "$VALIDATION_RESULT" = success
   e2e-tests:
     runs-on: *fleet-runner
-    timeout-minutes: 30
+    # Hosted shards ran 14-21 minutes on 19 Oct, against the ~7 the weights
+    # below were balanced for; rebalance with `scripts/e2e-shards.mjs --update`.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       # The suite is ~80 runner-minutes of browser work at Playwright's two
@@ -268,7 +274,7 @@ jobs:
   # a skipped job satisfies branch protection, so this job must run and fail
   # explicitly whenever any shard did not succeed.
   e2e:
-    timeout-minutes: 5
+    timeout-minutes: 15
     needs: e2e-tests
     if: always()
     runs-on: *fleet-runner

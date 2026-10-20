@@ -257,4 +257,35 @@ describe('exportFaceDxf', () => {
       faceDxfEntities(stub, 1, 1)
     ).toThrow(/no boundary edges/);
   });
+
+  it('samples a spline at 0.02 mm of physical length in every export unit', async () => {
+    const { faceDxfEntities }: { faceDxfEntities: typeof faceDxfEntitiesFn } =
+      await import('../packages/kernel-adapter/src/exact-dxf');
+    const asked: number[] = [];
+    const stub: DxfFaceKernel = {
+      getEdgeCurveType: () => 'BSPLINE',
+      getEdgeVertices: () => new Float64Array([0, 0, 0, 10, 0, 0]),
+      getEdgeParamSpan: () => new Float64Array(2),
+      evaluateEdgeCurve: () => new Float64Array(3),
+      measureCurvatureAtEdge: () => new Float64Array(4),
+      sampleEdge: (_edge, deflection) => {
+        asked.push(deflection);
+        return new Float64Array([0, 0, 0, 5, 1, 0, 10, 0, 0]);
+      },
+      getSurfaceType: () => 'plane',
+      getFaceNormal: () => new Float64Array([0, 0, 1]),
+      getFaceWires: () => [1],
+      getWireEdges: () => [2]
+    };
+    // A millimetre model written in mm, cm, m and inches; then an inch model
+    // written in millimetres. The output scale changes; the physical
+    // tolerance (model units of 1 mm, or of 25.4 mm) must not.
+    faceDxfEntities(stub, 1, 1, 1);
+    faceDxfEntities(stub, 1, 0.1, 1);
+    faceDxfEntities(stub, 1, 0.001, 1);
+    faceDxfEntities(stub, 1, 1 / 25.4, 1);
+    faceDxfEntities(stub, 1, 25.4, 25.4);
+    expect(asked.slice(0, 4)).toEqual([0.02, 0.02, 0.02, 0.02]);
+    expect(asked[4]).toBeCloseTo(0.02 / 25.4, 15);
+  });
 });

@@ -1,6 +1,11 @@
 import {
   boundedArcSweepDegrees,
   boundedPolygonSides,
+  isFullEllipse,
+  resolveEllipseGeometry,
+  resolveSplineGeometry,
+  sampleEllipse,
+  sampleSpline,
   textDisplayLoops
 } from '@openzcad/geometry';
 import { textSketchBudgetError, type SketchObjectData } from '@openzcad/shared';
@@ -113,6 +118,21 @@ export function objectPolylines(
         });
       }
       return [{ points, closed: false }];
+    }
+    case 'ellipse': {
+      const ellipse = resolveEllipseGeometry(data, resolve);
+      const points = sampleEllipse(ellipse, CIRCLE_SEGMENTS);
+      return isFullEllipse(ellipse)
+        ? [{ points: points.slice(0, -1), closed: true }]
+        : [{ points, closed: false }];
+    }
+    case 'spline': {
+      // Display only: the exact curve reaches the kernel as NURBS.
+      const spline = resolveSplineGeometry(data, resolve);
+      const points = sampleSpline(spline);
+      return spline.closed
+        ? [{ points: points.slice(0, -1), closed: true }]
+        : [{ points, closed: false }];
     }
     case 'text': {
       // Display only, at a coarser tolerance than the kernel path — the solid

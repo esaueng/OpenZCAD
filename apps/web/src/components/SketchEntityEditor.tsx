@@ -4,6 +4,7 @@ import {
   evaluateFieldExpression,
   type ExpressionDimension
 } from '@openzcad/document-core';
+import { resolveSplineGeometry } from '@openzcad/geometry';
 import {
   MAX_SKETCH_ARC_SWEEP_DEGREES,
   MAX_SKETCH_POLYGON_SIDES,
@@ -12,7 +13,7 @@ import {
 } from '@openzcad/shared';
 import type { SketchConstraintToolKind } from '../lib/interaction/machine';
 import { CONSTRAINT_ICONS } from './constraintIcons';
-import { Trash2, X } from 'lucide-react';
+import { Construction, Trash2, X } from 'lucide-react';
 import { ExprInput } from './ExprInput';
 import { previewExpression } from '../lib/model';
 import { TextObjectFields, type TextAttributes } from './TextObjectFields';
@@ -67,6 +68,11 @@ interface SketchEntityEditorProps {
   error?: string | null;
   onApply(data: SketchObjectData): void;
   onDelete(): void;
+  /**
+   * Turn the entity into construction geometry, or back (one undo step).
+   * Absent, the editor has no construction toggle.
+   */
+  onToggleConstruction?(): void;
   onClose(): void;
   /**
    * The constraints section: what the entity is already held by. Adding one
@@ -94,7 +100,10 @@ interface FieldDefinition {
   fallback?: string;
 }
 
-const FIELDS: Record<SketchObjectData['objectKind'], FieldDefinition[]> = {
+const FIELDS: Record<
+  Exclude<SketchObjectData['objectKind'], 'ellipse' | 'spline'>,
+  FieldDefinition[]
+> = {
   line: [
     { key: 'x1', label: 'Start X' },
     { key: 'y1', label: 'Start Y' },
@@ -142,6 +151,50 @@ const FIELDS: Record<SketchObjectData['objectKind'], FieldDefinition[]> = {
   ]
 };
 
+const ELLIPSE_FIELDS: FieldDefinition[] = [
+  { key: 'radiusX', label: 'Radius X' },
+  { key: 'radiusY', label: 'Radius Y' },
+  { key: 'centerX', label: 'Center X' },
+  { key: 'centerY', label: 'Center Y' },
+  { key: 'rotationDeg', label: 'Rotation', dimension: 'angle' }
+];
+
+/**
+ * The fields one object shows. Most kinds have a fixed set; an elliptical
+ * arc adds its parameter range, and a spline has one X/Y pair per point
+ * (`points.<i>.x`), so its card grows with the curve.
+ */
+function fieldsFor(data: SketchObjectData): FieldDefinition[] {
+  if (data.objectKind === 'ellipse') {
+    return data.startParamDeg === undefined
+      ? ELLIPSE_FIELDS
+      : [
+          ...ELLIPSE_FIELDS,
+          { key: 'startParamDeg', label: 'Start', dimension: 'angle' },
+          { key: 'endParamDeg', label: 'End', dimension: 'angle' }
+        ];
+  }
+  if (data.objectKind === 'spline') {
+    return data.points.flatMap((_, index) => [
+      { key: `points.${index}.x`, label: `Point ${index + 1} X` },
+      { key: `points.${index}.y`, label: `Point ${index + 1} Y` }
+    ]);
+  }
+  return FIELDS[data.objectKind];
+}
+
+/** The stored value behind one field key, spline point keys included. */
+function fieldRaw(
+  data: SketchObjectData,
+  key: string
+): string | number | undefined {
+  const point = /^points\.(\d+)\.([xy])$/.exec(key);
+  if (point && data.objectKind === 'spline') {
+    return data.points[Number(point[1])]?.[point[2] as 'x' | 'y'];
+  }
+  return (data as unknown as Record<string, string | number>)[key];
+}
+
 /**
  * A dragged entity lands on a double — 41.808471716162806 — and the raw
  * string clipped in a 128 px field says nothing an engineer can use. The
@@ -163,9 +216,8 @@ function fieldText(raw: string | number | undefined, fallback?: string) {
 
 function initialValues(data: SketchObjectData): Record<string, string> {
   return Object.fromEntries(
-    FIELDS[data.objectKind].map(({ key, fallback }) => {
-      const raw = (data as unknown as Record<string, string | number>)[key];
-      return [key, fieldText(raw, fallback)];
+    fieldsFor(data).map(({ key, fallback }) => {
+      return [key, fieldText(fieldRaw(data, key), fallback)];
     })
   );
 }
@@ -173,8 +225,8 @@ function initialValues(data: SketchObjectData): Record<string, string> {
 /** The raw document values behind `initialValues`, keyed the same way. */
 function rawValues(data: SketchObjectData): Record<string, string | number> {
   return Object.fromEntries(
-    FIELDS[data.objectKind].flatMap(({ key }) => {
-      const raw = (data as unknown as Record<string, string | number>)[key];
+    fieldsFor(data).flatMap(({ key }) => {
+      const raw = fieldRaw(data, key);
       return raw === undefined ? [] : [[key, raw]];
     })
   );
@@ -207,14 +259,17 @@ function rebaseEditorFields(
   values: Record<string, string>,
   text: TextAttributes | null
 ): { values: Record<string, string>; text: TextAttributes | null } {
-  if (previous.objectKind !== next.objectKind) {
+  if (
+    previous.objectKind !== next.objectKind ||
+    fieldsFor(previous).length !== fieldsFor(next).length
+  ) {
     return { values: initialValues(next), text: textAttributes(next) };
   }
   const before = rawValues(previous);
   const after = rawValues(next);
   const shown = initialValues(next);
   const rebasedValues = Object.fromEntries(
-    FIELDS[next.objectKind].map(({ key }) => [
+    fieldsFor(next).map(({ key }) => [
       key,
       before[key] === after[key] ? (values[key] ?? shown[key]!) : shown[key]!
     ])
@@ -311,19 +366,45 @@ function nextData(
         startAngleDeg: value('startAngleDeg'),
         endAngleDeg: value('endAngleDeg')
       };
+    case 'ellipse':
+      return {
+        ...data,
+        objectKind: kind,
+        radiusX: value('radiusX'),
+        radiusY: value('radiusY'),
+        centerX: value('centerX'),
+        centerY: value('centerY'),
+        rotationDeg: value('rotationDeg'),
+        ...(data.startParamDeg === undefined
+          ? {}
+          : {
+              startParamDeg: value('startParamDeg'),
+              endParamDeg: value('endParamDeg')
+            })
+      };
+    case 'spline':
+      return {
+        ...data,
+        objectKind: kind,
+        points: data.points.map((_, index) => ({
+          x: value(`points.${index}.x`),
+          y: value(`points.${index}.y`)
+        }))
+      };
   }
 }
 
 function geometryError(
-  kind: SketchObjectData['objectKind'],
+  data: SketchObjectData,
   values: Record<string, string>,
   scope: Record<string, number>,
   units: UnitSystem
 ): string | null {
+  const kind = data.objectKind;
   let resolved: Record<string, number>;
   try {
     resolved = Object.fromEntries(
-      FIELDS[kind].map(({ key, dimension = 'length' }) => [
+      fieldsFor(data).map(({ key, dimension = 'length' }) => [
         key,
         evaluateFieldExpression(values[key] ?? '', scope, {
           documentUnits: units,
@@ -344,6 +425,40 @@ function geometryError(
     (kind === 'text' && resolved.size! <= 0)
   ) {
     return 'Lengths and radii must be greater than zero.';
+  }
+  if (
+    kind === 'ellipse' &&
+    (resolved.radiusX! <= 0 || resolved.radiusY! <= 0)
+  ) {
+    return 'Ellipse radii must be greater than zero.';
+  }
+  if (kind === 'ellipse' && data.startParamDeg !== undefined) {
+    // The same bounds as a circular arc: a near-full or near-empty sweep
+    // is a full ellipse or nothing, either of which has a better form.
+    const sweep = resolved.endParamDeg! - resolved.startParamDeg!;
+    if (Math.abs(sweep) > MAX_SKETCH_ARC_SWEEP_DEGREES) {
+      return `Arc sweep must not exceed ${MAX_SKETCH_ARC_SWEEP_DEGREES} degrees.`;
+    }
+    const wrapped = Math.abs(sweep % 360);
+    if (wrapped < 1 || 360 - wrapped < 1) {
+      return 'Arc sweep must be at least 1 degree.';
+    }
+  }
+  if (kind === 'spline') {
+    try {
+      resolveSplineGeometry(
+        {
+          ...data,
+          points: data.points.map((_, index) => ({
+            x: resolved[`points.${index}.x`]!,
+            y: resolved[`points.${index}.y`]!
+          }))
+        },
+        (value) => Number(value)
+      );
+    } catch (error) {
+      return error instanceof Error ? error.message : 'Invalid spline.';
+    }
   }
   if (
     kind === 'polygon' &&
@@ -383,6 +498,7 @@ export function SketchEntityEditor({
   error,
   onApply,
   onDelete,
+  onToggleConstruction,
   onClose,
   constraints,
   onEditConstraint,
@@ -404,7 +520,7 @@ export function SketchEntityEditor({
     setValues(rebased.values);
     setTextAttrs(rebased.text);
   }
-  const fields = FIELDS[data.objectKind];
+  const fields = fieldsFor(data);
   const expressionsValid = fields.every(
     ({ key, dimension = 'length' }) =>
       previewExpression(values[key] ?? '', scope, {
@@ -413,7 +529,7 @@ export function SketchEntityEditor({
       }).ok
   );
   const semanticError = expressionsValid
-    ? geometryError(data.objectKind, values, scope, units)
+    ? geometryError(data, values, scope, units)
     : null;
   const valid = expressionsValid && !semanticError;
 
@@ -488,6 +604,23 @@ export function SketchEntityEditor({
               <Trash2 size={13} aria-hidden="true" />
               Delete
             </button>
+            {onToggleConstruction && (
+              <button
+                type="button"
+                className="secondary sketch-entity-construction"
+                aria-pressed={data.construction === true}
+                title={
+                  data.construction
+                    ? 'Make regular geometry: it bounds profiles again'
+                    : 'Make construction geometry: it solves but bounds no profile'
+                }
+                disabled={disabled}
+                onClick={onToggleConstruction}
+              >
+                <Construction size={13} aria-hidden="true" />
+                Construction
+              </button>
+            )}
             <button
               type="submit"
               className="primary"

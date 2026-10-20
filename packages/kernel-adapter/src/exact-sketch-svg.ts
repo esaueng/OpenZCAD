@@ -17,6 +17,7 @@
  * counter-clockwise arcs into SVG's negative-angle direction (sweep flag 0).
  */
 
+import { splineBezierSegments } from '@openzcad/geometry';
 import { formatDxfNumber, type DxfEntity } from '@openzcad/io-dxf';
 import type { UnitSystem } from '@openzcad/shared';
 
@@ -80,6 +81,77 @@ function pointAt(
     center[0] + radius * Math.cos(radians),
     center[1] + radius * Math.sin(radians)
   ];
+}
+
+type EllipseEntity = Extract<DxfEntity, { kind: 'ellipse' }>;
+type SplineEntity = Extract<DxfEntity, { kind: 'spline' }>;
+
+/** The point at ellipse parameter `t`. */
+function ellipseAt(entity: EllipseEntity, t: number): [number, number] {
+  const [mx, my] = entity.majorAxis;
+  const cos = Math.cos(t);
+  // The minor axis is the major turned a quarter counter-clockwise.
+  const sin = Math.sin(t) * entity.ratio;
+  return [
+    entity.center[0] + mx * cos - my * sin,
+    entity.center[1] + my * cos + mx * sin
+  ];
+}
+
+/** The spline's exact Bézier spans, control points as tuples. */
+function splineSegments(entity: SplineEntity): [number, number][][] {
+  return splineBezierSegments({
+    degree: entity.degree,
+    knots: [...entity.knots],
+    controls: entity.controls.map(([x, y]) => ({ x, y })),
+    closed: false
+  }).map((segment) => segment.map((point) => [point.x, point.y]));
+}
+
+/** Bernstein value of one coordinate of a Bézier span at `t`. */
+function bezierValue(values: readonly number[], t: number): number {
+  let row = [...values];
+  while (row.length > 1) {
+    row = row
+      .slice(1)
+      .map((value, index) => row[index]! + (value - row[index]!) * t);
+  }
+  return row[0]!;
+}
+
+/** Interior parameters where one coordinate of a Bézier span is extreme. */
+function bezierExtremes(values: readonly number[]): number[] {
+  const degree = values.length - 1;
+  // Derivative coefficients in the power basis of t.
+  const d = values
+    .slice(1)
+    .map((value, index) => degree * (value - values[index]!));
+  let roots: number[];
+  if (d.length === 1) {
+    roots = [];
+  } else if (d.length === 2) {
+    // Linear derivative d0(1 − t) + d1 t.
+    const slope = d[1]! - d[0]!;
+    roots = slope === 0 ? [] : [-d[0]! / slope];
+  } else {
+    // Quadratic derivative in Bernstein form d0, d1, d2.
+    const a = d[0]! - 2 * d[1]! + d[2]!;
+    const b = 2 * (d[1]! - d[0]!);
+    const c = d[0]!;
+    if (Math.abs(a) < 1e-15) {
+      roots = b === 0 ? [] : [-c / b];
+    } else {
+      const disc = b * b - 4 * a * c;
+      roots =
+        disc < 0
+          ? []
+          : [
+              (-b + Math.sqrt(disc)) / (2 * a),
+              (-b - Math.sqrt(disc)) / (2 * a)
+            ];
+    }
+  }
+  return roots.filter((t) => t > 0 && t < 1);
 }
 
 interface Bounds {
@@ -152,6 +224,49 @@ export function sketchSvgBounds(entities: readonly DxfEntity[]): Bounds {
         }
         break;
       }
+      case 'ellipse': {
+        include(bounds, ...ellipseAt(entity, entity.startParam));
+        include(bounds, ...ellipseAt(entity, entity.endParam));
+        // dx/dt = 0 and dy/dt = 0 each hold at two opposite parameters.
+        const [mx, my] = entity.majorAxis;
+        const r = entity.ratio;
+        const extremes = [
+          Math.atan2(-my * r, mx),
+          Math.atan2(mx * r, my)
+        ].flatMap((t) => [t, t + Math.PI]);
+        const sweep = entity.endParam - entity.startParam;
+        for (const t of extremes) {
+          const offset =
+            (((t - entity.startParam) % (2 * Math.PI)) + 2 * Math.PI) %
+            (2 * Math.PI);
+          if (offset <= sweep) {
+            include(bounds, ...ellipseAt(entity, t));
+          }
+        }
+        break;
+      }
+      case 'spline':
+        for (const segment of splineSegments(entity)) {
+          include(bounds, ...segment[0]!);
+          include(bounds, ...segment[segment.length - 1]!);
+          for (const axis of [0, 1] as const) {
+            const values = segment.map((point) => point[axis]);
+            for (const t of bezierExtremes(values)) {
+              include(
+                bounds,
+                bezierValue(
+                  segment.map((point) => point[0]),
+                  t
+                ),
+                bezierValue(
+                  segment.map((point) => point[1]),
+                  t
+                )
+              );
+            }
+          }
+        }
+        break;
     }
   }
   return bounds;
@@ -187,6 +302,54 @@ function element(entity: DxfEntity): string {
       }
       // y is negated, so counter-clockwise in the sketch is sweep flag 0.
       return `<path d="M${num(x0)} ${num(-y0)} A${r} ${r} 0 ${sweep > 180 ? 1 : 0} 0 ${num(x1)} ${num(-y1)}"/>`;
+    }
+    case 'ellipse': {
+      // Exact elliptical-arc commands, at most a half turn each so no
+      // command's endpoints can coincide. With v negated, the major axis
+      // at θ in the sketch sits at −θ in SVG, and counter-clockwise is
+      // still sweep flag 0.
+      const [mx, my] = entity.majorAxis;
+      const rx = num(Math.hypot(mx, my));
+      const ry = num(Math.hypot(mx, my) * entity.ratio);
+      const tilt = num((-Math.atan2(my, mx) * 180) / Math.PI);
+      const sweep = entity.endParam - entity.startParam;
+      const pieces = Math.max(1, Math.ceil(sweep / Math.PI - 1e-12));
+      const [x0, y0] = ellipseAt(entity, entity.startParam);
+      const commands = [`M${num(x0)} ${num(-y0)}`];
+      for (let piece = 1; piece <= pieces; piece += 1) {
+        const [x, y] = ellipseAt(
+          entity,
+          entity.startParam + (sweep * piece) / pieces
+        );
+        commands.push(`A${rx} ${ry} ${tilt} 0 0 ${num(x)} ${num(-y)}`);
+      }
+      return `<path d="${commands.join(' ')}"/>`;
+    }
+    case 'spline': {
+      // One exact Bézier command per knot span: Q for a quadratic, C for a
+      // cubic. Nothing is sampled.
+      const segments = splineSegments(entity);
+      const first = segments[0]?.[0];
+      if (!first) return '';
+      const commands = [`M${num(first[0])} ${num(-first[1])}`];
+      for (const segment of segments) {
+        const rest = segment
+          .slice(1)
+          .map(([x, y]) => `${num(x)} ${num(-y)}`)
+          .join(' ');
+        if (segment.length === 4) {
+          commands.push(`C${rest}`);
+        } else if (segment.length === 3) {
+          commands.push(`Q${rest}`);
+        } else if (segment.length === 2) {
+          commands.push(`L${rest}`);
+        } else {
+          throw new Error(
+            `An SVG path has no degree-${segment.length - 1} curve command.`
+          );
+        }
+      }
+      return `<path d="${commands.join(' ')}"/>`;
     }
   }
 }

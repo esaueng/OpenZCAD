@@ -1,0 +1,367 @@
+{
+  "browser": "webkit",
+  "version": "26.6",
+  "runs": {
+    "mls-rs": [
+      {
+        "host": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "loadMs": 15,
+        "library": "mls-rs+webcrypto",
+        "failedSteps": [
+          "aborted: CryptoProviderError(AnyError(\"HpkeError(AnyError(KemError(AnyError(KeyDerivationError))))\"))"
+        ],
+        "medianMs": {
+          "commitCreate": null,
+          "commitProcess": null,
+          "addCommitWithWelcome": null,
+          "welcomeJoin": null,
+          "externalCommit": null
+        },
+        "samples": {
+          "commitCreate": 0,
+          "commitProcess": 0,
+          "welcomeJoin": 0
+        },
+        "sizes": {
+          "key_package": 401
+        },
+        "epochChecks": 0,
+        "finalEpoch": 0,
+        "persistence": []
+      },
+      {
+        "host": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "loadMs": 11,
+        "library": "mls-rs+webcrypto",
+        "failedSteps": [
+          "aborted: CryptoProviderError(AnyError(\"HpkeError(AnyError(KemError(AnyError(KeyDerivationError))))\"))"
+        ],
+        "medianMs": {
+          "commitCreate": null,
+          "commitProcess": null,
+          "addCommitWithWelcome": null,
+          "welcomeJoin": null,
+          "externalCommit": null
+        },
+        "samples": {
+          "commitCreate": 0,
+          "commitProcess": 0,
+          "welcomeJoin": 0
+        },
+        "sizes": {
+          "key_package": 402
+        },
+        "epochChecks": 0,
+        "finalEpoch": 0,
+        "persistence": []
+      },
+      {
+        "host": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "loadMs": 14,
+        "library": "mls-rs+webcrypto",
+        "failedSteps": [
+          "aborted: CryptoProviderError(AnyError(\"HpkeError(AnyError(KemError(AnyError(KeyDerivationError))))\"))"
+        ],
+        "medianMs": {
+          "commitCreate": null,
+          "commitProcess": null,
+          "addCommitWithWelcome": null,
+          "welcomeJoin": null,
+          "externalCommit": null
+        },
+        "samples": {
+          "commitCreate": 0,
+          "commitProcess": 0,
+          "welcomeJoin": 0
+        },
+        "sizes": {
+          "key_package": 401
+        },
+        "epochChecks": 0,
+        "finalEpoch": 0,
+        "persistence": []
+      }
+    ],
+    "mls-rs-rustcrypto": [
+      {
+        "host": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "loadMs": 11,
+        "library": "mls-rs+rustcrypto",
+        "failedSteps": [],
+        "medianMs": {
+          "commitCreate": 3,
+          "commitProcess": 2,
+          "addCommitWithWelcome": 5,
+          "welcomeJoin": 3,
+          "externalCommit": 7
+        },
+        "samples": {
+          "commitCreate": 13,
+          "commitProcess": 57,
+          "welcomeJoin": 7
+        },
+        "sizes": {
+          "commit_path_only": 664,
+          "group_info_with_external_pub": 1337,
+          "key_package": 403,
+          "signature_secret_key": 32,
+          "state_a1_1_member": 2326,
+          "state_a1_3_members": 3852,
+          "welcome_1_joiner": 1069,
+          "welcome_4_member_group": 1731
+        },
+        "epochChecks": 26,
+        "finalEpoch": 32,
+        "persistence": [
+          {
+            "label": "mls-rs/A1",
+            "store": "indexeddb",
+            "stateBytes": 3852,
+            "sealedBytes": 3868,
+            "keyExtractable": false,
+            "exportRefused": true,
+            "roundTripMs": 11,
+            "identical": true
+          }
+        ]
+      },
+      {
+        "host": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "loadMs": 10,
+        "library": "mls-rs+rustcrypto",
+        "failedSteps": [],
+        "medianMs": {
+          "commitCreate": 3,
+          "commitProcess": 2,
+          "addCommitWithWelcome": 5,
+          "welcomeJoin": 3,
+          "externalCommit": 6
+        },
+        "samples": {
+          "commitCreate": 13,
+          "commitProcess": 57,
+          "welcomeJoin": 7
+        },
+        "sizes": {
+          "commit_path_only": 664,
+          "group_info_with_external_pub": 1337,
+          "key_package": 402,
+          "signature_secret_key": 32,
+          "state_a1_1_member": 2327,
+          "state_a1_3_members": 3853,
+          "welcome_1_joiner": 1070,
+          "welcome_4_member_group": 1730
+        },
+        "epochChecks": 26,
+        "finalEpoch": 32,
+        "persistence": [
+          {
+            "label": "mls-rs/A1",
+            "store": "indexeddb",
+            "stateBytes": 3853,
+            "sealedBytes": 3869,
+            "keyExtractable": false,
+            "exportRefused": true,
+            "roundTripMs": 6,
+            "identical": true
+          }
+        ]
+      },
+      {
+        "host": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "loadMs": 11,
+        "library": "mls-rs+rustcrypto",
+        "failedSteps": [],
+        "medianMs": {
+          "commitCreate": 4,
+          "commitProcess": 2,
+          "addCommitWithWelcome": 5,
+          "welcomeJoin": 3,
+          "externalCommit": 7
+        },
+        "samples": {
+          "commitCreate": 13,
+          "commitProcess": 57,
+          "welcomeJoin": 7
+        },
+        "sizes": {
+          "commit_path_only": 662,
+          "group_info_with_external_pub": 1335,
+          "key_package": 402,
+          "signature_secret_key": 32,
+          "state_a1_1_member": 2327,
+          "state_a1_3_members": 3851,
+          "welcome_1_joiner": 1068,
+          "welcome_4_member_group": 1729
+        },
+        "epochChecks": 26,
+        "finalEpoch": 32,
+        "persistence": [
+          {
+            "label": "mls-rs/A1",
+            "store": "indexeddb",
+            "stateBytes": 3851,
+            "sealedBytes": 3867,
+            "keyExtractable": false,
+            "exportRefused": true,
+            "roundTripMs": 5,
+            "identical": true
+          }
+        ]
+      }
+    ],
+    "openmls": [
+      {
+        "host": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "loadMs": 13,
+        "library": "openmls",
+        "failedSteps": [],
+        "medianMs": {
+          "commitCreate": 4,
+          "commitProcess": 2,
+          "addCommitWithWelcome": 5,
+          "welcomeJoin": 4,
+          "externalCommit": 6
+        },
+        "samples": {
+          "commitCreate": 13,
+          "commitProcess": 61,
+          "welcomeJoin": 7
+        },
+        "sizes": {
+          "commit_path_only": 657,
+          "group_info_with_external_pub": 1368,
+          "key_package": 395,
+          "signature_key_pair_record": 779,
+          "state_a1_1_member": 24930,
+          "state_a1_3_members": 29855,
+          "welcome_1_joiner": 1087,
+          "welcome_4_member_group": 1759
+        },
+        "epochChecks": 26,
+        "finalEpoch": 33,
+        "persistence": [
+          {
+            "label": "openmls/A1",
+            "store": "indexeddb",
+            "stateBytes": 29855,
+            "sealedBytes": 29871,
+            "keyExtractable": false,
+            "exportRefused": true,
+            "roundTripMs": 6,
+            "identical": true
+          }
+        ]
+      },
+      {
+        "host": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "loadMs": 13,
+        "library": "openmls",
+        "failedSteps": [],
+        "medianMs": {
+          "commitCreate": 3,
+          "commitProcess": 2,
+          "addCommitWithWelcome": 5,
+          "welcomeJoin": 3,
+          "externalCommit": 6
+        },
+        "samples": {
+          "commitCreate": 13,
+          "commitProcess": 61,
+          "welcomeJoin": 7
+        },
+        "sizes": {
+          "commit_path_only": 656,
+          "group_info_with_external_pub": 1371,
+          "key_package": 396,
+          "signature_key_pair_record": 760,
+          "state_a1_1_member": 24947,
+          "state_a1_3_members": 29905,
+          "welcome_1_joiner": 1086,
+          "welcome_4_member_group": 1755
+        },
+        "epochChecks": 26,
+        "finalEpoch": 33,
+        "persistence": [
+          {
+            "label": "openmls/A1",
+            "store": "indexeddb",
+            "stateBytes": 29905,
+            "sealedBytes": 29921,
+            "keyExtractable": false,
+            "exportRefused": true,
+            "roundTripMs": 5,
+            "identical": true
+          }
+        ]
+      },
+      {
+        "host": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+        "loadMs": 13,
+        "library": "openmls",
+        "failedSteps": [],
+        "medianMs": {
+          "commitCreate": 3,
+          "commitProcess": 2,
+          "addCommitWithWelcome": 5,
+          "welcomeJoin": 4,
+          "externalCommit": 6
+        },
+        "samples": {
+          "commitCreate": 13,
+          "commitProcess": 61,
+          "welcomeJoin": 7
+        },
+        "sizes": {
+          "commit_path_only": 657,
+          "group_info_with_external_pub": 1369,
+          "key_package": 397,
+          "signature_key_pair_record": 776,
+          "state_a1_1_member": 24980,
+          "state_a1_3_members": 29909,
+          "welcome_1_joiner": 1088,
+          "welcome_4_member_group": 1756
+        },
+        "epochChecks": 26,
+        "finalEpoch": 33,
+        "persistence": [
+          {
+            "label": "openmls/A1",
+            "store": "indexeddb",
+            "stateBytes": 29909,
+            "sealedBytes": 29925,
+            "keyExtractable": false,
+            "exportRefused": true,
+            "roundTripMs": 6,
+            "identical": true
+          }
+        ]
+      }
+    ]
+  },
+  "rejoin": {
+    "mls-rs": [
+      "FAIL: aborted — CryptoProviderError(AnyError(\"HpkeError(AnyError(KemError(AnyError(KeyDerivationError))))\"))"
+    ],
+    "mls-rs-rustcrypto": [
+      "pass: rejoin: wiped sole member — rejoined with PSK of epoch 1; 1 member(s); now epoch 3",
+      "pass: library: resumption PSK in an external Commit — not possible: ExternalCommitBuilder takes only external PSK ids",
+      "pass: rejoin refused: revoked device with a fresh PSK — A1 rejected: MlsRulesError(AnyError(SpikeError(\"credential revoked\")))",
+      "pass: rejoin refused: PSK older than the user's newest revocation — A1 rejected: MlsRulesError(AnyError(SpikeError(\"PSK epoch 2 before newest revocation 3\")))",
+      "pass: rejoin accepted: unrevoked device, PSK inside the window — PSK of epoch 5 at epoch 6; epoch 7, 3 members agree",
+      "pass: rejoin refused: PSK outside the retention window — A1 rejected: MlsRulesError(AnyError(SpikeError(\"PSK epoch 7 outside the 4-epoch window (now 12)\")))",
+      "pass: rejoin refused: PSK from before the member's role change — A1 rejected: MlsRulesError(AnyError(SpikeError(\"PSK epoch 12 before role change 13\")))",
+      "pass: rejoin refused: removed member, PSK from before removal — A1 rejected: MlsRulesError(AnyError(SpikeError(\"identity not listed in the roles extension\")))"
+    ],
+    "openmls": [
+      "pass: rejoin: wiped sole member — rejoined with PSK of epoch 1; 2 leaves until the stale one was removed; now epoch 3, 1 member(s)",
+      "pass: library: resumption PSK in an external Commit — not possible: the joiner has no resumption secrets (PskError(KeyNotFound))",
+      "pass: rejoin refused: revoked device with a fresh PSK — A1 policy rejected: credential revoked",
+      "pass: rejoin refused: PSK older than the user's newest revocation — A1 policy rejected: PSK epoch 2 before newest revocation 3",
+      "pass: rejoin accepted: unrevoked device, PSK inside the window — PSK of epoch 5 at epoch 6; epoch 7, 3 members agree",
+      "pass: rejoin refused: PSK outside the retention window — A1 policy rejected: PSK epoch 7 outside the 4-epoch window (now 12)",
+      "pass: rejoin refused: PSK from before the member's role change — A1 policy rejected: PSK epoch 12 before role change 13",
+      "pass: rejoin refused: removed member, PSK from before removal — A1 policy rejected: identity not listed in the roles extension"
+    ]
+  }
+}

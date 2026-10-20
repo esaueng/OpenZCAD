@@ -1,0 +1,52 @@
+[package]
+name = "openzcad-mls-spike-mls-rs"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "Throwaway ADR-024 MLS spike: mls-rs with the WebCrypto provider"
+
+# Standalone: not part of any repository workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mls-rs = { version = "=0.56.0", default-features = false, features = [
+  "std",
+  "private_message",
+  "by_ref_proposal",
+  "custom_proposal",
+  "self_remove_proposal",
+  "prior_epoch",
+  "psk",
+  "tree_index",
+] }
+mls-rs-core = { version = "=0.27.0", default-features = false, features = ["std"] }
+mls-rs-codec = "=0.7.0"
+mls-rs-crypto-webcrypto = { version = "=0.15.1", optional = true }
+mls-rs-crypto-rustcrypto = { version = "=0.22.1", optional = true, features = ["browser"] }
+maybe-async = "0.2"
+async-trait = "0.1"
+thiserror = "2"
+wasm-bindgen = "=0.2.126"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+zeroize = "1"
+
+[features]
+default = ["webcrypto"]
+# SubtleCrypto provider (the ADR's preferred option).
+webcrypto = ["dep:mls-rs-crypto-webcrypto"]
+# Pure-Rust provider, built as a second variant for comparison.
+rustcrypto = ["dep:mls-rs-crypto-rustcrypto"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -128,6 +128,43 @@ export function solvedSketchCommands(
           endAngleDeg: solved.endAngleDeg
         };
       }
+    } else if (solved.kind === 'ellipse' && data.objectKind === 'ellipse') {
+      if (
+        movedField(data.centerX, solved.centerX, resolve) ||
+        movedField(data.centerY, solved.centerY, resolve) ||
+        movedField(data.radiusX, solved.radiusX, resolve) ||
+        movedField(data.radiusY, solved.radiusY, resolve) ||
+        movedField(data.rotationDeg, solved.rotationDeg, resolve)
+      ) {
+        // An elliptical arc keeps its parameter range: the solver held it
+        // as its carrier ellipse.
+        next = {
+          ...data,
+          centerX: solved.centerX,
+          centerY: solved.centerY,
+          radiusX: solved.radiusX,
+          radiusY: solved.radiusY,
+          rotationDeg: solved.rotationDeg
+        };
+      }
+    } else if (solved.kind === 'spline' && data.objectKind === 'spline') {
+      // Per point: a point the solve left alone keeps its expressions.
+      let moved = false;
+      const points = data.points.map((point, index) => {
+        const at = solved.points[index];
+        if (
+          !at ||
+          (!movedField(point.x, at.x, resolve) &&
+            !movedField(point.y, at.y, resolve))
+        ) {
+          return point;
+        }
+        moved = true;
+        return { x: at.x, y: at.y };
+      });
+      if (moved) {
+        next = { ...data, points };
+      }
     }
     if (next) {
       commands.push(

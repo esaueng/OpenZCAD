@@ -77,8 +77,23 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * leave four unrelated lines, so the bump makes it refuse such a document.
  * Absent means no composites: every older rectangle and polygon object loads
  * unchanged and is never decomposed.
+ *
+ * v27 adds the I01 curve entities: the `ellipse` sketch object (a full
+ * ellipse, or an elliptical arc when it carries a parameter range) and the
+ * `spline` object (a fit spline through points or a control-point B-spline).
+ * An older client would refuse or drop such an object and every profile it
+ * bounds, so the bump makes it refuse the document instead. Existing objects
+ * are unchanged.
+ *
+ * v28 adds R01 datum axes: the `datum-axis` feature kind (through two points,
+ * along a straight edge, the axis of a cylinder or cone, or where two planes
+ * meet) and the references that turn geometry about one: a revolve's
+ * `axisRef`, a circular pattern's `axisRef` and a Move's `axisRotation`. An
+ * older client would build those features about their stored sketch or world
+ * axis instead, so the bump makes it refuse such a document. Every field is
+ * optional; absent is the v27 behaviour.
  */
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 26 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 28 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -115,9 +130,27 @@ export type FeatureKind =
   | 'direct-edit'
   | 'imported-step'
   | 'imported-mesh'
-  | 'datum-plane';
+  | 'datum-plane'
+  | 'datum-axis';
 export type SketchObjectKind =
-  'rectangle' | 'circle' | 'polygon' | 'line' | 'arc' | 'text';
+  | 'rectangle'
+  | 'circle'
+  | 'polygon'
+  | 'line'
+  | 'arc'
+  | 'ellipse'
+  | 'spline'
+  | 'text';
+/**
+ * How a spline is defined (I01, schema v27): `fit` interpolates its points,
+ * `control` treats them as the control polygon of a clamped B-spline.
+ */
+export type SketchSplineMethod = 'fit' | 'control';
+/**
+ * Control-spline degrees the sketch offers. A fit spline sets its own: cubic,
+ * or quadratic through only three open points.
+ */
+export type SketchSplineDegree = 2 | 3;
 /**
  * Font style of a text sketch object. Each style is a distinct bundled font
  * file — never a synthetic shear or emboldening — so the letterforms are the
@@ -176,6 +209,8 @@ export function isVariableFilletLaw(law: unknown): law is VariableFilletLaw {
 export type ParamValue = number | string;
 export const MAX_SKETCH_POLYGON_SIDES = 64;
 export const MAX_SKETCH_ARC_SWEEP_DEGREES = 360;
+/** Fit points or control points one spline may hold. */
+export const MAX_SKETCH_SPLINE_POINTS = 64;
 export const MAX_HELICAL_SWEEP_TURNS = 100;
 
 export interface Vector3 {
@@ -309,6 +344,17 @@ export function isDatumPlaneRef(
   plane: ModelingPlaneReference | SketchPlaneRef
 ): plane is DatumPlaneRef {
   return (plane as { type?: unknown }).type === 'datum';
+}
+
+/**
+ * Schema v28: a reference to an R01 datum axis by the feature that defines
+ * it. Like a datum plane, the axis resolves once at its own history position
+ * and every consumer reads that line; nothing re-derives it from final
+ * topology.
+ */
+export interface DatumAxisRef {
+  type: 'datum-axis';
+  datumFeatureId: FeatureId;
 }
 
 export type FaceDistanceMoveMode =
@@ -689,6 +735,116 @@ export type DatumPlaneDefinition =
       reverseNormal?: boolean;
     };
 
+/**
+ * Schema v28: a straight model edge, by its schema-v5 lineage, that a datum
+ * axis runs along. The axis runs from the edge's end 0 to its end 1 (the
+ * same quantized end order an `edge-vertex` uses), so neither kernel's edge
+ * orientation decides its direction.
+ */
+export interface DatumAxisEdgeSource {
+  type: 'edge';
+  bodyId: BodyId;
+  edgeReference: EdgeTopologyReferenceV5;
+}
+
+/**
+ * Schema v28: a cylindrical or conical model face, by its schema-v5 lineage,
+ * whose axis a datum axis follows.
+ */
+export interface DatumAxisFaceSource {
+  type: 'face';
+  bodyId: BodyId;
+  faceReference: FaceTopologyReferenceV5;
+}
+
+/**
+ * Schema v28: how a datum axis is built. Each is refused by name rather than
+ * guessed when it has no single line: coincident points, an edge that is not
+ * straight, a face that is not a cylinder or cone, parallel planes.
+ * `reverseDirection` turns the axis end for end without moving it, which
+ * reverses the sense of every angle measured about it.
+ */
+export type DatumAxisDefinition =
+  | {
+      /** From the first point toward the second; the origin is the first. */
+      kind: 'two-point';
+      points: [DatumPointSource, DatumPointSource];
+      reverseDirection?: boolean;
+    }
+  | {
+      /** Along a straight edge, from its end 0 toward its end 1. */
+      kind: 'edge';
+      source: DatumAxisEdgeSource;
+      reverseDirection?: boolean;
+    }
+  | {
+      /**
+       * The axis of a cylindrical or conical face. A surface axis has no
+       * preferred sense of its own, so the direction is canonical (its first
+       * component beyond the direction quantum is positive) and kernel-neutral.
+       */
+      kind: 'cylinder';
+      source: DatumAxisFaceSource;
+      reverseDirection?: boolean;
+    }
+  | {
+      /**
+       * Where two planes meet, along A's normal × B's normal. The origin is
+       * the point of the line nearest A's origin. Parallel planes have no
+       * intersection line and are refused.
+       */
+      kind: 'plane-intersection';
+      sources: [DatumPlaneSource, DatumPlaneSource];
+      reverseDirection?: boolean;
+    };
+
+/** The plane sources a datum axis definition reads, in role order. */
+export function datumAxisPlaneSources(
+  definition: DatumAxisDefinition
+): DatumPlaneSource[] {
+  return definition.kind === 'plane-intersection'
+    ? [...definition.sources]
+    : [];
+}
+
+/** The point sources a datum axis definition reads, in role order. */
+export function datumAxisPointSources(
+  definition: DatumAxisDefinition
+): DatumPointSource[] {
+  return definition.kind === 'two-point' ? [...definition.points] : [];
+}
+
+/** The bodies whose topology a datum axis reads, like {@link datumSourceBodyIds}. */
+export function datumAxisSourceBodyIds(
+  definition: DatumAxisDefinition
+): BodyId[] {
+  const bodies = new Set<BodyId>();
+  if (definition.kind === 'edge' || definition.kind === 'cylinder')
+    bodies.add(definition.source.bodyId);
+  for (const source of datumAxisPlaneSources(definition))
+    if (source.type === 'face') bodies.add(source.bodyId);
+  for (const point of datumAxisPointSources(definition))
+    if (point.type === 'edge-vertex') bodies.add(point.bodyId);
+  return [...bodies];
+}
+
+/**
+ * Every datum axis a feature turns about: a revolve's or circular pattern's
+ * `axisRef` and a Move's `axisRotation`. Suppressed features count; their
+ * references are still live.
+ */
+export function featureDatumAxisRefs(data: FeatureData): DatumAxisRef[] {
+  switch (data.featureKind) {
+    case 'revolve':
+    case 'pattern':
+      return data.axisRef ? [data.axisRef] : [];
+    case 'transform':
+      return data.axisRotation ? [data.axisRotation.axis] : [];
+    default:
+      return [];
+  }
+}
+
 /** The plane sources a datum definition reads, in role order. */
 export function datumPlaneSources(
   definition: DatumPlaneDefinition
@@ -991,6 +1147,46 @@ export type SketchObjectData = (
       endAngleDeg: ParamValue;
     }
   | {
+      /**
+       * I01 (schema v27). The point at parameter `t` is
+       * `center + radiusX·cos t·u + radiusY·sin t·v`, where `u` is the sketch
+       * x axis turned counter-clockwise by `rotationDeg` and `v` is `u` turned
+       * a further 90°. Either radius may be the larger one; which is the major
+       * axis is a property of the values, not of the field names.
+       */
+      objectKind: 'ellipse';
+      centerX: ParamValue;
+      centerY: ParamValue;
+      radiusX: ParamValue;
+      radiusY: ParamValue;
+      rotationDeg: ParamValue;
+      /**
+       * An elliptical arc: the counter-clockwise parameter range from
+       * `startParamDeg` to `endParamDeg`, in degrees of the parameter `t`
+       * above (the eccentric anomaly, not the polar angle). Both present or
+       * both absent; absent is the full ellipse.
+       */
+      startParamDeg?: ParamValue;
+      endParamDeg?: ParamValue;
+    }
+  | {
+      /**
+       * I01 (schema v27). A non-rational B-spline. A `fit` spline passes
+       * through every point (cubic, chord-length parameterized; quadratic
+       * through only three open points); a `control`
+       * spline is the clamped uniform B-spline of `degree` over the points as
+       * its control polygon. A `closed` spline is periodic: the curve joins
+       * itself smoothly and no endpoint is repeated in `points`. The curve is
+       * re-derived from these fields on every rebuild, never stored.
+       */
+      objectKind: 'spline';
+      method: SketchSplineMethod;
+      /** Control-spline degree; ignored for a fit spline. */
+      degree?: SketchSplineDegree;
+      points: { x: ParamValue; y: ParamValue }[];
+      closed?: boolean;
+    }
+  | {
       objectKind: 'text';
       /**
        * The string to render. Glyph outlines are never persisted — they are
@@ -1126,6 +1322,15 @@ export type FeatureData =
       definition: DatumPlaneDefinition;
     }
   | {
+      /**
+       * R01 (schema v28): a datum axis. Like a datum plane it owns no body;
+       * its resolved line is published at its history position for the
+       * revolves, circular patterns and Moves that turn about it.
+       */
+      featureKind: 'datum-axis';
+      definition: DatumAxisDefinition;
+    }
+  | {
       featureKind: 'primitive';
       primitiveKind: PrimitiveKind;
       dimensions: Record<string, ParamValue>;
@@ -1195,6 +1400,13 @@ export type FeatureData =
        * `PARTIAL_REVOLVE_HASH_ONLY_REASON` in the kernel adapter.
        */
       angleDeg?: ParamValue;
+      /**
+       * R01 (schema v28): turn the profile about a datum axis instead of the
+       * sketch's `axis`. The axis must lie in the sketch plane; one that
+       * leaves it is refused by name rather than projected. `axis` is kept,
+       * so clearing this restores the sketch axis the revolve had.
+       */
+      axisRef?: DatumAxisRef;
     }
   | {
       featureKind: 'loft';
@@ -1267,6 +1479,13 @@ export type FeatureData =
        * holds: it rewrites `targetBodyId` and has no body of its own.
        */
       copy?: true;
+      /**
+       * R01 (schema v28): turn the body `angleDeg` degrees about a datum
+       * axis, right-handed about its direction, before `transform` applies
+       * (so a translation then moves the turned body). Absent is the
+       * Move every older document holds.
+       */
+      axisRotation?: { axis: DatumAxisRef; angleDeg: ParamValue };
     }
   | {
       featureKind: 'mirror';
@@ -1438,6 +1657,12 @@ export type FeatureData =
       spacing2?: ParamValue;
       /** Grid patterns: instance count along `axis2`. Absent reads as `count`. */
       count2?: ParamValue;
+      /**
+       * R01 (schema v28), circular patterns only: turn the copies about a
+       * datum axis, through its own origin, instead of the world `axis`
+       * through the origin. Absent is the world axis every older pattern uses.
+       */
+      axisRef?: DatumAxisRef;
     }
   | {
       featureKind: 'direct-edit';
@@ -2587,6 +2812,12 @@ export interface DatumFrame {
   normal: Vector3;
 }
 
+/** A resolved datum axis: a point on the line and its unit direction. */
+export interface DatumAxisLine {
+  origin: Vector3;
+  direction: Vector3;
+}
+
 export interface DerivedState {
   editAnalysis?: EditAnalysisRequest;
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
@@ -2596,6 +2827,11 @@ export interface DerivedState {
    * as the kernel did. A datum that failed or is suppressed is absent.
    */
   datumFrames?: Record<FeatureId, DatumFrame>;
+  /**
+   * R01 (schema v28): each datum axis as the exact build resolved it at its
+   * own history position. A datum axis that failed or is suppressed is absent.
+   */
+  datumAxes?: Record<FeatureId, DatumAxisLine>;
   exportableBodyIds: BodyId[];
   warnings: string[];
   updatedAt: string;
@@ -3261,6 +3497,18 @@ export interface AppSettings {
     cloudAutosave: boolean;
     /** Quiet time before a copy is written, in seconds. */
     cloudAutosaveDelaySeconds: number;
+    /**
+     * How a file that states no length unit (STL, OBJ, PLY, a DXF without
+     * `$INSUNITS`) is read: ask at each import, the project's units, or one
+     * fixed unit.
+     */
+    unitlessImportUnits: UnitlessImportUnits;
+    /**
+     * The length unit exports write where the format can carry one (STEP,
+     * 3MF, DXF) or simply holds numbers (STL, OBJ, PLY). glTF is metres by
+     * definition and SVG states its physical size, so neither follows it.
+     */
+    exportUnits: ExportUnits;
   };
   collaboration: {
     /** Allow project invitations and live collaboration connections. */
@@ -3359,7 +3607,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   },
   files: {
     cloudAutosave: true,
-    cloudAutosaveDelaySeconds: CLOUD_AUTOSAVE_DELAY_BOUNDS.default
+    cloudAutosaveDelaySeconds: CLOUD_AUTOSAVE_DELAY_BOUNDS.default,
+    unitlessImportUnits: 'ask',
+    // Millimetres, what every export wrote before the unit became a choice.
+    exportUnits: 'mm'
   },
   collaboration: {
     enabled: true
@@ -3827,7 +4078,8 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff',
-  'datum-plane': '#9aa5b8'
+  'datum-plane': '#9aa5b8',
+  'datum-axis': '#9aa5b8'
 };
 
 export const featureColor = (kind: FeatureKind): string =>
@@ -3864,6 +4116,37 @@ export function bodyDisplayColor(
   featureKind?: FeatureKind
 ): string {
   return chosenBodyColor(metadata, featureKind) ?? DEFAULT_BODY_COLOR;
+}
+
+/** Reading a unitless import: ask, the project's units, or a fixed unit. */
+export type UnitlessImportUnits = 'ask' | 'document' | UnitSystem;
+
+export const UNITLESS_IMPORT_UNITS: readonly UnitlessImportUnits[] = [
+  'ask',
+  'document',
+  'mm',
+  'cm',
+  'm',
+  'inch'
+];
+
+/** The unit an export writes: the project's own, or a fixed one. */
+export type ExportUnits = 'document' | UnitSystem;
+
+export const EXPORT_UNITS: readonly ExportUnits[] = [
+  'document',
+  'mm',
+  'cm',
+  'm',
+  'inch'
+];
+
+/** The concrete unit an export preference names for one document. */
+export function resolveExportUnits(
+  preference: ExportUnits,
+  documentUnits: UnitSystem
+): UnitSystem {
+  return preference === 'document' ? documentUnits : preference;
 }
 
 /** Millimetres per document unit, used by exporters that fix a unit. */
