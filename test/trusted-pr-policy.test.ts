@@ -80,7 +80,7 @@ describe('required validation gate', () => {
     const job = (name: string) => {
       const start = ci.indexOf(`\n  ${name}:\n`);
       expect(start).toBeGreaterThan(-1);
-      const end = ci.slice(start + 1).search(/\n  [a-z0-9-]+:\n/);
+      const end = ci.slice(start + 1).search(/\n {2}[a-z0-9-]+:\n/);
       return ci.slice(start, end === -1 ? undefined : start + 1 + end);
     };
     const direct = job('e2e-tests');
