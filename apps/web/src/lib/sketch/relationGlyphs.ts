@@ -82,19 +82,6 @@ export function sketchRelationGlyphs(
     const result = resolve(value);
     return result !== undefined && Number.isFinite(result) ? result : undefined;
   };
-  // Points that coincide after a solve agree to far better than this, so
-  // they share one chip; the quantum scales with the sketch so large sketches
-  // do not split a corner across chips.
-  let extent = 1;
-  for (const { data } of objects) {
-    for (const value of Object.values(data)) {
-      const number = typeof value === 'number' ? value : undefined;
-      if (number !== undefined && Number.isFinite(number)) {
-        extent = Math.max(extent, Math.abs(number));
-      }
-    }
-  }
-  const quantum = extent * 1e-6;
   const chips = new Map<string, SketchRelationGlyphChip>();
   const place = (
     key: string,
@@ -117,15 +104,16 @@ export function sketchRelationGlyphs(
     const anchor = objectAnchor(byId.get(objectId), scalar);
     if (anchor) place(`object:${objectId}`, 'object', anchor, glyph);
   };
+  // Point glyphs are clustered after every anchor is known, because the
+  // clustering tolerance depends on all of them.
+  const pointGlyphs: { anchor: Point; glyph: SketchRelationGlyph }[] = [];
   const onPoint = (ref: SketchPointRef, glyph: SketchRelationGlyph) => {
     const anchor = sketchPointPosition(
       byId.get(ref.objectId),
       ref.point,
       scalar
     );
-    if (!anchor) return;
-    const key = `point:${Math.round(anchor.x / quantum)},${Math.round(anchor.y / quantum)}`;
-    place(key, 'point', anchor, glyph);
+    if (anchor) pointGlyphs.push({ anchor, glyph });
   };
 
   for (const constraint of constraints) {
@@ -164,7 +152,9 @@ export function sketchRelationGlyphs(
         onObject(data.b, glyph);
         break;
       case 'coincident':
+        // Both ends: before a Solve, or after a refused one, they can differ.
         onPoint(data.a, glyph);
+        onPoint(data.b, glyph);
         break;
       case 'midpoint':
       case 'point-on-object':
@@ -176,6 +166,34 @@ export function sketchRelationGlyphs(
         onPoint(data.b, glyph);
         onObject(data.axis, glyph);
         break;
+    }
+  }
+  // Solved coincident points agree to far better than this quantum, so they
+  // share one chip. It follows the points' span, so a compact sketch far from
+  // its plane origin keeps distinct points apart, with a floor for the
+  // rounding of coordinates that far out.
+  if (pointGlyphs.length > 0) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const { anchor } of pointGlyphs) {
+      minX = Math.min(minX, anchor.x);
+      minY = Math.min(minY, anchor.y);
+      maxX = Math.max(maxX, anchor.x);
+      maxY = Math.max(maxY, anchor.y);
+    }
+    const span = Math.max(maxX - minX, maxY - minY);
+    const offset = Math.max(
+      Math.abs(minX),
+      Math.abs(minY),
+      Math.abs(maxX),
+      Math.abs(maxY)
+    );
+    const quantum = Math.max(span * 1e-6, offset * 1e-12, 1e-12);
+    for (const { anchor, glyph } of pointGlyphs) {
+      const key = `point:${Math.round(anchor.x / quantum)},${Math.round(anchor.y / quantum)}`;
+      place(key, 'point', anchor, glyph);
     }
   }
   return [...chips.values()];

@@ -186,6 +186,72 @@ describe('sketchRelationGlyphs', () => {
     ]);
   });
 
+  it('marks both ends of a coincident that has not been solved yet', () => {
+    const chips = sketchRelationGlyphs(
+      objects,
+      [
+        constraint({
+          constraintKind: 'coincident',
+          a: { objectId: id('bottom'), point: 'start' },
+          b: { objectId: id('bend'), point: 'end' }
+        })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    expect(chips.map(label).sort()).toEqual(['point(0,0)', 'point(40,4)']);
+  });
+
+  it('keeps distinct points apart in a compact sketch far from the plane origin', () => {
+    // Two 10-unit segments a billion units out: the corner between them must
+    // stay one chip, and the free ends must not merge into it.
+    const far = 1e9;
+    const chips = sketchRelationGlyphs(
+      [
+        {
+          id: 'p',
+          data: { objectKind: 'line', x1: far, y1: far, x2: far + 10, y2: far }
+        },
+        {
+          id: 'q',
+          data: {
+            objectKind: 'line',
+            x1: far + 10,
+            y1: far,
+            x2: far + 10,
+            y2: far + 10
+          }
+        }
+      ],
+      [
+        constraint({
+          constraintKind: 'coincident',
+          a: { objectId: id('p'), point: 'end' },
+          b: { objectId: id('q'), point: 'start' }
+        }),
+        constraint({
+          constraintKind: 'lock',
+          point: { objectId: id('p'), point: 'start' },
+          x: far,
+          y: far
+        }),
+        constraint({
+          constraintKind: 'lock',
+          point: { objectId: id('q'), point: 'end' },
+          x: far + 10,
+          y: far + 10
+        })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    expect(
+      chips
+        .map((chip) => chip.glyphs.map((glyph) => glyph.kind).join('+'))
+        .sort()
+    ).toEqual(['coincident', 'lock', 'lock']);
+  });
+
   it('skips relations whose geometry does not resolve', () => {
     const chips = sketchRelationGlyphs(
       [
