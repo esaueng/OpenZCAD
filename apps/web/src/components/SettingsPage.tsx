@@ -718,6 +718,24 @@ export function SettingsPage({
 
   const credential = accountState?.credential;
   const effective = accountState?.effectiveAssistant;
+  const builtInDataPolicy =
+    effective?.provider === 'openrouter'
+      ? {
+          text: 'OpenRouter and the model provider may retain this data or use it for training and service improvement under their policies.',
+          href: 'https://openrouter.ai/docs/guides/privacy/provider-logging',
+          label: 'OpenRouter data policies'
+        }
+      : effective?.provider === 'openai'
+        ? {
+            text: 'OpenAI may retain API data for safety and service operation. API data is not used for training unless the deployment operator opts in to sharing.',
+            href: 'https://developers.openai.com/api/docs/guides/your-data',
+            label: 'OpenAI API data policies'
+          }
+        : {
+            text: 'The configured AI provider may retain this data or use it for training and service improvement under its policies. Ask your deployment operator which service and data policies apply.',
+            href: null,
+            label: ''
+          };
   const credentialValidated = Boolean(credential?.lastValidatedAt);
   // From the start screen there is no workspace behind Settings to go back to.
   const backLabel = workspaceOpen ? 'Back to workspace' : 'Back to projects';
@@ -1358,7 +1376,10 @@ export function SettingsPage({
                     onChange={(enabled) => patchAssistant({ enabled })}
                   />
                 </SettingRow>
-                <SettingRow title="Credential source">
+                <SettingRow
+                  title="Credential source"
+                  hint="Use the built-in model, or your own API key and model."
+                >
                   <Segmented
                     label="AI credential source"
                     value={settings.assistant.credentialSource}
@@ -1383,6 +1404,42 @@ export function SettingsPage({
                   </SettingRow>
                 )}
               </Group>
+
+              {settings.assistant.credentialSource === 'deployment' ? (
+                <Group title="Data use">
+                  {effective?.configured &&
+                  effective.provider === 'openrouter' &&
+                  effective.model.endsWith(':free') ? (
+                    <Notice>
+                      Free with no personal API key. Usage limits and provider
+                      availability apply.
+                    </Notice>
+                  ) : null}
+                  <Notice>
+                    The built-in assistant sends your prompts, conversation,
+                    model context, and any attachments to the configured AI
+                    provider. {builtInDataPolicy.text} Avoid sending sensitive
+                    or confidential data. Use a personal API key to choose
+                    another model; that provider’s data policies and charges
+                    apply.{' '}
+                    {builtInDataPolicy.href ? (
+                      <a
+                        href={builtInDataPolicy.href}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {builtInDataPolicy.label}
+                      </a>
+                    ) : null}
+                  </Notice>
+                </Group>
+              ) : (
+                <Notice>
+                  Requests use your selected provider and model. That provider’s
+                  data retention, training policies, usage limits, and charges
+                  apply to prompts, model context, and attachments.
+                </Notice>
+              )}
 
               {settings.assistant.credentialSource === 'personal' ? (
                 <>
@@ -1634,8 +1691,9 @@ export function SettingsPage({
 
               <p className="settings-footnote">
                 <ShieldCheck size={14} aria-hidden="true" />
-                The assistant sees feature history and your selection, never
-                STEP text or meshes.
+                The assistant receives feature history, model summaries, your
+                selection, and attachments you choose to send. Raw STEP files
+                and meshes are not sent.
               </p>
             </Section>
           )}
