@@ -113,9 +113,11 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       const body = derived.bodyRepresentations[bodyId];
       expect(body, 'the cut body').toBeDefined();
       expect(body!.faceCount).toBe(5);
-      // Exact circular equators in Remus 2026.1.62 change this numerical
-      // reading at the adapter's unchanged measurement deflection.
-      expect(body!.volume).toBeCloseTo(4137.275147, 4);
+      // Exact circular equators in Remus 2026.1.62, and the 2026.1.69
+      // measurement, change this numerical reading at the adapter's
+      // unchanged measurement deflection; 2026.1.69 moved it toward the
+      // closed form 2000π − 2048π/3 ≈ 4138.4952.
+      expect(body!.volume).toBeCloseTo(4137.468689, 4);
     },
     120_000
   );
@@ -142,7 +144,9 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       const body = derived.bodyRepresentations[bodyId];
       expect(body, 'the intersection body').toBeDefined();
       expect(body!.faceCount).toBe(4);
-      expect(body!.volume).toBeCloseTo(163.596637, 4);
+      // Remus 2026.1.69 reads closer to the closed-form quarter cap
+      // 625π/12 ≈ 163.6246 (was 163.596637).
+      expect(body!.volume).toBeCloseTo(163.597068, 4);
     },
     120_000
   );
@@ -292,7 +296,8 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
   it(
     'keeps the plain intersect value where the evolution intersect moves it',
     async () => {
-      // Plain: 523.545492 mm^3. Evolution: 523.528813 mm^3 — a silent
+      // Plain: 523.545492 mm^3 (523.553418 since Remus 2026.1.69, nearer the
+      // closed-form octant 500π/3 ≈ 523.5988). Evolution: 523.528813 mm^3 — a silent
       // geometric change on a path advertised as changing provenance only.
       const { document, bodyId } = operandDocument(
         'Ball corner',
@@ -310,7 +315,7 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       const body = derived.bodyRepresentations[bodyId];
       expect(body, 'the intersection body').toBeDefined();
       expect(body!.faceCount).toBe(4);
-      expect(body!.volume).toBeCloseTo(523.545492, 4);
+      expect(body!.volume).toBeCloseTo(523.553418, 4);
     },
     120_000
   );
