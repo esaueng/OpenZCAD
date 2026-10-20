@@ -3855,6 +3855,11 @@ export function App() {
       version: current.version,
       error
     });
+    // The record and its dismiss control live in History: bring it into
+    // view (unpinned if closed, out of the parking slot if parked).
+    setPanelLayout((layout) =>
+      presentPanel(layout, 'history', panelStage ?? undefined)
+    );
   }
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
