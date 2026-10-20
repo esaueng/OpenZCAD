@@ -1125,6 +1125,37 @@ describe('D01 occlusion tolerance', () => {
   });
 });
 
+describe('D01 thin occluders', () => {
+  it('lets a face-on plate 10^9 mm long and 0.01 mm wide hide what is behind it', () => {
+    // Its triangles' altitude is 10^-11 of their length: an aspect-ratio
+    // cutoff called them edge-on and skipped them.
+    const plate = {
+      vertices: Float64Array.from([
+        0, 0, 0, 1e9, 0, 0, 1e9, 0, 0.01, 0, 0, 0.01
+      ]),
+      indices: Uint32Array.from([0, 1, 2, 0, 2, 3]),
+      faces: [{ triangleStart: 0, triangleCount: 2 }],
+      edges: []
+    };
+    const edge = {
+      vertices: new Float64Array(),
+      indices: new Uint32Array(),
+      edges: [[100, 5, 0.005, 200, 5, 0.005]]
+    };
+    const result = projectView({
+      orientation: 'front',
+      hiddenLines: true,
+      bodies: [plate, edge]
+    });
+    const behind = (u: number, v: number) =>
+      Math.abs(u) >= 100 - 1e-9 &&
+      Math.abs(u) <= 200 + 1e-9 &&
+      Math.abs(v - 0.005) < 1e-9;
+    expect(onLine(result.visible, behind)).toEqual([]);
+    expect(onLine(result.hidden, behind)).toHaveLength(1);
+  });
+});
+
 describe('D01 coincident-line index budget', () => {
   it('bounds the entries it keeps, refining only within what is left', () => {
     // 2000 long diagonals across a square, each crossing about a hundred

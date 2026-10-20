@@ -946,6 +946,9 @@ function onTriangleBoundary(
   return false;
 }
 
+/** An altitude below this fraction of the coordinates is roundoff: edge-on. */
+const EDGE_ON_ALTITUDE = 1e-12;
+
 /** Four float32 units in the last place, relative to the coordinate. */
 const FLOAT32_NOISE = 2 ** -21;
 
@@ -1050,14 +1053,26 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       bounds.minV = Math.min(bounds.minV, v0, v1, v2);
       bounds.maxV = Math.max(bounds.maxV, v0, v1, v2);
       const area = (u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0);
-      // Edge-on triangles cover no area and cannot hide anything; judged
-      // against the triangle's own size, not the view's.
-      const longest = Math.max(
-        (u1 - u0) ** 2 + (v1 - v0) ** 2,
-        (u2 - u1) ** 2 + (v2 - v1) ** 2,
-        (u0 - u2) ** 2 + (v0 - v2) ** 2
+      // Edge-on triangles cover no area and cannot hide anything. Judged by
+      // the triangle's smallest altitude against roundoff at its own
+      // coordinates, not by its aspect ratio: a face-on plate 10^9 long and
+      // 0.01 wide is a real occluder however thin its triangles.
+      const longest = Math.sqrt(
+        Math.max(
+          (u1 - u0) ** 2 + (v1 - v0) ** 2,
+          (u2 - u1) ** 2 + (v2 - v1) ** 2,
+          (u0 - u2) ** 2 + (v0 - v2) ** 2
+        )
       );
-      if (Math.abs(area) <= longest * 1e-10) continue;
+      const reach = Math.max(
+        Math.abs(u0),
+        Math.abs(v0),
+        Math.abs(u1),
+        Math.abs(v1),
+        Math.abs(u2),
+        Math.abs(v2)
+      );
+      if (!(Math.abs(area) > longest * reach * EDGE_ON_ALTITUDE)) continue;
       // The floor absorbs only float noise: display meshes are float32, so
       // a vertex is good to a few units in the last place of its own
       // coordinates. Neither the body's size nor the triangle's sets it: a
