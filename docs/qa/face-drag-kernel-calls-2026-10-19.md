@@ -198,6 +198,33 @@ Milliseconds over the 26 accepted warm ticks. The other 14 ticks were refused
     previews with and without digests and requires digest hits. It skips on
     kernels without the binding, so CI runs it once the Remus update lands.
 
+- **Every complete sync now also checkpoints its last feature.**
+  - The commit after a drag used to restore the last sparse stable
+    checkpoint, replay everything after it, and fully re-measure every body
+    that got new handles. The move itself was only 21–36 ms of it.
+  - Now each complete sync checkpoints its last feature, and a drag's tail
+    is the feature before the edit (the previous sync's last feature). The
+    drag rebuilds nothing, and the commit restores the same checkpoint and
+    replays only the edit, so every other body keeps its measurement.
+  - A tail that a sync no longer schedules is restored when its digests still
+    match and then discarded, so the retained checkpoints stay aligned with
+    the stable positions. The count limit holds: at the limit, the tail
+    takes the latest stable position's slot.
+  - Commit sync, 2026.1.68, two runs each:
+
+    | Run                    |           Wall | Geometry ready | Bodies measured |
+    | ---------------------- | -------------: | -------------: | --------------: |
+    | Holder, before / after | 1230 / 1288 ms |   283 / 289 ms |           1 / 1 |
+    | + 200 boxes, before    |   1800–1876 ms |     696–806 ms |              57 |
+    | + 200 boxes, after     |   1516–1703 ms |     480–577 ms |               1 |
+
+  - Regression: the first test in `test/drag-source-checkpoint.test.ts`
+    (the drag rebuilds nothing, and the commit restores 21 features,
+    replays 1 and re-measures 1 body). With complete syncs back on the
+    stable schedule, the drag's first tick rebuilds the extrusion.
+  - History-cache expectations that counted retained checkpoints or restore
+    points now include the tail checkpoint.
+
 ## Not measured here
 
 - `postMessage` costs.
