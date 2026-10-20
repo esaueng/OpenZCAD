@@ -8432,7 +8432,9 @@ export function ModelViewer({
                   bodyId: body.bodyId,
                   positions: body.mesh.vertices,
                   indices: body.mesh.indices,
-                  topology: body.topology
+                  topology: body.topology,
+                  // A translucent appearance draws without depth writes.
+                  occludes: (body.opacity ?? 1) >= 1
                 })),
                 rect,
                 sweepMode,

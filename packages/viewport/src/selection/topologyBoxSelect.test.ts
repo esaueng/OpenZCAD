@@ -411,6 +411,33 @@ describe('box selection of edges', () => {
       topologyInBox([cube(), shield], leftHalf, 'crossing', options(true))
     ).toHaveLength(8);
   });
+
+  it('sees through a body drawn translucent', () => {
+    const shield: TopologyBoxCandidate = {
+      bodyId: 'shield',
+      positions: [-30, -30, 40, 30, -30, 40, 30, 30, 40, -30, 30, 40],
+      indices: [0, 1, 2, 0, 2, 3],
+      topology: {
+        faces: [
+          { topologyId: 'shield', hash: 9, triangleStart: 0, triangleCount: 2 }
+        ],
+        edges: []
+      },
+      occludes: false
+    };
+    // The cube's own faces still hide its rear edges, as with no shield.
+    expect(
+      ids(topologyInBox([cube(), shield], leftHalf, 'crossing', options()))
+    ).toEqual(ids(topologyInBox([cube()], leftHalf, 'crossing', options())));
+    const faces = ids(
+      topologyInBox([cube(), shield], leftHalf, 'crossing', {
+        ...options(),
+        kind: 'face'
+      })
+    );
+    expect(faces).toContain('face-top');
+    expect(faces).toContain('shield');
+  });
 });
 
 describe('box selection of faces', () => {

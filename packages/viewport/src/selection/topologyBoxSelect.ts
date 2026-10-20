@@ -38,6 +38,11 @@ export interface TopologyBoxCandidate {
   /** Triangle vertex indices into `positions`. */
   indices: ArrayLike<number>;
   topology: Pick<BodyTopology, 'faces' | 'edges'> | undefined;
+  /**
+   * False for a body drawn without depth writes (translucent appearance):
+   * what lies behind it stays drawn, so it hides nothing. Defaults to true.
+   */
+  occludes?: boolean;
 }
 
 export interface TopologyBoxOptions extends BoxSelectOptions {
@@ -375,6 +380,7 @@ class DepthGrid {
   rasterize(bodies: ProjectedBody[], cullBackFaces: boolean) {
     bodies.forEach((projected, bodyIndex) => {
       const { candidate, points, keys } = projected;
+      if (candidate.occludes === false) return;
       const triangleCount = Math.floor(candidate.indices.length / 3);
       for (let triangle = 0; triangle < triangleCount; triangle += 1) {
         const ia = candidate.indices[triangle * 3] ?? -1;
