@@ -147,11 +147,30 @@ Milliseconds over the 26 accepted warm ticks. The other 14 ticks were refused
     | Before |           405.1 / 483.1 |    202.7 / 251.0 | `moveFacesJournaled` 27.6 ms         |              21.2 MB |
     | After  |           259.5 / 392.2 |    148.6 / 227.0 | `moveFacesPreparedJournaled` 28.8 ms |               8.8 MB |
 
-  - `deserializeSolids` no longer runs per tick. Each tick still meshes 57
-    bodies, because the measured-body cache only refills on a complete sync
-    and those bodies got new handles on the drag's first tick.
+  - `deserializeSolids` no longer runs per tick. Each tick still meshed 57
+    bodies, because the measured-body cache only refilled on a complete sync
+    and those bodies got new handles on the drag's first tick (next item).
   - Regression: `test/drag-source-checkpoint.test.ts`. With the change
     reverted, every tick replays the dragged extrusion.
+
+- **Drag previews keep their own meshes of bodies they rebuilt.**
+  - A body the drag's first tick replays gets new handles, so its committed
+    measurement no longer matches and every later tick meshed it again.
+  - A drag preview now keeps the display it meshed for each body, keyed and
+    checked exactly like the committed measurement: the same solid handles,
+    lineage and import diagnostics, and a recounted handle/validation witness.
+    Later previews publish it while the body is unchanged.
+  - The entry holds no volume, edges or recognition, so it only serves
+    previews. A complete measurement of the body replaces it.
+  - Same run as above, one run each:
+
+    | Run    | Accepted wall p50 / p95 | Kernel p50 / p95 | Bodies meshed per tick | Refused wall p50 |
+    | ------ | ----------------------: | ---------------: | ---------------------: | ---------------: |
+    | Before |           250.0 / 321.1 |    151.2 / 195.8 |                     57 |            242.9 |
+    | After  |           194.8 / 256.8 |    129.7 / 163.4 |                      1 |             96.1 |
+
+  - Regression: the second test in `test/preview-measured-body-reuse.test.ts`.
+    With the store removed, the untouched extrusion is meshed on every tick.
 
 ## Not measured here
 
