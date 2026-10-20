@@ -84,4 +84,32 @@ describe('server account tier policy', () => {
     ).toBe(true);
     expect(deploymentAssistantAllowed('first@example.com', {})).toBe(false);
   });
+
+  it('opens an opted-in free OpenRouter deployment to every verified account', () => {
+    const freeEnv = {
+      AI_PROVIDER: 'openrouter' as const,
+      AI_MODEL: 'minimax/minimax-m3.1-flash:free',
+      AI_DEPLOYMENT_FREE_ENABLED: 'true',
+      OPENROUTER_API_KEY: 'test-key'
+    };
+    expect(deploymentAssistantAllowed('anyone@example.com', freeEnv)).toBe(
+      true
+    );
+    expect(deploymentAssistantAllowed(undefined, freeEnv)).toBe(false);
+    expect(deploymentAssistantAllowed(' ', freeEnv)).toBe(false);
+    for (const overrides of [
+      { AI_DEPLOYMENT_FREE_ENABLED: 'false' },
+      { AI_MODEL: 'minimax/minimax-m3.1-flash' },
+      { AI_MODEL: 'openrouter/auto' },
+      { AI_PROVIDER: 'openai' as const },
+      { AI_BASE_URL: 'https://openrouter.ai/api/v1/responses' }
+    ]) {
+      expect(
+        deploymentAssistantAllowed('anyone@example.com', {
+          ...freeEnv,
+          ...overrides
+        })
+      ).toBe(false);
+    }
+  });
 });

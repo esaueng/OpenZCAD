@@ -31,9 +31,10 @@
     "AUTH_SESSION_DAYS": "30",
     "DESKTOP_AUTH_ENABLED": "false",
     "TURNSTILE_SITE_KEY": "<YOUR_TURNSTILE_SITE_KEY>",
-    "AI_PROVIDER": "openai",
-    "AI_MODEL": "gpt-6-luna",
+    "AI_PROVIDER": "openrouter",
+    "AI_MODEL": "minimax/minimax-m3.1-flash:free",
     "AI_REASONING_EFFORT": "high",
+    "AI_DEPLOYMENT_FREE_ENABLED": "true",
     "PROJECT_SHARING_ENABLED": "true",
     "PROJECT_EDIT_LEASES_ENFORCED": "true",
     "PROJECT_PERSONAL_SYNC_ENABLED": "true"
