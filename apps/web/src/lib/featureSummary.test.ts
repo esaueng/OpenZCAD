@@ -104,6 +104,43 @@ describe('featureValueSummary', () => {
         'mm'
       )
     ).toBe('Through all, both sides');
+    // F01 (v29): to-face reads as its extent; a draft rides after it.
+    expect(
+      featureValueSummary(
+        feature({
+          featureKind: 'extrude',
+          distance: 1,
+          endCondition: 'to-face',
+          toFace: {}
+        } as never),
+        {},
+        'mm'
+      )
+    ).toBe('To face');
+    expect(
+      featureValueSummary(
+        feature({
+          featureKind: 'extrude',
+          distance: 1,
+          endCondition: 'to-face',
+          toFace: {},
+          draftAngleDeg: 3
+        } as never),
+        {},
+        'mm'
+      )
+    ).toBe('To face · 3° draft');
+    expect(
+      featureValueSummary(
+        feature({
+          featureKind: 'extrude',
+          distance: 12,
+          draftAngleDeg: -2
+        } as never),
+        {},
+        'mm'
+      )
+    ).toBe('12 mm · -2° draft');
   });
 
   it.each([

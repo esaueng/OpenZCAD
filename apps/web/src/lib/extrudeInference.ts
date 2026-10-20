@@ -340,6 +340,10 @@ export function regionExtrudeOutcome(
   if (resolved.command?.payload.endCondition === 'through-all') {
     return 'Cut the region through all of the target.';
   }
+  // F01 (v29): nor does a to-face extrude, whose face decides the depth.
+  if (resolved.command?.payload.endCondition === 'to-face') {
+    return `Extruded region up to the face${OUTCOME_PHRASES[resolved.inference.operation]}.`;
+  }
   return `Extruded region by ${distance} ${units}${OUTCOME_PHRASES[resolved.inference.operation]}.`;
 }
 

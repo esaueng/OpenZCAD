@@ -1,0 +1,80 @@
+{
+  "library": "openmls",
+  "version": "0.9.1",
+  "crypto": "openmls_rust_crypto 0.6.0 (RustCrypto, compiled to WASM)",
+  "cipher_suite": 2,
+  "steps": [
+    {
+      "name": "rejoin: wiped sole member",
+      "ok": true,
+      "detail": "rejoined with PSK of epoch 1; 2 leaves until the stale one was removed; now epoch 3, 1 member(s)"
+    },
+    {
+      "name": "library: resumption PSK in an external Commit",
+      "ok": true,
+      "detail": "not possible: the joiner has no resumption secrets (PskError(KeyNotFound))"
+    },
+    {
+      "name": "rejoin refused: revoked device with a fresh PSK",
+      "ok": true,
+      "detail": "A1 policy rejected: credential revoked"
+    },
+    {
+      "name": "rejoin refused: PSK older than the user's newest revocation",
+      "ok": true,
+      "detail": "A1 policy rejected: PSK epoch 2 before newest revocation 3"
+    },
+    {
+      "name": "rejoin accepted: unrevoked device, PSK inside the window",
+      "ok": true,
+      "detail": "PSK of epoch 5 at epoch 6; epoch 7, 3 members agree"
+    },
+    {
+      "name": "rejoin refused: PSK outside the retention window",
+      "ok": true,
+      "detail": "A1 rejected: InvalidCommit(PskError(KeyNotFound))"
+    },
+    {
+      "name": "rejoin refused: PSK from before the member's role change",
+      "ok": true,
+      "detail": "A1 policy rejected: PSK epoch 12 before role change 13"
+    },
+    {
+      "name": "rejoin refused: removed member, PSK from before removal",
+      "ok": true,
+      "detail": "A1 policy rejected: identity not listed in the roles extension"
+    }
+  ],
+  "commit_create_ms": [],
+  "commit_process_ms": [
+    3.7652619999998933,
+    3.3101010000000315,
+    3.2640440000000126,
+    3.285725000000184,
+    3.319437999999991,
+    3.343373000000156,
+    3.2669099999998252,
+    3.2731009999997696,
+    3.712923000000046,
+    3.2754249999998137,
+    1.9207729999998264,
+    5.329721000000063,
+    4.87444000000005,
+    3.3053720000002613,
+    2.0107130000001234,
+    3.2962950000001,
+    3.3047609999998713,
+    3.321933000000172,
+    3.2633719999998902,
+    1.8692959999998493
+  ],
+  "add_commit_ms": [],
+  "welcome_join_ms": [],
+  "external_commit_ms": [
+    20.939276000000064
+  ],
+  "sizes": {},
+  "epoch_checks": 1,
+  "exporter_sample": "dd6aaec6c9ccf393",
+  "final_epoch": 15
+}

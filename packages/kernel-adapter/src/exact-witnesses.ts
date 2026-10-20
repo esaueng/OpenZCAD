@@ -416,9 +416,15 @@ export function faceWitnessOf(kernel: RemusKernel, face: number): FaceWitnessV1 
 
 function measureFaceWitness(kernel: RemusKernel, face: number): FaceWitnessV1 {
   const surfaceType = surfaceTypeOf(kernel, face);
+  const lengths = syncReadMemoFor(kernel)?.edgeLengths;
   let perimeter = 0;
   for (const edge of kernel.getFaceEdges(face)) {
-    perimeter += kernel.edgeLength(edge);
+    let length = lengths?.get(edge);
+    if (length === undefined) {
+      length = kernel.edgeLength(edge);
+      lengths?.set(edge, length);
+    }
+    perimeter += length;
   }
   let analytic: FaceWitnessV1['analytic'] = { kind: 'none' };
   let parameters: unknown;

@@ -138,6 +138,8 @@ export class SyncReadMemo {
   readonly surfaceTypes = new Map<number, string>();
   readonly faceWitnesses = new Map<number, FaceWitnessV1>();
   readonly edgeWitnesses = new Map<number, EdgeWitnessV1>();
+  /** Edge lengths, read once per edge although both of its faces sum it. */
+  readonly edgeLengths = new Map<number, number>();
   /** The stored record each face / edge of a registered solid belongs to. */
   private readonly faceOwners = new Map<number, SolidWitnessRecord>();
   private readonly edgeOwners = new Map<number, SolidWitnessRecord>();

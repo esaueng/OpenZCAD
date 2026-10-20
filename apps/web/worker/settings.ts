@@ -1,4 +1,7 @@
-import { accountTier } from '@openzcad/cloudflare-adapters';
+import {
+  accountTier,
+  isCloudflareFeatureEnabled
+} from '@openzcad/cloudflare-adapters';
 import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
@@ -625,7 +628,20 @@ export function deploymentAssistantAllowed(
     return false;
   }
   const normalizedEmail = email.trim().toLowerCase();
+  if (!normalizedEmail) {
+    return false;
+  }
+  const status = getAssistantStatus(env);
+  // Public access is opt-in and limited to an explicitly free OpenRouter
+  // model on the standard endpoint. Paid deployments retain their allowlist.
+  const freeAccess =
+    isCloudflareFeatureEnabled(env, 'AI_DEPLOYMENT_FREE_ENABLED') &&
+    (!env.AI_PROVIDER || env.AI_PROVIDER === 'openrouter') &&
+    status.provider === 'openrouter' &&
+    status.model.endsWith(':free') &&
+    !env.AI_BASE_URL;
   return (
+    freeAccess ||
     accountTier(env, email) === 'premium' ||
     (env.AI_DEPLOYMENT_ALLOWED_EMAILS?.split(',')
       .map((entry) => entry.trim().toLowerCase())

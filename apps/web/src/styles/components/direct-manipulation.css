@@ -1701,6 +1701,22 @@
   width: auto;
 }
 
+/* F01 to-face: the target line, its re-pick button and the note, as one
+   group under Extent; the button sits at its content width. */
+.extrude-to-face {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.extrude-to-face p {
+  margin: 0;
+}
+
+.extrude-to-face > button {
+  justify-self: start;
+}
+
 /* M10: the Move card's copy toggle, laid out like the extrude symmetry box. */
 .transform-copy {
   display: flex;
@@ -1722,6 +1738,18 @@
 
 .tool-card .extrude-form {
   min-width: 0;
+}
+
+/* Its Create/Apply stays in reach while the fields scroll under it: the
+   card grew an Extent and a Draft angle (F01), and in a short window the
+   actions otherwise sat below the fold of the card's own scroll. */
+.tool-card .extrude-form .form-actions {
+  position: sticky;
+  bottom: -12px;
+  z-index: 1;
+  margin-bottom: -12px;
+  padding-block: 8px 12px;
+  background: var(--color-surface);
 }
 
 .tool-card:has(.extrude-form) .tool-card-copy {

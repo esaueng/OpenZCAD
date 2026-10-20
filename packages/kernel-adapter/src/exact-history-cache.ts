@@ -31,7 +31,7 @@ import {
   type ProjectDocument,
   type SketchId
 } from '@openzcad/shared';
-import type { BodyId } from '@openzcad/shared';
+import type { BodyId, GeometryBodyRepresentation } from '@openzcad/shared';
 import type {
   ExactBuildResult,
   ExactShape,
@@ -69,7 +69,8 @@ export const MAX_HISTORY_REPLAY_WORK = 512;
  * on document length: appending a feature must not invalidate earlier kernel
  * checkpoints. Keep short histories dense, spend four slots at the first
  * sparse spacing, then two at each doubling. This retains prefixes 32 and 80
- * without spending 80 full snapshots. Any tail beyond the last slot replays.
+ * without spending 80 full snapshots. Each sync adds one tail checkpoint
+ * (see `tailCheckpointIndices`), so only features after it replay.
  */
 export function historyCheckpointIndices(
   featureCount: number,
@@ -98,6 +99,36 @@ export function historyCheckpointIndices(
     spacing *= 2;
   }
   return indices;
+}
+
+/**
+ * A sync's checkpoint positions: the stable ones before `tail`, then `tail`.
+ *
+ * A complete sync's tail is its last feature, and a face-drag preview's is
+ * the feature right before the dragged edit, whose own digest changes on
+ * every tick. Appending a feature, or starting a drag, then restores the
+ * previous sync's tail and replays only what follows it, however sparse the
+ * stable positions are. Every other body keeps its handles, so its
+ * measurement is reused and a prepared face move can engage. The commit
+ * after a drag restores the drag's tail the same way.
+ *
+ * A schedule already at `limit` gives up its latest position before the
+ * tail, so the count stays within the limit. A tail that later syncs no
+ * longer schedule is the last retained checkpoint; the next sync restores
+ * it when its digests still match, then discards it (see `buildHistory`).
+ */
+export function tailCheckpointIndices(
+  indices: readonly number[],
+  tail: number,
+  limit: number
+): number[] {
+  if (indices.length === 0 || tail < 0) return [...indices];
+  const kept = indices.filter((index) => index < tail);
+  // The same count semantics as `historyCheckpointIndices`: 2.5 allows two.
+  const count = Math.floor(limit);
+  if (kept.length >= count) kept.length = Math.max(0, count - 1);
+  kept.push(tail);
+  return kept;
 }
 
 /**
@@ -446,6 +477,32 @@ export interface MeasuredBodyCacheEntry {
   /** Owned buffers plus serialized metadata/key/witness estimate. */
   bytes: number;
   measured: MeasuredShape;
+}
+
+/** What a drag preview publishes for an unchanged body. */
+export interface PreviewDisplay {
+  vertices: Float32Array;
+  indices: Uint32Array;
+  bbox: GeometryBodyRepresentation['bbox'];
+  faceCount: number;
+  /** Display faces only: NURBS face geometry and edges stay pending. */
+  faces: NonNullable<GeometryBodyRepresentation['topology']>['faces'];
+}
+
+/**
+ * A drag preview's own display projection of a body, kept so later previews
+ * can publish it again. It has the same handle-identity key and live witness
+ * check as {@link MeasuredBodyCacheEntry}, but it holds no volume, edges or
+ * recognition, so it only ever serves previews, never a complete sync.
+ */
+export interface PreviewDisplayCacheEntry {
+  provenanceKey: string;
+  witness: MeasurementWitness;
+  solidKey: string;
+  strict: boolean;
+  /** Owned buffers plus serialized faces/witness estimate. */
+  bytes: number;
+  display: PreviewDisplay;
 }
 
 /** No hash or traversal-position substitution: compare the complete record. */

@@ -1,0 +1,35 @@
+[package]
+name = "openzcad-mls-spike-openmls"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "Throwaway ADR-024 MLS spike: OpenMLS with the RustCrypto provider"
+
+# Standalone: not part of any repository workspace.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+openmls = { version = "=0.9.1", features = ["js"] }
+openmls_rust_crypto = "=0.6.0"
+openmls_basic_credential = { version = "=0.6.0", features = ["clonable"] }
+openmls_memory_storage = "=0.6.0"
+openmls_traits = "=0.6.0"
+# rand_core 0.6 (via openmls_rust_crypto) pulls getrandom 0.2, which needs
+# its `js` backend on wasm32-unknown-unknown.
+getrandom = { version = "0.2", features = ["js"] }
+wasm-bindgen = "=0.2.126"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"

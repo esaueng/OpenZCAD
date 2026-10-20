@@ -95,7 +95,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
  * axis instead, so the bump makes it refuse such a document. Every field is
  * optional; absent is the v27 behaviour.
  *
- * v29 is reserved for the to-face/draft slice running alongside D01.
+ * v29 adds two F01 extrude options: the `to-face` end condition, whose
+ * `toFace` names a planar face by verified lineage and derives the distance
+ * from it on every rebuild, and `draftAngleDeg`, which tapers the extrusion's
+ * walls from the sketch plane. An older client would replay either at its
+ * stale blind distance or with straight walls, so the bump makes it refuse
+ * such a document. Both are optional; absent is the v28 extrude.
  *
  * v30 adds the D01 drawing section (`ProjectDocument.drawings`): sheets with
  * paper, scale, projection angle and title-block text, each holding placed
@@ -111,8 +116,8 @@ export type ProjectDocumentSchemaVersion =
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
 /** F05: what a typed parameter measures. Absent on a node is unitless. */
 export type ParameterKind = 'length' | 'angle' | 'number';
-/** F01 extrude extents; to-face/to-next/offset-from-face are later slices. */
-export type ExtrudeEndCondition = 'blind' | 'through-all';
+/** F01 extrude extents; to-next/offset-from-face are later slices. */
+export type ExtrudeEndCondition = 'blind' | 'through-all' | 'to-face';
 export type ThroughAllSide = 'forward' | 'backward' | 'both';
 export type PlaneId = 'XY' | 'XZ' | 'YZ';
 /** See `SketchPlaneRef`'s `basisRevision`; absent means revision 1. */
@@ -681,6 +686,13 @@ export type FacePlaneSource = Extract<SketchPlaneRef, { type: 'face' }> & {
   faceReference: FaceTopologyReferenceV5;
   sourceCentroid: Vector3;
 };
+
+/**
+ * F01 (schema v29): the face a `to-face` extrude reaches, in the same
+ * lineage-qualified shape an R01 datum's face source uses, so one pick, one
+ * resolver and one re-pick repair serve both.
+ */
+export type ExtrudeToFaceTarget = FacePlaneSource;
 
 export type DatumPlaneSource =
   | CanonicalPlaneSource
@@ -1384,6 +1396,27 @@ export type FeatureData =
       endCondition?: ExtrudeEndCondition;
       /** Required with `through-all`; which side(s) of the sketch plane. */
       throughAllSide?: ThroughAllSide;
+      /**
+       * F01 (schema v29): required with `to-face` and absent otherwise. The
+       * extrusion runs from the sketch plane to this planar face, which must
+       * be parallel to it; the face is re-found through its verified lineage
+       * at the feature's history position on every rebuild, and the distance
+       * is derived from it, never stored. A face that no longer resolves
+       * leaves the feature unresolved (it refuses by name) until a re-pick
+       * replaces this target; `distance` is kept only so switching back to
+       * blind restores it.
+       */
+      toFace?: ExtrudeToFaceTarget;
+      /**
+       * F01 (schema v29): wall draft in degrees, measured from the sketch
+       * normal. Positive tapers the walls inward as the extrusion leaves the
+       * sketch plane (the profile is the widest section), negative flares
+       * them outward. The sketch plane is the neutral plane, so the profile
+       * itself never changes. Absent or zero means straight walls. A one-sided
+       * blind or to-face extrusion only: symmetric, two-sided and through-all
+       * extents refuse it until per-side draft lands.
+       */
+      draftAngleDeg?: ParamValue;
       /**
        * When present, extrudes one detected closed region of the sketch
        * instead of the whole profile. Resolution fails closed: if neither the

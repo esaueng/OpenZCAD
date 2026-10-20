@@ -92,6 +92,8 @@ export function featureHistory(document: ProjectDocument) {
       case 'extrude':
         sketch(data.sketchId);
         body(data.targetBodyId);
+        // F01: a to-face extent reads its face's body.
+        if (data.toFace) planeSource(data.toFace);
         break;
       case 'revolve':
         sketch(data.sketchId);
