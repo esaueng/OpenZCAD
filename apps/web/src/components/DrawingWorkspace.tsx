@@ -469,7 +469,11 @@ function AnnotationPanel(props: {
 }) {
   const { sheet, ready, editable, tool, selected } = props;
   const annotations = sheet.annotations ?? [];
+  // Dimensions measure a view's geometry; a note on the paper needs none,
+  // so a ready sheet with no views still takes one.
   const canAnnotate = ready && editable && sheet.views.length > 0;
+  const canUseTool = (kind: AnnotationToolKind) =>
+    kind === 'note' ? ready && editable : canAnnotate;
   const resolution = selected
     ? props.resolutions.get(selected.annotationId)
     : undefined;
@@ -488,13 +492,15 @@ function AnnotationPanel(props: {
               type="button"
               className={`drawing-tool${tool?.kind === kind && !tool.repairId ? ' active' : ''}`}
               aria-pressed={tool?.kind === kind && !tool.repairId}
-              disabled={!canAnnotate}
+              disabled={!canUseTool(kind)}
               title={
-                canAnnotate
+                canUseTool(kind)
                   ? `${ANNOTATION_TOOL_LABELS[kind]} ${kind === 'note' ? '' : 'dimension'}`.trim()
                   : !editable
                     ? 'Drawing edits are unavailable.'
-                    : 'Update the sheet to annotate it.'
+                    : !ready
+                      ? 'Update the sheet to annotate it.'
+                      : 'Add a view to dimension it.'
               }
               onClick={() =>
                 props.onTool(

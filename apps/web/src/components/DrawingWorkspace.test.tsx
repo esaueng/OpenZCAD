@@ -831,6 +831,21 @@ describe('DrawingWorkspace', () => {
       expect(screen.queryByText(/Vertical dimension: pick/)).toBeNull();
     });
 
+    it('offers paper notes, but no dimensions, on a ready sheet with no views', () => {
+      const sheet = {
+        ...starter(drawingSourceFingerprint({}, [])!),
+        views: []
+      };
+      setup({ sheet });
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'Note' }).disabled
+      ).toBe(false);
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'Horizontal' })
+          .disabled
+      ).toBe(true);
+    });
+
     it('ends a tool when the view it picks in is deleted', async () => {
       const sheet = dimensioned(999);
       const viewId = sheet.annotations![0]!.viewId!;
