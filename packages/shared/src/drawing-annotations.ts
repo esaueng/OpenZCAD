@@ -133,13 +133,30 @@ function isQuantizedPoint(value: unknown): boolean {
   );
 }
 
-/** Whether `value` has the full `EdgeWitnessV1` shape, open or closed. */
+/** Lexicographic order of two quantized points. */
+function comparePoints(left: number[], right: number[]): number {
+  for (let index = 0; index < 3; index += 1) {
+    const difference = left[index]! - right[index]!;
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+/**
+ * Whether `value` is a canonical `EdgeWitnessV1`: the shape and every rule
+ * the kernel adapter's witness inspection calls invalid (a non-empty curve
+ * type, a non-negative quantized length, quantized points, open endpoints
+ * in lexicographic order, a non-zero sign-canonical closed axis). Its hash
+ * is checked where the fingerprint lives, when the annotation resolves.
+ */
 function isEdgeWitness(value: unknown): boolean {
   if (
     !isRecord(value) ||
-    !isShortText(value.curveType, 64) ||
-    typeof value.length !== 'number' ||
-    !Number.isFinite(value.length)
+    typeof value.curveType !== 'string' ||
+    value.curveType.trim().length === 0 ||
+    value.curveType.length > 64 ||
+    !Number.isSafeInteger(value.length) ||
+    (value.length as number) < 0
   )
     return false;
   if (value.closed === false)
@@ -147,13 +164,19 @@ function isEdgeWitness(value: unknown): boolean {
       Array.isArray(value.endpoints) &&
       value.endpoints.length === 2 &&
       value.endpoints.every(isQuantizedPoint) &&
-      isQuantizedPoint(value.midpoint)
+      isQuantizedPoint(value.midpoint) &&
+      comparePoints(
+        value.endpoints[0] as number[],
+        value.endpoints[1] as number[]
+      ) <= 0
     );
-  if (value.closed === true)
-    return (
-      isQuantizedPoint(value.center) &&
-      (value.axis === null || isQuantizedPoint(value.axis))
-    );
+  if (value.closed === true) {
+    if (!isQuantizedPoint(value.center)) return false;
+    if (value.axis === null) return true;
+    if (!isQuantizedPoint(value.axis)) return false;
+    const first = (value.axis as number[]).find((component) => component !== 0);
+    return first !== undefined && first > 0;
+  }
   return false;
 }
 

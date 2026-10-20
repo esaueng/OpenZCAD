@@ -338,7 +338,35 @@ describe('D02 annotation section (schema v31)', () => {
           { ...ref.reference!.witness, closed: false, endpoints: [[0, 0, 0]] },
           { ...ref.reference!.witness, closed: false, midpoint: [0.5, 0, 0] },
           { ...ref.reference!.witness, closed: true, axis: 'z' },
-          { ...ref.reference!.witness, length: 'long' }
+          { ...ref.reference!.witness, length: 'long' },
+          // Finite but not canonical: fractional or negative lengths, a
+          // blank curve type, endpoints out of order, a non-canonical axis.
+          { ...ref.reference!.witness, length: 1.5 },
+          { ...ref.reference!.witness, length: -1 },
+          { ...ref.reference!.witness, curveType: ' ' },
+          {
+            ...ref.reference!.witness,
+            closed: false,
+            endpoints: [
+              [5, 0, 0],
+              [0, 0, 0]
+            ],
+            midpoint: [2, 0, 0]
+          },
+          {
+            curveType: 'CIRCLE',
+            length: 10,
+            closed: true,
+            center: [0, 0, 0],
+            axis: [0, 0, -1000]
+          },
+          {
+            curveType: 'CIRCLE',
+            length: 10,
+            closed: true,
+            center: [0, 0, 0],
+            axis: [0, 0, 0]
+          }
         ] as unknown[]
       ).map(
         (witness) =>
