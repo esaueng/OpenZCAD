@@ -75,6 +75,7 @@ import {
   applyAnnotationPick,
   draftAnnotation,
   draftRefusal,
+  drawingViewSignature,
   drawnLines,
   hitEdge,
   pickableEdges,
@@ -834,10 +835,18 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // Within one sheet, a tool also ends when the view it picked in, or the
   // annotation it is re-picking, goes away (a delete, an undo, a
   // collaborator): otherwise every later pick is refused as the wrong view.
+  // So does a change to what that view draws (its hidden lines, its
+  // bodies): a hidden edge picked with hidden lines on must not be placed
+  // once they are off.
+  const toolView = tool?.viewId
+    ? sheet?.views.find((view) => view.viewId === tool.viewId)
+    : undefined;
   const toolOrphaned =
     tool !== null &&
-    ((tool.viewId !== undefined &&
-      !sheet?.views.some((view) => view.viewId === tool.viewId)) ||
+    ((tool.viewId !== undefined && !toolView) ||
+      (toolView !== undefined &&
+        tool.viewSignature !== undefined &&
+        drawingViewSignature(toolView) !== tool.viewSignature) ||
       (tool.repairId !== undefined &&
         !sheet?.annotations?.some(
           (annotation) => annotation.annotationId === tool.repairId
@@ -847,6 +856,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     setTool(null);
     setHover(null);
   }, [toolOrphaned]);
+  /** `next` with the signature of the view it is pinned to, once it is. */
+  const pinnedTool = (next: AnnotationTool): AnnotationTool => {
+    if (!next.viewId || next.viewSignature !== undefined) return next;
+    const view = sheet?.views.find((entry) => entry.viewId === next.viewId);
+    return view ? { ...next, viewSignature: drawingViewSignature(view) } : next;
+  };
   const brokenCount = sheetReady
     ? [...resolutions.values()].filter((entry) => !entry.ok).length
     : 0;
@@ -1387,7 +1402,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       commitAnnotation(result.tool, at.point);
       return;
     }
-    setTool(result.tool);
+    setTool(pinnedTool(result.tool));
     setHover({ edge: null, point: at.point });
   };
 
@@ -1966,7 +1981,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           selected={selectedAnnotation}
           resolutions={resolutions}
           onTool={(next) => {
-            setTool(next);
+            setTool(next && pinnedTool(next));
             setHover(null);
             if (next) canvasRef.current?.focus();
           }}

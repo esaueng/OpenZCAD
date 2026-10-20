@@ -120,6 +120,38 @@ function isShortText(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= max;
 }
 
+function isQuantizedPoint(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((coordinate) => Number.isSafeInteger(coordinate))
+  );
+}
+
+/** Whether `value` has the full `EdgeWitnessV1` shape, open or closed. */
+function isEdgeWitness(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !isShortText(value.curveType, 64) ||
+    typeof value.length !== 'number' ||
+    !Number.isFinite(value.length)
+  )
+    return false;
+  if (value.closed === false)
+    return (
+      Array.isArray(value.endpoints) &&
+      value.endpoints.length === 2 &&
+      value.endpoints.every(isQuantizedPoint) &&
+      isQuantizedPoint(value.midpoint)
+    );
+  if (value.closed === true)
+    return (
+      isQuantizedPoint(value.center) &&
+      (value.axis === null || isQuantizedPoint(value.axis))
+    );
+  return false;
+}
+
 function edgeReferenceError(value: unknown, hash: number): string | null {
   if (!isRecord(value) || value.kind !== 'edge')
     return 'is not an edge reference';
@@ -129,7 +161,7 @@ function edgeReferenceError(value: unknown, hash: number): string | null {
     typeof value.currentHash !== 'number' ||
     !Number.isFinite(value.currentHash) ||
     value.witnessVersion !== 1 ||
-    !isRecord(value.witness)
+    !isEdgeWitness(value.witness)
   )
     return 'has a malformed edge reference';
   if (JSON.stringify(value).length > MAX_REFERENCE_JSON_LENGTH)

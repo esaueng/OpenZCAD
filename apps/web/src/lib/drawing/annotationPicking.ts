@@ -332,6 +332,22 @@ export interface AnnotationTool {
   placed?: { x: number; y: number };
   /** Re-picking the references of this broken annotation. */
   repairId?: DrawingAnnotationId;
+  /**
+   * What the view drew when the tool was pinned to it (see
+   * {@link drawingViewSignature}); picks are only good while it holds.
+   */
+  viewSignature?: string;
+}
+
+/**
+ * The view settings that decide which edges it draws: its direction, its
+ * bodies and whether it shows hidden lines. A pick made under one set is
+ * not a pick of what the view draws under another.
+ */
+export function drawingViewSignature(
+  view: Pick<DrawingView, 'orientation' | 'hiddenLines' | 'bodyIds'>
+): string {
+  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}`;
 }
 
 export function startAnnotationTool(

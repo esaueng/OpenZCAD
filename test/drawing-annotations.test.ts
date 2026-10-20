@@ -311,6 +311,31 @@ describe('D02 annotation section (schema v31)', () => {
         },
         /contradicts its hash/
       ],
+      ...(
+        [
+          {},
+          { ...ref.reference!.witness, closed: undefined },
+          { ...ref.reference!.witness, closed: false, endpoints: [[0, 0, 0]] },
+          { ...ref.reference!.witness, closed: false, midpoint: [0.5, 0, 0] },
+          { ...ref.reference!.witness, closed: true, axis: 'z' },
+          { ...ref.reference!.witness, length: 'long' }
+        ] as unknown[]
+      ).map(
+        (witness) =>
+          [
+            {
+              ...good,
+              from: {
+                edge: {
+                  ...ref,
+                  reference: { ...ref.reference!, witness }
+                },
+                anchor: 'first'
+              }
+            },
+            /malformed edge reference/
+          ] as [unknown, RegExp]
+      ),
       [
         {
           annotationId: id('n'),

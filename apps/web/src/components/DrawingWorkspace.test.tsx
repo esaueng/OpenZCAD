@@ -846,6 +846,48 @@ describe('DrawingWorkspace', () => {
       ).toBe(true);
     });
 
+    it('ends a tool when its view stops drawing what was picked', async () => {
+      const sheet = dimensioned(999);
+      const viewId = sheet.annotations![0]!.viewId!;
+      const base = createProjectDocument('Bracket', toUserId('test'));
+      const props = {
+        bodies: { [bodyId]: cube() },
+        geometryPending: false,
+        defaultBodyIds: [bodyId],
+        editDisabledReason: null,
+        onCommand: vi.fn((_command: AnyCommand) => true),
+        onStatus: vi.fn()
+      };
+      const documentWith = (entry: DrawingSheet): ProjectDocument => ({
+        ...base,
+        bodyOrder: [bodyId],
+        drawings: { sheets: [entry] }
+      });
+      const { rerender } = render(
+        <DrawingWorkspace document={documentWith(sheet)} {...props} />
+      );
+      await userEvent.click(
+        screen.getByRole('option', { name: 'Horizontal dimension (broken)' })
+      );
+      await userEvent.click(screen.getByRole('button', { name: /Re-pick/ }));
+      expect(document.querySelector('.drawing-pick-surface')).not.toBeNull();
+      // The same view, same sheet, still ready, with its hidden lines toggled.
+      const toggled: DrawingSheet = {
+        ...sheet,
+        views: sheet.views.map((view) =>
+          view.viewId === viewId
+            ? { ...view, hiddenLines: !view.hiddenLines }
+            : view
+        )
+      };
+      rerender(
+        <DrawingWorkspace document={documentWith(toggled)} {...props} />
+      );
+      await waitFor(() =>
+        expect(document.querySelector('.drawing-pick-surface')).toBeNull()
+      );
+    });
+
     it('ends a tool when the view it picks in is deleted', async () => {
       const sheet = dimensioned(999);
       const viewId = sheet.annotations![0]!.viewId!;
