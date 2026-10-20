@@ -148,6 +148,11 @@ The menu replaces the rail's Layout button.
    - First load migrates: a device whose drawer was open starts with a right
      column of the sections it had open; a device whose drawer was closed starts
      in Model only. New devices start in Essentials.
+   - Until slice 4 ships the left dock, new devices start in a transitional
+     right-only Essentials: Objects over Parameters in one right column.
+     Slice 4 switches the default to the two-sided form for devices that
+     have not stored a layout yet. A layout already stored is never
+     rewritten; the preset menu in slice 5 offers the two-sided form.
    - Migration runs in the same slice that first reads the new layout
      (slice 3), before anything writes the new key. Its absence is the signal
      to migrate, so a stored default must never come first and hide the old
@@ -264,6 +269,9 @@ Each slice is one PR and records its evidence in the U08 row.
     Diagnostics (with its badge).
   - The inspector lane, obstacles, suspension and search hand-off as above.
   - The column scroll for short stages.
+  - The no-dock policy below 720 px stage width (one panel at a time in the
+    phone lane), since the drawer's small-screen behaviour goes away here.
+  - The transitional right-only Essentials default for new devices.
   - The first-load migration from `openzcad-panel-state:v1`, run before the
     new key is ever written.
 - **Deletions.**
@@ -303,6 +311,9 @@ Each slice is one PR and records its evidence in the U08 row.
     keeps every header and control reachable inside the stage
   - devices seeded with an open and a closed v1 drawer migrate as above,
     and a reload after migration keeps the new layout
+  - a new device opens with Objects over Parameters in one right column
+  - at 600×800 and 720 px stage width no panel docks and a rail press opens
+    one panel in the phone lane; at 721 px the column docks
 
 ### 4. Drag and drop, left dock, floating windows
 
@@ -311,23 +322,27 @@ Each slice is one PR and records its evidence in the U08 row.
     both sides with the rail slide, emptied columns holding their place.
   - Floating windows and stacks, the frame grip, corner resize.
   - The keyboard Move menu, separator keys, floating-window arrow keys.
+  - The combined 50% cap, which matters from this slice on because it adds
+    extra columns and the left dock.
+  - The two-sided Essentials default for devices with no stored layout.
 - **Tests.**
   - E2E with `page.mouse` steps: dock right/left/new column/float/stack/rail
     drag-out, plus the same moves through the keyboard.
+  - The cap's boundary widths: 1184 px and 1183 px (Essentials fully docked,
+    then its second column floating) and 721 px (one column docked).
   - Unit tests for the hit-test thresholds.
   - A render-count check that `ModelViewer` doesn't re-render during a drag.
 
-### 5. View options and small screens
+### 5. View options
 
 - **Behaviour.**
   - The menu: presets, Hide all (`Ctrl+\`, added to `lib/keymap.ts` as a
     global command so U05 can list and remap it), Lock, Compact, Width.
-  - The combined 50% cap.
-  - The no-dock policy below 720 px.
+  - Width changes re-run the cap, so a wider setting can project a column as
+    floating.
 - **Tests.**
-  - E2E at 1440×900, 1280×720 and 600×800, plus the boundary widths 1184 px
-    and 1183 px (Essentials fully docked, then its second column floating)
-    and 721 px and 720 px (one column docked, then no docks).
+  - E2E for every preset, Hide all, Lock and Compact at 1440×900 and
+    1280×720, and Width L at 1280×720 projecting the outer column.
   - Tabbing from the rail through the panel headers, gaps and menu moves focus
     without hiding the panels; `Ctrl+\` hides and shows them.
 
