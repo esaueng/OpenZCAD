@@ -7,7 +7,7 @@ import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { documentForWorker, documentForRebuild } from '../lib/meshTransport';
-import { canonicalProjectContentKey } from '../worker/exactRebuildCache';
+import { geometryContentKey } from '../worker/exactRebuildCache';
 import { describeWorkerFailure } from '../lib/workerFailure';
 import type {
   BodyId,
@@ -26,6 +26,7 @@ import type {
   SectionOutlineReport,
   SketchPlanarOperation,
   SketchPlanarResult,
+  SketchSolveAnchor,
   SketchSolveOutcome,
   DxfFaceSelector
 } from '@openzcad/kernel-adapter/exact';
@@ -245,7 +246,8 @@ export interface GeometryWorkerApi {
    */
   solveSketch(
     document: ProjectDocument,
-    sketchId: SketchId
+    sketchId: SketchId,
+    options?: { anchor?: SketchSolveAnchor }
   ): Promise<SketchSolveOutcome>;
   /**
    * Runs one planar sketch edit — corner fillet, corner chamfer, or closed
@@ -1153,11 +1155,12 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         });
       });
     },
-    solveSketch(document, sketchId) {
+    solveSketch(document, sketchId, options) {
       const posted = postRequest(solveSketchRequests.current, {
         type: 'solve-sketch',
         document: documentForWorker(document),
-        sketchId
+        sketchId,
+        ...(options?.anchor ? { anchor: options.anchor } : {})
       });
       return posted.ok
         ? posted.promise
@@ -1213,8 +1216,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         state.projectId !== completed.projectId ||
         state.version !== completed.version ||
         completed.projectId !== document.projectId ||
-        canonicalProjectContentKey(completed) !==
-          canonicalProjectContentKey(document)
+        geometryContentKey(completed) !==
+          geometryContentKey(document)
       ) {
         return false;
       }

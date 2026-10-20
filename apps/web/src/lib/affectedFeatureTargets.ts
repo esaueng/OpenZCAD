@@ -200,7 +200,9 @@ export function affectedFeatureTargets(
         affected =
           affectedSketches.has(data.sketchId) ||
           (data.targetBodyId !== undefined &&
-            affectedBodies.has(data.targetBodyId));
+            affectedBodies.has(data.targetBodyId)) ||
+          // F01 (v29): a to-face extent reads its face's body here.
+          (data.toFace !== undefined && planeAffected(data.toFace));
         break;
       case 'revolve':
         affected =

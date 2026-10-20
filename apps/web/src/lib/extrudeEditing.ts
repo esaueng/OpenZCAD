@@ -36,12 +36,38 @@ export function extrudeEditCommand(
     throw new Error('Select a target body for this extrusion.');
   }
   const throughAll = value.endCondition === 'through-all';
+  const toFace = value.endCondition === 'to-face';
+  if (toFace && !value.toFace) {
+    throw new Error('Pick the face this extrusion reaches.');
+  }
+  // Blind is the absent extent and straight walls the absent draft: a field
+  // the edit no longer uses is cleared, never left stale beside the other.
+  const {
+    endCondition: _endCondition,
+    throughAllSide: _throughAllSide,
+    toFace: _toFace,
+    draftAngleDeg: _draftAngleDeg,
+    ...kept
+  } = feature.data;
+  const clearData = [
+    ...(!throughAll && !toFace && feature.data.endCondition !== undefined
+      ? ['endCondition']
+      : []),
+    ...(!throughAll && feature.data.throughAllSide !== undefined
+      ? ['throughAllSide']
+      : []),
+    ...(!toFace && feature.data.toFace !== undefined ? ['toFace'] : []),
+    ...(value.draftAngleDeg === undefined &&
+    feature.data.draftAngleDeg !== undefined
+      ? ['draftAngleDeg']
+      : [])
+  ];
   return commandFactories.updateFeature(
     {
       featureId: feature.featureId,
       name: value.name,
       data: {
-        ...feature.data,
+        ...kept,
         distance: value.distance,
         symmetric: value.symmetric,
         backDistance: value.backDistance,
@@ -55,12 +81,15 @@ export function extrudeEditCommand(
               endCondition: 'through-all' as const,
               throughAllSide: value.throughAllSide ?? 'forward'
             }
+          : {}),
+        ...(toFace
+          ? { endCondition: 'to-face' as const, toFace: value.toFace! }
+          : {}),
+        ...(value.draftAngleDeg !== undefined
+          ? { draftAngleDeg: value.draftAngleDeg }
           : {})
       },
-      // Blind is the absent extent; a stale side must not outlive it.
-      ...(!throughAll && feature.data.endCondition !== undefined
-        ? { clearData: ['endCondition', 'throughAllSide'] }
-        : {})
+      ...(clearData.length > 0 ? { clearData } : {})
     },
     `Edit ${value.name}`
   );
@@ -68,7 +97,8 @@ export function extrudeEditCommand(
 
 /**
  * The magnitude an extrude edit preview is requested at. A through-all cut's
- * stored distance is dormant (the build derives the span), so it is never
+ * or a to-face extrude's stored distance is dormant (the build derives the
+ * span), so it is never
  * resolved: a distance naming a since-deleted parameter must not block the
  * preview of an edit that Apply accepts.
  */
@@ -76,7 +106,8 @@ export function extrudePreviewMagnitude(
   value: Pick<ExtrudeFormValue, 'distance' | 'endCondition'>,
   resolve: (distance: ExtrudeFormValue['distance']) => number
 ): number {
-  return value.endCondition === 'through-all'
+  return value.endCondition === 'through-all' ||
+    value.endCondition === 'to-face'
     ? 1
     : Math.abs(resolve(value.distance));
 }
@@ -119,7 +150,15 @@ export function extrudeEditTargets(
         featureId: feature.featureId,
         data: { operation: 'add', targetBodyId: bodyId },
         ...(feature.data.endCondition !== undefined
-          ? { clearData: ['endCondition', 'throughAllSide'] }
+          ? {
+              clearData: [
+                'endCondition',
+                ...(feature.data.throughAllSide !== undefined
+                  ? ['throughAllSide']
+                  : []),
+                ...(feature.data.toFace !== undefined ? ['toFace'] : [])
+              ]
+            }
           : {})
       });
       command.validate(document);

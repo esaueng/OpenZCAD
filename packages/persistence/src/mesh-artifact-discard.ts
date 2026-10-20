@@ -32,11 +32,15 @@ export function importArtifactIds(document: ProjectDocument): string[] {
 }
 
 /** One JSON binding keeps large histories below D1's parameter ceiling. */
-export function meshDiscardCommitGuard(document: ProjectDocument): {
+export function meshDiscardCommitGuard(
+  document: ProjectDocument,
+  /** Ids the document no longer holds, such as an adoption's original ones. */
+  extraIds: readonly string[] = []
+): {
   sql: string;
   bindings: string[];
 } {
-  const ids = importArtifactIds(document);
+  const ids = [...new Set([...importArtifactIds(document), ...extraIds])];
   return ids.length
     ? {
         sql: ` AND NOT EXISTS (

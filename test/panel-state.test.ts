@@ -159,6 +159,13 @@ describe('workspace panel state', () => {
     );
   });
 
+  it('remembers the Drawing workspace (D01)', () => {
+    expect(
+      savePanelState({ ...defaultPanelState(), workspaceMode: 'drawing' })
+    ).toBe(true);
+    expect(loadPanelState().workspaceMode).toBe('drawing');
+  });
+
   it('falls back to Build on an unrecognised workspace mode', () => {
     // A stored value from a future build must not strip the modeling UI.
     expect(normalizePanelState({ workspaceMode: 'review' }).workspaceMode).toBe(

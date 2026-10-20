@@ -101,8 +101,15 @@ export function createProjectDiagnosticBundle(
   const nodes = Object.fromEntries(
     Object.entries(document.nodes).map(([id, node]) => [id, sanitizeNode(node)])
   );
+  // Drawing sheets carry title-block text (author, date, drawing number)
+  // and add nothing a geometry diagnosis needs: the section and its commands
+  // are left out entirely.
   const commandLog = document.commandLog
-    .filter((command) => command.kind !== 'node.metadata.set')
+    .filter(
+      (command) =>
+        command.kind !== 'node.metadata.set' &&
+        !command.kind.startsWith('drawing.')
+    )
     .map(sanitizeCommand);
   const diagnosticDocument: ProjectDocument = {
     ...document,
@@ -122,6 +129,7 @@ export function createProjectDiagnosticBundle(
   };
 
   delete diagnosticDocument.editHistory;
+  delete diagnosticDocument.drawings;
 
   const bodies = document.bodyOrder.flatMap((bodyId) => {
     const body = document.derived.bodyRepresentations[bodyId];

@@ -21,6 +21,8 @@ import {
   avoidSketchDimensionOverlays,
   buildSketchDimensions
 } from './viewer/sketchDimensions';
+import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
+import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
 import type { SketchDimensionIdentity } from '@openzcad/shared';
 import {
@@ -272,7 +274,8 @@ import {
   snapSketchPoint,
   type SketchPoint,
   type SnapTarget,
-  type SnapTargetKind
+  type SnapTargetKind,
+  type UnreferencedSnap
 } from '../lib/sketch/session';
 import {
   canPlaceTextDraft,
@@ -447,6 +450,8 @@ export interface SketchModeState {
   definedObjectIds: string[];
   textOutlineBudgetError?: string | null;
   dimensions: SketchDimensionAnnotation[];
+  /** Relation glyph chips, already filtered by the visibility setting. */
+  relations?: SketchRelationGlyphChip[];
   /**
    * The text card's draft while the text tool composes. Its outline follows
    * the pointer over the plane and a click places it; nothing is placed
@@ -927,6 +932,12 @@ export interface ModelViewerProps {
     | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
   regionHandle: RegionHandleTarget | null;
+  /**
+   * F01: a host waiting for a body face (an extrude's to-face target). A
+   * click then resolves to the nearest face under the pointer only — never
+   * a sketch region, ghost plane or datum drawn in front of it.
+   */
+  facePickOnly?: boolean;
   /** In-viewport sketch session; null when not sketching. */
   sketchMode: SketchModeState | null;
   /**
@@ -991,7 +1002,13 @@ export interface ModelViewerProps {
      * The click on the sketch plane, unsnapped: where along a curve the
      * click fell, which Trim needs and a snap would move to an end.
      */
-    planePoint: { x: number; y: number } | null
+    planePoint: { x: number; y: number } | null,
+    /**
+     * The active snap when it had no constraint-schema identity (a
+     * parametric rectangle corner, a midpoint…), so a point-taking tool can
+     * say why it refused it.
+     */
+    unreferencedSnap: UnreferencedSnap | null
   ): boolean | void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
@@ -1828,6 +1845,7 @@ export function ModelViewer({
   onPickDatum,
   onMeasurePreview,
   regionHandle,
+  facePickOnly = false,
   sketchMode,
   sketchTextAnchorRef,
   onSketchCommit,
@@ -1859,6 +1877,8 @@ export function ModelViewer({
   const topologyPickListRef = useRef<TopologyPickList | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
+  const facePickOnlyRef = useRef(facePickOnly);
+  facePickOnlyRef.current = facePickOnly;
   const topologyPicksHeldRef = useRef(topologyPicksHeld);
   topologyPicksHeldRef.current = topologyPicksHeld;
   const onSelectEdgeChainRef = useRef(onSelectEdgeChain);
@@ -5110,7 +5130,12 @@ export function ModelViewer({
     }
 
     function selectAtPointer(event: PointerEvent) {
-      const stack = picker.pickAll(event);
+      const facesOnly = facePickOnlyRef.current;
+      const stack = facesOnly
+        ? picker
+            .pickAll(event)
+            .filter((candidate) => candidate.selection?.kind === 'face')
+        : picker.pickAll(event);
       const stepped = cycleDepthPick(
         stack,
         depthCycle,
@@ -5121,7 +5146,7 @@ export function ModelViewer({
       const result = stepped.candidate;
       // A ghost plane in front of whatever the stack resolved starts the
       // sketch instead: it is armed precisely to be clicked.
-      const ghost = pickGhostPlane(event);
+      const ghost = facesOnly ? null : pickGhostPlane(event);
       if (ghost && (!result || ghost.distance < result.distance)) {
         planePickerRigRef.current?.setHover(null);
         onPickPlaneRef.current(ghost.plane);
@@ -5130,7 +5155,7 @@ export function ModelViewer({
       // A datum plane is chosen only where nothing in the model is under
       // the pointer: its quad is translucent and often passes through the
       // part, so it must never steal a click meant for a face behind it.
-      if (!result && onPickDatumRef.current) {
+      if (!result && !facesOnly && onPickDatumRef.current) {
         const datum = datumPlaneRigRef.current;
         if (datum) {
           picker.setRayFromEvent(event);
@@ -8403,7 +8428,15 @@ export function ModelViewer({
             objectId,
             snapPoint,
             { x: event.clientX, y: event.clientY },
-            planePoint ? { x: planePoint.x, y: planePoint.y } : null
+            planePoint ? { x: planePoint.x, y: planePoint.y } : null,
+            activeSketchSnap && !snapPoint
+              ? {
+                  kind: activeSketchSnap.kind,
+                  ...(activeSketchSnap.sourceId
+                    ? { sourceId: activeSketchSnap.sourceId }
+                    : {})
+                }
+              : null
           );
           if (!objectId && consumed !== true) {
             const profile = picker.pick(event)?.region;
@@ -11530,6 +11563,19 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [sketchBasis, sketchDimensions]);
+  const sketchRelations = sketchMode?.relations;
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !sketchBasis || !sketchRelations?.length) return;
+    const overlay = buildSketchRelationGlyphs(sketchRelations, sketchBasis);
+    context.scene.add(overlay.group);
+    context.requestRender();
+    return () => {
+      context.scene.remove(overlay.group);
+      overlay.dispose();
+      context.requestRender();
+    };
+  }, [sketchBasis, sketchRelations]);
   const sketchEntryFrameRef = useRef<SketchEntryFrame | null>(null);
   sketchEntryFrameRef.current = sketchMode?.frame ?? null;
   useEffect(() => {

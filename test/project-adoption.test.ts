@@ -392,7 +392,7 @@ describe('create-project request validation', () => {
   });
 });
 
-it.each([undefined, 0, 2])(
+it.each([undefined, 0, 3])(
   'requires a supported account identity transfer protocol (%s)',
   (adoptionProtocolVersion) => {
     const document = localDocument();

@@ -125,7 +125,7 @@ function faceReference(
 
 describe('datum axes in the document (v28)', () => {
   it('is schema 28, additive, and round-trips without rewriting', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(28);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(30);
     const axis = withAxis(blank(), {
       kind: 'two-point',
       points: [at(0, 0, 0), at(0, 0, '5 + 5')]
@@ -138,7 +138,7 @@ describe('datum axes in the document (v28)', () => {
     const saved = JSON.parse(
       JSON.stringify(crossing.document)
     ) as ProjectDocument;
-    expect(saved.schemaVersion).toBe(28);
+    expect(saved.schemaVersion).toBe(30);
     expect(normalizeDocument(saved)).toEqual(crossing.document);
 
     // A v26 document opens exactly as written: no axis field is invented.

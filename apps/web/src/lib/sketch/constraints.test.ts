@@ -25,9 +25,11 @@ import {
   residualConstraintObjectIds,
   sketchDefinedState,
   topResidualConstraints,
+  unreferencedSnapRefusal,
   type PendingConstraintKind,
   type ConstraintPick
 } from './constraints';
+import { snapTargetsForObject } from './session';
 
 function fixture() {
   const { document, sketchId } = addSketchFeature(
@@ -1229,5 +1231,130 @@ describe('fullyDefinedIds', () => {
   it('keys snap points as `objectId.point`', () => {
     expect(definedPointKey('ent_1', 'start')).toBe('ent_1.start');
     expect(definedPointKey('ent_1', 'center')).toBe('ent_1.center');
+  });
+});
+
+describe('unreferencedSnapRefusal (UX-2)', () => {
+  function legacyFixture() {
+    const { document, sketchId } = addSketchFeature(
+      createProjectDocument('Legacy shapes', toUserId('user_sketch')),
+      {
+        name: 'Legacy',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          {
+            objectKind: 'rectangle',
+            width: 4,
+            height: 2,
+            centerX: 0,
+            centerY: 0
+          },
+          {
+            objectKind: 'polygon',
+            sides: 6,
+            radius: 3,
+            centerX: 10,
+            centerY: 0
+          },
+          {
+            objectKind: 'text',
+            text: 'A',
+            fontFamily: 'open-sans',
+            fontStyle: 'regular',
+            size: 5,
+            x: 20,
+            y: 0
+          },
+          { objectKind: 'line', x1: 0, y1: 5, x2: 10, y2: 5 }
+        ]
+      }
+    );
+    const sketch = findSketch(document, sketchId)!;
+    const [rectangle, polygon, text, line] = sketch.objectIds as string[];
+    const targets = (objectId: string) => {
+      const node = document.nodes[objectId as EntityId];
+      if (node?.kind !== 'sketch-object') throw new Error('Missing object.');
+      return snapTargetsForObject(
+        node.data,
+        (value) => Number(value),
+        objectId
+      );
+    };
+    return {
+      document,
+      sketch,
+      rectangle: rectangle!,
+      polygon: polygon!,
+      text: text!,
+      line: line!,
+      targets
+    };
+  }
+
+  it('names the parametric rectangle point the hover marker offered', () => {
+    const { document, sketch, rectangle, targets } = legacyFixture();
+    const snaps = targets(rectangle);
+    // The precondition the refusal exists for: no rectangle snap carries a
+    // constraint-schema point, so a point pick can never accept one.
+    expect(snaps.every((snap) => snap.pointRef === undefined)).toBe(true);
+    const corner = snaps.find((snap) => snap.kind === 'endpoint')!;
+    expect(unreferencedSnapRefusal(document, sketch, 'distance', corner)).toBe(
+      "Distance can't use this rectangle's corners: it is one parametric shape, not four lines. Redraw it with the Rectangle tool to pick its corners."
+    );
+    const center = snaps.find((snap) => snap.kind === 'center')!;
+    expect(
+      unreferencedSnapRefusal(document, sketch, 'coincident', center)
+    ).toMatch(/^Coincident can't use this rectangle's center:/);
+    const side = snaps.find((snap) => snap.kind === 'midpoint')!;
+    expect(unreferencedSnapRefusal(document, sketch, 'lock', side)).toMatch(
+      /^Lock can't use this rectangle's side midpoints:/
+    );
+  });
+
+  it('names polygon centers and text origins', () => {
+    const { document, sketch, polygon, text, targets } = legacyFixture();
+    const [polygonCenter] = targets(polygon);
+    expect(polygonCenter?.pointRef).toBeUndefined();
+    expect(
+      unreferencedSnapRefusal(document, sketch, 'distance', polygonCenter!)
+    ).toMatch(/^Distance can't use this polygon's center: .*Polygon tool/);
+    const [textOrigin] = targets(text);
+    expect(textOrigin?.pointRef).toBeUndefined();
+    expect(
+      unreferencedSnapRefusal(document, sketch, 'symmetric', textOrigin!)
+    ).toBe(
+      "Symmetric can't use a text origin. Pick a line or arc endpoint, or a circle or arc center."
+    );
+  });
+
+  it('names derived points and keeps the hint for snaps that name none', () => {
+    const { document, sketch, line, targets } = legacyFixture();
+    const lineSnaps = targets(line);
+    // Line endpoints are addressable and never reach the refusal.
+    expect(
+      lineSnaps.filter((snap) => snap.pointRef).map((snap) => snap.pointRef)
+    ).toEqual(['start', 'end']);
+    const midpoint = lineSnaps.find((snap) => snap.kind === 'midpoint')!;
+    expect(midpoint.pointRef).toBeUndefined();
+    expect(
+      unreferencedSnapRefusal(document, sketch, 'distance', midpoint)
+    ).toBe(
+      "Distance can't use a midpoint: it is not a stored sketch point. Pick a line or arc endpoint, or a circle or arc center."
+    );
+    expect(
+      unreferencedSnapRefusal(document, sketch, 'distance', {
+        kind: 'intersection'
+      })
+    ).toMatch(/^Distance can't use an intersection:/);
+    expect(
+      unreferencedSnapRefusal(document, sketch, 'point-on-object', {
+        kind: 'origin'
+      })
+    ).toMatch(/^Point on curve can't use the sketch origin:/);
+    for (const kind of ['grid', 'horizontal', 'vertical'] as const) {
+      expect(
+        unreferencedSnapRefusal(document, sketch, 'distance', { kind })
+      ).toBeNull();
+    }
   });
 });
