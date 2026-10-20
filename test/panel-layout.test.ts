@@ -176,8 +176,8 @@ describe('panel layout presets', () => {
   });
 
   it('keeps the settings and turns Hide off', () => {
+    // Unlocked: a locked layout refuses presets (see 'a locked layout').
     let layout = setOption(essentials(), 'hidden', true);
-    layout = setOption(layout, 'locked', true);
     layout = setOption(layout, 'compact', true);
     layout = setOption(layout, 'width', 'wide');
     layout = openPanel(layout, 'history');
@@ -190,7 +190,7 @@ describe('panel layout presets', () => {
       const picked = applyPreset(layout, name);
       expect(picked.options).toEqual({
         hidden: false,
-        locked: true,
+        locked: false,
         compact: true,
         width: 'wide'
       });
@@ -1012,6 +1012,12 @@ describe('a locked layout', () => {
     expect(clampFloatsToStage(layout, { width: 600, height: 300 })).toBe(
       layout
     );
+    // Presets and the width rearrange or resize every panel.
+    for (const preset of PANEL_PRESET_IDS) {
+      expect(applyPreset(layout, preset)).toBe(layout);
+    }
+    expect(applyPreset(layout, ESSENTIALS_RIGHT_PRESET)).toBe(layout);
+    expect(setOption(layout, 'width', 'wide')).toBe(layout);
   });
 
   it('still pins, unpins, pops out, opens, closes and changes settings', () => {
@@ -1418,7 +1424,7 @@ describe('phone-width stages', () => {
     ).toBe(false);
   });
 
-  it('refuses every dock placement and keeps homes', () => {
+  it('refuses every placement and keeps homes', () => {
     const phoneStage: PanelStage = {
       width: PANEL_PHONE_MAX_WIDTH,
       height: 844
@@ -1434,6 +1440,17 @@ describe('phone-width stages', () => {
       expect(placePanel(layout, 'history', target, phoneStage)).toBe(layout);
     }
     expect(pinPanel(layout, 'history', phoneStage)).toBe(layout);
+    // No windows either: a drop on the stage or a pop-out leaves it alone.
+    const rect = { x: 100, y: 100, w: 300, h: 300 };
+    expect(
+      placePanel(layout, 'history', { kind: 'float', rect }, phoneStage)
+    ).toBe(layout);
+    expect(popOutPanel(layout, 'history', rect, phoneStage)).toBe(layout);
+    const windowed = popOutPanel(layout, 'revisions', rect);
+    const groupId = windowed.floats[0]!.id;
+    expect(
+      placePanel(windowed, 'history', { kind: 'group', groupId }, phoneStage)
+    ).toBe(windowed);
     // One pixel wider, the pin docks.
     expect(
       pinPanel(layout, 'history', { width: 721, height: 844 }).right
