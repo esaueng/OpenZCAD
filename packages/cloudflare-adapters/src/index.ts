@@ -19,6 +19,7 @@ import {
   ArtifactStorageError,
   assertClientAdoption,
   assertClientProjectCopy,
+  assertImportSourceCopyRefsComplete,
   assertPersistableDocument,
   copyImportSourceArtifacts,
   importSourceCopyRefs,
@@ -1585,10 +1586,18 @@ export class D1R2PersistenceService implements PersistenceService {
     this.assertDocumentCanBeStored(document);
     if (await this.projectIdInUse(document)) throw projectIdTaken();
     await this.assertRevisionIdUnused(document.projectId, revision.revisionId);
+    const documentDigest = await projectCopyDocumentDigest(document);
+    if (documentDigest !== request.documentDigest) {
+      throw new SavePointRequestError(
+        'The copy digest does not match its document.'
+      );
+    }
+    const importSources = request.importSources ?? [];
+    assertImportSourceCopyRefsComplete(document, importSources);
     return {
       document,
-      documentDigest: request.documentDigest!,
-      importSources: request.importSources ?? [],
+      documentDigest,
+      importSources,
       sourceProjectId: request.projectId
     };
   }

@@ -6,9 +6,11 @@ import {
 } from '@openzcad/cloudflare-adapters';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
+  adoptProjectDocument,
   createProjectDocument,
   duplicateProjectDocument,
-  archiveHistorySources
+  archiveHistorySources,
+  reidentifyProjectDocument
 } from '@openzcad/document-core';
 import {
   InMemoryPersistenceService,
@@ -16,11 +18,13 @@ import {
   ArtifactStorageError,
   ProjectNotFoundError,
   RevisionConflictError,
+  SavePointRequestError,
   reconcileCopiedImportSources,
   type PersistenceService
 } from '@openzcad/persistence';
 import {
   encodeImportedMeshPayload,
+  documentNodesWithHistory,
   importedSourceReferenceOf,
   toArtifactId,
   toProjectId,
@@ -327,6 +331,127 @@ describe.each(['memory', 'D1/R2'] as const)(
         ? new InMemoryPersistenceService()
         : d1Service().service;
 
+    it('refuses a mismatched document digest before inserting or copying sources', async () => {
+      const service = serviceOf();
+      const { document: source } = await importedProject(service);
+      const request = await browserCopyRequest(service, source.projectId);
+      const download = vi.spyOn(service, 'downloadArtifact');
+      await expect(
+        service.duplicateProject(owner, {
+          ...request,
+          documentDigest: '0'.repeat(64)
+        })
+      ).rejects.toBeInstanceOf(SavePointRequestError);
+      expect(download).not.toHaveBeenCalled();
+      expect(
+        await service.loadProject(owner, request.document!.projectId)
+      ).toBeNull();
+      expect((await service.listProjects(owner)).projects).toHaveLength(1);
+    });
+
+    it.each([
+      { label: 'omitted', importSources: undefined },
+      { label: 'empty', importSources: [] }
+    ])(
+      'refuses $label source coverage before inserting',
+      async ({ importSources }) => {
+        const service = serviceOf();
+        const { document: source } = await importedProject(service);
+        const request = await browserCopyRequest(service, source.projectId);
+        const download = vi.spyOn(service, 'downloadArtifact');
+        await expect(
+          service.duplicateProject(owner, { ...request, importSources })
+        ).rejects.toBeInstanceOf(SavePointRequestError);
+        expect(download).not.toHaveBeenCalled();
+        expect(
+          await service.loadProject(owner, request.document!.projectId)
+        ).toBeNull();
+        expect((await service.listProjects(owner)).projects).toHaveLength(1);
+      }
+    );
+
+    it('refuses a list that omits one of multiple source identities before inserting', async () => {
+      const service = serviceOf();
+      const { document: source, manager } = await importedProject(service);
+      const step = new TextEncoder().encode('ISO-10303-21; second source');
+      const { session } = await service.createUploadSession(owner, {
+        projectId: source.projectId,
+        fileName: 'second.step',
+        kind: 'step-import',
+        contentType: 'model/step'
+      });
+      await service.putUpload(owner, session.uploadSessionId, step.buffer);
+      const artifact = (await service.finalizeArtifact(owner, {
+        projectId: source.projectId,
+        uploadSessionId: session.uploadSessionId,
+        artifactId: session.artifactId
+      }))!;
+      manager.execute(
+        commandFactories.importStep({
+          name: 'Second source',
+          sourceName: 'second.step',
+          artifactId: artifact.artifactId,
+          stepSourceRef: reference(step)
+        })
+      );
+      await service.saveDocument(owner, {
+        projectId: source.projectId,
+        expectedVersion: source.version,
+        document: manager.document
+      });
+      const request = await browserCopyRequest(service, source.projectId);
+      expect(request.importSources).toHaveLength(2);
+      const download = vi.spyOn(service, 'downloadArtifact');
+      await expect(
+        service.duplicateProject(owner, {
+          ...request,
+          importSources: request.importSources!.slice(0, 1)
+        })
+      ).rejects.toBeInstanceOf(SavePointRequestError);
+      expect(download).not.toHaveBeenCalled();
+      expect(
+        await service.loadProject(owner, request.document!.projectId)
+      ).toBeNull();
+      expect((await service.listProjects(owner)).projects).toHaveLength(1);
+    });
+
+    it('requires source identities referenced only by redo history', async () => {
+      const service = serviceOf();
+      const { document: source, manager } = await importedProject(service);
+      manager.undo();
+      await service.saveDocument(owner, {
+        projectId: source.projectId,
+        expectedVersion: source.version,
+        document: manager.document
+      });
+      const request = await browserCopyRequest(service, source.projectId);
+      const history = adoptProjectDocument(
+        reidentifyProjectDocument(
+          manager.document,
+          request.document!.projectId
+        ),
+        owner
+      );
+      const document = {
+        ...request.document!,
+        editHistory: history.editHistory
+      };
+      expect(document.featureOrder).toEqual([]);
+      expect(listLocalOnlyImportSources(document)).toHaveLength(1);
+      const download = vi.spyOn(service, 'downloadArtifact');
+      await expect(
+        service.duplicateProject(owner, {
+          ...request,
+          document,
+          documentDigest: await projectCopyDocumentDigest(document),
+          importSources: []
+        })
+      ).rejects.toBeInstanceOf(SavePointRequestError);
+      expect(download).not.toHaveBeenCalled();
+      expect(await service.loadProject(owner, document.projectId)).toBeNull();
+      expect((await service.listProjects(owner)).projects).toHaveLength(1);
+    });
+
     it('stores the copy under its own id and archives only the sources it lists', async () => {
       const service = serviceOf();
       const { document: source, artifact } = await importedProject(service);
@@ -418,9 +543,19 @@ describe.each(['memory', 'D1/R2'] as const)(
       const service = serviceOf();
       const { document: source } = await importedProject(service);
       const request = await browserCopyRequest(service, source.projectId);
+      const document = structuredClone(request.document!);
+      // Keep the list complete for the submitted document, so this still
+      // exercises verification against the actual downloaded source bytes.
+      for (const node of documentNodesWithHistory(document)) {
+        if (node.kind !== 'feature') continue;
+        const ref = importedSourceReferenceOf(node.data);
+        if (ref) ref.checksumSha256 = 'f'.repeat(64);
+      }
       await expect(
         service.duplicateProject(owner, {
           ...request,
+          document,
+          documentDigest: await projectCopyDocumentDigest(document),
           importSources: request.importSources!.map((ref) => ({
             ...ref,
             checksumSha256: 'f'.repeat(64)
@@ -1685,12 +1820,23 @@ it('finalizes a browser-built copy through the room against the client digest', 
 });
 
 it('rolls back a failed browser-built copy in the room against the client digest', async () => {
-  const { service, db } = roomBackedService();
+  const { service, roomFor, db } = roomBackedService();
   const { document: source } = await importedProject(service);
   const request = await browserCopyRequest(service, source.projectId);
   const download = service.downloadArtifact.bind(service);
   vi.spyOn(service, 'downloadArtifact').mockImplementationOnce(
     async (...args) => {
+      const pending = (await service.loadProject(
+        owner,
+        request.document!.projectId
+      ))!;
+      expect(
+        (
+          await roomFor(pending.projectId).room.fetch(
+            roomSnapshotRequest(pending, null)
+          )
+        ).status
+      ).toBe(200);
       const damaged = mesh.slice();
       damaged[0] = damaged[0]! ^ 0xff;
       return { ...(await download(...args))!, body: damaged.buffer };

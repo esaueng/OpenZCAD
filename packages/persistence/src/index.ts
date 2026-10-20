@@ -1,9 +1,11 @@
 import {
+  assertImportSourceCopyRefsComplete,
   copyImportSourceArtifacts,
   importSourceCopyRefs,
   type ImportSourceCopyRef
 } from './copy-import-sources';
 export {
+  assertImportSourceCopyRefsComplete,
   copyImportedSources,
   copyImportSourceArtifacts,
   importSourceCopyRefs,
@@ -12,6 +14,7 @@ export {
   type ImportCopyDigest,
   type ImportSourceCopyRef
 } from './copy-import-sources';
+import { projectCopyDocumentDigest } from './copy-document-digest';
 export {
   isProjectCopyDocumentDigest,
   projectCopyDocumentDigest
@@ -1273,7 +1276,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     }
     await this.requireProjectRead(userId, request.projectId);
     const { document, importSources, sourceProjectId } = request.document
-      ? this.prepareClientCopy(userId, request)
+      ? await this.prepareClientCopy(userId, request)
       : this.prepareServerCopy(userId, request, head);
     this.assertProjectCount(userId);
     this.assertMeshSourcesNotDiscarded(document);
@@ -1397,14 +1400,14 @@ export class InMemoryPersistenceService implements PersistenceService {
   }
 
   /** A copy the browser built (ADR-024 Phase 1); see the D1 store. */
-  private prepareClientCopy(
+  private async prepareClientCopy(
     userId: UserId,
     request: DuplicateProjectRequest
-  ): {
+  ): Promise<{
     document: ProjectDocument;
     importSources: readonly ImportSourceCopyRef[];
     sourceProjectId: ProjectId;
-  } {
+  }> {
     if (
       request.revisionId &&
       !(this.revisions.get(request.projectId) ?? []).some(
@@ -1422,6 +1425,15 @@ export class InMemoryPersistenceService implements PersistenceService {
       normalizeDocument(request.document!)
     );
     assertPersistableDocument(document);
+    if (
+      (await projectCopyDocumentDigest(document)) !== request.documentDigest
+    ) {
+      throw new SavePointRequestError(
+        'The copy digest does not match its document.'
+      );
+    }
+    const importSources = request.importSources ?? [];
+    assertImportSourceCopyRefsComplete(document, importSources);
     if (this.projects.has(document.projectId)) throw projectIdTaken();
     if (
       [...this.revisions.values()].some((stored) =>
@@ -1431,7 +1443,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       throw new RevisionIdCollisionError();
     return {
       document,
-      importSources: request.importSources ?? [],
+      importSources,
       sourceProjectId: request.projectId
     };
   }

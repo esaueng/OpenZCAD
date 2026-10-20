@@ -14,6 +14,7 @@ import {
   type UserId
 } from '@openzcad/shared';
 import { ArtifactStorageError, type PersistenceService } from './index';
+import { SavePointRequestError } from './client-save-point';
 
 /** The source resolver and exact readers already refuse larger imports. */
 const MAX_IMPORT_SOURCE_BYTES = 128 * 1024 * 1024;
@@ -54,6 +55,36 @@ export function isImportSourceCopyRef(
     (ref.logicalBytes as number) >= 1 &&
     (ref.logicalBytes as number) <= MAX_IMPORT_SOURCE_BYTES
   );
+}
+
+/** Every source the copy or its undo/redo history needs must be archived. */
+export function assertImportSourceCopyRefsComplete(
+  document: ProjectDocument,
+  refs: readonly ImportSourceCopyRef[]
+): void {
+  if (
+    refs.length > MAX_IMPORT_SOURCE_COPY_REFS ||
+    !refs.every(isImportSourceCopyRef)
+  ) {
+    throw new SavePointRequestError(
+      'The copy import source list is malformed.'
+    );
+  }
+  const listed = new Set(refs.map(refKey));
+  for (const node of documentNodesWithHistory(document)) {
+    if (node.kind !== 'feature') continue;
+    const ref = importedSourceReferenceOf(node.data);
+    if (!ref) continue;
+    const kind =
+      node.data.featureKind === 'imported-mesh'
+        ? 'mesh-payload'
+        : 'step-import';
+    if (!listed.has(refKey({ ...ref, kind }))) {
+      throw new SavePointRequestError(
+        'The copy source list does not cover every imported source.'
+      );
+    }
+  }
 }
 
 /**
