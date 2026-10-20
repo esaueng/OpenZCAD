@@ -87,7 +87,10 @@ function isDisplayMode(value: unknown): value is DisplayMode {
   );
 }
 
-/** At most this many per project; sketch ids are short, the session small. */
+/**
+ * At most this many per project, the newest kept; sketch ids are short, the
+ * session small.
+ */
 const MAX_SKETCH_VISIBILITY_ENTRIES = 500;
 
 /** Only well-formed entries survive; a bad map reads as no choices made. */
@@ -104,7 +107,7 @@ function parseSketchVisibility(
         entry[0].length <= 200 &&
         typeof entry[1] === 'boolean'
     )
-    .slice(0, MAX_SKETCH_VISIBILITY_ENTRIES);
+    .slice(-MAX_SKETCH_VISIBILITY_ENTRIES);
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 

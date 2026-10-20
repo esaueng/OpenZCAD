@@ -77,6 +77,18 @@ describe('workspace session persistence', () => {
     expect(reloaded?.settings.xray).toBe(false);
   });
 
+  it('keeps the newest sketch visibility choices past the cap', () => {
+    const storage = new MemoryStorage();
+    const sketchVisibility = Object.fromEntries(
+      Array.from({ length: 501 }, (_, index) => [`sketch-${index}`, false])
+    );
+    saveProjectView('project-1', { ...view, sketchVisibility }, storage);
+    const reloaded = loadProjectView('project-1', storage)?.sketchVisibility;
+    expect(Object.keys(reloaded ?? {})).toHaveLength(500);
+    expect(reloaded).not.toHaveProperty('sketch-0');
+    expect(reloaded).toHaveProperty('sketch-500', false);
+  });
+
   it('keeps the field of view a pose was framed at, dropping a bad one', () => {
     const storage = new MemoryStorage();
     saveProjectView(

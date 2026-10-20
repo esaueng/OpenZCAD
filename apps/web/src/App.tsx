@@ -255,6 +255,7 @@ import {
 } from './lib/sketch/constraints';
 import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
 import { sketchRelationGlyphs } from './lib/sketch/relationGlyphs';
+import { toggledSketchVisibility } from './lib/sketch/visibilityOverrides';
 import {
   sketchGeometryDeleteRefusal,
   sketchSolveEvidenceKey
@@ -8505,10 +8506,20 @@ export function App() {
 
   function toggleSketchVisibility(sketchId: string) {
     const show = hiddenSketchIds.has(sketchId);
-    setSketchVisibilityOverrides((current) => ({
-      ...current,
-      [sketchId]: show
-    }));
+    const liveSketchIds = new Set(
+      doc
+        ? listNodesByKind(doc, 'sketch').map((sketch) => sketch.sketchId)
+        : []
+    );
+    setSketchVisibilityOverrides((current) =>
+      toggledSketchVisibility(
+        current,
+        sketchId,
+        show,
+        !consumedSketchIds.has(sketchId),
+        liveSketchIds
+      )
+    );
     setStatus(show ? 'Sketch shown.' : 'Sketch hidden.');
   }
 
