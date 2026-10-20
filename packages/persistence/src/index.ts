@@ -656,7 +656,7 @@ export interface PersistenceService {
     userId: UserId,
     projectId: string,
     artifactId: string,
-    originalKind?: 'stl-import' | 'mesh-import'
+    originalKind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ): Promise<{ deleted: boolean }>;
   listArtifacts(
     userId: UserId,
@@ -2193,7 +2193,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     userId: UserId,
     projectId: string,
     artifactId: string,
-    originalKind?: 'stl-import' | 'mesh-import'
+    originalKind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ): Promise<{ deleted: boolean }> {
     const access = await this.requireProjectEdit(userId, projectId);
     // Originals are stored files, and finalized records do not identify the

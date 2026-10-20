@@ -14,6 +14,7 @@ import {
 import {
   referenceImageDisplays,
   referenceImageFrame,
+  referenceImageInsertPlane,
   referenceImagePlaneMissing
 } from './referenceImageDisplay';
 
@@ -165,5 +166,32 @@ describe('reference image placement', () => {
     );
     expect(frame.xAxis.x).toBeCloseTo(Math.SQRT1_2);
     expect(frame.xAxis.y).toBeCloseTo(Math.SQRT1_2);
+  });
+});
+
+describe('referenceImageInsertPlane', () => {
+  it('uses Top with nothing selected and the face when it can carry an image', () => {
+    expect(referenceImageInsertPlane(null)).toEqual({
+      plane: { type: 'canonical', plane: 'XY', offset: 0 }
+    });
+    const face = {
+      type: 'frame' as const,
+      frame: {
+        origin: { x: 0, y: 0, z: 9 },
+        xAxis: { x: 1, y: 0, z: 0 },
+        yAxis: { x: 0, y: 1, z: 0 },
+        zAxis: { x: 0, y: 0, z: 1 }
+      }
+    };
+    expect(referenceImageInsertPlane(face)).toEqual({ plane: face });
+  });
+
+  it('refuses a selected face it cannot lie on instead of falling back to Top', () => {
+    expect(
+      referenceImageInsertPlane({ reason: 'Pick an exact planar face.' })
+    ).toEqual({
+      refusal:
+        'Pick an exact planar face. Clear the selection to place it on Top (XY).'
+    });
   });
 });

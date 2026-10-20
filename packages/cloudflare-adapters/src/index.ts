@@ -4100,7 +4100,7 @@ export class D1R2PersistenceService implements PersistenceService {
     userId: UserId,
     projectId: string,
     artifactId: string,
-    originalKind?: 'stl-import' | 'mesh-import'
+    originalKind?: 'stl-import' | 'mesh-import' | 'reference-image'
   ): Promise<{ deleted: boolean }> {
     if (!this.env.DB)
       return getInMemoryPersistence().discardMeshPayload(
@@ -6325,7 +6325,8 @@ export class ProjectCollaborationRoom extends DurableObject {
           payload.artifactId.length > 200 ||
           (payload.kind !== undefined &&
             payload.kind !== 'stl-import' &&
-            payload.kind !== 'mesh-import'))) ||
+            payload.kind !== 'mesh-import' &&
+            payload.kind !== 'reference-image'))) ||
       (payload.action !== 'discard-mesh' &&
         (!Number.isSafeInteger(payload.expectedVersion) ||
           (payload.expectedVersion as number) < 0 ||
@@ -6399,7 +6400,7 @@ export class ProjectCollaborationRoom extends DurableObject {
             userId,
             projectId,
             artifactId,
-            payload.kind as 'stl-import' | 'mesh-import' | undefined
+            payload.kind as 'stl-import' | 'mesh-import' | 'reference-image' | undefined
           )
         );
       }

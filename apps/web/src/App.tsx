@@ -20,7 +20,10 @@ import {
   datumFaceAttachFailed,
   earlierDatumPlanes
 } from './lib/datumPlaneDisplay';
-import { referenceImageDisplays } from './lib/referenceImageDisplay';
+import {
+  referenceImageDisplays,
+  referenceImageInsertPlane
+} from './lib/referenceImageDisplay';
 import { referenceImagesWithHistory } from '@openzcad/shared';
 import type {
   ReferenceImage,
@@ -7634,9 +7637,17 @@ export function App() {
     }
     if (nextTool === 'reference-image') {
       // The picture comes first: the file dialog opens, and the image lands
-      // on the selected flat face, or on Top (XY) with nothing picked.
-      const face = selectedFaceImagePlane();
-      referenceImagePlaneRef.current = face && !('reason' in face) ? face : null;
+      // on the selected flat face, or on Top (XY) with nothing picked. A
+      // selected face it cannot lie on refuses, rather than quietly placing
+      // the picture on Top, far from what the user picked.
+      const placement = referenceImageInsertPlane(selectedFaceImagePlane());
+      if ('refusal' in placement) {
+        setStatus(
+          `${TOOL_META['reference-image'].label}: ${placement.refusal}`
+        );
+        return false;
+      }
+      referenceImagePlaneRef.current = placement.plane;
       referenceImageInputRef.current?.click();
       return true;
     }

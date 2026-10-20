@@ -132,3 +132,22 @@ export function referenceImagePlaneMissing(
 ): boolean {
   return referenceImagePlaneBasis(document, image.plane, image.name) === null;
 }
+
+/**
+ * Where a picture about to be inserted will lie, from the face selected when
+ * the Image tool opened: on that face when it can carry an image, on Top
+ * (XY) with no face selected, and nowhere — a refusal to show — when a face
+ * is selected that it cannot lie on, rather than quietly on Top, far from
+ * what the user picked.
+ */
+export function referenceImageInsertPlane(
+  selectedFace: ReferenceImagePlane | { reason: string } | null
+): { plane: ReferenceImagePlane } | { refusal: string } {
+  if (selectedFace === null)
+    return { plane: { type: 'canonical', plane: 'XY', offset: 0 } };
+  if ('reason' in selectedFace)
+    return {
+      refusal: `${selectedFace.reason} Clear the selection to place it on Top (XY).`
+    };
+  return { plane: selectedFace };
+}
