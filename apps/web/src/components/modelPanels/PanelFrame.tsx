@@ -47,6 +47,8 @@ export interface PanelControls {
   placement: PanelPlacement;
   /** The panel's state in the stored layout, whatever the placement. */
   status: PanelStatus;
+  /** View options' Compact rows: tighter rows, the same controls. */
+  compact?: boolean;
   onPin(): void;
   onUnpin(): void;
   onClose(): void;
@@ -83,7 +85,7 @@ export function PanelFrame({
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   return (
     <section
-      className={`model-panel model-panel-${id} is-${controls.placement}`}
+      className={`model-panel model-panel-${id} is-${controls.placement}${controls.compact ? ' is-compact' : ''}`}
       aria-label={title}
       data-panel={id}
       onPointerDownCapture={controls.onUse}

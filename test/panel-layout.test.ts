@@ -23,6 +23,7 @@ import {
   isDragStart,
   isFloatCovered,
   loadPanelLayout,
+  matchingPreset,
   migratePanelState,
   moveFloat,
   movePanelInStack,
@@ -203,6 +204,49 @@ describe('panel layout presets', () => {
       expect(picked.homes).toEqual({});
       expect(picked.unpinned).toBeNull();
     }
+  });
+
+  it('names the preset a layout is arranged as, until it is rearranged', () => {
+    for (const name of PANEL_PRESET_IDS) {
+      expect(matchingPreset(applyPreset(modelOnly(), name))).toBe(name);
+    }
+    // The settings, the unpinned panel and the homes are not arrangement.
+    let layout = setOption(applyPreset(modelOnly(), 'full'), 'width', 'wide');
+    layout = setOption(layout, 'compact', true);
+    layout = openPanel(layout, 'diagnostics');
+    expect(layout.unpinned).toBe('diagnostics');
+    expect(matchingPreset(layout)).toBe('full');
+    // Each column's split counts by proportion, not by stored scale.
+    const scaled = layoutWith({
+      ...layout,
+      weights: {
+        ...layout.weights,
+        bodies: 3,
+        history: 3,
+        parameters: 2,
+        revisions: 0.64
+      }
+    });
+    expect(matchingPreset(scaled)).toBe('full');
+    // A gap resize, a move or a window is no preset any more.
+    const geometry = computePanelGeometry(layout, STAGE);
+    const gap = geometry.gaps.find((entry) => entry.above === 'bodies')!;
+    expect(
+      matchingPreset(
+        resizeGap(layout, 'bodies', 'history', 40, gap.pxPerWeight)
+      )
+    ).toBeNull();
+    expect(matchingPreset(movePanelInStack(layout, 'history', -1))).toBeNull();
+    expect(
+      matchingPreset(
+        popOutPanel(layout, 'revisions', { x: 400, y: 200, w: 300, h: 300 })
+      )
+    ).toBeNull();
+    // The right-only Essentials is not a menu preset.
+    expect(matchingPreset(defaultPanelLayout())).toBeNull();
+    expect(matchingPreset(defaultPanelLayout({ leftDock: true }))).toBe(
+      'essentials'
+    );
   });
 
   it('defaults a new device to the right-only Essentials until the left dock ships', () => {
@@ -1587,6 +1631,34 @@ describe('the dock footprint cap', () => {
     // A projection only: the stored layout is unchanged.
     expect(layout).toEqual(before);
     expect(narrow.dockWidth).toEqual({ left: 0, right: CW + GAP });
+  });
+
+  it('re-runs the cap for the panel width: Large parks Essentials’ left column at 1280px', () => {
+    const stage = { width: 1280, height: 720 };
+    for (const width of ['narrow', 'regular'] as const) {
+      const geometry = computePanelGeometry(
+        setOption(essentials(), 'width', width),
+        stage
+      );
+      expect(geometry.columns, width).toHaveLength(2);
+      expect(geometry.columnWidth).toBe(PANEL_COLUMN_WIDTHS[width]);
+    }
+    const wide = setOption(essentials(), 'width', 'wide');
+    // 60px a side and 370px a column: 860px, past 60% of 1280px (768px).
+    expect(dockFootprint({ left: 1, right: 1 }, 360)).toBe(860);
+    const geometry = computePanelGeometry(wide, stage);
+    expect(geometry.parkedColumns).toEqual([{ side: 'left', column: 0 }]);
+    expect(geometry.parked.bodies).toBe(true);
+    expect(geometry.panels.parameters).toMatchObject({
+      mode: 'docked',
+      w: 360
+    });
+    // A projection: the stored layout keeps Objects docked.
+    expect(wide.left).toEqual([['bodies']]);
+    expect(
+      computePanelGeometry(setOption(wide, 'width', 'regular'), stage).parked
+        .bodies
+    ).toBe(false);
   });
 
   it('docks one column at 721px', () => {
