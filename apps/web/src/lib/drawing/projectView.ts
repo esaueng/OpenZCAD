@@ -160,6 +160,129 @@ export function gridCellsAlong(
 /** Maximum retained triangle/cell references in one view's spatial index. */
 const MAX_OCCLUSION_GRID_ENTRIES = 4_000_000;
 
+/**
+ * One occlusion grid per body, each over that body's own extent. A single
+ * grid over the whole view sizes its cells by the view, so compact bodies far
+ * apart on the page each fall into one cell, and every segment then tests
+ * every triangle of a body. Queries go to the grids whose extent they reach;
+ * a segment is clipped to each grid's extent before it walks the cells.
+ * Exported for tests.
+ */
+export class OcclusionIndex {
+  private readonly grids: {
+    grid: OcclusionGrid;
+    minU: number;
+    minV: number;
+    maxU: number;
+    maxV: number;
+    margin: number;
+  }[] = [];
+
+  constructor(
+    groups: readonly Triangle[][],
+    coverTolerance: number,
+    entryBudget = MAX_OCCLUSION_GRID_ENTRIES
+  ) {
+    if (!Number.isSafeInteger(entryBudget) || entryBudget < 0)
+      throw new Error('Invalid drawing projection memory budget.');
+    // Body-local grids share the view's bound rather than each receiving a
+    // fresh allowance. The grid checks each row before retaining its entries.
+    let remaining = Math.min(entryBudget, MAX_OCCLUSION_GRID_ENTRIES);
+    for (const triangles of groups) {
+      if (triangles.length === 0) continue;
+      const box = {
+        minU: Infinity,
+        minV: Infinity,
+        maxU: -Infinity,
+        maxV: -Infinity
+      };
+      for (const t of triangles) {
+        box.minU = Math.min(box.minU, t.u0, t.u1, t.u2);
+        box.maxU = Math.max(box.maxU, t.u0, t.u1, t.u2);
+        box.minV = Math.min(box.minV, t.v0, t.v1, t.v2);
+        box.maxV = Math.max(box.maxV, t.v0, t.v1, t.v2);
+      }
+      // Rounding at the extent's edge must not drop a boundary point.
+      const margin =
+        Math.max(box.maxU - box.minU, box.maxV - box.minV, 1e-12) * 1e-9;
+      const grid = new OcclusionGrid(triangles, box, coverTolerance, remaining);
+      remaining -= grid.entryCount;
+      this.grids.push({
+        grid,
+        ...box,
+        margin
+      });
+    }
+  }
+
+  /** The most triangle entries any one cell holds; for tests. */
+  get maxCellLoad(): number {
+    return Math.max(0, ...this.grids.map(({ grid }) => grid.maxCellLoad));
+  }
+
+  occluded(u: number, v: number, depth: number): boolean {
+    for (const entry of this.grids)
+      if (
+        u >= entry.minU - entry.margin &&
+        u <= entry.maxU + entry.margin &&
+        v >= entry.minV - entry.margin &&
+        v <= entry.maxV + entry.margin &&
+        entry.grid.occluded(u, v, depth)
+      )
+        return true;
+    return false;
+  }
+
+  crossings(
+    au: number,
+    av: number,
+    ad: number,
+    bu: number,
+    bv: number,
+    bd: number
+  ): { t: number; depth: boolean; onA?: boolean; onB?: boolean }[] {
+    const out: { t: number; depth: boolean; onA?: boolean; onB?: boolean }[] =
+      [];
+    const du = bu - au;
+    const dv = bv - av;
+    for (const entry of this.grids) {
+      // Liang–Barsky: the part of the segment over this grid's extent.
+      let t0 = 0;
+      let t1 = 1;
+      const sides: [number, number][] = [
+        [-du, au - (entry.minU - entry.margin)],
+        [du, entry.maxU + entry.margin - au],
+        [-dv, av - (entry.minV - entry.margin)],
+        [dv, entry.maxV + entry.margin - av]
+      ];
+      let outside = false;
+      for (const [p, q] of sides) {
+        if (p === 0) {
+          if (q < 0) outside = true;
+        } else if (p < 0) t0 = Math.max(t0, q / p);
+        else t1 = Math.min(t1, q / p);
+      }
+      if (outside || t0 > t1) continue;
+      const at = (t: number) =>
+        [au + du * t, av + dv * t, ad + (bd - ad) * t] as const;
+      const [cu0, cv0, cd0] = t0 === 0 ? [au, av, ad] : at(t0);
+      const [cu1, cv1, cd1] = t1 === 1 ? [bu, bv, bd] : at(t1);
+      for (const cut of entry.grid.crossings(cu0, cv0, cd0, cu1, cv1, cd1)) {
+        const t = t0 + cut.t * (t1 - t0);
+        if (!(t > 0 && t < 1)) continue;
+        // Only the segment's own ends say anything about the line's ends.
+        out.push({
+          t,
+          depth: cut.depth,
+          ...(cut.onA && t0 === 0 ? { onA: true } : {}),
+          ...(cut.onB && t1 === 1 ? { onB: true } : {})
+        });
+      }
+    }
+    return out.sort((a, b) => a.t - b.t);
+  }
+}
+
 /** Exported for tests. */
 export class OcclusionGrid {
   private readonly cells: number[][];
@@ -241,6 +364,11 @@ export class OcclusionGrid {
   /** How many triangle entries the grid holds; for tests. */
   get entryCount(): number {
     return this.cells.reduce((sum, cell) => sum + cell.length, 0);
+  }
+
+  /** The most triangle entries any one cell holds; for tests. */
+  get maxCellLoad(): number {
+    return this.cells.reduce((most, cell) => Math.max(most, cell.length), 0);
   }
 
   private column(u: number): number {
@@ -711,7 +839,8 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       dot(frame.direction, x, y, z)
     ] as const;
 
-  const triangles: Triangle[] = [];
+  /** Each body's triangles, indexed on their own: see `OcclusionIndex`. */
+  const bodyTriangles: Triangle[][] = [];
   const bounds = {
     minU: Infinity,
     minV: Infinity,
@@ -730,6 +859,8 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   input.bodies.forEach((body, bodyIndex) => {
     const { vertices, indices } = body;
     const sag = triangleSag(body, meshes[bodyIndex]);
+    const triangles: Triangle[] = [];
+    bodyTriangles.push(triangles);
     for (let t = 0; t + 2 < indices.length; t += 3) {
       const [u0, v0, d0] = project(
         vertices[indices[t]! * 3]!,
@@ -833,7 +964,7 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   if (!Number.isFinite(bounds.minU))
     return { visible: [], hidden: [], bounds: null };
 
-  const grid = new OcclusionGrid(triangles, bounds, 1e-9);
+  const grid = new OcclusionIndex(bodyTriangles, 1e-9);
   // Thresholds on drawn (projected) lines scale with what is drawn.
   const span = Math.max(
     Math.hypot(bounds.maxU - bounds.minU, bounds.maxV - bounds.minV),
