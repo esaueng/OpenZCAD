@@ -28,6 +28,7 @@ jobs:
               CARGO_BUILD_JOBS=3 RUST_TEST_THREADS=6 ;;
             *) echo 'Unknown trusted runner' >&2; exit 1 ;;
           esac
+          CI_MEMORY=$((CI_MEMORY / $(getconf PAGESIZE) * $(getconf PAGESIZE)))
           CI_CGROUP=/sys/fs/cgroup/$CI_SLICE
           test "$(id -un)" = "$CI_USER"
           test "$(id -u)" != 0

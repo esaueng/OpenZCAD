@@ -11,6 +11,26 @@ const guard = (text: string) => {
 };
 
 describe('three-slot Jane runner profile', () => {
+  it('checks the exact kernel page-aligned memory cap', () => {
+    const align = staged
+      .split('\n')
+      .find((line) => line.trim().startsWith('CI_MEMORY=$(('));
+    expect(align).toBeDefined();
+    const result = spawnSync(
+      'bash',
+      [
+        '-eu',
+        '-c',
+        `getconf() { printf '4096\\n'; }; ${guard(staged)}\n${align}\nprintf '%s' "$CI_MEMORY"`
+      ],
+      {
+        env: { ...process.env, RUNNER_NAME: 'ci-server-jane-3' },
+        encoding: 'utf8'
+      }
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('4999999488');
+  });
   it('changes only the reviewed slot names and memory cap', () => {
     const previous = spawnSync(
       'git',
@@ -28,6 +48,10 @@ describe('three-slot Jane runner profile', () => {
           'ci-server-jane-1|ci-server-jane-2|ci-server-jane-3)'
         )
         .replace('CI_MEMORY=6442450944', 'CI_MEMORY=5000000000')
+        .replace(
+          '          CI_CGROUP=',
+          '          CI_MEMORY=$((CI_MEMORY / $(getconf PAGESIZE) * $(getconf PAGESIZE)))\n          CI_CGROUP='
+        )
     );
   });
 
