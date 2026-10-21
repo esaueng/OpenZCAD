@@ -83,8 +83,14 @@ GitHub billing and capacity.
 
 Before checkout, self-hosted jobs verify the non-root identity, protected runner
 files, NoNewPrivileges, fresh storage, empty rootless Docker state, mount options
-and exact cgroup limits. Jane slots each have six CPU equivalents and 6 GiB RAM;
-John has one CPU equivalent and 3 GiB. Guard failure fails the job.
+and exact cgroup limits. The staged v2 workflow supports Jane's approved three
+slots, each with six CPU equivalents and a nominal 5 GB decimal memory cap.
+It compares the exact kernel page-aligned limit (4,999,999,488 bytes with 4 KiB
+pages). The active legacy callee still requires the retired two-slot 6 GiB
+profile. Keep Jane's shared scheduling label withheld until compatible staged
+workflows are activated from main; runner registration alone does not make the
+resource contracts compatible. John retains one CPU equivalent and 3 GiB.
+Guard failure fails the job.
 Browser suites hold a shared host lock while using fixed localhost test ports.
 Browser/native OS dependencies must be installed by the host administrator;
 workflow jobs install browser binaries without sudo.

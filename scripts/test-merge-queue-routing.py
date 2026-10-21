@@ -263,7 +263,20 @@ class QueueWorkflowTests(unittest.TestCase):
         old_jobs, new_jobs = jobs(OLD), jobs(TEXT)
         self.assertEqual(set(new_jobs), set(old_jobs) | {"queue-trust"})
         old_isolation = re.search(r'^      - &fleet-isolation\n.*?(?=^      - |^  [\w-]+:|\Z)', OLD, re.M | re.S)[0]
-        self.assertIn(old_isolation, new_jobs["queue-trust"])
+        expected_isolation = old_isolation
+        if not REMUS:
+            # The independently approved three-slot migration changes only
+            # this exact profile and the kernel page-alignment calculation.
+            # Every other security check and application step stays identical.
+            expected_isolation = expected_isolation.replace(
+                'ci-server-jane-1|ci-server-jane-2)',
+                'ci-server-jane-1|ci-server-jane-2|ci-server-jane-3)')
+            expected_isolation = expected_isolation.replace(
+                'CI_MEMORY=6442450944', 'CI_MEMORY=5000000000')
+            expected_isolation = expected_isolation.replace(
+                '          CI_CGROUP=',
+                '          CI_MEMORY=$((CI_MEMORY / $(getconf PAGESIZE) * $(getconf PAGESIZE)))\n          CI_CGROUP=')
+        self.assertIn(expected_isolation, new_jobs["queue-trust"])
         for name, old in old_jobs.items():
             new = new_jobs[name]
             self.assertRegex(new, r"(?m)^    needs: (?:queue-trust|\[queue-trust, .+\])$")
