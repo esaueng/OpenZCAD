@@ -13,6 +13,37 @@ export interface PasskeySecret {
   readonly targetId: string;
   /** Local only. The caller must erase it in a finally block. */
   readonly secret: Bytes;
+  /** Provider-visible name, returned only for a newly created credential. */
+  readonly enrollmentLabel?: string;
+}
+
+const failedEnrollments = new WeakMap<
+  object,
+  { label: string; targetId?: string }
+>();
+
+/** Preserve the original error's type, status and cancellation semantics. */
+export function failedPasskeyEnrollment(
+  error: unknown,
+  label: string,
+  targetId?: string
+): Error {
+  const failure =
+    error instanceof Error
+      ? error
+      : new PasskeyError('Passkey enrollment could not be confirmed.');
+  failedEnrollments.set(failure, { label, targetId });
+  return failure;
+}
+
+export function passkeyEnrollmentCleanup(error: unknown): string | null {
+  const enrollment =
+    error instanceof Error ? failedEnrollments.get(error) : undefined;
+  if (!enrollment) return null;
+  const target = enrollment.targetId
+    ? ` After reloading Encryption, remove any unlock method marked ${enrollment.targetId.slice(3, 15)} as well.`
+    : '';
+  return `Before creating another passkey, remove only "${enrollment.label}" from the passkey provider where you saved it.${target} Use your recovery key or another device in the meantime.`;
 }
 
 export interface PasskeyPrf {
@@ -124,17 +155,20 @@ async function ceremony<T>(work: () => Promise<T>): Promise<T> {
  * https://www.w3.org/TR/webauthn-3/#prf-extension
  */
 export const browserPasskeys: PasskeyPrf = {
-  create: (userId) =>
-    ceremony(async () => {
-      const created = credential(
-        await navigator.credentials.create({
+  create: async (userId) => {
+    const handle = challenge();
+    const label = `OpenZCAD encryption ${toHex(handle.slice(0, 6))}`;
+    let credentialCreated = false;
+    try {
+      const selectedPasskey = await ceremony(async () => {
+        const value = await navigator.credentials.create({
           publicKey: {
             challenge: challenge(),
             rp: { name: 'OpenZCAD', id: location.hostname },
             user: {
-              id: challenge(),
-              name: userId,
-              displayName: 'OpenZCAD encryption'
+              id: handle,
+              name: `${userId} - ${label}`,
+              displayName: label
             },
             pubKeyCredParams: [
               { type: 'public-key', alg: -7 },
@@ -148,41 +182,47 @@ export const browserPasskeys: PasskeyPrf = {
             timeout: 60_000,
             extensions: { prf: { eval: { first: passkeyPrfInput() } } }
           }
-        })
-      );
-      // Creation may enable PRF without evaluating it. Obtain an assertion
-      // restricted to this exact credential before certifying any target.
-      if (!created.getClientExtensionResults().prf?.results) {
-        if (created.getClientExtensionResults().prf?.enabled !== true) {
-          throw new PasskeyError(
-            'This passkey does not support PRF unlock. Use another passkey or your recovery key.'
+        });
+        credentialCreated = value !== null;
+        const created = credential(value);
+        // Creation may enable PRF without evaluating it. Obtain an assertion
+        // restricted to this exact credential before certifying any target.
+        if (!created.getClientExtensionResults().prf?.results) {
+          if (created.getClientExtensionResults().prf?.enabled !== true) {
+            throw new PasskeyError(
+              'This passkey does not support PRF unlock. Use another passkey or your recovery key.'
+            );
+          }
+          const asserted = credential(
+            await navigator.credentials.get({
+              publicKey: {
+                challenge: challenge(),
+                rpId: location.hostname,
+                allowCredentials: [{ type: 'public-key', id: created.rawId }],
+                userVerification: 'required',
+                timeout: 60_000,
+                extensions: { prf: { eval: { first: passkeyPrfInput() } } }
+              }
+            })
           );
+          if (
+            toHex(new Uint8Array(asserted.rawId)) !==
+            toHex(new Uint8Array(created.rawId))
+          ) {
+            output(asserted)?.fill(0);
+            throw new PasskeyError(
+              'A different passkey was returned. No unlock method was added.'
+            );
+          }
+          return selected(asserted);
         }
-        const asserted = credential(
-          await navigator.credentials.get({
-            publicKey: {
-              challenge: challenge(),
-              rpId: location.hostname,
-              allowCredentials: [{ type: 'public-key', id: created.rawId }],
-              userVerification: 'required',
-              timeout: 60_000,
-              extensions: { prf: { eval: { first: passkeyPrfInput() } } }
-            }
-          })
-        );
-        if (
-          toHex(new Uint8Array(asserted.rawId)) !==
-          toHex(new Uint8Array(created.rawId))
-        ) {
-          output(asserted)?.fill(0);
-          throw new PasskeyError(
-            'A different passkey was returned. No unlock method was added.'
-          );
-        }
-        return selected(asserted);
-      }
-      return selected(created);
-    }),
+        return selected(created);
+      });
+      return { ...selectedPasskey, enrollmentLabel: label };
+    } catch (error) {
+      throw credentialCreated ? failedPasskeyEnrollment(error, label) : error;
+    }
+  },
   get: () =>
     ceremony(async () =>
       selected(

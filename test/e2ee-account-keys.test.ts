@@ -60,6 +60,7 @@ import {
 } from '../apps/web/src/lib/e2ee/unlockedKeys';
 import {
   PasskeyError,
+  passkeyEnrollmentCleanup,
   type PasskeyPrf,
   type PasskeySecret
 } from '../apps/web/src/lib/e2ee/passkeys';
@@ -2194,10 +2195,14 @@ describe('identity replacement races', () => {
 
 function fakePasskey(id = 'pk_test', byte = 0x71) {
   const issued: Uint8Array[] = [];
-  const select = async () => {
+  const select = async (): Promise<PasskeySecret> => {
     const secret = new Uint8Array(32).fill(byte);
     issued.push(secret);
-    return { targetId: id, secret };
+    return {
+      targetId: id,
+      secret,
+      enrollmentLabel: `OpenZCAD encryption ${id}`
+    };
   };
   return { create: vi.fn(select), get: vi.fn(select), issued };
 }
@@ -2612,23 +2617,68 @@ describe('passkey PRF unlock', () => {
       account,
       recovery.secret
     );
-    expect(
-      (
-        await refusal(
-          addPasskey(
-            { ...laptop, passkeys: fakePasskey('pk_stale') },
-            account,
-            recovery.secret
-          )
-        )
-      ).status
-    ).toBe(409);
+    const conflict = await refusal(
+      addPasskey(
+        { ...laptop, passkeys: fakePasskey('pk_stale') },
+        account,
+        recovery.secret
+      )
+    );
+    expect(conflict.status).toBe(409);
+    expect(passkeyEnrollmentCleanup(conflict)).toContain(
+      'OpenZCAD encryption pk_stale'
+    );
+    expect(passkeyEnrollmentCleanup(conflict)).toContain(
+      'unlock method marked stale'
+    );
     expect(
       count(
         srv.db,
         "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE target_id = 'pk_stale'"
       )
     ).toBe(0);
+  });
+
+  it('identifies both the provider credential and a possibly committed target after a lost response', async () => {
+    const srv = server();
+    const { laptop, account, recovery } = await setUp(srv);
+    const passkeys = fakePasskey();
+    const failure = new Error('Enrollment response was lost');
+    const api = {
+      ...laptop.api,
+      appendDeviceList: async (
+        input: Parameters<typeof laptop.api.appendDeviceList>[0]
+      ) => {
+        await laptop.api.appendDeviceList(input);
+        throw failure;
+      }
+    };
+    const caught: unknown = await addPasskey(
+      { ...laptop, api, passkeys },
+      account,
+      recovery.secret
+    ).catch((error: unknown) => error);
+    expect(caught).toBe(failure);
+    expect(passkeyEnrollmentCleanup(caught)).toContain(
+      'remove only "OpenZCAD encryption pk_test"'
+    );
+    expect(passkeyEnrollmentCleanup(caught)).toContain(
+      'unlock method marked test'
+    );
+    expect(
+      count(
+        srv.db,
+        "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE target_id = 'pk_test'"
+      )
+    ).toBe(3);
+    expect(
+      ready(await loadEncryption(laptop)).list.unlockTargets.some(
+        (target) => target.targetId === 'pk_test'
+      )
+    ).toBe(true);
+    expect(
+      passkeys.issued.every((bytes) => bytes.every((byte) => byte === 0))
+    ).toBe(true);
   });
 
   it.each(['create', 'get', 'revoke-read-only'] as const)(

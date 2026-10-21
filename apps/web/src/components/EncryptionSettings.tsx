@@ -41,8 +41,15 @@ import {
   type NewDeviceApprovalStep
 } from '../lib/e2ee/accountKeys';
 import { createE2eeApi, E2eeApiError } from '../lib/e2ee/e2eeApi';
-import { DeviceListPinConflict, indexedDbDeviceStore } from '../lib/e2ee/deviceStore';
-import { PasskeyError, passkeysAvailable } from '../lib/e2ee/passkeys';
+import {
+  DeviceListPinConflict,
+  indexedDbDeviceStore
+} from '../lib/e2ee/deviceStore';
+import {
+  PasskeyError,
+  passkeysAvailable,
+  passkeyEnrollmentCleanup
+} from '../lib/e2ee/passkeys';
 import { encodeQr, qrSvgPath } from '../lib/e2ee/qrCode';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 import '../styles/components/encryption.css';
@@ -74,7 +81,8 @@ export function EncryptionSettings({ userId }: { userId: string }) {
         if (next) setState(next);
         return true;
       } catch (caught) {
-        setError(messageFor(caught));
+        const cleanup = passkeyEnrollmentCleanup(caught);
+        setError(`${messageFor(caught)}${cleanup ? ` ${cleanup}` : ''}`);
         return false;
       } finally {
         setBusy(false);
@@ -495,7 +503,7 @@ function AccountPanel({
           {...shared}
           title="Add a passkey"
           actionLabel="Create passkey"
-          intro="Save a passkey for encryption unlock. Your recovery key still works if the passkey is lost."
+          intro="Save a passkey for encryption unlock. If enrollment fails, remove the newly saved passkey from your provider before trying again. Your recovery key remains available."
           onSubmit={(secret) => addPasskey(ctx, account, secret)}
         />
       ) : null}

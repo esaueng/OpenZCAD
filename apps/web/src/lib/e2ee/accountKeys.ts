@@ -53,7 +53,11 @@ import type {
   E2eeWrapRecord
 } from '@openzcad/shared';
 import type { E2eeApi } from './e2eeApi';
-import { browserPasskeys, type PasskeyPrf } from './passkeys';
+import {
+  browserPasskeys,
+  failedPasskeyEnrollment,
+  type PasskeyPrf
+} from './passkeys';
 import {
   DeviceListPinConflict,
   type DeviceKeyStore,
@@ -1031,10 +1035,17 @@ export async function addPasskey(
   let secret: Bytes | undefined;
   let targetPkcs8: Bytes | undefined;
   let identityPkcs8: Bytes | undefined;
+  let enrollment: { label: string; targetId: string } | undefined;
   try {
     ctx.assertActive?.();
     const selected = await (ctx.passkeys ?? browserPasskeys).create(ctx.userId);
     secret = selected.secret;
+    if (selected.enrollmentLabel) {
+      enrollment = {
+        label: selected.enrollmentLabel,
+        targetId: selected.targetId
+      };
+    }
     ctx.assertActive?.();
     const target = await generateEncryptionKeyPair(true);
     const publicKey = await exportPublicKey(target.publicKey);
@@ -1099,7 +1110,11 @@ export async function addPasskey(
       pin: account.list.pin,
       written: signed.entry
     });
-    return loadEncryption(ctx);
+    return await loadEncryption(ctx);
+  } catch (error) {
+    throw enrollment
+      ? failedPasskeyEnrollment(error, enrollment.label, enrollment.targetId)
+      : error;
   } finally {
     opened.accountKey.fill(0);
     secret?.fill(0);

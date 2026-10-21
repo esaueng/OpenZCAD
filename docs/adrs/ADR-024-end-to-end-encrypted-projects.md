@@ -258,7 +258,14 @@ returning its output, the browser requests an assertion restricted to that
 credential before enrolling anything. Missing PRF, cancellation and malformed
 outputs fail closed; the recovery-key and device-approval flows remain available.
 These are local unlock ceremonies, not a new sign-in method; no WebAuthn
-assertion or PRF output goes to the Worker.
+assertion or PRF output goes to the Worker. Each newly saved credential has a distinct
+provider-visible label. If enrollment fails after credential creation, the UI
+identifies that credential and asks the user to remove it from the provider
+before creating another. When certification might have committed, the UI
+also identifies the corresponding unlock method to remove after reloading.
+Creation cancellation before a credential is saved has no cleanup warning;
+original conflict and session-cancellation errors keep their types. No pending
+PRF output or raw key material is persisted for retries.
 
 A passkey target id is `pk_` followed by the SHA-256 hex digest of its raw
 credential id. The identity signs that id with the target public key in the
