@@ -51,9 +51,14 @@ function countingKernel(kernel: RemusKernel, sizes: number[]): RemusKernel {
   return new Proxy(kernel, {
     get(target, property) {
       if (property === 'filletDetailed') {
-        return (solid: number, edges: Uint32Array, size: number) => {
+        return (
+          solid: number,
+          edges: Uint32Array,
+          size: number,
+          exactOnly?: boolean | null
+        ) => {
           sizes.push(size);
-          return target.filletDetailed(solid, edges, size);
+          return target.filletDetailed(solid, edges, size, exactOnly);
         };
       }
       const value: unknown = Reflect.get(target, property, target);
@@ -409,6 +414,67 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
     expect(
       acceptedEdgeModifierProbe(kernel, box, [edge], 'fillet', 30)
     ).not.toBeNull();
+  });
+
+  it('never recommends an approximate blend even when scalar guards accept it', () => {
+    const kernel = new RemusKernel();
+    try {
+      const box = kernel.makeBox(30, 18, 24);
+      const edge = Array.from(kernel.getSolidEdges(box))[0]!;
+      const exactOnlyCalls: Array<boolean | null | undefined> = [];
+      const approximate = new Proxy(kernel, {
+        get(target, property) {
+          if (property === 'filletDetailed') {
+            return (
+              solid: number,
+              edges: Uint32Array,
+              size: number,
+              exactOnly?: boolean | null
+            ) => {
+              exactOnlyCalls.push(exactOnly);
+              const result = target.filletDetailed(solid, edges, size);
+              return result.status === 'ok'
+                ? {
+                    ...result,
+                    details: { ...result.details, quality: 'approximate' }
+                  }
+                : result;
+            };
+          }
+          const value: unknown = Reflect.get(target, property, target);
+          return typeof value === 'function'
+            ? (value as (...args: unknown[]) => unknown).bind(target)
+            : value;
+        }
+      });
+
+      // Preserve the requested edit's established approximation policy, but
+      // decline approximate advice even when the scalar guards accept it.
+      expect(
+        applyEdgeModifier(approximate, box, [edge], 'fillet', 2)
+      ).not.toBeNull();
+      expect(exactOnlyCalls).toEqual([undefined]);
+      exactOnlyCalls.length = 0;
+      expect(
+        acceptedEdgeModifierProbe(approximate, box, [edge], 'fillet', 30)
+      ).toBeNull();
+      expect(exactOnlyCalls).toHaveLength(3);
+      expect(exactOnlyCalls.every((value) => value === true)).toBe(true);
+
+      // The ladder's independently established exact seed must not be
+      // raised to a size whose typed result discloses approximation.
+      exactOnlyCalls.length = 0;
+      expect(
+        refineAcceptedEdgeModifierSize(approximate, box, [edge], 'fillet', 1, 5)
+      ).toBe(1);
+      expect(exactOnlyCalls.length).toBeGreaterThan(0);
+      expect(exactOnlyCalls.every((value) => value === true)).toBe(true);
+      expect(
+        edgeModifierFailureMessage(approximate, box, [edge], 'fillet', 30, true)
+      ).toContain('This body is a partial revolve');
+    } finally {
+      kernel.free();
+    }
   });
 
   /**
