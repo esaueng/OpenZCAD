@@ -302,4 +302,25 @@ test('relation glyphs keep clear of their anchors and each other, select on clic
     page.locator('.sketch-relation-glyph[data-selected="true"]')
   ).toHaveCount(0);
   await expect(rail).toBeVisible();
+
+  // Hiding the selected glyph's kind drops the pick: Delete then removes
+  // nothing, since nothing visible is selected.
+  await glyph('horizontal').first().click();
+  await expect(
+    page.locator('.sketch-relation-glyph[data-selected="true"]')
+  ).toHaveCount(1);
+  if (!(await visibility.isVisible())) await palette.click();
+  const horizontalToggle = filter.getByRole('button', {
+    name: 'Show Horizontal glyphs'
+  });
+  await horizontalToggle.click();
+  await expect(glyph('horizontal')).toHaveCount(0);
+  await page.locator('.viewer-host canvas').focus();
+  await page.keyboard.press('Delete');
+  await expect(relations).toHaveCount(before);
+  await horizontalToggle.click();
+  await expect(glyph('horizontal')).toHaveCount(2);
+  await expect(
+    page.locator('.sketch-relation-glyph[data-selected="true"]')
+  ).toHaveCount(0);
 });

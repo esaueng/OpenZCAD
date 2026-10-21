@@ -14878,6 +14878,25 @@ export function App() {
       sketchSolveStatus
     ]
   );
+  // A relation is picked from its glyph, so the pick lasts only while that
+  // glyph is drawn: a filter that hides its kind, glyphs turned off, or an
+  // undo that removes the relation drops it, and Delete can never remove a
+  // relation nobody can see selected.
+  const selectedSketchConstraintDrawn =
+    selectedSketchConstraintId !== null &&
+    sketchRelationChips.some((chip) =>
+      chip.glyphs.some(
+        (glyph) => glyph.constraintId === selectedSketchConstraintId
+      )
+    );
+  useEffect(() => {
+    if (selectedSketchConstraintId !== null && !selectedSketchConstraintDrawn) {
+      dispatchInteraction({
+        type: 'sketch-select-constraint',
+        constraintId: null
+      });
+    }
+  }, [selectedSketchConstraintId, selectedSketchConstraintDrawn]);
   // The viewport's copy of the session also knows whether a solve or rebuild
   // owns the sketch, so a click cannot place text the card has disabled.
   const sketchModeForViewer = useMemo(
@@ -20077,14 +20096,11 @@ export function App() {
         }
         // A relation picked from its glyph is the narrower selection, so
         // Delete removes it before it would remove the entity it sits on.
-        // An undo can remove the relation under its selection; that pick no
-        // longer exists, so the key falls through to the entity.
-        const selectedConstraintId = editingSketchNode?.constraints?.some(
-          (constraint) =>
-            String(constraint.constraintId) ===
-            interaction.session.selectedConstraintId
-        )
-          ? interaction.session.selectedConstraintId
+        // Only a relation whose glyph is drawn counts as selected (an undo,
+        // a filter or the glyph setting can take it away before the effect
+        // above clears it); otherwise the key falls through to the entity.
+        const selectedConstraintId = selectedSketchConstraintDrawn
+          ? selectedSketchConstraintId
           : null;
         if (
           (event.key === 'Delete' || event.key === 'Backspace') &&
