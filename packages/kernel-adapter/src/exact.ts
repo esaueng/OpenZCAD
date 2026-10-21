@@ -1933,10 +1933,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           ? { lineageProbeKey: probeKey, lineageMetadataBytes: probeKeyBytes }
           : {})
       };
-      // Only differing metadata needs a second view. Charge its complete
-      // serialized provenance/signature against the existing checkpoint byte
-      // ceiling; unavailable telemetry or oversized views keep exact replay.
-      if (idleView?.diverged && memory) {
+      // Different probe signatures also need a finalized proof when an
+      // unavailable probe left the metadata identical. Charge the complete
+      // view/signature against the existing checkpoint byte ceiling;
+      // unavailable telemetry or oversized views keep exact replay.
+      if (
+        idleView &&
+        memory &&
+        (idleView.diverged ||
+          idleDigests
+            .slice(0, index + 1)
+            .some((digest, featureIndex) => digest !== digests[featureIndex]))
+      ) {
         try {
           const viewDigests = idleDigests.slice(0, index + 1);
           const bytes = idleLineageViewBytes(idleView, viewDigests);
