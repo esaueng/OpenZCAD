@@ -351,10 +351,11 @@ describe('sketch relation glyph overlay', () => {
     overlay.dispose();
   });
 
-  it('keeps one chip of a selected relation in view, not every chip it is on', () => {
-    // A selected parallel shows on both lines. With a control over the whole
-    // view only the pinned chip shows; pinning both would stack two forced
-    // chips.
+  it('keeps one chip of a selected relation in view, and drops the pick when none can show', () => {
+    // A selected parallel shows on both lines. A panel covers all but a strip
+    // along the top: only the pinned chip walks out to it (pinning both
+    // would stack two). When the panel covers everything, the selection is
+    // reported hidden, once.
     const area = document.createElement('div');
     area.className = 'viewer-area';
     const layer = document.createElement('div');
@@ -362,21 +363,24 @@ describe('sketch relation glyph overlay', () => {
     cover.className = 'viewer-rail';
     area.append(layer, cover);
     document.body.append(area);
-    const rect = (width: number, height: number) =>
+    const rect = (top: number, width: number, height: number) =>
       ({
         left: 0,
-        top: 0,
+        top,
         right: width,
-        bottom: height,
+        bottom: top + height,
         width,
         height,
         x: 0,
-        y: 0,
+        y: top,
         toJSON: () => ({})
       }) as DOMRect;
-    vi.spyOn(layer, 'getBoundingClientRect').mockReturnValue(rect(400, 400));
-    vi.spyOn(cover, 'getBoundingClientRect').mockReturnValue(rect(400, 400));
+    vi.spyOn(layer, 'getBoundingClientRect').mockReturnValue(rect(0, 400, 400));
+    const coverBox = vi
+      .spyOn(cover, 'getBoundingClientRect')
+      .mockReturnValue(rect(40, 400, 360));
     const selectedParallel = { ...bottom.glyphs[1]!, selected: true };
+    const hidden = vi.fn();
     const overlay = buildSketchRelationGlyphs(
       [
         { ...bottom, glyphs: [selectedParallel] },
@@ -387,16 +391,27 @@ describe('sketch relation glyph overlay', () => {
           glyphs: [selectedParallel]
         }
       ],
-      basis
+      basis,
+      () => {},
+      hidden
     );
+    const shownCount = () =>
+      overlay.group.children.filter(
+        (child) =>
+          child instanceof CSS2DObject &&
+          child.element.style.visibility !== 'hidden'
+      ).length;
     overlay.refreshObstacles(layer);
     overlay.layout(topCamera(), 400, 400);
-    const shown = overlay.group.children.filter(
-      (child) =>
-        child instanceof CSS2DObject &&
-        child.element.style.visibility !== 'hidden'
-    );
-    expect(shown).toHaveLength(1);
+    expect(shownCount()).toBe(1);
+    expect(hidden).not.toHaveBeenCalled();
+    coverBox.mockReturnValue(rect(0, 400, 400));
+    overlay.refreshObstacles(layer);
+    overlay.layout(topCamera(), 400, 400);
+    overlay.layout(topCamera(), 400, 400);
+    expect(shownCount()).toBe(0);
+    expect(hidden).toHaveBeenCalledTimes(1);
+    expect(hidden).toHaveBeenCalledWith('c2');
     overlay.dispose();
     area.remove();
   });

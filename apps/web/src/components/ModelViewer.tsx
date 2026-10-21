@@ -963,6 +963,8 @@ export interface ModelViewerProps {
   ): void;
   /** A relation glyph was clicked: select that relation. */
   onSelectSketchConstraint?(constraintId: string): void;
+  /** The selected relation's glyph has nowhere clear to show. */
+  onSketchConstraintSelectionHidden?(constraintId: string): void;
   /** Mirrors chain/drag liveness into the interaction machine. */
   onSketchDrawingChange(drawing: boolean): void;
   /**
@@ -1870,6 +1872,7 @@ export function ModelViewer({
   onEditSketchDimension,
   onMoveSketchDimension,
   onSelectSketchConstraint,
+  onSketchConstraintSelectionHidden,
   onSketchDrawingChange,
   sketchMoveEnabled = false,
   onSketchMoveChange,
@@ -2078,6 +2081,11 @@ export function ModelViewer({
   moveSketchDimensionRef.current = onMoveSketchDimension;
   const selectSketchConstraintRef = useRef(onSelectSketchConstraint);
   selectSketchConstraintRef.current = onSelectSketchConstraint;
+  const sketchConstraintSelectionHiddenRef = useRef(
+    onSketchConstraintSelectionHidden
+  );
+  sketchConstraintSelectionHiddenRef.current =
+    onSketchConstraintSelectionHidden;
   const sketchRelationsRef = useRef<ReturnType<
     typeof buildSketchRelationGlyphs
   > | null>(null);
@@ -11691,7 +11699,9 @@ export function ModelViewer({
     const overlay = buildSketchRelationGlyphs(
       sketchRelations,
       sketchBasis,
-      (constraintId) => selectSketchConstraintRef.current?.(constraintId)
+      (constraintId) => selectSketchConstraintRef.current?.(constraintId),
+      (constraintId) =>
+        sketchConstraintSelectionHiddenRef.current?.(constraintId)
     );
     context.scene.add(overlay.group);
     sketchRelationsRef.current = overlay;

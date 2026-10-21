@@ -22522,6 +22522,23 @@ export function App() {
             onEditSketchDimension={handleEditSketchDimension}
             onMoveSketchDimension={handleMoveSketchDimension}
             onSelectSketchConstraint={handleSelectSketchConstraint}
+            onSketchConstraintSelectionHidden={(constraintId) => {
+              // Its glyph is under a control with nowhere clear to go: drop
+              // the pick rather than leave Delete armed on a hidden relation.
+              if (
+                interactionRef.current.mode === 'sketch' &&
+                interactionRef.current.session.selectedConstraintId ===
+                  constraintId
+              ) {
+                dispatchInteraction({
+                  type: 'sketch-select-constraint',
+                  constraintId: null
+                });
+                setStatus(
+                  'Deselected the relation: its glyph is covered by a panel.'
+                );
+              }
+            }}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }

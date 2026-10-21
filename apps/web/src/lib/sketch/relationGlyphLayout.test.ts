@@ -267,20 +267,65 @@ describe('relation glyph layout', () => {
     }
   });
 
-  it('always shows the chip holding the selected relation', () => {
-    // Every spot near the anchor is under a viewport control: an ordinary
-    // chip is hidden, the selected one still shows on screen.
+  it("searches further for the selected relation's chip, still clear of controls", () => {
+    // A panel over everything but a strip along the top: an ordinary chip
+    // gives up nearby and hides, the selected one walks out to the strip.
     const layout = new RelationGlyphLayout(2);
-    layout.setBlocked([0, 0, 400, 400], 1);
-    layout.set(0, 200, 200, 0, -1, 16, 16, false, true);
+    layout.setBlocked([0, 40, 400, 400], 1);
+    layout.set(0, 200, 300, 0, -1, 16, 16, false, true);
     layout.pin(0);
-    layout.set(1, 100, 100, 0, -1, 16, 16, false, true);
+    layout.set(1, 100, 300, 0, -1, 16, 16, false, true);
     layout.solve(2, 400, 400);
     expect(layout.shown[0]).toBe(1);
     expect(layout.shown[1]).toBe(0);
-    const cy = 200 + layout.offset[1]!;
-    expect(cy).toBeLessThan(200);
+    const cy = 300 + layout.offset[1]!;
+    expect(cy + 8).toBeLessThanOrEqual(40 - 2);
     expect(cy - 8).toBeGreaterThanOrEqual(0);
+  });
+
+  it("hides even the selected relation's chip when no spot on screen is clear", () => {
+    const layout = new RelationGlyphLayout(1);
+    layout.setBlocked([0, 0, 400, 400], 1);
+    layout.set(0, 200, 200, 0, -1, 16, 16, false, true);
+    layout.pin(0);
+    layout.solve(1, 400, 400);
+    expect(layout.shown[0]).toBe(0);
+  });
+
+  it('keeps a point chip clear of a straight run seen obliquely', () => {
+    // A point on a straight line: a half-turn gap, its two edges one line.
+    // Seen obliquely, the projected line leans 60° off square to the
+    // projected bisector (straight up), so the plain standoff would cross it.
+    const layout = new RelationGlyphLayout(1);
+    layout.set(0, 200, 200, 0, -1, 16, 16, true, true, Math.PI / 2);
+    const lean = Math.PI / 3;
+    const ex = Math.cos(lean);
+    const ey = Math.sin(lean);
+    layout.setSwings(
+      0,
+      [0, -1, 0, -1, 0, -1, 0, -1, 0, -1, ex, ey, -ex, -ey],
+      0
+    );
+    layout.solve(1, 400, 400);
+    const cx = 200 + layout.offset[0]!;
+    const cy = 200 + layout.offset[1]!;
+    // The line's normal on the chip's side.
+    let mx = -ey;
+    let my = ex;
+    if (my > 0) {
+      mx = -mx;
+      my = -my;
+    }
+    for (const [x, y] of [
+      [cx - 8, cy - 8],
+      [cx + 8, cy - 8],
+      [cx - 8, cy + 8],
+      [cx + 8, cy + 8]
+    ]) {
+      expect(mx * (x! - 200) + my * (y! - 200)).toBeGreaterThanOrEqual(
+        3 - 1e-9
+      );
+    }
   });
 
   it('keeps chips out from under the viewport controls drawn above them', () => {

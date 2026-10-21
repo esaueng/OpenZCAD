@@ -198,7 +198,10 @@ export class RelationGlyphLayout {
     const base = index * IN;
     const input = this.input;
     input[base + 6] = input[base + 6]! & ~WEDGE;
-    if (!(input[base + 7]! < Math.PI / 2 - 1e-6)) return;
+    // Up to and including half a turn (a point on a straight run, whose
+    // edges are one line): the projected bisector need not be square to the
+    // projected line, so even then the box must clear it.
+    if (!(input[base + 7]! <= Math.PI / 2 + 1e-6)) return;
     const bx = input[base + 2]!;
     const by = input[base + 3]!;
     const inward = (ex: number, ey: number, slot: number): boolean => {
@@ -427,20 +430,35 @@ export class RelationGlyphLayout {
         }
       }
       if (!found && flags & PINNED) {
-        // The selected relation's chip always shows, so a selection is never
-        // invisible: at its preferred spot, on screen. It is laid out first,
-        // so only a viewport control or a dimension label can be there.
+        // The selected relation's chip keeps looking, straight out on either
+        // side, as far as the viewport reaches: it is one chip, so the
+        // longer search is cheap, and it still keeps clear of controls,
+        // labels and anchors. Laid out first, no other glyph is in its way.
         const support = Math.abs(nx) * halfW + Math.abs(ny) * halfH;
-        let reach =
-          RELATION_CHIP_STANDOFF_PX + (point ? KEEP_OUT_PX : 0) + support;
-        if (point) reach = this.wedgeReach(at, nx, ny, halfW, halfH, reach);
-        chosenX = ax + nx * reach;
-        chosenY = ay + ny * reach;
-        if (bounded) {
-          chosenX = Math.min(Math.max(chosenX, halfW), width - halfW);
-          chosenY = Math.min(Math.max(chosenY, halfH), height - halfH);
+        const base = RELATION_CHIP_STANDOFF_PX + (point ? KEEP_OUT_PX : 0);
+        const limit = bounded ? Math.hypot(width, height) : UNBOUNDED_PX;
+        const step = 2 * halfH + CHIP_GAP_PX;
+        pinned: for (let reach = base; reach < limit; reach += step) {
+          for (let side = 0; side < (point ? 1 : 2); side += 1) {
+            const sx = side === 0 ? nx : -nx;
+            const sy = side === 0 ? ny : -ny;
+            let distance = reach + support;
+            if (point) {
+              distance = this.wedgeReach(at, sx, sy, halfW, halfH, distance);
+            }
+            const cx = ax + sx * distance;
+            const cy = ay + sy * distance;
+            if (this.free(cx - halfW, cy - halfH, cx + halfW, cy + halfH)) {
+              chosenX = cx;
+              chosenY = cy;
+              found = true;
+              break pinned;
+            }
+          }
         }
-        found = true;
+        // Still nothing: everything near it is under a control. It is hidden
+        // like any other chip, and the viewer reports that so the selection
+        // is dropped rather than left active with no glyph to show it.
       }
       if (!found) {
         // No room near its geometry (more relations than the view has space

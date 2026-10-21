@@ -51,7 +51,13 @@ export interface SketchLabelBoxes {
 export function buildSketchRelationGlyphs(
   chips: readonly SketchRelationGlyphChip[],
   basis: PlaneBasis,
-  select: (constraintId: string) => void = () => {}
+  select: (constraintId: string) => void = () => {},
+  /**
+   * The selected relation's glyph has nowhere clear to show (every spot near
+   * it is under a viewport control): drop the selection, so Delete never
+   * acts on a relation whose glyph cannot be seen or clicked.
+   */
+  selectionHidden: (constraintId: string) => void = () => {}
 ) {
   const group = new THREE.Group();
   group.name = 'sketch-relation-glyphs';
@@ -72,6 +78,7 @@ export function buildSketchRelationGlyphs(
   const pinnedIndex = chips.findIndex((chip) =>
     chip.glyphs.some((glyph) => glyph.selected)
   );
+  let selectionHiddenReported = false;
   const widths = new Float64Array(count);
   const elements: HTMLElement[] = [];
   // The last offset written per chip, so a still frame writes no style.
@@ -308,6 +315,17 @@ export function buildSketchRelationGlyphs(
         if (index === pinnedIndex) layout.pin(index);
       }
       layout.solve(count, width, height);
+      if (
+        pinnedIndex >= 0 &&
+        layout.shown[pinnedIndex] === 0 &&
+        !selectionHiddenReported
+      ) {
+        selectionHiddenReported = true;
+        const selected = chips[pinnedIndex]!.glyphs.find(
+          (glyph) => glyph.selected
+        );
+        if (selected) selectionHidden(selected.constraintId);
+      }
       const offset = layout.offset;
       const shown = layout.shown;
       for (let index = 0; index < count; index += 1) {
