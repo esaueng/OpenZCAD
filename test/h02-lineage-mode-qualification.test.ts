@@ -19,10 +19,11 @@ import {
   withoutDerivedProjection,
   type ExtrudeInput
 } from '@openzcad/document-core';
-import type {
-  ExactKernelAdapter,
-  ExactKernelAdapterOptions,
-  RebuildCacheEvent
+import {
+  createExactKernelAdapter,
+  type ExactKernelAdapter,
+  type ExactKernelAdapterOptions,
+  type RebuildCacheEvent
 } from '@openzcad/kernel-adapter/exact';
 import { computeSketchRegions } from '@openzcad/geometry';
 import {
@@ -34,10 +35,7 @@ import {
   type ProjectDocument,
   type SketchPlaneRef
 } from '@openzcad/shared';
-import {
-  createExactKernelAdapter,
-  sameStructure
-} from './perf/h02-session-exact';
+import { sameStructure } from './perf/h02-session-exact';
 import {
   captureExactArenas,
   compareExactArenas
@@ -52,28 +50,15 @@ import { IdleLineageViewBuilder } from '../packages/kernel-adapter/src/exact-idl
 import { recognizePlanarEmboss } from '../packages/kernel-adapter/src/planar-emboss';
 import { letteredHolder } from './support/lettered-holder';
 import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
-
-interface Equivalence {
-  rawEquivalent: boolean;
-  publicationEquivalent: boolean;
-  publicationDifferences: {
-    root: string[];
-    bodies: { bodyIndex: number; count: number; paths: string[] }[];
-  };
-  bodies: number;
-  serializedBytes: number;
-  faces: number;
-  warnings: number;
-}
-
-interface Probe {
-  compareFresh(): Promise<Equivalence>;
-}
+import {
+  captureFirstPublication,
+  compareCapturedFirstWithFresh
+} from './support/h02-first-publication';
 
 interface Harness {
   adapter: ExactKernelAdapter;
-  probe: Probe;
   events: RebuildCacheEvent[];
+  options: ExactKernelAdapterOptions;
 }
 
 function cacheState(adapter: ExactKernelAdapter) {
@@ -137,14 +122,15 @@ async function harness(
   options: ExactKernelAdapterOptions = {}
 ): Promise<Harness> {
   const events: RebuildCacheEvent[] = [];
+  const adapterOptions = { ...options, measurementCacheDiagnostics: true };
   const adapter = await createExactKernelAdapter({
-    ...options,
+    ...adapterOptions,
     onRebuildCacheEvent: (event) => events.push(event)
   });
   return {
     adapter,
     events,
-    probe: (globalThis as unknown as { __h02Session: Probe }).__h02Session
+    options: adapterOptions
   };
 }
 
@@ -357,12 +343,12 @@ function withoutTimestamp({ updatedAt: _time, ...derived }: DerivedState) {
 }
 
 /**
- * Compare the first response as well as a repeat, then use the unchanged H02
- * oracle against cache-disabled fresh geometry. No published fields are
- * removed beyond the oracle's established cross-arena normalization.
+ * Compare the captured first response directly with cache-disabled fresh
+ * geometry before any subject repeat, then compare the first and repeat.
+ * Keep the H02 oracle's established cross-arena normalization exactly.
  */
 async function qualify(
-  { adapter, probe }: Harness,
+  { adapter, events, options: adapterOptions }: Harness,
   document: ProjectDocument,
   demand?: readonly BodyId[],
   context = 'Mode qualification',
@@ -382,19 +368,19 @@ async function qualify(
       undefined,
       options
     );
-  const first = await captureExactArenas(adapter, document, sync);
-  const repeated = await captureExactArenas(adapter, document, sync);
-  expect(compareExactArenas(first.bodies, repeated.bodies).equivalent).toBe(
-    true
-  );
+  const eventsBeforeFirst = events.length;
+  const first = await captureFirstPublication(adapter, document, sync);
+  expect(events).toHaveLength(eventsBeforeFirst + 1);
+  const instrumentation = (globalThis as unknown as { __h02Session?: unknown })
+    .__h02Session;
+  const fresh = await compareCapturedFirstWithFresh(first, document, {
+    adapterOptions,
+    syncOptions: options
+  });
+  expect(events).toHaveLength(eventsBeforeFirst + 1);
   expect(
-    sameStructure(
-      withoutTimestamp(first.result),
-      withoutTimestamp(repeated.result)
-    ),
-    'The first mode-specific response must equal its repeat in the same arena'
-  ).toBe(true);
-  const fresh = await probe.compareFresh();
+    (globalThis as unknown as { __h02Session?: unknown }).__h02Session
+  ).toBe(instrumentation);
   expect(
     fresh.rawEquivalent,
     `${context}: every raw B-rep byte must match fresh`
@@ -408,6 +394,18 @@ async function qualify(
   expect(fresh.faces).toBeGreaterThan(0);
   expect(fresh.serializedBytes).toBeGreaterThan(0);
   expect(fresh.warnings).toBe(0);
+  const repeated = await captureExactArenas(adapter, document, sync);
+  expect(events).toHaveLength(eventsBeforeFirst + 2);
+  expect(compareExactArenas(first.bodies, repeated.bodies).equivalent).toBe(
+    true
+  );
+  expect(
+    sameStructure(
+      withoutTimestamp(first.result),
+      withoutTimestamp(repeated.result)
+    ),
+    'The first mode-specific response must equal its repeat in the same arena'
+  ).toBe(true);
   return first.result;
 }
 

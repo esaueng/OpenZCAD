@@ -7,17 +7,21 @@ import {
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import { toUserId, type BodyId, type DerivedState } from '@openzcad/shared';
-import type { RebuildCacheEvent } from '@openzcad/kernel-adapter/exact';
 import {
   createExactKernelAdapter,
-  sameStructure
-} from './perf/h02-session-exact';
+  type RebuildCacheEvent
+} from '@openzcad/kernel-adapter/exact';
+import { sameStructure } from './perf/h02-session-exact';
 import {
   captureExactArenas,
   compareExactArenas
 } from './support/exact-arena-equivalence';
 import * as evolution from '../packages/kernel-adapter/src/exact-boolean-evolution';
 import type { HistoryCheckpointEntry } from '../packages/kernel-adapter/src/exact-history-cache';
+import {
+  captureFirstPublication,
+  compareCapturedFirstWithFresh
+} from './support/h02-first-publication';
 
 function multiOperandUnion() {
   let document = createProjectDocument('Unavailable probe', toUserId('test'));
@@ -72,43 +76,43 @@ function withoutTimestamp({ updatedAt: _timestamp, ...value }: DerivedState) {
 
 async function harness(document = multiOperandUnion()) {
   const events: RebuildCacheEvent[] = [];
+  const adapterOptions = { measurementCacheDiagnostics: true };
   const adapter = await createExactKernelAdapter({
+    ...adapterOptions,
     onRebuildCacheEvent: (event) => events.push(event)
   });
-  const probe = (
-    globalThis as unknown as {
-      __h02Session: {
-        compareFresh(): Promise<{
-          rawEquivalent: boolean;
-          publicationEquivalent: boolean;
-          publicationDifferences: { root: string[]; bodies: unknown[] };
-          warnings: number;
-        }>;
-      };
-    }
-  ).__h02Session;
   const state = adapter as unknown as {
     historyCheckpoints: HistoryCheckpointEntry[];
     historyLineageMetadataBytes: number;
   };
   const qualify = async (idle: boolean) => {
+    const options = idle ? { lineageDemand: [] as BodyId[] } : undefined;
     const sync = () =>
-      adapter.syncDocument(
-        document,
-        undefined,
-        undefined,
-        undefined,
-        idle ? { lineageDemand: [] as BodyId[] } : undefined
-      );
+      adapter.syncDocument(document, undefined, undefined, undefined, options);
     const eventIndex = events.length;
-    const first = await captureExactArenas(adapter, document, sync);
+    const first = await captureFirstPublication(adapter, document, sync);
     const event = events[eventIndex]!;
-    const fresh = await probe.compareFresh();
+    expect(events).toHaveLength(eventIndex + 1);
+    const instrumentation = (
+      globalThis as unknown as { __h02Session?: unknown }
+    ).__h02Session;
+    const fresh = await compareCapturedFirstWithFresh(first, document, {
+      adapterOptions,
+      syncOptions: options
+    });
+    expect(events).toHaveLength(eventIndex + 1);
+    expect(
+      (globalThis as unknown as { __h02Session?: unknown }).__h02Session
+    ).toBe(instrumentation);
     expect(fresh.rawEquivalent).toBe(true);
     expect(fresh.publicationEquivalent).toBe(true);
     expect(fresh.publicationDifferences).toEqual({ root: [], bodies: [] });
+    expect(fresh.bodies).toBe(document.bodyOrder.length);
+    expect(fresh.faces).toBeGreaterThan(0);
+    expect(fresh.serializedBytes).toBeGreaterThan(0);
     expect(fresh.warnings).toBe(0);
     const repeated = await captureExactArenas(adapter, document, sync);
+    expect(events).toHaveLength(eventIndex + 2);
     expect(compareExactArenas(first.bodies, repeated.bodies).equivalent).toBe(
       true
     );
