@@ -91,6 +91,39 @@ describe('ReferenceImageWorkspaceCard', () => {
     expect(props.onClose).toHaveBeenCalled();
   });
 
+  it('restarts the draft when Undo or Redo moves the open image', async () => {
+    const props = setup();
+    // An unapplied edit, then Apply: the record now sits at U 12.
+    fireEvent.change(screen.getByLabelText('Position U (mm)'), {
+      target: { value: '12' }
+    });
+    const applied = { ...props.image, center: { u: 12, v: 0 } };
+    rerender(<ReferenceImageWorkspaceCard {...props} image={applied} />);
+    // Undo with the card still open reverts the record (U 0, and here a
+    // lower opacity too): the card and the viewport draft follow it, not the
+    // stale draft, so Done has nothing to reapply.
+    rerender(
+      <ReferenceImageWorkspaceCard
+        {...props}
+        image={{ ...props.image, opacity: 0.3 }}
+      />
+    );
+    expect(
+      screen.getByLabelText<HTMLInputElement>('Position U (mm)').value
+    ).toBe('0');
+    expect(screen.getByLabelText<HTMLInputElement>('Image opacity').value).toBe(
+      '0.3'
+    );
+    await waitFor(() =>
+      expect(props.onDraft).toHaveBeenLastCalledWith(
+        expect.objectContaining({ center: { u: 0, v: 0 }, opacity: 0.3 })
+      )
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(props.onApply).not.toHaveBeenCalled();
+    expect(props.onClose).toHaveBeenCalled();
+  });
+
   it('refuses a width that is not positive', () => {
     const props = setup();
     fireEvent.change(screen.getByLabelText('Width (mm)'), {

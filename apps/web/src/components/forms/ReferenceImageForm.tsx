@@ -81,6 +81,18 @@ function draftTextOf(image: ReferenceImage): DraftText {
   };
 }
 
+/** The stored values the card edits; a change to any restarts its draft. */
+function persistedPlacementKey(image: ReferenceImage): string {
+  return JSON.stringify([
+    image.name,
+    image.plane,
+    image.center,
+    image.rotationDeg,
+    image.width,
+    image.opacity
+  ]);
+}
+
 function finite(text: string, bound = MAX_REFERENCE_IMAGE_EXTENT) {
   const value = Number(text.trim());
   return text.trim() !== '' &&
@@ -105,6 +117,18 @@ export function ReferenceImageWorkspaceCard({
   const [text, setText] = useState<DraftText>(() => draftTextOf(image));
   const [plane, setPlane] = useState<ReferenceImagePlane>(image.plane);
   const [opacity, setOpacity] = useState(image.opacity);
+  // The card stays mounted while Undo, Redo or a collaborator changes the
+  // same image, so the draft restarts from the record whenever the stored
+  // values move. Otherwise a stale draft would overlay the reverted
+  // placement and Done would quietly reapply it.
+  const persisted = persistedPlacementKey(image);
+  const [draftBasis, setDraftBasis] = useState(persisted);
+  if (draftBasis !== persisted) {
+    setDraftBasis(persisted);
+    setText(draftTextOf(image));
+    setPlane(image.plane);
+    setOpacity(image.opacity);
+  }
   const units: UnitSystem = document.units;
 
   const name = text.name.trim();
