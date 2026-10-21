@@ -818,7 +818,6 @@ and asserts zero geometry-worker rebuild requests during the drag. The generic
 fixture reproduced the 1.5× area error with the previous kernel and passes with
 the paired fix from [Remus #807](https://github.com/esaueng/remus/pull/807).
 
-
 ## H02 matched-cache benchmark preparation (2026-10-15)
 
 The [current evidence and reproduction](qa/2026-10-15/h02-matched-cache-benchmark.md)
@@ -870,3 +869,9 @@ Raw B-rep matches all captured fresh oracles, but five sustained publication
 comparisons fail in face/edge references and lineage diagnostics. Public CI and
 the narrower one-edit private oracle do not close that gate. Whole-worker
 retention and the proposed detached Text record remain unaccepted; H02 is Partial.
+
+The [public two-box reproduction](qa/2026-10-21/h02-m5-pro-qualification.md#public-reproduction-of-demand-history-dependent-publication)
+isolates eager-to-idle lineage checkpoint reuse as a cause of history-dependent
+publication with unchanged raw B-rep bytes. Its manual strict publication check
+fails; aligning the demand histories or restarting the adapter matches fresh.
+This diagnostic does not replace any private acceptance comparison.

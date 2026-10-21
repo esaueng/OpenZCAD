@@ -173,7 +173,6 @@ claims about actual worker heap. The unchanged 32-checkpoint, 32 MiB derived
 rebuild and 128 MiB measurement ceilings do not authorize an additional branch
 allocation; branch retention is zero until its contract and acceptance pass.
 
-
 ## Matched benchmark preparation (2026-10-15)
 
 [Current harness and evidence](../qa/2026-10-15/h02-matched-cache-benchmark.md)
@@ -225,3 +224,10 @@ The unchanged publication-equivalence criterion is therefore unmet. The new
 probes retain those failures while completing independent observations; no
 normalization or acceptance threshold is relaxed. Whole-worker retained-memory
 bounds and branch-preserving kernel/dependency support remain open.
+
+The [public demand-history reproduction](../qa/2026-10-21/h02-m5-pro-qualification.md#public-reproduction-of-demand-history-dependent-publication)
+isolates a matching publication failure on two boxes and a union: an idle request
+can reuse eagerly probed lineage checkpoints and publish references that a fresh
+idle build omits, with identical raw geometry. Its opt-in strict assertion still
+fails. This explains a public path to the mismatch without changing the pinned
+runtime or treating broader lineage as accepted equivalence.

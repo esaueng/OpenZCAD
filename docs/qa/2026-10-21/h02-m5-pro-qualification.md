@@ -71,6 +71,39 @@ The final instrumented production-preview session runs at qualification head `5e
 
 Every checkpoint in the table has 17 bodies / 720 faces with zero warnings. The differing field families are `topology.faces[*].reference`, `topology.edges[*].reference` and `topology.lineageDiagnostics`. Raw geometry equivalence does not satisfy the separate published-lineage requirement. The one-edit Node oracle above remains a narrower passing case.
 
+### Public reproduction of demand-history-dependent publication
+
+The same class of publication mismatch reproduces without the private input on
+two overlapping public boxes and their terminal union. Run the opt-in probe:
+
+```bash
+pnpm exec vitest run --config test/perf/h02-publication-history.config.ts
+```
+
+At the unchanged runtime and paired-kernel pins, a cold idle build matches a
+fresh cache-disabled idle oracle. An eager build followed by an idle request
+restores all three feature checkpoints and reuses all three measurements, but
+its publication differs from that same fresh idle oracle. All **15,798 raw
+B-rep bytes across three bodies / 20 faces** still match, with zero warnings.
+The differing result body has 32 field paths: 22 edge references and 10 lineage
+diagnostic paths. Aligning both requests to eager probing restores publication
+equality; disposing the warm adapter and rebuilding idle does too.
+
+This isolates a public cause of history-dependent publication. The current
+adapter explicitly permits idle calls to restore checkpoints built with eager
+boolean lineage probing, while a fresh idle build skips that probing. Parameter
+preflight and subsequent live idle requests exercise this transition. It does
+not establish that every private mismatch has no additional cause, or that extra
+lineage is harmless: lineage reconciliation can withhold conflicting references.
+
+The opt-in probe retains the strict publication-equality assertion and exits 1
+for the reproduced mismatch. It is separate from ordinary passing CI, just as
+the private sustained acceptance probe is. No comparison fields are dropped,
+no demand is added to the private oracle to hide the difference, and the runtime
+reuse policy is unchanged. Resolving publication determinism needs a runtime
+change followed by fresh qualification; this frozen-runtime evidence does not
+claim that repair or accept the detached Text proposal.
+
 ### Eviction, recovery and restart
 
 The main session retains the existing default limits: at most 32 checkpoints, 128 MiB of accounted measurements, and the worker memo’s 8-entry / 32 MiB cap. Every observed live checkpoint owner agrees with its table and all accounted byte sums stay within their respective limits. The final pre-termination state reports 217 checkpoint retirements and 161 observed worker-memo key removals. Retired-checkpoint restoration is rejected wherever a retired checkpoint is available; the following exact comparisons retain the valid live geometry. This is sampled existing-cache lifetime evidence, not a detached-branch proof.
@@ -141,3 +174,12 @@ pnpm exec playwright test --config test/perf/h02-session.config.ts
 Local lint passes with zero errors and 17 pre-existing warnings; typecheck passes on `5e8ac0e8a0461652499ea1e42cdf19aeb0294d35`. The three public probe-contract tests and the 93 selected private-oracle/lifetime tests pass. All six matched timing arms pass their existing budgets. The sustained private session completes its independent probes and exits 1 for the five publication-equivalence failures recorded above.
 
 Required repository verification remains `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm test:parity-corpus` and `pnpm build`, plus the hosted Playwright aggregate and Cloudflare dry-run checks. The PR's current-head check runs provide the hosted evidence. Public CI runs with private inputs unset; its result does not replace the opt-in private acceptance outcome. No acceptance assertion, comparison field or numeric budget is weakened to obtain a green result.
+
+Review follow-up strengthens the outside-repository artifact contract for future
+runs. Samples, source-containing backups, browser artifacts and Vite build outputs
+use one canonical-path guard rooted at the checkout, including when a command
+runs from a package directory. Repository symlinks, cleanup destinations containing
+the checkout, and artifact/sample overlaps fail closed. Backups use exclusive
+creation with mode `0600`. Eleven public dummy-filesystem regressions cover these
+cases without reading or writing the private input. This changes test-output
+handling only; it does not change any recorded samples or acceptance condition.
