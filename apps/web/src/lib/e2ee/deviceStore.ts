@@ -1,4 +1,8 @@
-import type { Bytes, DeviceListPin } from '@openzcad/crypto';
+import type {
+  Bytes,
+  DeviceListPin,
+  VerifiedDeviceList
+} from '@openzcad/crypto';
 
 /**
  * This device's key material for one account, and the device-list pin.
@@ -23,6 +27,8 @@ export interface StoredDevice {
   readonly approval: {
     readonly id: string;
     readonly nonce: Bytes | null;
+    /** Pin when this approval was requested; anchors an identity change. */
+    readonly pinAtRequest?: DeviceListPin | null;
     /**
      * The approver key whose six digits the user confirmed on this device.
      * In the compare form a grant is accepted only from that key, so a
@@ -38,7 +44,86 @@ export interface DeviceKeyStore {
   deleteDevice(userId: string): Promise<void>;
   /** The newest device-list entry this browser accepted for the account. */
   loadPin(userId: string): Promise<DeviceListPin | null>;
-  savePin(userId: string, pin: DeviceListPin): Promise<void>;
+  /** Atomically accept only a verified descendant of the currently stored pin. */
+  savePin(
+    userId: string,
+    list: VerifiedDeviceList,
+    options?: PinUpdateOptions
+  ): Promise<void>;
+}
+
+export interface PinUpdateOptions {
+  /**
+   * An identity change authorized by recovery/setup or a verified approval
+   * grant. It may replace only this exact persistence snapshot. Undefined
+   * never authorizes replacement; null means the browser had no pin.
+   */
+  readonly replaceIdentityFrom?: DeviceListPin | null;
+}
+
+export class DeviceListPinConflict extends Error {
+  constructor(readonly reason: 'identity' | 'chain') {
+    super(
+      'The pinned device list changed in another tab. Reload and try again.'
+    );
+    this.name = 'DeviceListPinConflict';
+  }
+}
+
+function copyPin(pin: DeviceListPin): DeviceListPin {
+  return {
+    sequence: pin.sequence,
+    identityKeyHash: new Uint8Array(pin.identityKeyHash),
+    entryHash: new Uint8Array(pin.entryHash)
+  };
+}
+
+const sameBytes = (a: Uint8Array, b: Uint8Array) =>
+  a.length === b.length && a.every((value, index) => value === b[index]);
+const samePin = (a: DeviceListPin | null, b: DeviceListPin | null) =>
+  a === null || b === null
+    ? a === b
+    : a.sequence === b.sequence &&
+      sameBytes(a.identityKeyHash, b.identityKeyHash) &&
+      sameBytes(a.entryHash, b.entryHash);
+
+function pinUpdate(
+  userId: string,
+  list: VerifiedDeviceList,
+  options: PinUpdateOptions
+) {
+  if (list.userId !== userId) throw new DeviceListPinConflict('chain');
+  // Snapshot before the first await. Neither a caller nor a memory-store
+  // reader may mutate bytes that the acceptance decision later relies on.
+  return {
+    pin: copyPin(list.pin),
+    hashes: list.entries.map((entry) => new Uint8Array(entry.hash)),
+    replaceIdentityFrom:
+      options.replaceIdentityFrom === undefined
+        ? undefined
+        : options.replaceIdentityFrom === null
+          ? null
+          : copyPin(options.replaceIdentityFrom)
+  };
+}
+
+function checkPinUpdate(
+  current: DeviceListPin | null,
+  next: ReturnType<typeof pinUpdate>
+): void {
+  if (current && sameBytes(current.identityKeyHash, next.pin.identityKeyHash)) {
+    const ancestor = next.hashes[current.sequence];
+    if (!ancestor || !sameBytes(ancestor, current.entryHash)) {
+      throw new DeviceListPinConflict('chain');
+    }
+  } else if (current || next.replaceIdentityFrom !== undefined) {
+    if (
+      next.replaceIdentityFrom === undefined ||
+      !samePin(current, next.replaceIdentityFrom)
+    ) {
+      throw new DeviceListPinConflict('identity');
+    }
+  }
 }
 
 export function memoryDeviceStore(): DeviceKeyStore {
@@ -52,9 +137,14 @@ export function memoryDeviceStore(): DeviceKeyStore {
     deleteDevice: async (userId) => {
       devices.delete(userId);
     },
-    loadPin: async (userId) => pins.get(userId) ?? null,
-    savePin: async (userId, pin) => {
-      pins.set(userId, pin);
+    loadPin: async (userId) => {
+      const pin = pins.get(userId);
+      return pin ? copyPin(pin) : null;
+    },
+    savePin: async (userId, list, options = {}) => {
+      const next = pinUpdate(userId, list, options);
+      checkPinUpdate(pins.get(userId) ?? null, next);
+      pins.set(userId, next.pin);
     }
   };
 }
@@ -124,8 +214,7 @@ export function indexedDbDeviceStore(): DeviceKeyStore {
   return {
     loadDevice: async (userId) =>
       ((await inStore(DEVICES, 'readonly', (s) => s.get(userId))) as
-        | StoredDevice
-        | undefined) ?? null,
+        StoredDevice | undefined) ?? null,
     saveDevice: async (device) => {
       await inStore(DEVICES, 'readwrite', (s) => s.put(device));
     },
@@ -134,10 +223,41 @@ export function indexedDbDeviceStore(): DeviceKeyStore {
     },
     loadPin: async (userId) =>
       ((await inStore(PINS, 'readonly', (s) => s.get(userId))) as
-        | DeviceListPin
-        | undefined) ?? null,
-    savePin: async (userId, pin) => {
-      await inStore(PINS, 'readwrite', (s) => s.put(pin, userId));
+        DeviceListPin | undefined) ?? null,
+    savePin: async (userId, list, options = {}) => {
+      const next = pinUpdate(userId, list, options);
+      const db = await openDatabase();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(PINS, 'readwrite');
+        const objects = tx.objectStore(PINS);
+        let conflict: Error | undefined;
+        tx.oncomplete = () => resolve();
+        tx.onabort = tx.onerror = () =>
+          reject(
+            conflict ??
+              tx.error ??
+              new Error('IndexedDB pin transaction failed')
+          );
+        const read = objects.get(userId);
+        read.onsuccess = () => {
+          try {
+            // IndexedDB serializes readwrite transactions across connections
+            // and tabs. Check the actual pin and write in this one transaction;
+            // crypto verification has already finished outside it.
+            checkPinUpdate(
+              (read.result as DeviceListPin | undefined) ?? null,
+              next
+            );
+            objects.put(next.pin, userId);
+          } catch (error) {
+            conflict =
+              error instanceof Error
+                ? error
+                : new Error('Invalid device-list pin update');
+            tx.abort();
+          }
+        };
+      });
     }
   };
 }

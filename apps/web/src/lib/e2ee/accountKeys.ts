@@ -53,7 +53,12 @@ import type {
 } from '@openzcad/shared';
 import type { E2eeApi } from './e2eeApi';
 import { browserPasskeys, type PasskeyPrf } from './passkeys';
-import type { DeviceKeyStore, StoredDevice } from './deviceStore';
+import {
+  DeviceListPinConflict,
+  type DeviceKeyStore,
+  type PinUpdateOptions,
+  type StoredDevice
+} from './deviceStore';
 import {
   keyOperationGuard,
   lockAccount,
@@ -151,6 +156,8 @@ export interface AccountView {
   readonly generation: number;
   readonly createdAt: string;
   readonly list: VerifiedDeviceList;
+  /** Persistence snapshot this view accepted, or retained on identity change. */
+  readonly persistedPin: DeviceListPin | null;
   /** The identity fingerprint people compare, 40 digits. */
   readonly fingerprint: string;
   readonly wraps: readonly E2eeWrapRecord[];
@@ -593,6 +600,20 @@ function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+async function persistDeviceList(
+  ctx: E2eeContext,
+  list: VerifiedDeviceList,
+  options: PinUpdateOptions = {}
+): Promise<void> {
+  try {
+    ctx.assertActive?.();
+    await ctx.store.savePin(ctx.userId, list, options);
+  } catch (error) {
+    lockAccount(ctx.userId);
+    throw error;
+  }
+}
+
 /**
  * Fetches the account's key material, verifies the device list against the
  * pin this browser holds, and unlocks this device when it can. A rolled-back
@@ -617,11 +638,24 @@ export async function loadEncryption(
   let identityChanged = false;
   try {
     list = await verifyDeviceList(identityKey, chain, pin ? { pin } : {});
+    if (list.userId !== ctx.userId) {
+      throw new EncryptionFlowError(
+        'invalid-request',
+        'The device list belongs to another account.'
+      );
+    }
+    await persistDeviceList(ctx, list);
   } catch (error) {
-    if (pin && isE2eeError(error, 'context-mismatch')) {
+    if (
+      (pin && isE2eeError(error, 'context-mismatch')) ||
+      (error instanceof DeviceListPinConflict && error.reason === 'identity')
+    ) {
       list = await verifyDeviceList(identityKey, chain);
       identityChanged = true;
-    } else if (pin && isE2eeError(error, 'chain-broken')) {
+    } else if (
+      (pin && isE2eeError(error, 'chain-broken')) ||
+      (error instanceof DeviceListPinConflict && error.reason === 'chain')
+    ) {
       lockAccount(ctx.userId);
       return {
         kind: 'fork',
@@ -639,7 +673,6 @@ export async function loadEncryption(
     );
   }
   ctx.assertActive?.();
-  if (!identityChanged) await ctx.store.savePin(ctx.userId, list.pin);
   const device = await ctx.store.loadDevice(ctx.userId);
   const deviceStatus = statusOf(list, device, current.wraps);
   let unlocked = false;
@@ -671,6 +704,7 @@ export async function loadEncryption(
     generation: current.generation,
     createdAt: current.createdAt,
     list,
+    persistedPin: identityChanged ? pin : list.pin,
     fingerprint: formatComparisonCode(list.identityKeyHash),
     wraps: current.wraps,
     device,
@@ -872,6 +906,8 @@ async function acceptWrite(
     readonly identityKey: Uint8Array;
     /** The verified head the write extended; absent for a new identity. */
     readonly pin?: DeviceListPin;
+    /** Snapshot bound to an explicitly authorized identity change. */
+    readonly replaceIdentityFrom?: DeviceListPin | null;
     /** The canonical entry bytes this browser signed and sent. */
     readonly written: Uint8Array;
   }
@@ -898,8 +934,9 @@ async function acceptWrite(
       'The server answered without the device-list entry just written.'
     );
   }
-  ctx.assertActive?.();
-  await ctx.store.savePin(ctx.userId, list.pin);
+  await persistDeviceList(ctx, list, {
+    replaceIdentityFrom: expected.replaceIdentityFrom
+  });
   return list;
 }
 
@@ -914,6 +951,7 @@ export async function setUpEncryption(
   ctx: E2eeContext,
   options: { recoverySecret: Uint8Array; label: string }
 ): Promise<EncryptionState> {
+  const persistedPin = await ctx.store.loadPin(ctx.userId);
   const device = await newStoredDevice(ctx, options.label);
   const created = await newIdentity(
     ctx,
@@ -932,6 +970,7 @@ export async function setUpEncryption(
   });
   await acceptWrite(ctx, response, {
     identityKey: created.identityKey,
+    replaceIdentityFrom: persistedPin,
     written: created.signed.entry
   });
   return loadEncryption(ctx);
@@ -1059,13 +1098,29 @@ async function enrollWithUnlockMethod(
   authorization: UnlockAuthorization,
   label: string
 ): Promise<EncryptionState> {
-  if (account.deviceStatus === 'certified') return loadEncryption(ctx);
+  if (
+    account.deviceStatus === 'certified' &&
+    account.persistedPin &&
+    sameBytes(
+      account.persistedPin.identityKeyHash,
+      account.list.identityKeyHash
+    )
+  )
+    return loadEncryption(ctx);
   const { identityPrivateKey, accountKey } = await openIdentity(
     ctx,
     account,
     authorization
   );
   try {
+    if (account.deviceStatus === 'certified') {
+      // A replacement committed remotely may have lost its local pin CAS.
+      // Authorize the saved identity explicitly without certifying twice.
+      await persistDeviceList(ctx, account.list, {
+        replaceIdentityFrom: account.persistedPin
+      });
+      return loadEncryption(ctx);
+    }
     const device =
       account.device && account.deviceStatus !== 'removed'
         ? { ...account.device, approval: null }
@@ -1102,6 +1157,7 @@ async function enrollWithUnlockMethod(
     await acceptWrite(ctx, response, {
       identityKey: account.list.identityKey,
       pin: account.list.pin,
+      replaceIdentityFrom: account.persistedPin,
       written: signed.entry
     });
     return loadEncryption(ctx);
@@ -1277,6 +1333,7 @@ export async function replaceRecoveryKey(
   });
   await acceptWrite(ctx, response, {
     identityKey: created.identityKey,
+    replaceIdentityFrom: account.persistedPin,
     written: created.signed.entry
   });
   return loadEncryption(ctx);
@@ -1345,6 +1402,7 @@ export async function requestApproval(
   account: Pick<AccountView, 'deviceStatus'> | null,
   label: string
 ): Promise<NewDeviceApprovalStep> {
+  const pinAtRequest = await ctx.store.loadPin(ctx.userId);
   const stored = await ctx.store.loadDevice(ctx.userId);
   if (stored?.approval) {
     await ctx.api.cancelApproval(stored.approval.id).catch(() => undefined);
@@ -1367,7 +1425,12 @@ export async function requestApproval(
   });
   await ctx.store.saveDevice({
     ...device,
-    approval: { id: approval.id, nonce, confirmedApproverKey: null }
+    approval: {
+      id: approval.id,
+      nonce,
+      confirmedApproverKey: null,
+      pinAtRequest
+    }
   });
   return { step: 'waiting', approval, scanCode: await deviceScanCode(device) };
 }
@@ -1567,7 +1630,9 @@ async function finishApproval(
       'The approval claims a certification the device list does not hold.'
     );
   }
-  await ctx.store.savePin(ctx.userId, list.pin);
+  await persistDeviceList(ctx, list, {
+    replaceIdentityFrom: device.approval?.pinAtRequest
+  });
   await ctx.store.saveDevice({ ...device, approval: null });
   await ctx.api.cancelApproval(approval.id).catch(() => undefined);
   return loadEncryption(ctx);
