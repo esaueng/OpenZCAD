@@ -1,4 +1,5 @@
 import { AnalyticsConsent, CloudStatisticsConsent } from './AnalyticsConsent';
+import type { DeviceKeySignOutChoice } from '../lib/e2ee/signOut';
 import {
   MIDDLE_DRAG_LABELS,
   POINTER_NAVIGATION_LABELS
@@ -167,7 +168,7 @@ interface SettingsPageProps {
   onStartDesktopLogin(): Promise<void>;
   onDesktopAuthorizationCodeChange(code: string): void;
   onApproveDesktopLogin(): Promise<void>;
-  onLogout(): Promise<void>;
+  onLogout(choice?: DeviceKeySignOutChoice): Promise<void>;
   onDeleteCloudData(
     scope: AccountDeletionScope,
     confirmation: string
@@ -594,6 +595,8 @@ export function SettingsPage({
   >(null);
   /** Set while sign-out asks whether to keep this device unlocked. */
   const [signOutChoice, setSignOutChoice] = useState(false);
+  const [signOutBusy, setSignOutBusy] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
   const contentRef = useRef<HTMLElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
   const brandRef = useRef<HTMLButtonElement>(null);
@@ -661,29 +664,44 @@ export function SettingsPage({
   // Sign-out asks whether to keep this device unlocked, but only when this
   // browser holds device keys for the account; otherwise it signs out at once.
   const signOut = async () => {
-    const userId = session?.userId;
-    if (userId) {
-      const { hasStoredDevice } = await import('../lib/e2ee/deviceStore');
-      if (await hasStoredDevice(userId).catch(() => false)) {
-        setSignOutChoice(true);
-        return;
-      }
-    }
-    await onLogout();
-  };
-  // The app shell locks the in-memory keys on every session end; this only
-  // carries out the choice about the device key, even if sign-out's own
-  // local cleanup fails after the server session is gone.
-  const finishSignOut = async (keepDevice: boolean) => {
-    const userId = session?.userId;
-    setSignOutChoice(false);
+    if (signOutBusy) return;
+    setSignOutBusy(true);
+    setSignOutError(null);
+    let failureMessage =
+      "Could not check this browser's device keys. Try signing out again.";
     try {
-      await onLogout();
-    } finally {
+      const userId = session?.userId;
       if (userId) {
-        const { endKeySession } = await import('../lib/e2ee/signOut');
-        await endKeySession(userId, keepDevice);
+        const { hasStoredDevice } = await import('../lib/e2ee/deviceStore');
+        if (await hasStoredDevice(userId)) {
+          setSignOutChoice(true);
+          return;
+        }
       }
+      failureMessage = 'Could not complete sign-out. Try again.';
+      await onLogout();
+    } catch {
+      setSignOutError(failureMessage);
+    } finally {
+      setSignOutBusy(false);
+    }
+  };
+  // The app drains autosaves, completes this choice, then revokes the session.
+  // A failed deletion leaves the choice visible so it can be retried.
+  const finishSignOut = async (keepDevice: boolean) => {
+    if (signOutBusy) return;
+    setSignOutBusy(true);
+    setSignOutError(null);
+    try {
+      const userId = session?.userId;
+      await onLogout(userId ? { userId, keepDevice } : undefined);
+      setSignOutChoice(false);
+    } catch {
+      setSignOutError(
+        'Could not complete sign-out. Retry your device-key choice.'
+      );
+    } finally {
+      setSignOutBusy(false);
     }
   };
 
@@ -1825,13 +1843,18 @@ export function SettingsPage({
                           <button
                             className="secondary"
                             type="button"
-                            disabled={busy}
-                            onClick={() => void signOut().catch(() => undefined)}
+                            disabled={busy || signOutBusy}
+                            onClick={() => void signOut()}
                           >
                             <LogOut size={14} aria-hidden="true" />
                             Sign out
                           </button>
                         </SettingRow>
+                        {signOutError ? (
+                          <Notice tone="warning" role="alert">
+                            {signOutError}
+                          </Notice>
+                        ) : null}
                         {signOutChoice ? (
                           <Notice
                             tone="info"
@@ -1841,32 +1864,27 @@ export function SettingsPage({
                                 <button
                                   className="primary"
                                   type="button"
-                                  disabled={busy}
-                                  onClick={() =>
-                                    void finishSignOut(true).catch(
-                                      () => undefined
-                                    )
-                                  }
+                                  disabled={busy || signOutBusy}
+                                  onClick={() => void finishSignOut(true)}
                                 >
                                   Keep unlocked
                                 </button>
                                 <button
                                   className="secondary"
                                   type="button"
-                                  disabled={busy}
-                                  onClick={() =>
-                                    void finishSignOut(false).catch(
-                                      () => undefined
-                                    )
-                                  }
+                                  disabled={busy || signOutBusy}
+                                  onClick={() => void finishSignOut(false)}
                                 >
                                   Remove device keys
                                 </button>
                                 <button
                                   className="secondary"
                                   type="button"
-                                  disabled={busy}
-                                  onClick={() => setSignOutChoice(false)}
+                                  disabled={busy || signOutBusy}
+                                  onClick={() => {
+                                    setSignOutChoice(false);
+                                    setSignOutError(null);
+                                  }}
                                 >
                                   Cancel
                                 </button>

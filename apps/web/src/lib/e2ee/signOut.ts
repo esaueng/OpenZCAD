@@ -1,6 +1,11 @@
 import { lockAccount } from './unlockedKeys';
 import { indexedDbDeviceStore } from './deviceStore';
 
+export interface DeviceKeySignOutChoice {
+  readonly userId: string;
+  readonly keepDevice: boolean;
+}
+
 /**
  * Ends this page's hold on the account's keys at sign-out. Keeping the
  * device unlocked leaves its device key in this browser for the next
@@ -13,4 +18,18 @@ export async function endKeySession(
 ): Promise<void> {
   lockAccount(userId);
   if (!keepDevice) await indexedDbDeviceStore().deleteDevice(userId);
+}
+
+/** Save with the live session, then finish its key choice before revoking it. */
+export async function signOutAfterSaving(input: {
+  userId: string | null;
+  keepDevice?: boolean;
+  savePending(): Promise<void>;
+  revokeSession(): Promise<unknown>;
+}): Promise<void> {
+  await input.savePending();
+  if (input.userId && input.keepDevice !== undefined) {
+    await endKeySession(input.userId, input.keepDevice);
+  }
+  await input.revokeSession();
 }
