@@ -113,3 +113,18 @@ describe('commandContextLabel', () => {
     );
   });
 });
+
+describe('the body context', () => {
+  it('keeps every tool that starts from a picked body, Rotate about axis included', () => {
+    const body = commandContextFor(EVERY_KIND.body);
+    for (const tool of [
+      'transform',
+      'scale',
+      'axis-rotate',
+      'mirror',
+      'linear-pattern'
+    ] as const)
+      expect(toolApplies(body, tool)).toBe(true);
+    expect(toolApplies(body, 'box')).toBe(false);
+  });
+});

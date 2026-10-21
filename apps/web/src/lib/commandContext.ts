@@ -80,6 +80,9 @@ const CONTEXTS: Record<
     applies: [
       'transform',
       'scale',
+      // Rotate about axis starts from the picked body (the Inspector seeds
+      // its target from the selection).
+      'axis-rotate',
       'mirror',
       'shell',
       'split',

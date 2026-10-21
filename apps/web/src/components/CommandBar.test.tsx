@@ -6,6 +6,8 @@ import {
   ASSISTANT_PROMPT_FILES_EVENT,
   ASSISTANT_PROMPT_KEY_EVENT
 } from '../lib/assistant/promptKeys';
+import { commandContextFor, toolApplies } from '../lib/commandContext';
+import { TOOL_META } from '../lib/tools';
 import { CommandBar, type PaletteCommand } from './CommandBar';
 
 function command(
@@ -149,6 +151,23 @@ describe('CommandBar', () => {
     expect(screen.getByRole('option')).toHaveTextContent(
       'Select a region first'
     );
+  });
+
+  it('lists Rotate about axis for a picked body, from the shared pick table', async () => {
+    const body = commandContextFor({
+      edgeCount: 0,
+      faceSelected: false,
+      bodyCount: 1,
+      regionCount: 0
+    });
+    const commands = (['box', 'axis-rotate', 'mirror'] as const).map((tool) =>
+      command(tool, TOOL_META[tool].label, 'Tool', {
+        offPick: !toolApplies(body, tool)
+      })
+    );
+    render(<Bar commands={commands} pick="1 body" />);
+    await userEvent.type(searchField(), '/');
+    expect(visibleLabels()).toEqual(['Rotate about axis', 'Mirror']);
   });
 
   it('says how to reach every command when nothing can run on the pick', async () => {
