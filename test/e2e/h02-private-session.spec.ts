@@ -304,6 +304,12 @@ test('private holder survives sustained edits, retirement, refusal and worker re
           if (data?.type === 'state') scope.__h02States.push(data);
         });
       }
+      override terminate() {
+        super.terminate();
+        scope.__h02Workers = scope.__h02Workers.filter(
+          (worker) => worker !== this
+        );
+      }
     };
   });
   const caches: RebuildCacheEvent[] = [];
@@ -511,7 +517,7 @@ test('private holder survives sustained edits, retirement, refusal and worker re
     )
     .toBeGreaterThan(recoveryVersion);
   await checkpoint('recovery');
-  await expect(page.locator('.save-state')).toHaveClass(/is-synced/, {
+  await expect(page.locator('.save-state')).toHaveClass(/is-local/, {
     timeout: 30_000
   });
   await expect
@@ -559,8 +565,9 @@ test('private holder survives sustained edits, retirement, refusal and worker re
   await probe.detach();
   const terminated = await page.evaluate(() => {
     const scope = window as unknown as { __h02Workers: Worker[] };
-    for (const worker of scope.__h02Workers) worker.terminate();
-    return scope.__h02Workers.length;
+    const workers = [...scope.__h02Workers];
+    for (const worker of workers) worker.terminate();
+    return workers.length;
   });
   expect(terminated).toBe(1);
   await page.reload();
