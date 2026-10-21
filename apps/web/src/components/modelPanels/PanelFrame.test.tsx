@@ -89,6 +89,13 @@ describe('PanelFrame in a dock', () => {
     expect(lone.getByRole('button', { name: 'Move History' })).toBeVisible();
   });
 
+  it('marks a compact panel, in a dock or in the phone lane', () => {
+    renderFrame({ ...frame(), compact: true, placement: 'phone' });
+    expect(screen.getByRole('region', { name: 'History' })).toHaveClass(
+      'is-compact'
+    );
+  });
+
   it('draws the phone lane’s panel without the dock’s controls', () => {
     const region = renderFrame({ ...frame(), placement: 'phone' });
     expect(region.queryByRole('button', { name: 'Move History' })).toBeNull();

@@ -214,6 +214,13 @@ export const KEYBOARD_CONTROL_GROUPS = [
         action: 'Toggle X-ray',
         detail:
           'See through faces to hidden edges, and pick or box-select through them.'
+      },
+      {
+        id: 'hide-panels',
+        ...bound('panels-hide-all'),
+        action: 'Hide or show the model panels',
+        detail:
+          'Keeps the layout. The rest is under View options on the panel rail.'
       }
     ]
   },
