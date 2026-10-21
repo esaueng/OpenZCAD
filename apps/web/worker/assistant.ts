@@ -411,7 +411,14 @@ const ROLLOUT_OPERATION_FLAGS = [
   ['add_datum_plane', 'AI_PATCH_DATUM_PLANE_ENABLED'],
   ['add_datum_sketch', 'AI_PATCH_DATUM_PLANE_ENABLED'],
   ['add_datum_mirror', 'AI_PATCH_DATUM_PLANE_ENABLED'],
-  ['add_datum_split', 'AI_PATCH_DATUM_PLANE_ENABLED']
+  ['add_datum_split', 'AI_PATCH_DATUM_PLANE_ENABLED'],
+  ['add_datum_plane_v2', 'AI_PATCH_DATUM_GEOMETRY_ENABLED'],
+  ['update_datum_plane', 'AI_PATCH_DATUM_GEOMETRY_ENABLED'],
+  ['add_datum_axis', 'AI_PATCH_DATUM_GEOMETRY_ENABLED'],
+  ['update_datum_axis', 'AI_PATCH_DATUM_GEOMETRY_ENABLED'],
+  ['add_datum_revolve', 'AI_PATCH_DATUM_GEOMETRY_ENABLED'],
+  ['add_datum_pattern', 'AI_PATCH_DATUM_GEOMETRY_ENABLED'],
+  ['add_datum_transform', 'AI_PATCH_DATUM_GEOMETRY_ENABLED']
 ] as const;
 
 /**
@@ -423,7 +430,14 @@ const NEGOTIATED_OPERATIONS: ReadonlySet<string> = new Set([
   'add_datum_plane',
   'add_datum_sketch',
   'add_datum_mirror',
-  'add_datum_split'
+  'add_datum_split',
+  'add_datum_plane_v2',
+  'update_datum_plane',
+  'add_datum_axis',
+  'update_datum_axis',
+  'add_datum_revolve',
+  'add_datum_pattern',
+  'add_datum_transform'
 ]);
 
 /**
@@ -493,12 +507,16 @@ When enabled:
 - \`add_solid_offset\` uses a positive outward distance and may still be refused by exact kernel topology limits.
 - \`add_datum_plane\` creates a named reference plane that later operations reuse: an \`offset\` plane a signed distance along a source plane's normal (positive follows the source normal), or a \`midplane\` halfway between two parallel sources. A source is a principal plane (XY/XZ/YZ with an offset) or a datum — a datum-plane featureId from the digest or the \`$localId\` of an earlier \`add_datum_plane\`. Give it a \`localId\` when anything later uses it. Fill only the fields its kind uses and send null for the rest. Drive the offset with a parameter when the user names the distance.
 - \`add_datum_sketch\` sketches on a datum plane, in the plane's own 2D coordinates, exactly like \`add_sketch\`; a later \`add_extrude\` extrudes it along the datum normal. \`add_datum_mirror\` creates a separate reflected body across a datum plane and keeps its source. \`add_datum_split\` cuts a body in two at a datum plane and replaces it: \`localId\` names the half the datum normal points toward, \`secondLocalId\` the other; the plane must cross the body through flat faces. Use these instead of repeating plane numbers when several features share one plane.
+- \`add_datum_plane_v2\` creates an offset, midplane, three-point or parallel-point plane using the complete source schema. The older \`add_datum_plane\` retains its canonical/datum offset and midplane schema. A face source must copy one exact referenced planar face's bodyId, hash, reference, unrounded snapshot, centroid and attachmentFrame from the digest. A point is either authored document-unit coordinates (parameter expressions allowed), or an explicit end 0/1 of one digest-backed open edge, copying its complete exact edge reference. End order is the reference witness's lexicographic x/y/z order. Never estimate a vertex from rounded bounds or display polylines. Ask which vertex when intent is ambiguous. A three-point plane needs three distinct noncollinear points; a parallel-point plane keeps its source plane's orientation through the selected point. Preserve requested reverseNormal.
+- \`add_datum_axis\` creates a two-point axis, an axis along a straight open edge, a cylinder/cone face axis, or the intersection of two nonparallel planes. Copy all topology references verbatim from the digest. Closed/curved edges cannot define an edge axis, coincident points cannot define a two-point axis, and parallel planes cannot define an intersection axis. Preserve requested reverseDirection. Plane and axis aliases are distinct: a plane cannot stand in for an axis or a body.
+- \`update_datum_plane\` and \`update_datum_axis\` replace the full definition of the named datum featureId (or an earlier same-kind alias), retaining its identity and name. Copy every unchanged source, expression and direction flag; include only intended edits. An unchanged historical topology source may be retained verbatim from that target's existing definition when its body was consumed later; a changed topology source requires current live digest proof. Sources must be available before the target's history position, so a newly appended datum cannot become the source of an earlier feature. Never use a suppressed or unresolved datum as a source. An unresolved datum can be an update target for explicit repair. All affected geometry is rebuilt before any update is saved.
+- \`add_datum_revolve\` revolves a sketch about a datum axis by angleDeg in (0,360]. \`add_datum_pattern\` makes a circular pattern about a datum axis with integer count and angleDeg. \`add_datum_transform\` rotates a body about the datum axis by angleDeg and then translates it; it moves the body in place. Their datum field names an existing resolved axis featureId or the alias of an earlier add_datum_axis. Give planes, axes and sketches separate unique localIds when later operations reuse them. Topology sources cannot name bodies created in this proposal; create the bodies first and ask for their measured topology in a subsequent proposal.
 
 Rollout-controlled operation fields (the operations themselves stay available either way). Enabled: ${enabledProperties.length > 0 ? enabledProperties.map((field) => `\`${field}\``).join(', ') : 'none'}. Disabled: ${disabledProperties.length > 0 ? disabledProperties.map((field) => `\`${field}\``).join(', ') : 'none'}.
 
 - \`add_revolve.angleDeg\` sweeps a partial turn, in degrees, greater than 0 and at most 360. Send null, or leave it out where the schema allows, for a full turn. A partial revolve keeps hash-only topology references and the kernel cannot fillet or chamfer its edges, so do not follow one with an edge modifier on the same body.
 
-Copy every face reference, face snapshot, attachment frame, sketch id, body id, and selected profile point verbatim from the current digest. Topology-dependent operations may target only existing live bodies, never same-proposal body aliases. Recognized imported-feature edits remain disabled until their exact diagnostics and command path mature.`;
+Copy every face reference, face snapshot, attachment frame, sketch id, body id, and selected profile point verbatim from the current digest. New topology sources must target existing live digest bodies, never same-proposal body aliases. Datum updates may retain only verbatim historical sources from the target definition when current topology is unavailable. Recognized imported-feature edits remain disabled until their exact diagnostics and command path mature.`;
 }
 
 type MutableJsonSchema = Record<string, unknown>;

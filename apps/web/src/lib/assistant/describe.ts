@@ -5,7 +5,10 @@
 import {
   isLocalBodyRef,
   normalizeLocalId,
-  type CadDatumPlaneSource,
+  type CadDatumAxisDefinition,
+  type CadDatumPlaneDefinitionV2,
+  type CadDatumPlaneSourceV2,
+  type CadDatumPointSource,
   type CadPatchOperation
 } from '@openzcad/ai-contracts';
 import type { ParamValue } from '@openzcad/shared';
@@ -58,6 +61,51 @@ function isZeroVector(input: {
 
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+function datumSource(source: CadDatumPlaneSourceV2): string {
+  switch (source.type) {
+    case 'canonical':
+      return `${source.plane}${source.offset === 0 ? '' : ` + ${value(source.offset)}`}`;
+    case 'datum':
+      return describeBodyRef(source.datum);
+    case 'face':
+      return `face ${source.faceReference.lineageName} on ${describeBodyRef(source.bodyId)}`;
+  }
+}
+
+function datumPoint(source: CadDatumPointSource): string {
+  return source.type === 'point'
+    ? `(${vector(source.point)})`
+    : `vertex ${source.end + 1} of ${source.edgeReference.lineageName} on ${describeBodyRef(source.bodyId)}`;
+}
+
+function datumPlane(definition: CadDatumPlaneDefinitionV2): string {
+  const flipped = definition.reverseNormal ? ', normal flipped' : '';
+  switch (definition.kind) {
+    case 'offset':
+      return `plane ${value(definition.offset)} from ${datumSource(definition.source)}${flipped}`;
+    case 'midplane':
+      return `midplane between ${datumSource(definition.sources[0])} and ${datumSource(definition.sources[1])}${flipped}`;
+    case 'three-point':
+      return `plane through ${definition.points.map(datumPoint).join('; ')}${flipped}`;
+    case 'parallel-point':
+      return `plane parallel to ${datumSource(definition.source)}, through ${datumPoint(definition.point)}${flipped}`;
+  }
+}
+
+function datumAxis(definition: CadDatumAxisDefinition): string {
+  const reversed = definition.reverseDirection ? ', direction flipped' : '';
+  switch (definition.kind) {
+    case 'two-point':
+      return `axis through ${definition.points.map(datumPoint).join(' and ')}${reversed}`;
+    case 'edge':
+      return `axis along ${definition.source.edgeReference.lineageName} on ${describeBodyRef(definition.source.bodyId)}${reversed}`;
+    case 'cylinder':
+      return `axis of face ${definition.source.faceReference.lineageName} on ${describeBodyRef(definition.source.bodyId)}${reversed}`;
+    case 'plane-intersection':
+      return `axis where ${datumSource(definition.sources[0])} meets ${datumSource(definition.sources[1])}${reversed}`;
+  }
 }
 
 export function describeOperation(operation: CadPatchOperation): string {
@@ -129,16 +177,21 @@ export function describeOperation(operation: CadPatchOperation): string {
       return `${operation.name} — shell ${describeBodyRef(operation.targetBodyId)} at ${value(operation.thickness)}, ${plural(operation.openingFaceHashes.length, 'open face')}`;
     case 'add_solid_offset':
       return `${operation.name} — offset ${describeBodyRef(operation.targetBodyId)} by ${value(operation.distance)}`;
-    case 'add_datum_plane': {
-      const { definition } = operation;
-      const source = (entry: CadDatumPlaneSource) =>
-        entry.type === 'canonical'
-          ? `${entry.plane}${entry.offset === 0 ? '' : ` + ${value(entry.offset)}`}`
-          : describeBodyRef(entry.datum);
-      return definition.kind === 'offset'
-        ? `${operation.name} — plane ${value(definition.offset)} from ${source(definition.source)}${definition.reverseNormal ? ', normal flipped' : ''}`
-        : `${operation.name} — midplane between ${source(definition.sources[0])} and ${source(definition.sources[1])}${definition.reverseNormal ? ', normal flipped' : ''}`;
-    }
+    case 'add_datum_plane':
+    case 'add_datum_plane_v2':
+      return `${operation.name} — ${datumPlane(operation.definition)}`;
+    case 'update_datum_plane':
+      return `Update ${describeBodyRef(operation.featureId)} — ${datumPlane(operation.definition)}`;
+    case 'add_datum_axis':
+      return `${operation.name} — ${datumAxis(operation.definition)}`;
+    case 'update_datum_axis':
+      return `Update ${describeBodyRef(operation.featureId)} — ${datumAxis(operation.definition)}`;
+    case 'add_datum_revolve':
+      return `${operation.name} — revolve ${describeBodyRef(operation.sketchId)} ${value(operation.angleDeg)}° about ${describeBodyRef(operation.datum)}`;
+    case 'add_datum_pattern':
+      return `${operation.name} — circular pattern of ${describeBodyRef(operation.targetBodyId)}, ${value(operation.count)} about ${describeBodyRef(operation.datum)} through ${value(operation.angleDeg)}°`;
+    case 'add_datum_transform':
+      return `${operation.name} — rotate ${describeBodyRef(operation.targetBodyId)} ${value(operation.angleDeg)}° about ${describeBodyRef(operation.datum)}${isZeroVector(operation.translation) ? '' : `, move by ${vector(operation.translation)}`}`;
     case 'add_datum_sketch':
       return `${operation.name} — sketch on ${describeBodyRef(operation.datum)}, ${plural(operation.objects.length, 'object')}`;
     case 'add_datum_mirror':
@@ -164,9 +217,11 @@ export function operationCreatesBody(operation: CadPatchOperation): boolean {
     operation.kind === 'add_primitive' ||
     operation.kind === 'add_extrude' ||
     operation.kind === 'add_revolve' ||
+    operation.kind === 'add_datum_revolve' ||
     operation.kind === 'add_boolean' ||
     operation.kind === 'add_edge_modifier' ||
     operation.kind === 'add_pattern' ||
+    operation.kind === 'add_datum_pattern' ||
     operation.kind === 'add_multi_profile_extrude' ||
     operation.kind === 'add_mirror' ||
     operation.kind === 'add_datum_mirror' ||
