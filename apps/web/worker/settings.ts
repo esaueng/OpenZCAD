@@ -11,6 +11,8 @@ import {
   normalizeKeymapOverrides,
   nowIso,
   PANEL_WIDTH_LIMITS,
+  VIEWPORT_FIELD_OF_VIEW_BOUNDS,
+  XRAY_OPACITY_BOUNDS,
   UNITLESS_IMPORT_UNITS,
   type AppSettings,
   type PanelWidthLimits,
@@ -313,6 +315,17 @@ export function parseUpdateAppSettingsRequest(
           'pointerNavigation',
           POINTER_NAVIGATIONS,
           'auto'
+        ),
+        // Optional and clamped, like the panel widths: an older client
+        // omits them, and a newer one's out-of-range value is pulled in
+        // exactly as the browser pulls it in.
+        fieldOfView: optionalBoundedNumber(
+          viewport.fieldOfView,
+          VIEWPORT_FIELD_OF_VIEW_BOUNDS
+        ),
+        xrayOpacity: optionalBoundedNumber(
+          viewport.xrayOpacity,
+          XRAY_OPACITY_BOUNDS
         )
       },
       sketching: {
@@ -859,6 +872,27 @@ export function settingsRequestOmitsKeymap(body: unknown): boolean {
   );
 }
 
+/** Viewport preferences newer than some clients that still save settings. */
+export type CarriedViewportField = 'fieldOfView' | 'xrayOpacity';
+
+/**
+ * The viewport preferences a settings PATCH leaves out because its client
+ * predates them; the stored values are kept rather than reset to defaults.
+ */
+export function settingsRequestOmittedViewportFields(
+  body: unknown
+): CarriedViewportField[] {
+  const fields: CarriedViewportField[] = ['fieldOfView', 'xrayOpacity'];
+  if (!body || typeof body !== 'object') return fields;
+  const settings = (body as Record<string, unknown>).settings;
+  if (!settings || typeof settings !== 'object') return fields;
+  const viewport = (settings as Record<string, unknown>).viewport;
+  if (!viewport || typeof viewport !== 'object') return fields;
+  return fields.filter(
+    (field) => !Object.prototype.hasOwnProperty.call(viewport, field)
+  );
+}
+
 function settingsRequestOmitsSketching(body: unknown, key: string): boolean {
   if (!body || typeof body !== 'object') return true;
   const settings = (body as Record<string, unknown>).settings;
@@ -892,6 +926,7 @@ export async function updateAppSettings(
     keepStoredKeymap?: boolean;
     keepStoredRelationGlyphs?: boolean;
     keepStoredHiddenRelationGlyphs?: boolean;
+    keepStoredViewportFields?: readonly CarriedViewportField[];
   } = {}
 ): Promise<AppSettingsUpdate> {
   if (!env.DB) {
@@ -925,6 +960,13 @@ export async function updateAppSettings(
         hiddenRelationGlyphs: current.settings.sketching.hiddenRelationGlyphs
       }
     };
+  }
+  if (options.keepStoredViewportFields?.length) {
+    const viewport = { ...settings.viewport };
+    for (const field of options.keepStoredViewportFields) {
+      viewport[field] = current.settings.viewport[field] ?? viewport[field];
+    }
+    settings = { ...settings, viewport };
   }
   const serialized = JSON.stringify(settings);
   const timestamp = nowIso();

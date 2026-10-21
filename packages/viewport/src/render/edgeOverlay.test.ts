@@ -16,6 +16,7 @@ import {
 } from '../pick/edges';
 import { SELECTION_SEMANTICS } from './semantics';
 import { createBodyEdgeOverlay } from './edgeOverlay';
+import { applyDisplayMode } from '../scene/objects';
 
 const BODY_ID = toBodyId('body-1');
 const EDGE_REFERENCE: EdgeTopologyReferenceV5 = {
@@ -97,6 +98,16 @@ function selection(topologyId: string): TopologySelection {
 }
 
 describe('BodyEdgeOverlay', () => {
+  it('keeps X-ray batches visible through the generic shaded display pass', () => {
+    const overlay = makeOverlay();
+    const root = new THREE.Group();
+    root.add(overlay);
+    overlay.setDisplayMode('shaded');
+    overlay.setXrayView(true);
+    applyDisplayMode(root, 'shaded');
+    expect(overlay.idleEdges.visible).toBe(true);
+  });
+
   it('consolidates all renderable polylines into one idle draw batch', () => {
     const overlay = makeOverlay();
 
@@ -402,6 +413,27 @@ describe('BodyEdgeOverlay', () => {
     expect(material.color.getHex()).toBe(EDGE_IDLE_COLOR);
     expect(material.opacity).toBe(EDGE_IDLE_OPACITY);
     expect(overlay.idleEdges.visible).toBe(true);
+  });
+
+  it('draws every edge in the wireframe ink in X-ray, even when shaded', () => {
+    const overlay = makeOverlay();
+    const material = overlay.idleEdges.material;
+    overlay.setDisplayMode('shaded');
+    expect(overlay.idleEdges.visible).toBe(false);
+
+    expect(overlay.setXrayView(true)).toBe(true);
+    expect(overlay.setXrayView(true)).toBe(false);
+    expect(overlay.idleEdges.material).toBe(material);
+    expect(overlay.idleEdges.visible).toBe(true);
+    expect(material.color.getHex()).toBe(EDGE_WIREFRAME_COLOR);
+    expect(material.opacity).toBe(1);
+
+    // Leaving X-ray puts back exactly the mode that was chosen.
+    overlay.setXrayView(false);
+    expect(overlay.idleEdges.visible).toBe(false);
+    overlay.setDisplayMode('shaded-edges');
+    expect(material.color.getHex()).toBe(EDGE_IDLE_COLOR);
+    expect(material.opacity).toBe(EDGE_IDLE_OPACITY);
   });
 
   it('outlines a selected body by restyling its idle batch in place', () => {
