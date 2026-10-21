@@ -259,7 +259,11 @@ credential before enrolling anything. Missing PRF, cancellation and malformed
 outputs fail closed; the recovery-key and device-approval flows remain available.
 These are local unlock ceremonies, not a new sign-in method; no WebAuthn
 assertion or PRF output goes to the Worker. Each newly saved credential has a distinct
-provider-visible label. If enrollment fails after credential creation, the UI
+provider-visible label. Its user name and display name contain only that label;
+no email or stable account identifier is sent to the authenticator or passkey
+provider. Existing credentials remain usable because unlock uses their signed
+credential-id hashes, although metadata already saved by a provider must be
+removed or changed there. If enrollment fails after credential creation, the UI
 identifies that credential and asks the user to remove it from the provider
 before creating another. When certification might have committed, the UI
 also identifies the corresponding unlock method to remove after reloading.

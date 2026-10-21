@@ -47,7 +47,7 @@ export function passkeyEnrollmentCleanup(error: unknown): string | null {
 }
 
 export interface PasskeyPrf {
-  create(userId: string): Promise<PasskeySecret>;
+  create(): Promise<PasskeySecret>;
   get(): Promise<PasskeySecret>;
 }
 
@@ -155,7 +155,7 @@ async function ceremony<T>(work: () => Promise<T>): Promise<T> {
  * https://www.w3.org/TR/webauthn-3/#prf-extension
  */
 export const browserPasskeys: PasskeyPrf = {
-  create: async (userId) => {
+  create: async () => {
     const handle = challenge();
     const label = `OpenZCAD encryption ${toHex(handle.slice(0, 6))}`;
     let credentialCreated = false;
@@ -167,7 +167,7 @@ export const browserPasskeys: PasskeyPrf = {
             rp: { name: 'OpenZCAD', id: location.hostname },
             user: {
               id: handle,
-              name: `${userId} - ${label}`,
+              name: label,
               displayName: label
             },
             pubKeyCredParams: [

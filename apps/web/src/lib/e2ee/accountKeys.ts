@@ -1038,7 +1038,7 @@ export async function addPasskey(
   let enrollment: { label: string; targetId: string } | undefined;
   try {
     ctx.assertActive?.();
-    const selected = await (ctx.passkeys ?? browserPasskeys).create(ctx.userId);
+    const selected = await (ctx.passkeys ?? browserPasskeys).create();
     secret = selected.secret;
     if (selected.enrollmentLabel) {
       enrollment = {

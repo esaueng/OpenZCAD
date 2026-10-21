@@ -44,7 +44,7 @@ describe('browser passkey PRF ceremonies', () => {
   it('creates a discoverable, user-verified credential scoped to this host', async () => {
     const bytes = secret();
     create.mockResolvedValue(result(bytes));
-    const selected = await browserPasskeys.create('user_test');
+    const selected = await browserPasskeys.create();
     const options = create.mock.calls[0]![0]
       .publicKey as PublicKeyCredentialCreationOptions;
     expect(options.rp).toEqual({ id: 'zcad.test', name: 'OpenZCAD' });
@@ -74,7 +74,7 @@ describe('browser passkey PRF ceremonies', () => {
       new CredentialResult(undefined, { prf: { enabled: true } })
     );
     get.mockResolvedValue(result());
-    await browserPasskeys.create('user_test');
+    await browserPasskeys.create();
     const options = get.mock.calls[0]![0]
       .publicKey as PublicKeyCredentialRequestOptions;
     expect(options.allowCredentials).toEqual([
@@ -90,14 +90,24 @@ describe('browser passkey PRF ceremonies', () => {
 
   it('uses a distinct user handle for each added credential', async () => {
     create.mockImplementation(async () => result());
-    await browserPasskeys.create('user_test');
-    await browserPasskeys.create('user_test');
+    await browserPasskeys.create();
+    await browserPasskeys.create();
     expect(create.mock.calls[0]![0].publicKey!.user.id).not.toEqual(
       create.mock.calls[1]![0].publicKey!.user.id
     );
     expect(create.mock.calls[0]![0].publicKey!.user.displayName).not.toBe(
       create.mock.calls[1]![0].publicKey!.user.displayName
     );
+  });
+
+  it('uses only a random label in provider-visible user metadata', async () => {
+    create.mockImplementation(async () => result());
+    const selected = await browserPasskeys.create();
+    const user = create.mock.calls[0]![0].publicKey!.user;
+    expect(user.name).toBe(user.displayName);
+    expect(user.name).toMatch(/^OpenZCAD encryption [0-9a-f]{12}$/);
+    expect(JSON.stringify(user)).not.toContain('user_email_derived_identifier');
+    selected.secret.fill(0);
   });
 
   it('refuses a different credential in the creation fallback', async () => {
@@ -110,9 +120,7 @@ describe('browser passkey PRF ceremonies', () => {
         prf: { results: { first: bytes } }
       })
     );
-    await expect(browserPasskeys.create('user_test')).rejects.toThrow(
-      'different passkey'
-    );
+    await expect(browserPasskeys.create()).rejects.toThrow('different passkey');
     expect(bytes.every((b) => b === 0)).toBe(true);
   });
 
@@ -154,7 +162,7 @@ describe('browser passkey PRF ceremonies', () => {
     async (extensions) => {
       create.mockResolvedValue(new CredentialResult(undefined, extensions));
       const failure: unknown = await browserPasskeys
-        .create('user_test')
+        .create()
         .catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(PasskeyError);
       expect(passkeyEnrollmentCleanup(failure)).toContain(
@@ -172,7 +180,7 @@ describe('browser passkey PRF ceremonies', () => {
     );
     get.mockRejectedValue(new DOMException('canceled', 'NotAllowedError'));
     const failure: unknown = await browserPasskeys
-      .create('user_test')
+      .create()
       .catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(PasskeyError);
     expect((failure as Error).message).toContain('canceled or timed out');
@@ -184,7 +192,7 @@ describe('browser passkey PRF ceremonies', () => {
   it('does not suggest deleting a credential when creation itself is canceled', async () => {
     create.mockRejectedValue(new DOMException('canceled', 'NotAllowedError'));
     const failure: unknown = await browserPasskeys
-      .create('user_test')
+      .create()
       .catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(PasskeyError);
     expect(passkeyEnrollmentCleanup(failure)).toBeNull();
@@ -195,7 +203,7 @@ describe('browser passkey PRF ceremonies', () => {
     const bytes = new Uint8Array(31).fill(9);
     create.mockResolvedValue(result(bytes));
     const failure: unknown = await browserPasskeys
-      .create('user_test')
+      .create()
       .catch((error: unknown) => error);
     expect((failure as Error).message).toContain('invalid PRF');
     expect(passkeyEnrollmentCleanup(failure)).toContain('remove only');

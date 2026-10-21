@@ -194,7 +194,7 @@ for (const failure of ['unsupported PRF', 'append conflict'] as const) {
     expect(credentials).toHaveLength(1);
     const saved = credentials[0]!;
     expect(saved.userDisplayName).toMatch(/^OpenZCAD encryption [0-9a-f]{12}$/);
-    expect(saved.userName).toContain(saved.userDisplayName!);
+    expect(saved.userName).toBe(saved.userDisplayName);
     await expect(settings.getByRole('alert')).toContainText(
       saved.userDisplayName!
     );

@@ -2227,6 +2227,7 @@ describe('passkey PRF unlock', () => {
   it('certifies a public target with exactly three wraps, never sends PRF material, and enrolls a fresh browser', async () => {
     const srv = server();
     const { account, passkeys } = await withPasskey(srv);
+    expect(passkeys.create).toHaveBeenCalledExactlyOnceWith();
     expect(account.list.unlockTargets.map((t) => t.kind)).toEqual([
       'passkey',
       'recovery-key'
