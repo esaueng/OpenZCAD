@@ -194,17 +194,8 @@ runtime. Integration through `b4573979` preserves the M5 evidence and changes on
 documentation relative to this verified runtime/test tree. The later public-test
 revision is recorded separately below. H02 remains Partial.
 
-Target-device acceptance still needs a new quiet M5 Pro campaign at
-`b45739792bfb8d0a5242fb23eadde55d41b39146`.
-Run the unchanged sustained private session first, then at least three alternating
-matched pairs with fresh pair IDs. Use the existing
-[matched-arm commands](../2026-10-15/h02-matched-cache-benchmark.md#reproduction)
-and sustained command from the
-[baseline report](h02-m5-pro-qualification.md#reproduction-and-verification) in a clean committed
-candidate checkout. Keep source inputs and all samples, diagnostics, backups,
-builds and browser artifacts outside Git; use a new output directory. Do not mix
-candidate samples with the frozen campaign or run validation suites alongside
-timing arms.
+The quiet M5 handoff proposed for `b4573979` is superseded by the main-integrated
+candidate below. That frozen revision and all earlier evidence remain preserved.
 
 The proposed detached Text branch, branch-preserving kernel support and
 whole-worker retained-memory acceptance remain separate open requirements. This
@@ -214,7 +205,8 @@ candidate does not accept or implement that branch.
 
 This revision changes two public test suites and adds a public support helper.
 Runtime, dependency pins and private qualification helpers remain unchanged from
-`b4573979`; that revision remains the quiet M5 campaign target.
+`b4573979`. This public-test revision retains that runtime; the later main
+integration has its own qualification boundary.
 
 Each strengthened case owns the first returned publication and serialized bytes,
 then compares them with a separate cache-disabled production adapter before
@@ -235,6 +227,57 @@ build. The subsequent record update changes only this documentation.
 Private Linux evidence remains attributed to `08393cb4`; recorded-load M5 evidence
 remains attributed to `64f07065`. No private campaign was rerun or relabelled for
 this public-test revision. H02 remains Partial.
+
+### Main integration: `3e9814ae`
+
+PR #799 merged through the protected queue as `bfd2128b`, with all required
+candidate contexts passing under their configured Apps and Cloudflare upload
+skipped. Its source branch is preserved at `2da6fcc0`. Retargeting PR #805 to main
+exposed actual conflicts in the H02 roadmap/design/performance records and private
+session test. A normal merge of `9c54d2e4` and `bfd2128b` resolves them, preserving
+the newer H02 evidence, Partial status and unchanged private-session bytes.
+
+This incorporates main's already-delivered drawing, worker and viewport changes.
+The adapter gains main's additive D01 drawing API; the H02 cache implementation,
+Remus manifest/lock pins, private qualification helpers, normalization, budgets
+and acceptance assertions remain unchanged. The combined runtime is a new
+qualification candidate. Earlier M5 samples are not measurements of this tree.
+
+At clean committed `3e9814ae6dd0b61f2c2edfad4c00269f1759d006`:
+
+- All five local gates pass: lint (zero errors, 17 existing warnings), typecheck,
+  5,890 root tests (eight existing skips), 3,496 web tests, 220 parity tests (one
+  existing skip), and the full paired-WASM/provenance/bundle build.
+- Focused coverage passes 130 H02 cases (including the 29 direct first-result
+  cases), 71 drawing root cases and 30 drawing web cases. The unchanged strict
+  public reproduction passes. Independent integration review has no actionable
+  finding; these selected counts are not added to the full-suite totals.
+- The private one-edit oracle matches all 3,204,155 raw bytes and normalized
+  publication across 17 bodies / 720 faces, with no differing field paths.
+- One serial Linux enabled arm passes the original latency/Text assertions:
+  zero Text executions, restored 4 / 31 and replayed 27 / 0 in the first settled
+  edit. This is a diagnostic arm, not matched target-device timing.
+- The unchanged 80-edit session passes all seven raw/publication and four real
+  eviction comparisons, three replay-budget recycles, 252 retired checkpoints at
+  lifetime coverage and five rejected stale restores. Prepared feature reuses
+  total 220. Refusal/recovery, durable save and actual worker termination/restart
+  pass; acceptance failures and CLI exit are both zero.
+
+The private runs preserve source bytes, HEAD and clean checkout. All private raw
+evidence and earlier attempts remain outside Git. The owned browser/preview
+processes have stopped; private directories and reports are sealed. The following
+record update changes only documentation relative to this tested source tree.
+
+Fresh quiet M5 Pro qualification remains required for the immutable current
+candidate SHA named in PR #805's description. Run the unchanged sustained session
+first, then at least three new alternating matched pairs. Use the existing
+[matched-arm commands](../2026-10-15/h02-matched-cache-benchmark.md#reproduction)
+and sustained command from the
+[baseline report](h02-m5-pro-qualification.md#reproduction-and-verification) in a
+fresh clean checkout. Keep private inputs and all evidence outside Git, retain
+every sample and stop validation during timing. No Linux or earlier M5 sample
+enters that aggregation. Whole-worker retained-memory and detached Text criteria
+remain open; H02 remains Partial.
 
 ## M5 Pro follow-up: `64f07065`
 
