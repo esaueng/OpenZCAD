@@ -836,7 +836,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             shownSheet,
             resolveSheetAnnotations(shownSheet, bodies, document.units),
             drawnViews,
-            document.units
+            document.units,
+            bodies
           )
         : new Map<DrawingAnnotationId, AnnotationResolution>(),
     [shownSheet, bodies, document.units, drawnViews]

@@ -1276,22 +1276,20 @@ describe('D02 page and export', () => {
       leader: [0, 0, 20, 0]
     };
     const identity = (u: number, v: number): [number, number] => [u, v];
-    const tipOf = (drawn?: [number, number][][]) => {
-      const layout = layoutAnnotation(note, identity, 1, [16, 10], drawn);
+    const tipOf = (pieces?: number[][]) => {
+      const layout = layoutAnnotation(
+        pieces ? { ...note, leaderPieces: pieces } : note,
+        identity,
+        1,
+        [16, 10]
+      );
       const arrow = layout.strokes.find((stroke) => stroke.filled);
       return arrow ? arrow.points[0]! : null;
     };
     // The whole edge: the tip lands under the note.
     expect(tipOf()).toBeGreaterThan(10);
     // Only its left quarter is drawn: the tip stays on it.
-    expect(
-      tipOf([
-        [
-          [0, 0],
-          [5, 0]
-        ]
-      ])
-    ).toBeLessThanOrEqual(5 + 1e-9);
+    expect(tipOf([[0, 0, 5, 0]])).toBeLessThanOrEqual(5 + 1e-9);
     // Placed right next to the edge, or on it: still an arrow onto it.
     for (const anchor of [
       [8, 2],
@@ -1303,14 +1301,7 @@ describe('D02 page and export', () => {
       expect(head!.points[1]).toBeCloseTo(0, 9);
     }
     // None of it is drawn: no arrow into blank paper.
-    expect(
-      tipOf([
-        [
-          [0, 3],
-          [20, 3]
-        ]
-      ])
-    ).toBeNull();
+    expect(tipOf([])).toBeNull();
   });
 
   it('breaks a note whose leader edge its view no longer draws at all', async () => {
@@ -1341,7 +1332,8 @@ describe('D02 page and export', () => {
         sheet,
         resolved,
         [{ view: front, projection }],
-        'mm'
+        'mm',
+        bodies
       ).get(id('n'))
     ).toMatchObject({ ok: true });
     // The view draws nothing of that edge (say it is occluded after an
@@ -1355,12 +1347,48 @@ describe('D02 page and export', () => {
         sheet,
         resolved,
         [{ view: front, projection: elsewhere }],
-        'mm'
+        'mm',
+        bodies
       ).get(id('n'))
+    ).toMatchObject({ ok: false, reason: 'leader-hidden' });
+    // The back top edge lies on the same drawn line as the front one, but
+    // behind it: that line is the front edge's, so a leader to the back
+    // edge, with hidden lines off, points at nothing the view draws of it.
+    const { min, max } = bodies[bodyId]!.bbox;
+    const backTop = edgeWhere(
+      bodies[bodyId]!,
+      (a, b) =>
+        near(a[1]!, max.y) &&
+        near(b[1]!, max.y) &&
+        near(a[2]!, max.z) &&
+        near(b[2]!, max.z)
+    );
+    expect(min.y).toBeLessThan(max.y);
+    const behind = sheetOf(
+      [bodyId],
+      [
+        {
+          annotationId: id('b'),
+          kind: 'note',
+          text: 'BACK EDGE',
+          viewId: frontId,
+          leader: refOf(bodyId, backTop),
+          placementMm: { x: -30, y: 20 }
+        }
+      ]
+    );
+    expect(
+      markHiddenLeaders(
+        behind,
+        resolveSheetAnnotations(behind, bodies, 'mm'),
+        [{ view: front, projection }],
+        'mm',
+        bodies
+      ).get(id('b'))
     ).toMatchObject({ ok: false, reason: 'leader-hidden' });
     // A view not drawn yet is left alone.
     expect(
-      markHiddenLeaders(sheet, resolved, [], 'mm').get(id('n'))
+      markHiddenLeaders(sheet, resolved, [], 'mm', bodies).get(id('n'))
     ).toMatchObject({ ok: true });
   });
 

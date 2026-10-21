@@ -90,6 +90,16 @@ export type ResolvedAnnotation =
       label: string;
       /** The leader edge's projected polyline, flat `[u, v, …]`. */
       leader?: number[];
+      /** Each `leader` point's depth into the view, in model units. */
+      leaderDepths?: number[];
+      /** The leader edge itself, so a coincident edge is told apart. */
+      leaderEdge?: { bodyId: string; topologyId: string };
+      /**
+       * The parts of `leader` its drawn view shows of this edge, `[u0, v0,
+       * u1, v1]` each; set by {@link markHiddenLeaders}. Absent draws the
+       * whole edge.
+       */
+      leaderPieces?: number[][];
     };
 
 export type AnnotationResolution =
@@ -351,12 +361,20 @@ export function resolveDrawingAnnotation(
       return { ok: true, resolved: { kind: 'note', label } };
     const found = lookupEdge(annotation.leader, view, bodies);
     if (!found.ok) return failure(found.reason);
+    const depths: number[] = [];
+    for (let i = 0; i + 2 < found.edge.points.length; i += 3)
+      depths.push(projectPoint(view, found.edge.points, i).depth);
     return {
       ok: true,
       resolved: {
         kind: 'note',
         label,
-        leader: projectedPolyline(view, found.edge)
+        leader: projectedPolyline(view, found.edge),
+        leaderDepths: depths,
+        leaderEdge: {
+          bodyId: annotation.leader.bodyId,
+          topologyId: found.edge.topologyId
+        }
       }
     };
   }
@@ -821,27 +839,6 @@ function nearestOnPolyline(points: XY[], to: XY): XY | null {
 /** How far a drawn line may stray from the edge it was drawn from, in mm. */
 const DRAWN_COINCIDENCE_MM = 0.05;
 
-/**
- * The parts of an edge's paper polyline the view draws: each drawn segment
- * lying on the edge. Drawn runs are the edge's own projection split where
- * it is occluded, so their segments sit on it to rounding.
- */
-function drawnPieces(polyline: XY[], drawn: readonly XY[][]): XY[][] {
-  const onEdge = (p: XY) => {
-    const nearest = nearestOnPolyline(polyline, p);
-    return (
-      nearest !== null &&
-      Math.hypot(nearest[0] - p[0], nearest[1] - p[1]) <= DRAWN_COINCIDENCE_MM
-    );
-  };
-  const pieces: XY[][] = [];
-  for (const run of drawn)
-    for (let i = 0; i + 1 < run.length; i += 1)
-      if (onEdge(run[i]!) && onEdge(run[i + 1]!))
-        pieces.push([run[i]!, run[i + 1]!]);
-  return pieces;
-}
-
 function nearestOnPieces(pieces: readonly XY[][], to: XY): XY | null {
   let best: XY | null = null;
   let bestDistance = Infinity;
@@ -860,8 +857,7 @@ function nearestOnPieces(pieces: readonly XY[][], to: XY): XY | null {
 function noteLayout(
   resolved: Extract<ResolvedAnnotation, { kind: 'note' }>,
   toPage: ((u: number, v: number) => XY) | null,
-  anchor: XY,
-  drawn: readonly XY[][] | undefined
+  anchor: XY
 ): AnnotationLayout {
   const placed = placedText(
     resolved.label,
@@ -871,12 +867,18 @@ function noteLayout(
   );
   const strokes: SheetStroke[] = [];
   if (resolved.leader && toPage) {
-    const polyline: XY[] = [];
-    for (let i = 0; i + 1 < resolved.leader.length; i += 2)
-      polyline.push(toPage(resolved.leader[i]!, resolved.leader[i + 1]!));
-    // The tip lands only on what the view draws of the edge: a partly
-    // hidden edge, with hidden lines off, is pointed at where it shows.
-    const pieces = drawn ? drawnPieces(polyline, drawn) : [polyline];
+    // The tip lands only on what the view draws of this edge (see
+    // markHiddenLeaders): a partly hidden edge, with hidden lines off, is
+    // pointed at where it shows.
+    const toPagePolyline = (flat: readonly number[]) => {
+      const out: XY[] = [];
+      for (let i = 0; i + 1 < flat.length; i += 2)
+        out.push(toPage(flat[i]!, flat[i + 1]!));
+      return out;
+    };
+    const pieces = (resolved.leaderPieces ?? [resolved.leader]).map(
+      toPagePolyline
+    );
     const box = placed.box;
     const middle: XY = [box.x + box.width / 2, box.y + box.height / 2];
     const rough = nearestOnPieces(pieces, middle);
@@ -924,12 +926,9 @@ export function layoutAnnotation(
   resolved: ResolvedAnnotation,
   toPage: ((u: number, v: number) => XY) | null,
   k: number,
-  anchor: XY,
-  /** The view's drawn lines on the paper, for a leader's tip. */
-  drawn?: readonly XY[][]
+  anchor: XY
 ): AnnotationLayout {
-  if (resolved.kind === 'note')
-    return noteLayout(resolved, toPage, anchor, drawn);
+  if (resolved.kind === 'note') return noteLayout(resolved, toPage, anchor);
   if (!toPage) throw new Error('A dimension needs its view.');
   switch (resolved.kind) {
     case 'linear':
@@ -1014,15 +1013,18 @@ export function markHiddenLeaders(
   sheet: DrawingSheet,
   resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>,
   views: readonly ComposedView[],
-  units: UnitSystem
+  units: UnitSystem,
+  bodies: AnnotationBodies
 ): Map<DrawingAnnotationId, AnnotationResolution> {
   const out = new Map(resolutions);
   const leaders = (sheet.annotations ?? []).filter(
     (annotation) => annotation.kind === 'note' && annotation.leader
   );
   if (leaders.length === 0) return out;
-  const lines = drawnLines(sheet, views, units);
   const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
+  // Model units per paper millimetre: the coincidence tolerance in (u, v).
+  const tolerance =
+    DRAWN_COINCIDENCE_MM / drawingPaperPerModelUnit(sheet.scale, units);
   for (const annotation of leaders) {
     const resolution = out.get(annotation.annotationId);
     const entry = annotation.viewId ? drawn.get(annotation.viewId) : undefined;
@@ -1033,20 +1035,145 @@ export function markHiddenLeaders(
       !entry?.projection.bounds
     )
       continue;
-    const toPage = viewPageTransform(
-      entry.view,
-      entry.projection.bounds,
-      sheet,
-      units
+    const pieces = ownedLeaderPieces(
+      resolution.resolved,
+      entry,
+      bodies,
+      tolerance
     );
-    const polyline: XY[] = [];
-    const leader = resolution.resolved.leader;
-    for (let i = 0; i + 1 < leader.length; i += 2)
-      polyline.push(toPage(leader[i]!, leader[i + 1]!));
-    if (drawnPieces(polyline, lines.get(entry.view.viewId) ?? []).length === 0)
-      out.set(annotation.annotationId, failure('leader-hidden'));
+    out.set(
+      annotation.annotationId,
+      pieces.length === 0
+        ? failure('leader-hidden')
+        : {
+            ok: true,
+            resolved: { ...resolution.resolved, leaderPieces: pieces }
+          }
+    );
   }
   return out;
+}
+
+/** Points of a flat `[u, v, …]` polyline. */
+function uvPoints(flat: ArrayLike<number>): XY[] {
+  const out: XY[] = [];
+  for (let i = 0; i + 1 < flat.length; i += 2)
+    out.push([flat[i]!, flat[i + 1]!]);
+  return out;
+}
+
+/**
+ * Where on a polyline the point nearest `to` lies: its distance from `to`
+ * and the depth there, interpolated between the polyline's points.
+ */
+function nearestWithDepth(
+  points: readonly XY[],
+  depths: readonly number[],
+  to: XY
+): { distance: number; depth: number } {
+  let distance = Infinity;
+  let depth = Infinity;
+  for (let i = 0; i + 1 < points.length; i += 1) {
+    const a = points[i]!;
+    const b = points[i + 1]!;
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const lengthSquared = dx * dx + dy * dy;
+    const t =
+      lengthSquared > 0
+        ? Math.min(
+            1,
+            Math.max(
+              0,
+              ((to[0] - a[0]) * dx + (to[1] - a[1]) * dy) / lengthSquared
+            )
+          )
+        : 0;
+    const d = Math.hypot(a[0] + dx * t - to[0], a[1] + dy * t - to[1]);
+    if (d < distance) {
+      distance = d;
+      depth = depths[i]! + (depths[i + 1]! - depths[i]!) * t;
+    }
+  }
+  return { distance, depth };
+}
+
+/**
+ * The segments its view draws that belong to the leader's own edge. A drawn
+ * segment lying on the edge counts only where no other edge lies on it
+ * nearer the viewer: when the leader edge is occluded and another edge
+ * projects onto the same line (a box's back top edge behind its front one),
+ * the drawn line is the other edge's, not this one's.
+ */
+function ownedLeaderPieces(
+  resolved: Extract<ResolvedAnnotation, { kind: 'note' }>,
+  entry: ComposedView,
+  bodies: AnnotationBodies,
+  tolerance: number
+): number[][] {
+  const { view, projection } = entry;
+  const leader = uvPoints(resolved.leader ?? []);
+  const leaderDepths = resolved.leaderDepths ?? leader.map(() => 0);
+  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  // Every other physical edge of the view's bodies, in (u, v) with depths.
+  const others: { points: XY[]; depths: number[] }[] = [];
+  for (const bodyId of view.bodyIds) {
+    const body = bodies[bodyId];
+    if (!body?.topology || body.consumed) continue;
+    for (const edge of body.topology.edges) {
+      if (edge.displayRole === 'seam' || edge.points.length < 6) continue;
+      if (
+        bodyId === resolved.leaderEdge?.bodyId &&
+        edge.topologyId === resolved.leaderEdge.topologyId
+      )
+        continue;
+      const points: XY[] = [];
+      const depths: number[] = [];
+      for (let i = 0; i + 2 < edge.points.length; i += 3) {
+        const projected = projectToView(frame, {
+          x: edge.points[i]!,
+          y: edge.points[i + 1]!,
+          z: edge.points[i + 2]!
+        });
+        points.push([projected.u, projected.v]);
+        depths.push(projected.depth);
+      }
+      others.push({ points, depths });
+    }
+  }
+  const runs = view.hiddenLines
+    ? [...projection.visible, ...projection.hidden]
+    : projection.visible;
+  const pieces: number[][] = [];
+  for (const run of runs) {
+    const points = uvPoints(run);
+    for (let i = 0; i + 1 < points.length; i += 1) {
+      const a = points[i]!;
+      const b = points[i + 1]!;
+      const middle: XY = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const own = nearestWithDepth(leader, leaderDepths, middle);
+      if (
+        own.distance > tolerance ||
+        nearestWithDepth(leader, leaderDepths, a).distance > tolerance ||
+        nearestWithDepth(leader, leaderDepths, b).distance > tolerance
+      )
+        continue;
+      const depthTolerance = 1e-6 * Math.max(1, Math.abs(own.depth));
+      const nearer = others.some((other) => {
+        const at = nearestWithDepth(other.points, other.depths, middle);
+        return (
+          at.distance <= tolerance &&
+          nearestWithDepth(other.points, other.depths, a).distance <=
+            tolerance &&
+          nearestWithDepth(other.points, other.depths, b).distance <=
+            tolerance &&
+          at.depth < own.depth - depthTolerance
+        );
+      });
+      if (!nearer) pieces.push([a[0], a[1], b[0], b[1]]);
+    }
+  }
+  return pieces;
 }
 
 /**
@@ -1070,11 +1197,6 @@ export function composeSheetAnnotations(
   const boxes = new Map<DrawingAnnotationId, AnnotationBox>();
   const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
   const k = drawingPaperPerModelUnit(sheet.scale, units);
-  const linesByView = (sheet.annotations ?? []).some(
-    (annotation) => annotation.kind === 'note' && annotation.leader
-  )
-    ? drawnLines(sheet, views, units)
-    : null;
   for (const annotation of sheet.annotations ?? []) {
     const resolution = resolutions.get(annotation.annotationId);
     if (!resolution?.ok) continue;
@@ -1090,8 +1212,7 @@ export function composeSheetAnnotations(
       resolution.resolved,
       toPage,
       k,
-      annotationAnchor(annotation, view),
-      view ? linesByView?.get(view.viewId) : undefined
+      annotationAnchor(annotation, view)
     );
     strokes.push(...layout.strokes);
     texts.push(...layout.texts);
