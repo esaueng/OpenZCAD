@@ -171,9 +171,13 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'This device',
       'Certify with your recovery key',
       'Enter your recovery key',
+      'Use your passkey',
       'Device key',
       'Recovery key',
       'Passkeys',
+      'Add a passkey',
+      'Remove passkey',
+      'Your new recovery key',
       'Replace recovery key',
       'Scan this code',
       'Compare these digits',
@@ -196,6 +200,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'devices',
       'approve device',
       'remove device',
+      'passkey',
+      'prf',
       'fingerprint',
       'recovery'
     ]

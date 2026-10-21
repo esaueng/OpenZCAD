@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   accountKeyCommitment,
+  exportPrivateKey,
+  publicKeyHash,
+  toHex,
+  wrapKey,
   decodeDeviceListEntry,
   exportPublicKey,
   fromBase64Url,
@@ -22,6 +26,9 @@ import {
 } from '../apps/web/worker/e2ee';
 import {
   advanceApprovalAsNewDevice,
+  addPasskey,
+  enrollWithPasskey,
+  removePasskey,
   approveDevice,
   confirmApprovalCode,
   approverComparisonCode,
@@ -43,6 +50,15 @@ import {
   type EncryptionState
 } from '../apps/web/src/lib/e2ee/accountKeys';
 import { createE2eeApi, E2eeApiError } from '../apps/web/src/lib/e2ee/e2eeApi';
+import {
+  lockAccountsExcept,
+  unlockedAccount
+} from '../apps/web/src/lib/e2ee/unlockedKeys';
+import {
+  PasskeyError,
+  type PasskeyPrf,
+  type PasskeySecret
+} from '../apps/web/src/lib/e2ee/passkeys';
 import { memoryDeviceStore } from '../apps/web/src/lib/e2ee/deviceStore';
 import type { E2eeSetupRequest } from '@openzcad/shared';
 import { d1Database, migratedDatabase } from './d1-sqlite';
@@ -1065,4 +1081,435 @@ describe('identity replacement races', () => {
       )
     ).toBeGreaterThan(0);
   });
+});
+
+function fakePasskey(id = 'pk_test', byte = 0x71) {
+  const issued: Uint8Array[] = [];
+  const select = async () => {
+    const secret = new Uint8Array(32).fill(byte);
+    issued.push(secret);
+    return { targetId: id, secret };
+  };
+  return { create: vi.fn(select), get: vi.fn(select), issued };
+}
+
+async function withPasskey(srv: Server) {
+  const setup = await setUp(srv);
+  const passkeys = fakePasskey();
+  const laptop = { ...setup.laptop, passkeys };
+  const account = ready(
+    await addPasskey(laptop, setup.account, setup.recovery.secret)
+  );
+  return { ...setup, laptop, account, passkeys };
+}
+
+async function passkeyDevice(srv: Server, passkeys: PasskeyPrf) {
+  const ctx = { ...device(srv), passkeys };
+  const account = ready(await loadEncryption(ctx));
+  return { ctx, account };
+}
+
+describe('passkey PRF unlock', () => {
+  it('certifies a public target with exactly three wraps, never sends PRF material, and enrolls a fresh browser', async () => {
+    const srv = server();
+    const { account, passkeys } = await withPasskey(srv);
+    expect(account.list.unlockTargets.map((t) => t.kind)).toEqual([
+      'passkey',
+      'recovery-key'
+    ]);
+    expect(
+      account.wraps
+        .filter((w) => w.targetId === 'pk_test')
+        .map((w) => w.purpose)
+        .sort()
+    ).toEqual(['account-key', 'identity-key', 'unlock-target-key']);
+    const fresh = await passkeyDevice(srv, passkeys);
+    expect(fresh.account.unlocked).toBe(false);
+    const unlocked = ready(
+      await enrollWithPasskey(fresh.ctx, fresh.account, 'Passkey browser')
+    );
+    expect(unlocked.deviceStatus).toBe('certified');
+    expect(unlocked.unlocked).toBe(true);
+    expect(unlocked.fingerprint).toBe(account.fingerprint);
+    expect(unlockedEncryptionKey(USER)?.extractable).toBe(false);
+    expect(Object.keys(unlockedAccount(USER)!)).toEqual([
+      'generation',
+      'commitment',
+      'accountKey',
+      'encryptionPrivateKey'
+    ]);
+    expect(passkeys.issued.every((bytes) => bytes.every((b) => b === 0))).toBe(
+      true
+    );
+    lockAccount(USER);
+    expect(ready(await loadEncryption(fresh.ctx)).unlocked).toBe(true);
+    expect(passkeys.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires the recovery secret before creating a passkey', async () => {
+    const srv = server();
+    const { laptop, account } = await setUp(srv);
+    const passkeys = fakePasskey();
+    await flowRefusal(
+      addPasskey({ ...laptop, passkeys }, account, generateSymmetricKey()),
+      'wrong-recovery-key'
+    );
+    expect(passkeys.create).not.toHaveBeenCalled();
+    expect(
+      count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
+    ).toBe(1);
+  });
+
+  it.each(['unsupported', 'canceled'])(
+    'leaves enrollment unchanged when PRF is %s',
+    async (reason) => {
+      const srv = server();
+      const { laptop, account, recovery } = await setUp(srv);
+      const passkeys = fakePasskey();
+      passkeys.create.mockRejectedValue(new PasskeyError(reason));
+      await expect(
+        addPasskey({ ...laptop, passkeys }, account, recovery.secret)
+      ).rejects.toThrow(reason);
+      expect(
+        count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
+      ).toBe(1);
+      expect(count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_key_wraps')).toBe(5);
+    }
+  );
+
+  it('refuses unknown and wrong-secret passkeys without certifying or saving a device', async () => {
+    const srv = server();
+    await withPasskey(srv);
+    for (const passkeys of [
+      fakePasskey('other'),
+      fakePasskey('pk_test', 0x72)
+    ]) {
+      const fresh = await passkeyDevice(srv, passkeys);
+      await flowRefusal(
+        enrollWithPasskey(fresh.ctx, fresh.account, 'Impostor'),
+        'wrong-passkey'
+      );
+      expect(await fresh.ctx.store.loadDevice(USER)).toBeNull();
+      expect(unlockedEncryptionKey(USER)).toBeNull();
+      expect(
+        passkeys.issued.every((bytes) => bytes.every((b) => b === 0))
+      ).toBe(true);
+    }
+    expect(
+      count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
+    ).toBe(2);
+  });
+
+  it('keeps every surviving passkey and recovery target usable after passkey-authorized device removal', async () => {
+    const srv = server();
+    const { laptop, account, recovery, passkeys } = await withPasskey(srv);
+    const second = fakePasskey('pk_second', 0x72);
+    await addPasskey({ ...laptop, passkeys: second }, account, recovery.secret);
+    const other = await enrolled(srv, recovery.secret, 'To remove');
+    const before = ready(await loadEncryption(laptop));
+    const rotated = ready(
+      await removeDevice(
+        laptop,
+        before,
+        other.account.device!.deviceId,
+        'passkey'
+      )
+    );
+    expect(rotated.fingerprint).toBe(account.fingerprint);
+    expect(rotated.list.head.accountKeyCommitment).not.toEqual(
+      before.list.head.accountKeyCommitment
+    );
+    expect(rotated.list.head.encryptionKey).not.toEqual(
+      before.list.head.encryptionKey
+    );
+    expect(ready(await loadEncryption(other.ctx)).unlocked).toBe(false);
+    for (const provider of [passkeys, second]) {
+      const fresh = await passkeyDevice(srv, provider);
+      expect(
+        ready(await enrollWithPasskey(fresh.ctx, fresh.account, 'Survivor'))
+          .unlocked
+      ).toBe(true);
+    }
+    expect(
+      (await enrolled(srv, recovery.secret, 'Recovery browser')).account
+        .unlocked
+    ).toBe(true);
+  });
+
+  it('revokes a passkey, erases all its wraps and rotates both keys while retaining recovery', async () => {
+    const srv = server();
+    const { laptop, account, recovery, passkeys } = await withPasskey(srv);
+    const removed = ready(
+      await removePasskey(laptop, account, 'pk_test', 'passkey')
+    );
+    expect(removed.fingerprint).toBe(account.fingerprint);
+    expect(removed.list.head.accountKeyCommitment).not.toEqual(
+      account.list.head.accountKeyCommitment
+    );
+    expect(removed.list.head.encryptionKey).not.toEqual(
+      account.list.head.encryptionKey
+    );
+    expect(removed.list.unlockTargets.map((t) => t.kind)).toEqual([
+      'recovery-key'
+    ]);
+    expect(removed.wraps.some((w) => w.targetId === 'pk_test')).toBe(false);
+    const fresh = await passkeyDevice(srv, passkeys);
+    await flowRefusal(
+      enrollWithPasskey(fresh.ctx, fresh.account, 'Removed'),
+      'wrong-passkey'
+    );
+    expect(
+      (await enrolled(srv, recovery.secret, 'Recovery browser')).account
+        .unlocked
+    ).toBe(true);
+  });
+
+  it('drops passkeys on recovery/identity replacement and refuses their old secrets', async () => {
+    const srv = server();
+    const { laptop, account, recovery, passkeys } = await withPasskey(srv);
+    const replacement = await generateRecoveryKey();
+    const changed = ready(
+      await replaceRecoveryKey(
+        laptop,
+        account,
+        replacement.secret,
+        recovery.secret
+      )
+    );
+    expect(changed.list.unlockTargets.map((t) => t.kind)).toEqual([
+      'recovery-key'
+    ]);
+    expect(changed.fingerprint).not.toBe(account.fingerprint);
+    const fresh = await passkeyDevice(srv, passkeys);
+    await flowRefusal(
+      enrollWithPasskey(fresh.ctx, fresh.account, 'Old identity'),
+      'wrong-passkey'
+    );
+    expect(changed.wraps.some((w) => w.targetId === 'pk_test')).toBe(false);
+  });
+
+  it.each(['account-key', 'identity-key', 'unlock-target-key'] as const)(
+    'requires the %s wrap atomically when adding a passkey',
+    async (purpose) => {
+      const srv = server();
+      const { laptop, account, recovery } = await setUp(srv);
+      const ctx = {
+        ...laptop,
+        passkeys: fakePasskey(),
+        api: {
+          ...laptop.api,
+          appendDeviceList: (
+            request: Parameters<typeof laptop.api.appendDeviceList>[0]
+          ) =>
+            laptop.api.appendDeviceList({
+              ...request,
+              wraps: request.wraps.filter((w) => w.purpose !== purpose)
+            })
+        }
+      };
+      expect(
+        (await refusal(addPasskey(ctx, account, recovery.secret))).status
+      ).toBe(400);
+      expect(
+        count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
+      ).toBe(1);
+      expect(count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_key_wraps')).toBe(5);
+    }
+  );
+
+  it('rejects enrollment that overwrites an existing target wrap', async () => {
+    const srv = server();
+    const { laptop, account, recovery } = await withPasskey(srv);
+    const ctx = {
+      ...laptop,
+      passkeys: fakePasskey('pk_second'),
+      api: {
+        ...laptop.api,
+        appendDeviceList: (
+          request: Parameters<typeof laptop.api.appendDeviceList>[0]
+        ) =>
+          laptop.api.appendDeviceList({
+            ...request,
+            wraps: [
+              ...request.wraps,
+              {
+                purpose: 'unlock-target-key',
+                targetId: 'pk_test',
+                wrapped: toBase64Url(Uint8Array.of(1))
+              }
+            ]
+          })
+      }
+    };
+    expect(
+      (await refusal(addPasskey(ctx, account, recovery.secret))).status
+    ).toBe(400);
+    expect(
+      count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
+    ).toBe(2);
+  });
+
+  it('refuses a server-substituted account key sealed to the genuine passkey target', async () => {
+    const srv = server();
+    const { account, passkeys } = await withPasskey(srv);
+    const target = account.list.unlockTargets.find(
+      (t) => t.kind === 'passkey'
+    )!;
+    const malicious = toBase64Url(
+      await sealKey(target.publicKey, generateSymmetricKey(), {
+        purpose: 'account-key',
+        userId: USER,
+        method: 'passkey-prf',
+        unlockId: target.targetId
+      })
+    );
+    srv.db
+      .prepare(
+        "UPDATE e2ee_key_wraps SET wrapped = ? WHERE purpose = 'account-key' AND target_id = ?"
+      )
+      .run(malicious, target.targetId);
+    const fresh = await passkeyDevice(srv, passkeys);
+    await flowRefusal(
+      enrollWithPasskey(fresh.ctx, fresh.account, 'Substituted'),
+      'key-mismatch'
+    );
+    expect(await fresh.ctx.store.loadDevice(USER)).toBeNull();
+  });
+
+  it('checks the target private key against the signed public half', async () => {
+    const srv = server();
+    const { account, passkeys } = await withPasskey(srv);
+    const otherTarget = await generateEncryptionKeyPair(true);
+    const wrong = await wrapKey(
+      new Uint8Array(32).fill(0x71),
+      await exportPrivateKey(otherTarget.privateKey),
+      {
+        purpose: 'unlock-target-key',
+        userId: USER,
+        method: 'passkey-prf',
+        unlockId: 'pk_test',
+        identityKeyHash: toHex(await publicKeyHash(account.list.identityKey))
+      }
+    );
+    srv.db
+      .prepare(
+        "UPDATE e2ee_key_wraps SET wrapped = ? WHERE purpose = 'unlock-target-key' AND target_id = 'pk_test'"
+      )
+      .run(toBase64Url(wrong));
+    const fresh = await passkeyDevice(srv, passkeys);
+    await flowRefusal(
+      enrollWithPasskey(fresh.ctx, fresh.account, 'Wrong target'),
+      'key-mismatch'
+    );
+  });
+
+  it('binds target-key wraps to the expected identity hash', async () => {
+    const srv = server();
+    const { passkeys } = await withPasskey(srv);
+    const target = await generateEncryptionKeyPair(true);
+    const wrong = await wrapKey(
+      new Uint8Array(32).fill(0x71),
+      await exportPrivateKey(target.privateKey),
+      {
+        purpose: 'unlock-target-key',
+        userId: USER,
+        method: 'passkey-prf',
+        unlockId: 'pk_test',
+        identityKeyHash: '00'.repeat(32)
+      }
+    );
+    srv.db
+      .prepare(
+        "UPDATE e2ee_key_wraps SET wrapped = ? WHERE purpose = 'unlock-target-key' AND target_id = 'pk_test'"
+      )
+      .run(toBase64Url(wrong));
+    const fresh = await passkeyDevice(srv, passkeys);
+    await expect(
+      enrollWithPasskey(fresh.ctx, fresh.account, 'Wrong identity')
+    ).rejects.toThrow();
+    expect(await fresh.ctx.store.loadDevice(USER)).toBeNull();
+  });
+
+  it('keeps the existing pin when a passkey write is answered with an old prefix', async () => {
+    const srv = server();
+    const { laptop, account, recovery } = await setUp(srv);
+    const old = await laptop.api.account();
+    const pin = await laptop.store.loadPin(USER);
+    srv.tamper = (path, body) =>
+      path === '/api/e2ee/device-list' ? old : body;
+    await flowRefusal(
+      addPasskey(
+        { ...laptop, passkeys: fakePasskey() },
+        account,
+        recovery.secret
+      ),
+      'key-mismatch'
+    );
+    expect(await laptop.store.loadPin(USER)).toEqual(pin);
+  });
+
+  it('conflicts on a stale device-list append without partial passkey wraps', async () => {
+    const srv = server();
+    const { laptop, account, recovery } = await setUp(srv);
+    await addPasskey(
+      { ...laptop, passkeys: fakePasskey() },
+      account,
+      recovery.secret
+    );
+    expect(
+      (
+        await refusal(
+          addPasskey(
+            { ...laptop, passkeys: fakePasskey('pk_stale') },
+            account,
+            recovery.secret
+          )
+        )
+      ).status
+    ).toBe(409);
+    expect(
+      count(
+        srv.db,
+        "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE target_id = 'pk_stale'"
+      )
+    ).toBe(0);
+  });
+
+  it.each(['create', 'get'] as const)(
+    'does not resume %s after session teardown',
+    async (operation) => {
+      const srv = server();
+      const { laptop, account, recovery } = await withPasskey(srv);
+      let finish!: (value: PasskeySecret) => void;
+      let started!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const provider = fakePasskey();
+      provider[operation].mockImplementation(() => {
+        started();
+        return new Promise<PasskeySecret>((resolve) => {
+          finish = resolve;
+        });
+      });
+      const fresh =
+        operation === 'get'
+          ? await passkeyDevice(srv, provider)
+          : { ctx: { ...laptop, passkeys: provider }, account };
+      const work =
+        operation === 'create'
+          ? addPasskey(fresh.ctx, fresh.account, recovery.secret)
+          : enrollWithPasskey(fresh.ctx, fresh.account, 'Too late');
+      await waiting;
+      lockAccountsExcept(null);
+      const bytes = new Uint8Array(32).fill(0x71);
+      finish({ targetId: 'pk_test', secret: bytes });
+      await expect(work).rejects.toHaveProperty('name', 'AbortError');
+      expect(bytes.every((b) => b === 0)).toBe(true);
+      expect(unlockedEncryptionKey(USER)).toBeNull();
+      expect(
+        count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_list_entries')
+      ).toBe(2);
+    }
+  );
 });

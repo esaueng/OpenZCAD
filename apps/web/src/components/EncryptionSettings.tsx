@@ -16,6 +16,7 @@ import {
 import type { E2eeApprovalRecord } from '@openzcad/shared';
 import {
   advanceApprovalAsNewDevice,
+  addPasskey,
   approveDevice,
   approverComparisonCode,
   beginCompareApproval,
@@ -24,10 +25,12 @@ import {
   defaultDeviceLabel,
   denyApproval,
   enrollWithRecoveryKey,
+  enrollWithPasskey,
   EncryptionFlowError,
   forgetThisDevice,
   loadEncryption,
   removeDevice,
+  removePasskey,
   replaceRecoveryKey,
   requestApproval,
   setUpEncryption,
@@ -38,6 +41,7 @@ import {
 } from '../lib/e2ee/accountKeys';
 import { createE2eeApi, E2eeApiError } from '../lib/e2ee/e2eeApi';
 import { indexedDbDeviceStore } from '../lib/e2ee/deviceStore';
+import { PasskeyError, passkeysAvailable } from '../lib/e2ee/passkeys';
 import { encodeQr, qrSvgPath } from '../lib/e2ee/qrCode';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 import '../styles/components/encryption.css';
@@ -168,6 +172,8 @@ type Flow =
   | { kind: 'replace' }
   | { kind: 'remove'; deviceId: string; label: string }
   | { kind: 'recover' }
+  | { kind: 'add-passkey' }
+  | { kind: 'remove-passkey'; targetId: string }
   | { kind: 'request'; step: NewDeviceApprovalStep }
   | { kind: 'approve'; approval: E2eeApprovalRecord; mode: 'scan' | 'compare' };
 
@@ -180,7 +186,11 @@ interface Shared {
 }
 
 function messageFor(error: unknown): string {
-  if (error instanceof EncryptionFlowError || error instanceof E2eeApiError) {
+  if (
+    error instanceof EncryptionFlowError ||
+    error instanceof E2eeApiError ||
+    error instanceof PasskeyError
+  ) {
     return error.message;
   }
   if (error instanceof Error && error.name === 'E2eeError') {
@@ -230,6 +240,11 @@ function AccountPanel({
   const { ctx, busy, run, flow, setFlow } = shared;
   const thisDevice = account.device;
   const certified = account.deviceStatus === 'certified' && account.unlocked;
+  const passkeys = account.list.unlockTargets.filter(
+    (t) => t.kind === 'passkey'
+  );
+  const canUsePasskey =
+    passkeysAvailable() && !identityChanged && passkeys.length > 0;
   return (
     <>
       {identityChanged ? (
@@ -303,6 +318,31 @@ function AccountPanel({
         />
       ) : null}
 
+      {account.deviceStatus !== 'certified' && canUsePasskey ? (
+        <Group title="Unlock with a passkey">
+          <SettingRow
+            title="Use your passkey"
+            hint="Choose a passkey for this account to unlock and certify this browser."
+          >
+            <button
+              className="secondary"
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                void run(() =>
+                  enrollWithPasskey(
+                    ctx,
+                    account,
+                    thisDevice?.label ?? defaultDeviceLabel(navigator.userAgent)
+                  )
+                )
+              }
+            >
+              Use passkey
+            </button>
+          </SettingRow>
+        </Group>
+      ) : null}
       <Group title="Devices" note={`${account.list.devices.length} certified`}>
         {account.list.devices.map((device) => (
           <SettingRow
@@ -342,7 +382,14 @@ function AccountPanel({
           intro="Removing a device replaces your account key and encryption key, so it cannot open anything new. Your other devices keep working without approval."
           actionLabel="Remove device"
           danger
-          onSubmit={(secret) => removeDevice(ctx, account, flow.deviceId, secret)}
+          onSubmit={(secret) =>
+            removeDevice(ctx, account, flow.deviceId, secret)
+          }
+          onPasskey={
+            canUsePasskey
+              ? () => removeDevice(ctx, account, flow.deviceId, 'passkey')
+              : undefined
+          }
         />
       ) : null}
 
@@ -363,11 +410,67 @@ function AccountPanel({
         </SettingRow>
         <SettingRow
           title="Passkeys"
-          hint="Unlocking with a passkey is coming later."
+          hint={
+            passkeysAvailable()
+              ? 'Requires a passkey that supports PRF. Your recovery key authorizes adding one.'
+              : 'Passkeys are unavailable here. Use your recovery key or another device.'
+          }
         >
-          <Status>Not available</Status>
+          <button
+            className="secondary"
+            type="button"
+            disabled={busy || !certified || !passkeysAvailable()}
+            onClick={() => setFlow({ kind: 'add-passkey' })}
+          >
+            Add passkey
+          </button>
         </SettingRow>
+        {passkeys.map((target, index) => (
+          <SettingRow
+            key={target.targetId}
+            title={`Passkey ${index + 1}`}
+            hint={`Added ${formatDate(target.addedAt)} · ${target.targetId.slice(3, 15)}`}
+          >
+            <button
+              className="secondary"
+              type="button"
+              disabled={busy || !certified}
+              aria-label={`Remove passkey ${index + 1}`}
+              onClick={() =>
+                setFlow({ kind: 'remove-passkey', targetId: target.targetId })
+              }
+            >
+              Remove
+            </button>
+          </SettingRow>
+        ))}
       </Group>
+      {flow?.kind === 'add-passkey' ? (
+        <RecoveryKeyEntry
+          {...shared}
+          title="Add a passkey"
+          actionLabel="Create passkey"
+          intro="Save a passkey for encryption unlock. Your recovery key still works if the passkey is lost."
+          onSubmit={(secret) => addPasskey(ctx, account, secret)}
+        />
+      ) : null}
+      {flow?.kind === 'remove-passkey' ? (
+        <RecoveryKeyEntry
+          {...shared}
+          title="Remove passkey"
+          actionLabel="Remove passkey"
+          danger
+          intro="This replaces your account and encryption keys. The removed passkey cannot open future keys. Delete it from your passkey provider separately."
+          onSubmit={(secret) =>
+            removePasskey(ctx, account, flow.targetId, secret)
+          }
+          onPasskey={
+            canUsePasskey
+              ? () => removePasskey(ctx, account, flow.targetId, 'passkey')
+              : undefined
+          }
+        />
+      ) : null}
 
       {certified ? <ApprovalsPanel {...shared} account={account} /> : null}
 
@@ -1119,6 +1222,7 @@ function RecoveryKeyEntry({
   actionLabel,
   danger = false,
   onSubmit,
+  onPasskey,
   ...shared
 }: Shared & {
   title: string;
@@ -1126,6 +1230,7 @@ function RecoveryKeyEntry({
   actionLabel: string;
   danger?: boolean;
   onSubmit(secret: Bytes): Promise<EncryptionState>;
+  onPasskey?(): Promise<EncryptionState>;
 }) {
   const { busy, run, setFlow } = shared;
   const [text, setText] = useState('');
@@ -1153,14 +1258,37 @@ function RecoveryKeyEntry({
           disabled={busy || text.trim() === ''}
           onClick={() =>
             void run(async () => {
-              const next = await onSubmit(await readRecoveryKey(text));
-              setFlow(null);
-              return next;
+              const secret = await readRecoveryKey(text);
+              try {
+                const next = await onSubmit(secret);
+                setText('');
+                setFlow(null);
+                return next;
+              } finally {
+                secret.fill(0);
+              }
             })
           }
         >
           {actionLabel}
         </button>
+        {onPasskey ? (
+          <button
+            className="secondary"
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                const next = await onPasskey();
+                setText('');
+                setFlow(null);
+                return next;
+              })
+            }
+          >
+            Confirm with passkey
+          </button>
+        ) : null}
         <button
           className="secondary"
           type="button"

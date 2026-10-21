@@ -3,8 +3,9 @@
 ## Status
 
 Accepted 2026-10-19 as the design for roadmap row
-[L11](../../ROADMAP.md#l11). This record is Phase 0; no implementation phase
-has started. Extends [ADR-012](ADR-012-email-code-identity.md),
+[L11](../../ROADMAP.md#l11). This record captures the Phase 0 design;
+implementation evidence and remaining work are tracked in that roadmap row.
+Extends [ADR-012](ADR-012-email-code-identity.md),
 [ADR-016](ADR-016-project-cloud-sync.md),
 [ADR-018](ADR-018-client-generated-artifacts.md) and
 [ADR-019](ADR-019-durable-collaboration-authorization.md). Supersedes the
@@ -247,6 +248,42 @@ and is then discarded from memory.
   the other methods.
 - **The recovery key:** a random 256-bit code the user must save and confirm
   during setup.
+
+The Phase 3 passkey follow-up uses discoverable credentials, required user
+verification, the exact browser hostname as the relying-party id, and
+`passkeyPrfInput()` as the fixed PRF input. A new credential gets a random
+user handle, so adding another on the same authenticator does not replace
+an earlier credential for that handle. If creation enables PRF without
+returning its output, the browser requests an assertion restricted to that
+credential before enrolling anything. Missing PRF, cancellation and malformed
+outputs fail closed; the recovery-key and device-approval flows remain available.
+These are local unlock ceremonies, not a new sign-in method; no WebAuthn
+assertion or PRF output goes to the Worker.
+
+A passkey target id is `pk_` followed by the SHA-256 hex digest of its raw
+credential id. The identity signs that id with the target public key in the
+device list. Discoverable selection on a fresh browser must match a live
+certified target; it never trusts a separate server-provided credential
+mapping. The target-private-key wrap binds the user id, method, target id and
+identity hash, and the opened target, identity, account commitment and
+encryption public key are checked before use. The recovery key authorizes
+passkey enrollment. A passkey can certify a fresh browser or authorize device
+or passkey removal; removal rotates both account and encryption keys and
+re-seals only to surviving certified targets. Identity replacement carries
+over no passkeys. Identity keys are opened only for an operation, never
+cached with ordinary unlocked account keys. Session teardown invalidates
+pending passkey continuations.
+
+This account-key work remains behind the existing off-by-default
+`E2EE_KEYS_ENABLED` gate and `E2EE_CANARY_EMAILS` allowlist. Migration
+`0029_e2ee_account_keys.sql` must be applied with separate authorization
+before either is enabled; configuration reports disabled while the tables
+are missing. The passkey follow-up requires no additional schema migration.
+Enabling account keys is not completion of project encryption, migration,
+MLS integration or the Phase 8 outside review. Real authenticator and
+browser compatibility qualification remains a rollout prerequisite;
+Chromium virtual-authenticator tests do not establish Safari, platform
+passkey-provider or desktop support. Desktop keeps the other unlock methods.
 
 Every unlock method, not only devices, is a public-key target. Each passkey
 and the recovery key has its own random ECDH P-256 key pair. The private half
