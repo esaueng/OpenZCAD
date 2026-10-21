@@ -87,9 +87,14 @@ and exact cgroup limits. The staged v2 workflow supports Jane's approved three
 slots, each with six CPU equivalents and a nominal 5 GB decimal memory cap.
 It compares the exact kernel page-aligned limit (4,999,999,488 bytes with 4 KiB
 pages). The active legacy callee still requires the retired two-slot 6 GiB
-profile. Keep Jane's shared scheduling label withheld until compatible staged
-workflows are activated from main; runner registration alone does not make the
-resource contracts compatible. John retains one CPU equivalent and 3 GiB.
+profile. The combined v2 selects `ci-server-jane-5gb` while retaining the
+canonical `CI_FLEET_TARGET=ci-server-jane` controller preference. Keep the old
+shared `ci-server-jane` label withheld so legacy callers cannot reach the
+migrated slots. Add the profile selector only after the controller recognizes
+it, the compatible callee has landed on main, its exact main revision is
+approved in the restricted runner group, and the slot guards are verified.
+Runner registration alone does not make the resource contracts compatible.
+John retains one CPU equivalent and 3 GiB.
 Guard failure fails the job.
 Browser suites hold a shared host lock while using fixed localhost test ports.
 Browser/native OS dependencies must be installed by the host administrator;

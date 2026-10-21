@@ -20,6 +20,7 @@ spec = importlib.util.spec_from_file_location("queue_policy", SOURCE)
 POLICY = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(POLICY)
 REMUS = POLICY.REPOSITORY == "esaueng/remus"
+JANE_LABEL = "ci-server-jane" if REMUS else "ci-server-jane-5gb"
 STAGED = ROOT / (".github/workflows/fleet-ci-v5.yml" if REMUS
                  else ".github/workflows/fleet-ci-v2.yml")
 TEXT = STAGED.read_text()
@@ -228,7 +229,7 @@ class QueueWorkflowTests(unittest.TestCase):
         self.assertNotIn("uses:", block)
         self.assertNotIn("checkout", block.split("    steps:\n", 1)[1].split("        env:", 1)[0].replace("before checkout", ""))
         self.assertIn("group: ci-trusted-main", block)
-        self.assertIn("labels: ci-server-jane", block)
+        self.assertIn("labels: " + JANE_LABEL, block)
         self.assertIn("vars.CI_FLEET_ENABLED == 'true'", block)
         self.assertIn("vars.CI_FLEET_TARGET == 'ci-server-jane'", block)
         self.assertIn("github.event_name == 'merge_group'", block)
@@ -247,16 +248,19 @@ class QueueWorkflowTests(unittest.TestCase):
         hosted = "ubuntu-24.04" if REMUS else "ubuntu-latest"
         for expression in expressions:
             self.assertEqual(evaluate(expression, github, variables, needs),
-                             {"group": "ci-trusted-main", "labels": "ci-server-jane"})
+                             {"group": "ci-trusted-main", "labels": JANE_LABEL})
             for changed_vars, changed_needs in [
                 ({**variables, "CI_FLEET_ENABLED": "false"}, needs),
                 ({**variables, "CI_FLEET_TARGET": "github-hosted"}, needs),
                 (variables, {}), (variables, {"queue-trust": {"result": "success", "outputs": {"sha": "f" * 40}}}),
                 (variables, {"queue-trust": {"result": "failure", "outputs": {"sha": context["SHA"]}}})]:
                 self.assertEqual(evaluate(expression, github, changed_vars, changed_needs), hosted)
-            # The old ordinary-PR/main routing predicate is retained verbatim.
+            # Only the runner selector changes for the approved new profile;
+            # all old ordinary-PR/main authorization bytes remain identical.
+            authorization = expression.replace(
+                '"labels":"' + JANE_LABEL + '"', '"labels":"ci-server-jane"')
             old_expressions = re.findall(r"^    runs-on: (?:&fleet(?:-light)?-runner )?(\$\{\{ fromJSON\(.+\) \}\})$", OLD, re.M)
-            self.assertTrue(any(old[3:-3].removeprefix(" fromJSON(").rstrip()[:-1] in expression
+            self.assertTrue(any(old[3:-3].removeprefix(" fromJSON(").rstrip()[:-1] in authorization
                                 for old in old_expressions))
 
     def test_every_existing_command_and_security_guard_is_preserved(self):

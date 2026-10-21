@@ -21,7 +21,7 @@ jobs:
       vars.CI_FLEET_ENABLED == 'true' && vars.CI_FLEET_TARGET == 'ci-server-jane'
     runs-on:
       group: ci-trusted-main
-      labels: ci-server-jane
+      labels: ci-server-jane-5gb
     timeout-minutes: 3
     permissions:
       contents: read
@@ -252,7 +252,7 @@ jobs:
   quality:
     if: ${{ !cancelled() }}
     needs: queue-trust
-    runs-on: &fleet-runner ${{ fromJSON((github.event_name == 'merge_group' && needs.queue-trust.result == 'success' && needs.queue-trust.outputs.sha == github.sha && vars.CI_FLEET_ENABLED == 'true' && vars.CI_FLEET_TARGET == 'ci-server-jane') && '{"group":"ci-trusted-main","labels":"ci-server-jane"}' || (vars.CI_FLEET_ENABLED == 'true' && (github.repository == 'esaueng/OpenZCAD' && github.repository_id == '1334829303' && github.actor == 'petertoday' && github.actor_id == '171875562' && github.triggering_actor == 'petertoday' && ((github.event_name == 'pull_request' && github.event.pull_request.state == 'open' && github.event.pull_request.user.login == 'petertoday' && github.event.pull_request.user.id == 171875562 && github.event.pull_request.head.repo.id == 1334829303 && github.event.pull_request.base.repo.id == 1334829303 && github.event.pull_request.head.repo.fork == false && github.event.pull_request.base.repo.fork == false && github.event.pull_request.base.ref == 'main' && github.ref == format('refs/pull/{0}/merge', github.event.pull_request.number)) || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.ref_protected == true))) && (vars.CI_FLEET_TARGET == 'ci-server-jane' && '{"group":"ci-trusted-main","labels":"ci-server-jane"}' || vars.CI_FLEET_TARGET == 'ci-server-john' && '{"group":"ci-trusted-main","labels":"ci-server-john"}') || '"ubuntu-latest"')) }}
+    runs-on: &fleet-runner ${{ fromJSON((github.event_name == 'merge_group' && needs.queue-trust.result == 'success' && needs.queue-trust.outputs.sha == github.sha && vars.CI_FLEET_ENABLED == 'true' && vars.CI_FLEET_TARGET == 'ci-server-jane') && '{"group":"ci-trusted-main","labels":"ci-server-jane-5gb"}' || (vars.CI_FLEET_ENABLED == 'true' && (github.repository == 'esaueng/OpenZCAD' && github.repository_id == '1334829303' && github.actor == 'petertoday' && github.actor_id == '171875562' && github.triggering_actor == 'petertoday' && ((github.event_name == 'pull_request' && github.event.pull_request.state == 'open' && github.event.pull_request.user.login == 'petertoday' && github.event.pull_request.user.id == 171875562 && github.event.pull_request.head.repo.id == 1334829303 && github.event.pull_request.base.repo.id == 1334829303 && github.event.pull_request.head.repo.fork == false && github.event.pull_request.base.repo.fork == false && github.event.pull_request.base.ref == 'main' && github.ref == format('refs/pull/{0}/merge', github.event.pull_request.number)) || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.ref_protected == true))) && (vars.CI_FLEET_TARGET == 'ci-server-jane' && '{"group":"ci-trusted-main","labels":"ci-server-jane-5gb"}' || vars.CI_FLEET_TARGET == 'ci-server-john' && '{"group":"ci-trusted-main","labels":"ci-server-john"}') || '"ubuntu-latest"')) }}
     # Hosted jobs have hung for 4-14 minutes in "Cleaning up orphan processes"
     # after every step passed; the timeout counts that tail and turns a green
     # job into a cancelled required check, so each limit keeps that headroom.

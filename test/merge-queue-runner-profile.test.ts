@@ -15,9 +15,12 @@ it('preserves every reviewed queue workflow byte outside the approved profile', 
       'ci-server-jane-1|ci-server-jane-2)'
     )
     .replace('CI_MEMORY=5000000000', 'CI_MEMORY=6442450944')
-    .replace(alignment, '');
+    .replace(alignment, '')
+    .replace('labels: ci-server-jane-5gb\n', 'labels: ci-server-jane\n')
+    .replaceAll('"labels":"ci-server-jane-5gb"', '"labels":"ci-server-jane"');
   // Digest of the complete reviewed v2 callee in e3248bad. Keeping the
   // baseline here also verifies shallow CI checkouts without fetching a PR.
+  // Only the explicit resource profile and selector literals can differ.
   expect(createHash('sha256').update(previous).digest('hex')).toBe(
     'bc1137220e6e4b943c8a944fc5b73f6f5f24b2011cad02fd1247d1c842026a5e'
   );
@@ -65,4 +68,12 @@ it('rejects unknown slot names instead of inferring access from a label', () => 
   ]) {
     expect(() => evaluateProfile(name)).toThrow();
   }
+});
+
+it('keeps legacy callers quarantined behind a distinct profile selector', () => {
+  expect(workflow).toContain('labels: ci-server-jane-5gb\n');
+  expect(workflow.match(/"labels":"ci-server-jane-5gb"/g)).toHaveLength(2);
+  expect(workflow).not.toContain('labels: ci-server-jane\n');
+  expect(workflow).not.toContain('"labels":"ci-server-jane"');
+  expect(workflow).toContain("vars.CI_FLEET_TARGET == 'ci-server-jane'");
 });
