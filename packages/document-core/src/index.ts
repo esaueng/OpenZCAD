@@ -860,7 +860,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
     );
   }
   const document = withReadableHistory(input);
-  // Schema v30 drawings: validated as written, never synthesized or rewritten.
+  // Schema v30 drawings (v31 annotations): validated as written, never
+  // synthesized or rewritten.
   assertDrawingSet(document.drawings);
   // Schema v32 reference images: the same — validated, never rewritten.
   assertReferenceImageSet(document.referenceImages);

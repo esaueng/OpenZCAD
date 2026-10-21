@@ -306,3 +306,44 @@ sheet/view contract above with these recorded departures:
   the sheet canvas between them, which draws
   the sheet over the stage and allows only `drawing.*` commands (undo included);
   the model stays read-only there.
+
+## Implementation decisions (D02 annotations, schema v31)
+
+The first D02 slice (research-audit Stage 7, ZC-146/163) adds dimensions and
+notes to D01 sheets:
+
+- **Shape.** `DrawingSheet.annotations`, absent when a sheet has none and
+  never synthesized on load. Linear dimensions measure horizontally,
+  vertically or aligned between two points; radius, diameter and angle
+  dimensions; text notes on the paper or in a view, with an optional leader
+  to an edge. Each stores only intent: the edges it measures, its text
+  placement relative to its view's centre (so moving the view carries it),
+  and an optional decimal count. A point is an open edge's `first` or
+  `second` end in the view's page order (left, then lower, then nearer) or a
+  circle's `center`, so it does not depend on the kernel's edge direction.
+- **References and repair.** An edge is stored as body id, ADR-011 hash and,
+  when the kernel proves one, the ADR-013 persistent reference, and resolved
+  through `resolveEdge`: lineage first, then hash, failing on zero or several
+  matches. A box widened through a parameter keeps its lineage, so its
+  dimension reads the new width after Update. A reference that no longer
+  resolves, a body no longer in the view, a circle now edge-on or two edges
+  now parallel leave the annotation broken where it was placed, with a
+  reason; export refuses until it is re-picked (Re-pick keeps its placement
+  and format) or deleted. Picking refuses an edge whose identity another
+  edge shares, so a stored pick can never later bind to a twin.
+- **Values and the fence.** Values are computed every time a ready sheet is
+  drawn from exact edge vertices and the kernel's published circle data,
+  projected into the view; nothing typed, nothing stored. A stale sheet
+  shows no values and offers no tools until its explicit Update. An aligned
+  span between points at different depths, or an angle with an edge that
+  slopes into the view, is refused as foreshortened, as is any length or
+  angle on the isometric view; horizontal and vertical spans in a principal
+  view measure along a model axis and stay exact.
+- **Page and export.** Dimension lines, extension lines and filled
+  arrowheads are a `dimension` stroke class (0.25 mm); text may be centred
+  and rotated, placed from its measured Helvetica start so preview, SVG and
+  PDF agree. A sheet without annotations exports byte-identical to D01.
+- **Open.** Tolerances, prefixes and suffixes, centre marks and centrelines
+  as references, point-to-line and min/max distances, title-block layouts,
+  hole callouts, per-drawing unit and precision properties, and annotations
+  on section and detail views (D03).

@@ -76,6 +76,9 @@ export const CAD_OPERATIONS = [
   'drawing.view.add',
   'drawing.view.update',
   'drawing.view.delete',
+  'drawing.annotation.add',
+  'drawing.annotation.update',
+  'drawing.annotation.delete',
   'reference-image.add',
   'reference-image.update',
   'reference-image.delete'
