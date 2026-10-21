@@ -30,6 +30,15 @@ it('captures the live arena, rejects corrupted raw bytes and observes retired ch
       rawEquivalent: boolean;
       publicationEquivalent: boolean;
     }>;
+    exerciseEviction(): Promise<{
+      budget: number;
+      passes: {
+        rawEquivalent: boolean;
+        publicationEquivalent: boolean;
+        retainedBytes: number;
+        event: { remeasured: number; reusedMeasurements: number };
+      }[];
+    }>;
     probeRetiredCheckpoint(): { available: boolean; rejected: boolean };
     snapshot(): { retiredCheckpoints: number; ownersAgree: boolean };
   };
@@ -86,6 +95,16 @@ it('captures the live arena, rejects corrupted raw bytes and observes retired ch
       rawEquivalent: true,
       publicationEquivalent: true
     });
+    await adapter.syncDocument(document);
+    const pressure = await probe.exerciseEviction();
+    expect(pressure.passes).toHaveLength(4);
+    for (const pass of pressure.passes) {
+      expect(pass.rawEquivalent).toBe(true);
+      expect(pass.publicationEquivalent).toBe(true);
+      expect(pass.retainedBytes).toBeLessThanOrEqual(pressure.budget);
+      expect(pass.event.remeasured).toBeGreaterThan(0);
+      expect(pass.event.reusedMeasurements).toBeGreaterThan(0);
+    }
   } finally {
     adapter.dispose();
     vi.restoreAllMocks();

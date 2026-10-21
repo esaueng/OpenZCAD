@@ -63,7 +63,7 @@ interface Equivalence extends Observation {
   warnings: number;
 }
 
-async function workerProbe(page: Page) {
+async function workerProbe(page: Page, record: (value: unknown) => void) {
   const browser = page.context().browser()!;
   const session = await browser.newBrowserCDPSession();
   const pageSession = await page.context().newCDPSession(page);
@@ -123,8 +123,10 @@ async function workerProbe(page: Page) {
         awaitPromise: true,
         returnByValue: true
       });
-      if (value.exceptionDetails)
+      if (value.exceptionDetails) {
+        record({ phase: 'probe-exception', details: value.exceptionDetails });
         throw new Error('Private worker qualification exception.');
+      }
       return (value.result as { value: T }).value;
     },
     async heap() {
@@ -340,7 +342,7 @@ test('private holder survives sustained edits, retirement, refusal and worker re
   await page.getByRole('button', { name: 'Tweak', exact: true }).click();
   const field = page.getByLabel('Expression for holder_height');
   await expect(field).toHaveValue(String(initial));
-  let probe = await workerProbe(page);
+  let probe = await workerProbe(page, record);
   const checkpoint = async (phase: string) => {
     const retired = await probe.evaluate<{
       available: boolean;
@@ -412,27 +414,40 @@ test('private holder survives sustained edits, retirement, refusal and worker re
       assertOwners(snapshot);
     }
     if (block === 3) {
-      const pressure = await probe.evaluate<{
-        budget: number;
-        passes: {
-          evictedBodies: number;
-          rawEquivalent: boolean;
-          publicationEquivalent: boolean;
-          retainedBytes: number;
-          summedBytes: number;
-          event: RebuildCacheEvent;
-        }[];
-      }>('globalThis.__h02Session.exerciseEviction()');
-      record({ phase: 'private-measurement-eviction', pressure });
-      expect(pressure.passes).toHaveLength(4);
-      for (const pass of pressure.passes) {
-        expect(pass.evictedBodies).toBeGreaterThan(0);
-        expect(pass.rawEquivalent).toBe(true);
-        expect.soft(pass.publicationEquivalent).toBe(true);
-        expect(pass.retainedBytes).toBe(pass.summedBytes);
-        expect(pass.retainedBytes).toBeLessThanOrEqual(pressure.budget);
-        expect(pass.event.remeasured).toBeGreaterThan(0);
-        expect(pass.event.reusedMeasurements).toBeGreaterThan(0);
+      try {
+        const pressure = await probe.evaluate<{
+          budget: number;
+          passes: {
+            evictedBodies: number;
+            rawEquivalent: boolean;
+            publicationEquivalent: boolean;
+            retainedBytes: number;
+            summedBytes: number;
+            event: RebuildCacheEvent;
+          }[];
+        }>('globalThis.__h02Session.exerciseEviction()');
+        record({ phase: 'private-measurement-eviction', pressure });
+        expect(pressure.passes).toHaveLength(4);
+        for (const pass of pressure.passes) {
+          expect(pass.evictedBodies).toBeGreaterThan(0);
+          expect(pass.rawEquivalent).toBe(true);
+          expect.soft(pass.publicationEquivalent).toBe(true);
+          expect(pass.retainedBytes).toBe(pass.summedBytes);
+          expect(pass.retainedBytes).toBeLessThanOrEqual(pressure.budget);
+          expect(pass.event.remeasured).toBeGreaterThan(0);
+          expect(pass.event.reusedMeasurements).toBeGreaterThan(0);
+        }
+      } catch (error) {
+        record({
+          phase: 'private-measurement-eviction-failed',
+          error:
+            error instanceof Error ? error.message : 'Unknown probe failure'
+        });
+        // A failed pressure probe still fails qualification; finish the
+        // independent main-session recovery/restart observations as well.
+        expect
+          .soft(false, 'Private eviction probe must complete every assertion')
+          .toBe(true);
       }
     }
     await checkpoint(`block-${block + 1}`);
@@ -551,7 +566,7 @@ test('private holder survives sustained edits, retirement, refusal and worker re
   await page.reload();
   await expect(field).toHaveValue(String(initial + 13), { timeout: 60_000 });
   await ready(page);
-  probe = await workerProbe(page);
+  probe = await workerProbe(page, record);
   expect(probe.targetId).not.toBe(retiredTarget);
   const targetsSession = await browser.newBrowserCDPSession();
   const { targetInfos } = await targetsSession.send('Target.getTargets');

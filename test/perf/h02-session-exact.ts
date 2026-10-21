@@ -311,12 +311,33 @@ export async function createExactKernelAdapter(
     async exerciseEviction() {
       const document = lastDocument;
       if (!document) throw new Error('No live private document available.');
-      const sizes = [...state.measuredShapeCache.values()].map(
-        (entry) => entry.bytes
-      );
+      // Calibrate from this fresh private payload, not a long-lived arena whose
+      // held display deflections and lineage metadata can have different sizes.
+      const calibration = await create({
+        ...options,
+        onRebuildCacheEvent: undefined
+      });
+      let sizes: number[];
+      try {
+        await calibration.syncDocument(
+          document,
+          undefined,
+          undefined,
+          lastAnalysis,
+          { lineageDemand: lastDemand }
+        );
+        sizes = [
+          ...(calibration as unknown as ArenaState).measuredShapeCache.values()
+        ].map((entry) => entry.bytes);
+      } finally {
+        calibration.dispose();
+      }
       const total = sizes.reduce((sum, bytes) => sum + bytes, 0);
-      const budget = total - Math.ceil(Math.min(...sizes) / 2);
-      if (sizes.length < 2 || budget <= Math.max(...sizes))
+      const largest = Math.max(...sizes);
+      // Fit every individual entry, with substantial room below the complete
+      // working set so harmless arena-local metadata length cannot avoid eviction.
+      const budget = largest + Math.floor((total - largest) / 2);
+      if (sizes.length < 2 || budget <= largest || budget >= total)
         throw new Error('Private entries cannot calibrate live eviction.');
       const events: RebuildCacheEvent[] = [];
       const pressure = await create({
