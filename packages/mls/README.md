@@ -59,8 +59,8 @@ A refusal is an `MlsError` of kind `policy` whose `reasons` carry stable codes.
 - **Only the owner** changes the extension: adds identities, changes roles,
   drops identities (with all of their leaves, in the same Commit).
 - **Any member** may Add a leaf for an identity already listed, with its
-  existing role. When a non-owner does, the leaf key must be certified at or
-  after the identity's latest leaf removal (`certifiedEpoch` in the
+  existing role. Such a recovery Add, whoever commits it, needs a leaf key
+  certified at or after the identity's latest leaf removal (`certifiedEpoch` in the
   directory). A leaf key once removed from the group is never added back.
 - **Otherwise a member changes only its own identity:** Update of its leaf,
   SelfRemove, Remove of another leaf of its own identity. Viewers' Commits

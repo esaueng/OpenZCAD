@@ -412,11 +412,14 @@ impl ProjectRules {
                 )),
                 Some(_) => {}
             }
-            // A recovery Add (by a non-owner) must bring a credential
+            // A recovery Add (a leaf for an identity already listed, with its
+            // unchanged role), whoever sends it, must bring a credential
             // certified after the identity's latest leaf removal (ADR-024), so
             // a key certified earlier and held back cannot return without a
-            // fresh rejoin proof.
-            if sender_role != Role::Owner {
+            // fresh rejoin proof. The owner adding a new identity, re-adding a
+            // dropped one or changing a role is not a recovery Add.
+            let recovery = now.is_some() && now == after;
+            if recovery {
                 let projected = losing.contains(&credential.user_id).then_some(next_epoch);
                 if let Some(cutoff) = removals.identity_cutoff(&credential.user_id).max(projected) {
                     let certified = directory.certified_epoch(

@@ -141,6 +141,8 @@ class World {
   /** Each user's rejoin PSKs as that user's devices store them on the
    * server, wrapped under the account key (ADR-024, "Long-offline devices"). */
   private readonly accountPsks = new Map<string, Map<number, Uint8Array>>();
+  /** The newest epoch any device has reached: new certifications count from here. */
+  private latestEpoch = 0;
 
   constructor(
     readonly mls: Mls,
@@ -183,7 +185,7 @@ class World {
     userId: string,
     deviceId: string,
     certified = true,
-    certifiedEpoch?: number
+    certifiedEpoch: number | undefined = this.latestEpoch
   ): Promise<Device> {
     const session = await this.mls.generate({
       projectId: this.projectId,
@@ -247,6 +249,7 @@ class World {
     for (const d of devices) {
       if (!d.live) continue;
       const psk = await d.session.rejoinPsk();
+      this.latestEpoch = Math.max(this.latestEpoch, psk.epoch);
       let store = this.accountPsks.get(d.userId);
       if (!store)
         this.accountPsks.set(d.userId, (store = new Map<number, Uint8Array>()));
@@ -1164,6 +1167,23 @@ const readd = suite<ReaddCast>({
           [a1, b1n!]
         );
         return `${result}; ${await agree([a1, b1n!, copy])}`;
+      }
+    },
+    {
+      name: "refused: the owner's recovery Add of a key certified before the identity's latest removal",
+      async run({ world, a1, b1n, removedAt }) {
+        const early = await world.device('B', 'B5', true, removedAt - 1);
+        const kp = await early.session.keyPackage();
+        const local = await refused(
+          () => a1.session.commit({ add: [kp] }),
+          ['leaf-certified-before-removal']
+        );
+        const receivers = await refused(
+          () => tryCommit(a1, { add: [kp] }, [b1n!]),
+          ['leaf-certified-before-removal']
+        );
+        world.retire(early);
+        return `own client ${local}; receivers ${receivers}`;
       }
     }
   ]
