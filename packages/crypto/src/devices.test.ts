@@ -285,6 +285,25 @@ describe('verifying a device list', () => {
     expect(list.head.encryptionKey).toEqual(keys.encryptionKey);
   });
 
+  it.each(['encryptionKey', 'accountKeyCommitment'] as const)(
+    'refuses a signed one-sided %s rotation even without revocations',
+    async (field) => {
+      const f = await fixture();
+      const keys = await rotated();
+      const chain = await append(f, (list) => ({
+        ...nextDeviceListEntry(list, { issuedAt: 2 }),
+        [field]: keys[field]
+      }));
+      await rejectsWith(verifyDeviceList(f.identityRaw, chain), 'chain-broken');
+      const paired = await append(f, (list) =>
+        nextDeviceListEntry(list, { issuedAt: 2, ...keys })
+      );
+      expect(
+        (await verifyDeviceList(f.identityRaw, paired)).head.sequence
+      ).toBe(1);
+    }
+  );
+
   it('refuses a silent drop, a returning device and a returning key', async () => {
     const f = await fixture(3);
     const silent = await append(f, async (list) => ({

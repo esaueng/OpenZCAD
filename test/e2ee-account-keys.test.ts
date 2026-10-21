@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   accountKeyCommitment,
+  decodeDeviceApprovalGrant,
   decodeDeviceListEntry,
   exportPublicKey,
   fromBase64Url,
@@ -13,6 +14,7 @@ import {
   nextDeviceListEntry,
   sealKey,
   signDeviceListEntry,
+  signDeviceApprovalGrant,
   toBase64Url,
   verifyDeviceList
 } from '@openzcad/crypto';
@@ -613,6 +615,370 @@ describe('replacing the recovery key', () => {
 });
 
 describe('device approval', () => {
+  it.each(['cancel', 'replace identity'] as const)(
+    'retains hourly accounting when approvals %s',
+    async (action) => {
+      const srv = server();
+      const { laptop, account } = await setUp(srv);
+      let lastId = '';
+      for (let i = 0; i < MAX_APPROVALS_PER_HOUR; i += 1) {
+        const request = await requestApproval(device(srv), null, `Phone ${i}`);
+        if (request.step !== 'waiting')
+          throw new Error('Expected pending approval');
+        lastId = request.approval.id;
+        await laptop.api.cancelApproval(lastId);
+        await laptop.api.cancelApproval(lastId);
+      }
+      if (action === 'replace identity') {
+        await replaceRecoveryKey(
+          laptop,
+          account,
+          (await generateRecoveryKey()).secret,
+          null
+        );
+      }
+      expect((await refusal(laptop.api.getApproval(lastId))).status).toBe(404);
+      expect((await laptop.api.listApprovals()).approvals).toEqual([]);
+      const capped = await refusal(
+        requestApproval(device(srv), null, 'Too many')
+      );
+      expect([capped.status, capped.code]).toEqual([
+        429,
+        'E2EE_APPROVAL_RATE_LIMITED'
+      ]);
+      expect(
+        count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_approvals')
+      ).toBe(MAX_APPROVALS_PER_HOUR);
+      srv.db
+        .prepare('UPDATE e2ee_device_approvals SET created_at = ?')
+        .run(new Date(Date.now() - 60 * 60 * 1000 - 1).toISOString());
+      expect(
+        (await requestApproval(device(srv), null, 'After retention')).step
+      ).toBe('waiting');
+      expect(
+        count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_approvals')
+      ).toBe(1);
+    }
+  );
+
+  it('accepts an equivalent legacy responder key encoding and normalizes new responses', async () => {
+    const srv = server();
+    const { laptop, account } = await setUp(srv);
+    const phone = device(srv);
+    const request = await requestApproval(phone, null, 'Phone');
+    if (request.step !== 'waiting')
+      throw new Error('Expected pending approval');
+    const [approval] = (await laptop.api.listApprovals()).approvals;
+    const key = toBase64Url(account.device!.signingPublicKey);
+    const alphabet =
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    const alias =
+      key.slice(0, -1) + alphabet[alphabet.indexOf(key.at(-1)!) ^ 1];
+    expect(fromBase64Url(alias)).toEqual(fromBase64Url(key));
+    const originalRespond = laptop.api.respondApproval;
+    const responded = await beginCompareApproval(
+      {
+        ...laptop,
+        api: {
+          ...laptop.api,
+          respondApproval: (id, body) =>
+            originalRespond(id, { ...body, approverKey: alias })
+        }
+      },
+      account,
+      approval!.id
+    );
+    expect(responded.approverKey).toBe(key);
+    srv.db
+      .prepare('UPDATE e2ee_device_approvals SET approver_key = ? WHERE id = ?')
+      .run(alias, approval!.id);
+    await advanceApprovalAsNewDevice(phone);
+    await approveDevice(
+      laptop,
+      account,
+      await laptop.api.getApproval(approval!.id),
+      { kind: 'scan', code: request.scanCode },
+      null
+    );
+    const done = await confirmApprovalCode(phone);
+    if (done.step !== 'done') throw new Error('Expected completed comparison');
+    expect(ready(done.state).unlocked).toBe(true);
+  });
+
+  it('refuses a correctly signed grant naming a different hash at the same height', async () => {
+    const srv = server();
+    const { laptop, account } = await setUp(srv);
+    const phone = device(srv);
+    const request = await requestApproval(phone, null, 'Phone');
+    if (request.step !== 'waiting')
+      throw new Error('Expected pending approval');
+    const [approval] = (await laptop.api.listApprovals()).approvals;
+    const original = laptop.api.completeApproval;
+    const intercept = {
+      ...laptop,
+      api: {
+        ...laptop.api,
+        completeApproval: async (
+          id: string,
+          body: Parameters<typeof original>[1]
+        ) => {
+          const grant = await signDeviceApprovalGrant(
+            account.device!.signing.privateKey,
+            {
+              ...decodeDeviceApprovalGrant(fromBase64Url(body.grant.statement)),
+              headHash: generateSymmetricKey()
+            }
+          );
+          return original(id, {
+            ...body,
+            grant: {
+              statement: toBase64Url(grant.statement),
+              signature: toBase64Url(grant.signature)
+            }
+          });
+        }
+      }
+    };
+    const refused = await refusal(
+      approveDevice(
+        intercept,
+        account,
+        approval!,
+        { kind: 'scan', code: request.scanCode },
+        null
+      )
+    );
+    expect([refused.status, refused.code]).toEqual([
+      409,
+      'E2EE_DEVICE_LIST_CONFLICT'
+    ]);
+    expect((await laptop.api.getApproval(approval!.id)).state).toBe(
+      'requested'
+    );
+    expect(
+      count(
+        srv.db,
+        "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'"
+      )
+    ).toBe(0);
+  });
+
+  it.each(['before verification', 'before commit'] as const)(
+    'binds a revealed comparison to its responding approver %s',
+    async (timing) => {
+      const srv = server();
+      const { recovery, laptop } = await setUp(srv);
+      const other = await enrolled(srv, recovery.secret, 'Other approver');
+      const account = ready(await loadEncryption(laptop));
+      const phone = device(srv);
+      const request = await requestApproval(phone, null, 'Phone');
+      if (request.step !== 'waiting')
+        throw new Error('Expected pending approval');
+      const [scanSnapshot] = (await laptop.api.listApprovals()).approvals;
+      const reveal = async () => {
+        await beginCompareApproval(laptop, account, scanSnapshot!.id);
+        expect((await advanceApprovalAsNewDevice(phone)).step).toBe('compare');
+      };
+      if (timing === 'before verification') await reveal();
+      else
+        srv.beforeWrite = async (sql) => {
+          if (!sql.includes("SET state = 'completed'")) return;
+          srv.beforeWrite = undefined;
+          await reveal();
+        };
+      const rejected = await refusal(
+        approveDevice(
+          other.ctx,
+          other.account,
+          scanSnapshot!,
+          { kind: 'scan', code: request.scanCode },
+          null
+        )
+      );
+      expect([rejected.status, rejected.code]).toEqual([
+        409,
+        'E2EE_APPROVAL_STATE'
+      ]);
+      const pending = await laptop.api.getApproval(scanSnapshot!.id);
+      expect(pending.state).toBe('revealed');
+      expect(
+        count(
+          srv.db,
+          "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'"
+        )
+      ).toBe(0);
+      await approveDevice(laptop, account, pending, { kind: 'compare' }, null);
+      const done = await confirmApprovalCode(phone);
+      if (done.step !== 'done')
+        throw new Error('Expected completed comparison');
+      expect(ready(done.state).unlocked).toBe(true);
+    }
+  );
+
+  it.each(['open', 'hourly'] as const)(
+    'atomically enforces the %s approval cap',
+    async (cap) => {
+      const srv = server();
+      const token = 'q'.repeat(43);
+      const tokenHash = Buffer.from(
+        await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))
+      ).toString('hex');
+      srv.credential = { token, desktop: false };
+      srv.db
+        .prepare('INSERT INTO auth_sessions VALUES (?, ?, ?, ?)')
+        .run(tokenHash, USER, 0, 9_999_999_999);
+      await setUp(srv);
+      for (
+        let i = 0;
+        i < (cap === 'open' ? 2 : MAX_APPROVALS_PER_HOUR - 1);
+        i += 1
+      ) {
+        await requestApproval(device(srv), null, `Existing ${i}`);
+        if (cap === 'hourly')
+          srv.db.exec("UPDATE e2ee_device_approvals SET state = 'completed'");
+      }
+      let arrived = 0;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      srv.beforeWrite = async (sql) => {
+        if (!sql.includes('INSERT INTO e2ee_device_approvals')) return;
+        arrived += 1;
+        if (arrived === 2) release();
+        await gate;
+      };
+      const results = await Promise.allSettled([
+        requestApproval(device(srv), null, 'Contender A'),
+        requestApproval(device(srv), null, 'Contender B')
+      ]);
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      const failed = results.find(
+        (r) => r.status === 'rejected'
+      ) as PromiseRejectedResult;
+      expect(failed.reason).toMatchObject({
+        status: 429,
+        code: 'E2EE_APPROVAL_RATE_LIMITED'
+      });
+      expect(
+        count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_device_approvals')
+      ).toBe(cap === 'open' ? 3 : MAX_APPROVALS_PER_HOUR);
+    }
+  );
+
+  it('does not rewrite a completed approval wrap when a grant is replayed', async () => {
+    const srv = server();
+    const { laptop, account } = await setUp(srv);
+    const phone = device(srv);
+    const request = await requestApproval(phone, null, 'Phone');
+    if (request.step !== 'waiting')
+      throw new Error('Expected pending approval');
+    const [approval] = (await laptop.api.listApprovals()).approvals;
+    const original = laptop.api.completeApproval;
+    let captured!: Parameters<typeof original>[1];
+    const intercept = {
+      ...laptop,
+      api: {
+        ...laptop.api,
+        completeApproval: async (
+          id: string,
+          body: Parameters<typeof original>[1]
+        ) => {
+          captured = body;
+          return original(id, body);
+        }
+      }
+    };
+    await approveDevice(
+      intercept,
+      account,
+      approval!,
+      { kind: 'scan', code: request.scanCode },
+      null
+    );
+    const before = srv.db
+      .prepare(
+        "SELECT * FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'"
+      )
+      .get();
+    await refusal(
+      original(approval!.id, {
+        ...captured,
+        sealedAccountKey: toBase64Url(generateSymmetricKey())
+      })
+    );
+    expect(
+      srv.db
+        .prepare(
+          "SELECT * FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'"
+        )
+        .get()
+    ).toEqual(before);
+  });
+
+  it.each(['rotation', 'replacement', 'append'] as const)(
+    'does not commit an approval across a concurrent %s',
+    async (change) => {
+      const srv = server();
+      const { recovery, laptop } = await setUp(srv);
+      const other = await enrolled(srv, recovery.secret, 'Device to remove');
+      const account = ready(await loadEncryption(laptop));
+      const phone = device(srv);
+      const request = await requestApproval(phone, null, 'Phone');
+      if (request.step !== 'waiting')
+        throw new Error('Expected pending approval');
+      const [approval] = (await laptop.api.listApprovals()).approvals;
+      let moved = false;
+      srv.beforeWrite = async (sql) => {
+        if (!sql.includes("SET state = 'completed'")) return;
+        srv.beforeWrite = undefined;
+        moved = true;
+        if (change === 'rotation')
+          await removeDevice(
+            laptop,
+            account,
+            other.account.device!.deviceId,
+            recovery.secret
+          );
+        else if (change === 'append') {
+          const newcomer = device(srv);
+          await enrollWithRecoveryKey(
+            newcomer,
+            ready(await loadEncryption(newcomer)),
+            recovery.secret,
+            'New device'
+          );
+        } else
+          await replaceRecoveryKey(
+            laptop,
+            account,
+            (await generateRecoveryKey()).secret,
+            null
+          );
+      };
+      await refusal(
+        approveDevice(
+          laptop,
+          account,
+          approval!,
+          { kind: 'scan', code: request.scanCode },
+          null
+        )
+      );
+      expect(moved).toBe(true);
+      expect(
+        count(
+          srv.db,
+          "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'"
+        )
+      ).toBe(0);
+      if (change !== 'replacement')
+        expect((await laptop.api.getApproval(approval!.id)).state).toBe(
+          'requested'
+        );
+    }
+  );
+
   it('certifies a device approved by scanning its key hash', async () => {
     const srv = server();
     const { recovery, laptop } = await setUp(srv);
@@ -1359,7 +1725,7 @@ describe.each(['development', 'browser', 'desktop'] as const)(
                 target = 'AND created_at < ?';
               } else {
                 action = () => phone.api.cancelApproval(approval!.id);
-                target = 'DELETE FROM e2ee_device_approvals WHERE id';
+                target = 'SET expires_at = MIN(expires_at, ?)';
               }
             }
           }

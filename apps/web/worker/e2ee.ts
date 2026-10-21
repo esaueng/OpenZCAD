@@ -568,8 +568,8 @@ async function writeGeneration(
     ...input.wraps.map((wrap) =>
       insertWrap(db, userId, input.generation, 0, wrap, now, guard)
     ),
-    // A replaced identity's wraps open nothing anyone should use again, and
-    // pending approvals were for the old identity.
+    // A replaced identity's wraps open nothing anyone should use again.
+    // Expire old approvals, retaining receipts for the per-account hourly cap.
     db
       .prepare(
         `DELETE FROM e2ee_key_wraps
@@ -578,9 +578,10 @@ async function writeGeneration(
       .bind(userId, input.generation, ...guard.binds),
     db
       .prepare(
-        `DELETE FROM e2ee_device_approvals WHERE user_id = ? AND ${guard.sql}`
+        `UPDATE e2ee_device_approvals SET expires_at = MIN(expires_at, ?)
+         WHERE user_id = ? AND ${guard.sql}`
       )
-      .bind(userId, ...guard.binds)
+      .bind(now, userId, ...guard.binds)
   ];
   const results = await db.batch(statements);
   return (results[0]?.meta?.changes ?? 0) === 1;
@@ -1071,12 +1072,16 @@ async function handleCreateApproval(
     );
   }
   const id = randomApprovalId();
-  await db
+  const inserted = await db
     .prepare(
       `INSERT INTO e2ee_device_approvals
          (id, user_id, device_id, label, signing_key, unlock_key, commitment,
           state, created_at, expires_at)
-       SELECT ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ? WHERE ${db.authorization.sql}`
+       SELECT ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ? WHERE ${db.authorization.sql}
+         AND (SELECT COUNT(*) FROM e2ee_device_approvals
+              WHERE user_id = ? AND state <> 'completed' AND expires_at > ?) < ?
+         AND (SELECT COUNT(*) FROM e2ee_device_approvals
+              WHERE user_id = ? AND created_at >= ?) < ?`
     )
     .bind(
       id,
@@ -1088,9 +1093,22 @@ async function handleCreateApproval(
       commitment,
       now,
       new Date(nowMs + APPROVAL_TTL_MS).toISOString(),
-      ...db.authorization.binds
+      ...db.authorization.binds,
+      userId,
+      now,
+      MAX_OPEN_APPROVALS,
+      userId,
+      new Date(nowMs - APPROVAL_RETENTION_MS).toISOString(),
+      MAX_APPROVALS_PER_HOUR
     )
     .run();
+  if ((inserted.meta?.changes ?? 0) !== 1) {
+    refuse(
+      429,
+      'E2EE_APPROVAL_RATE_LIMITED',
+      'Too many approval requests. Finish or cancel one, or try again later.'
+    );
+  }
   return approvalRecord(await approvalRow(db, userId, id, now));
 }
 
@@ -1216,7 +1234,10 @@ async function handleCompleteApproval(
         : 'An uncertified approval carries the sealed account key'
     );
   }
-  if (grant.headSequence !== list.head.sequence) {
+  if (
+    grant.headSequence !== list.head.sequence ||
+    toHex(grant.headHash) !== toHex(list.headHash)
+  ) {
     refuse(
       409,
       'E2EE_DEVICE_LIST_CONFLICT',
@@ -1224,6 +1245,21 @@ async function handleCompleteApproval(
     );
   }
   const statementText = grantBody.statement as string;
+  // Preserve accepted equivalent encodings of an already-stored point. New
+  // responders are stored canonically; the predicate also covers a compare
+  // flow starting after we read a requested scan approval.
+  const sameResponder =
+    row.approver_key !== null &&
+    toHex(fromBase64Url(row.approver_key)) === toHex(approver.signingKey);
+  const responderKey = sameResponder
+    ? row.approver_key
+    : toBase64Url(approver.signingKey);
+  const headGuard = {
+    sql: `(SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?
+      AND (SELECT entry_hash FROM e2ee_device_list_entries WHERE user_id = ?
+           ORDER BY generation DESC, sequence DESC LIMIT 1) = ?`,
+    binds: [userId, current.generation, userId, toHex(list.headHash)]
+  };
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
@@ -1231,7 +1267,9 @@ async function handleCompleteApproval(
          SET state = 'completed', grant_statement = ?, grant_signature = ?
          WHERE id = ? AND user_id = ? AND expires_at > ?
            AND state IN ('requested', 'revealed')
-           AND (state = 'revealed' OR commitment IS NULL OR approver_key IS NULL) AND ${db.authorization.sql}`
+           AND ((state = 'revealed' AND approver_key = ?)
+                OR (state = 'requested' AND (commitment IS NULL OR approver_key IS NULL)))
+           AND ${headGuard.sql} AND ${db.authorization.sql}`
       )
       .bind(
         statementText,
@@ -1239,6 +1277,8 @@ async function handleCompleteApproval(
         id,
         userId,
         now,
+        responderKey,
+        ...headGuard.binds,
         ...db.authorization.binds
       )
   ];
@@ -1256,9 +1296,19 @@ async function handleCompleteApproval(
         },
         now,
         {
-          sql: `EXISTS (SELECT 1 FROM e2ee_device_approvals
-                        WHERE id = ? AND state = 'completed' AND grant_statement = ?) AND ${db.authorization.sql}`,
-          binds: [id, statementText, ...db.authorization.binds]
+          // D1 executes this batch in one transaction. As in the persistence
+          // adapter, changes() binds the child write to its preceding UPDATE,
+          // including duplicate grants that already have a completed row.
+          sql: `changes() = 1 AND EXISTS (SELECT 1 FROM e2ee_device_approvals
+                        WHERE id = ? AND user_id = ? AND state = 'completed' AND grant_statement = ?)
+                        AND ${headGuard.sql} AND ${db.authorization.sql}`,
+          binds: [
+            id,
+            userId,
+            statementText,
+            ...headGuard.binds,
+            ...db.authorization.binds
+          ]
         }
       )
     );
@@ -1418,11 +1468,14 @@ export async function handleE2eeRequest(
         );
       }
       if (method === 'DELETE') {
+        // Cancellation hides the request immediately but cannot refund the
+        // hourly attempt budget. Normal retention pruning removes the receipt.
         await db
           .prepare(
-            `DELETE FROM e2ee_device_approvals WHERE id = ? AND user_id = ? AND ${db.authorization.sql}`
+            `UPDATE e2ee_device_approvals SET expires_at = MIN(expires_at, ?)
+             WHERE id = ? AND user_id = ? AND ${db.authorization.sql}`
           )
-          .bind(id, userId, ...db.authorization.binds)
+          .bind(new Date().toISOString(), id, userId, ...db.authorization.binds)
           .run();
         return json({ ok: true });
       }
@@ -1444,7 +1497,7 @@ export async function handleE2eeRequest(
             id,
             {
               set: `state = 'responded', approver_key = ?, approver_nonce = ?`,
-              binds: [body.approverKey, body.approverNonce],
+              binds: [toBase64Url(approverKey), body.approverNonce],
               from: ['requested']
             },
             'AND commitment IS NOT NULL'
