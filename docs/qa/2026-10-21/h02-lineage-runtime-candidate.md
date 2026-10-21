@@ -145,6 +145,53 @@ failed earlier attempts remain outside Git. They do not qualify quiet M5 timing,
 whole-worker retention or a detached Text record. The documentation follow-up
 changes no runtime, tests, dependency pins, defaults or thresholds.
 
+### Unavailable-probe follow-up: `08393cb4`
+
+Review exposed another performance regression in `64f07065`: multi-operand unions
+and exact coaxial cuts cannot run an evolution probe, so eager and idle metadata
+are identical. Their mode signatures still differ. The finalized idle view was
+discarded because its metadata had not diverged, making the next eager-to-idle
+switch rebuild instead of restoring the proven checkpoint. Raw geometry and
+publication remain correct even before this fix; the fallback loses reuse.
+
+The follow-up retains that finalized view when the full current and idle prefix
+digests differ. Existing view cloning, signature selection, owner retirement and
+estimated-byte charging remain unchanged. These additional proof views consume
+the existing byte allowance and can reduce retention within that same ceiling.
+There is no global mode-key exception, new probe/modeling call, cache allowance or
+dependency change. A cold idle-to-eager transition still conservatively replays
+the boolean because an eager view has not been proven.
+
+Four public regressions cover both directions for a three-operand union and an
+exact coaxial cut. The eager-to-idle cases first fail on `64f07065`, while the two
+reverse controls pass. All four pass after the fix, directly comparing the first
+returned state with fresh raw/publication oracles before any repeat sync. They
+also verify zero evolution-probe calls and owned, charged metadata. The earlier
+25 transition cases and 118 selected existing tests pass; independent reviews
+found no remaining actionable issue in this patch.
+
+All five local gates pass at clean committed
+`08393cb4096ab7c2d338dd25a41e2a0b2c592c3c`: lint (zero errors, 17 existing
+warnings), typecheck, 5,824 root tests (eight existing skips), 3,474 web tests,
+220 parity tests (one existing skip), and the full paired-WASM/provenance/bundle
+build. The unchanged strict public reproduction and private one-edit oracle pass;
+all 3,204,155 raw bytes and normalized publication match across 17 bodies /
+720 faces.
+
+One Linux enabled `holder_height` arm passes the original latency and Text
+assertions, with zero Text executions and first-edit restored 4 / 31, replayed
+27 / 0. The unchanged 80-edit session also passes: seven raw/publication and four
+eviction comparisons match, with three replay-budget recycles, 252 retired
+checkpoints, five correctly rejected stale restores and 220 prepared reuses.
+Refusal, recovery and worker restart pass; acceptance failures are zero. Both
+runs preserve source bytes, HEAD and the clean checkout. Private artifacts and
+all earlier failed attempts remain outside Git.
+
+The M5 results below remain evidence for `64f07065`, before this follow-up. They
+are not mixed with these Linux samples or relabelled as measurements of the new
+runtime. The subsequent integration preserves the M5 evidence and changes only
+documentation relative to this verified runtime/test tree. H02 remains Partial.
+
 Target-device acceptance still needs a new quiet M5 Pro campaign on this candidate.
 Run the unchanged sustained private session first, then at least three alternating
 matched pairs with fresh pair IDs. Use the existing
