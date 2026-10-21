@@ -1698,7 +1698,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             .slice(
               prefix < 0 ? 0 : this.historyCheckpoints[prefix]!.featureIndex + 1
             )
-            .some((feature) => !supportsIdleLineageView(feature)));
+            .some((feature) => !supportsIdleLineageView(feature, document)));
       if (forceFreshLineageReplay) {
         prefix = -1;
         prefixUsesIdleView = false;

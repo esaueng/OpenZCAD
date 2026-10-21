@@ -16,11 +16,15 @@ B-rep bytes but different edge references and lineage diagnostics.
 
 The candidate records the full prefix's effective probe decisions and can retain
 one finalized empty-demand lineage view on the same geometry checkpoint. It adds
-no second kernel or geometry branch and retains no scratch probe handles. Only
-audited primitive, boolean and rigid-transform paths propagate an alternate view;
-unknown provenance, reference-bound axis transforms and unsupported suffixes miss
-and rebuild in a fresh arena when the mode changes. A selective demand must match
-the full effective signature rather than only the terminal boolean's demand.
+no second kernel or geometry branch and retains no scratch probe handles. Audited
+primitive, boolean and rigid-transform paths propagate an alternate view. The
+follow-up also qualifies self-contained STEP imports (including fixed planar
+emboss separation), canonical-plane sketches and blind new-body extrusions from
+canonical sketches. Their own output lineage is independent of earlier bodies;
+earlier divergent lineage stays intact. Unknown provenance, reference-bound axis
+transforms and unsupported suffixes miss and rebuild in a fresh arena when the
+mode changes. A selective demand must match the full effective signature rather
+than only the terminal boolean's demand.
 
 The alternate maps are cloned with checkpoint snapshots and dropped with their
 owner on retirement, eviction, reset or disposal. Their serialized metadata and
@@ -42,6 +46,35 @@ owning-kernel serialized bytes with a fresh build; it does not resync the result
 hide a transition. Existing normalization, geometry tolerances, cache budgets and
 acceptance assertions remain unchanged. The manual public reproduction remains a
 strict equality test.
+
+### First candidate: `d30b589e`
+
+The first candidate passed all 14 public transition regressions, 118 selected
+existing tests, the unchanged manual reproduction, the private one-edit oracle,
+and the full local repository gates. Its private one-edit comparison matches
+3,204,155 serialized bytes across 17 bodies / 720 faces, with no normalized
+publication differences and unchanged source bytes.
+
+The unchanged Linux sustained probe completed all 80 edits: five raw/publication
+checkpoints and four forced-eviction passes match. It then failed the existing
+replay-budget assertion: 166 syncs created 161 arenas, with zero replay-budget
+recycles or retired checkpoints. Refusal/recovery and worker restart were not
+reached. The M5 matched campaign also reports enabled-arm failures of the fixed
+Text-restore assertion. Samples are written before assertions and are retained.
+This revision is not accepted.
+
+The follow-up addresses the excessive fallback without changing those assertions.
+Public generated STEP/planar-emboss, canonical sketch and independent extrusion
+fixtures first pass cold eager/idle raw and publication controls. On `d30b589e`,
+the intended restore and real-edit recycling checks fail. Their same-checkpoint
+metadata propagation does not create a detached Text cache. Private lifecycle and
+target-device qualification must be rerun for the follow-up revision.
+
+The follow-up's 23 public cases retain the earlier strict transitions and add the
+Text-prefix/recycling regressions, draft/symmetric/two-sided blind extrusion
+controls, and conservative fallback checks for reference-bound profiles and
+unsupported extrusion operations/extents. The full private and target-device
+requirements remain unchanged.
 
 Target-device acceptance still needs a new quiet M5 Pro campaign on this candidate,
 including the sustained private session and at least three alternating matched

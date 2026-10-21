@@ -1,26 +1,37 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   addDatumAxis,
+  addDatumPlane,
   addPrimitiveFeature,
+  addSketchFeature,
   booleanBodies,
   createProjectDocument,
+  extrudeSketch,
   filletEdges,
+  findSketch,
+  importStepBody,
   listFeaturesInOrder,
   patternBody,
+  setParameter,
   transformBody,
   updateFeature,
-  withoutDerivedProjection
+  withoutDerivedProjection,
+  type ExtrudeInput
 } from '@openzcad/document-core';
 import type {
   ExactKernelAdapter,
   ExactKernelAdapterOptions,
   RebuildCacheEvent
 } from '@openzcad/kernel-adapter/exact';
+import { computeSketchRegions } from '@openzcad/geometry';
 import {
   toUserId,
   type BodyId,
   type DerivedState,
-  type ProjectDocument
+  type ExtrudeToFaceTarget,
+  type FeatureId,
+  type ProjectDocument,
+  type SketchPlaneRef
 } from '@openzcad/shared';
 import {
   createExactKernelAdapter,
@@ -31,9 +42,15 @@ import {
   compareExactArenas
 } from './support/exact-arena-equivalence';
 import * as evolution from '../packages/kernel-adapter/src/exact-boolean-evolution';
-import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import {
+  loadRemusTranslators,
+  RemusKernel
+} from '../packages/kernel-adapter/src/remus-runtime';
 import type { HistoryCheckpointEntry } from '../packages/kernel-adapter/src/exact-history-cache';
 import { IdleLineageViewBuilder } from '../packages/kernel-adapter/src/exact-idle-lineage-view';
+import { recognizePlanarEmboss } from '../packages/kernel-adapter/src/planar-emboss';
+import { letteredHolder } from './support/lettered-holder';
+import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
 
 interface Equivalence {
   rawEquivalent: boolean;
@@ -154,6 +171,160 @@ function fusedPlateDocument(
   });
 }
 
+/** Entirely generated, redistributable STEP; no private source is read. */
+async function importedTextTailDocument(
+  options: Pick<
+    ExtrudeInput,
+    'draftAngleDeg' | 'symmetric' | 'backDistance'
+  > = {}
+) {
+  const kernel = new RemusKernel();
+  const io = await loadRemusTranslators();
+  try {
+    const step = io.exportStep(
+      kernel.serializeSolids(Uint32Array.of(letteredHolder(kernel)))
+    );
+    const solids = kernel.deserializeSolids(io.importStep(step));
+    expect(solids).toHaveLength(1);
+    const selection = recognizePlanarEmboss(kernel, solids[0]!);
+    expect(selection).not.toBeNull();
+    if (!selection) throw new Error('Public planar emboss must be recognized.');
+    const fused = fusedPlateDocument();
+    const imported = importStepBody(fused.document, {
+      name: 'Text',
+      artifactId: 'public-generated-lettering',
+      sourceName: 'public-generated-lettering.step',
+      stepText: new TextDecoder().decode(step),
+      planarEmboss: { part: 'text', selection }
+    });
+    const parameterized = setParameter(imported.document, {
+      name: 'tail_height',
+      expression: '10'
+    });
+    // A closed line region follows the same canonical-profile path as a
+    // recipe bridge, independently of the earlier boolean's topology.
+    const sketch = addSketchFeature(parameterized, {
+      name: 'Independent bridge section',
+      planeRef: {
+        type: 'canonical',
+        plane: 'XY',
+        offset: 'tail_height / 10'
+      },
+      objects: [
+        { objectKind: 'line', x1: 80, y1: 0, x2: 84, y2: 0 },
+        { objectKind: 'line', x1: 84, y1: 0, x2: 84, y2: 3 },
+        { objectKind: 'line', x1: 84, y1: 3, x2: 80, y2: 3 },
+        { objectKind: 'line', x1: 80, y1: 3, x2: 80, y2: 0 }
+      ]
+    });
+    const sketchNode = findSketch(sketch.document, sketch.sketchId)!;
+    const regions = computeSketchRegions(
+      sketchNode.objectIds.flatMap((id) => {
+        const node = sketch.document.nodes[id];
+        return node?.kind === 'sketch-object' ? [{ id, data: node.data }] : [];
+      }),
+      (value) => (typeof value === 'number' ? value : Number(value))
+    );
+    expect(regions).toHaveLength(1);
+    const region = regions[0]!;
+    const extruded = extrudeSketch(sketch.document, {
+      name: 'Independent bridge',
+      sketchId: sketch.sketchId,
+      distance: 'tail_height',
+      profile: {
+        regionFingerprint: region.regionFingerprint,
+        samplePoint: region.samplePoint,
+        sourceArea: region.area
+      },
+      ...options
+    });
+    return transformBody(extruded.document, {
+      name: 'Dependent bridge move',
+      targetBodyId: extruded.bodyId,
+      translation: { x: 'tail_height / 5', y: 0, z: 0 }
+    }).document;
+  } finally {
+    kernel.free();
+  }
+}
+
+async function boundExtrusionDocument(
+  kind: 'datum-profile' | 'blind-cut' | 'through-all' | 'to-face'
+) {
+  let root = createProjectDocument('Bound extrusion', toUserId('test'));
+  let datumFeatureId: FeatureId | undefined;
+  if (kind === 'datum-profile') {
+    const datum = addDatumPlane(root, {
+      name: 'Earlier datum',
+      definition: {
+        kind: 'offset',
+        source: { type: 'canonical', plane: 'XY', offset: 0 },
+        offset: 1
+      }
+    });
+    root = datum.document;
+    datumFeatureId = datum.featureId;
+  }
+  const fused = fusedPlateDocument(root);
+  let document = fused.document;
+  let toFace: ExtrudeToFaceTarget | undefined;
+  if (kind === 'to-face') {
+    document = addPrimitiveFeature(document, {
+      name: 'Independent ceiling',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 24, depth: 2 }
+    });
+    const ceilingId = document.bodyOrder.at(-1)!;
+    document = transformBody(document, {
+      name: 'Lift ceiling',
+      targetBodyId: ceilingId,
+      translation: { x: 0, y: 0, z: 20 }
+    }).document;
+    const preparation = await harness();
+    try {
+      const built = await preparation.adapter.syncDocument(document);
+      const face = built.bodyRepresentations[ceilingId]!.topology!.faces.find(
+        (candidate) => (candidate.geometry?.normal?.z ?? 0) < -0.99
+      )!;
+      const attachment = faceSketchAttachment({
+        bodyId: ceilingId,
+        pickedHash: face.hash,
+        face
+      });
+      if (!attachment.ok || attachment.attachment !== 'associative')
+        throw new Error('Public ceiling must have an associative planar face.');
+      toFace = attachment.planeRef as ExtrudeToFaceTarget;
+    } finally {
+      preparation.adapter.dispose();
+    }
+  }
+  const planeRef: SketchPlaneRef = datumFeatureId
+    ? { type: 'datum', datumFeatureId }
+    : { type: 'canonical', plane: 'XY', offset: 0 };
+  const sketch = addSketchFeature(document, {
+    name: 'Bound section',
+    planeRef,
+    objects: [
+      { objectKind: 'rectangle', width: 4, height: 4, centerX: 20, centerY: 12 }
+    ]
+  });
+  return extrudeSketch(sketch.document, {
+    name: 'Bound extrusion',
+    sketchId: sketch.sketchId,
+    distance: 4,
+    ...(kind === 'blind-cut' || kind === 'through-all'
+      ? { operation: 'cut' as const, targetBodyId: fused.bodyId }
+      : {}),
+    ...(kind === 'through-all'
+      ? {
+          endCondition: 'through-all' as const,
+          throughAllSide: 'forward' as const
+        }
+      : {}),
+    ...(toFace ? { endCondition: 'to-face' as const, toFace } : {})
+  }).document;
+}
+
 function withoutTimestamp({ updatedAt: _time, ...derived }: DerivedState) {
   return derived;
 }
@@ -167,11 +338,23 @@ async function qualify(
   { adapter, probe }: Harness,
   document: ProjectDocument,
   demand?: readonly BodyId[],
-  context = 'Mode qualification'
+  context = 'Mode qualification',
+  completedFeatures?: string[]
 ) {
   const options = demand === undefined ? undefined : { lineageDemand: demand };
   const sync = () =>
-    adapter.syncDocument(document, undefined, undefined, undefined, options);
+    adapter.syncDocument(
+      document,
+      completedFeatures
+        ? (progress) => {
+            if (progress.stage === 'feature' && progress.status === 'completed')
+              completedFeatures.push(progress.name);
+          }
+        : undefined,
+      undefined,
+      undefined,
+      options
+    );
   const first = await captureExactArenas(adapter, document, sync);
   const repeated = await captureExactArenas(adapter, document, sync);
   expect(compareExactArenas(first.bodies, repeated.bodies).equivalent).toBe(
@@ -709,4 +892,288 @@ describe('H02 mode-specific cached lineage', { timeout: 120_000 }, () => {
       subject.adapter.dispose();
     }
   });
+
+  it('restores fixed planar-emboss STEP text after a boolean across eager/idle transitions and the first real tail edit', async () => {
+    let document = await importedTextTailDocument();
+    const featureCount = listFeaturesInOrder(document).length;
+    // Both cache-disabled modes independently establish that this public
+    // fixture is stable under the unchanged strict serialization oracle.
+    for (const demand of [undefined, []] as const) {
+      const cold = await harness({
+        historyCheckpointLimit: 0,
+        importedStepCacheBytes: 0,
+        measuredShapeCacheBytes: 0
+      });
+      try {
+        const options =
+          demand === undefined ? undefined : { lineageDemand: demand };
+        await cold.adapter.syncDocument(
+          document,
+          undefined,
+          undefined,
+          undefined,
+          options
+        );
+        await cold.adapter.syncDocument(
+          document,
+          undefined,
+          undefined,
+          undefined,
+          options
+        );
+        const warmControl = await captureExactArenas(
+          cold.adapter,
+          document,
+          () =>
+            cold.adapter.syncDocument(
+              document,
+              undefined,
+              undefined,
+              undefined,
+              options
+            )
+        );
+        const freshControl = await harness({
+          historyCheckpointLimit: 0,
+          importedStepCacheBytes: 0,
+          measuredShapeCacheBytes: 0
+        });
+        try {
+          const freshCapture = await captureExactArenas(
+            freshControl.adapter,
+            document,
+            () =>
+              freshControl.adapter.syncDocument(
+                document,
+                undefined,
+                undefined,
+                undefined,
+                options
+              )
+          );
+          expect(
+            compareExactArenas(warmControl.bodies, freshCapture.bodies)
+          ).toMatchObject({ equivalent: true });
+        } finally {
+          freshControl.adapter.dispose();
+        }
+        await qualify(cold, document, demand, 'Public text cold control');
+      } finally {
+        cold.adapter.dispose();
+      }
+    }
+    const subject = await harness();
+    try {
+      await qualify(subject, document);
+      for (const demand of [[], undefined] as const) {
+        const completed: string[] = [];
+        const before = subject.events.length;
+        await qualify(
+          subject,
+          document,
+          demand,
+          'Fixed text mode switch',
+          completed
+        );
+        expect(subject.events[before]).toMatchObject({
+          kind: 'prefix-restore',
+          restored: featureCount,
+          replayed: 0
+        });
+        expect(completed).not.toContain('Text');
+      }
+      document = setParameter(document, {
+        name: 'tail_height',
+        expression: '11'
+      });
+      const completed: string[] = [];
+      const before = subject.events.length;
+      await qualify(
+        subject,
+        document,
+        [],
+        'First actual bridge edit',
+        completed
+      );
+      expect(subject.events[before]).toMatchObject({
+        kind: 'prefix-restore',
+        restored: 4,
+        replayed: 3
+      });
+      expect(completed).not.toContain('Text');
+      expect(completed).toContain('Independent bridge section');
+      expect(completed).toContain('Independent bridge');
+      expect(completed).toContain('Dependent bridge move');
+      assertLineageOwners(subject.adapter);
+    } finally {
+      subject.adapter.dispose();
+    }
+  });
+
+  it('crosses the unchanged replay budget with imported text and real independent bridge edits instead of avoiding recycling through fresh rebuilds', async () => {
+    let document = await importedTextTailDocument();
+    const subject = await harness();
+    const editEvents: RebuildCacheEvent[] = [];
+    let textExecutionsOutsideRecycling = 0;
+    try {
+      await qualify(subject, document);
+      const originalKernel = cacheState(subject.adapter).historyKernel;
+      for (let edit = 0; edit < 180; edit++) {
+        document = setParameter(document, {
+          name: 'tail_height',
+          expression: String(11 + edit / 10)
+        });
+        const completed: string[] = [];
+        const demand = edit % 2 ? undefined : [];
+        const result = await subject.adapter.syncDocument(
+          document,
+          (progress) => {
+            if (progress.stage === 'feature' && progress.status === 'completed')
+              completed.push(progress.name);
+          },
+          undefined,
+          undefined,
+          demand === undefined ? undefined : { lineageDemand: demand }
+        );
+        expect(result.warnings).toEqual([]);
+        const event = subject.events.at(-1)!;
+        editEvents.push(event);
+        if (event.recycleReason !== 'replay-budget')
+          textExecutionsOutsideRecycling += completed.filter(
+            (name) => name === 'Text'
+          ).length;
+        if (edit % 45 === 0 || event.recycleReason === 'replay-budget') {
+          await qualify(
+            subject,
+            document,
+            demand,
+            'Sustained public text edit'
+          );
+          assertLineageOwners(subject.adapter);
+        }
+      }
+      expect(
+        editEvents.filter((event) => event.recycleReason === 'replay-budget')
+          .length,
+        'Real bridge replay must cross the unchanged replay recycling budget'
+      ).toBeGreaterThan(0);
+      expect(
+        editEvents.filter(
+          (event) => event.kind === 'full-rebuild' && !event.recycleReason
+        )
+      ).toEqual([]);
+      expect(textExecutionsOutsideRecycling).toBe(0);
+      for (const event of editEvents) {
+        expect(event).toMatchObject(
+          event.recycleReason === 'replay-budget'
+            ? { kind: 'full-rebuild', restored: 0, replayed: 7 }
+            : { kind: 'prefix-restore', restored: 4, replayed: 3 }
+        );
+      }
+      expect(cacheState(subject.adapter).historyKernel).not.toBe(
+        originalKernel
+      );
+      await qualify(subject, document, []);
+      await qualify(subject, document);
+      assertLineageOwners(subject.adapter);
+      subject.adapter.dispose();
+      expect(cacheState(subject.adapter).historyLineageMetadataBytes).toBe(0);
+      await qualify(subject, document, []);
+    } finally {
+      subject.adapter.dispose();
+    }
+  });
+
+  it.each(['datum-profile', 'blind-cut', 'through-all', 'to-face'] as const)(
+    'keeps %s extrusion dependencies on the strict fresh fallback path',
+    async (kind) => {
+      const document = await boundExtrusionDocument(kind);
+      const cold = await harness({
+        historyCheckpointLimit: 0,
+        importedStepCacheBytes: 0,
+        measuredShapeCacheBytes: 0
+      });
+      try {
+        await qualify(cold, document, [], `${kind} cold idle control`);
+      } finally {
+        cold.adapter.dispose();
+      }
+      const subject = await harness();
+      try {
+        await qualify(subject, document);
+        const before = subject.events.length;
+        await qualify(subject, document, [], `${kind} first mode transition`);
+        expect(subject.events[before]).toMatchObject({
+          kind: 'full-rebuild',
+          restored: 0,
+          replayed: listFeaturesInOrder(document).length
+        });
+        expect(
+          subject.events[before]!.measurementCache?.resetReason ?? null
+        ).toBeNull();
+        assertLineageOwners(subject.adapter);
+      } finally {
+        subject.adapter.dispose();
+      }
+    }
+  );
+
+  it.each([
+    { name: 'draft', options: { draftAngleDeg: 2 } },
+    { name: 'symmetric', options: { symmetric: true } },
+    { name: 'two-sided', options: { backDistance: 'tail_height / 2' } }
+  ] as const)(
+    'preserves strict independent blind $name extrusion across mode changes',
+    async ({ name, options }) => {
+      let document = await importedTextTailDocument(options);
+      for (const demand of [undefined, []] as const) {
+        const cold = await harness({
+          historyCheckpointLimit: 0,
+          importedStepCacheBytes: 0,
+          measuredShapeCacheBytes: 0
+        });
+        try {
+          await qualify(cold, document, demand, `${name} cold control`);
+        } finally {
+          cold.adapter.dispose();
+        }
+      }
+      const subject = await harness();
+      try {
+        await qualify(subject, document);
+        const before = subject.events.length;
+        const completed: string[] = [];
+        await qualify(subject, document, [], `${name} mode change`, completed);
+        expect(subject.events[before]).toMatchObject({
+          kind: 'prefix-restore',
+          restored: 7,
+          replayed: 0
+        });
+        expect(completed).not.toContain('Text');
+        document = setParameter(document, {
+          name: 'tail_height',
+          expression: '11'
+        });
+        const beforeEdit = subject.events.length;
+        completed.length = 0;
+        await qualify(
+          subject,
+          document,
+          [],
+          `${name} real tail edit`,
+          completed
+        );
+        expect(subject.events[beforeEdit]).toMatchObject({
+          kind: 'prefix-restore',
+          restored: 4,
+          replayed: 3
+        });
+        expect(completed).not.toContain('Text');
+        expect(completed).toContain('Independent bridge');
+        assertLineageOwners(subject.adapter);
+      } finally {
+        subject.adapter.dispose();
+      }
+    }
+  );
 });

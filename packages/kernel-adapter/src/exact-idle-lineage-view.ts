@@ -5,6 +5,7 @@
  * here: every retained reference belongs to a shipped shape.
  */
 import type { BodyId, FeatureNode, ProjectDocument } from '@openzcad/shared';
+import { findSketch } from '@openzcad/document-core';
 import type { ExactBuildResult, ExactShape } from './exact-types';
 import type { RemusKernel } from './remus-runtime';
 import {
@@ -29,11 +30,32 @@ export interface IdleLineageView {
   diverged: boolean;
 }
 
+/** These outputs depend on their own inputs, never a prior shape's lineage. */
+function independentLineageOutput(
+  feature: FeatureNode,
+  document: ProjectDocument
+): boolean {
+  const data = feature.data;
+  if (data.featureKind === 'primitive' || data.featureKind === 'imported-step')
+    return true;
+  return (
+    data.featureKind === 'extrude' &&
+    (data.operation === undefined || data.operation === 'new-body') &&
+    (data.endCondition === undefined || data.endCondition === 'blind') &&
+    findSketch(document, data.sketchId)?.planeRef.type === 'canonical'
+  );
+}
+
 /** Builders whose alternate metadata never resolves a reference-bound frame. */
-export function supportsIdleLineageView(feature: FeatureNode): boolean {
+export function supportsIdleLineageView(
+  feature: FeatureNode,
+  document: ProjectDocument
+): boolean {
   const data = feature.data;
   return (
-    data.featureKind === 'primitive' ||
+    independentLineageOutput(feature, document) ||
+    (data.featureKind === 'sketch' &&
+      findSketch(document, data.sketchId)?.planeRef.type === 'canonical') ||
     data.featureKind === 'boolean' ||
     (data.featureKind === 'transform' && !data.axisRotation)
   );
@@ -305,13 +327,16 @@ export class IdleLineageViewBuilder {
     // Before the first differing boolean, all builders have the same inputs.
     // Afterwards only these metadata paths have been audited. Other feature
     // kinds can consume lineage, repairs or reference-bound frames.
-    if (!supportsIdleLineageView(feature)) {
+    if (!supportsIdleLineageView(feature, this.document)) {
       this.abandon();
       return undefined;
     }
     for (const [id, shape] of result.shapes) {
       if (this.handled.has(id) || this.before.get(id) === shape) continue;
-      if (!view.diverged || feature.data.featureKind === 'primitive') {
+      if (
+        id === feature.bodyId &&
+        independentLineageOutput(feature, this.document)
+      ) {
         view.lineages.set(id, shape.lineage);
         continue;
       }
