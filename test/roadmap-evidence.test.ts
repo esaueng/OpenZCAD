@@ -134,6 +134,14 @@ describe('roadmap evidence fragments', () => {
     ]);
   });
 
+  it('keeps earlier evidence when a later fragment sets a shared state cell', () => {
+    const out = foldEvidence(LEDGER, [
+      fragment('PERF-N04', 'Measured.', undefined, 'perf-n04--a.md'),
+      fragment('PERF-N04', 'Closed.', 'Done', 'perf-n04--b.md')
+    ]);
+    expect(splitRow(rowOf(out, 'perf-n04')!)[2]).toBe('Done Measured. Closed.');
+  });
+
   it('applies several fragments for one row in file-name order', () => {
     const out = foldEvidence(LEDGER, [
       fragment('A01', 'Second.', undefined, 'a01--b.md'),

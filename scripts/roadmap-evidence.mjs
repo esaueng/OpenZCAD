@@ -217,15 +217,24 @@ export function foldEvidence(markdown, fragments) {
     placed.push({ fragment, index, target, state });
   }
   if (errors.length) throw new Error(errors.join('\n'));
-  for (const { fragment, index, target, state } of placed) {
-    const cells = splitRow(lines[index]);
-    if (fragment.state !== undefined) cells[state] = escapeCell(fragment.state);
+  // States first, then every body: where a table has no evidence column the
+  // state cell also receives evidence, and a state applied after an earlier
+  // fragment's body would overwrite that body.
+  const rowCells = new Map();
+  for (const { fragment, index, state } of placed) {
+    if (!rowCells.has(index)) rowCells.set(index, splitRow(lines[index]));
+    if (fragment.state !== undefined) {
+      rowCells.get(index)[state] = escapeCell(fragment.state);
+    }
+  }
+  for (const { fragment, index, target } of placed) {
+    const cells = rowCells.get(index);
     const text = escapeCell(fragment.evidence);
     cells[target] = EMPTY_CELLS.has(cells[target])
       ? text
       : `${cells[target]} ${text}`;
-    lines[index] = joinRow(cells);
   }
+  for (const [index, cells] of rowCells) lines[index] = joinRow(cells);
   return lines.join('\n');
 }
 
