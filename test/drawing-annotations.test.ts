@@ -618,6 +618,23 @@ describe('D02 values from the model', () => {
       Math.hypot(width, height),
       12
     );
+    // Horizontal on a vertical edge, vertical on a horizontal one: no span.
+    expect(
+      resolveDrawingAnnotation(
+        linear(id('hz'), 'horizontal', r, 'first', r, 'second'),
+        front,
+        bodies,
+        'mm'
+      )
+    ).toMatchObject({ ok: false, reason: 'degenerate' });
+    expect(
+      resolveDrawingAnnotation(
+        linear(id('vz'), 'vertical', t, 'first', t, 'second'),
+        front,
+        bodies,
+        'mm'
+      )
+    ).toMatchObject({ ok: false, reason: 'degenerate' });
     const angle = measure({
       annotationId: id('a'),
       kind: 'angle',

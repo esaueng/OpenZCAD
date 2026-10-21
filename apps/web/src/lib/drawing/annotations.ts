@@ -125,7 +125,7 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
     case 'parallel':
       return 'The two edges are now parallel in this view, so they make no angle.';
     case 'degenerate':
-      return 'The two points this measured now coincide in this view.';
+      return 'The two points this measures are level along its direction in this view, so there is no span to dimension.';
     case 'invalid-reference':
       return 'The stored reference to this edge does not match its own fingerprint, so it is not trusted.';
     case 'leader-hidden':
@@ -416,6 +416,10 @@ export function resolveDrawingAnnotation(
         axis = [du / length, dv / length];
       }
       const value = Math.abs(du * axis[0] + dv * axis[1]);
+      // Two points level along the measured axis (a Horizontal on a
+      // vertical edge) span nothing there: no "0" dimension.
+      if (value <= 1e-9 * Math.max(1, Math.abs(du), Math.abs(dv)))
+        return failure('degenerate');
       return {
         ok: true,
         resolved: {
