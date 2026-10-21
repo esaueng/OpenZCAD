@@ -5,6 +5,7 @@ import {
   modelPanel,
   promptField,
   railPanelButton,
+  selectBodyFromObjects,
   stubApi,
   test,
   type SeedPanelLayout
@@ -558,4 +559,48 @@ test('a window floated over a live handle leaves its value chip clear and reacha
       { x: after.x + after.width / 2, y: after.y + after.height / 2 }
     )
   ).toBe(true);
+});
+
+test('a window dropped over a selection callout moves the callout clear', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Callout clear', { right: [] });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expectBodyCount(page, 1);
+  await page.keyboard.press('Escape');
+  // A body picked from its row: a callout with no handle's value chip, so
+  // nothing but the panel layer can ask the scene to place it again.
+  await selectBodyFromObjects(page);
+  const callout = page.locator('.selection-callout-chip');
+  await expect(page.locator('.handle-value-chip:not([hidden])')).toHaveCount(0);
+  await modelPanel(page, 'Objects')
+    .getByRole('button', { name: 'Pop out Objects' })
+    .click();
+  const window = windowOf(page, 'Objects');
+  await expect(window).toBeVisible();
+  const before = await box(callout);
+  expect(overlaps(before, await box(window))).toBe(false);
+
+  const heading = await box(
+    modelPanel(page, 'Objects').locator('.model-panel-title')
+  );
+  const centre = {
+    x: before.x + before.width / 2,
+    y: before.y + before.height / 2
+  };
+  await page.mouse.move(heading.x + 24, heading.y + heading.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(heading.x + 40, heading.y + 30, { steps: 3 });
+  await page.mouse.move(centre.x - 60, centre.y - 40, { steps: 12 });
+  await page.mouse.up();
+  // The window now stands where the callout was, and the callout steps out.
+  expect(overlaps(await box(window), before)).toBe(true);
+  await expect(callout).toBeVisible();
+  await expect
+    .poll(async () => overlaps(await box(callout), await box(window)))
+    .toBe(false);
 });
