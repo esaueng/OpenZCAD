@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
+import { mergeCollaborationDocuments } from '@openzcad/cloudflare-adapters';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   createRoomContext,
@@ -115,3 +116,42 @@ describe.each(['http', 'websocket'])(
     });
   }
 );
+
+/**
+ * Two forks that are each valid can merge field by field into a folder
+ * section that is not: one deletes a folder while the other files a body in
+ * it. That is an ordinary collaboration conflict, not a room failure.
+ */
+describe('Objects folders in a three-way collaboration merge', () => {
+  it('reports a delete-versus-file fork as a conflict instead of throwing', () => {
+    const manager = new CommandManager(filedDocument());
+    manager.execute(
+      commandFactories.createObjectFolder({
+        folderId: 'folder_b',
+        name: 'Spare',
+        parentId: null
+      })
+    );
+    const base = structuredClone(manager.document);
+    const bodyId = base.bodyOrder[0]!;
+
+    const deleting = new CommandManager(structuredClone(base));
+    deleting.execute(
+      commandFactories.deleteObjectFolder({ folderId: 'folder_b' })
+    );
+    const filing = new CommandManager(structuredClone(base));
+    filing.execute(
+      commandFactories.moveToObjectFolder({
+        parentId: 'folder_b',
+        bodyIds: [bodyId]
+      })
+    );
+
+    expect(() =>
+      mergeCollaborationDocuments(base, deleting.document, filing.document)
+    ).not.toThrow();
+    expect(
+      mergeCollaborationDocuments(base, deleting.document, filing.document)
+    ).toBeNull();
+  });
+});
