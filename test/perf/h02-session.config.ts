@@ -1,7 +1,7 @@
 /** Serial private-session qualification; never included by ordinary E2E CI. */
-import { dirname, resolve } from 'node:path';
 import { defineConfig } from '@playwright/test';
 import matched from './h02-browser.config';
+import { privateArtifactPaths } from '../support/privateArtifacts';
 
 if (
   process.env.H02_SESSION_PROBE !== '1' ||
@@ -15,8 +15,7 @@ export default defineConfig({
   testMatch: 'h02-private-session.spec.ts',
   grep: undefined,
   timeout: 3_600_000,
-  outputDir: resolve(
-    dirname(process.env.OZ_PERF_OUT!),
+  outputDir: privateArtifactPaths(process.env.OZ_PERF_OUT).artifact(
     'h02-private-session-artifacts'
   )
 });

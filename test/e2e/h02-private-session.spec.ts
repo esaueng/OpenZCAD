@@ -1,19 +1,5 @@
 /** Opt-in sustained private browser qualification. No private fixture is committed. */
-import {
-  appendFileSync,
-  existsSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync
-} from 'node:fs';
-import {
-  basename,
-  dirname,
-  isAbsolute,
-  relative,
-  resolve,
-  sep
-} from 'node:path';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { loadavg } from 'node:os';
 import {
@@ -32,6 +18,7 @@ import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import { preflightCadPatch } from '../../apps/web/src/lib/aiPatchPreflight';
 import type { Page } from '@playwright/test';
 import { expect, test, stubApi } from './openzcad-fixtures';
+import { privateArtifactPaths } from '../support/privateArtifacts';
 
 const enabled = process.env.H02_SESSION_PROBE === '1';
 test.skip(!enabled, 'Opt-in private qualification only.');
@@ -217,22 +204,10 @@ test('private holder survives sustained edits, retirement, refusal and worker re
 }) => {
   test.setTimeout(3_600_000);
   const source = process.env.OZ_PERF_HOLDER_STEP;
-  const output = process.env.OZ_PERF_OUT;
-  if (!source || !output)
+  if (!source || !process.env.OZ_PERF_OUT)
     throw new Error('Private source and outside-repository output required.');
-  const destination = existsSync(output)
-    ? realpathSync(output)
-    : resolve(realpathSync(dirname(output)), basename(output));
-  const fromRepository = relative(realpathSync(process.cwd()), destination);
-  if (
-    !isAbsolute(output) ||
-    (fromRepository !== '..' &&
-      !fromRepository.startsWith(`..${sep}`) &&
-      !isAbsolute(fromRepository))
-  )
-    throw new Error(
-      'Private session artifacts must remain outside the repository.'
-    );
+  const paths = privateArtifactPaths(process.env.OZ_PERF_OUT);
+  const output = paths.output;
   const record = (value: unknown) =>
     appendFileSync(output, `${JSON.stringify(value)}\n`);
   const input = readFileSync(source);
@@ -329,7 +304,7 @@ test('private holder survives sustained edits, retirement, refusal and worker re
   await page.getByLabel('Project name').fill('Private qualification');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
-  const backupPath = resolve(dirname(output), 'private-session.openzcad');
+  const backupPath = paths.artifact('private-session.openzcad');
   writeFileSync(
     backupPath,
     JSON.stringify({
@@ -338,7 +313,7 @@ test('private holder survives sustained edits, retirement, refusal and worker re
       document: withoutDerivedProjection(document),
       files: []
     }),
-    { mode: 0o600 }
+    { flag: 'wx', mode: 0o600 }
   );
   await page.getByLabel('Import project backup').setInputFiles(backupPath);
   await expect(

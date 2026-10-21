@@ -1,8 +1,8 @@
 /** Build the real production app with only a benchmark adapter-options seam. */
-import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import webConfig from '../../apps/web/vite.config';
 import { assertBenchmarkCheckout } from '../support/benchmarkCheckout';
+import { privateArtifactPaths } from '../support/privateArtifacts';
 
 export default async (...args: Parameters<typeof webConfig>) => {
   const mode = process.env.H02_CACHE_MODE;
@@ -12,6 +12,7 @@ export default async (...args: Parameters<typeof webConfig>) => {
     throw new Error('H02 benchmark builds require VITE_E2E=1.');
   if (!process.env.OZ_PERF_OUT)
     throw new Error('Set OZ_PERF_OUT for an isolated benchmark build.');
+  const paths = privateArtifactPaths(process.env.OZ_PERF_OUT);
   const checkout = {
     sourceCommit: process.env.H02_SOURCE_COMMIT ?? '',
     lockfileSha256: process.env.H02_LOCKFILE_SHA256 ?? ''
@@ -31,7 +32,7 @@ export default async (...args: Parameters<typeof webConfig>) => {
     ],
     build: {
       ...config.build,
-      outDir: resolve(dirname(process.env.OZ_PERF_OUT), `h02-build-${mode}`)
+      outDir: paths.artifact(`h02-build-${mode}`)
     },
     define: { ...config.define, __H02_CACHE_MODE__: JSON.stringify(mode) },
     resolve: {
