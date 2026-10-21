@@ -39,6 +39,7 @@ export * from './snap/measureSnaps';
 // Selection: hover/preselect state and its overlays.
 export * from './selection/SelectionManager';
 export * from './selection/boxSelect';
+export * from './selection/topologyBoxSelect';
 export * from './selection/boundaryEdgesOfFace';
 export * from './selection/faceHighlightGeometry';
 export * from './selection/analyticCylinderGhost';

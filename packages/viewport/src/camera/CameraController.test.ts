@@ -1058,3 +1058,148 @@ describe('CameraController teardown', () => {
     expect(root.live).toEqual([]);
   });
 });
+
+describe('CameraController field of view', () => {
+  /** Half the height the perspective view spans at the orbit target. */
+  function spanAtTarget(controller: CameraController) {
+    const camera = controller.perspective;
+    return (
+      camera.position.distanceTo(controller.controls.target) *
+      Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))
+    );
+  }
+
+  it('restores a pose saved at another field of view with its framing', () => {
+    const first = createController();
+    const span = spanAtTarget(first.controller);
+    const saved = first.controller.capture();
+    expect(saved.fieldOfView).toBe(45);
+    first.controller.dispose();
+
+    // The preference changed while the project was closed.
+    const { controller } = createController();
+    controller.setFieldOfView(70);
+    controller.restore(saved, 'perspective');
+    expect(controller.fieldOfView).toBe(70);
+    expect(spanAtTarget(controller)).toBeCloseTo(span, 9);
+    expect(controller.controls.target.toArray()).toEqual(saved.target);
+    controller.dispose();
+  });
+
+  it('widens the clipping range for a pose reopened at a narrower field of view', () => {
+    const first = createController();
+    first.controller.setFieldOfView(90);
+    const saved = first.controller.capture();
+    first.controller.dispose();
+
+    const { controller } = createController();
+    controller.setFieldOfView(15);
+    const { near, far } = controller.perspective;
+    controller.restore(saved, 'perspective');
+    const distance = controller.perspective.position.distanceTo(
+      controller.controls.target
+    );
+    expect(controller.perspective.far).toBeGreaterThan(far);
+    expect(controller.perspective.far).toBeGreaterThan(distance * 1.5);
+    expect(controller.perspective.near).toBe(near);
+
+    // Back the other way the planes keep their range rather than shrink.
+    const wide = createController();
+    wide.controller.setFieldOfView(90);
+    const before = { ...wide.controller.perspective };
+    wide.controller.restore({ ...saved, fieldOfView: 15 }, 'perspective');
+    expect(wide.controller.perspective.far).toBe(before.far);
+    expect(wide.controller.perspective.near).toBeLessThan(before.near);
+    wide.controller.dispose();
+    controller.dispose();
+  });
+
+  it('restores a pose saved before the field of view was recorded as given', () => {
+    const first = createController();
+    const { fieldOfView: _unrecorded, ...legacy } = first.controller.capture();
+    first.controller.dispose();
+    const { controller } = createController();
+    controller.setFieldOfView(70);
+    controller.restore(legacy, 'perspective');
+    controller.perspective.position.toArray().forEach((value, axis) => {
+      expect(value).toBeCloseTo(legacy.position[axis]!, 9);
+    });
+    controller.dispose();
+  });
+
+  it('restores a pose with an out-of-range field of view as unrecorded', () => {
+    const first = createController();
+    const saved = first.controller.capture();
+    first.controller.dispose();
+    const { controller } = createController();
+    controller.setFieldOfView(70);
+    for (const fieldOfView of [179, 5, 120]) {
+      controller.restore({ ...saved, fieldOfView }, 'perspective');
+      controller.perspective.position.toArray().forEach((value, axis) => {
+        expect(value).toBeCloseTo(saved.position[axis]!, 9);
+      });
+    }
+    controller.dispose();
+  });
+
+  it('keeps the framing while the depth cue changes', () => {
+    const { controller, onViewChange } = createController();
+    const span = spanAtTarget(controller);
+    const direction = controller.viewDirection();
+    const near = controller.perspective.near;
+    controller.setFieldOfView(25);
+    expect(controller.fieldOfView).toBe(25);
+    expect(spanAtTarget(controller)).toBeCloseTo(span, 9);
+    // Along the same axis, and further out: a narrower view stands back.
+    expect(controller.viewDirection().angleTo(direction)).toBeLessThan(1e-9);
+    expect(orbitDistance(controller)).toBeGreaterThan(150);
+    expect(controller.perspective.near).toBeGreaterThan(near);
+    expect(onViewChange).toHaveBeenCalled();
+    controller.dispose();
+  });
+
+  it('clamps to the preference bounds and ignores a repeat', () => {
+    const { controller, onViewChange } = createController();
+    controller.setFieldOfView(170);
+    expect(controller.fieldOfView).toBe(90);
+    onViewChange.mockClear();
+    controller.setFieldOfView(90);
+    expect(onViewChange).not.toHaveBeenCalled();
+    controller.setFieldOfView(1);
+    expect(controller.fieldOfView).toBe(15);
+    controller.dispose();
+  });
+
+  it('leaves an orthographic view exactly as it was', () => {
+    const { controller } = createController();
+    controller.applyProjection('orthographic');
+    const before = controller.capture();
+    controller.setFieldOfView(70);
+    // The picture is untouched; only the recorded field of view moves.
+    expect(controller.capture()).toEqual({ ...before, fieldOfView: 70 });
+    expect(controller.projection).toBe('orthographic');
+    controller.dispose();
+  });
+
+  it.each([1, 2.5])(
+    'preserves orthographic framing after a FOV change and projection round trip (zoom %s)',
+    (zoom) => {
+      const { controller } = createController();
+      controller.applyProjection('orthographic');
+      controller.orthographic.zoom = zoom;
+      controller.orthographic.updateProjectionMatrix();
+      const span = Math.abs(controller.orthographic.top) / zoom;
+      controller.setFieldOfView(70);
+      expect(
+        Math.abs(controller.orthographic.top) / controller.orthographic.zoom
+      ).toBeCloseTo(span, 9);
+      controller.applyProjection('perspective');
+      expect(spanAtTarget(controller)).toBeCloseTo(span, 9);
+      controller.applyProjection('orthographic');
+      expect(
+        Math.abs(controller.orthographic.top) / controller.orthographic.zoom
+      ).toBeCloseTo(span, 9);
+      controller.dispose();
+    }
+  );
+});
