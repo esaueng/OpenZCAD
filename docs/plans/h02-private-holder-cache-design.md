@@ -173,7 +173,6 @@ claims about actual worker heap. The unchanged 32-checkpoint, 32 MiB derived
 rebuild and 128 MiB measurement ceilings do not authorize an additional branch
 allocation; branch retention is zero until its contract and acceptance pass.
 
-
 ## Matched benchmark preparation (2026-10-15)
 
 [Current harness and evidence](../qa/2026-10-15/h02-matched-cache-benchmark.md)
@@ -194,3 +193,41 @@ raw B-rep byte equivalence. The attempted browser comparison was interrupted
 under severe unrelated host load before a complete matched pair existed.
 Median/p95, browser retention and the 20% target remain unmeasured in that
 campaign. H02 remains Partial, and no proposed Text-branch cache is accepted.
+
+## Existing-cache qualification (2026-10-21)
+
+[Current qualification evidence](../qa/2026-10-21/h02-existing-cache-qualification.md)
+adds strict per-body reachable B-rep comparison on the private holder: all
+3,204,155 serialized bytes match across the actual cached and fresh builds of
+17 bodies. The existing normalized publication comparison also passes across
+720 faces. New regressions force real measurement-cache byte-budget eviction,
+then exercise refusal recovery, disposal and rebuild, and confirm that retired
+suffix checkpoints cannot restore over newly replayed geometry.
+
+These are existing-cache exactness and lifetime results. The current pinned
+Remus contract still restores ancestors only, so a detached Text record remains
+blocked on branch-preserving kernel support and dependency/effect analysis.
+No runtime cache change or extra branch-memory allocation is accepted here.
+
+## M5 Pro qualification follow-up (2026-10-21)
+
+[The target-hardware record](../qa/2026-10-21/h02-m5-pro-qualification.md)
+reports a 38.6% observed p95 exact-completion improvement across three matched
+existing-cache pairs under background load. It does not close quiet-host timing
+or accept a detached Text record.
+
+The 80-edit private browser session exercises eviction, recycling, refusal and
+recovery, real worker termination/restart and repeated post-GC probes. Per-body
+raw B-rep remains byte-identical to fresh builds; five accumulated-edit
+publication comparisons fail in topology references and lineage diagnostics.
+The unchanged publication-equivalence criterion is therefore unmet. The new
+probes retain those failures while completing independent observations; no
+normalization or acceptance threshold is relaxed. Whole-worker retained-memory
+bounds and branch-preserving kernel/dependency support remain open.
+
+The [public demand-history reproduction](../qa/2026-10-21/h02-m5-pro-qualification.md#public-reproduction-of-demand-history-dependent-publication)
+isolates a matching publication failure on two boxes and a union: an idle request
+can reuse eagerly probed lineage checkpoints and publish references that a fresh
+idle build omits, with identical raw geometry. Its opt-in strict assertion still
+fails. This explains a public path to the mismatch without changing the pinned
+runtime or treating broader lineage as accepted equivalence.

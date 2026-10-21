@@ -16,6 +16,7 @@ import type {
 import type {
   BuildCancellationSignal,
   createExactKernelAdapter,
+  DrawingBodyTessellation,
   DxfFaceSelector,
   ExactSectionPlane,
   MeshQualityReport,
@@ -133,6 +134,18 @@ export type GeometryWorkerRequest =
       angularTolerance?: number;
       /** The space the writer tessellates in; millimetres when unset. */
       units?: UnitSystem;
+    }
+  | {
+      /**
+       * D01 drawing projection input: each body meshed at its nominal
+       * deflection in canonical order, independent of the display mesh's
+       * held deflection, so a sheet draws the same lines however the model
+       * was built (see the adapter's `drawingTessellation`).
+       */
+      type: 'drawing-tessellation';
+      requestId: string;
+      document: ProjectDocument;
+      bodyIds: BodyId[];
     }
   | {
       /** Reads live mass data, restoring exact history for a stale cache hit. */
@@ -257,6 +270,21 @@ export type GeometryMeshQualityResult =
     }
   | { type: 'mesh-quality'; ok: false; requestId: string; error: string };
 
+export type GeometryDrawingTessellationResult =
+  | {
+      type: 'drawing-tessellation';
+      ok: true;
+      requestId: string;
+      /** Transferred, not copied. */
+      bodies: Record<BodyId, DrawingBodyTessellation>;
+    }
+  | {
+      type: 'drawing-tessellation';
+      ok: false;
+      requestId: string;
+      error: string;
+    };
+
 export type GeometryMassPropertiesResult =
   | {
       type: 'mass-properties';
@@ -358,6 +386,7 @@ export type GeometryWorkerResult =
   | GeometrySyncResult
   | GeometryExportResult
   | GeometryMeshQualityResult
+  | GeometryDrawingTessellationResult
   | GeometryMassPropertiesResult
   | GeometrySectionResult
   | GeometrySolveSketchResult
@@ -744,6 +773,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     if (
       request.type === 'export' ||
       request.type === 'mesh-quality' ||
+      request.type === 'drawing-tessellation' ||
       request.type === 'section' ||
       request.type === 'solve-sketch' ||
       request.type === 'sketch-2d-op' ||
@@ -828,6 +858,32 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           requestId: request.requestId,
           report
         });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.type === 'drawing-tessellation') {
+        const bodies = await exact.drawingTessellation(
+          document,
+          request.bodyIds
+        );
+        const transfer: ArrayBuffer[] = [];
+        for (const body of Object.values(bodies)) {
+          transfer.push(
+            body.vertices.buffer as ArrayBuffer,
+            body.indices.buffer as ArrayBuffer
+          );
+          for (const edge of body.edges)
+            transfer.push(edge.buffer as ArrayBuffer);
+        }
+        post(
+          {
+            type: 'drawing-tessellation',
+            ok: true,
+            requestId: request.requestId,
+            bodies
+          },
+          transfer
+        );
         post(stateFor('ready', request, { stale: false }));
         return;
       }
@@ -1150,6 +1206,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'mesh-quality') {
       post({
         type: 'mesh-quality',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'drawing-tessellation') {
+      post({
+        type: 'drawing-tessellation',
         ok: false,
         requestId: request.requestId,
         error: message
