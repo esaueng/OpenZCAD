@@ -84,6 +84,16 @@
   stroke-width: 0.8px;
 }
 
+.drawing-strokes.is-dimension {
+  stroke-width: 0.8px;
+}
+
+/* Dimension arrowheads: filled, not outlined. */
+.drawing-strokes polygon.is-filled {
+  fill: #000000;
+  stroke: none;
+}
+
 .drawing-texts {
   fill: #000000;
   font-family: Helvetica, Arial, sans-serif;
@@ -319,6 +329,135 @@
 .drawing-empty p {
   margin: 0;
   line-height: 1.5;
+}
+
+/* D02 annotations: picking, preview and selection over the paper. The
+   paper's own lines stay black; only the tool feedback is coloured. */
+.drawing-annotation-hit {
+  fill: transparent;
+  stroke: transparent;
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+  cursor: move;
+}
+
+.drawing-annotation-hit:hover {
+  stroke: rgb(103 152 255 / 55%);
+  stroke-dasharray: 3 2;
+}
+
+.drawing-annotation-hit.is-selected,
+.drawing-annotation-broken.is-selected .drawing-annotation-hit {
+  stroke: var(--color-accent);
+  stroke-dasharray: none;
+}
+
+.drawing-annotation-broken text {
+  fill: var(--color-error);
+  font-family: var(--font-ui);
+  font-size: 3.2px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.drawing-annotation-preview {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 0.8px;
+  pointer-events: none;
+}
+
+.drawing-annotation-preview polyline {
+  vector-effect: non-scaling-stroke;
+}
+
+.drawing-annotation-preview .is-filled {
+  fill: var(--color-accent);
+}
+
+.drawing-annotation-preview text {
+  fill: var(--color-accent);
+  stroke: none;
+  font-family: Helvetica, Arial, sans-serif;
+}
+
+.drawing-pick-highlight {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 3px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.drawing-pick-surface {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.drawing-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.drawing-tool {
+  min-height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.drawing-tool:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.drawing-tool.active {
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-dim);
+  color: var(--color-accent);
+}
+
+.drawing-tool:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.drawing-tool-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.drawing-tool-hint span {
+  flex: 1 1 auto;
+}
+
+.drawing-annotation-status {
+  margin: 0;
+  color: var(--color-error-text);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.drawing-annotation-value {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.drawing-sheet-item.is-broken {
+  color: var(--color-error-text);
 }
 
 @media (max-width: 760px) {

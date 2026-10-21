@@ -959,7 +959,10 @@ describe('assistant integration', () => {
     expect(schema).not.toContain('"const":"add_datum_split"');
   });
 
-  async function datumRequest(operations?: readonly string[]) {
+  async function datumRequest(
+    operations?: readonly string[],
+    geometryEnabled = false
+  ) {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
         new Response('data: {"type":"response.completed"}\n\n', {
@@ -974,6 +977,7 @@ describe('assistant integration', () => {
         AI_API_KEY: 'key',
         AI_BASE_URL: 'https://models.example.test/v1/responses',
         AI_PATCH_DATUM_PLANE_ENABLED: 'true',
+        AI_PATCH_DATUM_GEOMETRY_ENABLED: geometryEnabled ? 'true' : 'false',
         AI_PATCH_MIRROR_ENABLED: 'true'
       },
       'user_test'
@@ -995,6 +999,43 @@ describe('assistant integration', () => {
     'add_datum_mirror',
     'add_datum_split'
   ];
+  const DATUM_GEOMETRY_KINDS = [
+    'add_datum_plane_v2',
+    'update_datum_plane',
+    'add_datum_axis',
+    'update_datum_axis',
+    'add_datum_revolve',
+    'add_datum_pattern',
+    'add_datum_transform'
+  ];
+
+  it('negotiates complete datum geometry separately from the legacy plane contract', async () => {
+    const current = await datumRequest(CAD_PATCH_OPERATION_KINDS, true);
+    for (const kind of [...DATUM_KINDS, ...DATUM_GEOMETRY_KINDS]) {
+      expect(current.enabledLine).toContain(`\`${kind}\``);
+      expect(current.schema).toContain(`"const":"${kind}"`);
+    }
+    const olderKinds = CAD_PATCH_OPERATION_KINDS.filter(
+      (kind) => !DATUM_GEOMETRY_KINDS.includes(kind)
+    );
+    const older = await datumRequest(olderKinds, true);
+    for (const kind of DATUM_KINDS)
+      expect(older.schema).toContain(`"const":"${kind}"`);
+    for (const kind of DATUM_GEOMETRY_KINDS)
+      expect(older.schema).not.toContain(`"const":"${kind}"`);
+    const incomplete = await datumRequest(
+      CAD_PATCH_OPERATION_KINDS.filter((kind) => kind !== 'update_datum_axis'),
+      true
+    );
+    for (const kind of DATUM_GEOMETRY_KINDS)
+      expect(incomplete.schema).not.toContain(`"const":"${kind}"`);
+    const legacy = await datumRequest(undefined, true);
+    for (const kind of [...DATUM_KINDS, ...DATUM_GEOMETRY_KINDS])
+      expect(legacy.schema).not.toContain(`"const":"${kind}"`);
+    const off = await datumRequest(CAD_PATCH_OPERATION_KINDS);
+    for (const kind of DATUM_GEOMETRY_KINDS)
+      expect(off.schema).not.toContain(`"const":"${kind}"`);
+  });
 
   it('exposes all four datum-plane operations together behind one flag', async () => {
     const { enabledLine, schema } = await datumRequest(
@@ -2060,6 +2101,7 @@ describe('assistant integration', () => {
       'AI_PATCH_SHELL_ENABLED',
       'AI_PATCH_SOLID_OFFSET_ENABLED',
       'AI_PATCH_DATUM_PLANE_ENABLED',
+      'AI_PATCH_DATUM_GEOMETRY_ENABLED',
       'AI_PATCH_PARTIAL_REVOLVE_ENABLED'
     ] as const;
 

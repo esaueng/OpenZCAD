@@ -1,5 +1,10 @@
 import { UNIT_TO_MM } from './index';
 import type { BodyId, Brand, UnitSystem, Vector3 } from './index';
+import {
+  drawingAnnotationError,
+  MAX_DRAWING_ANNOTATIONS,
+  type DrawingAnnotation
+} from './drawing-annotations';
 
 /**
  * D01 drawing sheets — the persisted, command-free half shared by the
@@ -315,6 +320,11 @@ export interface DrawingSheet {
   titleBlock: DrawingTitleBlock;
   source: DrawingSheetSource;
   views: DrawingView[];
+  /**
+   * D02 dimensions and notes (schema v31). Absent when the sheet has none;
+   * never synthesized on load.
+   */
+  annotations?: DrawingAnnotation[];
 }
 
 /** The document's drawing section (schema v30). Absent means no drawings. */
@@ -481,6 +491,26 @@ export function drawingSheetError(value: unknown): string | null {
       side * free < -ALIGNMENT_TOLERANCE_MM
     )
       return `${where} has a projected view out of line with its base or on the wrong side for its projection angle.`;
+  }
+  if (value.annotations !== undefined) {
+    if (
+      !Array.isArray(value.annotations) ||
+      value.annotations.length > MAX_DRAWING_ANNOTATIONS
+    )
+      return `${where} holds at most ${MAX_DRAWING_ANNOTATIONS} annotations.`;
+    const ids = new Set<string>();
+    const viewIds = new Set(views.keys());
+    for (const [index, annotation] of value.annotations.entries()) {
+      const error = drawingAnnotationError(
+        annotation,
+        viewIds,
+        `${where} annotation ${index + 1}`
+      );
+      if (error) return error;
+      const id = (annotation as DrawingAnnotation).annotationId;
+      if (ids.has(id)) return `${where} names annotation ${id} twice.`;
+      ids.add(id);
+    }
   }
   return null;
 }

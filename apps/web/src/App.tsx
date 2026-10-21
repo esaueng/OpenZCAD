@@ -253,7 +253,12 @@ import {
   type DrivingDimensionKind
 } from './lib/sketch/constraints';
 import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
-import { sketchRelationGlyphs } from './lib/sketch/relationGlyphs';
+import {
+  SKETCH_RELATION_GLYPHS,
+  sketchRelationGlyphs,
+  sketchRelationKeepOuts,
+  sketchRelationStrokes
+} from './lib/sketch/relationGlyphs';
 import { toggledSketchVisibility } from './lib/sketch/visibilityOverrides';
 import {
   sketchGeometryDeleteRefusal,
@@ -15092,6 +15097,10 @@ export function App() {
     interaction.mode === 'sketch' && interaction.session.sketchId && doc
       ? (findSketch(doc, interaction.session.sketchId as SketchId) ?? null)
       : null;
+  const selectedSketchConstraintId =
+    interaction.mode === 'sketch'
+      ? (interaction.session.selectedConstraintId ?? null)
+      : null;
   const sketchRelationChips = useMemo(
     () =>
       sketchModeState && doc
@@ -15104,6 +15113,10 @@ export function App() {
             {
               visibility: appSettings.sketching.relationGlyphs,
               selectedObjectId: sketchModeState.selectedObjectId,
+              selectedConstraintId: selectedSketchConstraintId,
+              hiddenKinds: new Set(
+                appSettings.sketching.hiddenRelationGlyphs
+              ),
               conflictingConstraintIds: new Set(
                 sketchSolveStatus?.conflictingConstraintIds ?? []
               )
@@ -15116,8 +15129,62 @@ export function App() {
       editingSketchNode,
       parameterScope.scope,
       appSettings.sketching.relationGlyphs,
+      appSettings.sketching.hiddenRelationGlyphs,
+      selectedSketchConstraintId,
       sketchSolveStatus
     ]
+  );
+  // A relation is picked from its glyph, so the pick lasts only while that
+  // glyph is drawn: a filter that hides its kind, glyphs turned off, or an
+  // undo that removes the relation drops it, and Delete can never remove a
+  // relation nobody can see selected.
+  const selectedSketchConstraintDrawn =
+    selectedSketchConstraintId !== null &&
+    sketchRelationChips.some((chip) =>
+      chip.glyphs.some(
+        (glyph) => glyph.constraintId === selectedSketchConstraintId
+      )
+    );
+  useEffect(() => {
+    if (selectedSketchConstraintId !== null && !selectedSketchConstraintDrawn) {
+      dispatchInteraction({
+        type: 'sketch-select-constraint',
+        constraintId: null
+      });
+    }
+  }, [selectedSketchConstraintId, selectedSketchConstraintDrawn]);
+  // The drawn curves relation glyphs keep clear of, only while any show.
+  const sketchRelationStrokeSegments = useMemo(
+    () =>
+      sketchModeState && doc && sketchRelationChips.length > 0
+        ? sketchRelationStrokes(
+            sketchModeState.objects,
+            (value) =>
+              evalParamValue(value, parameterScope.scope, doc.units) ??
+              undefined,
+            textOutlineBudgetError
+          )
+        : undefined,
+    [
+      sketchModeState,
+      doc,
+      parameterScope.scope,
+      sketchRelationChips.length,
+      textOutlineBudgetError
+    ]
+  );
+  // And every pickable point (centres, ends, the origin), likewise.
+  const sketchRelationKeepOutPoints = useMemo(
+    () =>
+      sketchModeState && doc && sketchRelationChips.length > 0
+        ? sketchRelationKeepOuts(
+            sketchModeState.objects,
+            (value) =>
+              evalParamValue(value, parameterScope.scope, doc.units) ??
+              undefined
+          )
+        : undefined,
+    [sketchModeState, doc, parameterScope.scope, sketchRelationChips.length]
   );
   // The viewport's copy of the session also knows whether a solve or rebuild
   // owns the sketch, so a click cannot place text the card has disabled.
@@ -15126,9 +15193,18 @@ export function App() {
       sketchModeState && {
         ...sketchModeState,
         relations: sketchRelationChips,
+        relationStrokes: sketchRelationStrokeSegments,
+        relationKeepOuts: sketchRelationKeepOutPoints,
         textDraftBusy: sketchSolving || geometryBusy
       },
-    [sketchModeState, sketchRelationChips, sketchSolving, geometryBusy]
+    [
+      sketchModeState,
+      sketchRelationChips,
+      sketchRelationStrokeSegments,
+      sketchRelationKeepOutPoints,
+      sketchSolving,
+      geometryBusy
+    ]
   );
 
   const sketchOverview = useMemo(() => {
@@ -16274,6 +16350,32 @@ export function App() {
     setStatus(`Selected ${target.label}, referenced by this constraint.`);
   }
 
+  /**
+   * Whether the picked relation's glyph is drawn, as the viewport last
+   * reported. Panned or orbited off screen, or with nowhere clear to show,
+   * the selection stays but Delete does nothing: it never removes a relation
+   * whose selected glyph cannot be seen.
+   */
+  const selectedConstraintShownRef = useRef<{
+    constraintId: string;
+    shown: boolean;
+  } | null>(null);
+
+  /** A relation glyph was clicked: select that relation for Delete. */
+  function handleSelectSketchConstraint(constraintId: string) {
+    const constraint = editingSketchNode?.constraints?.find(
+      (candidate) => String(candidate.constraintId) === constraintId
+    );
+    if (!constraint || sketchSolving || geometryBusy) return;
+    const kind = constraint.data.constraintKind;
+    const label =
+      kind === 'distance' || kind === 'radius' || kind === 'angle'
+        ? 'dimension'
+        : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
+    dispatchInteraction({ type: 'sketch-select-constraint', constraintId });
+    setStatus(`Selected ${label}. Press Delete to remove it.`);
+  }
+
   function handleDeleteSketchConstraint(constraintId: string) {
     if (!editingSketchNode) {
       return;
@@ -16290,6 +16392,12 @@ export function App() {
       )
     ) {
       setSketchSolveStatus(null);
+      if (selectedSketchConstraintId === constraintId) {
+        dispatchInteraction({
+          type: 'sketch-select-constraint',
+          constraintId: null
+        });
+      }
       setStatus('Deleted constraint.');
     }
   }
@@ -20304,6 +20412,34 @@ export function App() {
           startExtrude(interaction.session.sketchId as SketchId);
           return;
         }
+        // A relation picked from its glyph is the narrower selection, so
+        // Delete removes it before it would remove the entity it sits on.
+        // Only a relation whose glyph is drawn counts as selected (an undo,
+        // a filter or the glyph setting can take it away before the effect
+        // above clears it); otherwise the key falls through to the entity.
+        const selectedConstraintId = selectedSketchConstraintDrawn
+          ? selectedSketchConstraintId
+          : null;
+        if (
+          (event.key === 'Delete' || event.key === 'Backspace') &&
+          !meta &&
+          !event.altKey &&
+          selectedConstraintId
+        ) {
+          event.preventDefault();
+          const onScreen =
+            selectedConstraintShownRef.current?.constraintId ===
+              selectedConstraintId &&
+            selectedConstraintShownRef.current.shown;
+          if (!onScreen) {
+            setStatus(
+              'The selected relation is out of view; bring its glyph back to delete it.'
+            );
+          } else if (!sketchSolving && !geometryBusy) {
+            handleDeleteSketchConstraint(selectedConstraintId);
+          }
+          return;
+        }
         if (
           (event.key === 'Delete' || event.key === 'Backspace') &&
           !meta &&
@@ -20564,6 +20700,15 @@ export function App() {
           return;
         case 'view-iso':
           requestView('iso');
+          return;
+        case 'view-back':
+          requestView('back');
+          return;
+        case 'view-bottom':
+          requestView('bottom');
+          return;
+        case 'view-left':
+          requestView('left');
           return;
         case 'view-measure':
           toggleMeasure(!measuring);
@@ -21059,6 +21204,30 @@ export function App() {
       shortcut: keymap.label('view-iso'),
       icon: <Monitor size={16} aria-hidden="true" />,
       run: () => requestView('iso')
+    },
+    {
+      id: 'view-back',
+      label: 'Back view',
+      group: 'View',
+      shortcut: keymap.label('view-back'),
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('back')
+    },
+    {
+      id: 'view-bottom',
+      label: 'Bottom view',
+      group: 'View',
+      shortcut: keymap.label('view-bottom'),
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('bottom')
+    },
+    {
+      id: 'view-left',
+      label: 'Left view',
+      group: 'View',
+      shortcut: keymap.label('view-left'),
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('left')
     },
     {
       id: 'view-fit',
@@ -22722,6 +22891,12 @@ export function App() {
             }}
             onEditSketchDimension={handleEditSketchDimension}
             onMoveSketchDimension={handleMoveSketchDimension}
+            onSelectSketchConstraint={handleSelectSketchConstraint}
+            onSketchConstraintSelectionShown={(constraintId, shown) => {
+              // Whether the picked relation's glyph is on screen: Delete
+              // acts on it only while it is (see the sketch key handler).
+              selectedConstraintShownRef.current = { constraintId, shown };
+            }}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }

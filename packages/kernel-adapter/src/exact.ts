@@ -184,6 +184,10 @@ import {
   registerSolidWitnesses
 } from './exact-witnesses';
 import {
+  nativeVertexEvidence,
+  nativeVertexPoint
+} from './remus-native-vertices';
+import {
   SyncReadMemo,
   TopologyWitnessStore,
   edgeToFaceMapOf,
@@ -2238,7 +2242,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     let indexCount = 0;
     const lineageDiagnostics =
       shape.lineage?.diagnostics.map(projectRemusLineageDiagnostic) ?? [];
-    const topology: BodyTopology = { faces: [], edges: [] };
+    const topology: BodyTopology = {
+      faces: [],
+      edges: [],
+      ...(shape.nativeVertices ? { vertices: [] } : {})
+    };
     const witness: MeasuredShape['witness'] = { solids: [] };
     const bbox = {
       min: { x: Infinity, y: Infinity, z: Infinity },
@@ -2302,6 +2310,50 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         if (!vertexIdByHandle.has(vertex)) {
           vertexIdByHandle.set(vertex, nextVertexId);
           nextVertexId += 1;
+        }
+      }
+      // Native handles remain private. This projection uses the same existing
+      // body/solid numbering the edge incidence records publish.
+      if (topology.vertices) {
+        const members = new Set(vertexHandles);
+        for (const vertex of vertexHandles) {
+          const actual = nativeVertexPoint(kernel, vertex);
+          if (!actual) {
+            // A partial point array must not pretend to cover native topology.
+            delete topology.vertices;
+            break;
+          }
+          const evidence = nativeVertexEvidence(
+            kernel,
+            shape.nativeVertices,
+            solid,
+            vertex,
+            members
+          );
+          const reference =
+            evidence?.status === 'qualified' ? evidence.reference : undefined;
+          topology.vertices.push({
+            id: vertexIdByHandle.get(vertex)!,
+            point: actual.point,
+            ...(reference
+              ? {
+                  reference: {
+                    ...reference,
+                    witness: { position: [...reference.witness.position] }
+                  }
+                }
+              : {}),
+            ...(!reference
+              ? {
+                  unavailableReason:
+                    evidence?.status === 'unavailable'
+                      ? evidence.reason
+                      : (shape.nativeVertices?.withheldBySolid
+                          .get(solid)
+                          ?.get(vertex) ?? 'unsupported-source')
+                }
+              : {})
+          });
         }
       }
       const meshDone = onStage?.('Display mesh and face topology');

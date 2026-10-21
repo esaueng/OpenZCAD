@@ -392,6 +392,31 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
     shapes.set(bodyId, {
       solids: [...shape.solids],
       ...(shape.sweepSource ? { sweepSource: shape.sweepSource } : {}),
+      ...(shape.nativeVertices
+        ? {
+            nativeVertices: {
+              bySolid: new Map(
+                [...shape.nativeVertices.bySolid].map(([solid, references]) => [
+                  solid,
+                  new Map(
+                    [...references].map(([handle, reference]) => [
+                      handle,
+                      {
+                        ...reference,
+                        witness: { position: [...reference.witness.position] }
+                      }
+                    ])
+                  )
+                ])
+              ),
+              withheldBySolid: new Map(
+                [...shape.nativeVertices.withheldBySolid].map(
+                  ([solid, reasons]) => [solid, new Map(reasons)]
+                )
+              )
+            }
+          }
+        : {}),
       ...(shape.lineage
         ? {
             lineage: {
@@ -542,8 +567,23 @@ export function measurementProvenanceKey(
   importedDiagnostics: ImportedStepDiagnostics | undefined
 ): string {
   const lineage = shape.lineage;
+  const native = shape.nativeVertices;
   return stableJson({
     importedDiagnostics,
+    nativeVertices: native && {
+      qualified: [...native.bySolid]
+        .sort(([a], [b]) => a - b)
+        .map(([solid, references]) => [
+          solid,
+          [...references].sort(([a], [b]) => a - b)
+        ]),
+      withheld: [...native.withheldBySolid]
+        .sort(([a], [b]) => a - b)
+        .map(([solid, reasons]) => [
+          solid,
+          [...reasons].sort(([a], [b]) => a - b)
+        ])
+    },
     lineage: lineage && {
       faces: [...lineage.faceReferences].sort(([a], [b]) => a - b),
       edges: [...lineage.edgeReferences].sort(([a], [b]) => a - b),
