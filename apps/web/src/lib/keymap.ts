@@ -110,6 +110,14 @@ export const KEYMAP_COMMANDS: readonly KeymapCommand[] = [
   command('view-grid', 'Toggle the grid', 'view-display', 'model', 'G'),
   command('view-display', 'Cycle display mode', 'view-display', 'model', 'W'),
   command('view-projection', 'Toggle projection', 'view-display', 'model', 'P'),
+  // Not Tab, which moves focus: a Ctrl chord also works from a field.
+  command(
+    'panels-hide-all',
+    'Hide or show the model panels',
+    'view-display',
+    'global',
+    'Ctrl+\\'
+  ),
   command(
     'selection-filter',
     'Cycle the selection filter',

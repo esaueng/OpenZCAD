@@ -563,6 +563,56 @@ export function applyPreset(
   return next;
 }
 
+/** Each panel's share of its column's height, column by column. */
+function columnShares(
+  columns: readonly PanelId[][],
+  weights: Readonly<Record<PanelId, number>>
+): number[][] {
+  return columns.map((column) => {
+    const total = column.reduce((sum, id) => sum + weights[id], 0);
+    return column.map((id) => weights[id] / total);
+  });
+}
+
+/**
+ * The menu preset the layout is arranged as, or null once it has been
+ * rearranged: the same panels in the same columns, no window, and each
+ * column split in the same proportions. The unpinned panel, the homes and
+ * the settings are not part of an arrangement.
+ */
+export function matchingPreset(layout: PanelLayout): PanelPresetId | null {
+  if (layout.floats.length > 0) {
+    return null;
+  }
+  const same = (a: readonly PanelId[][], b: readonly PanelId[][]) =>
+    a.length === b.length &&
+    a.every(
+      (column, k) =>
+        column.length === b[k]!.length &&
+        column.every((id, n) => id === b[k]![n])
+    );
+  return (
+    PANEL_PRESET_IDS.find((name) => {
+      const preset = presetLayout(name, layout.options);
+      if (
+        !same(layout.left, preset.left) ||
+        !same(layout.right, preset.right)
+      ) {
+        return false;
+      }
+      const shares = columnShares(
+        [...layout.left, ...layout.right],
+        layout.weights
+      ).flat();
+      const expected = columnShares(
+        [...preset.left, ...preset.right],
+        preset.weights
+      ).flat();
+      return shares.every((share, k) => Math.abs(share - expected[k]!) < 1e-6);
+    }) ?? null
+  );
+}
+
 /**
  * Marks a panel as the one used last: opened, pressed or focused. A floating
  * panel's window comes to the front with it.

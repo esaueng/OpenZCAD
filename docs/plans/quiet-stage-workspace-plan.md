@@ -1,6 +1,8 @@
 # Quiet-stage workspace redesign (U04)
 
-Status: slice 1 in review (#411); slice 2 in review (#412); slice 3 in review (#413); slice 4 in review (#414); slice 5 in review (#415); slice 6 in review (#416); slice 7 in review. Roadmap row: [U04](../../ROADMAP.md#u04).
+Status: slice 1 in review (#411); slice 2 in review (#412); slice 3 in review (#413); slice 4 in review (#414); slice 5 in review (#415); slice 6 in review (#416); slice 7 in review. Slice 4's drawer is superseded by the
+[dockable model panels](dockable-panels-plan-2026-10-20.md)
+([U08](../../ROADMAP.md#u08)). Roadmap row: [U04](../../ROADMAP.md#u04).
 
 ## Intent
 
@@ -55,6 +57,11 @@ Values ride the model at the point of action.
   `CONSTRAINT_TOOL_SPECS`; icons never move, relations that do not fit the
   selection grey out, and a name label appears only beside the ones that fit.
 - **History, Items, Parameters:** one drawer on the right, closed by default.
+  _Superseded by U08:_ each is now an independent model panel that opens
+  unpinned from the rail, pins into a docked column at either edge or floats
+  as a window, with Essentials (Objects left, Parameters right) as a new
+  device's layout; see the
+  [dockable model panels plan](dockable-panels-plan-2026-10-20.md).
 - **Assistant:** merged into the ⌘K bar; the conversation grows up out of it
   as a stream of text fading into the viewer (the console assistant).
 - **Face offset preview ("B refined"):** only the change is coloured. The moved
@@ -129,6 +136,14 @@ Each slice is one PR against `main`, recorded on the U04 row when it merges.
    The e2e fixtures (`stubApi`, `stubAnonymousApi`, the cloud-sync stub and
    `workspace-polish.spec.ts`'s own stub) seed it open for the specs that
    exercise its contents; a dedicated spec covers the closed default.
+   **Superseded by [U08](../../ROADMAP.md#u08).** The single drawer is gone:
+   its slice 3 replaced it with independent Parameters, Objects, History,
+   Revisions and Diagnostics panels (unpinned beside the rail, docked in
+   stacked columns at either edge, or floating), and the fixtures seed a
+   panel layout instead (`seedPanelLayout`). The inspector keeps a right
+   lane of its own, inward of the rail and clear of the dock. The
+   [dockable model panels plan](dockable-panels-plan-2026-10-20.md) is the
+   contract now; the text above is the history of this slice.
 5. **Search and ask.** ⌘K gains features and parameters as results and an
    "Ask" row that submits to the assistant; the conversation surface anchors
    to the bar. Acceptance: proposals still preview and apply through the same

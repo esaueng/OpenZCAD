@@ -207,6 +207,13 @@ export const KEYBOARD_CONTROL_GROUPS = [
         ...bound('view-projection'),
         action: 'Toggle projection',
         detail: 'Switch between perspective and orthographic projection.'
+      },
+      {
+        id: 'hide-panels',
+        ...bound('panels-hide-all'),
+        action: 'Hide or show the model panels',
+        detail:
+          'Keeps the layout. The rest is under View options on the panel rail.'
       }
     ]
   },
