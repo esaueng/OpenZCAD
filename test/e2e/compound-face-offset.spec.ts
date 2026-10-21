@@ -6,6 +6,7 @@ import {
   loadRemusTranslators
 } from '../../packages/kernel-adapter/src/remus-runtime';
 import { compoundOffsetSolids } from '../support/compound-offset';
+import { readCylinderCapX } from '../support/cylinderProbe';
 
 test('previews and commits a compound STEP cap offset, then undoes, redoes and reopens it', async ({
   page
@@ -129,31 +130,7 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
         })
       );
     });
-  const capX = () =>
-    canvas.evaluate(
-      (element) =>
-        new Promise<number | null>((resolve) => {
-          element.dispatchEvent(
-            new CustomEvent('openzcad:e2e-select-cylinder', {
-              detail: {
-                surface: 'wall',
-                select: false,
-                resolve: (
-                  geometry: {
-                    axisStart?: { x: number };
-                    axisEnd?: { x: number };
-                  } | null
-                ) =>
-                  resolve(
-                    geometry?.axisStart && geometry.axisEnd
-                      ? Math.max(geometry.axisStart.x, geometry.axisEnd.x)
-                      : null
-                  )
-              }
-            })
-          );
-        })
-    );
+  const capX = () => canvas.evaluate(readCylinderCapX);
   await expect.poll(capX, { timeout: 30_000 }).toBeCloseTo(63, 5);
   await expect
     .poll(async () => {
