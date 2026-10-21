@@ -3,7 +3,8 @@ import {
   appendFileSync,
   existsSync,
   readFileSync,
-  realpathSync
+  realpathSync,
+  writeFileSync
 } from 'node:fs';
 import {
   basename,
@@ -317,18 +318,18 @@ test('private holder survives sustained edits, retirement, refusal and worker re
   await page.getByLabel('Project name').fill('Private qualification');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
-  await page.getByLabel('Import project backup').setInputFiles({
-    name: 'private.openzcad',
-    mimeType: 'application/json',
-    buffer: Buffer.from(
-      JSON.stringify({
-        format: 'openzcad-project',
-        version: 1,
-        document,
-        files: []
-      })
-    )
-  });
+  const backupPath = resolve(dirname(output), 'private-session.openzcad');
+  writeFileSync(
+    backupPath,
+    JSON.stringify({
+      format: 'openzcad-project',
+      version: 1,
+      document,
+      files: []
+    }),
+    { mode: 0o600 }
+  );
+  await page.getByLabel('Import project backup').setInputFiles(backupPath);
   await expect(
     page.getByRole('button', { name: 'Rename project' })
   ).toContainText('Private session');
