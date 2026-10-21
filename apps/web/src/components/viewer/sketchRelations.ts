@@ -94,6 +94,11 @@ export function buildSketchRelationGlyphs(
     pinnedIndex >= 0
       ? chips[pinnedIndex]!.glyphs.find((glyph) => glyph.selected)?.constraintId
       : undefined;
+  // Every chip the selected relation shows on (a parallel or equal is on
+  // two): it is in view while any of them is drawn.
+  const selectedChips = chips.flatMap((chip, index) =>
+    chip.glyphs.some((glyph) => glyph.selected) ? [index] : []
+  );
   let selectionReported: boolean | null = null;
   const widths = new Float64Array(count);
   const elements: HTMLElement[] = [];
@@ -422,7 +427,10 @@ export function buildSketchRelationGlyphs(
       layout.setStrokes(strokeScreen, strokeCount);
       layout.solve(count, width, height);
       if (selectedId !== undefined) {
-        const drawn = layout.drawn(pinnedIndex);
+        let drawn = false;
+        for (const index of selectedChips) {
+          if (layout.drawn(index)) drawn = true;
+        }
         if (drawn !== selectionReported) {
           selectionReported = drawn;
           selectionShown(selectedId, drawn);

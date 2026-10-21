@@ -551,6 +551,43 @@ describe('sketch relation glyph overlay', () => {
     overlay.dispose();
   });
 
+  it('counts a selected relation in view while any of its chips is drawn', () => {
+    // A selected parallel on two lines: the first (pinned) is panned off
+    // screen, the second still shows, so the selection is still in view.
+    const shown = vi.fn();
+    const selectedParallel = { ...bottom.glyphs[1]!, selected: true };
+    const overlay = buildSketchRelationGlyphs(
+      [
+        { ...bottom, glyphs: [selectedParallel] },
+        {
+          ...bottom,
+          key: 'object:far',
+          anchor: { x: 40, y: 0 },
+          glyphs: [selectedParallel]
+        }
+      ],
+      basis,
+      () => {},
+      shown
+    );
+    const camera = topCamera();
+    // 4 px a unit, plane x = 10 at the screen centre. Pan 55 units: x = 10
+    // lands 20 px off the left edge, x = 40 at 100 px, still in view.
+    camera.position.x += 55;
+    camera.updateMatrixWorld();
+    overlay.layout(camera, 400, 400);
+    expect(shown.mock.calls).toEqual([['c2', true]]);
+    // Both gone: out of view.
+    camera.position.x += 200;
+    camera.updateMatrixWorld();
+    overlay.layout(camera, 400, 400);
+    expect(shown.mock.calls).toEqual([
+      ['c2', true],
+      ['c2', false]
+    ]);
+    overlay.dispose();
+  });
+
   it('leaves a chip whose anchor is off the viewport where it is', () => {
     const camera = topCamera();
     // Plane (200, 0) is far right of the 100-unit-wide view.
