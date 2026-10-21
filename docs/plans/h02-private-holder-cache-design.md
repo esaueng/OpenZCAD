@@ -235,3 +235,19 @@ runtime or treating broader lineage as accepted equivalence.
 ## PR #805 target-hardware follow-up (2026-10-21)
 
 [The candidate campaign](../qa/2026-10-21/h02-pr805-m5-pro-qualification.md) passes private raw/publication comparisons through 80 edits, recovery and restart, while failing the unchanged 20% p95 target (8.3% observed) and fixed Text restore. Its fresh-arena fallback does not exercise required private checkpoint retirement or replay-budget recycling. Those acceptance failures remain red in the continuation probe. Whole-worker retention, quiet-host and detached-branch dependency/kernel/mutation criteria remain open; none of the five acceptance conditions above changes.
+
+## Prepared-transform candidate M5 evidence (2026-10-21)
+
+The [fresh `64f07065` M5 campaign](../qa/2026-10-21/h02-64f07065-m5-qualification.md)
+passes fixed Text restore and the unchanged ≥20% existing-cache p95 gate
+(27.8% observed under recorded background load). Its unchanged private 80-edit
+session exercises retirement/recycling and passes raw/publication equality,
+measurement eviction, refusal/recovery and actual worker restart. This resolves
+the first candidate's measured reuse/lifetime regressions on the private trace;
+historical failures remain recorded separately.
+
+Quiet-host and whole-worker retained-memory acceptance remain open. No detached
+Text record, branch-preserving kernel operation or complete dependency/effect
+proof is added. Existing-prefix speedup does not satisfy that proposed branch's
+acceptance. The five acceptance conditions above, all pins and thresholds remain
+unchanged. H02 stays Partial.
