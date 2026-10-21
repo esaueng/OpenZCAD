@@ -12,7 +12,9 @@ import {
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
+  DRAWING_VIEW_FRAMES,
   drawingSetError,
+  projectToView,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
@@ -1626,6 +1628,78 @@ describe('D02 page and export', () => {
     // A view not drawn yet is left alone.
     expect(
       markHiddenLeaders(sheet, resolved, [], 'mm', bodies).get(id('n'))
+    ).toMatchObject({ ok: true });
+  });
+
+  it('keeps a leader on its own run beside a nearer, separately drawn edge', async () => {
+    const { bodies, bodyId, top } = await boxModel();
+    const front = view(frontId, 'front', [bodyId]);
+    const body = bodies[bodyId]!;
+    // Another edge just above the top edge in the view (inside the
+    // coincidence tolerance, but not on it) and nearer the viewer.
+    const offset = 0.02;
+    const shifted = top.points.map((value, index) =>
+      index % 3 === 2 ? value + offset : index % 3 === 1 ? value - 1 : value
+    );
+    const beside = {
+      ...top,
+      topologyId: 'beside',
+      hash: 4242,
+      reference: undefined,
+      points: shifted
+    };
+    const withBeside: AnnotationBodies = {
+      [bodyId]: {
+        ...body,
+        topology: {
+          ...body.topology!,
+          edges: [...body.topology!.edges, beside]
+        }
+      }
+    };
+    const projection = projectView({
+      orientation: 'front',
+      hiddenLines: false,
+      bodies: [projectionBodyInput(body)!]
+    });
+    const besideRun = Float64Array.from(
+      [0, shifted.length - 3].flatMap((i) => {
+        const p = projectToView(DRAWING_VIEW_FRAMES.front, {
+          x: shifted[i]!,
+          y: shifted[i + 1]!,
+          z: shifted[i + 2]!
+        });
+        return [p.u, p.v];
+      })
+    );
+    const drawn = {
+      ...projection,
+      edgeRuns: {
+        visible: [...projection.edgeRuns!.visible, besideRun],
+        hidden: []
+      }
+    };
+    const sheet = sheetOf(
+      [bodyId],
+      [
+        {
+          annotationId: id('n'),
+          kind: 'note',
+          text: 'TOP',
+          viewId: frontId,
+          leader: refOf(bodyId, top),
+          placementMm: { x: -30, y: 20 }
+        }
+      ]
+    );
+    expect(
+      markHiddenLeaders(
+        sheet,
+        resolveSheetAnnotations(sheet, withBeside, 'mm'),
+        [{ view: front, projection: drawn }],
+        'mm',
+        withBeside
+      ).get(id('n'))
     ).toMatchObject({ ok: true });
   });
 

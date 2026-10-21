@@ -1233,23 +1233,29 @@ function ownedLeaderPieces(
       const b = points[i + 1]!;
       const middle: XY = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
       const own = nearestWithDepth(leader, leaderDepths, middle);
-      if (
-        own.distance > tolerance ||
-        nearestWithDepth(leader, leaderDepths, a).distance > tolerance ||
-        nearestWithDepth(leader, leaderDepths, b).distance > tolerance
-      )
-        continue;
+      // How far the segment strays from an edge: its worst of three points.
+      const stray = (points: readonly XY[], depths: readonly number[]) =>
+        Math.max(
+          nearestWithDepth(points, depths, a).distance,
+          nearestWithDepth(points, depths, middle).distance,
+          nearestWithDepth(points, depths, b).distance
+        );
+      const ownStray = stray(leader, leaderDepths);
+      if (ownStray > tolerance) continue;
+      // The segment belongs to the edge it lies on. Another edge claims it
+      // only by lying on it more closely, or, when the two coincide (a
+      // box's back top edge behind its front one), by being nearer the
+      // viewer there. A separate edge merely within tolerance, drawn as its
+      // own run beside this one, does not take this edge's run.
+      const coincide = 0.1 * tolerance;
       const depthTolerance = 1e-6 * Math.max(1, Math.abs(own.depth));
       const nearer = others.some((other) => {
+        const otherStray = stray(other.points, other.depths);
+        if (otherStray > tolerance) return false;
+        if (otherStray < ownStray - coincide) return true;
+        if (otherStray > ownStray + coincide) return false;
         const at = nearestWithDepth(other.points, other.depths, middle);
-        return (
-          at.distance <= tolerance &&
-          nearestWithDepth(other.points, other.depths, a).distance <=
-            tolerance &&
-          nearestWithDepth(other.points, other.depths, b).distance <=
-            tolerance &&
-          at.depth < own.depth - depthTolerance
-        );
+        return at.depth < own.depth - depthTolerance;
       });
       if (!nearer) pieces.push([a[0], a[1], b[0], b[1]]);
     }
