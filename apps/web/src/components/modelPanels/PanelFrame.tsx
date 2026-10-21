@@ -1,14 +1,46 @@
-import type { ReactNode } from 'react';
-import { GripVertical, Pin, X } from 'lucide-react';
+import {
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode
+} from 'react';
+import { createPortal } from 'react-dom';
+import { ExternalLink, GripVertical, Pin, X } from 'lucide-react';
 import type { PanelId, PanelStatus } from '../../lib/panelLayout';
+import {
+  ContextMenu,
+  type ContextMenuItem,
+  type ContextMenuState
+} from '../ContextMenu';
 import { PANEL_ICONS, PANEL_TITLES } from './panelMeta';
 
 /**
- * Where a panel is drawn: in a docked column, in the unpinned slot beside the
- * rail (`revealed` is a parked docked panel shown there), or alone in the
- * phone lane.
+ * Where a panel is drawn: in a docked column, in a floating window, in the
+ * unpinned slot beside the rail (`revealed` is a parked docked panel shown
+ * there), or alone in the phone lane.
  */
-export type PanelPlacement = 'docked' | 'unpinned' | 'revealed' | 'phone';
+export type PanelPlacement =
+  'docked' | 'floating' | 'unpinned' | 'revealed' | 'phone';
+
+/**
+ * What the dock adds to a panel it draws: moving it by its header, by the
+ * Move menu and by keys. The phone lane draws without a dock, so a panel
+ * there has none of it.
+ */
+export interface PanelDockControls {
+  /** A press on the header, which becomes a drag once it moves 4px. */
+  onHeaderPointerDown(event: ReactPointerEvent<HTMLElement>): void;
+  /** The Move menu's items as the layout stands when it opens. */
+  moveItems(): ContextMenuItem[];
+  onMove(itemId: string): void;
+  /**
+   * Keys on the grip: Alt+↑/↓ move the panel in its stack; a floating
+   * window moves with the arrows and resizes with Shift. True when used.
+   */
+  onGripKey(event: ReactKeyboardEvent<HTMLElement>): boolean;
+  /** Absent where Pop out would not move the panel (alone in a window). */
+  onPopOut?: () => void;
+}
 
 /** What a panel's frame needs from the layout, and what it can ask of it. */
 export interface PanelControls {
@@ -20,13 +52,14 @@ export interface PanelControls {
   onClose(): void;
   /** Pressed or focused: the panel becomes the most recently used. */
   onUse(): void;
+  dock?: PanelDockControls;
 }
 
 /**
- * Every panel's frame: a header with the grip, the icon, the title and count
- * as a heading, any panel controls, Pin and Close; the body, which scrolls;
- * and, while the panel is unpinned, a footer saying so. There is no fold: an
- * open panel is fully open.
+ * Every panel's frame: a header with the grip (the Move menu), the icon, the
+ * title and count as a heading, any panel controls, Pin, Pop out and Close;
+ * the body, which scrolls; and, while the panel is unpinned, a footer
+ * saying so. There is no fold: an open panel is fully open.
  */
 export function PanelFrame({
   id,
@@ -49,6 +82,8 @@ export function PanelFrame({
   // button reads unpinned and a press is refused, never an unpin that would
   // drop the panel from its dock for when the window widens again.
   const pinned = controls.status === 'docked' && controls.placement !== 'phone';
+  const dock = controls.dock;
+  const [menu, setMenu] = useState<ContextMenuState | null>(null);
   return (
     <section
       className={`model-panel model-panel-${id} is-${controls.placement}`}
@@ -57,12 +92,43 @@ export function PanelFrame({
       onPointerDownCapture={controls.onUse}
       onFocusCapture={controls.onUse}
     >
-      <header className="model-panel-header">
-        {/* Moving a panel by its header arrives with the drag-and-drop slice;
-            the grip already marks the handle. */}
-        <span className="model-panel-grip" aria-hidden="true">
-          <GripVertical size={14} />
-        </span>
+      <header
+        className={`model-panel-header${dock ? ' is-draggable' : ''}`}
+        onPointerDown={dock?.onHeaderPointerDown}
+      >
+        {dock ? (
+          <button
+            type="button"
+            className="model-panel-grip"
+            aria-label={`Move ${title}`}
+            aria-haspopup="menu"
+            // Only while open: a closed panel header carries no
+            // `aria-expanded` at all, since nothing in it folds.
+            aria-expanded={menu ? true : undefined}
+            title={`Drag to move ${title} · press for the Move menu`}
+            onClick={(event) => {
+              const bounds = event.currentTarget.getBoundingClientRect();
+              setMenu({
+                x: bounds.left,
+                y: bounds.bottom + 4,
+                heading: `Move ${title}`,
+                items: dock.moveItems()
+              });
+            }}
+            onKeyDown={(event) => {
+              if (dock.onGripKey(event)) {
+                event.preventDefault();
+                event.stopPropagation();
+              }
+            }}
+          >
+            <GripVertical size={14} aria-hidden="true" />
+          </button>
+        ) : (
+          <span className="model-panel-grip" aria-hidden="true">
+            <GripVertical size={14} />
+          </span>
+        )}
         <Icon size={13} className="model-panel-icon" aria-hidden="true" />
         <h2 className="model-panel-title">
           <span className="model-panel-name">{title}</span>
@@ -90,6 +156,17 @@ export function PanelFrame({
             aria-hidden="true"
           />
         </button>
+        {dock?.onPopOut && (
+          <button
+            type="button"
+            className="model-panel-action"
+            aria-label={`Pop out ${title}`}
+            title={`Pop out ${title} · float it over the model`}
+            onClick={dock.onPopOut}
+          >
+            <ExternalLink size={14} aria-hidden="true" />
+          </button>
+        )}
         <button
           type="button"
           className="model-panel-action"
@@ -113,6 +190,18 @@ export function PanelFrame({
           </button>
         </footer>
       )}
+      {/* In the body, so the menu stands over every island rather than
+          inside the dock's layer. */}
+      {menu &&
+        dock &&
+        createPortal(
+          <ContextMenu
+            menu={menu}
+            onSelect={(itemId) => dock.onMove(itemId)}
+            onClose={() => setMenu(null)}
+          />,
+          document.body
+        )}
     </section>
   );
 }

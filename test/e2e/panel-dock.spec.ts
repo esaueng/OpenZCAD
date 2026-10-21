@@ -22,7 +22,8 @@ import type { Locator, Page } from '@playwright/test';
   screen edge, and the rail stands on the dock's inner edge. Every other
   spec runs with all five docked; this one covers how they open, dock,
   stack, resize, step aside, migrate and fall back to one panel at a time
-  on a phone-width stage.
+  on a phone-width stage. Dragging, the left dock and floating windows
+  (slice 4) are `panel-drag.spec.ts` and `panel-float.spec.ts`.
 */
 
 type Box = { x: number; y: number; width: number; height: number };
@@ -46,10 +47,10 @@ async function boxesOverlap(a: Locator, b: Locator) {
   return first && second ? overlaps(first, second) : null;
 }
 
-/** The panels docked in the right dock, edge column first, top to bottom. */
-function dockedTitles(page: Page) {
+/** The panels docked in a dock, edge column first, top to bottom. */
+function dockedTitles(page: Page, side: 'left' | 'right' = 'right') {
   return page
-    .locator('.panel-column')
+    .locator(`.panel-column[data-side="${side}"]`)
     .evaluateAll((columns) =>
       columns.map((column) =>
         [...column.querySelectorAll('.model-panel')].map(
@@ -363,7 +364,7 @@ test('a double-click split leaves the rest of the stack its height when a neighb
   ).toBeLessThan(1);
 });
 
-test('headers carry Pin and Close but no Pop out, and no fold', async ({
+test('headers carry the Move grip, Pin, Pop out and Close, and no fold', async ({
   page
 }) => {
   await openWorkspace(page, 'Header check', ALL_PANELS_DOCKED);
@@ -385,8 +386,11 @@ test('headers carry Pin and Close but no Pop out, and no fold', async ({
       panel.getByRole('button', { name: `Close ${title}` })
     ).toBeVisible();
     await expect(
-      panel.getByRole('button', { name: /pop ?out|float/i })
-    ).toHaveCount(0);
+      panel.getByRole('button', { name: `Move ${title}` })
+    ).toBeVisible();
+    await expect(
+      panel.getByRole('button', { name: `Pop out ${title}` })
+    ).toBeVisible();
     await expect(
       panel.locator('.model-panel-header [aria-expanded]')
     ).toHaveCount(0);
@@ -614,6 +618,20 @@ for (const [label, layout] of [
       width: 1280,
       height: 720
     });
+    // The rail slides in 16px from the right as the workspace enters
+    // (`mode-in-right`); read at the slide's start, a button's right edge
+    // was 1281px instead of the 1265px it lands at. Measure once it has
+    // landed: two reads in a row agree.
+    const rail = page.locator('.instrument-rail');
+    let landed = '';
+    await expect
+      .poll(async () => {
+        const at = JSON.stringify(await rail.boundingBox());
+        const settled = at === landed;
+        landed = at;
+        return settled;
+      })
+      .toBe(true);
     const buttons = page.locator('.instrument-rail button');
     const count = await buttons.count();
     expect(count).toBeGreaterThan(10);
@@ -776,7 +794,7 @@ test('a device whose drawer was closed migrates to the model alone', async ({
   expect(await storedV1(page)).toMatchObject({ drawerOpen: false });
 });
 
-test('a new device opens with Objects over Parameters in one right column', async ({
+test('a new device opens in the two-sided Essentials: Objects left, Parameters right', async ({
   page
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -788,10 +806,12 @@ test('a new device opens with Objects over Parameters in one right column', asyn
   });
   await createProject(page, 'New device');
   await expect(modelPanel(page, 'Objects')).toBeVisible({ timeout: 30_000 });
-  expect(await dockedTitles(page)).toEqual([['Objects', 'Parameters']]);
+  expect(await dockedTitles(page, 'left')).toEqual([['Objects']]);
+  expect(await dockedTitles(page, 'right')).toEqual([['Parameters']]);
   await page.reload();
   await expect(modelPanel(page, 'Objects')).toBeVisible({ timeout: 30_000 });
-  expect(await dockedTitles(page)).toEqual([['Objects', 'Parameters']]);
+  expect(await dockedTitles(page, 'left')).toEqual([['Objects']]);
+  expect(await dockedTitles(page, 'right')).toEqual([['Parameters']]);
 });
 
 for (const viewport of [

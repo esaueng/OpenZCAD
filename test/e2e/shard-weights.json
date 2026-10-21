@@ -23,6 +23,8 @@
   "measurement-preview-persistence.spec.ts": 24,
   "modeling.spec.ts": 1390,
   "panel-dock.spec.ts": 340,
+  "panel-drag.spec.ts": 107,
+  "panel-float.spec.ts": 56,
   "parameter-curation.spec.ts": 8,
   "parameter-lineage-repair.spec.ts": 59,
   "parameter-validation.spec.ts": 32,

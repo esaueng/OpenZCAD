@@ -1012,6 +1012,15 @@ export type SeedPanelId =
 export interface SeedPanelLayout {
   right?: SeedPanelId[][];
   left?: SeedPanelId[][];
+  /** Floating windows in z-order, the last on top. */
+  floats?: Array<{
+    id: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    panels: SeedPanelId[];
+  }>;
   unpinned?: SeedPanelId | null;
   recent?: SeedPanelId[];
   weights?: Partial<Record<SeedPanelId, number>>;

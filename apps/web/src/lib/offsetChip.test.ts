@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  chipPanelDodge,
   edgeChipCenterX,
   faceOffsetChipState,
   offsetChipText,
@@ -92,5 +93,95 @@ describe('offset chip', () => {
     // The boundary: exactly room for the chip and both margins.
     expect(edgeChipCenterX(200, 76, 60)).toBe(38);
     expect(edgeChipCenterX(200, 75, 60)).toBe(200);
+  });
+});
+
+describe('a handle chip under a model panel', () => {
+  const stage = { left: 0, top: 0, right: 1440, bottom: 840 };
+  const chip = (left: number, top: number) => ({
+    left,
+    top,
+    right: left + 80,
+    bottom: top + 22
+  });
+  const covered = (
+    rect: ReturnType<typeof chip>,
+    panel: { left: number; top: number; right: number; bottom: number }
+  ) =>
+    Math.min(rect.right, panel.right) > Math.max(rect.left, panel.left) &&
+    Math.min(rect.bottom, panel.bottom) > Math.max(rect.top, panel.top);
+  const moved = (
+    rect: ReturnType<typeof chip>,
+    { dx, dy }: { dx: number; dy: number }
+  ) => ({
+    left: rect.left + dx,
+    top: rect.top + dy,
+    right: rect.right + dx,
+    bottom: rect.bottom + dy
+  });
+
+  it('stays put when nothing covers it', () => {
+    expect(chipPanelDodge(chip(500, 300), [], stage, 1100)).toEqual({
+      dx: 0,
+      dy: 0
+    });
+    const window = { left: 700, top: 100, right: 1000, bottom: 500 };
+    expect(chipPanelDodge(chip(500, 300), [window], stage, 1100)).toEqual({
+      dx: 0,
+      dy: 0
+    });
+  });
+
+  it('comes out from under a floating window by the shortest way', () => {
+    const window = { left: 480, top: 100, right: 780, bottom: 500 };
+    const start = chip(500, 300);
+    const dodge = chipPanelDodge(start, [window], stage, 1100);
+    const after = moved(start, dodge);
+    expect(covered(after, window)).toBe(false);
+    // Off the window's near (left) edge, 8px clear.
+    expect(after.right).toBe(472);
+    expect(dodge.dy).toBe(0);
+  });
+
+  it('comes out from beside the left dock rather than under it', () => {
+    const left = { left: 10, top: 60, right: 306, bottom: 734 };
+    const start = chip(260, 400);
+    const after = moved(start, chipPanelDodge(start, [left], stage, 1100));
+    expect(covered(after, left)).toBe(false);
+    expect(after.left).toBe(314);
+  });
+
+  it('never moves into the right lane while the stage has room left of it', () => {
+    // A window the stage's height reaching close to the lane: past its
+    // right edge the chip would sit under the lane, so it goes left.
+    const window = { left: 800, top: 0, right: 1080, bottom: 840 };
+    const start = chip(990, 300);
+    const after = moved(start, chipPanelDodge(start, [window], stage, 1100));
+    expect(covered(after, window)).toBe(false);
+    expect(after.right).toBeLessThanOrEqual(1092);
+    expect(after.right).toBe(792);
+  });
+
+  it('never moves up under the top bar', () => {
+    // A wide window just below the top bar, the chip near its top edge:
+    // the shortest way out is up, into the bar's band.
+    const window = { left: 300, top: 70, right: 1000, bottom: 600 };
+    const start = chip(600, 74);
+    expect(chipPanelDodge(start, [window], stage, 1100).dy).toBeLessThan(0);
+    const after = moved(
+      start,
+      chipPanelDodge(start, [window], stage, 1100, 56)
+    );
+    expect(covered(after, window)).toBe(false);
+    expect(after.top).toBeGreaterThanOrEqual(56);
+  });
+
+  it('keeps a chip the lane rule left over a phone lane where it is, unless a panel covers it', () => {
+    const phone = { left: 0, top: 0, right: 390, bottom: 800 };
+    // The lane spans the stage: no room left of it, so the lane is no limit.
+    expect(chipPanelDodge(chip(200, 300), [], phone, 10)).toEqual({
+      dx: 0,
+      dy: 0
+    });
   });
 });

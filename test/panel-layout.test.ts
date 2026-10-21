@@ -21,9 +21,11 @@ import {
   grownFloatRect,
   hitTest,
   isDragStart,
+  isFloatCovered,
   loadPanelLayout,
   migratePanelState,
   moveFloat,
+  movePanelInStack,
   normalizePanelLayout,
   notePanelUsed,
   openPanel,
@@ -499,6 +501,55 @@ describe('placing panels', () => {
     layout = placePanel(layout, 'history', { kind: 'newColumn', side: 'left' });
     expect(layout.weights.history).toBe(1);
     expect(layout.homes.history).toBeUndefined();
+  });
+});
+
+describe('moving a panel within its stack', () => {
+  it('moves one place up or down in a column, stopping at the ends', () => {
+    const layout = layoutWith({
+      right: [['parameters', 'bodies', 'history']]
+    });
+    expect(movePanelInStack(layout, 'parameters', 1).right).toEqual([
+      ['bodies', 'parameters', 'history']
+    ]);
+    expect(movePanelInStack(layout, 'history', -1).right).toEqual([
+      ['parameters', 'history', 'bodies']
+    ]);
+    expect(movePanelInStack(layout, 'parameters', -1)).toBe(layout);
+    expect(movePanelInStack(layout, 'history', 1)).toBe(layout);
+    // A reorder keeps the panel's height.
+    const weighted = { ...layout, weights: { ...layout.weights, bodies: 2 } };
+    expect(movePanelInStack(weighted, 'bodies', 1).weights.bodies).toBe(2);
+  });
+
+  it('moves within a floating window, which keeps its rectangle', () => {
+    let layout = popOutPanel(modelOnly(), 'history', {
+      x: 100,
+      y: 100,
+      w: 300,
+      h: 400
+    });
+    layout = placePanel(layout, 'revisions', {
+      kind: 'group',
+      groupId: layout.floats[0]!.id
+    });
+    const moved = movePanelInStack(layout, 'revisions', -1, STAGE);
+    expect(moved.floats[0]!.panels).toEqual(['revisions', 'history']);
+    expect(moved.floats[0]).toMatchObject({
+      x: layout.floats[0]!.x,
+      y: layout.floats[0]!.y,
+      w: layout.floats[0]!.w,
+      h: layout.floats[0]!.h
+    });
+  });
+
+  it('leaves closed and unpinned panels, and a locked layout, alone', () => {
+    const layout = layoutWith({ right: [['parameters', 'bodies']] });
+    expect(movePanelInStack(layout, 'history', 1)).toBe(layout);
+    const unpinned = openPanel(layout, 'history');
+    expect(movePanelInStack(unpinned, 'history', -1)).toBe(unpinned);
+    const locked = setOption(layout, 'locked', true);
+    expect(movePanelInStack(locked, 'parameters', 1)).toBe(locked);
   });
 });
 
@@ -1159,6 +1210,54 @@ describe('floating window z-order', () => {
     expect(
       resizeFloat(layout, bottom, { w: 400, h: 400 }, STAGE).floats.at(-1)!.id
     ).toBe(bottom);
+  });
+
+  it('brings a covered window to the front from the rail instead of closing it', () => {
+    const layout = threeWindows();
+    expect(isFloatCovered(layout, 'history', STAGE)).toBe(true);
+    expect(isFloatCovered(layout, 'diagnostics', STAGE)).toBe(false);
+    const raised = togglePanel(layout, 'history', STAGE);
+    expect(panelStatus(raised, 'history')).toBe('floating');
+    expect(order(raised).at(-1)).toBe('history');
+    expect(raised.recent[0]).toBe('history');
+    // On top now, the next press closes it.
+    expect(panelStatus(togglePanel(raised, 'history', STAGE), 'history')).toBe(
+      'closed'
+    );
+    // A lower window nothing overlaps closes on the first press.
+    const apart = moveFloat(
+      layout,
+      layout.floats[0]!.id,
+      { x: 900, y: 100 },
+      STAGE
+    );
+    const lowered = raiseFloat(
+      raiseFloat(apart, apart.floats[0]!.id),
+      apart.floats[1]!.id
+    );
+    expect(order(lowered)[0]).toBe('history');
+    expect(isFloatCovered(lowered, 'history', STAGE)).toBe(false);
+    expect(panelStatus(togglePanel(lowered, 'history', STAGE), 'history')).toBe(
+      'closed'
+    );
+    // Only floating panels can be covered.
+    expect(isFloatCovered(essentials(), 'parameters', STAGE)).toBe(false);
+  });
+
+  it('closes the phone lane panel on a press even when its stored window is covered', () => {
+    // A window's move or resize raises it without counting as a use, so the
+    // lane can show a panel whose stored window sits under another one.
+    const layout = threeWindows();
+    const shown: PanelLayout = {
+      ...layout,
+      recent: ['history', ...layout.recent.filter((id) => id !== 'history')]
+    };
+    const phone = { width: 390, height: 844 };
+    expect(isFloatCovered(shown, 'history', STAGE)).toBe(true);
+    expect(computePanelGeometry(shown, phone).phonePanel).toBe('history');
+    expect(panelStatus(togglePanel(shown, 'history', phone), 'history')).toBe(
+      'closed'
+    );
   });
 
   it('hit-tests the raised window first', () => {
@@ -2792,5 +2891,13 @@ describe('the unpinned slot beside the right lane', () => {
     // Just past the phone breakpoint a docked column and the slot would have
     // left the inspector about 39px.
     expect(unpinnedSlotReserves(stage(721), 306, 306, 330)).toBe(false);
+  });
+
+  it('leaves the lane its card between the slot and the left dock', () => {
+    // The left dock's 306px come off the lane too: 1012 + 306 = 1318.
+    expect(unpinnedSlotReserves(stage(1318), 306, 306, 330, 306)).toBe(true);
+    expect(unpinnedSlotReserves(stage(1317), 306, 306, 330, 306)).toBe(false);
+    // Essentials at 1280px: the slot covers the lane rather than squeeze it.
+    expect(unpinnedSlotReserves(stage(1280), 306, 306, 330, 306)).toBe(false);
   });
 });
