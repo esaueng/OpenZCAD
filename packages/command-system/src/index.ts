@@ -179,6 +179,12 @@ import {
   type DrawingViewAddInput,
   type DrawingViewUpdateInput,
   type DrawingViewDeleteInput,
+  addDrawingAnnotation,
+  updateDrawingAnnotation,
+  deleteDrawingAnnotation,
+  type DrawingAnnotationAddInput,
+  type DrawingAnnotationUpdateInput,
+  type DrawingAnnotationDeleteInput,
   resolveParamValue,
   resolveSketchInput,
   type RevolveInput,
@@ -296,7 +302,10 @@ export type CommandKind =
   | 'drawing.sheet.delete'
   | 'drawing.view.add'
   | 'drawing.view.update'
-  | 'drawing.view.delete';
+  | 'drawing.view.delete'
+  | 'drawing.annotation.add'
+  | 'drawing.annotation.update'
+  | 'drawing.annotation.delete';
 
 export interface CommandDefinition<TPayload> {
   kind: CommandKind;
@@ -356,7 +365,10 @@ export type AnyCommand =
   | CommandDefinition<DrawingSheetDeleteInput>
   | CommandDefinition<DrawingViewAddInput>
   | CommandDefinition<DrawingViewUpdateInput>
-  | CommandDefinition<DrawingViewDeleteInput>;
+  | CommandDefinition<DrawingViewDeleteInput>
+  | CommandDefinition<DrawingAnnotationAddInput>
+  | CommandDefinition<DrawingAnnotationUpdateInput>
+  | CommandDefinition<DrawingAnnotationDeleteInput>;
 
 function makeCommand<TPayload>(
   kind: CommandKind,
@@ -1972,6 +1984,38 @@ export const commandFactories = {
       'Delete drawing view',
       payload,
       (document) => deleteDrawingView(document, payload)
+    );
+  },
+  addDrawingAnnotation(
+    payload: DrawingAnnotationAddInput
+  ): CommandDefinition<DrawingAnnotationAddInput> {
+    return makeCommand(
+      'drawing.annotation.add',
+      payload.annotation.kind === 'note' ? 'Add note' : 'Add dimension',
+      payload,
+      (document) => addDrawingAnnotation(document, payload)
+    );
+  },
+  updateDrawingAnnotation(
+    payload: DrawingAnnotationUpdateInput,
+    label = payload.annotation.kind === 'note' ? 'Edit note' : 'Edit dimension'
+  ): CommandDefinition<DrawingAnnotationUpdateInput> {
+    return makeCommand(
+      'drawing.annotation.update',
+      label,
+      payload,
+      (document) => updateDrawingAnnotation(document, payload)
+    );
+  },
+  deleteDrawingAnnotation(
+    payload: DrawingAnnotationDeleteInput,
+    label = 'Delete annotation'
+  ): CommandDefinition<DrawingAnnotationDeleteInput> {
+    return makeCommand(
+      'drawing.annotation.delete',
+      label,
+      payload,
+      (document) => deleteDrawingAnnotation(document, payload)
     );
   }
 };
@@ -4396,6 +4440,24 @@ export function replayCommands(
         next = deleteDrawingView(
           next,
           command.payload as DrawingViewDeleteInput
+        );
+        break;
+      case 'drawing.annotation.add':
+        next = addDrawingAnnotation(
+          next,
+          command.payload as DrawingAnnotationAddInput
+        );
+        break;
+      case 'drawing.annotation.update':
+        next = updateDrawingAnnotation(
+          next,
+          command.payload as DrawingAnnotationUpdateInput
+        );
+        break;
+      case 'drawing.annotation.delete':
+        next = deleteDrawingAnnotation(
+          next,
+          command.payload as DrawingAnnotationDeleteInput
         );
         break;
       default:
