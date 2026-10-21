@@ -55,6 +55,7 @@ import {
   buildOffsetFaceHandle,
   faceSweepProfile,
   bodiesInBox,
+  topologyInBox,
   boxSelectMode,
   cycleDepthPick,
   resolveSnap,
@@ -123,6 +124,7 @@ import {
   directEditDirectionFromNormal,
   fitCameraToObjects,
   forEachMesh,
+  isViewerMesh,
   isSameMoveGizmoFocus,
   layoutMeasurementCallouts,
   makeLabel,
@@ -187,6 +189,8 @@ import {
 } from '@openzcad/viewport';
 import {
   UNIT_TO_MM,
+  VIEWPORT_FIELD_OF_VIEW_BOUNDS,
+  XRAY_OPACITY_BOUNDS,
   displayLengthName,
   type GeometryBodyRepresentation,
   type FaceGeometry,
@@ -808,6 +812,19 @@ export interface ModelViewerProps {
   /** Bodies swept by a drag rectangle; empty clears the selection. */
   onBoxSelect(bodyIds: string[]): void;
   /**
+   * Faces or edges swept by a drag rectangle while the selection filter is
+   * Face or Edge; empty clears the selection. Absent, those sweeps take
+   * bodies, as every other filter's do.
+   */
+  onBoxSelectTopology?(
+    selections: TopologySelection[],
+    kind: 'face' | 'edge'
+  ): void;
+  /** Perspective field of view, in degrees; orthographic ignores it. */
+  fieldOfView?: number;
+  /** Face opacity in X-ray (`settings.xray`), 0–1. */
+  xrayOpacity?: number;
+  /**
    * A whole smooth run of edges at once, from double-clicking one of them.
    *
    * Separate from `onSelectTopology` because the edges have to land in one
@@ -1087,6 +1104,8 @@ export interface SceneContext {
   readonly controls: OrbitControls<THREE.Camera>;
   /** Switches projection, rebinding controls and syncing camera poses. */
   applyProjection(mode: ProjectionMode): void;
+  /** Widens or narrows the perspective view, keeping the framing. */
+  setFieldOfView(degrees: number): void;
   /** Mirrors the perspective pose onto the ortho camera and its frustum. */
   syncOrthographic(resetZoom: boolean): void;
   /** Re-applies navigation preferences onto the live orbit controls. */
@@ -1836,6 +1855,9 @@ export function ModelViewer({
   onSelectEdgeChain,
   selectionFilter,
   onBoxSelect,
+  onBoxSelectTopology,
+  fieldOfView = VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
+  xrayOpacity = XRAY_OPACITY_BOUNDS.default / 100,
   offsetHandle,
   onOffsetPreview,
   onOffsetCommit,
@@ -1926,6 +1948,18 @@ export function ModelViewer({
   pickListEnabledRef.current = pickListEnabled;
   const onBoxSelectRef = useRef(onBoxSelect);
   onBoxSelectRef.current = onBoxSelect;
+  const onBoxSelectTopologyRef = useRef(onBoxSelectTopology);
+  onBoxSelectTopologyRef.current = onBoxSelectTopology;
+  // X-ray is read per pick and per sweep, like the filter.
+  const xrayRef = useRef(settings.xray === true);
+  xrayRef.current = settings.xray === true;
+  /** What every body's face opacity is multiplied by right now. */
+  const xrayFactor = settings.xray === true ? xrayOpacity : 1;
+  const xrayFactorRef = useRef(xrayFactor);
+  xrayFactorRef.current = xrayFactor;
+  // Read once, when the scene is built; the effect below follows changes.
+  const fieldOfViewRef = useRef(fieldOfView);
+  fieldOfViewRef.current = fieldOfView;
   const onResizePrimitiveFaceRef = useRef(onResizePrimitiveFace);
   onResizePrimitiveFaceRef.current = onResizePrimitiveFace;
   // Read by the bodies pass, which re-runs on every selection change. When
@@ -2395,6 +2429,7 @@ export function ModelViewer({
       // The viewer rail and orientation widget are siblings of this host.
       wheelElement: host.parentElement ?? host,
       requestRender: () => requestRender(),
+      fieldOfView: fieldOfViewRef.current,
       onViewChange: (view) => onViewChangeRef.current(view),
       onViewSettled: (view) => onViewSettledRef.current(view),
       reducedMotion: () => reducesMotion(reducedMotionRef.current),
@@ -2532,6 +2567,8 @@ export function ModelViewer({
       sketchGroup,
       bodyGroup,
       filter: () => selectionFilterRef.current,
+      selectThrough: () => xrayRef.current,
+      clippingPlane: () => sectionViewRef.current ? sectionClippingPlane(sectionViewRef.current) : null,
       profiles: () => profilePickTargetsRef.current,
       selectionContext: () =>
         profileSelectionModeRef.current
@@ -2610,9 +2647,13 @@ export function ModelViewer({
             edges.setDisplayMode(displayModeRef.current);
             mesh.add(edges);
             copy.add(mesh);
-            applyDisplayMode(copy, displayModeRef.current);
+            applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
             return copy;
           });
+          moveCopyPreview.refreshAppearance(
+            displayModeRef.current,
+            xrayRef.current
+          );
           const final = composeMoveTransform(center, translation, rotationDeg);
           target.rotation.copy(moveEuler(rotationDeg));
           target.position.set(final.x, final.y, final.z);
@@ -2687,6 +2728,7 @@ export function ModelViewer({
         return cameraRig.controls;
       },
       applyProjection: (mode) => cameraRig.applyProjection(mode),
+      setFieldOfView: (degrees) => cameraRig.setFieldOfView(degrees),
       syncOrthographic: (resetZoom) => cameraRig.syncOrthographic(resetZoom),
       refreshNavigation: () => cameraRig.refreshNavigationPreferences(),
       viewDirection: () => cameraRig.viewDirection(),
@@ -4584,6 +4626,11 @@ export function ModelViewer({
           bodyId?: string;
           /** Edges already taken, so a second call finds a different one. */
           excludeTopologyIds?: string[];
+          /**
+           * Only a point a face stands in front of: an edge a click can take
+           * through the face (X-ray select-through) and not otherwise.
+           */
+          occluded?: boolean;
           resolve?: (
             value: { x: number; y: number; topologyId: string } | null
           ) => void;
@@ -4644,6 +4691,21 @@ export function ModelViewer({
           const picked = picker.pick(
             new MouseEvent('mousemove', { clientX, clientY })
           );
+          if (
+            detail.occluded &&
+            !(
+              picked &&
+              picker
+                .intersect(context.bodyGroup.children)
+                .some(
+                  (hit) =>
+                    isViewerMesh(hit.object) &&
+                    hit.distance < picked.distance * (1 - 1e-3)
+                )
+            )
+          ) {
+            continue;
+          }
           if (
             picked?.selection?.kind === 'edge' &&
             picked.selection.topologyId === edge.topologyId
@@ -4707,6 +4769,8 @@ export function ModelViewer({
               bounds: { min: number[]; max: number[] };
             }[];
             bodyFaces: {
+              visible: boolean;
+              opacity: number;
               depthTest: boolean;
               depthWrite: boolean;
               polygonOffset: boolean;
@@ -4737,6 +4801,8 @@ export function ModelViewer({
         return;
       }
       const bodyFaces: {
+        visible: boolean;
+        opacity: number;
         bounds?: { min: number[]; max: number[] };
         worldBounds?: { min: number[]; max: number[] };
         depthTest: boolean;
@@ -4752,6 +4818,8 @@ export function ModelViewer({
           ?.clone()
           .applyMatrix4(mesh.matrixWorld);
         bodyFaces.push({
+          visible: mesh.visible && mesh.material.visible,
+          opacity: mesh.material.opacity,
           depthTest: mesh.material.depthTest,
           depthWrite: mesh.material.depthWrite,
           polygonOffset: mesh.material.polygonOffset,
@@ -4871,6 +4939,49 @@ export function ModelViewer({
      * Whether every drawn body is wholly on screen through the live camera,
      * and where that camera stands, so a spec can tell a reframe from none.
      */
+    /**
+     * The first live body's world box and where world points land in client
+     * pixels, so a browser test can sweep a rectangle over known geometry
+     * wherever the camera framed it.
+     */
+    const handleE2EProjectPoints = (event: Event) => {
+      if (!e2eCanvasHooksEnabled) {
+        return;
+      }
+      const detail = (
+        event as CustomEvent<{
+          points?: [number, number, number][];
+          resolve?: (value: {
+            box: { min: number[]; max: number[] } | null;
+            points: { x: number; y: number }[];
+          }) => void;
+        }>
+      ).detail;
+      if (!detail?.resolve) {
+        return;
+      }
+      const object = bodiesRef.current
+        .filter((body) => !body.consumed)
+        .map((body) => context.objectsByBodyId.get(body.bodyId))
+        .find((candidate) => candidate !== undefined);
+      const box = object ? new THREE.Box3().setFromObject(object) : null;
+      const rect = renderer.domElement.getBoundingClientRect();
+      detail.resolve({
+        box:
+          box && !box.isEmpty()
+            ? { min: box.min.toArray(), max: box.max.toArray() }
+            : null,
+        points: (detail.points ?? []).map((point) => {
+          const projected = new THREE.Vector3(...point).project(
+            context.activeCamera
+          );
+          return {
+            x: rect.left + ((projected.x + 1) / 2) * rect.width,
+            y: rect.top + ((1 - projected.y) / 2) * rect.height
+          };
+        })
+      });
+    };
     const handleE2EBodiesInView = (event: Event) => {
       if (!e2eCanvasHooksEnabled) {
         return;
@@ -5179,6 +5290,10 @@ export function ModelViewer({
       renderer.domElement.addEventListener(
         'openzcad:e2e-bodies-in-view',
         handleE2EBodiesInView
+      );
+      renderer.domElement.addEventListener(
+        'openzcad:e2e-project-points',
+        handleE2EProjectPoints
       );
       renderer.domElement.addEventListener(
         'openzcad:e2e-control-pointer',
@@ -8419,24 +8534,71 @@ export function ModelViewer({
         }
         depthCycle = null;
         const host = renderer.domElement;
+        const sweepMode = boxSelectMode(started.startX, event.clientX);
+        const projectionOptions = {
+          camera: cameraRig.activeCamera,
+          width: host.clientWidth,
+          height: host.clientHeight
+        };
+        const liveBodies = bodiesRef.current.filter((body) => !body.consumed);
+        const filter = selectionFilterRef.current;
+        const onTopology = onBoxSelectTopologyRef.current;
+        // A Face or Edge filter says what the sweep is for; every other
+        // filter keeps taking whole bodies.
+        if ((filter === 'face' || filter === 'edge') && onTopology) {
+          // Without X-ray, wireframe hides every face and shaded hides
+          // every edge: a sweep takes nothing it cannot see.
+          if (
+            !xrayRef.current &&
+            ((filter === 'face' && displayModeRef.current === 'wireframe') ||
+              (filter === 'edge' && displayModeRef.current === 'shaded'))
+          ) {
+            onTopology([], filter);
+            return;
+          }
+          onTopology(
+            timed('viewer.boxSelectTopology', () =>
+              topologyInBox(
+                liveBodies.map((body) => ({
+                  bodyId: body.bodyId,
+                  positions: body.mesh.vertices,
+                  indices: body.mesh.indices,
+                  topology: body.topology,
+                  // A translucent appearance draws without depth writes.
+                  occludes: (body.opacity ?? 1) >= 1
+                })),
+                rect,
+                sweepMode,
+                {
+                  ...projectionOptions,
+                  kind: filter,
+                  // Wireframe draws rear edges without face occlusion too.
+                  selectThrough:
+                    xrayRef.current ||
+                    (filter === 'edge' &&
+                      displayModeRef.current === 'wireframe'),
+                  clippingPlane: sectionViewRef.current
+                    ? sectionClippingPlane(sectionViewRef.current)
+                    : null
+                }
+              )
+            ),
+            filter
+          );
+          return;
+        }
         onBoxSelectRef.current(
           bodiesInBox(
-            bodiesRef.current
-              .filter((body) => !body.consumed)
-              .map((body) => ({
-                bodyId: body.bodyId,
-                // Kernel meshes are already world-space, so no placement is
-                // applied here either — see createObjectForBody.
-                positions: body.mesh.vertices,
-                indices: body.mesh.indices
-              })),
+            liveBodies.map((body) => ({
+              bodyId: body.bodyId,
+              // Kernel meshes are already world-space, so no placement is
+              // applied here either — see createObjectForBody.
+              positions: body.mesh.vertices,
+              indices: body.mesh.indices
+            })),
             rect,
-            boxSelectMode(started.startX, event.clientX),
-            {
-              camera: cameraRig.activeCamera,
-              width: host.clientWidth,
-              height: host.clientHeight
-            }
+            sweepMode,
+            projectionOptions
           )
         );
         return;
@@ -9600,6 +9762,10 @@ export function ModelViewer({
         handleE2EBodiesInView
       );
       renderer.domElement.removeEventListener(
+        'openzcad:e2e-project-points',
+        handleE2EProjectPoints
+      );
+      renderer.domElement.removeEventListener(
         'openzcad:e2e-control-pointer',
         handleE2EControlPointer
       );
@@ -9933,6 +10099,11 @@ export function ModelViewer({
       context.renderer.domElement.dataset.e2eRenderedBodies = String(
         bodies.length
       );
+      if (xrayFactor < 1) {
+        context.renderer.domElement.dataset.e2eXray = String(xrayFactor);
+      } else {
+        delete context.renderer.domElement.dataset.e2eXray;
+      }
       // Pick order, as the boolean form numbers it.
       if (selectedBodyIds.length > 0) {
         context.renderer.domElement.dataset.e2eSelectedBodies =
@@ -10022,9 +10193,13 @@ export function ModelViewer({
         selectedBodyIds.includes(body.bodyId) &&
         !(selectionRecedes && partPicked);
 
+      // X-ray scales every body's own opacity, so a body already made
+      // translucent by its appearance stays the fainter of the two.
+      const faceOpacity = (body.opacity ?? 1) * xrayFactor;
       forEachMesh(object, (mesh) => {
-        if (bodyChanged) {
-          updateBodyMaterialOpacity(mesh.material, body.opacity ?? 1);
+        if (bodyChanged || mesh.userData.appliedOpacity !== faceOpacity) {
+          updateBodyMaterialOpacity(mesh.material, faceOpacity);
+          mesh.userData.appliedOpacity = faceOpacity;
         }
         const baseEmissive = isSelected ? SELECTION_EMISSIVE : 0x000000;
         mesh.material.emissive.setHex(baseEmissive);
@@ -10054,6 +10229,7 @@ export function ModelViewer({
       edgeOverlay?.setSelected(selectedEdges);
       edgeOverlay?.setBodySelected(isSelected);
       edgeOverlay?.setXrayEnabled(xrayEnabled);
+      edgeOverlay?.setXrayView(xrayFactor < 1);
       if (bodiesChanged) {
         context.bodyGroup.add(object);
         context.objectsByBodyId.set(body.bodyId, object);
@@ -10104,7 +10280,7 @@ export function ModelViewer({
           fill.polygonOffset = true;
           fill.polygonOffsetFactor = -3;
           fill.polygonOffsetUnits = 0;
-          fill.userData.targetOpacity = body.opacity ?? 1;
+          fill.userData.targetOpacity = faceOpacity;
           material = fill;
           ownColour = true;
         } else {
@@ -10127,10 +10303,11 @@ export function ModelViewer({
           ? VIEWPORT_RENDER_ORDER.SELECTED_FACE_FILL
           : VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
         fill.userData.selectionOverlay = true;
-        // A shaded face in a wireframe would contradict the mode; the rim
-        // still carries the selection there (see applyDisplayMode).
+        // The fill follows the body: ordinary wireframe uses its rim,
+        // while X-ray displays translucent surfaces (see applyDisplayMode).
         fill.userData.ownColourFill = ownColour;
-        fill.visible = !ownColour || displayModeRef.current !== 'wireframe';
+        fill.visible =
+          !ownColour || displayModeRef.current !== 'wireframe' || xrayRef.current;
         fill.raycast = () => undefined;
         context.fadeIns.add(material);
         return fill;
@@ -10393,8 +10570,16 @@ export function ModelViewer({
     }
 
     if (bodiesChanged) {
-      applyDisplayMode(context.bodyGroup, displayModeRef.current);
+      applyDisplayMode(
+        context.bodyGroup,
+        displayModeRef.current,
+        xrayRef.current
+      );
     }
+    context.moveCopyPreview.refreshAppearance(
+      displayModeRef.current,
+      xrayRef.current
+    );
     // Rebuilt bodies and freshly created highlight geometry arrive without
     // clip planes; reapply so an active section survives both.
     applySectionPlane(
@@ -10405,7 +10590,8 @@ export function ModelViewer({
       exactSectionRef.current
         ? {
             regions: exactSectionRef.current,
-            displayMode: displayModeRef.current
+            displayMode: displayModeRef.current,
+            xray: xrayRef.current
           }
         : null
     );
@@ -10547,7 +10733,10 @@ export function ModelViewer({
     // is body 1, the base a subtract cuts from" is answered in the viewport.
     // The name alone with a "+2" told the user how many were picked, but not
     // which ones. The chip for the whole pick hangs over all of them.
-    if (selectedBodyIds.length > 1) {
+    // Faces lit together (a History row's, a box sweep's) are the pick even
+    // when their bodies are selected, so their chip hangs over the faces.
+    const focusCallout = callout?.anchor === 'focus' && !focusBox.isEmpty();
+    if (selectedBodyIds.length > 1 && !focusCallout) {
       const pickBox = new THREE.Box3();
       selectedBodyIds.forEach((bodyId, index) => {
         const target = context.objectsByBodyId.get(bodyId);
@@ -10582,7 +10771,9 @@ export function ModelViewer({
       }
     }
     const primaryId =
-      selectedBodyIds.length === 1 ? selectedBodyIds[0] : undefined;
+      selectedBodyIds.length === 1 && !focusCallout
+        ? selectedBodyIds[0]
+        : undefined;
     if (primaryId) {
       const target = context.objectsByBodyId.get(primaryId);
       const body = bodies.find((candidate) => candidate.bodyId === primaryId);
@@ -10600,11 +10791,7 @@ export function ModelViewer({
           );
         }
       }
-    } else if (
-      selectedBodyIds.length === 0 &&
-      callout?.anchor === 'focus' &&
-      !focusBox.isEmpty()
-    ) {
+    } else if (focusCallout) {
       addSelectionCallout(focusBox, callout.label ?? [], null);
     }
 
@@ -10654,7 +10841,8 @@ export function ModelViewer({
     focusFaces,
     focusGhostBodies,
     sketchMode,
-    units
+    units,
+    xrayFactor
   ]);
 
   useEffect(() => {
@@ -10867,6 +11055,17 @@ export function ModelViewer({
   useEffect(() => {
     contextRef.current?.applyProjection(projection);
   }, [projection]);
+
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context) return;
+    context.setFieldOfView(fieldOfView);
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      context.renderer.domElement.dataset.e2eFieldOfView = String(
+        context.camera.fov
+      );
+    }
+  }, [fieldOfView]);
 
   // Navigation preferences are read per call, but the orbit controls cache
   // them, so a live toggle has to push the new value onto the instance.
@@ -11963,7 +12162,7 @@ export function ModelViewer({
         material.color.set(appearancePreview.color);
       }
       if (appearancePreview.opacity !== undefined) {
-        const opacity = appearancePreview.opacity;
+        const opacity = appearancePreview.opacity * xrayFactorRef.current;
         material.transparent = opacity < 1;
         material.opacity = opacity;
         material.depthWrite = opacity >= 1;
@@ -11982,7 +12181,7 @@ export function ModelViewer({
       }
       context.requestRender();
     };
-  }, [appearancePreview, bodies]);
+  }, [appearancePreview, bodies, xrayFactor]);
 
   // Solids recede while sketching so the plane reads as the work surface.
   // Re-applied after every body rebuild (each entity commit resyncs).
@@ -12024,13 +12223,21 @@ export function ModelViewer({
           context.fadeIns.add(material);
         }
       } else if (stored.sketchRecede) {
+        // The opacity the bodies pass set last, when it set one: an X-ray
+        // switched during the sketch changed it after the recede began.
+        const applied = (child.userData as { appliedOpacity?: number })
+          .appliedOpacity;
+        const restore =
+          applied === undefined
+            ? stored.sketchRecede
+            : { opacity: applied, transparent: applied < 1 };
         if (reducesMotion(reducedMotionRef.current)) {
-          material.opacity = stored.sketchRecede.opacity;
-          material.transparent = stored.sketchRecede.transparent;
+          material.opacity = restore.opacity;
+          material.transparent = restore.transparent;
         } else {
           context.selection.easeOpacity(material);
-          material.userData.targetOpacity = stored.sketchRecede.opacity;
-          if (!stored.sketchRecede.transparent) {
+          material.userData.targetOpacity = restore.opacity;
+          if (!restore.transparent) {
             material.userData.restoreOpaque = true;
           }
           context.fadeIns.add(material);
@@ -12039,7 +12246,9 @@ export function ModelViewer({
       }
     });
     context.requestRender();
-  }, [sketchMode, bodies]);
+    // X-ray is listed so a switch mid-sketch, which the bodies pass applies
+    // at full strength, recedes again here.
+  }, [sketchMode, bodies, xrayFactor]);
 
   // The drag handles appear and go with this flag; draw a frame for it.
   useEffect(() => {
@@ -12302,13 +12511,21 @@ export function ModelViewer({
         context.activeCamera,
         settings.showGrid
       );
-      applyDisplayMode(context.bodyGroup, settings.displayMode);
+      applyDisplayMode(
+        context.bodyGroup,
+        settings.displayMode,
+        settings.xray === true
+      );
       for (const edgeOverlay of context.edgeOverlaysByBodyId.values()) {
         edgeOverlay.setDisplayMode(settings.displayMode);
       }
+      context.moveCopyPreview.refreshAppearance(
+        settings.displayMode,
+        xrayRef.current
+      );
       context.requestRender();
     }
-  }, [settings.showGrid, settings.displayMode]);
+  }, [settings.showGrid, settings.displayMode, settings.xray]);
 
   useEffect(() => {
     const context = contextRef.current;
@@ -12322,7 +12539,11 @@ export function ModelViewer({
       // owns a mode CHANGE, and re-running this one for it would rebuild the
       // section geometry to no purpose.
       exactSection
-        ? { regions: exactSection, displayMode: displayModeRef.current }
+        ? {
+            regions: exactSection,
+            displayMode: displayModeRef.current,
+            xray: xrayRef.current
+          }
         : null
     );
     // The frozen ground shadow must follow the cut, not the uncut silhouette.

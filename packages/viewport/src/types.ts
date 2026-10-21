@@ -92,6 +92,11 @@ export interface SectionViewSettings {
 export interface ViewerSettings {
   showGrid: boolean;
   displayMode: DisplayMode;
+  /**
+   * X-ray over the display mode: faces translucent, every edge drawn, and
+   * picks go through faces. Absent (older saved views) means off.
+   */
+  xray?: boolean;
   /** Runtime-only cutaway state; absent means no section is active. */
   sectionView?: SectionViewSettings;
   /** Runtime-only accessibility preference; omitted by older saved views. */

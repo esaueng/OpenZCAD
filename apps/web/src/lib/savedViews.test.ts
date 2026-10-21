@@ -125,6 +125,51 @@ describe('saved views (ZC-115)', () => {
 });
 
 describe('saved view upkeep', () => {
+  it('keeps a captured FOV, accepts legacy views, and rejects invalid angles', () => {
+    const storage = memoryStorage();
+    const valid = { ...pose(1), name: 'View 1', savedAt: 1 };
+    storage.setItem(
+      SAVED_VIEWS_STORAGE_KEY,
+      JSON.stringify({
+        p1: [
+          { ...valid, id: 'captured', fieldOfView: 45 },
+          { ...valid, id: 'legacy' },
+          ...[-1, 0, 180, null, '45'].map((fieldOfView, index) => ({
+            ...valid,
+            id: `invalid-${index}`,
+            fieldOfView
+          }))
+        ]
+      })
+    );
+    expect(loadSavedViews('p1', storage).map((view) => view.id)).toEqual([
+      'captured',
+      'legacy'
+    ]);
+    expect(loadSavedViews('p1', storage)[0]).toHaveProperty('fieldOfView', 45);
+  });
+
+  it('rejects an out-of-range angle stored inside the camera pose', () => {
+    const storage = memoryStorage();
+    const valid = { ...pose(1), name: 'View 1', savedAt: 1, fieldOfView: 45 };
+    storage.setItem(
+      SAVED_VIEWS_STORAGE_KEY,
+      JSON.stringify({
+        p1: [
+          { ...valid, id: 'ok', camera: { ...valid.camera, fieldOfView: 45 } },
+          ...[179, 5, Number.NaN, '45'].map((fieldOfView, index) => ({
+            ...valid,
+            id: `invalid-${index}`,
+            camera: { ...valid.camera, fieldOfView }
+          }))
+        ]
+      })
+    );
+    expect(loadSavedViews('p1', storage).map((view) => view.id)).toEqual([
+      'ok'
+    ]);
+  });
+
   it('drops entries with an unknown display mode or a malformed section', () => {
     const storage = memoryStorage();
     const valid = { ...pose(1), name: 'View 1', savedAt: 1 };
@@ -148,6 +193,23 @@ describe('saved view upkeep', () => {
       'cut',
       'plain'
     ]);
+  });
+
+  it('keeps X-ray with the view and drops a malformed flag', () => {
+    const storage = memoryStorage();
+    saveView('p1', { ...pose(1), xray: true }, { storage, now: 1, id: 'x' });
+    expect(loadSavedViews('p1', storage)[0]?.xray).toBe(true);
+    const valid = { ...pose(1), name: 'View 1', savedAt: 1 };
+    storage.setItem(
+      SAVED_VIEWS_STORAGE_KEY,
+      JSON.stringify({
+        p1: [
+          { ...valid, id: 'bad', xray: 'on' },
+          { ...valid, id: 'older' }
+        ]
+      })
+    );
+    expect(loadSavedViews('p1', storage).map((v) => v.id)).toEqual(['older']);
   });
 
   it('reports a refused delete and keeps the stored list', () => {
