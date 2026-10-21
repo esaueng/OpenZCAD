@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { SketchRelationGlyphChip } from '../../lib/sketch/relationGlyphs';
+import { segmentHitsBox } from '../../lib/sketch/relationGlyphLayout';
 import {
   OBSTACLE_REFRESH_MS,
   buildSketchRelationGlyphs
@@ -443,6 +444,54 @@ describe('sketch relation glyph overlay', () => {
     ).toBe(true);
     // And the line the relation is on, screen y = 200.
     expect(bottomEdge < 200 - 2 || top > 200 + 2).toBe(true);
+    overlay.dispose();
+  });
+
+  it('keeps a glyph off the visible part of a curve that runs behind the camera', () => {
+    // A camera standing on the sketch plane, looking along it. A long line
+    // runs from behind the camera, through the chip's anchor at plane
+    // (10, 20), on into the distance; the chip would stand straight along it.
+    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+    camera.position.set(10, 8, 5);
+    camera.lookAt(10, 5, -20);
+    camera.updateMatrixWorld();
+    camera.updateProjectionMatrix();
+    const chip: SketchRelationGlyphChip = {
+      ...bottom,
+      key: 'object:far',
+      anchor: { x: 10, y: 20 },
+      normal: { x: 0, y: 1 }
+    };
+    const overlay = buildSketchRelationGlyphs(
+      [chip],
+      basis,
+      () => {},
+      () => {},
+      new Float64Array([10, -20, 10, 40])
+    );
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(camera, 400, 400);
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    const screen = (y: number) => {
+      const point = new THREE.Vector3(10, 5, -y).project(camera);
+      return { x: point.x * 200 + 200, y: -point.y * 200 + 200 };
+    };
+    const anchor = screen(20);
+    const cx = anchor.x + dx!;
+    const cy = anchor.y + dy!;
+    // The visible part of the line, plane y from just ahead of the camera
+    // to its far end, sampled finely.
+    for (let y = 0; y < 40; y += 0.5) {
+      const a = screen(y);
+      const b = screen(y + 0.5);
+      expect(
+        segmentHitsBox(a.x, a.y, b.x, b.y, cx - 17, cy - 8, cx + 17, cy + 8),
+        `covers the line near plane y = ${y}`
+      ).toBe(false);
+    }
     overlay.dispose();
   });
 

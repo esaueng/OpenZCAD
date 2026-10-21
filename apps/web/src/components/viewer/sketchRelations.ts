@@ -231,6 +231,7 @@ export function buildSketchRelationGlyphs(
   }
   const strokeScreen = new Float64Array(strokeCount * 4);
   const clip = new THREE.Vector4();
+  const clipEnd = new THREE.Vector4();
   const step = new THREE.Vector4();
   return {
     group,
@@ -338,30 +339,40 @@ export function buildSketchRelationGlyphs(
         if (point) layout.setSwings(index, screenSwings, 0);
         if (index === pinnedIndex) layout.pin(index);
       }
-      // The drawn curves, projected; an end behind the camera drops the
-      // segment (marked non-finite, which the layout skips).
+      // The drawn curves, projected. A segment crossing the near plane is
+      // clipped to it in clip space first, as the renderer draws its visible
+      // part; only one wholly behind the camera is dropped (marked
+      // non-finite, which the layout skips).
       for (let index = 0; index < strokeCount; index += 1) {
-        for (let end = 0; end < 2; end += 1) {
-          const w3 = index * 6 + end * 3;
-          clip
-            .set(
-              strokeWorld[w3]!,
-              strokeWorld[w3 + 1]!,
-              strokeWorld[w3 + 2]!,
-              1
-            )
-            .applyMatrix4(view)
-            .applyMatrix4(projection);
-          const s2 = index * 4 + end * 2;
-          if (clip.w <= 0) {
-            strokeScreen[s2] = Number.NaN;
-            strokeScreen[s2 + 1] = Number.NaN;
-          } else {
-            strokeScreen[s2] = (clip.x / clip.w) * 0.5 * width + 0.5 * width;
-            strokeScreen[s2 + 1] =
-              (-clip.y / clip.w) * 0.5 * height + 0.5 * height;
-          }
+        const w = index * 6;
+        clip
+          .set(strokeWorld[w]!, strokeWorld[w + 1]!, strokeWorld[w + 2]!, 1)
+          .applyMatrix4(view)
+          .applyMatrix4(projection);
+        clipEnd
+          .set(strokeWorld[w + 3]!, strokeWorld[w + 4]!, strokeWorld[w + 5]!, 1)
+          .applyMatrix4(view)
+          .applyMatrix4(projection);
+        // Signed distance to the near plane in clip space (z = −w).
+        const nearA = clip.z + clip.w;
+        const nearB = clipEnd.z + clipEnd.w;
+        const s4 = index * 4;
+        if (nearA < 0 && nearB < 0) {
+          strokeScreen[s4] = Number.NaN;
+          continue;
         }
+        if (nearA < 0) clip.lerp(clipEnd, nearA / (nearA - nearB));
+        else if (nearB < 0) clipEnd.lerp(clip, nearB / (nearB - nearA));
+        if (!(clip.w > 0) || !(clipEnd.w > 0)) {
+          strokeScreen[s4] = Number.NaN;
+          continue;
+        }
+        strokeScreen[s4] = (clip.x / clip.w) * 0.5 * width + 0.5 * width;
+        strokeScreen[s4 + 1] = (-clip.y / clip.w) * 0.5 * height + 0.5 * height;
+        strokeScreen[s4 + 2] =
+          (clipEnd.x / clipEnd.w) * 0.5 * width + 0.5 * width;
+        strokeScreen[s4 + 3] =
+          (-clipEnd.y / clipEnd.w) * 0.5 * height + 0.5 * height;
       }
       layout.setStrokes(strokeScreen, strokeCount);
       layout.solve(count, width, height);
