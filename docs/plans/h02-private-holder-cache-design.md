@@ -231,3 +231,7 @@ can reuse eagerly probed lineage checkpoints and publish references that a fresh
 idle build omits, with identical raw geometry. Its opt-in strict assertion still
 fails. This explains a public path to the mismatch without changing the pinned
 runtime or treating broader lineage as accepted equivalence.
+
+## PR #805 target-hardware follow-up (2026-10-21)
+
+[The candidate campaign](../qa/2026-10-21/h02-pr805-m5-pro-qualification.md) passes private raw/publication comparisons through 80 edits, recovery and restart, while failing the unchanged 20% p95 target (8.3% observed) and fixed Text restore. Its fresh-arena fallback does not exercise required private checkpoint retirement or replay-budget recycling. Those acceptance failures remain red in the continuation probe. Whole-worker retention, quiet-host and detached-branch dependency/kernel/mutation criteria remain open; none of the five acceptance conditions above changes.
