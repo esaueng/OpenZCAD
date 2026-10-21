@@ -352,11 +352,11 @@ describe('sketch relation glyph overlay', () => {
     overlay.dispose();
   });
 
-  it('keeps one chip of a selected relation in view, and drops the pick when none can show', () => {
+  it('keeps one chip of a selected relation in view, and reports when none can show', () => {
     // A selected parallel shows on both lines. A panel covers all but a strip
     // along the top: only the pinned chip walks out to it (pinning both
     // would stack two). When the panel covers everything, the selection is
-    // reported hidden, once.
+    // reported not drawn, once.
     const area = document.createElement('div');
     area.className = 'viewer-area';
     const layer = document.createElement('div');
@@ -381,7 +381,7 @@ describe('sketch relation glyph overlay', () => {
       .spyOn(cover, 'getBoundingClientRect')
       .mockReturnValue(rect(40, 400, 360));
     const selectedParallel = { ...bottom.glyphs[1]!, selected: true };
-    const hidden = vi.fn();
+    const shown = vi.fn();
     const overlay = buildSketchRelationGlyphs(
       [
         { ...bottom, glyphs: [selectedParallel] },
@@ -394,7 +394,7 @@ describe('sketch relation glyph overlay', () => {
       ],
       basis,
       () => {},
-      hidden
+      shown
     );
     const shownCount = () =>
       overlay.group.children.filter(
@@ -405,14 +405,16 @@ describe('sketch relation glyph overlay', () => {
     overlay.refreshObstacles(layer);
     overlay.layout(topCamera(), 400, 400);
     expect(shownCount()).toBe(1);
-    expect(hidden).not.toHaveBeenCalled();
+    expect(shown.mock.calls).toEqual([['c2', true]]);
     coverBox.mockReturnValue(rect(0, 400, 400));
     overlay.refreshObstacles(layer);
     overlay.layout(topCamera(), 400, 400);
     overlay.layout(topCamera(), 400, 400);
     expect(shownCount()).toBe(0);
-    expect(hidden).toHaveBeenCalledTimes(1);
-    expect(hidden).toHaveBeenCalledWith('c2');
+    expect(shown.mock.calls).toEqual([
+      ['c2', true],
+      ['c2', false]
+    ]);
     overlay.dispose();
     area.remove();
   });
@@ -520,6 +522,32 @@ describe('sketch relation glyph overlay', () => {
     expect(right <= 195 || left >= 205 || bottomEdge <= 179 || top >= 189).toBe(
       true
     );
+    overlay.dispose();
+  });
+
+  it('reports a selected glyph panned off screen and back', () => {
+    const shown = vi.fn();
+    const overlay = buildSketchRelationGlyphs(
+      [{ ...bottom, glyphs: [{ ...bottom.glyphs[0]!, selected: true }] }],
+      basis,
+      () => {},
+      shown
+    );
+    const camera = topCamera();
+    overlay.layout(camera, 400, 400);
+    // Pan far enough that the anchor (plane 10, 0) leaves the view.
+    camera.position.x += 200;
+    camera.updateMatrixWorld();
+    overlay.layout(camera, 400, 400);
+    overlay.layout(camera, 400, 400);
+    camera.position.x -= 200;
+    camera.updateMatrixWorld();
+    overlay.layout(camera, 400, 400);
+    expect(shown.mock.calls).toEqual([
+      ['c1', true],
+      ['c1', false],
+      ['c1', true]
+    ]);
     overlay.dispose();
   });
 

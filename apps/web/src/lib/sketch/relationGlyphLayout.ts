@@ -133,6 +133,17 @@ export class RelationGlyphLayout {
    * left where it is and counts as placed (it is clipped anyway).
    */
   readonly shown: Uint8Array;
+
+  /**
+   * Whether chip `index` was drawn on screen by the last `solve`: on camera,
+   * inside the viewport and placed. A chip left alone off screen or hidden
+   * for want of room was not.
+   */
+  drawn(index: number): boolean {
+    return (
+      (this.input[index * IN + 6]! & VISIBLE) !== 0 && this.shown[index] === 1
+    );
+  }
   /**
    * The box and anchor comparisons the last `solve` made: what a test checks
    * to prove a frame's work grows linearly (a wall clock is too noisy to).

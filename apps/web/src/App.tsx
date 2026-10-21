@@ -16089,6 +16089,17 @@ export function App() {
     setStatus(`Selected ${target.label}, referenced by this constraint.`);
   }
 
+  /**
+   * Whether the picked relation's glyph is drawn, as the viewport last
+   * reported. Panned or orbited off screen, or with nowhere clear to show,
+   * the selection stays but Delete does nothing: it never removes a relation
+   * whose selected glyph cannot be seen.
+   */
+  const selectedConstraintShownRef = useRef<{
+    constraintId: string;
+    shown: boolean;
+  } | null>(null);
+
   /** A relation glyph was clicked: select that relation for Delete. */
   function handleSelectSketchConstraint(constraintId: string) {
     const constraint = editingSketchNode?.constraints?.find(
@@ -20146,7 +20157,15 @@ export function App() {
           selectedConstraintId
         ) {
           event.preventDefault();
-          if (!sketchSolving && !geometryBusy) {
+          const onScreen =
+            selectedConstraintShownRef.current?.constraintId ===
+              selectedConstraintId &&
+            selectedConstraintShownRef.current.shown;
+          if (!onScreen) {
+            setStatus(
+              'The selected relation is out of view; bring its glyph back to delete it.'
+            );
+          } else if (!sketchSolving && !geometryBusy) {
             handleDeleteSketchConstraint(selectedConstraintId);
           }
           return;
@@ -22559,22 +22578,10 @@ export function App() {
             onEditSketchDimension={handleEditSketchDimension}
             onMoveSketchDimension={handleMoveSketchDimension}
             onSelectSketchConstraint={handleSelectSketchConstraint}
-            onSketchConstraintSelectionHidden={(constraintId) => {
-              // Its glyph is under a control with nowhere clear to go: drop
-              // the pick rather than leave Delete armed on a hidden relation.
-              if (
-                interactionRef.current.mode === 'sketch' &&
-                interactionRef.current.session.selectedConstraintId ===
-                  constraintId
-              ) {
-                dispatchInteraction({
-                  type: 'sketch-select-constraint',
-                  constraintId: null
-                });
-                setStatus(
-                  'Deselected the relation: its glyph is covered by a panel.'
-                );
-              }
+            onSketchConstraintSelectionShown={(constraintId, shown) => {
+              // Whether the picked relation's glyph is on screen: Delete
+              // acts on it only while it is (see the sketch key handler).
+              selectedConstraintShownRef.current = { constraintId, shown };
             }}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })

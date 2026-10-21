@@ -54,11 +54,12 @@ export function buildSketchRelationGlyphs(
   basis: PlaneBasis,
   select: (constraintId: string) => void = () => {},
   /**
-   * The selected relation's glyph has nowhere clear to show (every spot near
-   * it is under a viewport control): drop the selection, so Delete never
-   * acts on a relation whose glyph cannot be seen or clicked.
+   * The selected relation's glyph started or stopped being drawn: panned or
+   * orbited off screen, behind the camera, or with nowhere clear to show
+   * under a viewport control. Called on each change, first on the first
+   * frame. Delete acts on the selection only while its glyph is drawn.
    */
-  selectionHidden: (constraintId: string) => void = () => {},
+  selectionShown: (constraintId: string, shown: boolean) => void = () => {},
   /**
    * The sketch's drawn curves as plane-local segments [x1, y1, x2, y2, …]
    * (`sketchRelationStrokes`): no glyph may sit over any of them.
@@ -89,7 +90,11 @@ export function buildSketchRelationGlyphs(
   const pinnedIndex = chips.findIndex((chip) =>
     chip.glyphs.some((glyph) => glyph.selected)
   );
-  let selectionHiddenReported = false;
+  const selectedId =
+    pinnedIndex >= 0
+      ? chips[pinnedIndex]!.glyphs.find((glyph) => glyph.selected)?.constraintId
+      : undefined;
+  let selectionReported: boolean | null = null;
   const widths = new Float64Array(count);
   const elements: HTMLElement[] = [];
   // The last offset written per chip, so a still frame writes no style.
@@ -416,16 +421,12 @@ export function buildSketchRelationGlyphs(
       }
       layout.setStrokes(strokeScreen, strokeCount);
       layout.solve(count, width, height);
-      if (
-        pinnedIndex >= 0 &&
-        layout.shown[pinnedIndex] === 0 &&
-        !selectionHiddenReported
-      ) {
-        selectionHiddenReported = true;
-        const selected = chips[pinnedIndex]!.glyphs.find(
-          (glyph) => glyph.selected
-        );
-        if (selected) selectionHidden(selected.constraintId);
+      if (selectedId !== undefined) {
+        const drawn = layout.drawn(pinnedIndex);
+        if (drawn !== selectionReported) {
+          selectionReported = drawn;
+          selectionShown(selectedId, drawn);
+        }
       }
       const offset = layout.offset;
       const shown = layout.shown;

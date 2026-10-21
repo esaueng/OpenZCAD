@@ -397,6 +397,23 @@ describe('relation glyph layout', () => {
     ).toBe(false);
   });
 
+  it('says which chips it drew: not one off the viewport, off camera or hidden', () => {
+    const layout = new RelationGlyphLayout(4);
+    layout.set(0, 100, 100, 0, -1, 16, 16, false, true);
+    layout.set(1, -40, 100, 0, -1, 16, 16, false, true);
+    layout.set(2, 200, 200, 0, -1, 16, 16, false, false);
+    layout.set(3, 300, 300, 0, -1, 16, 16, false, true);
+    // A panel over the whole right-hand strip: chip 3 has nowhere to go.
+    layout.setBlocked([250, 0, 400, 400], 1);
+    layout.solve(4, 400, 400);
+    expect([0, 1, 2, 3].map((index) => layout.drawn(index))).toEqual([
+      true,
+      false,
+      false,
+      false
+    ]);
+  });
+
   it('leaves a chip whose anchor is off the viewport alone', () => {
     const chips = solve(
       [
