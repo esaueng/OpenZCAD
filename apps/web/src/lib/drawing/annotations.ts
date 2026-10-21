@@ -1049,9 +1049,11 @@ export function drawnLines(
     if (!projection.bounds) continue;
     const toPage = viewPageTransform(view, projection.bounds, sheet, units);
     const lines: XY[][] = [];
+    // Physical edges only: a silhouette is no proof an edge is drawn.
+    const runs = projection.edgeRuns ?? projection;
     for (const run of view.hiddenLines
-      ? [...projection.visible, ...projection.hidden]
-      : projection.visible) {
+      ? [...runs.visible, ...runs.hidden]
+      : runs.visible) {
       const line: XY[] = [];
       for (let i = 0; i + 1 < run.length; i += 2)
         line.push(toPage(run[i]!, run[i + 1]!));
@@ -1218,9 +1220,11 @@ function ownedLeaderPieces(
       others.push({ points, depths });
     }
   }
+  // Physical edges only: a silhouette lying on a hidden edge is not it.
+  const edgeRuns = projection.edgeRuns ?? projection;
   const runs = view.hiddenLines
-    ? [...projection.visible, ...projection.hidden]
-    : projection.visible;
+    ? [...edgeRuns.visible, ...edgeRuns.hidden]
+    : edgeRuns.visible;
   const pieces: number[][] = [];
   for (const run of runs) {
     const points = uvPoints(run);

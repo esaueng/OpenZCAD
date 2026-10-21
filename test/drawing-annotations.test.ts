@@ -1236,6 +1236,79 @@ describe('D02 picking', () => {
     ).toMatchObject({ ok: true });
   });
 
+  it('never takes a curved-face silhouette for a drawn edge', async () => {
+    // A cylinder seen from the side: its sides are silhouettes, its rims
+    // edges. edgeRuns keeps the edges and leaves the silhouettes out.
+    const document = cylinderDocument();
+    const bodies = (await adapter.syncDocument(document)).bodyRepresentations;
+    const bodyId = document.bodyOrder[0]!;
+    const side = projectView({
+      orientation: 'front',
+      hiddenLines: true,
+      bodies: [projectionBodyInput(bodies[bodyId]!)!]
+    });
+    expect(side.edgeRuns!.visible.length).toBeGreaterThan(0);
+    expect(side.edgeRuns!.visible.length).toBeLessThan(side.visible.length);
+    expect(
+      side.edgeRuns!.visible.every((run) => side.visible.includes(run))
+    ).toBe(true);
+    // A box's top edge, drawn in a view only as a silhouette run (no edge
+    // run): not offered to a pick, and not a leader target.
+    const box = await boxModel();
+    const front = view(frontId, 'front', [box.bodyId]);
+    const real = projectView({
+      orientation: 'front',
+      hiddenLines: false,
+      bodies: [projectionBodyInput(box.bodies[box.bodyId]!)!]
+    });
+    const silhouetteOnly = {
+      ...real,
+      edgeRuns: { visible: [] as Float64Array[], hidden: [] as Float64Array[] }
+    };
+    const sheet = sheetOf([box.bodyId]);
+    const edges = pickableEdges(
+      sheet,
+      [{ view: front, projection: silhouetteOnly }],
+      box.bodies,
+      'mm'
+    );
+    const topPick = edges.find((entry) => entry.edge === box.top)!;
+    const middle = topPick.page[Math.floor(topPick.page.length / 2)]!;
+    const [a, b] = [topPick.page[0]!, topPick.page.at(-1)!];
+    const centre: [number, number] = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    expect(middle).toBeDefined();
+    expect(
+      hitEdge(
+        edges,
+        centre,
+        1,
+        drawnLines(sheet, [{ view: front, projection: silhouetteOnly }], 'mm')
+      )
+    ).toBeNull();
+    const noted = sheetOf(
+      [box.bodyId],
+      [
+        {
+          annotationId: id('n'),
+          kind: 'note',
+          text: 'TOP',
+          viewId: frontId,
+          leader: refOf(box.bodyId, box.top),
+          placementMm: { x: -30, y: 20 }
+        }
+      ]
+    );
+    expect(
+      markHiddenLeaders(
+        noted,
+        resolveSheetAnnotations(noted, box.bodies, 'mm'),
+        [{ view: front, projection: silhouetteOnly }],
+        'mm',
+        box.bodies
+      ).get(id('n'))
+    ).toMatchObject({ ok: false, reason: 'leader-hidden' });
+  });
+
   it('refuses an edge that shares its identity with another', async () => {
     const { bodies, bodyId, top } = await boxModel();
     expect(edgeRefFor(bodies, bodyId, top)).not.toBeNull();
@@ -1434,9 +1507,11 @@ describe('D02 page and export', () => {
     ).toMatchObject({ ok: true });
     // The view draws nothing of that edge (say it is occluded after an
     // Update): broken, so export refuses rather than drop the leader.
+    const far = Float64Array.from([-500, -500, -499, -500]);
     const elsewhere = {
       ...projection,
-      visible: [Float64Array.from([-500, -500, -499, -500])]
+      visible: [far],
+      edgeRuns: { visible: [far], hidden: [] }
     };
     expect(
       markHiddenLeaders(

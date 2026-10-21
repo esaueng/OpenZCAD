@@ -60,6 +60,14 @@ export interface ViewProjection {
   hidden: Float64Array[];
   /** Extent of everything the view draws, or null for an empty view. */
   bounds: { minU: number; minV: number; maxU: number; maxV: number } | null;
+  /**
+   * The runs drawn from the bodies' physical edges alone, without the
+   * curved-face silhouettes `visible` and `hidden` also hold (D02): an
+   * annotation must find its edge drawn as an edge, never stand a
+   * silhouette in for a hidden edge it happens to lie on. `visible` here
+   * shares its arrays with the field above.
+   */
+  edgeRuns?: { visible: Float64Array[]; hidden: Float64Array[] };
 }
 
 /**
@@ -1159,18 +1167,18 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
 
   // Each line keeps its body's scale: a cutoff for degenerate or sliver
   // output must not grow with empty paper between bodies far apart.
-  const lines: { points: number[]; scale: number }[] = [];
+  const lines: { points: number[]; scale: number; silhouette: boolean }[] = [];
   input.bodies.forEach((body, bodyIndex) => {
     const scale = scales[bodyIndex]!;
     for (const edge of body.edges)
-      lines.push({ points: Array.from(edge), scale });
+      lines.push({ points: Array.from(edge), scale, silhouette: false });
     for (const silhouette of bodySilhouettes(
       body,
       frame,
       welds[bodyIndex]!,
       meshes[bodyIndex]
     ))
-      lines.push({ points: silhouette.points, scale });
+      lines.push({ points: silhouette.points, scale, silhouette: true });
   });
   for (const { points: line } of lines)
     for (let i = 0; i + 2 < line.length; i += 3) {
@@ -1181,7 +1189,12 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
       bounds.maxV = Math.max(bounds.maxV, v);
     }
   if (!Number.isFinite(bounds.minU))
-    return { visible: [], hidden: [], bounds: null };
+    return {
+      visible: [],
+      hidden: [],
+      bounds: null,
+      edgeRuns: { visible: [], hidden: [] }
+    };
 
   // Footprint slack: roundoff, at 10^-12 of the coordinates.
   const grid = new OcclusionIndex(bodyTriangles, 1e-12);
@@ -1197,6 +1210,9 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
 
   const visible: Float64Array[] = [];
   const hidden: Float64Array[] = [];
+  const edgeVisible: Float64Array[] = [];
+  const edgeHidden: Float64Array[] = [];
+  let fromSilhouette = false;
   const emit = (points: number[], isHidden: boolean, scale: number) => {
     if (points.length < 6) return;
     let length = 0;
@@ -1219,13 +1235,15 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
     // An edge running along the view direction projects to a point.
     if (drawn <= scale * 1e-9) return;
     (isHidden ? hidden : visible).push(flat);
+    if (!fromSilhouette) (isHidden ? edgeHidden : edgeVisible).push(flat);
   };
 
   // Corner artifacts shorter than this, in projection, take their
   // neighbours' state: where an edge meets a face's plane at its own end,
   // the occlusion tolerance leaves a sliver that is neither clearly in front
   // nor behind, and no drawing wants it. The cutoff is the line's own body's.
-  for (const { points: line, scale } of lines) {
+  for (const { points: line, scale, silhouette } of lines) {
+    fromSilhouette = silhouette;
     const minPiece = scale * 1e-4;
     const count = Math.floor(line.length / 3);
     if (count < 2) continue;
@@ -1372,7 +1390,11 @@ export function projectView(input: ViewProjectionInput): ViewProjection {
   return {
     visible,
     hidden: dropCoincidentHidden(hidden, visible, span * 1e-6),
-    bounds
+    bounds,
+    edgeRuns: {
+      visible: edgeVisible,
+      hidden: dropCoincidentHidden(edgeHidden, visible, span * 1e-6)
+    }
   };
 }
 
