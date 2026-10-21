@@ -1,6 +1,7 @@
 import type { ExtrudeChoice } from '../extrudeInference';
 import type {
   ParamValue,
+  BoundaryProvenance,
   SketchPlaneRef,
   TextAlign,
   TextFontStyle,
@@ -69,6 +70,7 @@ export interface RegionTarget {
    * exactly the edit text exists to support.
    */
   sourceEntityIds: string[];
+  sourceBoundaryLoops?: BoundaryProvenance;
 }
 
 export type SketchToolId =

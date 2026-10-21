@@ -6,6 +6,7 @@
  * below into commands.
  */
 
+import type { BoundaryProvenance } from '@openzcad/shared';
 import type { ViewportCameraState } from './camera/CameraController';
 
 export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
@@ -126,6 +127,7 @@ export interface RegionPickData {
     max: { x: number; y: number };
   };
   sourceEntityIds: string[];
+  sourceBoundaryLoops?: BoundaryProvenance;
   area: number;
 }
 

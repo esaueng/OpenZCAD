@@ -27,6 +27,14 @@ import {
   type SketchPathReference,
   type SketchSectionReference
 } from '@openzcad/shared';
+import {
+  geometryTolerance,
+  resolveBoundaryProfileReference
+} from '@openzcad/geometry';
+import {
+  boundaryRegionContainsPoint,
+  type BoundaryRegionGeometry
+} from './profileProvenance';
 import { evalParamValue, previewExpression } from './model';
 import type { FaceNamer } from './faceProducerName';
 import { faceLabel, faceNameRank, ownedTopologyName } from './topologyLabels';
@@ -56,6 +64,8 @@ export interface ModelingProfileOption {
   id: string;
   label: string;
   section: SketchSectionReference;
+  /** Live loops provide the containment witness for duplicate provenance. */
+  region?: BoundaryRegionGeometry;
 }
 
 export interface ModelingPathOption {
@@ -257,6 +267,31 @@ function resolveProfileOption(
       option.section.sketchId === section.sketchId &&
       option.section.profile.all !== true
   );
+  if (reference.sourceBoundaryLoops !== undefined) {
+    const boundaryCandidates = candidates.map((option) => ({
+      option,
+      area:
+        option.section.profile.all === true
+          ? NaN
+          : option.section.profile.sourceArea,
+      sourceBoundaryLoops:
+        option.section.profile.all === true
+          ? undefined
+          : option.section.profile.sourceBoundaryLoops
+    }));
+    return resolveBoundaryProfileReference(
+      {
+        ...reference,
+        sourceBoundaryLoops: reference.sourceBoundaryLoops
+      },
+      boundaryCandidates,
+      geometryTolerance(Math.sqrt(reference.sourceArea)),
+      ({ option }, point) =>
+        option.region
+          ? boundaryRegionContainsPoint(option.region, point)
+          : false
+    ).option;
+  }
   // A present but ambiguous identity must never fall through to another tier.
   const identities = candidates.filter(
     ({ section: { profile } }) =>

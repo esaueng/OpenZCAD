@@ -21,6 +21,18 @@ import {
 } from './sketch-reference-dimensions';
 export * from './sketch-reference-dimensions';
 import { assertSketchComposites, compositesWithout } from './sketch-composites';
+import {
+  assertSketchProvenance,
+  assertFeatureProfileProvenance
+} from './sketch-provenance-validation';
+export { assertSketchProvenance } from './sketch-provenance-validation';
+import {
+  assertSketchBoundaryDeletion,
+  assertSketchPromotionMemberUpdate,
+  assertSketchBoundaryTopologyPreserved,
+  dissolveSketchPromotion
+} from './sketch-boundary-dependencies';
+export { assertSketchBoundaryTopologyPreserved } from './sketch-boundary-dependencies';
 export * from './sketch-composites';
 export * from './drawings';
 export {
@@ -859,6 +871,7 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
     );
   }
   const document = withReadableHistory(input);
+  assertSketchProvenance(document);
   assertReferenceCommandSchema(document);
   // Schema v30 drawings: validated as written, never synthesized or rewritten.
   assertDrawingSet(document.drawings);
@@ -1412,10 +1425,14 @@ export function updateSketch(
     if (!objectNode || objectNode.kind !== 'sketch-object') {
       throw new Error(`Sketch ${input.sketchId} has no profile object.`);
     }
+    assertSketchPromotionMemberUpdate(
+      document, sketch, objectNode.id, input.object
+    );
     objectNode.objectKind = input.object.objectKind;
     objectNode.data = input.object;
     objectNode.name = `${input.object.objectKind} profile`;
   }
+  assertSketchBoundaryTopologyPreserved(document, next);
   next.version += 1;
   return next;
 }
@@ -1594,14 +1611,18 @@ export function updateSketchObject(
   input: SketchObjectUpdateInput
 ): ProjectDocument {
   const next = cloneDocument(document);
-  const { objectNode } = requireSketchObject(
+  const { sketch, objectNode } = requireSketchObject(
     next,
     input.sketchId,
     input.objectId
   );
+  assertSketchPromotionMemberUpdate(
+    document, sketch, input.objectId, input.data
+  );
   objectNode.objectKind = input.data.objectKind;
   objectNode.data = input.data;
   objectNode.name = `${input.data.objectKind} profile`;
+  assertSketchBoundaryTopologyPreserved(document, next);
   next.version += 1;
   return next;
 }
@@ -1616,8 +1637,10 @@ export function deleteSketchObject(
     input.objectId
   );
   assertNoReferenceDimensionDependents(original.sketch, input.objectId);
+  assertSketchBoundaryDeletion(document, original.sketch, input.objectId);
   const next = cloneDocument(document);
   const { sketch } = requireSketchObject(next, input.sketchId, input.objectId);
+  dissolveSketchPromotion(sketch, input.objectId);
   sketch.objectIds = sketch.objectIds.filter((id) => id !== input.objectId);
   // Constraints referencing the deleted object go with it: a dangling
   // reference would fail every later solve rather than one delete.
@@ -1735,7 +1758,7 @@ function requireLiteralPositive(value: unknown, label: string): void {
  * object exists, is a constrainable kind, and exposes the named points.
  * Expression values are validated at solve time, when parameters resolve.
  */
-function validateSketchConstraint(
+export function validateSketchConstraint(
   document: ProjectDocument,
   sketch: SketchNode,
   data: SketchConstraintData
@@ -1945,6 +1968,15 @@ export function deleteSketchConstraint(
   if (!sketch) {
     throw new Error(`Sketch ${input.sketchId} not found.`);
   }
+  if (
+    sketch.constraints?.some(
+      (constraint) => constraint.constraintId === input.constraintId &&
+        constraint.origin === 'promotion-structure'
+    )
+  )
+    throw new Error(
+      'Release the converted shape constraints explicitly before deleting conversion structure.'
+    );
   const remaining = (sketch.constraints ?? []).filter(
     (constraint) => constraint.constraintId !== input.constraintId
   );
@@ -2306,6 +2338,7 @@ export function extrudeSketch(
   document: ProjectDocument,
   input: ExtrudeInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  assertFeatureProfileProvenance(input, document);
   if (input.symmetric && input.backDistance !== undefined) {
     throw new Error(
       'An extrude cannot be both symmetric and two-sided; set symmetric or backDistance, not both.'
@@ -2337,9 +2370,9 @@ export function extrudeSketch(
       ...(input.targetBodyId === undefined
         ? {}
         : { targetBodyId: input.targetBodyId }),
-      ...(input.profile ? { profile: input.profile } : {}),
+      ...(input.profile ? { profile: deepClone(input.profile) } : {}),
       ...(input.profiles && input.profiles.length > 0
-        ? { profiles: input.profiles }
+        ? { profiles: deepClone(input.profiles) }
         : {}),
       ...(input.endCondition === 'through-all'
         ? {
@@ -2435,6 +2468,7 @@ export function loftSections(
   document: ProjectDocument,
   input: LoftInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  assertFeatureProfileProvenance(input, document);
   return addBodyResultFeature(
     document,
     input.name,
@@ -2458,6 +2492,7 @@ export function sweepProfile(
   document: ProjectDocument,
   input: SweepInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  assertFeatureProfileProvenance(input, document);
   return addBodyResultFeature(
     document,
     input.name,
@@ -2480,6 +2515,7 @@ export function helicalSweepProfile(
   document: ProjectDocument,
   input: HelicalSweepInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  assertFeatureProfileProvenance(input, document);
   return addBodyResultFeature(
     document,
     input.name,
@@ -3808,6 +3844,7 @@ export function setParameter(
     if (mismatch) throw new Error(mismatch);
   }
   refreshParameterValues(next);
+  assertSketchBoundaryTopologyPreserved(document, next);
   next.version += 1;
   return next;
 }
@@ -3878,6 +3915,7 @@ export function deleteParameter(
     (id) => id !== parameter.parameterId
   );
   refreshParameterValues(next);
+  assertSketchBoundaryTopologyPreserved(document, next);
   next.version += 1;
   return next;
 }
@@ -3927,6 +3965,7 @@ export function renameParameter(
   }
   parameter.name = newName;
   refreshParameterValues(next);
+  assertSketchBoundaryTopologyPreserved(document, next);
   next.version += 1;
   return next;
 }
@@ -4496,6 +4535,7 @@ export function updateFeature(
     feature.name = input.name.trim();
   }
   if (input.data) {
+    assertFeatureProfileProvenance(input.data, document);
     const patch = { ...input.data } as Record<string, unknown>;
     if (
       'featureKind' in patch &&
@@ -4525,7 +4565,9 @@ export function updateFeature(
           ...(value as Record<string, ParamValue>)
         };
       } else {
-        data[key] = value;
+        data[key] = ['profile', 'profiles', 'sections'].includes(key)
+          ? deepClone(value)
+          : value;
       }
     }
   }

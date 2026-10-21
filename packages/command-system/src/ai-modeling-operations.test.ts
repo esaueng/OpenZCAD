@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { parseCadPatchProposal } from '@openzcad/ai-contracts';
-import { createProjectDocument, holeBody } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  findSketch,
+  holeBody,
+  type ExtrudeInput
+} from '@openzcad/document-core';
+import { computeSketchRegions } from '@openzcad/geometry';
 import {
   toFeatureId,
   toUserId,
@@ -294,3 +300,89 @@ describe('AI modeling command translation', () => {
     expect(manager.document.featureOrder).toHaveLength(2);
   });
 });
+
+it.each(['rectangle', 'polygon'] as const)(
+  'AI profile writers retain the %s boundary identity before and after explicit conversion',
+  (kind) => {
+    const manager = new CommandManager(
+      createProjectDocument('AI provenance', toUserId('user_ai'))
+    );
+    const data =
+      kind === 'rectangle'
+        ? {
+            objectKind: 'rectangle' as const,
+            width: 20,
+            height: 12,
+            centerX: 0,
+            centerY: 0
+          }
+        : {
+            objectKind: 'polygon' as const,
+            sides: 6,
+            radius: 10,
+            centerX: 0,
+            centerY: 0
+          };
+    const add = commandFactories.addSketch({
+      name: 'Legacy AI source',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        data,
+        { objectKind: 'circle', radius: 3, centerX: 50, centerY: 0 }
+      ]
+    });
+    manager.execute(add);
+    const sketchId = add.payload.ids!.sketchId;
+    const sourceObjectId = findSketch(manager.document, sketchId)!
+      .objectIds[0]!;
+    const expected = computeSketchRegions(
+      [{ id: sourceObjectId, data }],
+      Number
+    )[0]!.sourceBoundaryLoops;
+    expect(expected?.outer).toHaveLength(kind === 'rectangle' ? 4 : 6);
+    for (const converted of [false, true]) {
+      if (converted)
+        manager.execute(
+          commandFactories.convertLegacySketchObject({
+            sketchId,
+            sourceObjectId
+          })
+        );
+      for (const multi of [false, true]) {
+        const proposal = parseCadPatchProposal({
+          proposalId: `boundary_${converted}_${multi}`,
+          summary: 'Persist authored boundary provenance.',
+          assumptions: [],
+          operations: [
+            multi
+              ? {
+                  kind: 'add_multi_profile_extrude',
+                  name: 'From converted graph',
+                  sketchId,
+                  distance: 5,
+                  samplePoints: [
+                    { x: 0, y: 0 },
+                    { x: 50, y: 0 }
+                  ]
+                }
+              : {
+                  kind: 'add_extrude',
+                  name: 'From converted graph',
+                  sketchId,
+                  distance: 5,
+                  samplePoint: { x: 0, y: 0 }
+                }
+          ]
+        });
+        const command = commandsForCadPatch(manager.document, proposal).find(
+          (c) => c.kind === 'feature.extrude'
+        )!;
+        const payload = command.serialize().payload as ExtrudeInput;
+        const profile = payload.profile ?? payload.profiles![0]!;
+        if (profile.all === true)
+          throw new Error('Composite profile became entity-wide');
+        expect(profile.sourceBoundaryLoops).toEqual(expected);
+      }
+    }
+  }
+);

@@ -18,6 +18,11 @@ export {
   isNearlyZero
 } from './tolerance';
 export {
+  resolveBoundaryProfileReference,
+  type BoundaryProfileCandidate,
+  type BoundaryProfileReference
+} from './boundary-profile-reference';
+export {
   computeSketchProfileAnalysis,
   computeSketchRegions,
   boundedArcSweepDegrees,

@@ -175,7 +175,7 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       });
       expect(data).toHaveProperty('toFace.faceReference.kind', 'face');
       // F01 took v29; projected reference distances now require v31.
-      expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(32);
+      expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(33);
     });
 
     it('opens an older extrude and a v29 one exactly as written', async () => {

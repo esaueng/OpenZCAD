@@ -319,3 +319,22 @@ describe('sketchRelationGlyphs', () => {
     expect(chips).toEqual([]);
   });
 });
+
+it('keeps promotion structural relations out of ordinary glyphs without altering stored diagnostics', () => {
+  const owned = rectangle.map((constraint) => ({
+    ...constraint,
+    origin: 'promotion-structure' as const,
+    promotionId: 'spr_test'
+  }));
+  expect(
+    sketchRelationGlyphs(objects, owned, resolve, {
+      visibility: 'always',
+      conflictingConstraintIds: new Set(owned.map((c) => c.constraintId))
+    })
+  ).toEqual([]);
+  expect(
+    sketchRelationGlyphs(objects, rectangle, resolve, { visibility: 'always' })
+      .length
+  ).toBeGreaterThan(0);
+  expect(owned.every((c) => c.origin === 'promotion-structure')).toBe(true);
+});

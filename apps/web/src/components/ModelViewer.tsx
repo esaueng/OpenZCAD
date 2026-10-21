@@ -24,7 +24,7 @@ import {
 import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
 import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
-import type { SketchComposite, SketchDimensionIdentity } from '@openzcad/shared';
+import type { BoundaryProvenance, SketchComposite, SketchDimensionIdentity } from '@openzcad/shared';
 import {
   disposeRetiringOverlays,
   disposeSettledOverlays,
@@ -611,6 +611,7 @@ export interface SketchViewData {
       max: { x: number; y: number };
     };
     sourceEntityIds: string[];
+    sourceBoundaryLoops?: BoundaryProvenance;
     area: number;
     outer: { x: number; y: number }[];
     holes: { x: number; y: number }[][];
@@ -11155,6 +11156,7 @@ export function ModelViewer({
           centroid: region.centroid,
           boundingBox: region.boundingBox,
           sourceEntityIds: region.sourceEntityIds,
+          sourceBoundaryLoops: region.sourceBoundaryLoops,
           area: region.area
         };
         const baseOpacity = view.active ? REGION_IDLE_OPACITY : 0;

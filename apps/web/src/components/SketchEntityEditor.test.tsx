@@ -1173,3 +1173,107 @@ describe('the construction toggle (ZC-024)', () => {
     ).toHaveAttribute('aria-pressed', 'true');
   });
 });
+
+describe('explicit legacy conversion', () => {
+  it.each([
+    { objectKind: 'rectangle', width: 20, height: 12, centerX: 0, centerY: 0 },
+    { objectKind: 'polygon', sides: 6, radius: 10, centerX: 0, centerY: 0 }
+  ] as SketchObjectData[])(
+    'converts only the unchanged committed $objectKind and respects busy state',
+    async (data) => {
+      const user = userEvent.setup();
+      const onConvertToEdges = vi.fn();
+      const props = {
+        data,
+        scope: {},
+        onApply: vi.fn(),
+        onDelete: vi.fn(),
+        onClose: vi.fn(),
+        onConvertToEdges
+      };
+      const { rerender } = render(<SketchEntityEditor {...props} />);
+      const action = screen.getByRole('button', {
+        name: 'Convert to editable edges'
+      });
+      await user.click(action);
+      expect(onConvertToEdges).toHaveBeenCalledTimes(1);
+      expect(props.onApply).not.toHaveBeenCalled();
+      expect(props.onDelete).not.toHaveBeenCalled();
+      const label = data.objectKind === 'rectangle' ? 'Width' : 'Radius';
+      const field = screen.getByLabelText(label);
+      const original = (field as HTMLInputElement).value;
+      await user.clear(field);
+      await user.type(field, '30');
+      expect(action).toBeDisabled();
+      expect(
+        screen.getByText('Apply or discard field edits before converting.')
+      ).toBeTruthy();
+      await user.clear(field);
+      await user.type(field, original);
+      expect(action).toBeEnabled();
+      rerender(<SketchEntityEditor {...props} disabled />);
+      expect(action).toBeDisabled();
+    }
+  );
+
+  it('offers no conversion for a line or without the command callback', () => {
+    const props = {
+      scope: {},
+      onApply: vi.fn(),
+      onDelete: vi.fn(),
+      onClose: vi.fn()
+    };
+    const { rerender } = render(
+      <SketchEntityEditor
+        {...props}
+        data={{ objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }}
+        onConvertToEdges={vi.fn()}
+      />
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Convert to editable edges' })
+    ).toBeNull();
+    rerender(
+      <SketchEntityEditor
+        {...props}
+        data={{
+          objectKind: 'rectangle',
+          width: 20,
+          height: 12,
+          centerX: 0,
+          centerY: 0
+        }}
+      />
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Convert to editable edges' })
+    ).toBeNull();
+  });
+});
+
+it('releases promotion structure explicitly and keeps pending edits out of the operation', async () => {
+  const user = userEvent.setup();
+  const onReleaseShapeConstraints = vi.fn();
+  const onApply = vi.fn();
+  render(
+    <SketchEntityEditor
+      data={{ objectKind: 'line', x1: 0, y1: 0, x2: 20, y2: 0 }}
+      promotionSource="rectangle"
+      scope={{}}
+      onApply={onApply}
+      onDelete={vi.fn()}
+      onClose={vi.fn()}
+      onReleaseShapeConstraints={onReleaseShapeConstraints}
+    />
+  );
+  expect(screen.getByText(/Your ordinary constraints remain/)).toBeTruthy();
+  const action = screen.getByRole('button', {
+    name: 'Release shape constraints'
+  });
+  await user.click(action);
+  expect(onReleaseShapeConstraints).toHaveBeenCalledTimes(1);
+  expect(onApply).not.toHaveBeenCalled();
+  await user.clear(screen.getByLabelText('End X'));
+  await user.type(screen.getByLabelText('End X'), '25');
+  expect(action).toBeDisabled();
+});

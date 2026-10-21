@@ -1,5 +1,12 @@
 import { importedOpeningCommand } from './imported-opening';
 import {
+  convertLegacySketchObject,
+  releaseSketchPromotionStructure,
+  type LegacySketchConversionInput,
+  type SketchPromotionReleaseInput
+} from './sketch-promotion';
+export type { LegacySketchConversionInput } from './sketch-promotion';
+import {
   growingHolderCommand,
   growingHolderHistories,
   recipeFromRecognizedOpening
@@ -41,8 +48,10 @@ import {
   createId,
   createSketchReferenceAnnotationId,
   createSketchCompositeId,
+  MAX_SKETCH_POLYGON_SIDES,
   assertDocumentHistory,
   assertDocumentTextBudget,
+  resolveSketchPromotionBoundaryTokens,
   isVariableFilletLaw,
   VARIABLE_FILLET_LAWS,
   type UserId,
@@ -239,6 +248,8 @@ export type CommandKind =
   | 'sketch.constraint.delete'
   | 'sketch.constraint.label-position'
   | 'sketch.composite.add'
+  | 'sketch.legacy.convert'
+  | 'sketch.promotion.release'
   | 'reference-dimension.add'
   | 'reference-dimension.delete'
   | 'reference-dimension.label-position'
@@ -307,6 +318,8 @@ export type AnyCommand =
   | CommandDefinition<SketchConstraintDeleteInput>
   | CommandDefinition<SketchDimensionLabelPositionInput>
   | CommandDefinition<SketchCompositeAddInput>
+  | CommandDefinition<LegacySketchConversionInput>
+  | CommandDefinition<SketchPromotionReleaseInput>
   | CommandDefinition<SketchReferenceDimensionAddInput>
   | CommandDefinition<SketchReferenceDimensionDeleteInput>
   | CommandDefinition<SketchReferenceLabelPositionInput>
@@ -1338,6 +1351,42 @@ export const commandFactories = {
       }
     );
   },
+  releaseSketchPromotionStructure(
+    payload: SketchPromotionReleaseInput,
+    label = 'Release shape constraints'
+  ): CommandDefinition<SketchPromotionReleaseInput> {
+    const snapshot = deepClone(payload);
+    const command = makeCommand(
+      'sketch.promotion.release',
+      label,
+      snapshot,
+      (document) => releaseSketchPromotionStructure(document, snapshot)
+    );
+    return { ...command, serialize: () => deepClone(command.serialize()) };
+  },
+  convertLegacySketchObject(
+    payload: LegacySketchConversionInput,
+    label = 'Convert to editable edges'
+  ): CommandDefinition<LegacySketchConversionInput> {
+    const withIds = deepClone({
+      ...payload,
+      ids: payload.ids ?? {
+        promotionId: createId('sprm'),
+        edgeIds: Array.from({ length: MAX_SKETCH_POLYGON_SIDES }, () =>
+          toEntityId(createId('ent'))
+        ),
+        centerSpokeId: toEntityId(createId('ent')),
+        helperIds: [toEntityId(createId('ent'))]
+      }
+    });
+    const command = makeCommand(
+      'sketch.legacy.convert',
+      label,
+      withIds,
+      (document) => convertLegacySketchObject(document, withIds)
+    );
+    return { ...command, serialize: () => deepClone(command.serialize()) };
+  },
   addSketchReferenceDimension(
     payload: SketchReferenceDimensionAddInput,
     label = 'Add reference dimension'
@@ -1424,14 +1473,18 @@ export const commandFactories = {
     );
   },
   extrudeSketch(payload: ExtrudeInput): CommandDefinition<ExtrudeInput> {
-    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
-    return makeCommand(
+    const withIds = deepClone({
+      ...payload,
+      ids: payload.ids ?? createBodyFeatureIds()
+    });
+    const command = makeCommand(
       'feature.extrude',
       'Extrude sketch',
       withIds,
       (document) => extrudeSketch(document, withIds).document,
       (document) => validateExtrudeInput(document, withIds)
     );
+    return { ...command, serialize: () => deepClone(command.serialize()) };
   },
   revolveSketch(payload: RevolveInput): CommandDefinition<RevolveInput> {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
@@ -1450,56 +1503,63 @@ export const commandFactories = {
     );
   },
   loftSections(payload: LoftInput): CommandDefinition<LoftInput> {
-    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
-    return makeCommand(
+    const withIds = deepClone({
+      ...payload,
+      ids: payload.ids ?? createBodyFeatureIds()
+    });
+    const command = makeCommand(
       'feature.loft',
       'Loft profiles',
       withIds,
       (document) => loftSections(document, withIds).document,
       (document) => {
-        if (payload.sections.length < 2) {
+        if (withIds.sections.length < 2) {
           throw new Error('Loft requires at least two profile sections.');
         }
-        for (const section of payload.sections) {
+        for (const section of withIds.sections) {
           if (!findSketch(document, section.sketchId)) {
             throw new Error(`Loft sketch ${section.sketchId} not found.`);
           }
         }
       }
     );
+    return { ...command, serialize: () => deepClone(command.serialize()) };
   },
   sweepProfile(payload: SweepInput): CommandDefinition<SweepInput> {
-    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
-    return makeCommand(
+    const withIds = deepClone({
+      ...payload,
+      ids: payload.ids ?? createBodyFeatureIds()
+    });
+    const command = makeCommand(
       'feature.sweep',
       'Sweep profile',
       withIds,
       (document) => sweepProfile(document, withIds).document,
       (document) => {
-        if (!findSketch(document, payload.profile.sketchId)) {
+        if (!findSketch(document, withIds.profile.sketchId)) {
           throw new Error('Sweep profile sketch not found.');
         }
-        const pathSketch = findSketch(document, payload.path.sketchId);
+        const pathSketch = findSketch(document, withIds.path.sketchId);
         if (!pathSketch) {
           throw new Error('Sweep path sketch not found.');
         }
-        if (payload.path.entityIds.length === 0) {
+        if (withIds.path.entityIds.length === 0) {
           throw new Error('Sweep requires at least one path entity.');
         }
         const available = new Set(pathSketch.objectIds);
-        if (payload.path.entityIds.some((id) => !available.has(id))) {
+        if (withIds.path.entityIds.some((id) => !available.has(id))) {
           throw new Error('Sweep path references a missing sketch entity.');
         }
-        if (payload.guide) {
-          const guideSketch = findSketch(document, payload.guide.sketchId);
+        if (withIds.guide) {
+          const guideSketch = findSketch(document, withIds.guide.sketchId);
           if (!guideSketch) {
             throw new Error('Sweep guide rail sketch not found.');
           }
-          if (payload.guide.entityIds.length === 0) {
+          if (withIds.guide.entityIds.length === 0) {
             throw new Error('A sweep guide rail needs at least one entity.');
           }
           const guideAvailable = new Set(guideSketch.objectIds);
-          if (payload.guide.entityIds.some((id) => !guideAvailable.has(id))) {
+          if (withIds.guide.entityIds.some((id) => !guideAvailable.has(id))) {
             throw new Error(
               'Sweep guide rail references a missing sketch entity.'
             );
@@ -1507,22 +1567,27 @@ export const commandFactories = {
         }
       }
     );
+    return { ...command, serialize: () => deepClone(command.serialize()) };
   },
   helicalSweepProfile(
     payload: HelicalSweepInput
   ): CommandDefinition<HelicalSweepInput> {
-    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
-    return makeCommand(
+    const withIds = deepClone({
+      ...payload,
+      ids: payload.ids ?? createBodyFeatureIds()
+    });
+    const command = makeCommand(
       'feature.helical-sweep',
       'Helical sweep profile',
       withIds,
       (document) => helicalSweepProfile(document, withIds).document,
       (document) => {
-        if (!findSketch(document, payload.profile.sketchId)) {
+        if (!findSketch(document, withIds.profile.sketchId)) {
           throw new Error('Helical sweep profile sketch not found.');
         }
       }
     );
+    return { ...command, serialize: () => deepClone(command.serialize()) };
   },
   booleanBodies(payload: BooleanInput): CommandDefinition<BooleanInput> {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
@@ -1757,13 +1822,15 @@ export const commandFactories = {
     payload: FeatureUpdateInput,
     label = 'Edit feature'
   ): CommandDefinition<FeatureUpdateInput> {
-    return makeCommand(
+    const snapshot = deepClone(payload);
+    const command = makeCommand(
       'feature.update',
       label,
-      payload,
-      (document) => updateFeature(document, payload),
-      (document) => validateModelingFeatureUpdate(document, payload)
+      snapshot,
+      (document) => updateFeature(document, snapshot),
+      (document) => validateModelingFeatureUpdate(document, snapshot)
     );
+    return { ...command, serialize: () => deepClone(command.serialize()) };
   },
   moveFeature(
     payload: FeatureMoveInput,
@@ -2659,9 +2726,17 @@ export function commandsForCadPatch(
     return {
       regionFingerprint: region.regionFingerprint,
       samplePoint,
-      sourceArea: region.area
+      sourceArea: region.area,
+      ...(region.sourceBoundaryLoops ? { sourceBoundaryLoops: deepClone(region.sourceBoundaryLoops) } : {})
     };
   };
+
+  const profileAnalysisOptions = (sketch: { sketchId: SketchId; objects: SketchObjectData[]; objectIds: EntityId[] }) => ({
+    promotionBoundaryTokens: resolveSketchPromotionBoundaryTokens(
+      findSketch(projectedDocument, sketch.sketchId)?.promotions ?? [],
+      new Map(sketch.objects.map((data, index) => [sketch.objectIds[index]!, data]))
+    )
+  });
 
   /** R01 datum planes created earlier in this proposal, by alias. */
   const localDatums = new Map<string, FeatureId>();
@@ -2875,7 +2950,9 @@ export function commandsForCadPatch(
                 parameterScope,
                 'sketch dimension',
                 document.units
-              )
+              ),
+            undefined,
+            profileAnalysisOptions(sketch)
           );
           const region = regionAtPoint(regions, operation.samplePoint);
           if (!region) {
@@ -3039,7 +3116,9 @@ export function commandsForCadPatch(
               parameterScope,
               'sketch dimension',
               document.units
-            )
+            ),
+          undefined,
+          profileAnalysisOptions(sketch)
         );
         const selected = operation.samplePoints.map((samplePoint) => {
           const region = regionAtPoint(regions, samplePoint);
@@ -3756,6 +3835,15 @@ export function replayCommands(
         break;
       case 'feature.extrude':
         next = extrudeSketch(next, command.payload as ExtrudeInput).document;
+        break;
+      case 'sketch.legacy.convert':
+        next = convertLegacySketchObject(
+          next,
+          command.payload as LegacySketchConversionInput
+        );
+        break;
+      case 'sketch.promotion.release':
+        next = releaseSketchPromotionStructure(next, command.payload as SketchPromotionReleaseInput);
         break;
       case 'reference-dimension.add':
         next = addSketchReferenceDimension(

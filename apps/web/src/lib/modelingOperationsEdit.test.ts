@@ -456,3 +456,50 @@ describe('split keep-original (M11)', () => {
     expect(update?.clearData).toEqual(['keepOriginal']);
   });
 });
+
+it('refuses saved boundary mismatch before matching a section by profile id or source entities', () => {
+  const saved = structuredClone(helix);
+  if (
+    saved.featureKind !== 'helical-sweep' ||
+    saved.profile.profile.all === true
+  )
+    throw new Error('fixture');
+  const loops = {
+    outer: Array.from(
+      { length: 4 },
+      (_, i) => `b1/ent_rect/rectangle/1/4/e/${i}`
+    ),
+    holes: []
+  };
+  saved.profile.profile.sourceBoundaryLoops = loops;
+  const live = profiles.map((option) => ({
+    ...option,
+    section: {
+      ...option.section,
+      profile:
+        option.section.profile.all === true
+          ? option.section.profile
+          : {
+              ...option.section.profile,
+              sourceBoundaryLoops: {
+                ...loops,
+                outer: [...loops.outer, loops.outer[0]!]
+              }
+            }
+    }
+  }));
+  expect(() =>
+    modelingFormStateFromFeature('Helix', saved, live, paths)
+  ).toThrow(/topology/);
+  const matching = profiles.map((option) => ({
+    ...option,
+    section: {
+      ...option.section,
+      profile:
+        option.section.profile.all === true
+          ? option.section.profile
+          : { ...option.section.profile, sourceBoundaryLoops: loops }
+    }
+  }));
+  expect(roundTrip(saved, matching)?.data).toEqual(saved);
+});
