@@ -1279,9 +1279,13 @@ import { cacheCopySources } from './lib/sourceBlobClaims';
 import {
   mirrorPendingOrganization,
   mirrorPendingReorder,
-  reconcileRemoteOrganizations,
   type OrganizationMirrorHost
 } from './lib/projectOrganizationMirror';
+import {
+  OrganizationMirrorBackground,
+  ORGANIZATION_SESSION_KEY,
+  prepareOrganizationMirrors
+} from './lib/projectOrganizationBackground';
 import {
   applyLocalProjectOrganizations,
   mergeProjectSummaries,
@@ -1679,21 +1683,24 @@ interface HydrateOptions {
 const organizationMirrorHost: OrganizationMirrorHost = {
   readLocal: loadLocalProjectOrganizationSnapshot,
   saveLocal: saveLocalProjectOrganizationIfCurrent,
-  updateRemote: (projectId, organization) =>
-    api.updateProject({
-      projectId: toProjectId(projectId),
-      status: organization.status,
-      pinned: organization.pinned,
-      sortOrder: organization.sortOrder
-    }).then(() => undefined)
+  updateRemote: (projectId, organization, signal) =>
+    api
+      .updateProject({
+        projectId: toProjectId(projectId),
+        status: organization.status,
+        pinned: organization.pinned,
+        sortOrder: organization.sortOrder
+      }, signal)
+      .then(() => undefined)
 };
+const organizationBackground = new OrganizationMirrorBackground();
 
 /**
  * Every project this device can reach. Device shelf state is reconciled before
  * expired local copies are purged so a temporarily failed cloud mirror cannot
  * resurrect a project after its local retention window closes.
  */
-async function loadProjectSummaries(signedIn: boolean): Promise<{
+async function loadProjectSummaries(accountId: string | null): Promise<{
   projects: ProjectSummary[];
   remoteReached: boolean;
   /**
@@ -1704,6 +1711,8 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
    */
   cloudProjectIds: Set<string>;
 }> {
+  const signedIn = accountId !== null;
+  const scope = organizationBackground.begin(accountId);
   const unavailableAs =
     <T,>(fallback: T) =>
     (error: unknown): T => {
@@ -1728,23 +1737,32 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
     [...organizationSnapshots].map(([id, snapshot]) => [id, snapshot.organization])
   );
   const remoteProjects = remote?.projects ?? [];
-  const mirrorFailures = remote
-    ? await reconcileRemoteOrganizations(
+  const remoteIds = new Set<string>(remoteProjects.map((project) => project.projectId));
+  const prepared = remote
+    ? await prepareOrganizationMirrors(
         organizationSnapshots,
         remoteProjects,
-        organizationMirrorHost
+        organizationMirrorHost,
+        scope
       )
-    : new Set<string>();
+    : { pending: [], protectedProjectIds: new Set<string>() };
+  // Discovery returns after local adoption; paced account writes run lazily.
+  organizationBackground.start(scope, prepared.pending, organizationMirrorHost);
+  // Defer model expiry for this account's pending mirrors. Without an eligible
+  // account row, expire model bytes normally but keep the tiny pending intent.
+  const protectedModels = new Set(
+    [...prepared.protectedProjectIds].filter((id) => remoteIds.has(id))
+  );
   // While signed in but offline, defer irreversible local purging until the
   // cloud copy can be reconciled. Otherwise a failed mirror could later make
   // an active remote row reappear after the local tombstone was destroyed.
   const purgedProjectIds =
-    !signedIn || remote
-      ? await purgeExpiredLocalProjects(Date.now(), mirrorFailures).catch(
-          () => []
-        )
+    !signedIn || (remote && scope.isCurrent())
+      ? await purgeExpiredLocalProjects(Date.now(), protectedModels, {
+          retainPendingOrganization: true,
+          deferPendingProjectIds: remoteIds
+        }).catch(() => [])
       : [];
-  const remoteIds = new Set(remoteProjects.map((project) => project.projectId));
   const purged = new Set(purgedProjectIds);
   const settledOrganizations = remote
     ? await listLocalProjectOrganizations().catch(
@@ -2812,6 +2830,20 @@ export function App() {
   });
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  useEffect(() => {
+    const online = () => organizationBackground.resume();
+    const changed = (event: StorageEvent) => {
+      if (event.key === ORGANIZATION_SESSION_KEY)
+        organizationBackground.accountChanged();
+    };
+    window.addEventListener('online', online);
+    window.addEventListener('storage', changed);
+    return () => {
+      organizationBackground.dispose();
+      window.removeEventListener('online', online);
+      window.removeEventListener('storage', changed);
+    };
+  }, []);
   /**
    * The shelf's preview source. This reads a small device-cached or cloud
    * image and nothing else — deliberately not the project document. Loading
@@ -5257,7 +5289,7 @@ export function App() {
             )
           : null;
         const listedPromise = timedAsync('startup.projectList', () =>
-          loadProjectSummaries(Boolean(activeSession))
+          loadProjectSummaries(activeSession?.userId ?? null)
         );
         const lastSyncedVersionPromise = startupProjectId
           ? loadLastSyncedVersion(startupProjectId)
@@ -5471,6 +5503,7 @@ export function App() {
     })();
     return () => {
       cancelled = true;
+      organizationBackground.dispose();
     };
     // Startup settings are intentionally read once. Later settings changes
     // should not re-run project discovery or reopen a different document.
@@ -8692,6 +8725,7 @@ export function App() {
     if (next === cloudFunctionsEnabledRef.current) {
       return;
     }
+    if (!next) organizationBackground.cancel();
     // Flip the transport gate before React can render another cloud consumer.
     // This also aborts active browser API and assistant fetches when going off.
     setCloudFunctionsEnabled(next);
@@ -8730,7 +8764,7 @@ export function App() {
       'Offline mode active · cloud functions are disabled on this device.'
     );
     setStatus('Offline mode · work is saved on this device.');
-    void loadProjectSummaries(false)
+    void loadProjectSummaries(null)
       .then((listed) => {
         if (!cloudFunctionsEnabledRef.current) {
           setProjects(listed.projects);
@@ -8740,6 +8774,7 @@ export function App() {
   }
 
   function endCloudSettingsSession() {
+    organizationBackground.cancel();
     clearAssistantHistory();
     endCloudSettingsAutosave();
     // The next session on this device may be a different account; it must not
@@ -8777,6 +8812,7 @@ export function App() {
     }
     setAuthConfig(nextAuth.config);
     setAuthConfigStatus(nextAuth.status);
+    organizationBackground.begin(activeSession?.userId ?? null);
     sessionRef.current = activeSession;
     setSession(activeSession);
     if (!activeSession) {
@@ -8804,7 +8840,7 @@ export function App() {
       accountSettingsRef.current = remoteSettings;
       setAccountSettings(remoteSettings);
       setCollaborationRollout(collaborationCapabilities);
-      const listed = await loadProjectSummaries(true);
+      const listed = await loadProjectSummaries(sessionRef.current?.userId ?? null);
       if (!cloudFunctionsEnabledRef.current) {
         return;
       }
@@ -8985,10 +9021,11 @@ export function App() {
   }
 
   async function activateCloudSession(activeSession: AuthSession) {
+    organizationBackground.begin(activeSession.userId);
     const [remoteSettings, listed, collaborationCapabilities] =
       await Promise.all([
         api.getSettings(),
-        loadProjectSummaries(true),
+        loadProjectSummaries(activeSession.userId),
         api
           .collaborationCapabilities()
           .catch(() => DISABLED_COLLABORATION_ROLLOUT)
@@ -9115,6 +9152,7 @@ export function App() {
   }
 
   async function handleLogout() {
+    organizationBackground.cancel();
     setSettingsBusy(true);
     setSettingsMessage('Signing out…');
     try {
@@ -9125,7 +9163,7 @@ export function App() {
       await cloudSettingsAutosaveRef.current?.flushPending();
       await api.logout();
       clearAssistantHistory();
-      const listed = await loadProjectSummaries(false);
+      const listed = await loadProjectSummaries(null);
       remoteVersionsRef.current.clear();
       accountDocumentUnavailableProjectIdRef.current = null;
       endCloudSettingsAutosave();
@@ -9197,7 +9235,7 @@ export function App() {
       const deleted = await api.deleteAccountData(scope, confirmation);
       if (deleted.signedOut) {
         projectController?.closeProject();
-        const listed = await loadProjectSummaries(false);
+        const listed = await loadProjectSummaries(null);
         remoteVersionsRef.current.clear();
         // The successful response invalidated the browser cookie (and the
         // desktop proxy drops its Keychain credential). Mirror that immediately
@@ -9222,7 +9260,7 @@ export function App() {
           await clearLastSyncedVersion(projectId).catch(() => undefined);
         })
       );
-      const listed = await loadProjectSummaries(true);
+      const listed = await loadProjectSummaries(sessionRef.current?.userId ?? null);
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(listed.remoteReached);
@@ -9904,7 +9942,7 @@ export function App() {
     try {
       const accepted = await projectSharingClient.acceptInvitation(token);
       if (!isCurrent()) return;
-      const listed = await loadProjectSummaries(true);
+      const listed = await loadProjectSummaries(sessionRef.current?.userId ?? null);
       if (!isCurrent()) return;
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
@@ -10176,7 +10214,7 @@ export function App() {
     setSelectedProfiles([]);
     setTool(null);
     try {
-      const listed = await loadProjectSummaries(Boolean(session));
+      const listed = await loadProjectSummaries(sessionRef.current?.userId ?? null);
       if (!isCurrent()) return;
       setProjects(listed.projects);
       setCloudProjectIds(listed.cloudProjectIds);
@@ -10222,9 +10260,12 @@ export function App() {
     if (!session) {
       return;
     }
-    await mirrorPendingOrganization(projectId, organizationMirrorHost).catch(
-      () => undefined
-    );
+    await mirrorPendingOrganization(
+      projectId,
+      organizationMirrorHost,
+      undefined,
+      organizationBackground.scopeFor(session.userId)
+    ).catch(() => undefined);
   }
 
   async function handleMoveProjectToShelf(
@@ -10294,11 +10335,16 @@ export function App() {
           .sort(compareProjectSummaries)
       );
       if (session) {
+        const organizationScope = organizationBackground.scopeFor(session.userId);
         await mirrorPendingReorder(
           projectIds,
           organizationMirrorHost,
           async (ids) =>
-            (await api.reorderProjects({ projectIds: ids.map(toProjectId) })).projects
+            (await api.reorderProjects(
+              { projectIds: ids.map(toProjectId) }, organizationScope.signal
+            )).projects,
+          undefined,
+          organizationScope
         ).catch(() => undefined);
       }
     } catch (error) {

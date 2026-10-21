@@ -338,17 +338,19 @@ export const api = {
       throw error;
     }
   },
-  updateProject: (payload: UpdateProjectRequest) =>
+  updateProject: (payload: UpdateProjectRequest, signal?: AbortSignal) =>
     requestJson<UpdateProjectResponse>(
       `/api/projects/${encodeURIComponent(payload.projectId)}`,
       {
         method: 'PATCH',
+        ...(signal ? { signal } : {}),
         body: JSON.stringify(payload)
       }
     ),
-  reorderProjects: (payload: ReorderProjectsRequest) =>
+  reorderProjects: (payload: ReorderProjectsRequest, signal?: AbortSignal) =>
     requestJson<ReorderProjectsResponse>('/api/projects/reorder', {
       method: 'POST',
+      ...(signal ? { signal } : {}),
       body: JSON.stringify(payload)
     }),
   /** Irreversible. Use `updateProject` with status 'deleted' for the bin. */

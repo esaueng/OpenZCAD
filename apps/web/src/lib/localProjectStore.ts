@@ -1291,7 +1291,8 @@ export function saveLocalProjectOrganization(
 export function saveLocalProjectOrganizationIfCurrent(
   projectId: string,
   organization: ProjectOrganization,
-  expectedRevision: string | null
+  expectedRevision: string | null,
+  isCurrent?: () => boolean
 ): Promise<boolean> {
   return scopedTransaction(
     'readwrite',
@@ -1301,7 +1302,10 @@ export function saveLocalProjectOrganizationIfCurrent(
       const meta = store(META_STORE_NAME);
       const current = (await settled(meta.get(projectId))) as
         ProjectMetaRecord | undefined;
-      if ((current?.organizationRevision ?? null) !== expectedRevision)
+      if (
+        (current?.organizationRevision ?? null) !== expectedRevision ||
+        (isCurrent && !isCurrent())
+      )
         return false;
       meta.put({
         ...organizationOf({ ...organization, projectId }),
@@ -1543,6 +1547,14 @@ export function clearAllLastSyncedVersions(): Promise<void> {
  * for a project that cannot be opened.
  */
 export function deleteLocalProject(projectId: string): Promise<void> {
+  return deleteLocalProjectWhen(projectId).then(() => undefined);
+}
+
+function deleteLocalProjectWhen(
+  projectId: string,
+  eligible?: (record: ProjectMetaRecord | undefined) => boolean,
+  retainPendingOrganization = false
+): Promise<boolean> {
   const storeNames = [
     BACKUP_STORE_NAME,
     STORE_NAME,
@@ -1558,9 +1570,24 @@ export function deleteLocalProject(projectId: string): Promise<void> {
     [...storeNames, CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
     async (store) => {
       await assertCurrentProjectId(store(ALIAS_STORE_NAME), projectId);
-      for (const name of storeNames) store(name).delete(projectId);
+      const metadata =
+        eligible || retainPendingOrganization
+          ? ((await settled(store(META_STORE_NAME).get(projectId))) as
+              ProjectMetaRecord | undefined)
+          : undefined;
+      if (eligible && !eligible(metadata)) return false;
+      for (const name of storeNames) {
+        if (
+          name === META_STORE_NAME &&
+          retainPendingOrganization &&
+          metadata?.mirrorPending
+        )
+          continue;
+        store(name).delete(projectId);
+      }
       store(CHECKPOINT_STORE_NAME).delete(checkpointKeyRange(projectId));
       // Aliases remain as fences: an older tab must never resurrect the removed ID.
+      return true;
     }
   );
 }
@@ -1687,10 +1714,16 @@ export async function listLocalProjects(): Promise<ProjectSummary[]> {
  * ids that were purged. Called on every start-screen refresh — retention is
  * measured in days, so a check at arrival is timely enough and the browser has
  * nowhere to run a scheduled job anyway.
+ * Account mirrors can defer eligible pending rows. Otherwise an optional small
+ * pending organization tombstone survives normal model/companion expiry.
  */
 export async function purgeExpiredLocalProjects(
   now = Date.now(),
-  excludedProjectIds: ReadonlySet<string> = new Set()
+  excludedProjectIds: ReadonlySet<string> = new Set(),
+  options: {
+    retainPendingOrganization?: boolean;
+    deferPendingProjectIds?: ReadonlySet<string>;
+  } = {}
 ): Promise<string[]> {
   const organizations = await listLocalProjectOrganizations();
   const expired = [...organizations.entries()]
@@ -1701,10 +1734,25 @@ export async function purgeExpiredLocalProjects(
         isPurgeDue(organization.deletedAt, now)
     )
     .map(([projectId]) => projectId);
+  const purged: string[] = [];
   for (const projectId of expired) {
-    await deleteLocalProject(projectId);
+    if (
+      await deleteLocalProjectWhen(
+        projectId,
+        (record) =>
+          Boolean(
+            record &&
+            (!record.mirrorPending ||
+              !options.deferPendingProjectIds?.has(projectId)) &&
+            record.status === 'deleted' &&
+            isPurgeDue(record.deletedAt, now)
+          ),
+        options.retainPendingOrganization
+      )
+    )
+      purged.push(projectId);
   }
-  return expired;
+  return purged;
 }
 
 /**
