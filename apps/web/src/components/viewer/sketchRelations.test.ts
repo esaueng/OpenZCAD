@@ -588,6 +588,44 @@ describe('sketch relation glyph overlay', () => {
     overlay.dispose();
   });
 
+  it("keeps glyphs off the selected text's rotation ring and grab dot", () => {
+    // A selected text's handles drawn just above the bottom line's middle,
+    // right where its chip would stand: the ring takes presses 27–41 px out.
+    const overlay = buildSketchRelationGlyphs([bottom], basis);
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(topCamera(), 400, 400, null, {
+      shown: true,
+      x: 200,
+      y: 170,
+      ring: true
+    });
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    const left = 200 + dx! - 17;
+    const right = 200 + dx! + 17;
+    const top = 200 + dy! - 8;
+    const bottomEdge = 200 + dy! + 8;
+    // Clear of the ring's whole square (41 px each way of 200, 170).
+    expect(right <= 159 || left >= 241 || bottomEdge <= 129 || top >= 211).toBe(
+      true
+    );
+    // A hidden handle blocks nothing: the chip takes its usual spot again.
+    overlay.layout(topCamera(), 400, 400, null, {
+      shown: false,
+      x: 200,
+      y: 170,
+      ring: true
+    });
+    const [, plainDy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    expect(plainDy).toBe(-14);
+    overlay.dispose();
+  });
+
   it('leaves a chip whose anchor is off the viewport where it is', () => {
     const camera = topCamera();
     // Plane (200, 0) is far right of the 100-unit-wide view.

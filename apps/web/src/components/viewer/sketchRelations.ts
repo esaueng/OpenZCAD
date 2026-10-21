@@ -12,6 +12,24 @@ import {
   relationChipWidth
 } from '../../lib/sketch/relationGlyphLayout';
 import { VIEWPORT_OBSTACLE_SELECTOR } from './sketchDimensions';
+import {
+  SKETCH_GRAB_RADIUS_PX,
+  SKETCH_ROTATE_RING_BAND_PX,
+  SKETCH_ROTATE_RING_RADIUS_PX
+} from '../../lib/sketch/session';
+
+/**
+ * Where the selected object's move handles are drawn this frame, in screen
+ * pixels: the grab dot and, for text, the rotation ring around it. Glyphs
+ * keep off both, as the handles take their presses.
+ */
+export interface SketchHandleSpot {
+  shown: boolean;
+  x: number;
+  y: number;
+  /** The text rotation ring is drawn around the dot. */
+  ring: boolean;
+}
 
 /**
  * How often the viewport controls glyphs avoid are re-measured while glyphs
@@ -277,11 +295,13 @@ export function buildSketchRelationGlyphs(
        * relation on the same line both start at its middle; their boxes are
        * projected every frame (no DOM read) and kept clear.
        */
-      dimensions?: SketchLabelBoxes | null
+      dimensions?: SketchLabelBoxes | null,
+      /** The selected object's move handles, as drawn this frame. */
+      handle?: SketchHandleSpot | null
     ) {
       if (count === 0) return;
       const labels = dimensions?.labelCount ?? 0;
-      const capacity = (obstacleCount + labels + keepOutCount) * 4;
+      const capacity = (obstacleCount + labels + keepOutCount + 1) * 4;
       if (blockedBoxes.length < capacity) {
         // A rare growth step, when a rebuild brings more labels or points.
         blockedBoxes = new Float64Array(capacity * 2);
@@ -316,6 +336,19 @@ export function buildSketchRelationGlyphs(
         blockedBoxes[at + 1] = y - RELATION_KEEP_OUT_PX;
         blockedBoxes[at + 2] = x + RELATION_KEEP_OUT_PX;
         blockedBoxes[at + 3] = y + RELATION_KEEP_OUT_PX;
+        blockedCount += 1;
+      }
+      if (handle?.shown) {
+        // The grab dot, or for text the whole rotation ring: its band takes
+        // presses all round, and what it encloses is the selected text.
+        const reach = handle.ring
+          ? SKETCH_ROTATE_RING_RADIUS_PX + SKETCH_ROTATE_RING_BAND_PX
+          : SKETCH_GRAB_RADIUS_PX;
+        const at = blockedCount * 4;
+        blockedBoxes[at] = handle.x - reach;
+        blockedBoxes[at + 1] = handle.y - reach;
+        blockedBoxes[at + 2] = handle.x + reach;
+        blockedBoxes[at + 3] = handle.y + reach;
         blockedCount += 1;
       }
       layout.setBlocked(blockedBoxes, blockedCount);

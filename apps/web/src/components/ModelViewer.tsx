@@ -3705,6 +3705,9 @@ export function ModelViewer({
     const sketchRotateRing = hud.create('sketch-rotate-ring', {
       ariaHidden: true
     });
+    // Where those handles are this frame, for the relation glyphs to keep
+    // off; rewritten in place each frame.
+    const sketchHandleSpot = { shown: false, x: 0, y: 0, ring: false };
 
     // Exact entry drives the same preview the drag does.
     offsetSetterRef.current = (value: number) => {
@@ -7675,6 +7678,7 @@ export function ModelViewer({
         selection && data
           ? sketchObjectGrabPoint(data, sketchModeResolver(selection.mode))
           : null;
+      sketchHandleSpot.shown = false;
       if (!selection || !grab) {
         sketchGrabHandle.hidden = true;
         sketchRotateRing.hidden = true;
@@ -7700,6 +7704,10 @@ export function ModelViewer({
         drag?.active === true && drag.handle === 'translate'
       );
       hud.showAt(sketchGrabHandle, screen.x, screen.y);
+      sketchHandleSpot.shown = true;
+      sketchHandleSpot.x = screen.x;
+      sketchHandleSpot.y = screen.y;
+      sketchHandleSpot.ring = sketchObjectRotatable(selection.data);
       if (sketchObjectRotatable(selection.data)) {
         sketchRotateRing.dataset.active = String(
           drag?.active === true && drag.handle === 'rotate'
@@ -9415,6 +9423,7 @@ export function ModelViewer({
         if (!sketchGridIndicator.hidden) sketchGridIndicator.hidden = true;
         if (!sketchGrabHandle.hidden) sketchGrabHandle.hidden = true;
         if (!sketchRotateRing.hidden) sketchRotateRing.hidden = true;
+        sketchHandleSpot.shown = false;
       }
 
       // Preselection and selection overlays cut to their targets; their
@@ -9628,7 +9637,8 @@ export function ModelViewer({
         context.activeCamera,
         canvasWidth(),
         canvasHeight(),
-        sketchDimensionsRef.current
+        sketchDimensionsRef.current,
+        sketchHandleSpot
       );
       if (cylinderRadiusProxyFrame && import.meta.env.OZ_PERF === '1') {
         mark('cylinder-radius.proxy-frame', {
