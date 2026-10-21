@@ -369,6 +369,40 @@ function tangentThrough(
     const ends = curveEnds(data, scalar);
     return ends[0]?.direction ?? null;
   }
+  if (data.objectKind === 'ellipse') {
+    // Point on curve accepts an ellipse: its tangent at the point's
+    // parameter, from the point in the ellipse's own frame.
+    const cx = scalar(data.centerX);
+    const cy = scalar(data.centerY);
+    const rx = scalar(data.radiusX);
+    const ry = scalar(data.radiusY);
+    const rotation = scalar(data.rotationDeg);
+    if (
+      cx === undefined ||
+      cy === undefined ||
+      rx === undefined ||
+      ry === undefined ||
+      rotation === undefined ||
+      !(rx > 0) ||
+      !(ry > 0)
+    ) {
+      return null;
+    }
+    const radians = (rotation * Math.PI) / 180;
+    const cos = Math.cos(radians);
+    const sin = Math.sin(radians);
+    const lx = (at.x - cx) * cos + (at.y - cy) * sin;
+    const ly = -(at.x - cx) * sin + (at.y - cy) * cos;
+    const t = Math.atan2(ly / ry, lx / rx);
+    const tx = -rx * Math.sin(t);
+    const ty = ry * Math.cos(t);
+    const length = Math.hypot(tx, ty);
+    if (!(length > 0)) return null;
+    return {
+      x: (tx * cos - ty * sin) / length,
+      y: (tx * sin + ty * cos) / length
+    };
+  }
   if (data.objectKind !== 'circle' && data.objectKind !== 'arc') return null;
   const cx = scalar(data.centerX);
   const cy = scalar(data.centerY);

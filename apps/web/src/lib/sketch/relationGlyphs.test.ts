@@ -516,6 +516,47 @@ describe('sketchRelationGlyphs', () => {
     expect(chip!.normal.y).toBeCloseTo(1, 12);
   });
 
+  it('stands an on-ellipse point chip off the ellipse, not along it', () => {
+    // A line ending on the top of an ellipse turned a quarter turn (its
+    // long axis up the y axis). The line leaves the point straight up and the
+    // ellipse runs left and right through it, so the chip stands straight
+    // down with a quarter turn of room either side. Ignoring the ellipse left
+    // it the whole circle, room to swing along the ellipse's stroke.
+    const chips = sketchRelationGlyphs(
+      [
+        {
+          id: 'oval',
+          data: {
+            objectKind: 'ellipse',
+            centerX: 0,
+            centerY: 0,
+            radiusX: 10,
+            radiusY: 4,
+            rotationDeg: 90
+          }
+        },
+        {
+          id: 'post',
+          data: { objectKind: 'line', x1: 0, y1: 10, x2: 0, y2: 20 }
+        }
+      ],
+      [
+        constraint({
+          constraintKind: 'point-on-object',
+          point: { objectId: id('post'), point: 'start' },
+          objectId: id('oval')
+        })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    const [chip] = chips;
+    expect(chip!.placement).toBe('point');
+    expect(chip!.normal.x).toBeCloseTo(0, 9);
+    expect(chip!.normal.y).toBeCloseTo(-1, 9);
+    expect(chip!.halfGap).toBeCloseTo(Math.PI / 2, 9);
+  });
+
   it('orders the chips holding the selected relation first, so they are never crowded out', () => {
     const parallel = String(rectangle[7]!.constraintId);
     const chips = sketchRelationGlyphs(objects, rectangle, resolve, {
