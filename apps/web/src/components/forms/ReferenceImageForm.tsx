@@ -120,7 +120,9 @@ export function ReferenceImageWorkspaceCard({
         ? `Use at most ${MAX_REFERENCE_IMAGE_NAME_LENGTH} characters.`
         : u === null || v === null
           ? 'Position needs two numbers.'
-          : offset === null
+          : // Only a principal plane has an offset: a hidden field left
+            // invalid there must not block an image on a datum or face.
+            plane.type === 'canonical' && offset === null
             ? 'Offset needs a number.'
             : rotation === null
               ? 'Rotation must be between −360° and 360°.'

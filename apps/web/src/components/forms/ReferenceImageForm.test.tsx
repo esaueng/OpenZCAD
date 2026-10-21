@@ -103,6 +103,35 @@ describe('ReferenceImageWorkspaceCard', () => {
     expect(props.onDraft).toHaveBeenLastCalledWith(null);
   });
 
+  it('ignores an invalid offset left behind on a principal plane once the image moves off it', async () => {
+    const face = {
+      type: 'frame' as const,
+      frame: {
+        origin: { x: 0, y: 0, z: 9 },
+        xAxis: { x: 1, y: 0, z: 0 },
+        yAxis: { x: 0, y: 1, z: 0 },
+        zAxis: { x: 0, y: 0, z: 1 }
+      }
+    };
+    const props = setup({ selectedFacePlane: face });
+    fireEvent.change(screen.getByLabelText('Offset (mm)'), {
+      target: { value: '' }
+    });
+    expect(screen.getByText('Offset needs a number.')).toBeTruthy();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Plane' }), {
+      target: { value: 'selected-face' }
+    });
+    // The offset field is gone, and so is its refusal.
+    expect(screen.queryByLabelText('Offset (mm)')).toBeNull();
+    expect(screen.queryByText('Offset needs a number.')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(props.onApply).toHaveBeenCalled());
+    expect(props.onApply).toHaveBeenCalledWith({
+      imageId: 'rimg_one',
+      plane: face
+    });
+  });
+
   it('moves the image to a datum plane or the selected face', async () => {
     const face = {
       type: 'frame' as const,
