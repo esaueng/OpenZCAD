@@ -72,6 +72,7 @@ describe('keymap registry', () => {
       'view-grid': 'G',
       'view-display': 'W',
       'view-projection': 'P',
+      'panels-hide-all': 'Ctrl+\\',
       'selection-filter': 'Q',
       'workspace-mode-cycle': 'Ctrl+Shift+M',
       'view-measure': 'M',
@@ -171,6 +172,14 @@ describe('chordFromEvent', () => {
     expect(chordFromEvent(key('µ', { altKey: true }, 'KeyM'))).toBe('Alt+M');
     expect(chordFromEvent(key('Escape'))).toBe('Escape');
     expect(chordFromEvent(key('+', { ctrlKey: true }))).toBe('Ctrl++');
+    // Hide all panels: Ctrl+\ and ⌘\ are one chord.
+    for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+      const chord = chordFromEvent(key('\\', modifier, 'Backslash'));
+      expect(chord).toBe('Ctrl+\\');
+      expect(DEFAULTS.commandFor(chord, ['global'])?.id).toBe(
+        'panels-hide-all'
+      );
+    }
   });
 
   it('reads AltGr as the character it types, not a Ctrl+Alt chord', () => {
