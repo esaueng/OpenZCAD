@@ -14,7 +14,7 @@ import {
   type SignedDeviceListEntry,
   type VerifiedDeviceList
 } from '@openzcad/crypto';
-import type { DeviceKeyStore } from './deviceStore';
+import type { DeviceKeyStore, StoredDevice } from './deviceStore';
 
 const USER = 'pin_user';
 beforeEach(() => {
@@ -102,6 +102,47 @@ async function fixture() {
 describe.each(['memory', 'indexeddb'] as const)(
   '%s atomic device-list pins',
   (backend) => {
+    it('atomically retains one non-extractable device across connections and retries', async () => {
+      const [left, right] = await stores(backend);
+      const candidate = async (deviceId: string): Promise<StoredDevice> => {
+        const signing = await generateSigningKeyPair(false);
+        const unlock = await generateEncryptionKeyPair(false);
+        return {
+          userId: USER,
+          deviceId,
+          label: deviceId,
+          signing,
+          unlock,
+          signingPublicKey: await exportPublicKey(signing.publicKey),
+          unlockPublicKey: await exportPublicKey(unlock.publicKey),
+          createdAt: 1,
+          approval: null
+        };
+      };
+      const a = await candidate('a');
+      const b = await candidate('b');
+      const accepted = await Promise.all([
+        left.getOrCreateDevice(a),
+        right.getOrCreateDevice(b)
+      ]);
+      expect(accepted.map((device) => device.deviceId)).toEqual(['a', 'a']);
+      const stored = (await right.loadDevice(USER))!;
+      expect(stored.signingPublicKey).toEqual(a.signingPublicKey);
+      expect(stored.unlockPublicKey).toEqual(a.unlockPublicKey);
+      expect(stored.signing.privateKey.extractable).toBe(false);
+      expect(stored.unlock.privateKey.extractable).toBe(false);
+      await left.saveDevice({
+        ...stored,
+        label: 'Updated',
+        approval: { id: 'request', nonce: null }
+      });
+      expect(await right.getOrCreateDevice(b)).toMatchObject({
+        deviceId: 'a',
+        label: 'Updated',
+        approval: { id: 'request' }
+      });
+    });
+
     it('accepts first sight, identical heads and descendants, refusing a stale head', async () => {
       const [left, right] = await stores(backend);
       const f = await fixture();

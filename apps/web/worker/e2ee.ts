@@ -43,6 +43,16 @@ import type {
   E2eeWrapRecord
 } from '@openzcad/shared';
 
+import {
+  e2eeWriteAuthorization,
+  releaseDevelopmentE2eeWrite,
+  type E2eeWriteAuthorization
+} from './e2eeWriteAuthorization';
+
+interface WriteDatabase extends D1Database {
+  authorization: E2eeWriteAuthorization;
+}
+
 export class E2eeRouteError extends Error {
   constructor(
     readonly status: number,
@@ -60,6 +70,8 @@ export interface E2eeRouteSession {
 
 export interface E2eeRouteEnv {
   DB?: D1Database;
+  AUTH_MODE?: string;
+  ENVIRONMENT?: string;
 }
 
 const MAX_BODY_BYTES = 512 * 1024;
@@ -467,7 +479,7 @@ async function loadAccount(
 
 /** Writes a first generation, or a replacement one, and its first entry. */
 async function writeGeneration(
-  db: D1Database,
+  db: WriteDatabase,
   userId: string,
   input: {
     generation: number;
@@ -488,27 +500,20 @@ async function writeGeneration(
 ): Promise<boolean> {
   const now = new Date().toISOString();
   const previousHead = input.previousHead;
+  const auth = db.authorization;
   const guard = {
     sql: `EXISTS (SELECT 1 FROM e2ee_identities
-                  WHERE user_id = ? AND generation = ? AND identity_key = ?)`,
-    binds: [userId, input.generation, input.identityKeyText]
+                  WHERE user_id = ? AND generation = ? AND identity_key = ?) AND ${auth.sql}`,
+    binds: [userId, input.generation, input.identityKeyText, ...auth.binds]
   };
   const statements: D1PreparedStatement[] = [
-    // A development or legacy session may predate its users row; every key
-    // row hangs off it so it goes on erasure.
-    db
-      .prepare(
-        `INSERT INTO users (id, email, created_at) VALUES (?, NULL, ?)
-         ON CONFLICT (id) DO NOTHING`
-      )
-      .bind(userId, now),
     db
       .prepare(
         `INSERT INTO e2ee_identities
            (user_id, generation, identity_key, transition_statement,
             transition_signature, created_at)
          SELECT ?, ?, ?, ?, ?, ?
-         WHERE (SELECT COALESCE(MAX(generation), 0) FROM e2ee_identities
+         WHERE ${auth.sql} AND (SELECT COALESCE(MAX(generation), 0) FROM e2ee_identities
                 WHERE user_id = ?) = ?
            AND ${
              previousHead
@@ -527,6 +532,7 @@ async function writeGeneration(
         input.transition?.statement ?? null,
         input.transition?.signature ?? null,
         now,
+        ...auth.binds,
         userId,
         input.generation - 1,
         ...(previousHead
@@ -577,11 +583,11 @@ async function writeGeneration(
       .bind(userId, ...guard.binds)
   ];
   const results = await db.batch(statements);
-  return (results[1]?.meta?.changes ?? 0) === 1;
+  return (results[0]?.meta?.changes ?? 0) === 1;
 }
 
 async function handleSetup(
-  db: D1Database,
+  db: WriteDatabase,
   userId: string,
   body: Record<string, unknown>
 ): Promise<E2eeAccountResponse> {
@@ -617,7 +623,7 @@ async function handleSetup(
 }
 
 async function handleReplaceIdentity(
-  db: D1Database,
+  db: WriteDatabase,
   userId: string,
   body: Record<string, unknown>
 ): Promise<E2eeAccountResponse> {
@@ -739,7 +745,7 @@ async function handleReplaceIdentity(
 }
 
 async function handleAppend(
-  db: D1Database,
+  db: WriteDatabase,
   userId: string,
   body: Record<string, unknown>
 ): Promise<E2eeAccountResponse> {
@@ -832,11 +838,18 @@ async function handleAppend(
   }
   const now = new Date().toISOString();
   const entryHash = toHex(list.headHash);
+  const auth = db.authorization;
   const guard = {
     sql: `EXISTS (SELECT 1 FROM e2ee_device_list_entries
                   WHERE user_id = ? AND generation = ? AND sequence = ?
-                    AND entry_hash = ?)`,
-    binds: [userId, current.generation, list.head.sequence, entryHash]
+                    AND entry_hash = ?) AND ${auth.sql}`,
+    binds: [
+      userId,
+      current.generation,
+      list.head.sequence,
+      entryHash,
+      ...auth.binds
+    ]
   };
   const revokedIds = list.head.revoked.map((r) => r.id);
   const statements: D1PreparedStatement[] = [
@@ -845,7 +858,7 @@ async function handleAppend(
         `INSERT INTO e2ee_device_list_entries
            (user_id, generation, sequence, entry, signature, entry_hash, created_at)
          SELECT ?, ?, ?, ?, ?, ?, ?
-         WHERE (SELECT MAX(sequence) FROM e2ee_device_list_entries
+         WHERE ${auth.sql} AND (SELECT MAX(sequence) FROM e2ee_device_list_entries
                 WHERE user_id = ? AND generation = ?) = ?
            AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?`
       )
@@ -857,6 +870,7 @@ async function handleAppend(
         signatureText,
         entryHash,
         now,
+        ...auth.binds,
         userId,
         current.generation,
         before.sequence,
@@ -1025,7 +1039,7 @@ function randomApprovalId(): string {
 }
 
 async function handleCreateApproval(
-  db: D1Database,
+  db: WriteDatabase,
   userId: string,
   body: Record<string, unknown>
 ): Promise<E2eeApprovalRecord> {
@@ -1051,9 +1065,13 @@ async function handleCreateApproval(
   const now = new Date(nowMs).toISOString();
   await db
     .prepare(
-      `DELETE FROM e2ee_device_approvals WHERE user_id = ? AND created_at < ?`
+      `DELETE FROM e2ee_device_approvals WHERE user_id = ? AND created_at < ? AND ${db.authorization.sql}`
     )
-    .bind(userId, new Date(nowMs - APPROVAL_RETENTION_MS).toISOString())
+    .bind(
+      userId,
+      new Date(nowMs - APPROVAL_RETENTION_MS).toISOString(),
+      ...db.authorization.binds
+    )
     .run();
   const counts = await db
     .prepare(
@@ -1084,7 +1102,7 @@ async function handleCreateApproval(
       `INSERT INTO e2ee_device_approvals
          (id, user_id, device_id, label, signing_key, unlock_key, commitment,
           state, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?)`
+       SELECT ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ? WHERE ${db.authorization.sql}`
     )
     .bind(
       id,
@@ -1095,14 +1113,15 @@ async function handleCreateApproval(
       body.unlockKey,
       commitment,
       now,
-      new Date(nowMs + APPROVAL_TTL_MS).toISOString()
+      new Date(nowMs + APPROVAL_TTL_MS).toISOString(),
+      ...db.authorization.binds
     )
     .run();
   return approvalRecord(await approvalRow(db, userId, id, now));
 }
 
 async function moveApproval(
-  db: D1Database,
+  db: WriteDatabase,
   userId: string,
   id: string,
   update: { set: string; binds: unknown[]; from: E2eeApprovalState[] },
@@ -1113,9 +1132,16 @@ async function moveApproval(
     .prepare(
       `UPDATE e2ee_device_approvals SET ${update.set}
        WHERE id = ? AND user_id = ? AND expires_at > ?
-         AND state IN (${update.from.map(() => '?').join(', ')}) ${extraWhere}`
+         AND state IN (${update.from.map(() => '?').join(', ')}) ${extraWhere} AND ${db.authorization.sql}`
     )
-    .bind(...update.binds, id, userId, now, ...update.from)
+    .bind(
+      ...update.binds,
+      id,
+      userId,
+      now,
+      ...update.from,
+      ...db.authorization.binds
+    )
     .run();
   if ((result.meta?.changes ?? 0) !== 1) {
     await approvalRow(db, userId, id, now);
@@ -1129,7 +1155,7 @@ async function moveApproval(
 }
 
 async function handleCompleteApproval(
-  db: D1Database,
+  db: WriteDatabase,
   userId: string,
   id: string,
   body: Record<string, unknown>
@@ -1231,9 +1257,16 @@ async function handleCompleteApproval(
          SET state = 'completed', grant_statement = ?, grant_signature = ?
          WHERE id = ? AND user_id = ? AND expires_at > ?
            AND state IN ('requested', 'revealed')
-           AND (state = 'revealed' OR commitment IS NULL OR approver_key IS NULL)`
+           AND (state = 'revealed' OR commitment IS NULL OR approver_key IS NULL) AND ${db.authorization.sql}`
       )
-      .bind(statementText, grantBody.signature, id, userId, now)
+      .bind(
+        statementText,
+        grantBody.signature,
+        id,
+        userId,
+        now,
+        ...db.authorization.binds
+      )
   ];
   if (sealed) {
     statements.push(
@@ -1250,8 +1283,8 @@ async function handleCompleteApproval(
         now,
         {
           sql: `EXISTS (SELECT 1 FROM e2ee_device_approvals
-                        WHERE id = ? AND state = 'completed' AND grant_statement = ?)`,
-          binds: [id, statementText]
+                        WHERE id = ? AND state = 'completed' AND grant_statement = ?) AND ${db.authorization.sql}`,
+          binds: [id, statementText, ...db.authorization.binds]
         }
       )
     );
@@ -1320,6 +1353,7 @@ export async function handleE2eeRequest(
 ): Promise<Response> {
   const { pathname } = new URL(request.url);
   const method = request.method;
+  let authorization: E2eeWriteAuthorization | null = null;
   try {
     if (pathname === '/api/e2ee/config' && method === 'GET') {
       return json({
@@ -1334,8 +1368,8 @@ export async function handleE2eeRequest(
         'End-to-end encryption is not available for this account yet.'
       );
     }
-    const db = database(env);
-    if (!(await isE2eeKeyStorageReady(db))) {
+    const rawDb = database(env);
+    if (!(await isE2eeKeyStorageReady(rawDb))) {
       refuse(
         503,
         'E2EE_UNAVAILABLE',
@@ -1343,6 +1377,28 @@ export async function handleE2eeRequest(
       );
     }
     const userId = session.userId;
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+      authorization = await e2eeWriteAuthorization(
+        request,
+        session,
+        env.AUTH_MODE === 'development' && env.ENVIRONMENT === 'development'
+      );
+      if (!authorization)
+        refuse(
+          401,
+          'E2EE_SESSION_REQUIRED',
+          'Sign in again before changing encryption keys.'
+        );
+    }
+    const db: WriteDatabase = {
+      prepare: (sql) => rawDb.prepare(sql),
+      batch: (statements) => rawDb.batch(statements),
+      authorization: authorization ?? {
+        sql: '0',
+        binds: [],
+        dispose: async () => {}
+      }
+    };
     if (pathname === '/api/e2ee/account' && method === 'GET') {
       return json(await loadAccount(db, userId));
     }
@@ -1390,9 +1446,9 @@ export async function handleE2eeRequest(
       if (method === 'DELETE') {
         await db
           .prepare(
-            `DELETE FROM e2ee_device_approvals WHERE id = ? AND user_id = ?`
+            `DELETE FROM e2ee_device_approvals WHERE id = ? AND user_id = ? AND ${db.authorization.sql}`
           )
-          .bind(id, userId)
+          .bind(id, userId, ...db.authorization.binds)
           .run();
         return json({ ok: true });
       }
@@ -1433,12 +1489,15 @@ export async function handleE2eeRequest(
       }
       return json(await handleCompleteApproval(db, userId, id, body));
     }
-    refuse(404, 'NOT_FOUND', 'Not found.');
+    return refuse(404, 'NOT_FOUND', 'Not found.');
   } catch (error) {
     if (error instanceof E2eeRouteError) {
       return json({ error: error.message, code: error.code }, error.status);
     }
     throw error;
+  } finally {
+    await releaseDevelopmentE2eeWrite(session);
+    if (env.AUTH_MODE !== 'development') await authorization?.dispose();
   }
 }
 

@@ -952,7 +952,9 @@ export async function setUpEncryption(
   options: { recoverySecret: Uint8Array; label: string }
 ): Promise<EncryptionState> {
   const persistedPin = await ctx.store.loadPin(ctx.userId);
-  const device = await newStoredDevice(ctx, options.label);
+  const device = await ctx.store.getOrCreateDevice(
+    await newStoredDevice(ctx, options.label)
+  );
   const created = await newIdentity(
     ctx,
     options.recoverySecret,
@@ -961,7 +963,6 @@ export async function setUpEncryption(
   );
   // Keys first: a setup that reaches the server without them still opens
   // with the recovery key, while the reverse would strand this device.
-  await ctx.store.saveDevice(device);
   const response = await ctx.api.setup({
     identityKey: b64(created.identityKey),
     entry: b64(created.signed.entry),

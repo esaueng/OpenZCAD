@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { admitDevelopmentE2eeWrite } from '../apps/web/worker/e2eeWriteAuthorization';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   accountKeyCommitment,
@@ -73,6 +74,8 @@ interface Server {
   enabled: boolean;
   /** Rewrites a response body before the browser sees it. */
   tamper?: (path: string, body: unknown) => unknown;
+  beforeWrite?: (sql: string) => Promise<void>;
+  credential?: { token: string; desktop: boolean };
 }
 
 function server(db = migratedDatabase()): Server {
@@ -85,12 +88,60 @@ function server(db = migratedDatabase()): Server {
 }
 
 function fetcherFor(srv: Server, userId: string) {
-  const env = { DB: d1Database(srv.db) };
+  const base = d1Database(srv.db);
+  const originals = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
+  const queries = new WeakMap<D1PreparedStatement, string>();
+  const wrap = (
+    sql: string,
+    statement: D1PreparedStatement
+  ): D1PreparedStatement => {
+    const wrapped: D1PreparedStatement = {
+      bind: (...values) => wrap(sql, statement.bind(...values)),
+      first: () => statement.first(),
+      all: () => statement.all(),
+      run: async () => {
+        await srv.beforeWrite?.(sql);
+        return statement.run();
+      }
+    };
+    originals.set(wrapped, statement);
+    queries.set(wrapped, sql);
+    return wrapped;
+  };
+  const env = {
+    DB: {
+      prepare: (sql: string) => wrap(sql, base.prepare(sql)),
+      batch: async (statements: D1PreparedStatement[]) => {
+        await srv.beforeWrite?.(
+          statements.map((s) => queries.get(s)).join('\n')
+        );
+        return base.batch(statements.map((s) => originals.get(s)!));
+      }
+    },
+    AUTH_MODE: srv.credential ? 'email-code' : 'development',
+    ENVIRONMENT: 'development'
+  };
   return async (path: string, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    if (srv.credential) {
+      headers.set(
+        srv.credential.desktop ? 'authorization' : 'cookie',
+        srv.credential.desktop
+          ? `Bearer ${srv.credential.token}`
+          : `__Host-openzcad_session=${srv.credential.token}`
+      );
+    }
+    const session = { userId };
+    if (
+      !srv.credential &&
+      !['GET', 'HEAD', 'OPTIONS'].includes(init?.method ?? 'GET') &&
+      srv.enabled
+    )
+      await admitDevelopmentE2eeWrite(env.DB, session);
     const response = await handleE2eeRequest(
-      new Request(`https://zcad.test${path}`, init),
+      new Request(`https://zcad.test${path}`, { ...init, headers }),
       env,
-      { userId },
+      session,
       srv.enabled
     );
     if (!srv.tamper || !response.ok) return response;
@@ -1011,6 +1062,175 @@ describe('session teardown', () => {
 });
 
 describe('profile deletion', () => {
+  it.each(['profile', 'all'] as const)(
+    'does not reacquire development authority after %s erasure before route readiness',
+    async (scope) => {
+      const srv = server();
+      const base = d1Database(srv.db);
+      let raced = false;
+      const racing: D1Database = {
+        prepare: (sql) => {
+          const statement = base.prepare(sql);
+          if (!sql.includes('COUNT(*) AS tables')) return statement;
+          return {
+            bind: (...values) => statement.bind(...values),
+            all: () => statement.all(),
+            run: () => statement.run(),
+            first: async <T>() => {
+              if (!raced) {
+                raced = true;
+                expect(
+                  count(srv.db, 'SELECT COUNT(*) AS n FROM auth_sessions')
+                ).toBe(1);
+                const { deleteAccountData } =
+                  await import('../apps/web/worker/accountDeletion');
+                await deleteAccountData(
+                  {
+                    userId: USER as never,
+                    displayName: 'Alice',
+                    mode: 'development'
+                  },
+                  {
+                    scope,
+                    confirmation:
+                      scope === 'all'
+                        ? 'DELETE ALL CLOUD DATA'
+                        : 'DELETE CLOUD PROFILE'
+                  },
+                  {
+                    DB: base,
+                    PROJECT_STORAGE: {
+                      put: async () => {},
+                      get: async () => null,
+                      delete: async () => {}
+                    } as never,
+                    PROJECT_ROOM: {} as never
+                  },
+                  { deleteOwnedProjects: async () => [] } as never
+                );
+              }
+              return statement.first<T>();
+            }
+          };
+        },
+        batch: (statements) => base.batch(statements)
+      };
+      const { default: worker } = await import('../apps/web/worker/index');
+      const ctx = {
+        ...device(srv),
+        api: createE2eeApi((path, init) =>
+          worker.fetch(
+            new Request(`https://zcad.test${path}`, {
+              ...init,
+              headers: { ...init?.headers, 'x-openzcad-development-user': USER }
+            }),
+            {
+              DB: racing,
+              AUTH_MODE: 'development',
+              ENVIRONMENT: 'development',
+              E2EE_KEYS_ENABLED: 'true'
+            }
+          )
+        )
+      };
+      await expect(
+        setUpEncryption(ctx, {
+          recoverySecret: (await generateRecoveryKey()).secret,
+          label: 'Laptop'
+        })
+      ).rejects.toBeInstanceOf(E2eeApiError);
+      expect(raced).toBe(true);
+      expect(count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_identities')).toBe(
+        0
+      );
+      expect(count(srv.db, 'SELECT COUNT(*) AS n FROM auth_sessions')).toBe(0);
+      expect(count(srv.db, 'SELECT COUNT(*) AS n FROM users')).toBe(
+        scope === 'all' ? 0 : 1
+      );
+    }
+  );
+
+  it.each(['profile', 'all'] as const)(
+    'refuses setup admitted before %s erasure, even after a new sign-in',
+    async (scope) => {
+      const srv = server();
+      const base = d1Database(srv.db);
+      let erased = false;
+      const racing = {
+        prepare: (sql: string) => base.prepare(sql),
+        batch: async (statements: D1PreparedStatement[]) => {
+          if (
+            !erased &&
+            statements.some((s) =>
+              (s as unknown as { sql: string }).sql.includes(
+                'INSERT INTO e2ee_identities'
+              )
+            )
+          ) {
+            erased = true;
+            const { deleteAccountData } =
+              await import('../apps/web/worker/accountDeletion');
+            await deleteAccountData(
+              {
+                userId: USER as never,
+                displayName: 'Alice',
+                mode: 'development'
+              },
+              {
+                scope,
+                confirmation:
+                  scope === 'all'
+                    ? 'DELETE ALL CLOUD DATA'
+                    : 'DELETE CLOUD PROFILE'
+              },
+              {
+                DB: base,
+                PROJECT_STORAGE: {
+                  put: async () => {},
+                  get: async () => null,
+                  delete: async () => {}
+                } as never,
+                PROJECT_ROOM: {} as never
+              },
+              { deleteOwnedProjects: async () => [] } as never
+            );
+            // A fresh sign-in must not reauthorize the old request.
+            srv.db
+              .prepare(
+                'INSERT INTO users (id, email, created_at) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET email = excluded.email'
+              )
+              .run(USER, 'alice@example.com', new Date().toISOString());
+            srv.db
+              .prepare('INSERT INTO auth_sessions VALUES (?, ?, ?, ?)')
+              .run('new-session', USER, 0, 9_999_999_999);
+          }
+          return base.batch(statements);
+        }
+      };
+      const ctx = { ...device(srv) };
+      ctx.api = createE2eeApi(async (path, init) => {
+        const session = { userId: USER };
+        if (!['GET', 'HEAD', 'OPTIONS'].includes(init?.method ?? 'GET'))
+          await admitDevelopmentE2eeWrite(racing, session);
+        return handleE2eeRequest(
+          new Request(`https://zcad.test${path}`, init),
+          { DB: racing, AUTH_MODE: 'development', ENVIRONMENT: 'development' },
+          session,
+          true
+        );
+      });
+      await expect(
+        setUpEncryption(ctx, {
+          recoverySecret: (await generateRecoveryKey()).secret,
+          label: 'Laptop'
+        })
+      ).rejects.toBeInstanceOf(E2eeApiError);
+      expect(count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_identities')).toBe(
+        0
+      );
+    }
+  );
+
   it('erases every key row although the users row survives', async () => {
     const srv = server();
     await setUp(srv);
@@ -1036,6 +1256,266 @@ describe('profile deletion', () => {
   });
 });
 
+describe.each(['development', 'browser', 'desktop'] as const)(
+  '%s mutation authority',
+  (backend) => {
+    describe.each(['revoked', 'erasing'] as const)('%s authority', (phase) => {
+      it.each([
+        'setup',
+        'replace',
+        'append',
+        'create',
+        'prune',
+        'respond',
+        'reveal',
+        'complete',
+        'cancel'
+      ] as const)(
+        'does not commit %s after its admitted authority is revoked',
+        async (operation) => {
+          const srv = server();
+          if (backend !== 'development') {
+            const token = 'a'.repeat(43);
+            const tokenHash = Buffer.from(
+              await crypto.subtle.digest(
+                'SHA-256',
+                new TextEncoder().encode(token)
+              )
+            ).toString('hex');
+            srv.credential = { token, desktop: backend === 'desktop' };
+            if (backend === 'browser') {
+              srv.db
+                .prepare('INSERT INTO auth_sessions VALUES (?, ?, ?, ?)')
+                .run(tokenHash, USER, 0, 9_999_999_999);
+            } else {
+              srv.db
+                .prepare(
+                  'INSERT INTO desktop_access_tokens VALUES (?, ?, ?, ?, ?, ?, NULL)'
+                )
+                .run(
+                  tokenHash,
+                  'desktop-session',
+                  USER,
+                  'openzcad-macos',
+                  0,
+                  9_999_999_999
+                );
+            }
+          }
+          const recovery = await generateRecoveryKey();
+          const laptop = device(srv);
+          let action: () => Promise<unknown>;
+          let target: string;
+          if (operation === 'setup') {
+            action = () =>
+              setUpEncryption(laptop, {
+                recoverySecret: recovery.secret,
+                label: 'Laptop'
+              });
+            target = 'INSERT INTO e2ee_identities';
+          } else {
+            const account = ready(
+              await setUpEncryption(laptop, {
+                recoverySecret: recovery.secret,
+                label: 'Laptop'
+              })
+            );
+            const phone = device(srv);
+            if (operation === 'replace') {
+              action = async () =>
+                replaceRecoveryKey(
+                  laptop,
+                  account,
+                  (await generateRecoveryKey()).secret,
+                  null
+                );
+              target = 'INSERT INTO e2ee_identities';
+            } else if (operation === 'append') {
+              action = async () =>
+                enrollWithRecoveryKey(
+                  phone,
+                  ready(await loadEncryption(phone)),
+                  recovery.secret,
+                  'Phone'
+                );
+              target = 'INSERT INTO e2ee_device_list_entries';
+            } else if (operation === 'create') {
+              action = () => requestApproval(phone, null, 'Phone');
+              target = 'INSERT INTO e2ee_device_approvals';
+            } else {
+              const request = await requestApproval(phone, null, 'Phone');
+              if (request.step !== 'waiting')
+                throw new Error('Expected pending approval');
+              const [approval] = (await laptop.api.listApprovals()).approvals;
+              if (operation === 'respond') {
+                action = () =>
+                  beginCompareApproval(laptop, account, approval!.id);
+                target = "state = 'responded'";
+              } else if (operation === 'reveal') {
+                await beginCompareApproval(laptop, account, approval!.id);
+                action = () => advanceApprovalAsNewDevice(phone);
+                target = "state = 'revealed'";
+              } else if (operation === 'complete') {
+                action = () =>
+                  approveDevice(
+                    laptop,
+                    account,
+                    approval!,
+                    { kind: 'scan', code: request.scanCode },
+                    null
+                  );
+                target = "SET state = 'completed'";
+              } else if (operation === 'prune') {
+                srv.db
+                  .prepare(
+                    "UPDATE e2ee_device_approvals SET created_at = '2000-01-01', expires_at = '2000-01-02'"
+                  )
+                  .run();
+                action = () => requestApproval(device(srv), null, 'Tablet');
+                target = 'AND created_at < ?';
+              } else {
+                action = () => phone.api.cancelApproval(approval!.id);
+                target = 'DELETE FROM e2ee_device_approvals WHERE id';
+              }
+            }
+          }
+          const snapshot = () =>
+            [
+              'e2ee_identities',
+              'e2ee_device_list_entries',
+              'e2ee_key_wraps',
+              'e2ee_device_approvals'
+            ].map((table) => srv.db.prepare(`SELECT * FROM ${table}`).all());
+          const before = snapshot();
+          let raced = false;
+          srv.beforeWrite = async (sql) => {
+            if (!sql.includes(target)) return;
+            raced = true;
+            srv.beforeWrite = undefined;
+            if (phase === 'erasing') {
+              srv.db
+                .prepare(
+                  'INSERT INTO account_erasure_requests VALUES (?, ?, ?, ?)'
+                )
+                .run(USER, 'profile', 1, 1);
+              return;
+            }
+            srv.db.exec(
+              'DELETE FROM auth_sessions; DELETE FROM desktop_access_tokens'
+            );
+            // New authority must not authorize this already-admitted operation.
+            srv.db
+              .prepare('INSERT INTO auth_sessions VALUES (?, ?, ?, ?)')
+              .run('fresh-login', USER, 0, 9_999_999_999);
+          };
+          if (operation === 'cancel')
+            await action(); // Cancellation remains idempotent.
+          else await expect(action()).rejects.toBeInstanceOf(E2eeApiError);
+          expect(raced).toBe(true);
+          expect(snapshot()).toEqual(before);
+        }
+      );
+    });
+  }
+);
+
+describe('setup device persistence', () => {
+  it('keeps the certified keys when two tabs set up concurrently', async () => {
+    const srv = server();
+    const first = { ...device(srv) };
+    const api = first.api;
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    first.api = {
+      ...api,
+      setup: async (body) => {
+        entered();
+        await released;
+        return api.setup(body);
+      }
+    };
+    const secret = (await generateRecoveryKey()).secret;
+    const pending = setUpEncryption(first, {
+      recoverySecret: secret,
+      label: 'First tab'
+    });
+    await started;
+    const winningKeys = await first.store.loadDevice(USER);
+    let secondEntered!: () => void;
+    let secondRelease!: () => void;
+    const secondStarted = new Promise<void>((resolve) => {
+      secondEntered = resolve;
+    });
+    const secondReleased = new Promise<void>((resolve) => {
+      secondRelease = resolve;
+    });
+    const second = {
+      ...device(srv),
+      store: first.store,
+      api: {
+        ...api,
+        setup: async (body: E2eeSetupRequest) => {
+          secondEntered();
+          await secondReleased;
+          return api.setup(body);
+        }
+      }
+    };
+    const secondSetup = setUpEncryption(second, {
+      recoverySecret: secret,
+      label: 'Second tab'
+    });
+    await secondStarted;
+    release();
+    await pending;
+    secondRelease();
+    await expect(secondSetup).rejects.toBeInstanceOf(E2eeApiError);
+    lockAccount(USER);
+    expect((await first.store.loadDevice(USER))?.deviceId).toBe(
+      winningKeys?.deviceId
+    );
+    expect(ready(await loadEncryption(first)).deviceStatus).toBe('certified');
+    expect(unlockedEncryptionKey(USER)).not.toBeNull();
+  });
+
+  it('preserves keys when retrying a committed setup whose response was lost', async () => {
+    const srv = server();
+    const ctx = { ...device(srv) };
+    const api = ctx.api;
+    ctx.api = {
+      ...api,
+      setup: async (body) => {
+        await api.setup(body);
+        throw new Error('Response lost');
+      }
+    };
+    const options = {
+      recoverySecret: (await generateRecoveryKey()).secret,
+      label: 'Laptop'
+    };
+    await expect(setUpEncryption(ctx, options)).rejects.toThrow(
+      'Response lost'
+    );
+    const committed = await ctx.store.loadDevice(USER);
+    ctx.api = api;
+    await expect(setUpEncryption(ctx, options)).rejects.toBeInstanceOf(
+      E2eeApiError
+    );
+    expect((await ctx.store.loadDevice(USER))?.deviceId).toBe(
+      committed?.deviceId
+    );
+    lockAccount(USER);
+    expect(ready(await loadEncryption(ctx)).deviceStatus).toBe('certified');
+    expect(unlockedEncryptionKey(USER)).not.toBeNull();
+  });
+});
+
 describe('identity replacement races', () => {
   it('conflicts when the device list moves between check and write', async () => {
     const srv = server();
@@ -1046,24 +1526,34 @@ describe('identity replacement races', () => {
     const racing = {
       prepare: (sql: string) => base.prepare(sql),
       batch: async (statements: D1PreparedStatement[]) => {
-        srv.db
-          .prepare(
-            `INSERT INTO e2ee_device_list_entries (user_id, generation, sequence, entry, signature, entry_hash, created_at)
+        if (
+          statements.some((s) =>
+            (s as unknown as { sql: string }).sql.includes(
+              'INSERT INTO e2ee_identities'
+            )
+          )
+        )
+          srv.db
+            .prepare(
+              `INSERT INTO e2ee_device_list_entries (user_id, generation, sequence, entry, signature, entry_hash, created_at)
              SELECT user_id, generation, sequence + 1, entry, signature, ?, created_at
              FROM e2ee_device_list_entries WHERE generation = 1 ORDER BY sequence DESC LIMIT 1`
-          )
-          .run('f'.repeat(64));
+            )
+            .run('f'.repeat(64));
         return base.batch(statements);
       }
     };
-    const api = createE2eeApi((path, init) =>
-      handleE2eeRequest(
+    const api = createE2eeApi(async (path, init) => {
+      const session = { userId: USER };
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(init?.method ?? 'GET'))
+        await admitDevelopmentE2eeWrite(racing, session);
+      return handleE2eeRequest(
         new Request(`https://zcad.test${path}`, init),
-        { DB: racing },
-        { userId: USER },
+        { DB: racing, AUTH_MODE: 'development', ENVIRONMENT: 'development' },
+        session,
         true
-      )
-    );
+      );
+    });
     const refused = await refusal(
       replaceRecoveryKey(
         { ...laptop, api },

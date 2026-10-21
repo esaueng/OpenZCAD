@@ -1,3 +1,4 @@
+import { admitDevelopmentE2eeWrite } from '../../apps/web/worker/e2eeWriteAuthorization';
 import { expect, type BrowserContext, type Page } from '@playwright/test';
 import type { DatabaseSync } from 'node:sqlite';
 import {
@@ -60,15 +61,18 @@ export function createE2eeServer({ enabled = true } = {}): E2eeServer {
   return server;
 }
 
-function call(
+async function call(
   server: E2eeServer,
   path: string,
   init: RequestInit = {}
 ): Promise<Response> {
+  const env = { DB: d1Database(server.db), AUTH_MODE: 'development', ENVIRONMENT: 'development' };
+  const session = { userId: E2E_USER_ID };
+  if (server.enabled && !['GET', 'HEAD', 'OPTIONS'].includes(init.method ?? 'GET')) await admitDevelopmentE2eeWrite(env.DB, session);
   return handleE2eeRequest(
     new Request(`https://zcad.test${path}`, init),
-    { DB: d1Database(server.db) },
-    { userId: E2E_USER_ID },
+    env,
+    session,
     server.enabled
   );
 }
