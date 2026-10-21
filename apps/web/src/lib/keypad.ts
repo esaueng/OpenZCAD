@@ -40,7 +40,12 @@ export interface KeypadExclusion {
   width: number;
 }
 
-/** Widest gap left of / right of the excluded band that can hold the keypad. */
+/**
+ * The widest gap the excluded bands leave that can hold the keypad. The gaps
+ * are what no band covers: the bands are merged first, so neither a band's
+ * own interior nor the overlap of two bands (the right lane's inspector and
+ * the panel under it share their whole width) ever reads as free room.
+ */
 function horizontalRange(
   size: KeypadSize,
   viewport: KeypadSize,
@@ -53,18 +58,24 @@ function horizontalRange(
       VIEWPORT_MARGIN
     )
   };
+  const bands = exclusions
+    .filter((band) => band.width > 0)
+    .map((band) => ({ start: band.x, end: band.x + band.width }))
+    .sort((a, b) => a.start - b.start);
+  const gaps: Array<{ start: number; end: number }> = [];
+  let free = 0;
+  for (const band of bands) {
+    if (band.start > free) {
+      gaps.push({ start: free, end: band.start });
+    }
+    free = Math.max(free, band.end);
+  }
+  gaps.push({ start: free, end: viewport.width });
   let best = full;
   let bestWidth = -1;
-  const edges = [
-    0,
-    ...exclusions.flatMap((band) => [band.x, band.x + band.width]),
-    viewport.width
-  ];
-  for (let index = 0; index < edges.length - 1; index += 1) {
-    const gapStart = Math.max(edges[index] ?? 0, 0) + VIEWPORT_MARGIN;
-    const gapEnd =
-      Math.min(edges[index + 1] ?? viewport.width, viewport.width) -
-      VIEWPORT_MARGIN;
+  for (const gap of gaps) {
+    const gapStart = Math.max(gap.start, 0) + VIEWPORT_MARGIN;
+    const gapEnd = Math.min(gap.end, viewport.width) - VIEWPORT_MARGIN;
     const usable = gapEnd - gapStart;
     // A gap that cannot hold the keypad is not a placement, it is a squeeze.
     if (usable >= size.width && usable > bestWidth) {

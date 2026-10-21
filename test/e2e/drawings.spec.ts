@@ -3,7 +3,7 @@ import {
   test,
   expect,
   stubApi,
-  selectBodyFromItems
+  selectBodyFromObjects
 } from './openzcad-fixtures';
 
 /**
@@ -338,7 +338,7 @@ test('starts a sheet from the bodies on screen, not the export scope', async ({
   }
   // Hide Upper. The export scope still includes hidden bodies by default
   // (the mesh dialog's choice); a new drawing shows what is on screen.
-  await selectBodyFromItems(page, 'Upper');
+  await selectBodyFromObjects(page, 'Upper');
   await page
     .locator('.body-row', { hasText: 'Upper' })
     .getByRole('button', { name: /^Hide body / })

@@ -6,7 +6,7 @@ import {
   loftedHollowDuct,
   upperDuctSectionEdit
 } from '../fixtures/lofted-hollow-duct';
-import { expect, test, stubApi } from './openzcad-fixtures';
+import { expect, test, stubApi, revealModelPanel } from './openzcad-fixtures';
 
 /**
  * Production QA CAD-002 (2026-10-11): narrowing a shelled loft's upper section
@@ -44,9 +44,7 @@ async function createProject(page: Page, name: string) {
 }
 
 async function bodyReadout(page: Page, bodyName: RegExp) {
-  const bodies = page.getByRole('button', { name: /^Objects \d/ });
-  if ((await bodies.getAttribute('aria-expanded')) === 'false')
-    await bodies.click();
+  await revealModelPanel(page, 'Objects');
   await page
     .locator('.body-row:not(.consumed) .body-row-main', { hasText: bodyName })
     .click();

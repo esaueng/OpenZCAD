@@ -2,7 +2,7 @@ import type { Page } from '@playwright/test';
 import {
   expect,
   expectBodyCount,
-  revealModelDrawer,
+  revealModelPanel,
   stubApi,
   test
 } from './openzcad-fixtures';
@@ -51,12 +51,14 @@ test('refuses a history reorder that breaks a later feature', async ({
   test.setTimeout(180_000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await stubApi(page);
+  // History docked alone: a drag between two rows needs both on screen, and
+  // a fifth of a five-panel column scrolled the target away mid-drag.
+  await stubApi(page, { panelLayout: { right: [['history']] } });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await page.getByRole('button', { name: /Mounting Bracket/ }).click();
   await expectBodyCount(page, 1);
-  await revealModelDrawer(page);
+  await revealModelPanel(page);
   const order = () => historyOrder(page);
   await expect.poll(order, { timeout: 30_000 }).toEqual(DEMO_ORDER);
 

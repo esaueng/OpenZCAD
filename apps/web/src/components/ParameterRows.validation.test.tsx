@@ -118,3 +118,39 @@ it('shows the refusing feature inline without requiring the activity log', async
   expect(input).toHaveValue('58');
   expect(screen.queryByRole('button', { name: 'View details' })).toBeNull();
 });
+
+it('cancels a live preview when the row unmounts mid-edit', async () => {
+  const user = userEvent.setup();
+  const onPreview = vi.fn();
+  const onSet = vi.fn();
+  const { unmount } = render(
+    <ParameterRow
+      parameter={parameter()}
+      value={58}
+      onSet={onSet}
+      onPreview={onPreview}
+    />
+  );
+  const input = screen.getByLabelText('Expression for holder_height');
+  await user.clear(input);
+  await user.type(input, '62');
+  expect(onPreview).toHaveBeenLastCalledWith('holder_height', '62');
+  // React fires no blur on unmount: the row's own cleanup ends the preview.
+  unmount();
+  expect(onPreview).toHaveBeenLastCalledWith('holder_height', null);
+  expect(onSet).not.toHaveBeenCalled();
+});
+
+it('leaves the preview alone when an untouched row unmounts', () => {
+  const onPreview = vi.fn();
+  const { unmount } = render(
+    <ParameterRow
+      parameter={parameter()}
+      value={58}
+      onSet={vi.fn()}
+      onPreview={onPreview}
+    />
+  );
+  unmount();
+  expect(onPreview).not.toHaveBeenCalled();
+});

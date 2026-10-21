@@ -3,13 +3,8 @@ import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { FeatureId, FeatureNode } from '@openzcad/shared';
-import {
-  HistoryFindToggle,
-  HistoryPanel,
-  historyCount,
-  historyScrub,
-  useHistoryFind
-} from './HistoryPanel';
+import { HistoryFindToggle, HistoryPanel, historyCount } from './HistoryPanel';
+import { useHistoryFind } from './panelViews';
 
 function feature(index: number): FeatureNode {
   return {
@@ -75,19 +70,8 @@ describe('HistoryPanel', () => {
     expect(document.activeElement).toBe(toggle);
   });
 
-  it('counts features and summarises where the history sits', () => {
-    const features = [feature(1), feature(2), feature(3)];
-    expect(historyCount(features)).toBe(3);
-    expect(
-      historyScrub({ features: [], selectedFeatureNodeId: null })
-    ).toBeUndefined();
-    const { container } = render(
-      <>{historyScrub({ features, selectedFeatureNodeId: 'node-2' })}</>
-    );
-    expect(container.querySelector('.history-scrub')).toHaveAttribute(
-      'title',
-      'Step 2 of 3: Feature 2'
-    );
-    expect(container).toHaveTextContent('3 features · at Feature 2');
+  it('counts features', () => {
+    expect(historyCount([])).toBe(0);
+    expect(historyCount([feature(1), feature(2), feature(3)])).toBe(3);
   });
 });
