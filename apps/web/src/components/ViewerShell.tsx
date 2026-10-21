@@ -212,6 +212,11 @@ interface ViewerShellProps {
   orientationRef: MutableRefObject<((axes: AxisProjection) => void) | null>;
   selectionFilter: SelectionFilter;
   onBoxSelect(bodyIds: string[]): void;
+  /** See `ModelViewerProps.onBoxSelectTopology`. */
+  onBoxSelectTopology?(
+    selections: TopologySelection[],
+    kind: 'face' | 'edge'
+  ): void;
   onSelectEdgeChain(selections: TopologySelection[]): void;
   onSelectTopology(
     selection: TopologySelection | null,
@@ -350,6 +355,10 @@ interface ViewerShellProps {
   savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
+  /** Perspective field of view, degrees (Settings › Viewport). */
+  fieldOfView?: number;
+  /** Face opacity in X-ray, 0–1 (Settings › Viewport). */
+  xrayOpacity?: number;
   sectionRange: { min: number; max: number } | null;
   onToggleSection(): void;
   onSectionPlane(plane: SectionPlaneId): void;
@@ -413,6 +422,7 @@ export function ViewerShell({
   onSelectEdgeChain,
   selectionFilter,
   onBoxSelect,
+  onBoxSelectTopology,
   offsetHandle,
   onOffsetPreview,
   onOffsetCommit,
@@ -483,6 +493,8 @@ export function ViewerShell({
   savedViews,
   onCycleDisplayMode,
   onToggleProjection,
+  fieldOfView,
+  xrayOpacity,
   sectionRange,
   onToggleSection,
   onSectionPlane,
@@ -679,6 +691,9 @@ export function ViewerShell({
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
         onBoxSelect={onBoxSelect}
+        {...(onBoxSelectTopology ? { onBoxSelectTopology } : {})}
+        {...(fieldOfView !== undefined ? { fieldOfView } : {})}
+        {...(xrayOpacity !== undefined ? { xrayOpacity } : {})}
         offsetHandle={offsetHandle ?? datumOffsetTarget}
         onOffsetPreview={
           datumOffsetTarget && datumHandle

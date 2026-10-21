@@ -251,11 +251,18 @@ export function updateSectionCap(
     cap.material.copy(mesh.material);
     cap.material.clippingPlanes = null;
     cap.material.side = THREE.DoubleSide;
-    // Hover animation updates emissive between section applications.
+    // Hover animation updates emissive, and X-ray or appearance changes
+    // update blending, between section applications.
     cap.onBeforeRender = () => {
-      cap.material.color.copy(mesh.material.color);
-      cap.material.emissive.copy(mesh.material.emissive);
-      cap.material.opacity = mesh.material.opacity;
+      const target = cap.material;
+      const source = mesh.material;
+      target.color.copy(source.color);
+      target.emissive.copy(source.emissive);
+      if (target.transparent !== source.transparent) target.needsUpdate = true;
+      target.opacity = source.opacity;
+      target.transparent = source.transparent;
+      target.depthWrite = source.depthWrite;
+      target.stencilWrite = source.stencilWrite;
     };
   }
 }

@@ -117,10 +117,9 @@ function applyTypedBlend(
  * result under, returning `null` when the kernel refused or produced a body
  * this adapter will not accept.
  *
- * This is the single definition of "the edit worked". The failure classifier
- * probes through it too, so a probe can never accept a result the real edit
- * would have rejected — which is exactly how a truthful "try a smaller size"
- * turns into a lie.
+ * The failure classifier probes through these same acceptance rules. A
+ * recommendation additionally requires a typed exact result; scalar
+ * acceptance checks alone do not qualify an approximate probe.
  */
 export function applyEdgeModifier(
   kernel: RemusKernel,
@@ -150,13 +149,41 @@ export function applyEdgeModifier(
    * edge borders, with `size` on the first. Absent runs the symmetric (or
    * distance-angle) chamfer.
    */
-  chamferSecondDistance?: number
+  chamferSecondDistance?: number,
+  /** Diagnostic probes require an exact result before applying these guards. */
+  requireExactResult = false
 ): number | null {
   const targetBounds = kernel.boundingBox(target);
   const handles = Uint32Array.from(selected);
   let modified: number;
   let evolution: FaceEvolutionPayloadV1 | undefined;
-  if (featureKind === 'fillet') {
+  if (requireExactResult) {
+    // The ladder and its refinement recommend constant blends. Keep the
+    // requested edit's existing policy separate from this stronger proof.
+    if (variableRadius || chamferSecondDistance !== undefined) {
+      return null;
+    }
+    try {
+      const detailed =
+        featureKind === 'fillet'
+          ? kernel.filletDetailed(target, handles, size, true)
+          : chamferAngleRadians === undefined
+            ? kernel.chamferDetailed(target, handles, size, true)
+            : kernel.chamferDistanceAngleDetailed(
+                target,
+                handles,
+                size,
+                chamferAngleRadians,
+                true
+              );
+      if (detailed.status !== 'ok' || detailed.details?.quality !== 'exact') {
+        return null;
+      }
+      modified = detailed.value;
+    } catch {
+      return null;
+    }
+  } else if (featureKind === 'fillet') {
     try {
       if (variableRadius) {
         // No evolution entry point exists for the variable blend, so a
@@ -424,8 +451,8 @@ export function chamferLadderAim(
 }
 
 /**
- * The largest size on the ladder at which this selection is ACCEPTED, or
- * `null` when none is — the only sound evidence that a failure is size-bound
+ * The largest size on the ladder at which this selection is accepted as an
+ * exact result, or `null` when none is — the evidence that a failure is size-bound
  * rather than structural. Runs on the failure path only.
  *
  * `chamferAngleRadians` is the bevel angle the user asked for, and the ladder
@@ -487,7 +514,10 @@ export function acceptedEdgeModifierProbe(
           probe,
           undefined,
           undefined,
-          angle
+          angle,
+          undefined,
+          undefined,
+          true
         ) !== null
       ) {
         return probe;
@@ -513,8 +543,8 @@ function refineStep(accepted: number, refused: number): number {
 }
 
 /**
- * Raises a probed size that builds toward the refused one and returns the
- * largest size proved to build.
+ * Raises an exact probed size toward the refused one and returns the
+ * largest size proved to build exactly.
  *
  * The ladder alone answers in coarse fractions of the request — a half, an
  * eighth — so a 6 mm plate that refused r5 was told "radius 2.5 builds
@@ -567,7 +597,10 @@ export function refineAcceptedEdgeModifierSize(
           size,
           undefined,
           undefined,
-          angle
+          angle,
+          undefined,
+          undefined,
+          true
         ) !== null;
     } catch {
       // A throw is a refusal like any other.
