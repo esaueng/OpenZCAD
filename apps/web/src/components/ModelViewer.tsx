@@ -2786,15 +2786,18 @@ export function ModelViewer({
     });
     observer.observe(host);
 
-    // A handle's value chip is placed when the scene draws, clear of the
-    // model panels over the stage; a panel moving over it (a window dragged
-    // or resized, a column docked) draws again so the chip moves too. The
-    // dock's layer comes and goes with the mode, so the area is watched for
-    // it and the layer for its panels' moves.
+    // A handle's value chip and the selection callouts are placed when the
+    // scene draws, clear of the model panels over the stage; a panel moving
+    // over them (a window dragged or resized, a column docked) draws again
+    // so they move too. The dock's layer comes and goes with the mode, so
+    // the area is watched for it and the layer for its panels' moves.
     const viewerArea = host.closest('.viewer-area');
     let watchedLayer: Element | null = null;
     const panelObserver = new MutationObserver(() => {
-      if (offsetChipRef.current && !offsetChipRef.current.hidden) {
+      if (
+        (offsetChipRef.current && !offsetChipRef.current.hidden) ||
+        host.querySelector(`.${SELECTION_CALLOUT_CHIP_CLASS}`)
+      ) {
         requestRender();
       }
     });

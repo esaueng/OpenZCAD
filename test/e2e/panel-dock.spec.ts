@@ -618,6 +618,20 @@ for (const [label, layout] of [
       width: 1280,
       height: 720
     });
+    // The rail slides in 16px from the right as the workspace enters
+    // (`mode-in-right`); read at the slide's start, a button's right edge
+    // was 1281px instead of the 1265px it lands at. Measure once it has
+    // landed: two reads in a row agree.
+    const rail = page.locator('.instrument-rail');
+    let landed = '';
+    await expect
+      .poll(async () => {
+        const at = JSON.stringify(await rail.boundingBox());
+        const settled = at === landed;
+        landed = at;
+        return settled;
+      })
+      .toBe(true);
     const buttons = page.locator('.instrument-rail button');
     const count = await buttons.count();
     expect(count).toBeGreaterThan(10);
@@ -849,9 +863,18 @@ test('a stored dock shows one panel in the lane at a 720px stage and docks at 72
     .getAttribute('aria-label');
   const other = shown === 'History' ? 'Parameters' : 'History';
   await railPanelButton(page, other).click();
-  await expect(
-    page.locator('.panel-lane-float').getByRole('region', { name: other })
-  ).toBeVisible();
+  const laneRegion = page
+    .locator('.panel-lane-float')
+    .getByRole('region', { name: other });
+  await expect(laneRegion).toBeVisible();
+  // Its saved dock stands: the lane's Pin reads unpinned, and a press is
+  // refused rather than unpinning it out of the column.
+  const pin = laneRegion.getByRole('button', { name: `Pin ${other}` });
+  await expect(pin).toHaveAttribute('aria-pressed', 'false');
+  await pin.click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Panels do not dock at this width'
+  );
   await page.setViewportSize({ width: 721, height: 800 });
   await expect(page.locator('.panel-column')).toBeVisible();
   expect(await dockedTitles(page)).toEqual([['History', 'Parameters']]);

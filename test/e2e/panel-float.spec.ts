@@ -5,6 +5,7 @@ import {
   modelPanel,
   promptField,
   railPanelButton,
+  selectBodyFromObjects,
   stubApi,
   test,
   type SeedPanelLayout
@@ -256,6 +257,91 @@ test('a floating window moves on its grip’s arrow keys and resizes with Shift 
   ]);
 });
 
+test('a gap drag or a window resize the page loses is cancelled, and the next one works', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Lost gestures', {
+    ...LONE_WINDOW,
+    right: [['history', 'bodies']]
+  });
+  const stored = () =>
+    page.evaluate(() => {
+      const raw = window.localStorage.getItem('openzcad-panel-layout:v1');
+      const layout = JSON.parse(raw ?? '{}') as {
+        weights: Record<string, number>;
+        floats: unknown[];
+      };
+      return { weights: layout.weights, floats: layout.floats };
+    });
+  const before = await stored();
+  const history = modelPanel(page, 'History');
+  const floating = windowOf(page, 'Parameters');
+  const gap = page.getByRole('separator', {
+    name: 'Resize History and Objects'
+  });
+  const corner = floating.getByRole('button', {
+    name: 'Resize Parameters window'
+  });
+  const heights = async () => (await box(history)).height;
+  const width = async () => (await box(floating)).width;
+  const startHeight = await heights();
+  const startWidth = await width();
+
+  // Each gesture is pressed and moved, then the page loses its pointer
+  // (capture taken from the element holding it, or the window's blur).
+  const gestures = [
+    { control: gap, dx: 0, dy: 60, read: heights, rest: startHeight },
+    { control: corner, dx: 80, dy: 0, read: width, rest: startWidth }
+  ];
+  const losses = [
+    (control: Locator) =>
+      control.evaluate((element) =>
+        element.dispatchEvent(
+          new PointerEvent('lostpointercapture', { pointerId: 1 })
+        )
+      ),
+    () => page.evaluate(() => globalThis.dispatchEvent(new Event('blur')))
+  ];
+  for (const gesture of gestures) {
+    for (const lose of losses) {
+      const handle = await box(gesture.control);
+      const from = {
+        x: handle.x + handle.width / 2,
+        y: handle.y + handle.height / 2
+      };
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(from.x + gesture.dx, from.y + gesture.dy, {
+        steps: 6
+      });
+      await expect.poll(gesture.read).toBeGreaterThan(gesture.rest + 20);
+      await lose(gesture.control);
+      // Back as it was, and the release that follows commits nothing.
+      await expect.poll(gesture.read).toBeCloseTo(gesture.rest, 0);
+      await page.mouse.up();
+      expect(await gesture.read()).toBeCloseTo(gesture.rest, 0);
+      expect(await stored()).toEqual(before);
+    }
+  }
+
+  // Nothing is left holding a gesture: the next ones resize and commit.
+  for (const gesture of gestures) {
+    const handle = await box(gesture.control);
+    const from = {
+      x: handle.x + handle.width / 2,
+      y: handle.y + handle.height / 2
+    };
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x + gesture.dx, from.y + gesture.dy, {
+      steps: 6
+    });
+    await page.mouse.up();
+    await expect.poll(gesture.read).toBeGreaterThan(gesture.rest + 20);
+  }
+  expect(await stored()).not.toEqual(before);
+});
+
 /** The panels' windows from the bottom of the stack to the top. */
 function zOrder(page: Page) {
   return page.locator('.panel-float').evaluateAll((windows) =>
@@ -473,4 +559,48 @@ test('a window floated over a live handle leaves its value chip clear and reacha
       { x: after.x + after.width / 2, y: after.y + after.height / 2 }
     )
   ).toBe(true);
+});
+
+test('a window dropped over a selection callout moves the callout clear', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Callout clear', { right: [] });
+  await page.getByRole('button', { name: /^Box \(B\)/ }).click();
+  await page
+    .getByRole('region', { name: 'Feature inspector' })
+    .getByRole('button', { name: /^Create/ })
+    .click();
+  await expectBodyCount(page, 1);
+  await page.keyboard.press('Escape');
+  // A body picked from its row: a callout with no handle's value chip, so
+  // nothing but the panel layer can ask the scene to place it again.
+  await selectBodyFromObjects(page);
+  const callout = page.locator('.selection-callout-chip');
+  await expect(page.locator('.handle-value-chip:not([hidden])')).toHaveCount(0);
+  await modelPanel(page, 'Objects')
+    .getByRole('button', { name: 'Pop out Objects' })
+    .click();
+  const window = windowOf(page, 'Objects');
+  await expect(window).toBeVisible();
+  const before = await box(callout);
+  expect(overlaps(before, await box(window))).toBe(false);
+
+  const heading = await box(
+    modelPanel(page, 'Objects').locator('.model-panel-title')
+  );
+  const centre = {
+    x: before.x + before.width / 2,
+    y: before.y + before.height / 2
+  };
+  await page.mouse.move(heading.x + 24, heading.y + heading.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(heading.x + 40, heading.y + 30, { steps: 3 });
+  await page.mouse.move(centre.x - 60, centre.y - 40, { steps: 12 });
+  await page.mouse.up();
+  // The window now stands where the callout was, and the callout steps out.
+  expect(overlaps(await box(window), before)).toBe(true);
+  await expect(callout).toBeVisible();
+  await expect
+    .poll(async () => overlaps(await box(callout), await box(window)))
+    .toBe(false);
 });
