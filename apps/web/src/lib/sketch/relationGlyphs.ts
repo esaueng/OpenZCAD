@@ -56,6 +56,12 @@ export interface SketchRelationGlyphChip {
    * the curves meeting at a point. The viewer projects it every frame.
    */
   normal: Point;
+  /**
+   * A point chip's room either side of `normal`, in radians: half the gap
+   * between the curves meeting there. Its sideways candidates stay well
+   * inside it, so a chip never swings onto a curve. Absent is half a turn.
+   */
+  halfGap?: number;
   glyphs: SketchRelationGlyph[];
 }
 
@@ -242,13 +248,11 @@ export function sketchRelationGlyphs(
   });
   pointGlyphs.forEach(({ anchor, glyph }, index) => {
     const cluster = clusters[index]!;
-    place(
-      `point:${cluster}`,
-      'point',
-      anchor,
-      widestGap(directions.get(cluster) ?? []),
-      glyph
-    );
+    const key = `point:${cluster}`;
+    const fresh = !chips.has(key);
+    const gap = widestGapOf(directions.get(cluster) ?? []);
+    place(key, 'point', anchor, gap.normal, glyph);
+    if (fresh) chips.get(key)!.halfGap = gap.halfGap;
   });
   return orderedChips([...chips.values()]);
 }
@@ -280,11 +284,21 @@ const DEFAULT_POINT_NORMAL: Point = { x: Math.SQRT1_2, y: -Math.SQRT1_2 };
  * one side of a line passing straight through.
  */
 export function widestGap(directions: readonly Point[]): Point {
+  return widestGapOf(directions).normal;
+}
+
+/** {@link widestGap}'s bisector, with half the gap's width in radians. */
+export function widestGapOf(directions: readonly Point[]): {
+  normal: Point;
+  halfGap: number;
+} {
   const angles = directions
     .filter(({ x, y }) => Math.hypot(x, y) > 1e-12)
     .map(({ x, y }) => Math.atan2(y, x))
     .sort((a, b) => a - b);
-  if (angles.length === 0) return DEFAULT_POINT_NORMAL;
+  if (angles.length === 0) {
+    return { normal: DEFAULT_POINT_NORMAL, halfGap: Math.PI };
+  }
   let bestGap = -1;
   let bestStart = 0;
   for (let index = 0; index < angles.length; index += 1) {
@@ -298,7 +312,10 @@ export function widestGap(directions: readonly Point[]): Point {
     }
   }
   const angle = bestStart + bestGap / 2;
-  return { x: Math.cos(angle), y: Math.sin(angle) };
+  return {
+    normal: { x: Math.cos(angle), y: Math.sin(angle) },
+    halfGap: bestGap / 2
+  };
 }
 
 /** Each line and arc end, with the unit direction the curve leaves it in. */

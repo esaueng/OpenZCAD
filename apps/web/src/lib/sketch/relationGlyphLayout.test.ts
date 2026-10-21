@@ -179,6 +179,33 @@ describe('relation glyph layout', () => {
     }
   });
 
+  it('swings a point chip only within its gap', () => {
+    // A six-way junction: 30° either side of the bisector (straight up).
+    // Its first spot is taken, so it must swing, but no further than half
+    // way to the curves either side, never onto one.
+    const halfGap = Math.PI / 6;
+    const layout = new RelationGlyphLayout(1);
+    layout.setBlocked([192, 160, 208, 189], 1);
+    layout.set(0, 200, 200, 0, -1, 16, 16, true, true, halfGap);
+    layout.solve(1, 400, 400);
+    expect(layout.shown[0]).toBe(1);
+    const dx = layout.offset[0]!;
+    const dy = layout.offset[1]!;
+    const fromBisector = Math.abs(Math.atan2(dx, -dy));
+    expect(fromBisector).toBeLessThanOrEqual(halfGap / 2 + 1e-9);
+    expect(
+      overlaps(
+        {
+          left: 200 + dx - 8,
+          right: 200 + dx + 8,
+          top: 200 + dy - 8,
+          bottom: 200 + dy + 8
+        },
+        { left: 192, top: 160, right: 208, bottom: 189 }
+      )
+    ).toBe(false);
+  });
+
   it('keeps chips out from under the viewport controls drawn above them', () => {
     const layout = new RelationGlyphLayout(1);
     // A rail covering the chip's preferred spot above the curve.

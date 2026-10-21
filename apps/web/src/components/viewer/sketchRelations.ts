@@ -223,7 +223,8 @@ export function buildSketchRelationGlyphs(
           widths[index]!,
           RELATION_GLYPH_PX,
           chips[index]!.placement === 'point',
-          visible
+          visible,
+          chips[index]!.halfGap
         );
       }
       layout.solve(count, width, height);

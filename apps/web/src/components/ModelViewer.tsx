@@ -9445,6 +9445,9 @@ export function ModelViewer({
       }
       updateDimensionLabels(context, canvasWidth(), canvasHeight());
       labelRenderer.render(scene, context.activeCamera);
+      // Dimension labels settle first: the glyph layout below keeps out of
+      // their boxes, margins included, so it must read this frame's.
+      avoidSketchDimensionOverlays(labelRenderer.domElement);
       // Relation glyphs stand off their geometry in screen space, so they
       // are laid out against this frame's camera; a still frame writes no
       // style and the layout allocates nothing.
@@ -9454,7 +9457,6 @@ export function ModelViewer({
         canvasHeight(),
         sketchDimensionsRef.current
       );
-      avoidSketchDimensionOverlays(labelRenderer.domElement);
       if (cylinderRadiusProxyFrame && import.meta.env.OZ_PERF === '1') {
         mark('cylinder-radius.proxy-frame', {
           latencyMs: Math.max(

@@ -47,19 +47,19 @@ export function relationChipWidth(glyphs: number): number {
 }
 
 // Inputs per chip: anchor x/y, normal x/y (screen, y down), width, height,
-// flags (bit 0 visible, bit 1 point placement).
-const IN = 7;
+// flags (bit 0 visible, bit 1 point placement), and a point chip's half gap.
+const IN = 8;
 const POINT = 2;
 const VISIBLE = 1;
 
 // Candidate moves for a curve chip: along its curve, in chip widths, on the
 // preferred side and then the other.
 const SLIDES = [0, 1, -1, 2, -2] as const;
-// Candidate swings for a point chip, round the bisector of its gap.
-const SWINGS = [0, 0.5, -0.5, 1, -1].map((angle) => ({
-  cos: Math.cos(angle),
-  sin: Math.sin(angle)
-}));
+// Candidate swings for a point chip, round the bisector of its gap, as
+// fractions of its swing step (see `solve`).
+const SWINGS = [0, 0.5, -0.5, 1, -1] as const;
+/** A point chip's widest swing, in radians, however open its gap. */
+const MAX_SWING = 1;
 
 export class RelationGlyphLayout {
   readonly capacity: number;
@@ -139,7 +139,13 @@ export class RelationGlyphLayout {
     width: number,
     height: number,
     point: boolean,
-    visible: boolean
+    visible: boolean,
+    /**
+     * A point chip's room either side of its normal, in radians: half the
+     * gap between the curves meeting there. Its swings stay within half of
+     * it, so a candidate never lands on a curve.
+     */
+    halfGap = Math.PI
   ) {
     const at = index * IN;
     const length = Math.hypot(nx, ny);
@@ -153,6 +159,7 @@ export class RelationGlyphLayout {
     input[at + 4] = width;
     input[at + 5] = height;
     input[at + 6] = (visible ? VISIBLE : 0) | (point ? POINT : 0);
+    input[at + 7] = halfGap;
   }
 
   /**
@@ -208,6 +215,10 @@ export class RelationGlyphLayout {
       const halfW = input[at + 4]! / 2;
       const halfH = input[at + 5]! / 2;
       const point = (flags & POINT) !== 0;
+      // Swing at most half way to the gap's edge (and never past MAX_SWING),
+      // so in a tight junction a chip keeps to the middle of its gap and
+      // steps outward instead of onto a curve.
+      const swingStep = Math.min(MAX_SWING, 0.5 * input[at + 7]!);
       let chosenX = Number.NaN;
       let chosenY = 0;
       let found = false;
@@ -223,9 +234,11 @@ export class RelationGlyphLayout {
             let dx: number;
             let dy: number;
             if (point) {
-              const swing = SWINGS[candidate]!;
-              dx = nx * swing.cos - ny * swing.sin;
-              dy = nx * swing.sin + ny * swing.cos;
+              const angle = SWINGS[candidate]! * swingStep;
+              const cos = Math.cos(angle);
+              const sin = Math.sin(angle);
+              dx = nx * cos - ny * sin;
+              dy = nx * sin + ny * cos;
             } else {
               dx = nx * sign;
               dy = ny * sign;

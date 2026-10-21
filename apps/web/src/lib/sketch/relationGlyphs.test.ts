@@ -6,7 +6,7 @@ import {
   type SketchConstraintData,
   type SketchObjectData
 } from '@openzcad/shared';
-import { sketchRelationGlyphs, widestGap } from './relationGlyphs';
+import { sketchRelationGlyphs, widestGap, widestGapOf } from './relationGlyphs';
 
 const id = (value: string) => value as EntityId;
 let next = 0;
@@ -528,6 +528,39 @@ describe('sketchRelationGlyphs', () => {
       forward.slice(firstObject).every((key) => key.startsWith('object'))
     ).toBe(true);
     expect(forward.slice(0, firstObject)).toEqual(['point:0,0', 'point:20,0']);
+  });
+
+  it('records how much room a point chip has either side of its bisector', () => {
+    // Six lines leaving one point 60° apart: every gap is 60°, so the chip
+    // has 30° either side of its bisector.
+    const spokes = Array.from({ length: 6 }, (_, index) => {
+      const angle = (index * Math.PI) / 3;
+      return {
+        id: `s${index}`,
+        data: {
+          objectKind: 'line' as const,
+          x1: 0,
+          y1: 0,
+          x2: 10 * Math.cos(angle),
+          y2: 10 * Math.sin(angle)
+        }
+      };
+    });
+    const [chip] = sketchRelationGlyphs(
+      spokes,
+      [
+        constraint({
+          constraintKind: 'coincident',
+          a: { objectId: id('s0'), point: 'start' },
+          b: { objectId: id('s1'), point: 'start' }
+        })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    expect(chip!.placement).toBe('point');
+    expect(chip!.halfGap).toBeCloseTo(Math.PI / 6, 12);
+    expect(widestGapOf([]).halfGap).toBe(Math.PI);
   });
 
   it('bisects the widest gap between leaving directions', () => {
