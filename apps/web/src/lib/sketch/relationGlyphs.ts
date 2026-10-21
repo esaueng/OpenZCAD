@@ -12,7 +12,7 @@ import {
 import { objectPolylines } from '../objectPolyline';
 import { constraintReferencesObject } from './constraints';
 import { sketchPointPosition } from './dimensionAnnotations';
-import { sketchObjectGrabPoint } from './session';
+import { sketchObjectGrabPoint, snapTargetsForObject } from './session';
 
 type Point = { x: number; y: number };
 type Resolve = (value: number | string) => number | undefined;
@@ -303,39 +303,45 @@ export function sketchRelationStrokes(
 }
 
 /**
- * Every pickable sketch point as plane-local pairs [x, y, …]: each object's
- * start, end and centre where it has one (line and arc ends, circle, arc
- * and ellipse centres, open-spline ends), each object's grab point (the
- * move handle: a legacy rectangle's or polygon's centre, a text origin) and
- * the sketch origin. Relation glyphs keep clear of them too: a glyph over a
- * centre with no relation of its own would take the pick meant for it.
+ * Every pickable sketch point as plane-local pairs [x, y, …]: the sketch
+ * origin, each object's endpoint and centre snap targets (line, arc and
+ * elliptical-arc ends, a fit spline's every point, shape corners, centres,
+ * a text origin; the same list the snapping offers) and its grab point (the
+ * move handle). Relation glyphs keep clear of them too: a glyph over one
+ * would take the pick or snap meant for it. Midpoints and quadrants are left
+ * out: they lie on the drawn curve, which glyphs already keep clear of.
  */
 export function sketchRelationKeepOuts(
   objects: readonly { data: SketchObjectData }[],
   resolve: Resolve
 ): Float64Array {
-  const scalar = (value: number | string): number | undefined => {
-    const result = resolve(value);
-    return result !== undefined && Number.isFinite(result) ? result : undefined;
+  const strict = (value: unknown): number => {
+    const result = resolve(value as number | string);
+    if (result === undefined || !Number.isFinite(result)) {
+      throw new Error('unresolved');
+    }
+    return result;
   };
   const points: number[] = [0, 0];
   for (const { data } of objects) {
     const from = points.length;
-    for (const name of ['start', 'end', 'center'] as const) {
-      const point = sketchPointPosition(data, name, scalar);
-      if (point) points.push(point.x, point.y);
+    const add = (x: number, y: number) => {
+      for (let at = from; at < points.length; at += 2) {
+        if (points[at] === x && points[at + 1] === y) return;
+      }
+      points.push(x, y);
+    };
+    try {
+      for (const target of snapTargetsForObject(data, strict)) {
+        if (target.kind === 'endpoint' || target.kind === 'center') {
+          add(target.x, target.y);
+        }
+      }
+    } catch {
+      // An object that does not resolve offers no snap targets either.
     }
-    const grab = sketchObjectGrabPoint(data, (value) => {
-      const result = scalar(value as number | string);
-      if (result === undefined) throw new Error('unresolved');
-      return result;
-    });
-    // A circle's grab point is its centre, already listed.
-    let listed = false;
-    for (let at = from; at < points.length; at += 2) {
-      if (points[at] === grab?.x && points[at + 1] === grab?.y) listed = true;
-    }
-    if (grab && !listed) points.push(grab.x, grab.y);
+    const grab = sketchObjectGrabPoint(data, strict);
+    if (grab) add(grab.x, grab.y);
   }
   return Float64Array.from(points);
 }

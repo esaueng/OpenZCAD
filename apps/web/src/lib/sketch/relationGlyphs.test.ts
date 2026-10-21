@@ -804,15 +804,18 @@ describe('sketchRelationGlyphs', () => {
         Math.round(points[index + 1]! * 1e9) / 1e9
       ]);
     }
-    expect(pairs).toEqual([
-      [0, 0],
-      [1, 2],
-      [3, 4],
-      [10, 10],
-      [2, 0],
-      [0, 2],
-      [0, 0]
-    ]);
+    expect(pairs).toEqual(
+      expect.arrayContaining([
+        [0, 0],
+        [1, 2],
+        [3, 4],
+        [10, 10],
+        [2, 0],
+        [0, 2]
+      ])
+    );
+    // Midpoints and quadrants lie on the curves, kept clear as strokes.
+    expect(pairs).not.toContainEqual([2, 3]);
   });
 
   it('keeps the grab points of shapes and text off-curve as well', () => {
@@ -857,12 +860,45 @@ describe('sketchRelationGlyphs', () => {
     for (let index = 0; index < points.length; index += 2) {
       pairs.push([points[index], points[index + 1]]);
     }
-    expect(pairs).toEqual([
-      [0, 0],
-      [5, 6],
-      [-3, 7],
-      [20, 30]
-    ]);
+    expect(pairs).toEqual(
+      expect.arrayContaining([
+        [0, 0],
+        [5, 6],
+        [-3, 7],
+        [20, 30]
+      ])
+    );
+  });
+
+  it('keeps every point a fit spline passes through, not only its ends', () => {
+    const points = sketchRelationKeepOuts(
+      [
+        {
+          data: {
+            objectKind: 'spline',
+            method: 'fit',
+            points: [
+              { x: 0, y: 0 },
+              { x: 10, y: 4 },
+              { x: 20, y: -3 },
+              { x: 30, y: 1 }
+            ]
+          }
+        }
+      ] as { data: SketchObjectData }[],
+      resolve
+    );
+    const pairs = [];
+    for (let index = 0; index < points.length; index += 2) {
+      pairs.push([points[index], points[index + 1]]);
+    }
+    expect(pairs).toEqual(
+      expect.arrayContaining([
+        [10, 4],
+        [20, -3],
+        [30, 1]
+      ])
+    );
   });
 
   it('bisects the widest gap between leaving directions', () => {
