@@ -972,12 +972,13 @@ function buildHelicalSweepFeature(
   }
 }
 
-function buildTransformFeature(
+/** The ordinary and prepared paths must project the same authored transform. */
+function resolveTransformFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
   data: FeatureDataOf<'transform'>
-): void {
-  const { kernel, document, scope, result } = ctx;
+) {
+  const { document, scope, result } = ctx;
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
     throw new Error('Transform target is unavailable.');
@@ -1036,19 +1037,77 @@ function buildTransformFeature(
       z: resolveParamValue(pivot.z, scope, 'pivot Z', document.units)
     }
   );
-  result.shapes.set(
-    resultBodyId,
-    copyShapeWithVerifiedLineage(
-      kernel,
-      target,
-      axisTurn ? composeAffine(authored, axisTurn) : authored,
-      // Both primitive planners convert world-space drags through uniform scale.
-      ['cylinder', 'box'].includes(
-        modifierChainRootPrimitive(document, data.targetBodyId) ?? ''
-      )
-    )
+  const matrix = axisTurn ? composeAffine(authored, axisTurn) : authored;
+  // Both primitive planners convert world-space drags through uniform scale.
+  const allowUniformScale = ['cylinder', 'box'].includes(
+    modifierChainRootPrimitive(document, data.targetBodyId) ?? ''
   );
+  return { target, resultBodyId, matrix, allowUniformScale };
+}
+
+function buildTransformFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'transform'>
+): void {
+  const { kernel, result } = ctx;
+  const { target, resultBodyId, matrix, allowUniformScale } =
+    resolveTransformFeature(ctx, feature, data);
+  const transformed = copyShapeWithVerifiedLineage(
+    kernel,
+    target,
+    matrix,
+    allowUniformScale
+  );
+  result.shapes.set(resultBodyId, transformed);
+  try {
+    if (data.axisRotation) ctx.idleLineageView?.abandon();
+    else
+      ctx.idleLineageView?.transform(
+        kernel,
+        data.targetBodyId,
+        resultBodyId,
+        transformed,
+        matrix,
+        allowUniformScale
+      );
+  } catch {
+    // An unavailable alternate view keeps ordinary exact-mode replay.
+    ctx.idleLineageView?.abandon();
+  }
   if (data.copy) inheritMeshOrigin(result, data.targetBodyId, resultBodyId);
+}
+
+/** Complete alternate metadata after existing prepared geometry reuse. */
+export function completePreparedFeatureLineage(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode
+): void {
+  const view = ctx.idleLineageView;
+  if (!view) return;
+  try {
+    const data = feature.data;
+    if (data.featureKind === 'transform') {
+      if (data.axisRotation) return view.abandon();
+      const { resultBodyId, matrix, allowUniformScale } =
+        resolveTransformFeature(ctx, feature, data);
+      const transformed = ctx.result.shapes.get(resultBodyId);
+      if (!transformed) return view.abandon();
+      view.transform(
+        ctx.kernel,
+        data.targetBodyId,
+        resultBodyId,
+        transformed,
+        matrix,
+        allowUniformScale
+      );
+    } else {
+      view.reused(feature, ctx.result, ctx.kernel, ctx.lineageDemand);
+    }
+  } catch {
+    // Metadata cannot change acceptance of the already verified prepared shape.
+    view.abandon();
+  }
 }
 
 /**
@@ -2121,37 +2180,53 @@ function combineBooleanOperands(
   }
   // M11: a kept input stays live beside the result, its own shape untouched.
   booleanConsumedBodyIds(data).forEach((bodyId) => result.consumed.add(bodyId));
-  result.shapes.set(bodyId, {
-    solids: [solid],
-    lineage: deriveBooleanLineage({
-      evidence:
-        evolutionProbe !== null &&
-        // No lineage demand means a caller that did not opt into the idle
-        // skip (exports, previews, seeding, tests): probe as always.
-        (ctx.lineageDemand === undefined ||
-          booleanEvolutionProbeNeeded(document, feature, ctx.lineageDemand))
-          ? probeBooleanEntityEvolution({
-              kernel,
-              operation: evolutionProbe.operation,
-              a: evolutionProbe.a,
-              b: evolutionProbe.b,
-              shipped: solid,
-              unify: (candidate) =>
-                evolutionProbe.operation === 'fuse'
-                  ? unifyUnionFaces(kernel, candidate)
-                  : unifyBooleanFaces(kernel, candidate),
-              operands: operandLineage
-            })
-          : declinedBooleanEvidence(
-              evolutionProbe === null
-                ? probeDeclined
-                : BOOLEAN_EVOLUTION_SKIPPED_NO_REFERENCE
-            ),
-      producingFeatureId: feature.featureId,
-      operands: operandLineage,
-      resultCandidates: topologyCandidatesForSolid(kernel, solid)
-    })
+  const probeSelected =
+    ctx.lineageDemand === undefined ||
+    booleanEvolutionProbeNeeded(document, feature, ctx.lineageDemand);
+  const evidence =
+    evolutionProbe !== null &&
+    // No lineage demand means a caller that did not opt into the idle
+    // skip (exports, previews, seeding, tests): probe as always.
+    probeSelected
+      ? probeBooleanEntityEvolution({
+          kernel,
+          operation: evolutionProbe.operation,
+          a: evolutionProbe.a,
+          b: evolutionProbe.b,
+          shipped: solid,
+          unify: (candidate) =>
+            evolutionProbe.operation === 'fuse'
+              ? unifyUnionFaces(kernel, candidate)
+              : unifyBooleanFaces(kernel, candidate),
+          operands: operandLineage
+        })
+      : declinedBooleanEvidence(
+          evolutionProbe === null
+            ? probeDeclined
+            : BOOLEAN_EVOLUTION_SKIPPED_NO_REFERENCE
+        );
+  const resultCandidates = topologyCandidatesForSolid(kernel, solid);
+  const lineage = deriveBooleanLineage({
+    evidence,
+    producingFeatureId: feature.featureId,
+    operands: operandLineage,
+    resultCandidates
   });
+  result.shapes.set(bodyId, { solids: [solid], lineage });
+  try {
+    ctx.idleLineageView?.boolean({
+      feature,
+      operands,
+      candidates: operandLineage,
+      resultCandidates,
+      selected: lineage,
+      probeSelected,
+      probeAvailable: evolutionProbe !== null,
+      declined: probeDeclined
+    });
+  } catch {
+    ctx.idleLineageView?.abandon();
+  }
 }
 
 function buildEdgeModifierFeature(
