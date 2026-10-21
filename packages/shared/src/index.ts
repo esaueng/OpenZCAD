@@ -3159,6 +3159,26 @@ export function duplicateProjectName(
   }
 }
 
+/**
+ * An embedded import payload the browser split out of a document it sends
+ * (ADR-024 Phase 1): legacy `stepText`, or a mesh's `vertices`/`indices`.
+ * The document carries the project-asset reference in its place, exactly as
+ * the stored projection does, and the account stores these bytes under that
+ * reference's content-addressed key after checking them against `checksumSha256`.
+ */
+export interface ProjectStorageAssetUpload {
+  kind: 'step-source' | 'mesh-payload';
+  /** SHA-256 of the payload before compression, lowercase hex. */
+  checksumSha256: string;
+  /** Payload bytes before compression. */
+  logicalBytes: number;
+  /** The gzip-compressed payload, base64-encoded. */
+  storedBody: string;
+}
+
+/** Distinct split payloads one document write may carry. */
+export const MAX_PROJECT_STORAGE_ASSET_UPLOADS = 1_000;
+
 export interface CreateProjectRequest {
   name: string;
   units?: UnitSystem;
@@ -3192,6 +3212,13 @@ export interface CreateProjectRequest {
    * pre-Phase 1 contract, kept for one release: the server builds the document.
    */
   initialDocument?: ProjectDocument;
+  /**
+   * With this, the document field is the browser's storage projection: its
+   * embedded import payloads are split out into these uploads (ADR-024
+   * Phase 1). Requests without it are the pre-Phase 1 contract, kept for one
+   * release: the server splits the document itself.
+   */
+  storageAssets?: ProjectStorageAssetUpload[];
 }
 
 export interface CreateProjectResponse {
@@ -3239,6 +3266,13 @@ export interface DuplicateProjectRequest {
    * server copies byte for byte without reading either document.
    */
   importSources?: ImportSourceCopyRef[];
+  /**
+   * With this, the document field is the browser's storage projection: its
+   * embedded import payloads are split out into these uploads (ADR-024
+   * Phase 1). Requests without it are the pre-Phase 1 contract, kept for one
+   * release: the server splits the document itself.
+   */
+  storageAssets?: ProjectStorageAssetUpload[];
 }
 
 /** One archived import source a browser-built copy needs under its own id. */
@@ -3280,6 +3314,13 @@ export interface SaveRevisionRequest {
    * release: the server mints the save point itself.
    */
   savedRevisionId?: RevisionId;
+  /**
+   * With this, the document field is the browser's storage projection: its
+   * embedded import payloads are split out into these uploads (ADR-024
+   * Phase 1). Requests without it are the pre-Phase 1 contract, kept for one
+   * release: the server splits the document itself.
+   */
+  storageAssets?: ProjectStorageAssetUpload[];
 }
 
 /**
@@ -3292,6 +3333,13 @@ export interface SaveProjectDocumentRequest {
   projectId: ProjectId;
   expectedVersion: number;
   document: ProjectDocument;
+  /**
+   * With this, the document field is the browser's storage projection: its
+   * embedded import payloads are split out into these uploads (ADR-024
+   * Phase 1). Requests without it are the pre-Phase 1 contract, kept for one
+   * release: the server splits the document itself.
+   */
+  storageAssets?: ProjectStorageAssetUpload[];
 }
 
 /**
@@ -4001,6 +4049,18 @@ export const MAX_PERSISTED_DOCUMENT_BYTES = 1_500_000;
  * than an R2 object-size limit.
  */
 export const MAX_CLOUD_PROJECT_DOCUMENT_BYTES = 24 * 1024 * 1024;
+
+/**
+ * Largest request body a cloud document write may send: the document ceiling
+ * and 1 MiB of request envelope, plus room for a browser-split write
+ * (ADR-024 Phase 1), whose payloads travel gzip-compressed and base64-encoded
+ * — for bytes gzip cannot shrink, a third larger than inside the document,
+ * plus gzip framing. The document ceiling still applies once it is hydrated.
+ */
+export const MAX_CLOUD_PROJECT_WRITE_BYTES =
+  MAX_CLOUD_PROJECT_DOCUMENT_BYTES +
+  1024 * 1024 +
+  Math.ceil((MAX_CLOUD_PROJECT_DOCUMENT_BYTES * 1.01) / 3);
 
 /** Account limits include projects in the recycle bin until hard deletion. */
 export const MAX_ACCOUNT_PROJECTS = 100;
