@@ -74,6 +74,12 @@ export type ResolvedAnnotation =
       kind: 'radius' | 'diameter';
       center: UV;
       radius: number;
+      /**
+       * A partial arc's projected polyline, flat `[u, v, …]`: arrowheads
+       * land on it rather than anywhere on its full circle. Absent for a
+       * whole circle.
+       */
+      arc?: number[];
       value: number;
       label: string;
     }
@@ -446,6 +452,9 @@ export function resolveDrawingAnnotation(
           kind: annotation.kind,
           center: circle.center,
           radius: circle.radius,
+          ...(isClosed(found.edge)
+            ? {}
+            : { arc: projectedPolyline(view, found.edge) }),
           value,
           // WinAnsi has no diameter sign; Ø (U+00D8) is the usual stand-in.
           label: `${annotation.kind === 'radius' ? 'R' : 'Ø'}${formatDrawingNumber(value, decimals)}`
@@ -698,21 +707,57 @@ function radialLayout(
   const c = toPage(...resolved.center);
   const r = resolved.radius * k;
   const reach = Math.hypot(anchor[0] - c[0], anchor[1] - c[1]);
-  const u: XY =
+  let u: XY =
     reach > 1e-9
       ? [(anchor[0] - c[0]) / reach, (anchor[1] - c[1]) / reach]
       : [1, 0];
+  // A partial arc: the rim point must be on the arc itself. Placed beyond
+  // its sweep, the dimension turns to the arc's nearer end.
+  const arc = resolved.arc
+    ? (() => {
+        const points: XY[] = [];
+        for (let i = 0; i + 1 < resolved.arc.length; i += 2)
+          points.push(toPage(resolved.arc[i]!, resolved.arc[i + 1]!));
+        return points;
+      })()
+    : null;
+  // On the arc: within its chordal sag plus rounding of the circle.
+  const onArc = (p: XY) => {
+    if (!arc) return true;
+    const nearest = nearestOnPolyline(arc, p);
+    return (
+      nearest !== null &&
+      Math.hypot(nearest[0] - p[0], nearest[1] - p[1]) <=
+        Math.max(0.05, 0.02 * r)
+    );
+  };
+  if (arc && arc.length > 1 && !onArc([c[0] + u[0] * r, c[1] + u[1] * r])) {
+    const angleOf = (p: XY) => Math.atan2(p[1] - c[1], p[0] - c[0]);
+    const wanted = Math.atan2(u[1], u[0]);
+    const gap = (p: XY) => {
+      const d = Math.abs(angleOf(p) - wanted) % (2 * Math.PI);
+      return Math.min(d, 2 * Math.PI - d);
+    };
+    const first = arc[0]!;
+    const last = arc[arc.length - 1]!;
+    const end = gap(first) <= gap(last) ? first : last;
+    const length = Math.hypot(end[0] - c[0], end[1] - c[1]);
+    if (length > 1e-9) u = [(end[0] - c[0]) / length, (end[1] - c[1]) / length];
+  }
   const rim: XY = [c[0] + u[0] * r, c[1] + u[1] * r];
   const out = Math.max(r, reach);
   const end: XY = [c[0] + u[0] * out, c[1] + u[1] * out];
   const strokes: SheetStroke[] = [];
   if (resolved.kind === 'diameter') {
     const opposite: XY = [c[0] - u[0] * r, c[1] - u[1] * r];
-    strokes.push(
-      line(opposite, end),
-      arrow(rim, u),
-      arrow(opposite, [-u[0], -u[1]])
-    );
+    // The far arrowhead only where the arc reaches round to it.
+    if (onArc(opposite))
+      strokes.push(
+        line(opposite, end),
+        arrow(rim, u),
+        arrow(opposite, [-u[0], -u[1]])
+      );
+    else strokes.push(line(c, end), arrow(rim, u));
   } else {
     strokes.push(line(c, end), arrow(rim, u));
   }

@@ -1507,6 +1507,54 @@ describe('D02 page and export', () => {
     ).toMatchObject({ ok: true });
   });
 
+  it('lands radial arrowheads on a partial arc, not on its full circle', () => {
+    // A quarter arc of radius 10 about the origin, from +x to +y.
+    const arc: number[] = [];
+    for (let i = 0; i <= 16; i += 1) {
+      const angle = (Math.PI / 2) * (i / 16);
+      arc.push(10 * Math.cos(angle), 10 * Math.sin(angle));
+    }
+    const identity = (u: number, v: number): [number, number] => [u, v];
+    const tips = (
+      kind: 'radius' | 'diameter',
+      anchor: [number, number],
+      withArc = true
+    ) =>
+      layoutAnnotation(
+        {
+          kind,
+          center: [0, 0],
+          radius: 10,
+          value: 10,
+          label: 'R10',
+          ...(withArc ? { arc } : {})
+        },
+        identity,
+        1,
+        anchor
+      )
+        .strokes.filter((stroke) => stroke.filled)
+        .map((stroke) => [stroke.points[0]!, stroke.points[1]!]);
+    const onQuarter = ([x, y]: number[]) =>
+      x! >= -1e-6 && y! >= -1e-6 && Math.abs(Math.hypot(x!, y!) - 10) < 1e-6;
+    // Placed within the sweep: the tip is where the placement points.
+    const inside = tips('radius', [20, 20]);
+    expect(inside).toHaveLength(1);
+    expect(inside[0]![0]).toBeCloseTo(10 / Math.SQRT2, 9);
+    // Placed beyond it (down-left): the tip turns to the arc, never the
+    // blank half of the circle.
+    for (const anchor of [
+      [-20, -5],
+      [5, -20],
+      [-20, 3]
+    ] as [number, number][])
+      expect(tips('radius', anchor).every(onQuarter)).toBe(true);
+    // A quarter never reaches round to the diameter's far side: one tip.
+    expect(tips('diameter', [20, 20])).toHaveLength(1);
+    // A whole circle keeps both.
+    expect(tips('diameter', [20, 20], false)).toHaveLength(2);
+  });
+
   it('exports dimensions and notes in SVG and PDF, byte-stable across a reload', async () => {
     const { document, bodies, sheet } = await dimensioned();
     const context = { projectName: document.name, units: document.units };
