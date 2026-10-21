@@ -446,6 +446,10 @@ import {
   RAIL_PANEL_ORDER
 } from './components/modelPanels/panelMeta';
 import type { ObjectFolderActions } from './components/modelPanels/ObjectsPanel';
+import {
+  PanelsHiddenPill,
+  ViewOptionsMenu
+} from './components/modelPanels/ViewOptionsMenu';
 import type { FeatureHistoryPanel as FeatureHistoryComponent } from './components/FeatureHistoryPanel';
 import type { TweakPanel as TweakPanelComponent } from './components/TweakPanel';
 import type { ViewModeBar as ViewModeBarComponent } from './components/ViewModeBar';
@@ -1424,16 +1428,19 @@ import {
   WORKSPACE_MODE_ORDER
 } from './lib/panelState';
 import {
+  applyPreset,
   closePanel,
   computePanelGeometry,
   isPanelOpen,
   loadPanelLayout,
+  matchingPreset,
   notePanelUsed,
   openPanel,
   panelStatus,
   pinPanel,
   presentPanel,
   savePanelLayout,
+  setOption,
   togglePanel,
   unpinPanel,
   type PanelId,
@@ -20010,6 +20017,17 @@ export function App() {
         return;
       }
       if (event.key === 'Escape') exactEntryQueue.cancel();
+      // Hide all keeps the layout; the panels are Build's, so View and
+      // Tweak leave it as it is.
+      if (global === 'panels-hide-all') {
+        event.preventDefault();
+        if (!modelingLocked) {
+          setPanelLayout((current) =>
+            setOption(current, 'hidden', !current.options.hidden)
+          );
+        }
+        return;
+      }
       if (global === 'command-palette') {
         event.preventDefault();
         setShortcutsOpen(false);
@@ -20803,6 +20821,7 @@ export function App() {
   ): PanelControls => ({
     placement,
     status: panelStatus(panelLayout, id),
+    compact: panelLayout.options.compact,
     // A pin that cannot dock (nothing docks at a phone width, and a new
     // column past the footprint cap is refused) docks nothing: the panel
     // stays where it was and the status line says why.
@@ -22434,12 +22453,39 @@ export function App() {
                       </button>
                     );
                   })}
+                  <ViewOptionsMenu
+                    options={panelLayout.options}
+                    preset={matchingPreset(panelLayout)}
+                    hideShortcut={keymap.label('panels-hide-all')}
+                    onPreset={(preset) =>
+                      setPanelLayout((current) => applyPreset(current, preset))
+                    }
+                    onToggle={(key) =>
+                      setPanelLayout((current) =>
+                        setOption(current, key, !current.options[key])
+                      )
+                    }
+                    onWidth={(width) =>
+                      setPanelLayout((current) =>
+                        setOption(current, 'width', width)
+                      )
+                    }
+                  />
                   <ActivityLogButton
                     logOpen={activityLogOpen}
                     onToggleLog={() => setActivityLogOpen((open) => !open)}
                     logTriggerRef={activityLogTriggerRef}
                   />
                 </div>
+                {panelLayout.options.hidden && (
+                  <PanelsHiddenPill
+                    onShow={() =>
+                      setPanelLayout((current) =>
+                        setOption(current, 'hidden', false)
+                      )
+                    }
+                  />
+                )}
               </>
             }
             dockExtras={
