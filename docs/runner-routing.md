@@ -48,9 +48,13 @@ files, NoNewPrivileges, fresh storage, empty rootless Docker state, mount option
 and exact cgroup limits. The staged `fleet-ci-v3.yml` profile recognizes
 all three Jane slots, each with six CPU equivalents and a 5,000,000,000-byte
 RAM setting. systemd aligns this to whole host pages: 4,999,999,488 bytes on
-a 4 KiB-page host. Each slot has a separate 150 GiB image. Keep new local
-assignments paused until a second PR activates v3 at its landed main commit;
-the old active workflow still expects the legacy two-slot/6-GiB profile.
+a 4 KiB-page host. Each slot has a separate 150 GiB image. The coordinated
+queue rollout applies this same resource profile to the queue-enabled v2
+workflow. Activate that combined workflow at its landed main commit after
+normal checks; keep v3 as a resource-only staging reference. Do not replace
+a queue-enabled caller with a resource-only workflow. Keep new local
+assignments paused until the combined profile and exact runner-group pin
+are active; the old workflow expects the legacy two-slot/6-GiB profile.
 
 John has one CPU equivalent and 3 GiB. Guard failure fails the job.
 Browser suites hold a shared host lock while using fixed localhost test ports.
