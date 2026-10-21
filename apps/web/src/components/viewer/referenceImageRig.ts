@@ -129,16 +129,23 @@ export interface ReferenceTextureRequest {
 
 /**
  * One texture per picture, decoded once and kept while any shown image uses
- * it. `sync` starts the loads a request set needs; a load that comes back
- * empty or fails is forgotten, so the next `sync` naming a different
- * location for the same bytes tries again. `clear` drops every texture and
- * orphans the loads in flight, which then dispose what they decode; the
- * cache stays usable, as a remounted viewer needs it to be.
+ * it. `sync` starts at most one load per picture — however many images place
+ * it, and however many archives hold it, since the loader already tries every
+ * record — and remembers the locations a failed load was tried at, so the
+ * same set is not loaded again but a rewritten artifact id (a device-only
+ * picture archived by its owner) retries. `clear` drops every texture and
+ * orphans the loads in flight, which then dispose what they decode; the cache
+ * stays usable, as a remounted viewer needs it to be.
  */
 export class ReferenceTextureCache {
   readonly textures = new Map<string, THREE.Texture>();
-  private loads = new Set<string>();
+  private loading = new Set<string>();
+  /** Per picture: the locations its last unsuccessful load was tried at. */
+  private failedAt = new Map<string, string>();
   private wanted = new Set<string>();
+  /** Per picture: the locations the latest `sync` named. */
+  private latest = new Map<string, string>();
+  private lastSync: Parameters<ReferenceTextureCache['sync']> | null = null;
   private generation = 0;
 
   constructor(
@@ -152,37 +159,69 @@ export class ReferenceTextureCache {
     load: (checksumSha256: string) => Promise<Blob | null>,
     onReady: () => void
   ): void {
-    this.wanted = new Set(requests.map((request) => request.checksumSha256));
+    const locations = new Map<string, Set<string>>();
+    for (const { checksumSha256, artifactId } of requests) {
+      const known = locations.get(checksumSha256) ?? new Set<string>();
+      known.add(artifactId);
+      locations.set(checksumSha256, known);
+    }
+    this.wanted = new Set(locations.keys());
+    this.lastSync = [requests, load, onReady];
+    this.latest = new Map(
+      [...locations].map(([checksum, ids]) => [
+        checksum,
+        [...ids].sort().join('|')
+      ])
+    );
     for (const [checksum, texture] of this.textures) {
       if (this.wanted.has(checksum)) continue;
       texture.dispose();
       this.textures.delete(checksum);
     }
+    for (const checksum of this.failedAt.keys()) {
+      if (!this.wanted.has(checksum)) this.failedAt.delete(checksum);
+    }
     const generation = this.generation;
-    for (const { checksumSha256, artifactId } of requests) {
-      const key = `${checksumSha256}|${artifactId}`;
-      if (this.textures.has(checksumSha256) || this.loads.has(key)) continue;
-      this.loads.add(key);
-      const loads = this.loads;
+    for (const checksumSha256 of locations.keys()) {
+      const where = this.latest.get(checksumSha256)!;
+      if (
+        this.textures.has(checksumSha256) ||
+        this.loading.has(checksumSha256) ||
+        this.failedAt.get(checksumSha256) === where
+      )
+        continue;
+      this.loading.add(checksumSha256);
+      const loading = this.loading;
+      let retry = false;
+      const failed = () => {
+        if (generation !== this.generation) return;
+        this.failedAt.set(checksumSha256, where);
+        // A sync during this load named new locations and was skipped while
+        // it ran: try them once this load is out of the way.
+        const latest = this.latest.get(checksumSha256);
+        retry = latest !== undefined && latest !== where;
+      };
       void load(checksumSha256)
         .then((bytes) => (bytes ? this.decode(bytes) : null))
-        .then(
-          (texture) => {
-            if (!texture) return;
-            if (
-              generation !== this.generation ||
-              !this.wanted.has(checksumSha256) ||
-              this.textures.has(checksumSha256)
-            ) {
-              texture.dispose();
-              return;
-            }
-            this.textures.set(checksumSha256, texture);
-            onReady();
-          },
-          () => undefined
-        )
-        .finally(() => loads.delete(key));
+        .then((texture) => {
+          if (!texture) return failed();
+          if (
+            generation !== this.generation ||
+            !this.wanted.has(checksumSha256) ||
+            this.textures.has(checksumSha256)
+          ) {
+            texture.dispose();
+            return;
+          }
+          this.failedAt.delete(checksumSha256);
+          this.textures.set(checksumSha256, texture);
+          onReady();
+        }, failed)
+        .finally(() => {
+          loading.delete(checksumSha256);
+          if (retry && generation === this.generation && this.lastSync)
+            this.sync(...this.lastSync);
+        });
     }
   }
 
@@ -190,7 +229,10 @@ export class ReferenceTextureCache {
     this.generation += 1;
     for (const texture of this.textures.values()) texture.dispose();
     this.textures.clear();
-    this.loads = new Set();
+    this.loading = new Set();
+    this.failedAt = new Map();
     this.wanted = new Set();
+    this.latest = new Map();
+    this.lastSync = null;
   }
 }

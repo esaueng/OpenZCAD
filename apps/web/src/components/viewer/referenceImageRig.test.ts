@@ -111,6 +111,7 @@ describe('ReferenceTextureCache', () => {
       onReady
     );
     await flush();
+    expect(load).not.toHaveBeenCalled();
     expect(onReady).not.toHaveBeenCalled();
     // The owner archives it: the rewritten id makes it loadable.
     load.mockResolvedValue(new Blob([new Uint8Array([1])]));
@@ -130,6 +131,56 @@ describe('ReferenceTextureCache', () => {
       onReady
     );
     expect(load).not.toHaveBeenCalled();
+  });
+
+  it('loads a picture placed several times once, whatever its archives', async () => {
+    const decode = vi.fn(async () => new THREE.Texture());
+    const cache = new ReferenceTextureCache(decode);
+    const load = vi.fn(async () => new Blob([new Uint8Array([1])]));
+    cache.sync(
+      [
+        { checksumSha256: sum, artifactId: 'artifact_local_a' },
+        { checksumSha256: sum, artifactId: 'artifact_b' },
+        { checksumSha256: sum, artifactId: 'artifact_c' }
+      ],
+      load,
+      vi.fn()
+    );
+    await flush();
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(decode).toHaveBeenCalledTimes(1);
+    expect(cache.textures.has(sum)).toBe(true);
+  });
+
+  it('retries a picture whose location changed while its load was failing', async () => {
+    const cache = new ReferenceTextureCache(async () => new THREE.Texture());
+    let finish: (blob: Blob | null) => void = () => undefined;
+    const load = vi
+      .fn<(checksum: string) => Promise<Blob | null>>()
+      .mockImplementationOnce(
+        () => new Promise<Blob | null>((done) => (finish = done))
+      )
+      .mockResolvedValue(new Blob([new Uint8Array([1])]));
+    const onReady = vi.fn();
+    cache.sync(
+      [{ checksumSha256: sum, artifactId: 'artifact_local_x' }],
+      load,
+      onReady
+    );
+    // Archived while the first load is still out: skipped for now...
+    cache.sync(
+      [{ checksumSha256: sum, artifactId: 'artifact_cloud' }],
+      load,
+      onReady
+    );
+    expect(load).toHaveBeenCalledTimes(1);
+    // ...and tried as soon as the first load comes back empty.
+    finish(null);
+    await flush();
+    await flush();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(cache.textures.has(sum)).toBe(true);
+    expect(onReady).toHaveBeenCalledTimes(1);
   });
 
   it('drops pictures no image needs, and loads that finish after a clear', async () => {
