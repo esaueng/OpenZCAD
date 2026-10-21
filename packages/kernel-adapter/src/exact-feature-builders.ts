@@ -970,12 +970,13 @@ function buildHelicalSweepFeature(
   }
 }
 
-function buildTransformFeature(
+/** The ordinary and prepared paths must project the same authored transform. */
+function resolveTransformFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
   data: FeatureDataOf<'transform'>
-): void {
-  const { kernel, document, scope, result } = ctx;
+) {
+  const { document, scope, result } = ctx;
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
     throw new Error('Transform target is unavailable.');
@@ -1039,6 +1040,17 @@ function buildTransformFeature(
   const allowUniformScale = ['cylinder', 'box'].includes(
     modifierChainRootPrimitive(document, data.targetBodyId) ?? ''
   );
+  return { target, resultBodyId, matrix, allowUniformScale };
+}
+
+function buildTransformFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'transform'>
+): void {
+  const { kernel, result } = ctx;
+  const { target, resultBodyId, matrix, allowUniformScale } =
+    resolveTransformFeature(ctx, feature, data);
   const transformed = copyShapeWithVerifiedLineage(
     kernel,
     target,
@@ -1062,6 +1074,38 @@ function buildTransformFeature(
     ctx.idleLineageView?.abandon();
   }
   if (data.copy) inheritMeshOrigin(result, data.targetBodyId, resultBodyId);
+}
+
+/** Complete alternate metadata after existing prepared geometry reuse. */
+export function completePreparedFeatureLineage(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode
+): void {
+  const view = ctx.idleLineageView;
+  if (!view) return;
+  try {
+    const data = feature.data;
+    if (data.featureKind === 'transform') {
+      if (data.axisRotation) return view.abandon();
+      const { resultBodyId, matrix, allowUniformScale } =
+        resolveTransformFeature(ctx, feature, data);
+      const transformed = ctx.result.shapes.get(resultBodyId);
+      if (!transformed) return view.abandon();
+      view.transform(
+        ctx.kernel,
+        data.targetBodyId,
+        resultBodyId,
+        transformed,
+        matrix,
+        allowUniformScale
+      );
+    } else {
+      view.reused(feature, ctx.result, ctx.kernel, ctx.lineageDemand);
+    }
+  } catch {
+    // Metadata cannot change acceptance of the already verified prepared shape.
+    view.abandon();
+  }
 }
 
 /**

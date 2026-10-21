@@ -63,18 +63,56 @@ reached. The M5 matched campaign also reports enabled-arm failures of the fixed
 Text-restore assertion. Samples are written before assertions and are retained.
 This revision is not accepted.
 
-The follow-up addresses the excessive fallback without changing those assertions.
+### Independent import follow-up: `6cea4606`
+
+The first follow-up addresses the excessive fallback without changing those assertions.
 Public generated STEP/planar-emboss, canonical sketch and independent extrusion
 fixtures first pass cold eager/idle raw and publication controls. On `d30b589e`,
 the intended restore and real-edit recycling checks fail. Their same-checkpoint
 metadata propagation does not create a detached Text cache. Private lifecycle and
 target-device qualification must be rerun for the follow-up revision.
 
-The follow-up's 23 public cases retain the earlier strict transitions and add the
+Its 23 public cases retain the earlier strict transitions and add the
 Text-prefix/recycling regressions, draft/symmetric/two-sided blind extrusion
 controls, and conservative fallback checks for reference-bound profiles and
 unsupported extrusion operations/extents. The full private and target-device
 requirements remain unchanged.
+
+All five local repository gates, the strict public reproduction and the private
+one-edit oracle pass on this revision. One Linux enabled arm also passes the
+unchanged Text and latency assertions: its first settled edit restores the fixed
+prefix instead of executing Text. This is a single diagnostic arm, not matched
+target-device performance acceptance.
+
+The unchanged private sustained probe still fails replay-budget coverage after
+80 edits. All five raw/publication checkpoints and four forced-eviction comparisons
+match, but 166 syncs create 41 arenas with no replay-budget cycles. Every one of
+the 40 prepared-reuse events is followed by a full rebuild. The existing prepared
+transform path restores valid geometry without completing its alternate lineage;
+the following mode switch therefore loses reuse. This revision is not accepted.
+
+### Prepared transform follow-up
+
+The next follow-up completes alternate lineage after the existing prepared
+transform reuse. Ordinary modeling and metadata completion share the same authored
+matrix resolver, including units, pivot and allowed scaling. Metadata completion
+projects the captured pre-feature lineage onto the already verified cached output;
+it adds no modeling or probe calls. Reference-bound axis transforms still abandon
+the alternate view. Failed metadata completion also abandons that view without
+changing whether prepared geometry is accepted. Prepared-cache eligibility,
+storage, counters and budgets are unchanged.
+
+Two additional public regressions cover prepared reuse across an eager-to-idle
+transition and 180 real parameter edits through an actual replay-budget cycle.
+They retain strict fresh raw/publication equality. The sustained fixture puts its
+fixed Text before the boolean, matching the private recipe, and requires no Text
+execution outside recycling. The first eager request after an idle recycle must
+still replay the boolean suffix: the idle rebuild cannot create a probed eager
+view. The separate transition regression retains Text after the boolean and
+requires prepared reuse followed by complete idle restoration.
+
+Private lifetime and target-device results for the earlier revisions do not
+qualify this follow-up. It requires fresh verification at its committed head.
 
 Target-device acceptance still needs a new quiet M5 Pro campaign on this candidate,
 including the sustained private session and at least three alternating matched

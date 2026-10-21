@@ -157,20 +157,7 @@ export class IdleLineageViewBuilder {
     if (!view || feature.data.featureKind === 'primitive') return;
     try {
       const data = feature.data;
-      if (data.featureKind === 'transform') {
-        const source = this.before.get(data.targetBodyId);
-        const outputId = data.copy ? feature.bodyId : data.targetBodyId;
-        if (
-          !data.axisRotation &&
-          source &&
-          outputId &&
-          view.lineages.get(data.targetBodyId) === source.lineage
-        ) {
-          view.lineages.set(outputId, result.shapes.get(outputId)?.lineage);
-          this.handled.add(outputId);
-          return;
-        }
-      } else if (
+      if (
         data.featureKind === 'boolean' &&
         data.operation === 'intersect' &&
         feature.bodyId

@@ -11,6 +11,7 @@ import {
   findSketch,
   importStepBody,
   listFeaturesInOrder,
+  moveFeature,
   patternBody,
   setParameter,
   transformBody,
@@ -246,6 +247,32 @@ async function importedTextTailDocument(
   } finally {
     kernel.free();
   }
+}
+
+async function preparedBooleanTransformDocument(textBeforeBoolean = false) {
+  const initial = await importedTextTailDocument();
+  const text = listFeaturesInOrder(initial).find(
+    (feature) => feature.name === 'Text'
+  )!;
+  const document = textBeforeBoolean
+    ? moveFeature(initial, { featureId: text.featureId, toIndex: 2 })
+    : initial;
+  const boolean = listFeaturesInOrder(document).find(
+    (feature) => feature.data.featureKind === 'boolean'
+  )!;
+  const transformed = transformBody(document, {
+    name: 'Fixed earlier boolean placement',
+    targetBodyId: boolean.bodyId!,
+    translation: { x: 2, y: 3, z: 1 },
+    rotationDeg: { x: 0, y: 0, z: 90 }
+  }).document;
+  const placement = listFeaturesInOrder(transformed).at(-1)!;
+  // The edited bridge comes before this fixed transform, so its prefix
+  // restore must retain the unchanged boolean's prepared geometry path.
+  return moveFeature(transformed, {
+    featureId: placement.featureId,
+    toIndex: listFeaturesInOrder(document).length - 1
+  });
 }
 
 async function boundExtrusionDocument(
@@ -1176,4 +1203,202 @@ describe('H02 mode-specific cached lineage', { timeout: 120_000 }, () => {
       }
     }
   );
+
+  it('retains the alternate view after actually reusing a fixed transform of an earlier boolean', async () => {
+    let document = await preparedBooleanTransformDocument();
+    const cold = await harness({
+      historyCheckpointLimit: 0,
+      importedStepCacheBytes: 0,
+      measuredShapeCacheBytes: 0
+    });
+    try {
+      await qualify(cold, document, [], 'Prepared placement cold idle control');
+      await qualify(
+        cold,
+        document,
+        undefined,
+        'Prepared placement cold eager control'
+      );
+    } finally {
+      cold.adapter.dispose();
+    }
+    const subject = await harness();
+    try {
+      await qualify(subject, document);
+      document = setParameter(document, {
+        name: 'tail_height',
+        expression: '11'
+      });
+      const beforeEdit = subject.events.length;
+      const completed: string[] = [];
+      await qualify(
+        subject,
+        document,
+        undefined,
+        'Prepared fixed placement edit',
+        completed
+      );
+      expect(subject.events[beforeEdit]).toMatchObject({
+        kind: 'independent-reuse',
+        restored: 4,
+        replayed: 3
+      });
+      expect(
+        subject.events[beforeEdit]!.reusedPreparedFeatures
+      ).toBeGreaterThan(0);
+      expect(completed).not.toContain('Text');
+      const beforeIdle = subject.events.length;
+      await qualify(
+        subject,
+        document,
+        [],
+        'Idle after prepared fixed placement'
+      );
+      expect(subject.events[beforeIdle]).toMatchObject({
+        kind: 'prefix-restore',
+        restored: 8,
+        replayed: 0
+      });
+      assertLineageOwners(subject.adapter);
+      await qualify(subject, document);
+    } finally {
+      subject.adapter.dispose();
+    }
+  });
+
+  it('keeps prepared earlier-boolean placements alive through real edits and replay-budget recycling', async () => {
+    // Match the private recipe's fixed-import prefix. An idle recycle cannot
+    // create probed eager metadata without violating the no-idle-probe rule;
+    // its next eager sync must replay the boolean, while keeping Text restored.
+    let document = await preparedBooleanTransformDocument(true);
+    expect(
+      listFeaturesInOrder(document)
+        .slice(0, 4)
+        .map((feature) => feature.data.featureKind)
+    ).toEqual(['primitive', 'primitive', 'imported-step', 'boolean']);
+    const subject = await harness();
+    const editEvents: RebuildCacheEvent[] = [];
+    const eagerRecoveriesAfterIdleRecycling: number[] = [];
+    let textExecutionsOutsideRecycling = 0;
+    const unexpectedTextEvents: {
+      edit: number;
+      kind: string;
+      restored: number;
+      replayed: number;
+      prepared: number;
+    }[] = [];
+    try {
+      await qualify(subject, document);
+      const originalKernel = cacheState(subject.adapter).historyKernel;
+      for (let edit = 0; edit < 180; edit++) {
+        document = setParameter(document, {
+          name: 'tail_height',
+          expression: String(11 + edit / 10)
+        });
+        const completed: string[] = [];
+        const demand = edit % 2 ? [] : undefined;
+        const result = await subject.adapter.syncDocument(
+          document,
+          (progress) => {
+            if (progress.stage === 'feature' && progress.status === 'completed')
+              completed.push(progress.name);
+          },
+          undefined,
+          undefined,
+          demand === undefined ? undefined : { lineageDemand: demand }
+        );
+        expect(result.warnings).toEqual([]);
+        const event = subject.events.at(-1)!;
+        const afterIdleRecycle =
+          editEvents.at(-1)?.recycleReason === 'replay-budget' &&
+          edit % 2 === 0;
+        if (afterIdleRecycle) eagerRecoveriesAfterIdleRecycling.push(edit);
+        editEvents.push(event);
+        if (event.recycleReason !== 'replay-budget') {
+          const textExecutions = completed.filter(
+            (name) => name === 'Text'
+          ).length;
+          textExecutionsOutsideRecycling += textExecutions;
+          if (textExecutions > 0)
+            unexpectedTextEvents.push({
+              edit,
+              kind: event.kind,
+              restored: event.restored,
+              replayed: event.replayed,
+              prepared: event.reusedPreparedFeatures ?? 0
+            });
+        }
+        if (
+          edit % 45 === 0 ||
+          event.recycleReason === 'replay-budget' ||
+          afterIdleRecycle
+        ) {
+          await qualify(
+            subject,
+            document,
+            demand,
+            'Sustained prepared placement edit'
+          );
+          assertLineageOwners(subject.adapter);
+        }
+      }
+      expect(
+        editEvents.reduce(
+          (sum, event) => sum + (event.reusedPreparedFeatures ?? 0),
+          0
+        ),
+        'The fixed earlier-boolean transform must actually use prepared geometry'
+      ).toBeGreaterThan(0);
+      expect(
+        editEvents.filter((event) => event.recycleReason === 'replay-budget')
+          .length,
+        'Prepared placements must preserve the unchanged replay recycling budget'
+      ).toBeGreaterThan(0);
+      expect(
+        editEvents.filter(
+          (event) => event.kind === 'full-rebuild' && !event.recycleReason
+        )
+      ).toEqual([]);
+      expect(
+        textExecutionsOutsideRecycling,
+        JSON.stringify({
+          unexpectedTextEvents,
+          recycleEdits: editEvents.flatMap((event, edit) =>
+            event.recycleReason === 'replay-budget' ? [edit] : []
+          )
+        })
+      ).toBe(0);
+      expect(eagerRecoveriesAfterIdleRecycling.length).toBeGreaterThan(0);
+      for (const [edit, event] of editEvents.entries()) {
+        if (event.recycleReason === 'replay-budget')
+          expect(event).toMatchObject({
+            kind: 'full-rebuild',
+            restored: 0,
+            replayed: 8
+          });
+        else if (eagerRecoveriesAfterIdleRecycling.includes(edit)) {
+          expect(event).toMatchObject({
+            kind: 'prefix-restore',
+            restored: 3,
+            replayed: 5
+          });
+          expect(event.reusedPreparedFeatures ?? 0).toBe(0);
+        } else {
+          expect(event.restored).toBe(4);
+          expect(event.replayed).toBe(4 - (event.reusedPreparedFeatures ?? 0));
+        }
+      }
+      expect(cacheState(subject.adapter).historyKernel).not.toBe(
+        originalKernel
+      );
+      await qualify(subject, document, []);
+      await qualify(subject, document);
+      assertLineageOwners(subject.adapter);
+      subject.adapter.dispose();
+      expect(cacheState(subject.adapter).historyLineageMetadataBytes).toBe(0);
+      await qualify(subject, document, []);
+    } finally {
+      subject.adapter.dispose();
+    }
+  });
 });

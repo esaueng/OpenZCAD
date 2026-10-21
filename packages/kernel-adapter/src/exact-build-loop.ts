@@ -23,7 +23,10 @@ import type {
   StrictUnionVerdict as BooleanHelperStrictUnionVerdict,
   UnionVerdictsWithMeshBudget
 } from './exact-boolean-helpers';
-import { buildFeature } from './exact-feature-builders';
+import {
+  buildFeature,
+  completePreparedFeatureLineage
+} from './exact-feature-builders';
 import {
   IdleLineageViewBuilder,
   type IdleLineageView
@@ -289,7 +292,7 @@ function* buildDocumentHistorySteps(
           buildFeature(ctx, feature);
           primitiveReuse?.store(index, feature, result);
         } else {
-          idleLineageView?.reused(feature, result, kernel, normalizedDemand);
+          completePreparedFeatureLineage(ctx, feature);
         }
         if (firstSuppressed >= 0 && index > firstSuppressed) {
           withholdReferenceRepairs(result, feature);
