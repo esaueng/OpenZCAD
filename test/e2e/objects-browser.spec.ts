@@ -65,7 +65,7 @@ for (const viewport of [
     await createProject(page, document.name);
     await expect(page).toHaveTitle(/OpenZCAD/);
     await expect(
-      page.getByRole('button', { name: 'Objects 3', exact: true })
+      page.getByRole('heading', { name: 'Objects 3', exact: true })
     ).toBeVisible();
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     const objects = page.getByRole('list', { name: 'Objects' });
@@ -124,7 +124,7 @@ for (const viewport of [
     // The stored section key still opens the renamed section after reload.
     await page.reload();
     await expect(
-      page.getByRole('button', { name: 'Objects 3', exact: true })
+      page.getByRole('heading', { name: 'Objects 3', exact: true })
     ).toBeVisible();
     await expect(
       page.getByRole('combobox', { name: 'Filter objects by type' })

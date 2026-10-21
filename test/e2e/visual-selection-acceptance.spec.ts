@@ -1,5 +1,10 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { stubApi } from './openzcad-fixtures';
+import {
+  MODEL_ONLY,
+  railPanelButton,
+  revealModelPanel,
+  stubApi
+} from './openzcad-fixtures';
 
 interface Point3 {
   x: number;
@@ -448,7 +453,9 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   // failed the whole scenario mid-orbit. 300 s covers the worst run measured
   // under load heavier than CI's, with room to spare.
   test.setTimeout(300_000);
-  await stubApi(page);
+  // The chip checks need the anchor on open stage: a docked column moves the
+  // right lane far enough in that an edge chip under it steps aside.
+  await stubApi(page, { panelLayout: MODEL_ONLY });
   await page.setViewportSize({ width: 1440, height: 1000 });
   const consoleErrors: string[] = [];
   page.on('console', (message) => {
@@ -559,6 +566,7 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   await page.keyboard.press('Delete');
   expect((await readBlend(canvas, 2))?.blendRadius).toBeCloseTo(2, 6);
 
+  await revealModelPanel(page, 'History');
   await page
     .locator('.feature-row', { hasText: 'Lower rim fillet' })
     .locator('.feature-row-main')
@@ -569,6 +577,11 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   await inspector.getByLabel('More actions').click();
   await inspector.getByRole('button', { name: 'Delete feature' }).click();
   await expect(status).not.toContainText(REBUILDING, { timeout: 60_000 });
+  await railPanelButton(page, 'History').click();
+  await expect(railPanelButton(page, 'History')).toHaveAttribute(
+    'aria-pressed',
+    'false'
+  );
   await expect.poll(() => readBlend(canvas, 2), REPUBLISH).toBeNull();
 
   // 5. Dragging streams monotone diameter chips and exact preview topology.

@@ -60,18 +60,6 @@ export const UNSTYLED_ALLOWANCES = [
     classes: ['settings-turnstile-shell'],
     reason:
       'Bare wrapper around the sized .settings-turnstile widget slot and its status line.'
-  },
-  {
-    file: 'apps/web/src/components/Sidebar.tsx',
-    classes: ['revisions'],
-    reason:
-      'Passed to SidebarSection, which composes `sidebar-section ${className}` (Sidebar.tsx:96).'
-  },
-  {
-    file: 'apps/web/src/components/Sidebar.tsx',
-    classes: ['grow'],
-    reason:
-      'Same SidebarSection composition: .sidebar-section.grow is satisfied by the base class the component adds.'
   }
 ];
 

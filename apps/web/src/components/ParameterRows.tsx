@@ -148,6 +148,19 @@ export function ParameterRow({
   const [pending, setPending] = useState(false);
   const nameEditorRef = useRef<HTMLInputElement | null>(null);
   const renameButtonRef = useRef<HTMLButtonElement | null>(null);
+  const onPreviewRef = useRef(onPreview);
+  onPreviewRef.current = onPreview;
+  // A row can unmount with an edit still typed in it (its panel moving across
+  // the phone breakpoint, say) and no blur to commit or cancel it: the model
+  // must not keep previewing a value nobody can see.
+  useEffect(
+    () => () => {
+      if (changedByUser.current) {
+        onPreviewRef.current?.(latestParameter.current.name, null);
+      }
+    },
+    []
+  );
   // Set when Enter or Escape closes the rename editor: the keyboard is here,
   // so focus returns to the name rather than falling to <body>.
   const refocusName = useRef(false);

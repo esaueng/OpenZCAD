@@ -3,7 +3,8 @@ import {
   expect,
   test,
   stubApi,
-  expectConsumedBodyCount
+  expectConsumedBodyCount,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 // Streamed preview frames arrive much later on the 2-core CI runners under
@@ -148,6 +149,23 @@ async function armChamferedTopCapOffset(page: Page) {
     .not.toBeNull();
   const chip = page.getByTestId('direct-manipulation-value');
   await expect(chip).toHaveText('28 mm');
+  // The selection's inspector stands in the right lane, inside the docked
+  // panels, over the right of a model framed before it opened. Fit frames
+  // what it leaves, so the cap's arrow is on the open canvas.
+  await page.keyboard.press('f');
+  let lastHandle = '';
+  await expect
+    .poll(
+      async () => {
+        const at = `${await canvas.getAttribute('data-e2e-handle-x')},${await canvas.getAttribute('data-e2e-handle-y')}`;
+        const still = at === lastHandle;
+        lastHandle = at;
+        return still;
+      },
+      { intervals: [400], timeout: 30_000 }
+    )
+    .toBe(true);
+  await expect(chip).toHaveText('28 mm');
   const handle = await canvas.evaluate((element) => ({
     x: Number(element.dataset.e2eHandleX),
     y: Number(element.dataset.e2eHandleY),
@@ -159,6 +177,13 @@ async function armChamferedTopCapOffset(page: Page) {
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
   const start = { x: bounds!.x + handle.x, y: bounds!.y + handle.y };
+  // Nothing stands over the arrow: the press reaches the canvas.
+  expect(
+    await canvas.evaluate(
+      (element, point) => document.elementFromPoint(point.x, point.y) === element,
+      start
+    )
+  ).toBe(true);
   return {
     canvas,
     chip,
@@ -410,8 +435,8 @@ test('reuses an exact frame on reversal and waits for complete validation on rel
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toContainText('Validating');
-  // A released drag keeps the drawer suspended through validation; opening
-  // it explicitly must still disclose the preview's incomplete analysis.
+  // A released drag keeps the panels suspended through validation; opening
+  // one explicitly must still disclose the preview's incomplete analysis.
   await page
     .getByRole('button', { name: 'Objects panel', exact: true })
     .click();
@@ -613,9 +638,9 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
       .getByRole('region', { name: 'Offset Face operation' })
       .locator('.selection-callout-phase-dot')
   ).toHaveAttribute('aria-label', 'Dragging');
-  // The drag has the stage: the drawer (and its History count) steps aside
-  // until the gesture ends; the count is checked again once it has.
-  await expect(page.locator('.model-drawer-float')).toHaveCount(0);
+  // The drag has the stage: every panel (and the History count) steps
+  // aside until the gesture ends; the count is checked again once it has.
+  await expect(page.locator('.model-panel')).toHaveCount(0);
   expect(await editPresentationMeasures(page)).toEqual(baseMeasures);
 
   // Still holding the button, drive the total below zero. The kernel refuses
@@ -675,7 +700,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect(keypad).toBeHidden();
   await expect(chip).toHaveText('28 mm');
   await expect(chip).toHaveAttribute('data-state', 'ready');
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
 
   const beforeTypedPreview = await editPresentationMeasures(page);
   await chip.click();
@@ -688,7 +713,7 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect(
     keypad.getByRole('button', { name: 'Apply total' })
   ).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   expect(await editPresentationMeasures(page)).toEqual(beforeTypedPreview);
   const beforeApply = await requests();
   await keypad.getByRole('button', { name: 'Apply total' }).click();
@@ -760,7 +785,7 @@ test('keeps the last value that built when a drag is released on a refusal', asy
     .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
     .toBeCloseTo(lastValid, 2);
   // The kept value edits the cylinder's height; no additional feature appears.
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   expect(consoleErrors).toEqual([]);
 });
 
@@ -809,7 +834,7 @@ test('retains the last accepted shape when release validation beats an invalid p
   const card = page.getByRole('region', { name: 'Offset Face operation' });
   await expect(card).toContainText('Failed', { timeout: PREVIEW_BUDGET_MS });
   expect(await readAxisLength()).toBeCloseTo(33, 4);
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await page.evaluate(() =>
     (
       window as typeof window & { facePreviewGate: FacePreviewGate }
@@ -1351,9 +1376,8 @@ for (const surface of ['top-cap', 'wall'] as const) {
       .click();
     await expect(page.getByText('Preparing model details…')).toBeVisible();
     // The preview cannot change history before the complete worker result.
-    await page
-      .getByRole('button', { name: 'History panel', exact: true })
-      .click();
+    // The Objects press brought every panel back, History among them.
+    await revealModelPanel(page, 'History');
     await expect(page.locator('.feature-row')).toHaveCount(2);
     expect(await editPresentationMeasures(page)).toEqual(beforeMeasures);
     await page.evaluate(() =>
