@@ -32,7 +32,7 @@ import { topologyHashOfWitness } from '../packages/kernel-adapter/src/topology-l
  * face belonged to.
  *
  * The feature now drives the kernel's own `linearPattern` / `circularPattern`
- * / `gridPattern`, and an instance face inherits its source face's name with
+ * / `gridPatternJournaled`, and an instance face inherits its source face's name with
  * the instance ordinal in front of it. These pin the names, the entry points
  * actually being called, the arrangement the kernel refuses, and the reason
  * the whole thing exists: a reference on one instance surviving a count
@@ -79,6 +79,30 @@ function row(
     axis: 'x',
     count,
     spacing
+  }).document;
+  return { document, patternId: document.bodyOrder.at(-1)! };
+}
+
+/** Rectangular so the kernel's row order differs from published column order. */
+function grid(spacing = 30, spacing2 = 40) {
+  let document = addPrimitiveFeature(
+    createProjectDocument('Grid lineage', user),
+    {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: CUBE, height: CUBE, depth: CUBE }
+    }
+  );
+  document = patternBody(document, {
+    name: 'Field',
+    patternKind: 'grid',
+    targetBodyId: document.bodyOrder.at(-1)!,
+    axis: 'x',
+    axis2: 'y',
+    count: 3,
+    count2: 2,
+    spacing,
+    spacing2
   }).document;
   return { document, patternId: document.bodyOrder.at(-1)! };
 }
@@ -160,7 +184,7 @@ describe('pattern instance lineage', { timeout: 120_000 }, () => {
 
   it('drives circular and grid patterns through the kernel too', async () => {
     const circular = vi.spyOn(RemusKernel.prototype, 'circularPattern');
-    const grid = vi.spyOn(RemusKernel.prototype, 'gridPattern');
+    const grid = vi.spyOn(RemusKernel.prototype, 'gridPatternJournaled');
     try {
       let document = addPrimitiveFeature(createProjectDocument('Ring', user), {
         name: 'Block',
@@ -246,6 +270,150 @@ describe('pattern instance lineage', { timeout: 120_000 }, () => {
     } finally {
       circular.mockRestore();
       grid.mockRestore();
+    }
+  });
+
+  it.each([
+    [-30, 40],
+    [30, -40],
+    [-30, -40]
+  ])(
+    'keeps signed grid spacing (%s, %s), column order and every face claim',
+    async (spacing, spacing2) => {
+      const journaled = vi.spyOn(RemusKernel.prototype, 'gridPatternJournaled');
+      const legacy = vi.spyOn(RemusKernel.prototype, 'gridPattern');
+      const outputs = vi.spyOn(RemusKernel.prototype, 'resolveOperationOutput');
+      try {
+        const { document, patternId } = grid(spacing, spacing2);
+        const derived = await adapter.syncDocument(document);
+        expect(derived.warnings).toEqual([]);
+        const columnSense = spacing < 0 ? -1 : 1;
+        const rowSense = spacing2 < 0 ? -1 : 1;
+        expect(journaled).toHaveBeenCalledExactlyOnceWith(
+          expect.any(Number),
+          columnSense,
+          0 * columnSense,
+          0 * columnSense,
+          0 * rowSense,
+          rowSense,
+          0 * rowSense,
+          Math.abs(spacing),
+          Math.abs(spacing2),
+          3,
+          2
+        );
+        expect(legacy).not.toHaveBeenCalled();
+        expect(outputs).toHaveBeenCalled();
+        const faces = facesOf(derived, patternId);
+        expect(faces).toHaveLength(36);
+        expect(derived.bodyRepresentations[patternId]!.volume).toBeCloseTo(
+          6 * CUBE ** 3,
+          6
+        );
+        for (let ordinal = 0; ordinal < 6; ordinal += 1) {
+          const column = Math.floor(ordinal / 2);
+          const row = ordinal % 2;
+          const prefix = `pattern.face.instance.${column}-${row}.`;
+          const instanceFaces = faces.slice(ordinal * 6, (ordinal + 1) * 6);
+          expect(
+            instanceFaces.every((face) =>
+              face.reference?.lineageName.startsWith(prefix)
+            )
+          ).toBe(true);
+          const top = planarFace(instanceFaces, { x: 0, y: 0, z: 1 }, CUBE)!;
+          expect(top.reference?.lineageName).toBe(
+            `${prefix}primitive.box.face.z-max`
+          );
+          expect(top.geometry!.center.x).toBeCloseTo(
+            CUBE / 2 + spacing * column,
+            9
+          );
+          expect(top.geometry!.center.y).toBeCloseTo(
+            CUBE / 2 + spacing2 * row,
+            9
+          );
+        }
+      } finally {
+        journaled.mockRestore();
+        legacy.mockRestore();
+        outputs.mockRestore();
+      }
+    }
+  );
+
+  it('checks native-order grid claims against witnesses before publishing column order', async () => {
+    const resolve = RemusKernel.prototype.resolveOperationOutput;
+    // Native block 1 is column 1, row 0; it publishes at ordinal 2. Swapping
+    // two outputs within that block preserves its face set, so layout checks
+    // pass and the exact witnesses must reject the two false associations.
+    const outputs = vi
+      .spyOn(RemusKernel.prototype, 'resolveOperationOutput')
+      .mockImplementation(function (this: RemusKernel, op, kind, index) {
+        return resolve.call(
+          this,
+          op,
+          kind,
+          kind === 'face' && index === 6
+            ? 7
+            : kind === 'face' && index === 7
+              ? 6
+              : index
+        );
+      });
+    try {
+      const { document, patternId } = grid();
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      const faces = facesOf(derived, patternId);
+      expect(faces).toHaveLength(36);
+      const refused = faces.filter((face) => face.reference === undefined);
+      expect(refused).toHaveLength(2);
+      const affected = faces.slice(12, 18);
+      expect(affected.filter((face) => face.reference === undefined)).toEqual(
+        refused
+      );
+      expect(
+        faces.filter((face) =>
+          face.reference?.lineageName.startsWith('pattern.face.instance.1-0.')
+        )
+      ).toHaveLength(4);
+      expect(
+        derived.bodyRepresentations[
+          patternId
+        ]!.topology!.lineageDiagnostics!.filter((diagnostic) =>
+          diagnostic.message.includes(
+            'The pattern journal claimed a different result face'
+          )
+        )
+      ).toHaveLength(2);
+    } finally {
+      outputs.mockRestore();
+    }
+  });
+
+  it('keeps grid cell names and geometry when both axis counts grow', async () => {
+    const { document, patternId } = grid(-30, 40);
+    const initial = await adapter.syncDocument(document);
+    const pattern = listFeaturesInOrder(document).find(
+      (feature) => feature.name === 'Field'
+    )!;
+    const grown = updateFeature(document, {
+      featureId: pattern.featureId,
+      data: { count: 4, count2: 3 }
+    });
+    const rebuilt = await adapter.syncDocument(grown);
+    expect(initial.warnings).toEqual([]);
+    expect(rebuilt.warnings).toEqual([]);
+    const newFaces = facesOf(rebuilt, patternId);
+    expect(newFaces).toHaveLength(72);
+    for (const face of facesOf(initial, patternId)) {
+      const retained = newFaces.find(
+        (candidate) =>
+          candidate.reference?.lineageName === face.reference?.lineageName
+      );
+      expect(face.reference).toBeDefined();
+      expect(retained?.geometry).toEqual(face.geometry);
+      expect(retained?.hash).toBe(face.hash);
     }
   });
 
