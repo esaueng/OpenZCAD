@@ -51,7 +51,16 @@ import {
   toEntityId,
   toShaprImportId,
   type BodyId,
+  type DatumAxisDefinition,
+  type DatumPlaneDefinition,
   type DatumPlaneSource,
+  type DatumPointSource,
+  type TopologyReferenceV5,
+  isFeatureSuppressed,
+  datumPlaneSources,
+  datumPointSources,
+  datumAxisPlaneSources,
+  datumAxisPointSources,
   type EntityId,
   type FeatureId,
   type FeatureNode,
@@ -170,6 +179,12 @@ import {
   type DrawingViewAddInput,
   type DrawingViewUpdateInput,
   type DrawingViewDeleteInput,
+  addDrawingAnnotation,
+  updateDrawingAnnotation,
+  deleteDrawingAnnotation,
+  type DrawingAnnotationAddInput,
+  type DrawingAnnotationUpdateInput,
+  type DrawingAnnotationDeleteInput,
   resolveParamValue,
   resolveSketchInput,
   type RevolveInput,
@@ -210,12 +225,18 @@ import {
   validateModelingPlane
 } from '@openzcad/document-core';
 import {
+  createCadDocumentDigest,
+  validateCadPatchProposalAgainstDigest,
   expandEditCandidateProposal,
   unmodifiedImportedSource,
   sketchObjectExposesDimension,
   isLocalBodyRef,
   normalizeLocalId,
   type CadDatumPlaneSource,
+  type CadDatumPlaneSourceV2,
+  type CadDatumPlaneDefinitionV2,
+  type CadDatumPointSource,
+  type CadDatumAxisDefinition,
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
 import {
@@ -281,7 +302,10 @@ export type CommandKind =
   | 'drawing.sheet.delete'
   | 'drawing.view.add'
   | 'drawing.view.update'
-  | 'drawing.view.delete';
+  | 'drawing.view.delete'
+  | 'drawing.annotation.add'
+  | 'drawing.annotation.update'
+  | 'drawing.annotation.delete';
 
 export interface CommandDefinition<TPayload> {
   kind: CommandKind;
@@ -341,7 +365,10 @@ export type AnyCommand =
   | CommandDefinition<DrawingSheetDeleteInput>
   | CommandDefinition<DrawingViewAddInput>
   | CommandDefinition<DrawingViewUpdateInput>
-  | CommandDefinition<DrawingViewDeleteInput>;
+  | CommandDefinition<DrawingViewDeleteInput>
+  | CommandDefinition<DrawingAnnotationAddInput>
+  | CommandDefinition<DrawingAnnotationUpdateInput>
+  | CommandDefinition<DrawingAnnotationDeleteInput>;
 
 function makeCommand<TPayload>(
   kind: CommandKind,
@@ -1739,7 +1766,9 @@ export const commandFactories = {
         validateBodyTarget(document, payload.targetBodyId);
         if (payload.axisRef) {
           if (payload.patternKind !== 'circular') {
-            throw new Error('Only a circular pattern turns about a datum axis.');
+            throw new Error(
+              'Only a circular pattern turns about a datum axis.'
+            );
           }
           validateDatumAxisRef(document, payload.axisRef, null);
         }
@@ -1956,6 +1985,38 @@ export const commandFactories = {
       payload,
       (document) => deleteDrawingView(document, payload)
     );
+  },
+  addDrawingAnnotation(
+    payload: DrawingAnnotationAddInput
+  ): CommandDefinition<DrawingAnnotationAddInput> {
+    return makeCommand(
+      'drawing.annotation.add',
+      payload.annotation.kind === 'note' ? 'Add note' : 'Add dimension',
+      payload,
+      (document) => addDrawingAnnotation(document, payload)
+    );
+  },
+  updateDrawingAnnotation(
+    payload: DrawingAnnotationUpdateInput,
+    label = payload.annotation.kind === 'note' ? 'Edit note' : 'Edit dimension'
+  ): CommandDefinition<DrawingAnnotationUpdateInput> {
+    return makeCommand(
+      'drawing.annotation.update',
+      label,
+      payload,
+      (document) => updateDrawingAnnotation(document, payload)
+    );
+  },
+  deleteDrawingAnnotation(
+    payload: DrawingAnnotationDeleteInput,
+    label = 'Delete annotation'
+  ): CommandDefinition<DrawingAnnotationDeleteInput> {
+    return makeCommand(
+      'drawing.annotation.delete',
+      label,
+      payload,
+      (document) => deleteDrawingAnnotation(document, payload)
+    );
   }
 };
 
@@ -2105,6 +2166,51 @@ function assertOperationExpressions(
     assertEvaluableExpression(scope, `${label}.x`, value.x, documentUnits);
     assertEvaluableExpression(scope, `${label}.y`, value.y, documentUnits);
     assertEvaluableExpression(scope, `${label}.z`, value.z, documentUnits);
+  };
+  const datumSource = (label: string, source: CadDatumPlaneSourceV2) => {
+    if (source.type === 'canonical')
+      assertEvaluableExpression(
+        scope,
+        `${label} source offset`,
+        source.offset,
+        documentUnits
+      );
+  };
+  const datumPoint = (label: string, point: CadDatumPointSource) => {
+    if (point.type === 'point') vector(label, point.point);
+  };
+  const datumPlane = (label: string, definition: CadDatumPlaneDefinitionV2) => {
+    switch (definition.kind) {
+      case 'offset':
+        datumSource(label, definition.source);
+        assertEvaluableExpression(
+          scope,
+          `${label} offset`,
+          definition.offset,
+          documentUnits
+        );
+        break;
+      case 'midplane':
+        definition.sources.forEach((source) => datumSource(label, source));
+        break;
+      case 'three-point':
+        definition.points.forEach((point, index) =>
+          datumPoint(`${label} point ${index + 1}`, point)
+        );
+        break;
+      case 'parallel-point':
+        datumSource(label, definition.source);
+        datumPoint(`${label} point`, definition.point);
+        break;
+    }
+  };
+  const datumAxis = (label: string, definition: CadDatumAxisDefinition) => {
+    if (definition.kind === 'two-point')
+      definition.points.forEach((point, index) =>
+        datumPoint(`${label} point ${index + 1}`, point)
+      );
+    else if (definition.kind === 'plane-intersection')
+      definition.sources.forEach((source) => datumSource(label, source));
   };
   // Text carries fields that are text, not dimensions — the string itself, a
   // font family id, a style, an alignment. Feeding those to the expression
@@ -2343,6 +2449,49 @@ function assertOperationExpressions(
           );
       break;
     }
+    case 'add_datum_plane_v2':
+      datumPlane(operation.name, operation.definition);
+      break;
+    case 'update_datum_plane':
+      datumPlane(`Datum ${operation.featureId}`, operation.definition);
+      break;
+    case 'add_datum_axis':
+      datumAxis(operation.name, operation.definition);
+      break;
+    case 'update_datum_axis':
+      datumAxis(`Datum ${operation.featureId}`, operation.definition);
+      break;
+    case 'add_datum_revolve':
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} angleDeg`,
+        operation.angleDeg,
+        documentUnits
+      );
+      break;
+    case 'add_datum_pattern':
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} count`,
+        operation.count,
+        documentUnits
+      );
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} angleDeg`,
+        operation.angleDeg,
+        documentUnits
+      );
+      break;
+    case 'add_datum_transform':
+      vector(`${operation.name} translation`, operation.translation);
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} angleDeg`,
+        operation.angleDeg,
+        documentUnits
+      );
+      break;
     case 'add_datum_sketch':
       sketchObjects(operation.name, operation.objects);
       break;
@@ -2561,6 +2710,22 @@ export function commandsForCadPatch(
   proposal: CadPatchProposal
 ): AnyCommand[] {
   proposal = expandEditCandidateProposal(document, proposal);
+  // Aliases share one namespace even when their targets have different types.
+  // Keep this guard here too: direct typed callers need the parser's protection.
+  const declaredAliases = new Set<string>();
+  for (const operation of proposal.operations) {
+    const aliases = [
+      ...('localId' in operation ? [operation.localId] : []),
+      ...('secondLocalId' in operation ? [operation.secondLocalId] : [])
+    ];
+    for (const localId of aliases) {
+      if (typeof localId !== 'string') continue;
+      const alias = normalizeLocalId(localId);
+      if (declaredAliases.has(alias))
+        throw new Error(`Duplicate localId "${alias}" in proposal.`);
+      declaredAliases.add(alias);
+    }
+  }
   const scope = new LocalBodyScope(document);
   let projectedDocument = document;
   const parameterScope = projectedParameterScope(document, proposal);
@@ -2658,22 +2823,269 @@ export function commandsForCadPatch(
 
   /** R01 datum planes created earlier in this proposal, by alias. */
   const localDatums = new Map<string, FeatureId>();
-  const resolveDatum = (reference: string): FeatureId => {
+  const localAxes = new Map<string, FeatureId>();
+  const resolveTypedDatum = (
+    reference: string,
+    kind: 'datum-plane' | 'datum-axis'
+  ): FeatureId => {
+    let featureId: FeatureId;
     if (isLocalBodyRef(reference)) {
-      const local = localDatums.get(normalizeLocalId(reference));
+      const local = (kind === 'datum-plane' ? localDatums : localAxes).get(
+        normalizeLocalId(reference)
+      );
       if (!local) {
         throw new Error(
-          `Datum alias ${reference} is not declared by an earlier add_datum_plane.`
+          `Datum ${kind === 'datum-plane' ? 'plane' : 'axis'} alias ${reference} is not declared by an earlier ${kind === 'datum-plane' ? 'add_datum_plane or add_datum_plane_v2' : 'add_datum_axis'}.`
         );
       }
-      return local;
-    }
-    return reference as FeatureId;
+      featureId = local;
+    } else featureId = reference as FeatureId;
+    const feature = findFeature(projectedDocument, featureId);
+    if (!feature || feature.data.featureKind !== kind)
+      throw new Error(`Datum ${reference} is not a ${kind} in the document.`);
+    if (isFeatureSuppressed(feature))
+      throw new Error(`Datum "${feature.name}" is suppressed.`);
+    return featureId;
   };
+  const resolveDatum = (reference: string): FeatureId =>
+    resolveTypedDatum(reference, 'datum-plane');
+  const resolveDatumAxis = (reference: string): FeatureId =>
+    resolveTypedDatum(reference, 'datum-axis');
   const datumSource = (source: CadDatumPlaneSource): DatumPlaneSource =>
     source.type === 'canonical'
       ? newCanonicalPlaneRef(source.plane, source.offset)
       : { type: 'datum', datumFeatureId: resolveDatum(source.datum) };
+
+  const canonicalSource = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonicalSource);
+    if (value === null || typeof value !== 'object') return value;
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalSource(entry)])
+    );
+  };
+  const sameSource = (left: unknown, right: unknown) =>
+    JSON.stringify(canonicalSource(left)) ===
+    JSON.stringify(canonicalSource(right));
+  const retainedSources = (featureId: FeatureId): unknown[] => {
+    const data = findFeature(projectedDocument, featureId)!.data;
+    return data.featureKind === 'datum-plane'
+      ? [
+          ...datumPlaneSources(data.definition),
+          ...datumPointSources(data.definition)
+        ]
+      : data.featureKind === 'datum-axis'
+        ? [
+            ...datumAxisPlaneSources(data.definition),
+            ...datumAxisPointSources(data.definition),
+            ...(data.definition.kind === 'edge' ||
+            data.definition.kind === 'cylinder'
+              ? [data.definition.source]
+              : [])
+          ]
+        : [];
+  };
+  const topologySourceBody = (
+    source: { bodyId: string },
+    reference: TopologyReferenceV5,
+    retained: readonly unknown[]
+  ): BodyId => {
+    if (isLocalBodyRef(source.bodyId))
+      throw new Error('Datum sources cannot target same-proposal topology.');
+    // A datum may be earlier than the operation that consumed its source.
+    // Updates may keep that exact authored source; they cannot invent another
+    // source on a body omitted from the live digest. History and exact preflight
+    // still judge the retained definition at the datum's own position.
+    if (retained.some((previous) => sameSource(previous, source)))
+      return source.bodyId as BodyId;
+    const bodyId = resolveBody(source.bodyId);
+    const topology =
+      projectedDocument.derived.bodyRepresentations[bodyId]?.topology;
+    const entries =
+      reference.kind === 'face' ? topology?.faces : topology?.edges;
+    if (
+      reference.witnessVersion !== 1 ||
+      !reference.producingFeatureId ||
+      !reference.lineageName ||
+      entries?.filter((entry) => entry.hash === reference.currentHash)
+        .length !== 1 ||
+      entries?.filter(
+        (entry) =>
+          entry.reference?.producingFeatureId ===
+            reference.producingFeatureId &&
+          entry.reference.lineageName === reference.lineageName
+      ).length !== 1 ||
+      !entries?.some(
+        (entry) =>
+          entry.hash === reference.currentHash &&
+          sameSource(entry.reference, reference)
+      )
+    )
+      throw new Error(
+        'The datum source does not match one qualified current topology reference. Refresh the proposal.'
+      );
+    return bodyId;
+  };
+  const datumSourceV2 = (
+    source: CadDatumPlaneSourceV2,
+    retained: readonly unknown[] = [],
+    sourceSlot = 0
+  ): DatumPlaneSource => {
+    if (source.type === 'canonical') {
+      // The provider has no basis-revision field. Keep a retained canonical
+      // source's authored frame (including unmarked legacy XZ) rather than
+      // silently moving its consumers to the current Front convention.
+      const previousRole = retained[sourceSlot] as DatumPlaneSource | undefined;
+      if (
+        previousRole?.type === 'canonical' &&
+        previousRole.plane === source.plane
+      )
+        return { ...deepClone(previousRole), offset: source.offset };
+      const matches = retained.filter((entry): entry is DatumPlaneSource => {
+        if (!entry || typeof entry !== 'object' || !('type' in entry))
+          return false;
+        const previous = entry as DatumPlaneSource;
+        return (
+          previous.type === 'canonical' &&
+          previous.plane === source.plane &&
+          sameSource(previous.offset, source.offset)
+        );
+      });
+      const distinct = new Map(
+        matches.map((entry) => [JSON.stringify(canonicalSource(entry)), entry])
+      );
+      if (distinct.size === 1) return deepClone([...distinct.values()][0]!);
+      if (distinct.size > 1)
+        throw new Error(
+          'The canonical datum source has ambiguous stored basis revisions. Keep its original source role.'
+        );
+    }
+    if (source.type !== 'face') return datumSource(source);
+    if (source.faceHash !== source.faceReference.currentHash)
+      throw new Error('A datum face source must carry its current face hash.');
+    const bodyId = topologySourceBody(source, source.faceReference, retained);
+    if (!retained.some((previous) => sameSource(previous, source))) {
+      // Reuse the shared exact snapshot/frame qualification for direct typed
+      // callers as well as the JSON path. Prioritising this face keeps the
+      // proof independent of the digest's bounded topology inventory.
+      validateCadPatchProposalAgainstDigest(
+        {
+          proposalId: 'datum_source_proof',
+          summary: 'Qualify a current datum face source.',
+          assumptions: [],
+          operations: [
+            {
+              kind: 'add_datum_plane_v2',
+              name: 'Datum source',
+              definition: { kind: 'offset', source, offset: 0 }
+            }
+          ]
+        },
+        createCadDocumentDigest(projectedDocument, {
+          bodyId,
+          kind: 'face',
+          hash: source.faceHash
+        })
+      );
+    }
+    return {
+      ...deepClone(source),
+      bodyId
+    };
+  };
+  const datumPoint = (
+    point: CadDatumPointSource,
+    retained: readonly unknown[] = []
+  ): DatumPointSource =>
+    point.type === 'point'
+      ? deepClone(point)
+      : {
+          ...deepClone(point),
+          bodyId: topologySourceBody(point, point.edgeReference, retained)
+        };
+  const datumPlaneDefinition = (
+    definition: CadDatumPlaneDefinitionV2,
+    retained: readonly unknown[] = []
+  ): DatumPlaneDefinition => {
+    switch (definition.kind) {
+      case 'offset':
+        return {
+          ...deepClone(definition),
+          source: datumSourceV2(definition.source, retained)
+        };
+      case 'parallel-point':
+        return {
+          ...deepClone(definition),
+          source: datumSourceV2(definition.source, retained),
+          point: datumPoint(definition.point, retained)
+        };
+      case 'midplane':
+        return {
+          ...deepClone(definition),
+          sources: [
+            datumSourceV2(definition.sources[0], retained),
+            datumSourceV2(definition.sources[1], retained, 1)
+          ]
+        };
+      case 'three-point':
+        return {
+          ...deepClone(definition),
+          points: [
+            datumPoint(definition.points[0], retained),
+            datumPoint(definition.points[1], retained),
+            datumPoint(definition.points[2], retained)
+          ]
+        };
+    }
+  };
+  const datumAxisDefinition = (
+    definition: CadDatumAxisDefinition,
+    retained: readonly unknown[] = []
+  ): DatumAxisDefinition => {
+    switch (definition.kind) {
+      case 'two-point':
+        return {
+          ...deepClone(definition),
+          points: [
+            datumPoint(definition.points[0], retained),
+            datumPoint(definition.points[1], retained)
+          ]
+        };
+      case 'plane-intersection':
+        return {
+          ...deepClone(definition),
+          sources: [
+            datumSourceV2(definition.sources[0], retained),
+            datumSourceV2(definition.sources[1], retained, 1)
+          ]
+        };
+      case 'edge':
+        return {
+          ...deepClone(definition),
+          source: {
+            ...deepClone(definition.source),
+            bodyId: topologySourceBody(
+              definition.source,
+              definition.source.edgeReference,
+              retained
+            )
+          }
+        };
+      case 'cylinder':
+        return {
+          ...deepClone(definition),
+          source: {
+            ...deepClone(definition.source),
+            bodyId: topologySourceBody(
+              definition.source,
+              definition.source.faceReference,
+              retained
+            )
+          }
+        };
+    }
+  };
 
   const commandForOperation = (
     proposed: CadPatchProposal['operations'][number]
@@ -3111,6 +3523,62 @@ export function commandsForCadPatch(
         }
         return datum;
       }
+      case 'add_datum_plane_v2': {
+        const ids = createFeatureOnlyIds();
+        const datum = commandFactories.addDatumPlane({
+          name: operation.name,
+          definition: datumPlaneDefinition(operation.definition),
+          ids
+        });
+        if (operation.localId)
+          localDatums.set(normalizeLocalId(operation.localId), ids.featureId);
+        return datum;
+      }
+      case 'update_datum_plane': {
+        const featureId = resolveDatum(operation.featureId);
+        const feature = findFeature(projectedDocument, featureId)!;
+        return commandFactories.updateFeature(
+          {
+            featureId,
+            data: {
+              featureKind: 'datum-plane',
+              definition: datumPlaneDefinition(
+                operation.definition,
+                retainedSources(featureId)
+              )
+            }
+          },
+          `Edit datum plane ${feature.name}`
+        );
+      }
+      case 'add_datum_axis': {
+        const ids = createFeatureOnlyIds();
+        const datum = commandFactories.addDatumAxis({
+          name: operation.name,
+          definition: datumAxisDefinition(operation.definition),
+          ids
+        });
+        if (operation.localId)
+          localAxes.set(normalizeLocalId(operation.localId), ids.featureId);
+        return datum;
+      }
+      case 'update_datum_axis': {
+        const featureId = resolveDatumAxis(operation.featureId);
+        const feature = findFeature(projectedDocument, featureId)!;
+        return commandFactories.updateFeature(
+          {
+            featureId,
+            data: {
+              featureKind: 'datum-axis',
+              definition: datumAxisDefinition(
+                operation.definition,
+                retainedSources(featureId)
+              )
+            }
+          },
+          `Edit datum axis ${feature.name}`
+        );
+      }
       case 'add_datum_sketch': {
         const ids = createSketchFeatureIds(operation.objects.length);
         const planeRef = {
@@ -3157,6 +3625,53 @@ export function commandsForCadPatch(
           ids
         });
       }
+      case 'add_datum_revolve': {
+        const ids = createBodyFeatureIds();
+        const datumFeatureId = resolveDatumAxis(operation.datum);
+        const sketchId = resolveSketch(operation.sketchId).sketchId;
+        scope.declare(operation.localId, ids.bodyId);
+        return commandFactories.revolveSketch({
+          name: operation.name,
+          bodyName: numberedBodyName(projectedDocument, proposedName),
+          sketchId,
+          // `axisRef` is authoritative. This legacy field is kept for the
+          // existing schema and never stands in for a failed datum axis.
+          axis: 'vertical',
+          axisRef: { type: 'datum-axis', datumFeatureId },
+          angleDeg: operation.angleDeg,
+          ids
+        });
+      }
+      case 'add_datum_pattern': {
+        const ids = createBodyFeatureIds();
+        const datumFeatureId = resolveDatumAxis(operation.datum);
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        scope.declare(operation.localId, ids.bodyId);
+        scope.consume([targetBodyId], 'pattern');
+        return commandFactories.patternBody({
+          name: operation.name,
+          targetBodyId,
+          patternKind: 'circular',
+          axis: 'z',
+          axisRef: { type: 'datum-axis', datumFeatureId },
+          count: operation.count,
+          angleDeg: operation.angleDeg,
+          ids
+        });
+      }
+      case 'add_datum_transform':
+        return commandFactories.transformBody({
+          name: operation.name,
+          targetBodyId: resolveBody(operation.targetBodyId),
+          translation: deepClone(operation.translation),
+          axisRotation: {
+            axis: {
+              type: 'datum-axis',
+              datumFeatureId: resolveDatumAxis(operation.datum)
+            },
+            angleDeg: operation.angleDeg
+          }
+        });
       case 'add_shell': {
         if (isLocalBodyRef(operation.targetBodyId)) {
           throw new Error('add_shell cannot target same-proposal topology.');
@@ -3927,6 +4442,24 @@ export function replayCommands(
           command.payload as DrawingViewDeleteInput
         );
         break;
+      case 'drawing.annotation.add':
+        next = addDrawingAnnotation(
+          next,
+          command.payload as DrawingAnnotationAddInput
+        );
+        break;
+      case 'drawing.annotation.update':
+        next = updateDrawingAnnotation(
+          next,
+          command.payload as DrawingAnnotationUpdateInput
+        );
+        break;
+      case 'drawing.annotation.delete':
+        next = deleteDrawingAnnotation(
+          next,
+          command.payload as DrawingAnnotationDeleteInput
+        );
+        break;
       default:
         // Unknown kinds are skipped (not fatal) so documents written by newer
         // clients still load; the skip is surfaced for debuggability.
@@ -3993,7 +4526,8 @@ export function duplicateFeatureCommands(
   let copyId: FeatureId;
   switch (data.featureKind) {
     case 'transform': {
-      const ids = data.copy === true ? createBodyFeatureIds() : createFeatureOnlyIds();
+      const ids =
+        data.copy === true ? createBodyFeatureIds() : createFeatureOnlyIds();
       copyId = ids.featureId;
       create = commandFactories.transformBody({
         name,

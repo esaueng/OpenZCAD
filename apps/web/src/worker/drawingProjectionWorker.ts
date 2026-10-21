@@ -1,5 +1,6 @@
 import {
   projectView,
+  projectionBuffers,
   type ProjectionBodyInput,
   type ViewProjection
 } from '../lib/drawing/projectView';
@@ -56,8 +57,8 @@ self.onmessage = (event: MessageEvent<DrawingProjectionRequest>) => {
         })
       });
       results[view.key] = { ok: true, projection };
-      for (const line of [...projection.visible, ...projection.hidden])
-        transfer.push(line.buffer as ArrayBuffer);
+      for (const buffer of projectionBuffers(projection))
+        transfer.push(buffer as ArrayBuffer);
     } catch (error) {
       results[view.key] = {
         ok: false,

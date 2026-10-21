@@ -6,7 +6,21 @@ import {
   type SketchConstraintData,
   type SketchObjectData
 } from '@openzcad/shared';
-import { sketchRelationGlyphs } from './relationGlyphs';
+import {
+  findFontFace,
+  resolveSplineGeometry,
+  setTextFontProvider
+} from '@openzcad/geometry';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { parseFontFace } from '../../../../../packages/geometry/src/text/loader';
+import {
+  sketchRelationGlyphs,
+  sketchRelationKeepOuts,
+  sketchRelationStrokes,
+  widestGap,
+  widestGapOf
+} from './relationGlyphs';
 
 const id = (value: string) => value as EntityId;
 let next = 0;
@@ -202,6 +216,50 @@ describe('sketchRelationGlyphs', () => {
     expect(chips.map(label).sort()).toEqual(['point(0,0)', 'point(40,4)']);
   });
 
+  it('keeps points half a unit apart distinct even a trillion units out', () => {
+    const far = 1e12;
+    const chips = sketchRelationGlyphs(
+      [
+        {
+          id: 'a',
+          data: { objectKind: 'line', x1: far, y1: 0, x2: far, y2: 10 }
+        },
+        {
+          id: 'b',
+          data: {
+            objectKind: 'line',
+            x1: far + 0.5,
+            y1: 0,
+            x2: far + 0.5,
+            y2: -10
+          }
+        }
+      ],
+      [
+        constraint({
+          constraintKind: 'lock',
+          point: { objectId: id('a'), point: 'start' },
+          x: far,
+          y: 0
+        }),
+        constraint({
+          constraintKind: 'lock',
+          point: { objectId: id('b'), point: 'start' },
+          x: far + 0.5,
+          y: 0
+        })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    const points = chips.filter((chip) => chip.placement === 'point');
+    expect(points).toHaveLength(2);
+    expect(points.map((chip) => chip.anchor.x).sort()).toEqual([
+      far,
+      far + 0.5
+    ]);
+  });
+
   it('keeps distinct points apart in a compact sketch far from the plane origin', () => {
     // Two 10-unit segments a billion units out: the corner between them must
     // stay one chip, and the free ends must not merge into it.
@@ -304,6 +362,95 @@ describe('sketchRelationGlyphs', () => {
     expect(close[0]!.glyphs).toHaveLength(1);
   });
 
+  it('clusters a column of many curve ends in linear time', () => {
+    // Sixty thousand short vertical lines stacked in one column: every end
+    // shares an x, which made the old sweep compare each against all.
+    const column = Array.from({ length: 60_000 }, (_, index) => ({
+      id: `l${index}`,
+      data: {
+        objectKind: 'line' as const,
+        x1: 0,
+        y1: index * 10,
+        x2: 0,
+        y2: index * 10 + 5
+      }
+    }));
+    const relations = [
+      constraint({
+        constraintKind: 'coincident',
+        a: { objectId: id('l0'), point: 'end' },
+        b: { objectId: id('l1'), point: 'start' }
+      }),
+      constraint({ constraintKind: 'vertical', objectId: id('l59999') })
+    ];
+    const stats = { comparisons: 0 };
+    const chips = sketchRelationGlyphs(column, relations, resolve, {
+      visibility: 'always',
+      stats
+    });
+    // A few comparisons per end (each meets its neighbours only); the
+    // sweep compared each end against every earlier one, about 7e9 here.
+    expect(stats.comparisons).toBeLessThan(10 * 2 * column.length);
+    expect(chips.map((chip) => chip.placement).sort()).toEqual([
+      'object',
+      'point',
+      'point'
+    ]);
+    // The lone line end the coincident names stands off opposite its line.
+    const end = chips.find(
+      (chip) => chip.placement === 'point' && chip.anchor.y === 5
+    )!;
+    expect(end.normal.y).toBeCloseTo(1, 12);
+  }, 20_000);
+
+  it('keeps clustering linear when one point sits far from the origin', () => {
+    // Forty thousand short lines packed into one model unit, and one line a
+    // trillion units out: sizing every bucket by that far point's tolerance
+    // (about one unit) put all the packed ends into a handful of buckets.
+    const packed = Array.from({ length: 40_000 }, (_, index) => ({
+      id: `p${index}`,
+      data: {
+        objectKind: 'line' as const,
+        x1: index * 2.5e-5,
+        y1: 0,
+        x2: index * 2.5e-5,
+        y2: 1e-3
+      }
+    }));
+    const sketch = [
+      ...packed,
+      {
+        id: 'far',
+        data: {
+          objectKind: 'line' as const,
+          x1: 1e12,
+          y1: 0,
+          x2: 1e12 + 10,
+          y2: 0
+        }
+      }
+    ];
+    const relations = [
+      constraint({
+        constraintKind: 'coincident',
+        a: { objectId: id('p0'), point: 'end' },
+        b: { objectId: id('p1'), point: 'start' }
+      }),
+      constraint({ constraintKind: 'horizontal', objectId: id('far') })
+    ];
+    const stats = { comparisons: 0 };
+    const chips = sketchRelationGlyphs(sketch, relations, resolve, {
+      visibility: 'always',
+      stats
+    });
+    // A few comparisons per end; global-max buckets put the packed ends
+    // into a handful of cells, about 3e9 comparisons here.
+    expect(stats.comparisons).toBeLessThan(10 * 2 * sketch.length);
+    // The packed ends stay distinct points: p0's end and p1's start are
+    // 2.5e-5 apart, far beyond their 1e-6 tolerance.
+    expect(chips.filter((chip) => chip.placement === 'point')).toHaveLength(2);
+  }, 30_000);
+
   it('skips relations whose geometry does not resolve', () => {
     const chips = sketchRelationGlyphs(
       [
@@ -317,5 +464,544 @@ describe('sketchRelationGlyphs', () => {
       { visibility: 'always' }
     );
     expect(chips).toEqual([]);
+  });
+
+  it('hides the kinds the per-kind filter names and nothing else', () => {
+    const chips = sketchRelationGlyphs(objects, rectangle, resolve, {
+      visibility: 'always',
+      hiddenKinds: new Set(['horizontal', 'coincident'] as const)
+    });
+    const kinds = chips.flatMap((chip) => chip.glyphs.map((g) => g.kind));
+    expect(kinds).not.toContain('horizontal');
+    expect(kinds).not.toContain('coincident');
+    expect(new Set(kinds)).toEqual(new Set(['vertical', 'lock', 'parallel']));
+  });
+
+  it('marks the relation picked from its glyph as selected, on every chip it draws on', () => {
+    const parallel = String(rectangle[7]!.constraintId);
+    const chips = sketchRelationGlyphs(objects, rectangle, resolve, {
+      visibility: 'always',
+      selectedConstraintId: parallel
+    });
+    const selected = chips.flatMap((chip) =>
+      chip.glyphs
+        .filter((glyph) => glyph.selected)
+        .map((glyph) => `${chip.key}:${glyph.kind}`)
+    );
+    expect(selected.sort()).toEqual([
+      'object:bottom:parallel',
+      'object:top:parallel'
+    ]);
+  });
+
+  it('stands curve chips off a profile outward and off a circle radially', () => {
+    // The rectangle and the hole inside it; the arc beside it would move the
+    // sketch's centre off the rectangle's.
+    const chips = sketchRelationGlyphs(
+      objects.slice(0, 5),
+      [
+        ...rectangle,
+        constraint({ constraintKind: 'equal', a: id('hole'), b: id('top') })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    const normals = Object.fromEntries(
+      chips.map((chip) => [chip.key, chip.normal])
+    );
+    // Away from the sketch's centre, so the rectangle's chips sit outside it
+    // whichever way each side was drawn (`top` runs right to left).
+    expect(normals['object:bottom']!.y).toBeCloseTo(-1, 12);
+    expect(normals['object:top']!.y).toBeCloseTo(1, 12);
+    expect(normals['object:right']!.x).toBeCloseTo(1, 12);
+    expect(normals['object:left']!.x).toBeCloseTo(-1, 12);
+    expect(normals['object:hole']!.x).toBeCloseTo(Math.SQRT1_2, 12);
+    expect(normals['object:hole']!.y).toBeCloseTo(Math.SQRT1_2, 12);
+  });
+
+  it('stands a line through the sketch centre off its upper side', () => {
+    const [chip] = sketchRelationGlyphs(
+      [
+        {
+          id: 'alone',
+          data: { objectKind: 'line', x1: 5, y1: 2, x2: -5, y2: 2 }
+        }
+      ],
+      [constraint({ constraintKind: 'horizontal', objectId: id('alone') })],
+      resolve,
+      { visibility: 'always' }
+    );
+    expect(chip!.normal.x).toBeCloseTo(0, 12);
+    expect(chip!.normal.y).toBeCloseTo(1, 12);
+  });
+
+  it('stands a corner chip outside the corner, between the curves meeting there', () => {
+    const chips = sketchRelationGlyphs(objects, rectangle, resolve, {
+      visibility: 'always'
+    });
+    const origin = chips.find(
+      (chip) => chip.placement === 'point' && chip.anchor.x === 0
+    )!;
+    // `bottom` leaves the origin along +x and `left` arrives along −y, so
+    // the open side is down-left, away from the rectangle.
+    expect(origin.normal.x).toBeCloseTo(-Math.SQRT1_2, 12);
+    expect(origin.normal.y).toBeCloseTo(-Math.SQRT1_2, 12);
+  });
+
+  it('stands a midpoint chip to one side of the line passing through it', () => {
+    const chips = sketchRelationGlyphs(
+      [
+        ...objects,
+        {
+          id: 'stub',
+          data: { objectKind: 'line', x1: 10, y1: 0, x2: 10, y2: -6 }
+        }
+      ],
+      [
+        constraint({
+          constraintKind: 'midpoint',
+          point: { objectId: id('stub'), point: 'start' },
+          line: id('bottom')
+        })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    const [chip] = chips;
+    // The stub hangs down from the middle of `bottom`, which runs both ways:
+    // the widest gap left is straight up.
+    expect(chip!.normal.x).toBeCloseTo(0, 12);
+    expect(chip!.normal.y).toBeCloseTo(1, 12);
+  });
+
+  it("draws an ellipse's own relations at its 45° parameter, standing off outward", () => {
+    const chips = sketchRelationGlyphs(
+      [
+        {
+          id: 'oval',
+          data: {
+            objectKind: 'ellipse',
+            centerX: 0,
+            centerY: 0,
+            radiusX: 10,
+            radiusY: 4,
+            rotationDeg: 0
+          }
+        },
+        {
+          id: 'other',
+          data: {
+            objectKind: 'ellipse',
+            centerX: 30,
+            centerY: 0,
+            radiusX: 10,
+            radiusY: 4,
+            rotationDeg: 0
+          }
+        }
+      ],
+      [constraint({ constraintKind: 'equal', a: id('oval'), b: id('other') })],
+      resolve,
+      { visibility: 'always' }
+    );
+    const oval = chips.find((chip) => chip.key === 'object:oval')!;
+    expect(oval.glyphs.map((glyph) => glyph.kind)).toEqual(['equal']);
+    expect(oval.anchor.x).toBeCloseTo(10 * Math.SQRT1_2, 12);
+    expect(oval.anchor.y).toBeCloseTo(4 * Math.SQRT1_2, 12);
+    // Outward is the gradient (x/rx², y/ry²): steeper than the radius.
+    const expected = { x: Math.SQRT1_2 / 10, y: Math.SQRT1_2 / 4 };
+    const length = Math.hypot(expected.x, expected.y);
+    expect(oval.normal.x).toBeCloseTo(expected.x / length, 12);
+    expect(oval.normal.y).toBeCloseTo(expected.y / length, 12);
+  });
+
+  it('draws point relations held at an ellipse centre or a spline end', () => {
+    const chips = sketchRelationGlyphs(
+      [
+        {
+          id: 'oval',
+          data: {
+            objectKind: 'ellipse',
+            centerX: 5,
+            centerY: 5,
+            radiusX: 10,
+            radiusY: 4,
+            rotationDeg: 0
+          }
+        },
+        {
+          id: 'wave',
+          data: {
+            objectKind: 'spline',
+            method: 'fit',
+            points: [
+              { x: 0, y: 0 },
+              { x: 10, y: 0 },
+              { x: 20, y: 5 }
+            ]
+          }
+        }
+      ],
+      [
+        constraint({
+          constraintKind: 'lock',
+          point: { objectId: id('oval'), point: 'center' },
+          x: 5,
+          y: 5
+        }),
+        constraint({
+          constraintKind: 'lock',
+          point: { objectId: id('wave'), point: 'start' },
+          x: 0,
+          y: 0
+        })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    expect(chips.map((chip) => chip.anchor)).toEqual(
+      expect.arrayContaining([
+        { x: 5, y: 5 },
+        { x: 0, y: 0 }
+      ])
+    );
+    // A fit spline leaves its start along its end tangent: the first leg of
+    // the controls the fit solved, which bends toward the third point, not
+    // the chord to the next point it passes through (straight along +x).
+    // With nothing else at the point, the chip stands off straight back.
+    const { controls } = resolveSplineGeometry(
+      {
+        objectKind: 'spline',
+        method: 'fit',
+        points: [
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+          { x: 20, y: 5 }
+        ]
+      },
+      (value: unknown) => value as number
+    );
+    const leg = {
+      x: controls[1]!.x - controls[0]!.x,
+      y: controls[1]!.y - controls[0]!.y
+    };
+    const length = Math.hypot(leg.x, leg.y);
+    const start = chips.find((chip) => chip.anchor.x === 0)!;
+    expect(start.normal.x).toBeCloseTo(-leg.x / length, 12);
+    expect(start.normal.y).toBeCloseTo(-leg.y / length, 12);
+    expect(Math.abs(start.normal.y)).toBeGreaterThan(0.05);
+  });
+
+  it('stands an on-ellipse point chip off the ellipse, not along it', () => {
+    // A line ending on the top of an ellipse turned a quarter turn (its
+    // long axis up the y axis). The line leaves the point straight up and the
+    // ellipse runs left and right through it, so the chip stands straight
+    // down with a quarter turn of room either side. Ignoring the ellipse left
+    // it the whole circle, room to swing along the ellipse's stroke.
+    const chips = sketchRelationGlyphs(
+      [
+        {
+          id: 'oval',
+          data: {
+            objectKind: 'ellipse',
+            centerX: 0,
+            centerY: 0,
+            radiusX: 10,
+            radiusY: 4,
+            rotationDeg: 90
+          }
+        },
+        {
+          id: 'post',
+          data: { objectKind: 'line', x1: 0, y1: 10, x2: 0, y2: 20 }
+        }
+      ],
+      [
+        constraint({
+          constraintKind: 'point-on-object',
+          point: { objectId: id('post'), point: 'start' },
+          objectId: id('oval')
+        })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    const [chip] = chips;
+    expect(chip!.placement).toBe('point');
+    expect(chip!.normal.x).toBeCloseTo(0, 9);
+    expect(chip!.normal.y).toBeCloseTo(-1, 9);
+    expect(chip!.halfGap).toBeCloseTo(Math.PI / 2, 9);
+  });
+
+  it('orders the chips holding the selected relation first, so they are never crowded out', () => {
+    const parallel = String(rectangle[7]!.constraintId);
+    const chips = sketchRelationGlyphs(objects, rectangle, resolve, {
+      visibility: 'always',
+      selectedConstraintId: parallel
+    });
+    expect(
+      chips
+        .slice(0, 2)
+        .map((chip) => chip.key)
+        .sort()
+    ).toEqual(['object:bottom', 'object:top']);
+    expect(chips[2]!.placement).toBe('point');
+  });
+
+  it('orders point chips before curve chips, stably, whatever the constraint order', () => {
+    const keys = (list: typeof rectangle) =>
+      sketchRelationGlyphs(objects, list, resolve, {
+        visibility: 'always'
+      }).map((chip) => `${chip.placement}:${chip.anchor.x},${chip.anchor.y}`);
+    const forward = keys(rectangle);
+    expect(keys([...rectangle].reverse())).toEqual(forward);
+    const firstObject = forward.findIndex((key) => key.startsWith('object'));
+    expect(
+      forward.slice(firstObject).every((key) => key.startsWith('object'))
+    ).toBe(true);
+    expect(forward.slice(0, firstObject)).toEqual(['point:0,0', 'point:20,0']);
+  });
+
+  it('records how much room a point chip has either side of its bisector', () => {
+    // Six lines leaving one point 60° apart: every gap is 60°, so the chip
+    // has 30° either side of its bisector.
+    const spokes = Array.from({ length: 6 }, (_, index) => {
+      const angle = (index * Math.PI) / 3;
+      return {
+        id: `s${index}`,
+        data: {
+          objectKind: 'line' as const,
+          x1: 0,
+          y1: 0,
+          x2: 10 * Math.cos(angle),
+          y2: 10 * Math.sin(angle)
+        }
+      };
+    });
+    const [chip] = sketchRelationGlyphs(
+      spokes,
+      [
+        constraint({
+          constraintKind: 'coincident',
+          a: { objectId: id('s0'), point: 'start' },
+          b: { objectId: id('s1'), point: 'start' }
+        })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    expect(chip!.placement).toBe('point');
+    expect(chip!.halfGap).toBeCloseTo(Math.PI / 6, 12);
+    expect(widestGapOf([]).halfGap).toBe(Math.PI);
+  });
+
+  it('lists every drawn curve as plane segments, skipping the unresolved', () => {
+    const strokes = sketchRelationStrokes(
+      [
+        { data: { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 } },
+        {
+          data: { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }
+        },
+        { data: { objectKind: 'line', x1: 'w', y1: 0, x2: 10, y2: 0 } },
+        {
+          data: {
+            objectKind: 'text',
+            text: 'A',
+            fontFamily: 'open-sans',
+            fontStyle: 'regular',
+            size: 10,
+            x: 0,
+            y: 0,
+            align: 'left'
+          }
+        }
+      ] as { data: SketchObjectData }[],
+      resolve
+    );
+    // The line, then the circle closed round on itself.
+    expect([...strokes.slice(0, 4)]).toEqual([0, 0, 10, 0]);
+    const segments = strokes.length / 4;
+    expect(segments).toBeGreaterThan(20);
+    const last = strokes.slice(-4);
+    const first = strokes.slice(4, 8);
+    expect(last[2]).toBeCloseTo(first[0]!, 12);
+    expect(last[3]).toBeCloseTo(first[1]!, 12);
+  });
+
+  it('keeps text outlines among the strokes, as text is picked by them', async () => {
+    const file = findFontFace('open-sans', 'regular')!.face.file;
+    const bytes = await readFile(
+      path.resolve(process.cwd(), '../../packages/geometry/assets/fonts', file)
+    );
+    const font = parseFontFace(
+      'open-sans',
+      'regular',
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+    );
+    setTextFontProvider(() => font);
+    try {
+      const text = {
+        data: {
+          objectKind: 'text',
+          text: 'H',
+          fontFamily: 'open-sans',
+          fontStyle: 'regular',
+          size: 10,
+          x: 0,
+          y: 0,
+          align: 'left'
+        }
+      } as { data: SketchObjectData };
+      const strokes = sketchRelationStrokes([text], resolve);
+      // An H outline: one closed loop of a dozen straight sides.
+      expect(strokes.length / 4).toBeGreaterThanOrEqual(12);
+      // Over the outline budget the sketch draws no text, and so keeps none.
+      expect(
+        sketchRelationStrokes([text], resolve, 'Too much text.').length
+      ).toBe(0);
+    } finally {
+      setTextFontProvider(null);
+    }
+  });
+
+  it('lists every pickable point: the origin, line and arc ends, and centres', () => {
+    const points = sketchRelationKeepOuts(
+      [
+        { data: { objectKind: 'line', x1: 1, y1: 2, x2: 3, y2: 4 } },
+        {
+          data: { objectKind: 'circle', centerX: 10, centerY: 10, radius: 5 }
+        },
+        {
+          data: {
+            objectKind: 'arc',
+            centerX: 0,
+            centerY: 0,
+            radius: 2,
+            startAngleDeg: 0,
+            endAngleDeg: 90
+          }
+        }
+      ] as { data: SketchObjectData }[],
+      resolve
+    );
+    const pairs = [];
+    for (let index = 0; index < points.length; index += 2) {
+      pairs.push([
+        Math.round(points[index]! * 1e9) / 1e9,
+        Math.round(points[index + 1]! * 1e9) / 1e9
+      ]);
+    }
+    expect(pairs).toEqual(
+      expect.arrayContaining([
+        [0, 0],
+        [1, 2],
+        [3, 4],
+        [10, 10],
+        [2, 0],
+        [0, 2]
+      ])
+    );
+    // Midpoints and quadrants lie on the curves, kept clear as strokes.
+    expect(pairs).not.toContainEqual([2, 3]);
+  });
+
+  it('keeps the grab points of shapes and text off-curve as well', () => {
+    // A legacy rectangle's and polygon's centre and a text origin are the
+    // objects' move handles, with no point of their own on a curve.
+    const points = sketchRelationKeepOuts(
+      [
+        {
+          data: {
+            objectKind: 'rectangle',
+            centerX: 5,
+            centerY: 6,
+            width: 4,
+            height: 2
+          }
+        },
+        {
+          data: {
+            objectKind: 'polygon',
+            centerX: -3,
+            centerY: 7,
+            radius: 2,
+            sides: 6
+          }
+        },
+        {
+          data: {
+            objectKind: 'text',
+            text: 'A',
+            fontFamily: 'open-sans',
+            fontStyle: 'regular',
+            size: 10,
+            x: 20,
+            y: 30,
+            align: 'left'
+          }
+        }
+      ] as { data: SketchObjectData }[],
+      resolve
+    );
+    const pairs = [];
+    for (let index = 0; index < points.length; index += 2) {
+      pairs.push([points[index], points[index + 1]]);
+    }
+    expect(pairs).toEqual(
+      expect.arrayContaining([
+        [0, 0],
+        [5, 6],
+        [-3, 7],
+        [20, 30]
+      ])
+    );
+  });
+
+  it('keeps every point a fit spline passes through, not only its ends', () => {
+    const points = sketchRelationKeepOuts(
+      [
+        {
+          data: {
+            objectKind: 'spline',
+            method: 'fit',
+            points: [
+              { x: 0, y: 0 },
+              { x: 10, y: 4 },
+              { x: 20, y: -3 },
+              { x: 30, y: 1 }
+            ]
+          }
+        }
+      ] as { data: SketchObjectData }[],
+      resolve
+    );
+    const pairs = [];
+    for (let index = 0; index < points.length; index += 2) {
+      pairs.push([points[index], points[index + 1]]);
+    }
+    expect(pairs).toEqual(
+      expect.arrayContaining([
+        [10, 4],
+        [20, -3],
+        [30, 1]
+      ])
+    );
+  });
+
+  it('bisects the widest gap between leaving directions', () => {
+    // One direction: straight back along it.
+    const back = widestGap([{ x: 1, y: 0 }]);
+    expect(back.x).toBeCloseTo(-1, 12);
+    expect(back.y).toBeCloseTo(0, 12);
+    // Nothing known: the default diagonal, down and to the right.
+    expect(widestGap([])).toEqual({ x: Math.SQRT1_2, y: -Math.SQRT1_2 });
+    // Three curves at 0°, 90° and 180°: the open half is below.
+    const tee = widestGap([
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+      { x: -1, y: 0 }
+    ]);
+    expect(tee.x).toBeCloseTo(0, 12);
+    expect(tee.y).toBeCloseTo(-1, 12);
   });
 });

@@ -242,13 +242,37 @@ export function patternJournalFaceClaims(
  * public resolver exposes subjects and provenance, not Generated.sources.
  * Known document transforms and independent edge witnesses establish roles.
  */
-const MAX_GRID_EDGE_LINEAGE_EVENT_VISITS = 4_000_000;
+const MAX_GRID_BOUNDARY_LINEAGE_EVENT_VISITS = 4_000_000;
 
+export interface PatternJournalBoundaryOutputs {
+  readonly edges: ReadonlySet<number>[];
+  readonly vertices: ReadonlySet<number>[] | null;
+  readonly vertexUnavailableReason:
+    'event-budget' | 'journal-unavailable' | null;
+}
+
+/** Existing edge-only callers retain exactly their original work allowance. */
 export function patternJournalEdgeOutputs(
   kernel: RemusKernel,
   op: number,
   instanceSolids: readonly number[]
 ): ReadonlySet<number>[] | null {
+  return (
+    patternJournalBoundaryOutputs(kernel, op, instanceSolids, false)?.edges ??
+    null
+  );
+}
+
+/**
+ * Preflight both lanes before ANY ordinal call. A vertex lane that cannot fit
+ * the existing combined cap leaves all existing face/edge behavior intact.
+ */
+export function patternJournalBoundaryOutputs(
+  kernel: RemusKernel,
+  op: number,
+  instanceSolids: readonly number[],
+  includeVertices = true
+): PatternJournalBoundaryOutputs | null {
   try {
     const queried = instanceSolids.map((solid) =>
       Array.from(kernel.getSolidEdges(solid))
@@ -264,21 +288,21 @@ export function patternJournalEdgeOutputs(
       actual.size !== total
     )
       return null;
-    // This producer records one event per unique result face, edge and
-    // vertex. Count the actual subjects independently so stale or understated
-    // summary metadata cannot make the ordinal scan budget look cheaper.
+    const vertexGroups = instanceSolids.map((solid) =>
+      Array.from(kernel.getSolidVertices(solid))
+    );
+    const vertexMembers = vertexGroups.map((vertices) => new Set(vertices));
     let actualEventCount = total;
-    for (const query of ['getSolidFaces', 'getSolidVertices'] as const) {
-      const entities = instanceSolids.flatMap((solid) =>
-        Array.from(kernel[query](solid))
-      );
+    for (const entities of [
+      instanceSolids.flatMap((solid) =>
+        Array.from(kernel.getSolidFaces(solid))
+      ),
+      vertexGroups.flat()
+    ]) {
       if (new Set(entities).size !== entities.length) return null;
       actualEventCount += entities.length;
       if (!Number.isSafeInteger(actualEventCount)) return null;
     }
-    // Each public ordinal resolution scans the entry's events. Bound this
-    // added work before making the ordinal calls; complex grids retain their
-    // existing face lineage and geometry when edge adoption exceeds it.
     const summary: unknown = JSON.parse(kernel.journalSummary());
     if (!Array.isArray(summary)) return null;
     const entries = summary.filter(
@@ -299,45 +323,89 @@ export function patternJournalEdgeOutputs(
       detail.events !== actualEventCount
     )
       return null;
-    const eventVisits = (total + 1) * actualEventCount;
+    const edgeVisits = (total + 1) * actualEventCount;
     if (
-      !Number.isSafeInteger(eventVisits) ||
-      eventVisits > MAX_GRID_EDGE_LINEAGE_EVENT_VISITS
+      !Number.isSafeInteger(edgeVisits) ||
+      edgeVisits > MAX_GRID_BOUNDARY_LINEAGE_EVENT_VISITS
     )
       return null;
-    const outputs = new Set<number>();
-    for (let index = 0; index <= total; index += 1) {
-      const decoded: unknown = JSON.parse(
-        kernel.resolveOperationOutput(op, 'edge', index)
-      );
-      if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded))
-        return null;
-      const row = decoded as Record<string, unknown>;
-      if (index === total) {
-        if (row.status !== 'noMatch') return null;
-        break;
+    const vertexTotal = vertexGroups.reduce(
+      (sum, vertices) => sum + vertices.length,
+      0
+    );
+    const combinedVisits = (total + 1 + vertexTotal + 1) * actualEventCount;
+    const canReadVertices =
+      includeVertices &&
+      vertexTotal > 0 &&
+      Number.isSafeInteger(combinedVisits) &&
+      combinedVisits <= MAX_GRID_BOUNDARY_LINEAGE_EVENT_VISITS;
+    const read = (
+      kind: 'edge' | 'vertex',
+      expected: ReadonlySet<number>
+    ): boolean => {
+      try {
+        const outputs = new Set<number>();
+        for (let index = 0; index <= expected.size; index += 1) {
+          const decoded: unknown = JSON.parse(
+            kernel.resolveOperationOutput(op, kind, index)
+          );
+          if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded))
+            return false;
+          const row = decoded as Record<string, unknown>;
+          if (index === expected.size)
+            return (
+              row.status === 'noMatch' &&
+              (row.entities === undefined ||
+                (Array.isArray(row.entities) && row.entities.length === 0))
+            );
+          if (
+            row.status !== 'bound' ||
+            row.provenance !== 'construction' ||
+            !Array.isArray(row.entities) ||
+            row.entities.length !== 1
+          )
+            return false;
+          const entity: unknown = row.entities[0];
+          if (!entity || typeof entity !== 'object' || Array.isArray(entity))
+            return false;
+          const { kind: actualKind, handle } = entity as Record<
+            string,
+            unknown
+          >;
+          if (
+            actualKind !== kind ||
+            !Number.isSafeInteger(handle) ||
+            (handle as number) < 0 ||
+            !expected.has(handle as number) ||
+            outputs.has(handle as number)
+          )
+            return false;
+          outputs.add(handle as number);
+        }
+        return false;
+      } catch {
+        return false;
       }
-      if (
-        row.status !== 'bound' ||
-        row.provenance !== 'construction' ||
-        !Array.isArray(row.entities) ||
-        row.entities.length !== 1
-      )
-        return null;
-      const entity: unknown = row.entities[0];
-      if (!entity || typeof entity !== 'object' || Array.isArray(entity))
-        return null;
-      const { kind, handle } = entity as Record<string, unknown>;
-      if (
-        kind !== 'edge' ||
-        !Number.isSafeInteger(handle) ||
-        !actual.has(handle as number) ||
-        outputs.has(handle as number)
-      )
-        return null;
-      outputs.add(handle as number);
-    }
-    return outputs.size === actual.size ? members : null;
+    };
+    if (!read('edge', actual)) return null;
+    if (!canReadVertices)
+      return {
+        edges: members,
+        vertices: null,
+        vertexUnavailableReason: includeVertices ? 'event-budget' : null
+      };
+    const vertexSet = new Set(vertexGroups.flat());
+    if (!read('vertex', vertexSet))
+      return {
+        edges: members,
+        vertices: null,
+        vertexUnavailableReason: 'journal-unavailable'
+      };
+    return {
+      edges: members,
+      vertices: vertexMembers,
+      vertexUnavailableReason: null
+    };
   } catch {
     return null;
   }

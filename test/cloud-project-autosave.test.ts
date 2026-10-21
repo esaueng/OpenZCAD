@@ -7,6 +7,7 @@ import {
 import {
   JsonComplexityGuard,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
+  MAX_CLOUD_PROJECT_WRITE_BYTES,
   MAX_DOCUMENT_VALUES,
   documentStructureError,
   toUserId,
@@ -919,12 +920,12 @@ describe('cloud project autosave — refusals', () => {
     },
     {
       path: 'declared request length',
-      limitBytes: 25 * 1024 * 1024,
+      limitBytes: MAX_CLOUD_PROJECT_WRITE_BYTES,
       contentLength: true
     },
     {
       path: 'streamed request bytes',
-      limitBytes: 25 * 1024 * 1024,
+      limitBytes: MAX_CLOUD_PROJECT_WRITE_BYTES,
       contentLength: false
     }
   ])(
@@ -991,7 +992,7 @@ describe('cloud project autosave — refusals', () => {
         expect((errors[0] as ApiError).status).toBe(413);
         expect(lastState(statuses)).toBe('refused');
         if (limitBytes > MAX_CLOUD_PROJECT_DOCUMENT_BYTES) {
-          // A request fitting 25 MiB may still exceed the canonical 24 MiB cap.
+          // A request that fits may still exceed the canonical 24 MiB cap.
           controller.schedule({
             ...document,
             version: document.version + 2,

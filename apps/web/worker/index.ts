@@ -35,10 +35,12 @@ import {
   RevisionConflictError,
   RevisionIdCollisionError,
   SavePointRequestError,
+  ProjectStorageUploadError,
   RevisionNotFoundError
 } from '@openzcad/persistence';
 import {
   HttpError,
+  openProjectStorageRequest,
   parseCreateProjectRequest,
   parseAssistantProposalRequest,
   parseCompleteMultipartUploadRequest,
@@ -97,6 +99,7 @@ import {
   parseAssistantCredential,
   parseUpdateAppSettingsRequest,
   settingsRequestOmitsKeymap,
+  settingsRequestOmitsHiddenRelationGlyphs,
   settingsRequestOmitsRelationGlyphs,
   settingsRequestOmittedViewportFields,
   resolveUserAssistant,
@@ -135,6 +138,7 @@ import {
 import {
   MAX_ARTIFACT_PART_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
+  MAX_CLOUD_PROJECT_WRITE_BYTES,
   toUserId
 } from '@openzcad/shared';
 
@@ -1224,11 +1228,14 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       env,
       session.email,
       // A client from before remapping sends no keymap, one from before
-      // relation glyphs no glyph preference, and one from before the field
-      // of view or X-ray no value for them: keep the stored ones.
+      // relation glyphs (or their per-kind filter) no glyph preference, and
+      // one from before the field of view or X-ray no value for them: keep
+      // the stored ones.
       {
         keepStoredKeymap: settingsRequestOmitsKeymap(body),
         keepStoredRelationGlyphs: settingsRequestOmitsRelationGlyphs(body),
+        keepStoredHiddenRelationGlyphs:
+          settingsRequestOmitsHiddenRelationGlyphs(body),
         keepStoredViewportFields: settingsRequestOmittedViewportFields(body)
       }
     );
@@ -1345,8 +1352,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/projects') {
-    const payload = parseCreateProjectRequest(await readJsonBody(request));
-    return json(await persistence.createProject(userId, payload), 201);
+    const opened = await openProjectStorageRequest(
+      await readJsonBody(request, MAX_CLOUD_PROJECT_WRITE_BYTES)
+    );
+    const payload = parseCreateProjectRequest(opened.body);
+    return json(
+      await persistence.createProject(userId, payload, {
+        storage: opened.storage
+      }),
+      201
+    );
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -1583,11 +1598,19 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const duplicateMatch = PROJECT_DUPLICATE_ROUTE.exec(pathname);
   if (request.method === 'POST' && duplicateMatch) {
+    const opened = await openProjectStorageRequest(
+      await readJsonBody(request, MAX_CLOUD_PROJECT_WRITE_BYTES)
+    );
     const payload = parseDuplicateProjectRequest(
-      await readJsonBody(request),
+      opened.body,
       duplicateMatch[1]!
     );
-    return json(await persistence.duplicateProject(userId, payload), 201);
+    return json(
+      await persistence.duplicateProject(userId, payload, {
+        storage: opened.storage
+      }),
+      201
+    );
   }
 
   if (
@@ -1716,11 +1739,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const revisionsMatch = PROJECT_REVISIONS_ROUTE.exec(pathname);
   if (request.method === 'POST' && revisionsMatch) {
-    const payload = parseSaveRevisionRequest(
-      await readJsonBody(request, MAX_JSON_BODY_BYTES, true),
-      revisionsMatch[1]!
+    const opened = await openProjectStorageRequest(
+      await readJsonBody(request, MAX_CLOUD_PROJECT_WRITE_BYTES, true),
+      revisionsMatch[1]
     );
-    return json(await persistence.saveRevision(userId, payload));
+    const payload = parseSaveRevisionRequest(opened.body, revisionsMatch[1]!);
+    return json(
+      await persistence.saveRevision(userId, payload, {
+        storage: opened.storage
+      })
+    );
   }
 
   if (request.method === 'GET' && revisionsMatch) {
@@ -1744,11 +1772,19 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const documentMatch = PROJECT_DOCUMENT_ROUTE.exec(pathname);
   if (request.method === 'PUT' && documentMatch) {
+    const opened = await openProjectStorageRequest(
+      await readJsonBody(request, MAX_CLOUD_PROJECT_WRITE_BYTES, true),
+      documentMatch[1]
+    );
     const payload = parseSaveProjectDocumentRequest(
-      await readJsonBody(request, MAX_JSON_BODY_BYTES, true),
+      opened.body,
       documentMatch[1]!
     );
-    return json(await persistence.saveDocument(userId, payload));
+    return json(
+      await persistence.saveDocument(userId, payload, {
+        storage: opened.storage
+      })
+    );
   }
 
   if (request.method === 'POST' && pathname === '/api/uploads') {
@@ -2107,6 +2143,9 @@ async function dispatchApiRequest(
     }
     if (error instanceof SavePointRequestError) {
       return json({ error: error.message, code: 'SAVE_POINT_INVALID' }, 400);
+    }
+    if (error instanceof ProjectStorageUploadError) {
+      return json({ error: error.message, code: 'STORAGE_ASSET_INVALID' }, 400);
     }
     if (error instanceof ProjectMeasurementRequestError) {
       return json({ error: error.message }, error.status);
