@@ -1,4 +1,8 @@
 import { formatNumber } from './model';
+import {
+  selectionCalloutObstacleShift,
+  type ScreenRect
+} from './selectionCalloutView';
 
 /** Which number the offset chip shows: the drag delta, or the whole span. */
 export type OffsetChipMode = 'offset' | 'total';
@@ -53,4 +57,60 @@ export function offsetChipText(input: {
   }
   const value = Math.round(rawValue * 100) / 100;
   return `${value >= 0 ? '+' : ''}${value} ${units}`;
+}
+
+/** The gap kept between an edge chip and the right lane or the stage edge. */
+const EDGE_CHIP_MARGIN_PX = 8;
+
+/**
+ * Where an edge rig's value chip centres horizontally: clear of the right
+ * lane when the space left of it can hold the chip. At a phone width the lane
+ * spans the stage from its left inset, and dodging it would put the chip,
+ * and with it exact entry, off-screen; it stays on its anchor instead.
+ */
+export function edgeChipCenterX(
+  anchorX: number,
+  laneLeft: number | null,
+  chipWidth: number
+): number {
+  if (laneLeft === null) return anchorX;
+  const dodged = laneLeft - EDGE_CHIP_MARGIN_PX - chipWidth / 2;
+  return dodged - chipWidth / 2 >= EDGE_CHIP_MARGIN_PX
+    ? Math.min(anchorX, dodged)
+    : anchorX;
+}
+
+/**
+ * How far a handle's chip — its value pill and any tag beside it, as one
+ * box, in the same coordinates as `stage` — moves to come out from under a
+ * model panel the right lane's rule does not cover: a floating window or
+ * the left dock. The right lane keeps its own rule (`edgeChipCenterX`, the
+ * pin's swap to its other side), so while the stage has room left of the
+ * lane no move here takes the chip into it. Nor does one take it above
+ * `topbarBottom`: the top bar stands over the stage's top. A chip nothing
+ * covers, or one no move inside the stage clears, stays where it is.
+ */
+export function chipPanelDodge(
+  chip: ScreenRect,
+  panels: readonly ScreenRect[],
+  stage: ScreenRect,
+  laneLeft: number | null,
+  topbarBottom: number | null = null
+): { dx: number; dy: number } {
+  if (panels.length === 0) return { dx: 0, dy: 0 };
+  const top =
+    topbarBottom === null ? stage.top : Math.max(stage.top, topbarBottom);
+  const width = chip.right - chip.left;
+  const laneEdge =
+    laneLeft !== null &&
+    laneLeft - EDGE_CHIP_MARGIN_PX - width >= stage.left + EDGE_CHIP_MARGIN_PX
+      ? Math.min(stage.right, laneLeft - EDGE_CHIP_MARGIN_PX)
+      : stage.right;
+  return selectionCalloutObstacleShift(
+    chip,
+    panels,
+    // A chip the lane rule left over the lane (a phone's) may stay there.
+    { ...stage, top, right: Math.max(laneEdge, chip.right) },
+    EDGE_CHIP_MARGIN_PX
+  );
 }

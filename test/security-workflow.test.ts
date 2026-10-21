@@ -9,6 +9,7 @@ describe('workflow runner policy', () => {
       'history-privacy.yml': ['ubuntu-24.04'],
       'history-privacy-request.yml': ['ubuntu-24.04'],
       'ci.yml': [],
+      'ci-recovery.yml': ['ubuntu-24.04'],
       'public-commit-metadata.yml': ['ubuntu-24.04'],
       'fleet-ci.yml': Array(6).fill('*fleet-runner'),
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],

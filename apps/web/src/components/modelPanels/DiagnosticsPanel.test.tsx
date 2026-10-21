@@ -4,10 +4,12 @@ import type { DiagnosticRow } from '../../lib/diagnosticsRows';
 import { DiagnosticsPanel, diagnosticCount } from './DiagnosticsPanel';
 
 describe('DiagnosticsPanel', () => {
-  it('has nothing to show without warnings', () => {
+  it('says so when there are no warnings', () => {
+    // An independent panel can be opened from the rail with nothing in it.
     expect(diagnosticCount([])).toBe(0);
     const { container } = render(<DiagnosticsPanel warnings={[]} />);
-    expect(container).toBeEmptyDOMElement();
+    expect(container.querySelector('.diagnostic-row')).toBeNull();
+    expect(screen.getByText('No warnings in this model.')).toBeVisible();
   });
 
   it('lists each warning under the feature it names', () => {

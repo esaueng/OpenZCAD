@@ -75,7 +75,10 @@ interface Groups {
 function makeService(
   groups: Partial<Groups> = {},
   filter?: SelectionFilter,
-  options: Pick<PickServiceOptions, 'profiles' | 'selectionContext'> = {}
+  options: Pick<
+    PickServiceOptions,
+    'profiles' | 'selectionContext' | 'selectThrough' | 'clippingPlane'
+  > = {}
 ) {
   const regionGroup = groups.regionGroup ?? new THREE.Group();
   const sketchGroup = groups.sketchGroup ?? new THREE.Group();
@@ -682,5 +685,112 @@ describe('selection filters narrow what a click can take', () => {
   it('finds nothing when a sketch filter is on and there is no sketch', () => {
     const { service } = makeService({ bodyGroup: layered() }, 'sketch');
     expect(service.pick(centreEvent())).toBeNull();
+  });
+});
+
+describe('X-ray select-through', () => {
+  /** A face in front of an edge on another body, both under the ray. */
+  function edgeBehindFace() {
+    const bodyGroup = new THREE.Group();
+    bodyGroup.add(
+      planeAt(5, {
+        bodyId: 'front',
+        topology: {
+          faces: [
+            {
+              topologyId: 'front-face',
+              hash: 7,
+              triangleStart: 0,
+              triangleCount: 2
+            }
+          ]
+        }
+      }),
+      batchedBody('rear', 0)
+    );
+    return bodyGroup;
+  }
+
+  it('takes the face in front while faces still hide what is behind', () => {
+    const { service } = makeService({ bodyGroup: edgeBehindFace() });
+    expect(service.pick(centreEvent())?.selection?.topologyId).toBe(
+      'front-face'
+    );
+  });
+
+  it.each([false, true])(
+    'excludes clipped faces and edges from pointer picks (X-ray: %s)',
+    (xray) => {
+      let plane: THREE.Plane | null = new THREE.Plane(
+        new THREE.Vector3(0, 0, 1),
+        -1
+      );
+      const { service } = makeService(
+        { bodyGroup: edgeBehindFace() },
+        undefined,
+        {
+          selectThrough: () => xray,
+          clippingPlane: () => plane
+        }
+      );
+      expect(service.pick(centreEvent())?.selection?.topologyId).toBe(
+        'front-face'
+      );
+      expect(
+        service.pickAll(centreEvent()).map((hit) => hit.selection?.topologyId)
+      ).toEqual(['front-face']);
+      plane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 1);
+      expect(service.pick(centreEvent())?.selection?.topologyId).toBe(
+        'edge-rear'
+      );
+      expect(
+        service.pickAll(centreEvent()).map((hit) => hit.selection?.topologyId)
+      ).toEqual(['edge-rear']);
+      plane = null;
+      expect(service.pickAll(centreEvent())).toHaveLength(2);
+    }
+  );
+
+  it.each([1, -1])(
+    'clips the edge location rather than its pick-band ray point (side: %s)',
+    (side) => {
+      const bodyGroup = new THREE.Group();
+      bodyGroup.add(batchedBody('rear', 0));
+      const { service } = makeService({ bodyGroup }, undefined, {
+        selectThrough: () => true,
+        clippingPlane: () =>
+          new THREE.Plane(new THREE.Vector3(0, side, 0), -side * 0.01)
+      });
+      const event = { clientX: 50, clientY: 49.9 } as MouseEvent;
+      service.setRayFromEvent(event);
+      const hit = service.intersect(
+        bodyGroup.children
+      )[0] as THREE.Intersection & { pointOnLine: THREE.Vector3 };
+      expect(hit.point.y).toBeGreaterThan(0.01);
+      expect(hit.pointOnLine.y).toBeCloseTo(0);
+      if (side > 0) expect(service.pick(event)).toBeNull();
+      else expect(service.pick(event)?.selection?.topologyId).toBe('edge-rear');
+    }
+  );
+
+  it('takes the rear edge through the face in X-ray', () => {
+    let xray = true;
+    const { service } = makeService(
+      { bodyGroup: edgeBehindFace() },
+      undefined,
+      { selectThrough: () => xray }
+    );
+    expect(service.pick(centreEvent())?.selection).toMatchObject({
+      bodyId: 'rear',
+      kind: 'edge',
+      topologyId: 'edge-rear'
+    });
+    // The face stays reachable by depth cycling, one step behind the edge.
+    expect(
+      service.pickAll(centreEvent()).map((candidate) => candidate.kind)
+    ).toEqual(['edge', 'face']);
+    // Back to shaded: the same click is the face again.
+    xray = false;
+    expect(service.pick(centreEvent())?.kind).toBe('face');
   });
 });

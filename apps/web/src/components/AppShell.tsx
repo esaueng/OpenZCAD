@@ -71,25 +71,33 @@ interface AppShellProps {
   /**
    * The command card of the moment — the direct-manipulation tool card, or
    * the closed-profile quick action — at the top of the right lane, over
-   * the inspector and the drawer. One anchor for every command card: it
-   * used to float over the viewport's top edge, where it covered the
-   * drawer's rows. Null gives the slot back.
+   * the inspector. One anchor for every command card: it used to float over
+   * the viewport's top edge, where it covered the model browser's rows.
+   * Null gives the slot back.
    */
   command?: ReactNode | null;
   /** Contextual properties panel; null hides it and gives the space back. */
   inspector: ReactNode | null;
   /**
    * The inspector holds a command's form (a tool's create card) rather than
-   * a selection's properties. It then owns the lane's height and the drawer
-   * gives way under it: a Hole card got 304 px of its 817 at 1280×720, with
-   * its Create button and its refusal below the fold.
+   * a selection's properties. It then owns the lane's height and a panel in
+   * the phone lane gives way under it: a Hole card got 304 px of its 817 at
+   * 1280×720, with its Create button and its refusal below the fold.
    */
   inspectorOwnsLane?: boolean;
   /**
-   * The model drawer (parameters, bodies, history), floating beside the
-   * instrument rail on the right; null while it is closed.
+   * The model panels' docks (`PanelDock`): each dock's columns against its
+   * screen edge, the floating windows and the unpinned panel beside the
+   * instrument rail, over the viewport. The rails and the lanes step inward
+   * by the docks' widths.
    */
-  drawer?: ReactNode | null;
+  panels?: ReactNode | null;
+  /**
+   * At a phone-width stage nothing docks: the one panel that shows takes the
+   * right lane under the command card and the inspector, as the model drawer
+   * did. Null while no panel shows there.
+   */
+  panelLane?: ReactNode | null;
   /**
    * The assistant's conversation, floating over the viewport above the search
    * bar. Null removes it entirely — what the assistant setting does.
@@ -139,7 +147,7 @@ interface AppShellProps {
 
 /**
  * Workspace layout frame: the viewer fills the workspace, and everything else
- * — the top islands, the column, the inspector, the drawer, the assistant —
+ * — the top islands, the column, the inspector, the panels, the assistant —
  * floats over it, so the viewport keeps its full size while modeling; there
  * is no status bar.
  */
@@ -151,7 +159,8 @@ export function AppShell({
   command = null,
   inspectorOwnsLane = false,
   inspector,
-  drawer = null,
+  panels = null,
+  panelLane = null,
   assistant,
   assistantHidden = false,
   assistantCollapsed = false,
@@ -196,7 +205,7 @@ export function AppShell({
           <div
             className={`viewer-area${inspector ? ' has-inspector' : ''}${
               inspector && inspectorOwnsLane ? ' inspector-owns-lane' : ''
-            }${command ? ' has-command' : ''}${drawer ? ' has-drawer' : ''}`}
+            }${command ? ' has-command' : ''}${panelLane ? ' has-panel-lane' : ''}`}
           >
             {viewer}
             {/* Over the viewer, under the toast lane: a takeover still
@@ -219,12 +228,13 @@ export function AppShell({
                 {stripExit.rendered}
               </ExitingFloat>
             )}
-            {/* The right lane, beside the instrument rail: the command card,
-              then the inspector, then the drawer, one column, so none of
-              them pushes into the canvas or paints over another. The
-              wrapper always renders and every slot keeps its place, so a
-              card arriving or the drawer opening never remounts an
-              inspector form mid-edit. */}
+            {panels}
+            {/* The right lane, inside the instrument rail: the command card,
+              then the inspector, then (at a phone width) the one panel that
+              shows, one column, so none of them pushes into the canvas or
+              paints over another. The wrapper always renders and every slot
+              keeps its place, so a card arriving or a panel opening never
+              remounts an inspector form mid-edit. */}
             <div className="stage-right">
               {command && <div className="command-float">{command}</div>}
               {inspectorExit.rendered && (
@@ -237,7 +247,7 @@ export function AppShell({
                   {inspectorExit.rendered}
                 </ExitingFloat>
               )}
-              {drawer && <div className="model-drawer-float">{drawer}</div>}
+              {panelLane && <div className="panel-lane-float">{panelLane}</div>}
             </div>
             {readout}
             {onDropFiles && (

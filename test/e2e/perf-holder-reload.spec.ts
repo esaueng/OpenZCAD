@@ -18,6 +18,7 @@ import {
   assertBenchmarkCheckout,
   benchmarkCheckout
 } from '../support/benchmarkCheckout';
+import { privateArtifactPaths } from '../support/privateArtifacts';
 
 /**
  * H02 measurement probe (ROADMAP.md): the first parameter edit after a reload
@@ -487,11 +488,18 @@ const scenarios: Scenario[] = [
   }
 ];
 
+const privatePaths =
+  process.env.OZ_PERF && process.env.OZ_PERF_HOLDER_STEP
+    ? privateArtifactPaths(process.env.OZ_PERF_OUT, undefined, [
+        process.env.OZ_PERF_HOLDER_STEP
+      ])
+    : undefined;
+
 // A private STEP file on this machine: every value is relative to what the
 // verified recipe measured, because the source's dimensions are not known
 // here. `initial` is read from the field after Apply.
 if (process.env.OZ_PERF_HOLDER_STEP) {
-  const file = process.env.OZ_PERF_HOLDER_STEP;
+  const file = privatePaths?.inputs[0] ?? process.env.OZ_PERF_HOLDER_STEP;
   const parameter = process.env.OZ_PERF_HOLDER_PARAMETER ?? 'opening_width';
   const defaultSuggestions =
     parameter === 'holder_height'
@@ -525,6 +533,7 @@ for (const scenario of scenarios) {
     page
   }, testInfo) => {
     test.setTimeout(600_000);
+    privatePaths?.artifactDirectory(testInfo.project.outputDir);
     const checkout = benchmarkCheckout({
       requireClean: !!process.env.H02_CACHE_MODE
     });
@@ -746,8 +755,13 @@ for (const scenario of scenarios) {
       cacheEvents: caches
     };
     // Retain completed samples even when a regression budget fails.
-    const out =
-      process.env.OZ_PERF_OUT ?? 'perf-results/perf-holder-reload.jsonl';
+    const out = privatePaths
+      ? privateArtifactPaths(
+          privatePaths.output,
+          undefined,
+          privatePaths.inputs
+        ).output
+      : (process.env.OZ_PERF_OUT ?? 'perf-results/perf-holder-reload.jsonl');
     await mkdir(out.slice(0, out.lastIndexOf('/')), { recursive: true });
     await writeFile(out, `${JSON.stringify(sample)}\n`, { flag: 'a' });
     if (process.env.H02_CACHE_MODE) {

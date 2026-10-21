@@ -129,10 +129,10 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
       { timeout: 30_000 }
     )
     .toBeGreaterThan(0);
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
   await keypad.getByRole('button', { name: 'Apply radius' }).click();
   await expect(status).toContainText('Filleted 1 edge at 1 mm.');
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await expect(status).not.toContainText(
     /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
     { timeout: 30_000 }
@@ -189,7 +189,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
     .toBeCloseTo(2, 6);
   expect((await readBlend(canvas))?.lineageName).toBe(selectedLineage);
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await keypad.getByRole('button', { name: 'Apply radius' }).click();
   await expect(status).toContainText('Set Fillet edges radius to R 2 mm.');
   await expect(editFillet).toBeVisible();
@@ -209,7 +209,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   await expect(status).toContainText('Set Fillet edges radius to R 3 mm.');
   await expect(editFillet).toBeVisible();
   await expect(chip).toHaveText('Edit Fillet · R 3 mm');
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
 
   await chip.click();
   keypad = page.getByRole('dialog', { name: 'Radius value' });
@@ -220,7 +220,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   await expect(
     page.locator('.feature-row', { hasText: /^Fillet edges/ })
   ).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
   await expect.poll(() => readBlend(canvas), { timeout: 30_000 }).toBeNull();
   expect(consoleErrors).toEqual([]);
 });
@@ -278,7 +278,7 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   let keypad = page.getByRole('dialog', { name: 'Radius value' });
   await keypad.getByRole('textbox').fill('1');
   await keypad.getByRole('button', { name: 'Apply radius' }).click();
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await expect
     .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
       timeout: 30_000
@@ -300,7 +300,7 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
       timeout: 30_000
     })
     .toBeCloseTo(2, 6);
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
 
   // A radius the kernel cannot build on this box is refused at the handle:
   // the cause lands in the tool card in the kernel's plain words, the chip
@@ -444,7 +444,7 @@ test('resizes an imported analytic blend twice without reselection', async ({
     .toBeCloseTo(1.5, 6);
   await expect(editFillet).toBeVisible();
   await expect(chip).toHaveText('Edit Fillet · R 1.5 mm');
-  await expect(page.getByRole('button', { name: 'History 3' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 3' })).toBeVisible();
   expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
     []
   );
@@ -496,7 +496,7 @@ test('still refuses an oversize radius after a slow blend preview', async ({
   let keypad = page.getByRole('dialog', { name: 'Radius value' });
   await keypad.getByRole('textbox').fill('1');
   await keypad.getByRole('button', { name: 'Apply radius' }).click();
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await expect
     .poll(async () => (await readBlend(canvas))?.blendRadius ?? null, {
       timeout: 30_000

@@ -21,9 +21,12 @@ import {
   grownFloatRect,
   hitTest,
   isDragStart,
+  isFloatCovered,
   loadPanelLayout,
+  matchingPreset,
   migratePanelState,
   moveFloat,
+  movePanelInStack,
   normalizePanelLayout,
   notePanelUsed,
   openPanel,
@@ -47,6 +50,7 @@ import {
   placePanel,
   popOutPanel,
   popOutRect,
+  presentPanel,
   previewLayout,
   raiseFloat,
   resizeFloat,
@@ -56,6 +60,7 @@ import {
   splitGapEvenly,
   togglePanel,
   unpinPanel,
+  unpinnedSlotReserves,
   wouldExceedCap,
   type PanelId,
   type PanelLayout,
@@ -199,6 +204,49 @@ describe('panel layout presets', () => {
       expect(picked.homes).toEqual({});
       expect(picked.unpinned).toBeNull();
     }
+  });
+
+  it('names the preset a layout is arranged as, until it is rearranged', () => {
+    for (const name of PANEL_PRESET_IDS) {
+      expect(matchingPreset(applyPreset(modelOnly(), name))).toBe(name);
+    }
+    // The settings, the unpinned panel and the homes are not arrangement.
+    let layout = setOption(applyPreset(modelOnly(), 'full'), 'width', 'wide');
+    layout = setOption(layout, 'compact', true);
+    layout = openPanel(layout, 'diagnostics');
+    expect(layout.unpinned).toBe('diagnostics');
+    expect(matchingPreset(layout)).toBe('full');
+    // Each column's split counts by proportion, not by stored scale.
+    const scaled = layoutWith({
+      ...layout,
+      weights: {
+        ...layout.weights,
+        bodies: 3,
+        history: 3,
+        parameters: 2,
+        revisions: 0.64
+      }
+    });
+    expect(matchingPreset(scaled)).toBe('full');
+    // A gap resize, a move or a window is no preset any more.
+    const geometry = computePanelGeometry(layout, STAGE);
+    const gap = geometry.gaps.find((entry) => entry.above === 'bodies')!;
+    expect(
+      matchingPreset(
+        resizeGap(layout, 'bodies', 'history', 40, gap.pxPerWeight)
+      )
+    ).toBeNull();
+    expect(matchingPreset(movePanelInStack(layout, 'history', -1))).toBeNull();
+    expect(
+      matchingPreset(
+        popOutPanel(layout, 'revisions', { x: 400, y: 200, w: 300, h: 300 })
+      )
+    ).toBeNull();
+    // The right-only Essentials is not a menu preset.
+    expect(matchingPreset(defaultPanelLayout())).toBeNull();
+    expect(matchingPreset(defaultPanelLayout({ leftDock: true }))).toBe(
+      'essentials'
+    );
   });
 
   it('defaults a new device to the right-only Essentials until the left dock ships', () => {
@@ -497,6 +545,55 @@ describe('placing panels', () => {
     layout = placePanel(layout, 'history', { kind: 'newColumn', side: 'left' });
     expect(layout.weights.history).toBe(1);
     expect(layout.homes.history).toBeUndefined();
+  });
+});
+
+describe('moving a panel within its stack', () => {
+  it('moves one place up or down in a column, stopping at the ends', () => {
+    const layout = layoutWith({
+      right: [['parameters', 'bodies', 'history']]
+    });
+    expect(movePanelInStack(layout, 'parameters', 1).right).toEqual([
+      ['bodies', 'parameters', 'history']
+    ]);
+    expect(movePanelInStack(layout, 'history', -1).right).toEqual([
+      ['parameters', 'history', 'bodies']
+    ]);
+    expect(movePanelInStack(layout, 'parameters', -1)).toBe(layout);
+    expect(movePanelInStack(layout, 'history', 1)).toBe(layout);
+    // A reorder keeps the panel's height.
+    const weighted = { ...layout, weights: { ...layout.weights, bodies: 2 } };
+    expect(movePanelInStack(weighted, 'bodies', 1).weights.bodies).toBe(2);
+  });
+
+  it('moves within a floating window, which keeps its rectangle', () => {
+    let layout = popOutPanel(modelOnly(), 'history', {
+      x: 100,
+      y: 100,
+      w: 300,
+      h: 400
+    });
+    layout = placePanel(layout, 'revisions', {
+      kind: 'group',
+      groupId: layout.floats[0]!.id
+    });
+    const moved = movePanelInStack(layout, 'revisions', -1, STAGE);
+    expect(moved.floats[0]!.panels).toEqual(['revisions', 'history']);
+    expect(moved.floats[0]).toMatchObject({
+      x: layout.floats[0]!.x,
+      y: layout.floats[0]!.y,
+      w: layout.floats[0]!.w,
+      h: layout.floats[0]!.h
+    });
+  });
+
+  it('leaves closed and unpinned panels, and a locked layout, alone', () => {
+    const layout = layoutWith({ right: [['parameters', 'bodies']] });
+    expect(movePanelInStack(layout, 'history', 1)).toBe(layout);
+    const unpinned = openPanel(layout, 'history');
+    expect(movePanelInStack(unpinned, 'history', -1)).toBe(unpinned);
+    const locked = setOption(layout, 'locked', true);
+    expect(movePanelInStack(locked, 'parameters', 1)).toBe(locked);
   });
 });
 
@@ -1159,6 +1256,54 @@ describe('floating window z-order', () => {
     ).toBe(bottom);
   });
 
+  it('brings a covered window to the front from the rail instead of closing it', () => {
+    const layout = threeWindows();
+    expect(isFloatCovered(layout, 'history', STAGE)).toBe(true);
+    expect(isFloatCovered(layout, 'diagnostics', STAGE)).toBe(false);
+    const raised = togglePanel(layout, 'history', STAGE);
+    expect(panelStatus(raised, 'history')).toBe('floating');
+    expect(order(raised).at(-1)).toBe('history');
+    expect(raised.recent[0]).toBe('history');
+    // On top now, the next press closes it.
+    expect(panelStatus(togglePanel(raised, 'history', STAGE), 'history')).toBe(
+      'closed'
+    );
+    // A lower window nothing overlaps closes on the first press.
+    const apart = moveFloat(
+      layout,
+      layout.floats[0]!.id,
+      { x: 900, y: 100 },
+      STAGE
+    );
+    const lowered = raiseFloat(
+      raiseFloat(apart, apart.floats[0]!.id),
+      apart.floats[1]!.id
+    );
+    expect(order(lowered)[0]).toBe('history');
+    expect(isFloatCovered(lowered, 'history', STAGE)).toBe(false);
+    expect(panelStatus(togglePanel(lowered, 'history', STAGE), 'history')).toBe(
+      'closed'
+    );
+    // Only floating panels can be covered.
+    expect(isFloatCovered(essentials(), 'parameters', STAGE)).toBe(false);
+  });
+
+  it('closes the phone lane panel on a press even when its stored window is covered', () => {
+    // A window's move or resize raises it without counting as a use, so the
+    // lane can show a panel whose stored window sits under another one.
+    const layout = threeWindows();
+    const shown: PanelLayout = {
+      ...layout,
+      recent: ['history', ...layout.recent.filter((id) => id !== 'history')]
+    };
+    const phone = { width: 390, height: 844 };
+    expect(isFloatCovered(shown, 'history', STAGE)).toBe(true);
+    expect(computePanelGeometry(shown, phone).phonePanel).toBe('history');
+    expect(panelStatus(togglePanel(shown, 'history', phone), 'history')).toBe(
+      'closed'
+    );
+  });
+
   it('hit-tests the raised window first', () => {
     const layout = threeWindows();
     const point = { x: 250, y: 250 };
@@ -1502,6 +1647,34 @@ describe('the dock footprint cap', () => {
     // A projection only: the stored layout is unchanged.
     expect(layout).toEqual(before);
     expect(narrow.dockWidth).toEqual({ left: 0, right: CW + GAP });
+  });
+
+  it('re-runs the cap for the panel width: Large parks Essentials’ left column at 1280px', () => {
+    const stage = { width: 1280, height: 720 };
+    for (const width of ['narrow', 'regular'] as const) {
+      const geometry = computePanelGeometry(
+        setOption(essentials(), 'width', width),
+        stage
+      );
+      expect(geometry.columns, width).toHaveLength(2);
+      expect(geometry.columnWidth).toBe(PANEL_COLUMN_WIDTHS[width]);
+    }
+    const wide = setOption(essentials(), 'width', 'wide');
+    // 60px a side and 370px a column: 860px, past 60% of 1280px (768px).
+    expect(dockFootprint({ left: 1, right: 1 }, 360)).toBe(860);
+    const geometry = computePanelGeometry(wide, stage);
+    expect(geometry.parkedColumns).toEqual([{ side: 'left', column: 0 }]);
+    expect(geometry.parked.bodies).toBe(true);
+    expect(geometry.panels.parameters).toMatchObject({
+      mode: 'docked',
+      w: 360
+    });
+    // A projection: the stored layout keeps Objects docked.
+    expect(wide.left).toEqual([['bodies']]);
+    expect(
+      computePanelGeometry(setOption(wide, 'width', 'regular'), stage).parked
+        .bodies
+    ).toBe(false);
   });
 
   it('docks one column at 721px', () => {
@@ -2010,6 +2183,88 @@ describe('phone-width stages', () => {
     expect(computePanelGeometry(modelOnly(), phoneStage).phonePanel).toBeNull();
     // Noting the panel already at the head changes nothing.
     expect(notePanelUsed(layout, 'parameters')).toBe(layout);
+  });
+
+  it('brings an open panel the lane is not showing into it instead of closing it', () => {
+    const phoneStage: PanelStage = { width: 600, height: 800 };
+    const layout = notePanelUsed(essentials(), 'parameters');
+    expect(computePanelGeometry(layout, phoneStage).phonePanel).toBe(
+      'parameters'
+    );
+    // Objects is docked but not shown: the press shows it, docked as before.
+    const shown = togglePanel(layout, 'bodies', phoneStage);
+    expect(computePanelGeometry(shown, phoneStage).phonePanel).toBe('bodies');
+    expect(shown.right).toEqual(layout.right);
+    expect(shown.left).toEqual(layout.left);
+    // A second press on the panel the lane shows closes it, remembering its
+    // place, and the lane falls back to the next open panel.
+    const closed = togglePanel(shown, 'bodies', phoneStage);
+    expect(panelStatus(closed, 'bodies')).toBe('closed');
+    expect(closed.homes.bodies).toMatchObject({
+      kind: 'column',
+      side: 'left',
+      column: 0,
+      index: 0
+    });
+    expect(computePanelGeometry(closed, phoneStage).phonePanel).toBe(
+      'parameters'
+    );
+    // Wider than the phone limit, the same press closes the docked panel.
+    expect(panelStatus(togglePanel(layout, 'bodies', STAGE), 'bodies')).toBe(
+      'closed'
+    );
+  });
+});
+
+describe('search hand-off', () => {
+  it('opens a closed panel unpinned, not at its home', () => {
+    const closed = closePanel(essentials(), 'parameters');
+    expect(closed.homes.parameters).toBeDefined();
+    const shown = presentPanel(closed, 'parameters', STAGE);
+    expect(panelStatus(shown, 'parameters')).toBe('unpinned');
+    expect(shown.recent[0]).toBe('parameters');
+    // A rail press would have gone home instead.
+    expect(
+      panelStatus(openPanel(closed, 'parameters', STAGE), 'parameters')
+    ).toBe('docked');
+  });
+
+  it('leaves an open panel where it is and makes it the most recent', () => {
+    const layout = essentials();
+    const shown = presentPanel(layout, 'bodies', STAGE);
+    expect(shown.left).toEqual(layout.left);
+    expect(shown.right).toEqual(layout.right);
+    expect(shown.recent[0]).toBe('bodies');
+    // So the phone lane shows it.
+    expect(
+      computePanelGeometry(shown, { width: 600, height: 800 }).phonePanel
+    ).toBe('bodies');
+    // Already the most recent and showing: nothing changes.
+    expect(presentPanel(shown, 'bodies', STAGE)).toBe(shown);
+  });
+
+  it('replaces the unpinned panel, turns Hide all off and reveals a parked one', () => {
+    const peeking = openPanel(modelOnly(), 'history', STAGE);
+    const replaced = presentPanel(peeking, 'parameters', STAGE);
+    expect(replaced.unpinned).toBe('parameters');
+    expect(panelStatus(replaced, 'history')).toBe('closed');
+
+    const hidden = setOption(essentials(), 'hidden', true);
+    expect(presentPanel(hidden, 'parameters', STAGE).options.hidden).toBe(
+      false
+    );
+
+    const narrow: PanelStage = {
+      width: Math.floor(stageFitting(2)) - 1,
+      height: 900
+    };
+    expect(computePanelGeometry(essentials(), narrow).parked.bodies).toBe(true);
+    const revealed = presentPanel(essentials(), 'bodies', narrow);
+    expect(revealed.revealed).toBe('bodies');
+    expect(panelStatus(revealed, 'bodies')).toBe('docked');
+    expect(computePanelGeometry(revealed, narrow).panels.bodies?.mode).toBe(
+      'revealed'
+    );
   });
 });
 
@@ -2686,5 +2941,35 @@ describe('panel layout persistence', () => {
     expect(storage.entries.get(PANEL_LAYOUT_STORAGE_KEY)).not.toContain(
       PANEL_SLOT
     );
+  });
+});
+
+describe('the unpinned slot beside the right lane', () => {
+  // Today's tokens: 40px rail, 10px gaps, a 296px column (306px with its
+  // gap) and the 330px card width the lane keeps.
+  const insets = { rail: 40, gap: 10 };
+  const stage = (width: number) => ({ width, height: 720, insets });
+
+  it('reserves its width while the lane keeps a full card beside it', () => {
+    // 60 (rail and gaps) + 306 (dock) + 306 (slot) + 10 + 330 = 1012.
+    expect(unpinnedSlotReserves(stage(1012), 306, 306, 330)).toBe(true);
+    expect(unpinnedSlotReserves(stage(1280), 306, 306, 330)).toBe(true);
+    // No dock: the slot alone needs 60 + 306 + 10 + 330 = 706.
+    expect(unpinnedSlotReserves(stage(721), 0, 306, 330)).toBe(true);
+  });
+
+  it('covers the lane when reserving would squeeze its card', () => {
+    expect(unpinnedSlotReserves(stage(1011), 306, 306, 330)).toBe(false);
+    // Just past the phone breakpoint a docked column and the slot would have
+    // left the inspector about 39px.
+    expect(unpinnedSlotReserves(stage(721), 306, 306, 330)).toBe(false);
+  });
+
+  it('leaves the lane its card between the slot and the left dock', () => {
+    // The left dock's 306px come off the lane too: 1012 + 306 = 1318.
+    expect(unpinnedSlotReserves(stage(1318), 306, 306, 330, 306)).toBe(true);
+    expect(unpinnedSlotReserves(stage(1317), 306, 306, 330, 306)).toBe(false);
+    // Essentials at 1280px: the slot covers the lane rather than squeeze it.
+    expect(unpinnedSlotReserves(stage(1280), 306, 306, 330, 306)).toBe(false);
   });
 });

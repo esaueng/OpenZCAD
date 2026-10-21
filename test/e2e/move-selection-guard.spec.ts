@@ -435,7 +435,9 @@ test('a nonempty box sweep asks before replacing a typed Move target', async ({
     await page.mouse.up();
   }
   const pickBody = () => sweep(0.85, 0.05, 0.01, 0.95);
-  await sweep(0.6, 0.04, 0.72, 0.14);
+  // An empty sweep in open stage, left of the model: the Move card stands in
+  // the right lane, which reaches past the docked panels into the top centre.
+  await sweep(0.1, 0.1, 0.2, 0.25);
   await expect(ask).toHaveCount(0);
   await expect(move.getByLabel('Move X in mm')).toHaveValue('5');
   await expect(canvas).toHaveAttribute('data-e2e-selected-bodies', selected);
