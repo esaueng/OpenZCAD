@@ -539,33 +539,41 @@ impl ProjectRules {
             }
         }
 
-        // The last-leaf exception waives only the stale leaf's own revocation:
-        // the user's only remaining leaf is revoked, its revocation named this
-        // joiner as the replacement, and this Commit removes it.
+        // The last-leaf exception waives only the stale leaves' own
+        // revocations: every remaining leaf of the user is revoked, each
+        // revocation named this joiner as the replacement, and this Commit
+        // removes one of them. An external Commit may remove only one leaf
+        // (RFC 9420 §12.4.3.2), so the joiner removes the others in its next
+        // Commit; until then they can sign nothing anyone accepts.
         let replaced = if status == CredentialStatus::Certified {
             directory.replaces(&joiner.user_id, &joiner.device_id)
         } else {
             Vec::new()
         };
-        let own: Vec<Member> = roster
+        let own: Vec<(Member, DeviceCredential)> = roster
             .members()
             .into_iter()
-            .filter(|m| DeviceCredential::from_identity(&m.signing_identity).is_ok_and(|c| c.user_id == joiner.user_id))
+            .filter_map(|m| {
+                let credential = DeviceCredential::from_identity(&m.signing_identity).ok()?;
+                (credential.user_id == joiner.user_id).then_some((m, credential))
+            })
             .collect();
-        let exempt_device: Option<Vec<u8>> = match own.as_slice() {
-            [only] => DeviceCredential::from_identity(&only.signing_identity)
-                .ok()
-                .filter(|c| {
-                    replaced.contains(&c.device_id)
-                        && directory.credential_status(
-                            &c.user_id,
-                            &c.device_id,
-                            only.signing_identity.signature_key.as_bytes(),
-                        ) == CredentialStatus::Revoked
-                        && removed.as_ref().is_some_and(|(index, _, _)| *index == only.index)
-                })
-                .map(|c| c.device_id),
-            _ => None,
+        let all_stale = !own.is_empty()
+            && own.iter().all(|(m, c)| {
+                replaced.contains(&c.device_id)
+                    && directory.credential_status(
+                        &c.user_id,
+                        &c.device_id,
+                        m.signing_identity.signature_key.as_bytes(),
+                    ) == CredentialStatus::Revoked
+            });
+        let removes_stale = removed
+            .as_ref()
+            .is_some_and(|(index, _, _)| own.iter().any(|(m, _)| m.index == *index));
+        let exempt_devices: Vec<Vec<u8>> = if all_stale && removes_stale {
+            own.iter().map(|(_, c)| c.device_id.clone()).collect()
+        } else {
+            Vec::new()
         };
 
         match psk_epochs.as_slice() {
@@ -588,7 +596,7 @@ impl ProjectRules {
                         format!("PSK epoch {epoch} is outside the {window}-epoch window (now {now})"),
                     ));
                 }
-                if let Some(cutoff) = directory.revocation_cutoff(&joiner.user_id, exempt_device.as_deref()) {
+                if let Some(cutoff) = directory.revocation_cutoff(&joiner.user_id, &exempt_devices) {
                     if epoch < cutoff {
                         reasons.push(Reason::new(
                             "rejoin-psk-before-revocation",

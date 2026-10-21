@@ -25,10 +25,10 @@ pub enum CredentialStatus {
 /// Authentication Service).
 pub trait DeviceListVerifier: Send + Sync {
     fn credential_status(&self, user_id: &[u8], device_id: &[u8], signature_key: &[u8]) -> CredentialStatus;
-    /// The newest revocation cutoff among the user's revoked devices, except
-    /// `except`: the first epoch of this group whose rejoin PSK that device
+    /// The newest revocation cutoff among the user's revoked devices, other
+    /// than those in `except`: the first epoch of this group whose rejoin PSK that device
     /// must not know. A rejoin PSK must be from this epoch or later.
-    fn revocation_cutoff(&self, user_id: &[u8], except: Option<&[u8]>) -> Option<u64>;
+    fn revocation_cutoff(&self, user_id: &[u8], except: &[Vec<u8>]) -> Option<u64>;
     /// The group epoch from which this leaf key's certification counts, if
     /// the device list records one.
     fn certified_epoch(&self, user_id: &[u8], device_id: &[u8], signature_key: &[u8]) -> Option<u64>;
@@ -72,11 +72,11 @@ impl DeviceListVerifier for DeviceDirectory {
         }
     }
 
-    fn revocation_cutoff(&self, user_id: &[u8], except: Option<&[u8]>) -> Option<u64> {
+    fn revocation_cutoff(&self, user_id: &[u8], except: &[Vec<u8>]) -> Option<u64> {
         self.users.get(user_id).and_then(|u| {
             u.devices
                 .iter()
-                .filter(|(id, d)| d.revoked && Some(id.as_slice()) != except)
+                .filter(|(id, d)| d.revoked && !except.contains(id))
                 .filter_map(|(_, d)| d.revocation_cutoff)
                 .max()
         })

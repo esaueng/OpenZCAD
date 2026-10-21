@@ -1317,6 +1317,59 @@ const laterRevocation = suite<LaterRevocationCast>({
   ]
 });
 
+interface TwoStaleCast {
+  world: World;
+  a1: Device;
+  c1: Device;
+  c1b: Device;
+}
+
+const twoStaleLeaves = suite<TwoStaleCast>({
+  name: 'last-leaf recovery when every remaining leaf is revoked',
+  async setup(mls) {
+    const world = new World(mls, project('lastleaf-two'));
+    const a1 = await world.device('A', 'A1');
+    const c1 = await world.device('C', 'C1');
+    const c1b = await world.device('C', 'C1b');
+    await createProject(world, a1);
+    await addDevices(world, a1, [], [c1, c1b], {
+      setRoles: [{ userId: 'C', role: 'editor' }]
+    });
+    await tick(world, c1, [a1, c1b], 2);
+    return { world, a1, c1, c1b };
+  },
+  steps: [
+    {
+      name: 'refused while another leaf of the user is still unrevoked; accepted once both are revoked, and the second is removed next',
+      async run({ world, a1, c1, c1b }) {
+        const first = (await epochOf(a1)) + 1;
+        await world.revoke('C', 'C1', first, 'C2');
+        const c2 = await world.device('C', 'C2');
+        const early = await world.copy(c2, 'C2 (C1b still active)');
+        const psk = world.newestPsk('C', first);
+        const stale = await indexOf(c1);
+        const active = await refused(
+          () => tryRejoin(early, a1, psk, [a1], stale),
+          ...only('rejoin-psk-before-revocation')
+        );
+        await world.revoke('C', 'C1b', (await epochOf(a1)) + 1, 'C2');
+        const accepted = await rejoin(world, c2, a1, psk, [a1], stale);
+        // The external Commit removed C1; C2 removes C1b in its next Commit.
+        await advance(world, c2, [a1], { remove: [await indexOf(c1b)] });
+        world.retire(c1, c1b);
+        const members = (await a1.session.status()).members.map(
+          (m) => m.deviceId
+        );
+        assert(
+          members.length === 2 && members.includes('C2'),
+          'both revoked leaves are gone'
+        );
+        return `${active}; ${accepted}; ${await agree([a1, c2])}`;
+      }
+    }
+  ]
+});
+
 // ---------------------------------------------------------------------------
 // Viewer and editor limits
 
@@ -1619,7 +1672,8 @@ export const scenarioSuites: ScenarioSuite[] = [
   lastLeaf,
   roleLimits,
   carriedRecords,
-  laterRevocation
+  laterRevocation,
+  twoStaleLeaves
 ];
 
 /** Run every suite in order; used by the browser harness. */

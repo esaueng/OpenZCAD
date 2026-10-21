@@ -83,10 +83,12 @@ A refusal is an `MlsError` of kind `policy` whose `reasons` carry stable codes.
   a re-add sets a new `since`) and the latest recorded Remove of a leaf with
   the same device or key; inside the window; at most one Remove, of the
   joiner's own user.
-- **The last-leaf exception:** when a user's only leaf carries a revoked
-  credential, the replacement the revocation named may rejoin with a PSK from
+- **The last-leaf exception:** when every remaining leaf of a user carries a
+  revoked credential, the replacement the revocation named may rejoin with a PSK from
   before that leaf's own revocation (never before a later revocation of
-  another device), if the same external Commit removes that leaf.
+  another device), if the same external Commit removes one of those leaves.
+  An external Commit removes at most one leaf, so the replacement removes the
+  rest in its next Commit; until then they can sign nothing anyone accepts.
 
 Leaf-removal records come from the group's own Commits. A member who joins
 by Welcome, or rejoins, starts from the records in the committer's signed
