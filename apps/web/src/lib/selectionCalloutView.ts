@@ -253,15 +253,29 @@ export interface ScreenRect {
 }
 
 /**
- * The panels floating over the viewport that a selection chip must not
- * slide under: the right lane (inspector, drawer, command card), the left
- * column and palette, and the instrument rail. Under one of them the chip's
- * verbs and its operation's way out would be drawn but not pressable — the
- * column-top chip it replaced always sat in the lane, so it never had to
- * avoid it.
+ * Every model panel drawn over the viewport: both docks' columns, the
+ * floating windows, the unpinned panel beside the rail and the phone lane's
+ * panel. Only what is drawn matches — a panel hidden by Hide all or
+ * suspended by a sketch or a drag is not rendered — so a closed panel
+ * leaves no stale obstacle. A transient panel may cover the model, but
+ * nothing interactive or fitted is placed under it.
  */
-export const SELECTION_CALLOUT_OBSTACLES =
-  '.stage-right > *, .palette-float, .workspace-column-float, .instrument-rail';
+export const MODEL_PANEL_OBSTACLES =
+  '.panel-column, .panel-float, .panel-unpinned, .panel-lane-float';
+
+/** The model panels that stand in the right lane, beside the inspector. */
+export const RIGHT_LANE_MODEL_PANELS =
+  '.panel-column[data-side="right"], .panel-unpinned, .panel-lane-float';
+
+/**
+ * The panels floating over the viewport that a selection chip must not
+ * slide under: the right lane (inspector, command card), the model panels,
+ * the left column and palette, and the instrument rail. Under one of them
+ * the chip's verbs and its operation's way out would be drawn but not
+ * pressable — the column-top chip it replaced always sat in the lane, so it
+ * never had to avoid it.
+ */
+export const SELECTION_CALLOUT_OBSTACLES = `.stage-right > *, ${MODEL_PANEL_OBSTACLES}, .palette-float, .workspace-column-float, .instrument-rail`;
 
 /**
  * The smallest move that takes a chip out from under every obstacle and

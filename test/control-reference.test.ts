@@ -89,6 +89,11 @@ describe('controls reference', () => {
     ).toHaveLength(9);
   });
 
+  it('documents Hide all panels on its Ctrl chord, not Tab', () => {
+    expect(keyboardItem('hide-panels')?.keys).toEqual(['Ctrl/Cmd+\\']);
+    expect(keyboardItem('hide-panels')?.commands).toEqual(['panels-hide-all']);
+  });
+
   it('keeps every reference item id unique', () => {
     const ids = [...KEYBOARD_CONTROL_GROUPS, ...POINTER_CONTROL_GROUPS].flatMap(
       (group) => group.items.map((item) => item.id)

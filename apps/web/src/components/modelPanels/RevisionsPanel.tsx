@@ -5,7 +5,7 @@ import {
   listLocalSaveStateCheckpoints,
   onLocalSaveStatesChanged
 } from '../../lib/localProjectStore';
-import type { SidebarProps } from '../Sidebar';
+import type { ModelPanelSource } from './modelPanelProps';
 
 /**
  * The save points Revisions lists: the document's own, merged with the ones
@@ -21,15 +21,15 @@ export interface RevisionCheckpoints {
 
 /**
  * Loads this device's save states for the open project and keeps them current.
- * The composer calls it, not the panel, because whether Revisions shows at all
- * depends on what it finds.
+ * The panel's frame calls it, not the list, because the header counts what
+ * it finds.
  */
 export function useRevisionCheckpoints({
   projectId,
   checkpoints,
   restorableCheckpointIds
 }: Pick<
-  SidebarProps,
+  ModelPanelSource,
   'projectId' | 'checkpoints' | 'restorableCheckpointIds'
 >): RevisionCheckpoints {
   const [localSaveStates, setLocalSaveStates] = useState<{
@@ -80,7 +80,7 @@ export function useRevisionCheckpoints({
   };
 }
 
-/** The Revisions header count. The panel hides while it is zero. */
+/** The Revisions header count. */
 export function revisionCount(revisions: RevisionCheckpoints): number {
   return revisions.visible.length;
 }
@@ -101,7 +101,7 @@ function revisionTime(createdAt: string): string {
 }
 
 export type RevisionsPanelProps = Pick<
-  SidebarProps,
+  ModelPanelSource,
   | 'documentVersion'
   | 'restorableCheckpointIds'
   | 'onRestoreCheckpoint'
@@ -120,6 +120,13 @@ export function RevisionsPanel({
     canonicalIds: canonicalCheckpointIds,
     local: localCheckpoints
   } = revisions;
+  if (visibleCheckpoints.length === 0) {
+    return (
+      <p className="muted sidebar-hint">
+        No save points yet. Save the project to start its revision list.
+      </p>
+    );
+  }
   return (
     <div className="revision-list">
       {[...visibleCheckpoints].reverse().map((checkpoint, index) => {

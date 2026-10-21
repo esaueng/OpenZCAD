@@ -67,15 +67,15 @@ async function createBox(page: Page, name: string) {
   await expectBodyCount(page, 1);
 }
 
-test('Fit keeps the view direction and frames clear of the open drawer', async ({
+test('Fit keeps the view direction and frames clear of the docked panels', async ({
   page
 }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   await createBox(page, 'Fit Direction Part');
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
-  const drawer = page.locator('.model-drawer-float');
-  await expect(drawer).toBeVisible();
+  const dock = page.locator('.panel-column');
+  await expect(dock).toBeVisible();
 
   await page.getByRole('button', { name: 'Standard views' }).click();
   await page.getByRole('button', { name: 'Front view (1)' }).click();
@@ -83,25 +83,26 @@ test('Fit keeps the view direction and frames clear of the open drawer', async (
 
   // F used to glide back to the iso home and frame against the full canvas.
   await page.keyboard.press('f');
-  const withDrawer = await settledCamera(canvas);
-  const front = directionOf(withDrawer);
+  const withDock = await settledCamera(canvas);
+  const front = directionOf(withDock);
   expect(front[0]!).toBeCloseTo(0, 3);
   expect(front[1]!).toBeCloseTo(-1, 3);
   expect(front[2]!).toBeCloseTo(0, 3);
 
-  // Close the drawer and fit again: the same direction, and the camera sits
-  // further left in world X, because the part no longer has to clear the
-  // drawer on the right of the screen (+X from the front).
-  await page
+  // Close every docked panel and fit again: the same direction, and the
+  // camera sits further left in world X, because the part no longer has to
+  // clear the dock on the right of the screen (+X from the front).
+  const pressed = page
     .getByRole('toolbar', { name: 'Model panels' })
-    .locator('button[aria-pressed="true"]')
-    .first()
-    .click();
-  await expect(drawer).toHaveCount(0);
+    .locator('button[aria-pressed="true"]');
+  while ((await pressed.count()) > 0) {
+    await pressed.first().click();
+  }
+  await expect(dock).toHaveCount(0);
   await page.keyboard.press('f');
-  const withoutDrawer = await settledCamera(canvas);
-  expect(directionOf(withoutDrawer)[1]!).toBeCloseTo(-1, 3);
-  expect(withDrawer.target[0]! - withoutDrawer.target[0]!).toBeGreaterThan(1);
+  const withoutDock = await settledCamera(canvas);
+  expect(directionOf(withoutDock)[1]!).toBeCloseTo(-1, 3);
+  expect(withDock.target[0]! - withoutDock.target[0]!).toBeGreaterThan(1);
 });
 
 test('picking a face leaves the scale bar alone', async ({ page }) => {
