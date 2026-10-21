@@ -3487,6 +3487,14 @@ export interface E2eeIdentityRecord {
   entries: E2eeDeviceListEntryRecord[];
   transition: E2eeSignedStatementRecord | null;
   wraps: E2eeWrapRecord[];
+  /** Display metadata only; live approval wraps determine read-only access. */
+  approvedDevices?: E2eeApprovedDeviceRecord[];
+}
+
+export interface E2eeApprovedDeviceRecord {
+  deviceId: string;
+  label: string;
+  approvedAt: string;
 }
 
 export interface E2eePreviousIdentityRecord {

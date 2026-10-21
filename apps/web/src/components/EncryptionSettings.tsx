@@ -31,6 +31,7 @@ import {
   loadEncryption,
   removeDevice,
   removePasskey,
+  revokeReadOnlyDevices,
   replaceRecoveryKey,
   requestApproval,
   setUpEncryption,
@@ -171,6 +172,7 @@ type Flow =
   | { kind: 'setup' }
   | { kind: 'replace' }
   | { kind: 'remove'; deviceId: string; label: string }
+  | { kind: 'revoke-read-only' }
   | { kind: 'recover' }
   | { kind: 'add-passkey' }
   | { kind: 'remove-passkey'; targetId: string }
@@ -376,11 +378,53 @@ function AccountPanel({
           </SettingRow>
         ))}
       </Group>
+      <Group
+        title="Read-only devices"
+        note={`${account.approvedDevices.length} approved`}
+      >
+        {account.approvedDevices.map((device) => (
+          <SettingRow
+            key={device.deviceId}
+            title={device.label}
+            hint={`Approved ${formatDate(device.approvedAt)}`}
+          >
+            <Status tone="warning">Read-only</Status>
+          </SettingRow>
+        ))}
+        <SettingRow
+          title="Revoke read-only access"
+          hint="Replaces your account and encryption keys. All read-only devices must be approved again; certified devices keep working."
+        >
+          <button
+            className="secondary"
+            type="button"
+            disabled={busy || !certified}
+            onClick={() => setFlow({ kind: 'revoke-read-only' })}
+          >
+            Revoke read-only devices
+          </button>
+        </SettingRow>
+      </Group>
+      {flow?.kind === 'revoke-read-only' ? (
+        <RecoveryKeyEntry
+          {...shared}
+          title="Revoke read-only devices"
+          intro="All read-only devices will need approval again. Certified devices keep working."
+          actionLabel="Revoke read-only access"
+          danger
+          onSubmit={(secret) => revokeReadOnlyDevices(ctx, account, secret)}
+          onPasskey={
+            canUsePasskey
+              ? () => revokeReadOnlyDevices(ctx, account, 'passkey')
+              : undefined
+          }
+        />
+      ) : null}
       {flow?.kind === 'remove' ? (
         <RecoveryKeyEntry
           {...shared}
           title={`Remove ${flow.label}`}
-          intro="Removing a device replaces your account key and encryption key, so it cannot open anything new. Your other devices keep working without approval."
+          intro="Removing a device replaces your account key and encryption key, so it cannot open anything new. Certified devices keep working. Read-only devices must be approved again."
           actionLabel="Remove device"
           danger
           onSubmit={(secret) =>

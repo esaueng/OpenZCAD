@@ -44,6 +44,7 @@ import {
   lockAccount,
   parseScanCode,
   removeDevice,
+  revokeReadOnlyDevices,
   replaceRecoveryKey,
   requestApproval,
   setUpEncryption,
@@ -631,6 +632,172 @@ describe('replacing the recovery key', () => {
 });
 
 describe('device approval', () => {
+  it.each([
+    'retained',
+    'legacy pruned',
+    'colliding ID',
+    'duplicate receipts',
+    'omitted wraps'
+  ] as const)(
+    'lists and revokes read-only devices with %s approval metadata',
+    async (metadata) => {
+      const srv = server();
+      const { recovery, laptop } = await setUp(srv);
+      const survivor = await enrolled(
+        srv,
+        recovery.secret,
+        'Certified survivor'
+      );
+      const account = ready(await loadEncryption(laptop));
+      const phones: E2eeContext[] = [];
+      for (const label of ['Lost phone', 'Other reader']) {
+        const phone = device(srv);
+        if (metadata === 'colliding ID' && label === 'Lost phone') {
+          await requestApproval(phone, null, label);
+          const stored = (await phone.store.loadDevice(USER))!;
+          await phone.store.saveDevice({
+            ...stored,
+            deviceId: account.device!.deviceId
+          });
+        }
+        const request = await requestApproval(phone, null, label);
+        if (request.step !== 'waiting') throw new Error('Expected request');
+        await approveDevice(
+          laptop,
+          ready(await loadEncryption(laptop)),
+          await laptop.api.getApproval(request.approval.id),
+          { kind: 'scan', code: request.scanCode },
+          null
+        );
+        expect((await advanceApprovalAsNewDevice(phone)).step).toBe('done');
+        if (metadata === 'duplicate receipts' && label === 'Lost phone') {
+          const again = await requestApproval(phone, null, label);
+          if (again.step !== 'waiting') throw new Error('Expected request');
+          await approveDevice(
+            laptop,
+            ready(await loadEncryption(laptop)),
+            again.approval,
+            { kind: 'scan', code: again.scanCode },
+            null
+          );
+          expect((await advanceApprovalAsNewDevice(phone)).step).toBe('done');
+        }
+        phones.push(phone);
+      }
+      const ids = await Promise.all(
+        phones.map(
+          async (phone) => (await phone.store.loadDevice(USER))!.deviceId
+        )
+      );
+      srv.db
+        .prepare('UPDATE e2ee_device_approvals SET created_at = ?')
+        .run(new Date(Date.now() - 60 * 60 * 1000 - 1).toISOString());
+      if (metadata === 'legacy pruned')
+        srv.db
+          .prepare('DELETE FROM e2ee_device_approvals WHERE device_id = ?')
+          .run(ids[0]!);
+      // Pruning and the hourly cap must ignore old accounting receipts while
+      // retaining display metadata for every live read-only wrap.
+      for (let i = 0; i < MAX_APPROVALS_PER_HOUR; i += 1) {
+        const request = await requestApproval(
+          device(srv),
+          null,
+          `Attempt ${i}`
+        );
+        if (request.step !== 'waiting') throw new Error('Expected request');
+        await laptop.api.cancelApproval(request.approval.id);
+      }
+      const listed = ready(await loadEncryption(laptop));
+      expect(
+        count(
+          srv.db,
+          "SELECT COUNT(*) AS n FROM e2ee_device_approvals WHERE state = 'completed'"
+        )
+      ).toBe(metadata === 'legacy pruned' ? 1 : 2);
+      expect(listed.approvedDevices.map((d) => d.deviceId).sort()).toEqual(
+        [...ids].sort()
+      );
+      expect(
+        listed.approvedDevices.find((d) => d.deviceId === ids[0])?.label
+      ).toBe(metadata === 'legacy pruned' ? 'Read-only device' : 'Lost phone');
+      for (const [index, phone] of phones.entries()) {
+        lockAccount(USER);
+        expect(ready(await loadEncryption(phone)).unlocked).toBe(
+          !(metadata === 'colliding ID' && index === 0)
+        );
+      }
+      // Unsigned metadata cannot hide a live wrap or add a sealing target.
+      srv.tamper = (path, body) => {
+        if (path === '/api/e2ee/account') {
+          const response = body as {
+            current: {
+              approvedDevices?: unknown[];
+              wraps: { purpose: string }[];
+            };
+          };
+          response.current.approvedDevices = [
+            { deviceId: 'forged', label: 'Fake' }
+          ];
+          if (metadata === 'omitted wraps')
+            response.current.wraps = response.current.wraps.filter(
+              (wrap) => wrap.purpose !== 'account-key-approval'
+            );
+        }
+        return body;
+      };
+      const untrusted = ready(await loadEncryption(laptop));
+      expect(untrusted.approvedDevices.map((d) => d.deviceId).sort()).toEqual(
+        metadata === 'omitted wraps' ? [] : [...ids].sort()
+      );
+      const removed = ready(
+        await revokeReadOnlyDevices(laptop, untrusted, recovery.secret)
+      );
+      srv.tamper = undefined;
+      expect(removed.approvedDevices).toEqual([]);
+      expect(removed.list.head.accountKeyCommitment).not.toEqual(
+        listed.list.head.accountKeyCommitment
+      );
+      expect(removed.list.head.encryptionKey).not.toEqual(
+        listed.list.head.encryptionKey
+      );
+      expect(removed.list.devices).toEqual(listed.list.devices);
+      expect(removed.list.head.revoked).toEqual([]);
+      lockAccount(USER);
+      expect(ready(await loadEncryption(survivor.ctx)).unlocked).toBe(true);
+      for (const phone of phones) {
+        lockAccount(USER);
+        const state = ready(await loadEncryption(phone));
+        expect(state.unlocked).toBe(false);
+        expect(state.deviceStatus).not.toBe('approved');
+      }
+    }
+  );
+
+  it('removes read-only listings when the identity is replaced', async () => {
+    const srv = server();
+    const { laptop, account } = await setUp(srv);
+    const request = await requestApproval(device(srv), null, 'Phone');
+    if (request.step !== 'waiting') throw new Error('Expected request');
+    await approveDevice(
+      laptop,
+      account,
+      request.approval,
+      { kind: 'scan', code: request.scanCode },
+      null
+    );
+    const before = ready(await loadEncryption(laptop));
+    expect(before.approvedDevices).toHaveLength(1);
+    const replaced = ready(
+      await replaceRecoveryKey(
+        laptop,
+        before,
+        (await generateRecoveryKey()).secret,
+        null
+      )
+    );
+    expect(replaced.approvedDevices).toEqual([]);
+  });
+
   it.each(['cancel', 'replace identity'] as const)(
     'retains hourly accounting when approvals %s',
     async (action) => {
@@ -1074,11 +1241,13 @@ describe('device approval', () => {
     const readOnly = ready(done.state);
     expect(readOnly.deviceStatus).toBe('approved');
     expect(readOnly.unlocked).toBe(true);
+    expect(readOnly.approvedDevices).toHaveLength(1);
     // It certifies itself later with the recovery key.
     const certified = ready(
       await enrollWithRecoveryKey(phone, readOnly, recovery.secret, 'Phone')
     );
     expect(certified.deviceStatus).toBe('certified');
+    expect(certified.approvedDevices).toEqual([]);
     expect(
       count(
         srv.db,
@@ -1428,6 +1597,87 @@ describe('session teardown', () => {
 });
 
 describe('profile deletion', () => {
+  it('still deletes a profile before the E2EE schema exists', async () => {
+    const srv = server();
+    srv.db.exec(
+      'DROP TABLE e2ee_device_approvals; DROP TABLE e2ee_key_wraps; DROP TABLE e2ee_device_list_entries; DROP TABLE e2ee_identities'
+    );
+    const { deleteAccountData } =
+      await import('../apps/web/worker/accountDeletion');
+    await expect(
+      deleteAccountData(
+        { userId: USER as never, displayName: 'Alice', mode: 'development' },
+        { scope: 'profile', confirmation: 'DELETE CLOUD PROFILE' },
+        { DB: d1Database(srv.db) },
+        {} as never
+      )
+    ).resolves.toMatchObject({ ok: true, signedOut: true });
+    expect(
+      srv.db.prepare('SELECT email FROM users WHERE id = ?').get(USER)
+    ).toEqual({ email: null });
+  });
+
+  it.each(['query failure', 'missing result', 'partial schema'] as const)(
+    'retains the erasure fence and refuses success after an E2EE readiness %s',
+    async (fault) => {
+      const srv = server();
+      await setUp(srv);
+      const base = d1Database(srv.db);
+      let fail = true;
+      const db: D1Database = {
+        prepare: (sql) => {
+          const statement = base.prepare(sql);
+          if (!sql.includes('COUNT(*) AS tables')) return statement;
+          return {
+            bind: (...values) => statement.bind(...values),
+            all: () => statement.all(),
+            run: () => statement.run(),
+            first: async <T>() => {
+              if (!fail) return statement.first<T>();
+              if (fault === 'query failure')
+                throw new Error('Transient D1 error');
+              return (
+                fault === 'missing result' ? null : { tables: 3 }
+              ) as T | null;
+            }
+          };
+        },
+        batch: (statements) => base.batch(statements)
+      };
+      const { deleteAccountData } =
+        await import('../apps/web/worker/accountDeletion');
+      const erase = () =>
+        deleteAccountData(
+          { userId: USER as never, displayName: 'Alice', mode: 'development' },
+          { scope: 'profile', confirmation: 'DELETE CLOUD PROFILE' },
+          { DB: db },
+          {} as never
+        );
+      await expect(erase()).rejects.toThrow();
+      expect(
+        count(srv.db, 'SELECT COUNT(*) AS n FROM account_erasure_requests')
+      ).toBe(1);
+      expect(count(srv.db, 'SELECT COUNT(*) AS n FROM e2ee_identities')).toBe(
+        1
+      );
+      expect(
+        srv.db.prepare('SELECT email FROM users WHERE id = ?').get(USER)
+      ).toEqual({ email: 'alice@example.com' });
+      fail = false;
+      expect(await erase()).toMatchObject({ ok: true, signedOut: true });
+      for (const table of [
+        'e2ee_identities',
+        'e2ee_device_list_entries',
+        'e2ee_key_wraps',
+        'e2ee_device_approvals'
+      ])
+        expect(count(srv.db, `SELECT COUNT(*) AS n FROM ${table}`)).toBe(0);
+      expect(
+        count(srv.db, 'SELECT COUNT(*) AS n FROM account_erasure_requests')
+      ).toBe(0);
+    }
+  );
+
   it.each(['profile', 'all'] as const)(
     'does not reacquire development authority after %s erasure before route readiness',
     async (scope) => {
@@ -2059,6 +2309,53 @@ describe('passkey PRF unlock', () => {
     ).toBe(2);
   });
 
+  it('revokes read-only access with a passkey while retaining certified and recovery targets', async () => {
+    const srv = server();
+    const { laptop, account, recovery, passkeys } = await withPasskey(srv);
+    const phone = device(srv);
+    const request = await requestApproval(phone, null, 'Read-only phone');
+    if (request.step !== 'waiting') throw new Error('Expected request');
+    await approveDevice(
+      laptop,
+      account,
+      request.approval,
+      { kind: 'scan', code: request.scanCode },
+      null
+    );
+    expect((await advanceApprovalAsNewDevice(phone)).step).toBe('done');
+    const before = ready(await loadEncryption(laptop));
+    const rotated = ready(
+      await revokeReadOnlyDevices(laptop, before, 'passkey')
+    );
+    expect(rotated.fingerprint).toBe(before.fingerprint);
+    expect(rotated.list.devices).toEqual(before.list.devices);
+    expect(rotated.list.unlockTargets).toEqual(before.list.unlockTargets);
+    expect(rotated.list.head.accountKeyCommitment).not.toEqual(
+      before.list.head.accountKeyCommitment
+    );
+    expect(rotated.list.head.encryptionKey).not.toEqual(
+      before.list.head.encryptionKey
+    );
+    expect(rotated.approvedDevices).toEqual([]);
+    lockAccount(USER);
+    expect(ready(await loadEncryption(phone)).unlocked).toBe(false);
+    lockAccount(USER);
+    expect(ready(await loadEncryption(laptop)).unlocked).toBe(true);
+    const fresh = await passkeyDevice(srv, passkeys);
+    expect(
+      ready(
+        await enrollWithPasskey(fresh.ctx, fresh.account, 'Passkey survivor')
+      ).unlocked
+    ).toBe(true);
+    expect(
+      (await enrolled(srv, recovery.secret, 'Recovery survivor')).account
+        .unlocked
+    ).toBe(true);
+    expect(
+      passkeys.issued.every((bytes) => bytes.every((byte) => byte === 0))
+    ).toBe(true);
+  });
+
   it('keeps every surviving passkey and recovery target usable after passkey-authorized device removal', async () => {
     const srv = server();
     const { laptop, account, recovery, passkeys } = await withPasskey(srv);
@@ -2334,7 +2631,7 @@ describe('passkey PRF unlock', () => {
     ).toBe(0);
   });
 
-  it.each(['create', 'get'] as const)(
+  it.each(['create', 'get', 'revoke-read-only'] as const)(
     'does not resume %s after session teardown',
     async (operation) => {
       const srv = server();
@@ -2345,7 +2642,7 @@ describe('passkey PRF unlock', () => {
         started = resolve;
       });
       const provider = fakePasskey();
-      provider[operation].mockImplementation(() => {
+      provider[operation === 'create' ? 'create' : 'get'].mockImplementation(() => {
         started();
         return new Promise<PasskeySecret>((resolve) => {
           finish = resolve;
@@ -2358,7 +2655,9 @@ describe('passkey PRF unlock', () => {
       const work =
         operation === 'create'
           ? addPasskey(fresh.ctx, fresh.account, recovery.secret)
-          : enrollWithPasskey(fresh.ctx, fresh.account, 'Too late');
+          : operation === 'get'
+            ? enrollWithPasskey(fresh.ctx, fresh.account, 'Too late')
+            : revokeReadOnlyDevices(fresh.ctx, fresh.account, 'passkey');
       await waiting;
       lockAccountsExcept(null);
       const bytes = new Uint8Array(32).fill(0x71);

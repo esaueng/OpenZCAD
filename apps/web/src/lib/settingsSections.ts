@@ -172,6 +172,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Certify with your recovery key',
       'Enter your recovery key',
       'Use your passkey',
+      'Revoke read-only access',
+      'Revoke read-only devices',
       'Device key',
       'Recovery key',
       'Passkeys',

@@ -45,6 +45,7 @@ import {
 } from '@openzcad/crypto';
 import type {
   E2eeAccountResponse,
+  E2eeApprovedDeviceRecord,
   E2eeApprovalRecord,
   E2eeIdentityRecord,
   E2eeWrapInput,
@@ -161,6 +162,8 @@ export interface AccountView {
   /** The identity fingerprint people compare, 40 digits. */
   readonly fingerprint: string;
   readonly wraps: readonly E2eeWrapRecord[];
+  /** Informational labels; never a source of keys for sealing or signing. */
+  readonly approvedDevices: readonly E2eeApprovedDeviceRecord[];
   readonly device: StoredDevice | null;
   readonly deviceStatus: DeviceStatus;
   readonly unlocked: boolean;
@@ -699,6 +702,17 @@ export async function loadEncryption(
   } else {
     lockAccount(ctx.userId);
   }
+  const approvedMetadata = new Map(
+    (current.approvedDevices ?? []).map((item) => [item.deviceId, item])
+  );
+  const approvedDevices = current.wraps
+    .filter((wrap) => wrap.purpose === 'account-key-approval')
+    .map((wrap) => ({
+      deviceId: wrap.targetId,
+      label: approvedMetadata.get(wrap.targetId)?.label ?? 'Read-only device',
+      approvedAt:
+        approvedMetadata.get(wrap.targetId)?.approvedAt ?? current.createdAt
+    }));
   const account: AccountView = {
     userId: ctx.userId,
     generation: current.generation,
@@ -707,6 +721,7 @@ export async function loadEncryption(
     persistedPin: identityChanged ? pin : list.pin,
     fingerprint: formatComparisonCode(list.identityKeyHash),
     wraps: current.wraps,
+    approvedDevices,
     device,
     deviceStatus,
     unlocked,
@@ -1183,7 +1198,7 @@ export function removeDevice(
   deviceId: string,
   authorization: UnlockAuthorization
 ): Promise<EncryptionState> {
-  return removeCertifiedTarget(
+  return rotateAccountKeys(
     authorization === 'passkey' ? passkeyContext(ctx) : ctx,
     account,
     deviceId,
@@ -1198,7 +1213,7 @@ export function removePasskey(
   targetId: string,
   authorization: UnlockAuthorization
 ): Promise<EncryptionState> {
-  return removeCertifiedTarget(
+  return rotateAccountKeys(
     authorization === 'passkey' ? passkeyContext(ctx) : ctx,
     account,
     targetId,
@@ -1207,11 +1222,26 @@ export function removePasskey(
   );
 }
 
-async function removeCertifiedTarget(
+/** Rotate even when the server omits every read-only approval wrap. */
+export function revokeReadOnlyDevices(
+  ctx: E2eeContext,
+  account: AccountView,
+  authorization: UnlockAuthorization
+): Promise<EncryptionState> {
+  return rotateAccountKeys(
+    authorization === 'passkey' ? passkeyContext(ctx) : ctx,
+    account,
+    '', // Aggregate rotation does not remove a certified id.
+    'read-only',
+    authorization
+  );
+}
+
+async function rotateAccountKeys(
   ctx: E2eeContext,
   account: AccountView,
   id: string,
-  kind: 'device' | 'passkey',
+  kind: 'device' | 'passkey' | 'read-only',
   authorization: UnlockAuthorization
 ): Promise<EncryptionState> {
   if (kind === 'device' && id === account.device?.deviceId) {
@@ -1244,7 +1274,9 @@ async function removeCertifiedTarget(
       issuedAt: now(ctx),
       ...(kind === 'device'
         ? { removeDeviceIds: [id] }
-        : { removeUnlockTargetIds: [id] }),
+        : kind === 'passkey'
+          ? { removeUnlockTargetIds: [id] }
+          : {}),
       encryptionKey: await exportPublicKey(encryption.publicKey),
       accountKeyCommitment: await accountKeyCommitment(accountKey)
     });
