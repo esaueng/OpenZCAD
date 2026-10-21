@@ -144,12 +144,30 @@ const DATABASE_VERSION = LOCAL_PROJECT_DATABASE_VERSION;
 
 interface ProjectMetaRecord extends ProjectOrganization {
   projectId: string;
+  organizationRevision?: string;
   /**
    * Present while a change made on this device has not reached the account.
    * Set by every local organisation write, cleared once the account has the
    * same row; the listing's reconcile lets the account win when it is absent.
    */
   mirrorPending?: true;
+}
+
+export interface LocalProjectOrganizationSnapshot {
+  organization: ProjectOrganization;
+  /** Null identifies metadata written before revision fencing was introduced. */
+  revision: string | null;
+  mirrorPending: boolean;
+}
+
+function organizationSnapshot(
+  record: ProjectMetaRecord
+): LocalProjectOrganizationSnapshot {
+  return {
+    organization: organizationOf(record),
+    revision: record.organizationRevision ?? null,
+    mirrorPending: record.mirrorPending === true
+  };
 }
 
 function organizationOf(record: ProjectMetaRecord): ProjectOrganization {
@@ -1261,6 +1279,7 @@ export function saveLocalProjectOrganization(
   const record: ProjectMetaRecord = {
     ...organizationOf({ ...organization, projectId }),
     projectId,
+    organizationRevision: crypto.randomUUID(),
     ...(options.mirrorPending ? { mirrorPending: true } : {})
   };
   return projectTransaction('readwrite', projectId, META_STORE_NAME, (store) =>
@@ -1268,11 +1287,65 @@ export function saveLocalProjectOrganization(
   ).then(() => undefined);
 }
 
+/** A network acknowledgement/adoption may replace only the revision it read. */
+export function saveLocalProjectOrganizationIfCurrent(
+  projectId: string,
+  organization: ProjectOrganization,
+  expectedRevision: string | null
+): Promise<boolean> {
+  return scopedTransaction(
+    'readwrite',
+    [META_STORE_NAME, ALIAS_STORE_NAME],
+    async (store) => {
+      await assertCurrentProjectId(store(ALIAS_STORE_NAME), projectId);
+      const meta = store(META_STORE_NAME);
+      const current = (await settled(meta.get(projectId))) as
+        ProjectMetaRecord | undefined;
+      if ((current?.organizationRevision ?? null) !== expectedRevision)
+        return false;
+      meta.put({
+        ...organizationOf({ ...organization, projectId }),
+        projectId,
+        organizationRevision: crypto.randomUUID()
+      });
+      return true;
+    }
+  );
+}
+
+export function loadLocalProjectOrganizationSnapshot(
+  projectId: string
+): Promise<LocalProjectOrganizationSnapshot | null> {
+  return projectTransaction(
+    'readonly',
+    projectId,
+    META_STORE_NAME,
+    (store, resolved) => store.get(resolved)
+  ).then((record: ProjectMetaRecord | undefined) =>
+    record ? organizationSnapshot(record) : null
+  );
+}
+
 function listLocalProjectMetaRecords(): Promise<ProjectMetaRecord[]> {
   return transaction<ProjectMetaRecord[]>(
     'readonly',
     (store) => store.getAll() as IDBRequest<ProjectMetaRecord[]>,
     META_STORE_NAME
+  );
+}
+
+/** Organization values and their pending/revision fences from one snapshot. */
+export function listLocalProjectOrganizationSnapshots(): Promise<
+  Map<string, LocalProjectOrganizationSnapshot>
+> {
+  return listLocalProjectMetaRecords().then(
+    (records) =>
+      new Map(
+        records.map((record) => [
+          record.projectId,
+          organizationSnapshot(record)
+        ])
+      )
   );
 }
 
