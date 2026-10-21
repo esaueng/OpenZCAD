@@ -4,8 +4,9 @@ H02 remains **Partial**. This is a separate runtime candidate for the
 [publication failure recorded in #799](https://github.com/esaueng/OpenZCAD/pull/799).
 The frozen qualification baseline remains
 `6cd0838b45ad9af18367b3d819de3b113cfcb246`; the paired Remus packages remain
-`0d942168550b6dd5101d049f7a10de0230bb5848`. The previous M5 Pro timings and private
-session results describe that baseline, not this candidate.
+`0d942168550b6dd5101d049f7a10de0230bb5848`. The pre-candidate M5 Pro timings and
+private session results describe that baseline. Later candidate results are
+attributed to their tested revisions below.
 
 ## Changed behavior
 
@@ -41,11 +42,11 @@ require fresh performance qualification.
 
 ## Qualification boundary
 
-The public regression suite compares the first returned publication and actual
-owning-kernel serialized bytes with a fresh build; it does not resync the result to
-hide a transition. Existing normalization, geometry tolerances, cache budgets and
-acceptance assertions remain unchanged. The manual public reproduction remains a
-strict equality test.
+Historical public tests checked first/repeat stability and compared a resynced
+subject with fresh output. Direct first-to-fresh proof is recorded separately at
+`f7cd6587` below. Existing normalization, geometry tolerances, cache budgets and
+private acceptance assertions remain unchanged. The manual public reproduction
+remains a strict equality test.
 
 ### First candidate: `d30b589e`
 
@@ -164,11 +165,11 @@ the boolean because an eager view has not been proven.
 
 Four public regressions cover both directions for a three-operand union and an
 exact coaxial cut. The eager-to-idle cases first fail on `64f07065`, while the two
-reverse controls pass. All four pass after the fix, directly comparing the first
-returned state with fresh raw/publication oracles before any repeat sync. They
-also verify zero evolution-probe calls and owned, charged metadata. The earlier
-25 transition cases and 118 selected existing tests pass; independent reviews
-found no remaining actionable issue in this patch.
+reverse controls pass. All four pass after the fix, checking fresh raw/publication
+equivalence, strict first/repeat equality, zero evolution-probe calls and owned,
+charged metadata. The later public-test revision adds direct first-to-fresh
+comparison. The earlier 25 transition cases and 118 selected existing tests pass;
+independent reviews found no remaining actionable issue in this patch.
 
 All five local gates pass at clean committed
 `08393cb4096ab7c2d338dd25a41e2a0b2c592c3c`: lint (zero errors, 17 existing
@@ -189,10 +190,12 @@ all earlier failed attempts remain outside Git.
 
 The M5 results below remain evidence for `64f07065`, before this follow-up. They
 are not mixed with these Linux samples or relabelled as measurements of the new
-runtime. The subsequent integration preserves the M5 evidence and changes only
-documentation relative to this verified runtime/test tree. H02 remains Partial.
+runtime. Integration through `b4573979` preserves the M5 evidence and changes only
+documentation relative to this verified runtime/test tree. The later public-test
+revision is recorded separately below. H02 remains Partial.
 
-Target-device acceptance still needs a new quiet M5 Pro campaign on this candidate.
+Target-device acceptance still needs a new quiet M5 Pro campaign at
+`b45739792bfb8d0a5242fb23eadde55d41b39146`.
 Run the unchanged sustained private session first, then at least three alternating
 matched pairs with fresh pair IDs. Use the existing
 [matched-arm commands](../2026-10-15/h02-matched-cache-benchmark.md#reproduction)
@@ -206,6 +209,32 @@ timing arms.
 The proposed detached Text branch, branch-preserving kernel support and
 whole-worker retained-memory acceptance remain separate open requirements. This
 candidate does not accept or implement that branch.
+
+### Public first-result proof: `f7cd6587`
+
+This revision changes two public test suites and adds a public support helper.
+Runtime, dependency pins and private qualification helpers remain unchanged from
+`b4573979`; that revision remains the quiet M5 campaign target.
+
+Each strengthened case owns the first returned publication and serialized bytes,
+then compares them with a separate cache-disabled production adapter before
+another subject sync. The helper preserves the exact H02 normalization and
+positive-solid raw-byte checks. Event counts prove that fresh comparison adds no
+subject sync; the explicit repeat and strict same-arena comparison follow it.
+
+All 29 strengthened cases and 118 selected existing tests pass (147 total), as
+does the unchanged strict manual reproduction. Independent review found no
+actionable issue in the helper or its test integration.
+
+All five local gates pass at clean committed
+`f7cd65874449b3599db67202d2add58932550f7c`: lint (zero errors, 17 existing
+warnings), typecheck, 5,824 root tests (eight existing skips), 3,474 web tests,
+220 parity tests (one existing skip), and the full paired-WASM/provenance/bundle
+build. The subsequent record update changes only this documentation.
+
+Private Linux evidence remains attributed to `08393cb4`; recorded-load M5 evidence
+remains attributed to `64f07065`. No private campaign was rerun or relabelled for
+this public-test revision. H02 remains Partial.
 
 ## M5 Pro follow-up: `64f07065`
 
