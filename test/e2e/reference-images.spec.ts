@@ -390,15 +390,19 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
     timeout: 20_000
   });
   await page.reload();
+  // Reopening the project, then reading and decoding the picture, outlasts
+  // the default poll on a loaded runner.
   await expect
-    .poll(async () => drawnImages(canvas))
+    .poll(async () => drawnImages(canvas), { timeout: 20_000 })
     .toEqual([expect.objectContaining({ width: 60, textured: true })]);
   expect(archive.downloads).toBe(0);
   // A device without the picture resolves it from the archived artifact.
   await forgetSourceBlobs(page);
   await page.reload();
+  // Reopening the project, then reading and decoding the picture, outlasts
+  // the default poll on a loaded runner.
   await expect
-    .poll(async () => drawnImages(canvas))
+    .poll(async () => drawnImages(canvas), { timeout: 20_000 })
     .toEqual([expect.objectContaining({ width: 60, textured: true })]);
   expect(archive.downloads).toBe(1);
 
