@@ -160,6 +160,26 @@ The proposed detached Text branch, branch-preserving kernel support and
 whole-worker retained-memory acceptance remain separate open requirements. This
 candidate does not accept or implement that branch.
 
+## M5 Pro follow-up: `64f07065`
+
+The [fresh M5 Pro qualification](h02-64f07065-m5-qualification.md) uses clean
+`64f0706512425b41bbf69f12dd4399b2cc93c274`, first running the unchanged sustained
+session and then three alternating matched pairs. All six arms pass; enabled
+first edits execute no Text. Recorded-load p95 exact completion is
+3,442.9 → 2,487.1 ms (27.8% lower), meeting the unchanged ≥20% target.
+
+The private 80-edit session passes all seven raw/publication and four eviction
+comparisons, with three replay-budget recycles, 252 retired checkpoints, five
+rejected retired-checkpoint restores and actual refusal/recovery and worker
+restart. Acceptance failures are zero. The 93 private/mutation tests, strict
+public reproduction and all five local repository gates pass at that same head.
+No Linux or earlier-candidate sample enters the M5 aggregation.
+
+Background load is recorded per instruction; quiet-host acceptance remains
+unestablished. Separate post-GC metrics do not prove whole-worker retention.
+The detached Text proposal and every remaining criterion stay open; H02 is
+Partial. Source inputs, pins, runtime, budgets and assertions are unchanged.
+
 ## Historical M5 Pro qualification: `d30b589e`
 
 [Target-hardware evidence for `d30b589e`](h02-pr805-m5-pro-qualification.md) records
