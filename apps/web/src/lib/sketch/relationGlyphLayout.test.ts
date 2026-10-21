@@ -231,8 +231,9 @@ describe('relation glyph layout', () => {
   });
 
   it('lays out thousands of separate chips in about linear time', () => {
-    // A 150 × 150 lattice of curve anchors 26 px apart: every chip finds
-    // its first spot free, so the cost is the neighbour search alone.
+    // A 150 × 150 lattice of curve anchors 40 px apart (a chip and its
+    // standoff need 30): every chip finds its first spot free, so the cost
+    // is the neighbour search alone.
     const lattice: Chip[] = [];
     for (let row = 0; row < 150; row += 1) {
       for (let column = 0; column < 150; column += 1) {
@@ -250,11 +251,11 @@ describe('relation glyph layout', () => {
     lattice.forEach((chip, index) =>
       layout.set(index, chip.ax, chip.ay, chip.nx, chip.ny, 16, 16, false, true)
     );
-    const started = performance.now();
     layout.solve(lattice.length, 6000, 6000);
-    // About 15 ms here; scanning every anchor per chip took about 1 s.
-    expect(performance.now() - started).toBeLessThan(250);
-  }, 20_000);
+    // About 5.5 comparisons per chip; scanning every anchor per chip is
+    // about 2.5e8 here.
+    expect(layout.work).toBeLessThan(20 * lattice.length);
+  });
 
   it('bounds the cost of a lattice too dense for its glyphs', () => {
     // Anchors 26 px apart: less than a chip and its standoff need, so most
@@ -275,11 +276,15 @@ describe('relation glyph layout', () => {
         );
       }
     }
-    const started = performance.now();
     layout.solve(150 * 150, 3900, 3900);
-    // About 0.1 s here; an unbounded overflow search took about 0.8 s.
-    expect(performance.now() - started).toBeLessThan(500);
-  }, 20_000);
+    // About 160 comparisons per chip: every candidate of a bounded search,
+    // each against its neighbours only. Some chips are hidden for want of
+    // room rather than searched for further.
+    expect(layout.work).toBeLessThan(400 * 150 * 150);
+    expect(
+      [...layout.shown].filter((shown) => shown === 0).length
+    ).toBeGreaterThan(0);
+  });
 
   it('keeps every chip off every anchor, not just its own', () => {
     // A short line: its middle chip would sit on the end point beside it.

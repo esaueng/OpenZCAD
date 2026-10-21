@@ -325,12 +325,14 @@ describe('sketchRelationGlyphs', () => {
       }),
       constraint({ constraintKind: 'vertical', objectId: id('l59999') })
     ];
-    const started = performance.now();
+    const stats = { comparisons: 0 };
     const chips = sketchRelationGlyphs(column, relations, resolve, {
-      visibility: 'always'
+      visibility: 'always',
+      stats
     });
-    // About half a second here; the quadratic sweep took about 18 s.
-    expect(performance.now() - started).toBeLessThan(4_000);
+    // A few comparisons per end (each meets its neighbours only); the
+    // sweep compared each end against every earlier one, about 7e9 here.
+    expect(stats.comparisons).toBeLessThan(10 * 2 * column.length);
     expect(chips.map((chip) => chip.placement).sort()).toEqual([
       'object',
       'point',
@@ -378,12 +380,14 @@ describe('sketchRelationGlyphs', () => {
       }),
       constraint({ constraintKind: 'horizontal', objectId: id('far') })
     ];
-    const started = performance.now();
+    const stats = { comparisons: 0 };
     const chips = sketchRelationGlyphs(sketch, relations, resolve, {
-      visibility: 'always'
+      visibility: 'always',
+      stats
     });
-    // About 0.5 s here; global-max buckets took about 8 s.
-    expect(performance.now() - started).toBeLessThan(2_500);
+    // A few comparisons per end; global-max buckets put the packed ends
+    // into a handful of cells, about 3e9 comparisons here.
+    expect(stats.comparisons).toBeLessThan(10 * 2 * sketch.length);
     // The packed ends stay distinct points: p0's end and p1's start are
     // 2.5e-5 apart, far beyond their 1e-6 tolerance.
     expect(chips.filter((chip) => chip.placement === 'point')).toHaveLength(2);

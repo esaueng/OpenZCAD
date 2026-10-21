@@ -68,6 +68,11 @@ export interface SketchRelationGlyphOptions {
   /** Glyph kinds the per-kind filter hides. */
   hiddenKinds?: ReadonlySet<SketchRelationGlyphKind>;
   conflictingConstraintIds?: ReadonlySet<string>;
+  /**
+   * Counts the point-to-point comparisons clustering made, for tests that
+   * prove the work grows linearly (a wall clock is too noisy to).
+   */
+  stats?: { comparisons: number };
 }
 
 /**
@@ -212,7 +217,7 @@ export function sketchRelationGlyphs(
       for (const end of curveEnds(object.data, scalar)) probes.push(end);
     }
   }
-  const clusters = clusterPoints([
+  const clusters = clusterPoints(options.stats, [
     ...pointGlyphs.map(({ anchor }) => anchor),
     ...probes.map(({ anchor }) => anchor)
   ]);
@@ -374,7 +379,10 @@ function samePointTolerance(point: Point): number {
  * own, over enough neighbouring cells to cover the reach, and two coincident
  * points are never split across a cell boundary. That is O(n) for any layout.
  */
-function clusterPoints(points: readonly Point[]): number[] {
+function clusterPoints(
+  stats: { comparisons: number } | undefined,
+  points: readonly Point[]
+): number[] {
   const ids = new Array<number>(points.length);
   const grid = new Map<
     string,
@@ -395,6 +403,7 @@ function clusterPoints(points: readonly Point[]): number[] {
         for (let dy = -span; dy <= span; dy += 1) {
           for (const candidate of grid.get(`${other},${cx + dx},${cy + dy}`) ??
             []) {
+            if (stats) stats.comparisons += 1;
             const reach = Math.max(tolerance, candidate.tolerance);
             if (
               Math.abs(point.x - candidate.point.x) <= reach &&

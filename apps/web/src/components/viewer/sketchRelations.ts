@@ -18,6 +18,12 @@ import { VIEWPORT_OBSTACLE_SELECTOR } from './sketchDimensions';
 export const OBSTACLE_REFRESH_MS = 250;
 /** Viewport controls measured; more are ignored. */
 const MAX_OBSTACLES = 32;
+/**
+ * What glyphs keep out from under: the viewport controls dimension labels
+ * avoid, plus the right lane's command card and inspector and the tool
+ * palette, which float over the stage too (the keypad avoids the same).
+ */
+const GLYPH_OBSTACLE_SELECTOR = `${VIEWPORT_OBSTACLE_SELECTOR}, .command-float, .inspector-float, .palette-float`;
 
 /** The sketch dimension labels, which glyphs keep out of every frame. */
 export interface SketchLabelBoxes {
@@ -129,7 +135,7 @@ export function buildSketchRelationGlyphs(
     const origin = layer.getBoundingClientRect();
     let found = 0;
     for (const element of root?.querySelectorAll<HTMLElement>(
-      VIEWPORT_OBSTACLE_SELECTOR
+      GLYPH_OBSTACLE_SELECTOR
     ) ?? []) {
       if (found === MAX_OBSTACLES) break;
       const rect = element.getBoundingClientRect();

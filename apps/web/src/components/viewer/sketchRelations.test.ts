@@ -176,7 +176,11 @@ describe('sketch relation glyph overlay', () => {
     const layer = document.createElement('div');
     const rail = document.createElement('div');
     rail.className = 'viewer-rail';
-    area.append(layer, rail);
+    // The right lane's inspector floats over the stage as well; this one
+    // is closed (no box), so it blocks nothing.
+    const inspector = document.createElement('div');
+    inspector.className = 'inspector-float';
+    area.append(layer, rail, inspector);
     document.body.append(area);
     const rect = (left: number, top: number, width: number, height: number) =>
       ({

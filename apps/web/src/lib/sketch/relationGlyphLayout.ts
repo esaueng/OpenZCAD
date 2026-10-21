@@ -73,6 +73,11 @@ export class RelationGlyphLayout {
    * left where it is and counts as placed (it is clipped anyway).
    */
   readonly shown: Uint8Array;
+  /**
+   * The box and anchor comparisons the last `solve` made: what a test checks
+   * to prove a frame's work grows linearly (a wall clock is too noisy to).
+   */
+  work = 0;
   // Placed boxes as [left, top, right, bottom], in anchor order.
   private readonly placed: Float64Array;
   // The grid: anchors bucketed per cell by a counting sort each frame, and
@@ -187,6 +192,7 @@ export class RelationGlyphLayout {
     for (let index = 0; index < this.blockedCount; index += 1) {
       this.insertRect(-1 - index, this.blocked, index * 4);
     }
+    this.work = 0;
     let placedCount = 0;
     for (let index = 0; index < count; index += 1) {
       const at = index * IN;
@@ -398,6 +404,7 @@ export class RelationGlyphLayout {
           entry >= 0;
           entry = this.placedNext[entry]!
         ) {
+          this.work += 1;
           const item = this.placedItem[entry]!;
           const boxes = item >= 0 ? placed : blocked;
           const p = (item >= 0 ? item : -1 - item) * 4;
@@ -424,6 +431,7 @@ export class RelationGlyphLayout {
       for (let column = a0; column <= a1; column += 1) {
         const cell = row * this.cols + column;
         for (let item = start[cell]!; item < start[cell + 1]!; item += 1) {
+          this.work += 1;
           const at = this.anchorItems[item]! * IN;
           const ax = input[at]!;
           const ay = input[at + 1]!;
