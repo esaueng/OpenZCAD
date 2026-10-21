@@ -9,6 +9,7 @@ import {
 import { resolveSplineGeometry } from '@openzcad/geometry';
 import {
   sketchRelationGlyphs,
+  sketchRelationKeepOuts,
   sketchRelationStrokes,
   widestGap,
   widestGapOf
@@ -774,6 +775,44 @@ describe('sketchRelationGlyphs', () => {
     const first = strokes.slice(4, 8);
     expect(last[2]).toBeCloseTo(first[0]!, 12);
     expect(last[3]).toBeCloseTo(first[1]!, 12);
+  });
+
+  it('lists every pickable point: the origin, line and arc ends, and centres', () => {
+    const points = sketchRelationKeepOuts(
+      [
+        { data: { objectKind: 'line', x1: 1, y1: 2, x2: 3, y2: 4 } },
+        {
+          data: { objectKind: 'circle', centerX: 10, centerY: 10, radius: 5 }
+        },
+        {
+          data: {
+            objectKind: 'arc',
+            centerX: 0,
+            centerY: 0,
+            radius: 2,
+            startAngleDeg: 0,
+            endAngleDeg: 90
+          }
+        }
+      ] as { data: SketchObjectData }[],
+      resolve
+    );
+    const pairs = [];
+    for (let index = 0; index < points.length; index += 2) {
+      pairs.push([
+        Math.round(points[index]! * 1e9) / 1e9,
+        Math.round(points[index + 1]! * 1e9) / 1e9
+      ]);
+    }
+    expect(pairs).toEqual([
+      [0, 0],
+      [1, 2],
+      [3, 4],
+      [10, 10],
+      [2, 0],
+      [0, 2],
+      [0, 0]
+    ]);
   });
 
   it('bisects the widest gap between leaving directions', () => {

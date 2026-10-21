@@ -4,6 +4,7 @@ import type { PlaneBasis } from '@openzcad/geometry';
 import { clearGroup } from '@openzcad/viewport';
 import type { SketchRelationGlyphChip } from '../../lib/sketch/relationGlyphs';
 import {
+  RELATION_KEEP_OUT_PX,
   RELATION_CHIP_MAX_SWING,
   RELATION_CHIP_SWINGS,
   RELATION_GLYPH_PX,
@@ -62,7 +63,12 @@ export function buildSketchRelationGlyphs(
    * The sketch's drawn curves as plane-local segments [x1, y1, x2, y2, …]
    * (`sketchRelationStrokes`): no glyph may sit over any of them.
    */
-  strokes: Float64Array = new Float64Array(0)
+  strokes: Float64Array = new Float64Array(0),
+  /**
+   * Every pickable sketch point as plane-local pairs
+   * (`sketchRelationKeepOuts`): no glyph may sit over one.
+   */
+  keepOuts: Float64Array = new Float64Array(0)
 ) {
   const group = new THREE.Group();
   group.name = 'sketch-relation-glyphs';
@@ -232,6 +238,18 @@ export function buildSketchRelationGlyphs(
   const strokeScreen = new Float64Array(strokeCount * 4);
   const clip = new THREE.Vector4();
   const clipEnd = new THREE.Vector4();
+  // Pickable points in world space, projected each frame into keep-out
+  // squares after the controls and labels in `blockedBoxes`.
+  const keepOutCount = Math.floor(keepOuts.length / 2);
+  const keepOutWorld = new Float64Array(keepOutCount * 3);
+  for (let index = 0; index < keepOutCount; index += 1) {
+    toWorld(
+      keepOuts[index * 2]!,
+      keepOuts[index * 2 + 1]!,
+      keepOutWorld,
+      index * 3
+    );
+  }
   const step = new THREE.Vector4();
   return {
     group,
@@ -253,9 +271,10 @@ export function buildSketchRelationGlyphs(
     ) {
       if (count === 0) return;
       const labels = dimensions?.labelCount ?? 0;
-      if (blockedBoxes.length < (obstacleCount + labels) * 4) {
-        // A rare growth step, when a rebuild brings more labels.
-        blockedBoxes = new Float64Array((obstacleCount + labels) * 4 * 2);
+      const capacity = (obstacleCount + labels + keepOutCount) * 4;
+      if (blockedBoxes.length < capacity) {
+        // A rare growth step, when a rebuild brings more labels or points.
+        blockedBoxes = new Float64Array(capacity * 2);
       }
       for (let index = 0; index < obstacleCount * 4; index += 1) {
         blockedBoxes[index] = obstacles[index]!;
@@ -268,7 +287,28 @@ export function buildSketchRelationGlyphs(
           width,
           height
         ) ?? 0;
-      layout.setBlocked(blockedBoxes, obstacleCount + labelBoxes);
+      let blockedCount = obstacleCount + labelBoxes;
+      for (let index = 0; index < keepOutCount; index += 1) {
+        clip
+          .set(
+            keepOutWorld[index * 3]!,
+            keepOutWorld[index * 3 + 1]!,
+            keepOutWorld[index * 3 + 2]!,
+            1
+          )
+          .applyMatrix4(camera.matrixWorldInverse)
+          .applyMatrix4(camera.projectionMatrix);
+        if (!(clip.w > 0) || Math.abs(clip.z / clip.w) > 1) continue;
+        const x = (clip.x / clip.w) * 0.5 * width + 0.5 * width;
+        const y = (-clip.y / clip.w) * 0.5 * height + 0.5 * height;
+        const at = blockedCount * 4;
+        blockedBoxes[at] = x - RELATION_KEEP_OUT_PX;
+        blockedBoxes[at + 1] = y - RELATION_KEEP_OUT_PX;
+        blockedBoxes[at + 2] = x + RELATION_KEEP_OUT_PX;
+        blockedBoxes[at + 3] = y + RELATION_KEEP_OUT_PX;
+        blockedCount += 1;
+      }
+      layout.setBlocked(blockedBoxes, blockedCount);
       // The screen direction of each normal is the projection's derivative
       // along it, taken exactly in clip space: no probe point, so nothing
       // can cross the eye plane and flip, however far the sketch sits from

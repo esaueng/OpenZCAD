@@ -255,6 +255,7 @@ import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
 import {
   SKETCH_RELATION_GLYPHS,
   sketchRelationGlyphs,
+  sketchRelationKeepOuts,
   sketchRelationStrokes
 } from './lib/sketch/relationGlyphs';
 import {
@@ -14911,6 +14912,19 @@ export function App() {
         : undefined,
     [sketchModeState, doc, parameterScope.scope, sketchRelationChips.length]
   );
+  // And every pickable point (centres, ends, the origin), likewise.
+  const sketchRelationKeepOutPoints = useMemo(
+    () =>
+      sketchModeState && doc && sketchRelationChips.length > 0
+        ? sketchRelationKeepOuts(
+            sketchModeState.objects,
+            (value) =>
+              evalParamValue(value, parameterScope.scope, doc.units) ??
+              undefined
+          )
+        : undefined,
+    [sketchModeState, doc, parameterScope.scope, sketchRelationChips.length]
+  );
   // The viewport's copy of the session also knows whether a solve or rebuild
   // owns the sketch, so a click cannot place text the card has disabled.
   const sketchModeForViewer = useMemo(
@@ -14919,12 +14933,14 @@ export function App() {
         ...sketchModeState,
         relations: sketchRelationChips,
         relationStrokes: sketchRelationStrokeSegments,
+        relationKeepOuts: sketchRelationKeepOutPoints,
         textDraftBusy: sketchSolving || geometryBusy
       },
     [
       sketchModeState,
       sketchRelationChips,
       sketchRelationStrokeSegments,
+      sketchRelationKeepOutPoints,
       sketchSolving,
       geometryBusy
     ]

@@ -302,6 +302,31 @@ export function sketchRelationStrokes(
 }
 
 /**
+ * Every pickable sketch point as plane-local pairs [x, y, …]: each object's
+ * start, end and centre where it has one (line and arc ends, circle, arc
+ * and ellipse centres, open-spline ends) and the sketch origin. Relation
+ * glyphs keep clear of them too: a glyph over a centre with no relation of
+ * its own would take the pick meant for it.
+ */
+export function sketchRelationKeepOuts(
+  objects: readonly { data: SketchObjectData }[],
+  resolve: Resolve
+): Float64Array {
+  const scalar = (value: number | string): number | undefined => {
+    const result = resolve(value);
+    return result !== undefined && Number.isFinite(result) ? result : undefined;
+  };
+  const points: number[] = [0, 0];
+  for (const { data } of objects) {
+    for (const name of ['start', 'end', 'center'] as const) {
+      const point = sketchPointPosition(data, name, scalar);
+      if (point) points.push(point.x, point.y);
+    }
+  }
+  return Float64Array.from(points);
+}
+
+/**
  * The anchor order: the order chips claim screen space in. A chip holding
  * the selected relation goes first, so it is never the one crowded out; then
  * point chips, since a corner has the least room and the most to say; curve

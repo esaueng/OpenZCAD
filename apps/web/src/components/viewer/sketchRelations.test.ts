@@ -495,6 +495,34 @@ describe('sketch relation glyph overlay', () => {
     overlay.dispose();
   });
 
+  it('keeps a glyph off a pickable point it has no relation to', () => {
+    // A large circle's centre at plane (10, 4) sits just above the bottom
+    // line's middle, right where its chip would stand; nothing ties the two.
+    const overlay = buildSketchRelationGlyphs(
+      [bottom],
+      basis,
+      () => {},
+      () => {},
+      new Float64Array(0),
+      new Float64Array([10, 4])
+    );
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(topCamera(), 400, 400);
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    // The centre is screen (200, 184); the chip box must keep 5 px off it.
+    const left = 200 + dx! - 17;
+    const right = 200 + dx! + 17;
+    const top = 200 + dy! - 8;
+    const bottomEdge = 200 + dy! + 8;
+    expect(right <= 195 || left >= 205 || bottomEdge <= 179 || top >= 189).toBe(
+      true
+    );
+    overlay.dispose();
+  });
+
   it('leaves a chip whose anchor is off the viewport where it is', () => {
     const camera = topCamera();
     // Plane (200, 0) is far right of the 100-unit-wide view.

@@ -28,7 +28,8 @@ export const RELATION_GLYPH_GAP_PX = 2;
 /** Clear space between a chip and its anchor's stroke or point. */
 export const RELATION_CHIP_STANDOFF_PX = 6;
 /** Half the square kept clear round every anchor point. */
-const KEEP_OUT_PX = 5;
+export const RELATION_KEEP_OUT_PX = 5;
+const KEEP_OUT_PX = RELATION_KEEP_OUT_PX;
 /** Clear space between two chips. */
 const CHIP_GAP_PX = 2;
 const RINGS = 4;
