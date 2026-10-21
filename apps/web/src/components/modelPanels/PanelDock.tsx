@@ -132,6 +132,36 @@ interface LocalDrag {
   base: PanelLayout;
   apply(base: PanelLayout, dx: number, dy: number): PanelLayout;
   frame: number | null;
+  /** Stops watching for the pointer's loss. */
+  unwatch(): void;
+}
+
+/**
+ * Calls `cancel` when a gesture's pointer is lost without a release, so no
+ * release may ever come: capture taken from `holder`, the window losing
+ * focus (its own blur; focus moving within the page does not reach a
+ * non-capturing listener on the window), or the page hidden. Returns the
+ * function that stops watching.
+ */
+function watchPointerLoss(
+  holder: Element,
+  pointerId: number,
+  cancel: () => void
+): () => void {
+  const lost = (event: Event) => {
+    if ((event as PointerEvent).pointerId === pointerId) cancel();
+  };
+  const hidden = () => {
+    if (document.visibilityState === 'hidden') cancel();
+  };
+  holder.addEventListener('lostpointercapture', lost);
+  window.addEventListener('blur', cancel);
+  document.addEventListener('visibilitychange', hidden);
+  return () => {
+    holder.removeEventListener('lostpointercapture', lost);
+    window.removeEventListener('blur', cancel);
+    document.removeEventListener('visibilitychange', hidden);
+  };
 }
 
 /** A panel dragged from its header or out of its rail button. */
@@ -322,6 +352,7 @@ export function PanelDock({
     () => () => {
       const local = localRef.current;
       if (local?.frame != null) cancelAnimationFrame(local.frame);
+      local?.unwatch();
       dragRef.current?.stop();
     },
     []
@@ -353,14 +384,21 @@ export function PanelDock({
     event.stopPropagation();
     event.currentTarget.setPointerCapture?.(event.pointerId);
     const point = { x: event.clientX, y: event.clientY };
-    localRef.current = {
+    const local: LocalDrag = {
       pointerId: event.pointerId,
       start: point,
       last: point,
       base: layout,
       apply,
-      frame: null
+      frame: null,
+      unwatch: () => {}
     };
+    // Lost without a release, the gesture is cancelled: left standing, it
+    // refused every later gesture and a stray release committed it.
+    local.unwatch = watchPointerLoss(event.currentTarget, event.pointerId, () =>
+      stopLocal(local, null)
+    );
+    localRef.current = local;
   };
 
   const applied = (local: LocalDrag, point: Point) =>
@@ -382,16 +420,23 @@ export function PanelDock({
     }
   };
 
+  /** Ends a gesture, committing it at `release` or, without one, not at all. */
+  const stopLocal = (local: LocalDrag, release: Point | null) => {
+    if (localRef.current !== local) return;
+    if (local.frame !== null) cancelAnimationFrame(local.frame);
+    local.unwatch();
+    localRef.current = null;
+    setLocalLayout(null);
+    if (release) {
+      const next = applied(local, release);
+      if (next !== local.base) latest.current.onLayout(next);
+    }
+  };
+
   const endLocal = (event: ReactPointerEvent<HTMLElement>, keep: boolean) => {
     const local = localRef.current;
     if (!local || local.pointerId !== event.pointerId) return;
-    if (local.frame !== null) cancelAnimationFrame(local.frame);
-    localRef.current = null;
-    setLocalLayout(null);
-    if (keep) {
-      const next = applied(local, { x: event.clientX, y: event.clientY });
-      if (next !== local.base) onLayout(next);
-    }
+    stopLocal(local, keep ? { x: event.clientX, y: event.clientY } : null);
   };
 
   const localHandlers = {
@@ -524,9 +569,7 @@ export function PanelDock({
         window.removeEventListener('pointerup', onUp, true);
         window.removeEventListener('pointercancel', onCancel, true);
         window.removeEventListener('keydown', onKey, true);
-        window.removeEventListener('blur', onAbandon);
-        document.removeEventListener('visibilitychange', onAbandon);
-        layer.removeEventListener('lostpointercapture', onLost);
+        unwatch();
         if (layer.hasPointerCapture?.(drag.pointerId)) {
           layer.releasePointerCapture(drag.pointerId);
         }
@@ -644,30 +687,16 @@ export function PanelDock({
       key.stopPropagation();
       end(false);
     };
-    // The page losing the pointer — capture taken away, the window losing
-    // focus or hidden mid-drag — cancels: no release may ever come.
-    const onLost = (pointer: PointerEvent) => {
-      if (pointer.pointerId === drag.pointerId && dragRef.current === drag) {
-        end(false);
-      }
-    };
-    const onAbandon = (event: Event) => {
-      if (dragRef.current !== drag) return;
-      // The window's own blur (focus moving within the page does not reach
-      // a non-capturing listener on the window), or the page hidden.
-      if (event.type === 'blur' || document.visibilityState === 'hidden') {
-        end(false);
-      }
-    };
+    // The layer holds the pointer once the drag lifts; losing it cancels.
+    const unwatch = watchPointerLoss(layer, drag.pointerId, () => {
+      if (dragRef.current === drag) end(false);
+    });
 
     dragRef.current = drag;
     window.addEventListener('pointermove', onMove, true);
     window.addEventListener('pointerup', onUp, true);
     window.addEventListener('pointercancel', onCancel, true);
     window.addEventListener('keydown', onKey, true);
-    window.addEventListener('blur', onAbandon);
-    document.addEventListener('visibilitychange', onAbandon);
-    layer.addEventListener('lostpointercapture', onLost);
   };
 
   useImperativeHandle(handleRef, () => ({

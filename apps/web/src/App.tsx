@@ -20701,7 +20701,10 @@ export function App() {
         placement === 'phone'
           ? panelLayout
           : pinPanel(panelLayout, id, panelStageOrUndefined);
-      if (next === panelLayout && panelStatus(panelLayout, id) !== 'docked') {
+      if (
+        placement === 'phone' ||
+        (next === panelLayout && panelStatus(panelLayout, id) !== 'docked')
+      ) {
         setStatus(
           placement === 'phone'
             ? 'Panels do not dock at this width; widen the window to pin one.'
