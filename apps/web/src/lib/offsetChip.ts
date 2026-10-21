@@ -86,16 +86,20 @@ export function edgeChipCenterX(
  * model panel the right lane's rule does not cover: a floating window or
  * the left dock. The right lane keeps its own rule (`edgeChipCenterX`, the
  * pin's swap to its other side), so while the stage has room left of the
- * lane no move here takes the chip into it. A chip nothing covers, or one
- * no move inside the stage clears, stays where it is.
+ * lane no move here takes the chip into it. Nor does one take it above
+ * `topbarBottom`: the top bar stands over the stage's top. A chip nothing
+ * covers, or one no move inside the stage clears, stays where it is.
  */
 export function chipPanelDodge(
   chip: ScreenRect,
   panels: readonly ScreenRect[],
   stage: ScreenRect,
-  laneLeft: number | null
+  laneLeft: number | null,
+  topbarBottom: number | null = null
 ): { dx: number; dy: number } {
   if (panels.length === 0) return { dx: 0, dy: 0 };
+  const top =
+    topbarBottom === null ? stage.top : Math.max(stage.top, topbarBottom);
   const width = chip.right - chip.left;
   const laneEdge =
     laneLeft !== null &&
@@ -106,7 +110,7 @@ export function chipPanelDodge(
     chip,
     panels,
     // A chip the lane rule left over the lane (a phone's) may stay there.
-    { ...stage, right: Math.max(laneEdge, chip.right) },
+    { ...stage, top, right: Math.max(laneEdge, chip.right) },
     EDGE_CHIP_MARGIN_PX
   );
 }

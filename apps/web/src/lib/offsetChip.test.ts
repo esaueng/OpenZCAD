@@ -162,6 +162,20 @@ describe('a handle chip under a model panel', () => {
     expect(after.right).toBe(792);
   });
 
+  it('never moves up under the top bar', () => {
+    // A wide window just below the top bar, the chip near its top edge:
+    // the shortest way out is up, into the bar's band.
+    const window = { left: 300, top: 70, right: 1000, bottom: 600 };
+    const start = chip(600, 74);
+    expect(chipPanelDodge(start, [window], stage, 1100).dy).toBeLessThan(0);
+    const after = moved(
+      start,
+      chipPanelDodge(start, [window], stage, 1100, 56)
+    );
+    expect(covered(after, window)).toBe(false);
+    expect(after.top).toBeGreaterThanOrEqual(56);
+  });
+
   it('keeps a chip the lane rule left over a phone lane where it is, unless a panel covers it', () => {
     const phone = { left: 0, top: 0, right: 390, bottom: 800 };
     // The lane spans the stage: no room left of it, so the lane is no limit.
