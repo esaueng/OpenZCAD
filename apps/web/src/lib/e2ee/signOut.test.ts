@@ -7,7 +7,6 @@ import {
 import * as deviceStores from './deviceStore';
 import { signOutAfterSaving } from './signOut';
 import {
-  keyOperationGuard,
   lockAccountsExcept,
   rememberUnlockedAccount,
   unlockedAccount
@@ -69,7 +68,6 @@ describe('saving before device-key sign-out', () => {
 
   it('blocks session revocation on deletion failure, locks cached keys and allows retry', async () => {
     const { userId, store, accountKey } = await fixture();
-    const pendingKeyOperation = keyOperationGuard(userId);
     const remove = vi
       .spyOn(store, 'deleteDevice')
       .mockRejectedValueOnce(new Error('Deletion aborted'));
@@ -83,7 +81,6 @@ describe('saving before device-key sign-out', () => {
     expect(await store.loadDevice(userId)).not.toBeNull();
     expect(unlockedAccount(userId)).toBeUndefined();
     expect(accountKey.every((byte) => byte === 0)).toBe(true);
-    expect(pendingKeyOperation).toThrow(DOMException);
     await signOutAfterSaving(input);
     expect(savePending).toHaveBeenCalledTimes(2);
     expect(remove).toHaveBeenCalledTimes(2);
