@@ -94,6 +94,7 @@ import {
   parseAssistantCredential,
   parseUpdateAppSettingsRequest,
   settingsRequestOmitsKeymap,
+  settingsRequestOmitsHiddenRelationGlyphs,
   settingsRequestOmitsRelationGlyphs,
   settingsRequestOmittedViewportFields,
   resolveUserAssistant,
@@ -1204,11 +1205,14 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       env,
       session.email,
       // A client from before remapping sends no keymap, one from before
-      // relation glyphs no glyph preference, and one from before the field
-      // of view or X-ray no value for them: keep the stored ones.
+      // relation glyphs (or their per-kind filter) no glyph preference, and
+      // one from before the field of view or X-ray no value for them: keep
+      // the stored ones.
       {
         keepStoredKeymap: settingsRequestOmitsKeymap(body),
         keepStoredRelationGlyphs: settingsRequestOmitsRelationGlyphs(body),
+        keepStoredHiddenRelationGlyphs:
+          settingsRequestOmitsHiddenRelationGlyphs(body),
         keepStoredViewportFields: settingsRequestOmittedViewportFields(body)
       }
     );

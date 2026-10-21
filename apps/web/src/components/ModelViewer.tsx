@@ -459,6 +459,10 @@ export interface SketchModeState {
   dimensions: SketchDimensionAnnotation[];
   /** Relation glyph chips, already filtered by the visibility setting. */
   relations?: SketchRelationGlyphChip[];
+  /** The drawn curves as plane-local segments; glyphs keep clear of them. */
+  relationStrokes?: Float64Array;
+  /** Every pickable sketch point as plane-local pairs; glyphs keep off. */
+  relationKeepOuts?: Float64Array;
   /**
    * The text card's draft while the text tool composes. Its outline follows
    * the pointer over the plane and a click places it; nothing is placed
@@ -978,6 +982,10 @@ export interface ModelViewerProps {
     identity: SketchDimensionIdentity,
     offset: { x: number; y: number }
   ): void;
+  /** A relation glyph was clicked: select that relation. */
+  onSelectSketchConstraint?(constraintId: string): void;
+  /** The selected relation's glyph started or stopped being drawn. */
+  onSketchConstraintSelectionShown?(constraintId: string, shown: boolean): void;
   /** Mirrors chain/drag liveness into the interaction machine. */
   onSketchDrawingChange(drawing: boolean): void;
   /**
@@ -1889,6 +1897,8 @@ export function ModelViewer({
   onSketchCommitComposite,
   onEditSketchDimension,
   onMoveSketchDimension,
+  onSelectSketchConstraint,
+  onSketchConstraintSelectionShown,
   onSketchDrawingChange,
   sketchMoveEnabled = false,
   onSketchMoveChange,
@@ -2107,6 +2117,15 @@ export function ModelViewer({
   editSketchDimensionRef.current = onEditSketchDimension;
   const moveSketchDimensionRef = useRef(onMoveSketchDimension);
   moveSketchDimensionRef.current = onMoveSketchDimension;
+  const selectSketchConstraintRef = useRef(onSelectSketchConstraint);
+  selectSketchConstraintRef.current = onSelectSketchConstraint;
+  const sketchConstraintSelectionShownRef = useRef(
+    onSketchConstraintSelectionShown
+  );
+  sketchConstraintSelectionShownRef.current = onSketchConstraintSelectionShown;
+  const sketchRelationsRef = useRef<ReturnType<
+    typeof buildSketchRelationGlyphs
+  > | null>(null);
   /** Separate from direct-edit overlays so body rebuilds do not erase it. */
   const measurementGroupRef = useRef<THREE.Group | null>(null);
   /**
@@ -2839,6 +2858,14 @@ export function ModelViewer({
       if (
         (offsetChipRef.current && !offsetChipRef.current.hidden) ||
         host.querySelector(`.${SELECTION_CALLOUT_CHIP_CLASS}`)
+      ) {
+        requestRender();
+      }
+      // Relation glyphs keep out from under the panels: re-measure at once
+      // rather than on the glyphs' timer, so a dragged panel pushes them
+      // aside as it moves.
+      if (
+        sketchRelationsRef.current?.refreshObstacles(labelRenderer.domElement)
       ) {
         requestRender();
       }
@@ -3678,6 +3705,9 @@ export function ModelViewer({
     const sketchRotateRing = hud.create('sketch-rotate-ring', {
       ariaHidden: true
     });
+    // Where those handles are this frame, for the relation glyphs to keep
+    // off; rewritten in place each frame.
+    const sketchHandleSpot = { shown: false, x: 0, y: 0, ring: false };
 
     // Exact entry drives the same preview the drag does.
     offsetSetterRef.current = (value: number) => {
@@ -7648,6 +7678,7 @@ export function ModelViewer({
         selection && data
           ? sketchObjectGrabPoint(data, sketchModeResolver(selection.mode))
           : null;
+      sketchHandleSpot.shown = false;
       if (!selection || !grab) {
         sketchGrabHandle.hidden = true;
         sketchRotateRing.hidden = true;
@@ -7673,6 +7704,10 @@ export function ModelViewer({
         drag?.active === true && drag.handle === 'translate'
       );
       hud.showAt(sketchGrabHandle, screen.x, screen.y);
+      sketchHandleSpot.shown = true;
+      sketchHandleSpot.x = screen.x;
+      sketchHandleSpot.y = screen.y;
+      sketchHandleSpot.ring = sketchObjectRotatable(selection.data);
       if (sketchObjectRotatable(selection.data)) {
         sketchRotateRing.dataset.active = String(
           drag?.active === true && drag.handle === 'rotate'
@@ -9388,6 +9423,7 @@ export function ModelViewer({
         if (!sketchGridIndicator.hidden) sketchGridIndicator.hidden = true;
         if (!sketchGrabHandle.hidden) sketchGrabHandle.hidden = true;
         if (!sketchRotateRing.hidden) sketchRotateRing.hidden = true;
+        sketchHandleSpot.shown = false;
       }
 
       // Preselection and selection overlays cut to their targets; their
@@ -9591,7 +9627,19 @@ export function ModelViewer({
       }
       updateDimensionLabels(context, canvasWidth(), canvasHeight());
       labelRenderer.render(scene, context.activeCamera);
+      // Dimension labels settle first: the glyph layout below keeps out of
+      // their boxes, margins included, so it must read this frame's.
       avoidSketchDimensionOverlays(labelRenderer.domElement);
+      // Relation glyphs stand off their geometry in screen space, so they
+      // are laid out against this frame's camera; a still frame writes no
+      // style and the layout allocates nothing.
+      sketchRelationsRef.current?.layout(
+        context.activeCamera,
+        canvasWidth(),
+        canvasHeight(),
+        sketchDimensionsRef.current,
+        sketchHandleSpot
+      );
       if (cylinderRadiusProxyFrame && import.meta.env.OZ_PERF === '1') {
         mark('cylinder-radius.proxy-frame', {
           latencyMs: Math.max(
@@ -11834,6 +11882,9 @@ export function ModelViewer({
     );
     context.scene.add(overlay.group);
     sketchDimensionsRef.current = overlay;
+    // A label that changes size (its web font arriving) moves the relation
+    // glyphs that keep clear of it; draw again so they do.
+    overlay.onLabelResize(() => context.requestRender());
     context.requestRender();
     const focusedReference = focusedReferenceDimensionRef.current;
     focusedReferenceDimensionRef.current = null;
@@ -11857,18 +11908,42 @@ export function ModelViewer({
     };
   }, [sketchBasis, sketchDimensions]);
   const sketchRelations = sketchMode?.relations;
+  const sketchRelationStrokes = sketchMode?.relationStrokes;
+  const sketchRelationKeepOuts = sketchMode?.relationKeepOuts;
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !sketchBasis || !sketchRelations?.length) return;
-    const overlay = buildSketchRelationGlyphs(sketchRelations, sketchBasis);
+    const overlay = buildSketchRelationGlyphs(
+      sketchRelations,
+      sketchBasis,
+      (constraintId) => selectSketchConstraintRef.current?.(constraintId),
+      (constraintId, shown) =>
+        sketchConstraintSelectionShownRef.current?.(constraintId, shown),
+      sketchRelationStrokes,
+      sketchRelationKeepOuts
+    );
     context.scene.add(overlay.group);
+    sketchRelationsRef.current = overlay;
+    // The rails, flyouts and floating panels glyphs keep out from under are
+    // measured on their own timer, so one that moves over an idle scene
+    // still moves the glyphs (it draws a frame only on a change).
+    overlay.watchObstacles(context.labelRenderer.domElement, () =>
+      context.requestRender()
+    );
     context.requestRender();
     return () => {
       context.scene.remove(overlay.group);
       overlay.dispose();
+      if (sketchRelationsRef.current === overlay)
+        sketchRelationsRef.current = null;
       context.requestRender();
     };
-  }, [sketchBasis, sketchRelations]);
+  }, [
+    sketchBasis,
+    sketchRelations,
+    sketchRelationStrokes,
+    sketchRelationKeepOuts
+  ]);
   const sketchEntryFrameRef = useRef<SketchEntryFrame | null>(null);
   sketchEntryFrameRef.current = sketchMode?.frame ?? null;
   useEffect(() => {
