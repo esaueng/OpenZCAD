@@ -73,7 +73,13 @@ export function ViewModeBar({
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const panelId = useId();
-  const displayModeLabel = DISPLAY_MODE_LABELS[settings.displayMode];
+  // X-ray rides over the display mode and has no button of its own here, as
+  // on Build's rail: the rail's height is what its loading placeholder and
+  // the stage centring are sized to. Shift+X, the command bar and the view
+  // menu reach it.
+  const displayModeLabel = `${DISPLAY_MODE_LABELS[settings.displayMode]}${
+    settings.xray ? ' · X-ray' : ''
+  }`;
   const projectionLabel = PROJECTION_LABELS[projection];
 
   useEffect(() => {

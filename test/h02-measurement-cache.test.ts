@@ -447,6 +447,128 @@ describe('H02 unchanged measurement payload safety', { timeout: 30_000 }, () => 
     }
   });
 
+  it('evicts older live measurements under byte pressure and remeasures them exactly', async () => {
+    let doc = document();
+    for (const name of ['Second box', 'Third box'])
+      doc = addPrimitiveFeature(doc, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 8, depth: 6 }
+      });
+    const reference = await createExactKernelAdapter();
+    const events: RebuildCacheEvent[] = [];
+    let adapter: ExactKernelAdapter | undefined;
+    try {
+      const expected = await reference.syncDocument(doc);
+      const sizes = [...state(reference).measuredShapeCache.values()]
+        .map((entry) => entry.bytes)
+        .sort((a, b) => a - b);
+      expect(sizes).toHaveLength(3);
+      // Fit every individual entry and every pair, but never all three.
+      // Calibrate from real payloads instead of depending on metadata sizes.
+      const budget = sizes[1]! + sizes[2]! + Math.floor(sizes[0]! / 2);
+      expect(budget).toBeLessThan(state(reference).measuredShapeCacheBytes);
+      adapter = await createExactKernelAdapter({
+        measuredShapeCacheBytes: budget,
+        measurementCacheDiagnostics: true,
+        onRebuildCacheEvent: (event) => events.push(event)
+      });
+      const assertBudget = () => {
+        const retained = state(adapter!);
+        expect(retained.measuredShapeCacheBytes).toBe(
+          [...retained.measuredShapeCache.values()].reduce(
+            (total, entry) => total + entry.bytes,
+            0
+          )
+        );
+        expect(retained.measuredShapeCacheBytes).toBeLessThanOrEqual(budget);
+        expect(retained.measuredShapeCache.size).toBe(2);
+      };
+      expect((await adapter.syncDocument(doc)).bodyRepresentations).toEqual(
+        expected.bodyRepresentations
+      );
+      expect([...state(adapter).measuredShapeCache.keys()]).toEqual(
+        doc.bodyOrder.slice(1)
+      );
+      assertBudget();
+
+      for (let pass = 0; pass < 4; pass++) {
+        const retainedIds = [...state(adapter).measuredShapeCache.keys()];
+        const evictedIds = doc.bodyOrder.filter(
+          (id) => !state(adapter!).measuredShapeCache.has(id)
+        );
+        expect(evictedIds).toHaveLength(1);
+        // Measure the retained bodies first, so their hits are observable
+        // before storing the evicted body's new payload displaces another.
+        const reordered = {
+          ...doc,
+          bodyOrder: [...retainedIds, ...evictedIds]
+        };
+        const actual = await adapter.syncDocument(reordered);
+        expect(actual.bodyRepresentations).toEqual(
+          expected.bodyRepresentations
+        );
+        expect(actual.warnings).toEqual([]);
+        expect(events.at(-1)).toMatchObject({
+          restored: 3,
+          replayed: 0,
+          remeasured: 1,
+          reusedMeasurements: 2,
+          measurementCache: {
+            hits: 2,
+            misses: { 'no-entry': 1 },
+            resetReason: null
+          }
+        });
+        expect(state(adapter).measuredShapeCache.has(evictedIds[0]!)).toBe(
+          true
+        );
+        expect(state(adapter).measuredShapeCache.has(retainedIds[0]!)).toBe(
+          false
+        );
+        assertBudget();
+      }
+
+      const refused = updateFeature(doc, {
+        featureId: listFeaturesInOrder(doc)[2]!.featureId,
+        data: { dimensions: { width: -1, height: 8, depth: 6 } }
+      });
+      const failed = await adapter.syncDocument(refused);
+      expect(
+        failed.featureWarnings?.some(
+          (warning) => warning.kind === 'build-failed'
+        )
+      ).toBe(true);
+      expect(state(adapter).measuredShapeCache.has(doc.bodyOrder[2]!)).toBe(
+        false
+      );
+      expect(acrossArenas(failed)).toEqual(
+        acrossArenas(await reference.syncDocument(refused))
+      );
+      expect(acrossArenas(await adapter.syncDocument(doc))).toEqual(
+        acrossArenas(expected)
+      );
+      assertBudget();
+
+      adapter.dispose();
+      expect(state(adapter).historyKernel).toBeNull();
+      expect(state(adapter).measuredShapeCache.size).toBe(0);
+      expect(state(adapter).measuredShapeCacheBytes).toBe(0);
+      expect(acrossArenas(await adapter.syncDocument(doc))).toEqual(
+        acrossArenas(expected)
+      );
+      expect(events.at(-1)).toMatchObject({
+        restored: 0,
+        remeasured: 3,
+        reusedMeasurements: 0
+      });
+      assertBudget();
+    } finally {
+      adapter?.dispose();
+      reference.dispose();
+    }
+  });
+
   it('recycles through repeated edits, disposal and a refused build without stale hits', async () => {
     const adapter = await createExactKernelAdapter();
     const fresh = await createExactKernelAdapter({ historyCheckpointLimit: 0 });
@@ -497,7 +619,7 @@ describe('H02 unchanged measurement payload safety', { timeout: 30_000 }, () => 
   });
 });
 
-it('the installed Remus pin preserves prefix handles and permanently retires suffix handles', () => {
+it('the installed Remus pin preserves prefixes and permanently retires suffix handles and checkpoints', () => {
   const kernel = new RemusKernel();
   try {
     const keep = kernel.makeBox(2, 2, 2);
@@ -507,13 +629,17 @@ it('the installed Remus pin preserves prefix handles and permanently retires suf
     const staleFaces = kernel.getSolidFaces(stale).slice();
     const staleEdges = kernel.getSolidEdges(stale).slice();
     const staleVertices = kernel.getSolidVertices(stale).slice();
-    kernel.checkpoint();
+    const staleCheckpoint = kernel.checkpoint();
     kernel.restore(checkpoint);
     expect(kernel.checkpointCount()).toBe(1);
     expect(kernel.getSolidFaces(keep)).toEqual(prefixFaces);
     for (let i = 0; i < 20; i++) {
       const next = kernel.makeBox(3, 3, 3);
       expect(next).toBeGreaterThan(stale);
+      // A saved later branch cannot be restored over the replayed model.
+      // Refusing that checkpoint must leave the current branch intact.
+      expect(() => kernel.restore(staleCheckpoint)).toThrow();
+      expect(kernel.getSolidFaces(next)).toHaveLength(6);
       expect(() => kernel.getSolidFaces(stale)).toThrow();
       for (const face of staleFaces)
         expect(() => kernel.getFaceNormal(face)).toThrow();
