@@ -115,6 +115,47 @@ export function sameStructure(actual: unknown, expected: unknown): boolean {
   );
 }
 
+function differingPaths(
+  actual: unknown,
+  expected: unknown,
+  path = ''
+): string[] {
+  if (sameStructure(actual, expected)) return [];
+  if (
+    actual &&
+    expected &&
+    typeof actual === 'object' &&
+    typeof expected === 'object'
+  ) {
+    const a = actual as Record<string, unknown>,
+      b = expected as Record<string, unknown>;
+    return [...new Set([...Object.keys(a), ...Object.keys(b)])].flatMap((key) =>
+      differingPaths(a[key], b[key], `${path}.${key}`)
+    );
+  }
+  return [path];
+}
+
+function publicationDifferences(
+  actual: DerivedState,
+  expected: DerivedState,
+  document: ProjectDocument
+) {
+  const { bodyRepresentations: actualBodies, ...actualRoot } =
+    publication(actual);
+  const { bodyRepresentations: expectedBodies, ...expectedRoot } =
+    publication(expected);
+  return {
+    root: differingPaths(actualRoot, expectedRoot).slice(0, 100),
+    bodies: document.bodyOrder
+      .map((id, bodyIndex) => {
+        const paths = differingPaths(actualBodies[id], expectedBodies[id]);
+        return { bodyIndex, count: paths.length, paths: paths.slice(0, 100) };
+      })
+      .filter((body) => body.count > 0)
+  };
+}
+
 async function capture(
   adapter: ExactKernelAdapter,
   document: ProjectDocument,
@@ -245,6 +286,11 @@ export async function createExactKernelAdapter(
             publication(actual.result),
             publication(expected.result)
           ),
+          publicationDifferences: publicationDifferences(
+            actual.result,
+            expected.result,
+            document
+          ),
           bodies: actual.bodies.length,
           serializedBytes: actual.bodies.reduce(
             (sum, body) => sum + body.bytes.length,
@@ -339,6 +385,11 @@ export async function createExactKernelAdapter(
             publicationEquivalent: sameStructure(
               publication(actual.result),
               publication(expected.result)
+            ),
+            publicationDifferences: publicationDifferences(
+              actual.result,
+              expected.result,
+              reordered
             ),
             retainedBytes: retained.measuredShapeCacheBytes,
             summedBytes: [...retained.measuredShapeCache.values()].reduce(

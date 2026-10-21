@@ -196,10 +196,12 @@ function assertEquivalent(result: Equivalence) {
     result.rawEquivalent,
     'Every captured private B-rep byte must match fresh'
   ).toBe(true);
-  expect(
-    result.publicationEquivalent,
-    'Private normalized publication must match fresh'
-  ).toBe(true);
+  expect
+    .soft(
+      result.publicationEquivalent,
+      'Private normalized publication must match fresh'
+    )
+    .toBe(true);
   expect(result.bodies).toBe(17);
   expect(result.faces).toBe(720);
   expect(result.serializedBytes).toBeGreaterThan(0);
@@ -426,7 +428,7 @@ test('private holder survives sustained edits, retirement, refusal and worker re
       for (const pass of pressure.passes) {
         expect(pass.evictedBodies).toBeGreaterThan(0);
         expect(pass.rawEquivalent).toBe(true);
-        expect(pass.publicationEquivalent).toBe(true);
+        expect.soft(pass.publicationEquivalent).toBe(true);
         expect(pass.retainedBytes).toBe(pass.summedBytes);
         expect(pass.retainedBytes).toBeLessThanOrEqual(pressure.budget);
         expect(pass.event.remeasured).toBeGreaterThan(0);
@@ -579,5 +581,11 @@ test('private holder survives sustained edits, retirement, refusal and worker re
   expect(createHash('sha256').update(readFileSync(source)).digest('hex')).toBe(
     createHash('sha256').update(input).digest('hex')
   );
-  record({ phase: 'complete', sourceUnchanged: true, errors: errors.length });
+  record({
+    phase: 'complete',
+    sourceUnchanged: true,
+    errors: errors.length,
+    acceptanceFailures: test.info().errors.length,
+    accepted: test.info().errors.length === 0
+  });
 });
