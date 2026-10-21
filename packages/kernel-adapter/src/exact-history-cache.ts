@@ -46,6 +46,7 @@ import {
   type BooleanLineageDemand
 } from './exact-boolean-evolution';
 import type { RemusKernel } from './remus-runtime';
+import type { IdleLineageView } from './exact-idle-lineage-view';
 import { featureProfileAwaitsFonts } from './feature-profile-dependencies';
 
 /**
@@ -434,6 +435,17 @@ export interface HistoryCheckpointEntry {
   checkpointId: number;
   /** Post-feature JS state, isolated from later in-place mutation. */
   snapshot: ExactBuildResult;
+  /** Probe signature actually represented by this snapshot's JS lineage. */
+  lineageProbeKey?: string;
+  /** Accounted probe key plus optional alternate provenance metadata. */
+  lineageMetadataBytes?: number;
+  /** Finalized alternate metadata on this same checkpoint's shipped handles. */
+  idleLineageView?: {
+    /** Full-prefix effective probe decisions, never just the last boolean. */
+    digests: string[];
+    state: IdleLineageView;
+    estimatedBytes: number;
+  };
 }
 
 /**
