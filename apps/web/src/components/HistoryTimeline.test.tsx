@@ -431,7 +431,7 @@ describe('HistoryTimeline', () => {
     expect(onApply).toHaveBeenCalledOnce();
   });
 
-  it('lets a double-click that stays on its row through', () => {
+  it('lets a double-click that stays on its row through as one selection', () => {
     const { props } = renderTimeline();
     const main =
       row('Feature 2').querySelector<HTMLElement>('.feature-row-main')!;
@@ -439,8 +439,43 @@ describe('HistoryTimeline', () => {
     fireEvent.click(main, { detail: 1 });
     expect(fireEvent.mouseDown(main, { detail: 2 })).toBe(true);
     fireEvent.click(main, { detail: 2 });
-    expect(props.onSelectFeature).toHaveBeenCalledTimes(2);
+    fireEvent.dblClick(main, { detail: 2 });
+    // The second click is the rest of the gesture, not a second toggle.
+    expect(props.onSelectFeature).toHaveBeenCalledOnce();
+    expect(props.onSelectFeature).toHaveBeenCalledWith('node-2');
     // Ends the hold, as the user's next single press would.
+    fireEvent.mouseDown(document.body, { detail: 1 });
+  });
+
+  it('keeps a double-clicked row selected when its edit card opens elsewhere', () => {
+    // The edit card stands in the right lane, away from History, so the
+    // row stays under the pointer; selecting a selected row clears it, and
+    // the second click closed the card the first had opened.
+    function Workspace() {
+      const [selected, setSelected] = useState<string | null>(null);
+      return (
+        <HistoryTimeline
+          {...timelineProps()}
+          selectedFeatureNodeId={selected}
+          onSelectFeature={(id) =>
+            setSelected((current) => (current === id ? null : id))
+          }
+        />
+      );
+    }
+    render(<Workspace />);
+    const main =
+      row('Feature 2').querySelector<HTMLElement>('.feature-row-main')!;
+    fireEvent.mouseDown(main, { detail: 1 });
+    fireEvent.click(main, { detail: 1 });
+    fireEvent.mouseDown(main, { detail: 2 });
+    fireEvent.click(main, { detail: 2 });
+    fireEvent.dblClick(main, { detail: 2 });
+    expect(row('Feature 2')).toHaveClass('selected');
+    // A later single click is the user's own: it clears the row again.
+    fireEvent.mouseDown(main, { detail: 1 });
+    fireEvent.click(main, { detail: 1 });
+    expect(row('Feature 2')).not.toHaveClass('selected');
     fireEvent.mouseDown(document.body, { detail: 1 });
   });
 

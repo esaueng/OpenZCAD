@@ -141,7 +141,7 @@ describe('WorkspaceTour', () => {
     }
   });
 
-  it('points to the History control with the drawer closed and releases it on Next', async () => {
+  it('points to the History rail button with the panel closed and releases it on Next', async () => {
     const { unmount } = render(
       <WorkspaceTour
         {...idle}
@@ -151,7 +151,7 @@ describe('WorkspaceTour', () => {
       />
     );
     expect(screen.getByText('The history is the model')).toBeTruthy();
-    expect(document.querySelector('.sidebar')).toBeNull();
+    expect(document.querySelector('.model-panel')).toBeNull();
 
     // The rail can arrive after the tour, just like the first step's palette.
     const rail = document.createElement('div');

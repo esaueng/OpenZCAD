@@ -46,6 +46,18 @@ describe('RevisionsPanel', () => {
     );
     expect(result.current.visible).toEqual([]);
     expect(revisionCount(result.current)).toBe(0);
+    // Opened from the rail anyway, the panel says why it is empty.
+    const { container } = render(
+      <RevisionsPanel
+        documentVersion={1}
+        restorableCheckpointIds={new Set()}
+        onRestoreCheckpoint={vi.fn()}
+        onBranchCheckpoint={vi.fn()}
+        revisions={result.current}
+      />
+    );
+    expect(container.querySelector('.revision-row')).toBeNull();
+    expect(container).toHaveTextContent('No save points yet.');
   });
 
   it('lists the newest first and offers only what is stored and not current', async () => {
