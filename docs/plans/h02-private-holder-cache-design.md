@@ -194,3 +194,18 @@ raw B-rep byte equivalence. The attempted browser comparison was interrupted
 under severe unrelated host load before a complete matched pair existed.
 Median/p95, browser retention and the 20% target remain unmeasured in that
 campaign. H02 remains Partial, and no proposed Text-branch cache is accepted.
+
+## Existing-cache qualification (2026-10-21)
+
+[Current qualification evidence](../qa/2026-10-21/h02-existing-cache-qualification.md)
+adds strict per-body reachable B-rep comparison on the private holder: all
+3,204,155 serialized bytes match across the actual cached and fresh builds of
+17 bodies. The existing normalized publication comparison also passes across
+720 faces. New regressions force real measurement-cache byte-budget eviction,
+then exercise refusal recovery, disposal and rebuild, and confirm that retired
+suffix checkpoints cannot restore over newly replayed geometry.
+
+These are existing-cache exactness and lifetime results. The current pinned
+Remus contract still restores ancestors only, so a detached Text record remains
+blocked on branch-preserving kernel support and dependency/effect analysis.
+No runtime cache change or extra branch-memory allocation is accepted here.

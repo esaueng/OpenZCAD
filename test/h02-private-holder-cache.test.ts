@@ -16,6 +16,10 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId, type DerivedState } from '@openzcad/shared';
 import { preflightCadPatch } from '../apps/web/src/lib/aiPatchPreflight';
+import {
+  captureExactArenas,
+  compareExactArenas
+} from './support/exact-arena-equivalence';
 
 const sourcePath = process.env.OZ_PERF_HOLDER_STEP;
 
@@ -134,16 +138,26 @@ it.skipIf(!sourcePath)(
         expression: String(Number(height!.expression) + 8)
       });
       const replayed: string[] = [];
-      const actual = await warm.syncDocument(changed, (progress) => {
-        if (progress.stage === 'feature' && progress.status === 'completed')
-          replayed.push(progress.name);
-      });
+      const capturedActual = await captureExactArenas(warm, changed, () =>
+        warm.syncDocument(changed, (progress) => {
+          if (progress.stage === 'feature' && progress.status === 'completed')
+            replayed.push(progress.name);
+        })
+      );
+      const actual = capturedActual.result;
       expect(actual.warnings.length).toBe(0);
       expect(actual.featureWarnings?.length ?? 0).toBe(0);
       expect(replayed).not.toContain('Text');
       expect(replayed).toContain('Keep text together');
       expect(events.at(-1)!.reusedMeasurements).toBeGreaterThan(0);
-      const expected = await cold.syncDocument(changed);
+      const capturedExpected = await captureExactArenas(cold, changed, () =>
+        cold.syncDocument(changed)
+      );
+      const expected = capturedExpected.result;
+      const exactArenas = compareExactArenas(
+        capturedActual.bodies,
+        capturedExpected.bodies
+      );
       const publishedActual = exactPublication(actual),
         publishedExpected = exactPublication(expected);
       if (process.env.OZ_PERF_PRIVATE_DIFF_OUT) {
@@ -167,6 +181,7 @@ it.skipIf(!sourcePath)(
                   paths: paths.slice(0, 100)
                 };
               }),
+              exactArenas,
               summary: {
                 documentBytes: new TextEncoder().encode(
                   JSON.stringify(reopened)
@@ -188,10 +203,21 @@ it.skipIf(!sourcePath)(
         isDeepStrictEqual(publishedActual, publishedExpected),
         'Private exact publication must match the uncached oracle'
       ).toBe(true);
+      expect(
+        exactArenas.bodies.every(
+          (body) => body.actualSolids > 0 && body.expectedSolids > 0
+        ),
+        'Every private body must have captured exact solids'
+      ).toBe(true);
+      expect(
+        exactArenas.equivalent,
+        'Private raw B-rep arena bytes must match the uncached oracle'
+      ).toBe(true);
       console.log(
         '[H02 private equivalence]',
         JSON.stringify({
           equivalent: true,
+          exactArenas,
           documentBytes: new TextEncoder().encode(JSON.stringify(reopened))
             .byteLength,
           bodies: changed.bodyOrder.length,
