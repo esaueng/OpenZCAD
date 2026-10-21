@@ -5,6 +5,7 @@ import {
   composingTextDraft,
   sketchToolKeysSuspended,
   sketchPickArmed,
+  projectionRepickHolds,
   radialFaceOperationName,
   escapeTarget,
   interactionReducer,
@@ -381,6 +382,34 @@ describe('interactionReducer', () => {
       tool: 'line',
       projectMode: 'unlinked'
     });
+  });
+
+  it('holds a projection re-pick only while Project is armed linked (I01)', () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    expect(projectionRepickHolds(state)).toBe(false);
+    // Re-pick arms Project in Linked, the only mode a re-pick commits.
+    state = interactionReducer(state, {
+      type: 'sketch-project-mode',
+      mode: 'linked'
+    });
+    expect(projectionRepickHolds(state)).toBe(true);
+    // The project key on Project steps to Unlinked through the same event
+    // as the strip: the re-pick must not survive it, or the next pick would
+    // rewrite the existing entity's source while the strip shows Unlinked.
+    state = interactionReducer(state, {
+      type: 'sketch-project-mode',
+      mode: 'unlinked'
+    });
+    expect(state.mode === 'sketch' && state.session.tool).toBe('project');
+    expect(projectionRepickHolds(state)).toBe(false);
+    state = interactionReducer(state, {
+      type: 'sketch-project-mode',
+      mode: 'linked'
+    });
+    expect(projectionRepickHolds(state)).toBe(true);
+    // Leaving the tool disarms it too.
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'line' });
+    expect(projectionRepickHolds(state)).toBe(false);
   });
 
   it('steps the circle type in the strip order, wrapping round', () => {

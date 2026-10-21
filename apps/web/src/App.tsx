@@ -6,7 +6,15 @@ import {
   repairLegacyBracketDemo,
   repairLegacyBracketSaveState
 } from './lib/bracketDemoCompatibility';
-import { setAnalyticsEnabled, trackUsage, trackDetail, trackParts, trackSize, isAnalyticsEnabled, durationBucket } from './lib/analytics';
+import {
+  setAnalyticsEnabled,
+  trackUsage,
+  trackDetail,
+  trackParts,
+  trackSize,
+  isAnalyticsEnabled,
+  durationBucket
+} from './lib/analytics';
 import type {
   GeometryBodyRepresentation,
   GeometryReadyState,
@@ -596,6 +604,7 @@ import {
   composingTextDraft,
   escapeTarget,
   sketchPickArmed,
+  projectionRepickHolds,
   sketchToolKeysSuspended,
   interactionReducer,
   commandSessionFor,
@@ -2268,9 +2277,7 @@ export function App() {
   /** The open Plane card's handler for a drag of its datum's handle. */
   const datumOffsetDragRef = useRef<((delta: number) => void) | null>(null);
   /** The open Plane card's draft Offset, drawn ahead of its Apply. */
-  const [datumOffsetDraft, setDatumOffsetDraft] = useState<number | null>(
-    null
-  );
+  const [datumOffsetDraft, setDatumOffsetDraft] = useState<number | null>(null);
   /** Whether the open Plane card's draft can take a drag: a numeric offset. */
   const [datumDragAvailable, setDatumDragAvailable] = useState(false);
   /** The open Plane card's exact entry for its datum's handle. */
@@ -2670,7 +2677,9 @@ export function App() {
       doc
         ? doc.bodyOrder.filter((id) => {
             const body = doc.derived.bodyRepresentations[id];
-            return body !== undefined && !body.consumed && !hiddenBodyIds.has(id);
+            return (
+              body !== undefined && !body.consumed && !hiddenBodyIds.has(id)
+            );
           })
         : [],
     [doc, hiddenBodyIds]
@@ -3129,7 +3138,10 @@ export function App() {
       run: handleUndo
     });
   };
-  const pendingPartCountRef = useRef<Pick<ProjectDocument, 'projectId' | 'version'> | null>(null);
+  const pendingPartCountRef = useRef<Pick<
+    ProjectDocument,
+    'projectId' | 'version'
+  > | null>(null);
   const [geometrySnapshot, setGeometrySnapshot] = useState<{
     projectId: string;
     version: number;
@@ -5926,7 +5938,8 @@ export function App() {
       parameterCandidate !== null &&
       parameterCandidate.base.projectId === doc?.projectId &&
       parameterCandidate?.base.version === doc?.version
-        ? (parameterPreviewSession?.preview(parameterCandidate.document) ?? null)
+        ? (parameterPreviewSession?.preview(parameterCandidate.document) ??
+          null)
         : !previewDoc &&
             !exactGeometryReady &&
             geometry.state.phase !== 'failed'
@@ -7151,7 +7164,8 @@ export function App() {
       let next = managerRef.current.execute(command);
       // A drawing-sheet edit leaves the model alone: keep the ready geometry
       // rather than posting a rebuild (and a "Rebuilding" lane) per view move.
-      if (isDrawingCommandKind(command.kind)) geometry.retainReadyGeometry(next);
+      if (isDrawingCommandKind(command.kind))
+        geometry.retainReadyGeometry(next);
       if (derived) {
         // Validation already rebuilt this exact result; attaching it now
         // renders the new geometry in the same batch instead of flashing the
@@ -7166,7 +7180,10 @@ export function App() {
       if (isAnalyticsEnabled()) {
         trackUsage('feature_used');
         trackDetail('feature_operation', command.kind);
-        pendingPartCountRef.current = { projectId: next.projectId, version: next.version };
+        pendingPartCountRef.current = {
+          projectId: next.projectId,
+          version: next.version
+        };
         if (derived) trackCommittedParts(next, derived);
       }
       setStatus(commandOutcomeMessage(command.label));
@@ -7212,7 +7229,10 @@ export function App() {
         trackUsage('feature_used');
         for (const command of commands)
           trackDetail('feature_operation', command.kind);
-        pendingPartCountRef.current = { projectId: next.projectId, version: next.version };
+        pendingPartCountRef.current = {
+          projectId: next.projectId,
+          version: next.version
+        };
         if (derived) trackCommittedParts(next, derived);
       }
       setStatus(commandOutcomeMessage(label));
@@ -7229,13 +7249,21 @@ export function App() {
     derived: ProjectDocument['derived']
   ): void {
     const pending = pendingPartCountRef.current;
-    if (!pending || pending.projectId !== document.projectId || pending.version !== document.version)
+    if (
+      !pending ||
+      pending.projectId !== document.projectId ||
+      pending.version !== document.version
+    )
       return;
     pendingPartCountRef.current = null;
     // Count the completed result, including hidden parts but excluding consumed
     // replay sources. Pending edits are sampled only after their owned rebuild.
     if (isAnalyticsEnabled())
-      trackParts(Object.values(derived.bodyRepresentations).filter(body => !body.consumed).length);
+      trackParts(
+        Object.values(derived.bodyRepresentations).filter(
+          (body) => !body.consumed
+        ).length
+      );
   }
 
   function finishFeatureCreation(): void {
@@ -7386,12 +7414,8 @@ export function App() {
     void run(command, {
       featureName,
       resultBodyId,
-      targets: editAffectedFeatureTargets(
-        doc,
-        proposed,
-        feature.featureId
-      ).map((target, index) =>
-        index === 0 ? { ...target, featureName } : target
+      targets: editAffectedFeatureTargets(doc, proposed, feature.featureId).map(
+        (target, index) => (index === 0 ? { ...target, featureName } : target)
       ),
       successMessage: commandOutcomeMessage(command.label),
       onSuccess: () => finishFeatureEdit(feature, editSession),
@@ -8143,7 +8167,9 @@ export function App() {
     if (
       !moveHasFiniteValues(values) ||
       (values.pivot &&
-        ![values.pivot.x, values.pivot.y, values.pivot.z].every(Number.isFinite))
+        ![values.pivot.x, values.pivot.y, values.pivot.z].every(
+          Number.isFinite
+        ))
     ) {
       setStatus(
         'Could not apply Move: its resulting transform must be finite.'
@@ -8155,7 +8181,9 @@ export function App() {
       commandFactories.transformBody({
         // Whatever the gizmo's Name field holds, falling back to the default
         // rather than committing a feature with a blank name.
-        name: newFeatureName(moveName.trim() || (preview.copy ? 'Copy' : 'Move')),
+        name: newFeatureName(
+          moveName.trim() || (preview.copy ? 'Copy' : 'Move')
+        ),
         targetBodyId: preview.bodyId as BodyId,
         ...values,
         ...(preview.copy
@@ -12602,9 +12630,9 @@ export function App() {
       );
       trackUsage('export_completed');
       if (analyticsStarted !== null) {
-        trackSize('project_size',new Blob([text]).size);
-        const bucket = durationBucket(performance.now()-analyticsStarted);
-        if(bucket)trackDetail('export_latency',bucket);
+        trackSize('project_size', new Blob([text]).size);
+        const bucket = durationBucket(performance.now() - analyticsStarted);
+        if (bucket) trackDetail('export_latency', bucket);
       }
       setStatus(`Exported complete project ${snapshot.name}.`);
       sink.finish({ tone: 'ok', message: 'complete project', landed: true });
@@ -13462,7 +13490,9 @@ export function App() {
               }
             });
           } catch (error) {
-            setStatus(errorMessage(error, 'That face cannot carry this plane.'));
+            setStatus(
+              errorMessage(error, 'That face cannot carry this plane.')
+            );
           }
         }
       );
@@ -14260,12 +14290,9 @@ export function App() {
     };
   }, [selectedSketchEntity, doc, features, projectionRepair]);
 
-  // A re-pick lives only while the Project tool it armed does.
+  // A re-pick lives only while the linked Project tool it armed does.
   useEffect(() => {
-    if (
-      projectionRepair &&
-      (interaction.mode !== 'sketch' || interaction.session.tool !== 'project')
-    ) {
+    if (projectionRepair && !projectionRepickHolds(interaction)) {
       setProjectionRepair(null);
     }
   }, [interaction, projectionRepair]);
@@ -14513,7 +14540,9 @@ export function App() {
   function handleRepickProjection() {
     const target = sketchEntityEditTarget(interactionRef.current);
     if (!target) return;
-    dispatchInteraction({ type: 'sketch-tool', tool: 'project' });
+    // A re-pick replaces a linked source, so Project arms in Linked and the
+    // strip says so; stepping to Unlinked (strip or key) disarms the re-pick.
+    dispatchInteraction({ type: 'sketch-project-mode', mode: 'linked' });
     setProjectionRepair({
       sketchId: target.sketchId as SketchId,
       objectId: target.objectId as EntityId
@@ -14548,7 +14577,10 @@ export function App() {
       return;
     }
     if (!session.sketchId) {
-      dispatchInteraction({ type: 'sketch-created', sketchId: commit.sketchId });
+      dispatchInteraction({
+        type: 'sketch-created',
+        sketchId: commit.sketchId
+      });
       setStatus(`${name} started.`);
     }
   }
@@ -14767,8 +14799,12 @@ export function App() {
           : [];
       })
     );
-    const resolved = resolveSketchComposite(composite, objects, (value) =>
-      evalParamValue(value, getParameterScope(base).scope, base.units) ?? undefined
+    const resolved = resolveSketchComposite(
+      composite,
+      objects,
+      (value) =>
+        evalParamValue(value, getParameterScope(base).scope, base.units) ??
+        undefined
     );
     if (resolved.status !== 'resolved') {
       setSketchEditError(resolved.reason);
@@ -15458,7 +15494,8 @@ export function App() {
           ? lockConstraintIds(editingSketchNode, ref)
           : disconnectConstraintIds(editingSketchNode, ref);
       if (removals.length > 0) {
-        const verb = pending.kind === 'lock' ? 'Unlock point' : 'Disconnect point';
+        const verb =
+          pending.kind === 'lock' ? 'Unlock point' : 'Disconnect point';
         if (
           executeTransaction(
             verb,
@@ -15481,7 +15518,9 @@ export function App() {
         return true;
       }
       if (pending.kind === 'disconnect') {
-        setStatus('That point has no coincident, midpoint or on-curve relation.');
+        setStatus(
+          'That point has no coincident, midpoint or on-curve relation.'
+        );
         dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
         return true;
       }
@@ -19104,7 +19143,9 @@ export function App() {
     });
     if (plan.kind === 'direct') executeCommand(command);
     if (plan.kind === 'pending')
-      setStatus('Exact geometry is still rebuilding. Reorder once it finishes.');
+      setStatus(
+        'Exact geometry is still rebuilding. Reorder once it finishes.'
+      );
     if (plan.kind !== 'validate') return;
     let failed = '';
     const attribution =
@@ -19126,7 +19167,8 @@ export function App() {
       },
       validatingMessage: `Checking features after ${name ?? 'the move'}…`,
       successMessage: commandOutcomeMessage(label),
-      onFailure: (message) => announce(`${label} not applied${failed}. ${message}`)
+      onFailure: (message) =>
+        announce(`${label} not applied${failed}. ${message}`)
     });
   }
 
@@ -19576,7 +19618,9 @@ export function App() {
         setFaceRepair(null);
         setDatumRepair(null);
         setToFacePick(
-          kind === 'edit' && featureId ? { kind, featureId } : { kind: 'create' }
+          kind === 'edit' && featureId
+            ? { kind, featureId }
+            : { kind: 'create' }
         );
         setStatus(
           'Click a planar face parallel to the sketch for the extrusion to reach · Esc cancels.'
@@ -19614,7 +19658,9 @@ export function App() {
       return;
     }
     if (!selection) {
-      setStatus('Click a planar face for the extrusion to reach · Esc cancels.');
+      setStatus(
+        'Click a planar face for the extrusion to reach · Esc cancels.'
+      );
       return;
     }
     if (!exactGeometryReady) {
@@ -19856,62 +19902,63 @@ export function App() {
           ? featureAttribution.featureWarnings
           : []
       )
-        ? datumPlaneSources(feature.data.definition).flatMap((source, index) => {
-            if (source.type !== 'face') return [];
-            const slot = index as 0 | 1;
-            const midplane =
-              feature.data.featureKind === 'datum-plane' &&
-              feature.data.definition.kind === 'midplane';
-            const which = midplane ? ` ${slot === 0 ? 'A' : 'B'}` : '';
-            return [
-              {
-                item: {
-                  id: `repair-datum-face${midplane ? `-${slot}` : ''}`,
-                  label: `Re-pick source face${which}…`,
-                  icon: <Crosshair size={13} aria-hidden="true" />
-                },
-                run: () => {
-                  if (!ensureCanEdit('repair a feature')) return;
-                  setTool(null);
-                  clearSelection();
-                  setFaceRepair(null);
-                  setDatumRepair({ feature, slot });
-                  setStatus(
-                    `Re-pick ${midplane ? `face${which}` : 'the face'} for "${feature.name}": click a planar face · Esc cancels.`
-                  );
-                }
-              }
-            ];
-          })
-          .concat(
-            // Both of a midplane's faces lost (a deleted body held them):
-            // either alone still leaves the plane unresolved, so pick both.
-            feature.data.featureKind === 'datum-plane' &&
-              feature.data.definition.kind === 'midplane' &&
-              feature.data.definition.sources.every(
-                (source) => source.type === 'face'
-              )
-              ? [
-                  {
-                    item: {
-                      id: 'repair-datum-faces-both',
-                      label: 'Re-pick both source faces…',
-                      icon: <Crosshair size={13} aria-hidden="true" />
-                    },
-                    run: () => {
-                      if (!ensureCanEdit('repair a feature')) return;
-                      setTool(null);
-                      clearSelection();
-                      setFaceRepair(null);
-                      setDatumRepair({ feature, slot: 0, both: true });
-                      setStatus(
-                        `Re-pick both faces for "${feature.name}": click face A, then face B · Esc cancels.`
-                      );
-                    }
+        ? datumPlaneSources(feature.data.definition)
+            .flatMap((source, index) => {
+              if (source.type !== 'face') return [];
+              const slot = index as 0 | 1;
+              const midplane =
+                feature.data.featureKind === 'datum-plane' &&
+                feature.data.definition.kind === 'midplane';
+              const which = midplane ? ` ${slot === 0 ? 'A' : 'B'}` : '';
+              return [
+                {
+                  item: {
+                    id: `repair-datum-face${midplane ? `-${slot}` : ''}`,
+                    label: `Re-pick source face${which}…`,
+                    icon: <Crosshair size={13} aria-hidden="true" />
+                  },
+                  run: () => {
+                    if (!ensureCanEdit('repair a feature')) return;
+                    setTool(null);
+                    clearSelection();
+                    setFaceRepair(null);
+                    setDatumRepair({ feature, slot });
+                    setStatus(
+                      `Re-pick ${midplane ? `face${which}` : 'the face'} for "${feature.name}": click a planar face · Esc cancels.`
+                    );
                   }
-                ]
-              : []
-          )
+                }
+              ];
+            })
+            .concat(
+              // Both of a midplane's faces lost (a deleted body held them):
+              // either alone still leaves the plane unresolved, so pick both.
+              feature.data.featureKind === 'datum-plane' &&
+                feature.data.definition.kind === 'midplane' &&
+                feature.data.definition.sources.every(
+                  (source) => source.type === 'face'
+                )
+                ? [
+                    {
+                      item: {
+                        id: 'repair-datum-faces-both',
+                        label: 'Re-pick both source faces…',
+                        icon: <Crosshair size={13} aria-hidden="true" />
+                      },
+                      run: () => {
+                        if (!ensureCanEdit('repair a feature')) return;
+                        setTool(null);
+                        clearSelection();
+                        setFaceRepair(null);
+                        setDatumRepair({ feature, slot: 0, both: true });
+                        setStatus(
+                          `Re-pick both faces for "${feature.name}": click face A, then face B · Esc cancels.`
+                        );
+                      }
+                    }
+                  ]
+                : []
+            )
         : []),
       // R01: an axis along an edge or a cylinder whose source was lost.
       ...(feature.data.featureKind === 'datum-axis' &&
@@ -20246,10 +20293,7 @@ export function App() {
       // The command the key means outside a sketch, if any. In a reading
       // workspace a tool key is still looked up, to say why it is refused.
       const resolvedModelCommand = chord
-        ? keymap.commandFor(chord, [
-            'model',
-            modelingLocked ? 'view' : 'build'
-          ])
+        ? keymap.commandFor(chord, ['model', modelingLocked ? 'view' : 'build'])
         : null;
       // From a field only Space reaches a command, and only Normal to face:
       // a number or expression field still holding focus after a face pick
@@ -20266,11 +20310,7 @@ export function App() {
         renderedSelectedTopology?.kind === 'face' &&
         (interaction.mode === 'idle' ||
           (interaction.mode === 'face' && interaction.phase === 'armed'));
-      if (
-        normalViewKey &&
-        tool === null &&
-        stableFaceSelection
-      ) {
+      if (normalViewKey && tool === null && stableFaceSelection) {
         event.preventDefault();
         requestNormalToSelectedFace();
         return;
@@ -21451,43 +21491,43 @@ export function App() {
   const workspacePrompt = drawingMode
     ? 'Drag a view to place it · arrow keys nudge it · Update redraws a stale sheet'
     : readingHints
-    ? viewModeHint
-    : tweakMode
-      ? tweakModeHint
-      : (commandPromptText(interaction) ??
-        (tool === 'sketch'
-          ? [
-              'Drag to draw',
-              keyHint(keymap, 'sketch-rectangle', 'rectangle'),
-              keyHint(keymap, 'sketch-circle', 'circle'),
-              'P polygon',
-              'Enter finishes'
-            ]
-              .filter(Boolean)
-              .join(' · ')
-          : tool === 'fillet' || tool === 'chamfer'
-            ? selectedEdges.length > 0
-              ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
-              : 'Click an edge (Shift adds more) or choose Select all edges'
-            : tool === 'union' || tool === 'subtract' || tool === 'intersect'
-              ? selectedBodyIds.length >= 2
-                ? `${selectedBodyIds.length} bodies picked, numbered in the viewport · Click toggles · Enter creates`
-                : 'Click bodies in the viewport or the list · pick order sets the base'
-              : tool
-                ? 'Enter creates · Esc cancels'
-                : selectedBodyIds.length >= 2
-                  ? `${selectedBodyIds.length} bodies picked${booleanKeyHints() ? ` — ${booleanKeyHints()}` : ''}`
-                  : selectedTopology?.kind === 'face'
-                    ? faceSelectedHint
-                    : selectedTopology?.kind === 'edge'
-                      ? // Neither tool has a shortcut, so the rail is the only
-                        // route: name it the way the rail names itself.
-                        'Edge selected — Fillet or Chamfer in Feature tools'
-                      : selectedFeature
-                        ? 'Edit in the panel · Del deletes · Esc closes'
-                        : viewerBodies.length > 0
-                          ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                          : idleHint));
+      ? viewModeHint
+      : tweakMode
+        ? tweakModeHint
+        : (commandPromptText(interaction) ??
+          (tool === 'sketch'
+            ? [
+                'Drag to draw',
+                keyHint(keymap, 'sketch-rectangle', 'rectangle'),
+                keyHint(keymap, 'sketch-circle', 'circle'),
+                'P polygon',
+                'Enter finishes'
+              ]
+                .filter(Boolean)
+                .join(' · ')
+            : tool === 'fillet' || tool === 'chamfer'
+              ? selectedEdges.length > 0
+                ? `${selectedEdges.length} edge${selectedEdges.length === 1 ? '' : 's'} selected · Shift+Click adjusts · Enter creates`
+                : 'Click an edge (Shift adds more) or choose Select all edges'
+              : tool === 'union' || tool === 'subtract' || tool === 'intersect'
+                ? selectedBodyIds.length >= 2
+                  ? `${selectedBodyIds.length} bodies picked, numbered in the viewport · Click toggles · Enter creates`
+                  : 'Click bodies in the viewport or the list · pick order sets the base'
+                : tool
+                  ? 'Enter creates · Esc cancels'
+                  : selectedBodyIds.length >= 2
+                    ? `${selectedBodyIds.length} bodies picked${booleanKeyHints() ? ` — ${booleanKeyHints()}` : ''}`
+                    : selectedTopology?.kind === 'face'
+                      ? faceSelectedHint
+                      : selectedTopology?.kind === 'edge'
+                        ? // Neither tool has a shortcut, so the rail is the only
+                          // route: name it the way the rail names itself.
+                          'Edge selected — Fillet or Chamfer in Feature tools'
+                        : selectedFeature
+                          ? 'Edit in the panel · Del deletes · Esc closes'
+                          : viewerBodies.length > 0
+                            ? 'Click a body, face, or edge · Shift+Click adds to selection'
+                            : idleHint));
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
@@ -23572,23 +23612,26 @@ export function App() {
                 onCreateTransform={(value) => {
                   const name = newFeatureName(value.name);
                   const command = commandFactories.transformBody({
-                      name,
-                      targetBodyId: value.targetBodyId,
-                      translation: value.translation,
-                      rotationDeg: value.rotationDeg,
-                      ...(value.scale !== undefined
-                        ? { scale: value.scale }
-                        : {}),
-                      ...(value.pivot !== undefined
-                        ? { pivot: value.pivot }
-                        : {}),
-                      ...(value.copy
-                        ? { copy: true, bodyName: newCopyBodyName(value.targetBodyId) }
-                        : {}),
-                      ...(value.axisRotation
-                        ? { axisRotation: value.axisRotation }
-                        : {})
-                    });
+                    name,
+                    targetBodyId: value.targetBodyId,
+                    translation: value.translation,
+                    rotationDeg: value.rotationDeg,
+                    ...(value.scale !== undefined
+                      ? { scale: value.scale }
+                      : {}),
+                    ...(value.pivot !== undefined
+                      ? { pivot: value.pivot }
+                      : {}),
+                    ...(value.copy
+                      ? {
+                          copy: true,
+                          bodyName: newCopyBodyName(value.targetBodyId)
+                        }
+                      : {}),
+                    ...(value.axisRotation
+                      ? { axisRotation: value.axisRotation }
+                      : {})
+                  });
                   createValidatedFeature(
                     command,
                     name,
@@ -24278,45 +24321,45 @@ export function App() {
             // nothing visible is left, so the choice can be undone here.
             (exportBodyIds.length > 0 ||
               (exportScopeInfo?.hiddenExcluded ?? 0) > 0) && (
-            <ExportDialog
-              scopeLabel={
-                exportScopeInfo?.selection && selectedBody
-                  ? selectedBody.name
-                  : exportScopeInfo
-                    ? exportScopeLabel(exportScopeInfo)
-                    : `all bodies (${exportBodyIds.length})`
-              }
-              hiddenBodies={
-                exportScopeInfo && !exportScopeInfo.selection
-                  ? exportScopeInfo.hiddenIncluded +
-                    exportScopeInfo.hiddenExcluded
-                  : 0
-              }
-              includeHidden={exportIncludesHidden}
-              onIncludeHiddenChange={setExportIncludesHidden}
-              bodies={exportBodyIds.map((bodyId) => ({
-                bodyId,
-                name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
-              }))}
-              revision={doc.version}
-              onClose={() => {
-                setMeshExportOpen(false);
-                // Leaving with every body hidden and left out would leave no
-                // export to reopen this dialog from; hidden bodies come back.
-                if (exportBodyIds.length === 0) setExportIncludesHidden(true);
-              }}
-              onExport={handleExportMesh}
-              onCheckQuality={handleCheckMeshQuality}
-              exportUnits={appSettings.files.exportUnits}
-              documentUnits={doc.units}
-              onExportUnitsChange={(exportUnits) =>
-                handleAppSettingsChange({
-                  ...appSettingsRef.current,
-                  files: { ...appSettingsRef.current.files, exportUnits }
-                })
-              }
-            />
-          )}
+              <ExportDialog
+                scopeLabel={
+                  exportScopeInfo?.selection && selectedBody
+                    ? selectedBody.name
+                    : exportScopeInfo
+                      ? exportScopeLabel(exportScopeInfo)
+                      : `all bodies (${exportBodyIds.length})`
+                }
+                hiddenBodies={
+                  exportScopeInfo && !exportScopeInfo.selection
+                    ? exportScopeInfo.hiddenIncluded +
+                      exportScopeInfo.hiddenExcluded
+                    : 0
+                }
+                includeHidden={exportIncludesHidden}
+                onIncludeHiddenChange={setExportIncludesHidden}
+                bodies={exportBodyIds.map((bodyId) => ({
+                  bodyId,
+                  name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId
+                }))}
+                revision={doc.version}
+                onClose={() => {
+                  setMeshExportOpen(false);
+                  // Leaving with every body hidden and left out would leave no
+                  // export to reopen this dialog from; hidden bodies come back.
+                  if (exportBodyIds.length === 0) setExportIncludesHidden(true);
+                }}
+                onExport={handleExportMesh}
+                onCheckQuality={handleCheckMeshQuality}
+                exportUnits={appSettings.files.exportUnits}
+                documentUnits={doc.units}
+                onExportUnitsChange={(exportUnits) =>
+                  handleAppSettingsChange({
+                    ...appSettingsRef.current,
+                    files: { ...appSettingsRef.current.files, exportUnits }
+                  })
+                }
+              />
+            )}
           {imageExportView && doc && (
             <ImageExportDialog
               viewScopeLabel={

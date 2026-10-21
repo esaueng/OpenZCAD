@@ -518,6 +518,21 @@ export function sketchPickArmed(state: InteractionState): boolean {
 }
 
 /**
+ * I01: whether an armed projection re-pick still holds. A re-pick replaces a
+ * linked projection's source, so it lives only while Project is armed in
+ * linked mode: leaving the tool, or stepping to Unlinked from the strip or
+ * the project key, disarms it, and the next pick then does what the strip
+ * shows.
+ */
+export function projectionRepickHolds(state: InteractionState): boolean {
+  return (
+    state.mode === 'sketch' &&
+    state.session.tool === 'project' &&
+    (state.session.projectMode ?? 'linked') === 'linked'
+  );
+}
+
+/**
  * What the next Escape press does.
  *
  * Inside a sketch Escape climbs a ladder, innermost state first: the chain
