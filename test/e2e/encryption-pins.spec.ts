@@ -119,10 +119,12 @@ test('the saved recovery key restores a certified browser after its replacement 
   await page.goto('/');
   const seeded = await seedE2eeDevice(page, server);
   const settings = await openEncryptionSettings(page);
+  await expect(settings.getByText('1 certified')).toBeVisible();
   const other = await context.newPage();
   await stubApi(other);
   await other.goto('/');
   const otherSettings = await openEncryptionSettings(other);
+  await expect(otherSettings.getByText('1 certified')).toBeVisible();
   const nodeDevice = server.nodeDevice();
   const state = await loadEncryption(nodeDevice);
   if (state.kind !== 'ready')

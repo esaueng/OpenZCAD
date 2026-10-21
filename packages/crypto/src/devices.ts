@@ -689,6 +689,9 @@ function checkTransition(
     previous.accountKeyCommitment,
     next.accountKeyCommitment
   );
+  if (encryptionChanged !== accountChanged) {
+    broken(`${at} must rotate the account and encryption keys together`);
+  }
   if (next.revoked.length > 0 && !(encryptionChanged && accountChanged)) {
     broken(
       `${at} removes access without rotating the account and encryption keys`
