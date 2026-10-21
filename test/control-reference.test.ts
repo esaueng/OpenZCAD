@@ -48,6 +48,20 @@ describe('controls reference', () => {
     ]);
   });
 
+  it('documents all seven standard views without changing existing bindings', () => {
+    for (const [id, key, action] of [
+      ['front-view', '1', 'Front view'],
+      ['top-view', '2', 'Top view'],
+      ['right-view', '3', 'Right view'],
+      ['isometric-view', '4', 'Isometric view'],
+      ['back-view', '5', 'Back view'],
+      ['bottom-view', '6', 'Bottom view'],
+      ['left-view', '7', 'Left view']
+    ] as const) {
+      expect(keyboardItem(id)).toMatchObject({ keys: [key], action });
+    }
+  });
+
   it('documents context-specific keys and directional selection gestures', () => {
     expect(keyboardItem('sketch-circle')?.keys).toEqual(['C']);
     expect(keyboardItem('sketch-rectangle')?.keys).toEqual(['R']);

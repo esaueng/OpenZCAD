@@ -120,6 +120,24 @@ describe('KeymapEditor', () => {
     expect(onChange).toHaveBeenCalledWith({});
   });
 
+  it('shows saved shortcuts as assigned and newly conflicting defaults as unassigned', () => {
+    render(
+      <KeymapEditor
+        overrides={{ 'view-grid': ['5'], 'tool-extrude': ['6'] }}
+        onChange={vi.fn()}
+      />
+    );
+    expect(within(row('view-grid')).getByText('5')).toBeInTheDocument();
+    expect(within(row('tool-extrude')).getByText('6')).toBeInTheDocument();
+    expect(
+      within(row('view-back')).getByText('Unassigned')
+    ).toBeInTheDocument();
+    expect(
+      within(row('view-bottom')).getByText('Unassigned')
+    ).toBeInTheDocument();
+    expect(within(row('view-back')).queryByText('5')).not.toBeInTheDocument();
+  });
+
   it('shows a remap in the shortcut overlay', () => {
     act(() => setActiveKeymapOverrides({ 'view-grid': ['H'] }));
     render(<ShortcutsOverlay onClose={vi.fn()} />);

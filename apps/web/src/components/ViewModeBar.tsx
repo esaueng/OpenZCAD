@@ -18,11 +18,11 @@ import { platformShortcutLabel } from '../lib/platformShortcut';
 
 const VIEWS: { id: StandardView; command?: string }[] = [
   { id: 'front', command: 'view-front' },
-  { id: 'back' },
-  { id: 'left' },
+  { id: 'back', command: 'view-back' },
+  { id: 'left', command: 'view-left' },
   { id: 'right', command: 'view-right' },
   { id: 'top', command: 'view-top' },
-  { id: 'bottom' },
+  { id: 'bottom', command: 'view-bottom' },
   { id: 'iso', command: 'view-iso' }
 ];
 

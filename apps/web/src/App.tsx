@@ -20302,6 +20302,15 @@ export function App() {
         case 'view-iso':
           requestView('iso');
           return;
+        case 'view-back':
+          requestView('back');
+          return;
+        case 'view-bottom':
+          requestView('bottom');
+          return;
+        case 'view-left':
+          requestView('left');
+          return;
         case 'view-measure':
           toggleMeasure(!measuring);
           return;
@@ -20793,6 +20802,30 @@ export function App() {
       shortcut: keymap.label('view-iso'),
       icon: <Monitor size={16} aria-hidden="true" />,
       run: () => requestView('iso')
+    },
+    {
+      id: 'view-back',
+      label: 'Back view',
+      group: 'View',
+      shortcut: keymap.label('view-back'),
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('back')
+    },
+    {
+      id: 'view-bottom',
+      label: 'Bottom view',
+      group: 'View',
+      shortcut: keymap.label('view-bottom'),
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('bottom')
+    },
+    {
+      id: 'view-left',
+      label: 'Left view',
+      group: 'View',
+      shortcut: keymap.label('view-left'),
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('left')
     },
     {
       id: 'view-fit',
