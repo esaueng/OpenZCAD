@@ -1,5 +1,6 @@
 import {
   DRAWING_VIEW_FRAMES,
+  drawingPaperPerModelUnit,
   projectToView,
   type BodyId,
   type DrawingAnnotation,
@@ -15,6 +16,7 @@ import {
 } from '@openzcad/shared';
 import { resolveEdge } from '../topologyResolution';
 import {
+  drawnCoincidence,
   drawnLines,
   edgeEndsInPageOrder,
   referenceTrust,
@@ -43,6 +45,8 @@ export interface PickableEdge {
   page: XY[];
   /** Each polyline point's distance into the view, in model units. */
   depths: number[];
+  /** How far a drawn line of this view may lie from it, in paper mm. */
+  coincidenceMm: number;
 }
 
 /** Every physical edge of every drawn view, placed on the paper. */
@@ -57,6 +61,8 @@ export function pickableEdges(
     if (!projection.bounds) continue;
     const toPage = viewPageTransform(view, projection.bounds, sheet, units);
     const frame = DRAWING_VIEW_FRAMES[view.orientation];
+    const k = drawingPaperPerModelUnit(sheet.scale, units);
+    const coincidenceMm = drawnCoincidence(bodies, view.bodyIds, k) * k;
     for (const bodyId of view.bodyIds) {
       const body = bodies[bodyId];
       if (!body?.topology || body.consumed) continue;
@@ -73,7 +79,7 @@ export function pickableEdges(
           page.push(toPage(projected.u, projected.v));
           depths.push(projected.depth);
         }
-        out.push({ view, bodyId, edge, page, depths });
+        out.push({ view, bodyId, edge, page, depths, coincidenceMm });
       }
     }
   }
@@ -104,9 +110,6 @@ function distanceToSegment(p: XY, a: XY, b: XY): number {
       : 0;
   return Math.hypot(a[0] + dx * t - p[0], a[1] + dy * t - p[1]);
 }
-
-/** How far a drawn line may stray from the edge it was drawn from, in mm. */
-const DRAWN_COINCIDENCE_MM = 0.05;
 
 /**
  * The point `along` paper millimetres from the start of a polyline,
@@ -176,7 +179,7 @@ function drawsEdgeAt(
   return [at - tolerance, at, at + tolerance].every(
     (along) =>
       distanceToPolylines(pointAtLength(page, along), lines) <=
-      DRAWN_COINCIDENCE_MM
+      entry.coincidenceMm
   );
 }
 

@@ -843,6 +843,36 @@ function nearestOnPolyline(points: XY[], to: XY): XY | null {
 /** How far a drawn line may stray from the edge it was drawn from, in mm. */
 const DRAWN_COINCIDENCE_MM = 0.05;
 
+/**
+ * How far, in model units, a drawn line may lie from the edge polyline it
+ * comes from. Views project from the canonical drawing tessellation (#777)
+ * while edge identity comes from the display topology, whose curved edges
+ * keep an earlier deflection through small edits: an R20 rim edited to R21
+ * was measured 0.008 units off its canonical twin. A thousandth of the
+ * largest body diagonal covers that with room; on paper the tolerance is
+ * never tighter than {@link DRAWN_COINCIDENCE_MM}.
+ */
+export function drawnCoincidence(
+  bodies: AnnotationBodies,
+  bodyIds: readonly string[],
+  paperPerModelUnit: number
+): number {
+  let diagonal = 0;
+  for (const bodyId of bodyIds) {
+    const box = bodies[bodyId]?.bbox;
+    if (!box) continue;
+    diagonal = Math.max(
+      diagonal,
+      Math.hypot(
+        box.max.x - box.min.x,
+        box.max.y - box.min.y,
+        box.max.z - box.min.z
+      )
+    );
+  }
+  return Math.max(DRAWN_COINCIDENCE_MM / paperPerModelUnit, 1e-3 * diagonal);
+}
+
 function nearestOnPieces(pieces: readonly XY[][], to: XY): XY | null {
   let best: XY | null = null;
   let bestDistance = Infinity;
@@ -1026,9 +1056,7 @@ export function markHiddenLeaders(
   );
   if (leaders.length === 0) return out;
   const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
-  // Model units per paper millimetre: the coincidence tolerance in (u, v).
-  const tolerance =
-    DRAWN_COINCIDENCE_MM / drawingPaperPerModelUnit(sheet.scale, units);
+  const k = drawingPaperPerModelUnit(sheet.scale, units);
   for (const annotation of leaders) {
     const resolution = out.get(annotation.annotationId);
     const entry = annotation.viewId ? drawn.get(annotation.viewId) : undefined;
@@ -1043,7 +1071,7 @@ export function markHiddenLeaders(
       resolution.resolved,
       entry,
       bodies,
-      tolerance
+      drawnCoincidence(bodies, entry.view.bodyIds, k)
     );
     out.set(
       annotation.annotationId,

@@ -1106,7 +1106,8 @@ describe('D02 picking', () => {
         [0, 0],
         [20, 0]
       ] as [number, number][],
-      depths: [5, 5]
+      depths: [5, 5],
+      coincidenceMm: 0.05
     };
     const hidden = {
       view: front,
@@ -1116,7 +1117,8 @@ describe('D02 picking', () => {
         [10, -5],
         [10, 5]
       ] as [number, number][],
-      depths: [1, 1]
+      depths: [1, 1],
+      coincidenceMm: 0.05
     };
     const click: [number, number] = [10, 0.1];
     const drawn = new Map([[frontId, [visible.page]]]);
@@ -1145,7 +1147,8 @@ describe('D02 picking', () => {
         [0, 0],
         [20, 0]
       ] as [number, number][],
-      depths: [5, 5]
+      depths: [5, 5],
+      coincidenceMm: 0.05
     };
     const sloped = {
       ...level,
@@ -1156,6 +1159,81 @@ describe('D02 picking', () => {
     expect(hitEdge([sloped, level], [2, 0], 1)?.edge.hash).toBe(1);
     // Near its close end, the sloped edge is in front.
     expect(hitEdge([level, sloped], [18, 0], 1)?.edge.hash).toBe(2);
+  });
+
+  it('picks and points at a curved edge drawn from the canonical tessellation after a held-deflection edit', async () => {
+    // The view projects from the canonical drawing tessellation; the edge
+    // identity comes from the display topology, whose rims keep an earlier
+    // deflection through a small edit. At 10:1 they disagree by more than
+    // a fixed 0.05 mm on paper.
+    let document = setParameter(
+      createProjectDocument('Disc', toUserId('test')),
+      {
+        name: 'r',
+        expression: '20'
+      }
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Disc',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 'r', height: 12 }
+    });
+    await adapter.syncDocument(document);
+    document = setParameter(document, { name: 'r', expression: '21' });
+    const bodies = (await adapter.syncDocument(document)).bodyRepresentations;
+    const bodyId = document.bodyOrder[0]!;
+    const canonical = (await adapter.drawingTessellation(document, [bodyId]))[
+      bodyId
+    ]!;
+    const top = view(topId, 'top', [bodyId]);
+    const projection = projectView({
+      orientation: 'top',
+      hiddenLines: false,
+      bodies: [canonical]
+    });
+    const rim = bodies[bodyId]!.topology!.edges.find(
+      (edge) =>
+        edge.displayRole !== 'seam' &&
+        edge.curve?.circle &&
+        near(edge.curve.circle.center.z, bodies[bodyId]!.bbox.max.z)
+    )!;
+    const sheet: DrawingSheet = {
+      ...sheetOf([bodyId]),
+      scale: { numerator: 10, denominator: 1 }
+    };
+    const edges = pickableEdges(
+      sheet,
+      [{ view: top, projection }],
+      bodies,
+      'mm'
+    );
+    const pick = edges.find((entry) => entry.edge === rim)!;
+    const at = pick.page[Math.floor(pick.page.length / 3)]!;
+    const drawn = drawnLines(sheet, [{ view: top, projection }], 'mm');
+    expect(hitEdge(edges, at, 1, drawn)?.edge).toBe(rim);
+    const noted = sheetOf(
+      [bodyId],
+      [
+        {
+          annotationId: id('n'),
+          kind: 'note',
+          text: 'RIM',
+          viewId: topId,
+          leader: refOf(bodyId, rim),
+          placementMm: { x: 40, y: 40 }
+        }
+      ]
+    );
+    const tenToOne = { ...noted, scale: { numerator: 10, denominator: 1 } };
+    expect(
+      markHiddenLeaders(
+        tenToOne,
+        resolveSheetAnnotations(tenToOne, bodies, 'mm'),
+        [{ view: { ...top, viewId: topId }, projection }],
+        'mm',
+        bodies
+      ).get(id('n'))
+    ).toMatchObject({ ok: true });
   });
 
   it('refuses an edge that shares its identity with another', async () => {

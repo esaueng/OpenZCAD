@@ -968,6 +968,7 @@ describe('DrawingWorkspace', () => {
       const base = createProjectDocument('Bracket', toUserId('test'));
       const props = {
         bodies: { [bodyId]: cube() },
+        requestTessellation: displayTessellation({ [bodyId]: cube() }),
         geometryPending: false,
         defaultBodyIds: [bodyId],
         editDisabledReason: null,
@@ -1013,6 +1014,7 @@ describe('DrawingWorkspace', () => {
       const base = createProjectDocument('Bracket', toUserId('test'));
       const props = {
         bodies: { [bodyId]: cube() },
+        requestTessellation: displayTessellation({ [bodyId]: cube() }),
         geometryPending: false,
         defaultBodyIds: [bodyId],
         editDisabledReason: null,
@@ -1055,6 +1057,7 @@ describe('DrawingWorkspace', () => {
       const base = createProjectDocument('Bracket', toUserId('test'));
       const props = {
         bodies: { [bodyId]: cube() },
+        requestTessellation: displayTessellation({ [bodyId]: cube() }),
         geometryPending: false,
         defaultBodyIds: [bodyId],
         editDisabledReason: null,
