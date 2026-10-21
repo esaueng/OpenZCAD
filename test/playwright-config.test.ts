@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { JSONReport } from '@playwright/test/reporter';
 import { expect, it } from 'vitest';
 
 it('resolves a bounded CI browser pool without relaxing test budgets', () => {
@@ -30,7 +31,9 @@ it('resolves a bounded CI browser pool without relaxing test budgets', () => {
         stdio: 'pipe'
       }
     );
-    const { config, suites } = JSON.parse(readFileSync(report, 'utf8'));
+    const { config, suites } = JSON.parse(
+      readFileSync(report, 'utf8')
+    ) as JSONReport;
     expect(config.workers).toBe(2);
     expect(config.fullyParallel).toBe(true);
     expect(config.projects[0]).toMatchObject({ timeout: 90_000, retries: 2 });
