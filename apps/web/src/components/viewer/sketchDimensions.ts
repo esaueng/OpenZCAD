@@ -149,6 +149,7 @@ export function buildSketchDimensions(
 ) {
   const group = new THREE.Group();
   const referenceLabels = new Map<string, HTMLButtonElement>();
+  const placedLabels: CSS2DObject[] = [];
   group.name = 'sketch-dimensions';
   const spans: {
     graphic: DimensionGraphic;
@@ -296,12 +297,60 @@ export function buildSketchDimensions(
     const label = new CSS2DObject(button);
     label.position.copy(world(annotation.anchor));
     group.add(label);
+    placedLabels.push(label);
   }
   group.traverse((child) => {
     child.raycast = () => undefined;
   });
+  // Each label's laid-out size, read once it has one: a label's text only
+  // changes with a rebuild, so per-frame boxes need no DOM read.
+  const sizes = new Float64Array(placedLabels.length * 2);
+  const scratch = new THREE.Vector3();
   return {
     group,
+    /** How many boxes {@link writeLabelBoxes} can write. */
+    labelCount: placedLabels.length,
+    /**
+     * Writes each on-screen label's box as [left, top, right, bottom] in
+     * viewport pixels into `out` from `at`, and returns how many it wrote.
+     * The relation glyphs keep out of them. Allocates nothing.
+     */
+    writeLabelBoxes(
+      out: Float64Array,
+      at: number,
+      camera: THREE.Camera,
+      width: number,
+      height: number
+    ): number {
+      let written = 0;
+      placedLabels.forEach((label, index) => {
+        const element = label.element;
+        if (sizes[index * 2] === 0) {
+          sizes[index * 2] = element.offsetWidth;
+          sizes[index * 2 + 1] = element.offsetHeight;
+        }
+        const w = sizes[index * 2]!;
+        const h = sizes[index * 2 + 1]!;
+        if (w === 0) return;
+        scratch.copy(label.position).project(camera);
+        if (scratch.z < -1 || scratch.z > 1) return;
+        // CSS2DRenderer centres the label on its point; the overlay clamp
+        // above shifts it by its margins.
+        const cx =
+          (scratch.x * 0.5 + 0.5) * width +
+          (parseFloat(element.style.marginLeft) || 0);
+        const cy =
+          (-scratch.y * 0.5 + 0.5) * height +
+          (parseFloat(element.style.marginTop) || 0);
+        const o = at + written * 4;
+        out[o] = cx - w / 2;
+        out[o + 1] = cy - h / 2;
+        out[o + 2] = cx + w / 2;
+        out[o + 3] = cy + h / 2;
+        written += 1;
+      });
+      return written;
+    },
     focusReference(id: string) {
       referenceLabels.get(id)?.focus({ preventScroll: true });
     },

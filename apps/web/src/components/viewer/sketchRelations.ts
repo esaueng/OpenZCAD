@@ -4,7 +4,6 @@ import type { PlaneBasis } from '@openzcad/geometry';
 import { clearGroup } from '@openzcad/viewport';
 import type { SketchRelationGlyphChip } from '../../lib/sketch/relationGlyphs';
 import {
-  MAX_BLOCKED,
   RELATION_GLYPH_PX,
   RelationGlyphLayout,
   relationChipWidth
@@ -13,6 +12,20 @@ import { VIEWPORT_OBSTACLE_SELECTOR } from './sketchDimensions';
 
 /** How often the viewport controls glyphs avoid are re-measured. */
 const OBSTACLE_REFRESH_MS = 200;
+/** Viewport controls measured; more are ignored. */
+const MAX_OBSTACLES = 32;
+
+/** The sketch dimension labels, which glyphs keep out of every frame. */
+export interface SketchLabelBoxes {
+  labelCount: number;
+  writeLabelBoxes(
+    out: Float64Array,
+    at: number,
+    camera: THREE.Camera,
+    width: number,
+    height: number
+  ): number;
+}
 
 /**
  * Relation glyphs as screen-space chips on the sketch plane. Each glyph is a
@@ -96,7 +109,10 @@ export function buildSketchRelationGlyphs(
     child.raycast = () => undefined;
   });
   let obstaclesAt = Number.NEGATIVE_INFINITY;
-  const obstacles = new Float64Array(MAX_BLOCKED * 4);
+  // Viewport controls first (refreshed every OBSTACLE_REFRESH_MS), then this
+  // frame's dimension label boxes after them.
+  let blockedBoxes = new Float64Array((MAX_OBSTACLES + 16) * 4);
+  let obstacleCount = 0;
   const measureObstacles = (layer: HTMLElement) => {
     const root = layer.closest('.viewer-area') ?? layer.parentElement;
     const origin = layer.getBoundingClientRect();
@@ -104,17 +120,17 @@ export function buildSketchRelationGlyphs(
     for (const element of root?.querySelectorAll<HTMLElement>(
       VIEWPORT_OBSTACLE_SELECTOR
     ) ?? []) {
-      if (found === MAX_BLOCKED) break;
+      if (found === MAX_OBSTACLES) break;
       const rect = element.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) continue;
       const at = found * 4;
-      obstacles[at] = rect.left - origin.left;
-      obstacles[at + 1] = rect.top - origin.top;
-      obstacles[at + 2] = rect.right - origin.left;
-      obstacles[at + 3] = rect.bottom - origin.top;
+      blockedBoxes[at] = rect.left - origin.left;
+      blockedBoxes[at + 1] = rect.top - origin.top;
+      blockedBoxes[at + 2] = rect.right - origin.left;
+      blockedBoxes[at + 3] = rect.bottom - origin.top;
       found += 1;
     }
-    layout.setBlocked(obstacles, found);
+    obstacleCount = found;
   };
   const clip = new THREE.Vector4();
   const step = new THREE.Vector4();
@@ -134,7 +150,13 @@ export function buildSketchRelationGlyphs(
        * at most every {@link OBSTACLE_REFRESH_MS}, not every frame: a read
        * would force layout and allocate, and controls move rarely.
        */
-      layer?: HTMLElement
+      layer?: HTMLElement,
+      /**
+       * The dimension labels beside the glyphs. A driving dimension and a
+       * relation on the same line both start at its middle; their boxes are
+       * projected every frame (no DOM read) and kept clear.
+       */
+      dimensions?: SketchLabelBoxes | null
     ) {
       if (count === 0) return;
       if (layer) {
@@ -144,6 +166,22 @@ export function buildSketchRelationGlyphs(
           measureObstacles(layer);
         }
       }
+      const labels = dimensions?.labelCount ?? 0;
+      if (blockedBoxes.length < (obstacleCount + labels) * 4) {
+        // A rare growth step, when a rebuild brings more labels.
+        const grown = new Float64Array((obstacleCount + labels) * 4 * 2);
+        grown.set(blockedBoxes.subarray(0, obstacleCount * 4));
+        blockedBoxes = grown;
+      }
+      const labelBoxes =
+        dimensions?.writeLabelBoxes(
+          blockedBoxes,
+          obstacleCount * 4,
+          camera,
+          width,
+          height
+        ) ?? 0;
+      layout.setBlocked(blockedBoxes, obstacleCount + labelBoxes);
       // The screen direction of each normal is the projection's derivative
       // along it, taken exactly in clip space: no probe point, so nothing
       // can cross the eye plane and flip, however far the sketch sits from

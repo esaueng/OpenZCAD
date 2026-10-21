@@ -195,6 +195,27 @@ describe('relation glyph layout', () => {
     expect(covers(box, 200, 200)).toBe(false);
   });
 
+  it('honours any number of blocked boxes', () => {
+    // Forty boxes; the last covers the chip's preferred spot.
+    const rects: number[] = [];
+    for (let index = 0; index < 39; index += 1) {
+      rects.push(index * 10, 380, index * 10 + 8, 390);
+    }
+    rects.push(180, 150, 220, 195);
+    const layout = new RelationGlyphLayout(1);
+    layout.setBlocked(rects, 40);
+    layout.set(0, 200, 200, 0, -1, 34, 16, false, true);
+    layout.solve(1, 400, 400);
+    const cx = 200 + layout.offset[0]!;
+    const cy = 200 + layout.offset[1]!;
+    expect(
+      overlaps(
+        { left: cx - 17, right: cx + 17, top: cy - 8, bottom: cy + 8 },
+        { left: 180, top: 150, right: 220, bottom: 195 }
+      )
+    ).toBe(false);
+  });
+
   it('leaves a chip whose anchor is off the viewport alone', () => {
     const chips = solve(
       [

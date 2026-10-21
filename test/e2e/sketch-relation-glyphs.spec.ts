@@ -138,6 +138,7 @@ test('relation glyphs keep clear of their anchors and each other, select on clic
         );
         const rect = chip.getBoundingClientRect();
         return {
+          point: chip.dataset.placement === 'point',
           translate: chip.style.translate,
           anchor: match
             ? {
@@ -178,6 +179,79 @@ test('relation glyphs keep clear of their anchors and each other, select on clic
       ).toBe(false);
     }
   }
+
+  // A driving distance across the bottom side puts its label at the same
+  // side middle the horizontal chip stands off from: the chip must keep off
+  // the label, or the two buttons would fight over the click.
+  const corners = placement
+    .filter((chip) => chip.point)
+    .map((chip) => chip.anchor!)
+    .sort((a, b) => b.y - a.y || a.x - b.x)
+    .slice(0, 2);
+  await page
+    .getByRole('toolbar', { name: 'Relations' })
+    .getByRole('button', { name: 'Distance', exact: true })
+    .click();
+  await page.mouse.click(corners[0]!.x, corners[0]!.y);
+  await page.mouse.click(corners[1]!.x, corners[1]!.y);
+  await page.mouse.click(
+    (corners[0]!.x + corners[1]!.x) / 2,
+    (corners[0]!.y + corners[1]!.y) / 2
+  );
+  const distanceValue = page.getByRole('dialog', { name: 'Distance value' });
+  await expect(distanceValue).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(distanceValue).toHaveCount(0);
+  const dimensionLabel = page.locator('.sketch-dimension-label');
+  await expect(dimensionLabel).toHaveCount(1);
+  // The label starts inside the side; drag it onto the spot just outside,
+  // where the side's horizontal chip stands.
+  const bottomMiddle = {
+    x: (corners[0]!.x + corners[1]!.x) / 2,
+    y: (corners[0]!.y + corners[1]!.y) / 2
+  };
+  const labelBox = (await dimensionLabel.boundingBox())!;
+  await page.mouse.move(
+    labelBox.x + labelBox.width / 2,
+    labelBox.y + labelBox.height / 2
+  );
+  await page.mouse.down();
+  await page.mouse.move(bottomMiddle.x, bottomMiddle.y + 16, { steps: 6 });
+  await page.mouse.up();
+  await expect
+    .poll(async () => {
+      // The overlay rebuilds with the moved label: read it once it is back.
+      const box = await dimensionLabel.boundingBox();
+      return box !== null && box.y + box.height / 2 > bottomMiddle.y;
+    })
+    .toBe(true);
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const label = document
+          .querySelector('.sketch-dimension-label')!
+          .getBoundingClientRect();
+        return [
+          ...document.querySelectorAll<HTMLElement>('.sketch-relation-chip')
+        ]
+          .filter(
+            (chip) =>
+              chip.style.display !== 'none' &&
+              chip.style.visibility !== 'hidden'
+          )
+          .filter((chip) => {
+            const rect = chip.getBoundingClientRect();
+            return (
+              rect.left < label.right &&
+              rect.right > label.left &&
+              rect.top < label.bottom &&
+              rect.bottom > label.top
+            );
+          }).length;
+      })
+    )
+    .toBe(0);
+  await expect(glyph('horizontal')).toHaveCount(2);
 
   // The per-kind filter hides one kind and leaves the rest.
   if (!(await visibility.isVisible())) await palette.click();

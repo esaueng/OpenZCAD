@@ -32,8 +32,6 @@ const KEEP_OUT_PX = 5;
 /** Clear space between two chips. */
 const CHIP_GAP_PX = 2;
 const RINGS = 4;
-/** Viewport controls kept clear of glyphs; more are ignored. */
-export const MAX_BLOCKED = 32;
 /** Further straight-out steps tried after the rings, before giving up. */
 const EXTRA_RINGS = 8;
 /** Grid cell edge for the neighbour search. */
@@ -90,9 +88,11 @@ export class RelationGlyphLayout {
   private placedNext: Int32Array;
   private placedItem: Int32Array;
   private placedEntries = 0;
-  // Viewport controls drawn above the label layer, as [left, top, right,
-  // bottom] in viewport pixels: a glyph under one could not take its click.
-  private readonly blocked = new Float64Array(MAX_BLOCKED * 4);
+  // Space glyphs keep out of, as [left, top, right, bottom] in viewport
+  // pixels: viewport controls drawn above the label layer and the sketch's
+  // dimension labels, either of which would take a glyph's click. They join
+  // the grid as placed items numbered −1, −2, …
+  private blocked = new Float64Array(64);
   private blockedCount = 0;
 
   constructor(capacity: number) {
@@ -107,15 +107,21 @@ export class RelationGlyphLayout {
   }
 
   /**
-   * Viewport controls that float above the glyphs, as `count` boxes of
-   * [left, top, right, bottom] in viewport pixels. They hold until replaced.
+   * Space the glyphs keep out of (viewport controls above them, dimension
+   * labels beside them), as `count` boxes of [left, top, right, bottom] in
+   * viewport pixels. They hold until replaced.
    */
   setBlocked(rects: ArrayLike<number>, count: number) {
-    const kept = Math.min(count, MAX_BLOCKED);
-    for (let index = 0; index < kept * 4; index += 1) {
+    if (this.blocked.length < count * 4) {
+      // A rare growth step, never a steady-frame allocation.
+      this.blocked = new Float64Array(
+        Math.max(count * 4, this.blocked.length * 2)
+      );
+    }
+    for (let index = 0; index < count * 4; index += 1) {
       this.blocked[index] = rects[index]!;
     }
-    this.blockedCount = kept;
+    this.blockedCount = count;
   }
 
   /** Writes chip `index`'s projected inputs; call before `solve`. */
@@ -178,6 +184,9 @@ export class RelationGlyphLayout {
       bounded ? width : UNBOUNDED_PX,
       bounded ? height : UNBOUNDED_PX
     );
+    for (let index = 0; index < this.blockedCount; index += 1) {
+      this.insertRect(-1 - index, this.blocked, index * 4);
+    }
     let placedCount = 0;
     for (let index = 0; index < count; index += 1) {
       const at = index * IN;
@@ -331,11 +340,18 @@ export class RelationGlyphLayout {
 
   /** Links placed box `index` into every cell it spans. */
   private insertPlaced(index: number) {
-    const p = index * 4;
-    const c0 = this.column(this.placed[p]!);
-    const c1 = this.column(this.placed[p + 2]!);
-    const r0 = this.row(this.placed[p + 1]!);
-    const r1 = this.row(this.placed[p + 3]!);
+    this.insertRect(index, this.placed, index * 4);
+  }
+
+  /**
+   * Links a box into every cell it spans, as `item`: a placed chip's index,
+   * or −1 − n for blocked box n.
+   */
+  private insertRect(item: number, boxes: Float64Array, at: number) {
+    const c0 = this.column(boxes[at]!);
+    const c1 = this.column(boxes[at + 2]!);
+    const r0 = this.row(boxes[at + 1]!);
+    const r1 = this.row(boxes[at + 3]!);
     for (let row = r0; row <= r1; row += 1) {
       for (let column = c0; column <= c1; column += 1) {
         if (this.placedEntries === this.placedItem.length) {
@@ -349,7 +365,7 @@ export class RelationGlyphLayout {
         }
         const cell = row * this.cols + column;
         const entry = this.placedEntries;
-        this.placedItem[entry] = index;
+        this.placedItem[entry] = item;
         this.placedNext[entry] = this.placedHead[cell]!;
         this.placedHead[cell] = entry;
         this.placedEntries += 1;
@@ -369,19 +385,8 @@ export class RelationGlyphLayout {
     ) {
       return false;
     }
-    const blocked = this.blocked;
-    for (let index = 0; index < this.blockedCount; index += 1) {
-      const b = index * 4;
-      if (
-        left < blocked[b + 2]! + CHIP_GAP_PX &&
-        right > blocked[b]! - CHIP_GAP_PX &&
-        top < blocked[b + 3]! + CHIP_GAP_PX &&
-        bottom > blocked[b + 1]! - CHIP_GAP_PX
-      ) {
-        return false;
-      }
-    }
     const placed = this.placed;
+    const blocked = this.blocked;
     const c0 = this.column(left - CHIP_GAP_PX);
     const c1 = this.column(right + CHIP_GAP_PX);
     const r0 = this.row(top - CHIP_GAP_PX);
@@ -393,12 +398,14 @@ export class RelationGlyphLayout {
           entry >= 0;
           entry = this.placedNext[entry]!
         ) {
-          const p = this.placedItem[entry]! * 4;
+          const item = this.placedItem[entry]!;
+          const boxes = item >= 0 ? placed : blocked;
+          const p = (item >= 0 ? item : -1 - item) * 4;
           if (
-            left < placed[p + 2]! + CHIP_GAP_PX &&
-            right > placed[p]! - CHIP_GAP_PX &&
-            top < placed[p + 3]! + CHIP_GAP_PX &&
-            bottom > placed[p + 1]! - CHIP_GAP_PX
+            left < boxes[p + 2]! + CHIP_GAP_PX &&
+            right > boxes[p]! - CHIP_GAP_PX &&
+            top < boxes[p + 3]! + CHIP_GAP_PX &&
+            bottom > boxes[p + 1]! - CHIP_GAP_PX
           ) {
             return false;
           }

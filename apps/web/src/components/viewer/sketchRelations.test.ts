@@ -211,6 +211,40 @@ describe('sketch relation glyph overlay', () => {
     area.remove();
   });
 
+  it('keeps glyphs off the dimension labels beside them, every frame', () => {
+    // A driving dimension's label centred on the same line middle the
+    // horizontal relation's chip would stand above (screen 200, 200).
+    const boxes = vi.fn(
+      (
+        out: Float64Array,
+        at: number,
+        _camera: THREE.Camera,
+        _width: number,
+        _height: number
+      ) => {
+        out.set([160, 170, 240, 200], at);
+        return 1;
+      }
+    );
+    const overlay = buildSketchRelationGlyphs([bottom], basis);
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(topCamera(), 400, 400, undefined, {
+      labelCount: 1,
+      writeLabelBoxes: boxes
+    });
+    expect(boxes).toHaveBeenCalledTimes(1);
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    const left = 200 + dx! - 17;
+    const top = 200 + dy! - 8;
+    expect(
+      left + 34 <= 160 || left >= 240 || top + 16 <= 170 || top >= 200
+    ).toBe(true);
+    overlay.dispose();
+  });
+
   it('leaves a chip whose anchor is off the viewport where it is', () => {
     const camera = topCamera();
     // Plane (200, 0) is far right of the 100-unit-wide view.
