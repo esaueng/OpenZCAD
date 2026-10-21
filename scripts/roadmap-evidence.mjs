@@ -22,7 +22,13 @@
  * set the state of one row are refused rather than ordered by file name.
  */
 
-import { readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -146,24 +152,30 @@ export function stateColumn(header) {
 
 const ANCHOR = /<a id="([^"]+)"><\/a>/;
 
-/** Ledger row line indices for a fragment's `row`, by anchor id or displayed ID. */
+/**
+ * Ledger row line indices for a fragment's `row`, by anchor id or displayed ID.
+ * Summary tables repeat an owner row's ID in their first column, so anchored
+ * owner rows win and unanchored rows are matched only when none does.
+ */
 export function findRows(lines, row) {
   const wanted = row.trim();
-  const hits = [];
+  const anchored = [];
+  const unanchored = [];
   lines.forEach((line, index) => {
     if (!isTableRow(line) || isDelimiter(line)) return;
     const first = splitRow(line)[0] ?? '';
     const anchor = ANCHOR.exec(first);
     const shown = first.replace(ANCHOR, '').trim();
     if (
-      (anchor && anchor[1] === wanted.toLowerCase()) ||
-      shown === wanted ||
-      shown.split(/\s+/)[0] === wanted
+      ((anchor && anchor[1] === wanted.toLowerCase()) ||
+        shown === wanted ||
+        shown.split(/\s+/)[0] === wanted) &&
+      headerFor(lines, index)
     ) {
-      if (headerFor(lines, index)) hits.push(index);
+      (anchor ? anchored : unanchored).push(index);
     }
   });
-  return hits;
+  return anchored.length ? anchored : unanchored;
 }
 
 const escapeCell = (text) => text.replace(/(?<!\\)\|/g, '\\|');
@@ -190,6 +202,15 @@ export function foldEvidence(markdown, fragments) {
     }
     const index = hits[0];
     const header = headerFor(lines, index);
+    const width = splitRow(lines[index]).length;
+    if (width !== header.length) {
+      // An unescaped `|` in the row's text (e.g. `|x|`) shifts every later
+      // cell, so the fold would write into the wrong column.
+      errors.push(
+        `${fragment.name}: row "${fragment.row}" has ${width} cells but its table has ${header.length}; escape the raw | in that row as \\| first`
+      );
+      continue;
+    }
     const target = evidenceColumn(header);
     const state = stateColumn(header);
     if (target < 0) {
@@ -249,10 +270,10 @@ export function readFragments(repoRoot = REPO_ROOT) {
   }
   const errors = [];
   const fragments = [];
-  for (const name of names
-    .filter((n) => n.endsWith('.md') && n !== 'README.md')
-    .sort()) {
-    if (!FRAGMENT_NAME.test(name)) {
+  // Every entry is checked, so a misnamed `.MD` or extensionless fragment is
+  // refused instead of silently skipped.
+  for (const name of names.filter((n) => n !== 'README.md').sort()) {
+    if (!FRAGMENT_NAME.test(name) || !statSync(path.join(dir, name)).isFile()) {
       errors.push(`${name}: name must be <row>--<slug>.md, lowercase`);
       continue;
     }

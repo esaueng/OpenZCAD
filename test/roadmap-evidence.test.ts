@@ -37,6 +37,15 @@ const LEDGER = [
   '| --- | --- | --- |',
   '| <a id="perf-n04"></a>PERF-N04 | P1 / 3 / M | Pending |',
   '',
+  '| ID | Item | Status |',
+  '| --- | --- | --- |',
+  '| <a id="b65"></a>B65 | Clamp |x| below one | Open |',
+  '',
+  '| Owner row | Summary and evidence |',
+  '| --- | --- |',
+  '| H02 | repeated in a summary table |',
+  '| Z01 | only in a summary table |',
+  '',
   'Prose mentioning | A01 | outside a table.'
 ].join('\n');
 
@@ -162,6 +171,21 @@ describe('roadmap evidence fragments', () => {
     ).toThrow(/already sets the state/);
   });
 
+  it('refuses a row whose raw pipes shift its cells', () => {
+    expect(() => foldEvidence(LEDGER, [fragment('B65', 'x')])).toThrow(
+      /has 5 cells but its table has 3/
+    );
+  });
+
+  it('prefers the anchored owner row over a summary mention', () => {
+    const out = foldEvidence(LEDGER, [fragment('H02', 'Owner.')]);
+    expect(splitRow(rowOf(out, 'h02')!)[2]).toMatch(/Owner\.$/);
+    expect(out).toContain('| H02 | repeated in a summary table |');
+    expect(foldEvidence(LEDGER, [fragment('Z01', 'Unanchored.')])).toContain(
+      '| Z01 | only in a summary table Unanchored. |'
+    );
+  });
+
   it('folds a repository and deletes only the folded fragments', () => {
     const root = mkdtempSync(join(tmpdir(), 'roadmap-evidence-'));
     try {
@@ -198,6 +222,24 @@ describe('roadmap evidence fragments', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it.each(['a01--live.MD', 'a01--live'])(
+    'refuses a fragment named %s instead of skipping it',
+    (name) => {
+      const root = mkdtempSync(join(tmpdir(), 'roadmap-evidence-'));
+      try {
+        writeFileSync(join(root, ROADMAP_PATH), LEDGER);
+        mkdirSync(join(root, FRAGMENT_DIR), { recursive: true });
+        writeFileSync(
+          join(root, FRAGMENT_DIR, name),
+          '---\nrow: A01\n---\nx\n'
+        );
+        expect(() => checkRepo(root)).toThrow(/<row>--<slug>\.md/);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
 
   it('accepts every pending fragment in this repository', () => {
     expect(() => checkRepo()).not.toThrow();
