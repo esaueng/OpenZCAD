@@ -5791,7 +5791,10 @@ export function ModelViewer({
               },
               otherPanels,
               stageRect,
-              laneLeft === null ? null : laneLeft + stageRect.left
+              laneLeft === null ? null : laneLeft + stageRect.left,
+              renderer.domElement.ownerDocument
+                .querySelector('.app-shell > .topbar')
+                ?.getBoundingClientRect().bottom ?? null
             )
           : { dx: 0, dy: 0 };
       const place = (element: HTMLElement, x: number, y: number) =>

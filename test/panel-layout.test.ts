@@ -1288,6 +1288,22 @@ describe('floating window z-order', () => {
     expect(isFloatCovered(essentials(), 'parameters', STAGE)).toBe(false);
   });
 
+  it('closes the phone lane panel on a press even when its stored window is covered', () => {
+    // A window's move or resize raises it without counting as a use, so the
+    // lane can show a panel whose stored window sits under another one.
+    const layout = threeWindows();
+    const shown: PanelLayout = {
+      ...layout,
+      recent: ['history', ...layout.recent.filter((id) => id !== 'history')]
+    };
+    const phone = { width: 390, height: 844 };
+    expect(isFloatCovered(shown, 'history', STAGE)).toBe(true);
+    expect(computePanelGeometry(shown, phone).phonePanel).toBe('history');
+    expect(panelStatus(togglePanel(shown, 'history', phone), 'history')).toBe(
+      'closed'
+    );
+  });
+
   it('hit-tests the raised window first', () => {
     const layout = threeWindows();
     const point = { x: 250, y: 250 };

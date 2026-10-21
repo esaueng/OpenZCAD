@@ -1304,9 +1304,9 @@ function revealPanel(layout: PanelLayout, id: PanelId): PanelLayout {
  * panel shows it in the unpinned slot, and a second press hides it again;
  * it stays docked throughout. On a phone-width stage, where the lane shows
  * only the most recently used open panel, a press on an open panel the lane
- * is not showing brings it into the lane rather than closing it unseen,
- * and a press on a floating panel whose window another covers brings it to
- * the front. Every press counts as a use.
+ * is not showing brings it into the lane rather than closing it unseen.
+ * Wider, a press on a floating panel whose window another covers brings it
+ * to the front. Every press counts as a use.
  */
 export function togglePanel(
   layout: PanelLayout,
@@ -1338,7 +1338,11 @@ export function togglePanel(
   }
   // A window another one covers comes to the front instead: the press asks
   // for the panel, and closing one the person cannot fully see would lose it.
-  if (isFloatCovered(layout, id, stage)) {
+  // The phone lane draws no windows, so the panel it shows closes as usual.
+  if (
+    !(stage && stage.width <= PANEL_PHONE_MAX_WIDTH) &&
+    isFloatCovered(layout, id, stage)
+  ) {
     return notePanelUsed(layout, id);
   }
   return notePanelUsed(closePanel(layout, id), id);

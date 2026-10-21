@@ -262,6 +262,15 @@ for (const viewport of VIEWPORTS) {
     await expect(pill(page)).toContainText('Panels hidden');
     await expect.poll(() => dockWidth('left')).toBe('0px');
     await expect.poll(() => dockWidth('right')).toBe('0px');
+    // The rail moved out to the edge, and the open menu went with it: its
+    // right edge stays 10px left of the button.
+    await expect
+      .poll(async () => {
+        const menu = await box(viewOptionsMenu(page));
+        const button = await box(viewOptionsButton(page));
+        return Math.abs(menu.x + menu.width - (button.x - 10));
+      })
+      .toBeLessThan(1);
     await expect(railPanelButton(page, 'Objects')).toHaveAttribute(
       'aria-pressed',
       'false'
