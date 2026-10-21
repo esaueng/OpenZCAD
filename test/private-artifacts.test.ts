@@ -1,4 +1,6 @@
 import {
+  appendFileSync,
+  linkSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -9,8 +11,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { afterEach, expect, it, vi } from 'vitest';
-import { privateArtifactPaths } from './support/privateArtifacts';
+import {
+  privateArtifactPaths,
+  privatePlaywrightOutput
+} from './support/privateArtifacts';
 
 const directories: string[] = [];
 function fixture() {
@@ -186,3 +192,262 @@ it('rejects relative sample paths and refuses overwriting a prior private backup
   ).toThrow();
   expect(readFileSync(backup, 'utf8')).toBe('first dummy backup');
 });
+
+it.each(['same-path', 'symlink', 'hard-link'])(
+  'refuses a %s sample alias of the input before appending any bytes',
+  (alias) => {
+    const { repository, outside } = fixture();
+    const source = join(outside, 'source.step');
+    const original = Buffer.from('dummy private STEP input\n');
+    writeFileSync(source, original);
+    const output =
+      alias === 'same-path' ? source : join(outside, 'samples.jsonl');
+    if (alias === 'symlink') symlinkSync(source, output);
+    if (alias === 'hard-link') linkSync(source, output);
+    expect(() => {
+      const paths = privateArtifactPaths(output, repository, [source]);
+      appendFileSync(paths.output, '{"phase":"start"}\n');
+    }).toThrow('source input');
+    expect(readFileSync(source)).toEqual(original);
+  }
+);
+
+it.each(['same-path', 'symlink', 'hard-link'])(
+  'refuses a %s backup or artifact alias of the protected input',
+  (alias) => {
+    const { repository, outside } = fixture();
+    const source = join(outside, 'source.step');
+    const original = Buffer.from('dummy private STEP input\n');
+    writeFileSync(source, original);
+    const target =
+      alias === 'same-path'
+        ? source
+        : join(outside, 'private-session.openzcad');
+    if (alias === 'symlink') symlinkSync(source, target);
+    if (alias === 'hard-link') linkSync(source, target);
+    const paths = privateArtifactPaths(
+      join(outside, 'samples.jsonl'),
+      repository,
+      [source]
+    );
+    expect(() => {
+      writeFileSync(
+        paths.artifact(
+          alias === 'same-path' ? 'source.step' : 'private-session.openzcad'
+        ),
+        'replacement'
+      );
+    }).toThrow('source input');
+    expect(readFileSync(source)).toEqual(original);
+  }
+);
+
+it('rejects cleanup ancestors of an input, including derived-directory symlinks', () => {
+  const { directory, repository, outside } = fixture();
+  const sourceDirectory = join(outside, 'sources');
+  mkdirSync(sourceDirectory);
+  const source = join(sourceDirectory, 'source.step');
+  const original = Buffer.from('dummy private STEP input\n');
+  writeFileSync(source, original);
+  symlinkSync(sourceDirectory, join(outside, 'h02-build-enabled'), 'dir');
+  const paths = privateArtifactPaths(
+    join(outside, 'samples.jsonl'),
+    repository,
+    [source]
+  );
+  expect(() => paths.artifact('h02-build-enabled')).toThrow('source input');
+  expect(() => paths.artifact('sources')).toThrow('source input');
+  expect(() =>
+    privateArtifactPaths(sourceDirectory, repository, [source])
+  ).toThrow('source input');
+  const alias = join(directory, 'source-alias.step');
+  symlinkSync(source, alias);
+  expect(
+    privateArtifactPaths(join(outside, 'samples.jsonl'), repository, [alias])
+      .inputs
+  ).toEqual([source]);
+  expect(paths.artifact('safe-build')).toBe(join(outside, 'safe-build'));
+  expect(readFileSync(source)).toEqual(original);
+});
+
+it('fails closed on missing or dangling declared source inputs', () => {
+  const { repository, outside } = fixture();
+  const source = join(outside, 'missing.step');
+  const alias = join(outside, 'dangling.step');
+  symlinkSync(source, alias);
+  for (const input of [source, alias])
+    expect(() =>
+      privateArtifactPaths(join(outside, 'samples.jsonl'), repository, [input])
+    ).toThrow('cannot be resolved');
+});
+
+it('canonicalizes a relative source before a package changes working directory', () => {
+  const { repository, outside } = fixture();
+  const source = join(outside, 'source.step');
+  writeFileSync(source, 'dummy private STEP input');
+  const cwd = vi.spyOn(process, 'cwd').mockReturnValue(outside);
+  try {
+    const paths = privateArtifactPaths(
+      join(outside, 'samples.jsonl'),
+      repository,
+      ['source.step']
+    );
+    expect(paths.inputs).toEqual([source]);
+    cwd.mockReturnValue(join(repository, 'apps', 'web'));
+    expect(
+      privateArtifactPaths(paths.output, repository, paths.inputs).inputs
+    ).toEqual([source]);
+  } finally {
+    cwd.mockRestore();
+  }
+});
+
+it('validates actual runner artifact directories before a private input is read', () => {
+  const { directory, repository, outside } = fixture();
+  const source = join(outside, 'source.step');
+  writeFileSync(source, 'dummy private STEP input');
+  const paths = privateArtifactPaths(
+    join(outside, 'samples.jsonl'),
+    repository,
+    [source]
+  );
+  expect(() =>
+    paths.artifactDirectory(join(repository, 'test-results'))
+  ).toThrow('outside the repository');
+  expect(() => paths.artifactDirectory(outside)).toThrow('source input');
+  expect(() => paths.artifactDirectory(paths.output)).toThrow(
+    'overlap the sample'
+  );
+  expect(() => paths.artifactDirectory('relative-artifacts')).toThrow(
+    'absolute'
+  );
+  const externalArtifacts = join(directory, 'separate-artifacts');
+  expect(paths.artifactDirectory(externalArtifacts)).toBe(externalArtifacts);
+});
+
+it.each(['directory', 'worktree-file'])(
+  'keeps sample and artifact writes outside an unrelated Git checkout (%s)',
+  (kind) => {
+    const { directory, repository, outside } = fixture();
+    const unrelated = join(directory, 'another-repo');
+    mkdirSync(unrelated);
+    if (kind === 'directory') {
+      mkdirSync(join(unrelated, '.git'));
+      writeFileSync(join(unrelated, '.git', 'HEAD'), 'ref: refs/heads/main');
+    } else writeFileSync(join(unrelated, '.git'), 'gitdir: dummy');
+    expect(() =>
+      privateArtifactPaths(join(unrelated, 'new', 'samples.jsonl'), repository)
+    ).toThrow('outside Git checkouts');
+    symlinkSync(unrelated, join(outside, 'linked-repo'), 'dir');
+    const paths = privateArtifactPaths(
+      join(outside, 'samples.jsonl'),
+      repository
+    );
+    expect(() => paths.artifact('linked-repo/artifacts')).toThrow(
+      'outside Git checkouts'
+    );
+  }
+);
+
+it('checks CLI cleanup overrides while selecting an external private default', () => {
+  const { directory, repository, outside } = fixture();
+  const sources = join(directory, 'sources');
+  mkdirSync(sources);
+  const source = join(sources, 'source.step');
+  writeFileSync(source, 'dummy private STEP input');
+  const paths = privateArtifactPaths(
+    join(outside, 'samples.jsonl'),
+    repository,
+    [source]
+  );
+  expect(privatePlaywrightOutput(paths, [], undefined)).toBe(
+    join(outside, 'h02-private-playwright-artifacts')
+  );
+  for (const argv of [['--output', sources], [`--output=${sources}`]])
+    expect(() => privatePlaywrightOutput(paths, argv, undefined)).toThrow(
+      'source input'
+    );
+  const artifacts = join(directory, 'separate-artifacts');
+  expect(
+    privatePlaywrightOutput(paths, ['--output', artifacts], undefined)
+  ).toBe(artifacts);
+  expect(
+    privatePlaywrightOutput(paths, [`--output=${artifacts}`], undefined)
+  ).toBe(artifacts);
+  expect(() =>
+    privatePlaywrightOutput(paths, ['--last-failed-file', source], undefined)
+  ).toThrow('source input');
+  expect(() => privatePlaywrightOutput(paths, [], source)).toThrow(
+    'source input'
+  );
+});
+
+it.each(['--reporter', '--add-reporter'])(
+  'rejects unsupported private %s outputs before a reporter can write',
+  (option) => {
+    const { repository, outside } = fixture();
+    const paths = privateArtifactPaths(
+      join(outside, 'samples.jsonl'),
+      repository
+    );
+    for (const reporter of [
+      'html',
+      'blob',
+      'json',
+      'junit',
+      './custom-reporter.ts'
+    ]) {
+      expect(() =>
+        privatePlaywrightOutput(paths, [option, reporter], undefined)
+      ).toThrow('stdout reporters');
+      expect(() =>
+        privatePlaywrightOutput(paths, [`${option}=${reporter}`], undefined)
+      ).toThrow('stdout reporters');
+    }
+    expect(() =>
+      privatePlaywrightOutput(paths, [option, 'list,dot,line,null'], undefined)
+    ).not.toThrow();
+  }
+);
+
+it.each(['matched', 'sustained'])(
+  'rejects an actual %s Playwright cleanup override before it can remove the source',
+  (mode) => {
+    const { directory, outside } = fixture();
+    const sources = join(directory, 'sources');
+    mkdirSync(sources);
+    const source = join(sources, 'source.step');
+    const original = Buffer.from('dummy private STEP input\n');
+    writeFileSync(source, original);
+    const result = spawnSync(
+      process.execPath,
+      [
+        fileURLToPath(
+          new URL('../node_modules/@playwright/test/cli.js', import.meta.url)
+        ),
+        'test',
+        '--config',
+        fileURLToPath(new URL('../playwright.config.ts', import.meta.url)),
+        '--output',
+        sources,
+        '--list'
+      ],
+      {
+        env: {
+          ...process.env,
+          OZ_PERF: mode === 'matched' ? '1' : '',
+          H02_SESSION_PROBE: mode === 'sustained' ? '1' : '',
+          OZ_PERF_HOLDER_STEP: source,
+          OZ_PERF_OUT: join(outside, 'samples.jsonl')
+        },
+        encoding: 'utf8',
+        timeout: 10_000
+      }
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('source input');
+    expect(readFileSync(source)).toEqual(original);
+  },
+  15_000
+);

@@ -201,16 +201,24 @@ function assertEquivalent(result: Equivalence) {
 test('private holder survives sustained edits, retirement, refusal and worker restart', async ({
   page,
   browser
-}) => {
+}, testInfo) => {
   test.setTimeout(3_600_000);
   const source = process.env.OZ_PERF_HOLDER_STEP;
   if (!source || !process.env.OZ_PERF_OUT)
     throw new Error('Private source and outside-repository output required.');
-  const paths = privateArtifactPaths(process.env.OZ_PERF_OUT);
+  const paths = privateArtifactPaths(process.env.OZ_PERF_OUT, undefined, [
+    source
+  ]);
   const output = paths.output;
+  paths.artifactDirectory(testInfo.project.outputDir);
+  const backupPath = paths.artifact('private-session.openzcad');
+  paths.artifact('h02-private-session-artifacts');
   const record = (value: unknown) =>
-    appendFileSync(output, `${JSON.stringify(value)}\n`);
-  const input = readFileSync(source);
+    appendFileSync(
+      privateArtifactPaths(output, undefined, paths.inputs).output,
+      `${JSON.stringify(value)}\n`
+    );
+  const input = readFileSync(paths.inputs[0]!);
   record({
     phase: 'start',
     hostLoad: loadavg(),
@@ -304,7 +312,6 @@ test('private holder survives sustained edits, retirement, refusal and worker re
   await page.getByLabel('Project name').fill('Private qualification');
   await page.getByRole('button', { name: 'Create project' }).click();
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
-  const backupPath = paths.artifact('private-session.openzcad');
   writeFileSync(
     backupPath,
     JSON.stringify({

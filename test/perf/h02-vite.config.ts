@@ -10,9 +10,11 @@ export default async (...args: Parameters<typeof webConfig>) => {
     throw new Error('H02_CACHE_MODE must be disabled or enabled.');
   if (process.env.VITE_E2E !== '1')
     throw new Error('H02 benchmark builds require VITE_E2E=1.');
-  if (!process.env.OZ_PERF_OUT)
-    throw new Error('Set OZ_PERF_OUT for an isolated benchmark build.');
-  const paths = privateArtifactPaths(process.env.OZ_PERF_OUT);
+  if (!process.env.OZ_PERF_OUT || !process.env.OZ_PERF_HOLDER_STEP)
+    throw new Error('Set private source and isolated benchmark output paths.');
+  const paths = privateArtifactPaths(process.env.OZ_PERF_OUT, undefined, [
+    process.env.OZ_PERF_HOLDER_STEP
+  ]);
   const checkout = {
     sourceCommit: process.env.H02_SOURCE_COMMIT ?? '',
     lockfileSha256: process.env.H02_LOCKFILE_SHA256 ?? ''

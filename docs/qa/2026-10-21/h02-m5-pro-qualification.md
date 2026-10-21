@@ -178,8 +178,11 @@ Required repository verification remains `pnpm lint`, `pnpm typecheck`, `pnpm te
 Review follow-up strengthens the outside-repository artifact contract for future
 runs. Samples, source-containing backups, browser artifacts and Vite build outputs
 use one canonical-path guard rooted at the checkout, including when a command
-runs from a package directory. Repository symlinks, cleanup destinations containing
-the checkout, and artifact/sample overlaps fail closed. Backups use exclusive
-creation with mode `0600`. Eleven public dummy-filesystem regressions cover these
-cases without reading or writing the private input. This changes test-output
-handling only; it does not change any recorded samples or acceptance condition.
+runs from a package directory. Source aliases (including hard links), repository
+symlinks, cleanup destinations containing a source or checkout, and artifact/sample
+overlaps fail closed. Playwright checks CLI output, last-run and reporter options
+while loading its config, before cleanup. Backups and optional Node diagnostics
+use exclusive creation with mode `0600`. Twenty-eight public dummy-filesystem and
+config regressions cover these cases without reading or writing the private input.
+This changes test-output handling only; it does not change any recorded samples or
+acceptance condition.

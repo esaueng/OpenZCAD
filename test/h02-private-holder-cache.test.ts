@@ -20,6 +20,7 @@ import {
   captureExactArenas,
   compareExactArenas
 } from './support/exact-arena-equivalence';
+import { privateArtifactPaths } from './support/privateArtifacts';
 
 const sourcePath = process.env.OZ_PERF_HOLDER_STEP;
 
@@ -82,6 +83,12 @@ function exactPublication({ updatedAt: _time, ...derived }: DerivedState) {
 it.skipIf(!sourcePath)(
   'private holder reload and first edit match a cache-disabled exact oracle',
   async () => {
+    const diagnosticPaths = process.env.OZ_PERF_PRIVATE_DIFF_OUT
+      ? privateArtifactPaths(process.env.OZ_PERF_PRIVATE_DIFF_OUT, undefined, [
+          sourcePath!
+        ])
+      : undefined;
+    const inputPath = diagnosticPaths?.inputs[0] ?? sourcePath!;
     const events: RebuildCacheEvent[] = [];
     const warm = await createExactKernelAdapter({
       onRebuildCacheEvent: (event) => events.push(event),
@@ -99,7 +106,7 @@ it.skipIf(!sourcePath)(
           name: 'Source',
           artifactId: 'source',
           sourceName: 'source.step',
-          stepText: readFileSync(sourcePath!, 'utf8')
+          stepText: readFileSync(inputPath, 'utf8')
         }
       ).document;
       imported = { ...imported, derived: await warm.syncDocument(imported) };
@@ -160,13 +167,14 @@ it.skipIf(!sourcePath)(
       );
       const publishedActual = exactPublication(actual),
         publishedExpected = exactPublication(expected);
-      if (process.env.OZ_PERF_PRIVATE_DIFF_OUT) {
+      if (diagnosticPaths) {
         const { bodyRepresentations: actualBodies, ...actualRoot } =
           publishedActual;
         const { bodyRepresentations: expectedBodies, ...expectedRoot } =
           publishedExpected;
         writeFileSync(
-          process.env.OZ_PERF_PRIVATE_DIFF_OUT,
+          privateArtifactPaths(diagnosticPaths.output, undefined, [inputPath])
+            .output,
           JSON.stringify(
             {
               root: differingPaths(actualRoot, expectedRoot),
@@ -196,7 +204,8 @@ it.skipIf(!sourcePath)(
             },
             null,
             2
-          )
+          ),
+          { flag: 'wx', mode: 0o600 }
         );
       }
       expect(

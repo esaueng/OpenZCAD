@@ -15,7 +15,7 @@ export default defineConfig({
   testMatch: 'h02-private-session.spec.ts',
   grep: undefined,
   timeout: 3_600_000,
-  outputDir: privateArtifactPaths(process.env.OZ_PERF_OUT).artifact(
-    'h02-private-session-artifacts'
-  )
+  outputDir: privateArtifactPaths(process.env.OZ_PERF_OUT, undefined, [
+    process.env.OZ_PERF_HOLDER_STEP!
+  ]).artifact('h02-private-session-artifacts')
 });
