@@ -416,6 +416,36 @@ describe('sketch relation glyph overlay', () => {
     area.remove();
   });
 
+  it('keeps a glyph off an unrelated curve crossing its anchor', () => {
+    // The bottom line's horizontal relation sits at its middle, (10, 0),
+    // where an unconstrained vertical line crosses it. The chip would stand
+    // straight up over that line; it must go aside instead.
+    const overlay = buildSketchRelationGlyphs(
+      [bottom],
+      basis,
+      () => {},
+      () => {},
+      new Float64Array([0, 0, 20, 0, 10, -10, 10, 10])
+    );
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(topCamera(), 400, 400);
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    // The vertical line is screen x = 200, from y = 160 to 240.
+    const left = 200 + dx! - 17;
+    const right = 200 + dx! + 17;
+    const top = 200 + dy! - 8;
+    const bottomEdge = 200 + dy! + 8;
+    expect(
+      right < 200 - 2 || left > 200 + 2 || bottomEdge < 160 || top > 240
+    ).toBe(true);
+    // And the line the relation is on, screen y = 200.
+    expect(bottomEdge < 200 - 2 || top > 200 + 2).toBe(true);
+    overlay.dispose();
+  });
+
   it('leaves a chip whose anchor is off the viewport where it is', () => {
     const camera = topCamera();
     // Plane (200, 0) is far right of the 100-unit-wide view.

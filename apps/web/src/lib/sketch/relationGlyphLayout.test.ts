@@ -3,7 +3,8 @@ import {
   RELATION_CHIP_STANDOFF_PX,
   RELATION_GLYPH_PX,
   RelationGlyphLayout,
-  relationChipWidth
+  relationChipWidth,
+  segmentHitsBox
 } from './relationGlyphLayout';
 
 type Chip = {
@@ -326,6 +327,37 @@ describe('relation glyph layout', () => {
         3 - 1e-9
       );
     }
+  });
+
+  it('tests a segment against a box exactly', () => {
+    // Through, touching an edge, beside it, and diagonal past a corner.
+    expect(segmentHitsBox(0, 5, 20, 5, 4, 0, 8, 10)).toBe(true);
+    expect(segmentHitsBox(8, -5, 8, 15, 4, 0, 8, 10)).toBe(true);
+    expect(segmentHitsBox(9, -5, 9, 15, 4, 0, 8, 10)).toBe(false);
+    expect(segmentHitsBox(0, 3, 3, 0, 4, 4, 8, 8)).toBe(false);
+    expect(segmentHitsBox(0, 12, 12, 0, 4, 4, 8, 8)).toBe(true);
+  });
+
+  it('keeps every chip clear of the drawn curves, related or not', () => {
+    // A line of another curve runs straight up through the anchor, right
+    // where the chip would stand: it must go aside, 3 px clear of it.
+    const layout = new RelationGlyphLayout(1);
+    layout.setStrokes([200, 100, 200, 300], 1);
+    layout.set(0, 200, 200, 0, -1, 16, 16, false, true);
+    layout.solve(1, 400, 400);
+    expect(layout.shown[0]).toBe(1);
+    const cx = 200 + layout.offset[0]!;
+    const cy = 200 + layout.offset[1]!;
+    expect(
+      segmentHitsBox(200, 100, 200, 300, cx - 11, cy - 11, cx + 11, cy + 11)
+    ).toBe(false);
+    // A long stroke far across the view is indexed in pieces, not its box:
+    // a chip far from it is unaffected.
+    const far = new RelationGlyphLayout(1);
+    far.setStrokes([-5000, -5000, 5000, 5000], 1);
+    far.set(0, 300, 60, 0, -1, 16, 16, false, true);
+    far.solve(1, 400, 400);
+    expect(far.offset[0]).toBeCloseTo(0);
   });
 
   it('keeps chips out from under the viewport controls drawn above them', () => {

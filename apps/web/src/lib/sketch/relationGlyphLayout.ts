@@ -76,6 +76,50 @@ const SWINGS = RELATION_CHIP_SWINGS;
 export const RELATION_CHIP_MAX_SWING = 1;
 const MAX_SWING = RELATION_CHIP_MAX_SWING;
 
+// Liang–Barsky parameter window [t0, t1], reused so clipping allocates nothing.
+const CLIP = new Float64Array([0, 1]);
+
+/** Narrows `window` by one clip edge (p·t ≤ q); false once it is empty. */
+function clipEdge(p: number, q: number, window: Float64Array): boolean {
+  if (p === 0) return q >= 0;
+  const t = q / p;
+  if (p < 0) {
+    if (t > window[1]!) return false;
+    if (t > window[0]!) window[0] = t;
+  } else {
+    if (t < window[0]!) return false;
+    if (t < window[1]!) window[1] = t;
+  }
+  return true;
+}
+
+// A second window for the exact segment test, so it never disturbs CLIP.
+const HIT = new Float64Array([0, 1]);
+
+/** Whether a segment touches the box [left, top, right, bottom]. */
+export function segmentHitsBox(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number
+): boolean {
+  HIT[0] = 0;
+  HIT[1] = 1;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  return (
+    clipEdge(-dx, x1 - left, HIT) &&
+    clipEdge(dx, right - x1, HIT) &&
+    clipEdge(-dy, y1 - top, HIT) &&
+    clipEdge(dy, bottom - y1, HIT) &&
+    HIT[0] <= HIT[1]
+  );
+}
+
 export class RelationGlyphLayout {
   readonly capacity: number;
   /** Per chip: [ax, ay, nx, ny, width, height, flags]. */
@@ -114,6 +158,11 @@ export class RelationGlyphLayout {
   // the grid as placed items numbered −1, −2, …
   private blocked = new Float64Array(64);
   private blockedCount = 0;
+  // The sketch's drawn curves as screen segments [x1, y1, x2, y2]: a glyph is
+  // a button, and one over any curve would take that curve's picks. They
+  // join the grid after the blocked boxes, numbered on from them.
+  private strokes = new Float64Array(64);
+  private strokeCount = 0;
 
   constructor(capacity: number) {
     this.capacity = capacity;
@@ -124,6 +173,25 @@ export class RelationGlyphLayout {
     this.anchorItems = new Int32Array(capacity);
     this.placedNext = new Int32Array(Math.max(4, capacity * 4));
     this.placedItem = new Int32Array(Math.max(4, capacity * 4));
+  }
+
+  /**
+   * The sketch's drawn curves, as `count` screen segments [x1, y1, x2, y2]
+   * from `segments`. Every chip keeps STROKE_CLEAR_PX off all of them; a
+   * segment with a non-finite end (behind the camera) is skipped. They hold
+   * until replaced.
+   */
+  setStrokes(segments: ArrayLike<number>, count: number) {
+    if (this.strokes.length < count * 4) {
+      // A rare growth step, never a steady-frame allocation.
+      this.strokes = new Float64Array(
+        Math.max(count * 4, this.strokes.length * 2)
+      );
+    }
+    for (let index = 0; index < count * 4; index += 1) {
+      this.strokes[index] = segments[index]!;
+    }
+    this.strokeCount = count;
   }
 
   /**
@@ -338,6 +406,10 @@ export class RelationGlyphLayout {
     for (let index = 0; index < this.blockedCount; index += 1) {
       this.insertRect(-1 - index, this.blocked, index * 4);
     }
+    this.indexStrokes(
+      bounded ? width : UNBOUNDED_PX,
+      bounded ? height : UNBOUNDED_PX
+    );
     this.work = 0;
     let placedCount = 0;
     for (let index = 0; index < count; index += 1) {
@@ -536,6 +608,70 @@ export class RelationGlyphLayout {
     this.placedEntries = 0;
   }
 
+  /**
+   * Links each stroke into the cells it passes through: clipped to the grid
+   * (with a margin), then cut into pieces no longer than a cell, so a long
+   * line joins a narrow band of cells rather than its whole bounding box.
+   * Each piece refers back to its whole segment, which `free` tests exactly.
+   */
+  private indexStrokes(width: number, height: number) {
+    const strokes = this.strokes;
+    const margin = CELL_PX;
+    const scratch = this.pieceBox;
+    for (let index = 0; index < this.strokeCount; index += 1) {
+      const s = index * 4;
+      let x1 = strokes[s]!;
+      let y1 = strokes[s + 1]!;
+      let x2 = strokes[s + 2]!;
+      let y2 = strokes[s + 3]!;
+      if (
+        !Number.isFinite(x1) ||
+        !Number.isFinite(y1) ||
+        !Number.isFinite(x2) ||
+        !Number.isFinite(y2)
+      ) {
+        continue;
+      }
+      // Liang–Barsky against the grid, so only the visible part is indexed.
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      CLIP[0] = 0;
+      CLIP[1] = 1;
+      if (!(
+        clipEdge(-dx, x1 + margin, CLIP) &&
+        clipEdge(dx, width + margin - x1, CLIP) &&
+        clipEdge(-dy, y1 + margin, CLIP) &&
+        clipEdge(dy, height + margin - y1, CLIP)
+      )) {
+        continue;
+      }
+      const sx = x1 + dx * CLIP[0];
+      const sy = y1 + dy * CLIP[0];
+      x2 = x1 + dx * CLIP[1];
+      y2 = y1 + dy * CLIP[1];
+      x1 = sx;
+      y1 = sy;
+      const length = Math.hypot(x2 - x1, y2 - y1);
+      const pieces = Math.max(1, Math.ceil(length / CELL_PX));
+      const item = -1 - this.blockedCount - index;
+      for (let piece = 0; piece < pieces; piece += 1) {
+        const a = piece / pieces;
+        const b = (piece + 1) / pieces;
+        const px1 = x1 + (x2 - x1) * a;
+        const py1 = y1 + (y2 - y1) * a;
+        const px2 = x1 + (x2 - x1) * b;
+        const py2 = y1 + (y2 - y1) * b;
+        scratch[0] = Math.min(px1, px2);
+        scratch[1] = Math.min(py1, py2);
+        scratch[2] = Math.max(px1, px2);
+        scratch[3] = Math.max(py1, py2);
+        this.insertRect(item, scratch, 0);
+      }
+    }
+  }
+
+  private readonly pieceBox = new Float64Array(4);
+
   /** Links placed box `index` into every cell it spans. */
   private insertPlaced(index: number) {
     this.insertRect(index, this.placed, index * 4);
@@ -585,10 +721,11 @@ export class RelationGlyphLayout {
     }
     const placed = this.placed;
     const blocked = this.blocked;
-    const c0 = this.column(left - CHIP_GAP_PX);
-    const c1 = this.column(right + CHIP_GAP_PX);
-    const r0 = this.row(top - CHIP_GAP_PX);
-    const r1 = this.row(bottom + CHIP_GAP_PX);
+    const reach = Math.max(CHIP_GAP_PX, STROKE_CLEAR_PX);
+    const c0 = this.column(left - reach);
+    const c1 = this.column(right + reach);
+    const r0 = this.row(top - reach);
+    const r1 = this.row(bottom + reach);
     for (let row = r0; row <= r1; row += 1) {
       for (let column = c0; column <= c1; column += 1) {
         for (
@@ -598,6 +735,25 @@ export class RelationGlyphLayout {
         ) {
           this.work += 1;
           const item = this.placedItem[entry]!;
+          if (item < -this.blockedCount) {
+            const s = (-1 - item - this.blockedCount) * 4;
+            const strokes = this.strokes;
+            if (
+              segmentHitsBox(
+                strokes[s]!,
+                strokes[s + 1]!,
+                strokes[s + 2]!,
+                strokes[s + 3]!,
+                left - STROKE_CLEAR_PX,
+                top - STROKE_CLEAR_PX,
+                right + STROKE_CLEAR_PX,
+                bottom + STROKE_CLEAR_PX
+              )
+            ) {
+              return false;
+            }
+            continue;
+          }
           const boxes = item >= 0 ? placed : blocked;
           const p = (item >= 0 ? item : -1 - item) * 4;
           if (

@@ -57,7 +57,12 @@ export function buildSketchRelationGlyphs(
    * it is under a viewport control): drop the selection, so Delete never
    * acts on a relation whose glyph cannot be seen or clicked.
    */
-  selectionHidden: (constraintId: string) => void = () => {}
+  selectionHidden: (constraintId: string) => void = () => {},
+  /**
+   * The sketch's drawn curves as plane-local segments [x1, y1, x2, y2, …]
+   * (`sketchRelationStrokes`): no glyph may sit over any of them.
+   */
+  strokes: Float64Array = new Float64Array(0)
 ) {
   const group = new THREE.Group();
   group.name = 'sketch-relation-glyphs';
@@ -206,6 +211,25 @@ export function buildSketchRelationGlyphs(
     }
     return changed;
   };
+  // Stroke ends in world space, fixed for the overlay's life, and their
+  // screen segments, rewritten each frame.
+  const strokeCount = Math.floor(strokes.length / 4);
+  const strokeWorld = new Float64Array(strokeCount * 6);
+  for (let index = 0; index < strokeCount; index += 1) {
+    toWorld(
+      strokes[index * 4]!,
+      strokes[index * 4 + 1]!,
+      strokeWorld,
+      index * 6
+    );
+    toWorld(
+      strokes[index * 4 + 2]!,
+      strokes[index * 4 + 3]!,
+      strokeWorld,
+      index * 6 + 3
+    );
+  }
+  const strokeScreen = new Float64Array(strokeCount * 4);
   const clip = new THREE.Vector4();
   const step = new THREE.Vector4();
   return {
@@ -314,6 +338,32 @@ export function buildSketchRelationGlyphs(
         if (point) layout.setSwings(index, screenSwings, 0);
         if (index === pinnedIndex) layout.pin(index);
       }
+      // The drawn curves, projected; an end behind the camera drops the
+      // segment (marked non-finite, which the layout skips).
+      for (let index = 0; index < strokeCount; index += 1) {
+        for (let end = 0; end < 2; end += 1) {
+          const w3 = index * 6 + end * 3;
+          clip
+            .set(
+              strokeWorld[w3]!,
+              strokeWorld[w3 + 1]!,
+              strokeWorld[w3 + 2]!,
+              1
+            )
+            .applyMatrix4(view)
+            .applyMatrix4(projection);
+          const s2 = index * 4 + end * 2;
+          if (clip.w <= 0) {
+            strokeScreen[s2] = Number.NaN;
+            strokeScreen[s2 + 1] = Number.NaN;
+          } else {
+            strokeScreen[s2] = (clip.x / clip.w) * 0.5 * width + 0.5 * width;
+            strokeScreen[s2 + 1] =
+              (-clip.y / clip.w) * 0.5 * height + 0.5 * height;
+          }
+        }
+      }
+      layout.setStrokes(strokeScreen, strokeCount);
       layout.solve(count, width, height);
       if (
         pinnedIndex >= 0 &&

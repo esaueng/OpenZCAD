@@ -5,7 +5,11 @@ import type {
   SketchRelationGlyphKind,
   SketchRelationGlyphVisibility
 } from '@openzcad/shared';
-import { boundedArcSweepDegrees } from '@openzcad/geometry';
+import {
+  boundedArcSweepDegrees,
+  resolveSplineGeometry
+} from '@openzcad/geometry';
+import { objectPolylines } from '../objectPolyline';
 import { constraintReferencesObject } from './constraints';
 import { sketchPointPosition } from './dimensionAnnotations';
 
@@ -258,6 +262,46 @@ export function sketchRelationGlyphs(
 }
 
 /**
+ * Every drawn sketch curve as plane-local segments [x1, y1, x2, y2, …], from
+ * the same polylines the sketch view draws. Relation glyphs keep clear of
+ * them: a glyph is a button, and one over any curve, related or not, would
+ * take that curve's picks. Text is left out (its outlines are many small
+ * loops, and a glyph rarely sits over a label). An object that does not
+ * resolve contributes nothing.
+ */
+export function sketchRelationStrokes(
+  objects: readonly { data: SketchObjectData }[],
+  resolve: Resolve
+): Float64Array {
+  const strict = (value: unknown): number => {
+    const result = resolve(value as number | string);
+    if (result === undefined || !Number.isFinite(result)) {
+      throw new Error('unresolved');
+    }
+    return result;
+  };
+  const segments: number[] = [];
+  for (const { data } of objects) {
+    if (data.objectKind === 'text') continue;
+    let polylines: ReturnType<typeof objectPolylines>;
+    try {
+      polylines = objectPolylines(data, strict);
+    } catch {
+      continue;
+    }
+    for (const { points, closed } of polylines) {
+      const last = closed ? points.length : points.length - 1;
+      for (let index = 0; index < last; index += 1) {
+        const a = points[index]!;
+        const b = points[(index + 1) % points.length]!;
+        segments.push(a.x, a.y, b.x, b.y);
+      }
+    }
+  }
+  return Float64Array.from(segments);
+}
+
+/**
  * The anchor order: the order chips claim screen space in. A chip holding
  * the selected relation goes first, so it is never the one crowded out; then
  * point chips, since a corner has the least room and the most to say; curve
@@ -341,35 +385,40 @@ function curveEnds(
     ];
   }
   if (data.objectKind === 'spline') {
-    // An open spline leaves each end toward its neighbouring point: the
-    // control polygon's direction, which a spline's end tangent follows.
+    // An open spline leaves each end along its end tangent. The curve is
+    // clamped, so that is its first (last) control leg: for a fit spline,
+    // the controls the fit solved, not the next point it passes through.
     if (data.closed === true || data.points.length < 2) return [];
+    let controls: readonly Point[];
+    try {
+      controls = resolveSplineGeometry(data, (value) => {
+        const result = scalar(value);
+        if (result === undefined) throw new Error('unresolved');
+        return result;
+      }).controls;
+    } catch {
+      return [];
+    }
     const ends: { anchor: Point; direction: Point }[] = [];
-    const leave = (from: number, toward: number) => {
-      const a = data.points[from]!;
-      const b = data.points[toward]!;
-      const ax = scalar(a.x);
-      const ay = scalar(a.y);
-      const bx = scalar(b.x);
-      const by = scalar(b.y);
-      if (
-        ax === undefined ||
-        ay === undefined ||
-        bx === undefined ||
-        by === undefined
-      ) {
-        return;
+    const leave = (from: number, step: number) => {
+      const a = controls[from];
+      if (!a) return;
+      // The first control apart from the end: coincident controls give no
+      // direction.
+      for (let at = from + step; at >= 0 && at < controls.length; at += step) {
+        const b = controls[at]!;
+        const length = Math.hypot(b.x - a.x, b.y - a.y);
+        if (length > 1e-12) {
+          ends.push({
+            anchor: { x: a.x, y: a.y },
+            direction: { x: (b.x - a.x) / length, y: (b.y - a.y) / length }
+          });
+          return;
+        }
       }
-      const length = Math.hypot(bx - ax, by - ay);
-      if (!(length > 0)) return;
-      ends.push({
-        anchor: { x: ax, y: ay },
-        direction: { x: (bx - ax) / length, y: (by - ay) / length }
-      });
     };
-    const last = data.points.length - 1;
     leave(0, 1);
-    leave(last, last - 1);
+    leave(controls.length - 1, -1);
     return ends;
   }
   if (data.objectKind !== 'arc') return [];

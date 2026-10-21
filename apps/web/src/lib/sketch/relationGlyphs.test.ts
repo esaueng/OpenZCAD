@@ -6,7 +6,13 @@ import {
   type SketchConstraintData,
   type SketchObjectData
 } from '@openzcad/shared';
-import { sketchRelationGlyphs, widestGap, widestGapOf } from './relationGlyphs';
+import { resolveSplineGeometry } from '@openzcad/geometry';
+import {
+  sketchRelationGlyphs,
+  sketchRelationStrokes,
+  widestGap,
+  widestGapOf
+} from './relationGlyphs';
 
 const id = (value: string) => value as EntityId;
 let next = 0;
@@ -607,10 +613,31 @@ describe('sketchRelationGlyphs', () => {
         { x: 0, y: 0 }
       ])
     );
-    // The spline leaves its start along +x, so the chip stands off along −x.
+    // A fit spline leaves its start along its end tangent: the first leg of
+    // the controls the fit solved, which bends toward the third point, not
+    // the chord to the next point it passes through (straight along +x).
+    // With nothing else at the point, the chip stands off straight back.
+    const { controls } = resolveSplineGeometry(
+      {
+        objectKind: 'spline',
+        method: 'fit',
+        points: [
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+          { x: 20, y: 5 }
+        ]
+      },
+      (value: unknown) => value as number
+    );
+    const leg = {
+      x: controls[1]!.x - controls[0]!.x,
+      y: controls[1]!.y - controls[0]!.y
+    };
+    const length = Math.hypot(leg.x, leg.y);
     const start = chips.find((chip) => chip.anchor.x === 0)!;
-    expect(start.normal.x).toBeCloseTo(-1, 12);
-    expect(start.normal.y).toBeCloseTo(0, 12);
+    expect(start.normal.x).toBeCloseTo(-leg.x / length, 12);
+    expect(start.normal.y).toBeCloseTo(-leg.y / length, 12);
+    expect(Math.abs(start.normal.y)).toBeGreaterThan(0.05);
   });
 
   it('stands an on-ellipse point chip off the ellipse, not along it', () => {
@@ -714,6 +741,39 @@ describe('sketchRelationGlyphs', () => {
     expect(chip!.placement).toBe('point');
     expect(chip!.halfGap).toBeCloseTo(Math.PI / 6, 12);
     expect(widestGapOf([]).halfGap).toBe(Math.PI);
+  });
+
+  it('lists every drawn curve as plane segments, skipping text and the unresolved', () => {
+    const strokes = sketchRelationStrokes(
+      [
+        { data: { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 } },
+        {
+          data: { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }
+        },
+        { data: { objectKind: 'line', x1: 'w', y1: 0, x2: 10, y2: 0 } },
+        {
+          data: {
+            objectKind: 'text',
+            text: 'A',
+            fontFamily: 'open-sans',
+            fontStyle: 'regular',
+            size: 10,
+            x: 0,
+            y: 0,
+            align: 'left'
+          }
+        }
+      ] as { data: SketchObjectData }[],
+      resolve
+    );
+    // The line, then the circle closed round on itself.
+    expect([...strokes.slice(0, 4)]).toEqual([0, 0, 10, 0]);
+    const segments = strokes.length / 4;
+    expect(segments).toBeGreaterThan(20);
+    const last = strokes.slice(-4);
+    const first = strokes.slice(4, 8);
+    expect(last[2]).toBeCloseTo(first[0]!, 12);
+    expect(last[3]).toBeCloseTo(first[1]!, 12);
   });
 
   it('bisects the widest gap between leaving directions', () => {

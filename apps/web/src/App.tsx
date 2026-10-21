@@ -254,7 +254,8 @@ import {
 import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
 import {
   SKETCH_RELATION_GLYPHS,
-  sketchRelationGlyphs
+  sketchRelationGlyphs,
+  sketchRelationStrokes
 } from './lib/sketch/relationGlyphs';
 import {
   sketchGeometryDeleteRefusal,
@@ -14897,6 +14898,19 @@ export function App() {
       });
     }
   }, [selectedSketchConstraintId, selectedSketchConstraintDrawn]);
+  // The drawn curves relation glyphs keep clear of, only while any show.
+  const sketchRelationStrokeSegments = useMemo(
+    () =>
+      sketchModeState && doc && sketchRelationChips.length > 0
+        ? sketchRelationStrokes(
+            sketchModeState.objects,
+            (value) =>
+              evalParamValue(value, parameterScope.scope, doc.units) ??
+              undefined
+          )
+        : undefined,
+    [sketchModeState, doc, parameterScope.scope, sketchRelationChips.length]
+  );
   // The viewport's copy of the session also knows whether a solve or rebuild
   // owns the sketch, so a click cannot place text the card has disabled.
   const sketchModeForViewer = useMemo(
@@ -14904,9 +14918,16 @@ export function App() {
       sketchModeState && {
         ...sketchModeState,
         relations: sketchRelationChips,
+        relationStrokes: sketchRelationStrokeSegments,
         textDraftBusy: sketchSolving || geometryBusy
       },
-    [sketchModeState, sketchRelationChips, sketchSolving, geometryBusy]
+    [
+      sketchModeState,
+      sketchRelationChips,
+      sketchRelationStrokeSegments,
+      sketchSolving,
+      geometryBusy
+    ]
   );
 
   const sketchOverview = useMemo(() => {

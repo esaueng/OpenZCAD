@@ -455,6 +455,8 @@ export interface SketchModeState {
   dimensions: SketchDimensionAnnotation[];
   /** Relation glyph chips, already filtered by the visibility setting. */
   relations?: SketchRelationGlyphChip[];
+  /** The drawn curves as plane-local segments; glyphs keep clear of them. */
+  relationStrokes?: Float64Array;
   /**
    * The text card's draft while the text tool composes. Its outline follows
    * the pointer over the plane and a click places it; nothing is placed
@@ -11693,6 +11695,7 @@ export function ModelViewer({
     };
   }, [sketchBasis, sketchDimensions]);
   const sketchRelations = sketchMode?.relations;
+  const sketchRelationStrokes = sketchMode?.relationStrokes;
   useEffect(() => {
     const context = contextRef.current;
     if (!context || !sketchBasis || !sketchRelations?.length) return;
@@ -11701,7 +11704,8 @@ export function ModelViewer({
       sketchBasis,
       (constraintId) => selectSketchConstraintRef.current?.(constraintId),
       (constraintId) =>
-        sketchConstraintSelectionHiddenRef.current?.(constraintId)
+        sketchConstraintSelectionHiddenRef.current?.(constraintId),
+      sketchRelationStrokes
     );
     context.scene.add(overlay.group);
     sketchRelationsRef.current = overlay;
@@ -11719,7 +11723,7 @@ export function ModelViewer({
         sketchRelationsRef.current = null;
       context.requestRender();
     };
-  }, [sketchBasis, sketchRelations]);
+  }, [sketchBasis, sketchRelations, sketchRelationStrokes]);
   const sketchEntryFrameRef = useRef<SketchEntryFrame | null>(null);
   sketchEntryFrameRef.current = sketchMode?.frame ?? null;
   useEffect(() => {
