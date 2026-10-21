@@ -39,13 +39,19 @@ a label or repository variable does not grant execution authority.
 `ci-server-jane`, `ci-server-john`, or `github-hosted`. A controller outside
 Actions publishes this variable after checking fresh collector health and GitHub
 runner connectivity. Jane is primary, John the first backup, and GitHub-hosted
-the second. Busy Jane remains available; jobs queue for either of her two slots.
+the second. Busy Jane remains available; jobs queue for any of her three slots.
 Missing/invalid configuration selects hosted. Hosted fallback still depends on
 GitHub billing and capacity.
 
 Before checkout, self-hosted jobs verify the non-root identity, protected runner
 files, NoNewPrivileges, fresh storage, empty rootless Docker state, mount options
-and exact cgroup limits. Jane slots each have six CPU equivalents and 6 GiB RAM;
+and exact cgroup limits. The staged `fleet-ci-v3.yml` profile recognizes
+all three Jane slots, each with six CPU equivalents and a 5,000,000,000-byte
+RAM setting. systemd aligns this to whole host pages: 4,999,999,488 bytes on
+a 4 KiB-page host. Each slot has a separate 150 GiB image. Keep new local
+assignments paused until a second PR activates v3 at its landed main commit;
+the old active workflow still expects the legacy two-slot/6-GiB profile.
+
 John has one CPU equivalent and 3 GiB. Guard failure fails the job.
 Browser suites hold a shared host lock while using fixed localhost test ports.
 Browser/native OS dependencies must be installed by the host administrator;

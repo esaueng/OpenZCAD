@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { FLEET_CI_PATH } from './fleet-workflow';
@@ -31,27 +32,21 @@ describe('three-slot Jane runner profile', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toBe('4999999488');
   });
-  it('changes only the reviewed slot names and memory cap', () => {
-    const previous = spawnSync(
-      'git',
-      [
-        'show',
-        'fe46bdaa8a64c92464fea42034284be34c58ceae:.github/workflows/fleet-ci.yml'
-      ],
-      { encoding: 'utf8' }
-    );
-    expect(previous.status).toBe(0);
-    expect(staged).toBe(
-      previous.stdout
-        .replace(
-          'ci-server-jane-1|ci-server-jane-2)',
-          'ci-server-jane-1|ci-server-jane-2|ci-server-jane-3)'
-        )
-        .replace('CI_MEMORY=6442450944', 'CI_MEMORY=5000000000')
-        .replace(
-          '          CI_CGROUP=',
-          '          CI_MEMORY=$((CI_MEMORY / $(getconf PAGESIZE) * $(getconf PAGESIZE)))\n          CI_CGROUP='
-        )
+  it('changes only the reviewed slot names, memory cap and page alignment', () => {
+    // SHA-256 of fleet-ci.yml at fe46bdaa8a64c92464fea42034284be34c58ceae.
+    // A committed digest also works in a cold, shallow CI checkout.
+    const baseline = staged
+      .replace(
+        'ci-server-jane-1|ci-server-jane-2|ci-server-jane-3)',
+        'ci-server-jane-1|ci-server-jane-2)'
+      )
+      .replace('CI_MEMORY=5000000000', 'CI_MEMORY=6442450944')
+      .replace(
+        '          CI_MEMORY=$((CI_MEMORY / $(getconf PAGESIZE) * $(getconf PAGESIZE)))\n',
+        ''
+      );
+    expect(createHash('sha256').update(baseline).digest('hex')).toBe(
+      '8ef9ecab920f42cc84c883e6c02aac4dffd48d0ed7637915bd1d55c73365a5de'
     );
   });
 
@@ -85,7 +80,7 @@ describe('three-slot Jane runner profile', () => {
   );
 
   it('keeps an activated workflow on the current resource contract', () => {
-    if (FLEET_CI_PATH.endsWith('/fleet-ci.yml')) return;
+    if (FLEET_CI_PATH !== '.github/workflows/fleet-ci-v3.yml') return;
     const active = guard(readFileSync(FLEET_CI_PATH, 'utf8'));
     expect(active).toContain(
       'ci-server-jane-1|ci-server-jane-2|ci-server-jane-3)'
