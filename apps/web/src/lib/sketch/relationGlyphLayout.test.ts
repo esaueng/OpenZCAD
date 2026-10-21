@@ -179,6 +179,22 @@ describe('relation glyph layout', () => {
     }
   });
 
+  it('keeps chips out from under the viewport controls drawn above them', () => {
+    const layout = new RelationGlyphLayout(1);
+    // A rail covering the chip's preferred spot above the curve.
+    layout.setBlocked([180, 150, 220, 195], 1);
+    layout.set(0, 200, 200, 0, -1, 34, 16, false, true);
+    layout.solve(1, 400, 400);
+    const cx = 200 + layout.offset[0]!;
+    const cy = 200 + layout.offset[1]!;
+    const box = { left: cx - 17, right: cx + 17, top: cy - 8, bottom: cy + 8 };
+    expect(layout.shown[0]).toBe(1);
+    expect(
+      overlaps(box, { left: 180, top: 150, right: 220, bottom: 195 })
+    ).toBe(false);
+    expect(covers(box, 200, 200)).toBe(false);
+  });
+
   it('leaves a chip whose anchor is off the viewport alone', () => {
     const chips = solve(
       [

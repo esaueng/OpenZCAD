@@ -343,6 +343,52 @@ describe('sketchRelationGlyphs', () => {
     expect(end.normal.y).toBeCloseTo(1, 12);
   }, 20_000);
 
+  it('keeps clustering linear when one point sits far from the origin', () => {
+    // Forty thousand short lines packed into one model unit, and one line a
+    // trillion units out: sizing every bucket by that far point's tolerance
+    // (about one unit) put all the packed ends into a handful of buckets.
+    const packed = Array.from({ length: 40_000 }, (_, index) => ({
+      id: `p${index}`,
+      data: {
+        objectKind: 'line' as const,
+        x1: index * 2.5e-5,
+        y1: 0,
+        x2: index * 2.5e-5,
+        y2: 1e-3
+      }
+    }));
+    const sketch = [
+      ...packed,
+      {
+        id: 'far',
+        data: {
+          objectKind: 'line' as const,
+          x1: 1e12,
+          y1: 0,
+          x2: 1e12 + 10,
+          y2: 0
+        }
+      }
+    ];
+    const relations = [
+      constraint({
+        constraintKind: 'coincident',
+        a: { objectId: id('p0'), point: 'end' },
+        b: { objectId: id('p1'), point: 'start' }
+      }),
+      constraint({ constraintKind: 'horizontal', objectId: id('far') })
+    ];
+    const started = performance.now();
+    const chips = sketchRelationGlyphs(sketch, relations, resolve, {
+      visibility: 'always'
+    });
+    // About 0.5 s here; global-max buckets took about 8 s.
+    expect(performance.now() - started).toBeLessThan(2_500);
+    // The packed ends stay distinct points: p0's end and p1's start are
+    // 2.5e-5 apart, far beyond their 1e-6 tolerance.
+    expect(chips.filter((chip) => chip.placement === 'point')).toHaveLength(2);
+  }, 30_000);
+
   it('skips relations whose geometry does not resolve', () => {
     const chips = sketchRelationGlyphs(
       [

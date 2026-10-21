@@ -9443,7 +9443,8 @@ export function ModelViewer({
       sketchRelationsRef.current?.layout(
         context.activeCamera,
         canvasWidth(),
-        canvasHeight()
+        canvasHeight(),
+        labelRenderer.domElement
       );
       avoidSketchDimensionOverlays(labelRenderer.domElement);
       if (cylinderRadiusProxyFrame && import.meta.env.OZ_PERF === '1') {

@@ -4,10 +4,15 @@ import type { PlaneBasis } from '@openzcad/geometry';
 import { clearGroup } from '@openzcad/viewport';
 import type { SketchRelationGlyphChip } from '../../lib/sketch/relationGlyphs';
 import {
+  MAX_BLOCKED,
   RELATION_GLYPH_PX,
   RelationGlyphLayout,
   relationChipWidth
 } from '../../lib/sketch/relationGlyphLayout';
+import { VIEWPORT_OBSTACLE_SELECTOR } from './sketchDimensions';
+
+/** How often the viewport controls glyphs avoid are re-measured. */
+const OBSTACLE_REFRESH_MS = 200;
 
 /**
  * Relation glyphs as screen-space chips on the sketch plane. Each glyph is a
@@ -90,6 +95,27 @@ export function buildSketchRelationGlyphs(
   group.traverse((child) => {
     child.raycast = () => undefined;
   });
+  let obstaclesAt = Number.NEGATIVE_INFINITY;
+  const obstacles = new Float64Array(MAX_BLOCKED * 4);
+  const measureObstacles = (layer: HTMLElement) => {
+    const root = layer.closest('.viewer-area') ?? layer.parentElement;
+    const origin = layer.getBoundingClientRect();
+    let found = 0;
+    for (const element of root?.querySelectorAll<HTMLElement>(
+      VIEWPORT_OBSTACLE_SELECTOR
+    ) ?? []) {
+      if (found === MAX_BLOCKED) break;
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) continue;
+      const at = found * 4;
+      obstacles[at] = rect.left - origin.left;
+      obstacles[at + 1] = rect.top - origin.top;
+      obstacles[at + 2] = rect.right - origin.left;
+      obstacles[at + 3] = rect.bottom - origin.top;
+      found += 1;
+    }
+    layout.setBlocked(obstacles, found);
+  };
   const clip = new THREE.Vector4();
   const step = new THREE.Vector4();
   return {
@@ -99,8 +125,25 @@ export function buildSketchRelationGlyphs(
      * chip's `transform` and centres it on its anchor; the standoff rides
      * on the independent `translate` property, rewritten only when it moves.
      */
-    layout(camera: THREE.Camera, width: number, height: number) {
+    layout(
+      camera: THREE.Camera,
+      width: number,
+      height: number,
+      /**
+       * The label layer. Its viewer area's floating controls are measured
+       * at most every {@link OBSTACLE_REFRESH_MS}, not every frame: a read
+       * would force layout and allocate, and controls move rarely.
+       */
+      layer?: HTMLElement
+    ) {
       if (count === 0) return;
+      if (layer) {
+        const now = performance.now();
+        if (now - obstaclesAt >= OBSTACLE_REFRESH_MS) {
+          obstaclesAt = now;
+          measureObstacles(layer);
+        }
+      }
       // The screen direction of each normal is the projection's derivative
       // along it, taken exactly in clip space: no probe point, so nothing
       // can cross the eye plane and flip, however far the sketch sits from

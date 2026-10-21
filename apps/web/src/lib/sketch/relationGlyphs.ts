@@ -364,18 +364,18 @@ function samePointTolerance(point: Point): number {
 }
 
 /**
- * Cluster id per anchor, by proximity. Anchors are bucketed on a grid no finer
- * than the largest tolerance, and each one is matched against the
- * representatives in its own and the eight neighbouring cells, so two
- * coincident points are never split across a cell boundary. That is O(n) for
- * any layout; a sweep along one axis went quadratic on a column of points.
+ * Cluster id per anchor, by proximity. Each anchor is bucketed on a grid at
+ * its own tolerance's scale (a power of two at or above it), so one far-off
+ * point does not coarsen the buckets for every other, and each bucket holds a
+ * bounded handful of distinct points. Two points that match have tolerances
+ * within a factor of 1 ± 1e-12 of each other (each grows with its own
+ * coordinates, and they differ by at most the tolerance), so their scales are
+ * at most one level apart: a point is matched against the levels beside its
+ * own, over enough neighbouring cells to cover the reach, and two coincident
+ * points are never split across a cell boundary. That is O(n) for any layout.
  */
 function clusterPoints(points: readonly Point[]): number[] {
   const ids = new Array<number>(points.length);
-  let cell = 0;
-  for (const point of points) {
-    cell = Math.max(cell, samePointTolerance(point));
-  }
   const grid = new Map<
     string,
     { point: Point; tolerance: number; id: number }[]
@@ -383,19 +383,26 @@ function clusterPoints(points: readonly Point[]): number[] {
   let next = 0;
   points.forEach((point, index) => {
     const tolerance = samePointTolerance(point);
-    const cx = Math.floor(point.x / cell);
-    const cy = Math.floor(point.y / cell);
+    const level = Math.ceil(Math.log2(tolerance));
     let id: number | undefined;
-    for (let dx = -1; dx <= 1; dx += 1) {
-      for (let dy = -1; dy <= 1; dy += 1) {
-        for (const candidate of grid.get(`${cx + dx},${cy + dy}`) ?? []) {
-          const reach = Math.max(tolerance, candidate.tolerance);
-          if (
-            Math.abs(point.x - candidate.point.x) <= reach &&
-            Math.abs(point.y - candidate.point.y) <= reach &&
-            (id === undefined || candidate.id < id)
-          ) {
-            id = candidate.id;
+    for (let other = level - 1; other <= level + 1; other += 1) {
+      const cell = 2 ** other;
+      // The widest reach to a representative at that level, in its cells.
+      const span = Math.ceil(Math.max(tolerance, cell) / cell);
+      const cx = Math.floor(point.x / cell);
+      const cy = Math.floor(point.y / cell);
+      for (let dx = -span; dx <= span; dx += 1) {
+        for (let dy = -span; dy <= span; dy += 1) {
+          for (const candidate of grid.get(`${other},${cx + dx},${cy + dy}`) ??
+            []) {
+            const reach = Math.max(tolerance, candidate.tolerance);
+            if (
+              Math.abs(point.x - candidate.point.x) <= reach &&
+              Math.abs(point.y - candidate.point.y) <= reach &&
+              (id === undefined || candidate.id < id)
+            ) {
+              id = candidate.id;
+            }
           }
         }
       }
@@ -403,7 +410,8 @@ function clusterPoints(points: readonly Point[]): number[] {
     if (id === undefined) {
       id = next;
       next += 1;
-      const key = `${cx},${cy}`;
+      const cell = 2 ** level;
+      const key = `${level},${Math.floor(point.x / cell)},${Math.floor(point.y / cell)}`;
       const bucket = grid.get(key);
       const representative = { point, tolerance, id };
       if (bucket) bucket.push(representative);

@@ -7,12 +7,14 @@
  * that would cover an earlier chip, or any anchor, tries the next candidate —
  * slid along its curve or swung round its point, then one ring further out.
  *
- * Only spots inside the viewport count, so a chip near an edge turns inward
- * rather than leaving the canvas, and a chip whose anchor is off-screen is
- * left alone. A chip with no room within a bounded search is hidden for the
- * frame rather than drawn over another (see `shown`). Anchors and placed
- * chips sit in a uniform screen grid, so a candidate is checked against its
- * neighbours only and a frame costs about linear time in the chips.
+ * Only spots inside the viewport and clear of the viewport controls drawn
+ * above the glyphs (the orientation cube, the rails, floating panels, which
+ * would take a glyph's click) count, so a chip near an edge or a control turns
+ * aside. A chip whose anchor is off-screen is left alone, and one with no
+ * room within a bounded search is hidden for the frame rather than drawn over
+ * another (see `shown`). Anchors and placed chips sit in a uniform screen
+ * grid, so a candidate is checked against its neighbours only and a frame
+ * costs about linear time in the chips.
  *
  * Everything lives in typed arrays sized once per overlay (grown, rarely,
  * when the viewport or a pile outgrows them), so a steady frame allocates
@@ -30,6 +32,8 @@ const KEEP_OUT_PX = 5;
 /** Clear space between two chips. */
 const CHIP_GAP_PX = 2;
 const RINGS = 4;
+/** Viewport controls kept clear of glyphs; more are ignored. */
+export const MAX_BLOCKED = 32;
 /** Further straight-out steps tried after the rings, before giving up. */
 const EXTRA_RINGS = 8;
 /** Grid cell edge for the neighbour search. */
@@ -86,6 +90,10 @@ export class RelationGlyphLayout {
   private placedNext: Int32Array;
   private placedItem: Int32Array;
   private placedEntries = 0;
+  // Viewport controls drawn above the label layer, as [left, top, right,
+  // bottom] in viewport pixels: a glyph under one could not take its click.
+  private readonly blocked = new Float64Array(MAX_BLOCKED * 4);
+  private blockedCount = 0;
 
   constructor(capacity: number) {
     this.capacity = capacity;
@@ -96,6 +104,18 @@ export class RelationGlyphLayout {
     this.anchorItems = new Int32Array(capacity);
     this.placedNext = new Int32Array(Math.max(4, capacity * 4));
     this.placedItem = new Int32Array(Math.max(4, capacity * 4));
+  }
+
+  /**
+   * Viewport controls that float above the glyphs, as `count` boxes of
+   * [left, top, right, bottom] in viewport pixels. They hold until replaced.
+   */
+  setBlocked(rects: ArrayLike<number>, count: number) {
+    const kept = Math.min(count, MAX_BLOCKED);
+    for (let index = 0; index < kept * 4; index += 1) {
+      this.blocked[index] = rects[index]!;
+    }
+    this.blockedCount = kept;
   }
 
   /** Writes chip `index`'s projected inputs; call before `solve`. */
@@ -348,6 +368,18 @@ export class RelationGlyphLayout {
       (left < 0 || top < 0 || right > this.width || bottom > this.height)
     ) {
       return false;
+    }
+    const blocked = this.blocked;
+    for (let index = 0; index < this.blockedCount; index += 1) {
+      const b = index * 4;
+      if (
+        left < blocked[b + 2]! + CHIP_GAP_PX &&
+        right > blocked[b]! - CHIP_GAP_PX &&
+        top < blocked[b + 3]! + CHIP_GAP_PX &&
+        bottom > blocked[b + 1]! - CHIP_GAP_PX
+      ) {
+        return false;
+      }
     }
     const placed = this.placed;
     const c0 = this.column(left - CHIP_GAP_PX);

@@ -167,6 +167,50 @@ describe('sketch relation glyph overlay', () => {
     }
   );
 
+  it("measures the viewer area's floating controls and keeps glyphs from under them", () => {
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const layer = document.createElement('div');
+    const rail = document.createElement('div');
+    rail.className = 'viewer-rail';
+    area.append(layer, rail);
+    document.body.append(area);
+    const rect = (left: number, top: number, width: number, height: number) =>
+      ({
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
+        width,
+        height,
+        x: left,
+        y: top,
+        toJSON: () => ({})
+      }) as DOMRect;
+    vi.spyOn(layer, 'getBoundingClientRect').mockReturnValue(
+      rect(0, 0, 400, 400)
+    );
+    // The rail sits right over the bottom line's preferred spot: the chip
+    // above the line's middle (screen 200, 200).
+    vi.spyOn(rail, 'getBoundingClientRect').mockReturnValue(
+      rect(150, 150, 100, 46)
+    );
+    const overlay = buildSketchRelationGlyphs([bottom], basis);
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(topCamera(), 400, 400, layer);
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    const left = 200 + dx! - 17;
+    const top = 200 + dy! - 8;
+    const clear =
+      left + 34 <= 150 || left >= 250 || top + 16 <= 150 || top >= 196;
+    expect(clear).toBe(true);
+    overlay.dispose();
+    area.remove();
+  });
+
   it('leaves a chip whose anchor is off the viewport where it is', () => {
     const camera = topCamera();
     // Plane (200, 0) is far right of the 100-unit-wide view.

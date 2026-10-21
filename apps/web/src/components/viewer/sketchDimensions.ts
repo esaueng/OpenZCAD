@@ -34,6 +34,12 @@ function overlaps(a: LayoutRect, b: LayoutRect) {
  * this is a presentation-only margin correction, recalculated from the
  * CSS2DRenderer transform on every frame like the other callout clamps.
  */
+/**
+ * Viewport controls drawn above the label layer. Labels and glyphs keep out
+ * from under them, since a control there takes their clicks.
+ */
+export const VIEWPORT_OBSTACLE_SELECTOR = `.viewer-rail-stack, .viewer-rail, .viewport-readout, .sketch-relations, .sketch-flyouts, ${MODEL_PANEL_OBSTACLES}, .workspace-column-float`;
+
 export function avoidSketchDimensionOverlays(
   container: HTMLElement,
   occupiedRoot: HTMLElement | null = container.closest('.viewer-area') ??
@@ -47,7 +53,7 @@ export function avoidSketchDimensionOverlays(
   const occupied = occupiedRoot
     ? [
         ...occupiedRoot.querySelectorAll<HTMLElement>(
-          `.viewer-rail-stack, .viewer-rail, .viewport-readout, .sketch-relations, .sketch-flyouts, ${MODEL_PANEL_OBSTACLES}, .workspace-column-float`
+          VIEWPORT_OBSTACLE_SELECTOR
         )
       ]
         .map((element) => element.getBoundingClientRect())
