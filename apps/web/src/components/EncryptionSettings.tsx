@@ -37,7 +37,7 @@ import {
   type NewDeviceApprovalStep
 } from '../lib/e2ee/accountKeys';
 import { createE2eeApi, E2eeApiError } from '../lib/e2ee/e2eeApi';
-import { indexedDbDeviceStore } from '../lib/e2ee/deviceStore';
+import { DeviceListPinConflict, indexedDbDeviceStore } from '../lib/e2ee/deviceStore';
 import { encodeQr, qrSvgPath } from '../lib/e2ee/qrCode';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 import '../styles/components/encryption.css';
@@ -180,7 +180,7 @@ interface Shared {
 }
 
 function messageFor(error: unknown): string {
-  if (error instanceof EncryptionFlowError || error instanceof E2eeApiError) {
+  if (error instanceof EncryptionFlowError || error instanceof E2eeApiError || error instanceof DeviceListPinConflict) {
     return error.message;
   }
   if (error instanceof Error && error.name === 'E2eeError') {
@@ -265,8 +265,8 @@ function AccountPanel({
         </SettingRow>
       </Group>
 
-      {account.deviceStatus === 'certified' ||
-      account.deviceStatus === 'approved' ? null : (
+      {!identityChanged && (account.deviceStatus === 'certified' ||
+      account.deviceStatus === 'approved') ? null : (
         <EnrollPanel {...shared} account={account} />
       )}
       {account.deviceStatus === 'approved' && flow?.kind !== 'recover' ? (

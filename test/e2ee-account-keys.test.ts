@@ -43,7 +43,10 @@ import {
   type EncryptionState
 } from '../apps/web/src/lib/e2ee/accountKeys';
 import { createE2eeApi, E2eeApiError } from '../apps/web/src/lib/e2ee/e2eeApi';
-import { memoryDeviceStore } from '../apps/web/src/lib/e2ee/deviceStore';
+import {
+  memoryDeviceStore,
+  type DeviceKeyStore
+} from '../apps/web/src/lib/e2ee/deviceStore';
 import type { E2eeSetupRequest } from '@openzcad/shared';
 import { d1Database, migratedDatabase } from './d1-sqlite';
 
@@ -1064,5 +1067,263 @@ describe('identity replacement races', () => {
         'SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE generation = 1'
       )
     ).toBeGreaterThan(0);
+  });
+});
+
+function deferredPinWrite(store: DeviceKeyStore) {
+  let start!: () => void;
+  let resume!: () => void;
+  const started = new Promise<void>((resolve) => {
+    start = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  return {
+    started,
+    resume,
+    store: {
+      ...store,
+      savePin: async (...args: Parameters<DeviceKeyStore['savePin']>) => {
+        start();
+        await released;
+        return store.savePin(...args);
+      }
+    }
+  };
+}
+
+describe('cross-tab pin persistence', () => {
+  it('refuses a delayed load after another tab pins a newer head, keeping the pin and locking', async () => {
+    const srv = server();
+    const { laptop, recovery } = await setUp(srv);
+    const delayed = deferredPinWrite(laptop.store);
+    const loading = loadEncryption({ ...laptop, store: delayed.store });
+    await delayed.started;
+    await enrolled(srv, recovery.secret, 'Phone');
+    const newer = ready(await loadEncryption(laptop));
+    const pin = await laptop.store.loadPin(USER);
+    expect(pin?.sequence).toBe(newer.list.head.sequence);
+    delayed.resume();
+    expect((await loading).kind).toBe('fork');
+    expect(await laptop.store.loadPin(USER)).toEqual(pin);
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+  });
+
+  it('refuses a delayed old-identity load after another tab replaces the identity', async () => {
+    const srv = server();
+    const { laptop, account, recovery } = await setUp(srv);
+    const delayed = deferredPinWrite(laptop.store);
+    const loading = loadEncryption({ ...laptop, store: delayed.store });
+    await delayed.started;
+    const replaced = ready(
+      await replaceRecoveryKey(
+        laptop,
+        account,
+        (await generateRecoveryKey()).secret,
+        recovery.secret
+      )
+    );
+    delayed.resume();
+    expect((await loading).kind).toBe('identity-changed');
+    expect(await laptop.store.loadPin(USER)).toEqual(replaced.list.pin);
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+  });
+
+  it('refuses an old first-sight load when another tab first pins a different identity', async () => {
+    const srv = server();
+    const { laptop, account, recovery } = await setUp(srv);
+    const fresh = device(srv);
+    const delayed = deferredPinWrite(fresh.store);
+    const loading = loadEncryption({ ...fresh, store: delayed.store });
+    await delayed.started;
+    await replaceRecoveryKey(
+      laptop,
+      account,
+      (await generateRecoveryKey()).secret,
+      recovery.secret
+    );
+    const newer = ready(await loadEncryption(fresh));
+    delayed.resume();
+    expect((await loading).kind).toBe('identity-changed');
+    expect(await fresh.store.loadPin(USER)).toEqual(newer.list.pin);
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+  });
+
+  it('refuses a delayed write response after another tab accepts a later head', async () => {
+    const srv = server();
+    const { laptop, recovery } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const before = ready(await loadEncryption(laptop));
+    const delayed = deferredPinWrite(laptop.store);
+    const writing = removeDevice(
+      { ...laptop, store: delayed.store },
+      before,
+      phone.account.device!.deviceId,
+      recovery.secret
+    );
+    await delayed.started;
+    await enrolled(srv, recovery.secret, 'Tablet');
+    const newer = ready(await loadEncryption(laptop));
+    delayed.resume();
+    await expect(writing).rejects.toHaveProperty(
+      'name',
+      'DeviceListPinConflict'
+    );
+    expect(await laptop.store.loadPin(USER)).toEqual(newer.list.pin);
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+  });
+
+  it('refuses a delayed authorized replacement after another identity is accepted', async () => {
+    const srv = server();
+    const { laptop, account, recovery } = await setUp(srv);
+    const next = await generateRecoveryKey();
+    const delayed = deferredPinWrite(laptop.store);
+    const replacing = replaceRecoveryKey(
+      { ...laptop, store: delayed.store },
+      account,
+      next.secret,
+      recovery.secret
+    );
+    await delayed.started;
+    const response = await laptop.api.account();
+    const current = response.current!;
+    const intermediate = await verifyDeviceList(
+      fromBase64Url(current.identityKey),
+      current.entries.map((e) => ({
+        entry: fromBase64Url(e.entry),
+        signature: fromBase64Url(e.signature)
+      }))
+    );
+    await laptop.store.savePin(USER, intermediate, {
+      replaceIdentityFrom: account.persistedPin
+    });
+    const b = ready(await loadEncryption(laptop));
+    const newer = ready(
+      await replaceRecoveryKey(
+        laptop,
+        b,
+        (await generateRecoveryKey()).secret,
+        next.secret
+      )
+    );
+    delayed.resume();
+    await expect(replacing).rejects.toHaveProperty(
+      'name',
+      'DeviceListPinConflict'
+    );
+    expect(await laptop.store.loadPin(USER)).toEqual(newer.list.pin);
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+  });
+
+  it('binds a pending approval to its original pin across identity changes', async () => {
+    const srv = server();
+    const { laptop, account, recovery } = await setUp(srv);
+    const phone = device(srv);
+    const fresh = ready(await loadEncryption(phone));
+    const request = await requestApproval(phone, fresh, 'Phone');
+    if (request.step !== 'waiting')
+      throw new Error('Expected a waiting approval');
+    ready(await loadEncryption(laptop));
+    await approveDevice(
+      laptop,
+      account,
+      request.approval,
+      { kind: 'scan', code: request.scanCode },
+      recovery.secret
+    );
+    const before = ready(await loadEncryption(laptop));
+    const delayed = deferredPinWrite(phone.store);
+    const approving = advanceApprovalAsNewDevice({
+      ...phone,
+      store: delayed.store
+    });
+    await delayed.started;
+    const newer = ready(
+      await replaceRecoveryKey(
+        laptop,
+        before,
+        (await generateRecoveryKey()).secret,
+        recovery.secret
+      )
+    );
+    await phone.store.savePin(USER, newer.list, {
+      replaceIdentityFrom: fresh.persistedPin
+    });
+    delayed.resume();
+    await expect(approving).rejects.toHaveProperty(
+      'name',
+      'DeviceListPinConflict'
+    );
+    expect(await phone.store.loadPin(USER)).toEqual(newer.list.pin);
+    expect((await phone.store.loadDevice(USER))?.approval).not.toBeNull();
+    expect(unlockedEncryptionKey(USER)).toBeNull();
+  });
+
+  it('preserves explicit re-approval after an identity replacement', async () => {
+    const srv = server();
+    const { laptop, recovery } = await setUp(srv);
+    const phone = await enrolled(srv, recovery.secret, 'Phone');
+    const next = await generateRecoveryKey();
+    const newer = ready(
+      await replaceRecoveryKey(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        next.secret,
+        recovery.secret
+      )
+    );
+    const stale = await loadEncryption(phone.ctx);
+    if (stale.kind !== 'identity-changed')
+      throw new Error('Expected an identity change');
+    const request = await requestApproval(
+      phone.ctx,
+      stale.account,
+      'Phone again'
+    );
+    if (request.step !== 'waiting')
+      throw new Error('Expected a waiting approval');
+    ready(await loadEncryption(laptop));
+    await approveDevice(
+      laptop,
+      newer,
+      request.approval,
+      { kind: 'scan', code: request.scanCode },
+      next.secret
+    );
+    const completed = await advanceApprovalAsNewDevice(phone.ctx);
+    if (completed.step !== 'done')
+      throw new Error('Expected a completed approval');
+    expect(ready(completed.state).unlocked).toBe(true);
+    expect(ready(completed.state).fingerprint).toBe(newer.fingerprint);
+  });
+
+  it('recovers a certified browser when replacement committed but its pin snapshot was stale', async () => {
+    const srv = server();
+    const { laptop, account, recovery } = await setUp(srv);
+    await enrolled(srv, recovery.secret, 'Phone');
+    const advanced = ready(await loadEncryption(laptop));
+    const next = await generateRecoveryKey();
+    await expect(
+      replaceRecoveryKey(laptop, account, next.secret, recovery.secret)
+    ).rejects.toHaveProperty('name', 'DeviceListPinConflict');
+    expect(await laptop.store.loadPin(USER)).toEqual(advanced.list.pin);
+    const state = await loadEncryption(laptop);
+    if (state.kind !== 'identity-changed')
+      throw new Error('Expected changed identity');
+    expect(state.account.deviceStatus).toBe('certified');
+    await flowRefusal(
+      enrollWithRecoveryKey(laptop, state.account, recovery.secret, 'Laptop'),
+      'wrong-recovery-key'
+    );
+    expect(await laptop.store.loadPin(USER)).toEqual(advanced.list.pin);
+    const trusted = ready(
+      await enrollWithRecoveryKey(laptop, state.account, next.secret, 'Laptop')
+    );
+    expect(trusted.unlocked).toBe(true);
+    expect(trusted.device?.deviceId).toBe(account.device?.deviceId);
+    expect(trusted.list.devices).toHaveLength(1);
+    expect(trusted.list.head.sequence).toBe(0);
+    expect(await laptop.store.loadPin(USER)).toEqual(trusted.list.pin);
   });
 });
