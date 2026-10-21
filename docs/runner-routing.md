@@ -51,6 +51,11 @@ Browser suites hold a shared host lock while using fixed localhost test ports.
 Browser/native OS dependencies must be installed by the host administrator;
 workflow jobs install browser binaries without sudo.
 
+Playwright uses two workers in CI rather than deriving concurrency from the
+physical host's CPU count. Browser and geometry workers share each slot's
+resource budget; test deadlines and retries retain their existing values.
+Local runs keep Playwright's automatic worker count.
+
 ## Activation and rollback
 
 Approve the exact immutable `fleet-ci.yml` runner-group entry without removing

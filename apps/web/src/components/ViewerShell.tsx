@@ -279,6 +279,8 @@ interface ViewerShellProps {
     identity: SketchDimensionIdentity,
     offset: { x: number; y: number }
   ): void;
+  onSelectSketchConstraint?: ModelViewerProps['onSelectSketchConstraint'];
+  onSketchConstraintSelectionShown?: ModelViewerProps['onSketchConstraintSelectionShown'];
   onSketchDrawingChange(drawing: boolean): void;
   sketchMoveEnabled?: ModelViewerProps['sketchMoveEnabled'];
   onSketchMoveChange?: ModelViewerProps['onSketchMoveChange'];
@@ -456,6 +458,8 @@ export function ViewerShell({
   onSketchCommitComposite,
   onEditSketchDimension,
   onMoveSketchDimension,
+  onSelectSketchConstraint,
+  onSketchConstraintSelectionShown,
   onSketchDrawingChange,
   sketchMoveEnabled,
   onSketchMoveChange,
@@ -749,6 +753,8 @@ export function ViewerShell({
         onSketchCommitComposite={onSketchCommitComposite}
         onEditSketchDimension={onEditSketchDimension}
         onMoveSketchDimension={onMoveSketchDimension}
+        onSelectSketchConstraint={onSelectSketchConstraint}
+        onSketchConstraintSelectionShown={onSketchConstraintSelectionShown}
         onSketchDrawingChange={onSketchDrawingChange}
         sketchMoveEnabled={sketchMoveEnabled}
         onSketchMoveChange={onSketchMoveChange}

@@ -78,6 +78,12 @@ export default defineConfig({
           import.meta.url
         )
       ),
+      '@openzcad/kernel-adapter/topology-lineage': fileURLToPath(
+        new URL(
+          './packages/kernel-adapter/src/topology-lineage.ts',
+          import.meta.url
+        )
+      ),
       '@openzcad/kernel-adapter/face-attachment': fileURLToPath(
         new URL(
           './packages/kernel-adapter/src/face-attachment.ts',
