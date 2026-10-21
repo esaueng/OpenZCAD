@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { SketchRelationGlyphChip } from '../../lib/sketch/relationGlyphs';
-import { buildSketchRelationGlyphs } from './sketchRelations';
+import {
+  OBSTACLE_REFRESH_MS,
+  buildSketchRelationGlyphs
+} from './sketchRelations';
 
 // The XZ plane at y = 5: plane (10, 0) is world (10, 5, 0).
 const basis = {
@@ -197,7 +200,10 @@ describe('sketch relation glyph overlay', () => {
     );
     const overlay = buildSketchRelationGlyphs([bottom], basis);
     const element = (overlay.group.children[0] as CSS2DObject).element;
-    overlay.layout(topCamera(), 400, 400, layer);
+    expect(overlay.refreshObstacles(layer)).toBe(true);
+    // Nothing moved: a second measurement reports no change.
+    expect(overlay.refreshObstacles(layer)).toBe(false);
+    overlay.layout(topCamera(), 400, 400);
     const [dx, dy] = element.style
       .getPropertyValue('translate')
       .split(' ')
@@ -209,6 +215,56 @@ describe('sketch relation glyph overlay', () => {
     expect(clear).toBe(true);
     overlay.dispose();
     area.remove();
+  });
+
+  it('re-measures the viewport controls on its own timer and draws only on a change', () => {
+    vi.useFakeTimers();
+    try {
+      const area = document.createElement('div');
+      area.className = 'viewer-area';
+      const layer = document.createElement('div');
+      const flyout = document.createElement('div');
+      flyout.className = 'sketch-flyouts';
+      area.append(layer, flyout);
+      document.body.append(area);
+      const box = (left: number, width: number) =>
+        ({
+          left,
+          top: 100,
+          right: left + width,
+          bottom: 200,
+          width,
+          height: 100,
+          x: left,
+          y: 100,
+          toJSON: () => ({})
+        }) as DOMRect;
+      vi.spyOn(layer, 'getBoundingClientRect').mockReturnValue(box(0, 400));
+      const flyoutBox = vi
+        .spyOn(flyout, 'getBoundingClientRect')
+        .mockReturnValue(box(0, 0));
+      const changed = vi.fn();
+      const overlay = buildSketchRelationGlyphs([bottom], basis);
+      // Closed flyout: nothing to keep out of, so nothing to draw.
+      overlay.watchObstacles(layer, changed);
+      expect(changed).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(OBSTACLE_REFRESH_MS * 3);
+      expect(changed).not.toHaveBeenCalled();
+      // It opens while the scene is idle: the next tick asks for one frame.
+      flyoutBox.mockReturnValue(box(150, 100));
+      vi.advanceTimersByTime(OBSTACLE_REFRESH_MS);
+      expect(changed).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(OBSTACLE_REFRESH_MS * 3);
+      expect(changed).toHaveBeenCalledTimes(1);
+      // Disposed overlays stop measuring.
+      overlay.dispose();
+      flyoutBox.mockReturnValue(box(0, 0));
+      vi.advanceTimersByTime(OBSTACLE_REFRESH_MS * 3);
+      expect(changed).toHaveBeenCalledTimes(1);
+      area.remove();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps glyphs off the dimension labels beside them, every frame', () => {
@@ -228,7 +284,7 @@ describe('sketch relation glyph overlay', () => {
     );
     const overlay = buildSketchRelationGlyphs([bottom], basis);
     const element = (overlay.group.children[0] as CSS2DObject).element;
-    overlay.layout(topCamera(), 400, 400, undefined, {
+    overlay.layout(topCamera(), 400, 400, {
       labelCount: 1,
       writeLabelBoxes: boxes
     });

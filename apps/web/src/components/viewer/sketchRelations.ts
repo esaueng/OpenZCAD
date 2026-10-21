@@ -10,8 +10,12 @@ import {
 } from '../../lib/sketch/relationGlyphLayout';
 import { VIEWPORT_OBSTACLE_SELECTOR } from './sketchDimensions';
 
-/** How often the viewport controls glyphs avoid are re-measured. */
-const OBSTACLE_REFRESH_MS = 200;
+/**
+ * How often the viewport controls glyphs avoid are re-measured while glyphs
+ * are up. Measuring runs on its own timer, not in the draw, so a flyout that
+ * opens or a panel that moves while the scene is idle still moves the glyphs.
+ */
+export const OBSTACLE_REFRESH_MS = 250;
 /** Viewport controls measured; more are ignored. */
 const MAX_OBSTACLES = 32;
 
@@ -108,12 +112,19 @@ export function buildSketchRelationGlyphs(
   group.traverse((child) => {
     child.raycast = () => undefined;
   });
-  let obstaclesAt = Number.NEGATIVE_INFINITY;
-  // Viewport controls first (refreshed every OBSTACLE_REFRESH_MS), then this
-  // frame's dimension label boxes after them.
-  let blockedBoxes = new Float64Array((MAX_OBSTACLES + 16) * 4);
+  // The viewport controls, as last measured, and the scratch a measurement
+  // is compared in; each frame copies them into `blockedBoxes` and adds
+  // that frame's dimension label boxes after them.
+  const obstacles = new Float64Array(MAX_OBSTACLES * 4);
+  const measured = new Float64Array(MAX_OBSTACLES * 4);
   let obstacleCount = 0;
-  const measureObstacles = (layer: HTMLElement) => {
+  let blockedBoxes = new Float64Array((MAX_OBSTACLES + 16) * 4);
+  let watch: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Re-measures the viewer area's floating controls against the label
+   * layer, and says whether any moved, appeared or went.
+   */
+  const refreshObstacles = (layer: HTMLElement): boolean => {
     const root = layer.closest('.viewer-area') ?? layer.parentElement;
     const origin = layer.getBoundingClientRect();
     let found = 0;
@@ -124,13 +135,21 @@ export function buildSketchRelationGlyphs(
       const rect = element.getBoundingClientRect();
       if (rect.width <= 0 || rect.height <= 0) continue;
       const at = found * 4;
-      blockedBoxes[at] = rect.left - origin.left;
-      blockedBoxes[at + 1] = rect.top - origin.top;
-      blockedBoxes[at + 2] = rect.right - origin.left;
-      blockedBoxes[at + 3] = rect.bottom - origin.top;
+      measured[at] = Math.round(rect.left - origin.left);
+      measured[at + 1] = Math.round(rect.top - origin.top);
+      measured[at + 2] = Math.round(rect.right - origin.left);
+      measured[at + 3] = Math.round(rect.bottom - origin.top);
       found += 1;
     }
-    obstacleCount = found;
+    let changed = found !== obstacleCount;
+    for (let index = 0; !changed && index < found * 4; index += 1) {
+      changed = measured[index] !== obstacles[index];
+    }
+    if (changed) {
+      obstacles.set(measured);
+      obstacleCount = found;
+    }
+    return changed;
   };
   const clip = new THREE.Vector4();
   const step = new THREE.Vector4();
@@ -146,12 +165,6 @@ export function buildSketchRelationGlyphs(
       width: number,
       height: number,
       /**
-       * The label layer. Its viewer area's floating controls are measured
-       * at most every {@link OBSTACLE_REFRESH_MS}, not every frame: a read
-       * would force layout and allocate, and controls move rarely.
-       */
-      layer?: HTMLElement,
-      /**
        * The dimension labels beside the glyphs. A driving dimension and a
        * relation on the same line both start at its middle; their boxes are
        * projected every frame (no DOM read) and kept clear.
@@ -159,19 +172,13 @@ export function buildSketchRelationGlyphs(
       dimensions?: SketchLabelBoxes | null
     ) {
       if (count === 0) return;
-      if (layer) {
-        const now = performance.now();
-        if (now - obstaclesAt >= OBSTACLE_REFRESH_MS) {
-          obstaclesAt = now;
-          measureObstacles(layer);
-        }
-      }
       const labels = dimensions?.labelCount ?? 0;
       if (blockedBoxes.length < (obstacleCount + labels) * 4) {
         // A rare growth step, when a rebuild brings more labels.
-        const grown = new Float64Array((obstacleCount + labels) * 4 * 2);
-        grown.set(blockedBoxes.subarray(0, obstacleCount * 4));
-        blockedBoxes = grown;
+        blockedBoxes = new Float64Array((obstacleCount + labels) * 4 * 2);
+      }
+      for (let index = 0; index < obstacleCount * 4; index += 1) {
+        blockedBoxes[index] = obstacles[index]!;
       }
       const labelBoxes =
         dimensions?.writeLabelBoxes(
@@ -233,7 +240,23 @@ export function buildSketchRelationGlyphs(
         elements[index]!.style.setProperty('translate', `${dx}px ${dy}px`);
       }
     },
+    refreshObstacles,
+    /**
+     * Keeps the viewport controls measured while the glyphs are up: now, and
+     * then every {@link OBSTACLE_REFRESH_MS}, calling `changed` (to draw a
+     * frame) only when a control moved, appeared or went. An idle scene
+     * stays idle.
+     */
+    watchObstacles(layer: HTMLElement, changed: () => void) {
+      if (watch !== null) clearInterval(watch);
+      if (refreshObstacles(layer)) changed();
+      watch = setInterval(() => {
+        if (refreshObstacles(layer)) changed();
+      }, OBSTACLE_REFRESH_MS);
+    },
     dispose() {
+      if (watch !== null) clearInterval(watch);
+      watch = null;
       clearGroup(group);
     }
   };

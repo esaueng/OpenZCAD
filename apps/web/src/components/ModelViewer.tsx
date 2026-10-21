@@ -2808,6 +2808,14 @@ export function ModelViewer({
       ) {
         requestRender();
       }
+      // Relation glyphs keep out from under the panels: re-measure at once
+      // rather than on the glyphs' timer, so a dragged panel pushes them
+      // aside as it moves.
+      if (
+        sketchRelationsRef.current?.refreshObstacles(labelRenderer.domElement)
+      ) {
+        requestRender();
+      }
     });
     const watchPanelLayer = () => {
       const layer =
@@ -9444,7 +9452,6 @@ export function ModelViewer({
         context.activeCamera,
         canvasWidth(),
         canvasHeight(),
-        labelRenderer.domElement,
         sketchDimensionsRef.current
       );
       avoidSketchDimensionOverlays(labelRenderer.domElement);
@@ -11686,6 +11693,12 @@ export function ModelViewer({
     );
     context.scene.add(overlay.group);
     sketchRelationsRef.current = overlay;
+    // The rails, flyouts and floating panels glyphs keep out from under are
+    // measured on their own timer, so one that moves over an idle scene
+    // still moves the glyphs (it draws a frame only on a change).
+    overlay.watchObstacles(context.labelRenderer.domElement, () =>
+      context.requestRender()
+    );
     context.requestRender();
     return () => {
       context.scene.remove(overlay.group);
