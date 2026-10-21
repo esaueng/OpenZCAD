@@ -258,16 +258,20 @@ export function sketchRelationGlyphs(
 }
 
 /**
- * The anchor order: the order chips claim screen space in. Point chips go
- * first, since a corner has the least room and the most to say; curve chips
- * fill in around them. Within a placement the order is by position, so it is
+ * The anchor order: the order chips claim screen space in. A chip holding
+ * the selected relation goes first, so it is never the one crowded out; then
+ * point chips, since a corner has the least room and the most to say; curve
+ * chips fill in around them. Within a placement the order is by position, so it is
  * stable across renders and independent of constraint order.
  */
 function orderedChips(
   chips: SketchRelationGlyphChip[]
 ): SketchRelationGlyphChip[] {
+  const selected = (chip: SketchRelationGlyphChip) =>
+    chip.glyphs.some((glyph) => glyph.selected) ? 0 : 1;
   return chips.sort(
     (a, b) =>
+      selected(a) - selected(b) ||
       (a.placement === b.placement ? 0 : a.placement === 'point' ? -1 : 1) ||
       a.anchor.x - b.anchor.x ||
       a.anchor.y - b.anchor.y ||

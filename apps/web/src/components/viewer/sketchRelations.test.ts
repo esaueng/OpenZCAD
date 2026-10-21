@@ -305,6 +305,52 @@ describe('sketch relation glyph overlay', () => {
     overlay.dispose();
   });
 
+  it('stands a curve chip off square to the curve as drawn on an oblique view', () => {
+    // A camera low and off to the side: the projected plane normal leans
+    // along the projected line, so only the tangent's perpendicular is square.
+    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
+    camera.position.set(40, 25, 30);
+    camera.lookAt(10, 5, 0);
+    camera.updateMatrixWorld();
+    camera.updateProjectionMatrix();
+    const overlay = buildSketchRelationGlyphs([bottom], basis);
+    const element = (overlay.group.children[0] as CSS2DObject).element;
+    overlay.layout(camera, 400, 400);
+    const [dx, dy] = element.style
+      .getPropertyValue('translate')
+      .split(' ')
+      .map((part) => parseFloat(part));
+    const screen = (x: number, z: number) => {
+      const point = new THREE.Vector3(x, 5, z).project(camera);
+      return { x: point.x * 200 + 200, y: -point.y * 200 + 200 };
+    };
+    // The line runs along world x through (10, 5, 0); its normal side is
+    // plane +v, world −z.
+    const a = screen(9, 0);
+    const b = screen(11, 0);
+    const tangent = { x: b.x - a.x, y: b.y - a.y };
+    const along =
+      (dx! * tangent.x + dy! * tangent.y) /
+      (Math.hypot(dx!, dy!) * Math.hypot(tangent.x, tangent.y));
+    // Rounded to whole pixels, so square to within a few degrees.
+    expect(Math.abs(along)).toBeLessThan(0.08);
+    const side = screen(10, -1);
+    const anchor = screen(10, 0);
+    expect(
+      dx! * (side.x - anchor.x) + dy! * (side.y - anchor.y)
+    ).toBeGreaterThan(0);
+    // The projected normal itself is not square here (else this proves
+    // nothing).
+    const normal = { x: side.x - anchor.x, y: side.y - anchor.y };
+    expect(
+      Math.abs(
+        (normal.x * tangent.x + normal.y * tangent.y) /
+          (Math.hypot(normal.x, normal.y) * Math.hypot(tangent.x, tangent.y))
+      )
+    ).toBeGreaterThan(0.2);
+    overlay.dispose();
+  });
+
   it('leaves a chip whose anchor is off the viewport where it is', () => {
     const camera = topCamera();
     // Plane (200, 0) is far right of the 100-unit-wide view.

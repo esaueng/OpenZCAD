@@ -516,6 +516,21 @@ describe('sketchRelationGlyphs', () => {
     expect(chip!.normal.y).toBeCloseTo(1, 12);
   });
 
+  it('orders the chips holding the selected relation first, so they are never crowded out', () => {
+    const parallel = String(rectangle[7]!.constraintId);
+    const chips = sketchRelationGlyphs(objects, rectangle, resolve, {
+      visibility: 'always',
+      selectedConstraintId: parallel
+    });
+    expect(
+      chips
+        .slice(0, 2)
+        .map((chip) => chip.key)
+        .sort()
+    ).toEqual(['object:bottom', 'object:top']);
+    expect(chips[2]!.placement).toBe('point');
+  });
+
   it('orders point chips before curve chips, stably, whatever the constraint order', () => {
     const keys = (list: typeof rectangle) =>
       sketchRelationGlyphs(objects, list, resolve, {

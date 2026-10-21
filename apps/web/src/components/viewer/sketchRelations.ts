@@ -4,6 +4,8 @@ import type { PlaneBasis } from '@openzcad/geometry';
 import { clearGroup } from '@openzcad/viewport';
 import type { SketchRelationGlyphChip } from '../../lib/sketch/relationGlyphs';
 import {
+  RELATION_CHIP_MAX_SWING,
+  RELATION_CHIP_SWINGS,
   RELATION_GLYPH_PX,
   RelationGlyphLayout,
   relationChipWidth
@@ -54,9 +56,18 @@ export function buildSketchRelationGlyphs(
   const group = new THREE.Group();
   group.name = 'sketch-relation-glyphs';
   const count = chips.length;
-  // World anchor and world normal per chip, fixed for the overlay's life.
+  // World anchor and world normal per chip, fixed for the overlay's life,
+  // and its world directions to project each frame: a curve chip's tangent,
+  // or a point chip's swing directions, built in the sketch plane so they
+  // stay inside its gap however the plane is viewed.
   const anchors = new Float64Array(count * 3);
   const normals = new Float64Array(count * 3);
+  const SWING_COUNT = RELATION_CHIP_SWINGS.length;
+  const directions = new Float64Array(count * SWING_COUNT * 3);
+  const screenSwings = new Float64Array(SWING_COUNT * 2);
+  const pinned = chips.map((chip) =>
+    chip.glyphs.some((glyph) => glyph.selected)
+  );
   const widths = new Float64Array(count);
   const elements: HTMLElement[] = [];
   // The last offset written per chip, so a still frame writes no style.
@@ -107,6 +118,29 @@ export function buildSketchRelationGlyphs(
     normals[at] = basis.u.x * chip.normal.x + basis.v.x * chip.normal.y;
     normals[at + 1] = basis.u.y * chip.normal.x + basis.v.y * chip.normal.y;
     normals[at + 2] = basis.u.z * chip.normal.x + basis.v.z * chip.normal.y;
+    const planeDirection = (x: number, y: number, entry: number) => {
+      const d = (index * SWING_COUNT + entry) * 3;
+      directions[d] = basis.u.x * x + basis.v.x * y;
+      directions[d + 1] = basis.u.y * x + basis.v.y * y;
+      directions[d + 2] = basis.u.z * x + basis.v.z * y;
+    };
+    if (chip.placement === 'point') {
+      const swingStep = Math.min(
+        RELATION_CHIP_MAX_SWING,
+        0.5 * (chip.halfGap ?? Math.PI)
+      );
+      RELATION_CHIP_SWINGS.forEach((fraction, entry) => {
+        const angle = fraction * swingStep;
+        planeDirection(
+          chip.normal.x * Math.cos(angle) - chip.normal.y * Math.sin(angle),
+          chip.normal.x * Math.sin(angle) + chip.normal.y * Math.cos(angle),
+          entry
+        );
+      });
+    } else {
+      // The curve's tangent at its anchor: the normal turned a quarter.
+      planeDirection(-chip.normal.y, chip.normal.x, 0);
+    }
     const label = new CSS2DObject(element);
     label.position.set(
       anchors[index * 3]!,
@@ -214,18 +248,56 @@ export function buildSketchRelationGlyphs(
         const w = clip.w;
         const visible = w > 0 && Math.abs(clip.z / w) <= 1;
         // d(ndc) = (d·w − clip·dw) / w²; w² > 0 only scales it, so drop it.
+        let nx = (step.x * w - clip.x * step.w) * width;
+        let ny = -(step.y * w - clip.y * step.w) * height;
+        const point = chips[index]!.placement === 'point';
+        const d = index * SWING_COUNT * 3;
+        if (point) {
+          for (let entry = 0; entry < SWING_COUNT; entry += 1) {
+            step
+              .set(
+                directions[d + entry * 3]!,
+                directions[d + entry * 3 + 1]!,
+                directions[d + entry * 3 + 2]!,
+                0
+              )
+              .applyMatrix4(view)
+              .applyMatrix4(projection);
+            screenSwings[entry * 2] = (step.x * w - clip.x * step.w) * width;
+            screenSwings[entry * 2 + 1] =
+              -(step.y * w - clip.y * step.w) * height;
+          }
+        } else {
+          // A curve chip stands off square to the curve as drawn: the
+          // perpendicular of its projected tangent, on the side its
+          // projected normal points to. On an oblique view the projected
+          // normal itself is no longer square to the curve.
+          step
+            .set(directions[d]!, directions[d + 1]!, directions[d + 2]!, 0)
+            .applyMatrix4(view)
+            .applyMatrix4(projection);
+          const tx = (step.x * w - clip.x * step.w) * width;
+          const ty = -(step.y * w - clip.y * step.w) * height;
+          if (Math.hypot(tx, ty) > 1e-9 * (Math.abs(nx) + Math.abs(ny) + 1)) {
+            const sign = -ty * nx + tx * ny >= 0 ? 1 : -1;
+            nx = -ty * sign;
+            ny = tx * sign;
+          }
+        }
         layout.set(
           index,
           (clip.x / w) * 0.5 * width + 0.5 * width,
           (-clip.y / w) * 0.5 * height + 0.5 * height,
-          (step.x * w - clip.x * step.w) * width,
-          -(step.y * w - clip.y * step.w) * height,
+          nx,
+          ny,
           widths[index]!,
           RELATION_GLYPH_PX,
-          chips[index]!.placement === 'point',
+          point,
           visible,
           chips[index]!.halfGap
         );
+        if (point) layout.setSwings(index, screenSwings, 0);
+        if (pinned[index]) layout.pin(index);
       }
       layout.solve(count, width, height);
       const offset = layout.offset;

@@ -47,19 +47,27 @@ export function relationChipWidth(glyphs: number): number {
 }
 
 // Inputs per chip: anchor x/y, normal x/y (screen, y down), width, height,
-// flags (bit 0 visible, bit 1 point placement), and a point chip's half gap.
-const IN = 8;
-const POINT = 2;
+// flags, a point chip's half gap, then its swing directions as projected
+// from the sketch plane (x/y per entry of SWINGS) when the viewer gives them.
+const SWING_AT = 8;
+const IN = SWING_AT + 10;
 const VISIBLE = 1;
+const POINT = 2;
+/** The point chip's swing directions were projected, not rotated. */
+const SWUNG = 4;
+/** A chip holding the selected relation: placed even without free room. */
+const PINNED = 8;
 
 // Candidate moves for a curve chip: along its curve, in chip widths, on the
 // preferred side and then the other.
 const SLIDES = [0, 1, -1, 2, -2] as const;
 // Candidate swings for a point chip, round the bisector of its gap, as
 // fractions of its swing step (see `solve`).
-const SWINGS = [0, 0.5, -0.5, 1, -1] as const;
+export const RELATION_CHIP_SWINGS = [0, 0.5, -0.5, 1, -1] as const;
+const SWINGS = RELATION_CHIP_SWINGS;
 /** A point chip's widest swing, in radians, however open its gap. */
-const MAX_SWING = 1;
+export const RELATION_CHIP_MAX_SWING = 1;
+const MAX_SWING = RELATION_CHIP_MAX_SWING;
 
 export class RelationGlyphLayout {
   readonly capacity: number;
@@ -127,6 +135,36 @@ export class RelationGlyphLayout {
       this.blocked[index] = rects[index]!;
     }
     this.blockedCount = count;
+  }
+
+  /**
+   * Marks chip `index` as holding the selected relation: it is laid out even
+   * when no free spot is found (at its preferred one, kept on screen), so a
+   * selection is never left without a visible glyph. Call after `set`.
+   */
+  pin(index: number) {
+    const at = index * IN + 6;
+    this.input[at] = this.input[at]! | PINNED;
+  }
+
+  /**
+   * Point chip `index`'s swing directions as projected from the sketch plane,
+   * one screen vector per entry of the swing table, as [x, y] pairs from
+   * `at` in `directions`. Rotating a projected normal by a plane angle is
+   * wrong on an oblique view; these keep each swing inside the projected gap.
+   * Call after `set`.
+   */
+  setSwings(index: number, directions: ArrayLike<number>, at: number) {
+    const base = index * IN;
+    for (let entry = 0; entry < SWINGS.length; entry += 1) {
+      const x = directions[at + entry * 2]!;
+      const y = directions[at + entry * 2 + 1]!;
+      const length = Math.hypot(x, y);
+      const slot = base + SWING_AT + entry * 2;
+      this.input[slot] = length > 1e-9 ? x / length : this.input[base + 2]!;
+      this.input[slot + 1] = length > 1e-9 ? y / length : this.input[base + 3]!;
+    }
+    this.input[base + 6] = this.input[base + 6]! | SWUNG;
   }
 
   /** Writes chip `index`'s projected inputs; call before `solve`. */
@@ -233,7 +271,10 @@ export class RelationGlyphLayout {
           for (let candidate = 0; candidate < candidates; candidate += 1) {
             let dx: number;
             let dy: number;
-            if (point) {
+            if (point && flags & SWUNG) {
+              dx = input[at + SWING_AT + candidate * 2]!;
+              dy = input[at + SWING_AT + candidate * 2 + 1]!;
+            } else if (point) {
               const angle = SWINGS[candidate]! * swingStep;
               const cos = Math.cos(angle);
               const sin = Math.sin(angle);
@@ -280,6 +321,21 @@ export class RelationGlyphLayout {
             break;
           }
         }
+      }
+      if (!found && flags & PINNED) {
+        // The selected relation's chip always shows, so a selection is never
+        // invisible: at its preferred spot, on screen. It is laid out first,
+        // so only a viewport control or a dimension label can be there.
+        const support = Math.abs(nx) * halfW + Math.abs(ny) * halfH;
+        const reach =
+          RELATION_CHIP_STANDOFF_PX + (point ? KEEP_OUT_PX : 0) + support;
+        chosenX = ax + nx * reach;
+        chosenY = ay + ny * reach;
+        if (bounded) {
+          chosenX = Math.min(Math.max(chosenX, halfW), width - halfW);
+          chosenY = Math.min(Math.max(chosenY, halfH), height - halfH);
+        }
+        found = true;
       }
       if (!found) {
         // No room near its geometry (more relations than the view has space

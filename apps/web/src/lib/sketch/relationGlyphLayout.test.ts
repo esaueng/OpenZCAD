@@ -206,6 +206,44 @@ describe('relation glyph layout', () => {
     ).toBe(false);
   });
 
+  it('swings a point chip along the projected directions it is given', () => {
+    // On an oblique view the gap's projection is skewed: the viewer passes
+    // each swing already projected. With the first spot taken, the chip must
+    // take one of those directions, not a screen rotation of the normal.
+    const layout = new RelationGlyphLayout(1);
+    layout.set(0, 200, 200, 0, -1, 16, 16, true, true, Math.PI / 6);
+    // Bisector up; the swings lean far right only (a skewed wedge).
+    layout.setSwings(0, [0, -1, 0.6, -0.8, 0.8, -0.6, 0.6, -0.8, 0.8, -0.6], 0);
+    layout.setBlocked([192, 160, 208, 189], 1);
+    layout.solve(1, 400, 400);
+    const dx = layout.offset[0]!;
+    const dy = layout.offset[1]!;
+    const length = Math.hypot(dx, dy);
+    const matches = [
+      [0.6, -0.8],
+      [0.8, -0.6]
+    ].some(
+      ([x, y]) => Math.abs(dx / length - x!) + Math.abs(dy / length - y!) < 1e-9
+    );
+    expect(matches).toBe(true);
+  });
+
+  it('always shows the chip holding the selected relation', () => {
+    // Every spot near the anchor is under a viewport control: an ordinary
+    // chip is hidden, the selected one still shows on screen.
+    const layout = new RelationGlyphLayout(2);
+    layout.setBlocked([0, 0, 400, 400], 1);
+    layout.set(0, 200, 200, 0, -1, 16, 16, false, true);
+    layout.pin(0);
+    layout.set(1, 100, 100, 0, -1, 16, 16, false, true);
+    layout.solve(2, 400, 400);
+    expect(layout.shown[0]).toBe(1);
+    expect(layout.shown[1]).toBe(0);
+    const cy = 200 + layout.offset[1]!;
+    expect(cy).toBeLessThan(200);
+    expect(cy - 8).toBeGreaterThanOrEqual(0);
+  });
+
   it('keeps chips out from under the viewport controls drawn above them', () => {
     const layout = new RelationGlyphLayout(1);
     // A rail covering the chip's preferred spot above the curve.
