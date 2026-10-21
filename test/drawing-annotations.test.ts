@@ -207,8 +207,9 @@ function linear(
 }
 
 describe('D02 annotation section (schema v31)', () => {
-  it('is schema 31 and additive: a v30 sheet opens without annotations', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(31);
+  it('is additive: a v30 sheet opens without annotations', () => {
+    // D02 took v31; I05's reference images are v32.
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(32);
     const document = boxDocument();
     const v30 = {
       ...document,
