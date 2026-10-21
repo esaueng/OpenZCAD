@@ -66,7 +66,7 @@ import {
   composeSheetAnnotations,
   defaultDimensionDecimals,
   markHiddenLeaders,
-  resolveDrawingAnnotation,
+  previewAnnotationLayer,
   resolveSheetAnnotations,
   type AnnotationResolution
 } from '../lib/drawing/annotations';
@@ -1558,15 +1558,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       placementMm
     );
     if (!draft) return null;
-    return composeSheetAnnotations(
-      { ...shownSheet, annotations: [draft] },
+    return previewAnnotationLayer(
+      shownSheet,
+      draft,
       drawnViews,
-      new Map([
-        [
-          draft.annotationId,
-          resolveDrawingAnnotation(draft, view, bodies, document.units)
-        ]
-      ]),
+      bodies,
       document.units
     );
   })();

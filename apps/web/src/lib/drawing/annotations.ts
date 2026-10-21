@@ -1177,6 +1177,33 @@ function ownedLeaderPieces(
 }
 
 /**
+ * One not-yet-placed annotation laid out as it would be once placed: the
+ * same resolution, leader visibility and layout the sheet uses, so the
+ * placement preview never draws what the placed annotation would not.
+ */
+export function previewAnnotationLayer(
+  sheet: DrawingSheet,
+  draft: DrawingAnnotation,
+  views: readonly ComposedView[],
+  bodies: AnnotationBodies,
+  units: UnitSystem
+): ReturnType<typeof composeSheetAnnotations> {
+  const withDraft = { ...sheet, annotations: [draft] };
+  return composeSheetAnnotations(
+    withDraft,
+    views,
+    markHiddenLeaders(
+      withDraft,
+      resolveSheetAnnotations(withDraft, bodies, units),
+      views,
+      units,
+      bodies
+    ),
+    units
+  );
+}
+
+/**
  * The sheet's annotations laid out on its page, for the preview and both
  * exports. An annotation of a view not yet drawn (`views` holds the drawn
  * ones), or one that is broken, is left out; the workspace marks broken

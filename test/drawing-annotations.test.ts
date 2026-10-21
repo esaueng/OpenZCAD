@@ -40,6 +40,7 @@ import {
   formatDrawingNumber,
   layoutAnnotation,
   markHiddenLeaders,
+  previewAnnotationLayer,
   resolveDrawingAnnotation,
   resolveSheetAnnotations,
   type AnnotationBodies
@@ -1386,6 +1387,25 @@ describe('D02 page and export', () => {
         bodies
       ).get(id('b'))
     ).toMatchObject({ ok: false, reason: 'leader-hidden' });
+    // The placement preview follows the same rule: no arrow to the hidden
+    // back edge, an arrow to the front one.
+    const arrowsIn = (leader: DrawingEdgeRef) =>
+      previewAnnotationLayer(
+        sheetOf([bodyId]),
+        {
+          annotationId: id('p'),
+          kind: 'note',
+          text: 'PREVIEW',
+          viewId: frontId,
+          leader,
+          placementMm: { x: -30, y: 20 }
+        },
+        [{ view: front, projection }],
+        bodies,
+        'mm'
+      ).strokes.filter((stroke) => stroke.filled).length;
+    expect(arrowsIn(refOf(bodyId, backTop))).toBe(0);
+    expect(arrowsIn(refOf(bodyId, top))).toBe(1);
     // A view not drawn yet is left alone.
     expect(
       markHiddenLeaders(sheet, resolved, [], 'mm', bodies).get(id('n'))
