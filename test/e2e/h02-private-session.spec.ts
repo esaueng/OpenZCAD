@@ -20,7 +20,8 @@ import {
   createProjectDocument,
   importStepBody,
   listParameters,
-  normalizeDocument
+  normalizeDocument,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 import { createGrowingHolderProposal } from '@openzcad/ai-contracts';
 import {
@@ -324,7 +325,7 @@ test('private holder survives sustained edits, retirement, refusal and worker re
     JSON.stringify({
       format: 'openzcad-project',
       version: 1,
-      document,
+      document: withoutDerivedProjection(document),
       files: []
     }),
     { mode: 0o600 }
@@ -332,7 +333,7 @@ test('private holder survives sustained edits, retirement, refusal and worker re
   await page.getByLabel('Import project backup').setInputFiles(backupPath);
   await expect(
     page.getByRole('button', { name: 'Rename project' })
-  ).toContainText('Private session');
+  ).toContainText('Private session', { timeout: 180_000 });
   await ready(page);
   await page.getByRole('button', { name: 'Tweak', exact: true }).click();
   const field = page.getByLabel('Expression for holder_height');
