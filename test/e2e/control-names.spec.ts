@@ -72,11 +72,11 @@ const SIZED_TARGETS = [
   '.revision-action',
   '.param-row .param-expose',
   '.param-row .row-delete',
-  '.param-row .param-name-button'
+  '.param-row .param-name-button',
+  '.model-panel-header .model-panel-action'
 ];
 const REACHING_TARGETS = [
   'button.brand',
-  'button.section-title',
   'summary.section-title',
   '.history-handle'
 ];
@@ -137,7 +137,7 @@ async function targetConflicts(page: Page) {
       const failures: string[] = [];
       const audit = (selector: string, reaches: boolean) => {
         for (const element of document.querySelectorAll(selector)) {
-          // The Objects filter can push later sections below the drawer's
+          // The Objects filter can push later rows below a panel's
           // scrollport. Audit each control after revealing it, including its
           // whole target, rather than hit-testing through the clipped area.
           element.scrollIntoView({

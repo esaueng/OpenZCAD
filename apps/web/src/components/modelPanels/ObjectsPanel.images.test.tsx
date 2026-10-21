@@ -7,7 +7,8 @@ import type {
   ReferenceImage,
   ReferenceImageId
 } from '@openzcad/shared';
-import { ObjectsPanel, objectCount, useObjectsView } from './ObjectsPanel';
+import { ObjectsPanel, objectCount } from './ObjectsPanel';
+import { useObjectsView } from './panelViews';
 
 vi.mock('../../lib/datumPlanes', () => ({ datumPlaneRows: vi.fn(() => []) }));
 vi.mock('../../lib/datumAxes', () => ({ datumAxisRows: vi.fn(() => []) }));

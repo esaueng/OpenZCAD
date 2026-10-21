@@ -27,7 +27,7 @@ test('invalid primitive dimensions never enter saved history', async ({
   await inspector.getByRole('button', { name: 'Create', exact: true }).click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
   await expect(
-    page.getByRole('button', { name: 'History 1', exact: true })
+    page.getByRole('heading', { name: 'History 1', exact: true })
   ).toBeVisible();
 });
 
@@ -57,7 +57,7 @@ test('a missing export chunk leaves the workspace usable without reload', async 
   await page.keyboard.press('Escape');
   await expect(unavailable).not.toBeVisible();
   await expect(
-    page.getByRole('button', { name: 'History 1', exact: true })
+    page.getByRole('heading', { name: 'History 1', exact: true })
   ).toBeVisible();
   await page.getByText('File', { exact: true }).click();
   await page

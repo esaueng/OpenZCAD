@@ -3,7 +3,8 @@ import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { datumAxisRows } from '../../lib/datumAxes';
 import { datumPlaneRows } from '../../lib/datumPlanes';
-import { ObjectsPanel, objectCount, useObjectsView } from './ObjectsPanel';
+import { ObjectsPanel, objectCount } from './ObjectsPanel';
+import { useObjectsView } from './panelViews';
 
 vi.mock('../../lib/datumPlanes', () => ({ datumPlaneRows: vi.fn(() => []) }));
 vi.mock('../../lib/datumAxes', () => ({ datumAxisRows: vi.fn(() => []) }));

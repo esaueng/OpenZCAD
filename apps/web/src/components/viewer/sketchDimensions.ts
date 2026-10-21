@@ -8,6 +8,7 @@ import {
   type DimensionGraphic,
   type FatLineResolution
 } from '@openzcad/viewport';
+import { MODEL_PANEL_OBSTACLES } from '../../lib/selectionCalloutView';
 import type { SketchDimensionAnnotation } from '../../lib/sketch/dimensionAnnotations';
 import {
   toSketchConstraintId,
@@ -46,7 +47,7 @@ export function avoidSketchDimensionOverlays(
   const occupied = occupiedRoot
     ? [
         ...occupiedRoot.querySelectorAll<HTMLElement>(
-          '.viewer-rail-stack, .viewer-rail, .viewport-readout, .sketch-relations, .sketch-flyouts, .model-drawer-float, .workspace-column-float'
+          `.viewer-rail-stack, .viewer-rail, .viewport-readout, .sketch-relations, .sketch-flyouts, ${MODEL_PANEL_OBSTACLES}, .workspace-column-float`
         )
       ]
         .map((element) => element.getBoundingClientRect())

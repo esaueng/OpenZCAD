@@ -90,15 +90,15 @@ test('selects all edges from the fillet card, previews joined corners, and survi
   await expect(page.getByRole('contentinfo')).toContainText(
     'Filleted 12 edges at 1 mm.'
   );
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await expectBodyCount(page, 1);
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await expect(page.locator('.save-state')).not.toHaveClass(/is-saving/);
   await page.reload();
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible({
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible({
     timeout: 30_000
   });
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
@@ -147,17 +147,17 @@ test('plain-language all-edge fillets work without a provider and require exact 
   await promptField(page).press('Enter');
   const proposal = page.locator('.assistant-card.proposal.open').last();
   await expect(proposal).toContainText('12 edges', { timeout: 30_000 });
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('zcad-all-edge-assistant.png') });
   await proposal.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect(
     page.locator('.assistant-card.proposal.applied').last()
   ).toContainText('Applied');
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await expectBodyCount(page, 1);
   await expect(page.locator('.save-state')).not.toHaveClass(/is-saving/);
   await page.reload();
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible({
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible({
     timeout: 30_000
   });
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
@@ -214,33 +214,33 @@ for (const radius of [1, 10]) {
         0
       );
       await expect(
-        page.getByRole('button', { name: 'History 1' })
+        page.getByRole('heading', { name: 'History 1' })
       ).toBeVisible();
     } else {
       const proposal = page.locator('.assistant-card.proposal.open');
       await expect(proposal).toBeVisible({ timeout: 30_000 });
       await expect(
-        page.getByRole('button', { name: 'History 1' })
+        page.getByRole('heading', { name: 'History 1' })
       ).toBeVisible();
       await expectBodyCount(page, 1);
       await proposal
         .getByRole('button', { name: 'Apply', exact: true })
         .click();
       await expect(
-        page.getByRole('button', { name: 'History 2' })
+        page.getByRole('heading', { name: 'History 2' })
       ).toBeVisible();
       await expectBodyCount(page, 1);
       await page.getByRole('button', { name: 'Undo', exact: true }).click();
       await expect(
-        page.getByRole('button', { name: 'History 1' })
+        page.getByRole('heading', { name: 'History 1' })
       ).toBeVisible();
       await page.getByRole('button', { name: 'Redo', exact: true }).click();
       await expect(
-        page.getByRole('button', { name: 'History 2' })
+        page.getByRole('heading', { name: 'History 2' })
       ).toBeVisible();
       await expect(page.locator('.save-state')).not.toHaveClass(/is-saving/);
       await page.reload();
-      await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible(
+      await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible(
         { timeout: 30_000 }
       );
     }

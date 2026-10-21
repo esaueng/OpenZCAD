@@ -369,7 +369,7 @@ test('Space centres and faces an exact planar selection head-on', async ({
   await expect(
     page.getByRole('button', { name: /projection \(P\).*perspective/i })
   ).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
 });
 
 test('the wheel zooms toward the pointer, and the preference turns it off', async ({
@@ -394,7 +394,7 @@ test('the wheel zooms toward the pointer, and the preference turns it off', asyn
   expect(box).not.toBeNull();
   // Well off-centre: centre-zoom leaves the target alone, cursor-zoom pulls
   // it toward this point. Left of the right lane, where a wheel would
-  // scroll the model drawer instead.
+  // scroll a model panel instead.
   const cursor = {
     x: box!.x + box!.width * 0.64,
     y: box!.y + box!.height * 0.3

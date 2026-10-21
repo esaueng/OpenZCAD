@@ -7,12 +7,8 @@ import type {
   FeatureId,
   FeatureNode
 } from '@openzcad/shared';
-import {
-  modelBodies,
-  ObjectsPanel,
-  objectCount,
-  useObjectsView
-} from './ObjectsPanel';
+import { modelBodies, ObjectsPanel, objectCount } from './ObjectsPanel';
+import { useObjectsView } from './panelViews';
 
 function feature(
   index: number,
