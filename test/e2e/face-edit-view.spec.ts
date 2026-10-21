@@ -1,7 +1,29 @@
 import type { Locator } from '@playwright/test';
 import type { ViewportCameraState } from '@openzcad/viewport';
 import { steppedCylinderDocument } from '../support/stepped-cylinder';
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import type { Page } from '@playwright/test';
+import {
+  test,
+  expect,
+  stubApi,
+  expectBodyCount,
+  MODEL_ONLY,
+  modelPanel,
+  railPanelButton,
+  revealModelPanel
+} from './openzcad-fixtures';
+
+/**
+ * The history's length, read from History opened for the purpose and closed
+ * again. Nothing is docked in these tests: the selection's inspector stands
+ * inside a docked column's lane, over the rod's arrow.
+ */
+async function expectHistoryLength(page: Page, count: number) {
+  await revealModelPanel(page, 'History');
+  await expect(page.locator('.feature-row')).toHaveCount(count);
+  await railPanelButton(page, 'History').click();
+  await expect(modelPanel(page, 'History')).toHaveCount(0);
+}
 
 function camera(canvas: Locator): Promise<ViewportCameraState> {
   return canvas.evaluate(
@@ -64,7 +86,7 @@ for (const projection of ['perspective', 'orthographic'] as const) {
     page.on('console', (message) => {
       if (message.type() === 'error') errors.push(message.text());
     });
-    await stubApi(page);
+    await stubApi(page, { panelLayout: MODEL_ONLY });
     await page.setViewportSize({ width: 1440, height: 1000 });
     const { document } = await steppedCylinderDocument();
     await page.goto('/');
@@ -170,7 +192,7 @@ for (const projection of ['perspective', 'orthographic'] as const) {
     // Extend far beyond the current framing using the actual numeric editor.
     await keypad.getByRole('textbox').fill('250');
     await keypad.getByRole('button', { name: 'Apply offset' }).click();
-    await expect(page.locator('.feature-row')).toHaveCount(2);
+    await expectHistoryLength(page, 2);
     await expect
       .poll(extent, { timeout: 30_000 })
       .toBeGreaterThan(originalExtent + 100);
@@ -204,7 +226,7 @@ for (const projection of ['perspective', 'orthographic'] as const) {
       { steps: 8 }
     );
     await page.mouse.up();
-    await expect(page.locator('.feature-row')).toHaveCount(2);
+    await expectHistoryLength(page, 2);
     await expect
       .poll(extent, { timeout: 30_000 })
       .toBeGreaterThan(originalExtent + 1);

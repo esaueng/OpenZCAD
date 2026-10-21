@@ -14,11 +14,8 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { COLLAPSED_FOLDERS_STORAGE_KEY } from '../../lib/objectFolderView';
-import {
-  ObjectsPanel,
-  useObjectsView,
-  type ObjectFolderActions
-} from './ObjectsPanel';
+import { ObjectsPanel, type ObjectFolderActions } from './ObjectsPanel';
+import { useObjectsView } from './panelViews';
 
 type PanelProps = Omit<ComponentProps<typeof ObjectsPanel>, 'view'>;
 
@@ -62,10 +59,12 @@ function representations(document: ProjectDocument) {
 function Harness({
   manager,
   selected = [],
+  editable = true,
   spy
 }: {
   manager: CommandManager;
   selected?: BodyId[];
+  editable?: boolean;
   spy: Partial<ObjectFolderActions>;
 }) {
   const [document, setDocument] = useState(manager.document);
@@ -76,6 +75,7 @@ function Harness({
     return true;
   };
   const actions: ObjectFolderActions = {
+    editable,
     create: (input) => run(commandFactories.createObjectFolder(input)),
     rename: (folderId, name) =>
       void run(commandFactories.renameObjectFolder({ folderId, name })),
@@ -393,6 +393,48 @@ describe('Objects folders (U06, ZC-128)', () => {
     });
     expect(rowNames()).toEqual(['Base', 'Lug', 'Pin']);
     expect(manager.document.bodyOrder).toHaveLength(3);
+  });
+
+  it('offers no filing while editing is locked, but still selects and hides', async () => {
+    const user = userEvent.setup();
+    const manager = model();
+    const [base] = manager.document.bodyOrder;
+    manager.execute(
+      commandFactories.createObjectFolder({
+        folderId: 'folder_a',
+        name: 'Frame',
+        parentId: null,
+        bodyIds: [base!]
+      })
+    );
+    const setBodiesHidden = vi.fn();
+    const selectBodies = vi.fn();
+    render(
+      <Harness
+        manager={manager}
+        editable={false}
+        spy={{ setBodiesHidden, selectBodies }}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'New folder' })).toBeNull();
+    expect(
+      list().queryByRole('button', { name: 'Rename folder Frame' })
+    ).toBeNull();
+    expect(
+      list().queryByRole('button', { name: 'Delete folder Frame' })
+    ).toBeNull();
+    for (const row of list().getAllByRole('listitem'))
+      expect(row).toHaveAttribute('draggable', 'false');
+    list()
+      .getByRole('button', { name: /^Frame/ })
+      .focus();
+    await user.keyboard('{F2}');
+    expect(list().queryByRole('textbox')).toBeNull();
+
+    await user.click(list().getByRole('button', { name: 'Hide folder Frame' }));
+    expect(setBodiesHidden).toHaveBeenLastCalledWith([base], true);
+    await user.click(list().getByRole('button', { name: /^Frame/ }));
+    expect(selectBodies).toHaveBeenLastCalledWith([base], false);
   });
 
   it('lists matches flat while searching, and the tree comes back when cleared', async () => {

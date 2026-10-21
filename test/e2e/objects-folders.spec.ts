@@ -67,12 +67,17 @@ const row = (page: Page, name: string) =>
 
 /** An HTML5 drag with the real mouse: the drop target appears mid-drag. */
 async function dragRow(page: Page, source: Locator, target: () => Locator) {
+  // The Objects list scrolls inside its dock panel: a row below the fold
+  // has a box under the next panel's header.
+  await source.scrollIntoViewIfNeeded();
   const from = await source.locator('.feature-name').boundingBox();
   await page.mouse.move(from!.x + 4, from!.y + from!.height / 2);
   await page.mouse.down();
   await page.mouse.move(from!.x + 12, from!.y + from!.height / 2 + 6, {
     steps: 4
   });
+  // The drop target can be one that appears only once the drag starts.
+  await target().scrollIntoViewIfNeeded();
   const to = await target().boundingBox();
   await page.mouse.move(to!.x + 20, to!.y + to!.height / 2, { steps: 8 });
   await page.mouse.up();

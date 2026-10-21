@@ -1,10 +1,8 @@
 import {
   useState,
   type CSSProperties,
-  type Dispatch,
   type DragEvent,
-  type ReactNode,
-  type SetStateAction
+  type ReactNode
 } from 'react';
 import {
   Axis3d,
@@ -44,39 +42,19 @@ import { useArrivals } from '../../hooks/useArrivals';
 import { useCollapsedFolders } from '../../lib/objectFolderView';
 import { datumPlaneRows } from '../../lib/datumPlanes';
 import { datumAxisRows } from '../../lib/datumAxes';
-import type { SidebarProps } from '../Sidebar';
+import type { ModelPanelSource } from './modelPanelProps';
+import type { ObjectsView } from './panelViews';
 import { ObjectRenameField } from './ObjectRenameField';
 
 /** What the Objects list is built from, and all its header count needs. */
 export type ObjectsSource = Pick<
-  SidebarProps,
+  ModelPanelSource,
   'features' | 'representations' | 'document' | 'parameterValues'
 >;
 
-/**
- * The Objects list's type filter, name search and source-body disclosure.
- * The composer holds them, so they outlive the list while its section is
- * folded.
- */
-export interface ObjectsView {
-  filter: string;
-  setFilter(filter: string): void;
-  query: string;
-  setQuery(query: string): void;
-  showConsumed: boolean;
-  setShowConsumed: Dispatch<SetStateAction<boolean>>;
-}
-
-export function useObjectsView(): ObjectsView {
-  const [showConsumed, setShowConsumed] = useState(false);
-  const [filter, setFilter] = useState('all');
-  const [query, setQuery] = useState('');
-  return { filter, setFilter, query, setQuery, showConsumed, setShowConsumed };
-}
-
 export type ObjectsPanelProps = ObjectsSource &
   Pick<
-    SidebarProps,
+    ModelPanelSource,
     | 'geometryPending'
     | 'selectedFeatureNodeId'
     | 'selectedSketchProfileId'
@@ -98,6 +76,13 @@ export type ObjectsPanelProps = ObjectsSource &
  * undoable command there; visibility and selection are view state.
  */
 export interface ObjectFolderActions {
+  /**
+   * The project accepts model edits now. False in View, Tweak and Draw, on
+   * a read-only seat or with the project open elsewhere: folders still
+   * select and hide their bodies, but New folder, rename, delete and drag
+   * are not offered.
+   */
+  editable: boolean;
   /** False when the command was refused; the host says why. */
   create(input: ObjectFolderCreateInput): boolean;
   rename(folderId: string, name: string): void;
@@ -264,6 +249,7 @@ export function ObjectsPanel({
   objectFolderActions,
   view
 }: ObjectsPanelProps) {
+  const foldersEditable = objectFolderActions?.editable ?? false;
   // The body whose name is a field right now (ZC-127): double-click or F2.
   const [renamingBodyId, setRenamingBodyId] = useState<string | null>(null);
   const {
@@ -396,7 +382,7 @@ export function ObjectsPanel({
   }
 
   function createFolder() {
-    if (!objectFolderActions || !document) return;
+    if (!objectFolderActions || !foldersEditable || !document) return;
     const bodyIds = (selectedBodyIds as BodyId[]).filter((id) =>
       allLiveBodyIds.has(id)
     );
@@ -445,7 +431,7 @@ export function ObjectsPanel({
       bodyIds.length > 0 && bodyIds.every((id) => hiddenBodyIds.has(id));
     const allSelected =
       bodyIds.length > 0 && bodyIds.every((id) => selectedBodyIds.includes(id));
-    const editable = Boolean(objectFolderActions);
+    const editable = foldersEditable;
     const icon = expanded ? (
       <FolderOpen size={13} aria-hidden="true" />
     ) : (
@@ -580,9 +566,7 @@ export function ObjectsPanel({
     // it keeps the name it had when it was combined.
     const renamable = Boolean(onRenameBody) && !body.consumed;
     const draggable =
-      Boolean(objectFolderActions) &&
-      !body.consumed &&
-      renamingBodyId !== body.bodyId;
+      foldersEditable && !body.consumed && renamingBodyId !== body.bodyId;
     return (
       <div
         key={body.bodyId}
@@ -710,7 +694,7 @@ export function ObjectsPanel({
             }
           }}
         />
-        {objectFolderActions && document && (
+        {foldersEditable && document && (
           <button
             type="button"
             className="object-folder-new"
