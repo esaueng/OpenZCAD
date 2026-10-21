@@ -340,6 +340,38 @@ function curveEnds(
       { anchor: end, direction: { x: -ux, y: -uy } }
     ];
   }
+  if (data.objectKind === 'spline') {
+    // An open spline leaves each end toward its neighbouring point: the
+    // control polygon's direction, which a spline's end tangent follows.
+    if (data.closed === true || data.points.length < 2) return [];
+    const ends: { anchor: Point; direction: Point }[] = [];
+    const leave = (from: number, toward: number) => {
+      const a = data.points[from]!;
+      const b = data.points[toward]!;
+      const ax = scalar(a.x);
+      const ay = scalar(a.y);
+      const bx = scalar(b.x);
+      const by = scalar(b.y);
+      if (
+        ax === undefined ||
+        ay === undefined ||
+        bx === undefined ||
+        by === undefined
+      ) {
+        return;
+      }
+      const length = Math.hypot(bx - ax, by - ay);
+      if (!(length > 0)) return;
+      ends.push({
+        anchor: { x: ax, y: ay },
+        direction: { x: (bx - ax) / length, y: (by - ay) / length }
+      });
+    };
+    const last = data.points.length - 1;
+    leave(0, 1);
+    leave(last, last - 1);
+    return ends;
+  }
   if (data.objectKind !== 'arc') return [];
   const start = sketchPointPosition(data, 'start', scalar);
   const end = sketchPointPosition(data, 'end', scalar);
@@ -486,6 +518,60 @@ function clusterPoints(
   return ids;
 }
 
+/**
+ * An ellipse's own relations sit at parameter 45° (an elliptical arc's
+ * mid-sweep), standing off along its outward normal there, like a circle's.
+ */
+function ellipseAnchor(
+  data: Extract<SketchObjectData, { objectKind: 'ellipse' }>,
+  scalar: (value: number | string) => number | undefined
+): { anchor: Point; normal: Point } | null {
+  const cx = scalar(data.centerX);
+  const cy = scalar(data.centerY);
+  const rx = scalar(data.radiusX);
+  const ry = scalar(data.radiusY);
+  const rotation = scalar(data.rotationDeg);
+  if (
+    cx === undefined ||
+    cy === undefined ||
+    rx === undefined ||
+    ry === undefined ||
+    rotation === undefined ||
+    !(rx > 0) ||
+    !(ry > 0)
+  ) {
+    return null;
+  }
+  let paramDeg = 45;
+  if (data.startParamDeg !== undefined && data.endParamDeg !== undefined) {
+    const start = scalar(data.startParamDeg);
+    const end = scalar(data.endParamDeg);
+    if (start === undefined || end === undefined) return null;
+    try {
+      paramDeg = start + boundedArcSweepDegrees(start, end) / 2;
+    } catch {
+      return null;
+    }
+  }
+  const t = (paramDeg * Math.PI) / 180;
+  const r = (rotation * Math.PI) / 180;
+  const cos = Math.cos(r);
+  const sin = Math.sin(r);
+  const lx = rx * Math.cos(t);
+  const ly = ry * Math.sin(t);
+  // The outward normal in the ellipse's frame is the gradient (x/rx², y/ry²).
+  const gx = Math.cos(t) / rx;
+  const gy = Math.sin(t) / ry;
+  const length = Math.hypot(gx, gy);
+  return {
+    anchor: { x: cx + lx * cos - ly * sin, y: cy + lx * sin + ly * cos },
+    normal: {
+      x: (gx * cos - gy * sin) / length,
+      y: (gx * sin + gy * cos) / length
+    }
+  };
+}
+
 /** The middle of the sketch's line and circle extent, or null when empty. */
 function sketchCentre(
   objects: readonly { data: SketchObjectData }[],
@@ -564,6 +650,7 @@ function objectAnchor(
     }
     return { anchor, normal };
   }
+  if (data.objectKind === 'ellipse') return ellipseAnchor(data, scalar);
   if (data.objectKind !== 'circle' && data.objectKind !== 'arc') return null;
   const cx = scalar(data.centerX);
   const cy = scalar(data.centerY);

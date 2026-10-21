@@ -516,6 +516,103 @@ describe('sketchRelationGlyphs', () => {
     expect(chip!.normal.y).toBeCloseTo(1, 12);
   });
 
+  it("draws an ellipse's own relations at its 45° parameter, standing off outward", () => {
+    const chips = sketchRelationGlyphs(
+      [
+        {
+          id: 'oval',
+          data: {
+            objectKind: 'ellipse',
+            centerX: 0,
+            centerY: 0,
+            radiusX: 10,
+            radiusY: 4,
+            rotationDeg: 0
+          }
+        },
+        {
+          id: 'other',
+          data: {
+            objectKind: 'ellipse',
+            centerX: 30,
+            centerY: 0,
+            radiusX: 10,
+            radiusY: 4,
+            rotationDeg: 0
+          }
+        }
+      ],
+      [constraint({ constraintKind: 'equal', a: id('oval'), b: id('other') })],
+      resolve,
+      { visibility: 'always' }
+    );
+    const oval = chips.find((chip) => chip.key === 'object:oval')!;
+    expect(oval.glyphs.map((glyph) => glyph.kind)).toEqual(['equal']);
+    expect(oval.anchor.x).toBeCloseTo(10 * Math.SQRT1_2, 12);
+    expect(oval.anchor.y).toBeCloseTo(4 * Math.SQRT1_2, 12);
+    // Outward is the gradient (x/rx², y/ry²): steeper than the radius.
+    const expected = { x: Math.SQRT1_2 / 10, y: Math.SQRT1_2 / 4 };
+    const length = Math.hypot(expected.x, expected.y);
+    expect(oval.normal.x).toBeCloseTo(expected.x / length, 12);
+    expect(oval.normal.y).toBeCloseTo(expected.y / length, 12);
+  });
+
+  it('draws point relations held at an ellipse centre or a spline end', () => {
+    const chips = sketchRelationGlyphs(
+      [
+        {
+          id: 'oval',
+          data: {
+            objectKind: 'ellipse',
+            centerX: 5,
+            centerY: 5,
+            radiusX: 10,
+            radiusY: 4,
+            rotationDeg: 0
+          }
+        },
+        {
+          id: 'wave',
+          data: {
+            objectKind: 'spline',
+            method: 'fit',
+            points: [
+              { x: 0, y: 0 },
+              { x: 10, y: 0 },
+              { x: 20, y: 5 }
+            ]
+          }
+        }
+      ],
+      [
+        constraint({
+          constraintKind: 'lock',
+          point: { objectId: id('oval'), point: 'center' },
+          x: 5,
+          y: 5
+        }),
+        constraint({
+          constraintKind: 'lock',
+          point: { objectId: id('wave'), point: 'start' },
+          x: 0,
+          y: 0
+        })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    expect(chips.map((chip) => chip.anchor)).toEqual(
+      expect.arrayContaining([
+        { x: 5, y: 5 },
+        { x: 0, y: 0 }
+      ])
+    );
+    // The spline leaves its start along +x, so the chip stands off along −x.
+    const start = chips.find((chip) => chip.anchor.x === 0)!;
+    expect(start.normal.x).toBeCloseTo(-1, 12);
+    expect(start.normal.y).toBeCloseTo(0, 12);
+  });
+
   it('stands an on-ellipse point chip off the ellipse, not along it', () => {
     // A line ending on the top of an ellipse turned a quarter turn (its
     // long axis up the y axis). The line leaves the point straight up and the
