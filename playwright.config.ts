@@ -6,7 +6,8 @@ import { defineConfig } from '@playwright/test';
 // servers. Set PLAYWRIGHT_PORT to pin a specific port instead.
 function portForCheckout(): number {
   const envPort = Number(process.env.PLAYWRIGHT_PORT);
-  if (Number.isInteger(envPort) && envPort > 0 && envPort < 65536) return envPort;
+  if (Number.isInteger(envPort) && envPort > 0 && envPort < 65536)
+    return envPort;
   const digest = createHash('sha256').update(process.cwd()).digest();
   return 20000 + (digest.readUInt32BE(0) % 10000);
 }
@@ -27,6 +28,10 @@ export default defineConfig({
   // already run in isolated browser contexts; nothing in the suite depends
   // on in-file order.
   fullyParallel: true,
+  // The default scales with the host CPU count, even when a self-hosted slot
+  // has a smaller CPU budget. Match the two-worker hosted baseline so browser
+  // and geometry workers do not crowd each other into the test deadline.
+  workers: process.env.CI ? 2 : undefined,
   // Playwright's focus is run-wide, not file-wide, so one `test.only` left in a
   // push turns the CI shard holding it into a single executed test: the other
   // shards run zero, every shard exits 0, and the `e2e` aggregate — documented
