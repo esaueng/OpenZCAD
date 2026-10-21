@@ -209,3 +209,19 @@ These are existing-cache exactness and lifetime results. The current pinned
 Remus contract still restores ancestors only, so a detached Text record remains
 blocked on branch-preserving kernel support and dependency/effect analysis.
 No runtime cache change or extra branch-memory allocation is accepted here.
+
+## M5 Pro qualification follow-up (2026-10-21)
+
+[The target-hardware record](../qa/2026-10-21/h02-m5-pro-qualification.md)
+reports a 38.6% observed p95 exact-completion improvement across three matched
+existing-cache pairs under background load. It does not close quiet-host timing
+or accept a detached Text record.
+
+The 80-edit private browser session exercises eviction, recycling, refusal and
+recovery, real worker termination/restart and repeated post-GC probes. Per-body
+raw B-rep remains byte-identical to fresh builds; five accumulated-edit
+publication comparisons fail in topology references and lineage diagnostics.
+The unchanged publication-equivalence criterion is therefore unmet. The new
+probes retain those failures while completing independent observations; no
+normalization or acceptance threshold is relaxed. Whole-worker retained-memory
+bounds and branch-preserving kernel/dependency support remain open.

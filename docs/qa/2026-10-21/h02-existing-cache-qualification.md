@@ -5,6 +5,11 @@ STEP-import caches from the proposed detached Text-branch cache. H02 remains
 Partial. No runtime behavior, cache budget, geometry tolerance or acceptance
 threshold changes in this work.
 
+Local follow-up: the [M5 Pro evidence](h02-m5-pro-qualification.md) records all
+six loaded-target matched arms and the sustained private session. Existing-cache
+p95 improves 38.6%, but repeated-edit publication equality fails in references
+and lineage diagnostics despite matching raw B-rep. H02 remains Partial.
+
 The runtime under test is OpenZCAD `6cd0838b45ad9af18367b3d819de3b113cfcb246`
 with the frozen paired Remus packages at
 `0d942168550b6dd5101d049f7a10de0230bb5848`. Qualification helpers and regression

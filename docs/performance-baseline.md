@@ -857,3 +857,16 @@ still needs branch-preserving kernel support and dependency/lifetime analysis;
 no extra branch allocation or runtime cache behavior is enabled. The maintainer
 will run target-machine acceptance from a local Codex chat using the handoff in
 the evidence record.
+
+## H02 M5 Pro private qualification (2026-10-21)
+
+[The local qualification record](qa/2026-10-21/h02-m5-pro-qualification.md)
+retains all three alternating matched pairs on the unchanged `6cd0838b` runtime
+and paired Remus `0d942168`. Exact-completion p95 is 4,784 → 2,938 ms (38.6%
+lower); arm-start load is 10.62–26.82, so quiet-host acceptance remains open.
+The 80-edit private browser session completes real eviction, two kernel recycles,
+refusal/recovery, durable worker restart and repeated post-GC observations.
+Raw B-rep matches all captured fresh oracles, but five sustained publication
+comparisons fail in face/edge references and lineage diagnostics. Public CI and
+the narrower one-edit private oracle do not close that gate. Whole-worker
+retention and the proposed detached Text record remain unaccepted; H02 is Partial.
