@@ -7,6 +7,11 @@ The [design acceptance gate](../../plans/h02-private-holder-cache-design.md)
 still applies to any proposed branch cache; a speedup from existing caching
 cannot qualify a new record or its lifetime contract.
 
+Follow-up: [21 October qualification](../2026-10-21/h02-existing-cache-qualification.md)
+adds strict per-body raw B-rep byte evidence and live measurement-cache eviction
+coverage on the newer pinned runtime. The results below describe the original
+15 October campaign.
+
 ## Measurement setup
 
 The requested macOS checkout is unavailable in this execution environment.

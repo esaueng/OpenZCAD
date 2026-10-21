@@ -24,6 +24,12 @@ export interface ProjectViewState {
   projection: ProjectionMode;
   settings: ViewerSettings;
   hiddenBodyIds: string[];
+  /**
+   * Sketches shown or hidden by hand, by sketch id. Absent from views
+   * written before it, and from the cross-device resume state, which keeps
+   * this device's own choices; an id with no entry follows the default.
+   */
+  sketchVisibility?: Record<string, boolean>;
 }
 
 interface StoredProjectView extends ProjectViewState {
@@ -81,6 +87,42 @@ function isDisplayMode(value: unknown): value is DisplayMode {
   );
 }
 
+/**
+ * At most this many per project, the newest kept; sketch ids are short, the
+ * session small.
+ */
+const MAX_SKETCH_VISIBILITY_ENTRIES = 500;
+
+/** Only well-formed entries survive; a bad map reads as no choices made. */
+function parseSketchVisibility(
+  value: unknown
+): Record<string, boolean> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(
+      (entry): entry is [string, boolean] =>
+        entry[0].length > 0 &&
+        entry[0].length <= 200 &&
+        typeof entry[1] === 'boolean'
+    )
+    .slice(-MAX_SKETCH_VISIBILITY_ENTRIES);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+/** A recorded field of view, or nothing: a bad one reads as unrecorded. */
+function withFieldOfView(
+  value: unknown
+): Pick<ViewportCameraState, 'fieldOfView'> {
+  return typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value > 0 &&
+    value < 180
+    ? { fieldOfView: value }
+    : {};
+}
+
 function parseStoredView(value: unknown): StoredProjectView | null {
   if (!value || typeof value !== 'object') {
     return null;
@@ -113,13 +155,26 @@ function parseStoredView(value: unknown): StoredProjectView | null {
       position: [...camera.position],
       target: [...camera.target],
       orthographicZoom: camera.orthographicZoom,
-      orthographicHalfHeight: camera.orthographicHalfHeight
+      orthographicHalfHeight: camera.orthographicHalfHeight,
+      ...withFieldOfView(camera.fieldOfView)
     },
     projection: candidate.projection,
-    settings: { ...settings },
+    settings: {
+      ...settings,
+      ...(settings.xray === undefined || typeof settings.xray === 'boolean'
+        ? {}
+        : { xray: false })
+    },
     hiddenBodyIds: [...candidate.hiddenBodyIds],
+    ...withSketchVisibility(parseSketchVisibility(candidate.sketchVisibility)),
     updatedAt: candidate.updatedAt
   };
+}
+
+function withSketchVisibility(
+  visibility: Record<string, boolean> | undefined
+): Pick<ProjectViewState, 'sketchVisibility'> {
+  return visibility ? { sketchVisibility: { ...visibility } } : {};
 }
 
 function readSession(storage: StorageLike | null): WorkspaceSession {
@@ -290,11 +345,13 @@ export function loadProjectView(
       position: [...view.camera.position],
       target: [...view.camera.target],
       orthographicZoom: view.camera.orthographicZoom,
-      orthographicHalfHeight: view.camera.orthographicHalfHeight
+      orthographicHalfHeight: view.camera.orthographicHalfHeight,
+      ...withFieldOfView(view.camera.fieldOfView)
     },
     projection: view.projection,
     settings: { ...view.settings },
-    hiddenBodyIds: [...view.hiddenBodyIds]
+    hiddenBodyIds: [...view.hiddenBodyIds],
+    ...withSketchVisibility(view.sketchVisibility)
   };
 }
 

@@ -308,6 +308,47 @@ describe('useGeometryWorker', () => {
     });
     expect(host.onDerived).not.toHaveBeenCalled();
   });
+  it('cancels an abandoned drawing tessellation and discards its late reply', async () => {
+    installWorker();
+    const document = createProjectDocument('Drawing', toUserId('user'));
+    const bodyId = toBodyId('body_drawn');
+    const host = { manager: () => null, onDerived: vi.fn(), onError: vi.fn() };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+    const controller = new AbortController();
+    const pending = result.current.drawingTessellation(document, [bodyId], {
+      signal: controller.signal
+    });
+    const request = worker.postMessage.mock.calls.at(-1)![0] as {
+      requestId: string;
+    };
+    expect(request).toMatchObject({
+      type: 'drawing-tessellation',
+      bodyIds: [bodyId]
+    });
+    // The Draw workspace closed: the queued job is cancelled in the worker.
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(worker.postMessage).toHaveBeenLastCalledWith({
+      type: 'cancel',
+      requestId: request.requestId
+    });
+    act(() => {
+      worker.emit({
+        type: 'drawing-tessellation', ok: true,
+        requestId: request.requestId, bodies: {}
+      });
+    });
+    expect(host.onDerived).not.toHaveBeenCalled();
+    // Already aborted: nothing is posted at all.
+    const posts = worker.postMessage.mock.calls.length;
+    await expect(
+      result.current.drawingTessellation(document, [bodyId], {
+        signal: controller.signal
+      })
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(worker.postMessage).toHaveBeenCalledTimes(posts);
+  });
   it('preserves selected analysis on one-off sync requests', async () => {
     installWorker();
     const document = createProjectDocument('Analysis', toUserId('user'));

@@ -97,6 +97,12 @@ describe('selectionCalloutVerbs', () => {
         (verb) => verb.label
       )
     ).toEqual(['Union', 'Move', 'Mirror']);
+    // A box sweep's faces: the tools that take a list of faces.
+    expect(
+      selectionCalloutVerbs({ kind: 'faces', availability: READY }).map(
+        (verb) => verb.label
+      )
+    ).toEqual(['Shell', 'Draft']);
   });
 
   it('disables a tool verb with the reason it cannot run', () => {

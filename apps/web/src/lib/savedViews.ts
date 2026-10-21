@@ -1,3 +1,4 @@
+import { VIEWPORT_FIELD_OF_VIEW_BOUNDS } from '@openzcad/shared';
 import type {
   DisplayMode,
   ProjectionMode,
@@ -22,6 +23,10 @@ export interface SavedView {
   displayMode: DisplayMode;
   /** The section the view was saved with; absent means no section. */
   sectionView?: SectionViewSettings;
+  /** Saved in X-ray; absent (older views) means not. */
+  xray?: boolean;
+  /** Captured camera angle; absent in older saved views. */
+  fieldOfView?: number;
   savedAt: number;
 }
 
@@ -54,6 +59,14 @@ const isVector = (value: unknown): boolean =>
 
 const isPositive = (value: unknown): boolean =>
   typeof value === 'number' && Number.isFinite(value) && value > 0;
+
+/** Absent, or an angle the field-of-view preference could have produced. */
+const isFieldOfView = (value: unknown): boolean =>
+  value === undefined ||
+  (typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= VIEWPORT_FIELD_OF_VIEW_BOUNDS.min &&
+    value <= VIEWPORT_FIELD_OF_VIEW_BOUNDS.max);
 
 const DISPLAY_MODES: readonly unknown[] = [
   'shaded-edges',
@@ -92,7 +105,10 @@ function isSavedView(value: unknown): value is SavedView {
       isPositive(view.camera.orthographicHalfHeight)) &&
     (view.projection === 'perspective' || view.projection === 'orthographic') &&
     DISPLAY_MODES.includes(view.displayMode) &&
-    isSection(view.sectionView)
+    isSection(view.sectionView) &&
+    (view.xray === undefined || typeof view.xray === 'boolean') &&
+    isFieldOfView(view.fieldOfView) &&
+    isFieldOfView(view.camera.fieldOfView)
   );
 }
 

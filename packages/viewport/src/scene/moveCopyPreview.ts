@@ -1,5 +1,9 @@
 import type * as THREE from 'three';
 import { disposeObject } from './objects';
+import { forEachMesh } from '../pick/meshes';
+import { BodyEdgeOverlay } from '../render/edgeOverlay';
+import { updateBodyMaterialOpacity } from '../render/scene';
+import type { DisplayMode } from '../types';
 
 /** Owns a temporary body projection, independent of the source's overlays. */
 export class MoveCopyPreview {
@@ -35,6 +39,25 @@ export class MoveCopyPreview {
     // Sections must continue refusing geometry while an extra body is shown.
     source.userData.moveCopyPreview = true;
     return this.copy!;
+  }
+
+  /** Match the installed source without replacing the cached copy or its pose. */
+  refreshAppearance(mode: DisplayMode, xray: boolean): void {
+    if (!this.source || !this.copy) return;
+    let opacity = 1;
+    forEachMesh(this.source, (mesh) => {
+      opacity = mesh.material.opacity;
+    });
+    forEachMesh(this.copy, (mesh) => {
+      updateBodyMaterialOpacity(mesh.material, opacity);
+      mesh.material.visible = mode !== 'wireframe' || xray;
+    });
+    this.copy.traverse((child) => {
+      if (child instanceof BodyEdgeOverlay) {
+        child.setDisplayMode(mode);
+        child.setXrayView(xray);
+      }
+    });
   }
 
   clear(): void {
