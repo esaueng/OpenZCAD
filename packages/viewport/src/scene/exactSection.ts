@@ -67,6 +67,8 @@ export interface ExactSectionRegionDisplay {
 export type ExactSectionDisplay = {
   readonly regions: readonly ExactSectionRegionDisplay[];
   readonly displayMode: DisplayMode;
+  /** X-ray shows translucent surfaces over any underlying display mode. */
+  readonly xray?: boolean;
 } | null;
 
 function disposeSection(group: THREE.Object3D) {
@@ -98,7 +100,12 @@ export function applyExactSection(
    * fill re-shades from them every frame, so the cut follows the body's
    * colour without the section being recomputed.
    */
-  bodyColors: ReadonlyMap<string, THREE.Color> = new Map()
+  bodyColors: ReadonlyMap<string, THREE.Color> = new Map(),
+  /** Live body opacity (including X-ray); numeric snapshots remain supported. */
+  bodyOpacities: ReadonlyMap<
+    string,
+    number | Pick<THREE.Material, 'opacity'>
+  > = new Map()
 ) {
   const previous = root.getObjectByName(EXACT_SECTION);
   if (previous) {
@@ -108,7 +115,7 @@ export function applyExactSection(
   if (!display || display.regions.length === 0) {
     return;
   }
-  const { regions, displayMode } = display;
+  const { regions, displayMode, xray = false } = display;
   const group = new THREE.Group();
   group.name = EXACT_SECTION;
   group.userData.exactSection = true;
@@ -122,14 +129,22 @@ export function applyExactSection(
       geometry.setIndex(new THREE.BufferAttribute(region.indices, 1));
       geometry.computeVertexNormals();
       const bodyColor = bodyColors.get(region.bodyId);
+      const bodyOpacity = bodyOpacities.get(region.bodyId);
+      const readOpacity = () =>
+        typeof bodyOpacity === 'number'
+          ? bodyOpacity
+          : (bodyOpacity?.opacity ?? 1);
+      const opacity = readOpacity();
       const fill = new THREE.MeshPhongMaterial({
         color: sectionCutColor(bodyColor),
         side: THREE.DoubleSide,
+        opacity,
+        transparent: opacity < 1,
+        depthWrite: opacity >= 1,
         // Wireframe shows outlines, and the cut surface is not one. The
-        // display-mode pass writes this same flag, but it only runs when
-        // the MODE changes — a section arriving into wireframe has to be
-        // built hidden or it appears shaded until the next cycle.
-        visible: displayMode !== 'wireframe',
+        // The display-mode pass writes the same flag when mode or X-ray
+        // changes. A newly arriving cut must already match both settings.
+        visible: displayMode !== 'wireframe' || xray,
         // The cut surface lies in the clipping plane itself; without the
         // offset it fights the clipped body's own edge for the same depth.
         polygonOffset: true,
@@ -137,12 +152,18 @@ export function applyExactSection(
         polygonOffsetUnits: -1
       });
       const mesh = new THREE.Mesh(geometry, fill);
-      if (bodyColor) {
-        // In place, no allocation: this runs every frame the cut is drawn.
-        mesh.onBeforeRender = () => {
+      // Follow live appearance previews and their cleanup without rebuilding
+      // section geometry. This runs in place whenever the cut is drawn.
+      mesh.onBeforeRender = () => {
+        if (bodyColor) {
           fill.color.copy(bodyColor).offsetHSL(0, 0, CUT_LIGHTNESS_SHIFT);
-        };
-      }
+        }
+        const opacity = readOpacity();
+        if (fill.transparent !== opacity < 1) fill.needsUpdate = true;
+        fill.opacity = opacity;
+        fill.transparent = opacity < 1;
+        fill.depthWrite = opacity >= 1;
+      };
       mesh.name = `${EXACT_SECTION}-fill`;
       mesh.userData.exactSection = true;
       mesh.userData.exactSectionRegion = index;
