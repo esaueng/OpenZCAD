@@ -38,7 +38,7 @@ export function useMenuKeyboard(ref: RefObject<HTMLElement | null>): void {
     const itemsOf = (): HTMLElement[] =>
       Array.from(
         element.querySelectorAll<HTMLElement>(
-          '[role="menuitem"]:not([disabled])'
+          ':is([role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]):not([disabled])'
         )
       );
 

@@ -25,6 +25,7 @@
   "panel-dock.spec.ts": 340,
   "panel-drag.spec.ts": 107,
   "panel-float.spec.ts": 56,
+  "panel-view-options.spec.ts": 120,
   "parameter-curation.spec.ts": 8,
   "parameter-lineage-repair.spec.ts": 59,
   "parameter-validation.spec.ts": 32,
