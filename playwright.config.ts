@@ -1,12 +1,38 @@
 import { createHash } from 'node:crypto';
 import { defineConfig } from '@playwright/test';
+import {
+  privateArtifactPaths,
+  privatePlaywrightOutput
+} from './test/support/privateArtifacts';
+
+// Private runs need final CLI destinations checked before Playwright's cleanup;
+// globalSetup and test hooks run after it has already removed output folders.
+const privatePaths =
+  (process.env.OZ_PERF || process.env.H02_SESSION_PROBE === '1') &&
+  process.env.OZ_PERF_HOLDER_STEP
+    ? privateArtifactPaths(process.env.OZ_PERF_OUT, undefined, [
+        process.env.OZ_PERF_HOLDER_STEP
+      ])
+    : undefined;
+const privateOutput = privatePaths
+  ? privatePlaywrightOutput(
+      privatePaths,
+      process.argv.slice(2),
+      process.env.PLAYWRIGHT_LAST_RUN_OUTPUT_FILE
+    )
+  : undefined;
+if (privatePaths) {
+  process.env.OZ_PERF_HOLDER_STEP = privatePaths.inputs[0]!;
+  process.env.OZ_PERF_OUT = privatePaths.output;
+}
 
 // Each checkout derives its own stable port from its path, so concurrent e2e
 // runs in different worktrees never reuse (or tear down) each other's preview
 // servers. Set PLAYWRIGHT_PORT to pin a specific port instead.
 function portForCheckout(): number {
   const envPort = Number(process.env.PLAYWRIGHT_PORT);
-  if (Number.isInteger(envPort) && envPort > 0 && envPort < 65536) return envPort;
+  if (Number.isInteger(envPort) && envPort > 0 && envPort < 65536)
+    return envPort;
   const digest = createHash('sha256').update(process.cwd()).digest();
   return 20000 + (digest.readUInt32BE(0) % 10000);
 }
@@ -14,6 +40,7 @@ function portForCheckout(): number {
 const PORT = portForCheckout();
 
 export default defineConfig({
+  ...(privateOutput ? { outputDir: privateOutput } : {}),
   testDir: './test/e2e',
   // Playwright's default also collects `*.test.ts` and `*.spec.tsx`, which
   // `scripts/e2e-shards.mjs` would not assign to a CI shard (and a `.test.ts`

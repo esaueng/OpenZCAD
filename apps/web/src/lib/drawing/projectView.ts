@@ -15,8 +15,10 @@ import {
  * so a cylinder's side view has no sides. Both were measured against the pin;
  * see `test/drawing-projection.test.ts`.
  *
- * What this does instead, from the display projection the geometry worker
- * already publishes for every body:
+ * What this does instead, from each body's canonical drawing tessellation
+ * (the geometry worker's `drawing-tessellation` request: the display
+ * tolerance at its nominal deflection, in an order that depends only on the
+ * geometry, so a model state always draws the same lines):
  *
  * - **Lines.** Every feature edge's polyline, sampled by the kernel from the
  *   exact curve (seam edges are not physical edges and are left out), plus

@@ -818,7 +818,6 @@ and asserts zero geometry-worker rebuild requests during the drag. The generic
 fixture reproduced the 1.5× area error with the previous kernel and passes with
 the paired fix from [Remus #807](https://github.com/esaueng/remus/pull/807).
 
-
 ## H02 matched-cache benchmark preparation (2026-10-15)
 
 The [current evidence and reproduction](qa/2026-10-15/h02-matched-cache-benchmark.md)
@@ -836,3 +835,43 @@ pair before being stopped under severe unrelated host contention (load average
 150.53 on 32 logical CPUs). No timing, browser retained-heap or 20% p95 claim is
 made. A quiet target-machine campaign and the design's separate branch-lifetime,
 mutation, B-rep and retention qualifications remain required. H02 stays Partial.
+
+## H02 existing-cache qualification (2026-10-21)
+
+The [follow-up evidence](qa/2026-10-21/h02-existing-cache-qualification.md)
+records three completed production-preview matched pairs on the shared Linux
+host at runtime `6cd0838b` / paired Remus `0d942168`. All six within-run browser
+budgets pass. Exact completion median is 8,571.1 ms disabled / 7,704.5 ms enabled;
+nearest-rank p95 is 12,386.6 / 9,348.2 ms, an observed 24.5% improvement. Arm-start
+load ranges from 18.67 to 38.37, so this does not replace a quiet M5 Pro campaign.
+All six post-GC worker JS-isolate probes succeed; medians are 15,828,836 /
+21,953,712 bytes. Whole-worker retention and a sustained private-session bound
+are not established by those endpoint JS-heap observations.
+
+The private oracle additionally compares every per-body serialized B-rep byte:
+all 3,204,155 bytes match across 17 bodies, and normalized publication still
+matches across 720 faces. Measurement-cache byte-pressure eviction and retired
+checkpoint regressions pass. H02 remains Partial: the detached Text proposal
+still needs branch-preserving kernel support and dependency/lifetime analysis;
+no extra branch allocation or runtime cache behavior is enabled. The maintainer
+will run target-machine acceptance from a local Codex chat using the handoff in
+the evidence record.
+
+## H02 M5 Pro private qualification (2026-10-21)
+
+[The local qualification record](qa/2026-10-21/h02-m5-pro-qualification.md)
+retains all three alternating matched pairs on the unchanged `6cd0838b` runtime
+and paired Remus `0d942168`. Exact-completion p95 is 4,784 → 2,938 ms (38.6%
+lower); arm-start load is 10.62–26.82, so quiet-host acceptance remains open.
+The 80-edit private browser session completes real eviction, two kernel recycles,
+refusal/recovery, durable worker restart and repeated post-GC observations.
+Raw B-rep matches all captured fresh oracles, but five sustained publication
+comparisons fail in face/edge references and lineage diagnostics. Public CI and
+the narrower one-edit private oracle do not close that gate. Whole-worker
+retention and the proposed detached Text record remain unaccepted; H02 is Partial.
+
+The [public two-box reproduction](qa/2026-10-21/h02-m5-pro-qualification.md#public-reproduction-of-demand-history-dependent-publication)
+isolates eager-to-idle lineage checkpoint reuse as a cause of history-dependent
+publication with unchanged raw B-rep bytes. Its manual strict publication check
+fails; aligning the demand histories or restarting the adapter matches fresh.
+This diagnostic does not replace any private acceptance comparison.

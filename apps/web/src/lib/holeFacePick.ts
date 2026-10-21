@@ -42,6 +42,12 @@ export interface FormFacePick {
    * selection, a keyboard pick), which leaves the typed position alone.
    */
   position?: { u: string; v: string };
+  /**
+   * A box sweep: every face it took on the target body, `hash` among them.
+   * Shell and Draft add them all to their list rather than toggling, so a
+   * second sweep over the same faces cannot quietly take them back out.
+   */
+  hashes?: readonly number[];
 }
 
 export function resolveFormFacePick(
@@ -98,5 +104,61 @@ export function resolveFormFacePick(
       hash: face.hash,
       ...(face.reference ? { reference: face.reference } : {})
     }
+  };
+}
+
+/** Operations whose card holds a list of faces rather than one. */
+export function formFaceListOperation(operation: FacePickOperation): boolean {
+  return operation === 'shell' || operation === 'draft';
+}
+
+/**
+ * The faces a box sweep hands an open face-collecting card: those on its
+ * target body that the card can take. A one-face card (Hole, Thicken) takes a
+ * sweep only when exactly one usable face is in it.
+ */
+export function resolveFormFaceBox(
+  operation: FacePickOperation,
+  targetBodyId: BodyId,
+  selections: readonly TopologySelection[],
+  topology: BodyTopology | undefined
+):
+  | { ok: true; pick: FormFacePick; added: number; skipped: number }
+  | { ok: false; reason: string } {
+  const label = PICK_LABELS[operation];
+  const resolved = selections
+    .filter((selection) => selection.bodyId === targetBodyId)
+    .map((selection) =>
+      resolveFormFacePick(operation, targetBodyId, selection, topology)
+    );
+  const usable = resolved.flatMap((result) => (result.ok ? [result.pick] : []));
+  const skipped = selections.length - usable.length;
+  if (usable.length === 0) {
+    const refusal = resolved.find((result) => !result.ok);
+    return {
+      ok: false,
+      reason:
+        refusal && !refusal.ok
+          ? refusal.reason
+          : `${label}: the box took no faces on the target body.`
+    };
+  }
+  if (!formFaceListOperation(operation)) {
+    return usable.length === 1
+      ? { ok: true, pick: usable[0]!, added: 1, skipped }
+      : {
+          ok: false,
+          reason: `${label} takes one face: click it, or box just that face.`
+        };
+  }
+  return {
+    ok: true,
+    pick: {
+      bodyId: targetBodyId,
+      hash: usable[0]!.hash,
+      hashes: usable.map((pick) => pick.hash)
+    },
+    added: usable.length,
+    skipped
   };
 }
