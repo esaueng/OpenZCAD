@@ -110,6 +110,12 @@ export const MAX_DRAWING_DIMENSION_DECIMALS = 6;
 /** Placement bound, in paper millimetres. */
 const MAX_PLACEMENT_MM = 10_000;
 /** A stored edge reference's witness is small; this bounds a hostile one. */
+/**
+ * A stored edge reference's whole size, lineage name included. The kernel
+ * names an edge that survives booleans by prefixing its source's name, so
+ * names have no length of their own to bound; this budget does it once. A
+ * reference over it is stored hash-only instead (see `drawingEdgeRefError`).
+ */
 const MAX_REFERENCE_JSON_LENGTH = 4096;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -185,7 +191,8 @@ function edgeReferenceError(value: unknown, hash: number): string | null {
     return 'is not an edge reference';
   if (
     !isShortText(value.producingFeatureId, 128) ||
-    !isShortText(value.lineageName, 256) ||
+    typeof value.lineageName !== 'string' ||
+    value.lineageName.length === 0 ||
     !isTopologyHash(value.currentHash) ||
     value.witnessVersion !== 1 ||
     !isEdgeWitness(value.witness)
@@ -198,6 +205,15 @@ function edgeReferenceError(value: unknown, hash: number): string | null {
   if (value.currentHash !== hash)
     return 'has an edge reference that contradicts its hash';
   return null;
+}
+
+/**
+ * Why `ref` would be refused in a stored annotation, or null. A picker uses
+ * it to keep a pick hash-only rather than write a reference the document
+ * cannot hold.
+ */
+export function drawingEdgeRefError(ref: DrawingEdgeRef): string | null {
+  return edgeRefError(ref);
 }
 
 function edgeRefError(value: unknown): string | null {

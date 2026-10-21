@@ -436,6 +436,25 @@ describe('D02 annotation section (schema v31)', () => {
     expect(
       drawingSetError({ sheets: [sheetOf(document.bodyOrder, [good, good])] })
     ).toMatch(/twice/);
+    // A lineage name grown long by a boolean chain is fine within the
+    // reference's overall budget.
+    const deep = {
+      ...ref,
+      reference: {
+        ...ref.reference!,
+        lineageName: `${'boolean.edge.a.'.repeat(30)}${ref.reference!.lineageName}`
+      }
+    };
+    expect(deep.reference.lineageName.length).toBeGreaterThan(256);
+    expect(
+      drawingSetError({
+        sheets: [
+          sheetOf(document.bodyOrder, [
+            linear(id('d'), 'horizontal', deep, 'first', deep, 'second')
+          ])
+        ]
+      })
+    ).toBeNull();
     expect(
       drawingSetError({ sheets: [sheetOf(document.bodyOrder, [good])] })
     ).toBeNull();
@@ -1307,6 +1326,34 @@ describe('D02 picking', () => {
         box.bodies
       ).get(id('n'))
     ).toMatchObject({ ok: false, reason: 'leader-hidden' });
+  });
+
+  it('stores a pick hash-only when its reference would not fit a document', async () => {
+    const { bodies, bodyId, top } = await boxModel();
+    const long = {
+      ...top,
+      reference: {
+        ...top.reference!,
+        lineageName: 'boolean.edge.a.'.repeat(400) + top.reference!.lineageName
+      }
+    };
+    const withLong: AnnotationBodies = {
+      [bodyId]: {
+        ...bodies[bodyId]!,
+        topology: {
+          ...bodies[bodyId]!.topology!,
+          edges: bodies[bodyId]!.topology!.edges.map((edge) =>
+            edge === top ? long : edge
+          )
+        }
+      }
+    };
+    expect(edgeRefFor(withLong, bodyId, long)).toEqual({
+      bodyId,
+      hash: top.hash
+    });
+    // An ordinary one keeps its reference.
+    expect(edgeRefFor(bodies, bodyId, top)?.reference).toEqual(top.reference);
   });
 
   it('refuses an edge that shares its identity with another', async () => {

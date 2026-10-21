@@ -1,5 +1,6 @@
 import {
   DRAWING_VIEW_FRAMES,
+  drawingEdgeRefError,
   drawingPaperPerModelUnit,
   projectToView,
   type BodyId,
@@ -370,17 +371,22 @@ export function edgeRefFor(
   bodyId: BodyId,
   edge: EdgeTopology
 ): DrawingEdgeRef | null {
-  // A reference written for another hash would be refused on save; keep
-  // the pick hash-only then rather than store a contradiction.
-  const ref: DrawingEdgeRef = {
+  // Only a reference the document can hold, for this very hash and with a
+  // witness that fingerprints to it, is stored; otherwise the pick is kept
+  // hash-only rather than refused (a deep boolean chain grows lineage
+  // names past what a stored reference may carry).
+  const full: DrawingEdgeRef = {
     bodyId,
     hash: edge.hash,
-    ...(edge.reference &&
-    edge.reference.currentHash === edge.hash &&
-    referenceTrust({ reference: edge.reference }) === 'trusted'
-      ? { reference: edge.reference }
-      : {})
+    ...(edge.reference ? { reference: edge.reference } : {})
   };
+  const ref: DrawingEdgeRef =
+    edge.reference &&
+    edge.reference.currentHash === edge.hash &&
+    referenceTrust({ reference: edge.reference }) === 'trusted' &&
+    drawingEdgeRefError(full) === null
+      ? full
+      : { bodyId, hash: edge.hash };
   const found = resolveEdge(bodies[bodyId], ref);
   return found.ok && found.entry === edge ? ref : null;
 }
