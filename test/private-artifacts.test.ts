@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync
@@ -20,7 +21,9 @@ import {
 
 const directories: string[] = [];
 function fixture() {
-  const directory = mkdtempSync(join(tmpdir(), 'h02-private-paths-'));
+  const directory = realpathSync(
+    mkdtempSync(join(tmpdir(), 'h02-private-paths-'))
+  );
   directories.push(directory);
   const repository = join(directory, 'repo');
   const outside = join(directory, 'private');
