@@ -93,7 +93,6 @@ import {
   defaultDrawingPaper,
   drawingSourceFingerprint,
   estimateViewExtent,
-  projectionBodyInput,
   sheetBodyIds
 } from '../lib/drawing/sheetSources';
 import { saveCadBinaryFile, saveCadTextFile } from '../lib/desktopBridge';
@@ -126,6 +125,20 @@ export interface DrawingWorkspaceProps {
    * selection and the export scope. Empty refuses the new sheet.
    */
   defaultBodyIds: BodyId[];
+  /**
+   * Each body's canonical drawing tessellation, from the geometry worker.
+   * Views project from it, never from `bodies`' display meshes: the display
+   * mesh holds an earlier deflection through small edits and meshes again at
+   * the nominal one after a reload, so the same model could export
+   * different bytes. This one depends only on the exact geometry. `signal`
+   * aborts when the workspace closes, so the geometry worker drops work
+   * nobody will see.
+   */
+  requestTessellation: (
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    signal: AbortSignal
+  ) => Promise<Record<string, ProjectionBodyInput>>;
   /** Why drawing edits are refused, or null. */
   editDisabledReason: string | null;
   onCommand: (command: AnyCommand) => boolean;
@@ -189,10 +202,26 @@ function useViewProjections(
   /** Every projection key some sheet draws of the current model. */
   wanted: ReadonlySet<string>,
   status: SheetStatus | null,
-  bodies: DrawingWorkspaceProps['bodies']
+  document: ProjectDocument,
+  requestTessellation: DrawingWorkspaceProps['requestTessellation']
 ): Map<DrawingViewId, ViewState> {
   const client = useRef<DrawingProjectionClient | null>(null);
+  /** Aborted on close: abandons tessellations still queued or running. */
+  const closed = useRef<AbortController | null>(null);
   const cache = useRef(new Map<string, ViewState>());
+  /**
+   * The canonical tessellations of the model the sheet on screen is fenced
+   * to, per body, so a pass that only toggles hidden lines does not mesh
+   * again. Dropped when the fingerprint changes.
+   */
+  const tessellations = useRef<{
+    fingerprint: string;
+    bodies: Map<BodyId, ProjectionBodyInput>;
+  } | null>(null);
+  // Read when a pass starts, not effect inputs: a drawing edit replaces the
+  // document without changing the model a ready sheet draws.
+  const latest = useRef({ document, requestTessellation });
+  latest.current = { document, requestTessellation };
   /** Failed requests per view, so a worker that keeps failing is not retried forever. */
   const failures = useRef(new Map<string, number>());
   const mounted = useRef(false);
@@ -207,11 +236,15 @@ function useViewProjections(
   useEffect(() => {
     mounted.current = true;
     const owned = new DrawingProjectionClient();
+    const lifetime = new AbortController();
     client.current = owned;
+    closed.current = lifetime;
     return () => {
       mounted.current = false;
+      lifetime.abort();
       owned.dispose();
       client.current = null;
+      closed.current = null;
     };
   }, []);
   const fingerprint = status?.kind === 'ready' ? status.fingerprint : null;
@@ -233,22 +266,23 @@ function useViewProjections(
     );
     for (const key of failures.current.keys())
       if (!wanted.has(key)) failures.current.delete(key);
-    if (!sheet || !fingerprint || !client.current || outstanding.current)
+    if (
+      !sheet ||
+      !fingerprint ||
+      !client.current ||
+      !closed.current ||
+      outstanding.current
+    )
       return;
     // Every view this pass still needs goes in one request, with each body's
     // geometry once however many views draw it.
     const views: DrawingProjectionViewRequest[] = [];
-    const inputs: Record<string, ProjectionBodyInput> = {};
+    const bodyIds = new Set<BodyId>();
     for (const view of sheet.views) {
       const key = projectionKey(fingerprint, view);
       if (cache.current.has(key) || views.some((entry) => entry.key === key))
         continue;
-      for (const id of view.bodyIds) {
-        const body = bodies[id];
-        const input =
-          body && !(id in inputs) ? projectionBodyInput(body) : null;
-        if (input) inputs[id] = input;
-      }
+      for (const id of view.bodyIds) bodyIds.add(id);
       views.push({
         key,
         orientation: view.orientation,
@@ -262,8 +296,39 @@ function useViewProjections(
     }
     if (views.length > 0) {
       outstanding.current = true;
-      client.current
-        .project(inputs, views)
+      const owned = client.current;
+      const { signal } = closed.current;
+      if (tessellations.current?.fingerprint !== fingerprint)
+        tessellations.current = { fingerprint, bodies: new Map() };
+      const known = tessellations.current;
+      const missing = [...bodyIds].filter((id) => !known.bodies.has(id));
+      const { document: current, requestTessellation: tessellate } =
+        latest.current;
+      (missing.length > 0
+        ? tessellate(current, missing.sort(), signal)
+        : Promise.resolve<Record<string, ProjectionBodyInput>>({})
+      )
+        .then((meshed) => {
+          // Closed while the geometry worker meshed: a disposed client
+          // would start a fresh worker nobody stops.
+          if (client.current !== owned) {
+            const closed = new Error('Drawing closed.');
+            closed.name = 'AbortError';
+            throw closed;
+          }
+          for (const id of missing) {
+            const input = meshed[id];
+            if (input) known.bodies.set(id, input);
+          }
+          // Every body or none: a view missing one would look complete.
+          const inputs: Record<string, ProjectionBodyInput> = {};
+          for (const id of bodyIds) {
+            const input = known.bodies.get(id);
+            if (!input) throw new Error(`Body ${id} has no geometry to draw.`);
+            inputs[id] = input;
+          }
+          return owned.project(inputs, views);
+        })
         .then(
           (results) => {
             for (const view of views) {
@@ -283,11 +348,12 @@ function useViewProjections(
             }
           },
           (error: unknown) => {
-            // The request itself failed — the worker closed under it or
-            // stopped — not any one view: forget the views so the next pass
-            // asks a fresh worker. A worker that keeps failing gets two more
-            // tries before the views show the error. A closed client (an
-            // unmount, React's development remount) never counts.
+            // The request itself failed — the tessellation was refused, or
+            // a worker closed under it or stopped — not any one view: forget
+            // the views so the next pass asks again. A worker that keeps
+            // failing gets two more tries before the views show the error. A
+            // closed client (an unmount, React's development remount) never
+            // counts.
             const aborted =
               error instanceof Error && error.name === 'AbortError';
             for (const view of views) {
@@ -312,7 +378,7 @@ function useViewProjections(
     }
     // `revision` re-runs this pass after each answer, which re-requests any
     // view whose request was dropped.
-  }, [sheet, wanted, fingerprint, bodies, revision]);
+  }, [sheet, wanted, fingerprint, revision]);
   const states = new Map<DrawingViewId, ViewState>();
   if (sheet && fingerprint)
     for (const view of sheet.views) {
@@ -779,7 +845,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         : null,
     [sheet, bodies, props.geometryPending, fingerprints]
   );
-  const projections = useViewProjections(sheet, wanted, status, bodies);
+  const projections = useViewProjections(
+    sheet,
+    wanted,
+    status,
+    document,
+    props.requestTessellation
+  );
   const liveBodies = useMemo(
     () =>
       document.bodyOrder.filter((id) => {

@@ -281,11 +281,25 @@ sheet/view contract above with these recorded departures:
   tolerance and is labelled so in the sheet panel. `test/drawing-projection.test.ts`
   keeps the box bounds and isometric known-run oracles above and records the
   pinned kernel's gaps as a diagnostic.
+- **Canonical tessellation.** The projection's triangles and edge polylines
+  are not the viewport's. The display mesh holds an earlier deflection
+  through edits that stay within 25 % of it, and a cold reload meshes again
+  at the nominal value, so drawing from it let a sheet read ready after a
+  reload while exporting different bytes. The geometry worker's
+  `drawing-tessellation` request meshes each body at its nominal display
+  deflection for its own exact bounds (never a held one) and puts faces,
+  triangles, vertices and edges in an order that depends only on their
+  coordinates, so checkpoint replay and a full rebuild give the same arrays.
+  The fingerprint needs no tessellation signature: the canonical mesh is a
+  function of the exact geometry the fingerprint already fences.
+  `test/drawing-canonical-tessellation.test.ts` exports a sheet, rebuilds cold
+  in a fresh kernel and compares the PDF and SVG bytes.
 - **PDF and fonts.** A dependency-free single-page PDF 1.4 writer and an SVG
   writer serialize the same page model the preview draws. Text uses the
   base-14 Helvetica faces with WinAnsi encoding and is not embedded; any other
   character becomes "?" before layout so preview and exports agree. Output has
-  no timestamps or ids and is byte-stable for a document and kernel pin.
+  no timestamps or ids and is byte-stable for a model state and kernel pin,
+  however the model was built (see Canonical tessellation).
 - **Workspace.** Peter chose this placement and accepted the fence and
   projection departures above (2026-10-19). Drawings open as a fourth
   workspace mode, Draw: sheets in a left column, properties on the right, and
