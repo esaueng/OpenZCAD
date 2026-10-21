@@ -78,7 +78,10 @@ export function PanelFrame({
 }) {
   const title = PANEL_TITLES[id];
   const Icon = PANEL_ICONS[id];
-  const pinned = controls.status === 'docked';
+  // In the phone lane nothing docks, whatever the saved layout says: the
+  // button reads unpinned and a press is refused, never an unpin that would
+  // drop the panel from its dock for when the window widens again.
+  const pinned = controls.status === 'docked' && controls.placement !== 'phone';
   const dock = controls.dock;
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   return (

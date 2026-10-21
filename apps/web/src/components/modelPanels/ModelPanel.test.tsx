@@ -575,6 +575,19 @@ describe('ModelPanel', () => {
     expect(region.getByText('Feature 2')).toBeVisible();
   });
 
+  it('never unpins a docked panel shown in the phone lane', async () => {
+    const user = userEvent.setup();
+    const frame = controls({ placement: 'phone' });
+    renderPanels(['history'], {}, frame);
+    const pin = within(
+      screen.getByRole('region', { name: 'History' })
+    ).getByRole('button', { name: 'Pin History' });
+    expect(pin).toHaveAttribute('aria-pressed', 'false');
+    await user.click(pin);
+    expect(frame.onPin).toHaveBeenCalledTimes(1);
+    expect(frame.onUnpin).not.toHaveBeenCalled();
+  });
+
   it('says it is unpinned in its footer and pins from there', async () => {
     const user = userEvent.setup();
     const frame = controls({ placement: 'unpinned', status: 'unpinned' });
