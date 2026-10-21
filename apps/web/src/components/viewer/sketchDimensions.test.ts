@@ -289,4 +289,76 @@ describe('sketch dimension overlay', () => {
     ]);
     overlay.dispose();
   });
+
+  it('re-measures a label whose size changes, as when its web font arrives', () => {
+    // Capture the overlay's ResizeObserver so the test can fire it.
+    let fire: ((entries: { target: Element }[]) => void) | null = null;
+    const observed: Element[] = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: (entries: { target: Element }[]) => void) {
+          fire = callback;
+        }
+        observe(element: Element) {
+          observed.push(element);
+        }
+        disconnect() {
+          fire = null;
+        }
+      }
+    );
+    try {
+      const overlay = buildSketchDimensions(
+        [
+          {
+            id: 'c_distance',
+            kind: 'distance',
+            label: '40 mm',
+            anchor: { x: 10, y: 0 },
+            lines: []
+          }
+        ],
+        {
+          origin: { x: 0, y: 0, z: 0 },
+          u: { x: 1, y: 0, z: 0 },
+          v: { x: 0, y: 1, z: 0 },
+          normal: { x: 0, y: 0, z: 1 }
+        },
+        { width: 400, height: 400 },
+        () => {}
+      );
+      const label = overlay.group.children.find(
+        (child): child is CSS2DObject => child instanceof CSS2DObject
+      )!;
+      expect(observed).toEqual([label.element]);
+      let width = 50;
+      Object.defineProperty(label.element, 'offsetWidth', {
+        get: () => width
+      });
+      Object.defineProperty(label.element, 'offsetHeight', { value: 20 });
+      const camera = new OrthographicCamera(-50, 50, 50, -50, 0.1, 100);
+      camera.position.set(10, 0, 30);
+      camera.lookAt(10, 0, 0);
+      camera.updateMatrixWorld();
+      camera.updateProjectionMatrix();
+      const resized = vi.fn();
+      overlay.onLabelResize(resized);
+      const out = new Float64Array(4);
+      overlay.writeLabelBoxes(out, 0, camera, 400, 400);
+      expect(out[2]! - out[0]!).toBe(50);
+      // The font swaps in: wider, but the cached size holds until observed.
+      width = 64;
+      overlay.writeLabelBoxes(out, 0, camera, 400, 400);
+      expect(out[2]! - out[0]!).toBe(50);
+      fire!([{ target: label.element }]);
+      expect(resized).toHaveBeenCalledTimes(1);
+      overlay.writeLabelBoxes(out, 0, camera, 400, 400);
+      expect(out[2]! - out[0]!).toBe(64);
+      overlay.dispose();
+      expect(fire).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

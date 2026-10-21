@@ -11882,6 +11882,9 @@ export function ModelViewer({
     );
     context.scene.add(overlay.group);
     sketchDimensionsRef.current = overlay;
+    // A label that changes size (its web font arriving) moves the relation
+    // glyphs that keep clear of it; draw again so they do.
+    overlay.onLabelResize(() => context.requestRender());
     context.requestRender();
     const focusedReference = focusedReferenceDimensionRef.current;
     focusedReferenceDimensionRef.current = null;

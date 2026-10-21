@@ -302,10 +302,30 @@ export function buildSketchDimensions(
   group.traverse((child) => {
     child.raycast = () => undefined;
   });
-  // Each label's laid-out size, read once it has one: a label's text only
-  // changes with a rebuild, so per-frame boxes need no DOM read.
+  // Each label's laid-out size, read once it has one, so per-frame boxes
+  // need no DOM read. A label's text only changes with a rebuild, but its
+  // size can change under it: laid out first in a fallback font, it grows or
+  // shrinks when the web font arrives. A resize clears the cached size (read
+  // again next frame) and asks for that frame.
   const sizes = new Float64Array(placedLabels.length * 2);
   const scratch = new THREE.Vector3();
+  let resized: () => void = () => {};
+  const labelIndex = new Map(
+    placedLabels.map((label, index) => [label.element, index] as const)
+  );
+  const resizeObserver =
+    typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            const index = labelIndex.get(entry.target as HTMLElement);
+            if (index === undefined) continue;
+            sizes[index * 2] = 0;
+            sizes[index * 2 + 1] = 0;
+          }
+          resized();
+        });
+  for (const label of placedLabels) resizeObserver?.observe(label.element);
   return {
     group,
     /** How many boxes {@link writeLabelBoxes} can write. */
@@ -323,7 +343,8 @@ export function buildSketchDimensions(
       height: number
     ): number {
       let written = 0;
-      placedLabels.forEach((label, index) => {
+      for (let index = 0; index < placedLabels.length; index += 1) {
+        const label = placedLabels[index]!;
         const element = label.element;
         if (sizes[index * 2] === 0) {
           sizes[index * 2] = element.offsetWidth;
@@ -331,9 +352,9 @@ export function buildSketchDimensions(
         }
         const w = sizes[index * 2]!;
         const h = sizes[index * 2 + 1]!;
-        if (w === 0) return;
+        if (w === 0) continue;
         scratch.copy(label.position).project(camera);
-        if (scratch.z < -1 || scratch.z > 1) return;
+        if (scratch.z < -1 || scratch.z > 1) continue;
         // CSS2DRenderer centres the label on its point; the overlay clamp
         // above shifts it by its margins.
         const cx =
@@ -348,8 +369,12 @@ export function buildSketchDimensions(
         out[o + 2] = cx + w / 2;
         out[o + 3] = cy + h / 2;
         written += 1;
-      });
+      }
       return written;
+    },
+    /** Called when a label's size changes, so the scene draws again. */
+    onLabelResize(listener: () => void) {
+      resized = listener;
     },
     focusReference(id: string) {
       referenceLabels.get(id)?.focus({ preventScroll: true });
@@ -363,6 +388,8 @@ export function buildSketchDimensions(
       }
     },
     dispose() {
+      resizeObserver?.disconnect();
+      resized = () => {};
       for (const span of spans) {
         group.remove(span.graphic.object);
         span.graphic.dispose();
