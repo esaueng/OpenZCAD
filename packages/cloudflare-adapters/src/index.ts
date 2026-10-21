@@ -75,6 +75,7 @@ import {
   MAX_ARTIFACT_UPLOAD_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_THUMBNAIL_BYTES,
+  PROJECT_SHARE_LINK_TTL_SECONDS,
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISIONS,
   MAX_PROJECT_REVISION_RECORDS,
@@ -1045,7 +1046,9 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().loadSharedProjectByTokenHash(tokenHash);
     }
     // The token hash is the entire authorization: no user access check runs
-    // here on purpose, and unknown stays indistinguishable from revoked.
+    // here on purpose, and unknown stays indistinguishable from revoked or expired.
+    // Derive the fixed expiry from the stored creation time, including older
+    // rows, so no migration or token/request/response format change is needed.
     //
     // The owner's two kill switches have to reach this read, not only the
     // write side that mints links. Turning "Project sharing" off cut every
@@ -1065,6 +1068,7 @@ export class D1R2PersistenceService implements PersistenceService {
          ON owner_settings.user_id = p.user_id
        WHERE l.token_hash = ?
          AND l.revoked_at IS NULL
+         AND l.created_at > ?
          AND p.status != 'deleted'
          AND COALESCE(
            CASE WHEN json_valid(owner_settings.settings_json)
@@ -1076,7 +1080,10 @@ export class D1R2PersistenceService implements PersistenceService {
            1
          ) = 1`
     )
-      .bind(tokenHash)
+      .bind(
+        tokenHash,
+        Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS
+      )
       .first<{
         mode: ProjectShareLinkMode;
         project_id: string;
@@ -1111,7 +1118,7 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     // The join is the authorization: the asset is served only when it belongs
-    // to the unrevoked link's own project — and, as above, only while the
+    // to the unrevoked, unexpired link's own project — and, as above, only while the
     // owner still has sharing on and has not trashed the project. Serving a
     // side asset for a link whose document read is refused would leak the
     // imported source of a model the owner has already withdrawn.
@@ -1125,6 +1132,7 @@ export class D1R2PersistenceService implements PersistenceService {
          ON owner_settings.user_id = p.user_id
        WHERE l.token_hash = ?
          AND l.revoked_at IS NULL
+         AND l.created_at > ?
          AND a.id = ?
          AND p.status != 'deleted'
          AND COALESCE(
@@ -1137,7 +1145,11 @@ export class D1R2PersistenceService implements PersistenceService {
            1
          ) = 1`
     )
-      .bind(tokenHash, assetId)
+      .bind(
+        tokenHash,
+        Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS,
+        assetId
+      )
       .first<SharedProjectAssetRow>();
     if (!row) {
       return null;
@@ -1200,7 +1212,7 @@ export class D1R2PersistenceService implements PersistenceService {
       return null;
     }
     // Recheck the capability and both owner kill switches in this query. A
-    // revocation between document lookup and R2 lookup must stop the download.
+    // revocation or expiry between document lookup and R2 lookup must stop the download.
     const row = await this.env.DB.prepare(
       `SELECT a.id, a.project_id, a.kind, a.name, a.object_key,
               a.content_type, a.bytes, a.metadata_json, a.created_at
@@ -1209,6 +1221,7 @@ export class D1R2PersistenceService implements PersistenceService {
        INNER JOIN projects p ON p.id = a.project_id
        LEFT JOIN user_settings owner_settings ON owner_settings.user_id = p.user_id
        WHERE l.token_hash = ? AND l.revoked_at IS NULL
+         AND l.created_at > ?
          AND a.id = ? AND a.kind IN ('step-import', 'mesh-payload')
          AND p.status != 'deleted'
          AND COALESCE(
@@ -1217,7 +1230,11 @@ export class D1R2PersistenceService implements PersistenceService {
            END, 1
          ) = 1`
     )
-      .bind(tokenHash, artifactId)
+      .bind(
+        tokenHash,
+        Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS,
+        artifactId
+      )
       .first<ArtifactRow>();
     if (!row || row.project_id !== shared.projectId) {
       return null;

@@ -23,7 +23,7 @@ export interface ProjectShareLinkClient {
   ): Promise<CreateProjectShareLinkResponse>;
   listProjectShareLinks(projectId: string): Promise<ProjectShareLinkSummary[]>;
   revokeProjectShareLink(projectId: string, shareLinkId: string): Promise<void>;
-  /** Anonymous fetch by token; unknown and revoked links resolve to null. */
+  /** Anonymous fetch by token; unknown, revoked and expired links resolve to null. */
   fetchSharedProject(token: string): Promise<SharedProjectResponse | null>;
 }
 

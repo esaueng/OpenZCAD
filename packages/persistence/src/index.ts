@@ -72,6 +72,7 @@ import {
   MAX_PROJECT_REVISIONS,
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_THUMBNAIL_BYTES,
+  PROJECT_SHARE_LINK_TTL_SECONDS,
   THUMBNAIL_CONTENT_TYPE,
   nowIso,
   persistedDocumentBytes,
@@ -487,7 +488,7 @@ export interface PersistenceService {
     projectId: string,
     input: CreateProjectShareLinkInput
   ): Promise<ProjectShareLinkSummary>;
-  /** Active links only; token hashes never leave the store. */
+  /** Unrevoked links, including expired ones so owners can revoke them; no token hashes. */
   listProjectShareLinks(
     ownerUserId: UserId,
     projectId: string
@@ -499,8 +500,8 @@ export interface PersistenceService {
     revokedAt: number
   ): Promise<void>;
   /**
-   * Resolves an unrevoked share link and loads its project document with the
-   * derived projection stripped. Unknown and revoked tokens are equally null
+   * Resolves an unrevoked, unexpired share link and loads its project document with the
+   * derived projection stripped. Unknown, revoked and expired tokens are equally null
    * so the route can stay an indistinguishable 404.
    */
   loadSharedProjectByTokenHash(
@@ -1074,9 +1075,13 @@ export class InMemoryPersistenceService implements PersistenceService {
   async loadSharedProjectByTokenHash(
     tokenHash: string
   ): Promise<SharedProjectSnapshot | null> {
+    const oldestValidCreation =
+      Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS;
     const link = Array.from(this.projectShareLinks.values()).find(
       (candidate) =>
-        candidate.tokenHash === tokenHash && candidate.revokedAt === null
+        candidate.tokenHash === tokenHash &&
+        candidate.revokedAt === null &&
+        candidate.createdAt > oldestValidCreation
     );
     const document = link ? this.projects.get(link.projectId) : undefined;
     if (!link || !document) {
