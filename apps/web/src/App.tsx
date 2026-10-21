@@ -14379,11 +14379,12 @@ export function App() {
       } = await import('./lib/sketch/projection');
       const pick = projectionFromPick({
         document: base,
-        sketch: repair ? null : sketch,
+        sketch,
         selection,
         basis: sketchBasis,
         mode,
-        construction: sketchConstruction
+        construction: sketchConstruction,
+        ...(repair ? { repairing: repair.objectId } : {})
       });
       const sketchFeature = sketch
         ? features.find(

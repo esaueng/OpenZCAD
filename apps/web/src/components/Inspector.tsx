@@ -316,6 +316,10 @@ function editsAsOneClosedShape(
 ): boolean {
   return (
     sketch.objectIds.length === 1 &&
+    // I01: the form builds a fresh object on Apply, which would drop a
+    // projection's link to its edge; projected geometry is edited in the
+    // sketch, where Unlink and Re-pick are.
+    !object?.projection &&
     (object?.objectKind === 'rectangle' ||
       object?.objectKind === 'circle' ||
       object?.objectKind === 'polygon')

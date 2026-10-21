@@ -55,12 +55,18 @@ function sameSource(
   );
 }
 
-/** The linked sources a sketch already projects, so a pick does not repeat one. */
+/**
+ * The linked sources a sketch already projects, so a pick does not repeat
+ * one. A re-pick leaves out the object being repaired: its own source is
+ * the one being replaced.
+ */
 function linkedSources(
   document: ProjectDocument,
-  sketch: SketchNode | null
+  sketch: SketchNode | null,
+  except?: string
 ): SketchProjectionSource[] {
   return (sketch?.objectIds ?? []).flatMap((objectId) => {
+    if (objectId === except) return [];
     const node = document.nodes[objectId];
     const projection =
       node?.kind === 'sketch-object' ? node.data.projection : undefined;
@@ -107,6 +113,8 @@ export function projectionFromPick(input: {
   basis: PlaneBasis;
   mode: SketchProjectionMode;
   construction: boolean;
+  /** A re-pick: the object whose source the pick replaces. */
+  repairing?: string;
 }): ProjectionPick {
   const { document, selection, basis, mode, construction } = input;
   if (selection.kind === 'body') {
@@ -120,7 +128,7 @@ export function projectionFromPick(input: {
         : 'That edge is no longer part of the model.'
     );
   }
-  const existing = linkedSources(document, input.sketch);
+  const existing = linkedSources(document, input.sketch, input.repairing);
   const objects: SketchObjectData[] = [];
   const skipped: string[] = [];
   for (const edge of edges) {
@@ -381,9 +389,12 @@ export function projectionAddCommand(input: {
 }
 
 /**
- * Refuses a candidate whose new linked projections the exact build could
- * not re-find at the sketch's place in the history — an edge made by a
- * later feature, say — naming why. Moved is fine: the build follows it.
+ * Refuses a candidate unless the exact build re-found every new linked
+ * projection at the sketch's place in the history (current, or moved, which
+ * the build follows). Broken — an edge made by a later feature, say — is
+ * refused naming why; no verdict at all (the sketch is suppressed, or its
+ * plane failed before projection ran) is refused too, since nothing then
+ * proved the edge exists there.
  */
 export function assertProjectionsResolve(
   derived: Pick<DerivedState, 'sketchProjections'>,
@@ -394,6 +405,11 @@ export function assertProjectionsResolve(
     if (state?.status === 'broken') {
       throw new Error(
         `That edge cannot be projected linked here: ${state.reason.replace(/^its /, 'the ')}`
+      );
+    }
+    if (!state) {
+      throw new Error(
+        'That edge cannot be projected linked here: the sketch did not build, so nothing confirmed the edge at its place in the history. Resume or repair the sketch first, or project it unlinked.'
       );
     }
   }

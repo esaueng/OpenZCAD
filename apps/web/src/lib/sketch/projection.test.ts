@@ -213,6 +213,41 @@ describe('projectionFromPick', () => {
     ).toThrow(/already projected linked/);
   });
 
+  it('keeps the duplicate check on a re-pick, except for the object repaired', () => {
+    const document = modelDocument();
+    const pickEdge = (topologyId: string, hash: number) =>
+      projectionFromPick({
+        document,
+        sketch: null,
+        selection: { bodyId, kind: 'edge', topologyId, hash },
+        basis,
+        mode: 'linked',
+        construction: false
+      }).objects;
+    const sketched = addSketchFeature(document, {
+      name: 'S',
+      planeRef: plane,
+      objects: [...pickEdge('a', 1), ...pickEdge('b', 2)]
+    });
+    const sketch = findSketch(sketched.document, sketched.sketchId)!;
+    const [onA, onB] = sketch.objectIds;
+    const repick = (repairing: string, topologyId: string, hash: number) =>
+      projectionFromPick({
+        document: sketched.document,
+        sketch,
+        selection: { bodyId, kind: 'edge', topologyId, hash },
+        basis,
+        mode: 'linked',
+        construction: false,
+        repairing
+      });
+    // Re-picking B onto A's edge would leave two coincident linked lines.
+    expect(() => repick(onB!, 'a', 1)).toThrow(/already projected linked/);
+    // Re-picking A onto its own edge (or a fresh one) is the repair itself.
+    expect(repick(onA!, 'a', 1).objects).toHaveLength(1);
+    expect(repick(onA!, 'd', 4).objects).toHaveLength(1);
+  });
+
   it('refuses by name what does not project', () => {
     const document = modelDocument();
     const pick = (selection: Parameters<typeof projectionFromPick>[0]['selection']) =>
@@ -375,6 +410,17 @@ describe('repair, unlink and the words for each', () => {
         ['ent_a']
       )
     ).not.toThrow();
+    // No verdict (a suppressed sketch, or one whose plane failed) proves
+    // nothing about the edge, so it is refused too.
+    expect(() => assertProjectionsResolve({}, ['ent_a'])).toThrow(
+      /the sketch did not build/
+    );
+    expect(() =>
+      assertProjectionsResolve(
+        { sketchProjections: { ent_b: { status: 'current' } } },
+        ['ent_a']
+      )
+    ).toThrow(/the sketch did not build/);
   });
 
   it('describes each projection for History and Objects', () => {

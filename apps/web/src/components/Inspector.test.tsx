@@ -1501,4 +1501,43 @@ describe('Inspector sketch editing (S04)', () => {
       within(inspector).getByRole('button', { name: 'Apply' })
     ).toBeInTheDocument();
   });
+
+  it('keeps a lone projected circle out of the one-shape form (I01)', () => {
+    // Apply there would rebuild a plain circle and drop the edge link.
+    const props = sketchProps([
+      {
+        objectKind: 'circle',
+        centerX: 0,
+        centerY: 0,
+        radius: 4,
+        projection: {
+          mode: 'linked',
+          source: {
+            bodyId: 'body_post' as never,
+            edgeReference: {
+              kind: 'edge',
+              producingFeatureId: 'feat_post' as never,
+              lineageName: 'edge.rim',
+              currentHash: 1,
+              witnessVersion: 1,
+              witness: {
+                curveType: 'CIRCLE',
+                length: 1,
+                closed: true,
+                center: [0, 0, 0],
+                axis: null
+              }
+            }
+          }
+        }
+      }
+    ]);
+    render(<Inspector {...props} />);
+    const inspector = screen.getByRole('region', { name: 'Feature inspector' });
+    expect(inspector).toHaveTextContent('1 object');
+    expect(
+      within(inspector).queryByRole('button', { name: 'Apply' })
+    ).not.toBeInTheDocument();
+    expect(props.onApplySketch).not.toHaveBeenCalled();
+  });
 });
