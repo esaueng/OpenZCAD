@@ -12,7 +12,7 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 import type { Locator, Page } from '@playwright/test';
-import { expect, revealModelDrawer, stubApi, test } from './openzcad-fixtures';
+import { expect, revealModelPanel, stubApi, test } from './openzcad-fixtures';
 
 /**
  * S03: diagnostics lead from the actual GCS result to a stored constraint and
@@ -125,7 +125,7 @@ async function openFixture(page: Page, document: ProjectDocument) {
 }
 
 async function enterSketch(page: Page, canvas: Locator, objectCount = 1) {
-  await revealModelDrawer(page, 'History');
+  await revealModelPanel(page, 'History');
   await page.locator('.feature-row-main', { hasText: SKETCH_NAME }).click();
   await page
     .getByRole('button', { name: 'Edit sketch in viewport', exact: true })

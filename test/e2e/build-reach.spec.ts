@@ -3,7 +3,8 @@ import {
   locateEdge,
   promptField,
   setSelectionFilter,
-  stubApi
+  stubApi,
+  MODEL_ONLY
 } from './openzcad-fixtures';
 
 /**
@@ -162,11 +163,12 @@ test('F29: on a portrait phone a wide body is framed across the width too', asyn
   page
 }) => {
   // Fitting only the vertical field of view cut a long body off at the
-  // sides of a narrow canvas. Use the closed phone workspace so the drawer
-  // and the command fold do not cover the primitive form's controls.
+  // sides of a narrow canvas. Use the closed phone workspace so a panel in
+  // the phone lane and the command fold do not cover the primitive form's
+  // controls.
   await page.setViewportSize({ width: 390, height: 844 });
   await createProject(page, 'Auto Frame Phone', {
-    modelDrawer: false,
+    panelLayout: MODEL_ONLY,
     commandFoldClosed: true
   });
   await addBox(page, { width: '10', depth: '10', height: '10' });
@@ -245,7 +247,7 @@ test('F30: an opened fillet lists its edges by name, lights them, and drops one'
     .click();
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
-  await expect(page.locator('.sidebar .feature-row')).toHaveCount(17, {
+  await expect(page.locator('.model-panel .feature-row')).toHaveCount(17, {
     timeout: 60_000
   });
   await expect(page.getByRole('contentinfo')).not.toContainText(
