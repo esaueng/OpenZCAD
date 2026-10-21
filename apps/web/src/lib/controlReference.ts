@@ -179,6 +179,24 @@ export const KEYBOARD_CONTROL_GROUPS = [
         detail: 'Return to the standard three-quarter view.'
       },
       {
+        id: 'back-view',
+        ...bound('view-back'),
+        action: 'Back view',
+        detail: 'Align the camera with the back of the model.'
+      },
+      {
+        id: 'bottom-view',
+        ...bound('view-bottom'),
+        action: 'Bottom view',
+        detail: 'Align the camera below the model.'
+      },
+      {
+        id: 'left-view',
+        ...bound('view-left'),
+        action: 'Left view',
+        detail: 'Align the camera with the left side.'
+      },
+      {
         id: 'fit-view',
         ...bound('view-fit'),
         action: 'Fit view',
