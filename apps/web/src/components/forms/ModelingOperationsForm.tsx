@@ -78,6 +78,8 @@ export interface ModelingOperationsFormProps {
   onCancel?: () => void;
   onTargetBodyChange?: (bodyId: BodyId) => void;
   onOpeningFaceSelectionChange?: (hashes: number[]) => void;
+  /** The committed Shell/Draft list, including earlier and viewport picks. */
+  onFaceListStateChange?: (bodyId: BodyId, hashes: readonly number[]) => void;
   onRequestOpeningFaceSelection?: () => void;
   /**
    * The Hole card's values as numbers, on every change, so the viewport can
@@ -413,6 +415,14 @@ function toggleHash(hashes: readonly number[], hash: number): number[] {
     : [...hashes, hash];
 }
 
+/** A box sweep's faces join the list; ones already in it stay. */
+function addHashes(
+  hashes: readonly number[],
+  added: readonly number[]
+): number[] {
+  return [...hashes, ...added.filter((hash) => !hashes.includes(hash))];
+}
+
 function FacePicker({
   legend,
   options,
@@ -553,6 +563,7 @@ export function ModelingOperationsForm({
   onCancel,
   onTargetBodyChange,
   onOpeningFaceSelectionChange,
+  onFaceListStateChange,
   onRequestOpeningFaceSelection,
   onHoleDraftChange,
   holePreviewNotice = null
@@ -622,6 +633,10 @@ export function ModelingOperationsForm({
     // A pick changes the exact command even if an earlier preflight is still running.
     preflightEpoch.current += 1;
     setPreflight({ status: 'idle' });
+    // A sweep's faces, narrowed to those this card can list.
+    const swept = viewportFacePick.hashes?.filter((hash) =>
+      faceOptions.some((face) => face.hash === hash)
+    );
     setState((previous): ModelingOperationFormState => {
       const { bodyId, hash } = viewportFacePick;
       const current = retargeted ? withTargetBody(previous, bodyId) : previous;
@@ -632,10 +647,9 @@ export function ModelingOperationsForm({
                 ...current,
                 value: {
                   ...current.value,
-                  openingFaceHashes: toggleHash(
-                    current.value.openingFaceHashes,
-                    hash
-                  )
+                  openingFaceHashes: swept
+                    ? addHashes(current.value.openingFaceHashes, swept)
+                    : toggleHash(current.value.openingFaceHashes, hash)
                 }
               }
             : current;
@@ -645,7 +659,9 @@ export function ModelingOperationsForm({
                 ...current,
                 value: {
                   ...current.value,
-                  faceHashes: toggleHash(current.value.faceHashes, hash)
+                  faceHashes: swept
+                    ? addHashes(current.value.faceHashes, swept)
+                    : toggleHash(current.value.faceHashes, hash)
                 }
               }
             : current;
@@ -674,6 +690,21 @@ export function ModelingOperationsForm({
       }
     });
   }, [viewportFacePick, pickTarget, initialTarget, faceOptions]);
+  const faceListHashes =
+    state.operation === 'shell'
+      ? state.value.openingFaceHashes
+      : state.operation === 'draft'
+        ? state.value.faceHashes
+        : null;
+  const faceListCallback = useRef(onFaceListStateChange);
+  faceListCallback.current = onFaceListStateChange;
+  // Report after React commits the list. Calling a workspace setter from the
+  // pick's state updater would update its parent while this form is rendering.
+  useEffect(() => {
+    if (pickTarget && faceListHashes) {
+      faceListCallback.current?.(pickTarget, faceListHashes);
+    }
+  }, [pickTarget, faceListHashes]);
   const effectivePreflight: ExactPreflightState = unsupportedReason
     ? { status: 'refused', reason: unsupportedReason }
     : preflight;
