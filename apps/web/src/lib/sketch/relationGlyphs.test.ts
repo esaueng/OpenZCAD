@@ -6,7 +6,14 @@ import {
   type SketchConstraintData,
   type SketchObjectData
 } from '@openzcad/shared';
-import { resolveSplineGeometry } from '@openzcad/geometry';
+import {
+  findFontFace,
+  resolveSplineGeometry,
+  setTextFontProvider
+} from '@openzcad/geometry';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { parseFontFace } from '../../../../../packages/geometry/src/text/loader';
 import {
   sketchRelationGlyphs,
   sketchRelationKeepOuts,
@@ -788,7 +795,7 @@ describe('sketchRelationGlyphs', () => {
     expect(widestGapOf([]).halfGap).toBe(Math.PI);
   });
 
-  it('lists every drawn curve as plane segments, skipping text and the unresolved', () => {
+  it('lists every drawn curve as plane segments, skipping the unresolved', () => {
     const strokes = sketchRelationStrokes(
       [
         { data: { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 } },
@@ -819,6 +826,42 @@ describe('sketchRelationGlyphs', () => {
     const first = strokes.slice(4, 8);
     expect(last[2]).toBeCloseTo(first[0]!, 12);
     expect(last[3]).toBeCloseTo(first[1]!, 12);
+  });
+
+  it('keeps text outlines among the strokes, as text is picked by them', async () => {
+    const file = findFontFace('open-sans', 'regular')!.face.file;
+    const bytes = await readFile(
+      path.resolve(process.cwd(), '../../packages/geometry/assets/fonts', file)
+    );
+    const font = parseFontFace(
+      'open-sans',
+      'regular',
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+    );
+    setTextFontProvider(() => font);
+    try {
+      const text = {
+        data: {
+          objectKind: 'text',
+          text: 'H',
+          fontFamily: 'open-sans',
+          fontStyle: 'regular',
+          size: 10,
+          x: 0,
+          y: 0,
+          align: 'left'
+        }
+      } as { data: SketchObjectData };
+      const strokes = sketchRelationStrokes([text], resolve);
+      // An H outline: one closed loop of a dozen straight sides.
+      expect(strokes.length / 4).toBeGreaterThanOrEqual(12);
+      // Over the outline budget the sketch draws no text, and so keeps none.
+      expect(
+        sketchRelationStrokes([text], resolve, 'Too much text.').length
+      ).toBe(0);
+    } finally {
+      setTextFontProvider(null);
+    }
   });
 
   it('lists every pickable point: the origin, line and arc ends, and centres', () => {

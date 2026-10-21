@@ -15161,10 +15161,17 @@ export function App() {
             sketchModeState.objects,
             (value) =>
               evalParamValue(value, parameterScope.scope, doc.units) ??
-              undefined
+              undefined,
+            textOutlineBudgetError
           )
         : undefined,
-    [sketchModeState, doc, parameterScope.scope, sketchRelationChips.length]
+    [
+      sketchModeState,
+      doc,
+      parameterScope.scope,
+      sketchRelationChips.length,
+      textOutlineBudgetError
+    ]
   );
   // And every pickable point (centres, ends, the origin), likewise.
   const sketchRelationKeepOutPoints = useMemo(

@@ -9,7 +9,10 @@ import {
   boundedArcSweepDegrees,
   resolveSplineGeometry
 } from '@openzcad/geometry';
-import { objectPolylines } from '../objectPolyline';
+import {
+  displayObjectsWithTextBudget,
+  objectPolylines
+} from '../objectPolyline';
 import { constraintReferencesObject } from './constraints';
 import { sketchPointPosition } from './dimensionAnnotations';
 import { sketchObjectGrabPoint, snapTargetsForObject } from './session';
@@ -266,13 +269,15 @@ export function sketchRelationGlyphs(
  * Every drawn sketch curve as plane-local segments [x1, y1, x2, y2, …], from
  * the same polylines the sketch view draws. Relation glyphs keep clear of
  * them: a glyph is a button, and one over any curve, related or not, would
- * take that curve's picks. Text is left out (its outlines are many small
- * loops, and a glyph rarely sits over a label). An object that does not
- * resolve contributes nothing.
+ * take that curve's picks. Text counts too: it is picked by its outline
+ * loops, so they are kept clear like any curve, under the same outline
+ * budget the sketch view draws them with (`textBudgetError`, as there). An
+ * object that does not resolve contributes nothing.
  */
 export function sketchRelationStrokes(
   objects: readonly { data: SketchObjectData }[],
-  resolve: Resolve
+  resolve: Resolve,
+  textBudgetError: string | null = null
 ): Float64Array {
   const strict = (value: unknown): number => {
     const result = resolve(value as number | string);
@@ -282,8 +287,10 @@ export function sketchRelationStrokes(
     return result;
   };
   const segments: number[] = [];
-  for (const { data } of objects) {
-    if (data.objectKind === 'text') continue;
+  for (const { data } of displayObjectsWithTextBudget(
+    [...objects],
+    textBudgetError
+  )) {
     let polylines: ReturnType<typeof objectPolylines>;
     try {
       polylines = objectPolylines(data, strict);
