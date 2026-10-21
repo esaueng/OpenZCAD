@@ -18,6 +18,7 @@ import {
   type DerivedState,
   type ProjectDocument
 } from '@openzcad/shared';
+import { decodeRemusPatternJournal } from '../packages/kernel-adapter/src/remus-lineage';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 
 let adapter: ExactKernelAdapter;
@@ -247,6 +248,24 @@ describe(
         spacing: 30,
         spacing2: 40
       }).document;
+      const gridOps = new Set<number>();
+      const linearOps = new Set<number>();
+      const gridJournal = RemusKernel.prototype.gridPatternJournaled;
+      const linearJournal = RemusKernel.prototype.linearPatternJournaled;
+      const gridCalls = vi
+        .spyOn(RemusKernel.prototype, 'gridPatternJournaled')
+        .mockImplementation(function (this: RemusKernel, ...args) {
+          const response = gridJournal.apply(this, args);
+          gridOps.add(decodeRemusPatternJournal(response).op);
+          return response;
+        });
+      const linearCalls = vi
+        .spyOn(RemusKernel.prototype, 'linearPatternJournaled')
+        .mockImplementation(function (this: RemusKernel, ...args) {
+          const response = linearJournal.apply(this, args);
+          linearOps.add(decodeRemusPatternJournal(response).op);
+          return response;
+        });
       const outputs = vi.spyOn(RemusKernel.prototype, 'resolveOperationOutput');
       try {
         const derived = await adapter.syncDocument(field);
@@ -257,10 +276,26 @@ describe(
         expect(result.edges).toHaveLength(96);
         expect(result.vertices).toBeUndefined();
         expect(
-          outputs.mock.calls.filter(([, kind]) => kind === 'vertex')
+          outputs.mock.calls.filter(
+            ([op, kind]) => gridOps.has(op) && kind === 'vertex'
+          )
         ).toHaveLength(0);
+        expect(gridOps.size).toBe(2);
+        expect(linearOps.size).toBe(1);
+        expect(
+          outputs.mock.calls.filter(
+            ([op, kind]) => linearOps.has(op) && kind === 'vertex'
+          )
+        ).toHaveLength(17);
+        expect(
+          outputs.mock.calls.filter(
+            ([op, kind]) => gridOps.has(op) && kind === 'edge'
+          )
+        ).toHaveLength(98);
       } finally {
         outputs.mockRestore();
+        gridCalls.mockRestore();
+        linearCalls.mockRestore();
       }
     });
 
