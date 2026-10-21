@@ -117,26 +117,33 @@ function ViewOptionsList({
   );
   useMenuKeyboard(ref);
 
-  // To the rail's left, level with the button, and inside the window.
+  // To the rail's left, level with the button, and inside the window. It
+  // follows the button every frame while open: Hide all, Model only or a
+  // width change moves the rail, which slides to its new place.
   useLayoutEffect(() => {
+    let frame = 0;
+    let placed = '';
     const place = () => {
       const menu = ref.current?.getBoundingClientRect();
       const anchor = anchorRef.current?.getBoundingClientRect();
-      if (!menu || !anchor) return;
-      setPosition({
-        x: Math.max(
+      if (menu && anchor) {
+        const x = Math.max(
           8,
           Math.min(anchor.left - 10 - menu.width, window.innerWidth - 8)
-        ),
-        y: Math.max(
+        );
+        const y = Math.max(
           8,
           Math.min(anchor.top - 4, window.innerHeight - menu.height - 8)
-        )
-      });
+        );
+        if (`${x},${y}` !== placed) {
+          placed = `${x},${y}`;
+          setPosition({ x, y });
+        }
+      }
+      frame = requestAnimationFrame(place);
     };
     place();
-    window.addEventListener('resize', place);
-    return () => window.removeEventListener('resize', place);
+    return () => cancelAnimationFrame(frame);
   }, [anchorRef]);
 
   useEffect(() => {
