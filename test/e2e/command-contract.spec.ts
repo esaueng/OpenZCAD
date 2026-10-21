@@ -178,7 +178,7 @@ test('cap height under chamfers: Enter commits the chip value, Escape leaves his
   await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
   await inspector.getByLabel('Distance', { exact: true }).fill('1');
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   const { select, axisLength } = cylinderHooks(canvas);
   const arm = async () => {
     await expect
@@ -206,7 +206,7 @@ test('cap height under chamfers: Enter commits the chip value, Escape leaves his
   });
   // The cap's total height routes to the cylinder primitive even under its
   // chamfers (Resize Body), so the commit edits in place: still two features.
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   expect(consoleErrors).toEqual([]);
 });
 
@@ -239,7 +239,7 @@ test('resize cylinder: Enter commits the chip value, Escape leaves history alone
     read: async () => (await wall())?.diameter ?? null
   });
   // A primitive resize edits the cylinder in place: still one feature.
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
   expect(consoleErrors).toEqual([]);
 });
 
@@ -310,7 +310,7 @@ test('fillet: Enter commits the chip value, Escape leaves history alone', async 
     committed: 2,
     read: async () => (await readBlend(false))?.blendRadius ?? 0
   });
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   expect(consoleErrors).toEqual([]);
 });
 
@@ -358,7 +358,7 @@ test('resize hole: Enter commits the chip value, Escape leaves history alone', a
   await expect(
     page.locator('.feature-row-main', { hasText: 'Hole' })
   ).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   const { select, wall } = cylinderHooks(canvas);
   await proveContract(page, canvas, {
     arm: async () => {
@@ -409,7 +409,7 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
   await inspector.getByRole('button', { name: 'Select all 2 edges' }).click();
   await inspector.getByLabel('Distance', { exact: true }).fill('1');
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   const { select, axisLength } = cylinderHooks(canvas);
   const height = async () => {
     const axis = await axisLength();
@@ -423,6 +423,22 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
     .not.toBeNull();
   const chip = page.getByTestId('direct-manipulation-value');
   await expect(chip).toHaveText('28 mm');
+  // The selection's inspector stands in the right lane, inside the docked
+  // panels, over the right of a model framed before it opened. Fit frames
+  // what it leaves, so the cap's arrow is on the open canvas.
+  await page.keyboard.press('f');
+  let lastHandle = '';
+  await expect
+    .poll(
+      async () => {
+        const at = `${await canvas.getAttribute('data-e2e-handle-x')},${await canvas.getAttribute('data-e2e-handle-y')}`;
+        const still = at === lastHandle;
+        lastHandle = at;
+        return still;
+      },
+      { intervals: [400], timeout: 30_000 }
+    )
+    .toBe(true);
   const handle = await canvas.evaluate((element) => ({
     x: Number(element.dataset.e2eHandleX),
     y: Number(element.dataset.e2eHandleY),
@@ -432,6 +448,13 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
   }));
   const bounds = (await canvas.boundingBox())!;
   const start = { x: bounds.x + handle.x, y: bounds.y + handle.y };
+  // Nothing stands over the arrow: the press reaches the canvas.
+  expect(
+    await canvas.evaluate(
+      (element, point) => document.elementFromPoint(point.x, point.y) === element,
+      start
+    )
+  ).toBe(true);
   const at = (units: number) => ({
     x: start.x + handle.dx * handle.pixelsPerUnit * units,
     y: start.y + handle.dy * handle.pixelsPerUnit * units
@@ -456,7 +479,7 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
   await page.keyboard.press('Escape');
   await expectNothingSelected(page, canvas);
   await expect.poll(height, READ_TIMEOUT).toBeCloseTo(28, 4);
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
 
   // Picking the cap again starts from the committed value, not the refusal.
   await expect
@@ -577,6 +600,6 @@ test('exact entry keeps one rung: Escape closes the keypad, the next clears', as
   await expect
     .poll(async () => (await wall())?.diameter ?? null, READ_TIMEOUT)
     .toBeCloseTo(28, 5);
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
   expect(consoleErrors).toEqual([]);
 });

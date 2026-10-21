@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import { expect, stubApi, test } from './openzcad-fixtures';
+import { expect, stubApi, test, revealModelPanel } from './openzcad-fixtures';
 
 /**
  * Production QA CAD-004 (2026-10-11), ROADMAP F05: in an inch project the Box
@@ -24,9 +24,7 @@ async function createInchProject(page: Page, name: string) {
 }
 
 async function bodyReadout(page: Page) {
-  const bodies = page.getByRole('button', { name: /^Objects \d/ });
-  if ((await bodies.getAttribute('aria-expanded')) === 'false')
-    await bodies.click();
+  await revealModelPanel(page, 'Objects');
   await page.locator('.body-row:not(.consumed) .body-row-main').first().click();
   await expect(inspectorOf(page).getByText(/in³/).first()).toBeVisible();
   return inspectorOf(page);

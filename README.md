@@ -11,9 +11,9 @@ Use the hosted beta at [zcad.app](https://zcad.app/).
 > be reset, migrated, or not carried forward to a future production release.
 > Keep independent local or exported backups of anything important.
 
-![OpenZCAD Build workspace with the Mounting Bracket demo and Parameters drawer open](docs/design/readme-mounting-bracket.png)
+![OpenZCAD Build workspace with the Mounting Bracket demo, the Objects panel docked left and the Parameters panel docked right](docs/design/readme-mounting-bracket.png)
 
-*Current workspace, captured 18 October 2026 from the built-in demos running locally.*
+*Current Build workspace in the default Essentials panel layout, captured 20 October 2026 from the built-in demos running locally.*
 
 ## Highlights
 
@@ -21,7 +21,7 @@ Use the hosted beta at [zcad.app](https://zcad.app/).
 
 **Direct manipulation.** Model directly on the geometry: drag a face to offset it, drag a sketch region into a solid, drag an edge to grow a fillet or chamfer, move/rotate bodies with a snapping gizmo — every drag pairs with exact numeric entry. In-viewport sketching includes snapping, live dimensions, direct tools for every schema-backed constraint kind, and placed driving distance/angle dimensions whose values accept named-parameter expressions. Box select, selection filters, a right-click menu, and an Esc ladder round out the interaction model.
 
-**A viewport-first workspace.** Floating controls leave the model at the centre: a compact tool rail on the left, view and inspection instruments on the right, and command search along the bottom. The right-hand **Objects**, **History**, and **Parameters** buttons open a shared model drawer, which also holds Revisions and Diagnostics. Objects lists bodies and sketches with selection and visibility controls. **Build** exposes the full modeling tools, **Tweak** focuses on parameters and export, and **View** presents the model for inspection. `Ctrl/Cmd+K` opens command search; `Ctrl/Cmd+,` opens Settings over the workspace. The optional [AI assistant](#ai-assistant-experimental) shares the bottom prompt and proposes changes for review before you apply them.
+**A viewport-first workspace.** Floating controls leave the model at the centre: a compact tool rail on the left, view and inspection instruments on the right, and command search along the bottom. **Objects**, **History**, **Parameters**, **Revisions**, and **Diagnostics** are independent model panels with buttons on the right-hand rail. A rail press opens a panel unpinned beside the rail; **Pin** docks it and **Close** remembers where it was. Drag a panel's header, or its rail icon, to stack it in a column at either screen edge, start a new column, or float it as a movable, resizable window over the model — a slot preview shows where it will land — and its **Move** menu does the same from the keyboard. **View options** on the rail picks a layout preset (**Essentials**, the default, docks Objects left and Parameters right) and holds **Hide all panels** (`Ctrl/Cmd+\`), **Lock layout**, **Compact rows**, and the panel width. The layout is remembered per device; on a stage 720 px wide or less, panels open one at a time instead of docking. Objects lists bodies and sketches with selection and visibility controls. **Build** exposes the full modeling tools, **Tweak** focuses on parameters and export, and **View** presents the model for inspection. `Ctrl/Cmd+K` opens command search; `Ctrl/Cmd+,` opens Settings over the workspace. The optional [AI assistant](#ai-assistant-experimental) shares the bottom prompt and proposes changes for review before you apply them.
 
 **One kernel, one topology language.** Remus builds every document, imported STEP included. OpenCascade is absent from the modeling adapter; it is used by the non-shipping parity reference and by the separately loaded FreeCAD import converter. Remus publishes exact topology witnesses and a safe subset of semantic lineage ([ADR-011](docs/adrs/ADR-011-unified-topology-identity.md), [ADR-013](docs/adrs/ADR-013-persistent-topology-lineage.md), [ADR-020](docs/adrs/ADR-020-remus-browser-kernel.md)). Verified primitive, sweep, transform, boolean, blend, and pattern lineage can survive upstream edits within supported subsets. Where complete evolution is not proved, references remain hash-only; ambiguous or unsupported resolution fails closed.
 
@@ -35,6 +35,13 @@ Use the hosted beta at [zcad.app](https://zcad.app/).
 </p>
 
 *Pipe Flange in Tweak mode (left) and Heat Sink in View mode (right).*
+
+<p align="center">
+  <img src="docs/design/readme-panels-floating-window.png" width="49%" alt="Build workspace with History and Revisions stacked in a floating window over the model, beside the docked Objects and Parameters panels" />
+  <img src="docs/design/readme-panels-view-options.png" width="49%" alt="The View options menu open on the panel rail, listing the layout presets with Essentials checked, the Hide all, Lock and Compact settings, and the panel width" />
+</p>
+
+*Model panels: History and Revisions stacked in a floating window (left), and the View options menu (right).*
 
 ## Roadmap
 
@@ -57,8 +64,8 @@ Open the URL Vite prints. The start screen offers three built-in demos: **Mounti
 
 To explore the workspace:
 
-1. Open **Mounting Bracket** and use the right-hand **Parameters** button to inspect its named dimensions.
-2. Open **History** to inspect features and revisions, or **Objects** to select and hide bodies or sketches.
+1. Open **Mounting Bracket**: on a new device the **Parameters** panel is docked on the right with its named dimensions, and **Objects** on the left to select and hide bodies or sketches.
+2. Use the right-hand rail's **History** and **Revisions** buttons to inspect features and revisions, and **Pin** a panel to keep it docked.
 3. Switch to **Tweak** to adjust exposed parameters, or **View** to inspect the result.
 4. Use **File → Export project** for an editable backup, or export STEP/STL for downstream use.
 

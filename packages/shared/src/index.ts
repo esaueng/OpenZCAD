@@ -3655,6 +3655,13 @@ export interface AppSettings {
     middleDrag: SettingsMiddleDrag;
     /** Whether wheel input is auto-classified or forced to one device. */
     pointerNavigation: SettingsPointerNavigation;
+    /**
+     * Vertical field of view of the perspective camera, in whole degrees.
+     * Orthographic is its own projection and ignores it.
+     */
+    fieldOfView: number;
+    /** How opaque faces stay in X-ray, as a whole percentage. */
+    xrayOpacity: number;
   };
   sketching: {
     /** Sketch-plane grid visibility is independent from grid snapping. */
@@ -3755,6 +3762,27 @@ export const CLOUD_AUTOSAVE_DELAY_BOUNDS = {
   default: 3
 } as const;
 
+/**
+ * The perspective field of view, in degrees. Narrow reads close to
+ * orthographic; wide exaggerates depth, and past 90 the edges of the view
+ * stretch more than they inform.
+ */
+export const VIEWPORT_FIELD_OF_VIEW_BOUNDS = {
+  min: 15,
+  max: 90,
+  default: 45
+} as const;
+
+/**
+ * Face opacity in X-ray, in percent. Below 10 the faces vanish and the view
+ * is a wireframe; above 90 nothing behind them reads.
+ */
+export const XRAY_OPACITY_BOUNDS = {
+  min: 10,
+  max: 90,
+  default: 35
+} as const;
+
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   schemaVersion: APP_SETTINGS_SCHEMA_VERSION,
   general: {
@@ -3777,7 +3805,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     displayMode: 'shaded-edges',
     zoomToCursor: true,
     middleDrag: 'pan',
-    pointerNavigation: 'auto'
+    pointerNavigation: 'auto',
+    fieldOfView: VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
+    xrayOpacity: XRAY_OPACITY_BOUNDS.default
   },
   sketching: {
     gridVisible: true,

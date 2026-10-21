@@ -1,7 +1,7 @@
 import type { ProjectDocument } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
 import { elbowPath, roundProfile, sweptAlong } from '../fixtures/swept-elbow';
-import { expect, test, stubApi } from './openzcad-fixtures';
+import { expect, test, stubApi, revealModelPanel } from './openzcad-fixtures';
 
 /**
  * Production QA CAD-003 (2026-10-11): a round profile swept 270° along an arc
@@ -67,9 +67,7 @@ test('discloses a faceted round sweep in Diagnostics and explains Smooth', async
   });
 
   // Disclosure only: the body is still the one the QA run measured.
-  const bodies = page.getByRole('button', { name: /^Objects \d/ });
-  if ((await bodies.getAttribute('aria-expanded')) === 'false')
-    await bodies.click();
+  await revealModelPanel(page, 'Objects');
   await page.locator('.body-row:not(.consumed) .body-row-main').first().click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
   await expect(inspector).toContainText('3910.71 mm³');

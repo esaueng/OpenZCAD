@@ -37,6 +37,14 @@ export interface ProjectView {
   initialView: ViewportCameraState | null;
   hiddenBodyIds: ReadonlySet<string>;
   setHiddenBodyIds: Dispatch<SetStateAction<ReadonlySet<string>>>;
+  /**
+   * Sketches shown or hidden by hand on this device, by sketch id; a sketch
+   * with no entry follows the default (hidden once a feature consumes it).
+   */
+  sketchVisibility: Readonly<Record<string, boolean>>;
+  setSketchVisibility: Dispatch<
+    SetStateAction<Readonly<Record<string, boolean>>>
+  >;
   /** Applies a project's remembered view, falling back to the defaults. */
   restore(projectId: string, defaults: ProjectViewDefaults): void;
   /** The viewport reported a live pose; keep it immediately available. */
@@ -49,9 +57,13 @@ export interface ProjectView {
   forget(): void;
 }
 
+const NO_SKETCH_VISIBILITY: Readonly<Record<string, boolean>> = {};
+
 /**
  * Per-project viewport preferences — camera pose, projection, display
- * settings, and which bodies are hidden — and their persistence.
+ * settings, which bodies are hidden and which sketches were shown or hidden
+ * by hand — and their persistence. All of it is this device's view, kept
+ * beside the document and never in it.
  *
  * Two things used to write the same payload from different places: the
  * viewport reporting a new camera pose, and an effect watching the settings
@@ -70,6 +82,8 @@ export function useProjectView(projectId: string | null): ProjectView {
   const [hiddenBodyIds, setHiddenBodyIds] = useState<ReadonlySet<string>>(
     new Set()
   );
+  const [sketchVisibility, setSketchVisibility] =
+    useState<Readonly<Record<string, boolean>>>(NO_SKETCH_VISIBILITY);
   /**
    * The last pose the viewport reported. Held in a ref because the settings
    * effect below needs to persist it without re-running on every orbit.
@@ -89,7 +103,10 @@ export function useProjectView(projectId: string | null): ProjectView {
       camera,
       projection: next?.projection ?? projection,
       settings: next?.settings ?? settings,
-      hiddenBodyIds: [...(next?.hiddenBodyIds ?? hiddenBodyIds)]
+      hiddenBodyIds: [...(next?.hiddenBodyIds ?? hiddenBodyIds)],
+      ...(Object.keys(sketchVisibility).length > 0
+        ? { sketchVisibility: { ...sketchVisibility } }
+        : {})
     });
   }
 
@@ -107,9 +124,11 @@ export function useProjectView(projectId: string | null): ProjectView {
   }, [
     projectId,
     hiddenBodyIds,
+    sketchVisibility,
     projection,
     settings.displayMode,
-    settings.showGrid
+    settings.showGrid,
+    settings.xray
   ]);
 
   return {
@@ -120,6 +139,8 @@ export function useProjectView(projectId: string | null): ProjectView {
     initialView,
     hiddenBodyIds,
     setHiddenBodyIds,
+    sketchVisibility,
+    setSketchVisibility,
     restore(id, defaults) {
       const saved = loadProjectView(id);
       const camera = saved?.camera ?? null;
@@ -136,6 +157,7 @@ export function useProjectView(projectId: string | null): ProjectView {
         pointerNavigation: defaults.pointerNavigation
       });
       setHiddenBodyIds(new Set(saved?.hiddenBodyIds ?? []));
+      setSketchVisibility(saved?.sketchVisibility ?? NO_SKETCH_VISIBILITY);
     },
     onCameraChange(_id, camera) {
       cameraRef.current = camera;
@@ -152,7 +174,10 @@ export function useProjectView(projectId: string | null): ProjectView {
             camera: cameraRef.current,
             projection,
             settings,
-            hiddenBodyIds: [...hiddenBodyIds]
+            hiddenBodyIds: [...hiddenBodyIds],
+            ...(Object.keys(sketchVisibility).length > 0
+              ? { sketchVisibility: { ...sketchVisibility } }
+              : {})
           }
         : null;
     },
@@ -162,7 +187,18 @@ export function useProjectView(projectId: string | null): ProjectView {
       setProjection(view.projection);
       setSettings((current) => ({ ...current, ...view.settings }));
       setHiddenBodyIds(new Set(view.hiddenBodyIds));
-      if (projectId) saveProjectView(projectId, view);
+      // A view from another device carries no sketch choices; this device's
+      // own stay, and are written back with the applied view.
+      const sketches = view.sketchVisibility ?? sketchVisibility;
+      if (view.sketchVisibility) setSketchVisibility(view.sketchVisibility);
+      if (projectId) {
+        saveProjectView(projectId, {
+          ...view,
+          ...(Object.keys(sketches).length > 0
+            ? { sketchVisibility: { ...sketches } }
+            : {})
+        });
+      }
     },
     forget() {
       cameraRef.current = null;

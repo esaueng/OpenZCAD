@@ -1,17 +1,21 @@
-import { accessSync, existsSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { defineConfig } from '@playwright/test';
 import base from '../../playwright.config';
 import {
   assertBenchmarkCheckout,
   benchmarkCheckout
 } from '../support/benchmarkCheckout';
+import { privateArtifactPaths } from '../support/privateArtifacts';
 
 if (!process.env.OZ_PERF || !process.env.OZ_PERF_HOLDER_STEP)
   throw new Error(
     'Set OZ_PERF=1 and OZ_PERF_HOLDER_STEP to a local STEP source.'
   );
-accessSync(process.env.OZ_PERF_HOLDER_STEP);
+const paths = privateArtifactPaths(process.env.OZ_PERF_OUT, undefined, [
+  process.env.OZ_PERF_HOLDER_STEP
+]);
+process.env.OZ_PERF_OUT = paths.output;
+// Vite executes from apps/web, so resolve a relative source before it starts.
+process.env.OZ_PERF_HOLDER_STEP = paths.inputs[0]!;
 const checkout = benchmarkCheckout();
 // Playwright loads this config again in workers. Preserve the coordinator's
 // build identity instead of silently repinning after a checkout switch.
@@ -24,25 +28,12 @@ process.env.H02_LOCKFILE_SHA256 = checkout.lockfileSha256;
 process.env.OPENZCAD_BUILD_COMMIT = checkout.sourceCommit;
 if (!['disabled', 'enabled'].includes(process.env.H02_CACHE_MODE ?? ''))
   throw new Error('H02_CACHE_MODE must be disabled or enabled.');
-if (!process.env.OZ_PERF_OUT || !isAbsolute(process.env.OZ_PERF_OUT))
-  throw new Error(
-    'Set OZ_PERF_OUT to an absolute local path outside the repository.'
-  );
-
-const output = process.env.OZ_PERF_OUT;
-let ancestor = resolve(output);
-while (!existsSync(ancestor)) ancestor = dirname(ancestor);
-const canonicalOutput = resolve(
-  realpathSync(ancestor),
-  relative(ancestor, resolve(output))
-);
-const relativeOutput = relative(realpathSync(process.cwd()), canonicalOutput);
-if (
-  relativeOutput !== '..' &&
-  !relativeOutput.startsWith(`..${sep}`) &&
-  !isAbsolute(relativeOutput)
-)
-  throw new Error('Private samples must remain outside the repository.');
+// Reject every cleanup/write destination before Playwright or Vite can write.
+paths.artifact(`h02-build-${process.env.H02_CACHE_MODE}`);
+if (process.env.H02_SESSION_PROBE === '1') {
+  paths.artifact('h02-private-session-artifacts');
+  paths.artifact('private-session.openzcad');
+}
 
 const server = base.webServer as {
   command: string;
@@ -56,8 +47,7 @@ export default defineConfig({
   grep: /private holder/,
   workers: 1,
   retries: 0,
-  outputDir: resolve(
-    dirname(output),
+  outputDir: paths.artifact(
     `h02-playwright-${process.env.H02_CACHE_MODE}-${process.env.H02_PAIR ?? 'unpaired'}`
   ),
   webServer: {

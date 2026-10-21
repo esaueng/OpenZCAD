@@ -44,6 +44,8 @@ import {
 } from 'lucide-react';
 import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
+  VIEWPORT_FIELD_OF_VIEW_BOUNDS,
+  XRAY_OPACITY_BOUNDS,
   type AccountDeletionScope,
   type AccountStorageUsage,
   type AppSettings,
@@ -1167,6 +1169,43 @@ export function SettingsPage({
                     onChange={(showGrid) =>
                       patch({
                         viewport: { ...settings.viewport, showGrid }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Field of view"
+                  hint="Perspective only. The part keeps its size on screen."
+                >
+                  <NumberSetting
+                    min={VIEWPORT_FIELD_OF_VIEW_BOUNDS.min}
+                    max={VIEWPORT_FIELD_OF_VIEW_BOUNDS.max}
+                    integer
+                    unit="°"
+                    value={settings.viewport.fieldOfView}
+                    label="Perspective field of view"
+                    onCommit={(fieldOfView) =>
+                      patch({
+                        viewport: { ...settings.viewport, fieldOfView }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="X-ray opacity"
+                  hint="How solid faces stay in X-ray."
+                >
+                  <NumberSetting
+                    min={XRAY_OPACITY_BOUNDS.min}
+                    max={XRAY_OPACITY_BOUNDS.max}
+                    step={5}
+                    integer
+                    unit="%"
+                    value={settings.viewport.xrayOpacity}
+                    label="X-ray face opacity"
+                    onCommit={(xrayOpacity) =>
+                      patch({
+                        viewport: { ...settings.viewport, xrayOpacity }
                       })
                     }
                   />

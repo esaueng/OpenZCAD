@@ -4,11 +4,15 @@ export interface WorkspaceResumeState {
     target: [number, number, number];
     orthographicZoom: number;
     orthographicHalfHeight?: number;
+    /** Perspective field of view the pose was framed at, in degrees. */
+    fieldOfView?: number;
   };
   projection: 'perspective' | 'orthographic';
   settings: {
     showGrid: boolean;
     displayMode: 'shaded-edges' | 'shaded' | 'wireframe';
+    /** X-ray over the display mode. Absent from older devices' state. */
+    xray?: boolean;
   };
   hiddenBodyIds: string[];
   selectedBodyIds: string[];
@@ -105,13 +109,25 @@ export function parseWorkspaceResumeState(
       orthographicZoom: camera.orthographicZoom,
       ...(typeof camera.orthographicHalfHeight === 'number'
         ? { orthographicHalfHeight: camera.orthographicHalfHeight }
+        : {}),
+      // Optional and dropped rather than refused when unusable: an older
+      // device's state has none, and the pose is still good without it.
+      ...(typeof camera.fieldOfView === 'number' &&
+      Number.isFinite(camera.fieldOfView) &&
+      camera.fieldOfView > 0 &&
+      camera.fieldOfView < 180
+        ? { fieldOfView: camera.fieldOfView }
         : {})
     },
     projection: value.projection as WorkspaceResumeState['projection'],
     settings: {
       showGrid: settings.showGrid,
       displayMode:
-        settings.displayMode as WorkspaceResumeState['settings']['displayMode']
+        settings.displayMode as WorkspaceResumeState['settings']['displayMode'],
+      // Always set: an older device's state has none, and an absent flag
+      // must still turn X-ray off where the session resumes, as it was off
+      // where it was left.
+      xray: settings.xray === true
     },
     hiddenBodyIds: [...value.hiddenBodyIds],
     selectedBodyIds: [...value.selectedBodyIds],

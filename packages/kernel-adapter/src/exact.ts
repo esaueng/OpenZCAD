@@ -1,6 +1,12 @@
 import { CooperativeWork } from './cooperative-work';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import { projectShapeMesh } from './exact-display-projection';
+import {
+  drawingTessellationOfShape,
+  MAX_DRAWING_TESSELLATION_BYTES,
+  type DrawingBodyTessellation
+} from './exact-drawing-tessellation';
+export type { DrawingBodyTessellation } from './exact-drawing-tessellation';
 import { recognizePlanarEmboss } from './planar-emboss';
 import {
   rebuildReporter,
@@ -696,6 +702,19 @@ export interface ExactKernelAdapter {
     deflection: number,
     tolerances?: MeshExportTolerances
   ): Promise<MeshQualityReport>;
+  /**
+   * D01 drawing projection input: each body meshed at its nominal display
+   * deflection and put in canonical order (see
+   * `exact-drawing-tessellation.ts`), so the same exact model always draws
+   * the same lines whether it was edited in this session or rebuilt cold.
+   * Refuses by name a body that is unknown, consumed or parameter-hidden,
+   * and a request whose tessellation would exceed
+   * `MAX_DRAWING_TESSELLATION_BYTES` across all its bodies.
+   */
+  drawingTessellation(
+    document: ProjectDocument,
+    bodyIds: BodyId[]
+  ): Promise<Record<BodyId, DrawingBodyTessellation>>;
   /**
    * Solves one sketch's persisted constraints with the kernel's GCS and
    * returns the solved geometry plus classification, DOF, and per-constraint
@@ -3849,6 +3868,25 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             : format === 'glb'
               ? orientGlbForGltf(bytes)
               : (bytes as Uint8Array<ArrayBuffer>);
+    });
+  }
+
+  drawingTessellation(
+    document: ProjectDocument,
+    bodyIds: BodyId[]
+  ): Promise<Record<BodyId, DrawingBodyTessellation>> {
+    return this.withExportBuild(document, (kernel, build) => {
+      const hidden = getParameterHiddenBodyIds(document);
+      const result: Record<BodyId, DrawingBodyTessellation> = {};
+      // One budget for the whole request: many modest bodies add up too.
+      const budget = { remainingBytes: MAX_DRAWING_TESSELLATION_BYTES };
+      for (const bodyId of bodyIds) {
+        const shape = build.shapes.get(bodyId);
+        if (!shape || hidden.has(bodyId) || build.consumed.has(bodyId))
+          throw new Error(`Body ${bodyId} has no exact geometry to draw.`);
+        result[bodyId] = drawingTessellationOfShape(kernel, shape, budget);
+      }
+      return result;
     });
   }
 
