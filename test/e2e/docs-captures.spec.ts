@@ -119,9 +119,7 @@ test('README: Build workspace in the default Essentials layout', async ({
   await openMountingBracket(page, ESSENTIALS);
   await expect(modelPanel(page, 'Objects')).toBeVisible();
   await expect(page.locator('.panel-column[data-side="left"]')).toHaveCount(1);
-  await expect(page.locator('.panel-column[data-side="right"]')).toHaveCount(
-    1
-  );
+  await expect(page.locator('.panel-column[data-side="right"]')).toHaveCount(1);
   await capture(page, 'readme-mounting-bracket.png');
 });
 
