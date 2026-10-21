@@ -281,6 +281,8 @@ export class BodyEdgeOverlay extends THREE.Group {
   private readonly faceBoundaryTier: PresenceTier;
   private displayMode: DisplayMode = 'shaded-edges';
   private xrayEnabled = true;
+  /** The X-ray display: translucent faces, every edge drawn. */
+  private xrayView = false;
   private bodySelected = false;
 
   constructor(
@@ -654,6 +656,23 @@ export class BodyEdgeOverlay extends THREE.Group {
     return true;
   }
 
+  /**
+   * X-ray display. The faces turn translucent and stop writing depth, so
+   * every edge — the hidden ones included — passes the depth test and draws;
+   * they draw in the wireframe ink at full strength, since a faint face no
+   * longer gives the idle slate anything to read against. Edges show even
+   * in the Shaded mode: seeing the structure is what X-ray is for.
+   */
+  setXrayView(enabled: boolean) {
+    if (this.xrayView === enabled) {
+      return false;
+    }
+    this.xrayView = enabled;
+    this.applyIdleStyle();
+    this.refreshVisibility();
+    return true;
+  }
+
   /** Applies CAD display mode without rebuilding any edge batch. */
   setDisplayMode(mode: DisplayMode) {
     this.displayMode = mode;
@@ -680,11 +699,10 @@ export class BodyEdgeOverlay extends THREE.Group {
       material.opacity = 1;
       return;
     }
-    material.color.setHex(
-      this.displayMode === 'wireframe' ? EDGE_WIREFRAME_COLOR : EDGE_IDLE_COLOR
-    );
+    const inked = this.displayMode === 'wireframe' || this.xrayView;
+    material.color.setHex(inked ? EDGE_WIREFRAME_COLOR : EDGE_IDLE_COLOR);
     material.linewidth = EDGE_IDLE_WIDTH;
-    material.opacity = this.displayMode === 'wireframe' ? 1 : EDGE_IDLE_OPACITY;
+    material.opacity = inked ? 1 : EDGE_IDLE_OPACITY;
   }
 
   /** Keeps all three stable fat-line materials correct after a resize. */
@@ -739,7 +757,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   }
 
   private refreshVisibility() {
-    const showEdges = this.displayMode !== 'shaded';
+    const showEdges = this.displayMode !== 'shaded' || this.xrayView;
     // Wireframe only: with the faces shown, a seam reads as a line drawn
     // across a surface for no reason.
     if (this.seamEdges) {

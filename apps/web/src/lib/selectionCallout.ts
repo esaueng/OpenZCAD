@@ -88,7 +88,8 @@ export interface SelectionCalloutOperation {
   onSelectAllEdges(): void;
 }
 
-export type SelectionCalloutKind = 'face' | 'edges' | 'body' | 'bodies';
+export type SelectionCalloutKind =
+  'face' | 'faces' | 'edges' | 'body' | 'bodies';
 
 export interface SelectionCalloutVerbInput {
   kind: SelectionCalloutKind;
@@ -174,8 +175,9 @@ function edgeVerb(
 /**
  * The verbs for a pick, in the order they are usually reached for:
  * a face offers its own edit (Resize and Offset on a primitive, Offset, or
- * Radius on a cylinder), Sketch and Hole; edges offer Fillet and Chamfer;
- * a body Move and Mirror; several
+ * Radius on a cylinder), Sketch and Hole; several faces (a box sweep) the
+ * tools that take a list of faces, Shell and Draft; edges offer Fillet and
+ * Chamfer; a body Move and Mirror; several
  * bodies Union first. At most {@link MAX_SELECTION_VERBS}.
  */
 export function selectionCalloutVerbs(
@@ -217,6 +219,12 @@ export function selectionCalloutVerbs(
       }
       break;
     }
+    case 'faces':
+      verbs = [
+        toolVerb('shell', availability),
+        toolVerb('draft', availability)
+      ];
+      break;
     case 'edges':
       verbs = [edgeVerb('fillet', input), edgeVerb('chamfer', input)];
       break;

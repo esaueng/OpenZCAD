@@ -44,6 +44,7 @@ import {
   diagnoseImportedSolid,
   faceCandidatesForSolid,
   modifierChainRootPrimitive,
+  patternJournalEdgeOutputs,
   patternJournalFaceClaims,
   rederiveBoxModifierLineage,
   rederiveCylinderModifierLineage,
@@ -2350,12 +2351,15 @@ interface PatternInstanceBuild {
   readonly matrix: Float64Array;
   readonly solids: number[];
   readonly claims: (ReadonlyMap<number, number> | undefined)[];
+  readonly edgeOutputs: (ReadonlySet<number> | undefined)[];
 }
 
 /** What one source solid's kernel pattern produced. */
 interface KernelPatternCopies {
   readonly solids: number[];
   readonly claims: (ReadonlyMap<number, number> | undefined)[] | null;
+  /** Grid-only: complete checked journal subjects, not source-edge claims. */
+  readonly edgeOutputs?: ReadonlySet<number>[] | null;
 }
 
 /**
@@ -2483,7 +2487,8 @@ function patternInstances(
     instance: arm.label(index),
     matrix: arm.matrix(index),
     solids: perSource.map((copies) => copies.solids[index]!),
-    claims: perSource.map((copies) => copies.claims?.[index])
+    claims: perSource.map((copies) => copies.claims?.[index]),
+    edgeOutputs: perSource.map((copies) => copies.edgeOutputs?.[index])
   }));
 }
 
@@ -2508,21 +2513,32 @@ function patternInstanceLineage(
       'The source body has no verified topology lineage.'
     );
   }
+  const includeEdges = instances.some((instance) =>
+    instance.edgeOutputs.every((outputs) => outputs !== undefined)
+  );
+  const candidates = includeEdges
+    ? topologyCandidatesForSolid
+    : faceCandidatesForSolid;
   const derived = deriveRemusPatternInstanceLineage({
     producingFeatureId: feature.featureId,
     sourceLineage: target.lineage,
     sourceCandidates: target.solids.flatMap((solid) =>
-      faceCandidatesForSolid(kernel, solid)
+      candidates(kernel, solid)
     ),
     instances: instances.map((instance) => ({
       instance: instance.instance,
       matrix: Array.from(instance.matrix),
-      candidates: instance.solids.flatMap((solid) =>
-        faceCandidatesForSolid(kernel, solid)
-      ),
+      candidates: instance.solids.flatMap((solid) => candidates(kernel, solid)),
       claimedFaces: new Map(
         instance.claims.flatMap((claims) => [...(claims ?? [])])
-      )
+      ),
+      ...(instance.edgeOutputs.every((outputs) => outputs !== undefined)
+        ? {
+            journalEdges: new Set(
+              instance.edgeOutputs.flatMap((outputs) => [...outputs])
+            )
+          }
+        : {})
     }))
   });
   return derived.faceReferences.size > 0
@@ -2590,7 +2606,7 @@ function linearPatternArm(
   };
 }
 
-/** The grid arm: one kernel `gridPattern` per source solid. */
+/** The grid arm: one journaled kernel grid per source solid. */
 function gridPatternArm(
   kernel: RemusKernel,
   columns: { direction: Vec3; spacing: number; count: number },
@@ -2623,9 +2639,8 @@ function gridPatternArm(
     kernelCopies: (solid) => {
       const columnSense = columns.spacing < 0 ? -1 : 1;
       const rowSense = rows.spacing < 0 ? -1 : 1;
-      const produced = kernelPatternInstanceSolids(
-        kernel,
-        kernel.gridPattern(
+      const journal = decodeRemusPatternJournal(
+        kernel.gridPatternJournaled(
           solid,
           columns.direction.x * columnSense,
           columns.direction.y * columnSense,
@@ -2637,21 +2652,37 @@ function gridPatternArm(
           Math.abs(rows.spacing),
           columns.count,
           rows.count
-        ),
+        )
+      );
+      const produced = kernelPatternInstanceSolids(
+        kernel,
+        journal.compound,
         solid,
         total
       );
-      // `gridPattern` lays its copies out row-major — index `row * columns +
-      // column` — while this feature has always published them column-major.
-      // Reordering here keeps the solid order, and so every mesh and export
-      // that walks it, exactly as it was.
+      // Journal outputs follow the kernel's row-major instance order. Check
+      // the claims against that order before moving solids and claims into
+      // the column-major order this feature has always published.
+      const claims = patternJournalFaceClaims(
+        kernel,
+        journal.op,
+        Array.from<number>(kernel.getSolidFaces(solid)),
+        produced
+      );
+      const edgeOutputs = patternJournalEdgeOutputs(
+        kernel,
+        journal.op,
+        produced
+      );
+      const publicationOrder = Array.from(
+        { length: total },
+        (_unused, ordinal) => rowOf(ordinal) * columns.count + columnOf(ordinal)
+      );
       return {
-        solids: Array.from(
-          { length: total },
-          (_unused, ordinal) =>
-            produced[rowOf(ordinal) * columns.count + columnOf(ordinal)]!
-        ),
-        claims: null
+        solids: publicationOrder.map((index) => produced[index]!),
+        claims: claims && publicationOrder.map((index) => claims[index]),
+        edgeOutputs:
+          edgeOutputs && publicationOrder.map((index) => edgeOutputs[index]!)
       };
     }
   };

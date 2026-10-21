@@ -94,7 +94,8 @@ function project(
   };
 }
 
-interface ProjectedPoint {
+/** A projected point; `behind` marks one the camera cannot see at all. */
+export interface ProjectedPoint {
   x: number;
   y: number;
   behind: boolean;
@@ -102,7 +103,10 @@ interface ProjectedPoint {
 
 const INTERSECTION_EPSILON = 1e-9;
 
-function pointInRect(point: ProjectedPoint, rect: ScreenRect): boolean {
+export function pointInRect(
+  point: { x: number; y: number },
+  rect: ScreenRect
+): boolean {
   return (
     point.x >= rect.left &&
     point.x <= rect.right &&
@@ -112,8 +116,8 @@ function pointInRect(point: ProjectedPoint, rect: ScreenRect): boolean {
 }
 
 function cross(
-  a: ProjectedPoint,
-  b: ProjectedPoint,
+  a: { x: number; y: number },
+  b: { x: number; y: number },
   c: { x: number; y: number }
 ): number {
   return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
@@ -156,8 +160,8 @@ function pointOnSegment(
 }
 
 function segmentsIntersect(
-  a: ProjectedPoint,
-  b: ProjectedPoint,
+  a: { x: number; y: number },
+  b: { x: number; y: number },
   c: { x: number; y: number },
   d: { x: number; y: number }
 ): boolean {
@@ -182,7 +186,28 @@ function segmentsIntersect(
   );
 }
 
-function triangleIntersectsRect(
+/** Whether a screen segment touches the rectangle anywhere. */
+export function segmentIntersectsRect(
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  rect: ScreenRect
+): boolean {
+  if (pointInRect(a, rect) || pointInRect(b, rect)) {
+    return true;
+  }
+  const corners = [
+    { x: rect.left, y: rect.top },
+    { x: rect.right, y: rect.top },
+    { x: rect.right, y: rect.bottom },
+    { x: rect.left, y: rect.bottom }
+  ];
+  return corners.some((corner, index) =>
+    segmentsIntersect(a, b, corner, corners[(index + 1) % corners.length]!)
+  );
+}
+
+/** Whether a screen triangle and the rectangle share any area or boundary. */
+export function triangleIntersectsRect(
   a: ProjectedPoint,
   b: ProjectedPoint,
   c: ProjectedPoint,
