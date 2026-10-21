@@ -875,3 +875,7 @@ isolates eager-to-idle lineage checkpoint reuse as a cause of history-dependent
 publication with unchanged raw B-rep bytes. Its manual strict publication check
 fails; aligning the demand histories or restarting the adapter matches fresh.
 This diagnostic does not replace any private acceptance comparison.
+
+## H02 PR #805 M5 Pro candidate (2026-10-21)
+
+[Six candidate-only matched arms](qa/2026-10-21/h02-pr805-m5-pro-qualification.md) record p95 exact completion 3,966.6 → 3,639.0 ms (8.3% lower under load), below the required 20%; enabled median rises 3,284.9 → 3,420.3 ms. Every enabled arm fails the unchanged fixed Text restore assertion. Private raw B-rep and normalized publication match through 80 edits, refusal recovery and actual worker restart, but retirement/replay-budget coverage remains unmet. Post-GC JS/embedder/backing observations stay separate from whole-worker retention. H02 remains Partial; these results do not accept the detached Text branch or supersede baseline samples.

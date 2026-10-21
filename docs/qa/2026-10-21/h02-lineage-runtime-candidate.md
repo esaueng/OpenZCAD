@@ -128,3 +128,7 @@ timing arms.
 The proposed detached Text branch, branch-preserving kernel support and
 whole-worker retained-memory acceptance remain separate open requirements. This
 candidate does not accept or implement that branch.
+
+## M5 Pro qualification result
+
+[Candidate target-hardware evidence](h02-pr805-m5-pro-qualification.md) records all six new arms: observed p95 improvement is 8.3%, below the unchanged 20% target, and every enabled arm fails fixed Text restore. Raw/publication equality passes through 80 edits, refusal recovery and worker restart; required private retirement/replay-budget coverage still fails because fresh-arena fallback prevents it. Whole-worker memory and quiet-host acceptance remain open. H02 stays Partial; the candidate has not met acceptance.
