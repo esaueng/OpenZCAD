@@ -86,13 +86,26 @@ async function selectCylinderCap(page: Page, name: string) {
   const cylinder = page.locator('.feature-row-main', { hasText: 'Cylinder' });
   await expect(cylinder).toBeVisible();
   await cylinder.click();
-  await page.locator('.viewer-host canvas').evaluate((element) => {
-    element.dispatchEvent(
-      new CustomEvent('openzcad:e2e-select-cylinder', {
-        detail: { surface: 'cap' }
-      })
-    );
-  });
+  // A held topology pick reports no selection while the exact model is
+  // updating. Wait for the cap acknowledgement before exercising shortcuts.
+  await expect
+    .poll(() =>
+      page.locator('.viewer-host canvas').evaluate(
+        (element) =>
+          new Promise<string | null>((resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-select-cylinder', {
+                detail: {
+                  surface: 'cap',
+                  resolve: (geometry: { surfaceType: string } | null) =>
+                    resolve(geometry?.surfaceType ?? null)
+                }
+              })
+            );
+          })
+      )
+    )
+    .toBe('plane');
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toBeVisible();
