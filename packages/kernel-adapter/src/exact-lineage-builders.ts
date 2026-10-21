@@ -271,9 +271,12 @@ export function patternJournalBoundaryOutputs(
   kernel: RemusKernel,
   op: number,
   instanceSolids: readonly number[],
-  includeVertices = true
+  includeVertices = true,
+  expectedKind: 'grid_pattern' | 'linear_pattern' = 'grid_pattern'
 ): PatternJournalBoundaryOutputs | null {
   try {
+    if (expectedKind !== 'grid_pattern' && expectedKind !== 'linear_pattern')
+      return null;
     const queried = instanceSolids.map((solid) =>
       Array.from(kernel.getSolidEdges(solid))
     );
@@ -315,7 +318,7 @@ export function patternJournalBoundaryOutputs(
     const entry = entries[0]!;
     const detail = entry.detail as Record<string, unknown> | undefined;
     if (
-      entry.kind !== 'grid_pattern' ||
+      entry.kind !== expectedKind ||
       entry.type !== 'evolution' ||
       !detail ||
       detail.origin !== 'construction' ||

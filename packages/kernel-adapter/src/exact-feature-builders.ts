@@ -2569,7 +2569,8 @@ function linearPatternArm(
   kernel: RemusKernel,
   direction: Vec3,
   spacing: number,
-  count: number
+  count: number,
+  qualifyBoundary: boolean
 ): PatternArm {
   // The kernel takes a positive step along a direction it normalizes, so a
   // negative spacing — which this feature has always accepted — is the same
@@ -2605,8 +2606,21 @@ function linearPatternArm(
         solid,
         count
       );
+      const boundary = qualifyBoundary
+        ? patternJournalBoundaryOutputs(
+            kernel,
+            journal.op,
+            solids,
+            true,
+            'linear_pattern'
+          )
+        : null;
       return {
         solids,
+        edgeOutputs: boundary?.edges,
+        vertexOutputs: boundary?.vertices,
+        vertexUnavailableReason:
+          boundary?.vertexUnavailableReason ?? 'journal-unavailable',
         claims: patternJournalFaceClaims(
           kernel,
           journal.op,
@@ -2863,7 +2877,13 @@ function buildPatternFeature(
     if (Math.abs(spacing) <= GEOMETRY_EPSILON) {
       throw new Error('Pattern spacing cannot be zero.');
     }
-    arm = linearPatternArm(kernel, direction, spacing, count);
+    arm = linearPatternArm(
+      kernel,
+      direction,
+      spacing,
+      count,
+      target.solids.length === 1
+    );
   } else if (data.patternKind === 'grid') {
     const spacing = resolveParamValue(
       data.spacing,
@@ -3084,7 +3104,8 @@ function buildPatternFeature(
     result.shapes.set(feature.bodyId, {
       solids,
       lineage,
-      ...(data.patternKind === 'grid' && target.solids.length === 1
+      ...((data.patternKind === 'grid' || data.patternKind === 'linear') &&
+      target.solids.length === 1
         ? {
             nativeVertices: qualifyGridNativeVertices({
               kernel,

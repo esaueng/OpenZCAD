@@ -1,4 +1,4 @@
-/** GRID-only native construction evidence; none of these handles are persisted. */
+/** Translation-only GRID/LINEAR evidence; native handles are never persisted. */
 import type {
   EdgeTopologyReferenceV5,
   EdgeWitnessV1,
