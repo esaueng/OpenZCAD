@@ -1342,16 +1342,23 @@ export const commandFactories = {
     payload: SketchReferenceDimensionAddInput,
     label = 'Add reference dimension'
   ): CommandDefinition<SketchReferenceDimensionAddInput> {
-    const withIds = {
+    // The topology snapshot belongs to this command, not a caller's live
+    // composite or a later edited input object.
+    const withIds = deepClone({
       ...payload,
       ids: payload.ids ?? { annotationId: createSketchReferenceAnnotationId() }
-    };
-    return makeCommand(
+    });
+    const command = makeCommand(
       'reference-dimension.add',
       label,
       withIds,
       (document) => addSketchReferenceDimension(document, withIds).document
     );
+    return {
+      ...command,
+      // A recorded log entry must not share the command's mutable payload.
+      serialize: () => deepClone(command.serialize())
+    };
   },
   deleteSketchReferenceDimension(
     payload: SketchReferenceDimensionDeleteInput,

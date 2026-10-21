@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
+  createSketchCompositeCornerTarget,
+  createSketchCompositeSideTarget,
   describeSketchReferenceDimension,
   resolveSketchReferenceDimension,
   toSketchReferenceAnnotationId,
@@ -8,10 +10,14 @@ import {
   type SketchNode,
   type SketchObjectData,
   type SketchPointRef,
+  type SketchReferencePointTarget,
+  type SketchReferenceCurveTarget,
   type SketchReferenceDistanceMode,
   type SketchReferenceDimensionData
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
+import { sketchCompositeTargetNames } from '../lib/sketch/compositeTargetNames';
+import { SKETCH_SNAP_LIMITS } from '../lib/sketch/session';
 
 interface Props {
   sketch: SketchNode;
@@ -45,6 +51,20 @@ export function SketchReferenceDimensions({
       ? `${object.label} (position ${index + 1})`
       : object.label
   }));
+  const composites = sketch.composites ?? [];
+  const namedComposites = composites.slice(0, SKETCH_SNAP_LIMITS.objects);
+  const compositeNames = sketchCompositeTargetNames(namedComposites);
+  let compositeOptionCount = 0;
+  for (const composite of namedComposites) {
+    compositeOptionCount += composite.edgeIds.length;
+    if (compositeOptionCount > SKETCH_SNAP_LIMITS.targets) break;
+  }
+  const compositeOptionsLimited =
+    composites.length > SKETCH_SNAP_LIMITS.objects ||
+    compositeOptionCount > SKETCH_SNAP_LIMITS.targets;
+  const selectableComposites = compositeOptionsLimited ? [] : namedComposites;
+  const nameOfComposite = (id: (typeof composites)[number]['compositeId']) =>
+    compositeNames.get(id) ?? 'Composite';
   const points = namedObjects.flatMap((object) => {
     const roles: SketchPointRef['point'][] =
       object.data.objectKind === 'line'
@@ -59,13 +79,40 @@ export function SketchReferenceDimensions({
       label: `${object.label}.${point}`
     }));
   });
+  points.push(
+    ...selectableComposites.flatMap((composite) =>
+      composite.edgeIds.map((_, index) => ({
+        key: JSON.stringify(
+          createSketchCompositeCornerTarget(composite, index)
+        ),
+        label: `${nameOfComposite(composite.compositeId)} · Corner ${index + 1}`
+      }))
+    )
+  );
   const entities = namedObjects
     .filter((o) =>
       kind === 'angle'
         ? o.data.objectKind === 'line'
         : o.data.objectKind === 'circle' || o.data.objectKind === 'arc'
     )
-    .map((o) => ({ key: o.id, label: o.label }));
+    .map((o) => ({
+      key: o.id,
+      label: o.label,
+      target: o.id as SketchReferenceCurveTarget
+    }));
+  if (kind === 'angle')
+    entities.push(
+      ...selectableComposites.flatMap((composite) =>
+        composite.edgeIds.map((_, index) => {
+          const target = createSketchCompositeSideTarget(composite, index);
+          return {
+            key: JSON.stringify(target),
+            label: `${nameOfComposite(composite.compositeId)} · Side ${index + 1}`,
+            target
+          };
+        })
+      )
+    );
   const options = kind === 'distance' ? points : entities;
   const a = options.some((o) => o.key === first) ? first : '';
   const b = options.some((o) => o.key === second) ? second : '';
@@ -76,18 +123,23 @@ export function SketchReferenceDimensions({
         ? {
             dimensionKind: kind,
             ...(distanceMode !== 'absolute' ? { distanceMode } : {}),
-            a: JSON.parse(a) as SketchPointRef,
-            b: JSON.parse(b) as SketchPointRef
+            a: JSON.parse(a) as SketchReferencePointTarget,
+            b: JSON.parse(b) as SketchReferencePointTarget
           }
         : kind === 'radius'
           ? { dimensionKind: kind, objectId: a as EntityId }
-          : { dimensionKind: kind, a: a as EntityId, b: b as EntityId };
+          : {
+              dimensionKind: kind,
+              a: entities.find((option) => option.key === a)!.target,
+              b: entities.find((option) => option.key === b)!.target
+            };
   const byId = new Map(objects.map((o) => [o.id as EntityId, o.data]));
   const candidate = data
     ? resolveSketchReferenceDimension(
         byId,
         { annotationId: toSketchReferenceAnnotationId('sref_candidate'), data },
-        resolve
+        resolve,
+        composites
       )
     : null;
   const valueText = (
@@ -107,6 +159,12 @@ export function SketchReferenceDimensions({
         Saved measured values. They do not constrain geometry. Horizontal and
         vertical distances follow the sketch axes.
       </p>
+      {compositeOptionsLimited ? (
+        <p role="status">
+          Composite targets are unavailable because this sketch exceeds the
+          shape or target limit. Primitive references remain available.
+        </p>
+      ) : null}
       <label>
         Reference type
         <select
@@ -205,11 +263,13 @@ export function SketchReferenceDimensions({
           const outcome = resolveSketchReferenceDimension(
             byId,
             reference,
-            resolve
+            resolve,
+            composites
           );
           const description = describeSketchReferenceDimension(
             reference.data,
-            nameOf
+            nameOf,
+            nameOfComposite
           );
           return (
             <li key={reference.annotationId} aria-label={description}>

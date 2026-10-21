@@ -1,9 +1,9 @@
 # S04: Constraint-capable composite sketch identity
 
 Status: **implemented for new drawings by the decision below (schema v26).**
-The sections after it are the original proposal, kept as history and as the
-design for the legacy parametric objects, which this decision leaves as they
-are.
+The original proposal below is retained as history and as the design for
+legacy parametric objects, which this decision leaves as they are. S04-B
+defines the named-target extension for the new held-line shapes.
 
 Baseline: OpenZCAD `main` at `efa2662910199e6d23d63f337e35d3d591614d21`.
 
@@ -78,10 +78,56 @@ The rules:
   record on save. `normalizeDocument` validates the record's shape and never
   synthesizes one.
 
-Still open under S04: corner and side snap or dimension targets that name
-a composite (S02-D), and the region-provenance tokens and the
-explicit-conversion command for the **legacy** parametric objects, as
+The next section delivers corner and side snap or reference-dimension targets
+for these held-line composites. Region-provenance tokens and the explicit
+conversion command for the **legacy** parametric objects remain open, as
 designed below.
+
+## Composite target identity (S04-B)
+
+This bounded slice builds on the held-line decision above and on S02-E in
+[PR #797](https://github.com/esaueng/OpenZCAD/pull/797). It uses additive schema
+v32 from that branch's v31 baseline; pending independent schema migrations must
+be reconciled against the actual merged base before integration.
+
+A saved corner or side target names its composite ID, a zero-based index, and
+an immutable version-1 snapshot of the complete ordered side and helper IDs.
+Identity contains no coordinates. Indices must be finite integers in range;
+constructors and resolvers never wrap them. The current record must have the
+same ordered members, and the complete shape must resolve before any corner
+or side is published. Missing owners, changed topology, broken loops, missing
+helpers and changed helper ownership produce a named unresolved reference.
+No primitive, array-order or nearest-geometry fallback repairs one silently.
+
+Reference distances accept primitive points and composite corners; reference
+angles accept primitive lines and composite sides, including mixed targets.
+The palette and snapping expose human-readable corner/side names. Driving
+relations retain their existing real line/endpoint aliases and solver inputs.
+The same physical target selected through two aliases is refused as the same
+target. Absolute, horizontal and vertical reference modes keep their S02-E
+semantics along the sketch's axes; annotation identity, placements and targets
+survive resize, replay, undo/redo, backup and reopen.
+
+Deleting any side or helper would dissolve a named composite, so a saved
+composite-target annotation blocks that deletion until it is explicitly
+removed. Unrelated primitive reference/deletion behavior remains unchanged.
+Malformed descriptors are refused on load, including undo/redo nodes; a
+well-formed target whose topology no longer resolves stays visible and
+removable. Schema versions before v32 cannot carry composite-target records.
+Legacy saves without them remain additive and do not synthesize descriptors.
+
+Acceptance covers rectangle methods and regular polygons, strict topology and
+ownership validation, reversed/reordered/replaced members, broken geometry,
+primitive/composite alias collisions, deletion and recovery, mixed and
+projected measurements, and saved command replay. Exact-kernel regressions
+must show unchanged geometry/solve inputs and cache keys for annotation-only
+edits, and analytic downstream extrusion results after resizing the real
+lines. Browser coverage must exercise creation, read-only activation, target
+retention, undo/reopen and compact controls.
+
+This slice does not add legacy parametric-object conversion, virtual solver
+geometry, datum targets, composite centers or legacy region-provenance tokens.
+The existing held lines remain the source of exact regions and lineage.
 
 ## Decision summary (original proposal)
 

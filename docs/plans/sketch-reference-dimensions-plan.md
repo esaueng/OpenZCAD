@@ -1,8 +1,13 @@
 # S02 — Driven and reference sketch dimensions
 
-**Status:** primitive S02-A/B/C implemented. `ROADMAP.md` remains the delivery
-ledger. S02-D composite/datum consumers and a separate display-unit selector
-remain open.
+**Status:** primitive S02-A/B/C and projected S02-E implemented. `ROADMAP.md`
+remains the delivery ledger. S04-B extends references to new held-line
+rectangle/polygon corners and sides through the shared measured-target unions;
+driving constraints keep primitive identities. Its schema v32 topology,
+qualification and deletion contract is authoritative in the
+[composite target identity plan](sketch-composite-identity-plan.md#composite-target-identity-s04-b).
+Legacy parametric-composite and datum consumers, plus a separate display-unit
+selector, remain open. The original proposal below retains design history.
 
 ## Projected reference distances (S02-E)
 

@@ -44,15 +44,18 @@ export function avoidSketchDimensionOverlays(
   ];
   if (labels.length === 0) return;
   const bounds = container.getBoundingClientRect();
-  const occupied = occupiedRoot
-    ? [
-        ...occupiedRoot.querySelectorAll<HTMLElement>(
-          `.viewer-rail-stack, .viewer-rail, .viewport-readout, .sketch-relations, .sketch-flyouts, ${MODEL_PANEL_OBSTACLES}, .workspace-column-float`
-        )
-      ]
-        .map((element) => element.getBoundingClientRect())
-        .filter((rect) => rect.width > 0 && rect.height > 0)
-    : [];
+  const occupied = [
+    ...(occupiedRoot?.querySelectorAll<HTMLElement>(
+      `.viewer-rail-stack, .viewer-rail, .viewport-readout, .sketch-relations, .sketch-flyouts, ${MODEL_PANEL_OBSTACLES}, .workspace-column-float`
+    ) ?? []),
+    // The floating topbar is a sibling of the viewport. Its islands still
+    // occupy the viewport's top edge and must leave labels interactive.
+    ...(container
+      .closest('.app-shell')
+      ?.querySelectorAll<HTMLElement>('.topbar-island') ?? [])
+  ]
+    .map((element) => element.getBoundingClientRect())
+    .filter((rect) => rect.width > 0 && rect.height > 0);
   const pad = 4;
   const gap = 8;
   const clamp = (value: number, min: number, max: number) =>

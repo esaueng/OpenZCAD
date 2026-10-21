@@ -25,6 +25,8 @@ import {
 } from '@openzcad/geometry';
 import {
   createId,
+  sketchCompositeTargetMemberIds,
+  sketchReferenceDimensionObjectIds,
   toEntityId,
   type EntityId,
   type ParamValue,
@@ -497,12 +499,7 @@ function referenceDimensionsOn(
   objectId: EntityId
 ): boolean {
   return (sketch.referenceDimensions ?? []).some((dimension) => {
-    const data = dimension.data;
-    return data.dimensionKind === 'distance'
-      ? data.a.objectId === objectId || data.b.objectId === objectId
-      : data.dimensionKind === 'radius'
-        ? data.objectId === objectId
-        : data.a === objectId || data.b === objectId;
+    return sketchReferenceDimensionObjectIds(dimension.data).includes(objectId);
   });
 }
 
@@ -515,13 +512,22 @@ function referenceMeasuresPoint(
   sketch: SketchNode,
   ref: SketchPointRef
 ): boolean {
-  return (sketch.referenceDimensions ?? []).some(
-    ({ data }) =>
-      data.dimensionKind === 'distance' &&
+  return (sketch.referenceDimensions ?? []).some(({ data }) => {
+    if (data.dimensionKind === 'distance')
+      return [data.a, data.b].some((point) =>
+        'objectId' in point
+          ? point.objectId === ref.objectId && point.point === ref.point
+          : sketchCompositeTargetMemberIds(point).includes(ref.objectId)
+      );
+    return (
+      data.dimensionKind === 'angle' &&
       [data.a, data.b].some(
-        (point) => point.objectId === ref.objectId && point.point === ref.point
+        (side) =>
+          typeof side !== 'string' &&
+          sketchCompositeTargetMemberIds(side).includes(ref.objectId)
       )
-  );
+    );
+  });
 }
 
 const MOVED_END_MEASURED =

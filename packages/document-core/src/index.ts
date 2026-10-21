@@ -16,6 +16,7 @@ import { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 export { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 import {
   assertNoReferenceDimensionDependents,
+  assertReferenceCommandSchema,
   assertSketchReferenceDimensions
 } from './sketch-reference-dimensions';
 export * from './sketch-reference-dimensions';
@@ -858,11 +859,12 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
     );
   }
   const document = withReadableHistory(input);
+  assertReferenceCommandSchema(document);
   // Schema v30 drawings: validated as written, never synthesized or rewritten.
   assertDrawingSet(document.drawings);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch') {
-      assertSketchReferenceDimensions(node);
+      assertSketchReferenceDimensions(node, document.schemaVersion);
       assertSketchComposites(node);
     }
     if (node.kind === 'parameter') assertParameterQuantity(node);
@@ -922,6 +924,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // a saved rectangle or polygon object stays the parametric object it was.
   // Schema v31 reference-distance modes are optional. Never fill one in:
   // an absent mode remains the saved absolute distance without rewriting it.
+  // Schema v32 composite reference targets are explicit snapshots. Never
+  // derive them from a legacy object or promote an older carrier silently.
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version
   // boundary prevents older clients from accepting meshes they cannot rebuild.
