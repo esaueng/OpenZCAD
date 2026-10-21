@@ -44,13 +44,14 @@ import {
   diagnoseImportedSolid,
   faceCandidatesForSolid,
   modifierChainRootPrimitive,
-  patternJournalEdgeOutputs,
+  patternJournalBoundaryOutputs,
   patternJournalFaceClaims,
   rederiveBoxModifierLineage,
   rederiveCylinderModifierLineage,
   rederivePrimitiveDirectEditLineage,
   topologyCandidatesForSolid
 } from './exact-lineage-builders';
+import { qualifyGridNativeVertices } from './remus-native-vertices';
 import { measureFaceGeometry } from './exact-measure';
 import {
   drillHole,
@@ -2352,6 +2353,10 @@ interface PatternInstanceBuild {
   readonly solids: number[];
   readonly claims: (ReadonlyMap<number, number> | undefined)[];
   readonly edgeOutputs: (ReadonlySet<number> | undefined)[];
+  readonly vertexOutputs: (ReadonlySet<number> | undefined)[];
+  readonly vertexUnavailableReason: (
+    'event-budget' | 'journal-unavailable' | undefined
+  )[];
 }
 
 /** What one source solid's kernel pattern produced. */
@@ -2360,6 +2365,9 @@ interface KernelPatternCopies {
   readonly claims: (ReadonlyMap<number, number> | undefined)[] | null;
   /** Grid-only: complete checked journal subjects, not source-edge claims. */
   readonly edgeOutputs?: ReadonlySet<number>[] | null;
+  readonly vertexOutputs?: ReadonlySet<number>[] | null;
+  readonly vertexUnavailableReason?:
+    'event-budget' | 'journal-unavailable' | null;
 }
 
 /**
@@ -2488,7 +2496,11 @@ function patternInstances(
     matrix: arm.matrix(index),
     solids: perSource.map((copies) => copies.solids[index]!),
     claims: perSource.map((copies) => copies.claims?.[index]),
-    edgeOutputs: perSource.map((copies) => copies.edgeOutputs?.[index])
+    edgeOutputs: perSource.map((copies) => copies.edgeOutputs?.[index]),
+    vertexOutputs: perSource.map((copies) => copies.vertexOutputs?.[index]),
+    vertexUnavailableReason: perSource.map(
+      (copies) => copies.vertexUnavailableReason ?? undefined
+    )
   }));
 }
 
@@ -2610,7 +2622,8 @@ function linearPatternArm(
 function gridPatternArm(
   kernel: RemusKernel,
   columns: { direction: Vec3; spacing: number; count: number },
-  rows: { direction: Vec3; spacing: number; count: number }
+  rows: { direction: Vec3; spacing: number; count: number },
+  includeVertices: boolean
 ): PatternArm {
   const total = columns.count * rows.count;
   const columnOf = (ordinal: number) => Math.floor(ordinal / rows.count);
@@ -2669,10 +2682,11 @@ function gridPatternArm(
         Array.from<number>(kernel.getSolidFaces(solid)),
         produced
       );
-      const edgeOutputs = patternJournalEdgeOutputs(
+      const boundaryOutputs = patternJournalBoundaryOutputs(
         kernel,
         journal.op,
-        produced
+        produced,
+        includeVertices
       );
       const publicationOrder = Array.from(
         { length: total },
@@ -2682,7 +2696,13 @@ function gridPatternArm(
         solids: publicationOrder.map((index) => produced[index]!),
         claims: claims && publicationOrder.map((index) => claims[index]),
         edgeOutputs:
-          edgeOutputs && publicationOrder.map((index) => edgeOutputs[index]!)
+          boundaryOutputs &&
+          publicationOrder.map((index) => boundaryOutputs.edges[index]!),
+        vertexOutputs:
+          boundaryOutputs?.vertices &&
+          publicationOrder.map((index) => boundaryOutputs.vertices![index]!),
+        vertexUnavailableReason:
+          boundaryOutputs?.vertexUnavailableReason ?? 'journal-unavailable'
       };
     }
   };
@@ -2874,7 +2894,8 @@ function buildPatternFeature(
     arm = gridPatternArm(
       kernel,
       { direction, spacing, count },
-      { direction: direction2, spacing: spacing2, count: count2 }
+      { direction: direction2, spacing: spacing2, count: count2 },
+      target.solids.length === 1
     );
   } else {
     const angle = resolveParamValue(
@@ -3056,12 +3077,31 @@ function buildPatternFeature(
       )
     });
   } else {
+    const lineage = withPatternDiagnostic(
+      patternInstanceLineage(kernel, feature, target, instances),
+      declined
+    );
     result.shapes.set(feature.bodyId, {
       solids,
-      lineage: withPatternDiagnostic(
-        patternInstanceLineage(kernel, feature, target, instances),
-        declined
-      )
+      lineage,
+      ...(data.patternKind === 'grid' && target.solids.length === 1
+        ? {
+            nativeVertices: qualifyGridNativeVertices({
+              kernel,
+              producingFeatureId: feature.featureId,
+              sourceSolid: target.solids[0]!,
+              sourceLineage: target.lineage,
+              resultLineage: lineage,
+              instances: instances.map((instance) => ({
+                solid: instance.solids[0]!,
+                instance: instance.instance,
+                matrix: instance.matrix,
+                journalVertices: instance.vertexOutputs[0],
+                unavailableReason: instance.vertexUnavailableReason[0]
+              }))
+            })
+          }
+        : {})
     });
   }
   // Consumed only once a shape exists, which is what the other eight consume

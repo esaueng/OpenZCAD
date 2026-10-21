@@ -2311,11 +2311,43 @@ export interface EdgeCurve {
   };
 }
 
+/**
+ * Runtime-only identity qualified from native construction vertex subjects.
+ * This is deliberately outside TopologyReferenceV5 and the document schema:
+ * stored datum sources continue to address a named edge and canonical end.
+ */
+export interface RuntimeVertexReference {
+  kind: 'vertex';
+  producingFeatureId: FeatureId;
+  lineageName: string;
+  witnessVersion: 1;
+  witness: { position: QuantizedTopologyPoint };
+}
+
+export type RuntimeVertexUnavailableReason =
+  | 'journal-unavailable'
+  | 'event-budget'
+  | 'unsupported-source'
+  | 'ambiguous-anchor'
+  | 'conflicting-anchors'
+  | 'stale-evidence';
+
+/** Exact native vertex geometry, with the same body-scoped ids edges use. */
+export interface VertexTopology {
+  /** Transient body/solid numbering, never a WASM handle or persisted id. */
+  id: number;
+  point: Vector3;
+  reference?: RuntimeVertexReference;
+  unavailableReason?: RuntimeVertexUnavailableReason;
+}
+
 export interface BodyTopology {
   /** Independent exact raised-profile group; it does not require an opening. */
   recognizedPlanarEmboss?: PlanarEmbossSelection;
   faces: FaceTopology[];
   edges: EdgeTopology[];
+  /** Derived native points; their optional references are runtime-only. */
+  vertices?: VertexTopology[];
   /** Non-overlapping exact proofs created while imported topology is live. */
   recognizedImportedFeatures?: RecognizedImportedFeature[];
   /** Bounded imported-body dimensions with a successful changed-value proof. */
