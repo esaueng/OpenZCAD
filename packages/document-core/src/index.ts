@@ -920,6 +920,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // it while migrating: unmarked saved sketches must retain revision 1 geometry.
   // Schema v26 adds S04 sketch composites. Never synthesize one:
   // a saved rectangle or polygon object stays the parametric object it was.
+  // Schema v31 reference-distance modes are optional. Never fill one in:
+  // an absent mode remains the saved absolute distance without rewriting it.
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version
   // boundary prevents older clients from accepting meshes they cannot rebuild.

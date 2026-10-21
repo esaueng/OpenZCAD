@@ -9,6 +9,7 @@ import type {
   SketchReferenceAnnotationId,
   SketchReferenceDimension,
   SketchReferenceDimensionData,
+  SketchReferenceDistanceMode,
   UnitSystem
 } from './index';
 
@@ -38,8 +39,9 @@ export type SketchReferenceDimensionOutcome =
   | {
       status: 'current';
       dimensionKind: 'distance';
-      /** Measured Euclidean distance in sketch-local (document) units. */
+      /** Measured separation in sketch-local (document) units. */
       value: number;
+      distanceMode?: SketchReferenceDistanceMode;
       a: SketchReferencePoint;
       b: SketchReferencePoint;
     }
@@ -117,6 +119,17 @@ function hasDrivingField(value: Record<string, unknown>): boolean {
   );
 }
 
+function isDistanceMode(
+  value: unknown
+): value is SketchReferenceDistanceMode | undefined {
+  return (
+    value === undefined ||
+    value === 'absolute' ||
+    value === 'horizontal' ||
+    value === 'vertical'
+  );
+}
+
 /** Structural guard for persisted payloads. Rejects driving-dimension fields
  * (`value`, `valueDeg`, `constraintKind`, …): a reference row carries no
  * authored numeric value and no `ParamValue`, so a payload smuggling one is
@@ -135,7 +148,8 @@ export function isSketchReferenceDimensionData(
       return (
         isSketchPointRef(value.a) &&
         isSketchPointRef(value.b) &&
-        Object.keys(value).length === 3
+        isDistanceMode(value.distanceMode) &&
+        Object.keys(value).length === ('distanceMode' in value ? 4 : 3)
       );
     case 'radius':
       return (
@@ -287,6 +301,12 @@ export function validateSketchReferenceDimensionData(
 ): void {
   switch (data.dimensionKind) {
     case 'distance': {
+      if (!isDistanceMode(data.distanceMode)) {
+        throw creationError(
+          annotationId,
+          'the reference distance mode is unknown.'
+        );
+      }
       const aData = objectsById.get(data.a.objectId);
       if (!aData) {
         throw creationError(
@@ -509,6 +529,13 @@ export function resolveSketchReferenceDimension(
   const data = annotation.data;
   switch (data.dimensionKind) {
     case 'distance': {
+      if (!isDistanceMode(data.distanceMode)) {
+        return unresolved(
+          data.dimensionKind,
+          annotationId,
+          'the reference distance mode is unknown.'
+        );
+      }
       if (
         data.a.objectId === data.b.objectId &&
         data.a.point === data.b.point
@@ -527,7 +554,14 @@ export function resolveSketchReferenceDimension(
       if (!b.ok) {
         return unresolved(data.dimensionKind, annotationId, b.reason);
       }
-      const value = Math.hypot(b.point.x - a.point.x, b.point.y - a.point.y);
+      const dx = b.point.x - a.point.x;
+      const dy = b.point.y - a.point.y;
+      const value =
+        data.distanceMode === 'horizontal'
+          ? Math.abs(dx)
+          : data.distanceMode === 'vertical'
+            ? Math.abs(dy)
+            : Math.hypot(dx, dy);
       if (!Number.isFinite(value)) {
         return unresolved(
           data.dimensionKind,
@@ -540,6 +574,7 @@ export function resolveSketchReferenceDimension(
         status: 'current',
         dimensionKind: 'distance',
         value,
+        ...(data.distanceMode ? { distanceMode: data.distanceMode } : {}),
         a: a.point,
         b: b.point
       };
@@ -757,7 +792,7 @@ export function describeSketchReferenceDimension(
 ): string {
   switch (data.dimensionKind) {
     case 'distance':
-      return `Reference distance · ${nameOf(data.a.objectId)}.${data.a.point} ↔ ${nameOf(data.b.objectId)}.${data.b.point}`;
+      return `Reference ${data.distanceMode && data.distanceMode !== 'absolute' ? `${data.distanceMode} ` : ''}distance · ${nameOf(data.a.objectId)}.${data.a.point} ↔ ${nameOf(data.b.objectId)}.${data.b.point}`;
     case 'radius':
       return `Reference radius · ${nameOf(data.objectId)}`;
     case 'angle':

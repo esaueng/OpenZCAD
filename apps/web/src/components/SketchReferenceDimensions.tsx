@@ -8,6 +8,7 @@ import {
   type SketchNode,
   type SketchObjectData,
   type SketchPointRef,
+  type SketchReferenceDistanceMode,
   type SketchReferenceDimensionData
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
@@ -34,6 +35,8 @@ export function SketchReferenceDimensions({
     useState<SketchReferenceDimensionData['dimensionKind']>('distance');
   const [first, setFirst] = useState('');
   const [second, setSecond] = useState('');
+  const [distanceMode, setDistanceMode] =
+    useState<SketchReferenceDistanceMode>('absolute');
   const namedObjects = objects.map((object, index) => ({
     ...object,
     label: objects.some(
@@ -72,6 +75,7 @@ export function SketchReferenceDimensions({
       : kind === 'distance'
         ? {
             dimensionKind: kind,
+            ...(distanceMode !== 'absolute' ? { distanceMode } : {}),
             a: JSON.parse(a) as SketchPointRef,
             b: JSON.parse(b) as SketchPointRef
           }
@@ -100,8 +104,8 @@ export function SketchReferenceDimensions({
     <fieldset className="sketch-reference-dimensions" disabled={disabled}>
       <legend>Reference dimensions</legend>
       <p>
-        Saved measured values. They do not constrain geometry. Distance is
-        absolute between the selected points.
+        Saved measured values. They do not constrain geometry. Horizontal and
+        vertical distances follow the sketch axes.
       </p>
       <label>
         Reference type
@@ -113,11 +117,28 @@ export function SketchReferenceDimensions({
             setSecond('');
           }}
         >
-          <option value="distance">Distance (absolute)</option>
+          <option value="distance">Distance</option>
           <option value="radius">Radius</option>
           <option value="angle">Angle</option>
         </select>
       </label>
+      {kind === 'distance' ? (
+        <label>
+          Distance type
+          <select
+            value={distanceMode}
+            onChange={(event) =>
+              setDistanceMode(
+                event.currentTarget.value as SketchReferenceDistanceMode
+              )
+            }
+          >
+            <option value="absolute">Absolute</option>
+            <option value="horizontal">Horizontal</option>
+            <option value="vertical">Vertical</option>
+          </select>
+        </label>
+      ) : null}
       <label>
         {kind === 'radius' ? 'Reference geometry' : 'Reference from'}
         <select

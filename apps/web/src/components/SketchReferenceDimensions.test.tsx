@@ -36,6 +36,44 @@ function fixture() {
 }
 
 describe('reference dimension palette', () => {
+  it.each([
+    ['horizontal', 3],
+    ['vertical', 4]
+  ] as const)(
+    'authors a read-only %s distance with its mode and measured value',
+    (distanceMode, value) => {
+      const { sketch, objects } = fixture();
+      const onAdd = vi.fn<(command: AnyCommand) => void>();
+      render(
+        <SketchReferenceDimensions
+          sketch={sketch}
+          objects={objects}
+          units="mm"
+          resolve={(v) => (typeof v === 'number' ? v : undefined)}
+          disabled={false}
+          onCommand={onAdd}
+        />
+      );
+      fireEvent.change(screen.getByLabelText('Distance type'), {
+        target: { value: distanceMode }
+      });
+      for (const [name, point] of [
+        ['Reference from', 'start'],
+        ['Reference to', 'end']
+      ])
+        fireEvent.change(screen.getByLabelText(name!), {
+          target: { value: JSON.stringify({ objectId: objects[0]!.id, point }) }
+        });
+      expect(screen.getByRole('status').textContent).toBe(
+        `Measured: ${value} mm`
+      );
+      expect(screen.queryByRole('textbox')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Add reference' }));
+      expect(onAdd.mock.calls[0]![0].payload).toMatchObject({
+        data: { dimensionKind: 'distance', distanceMode }
+      });
+    }
+  );
   it('creates an absolute point distance from current measured targets, without a value field', () => {
     const { sketch, objects } = fixture();
     const onAdd = vi.fn<(command: AnyCommand) => void>();

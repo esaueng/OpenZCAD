@@ -1,11 +1,32 @@
 # S02 — Driven and reference sketch dimensions
 
 **Status:** primitive S02-A/B/C implemented. `ROADMAP.md` remains the delivery
-ledger. S02-D composite/datum consumers, horizontal/vertical distance variants
-and a separate display-unit selector remain open.
+ledger. S02-D composite/datum consumers and a separate display-unit selector
+remain open.
 
-The implementation uses the already merged optional `referenceDimensions` field
-on schema v16; it introduces no new schema envelope. The existing sketch palette
+## Projected reference distances (S02-E)
+
+Acceptance selected against schema v30: add an optional `distanceMode` of
+`absolute`, `horizontal` or `vertical` to primitive distance references in
+schema v31. Omitted mode keeps every saved absolute reference unchanged.
+Horizontal and vertical values are the nonnegative X/Y separations in the
+sketch's local frame; zero projected distance is valid for distinct targets.
+Rotating or mirroring geometry recomputes those separations along the same
+sketch axes; moving the whole datum frame preserves them. Mode is target
+metadata, never an authored value, constraint or exact-history input.
+
+The existing reference palette authors the mode. Labels identify horizontal
+and vertical distances with H/V badges and full accessible names, and their
+dimension spans align with the measured axis, with witness lines back to both
+real targets. Stored identity, mode and label placement survive command replay,
+undo/redo, backup and reopen. Unknown modes are malformed, including in stored
+undo/redo nodes. Cover primitive units, zero projection, target edits and
+rotation/reflection, distinct read-only activation, and unchanged solve/cache
+evidence. Composite/datum targets, driving-distance modes and an independent
+display-unit selector are excluded.
+
+The initial implementation used the merged optional `referenceDimensions` field
+on schema v16 without a new schema envelope. The existing sketch palette
 authors primitive reference distances, radii and angles. Values are measured and
 read-only, labels carry Reference identity, and placement/deletion are ordinary
 replayable commands. Annotation edits preserve GCS evidence and exact-history

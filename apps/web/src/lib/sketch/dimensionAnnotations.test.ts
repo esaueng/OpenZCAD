@@ -50,6 +50,67 @@ const line: SketchObjectData = {
 };
 
 describe('persistent sketch dimensions', () => {
+  it.each(['horizontal', 'vertical'] as const)(
+    'draws %s reference witnesses along the measured axis',
+    (distanceMode) => {
+      const objectId = 'ent_projected' as never;
+      const [annotation] = sketchDimensionAnnotations(
+        [{ id: objectId, data: line }],
+        [],
+        resolve,
+        'mm',
+        undefined,
+        [
+          {
+            annotationId: toSketchReferenceAnnotationId('sref_projected'),
+            data: {
+              dimensionKind: 'distance',
+              distanceMode,
+              a: { objectId, point: 'start' },
+              b: { objectId, point: 'end' }
+            }
+          }
+        ]
+      );
+      const horizontal = distanceMode === 'horizontal';
+      expect(annotation?.label).toBe(horizontal ? '(H 3 mm)' : '(V 4 mm)');
+      expect(annotation?.distanceMode).toBe(distanceMode);
+      const { start, end } = annotation!.span!;
+      expect(horizontal ? start.y : start.x).toBe(horizontal ? end.y : end.x);
+      expect(horizontal ? [start.x, end.x] : [start.y, end.y]).toEqual(
+        horizontal ? [0, 3] : [0, 4]
+      );
+      expect(annotation!.lines.map((points) => points[0])).toEqual([
+        { x: 0, y: 0 },
+        { x: 3, y: 4 }
+      ]);
+    }
+  );
+
+  it('labels zero projected distance without a false Euclidean span', () => {
+    const objectId = 'ent_zero' as never;
+    const [annotation] = sketchDimensionAnnotations(
+      [{ id: objectId, data: { ...line, x2: 0 } }],
+      [],
+      resolve,
+      'mm',
+      undefined,
+      [
+        {
+          annotationId: toSketchReferenceAnnotationId('sref_zero'),
+          data: {
+            dimensionKind: 'distance',
+            distanceMode: 'horizontal',
+            a: { objectId, point: 'start' },
+            b: { objectId, point: 'end' }
+          }
+        }
+      ]
+    );
+    expect(annotation?.label).toBe('(H 0 mm)');
+    expect(annotation?.span).toBeUndefined();
+    expect(annotation?.lines).toHaveLength(2);
+  });
   it('tags reference identities, measures current geometry and places an arc radius on the arc', () => {
     const arcId = 'ent_arc' as never;
     const lineId = 'ent_line' as never;

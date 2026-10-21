@@ -191,7 +191,7 @@ export function buildSketchDimensions(
     button.setAttribute(
       'aria-label',
       reference
-        ? `Reference ${annotation.kind}, ${annotation.label}`
+        ? `Reference ${annotation.distanceMode && annotation.distanceMode !== 'absolute' ? `${annotation.distanceMode} ` : ''}${annotation.kind}, ${annotation.label}`
         : `Edit driving ${annotation.kind}: ${annotation.label}`
     );
     button.title = reference

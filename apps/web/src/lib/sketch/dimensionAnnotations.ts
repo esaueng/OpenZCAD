@@ -21,6 +21,7 @@ export interface SketchDimensionAnnotation {
   id: string;
   identity?: SketchDimensionIdentity;
   kind: 'distance' | 'angle' | 'radius';
+  distanceMode?: 'absolute' | 'horizontal' | 'vertical';
   label: string;
   /** Derived placement before the user's persistent decluttering offset. */
   baseAnchor?: Point;
@@ -252,19 +253,33 @@ export function sketchDimensionAnnotations(
       kind: outcome.dimensionKind
     };
     if (outcome.dimensionKind === 'distance') {
-      const { a, b, value } = outcome;
+      const { a, b, value, distanceMode } = outcome;
       const length = Math.hypot(b.x - a.x, b.y - a.y);
       const shift = { x: -(b.y - a.y) * 0.15, y: (b.x - a.x) * 0.15 };
-      const start = { x: a.x + shift.x, y: a.y + shift.y };
-      const end = { x: b.x + shift.x, y: b.y + shift.y };
+      const offset = Math.max(length, 1) * 0.15;
+      const start =
+        distanceMode === 'horizontal'
+          ? { x: a.x, y: Math.max(a.y, b.y) + offset }
+          : distanceMode === 'vertical'
+            ? { x: Math.max(a.x, b.x) + offset, y: a.y }
+            : { x: a.x + shift.x, y: a.y + shift.y };
+      const end =
+        distanceMode === 'horizontal'
+          ? { x: b.x, y: start.y }
+          : distanceMode === 'vertical'
+            ? { x: start.x, y: b.y }
+            : { x: b.x + shift.x, y: b.y + shift.y };
+      const projected =
+        distanceMode === 'horizontal' || distanceMode === 'vertical';
       result.push(
         positioned({
           ...base,
-          label: `(${formatNumber(value)} ${units === 'inch' ? 'in' : units})`,
+          ...(distanceMode ? { distanceMode } : {}),
+          label: `(${projected ? `${distanceMode === 'horizontal' ? 'H' : 'V'} ` : ''}${formatNumber(value)} ${units === 'inch' ? 'in' : units})`,
           anchor: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
-          ...(length > 1e-9 ? { span: { start, end } } : {}),
+          ...(value > 1e-9 ? { span: { start, end } } : {}),
           lines:
-            length > 1e-9
+            projected || length > 1e-9
               ? [
                   [a, start],
                   [b, end]
