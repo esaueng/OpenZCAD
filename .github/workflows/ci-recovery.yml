@@ -1,0 +1,107 @@
+name: Recover superseded CI
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [requested]
+
+# Metadata only: no checkout, PR code, dependencies, or repository secrets.
+permissions:
+  actions: write
+  pull-requests: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Release CI belonging to superseded PR commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from urllib.parse import quote
+
+          repository = os.environ['REPOSITORY']
+          trigger_id = int(os.environ['TRIGGER_RUN_ID'])
+          root = f'repos/{repository}'
+
+          def api(path, method='GET'):
+              result = subprocess.check_output(
+                  ['gh', 'api', f'{root}/{path}', '--method', method],
+                  text=True,
+              )
+              return json.loads(result) if result.strip() else None
+
+          def current_pr():
+              return api(f'pulls/{number}')
+
+          def obsolete(run, pr):
+              head = pr.get('head', {})
+              head_repository = head.get('repo') or {}
+              base_repository = pr.get('base', {}).get('repo') or {}
+              return (
+                  pr.get('state') == 'open'
+                  and base_repository.get('full_name') == repository
+                  and run.get('workflow_id') == workflow_id
+                  and run.get('event') == 'pull_request'
+                  and run.get('status') in ('queued', 'pending', 'requested', 'waiting', 'in_progress')
+                  and bool(head.get('sha'))
+                  and bool(run.get('head_sha'))
+                  and run['head_sha'] != head['sha']
+                  and run.get('head_branch') == head.get('ref')
+                  and head_repository.get('id') is not None
+                  and (run.get('head_repository') or {}).get('id') == head_repository['id']
+                  and any(
+                      linked.get('number') == number
+                      and (linked.get('base', {}).get('repo') or {}).get('id') == base_repository.get('id')
+                      and (linked.get('head', {}).get('repo') or {}).get('id') == head_repository['id']
+                      for linked in run.get('pull_requests', [])
+                  )
+              )
+
+          workflow_id = api('actions/workflows/ci.yml')['id']
+          trigger = api(f'actions/runs/{trigger_id}')
+          # workflow_run loads this script from the protected default branch,
+          # including when the requesting PR targets another feature branch.
+          links = trigger.get('pull_requests', []) if (
+              trigger.get('workflow_id') == workflow_id
+              and trigger.get('event') == 'pull_request'
+          ) else []
+          for number in sorted({linked['number'] for linked in links}):
+              pr = current_pr()
+              if pr.get('state') == 'open' and pr.get('head', {}).get('repo'):
+                  branch = quote(pr['head']['ref'], safe='')
+                  # GitHub's filtered runs endpoint returns at most 1,000 results.
+                  for page in range(1, 11):
+                      runs = api(
+                          f'actions/workflows/{workflow_id}/runs?event=pull_request'
+                          f'&branch={branch}&per_page=100&page={page}'
+                      )['workflow_runs']
+                      for candidate in runs:
+                          if not obsolete(candidate, pr):
+                              continue
+                          # A delayed event, branch reset, or completed run must not
+                          # turn recovery into cancellation of the current head.
+                          run_id = candidate['id']
+                          live = api(f'actions/runs/{run_id}')
+                          pr = current_pr()
+                          if not obsolete(live, pr):
+                              continue
+                          try:
+                              # Ordinary cancellation leaves always() gates queued,
+                              # holding the PR's concurrency slot. Keep those gates
+                              # fail-closed and finish only the obsolete run instead.
+                              api(f'actions/runs/{run_id}/force-cancel', 'POST')
+                              print(f'Requested cancellation of superseded CI run {run_id}')
+                          except subprocess.CalledProcessError:
+                              if api(f'actions/runs/{run_id}').get('status') != 'completed':
+                                  raise
+                      if len(runs) < 100:
+                          break
+          PY

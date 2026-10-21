@@ -209,6 +209,13 @@ export const KEYBOARD_CONTROL_GROUPS = [
         detail: 'Switch between perspective and orthographic projection.'
       },
       {
+        id: 'xray',
+        ...bound('view-xray'),
+        action: 'Toggle X-ray',
+        detail:
+          'See through faces to hidden edges, and pick or box-select through them.'
+      },
+      {
         id: 'hide-panels',
         ...bound('panels-hide-all'),
         action: 'Hide or show the model panels',
