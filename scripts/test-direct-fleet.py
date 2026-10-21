@@ -39,7 +39,14 @@ def main_contains(commit):
         committed = subprocess.check_output(["git", "show", "-s", "--format=%cI", commit], cwd=ROOT, text=True).strip()
         since = datetime.fromisoformat(committed) - timedelta(days=1)
         fetch.append(f"--shallow-since={since.isoformat()}")
-    subprocess.run(fetch + ["origin", "+refs/heads/main:refs/remotes/origin/main"], cwd=ROOT, check=True)
+    result = subprocess.run(
+        fetch + ["origin", "+refs/heads/main:refs/remotes/origin/main"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if result.returncode:
+        # Git cannot unshallow a pinned commit main does not reach ("error in
+        # object: unshallow ..."), so this is usually the same answer.
+        raise AssertionError(f"could not fetch main back to {commit}: {result.stderr.strip()}")
     return contains()
 EXPRESSIONS = re.findall(
     r"^    runs-on: (?:&fleet-runner )?(\$\{\{ fromJSON\(.+\) \}\})$", TEXT, re.M
