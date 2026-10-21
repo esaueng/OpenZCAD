@@ -82,7 +82,7 @@ async function openMountingBracket(page: Page, layout: SeedPanelLayout) {
     timeout: 60_000
   });
   await expect(page.getByRole('contentinfo')).not.toContainText(
-    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
+    /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Rebuilding geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
     { timeout: 60_000 }
   );
 }
