@@ -30,7 +30,10 @@ import {
   type EdgeTopology,
   type ProjectDocument
 } from '@openzcad/shared';
-import { projectView } from '../apps/web/src/lib/drawing/projectView';
+import {
+  projectionBuffers,
+  projectView
+} from '../apps/web/src/lib/drawing/projectView';
 import { composeSheetPage } from '../apps/web/src/lib/drawing/sheetPage';
 import {
   sheetPageToPdf,
@@ -1356,6 +1359,54 @@ describe('D02 picking', () => {
     });
     // An ordinary one keeps its reference.
     expect(edgeRefFor(bodies, bodyId, top)?.reference).toEqual(top.reference);
+  });
+
+  it('offers only the edge a drawn run belongs to, not a hidden neighbour beside it', () => {
+    const front = view(frontId, 'front', ['body_a' as BodyId]);
+    const edge = (hash: number) => ({
+      topologyId: `e${hash}`,
+      hash,
+      points: []
+    });
+    const entry = (hash: number, y: number, depth: number) => ({
+      view: front,
+      bodyId: 'body_a' as BodyId,
+      edge: edge(hash),
+      page: [
+        [0, y],
+        [20, y]
+      ] as [number, number][],
+      depths: [depth, depth],
+      coincidenceMm: 0.05
+    });
+    // A drawn edge, and a hidden one 0.03 mm beside it (inside the
+    // coincidence tolerance) that the view does not draw.
+    const drawnEdge = entry(1, 0, 1);
+    const hiddenEdge = entry(2, 0.03, 5);
+    const drawn = new Map([[frontId, [drawnEdge.page]]]);
+    // A click nearer the hidden edge's position still gets the drawn one.
+    expect(
+      hitEdge([drawnEdge, hiddenEdge], [10, 0.04], 1, drawn)?.edge.hash
+    ).toBe(1);
+  });
+
+  it('lists every projection buffer once for transfer and accounting', async () => {
+    const document = cylinderDocument();
+    const bodies = (await adapter.syncDocument(document)).bodyRepresentations;
+    const projection = projectView({
+      orientation: 'front',
+      hiddenLines: true,
+      bodies: [projectionBodyInput(bodies[document.bodyOrder[0]!]!)!]
+    });
+    const buffers = projectionBuffers(projection);
+    expect(new Set(buffers).size).toBe(buffers.length);
+    for (const line of [
+      ...projection.visible,
+      ...projection.hidden,
+      ...projection.edgeRuns!.visible,
+      ...projection.edgeRuns!.hidden
+    ])
+      expect(buffers).toContain(line.buffer);
   });
 
   it('refuses an edge that shares its identity with another', async () => {

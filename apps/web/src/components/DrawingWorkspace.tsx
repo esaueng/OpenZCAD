@@ -43,9 +43,10 @@ import {
   DrawingProjectionClient,
   type DrawingProjectionViewRequest
 } from '../lib/drawing/projectionClient';
-import type {
-  ProjectionBodyInput,
-  ViewProjection
+import {
+  projectionBuffers,
+  type ProjectionBodyInput,
+  type ViewProjection
 } from '../lib/drawing/projectView';
 import {
   composeSheetPage,
@@ -191,8 +192,8 @@ const INACTIVE_PROJECTION_BYTES = 32 * 1024 * 1024;
 function viewStateBytes(entry: ViewState): number {
   if (entry.state !== 'ready') return 0;
   let bytes = 0;
-  for (const line of entry.projection.visible) bytes += line.byteLength;
-  for (const line of entry.projection.hidden) bytes += line.byteLength;
+  for (const buffer of projectionBuffers(entry.projection))
+    bytes += buffer.byteLength;
   return bytes;
 }
 

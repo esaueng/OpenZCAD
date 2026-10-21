@@ -87,17 +87,6 @@ export function pickableEdges(
   return out;
 }
 
-function distanceToPolylines(point: XY, lines: readonly XY[][]): number {
-  let distance = Infinity;
-  for (const line of lines)
-    for (let i = 0; i + 1 < line.length; i += 1)
-      distance = Math.min(
-        distance,
-        distanceToSegment(point, line[i]!, line[i + 1]!)
-      );
-  return distance;
-}
-
 function distanceToSegment(p: XY, a: XY, b: XY): number {
   const dx = b[0] - a[0];
   const dy = b[1] - a[1];
@@ -142,7 +131,8 @@ function drawsEdgeAt(
   entry: PickableEdge,
   point: XY,
   tolerance: number,
-  drawn: ReadonlyMap<DrawingViewId, XY[][]>
+  drawn: ReadonlyMap<DrawingViewId, XY[][]>,
+  viewEdges: readonly PickableEdge[]
 ): boolean {
   const lines = drawn.get(entry.view.viewId) ?? [];
   const { page } = entry;
@@ -177,11 +167,59 @@ function drawsEdgeAt(
     }
     walked += length;
   }
-  return [at - tolerance, at, at + tolerance].every(
-    (along) =>
-      distanceToPolylines(pointAtLength(page, along), lines) <=
-      entry.coincidenceMm
-  );
+  // Each sample must sit on a drawn segment this edge owns: one it lies on
+  // at least as closely as any other edge of the view (nearer the viewer
+  // when they coincide). A neighbouring edge's run within tolerance is not
+  // this edge drawn.
+  return [at - tolerance, at, at + tolerance].every((along) => {
+    const sample = pointAtLength(page, along);
+    for (const line of lines)
+      for (let i = 0; i + 1 < line.length; i += 1) {
+        const a = line[i]!;
+        const b = line[i + 1]!;
+        if (distanceToSegment(sample, a, b) > entry.coincidenceMm) continue;
+        if (segmentOwner(a, b, viewEdges, entry.coincidenceMm) === entry)
+          return true;
+      }
+    return false;
+  });
+}
+
+/**
+ * The edge of `edges` a drawn segment belongs to: the one it strays from
+ * least (worst of its ends and middle), the nearer one to the viewer when
+ * two coincide within a tenth of `coincidenceMm`; null when none lies
+ * within it.
+ */
+function segmentOwner(
+  a: XY,
+  b: XY,
+  edges: readonly PickableEdge[],
+  coincidenceMm: number
+): PickableEdge | null {
+  const middle: XY = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const coincide = 0.1 * coincidenceMm;
+  let owner: PickableEdge | null = null;
+  let ownerStray = Infinity;
+  let ownerDepth = Infinity;
+  for (const edge of edges) {
+    const stray = Math.max(
+      nearestOnEdge(edge, a).distance,
+      nearestOnEdge(edge, b).distance,
+      nearestOnEdge(edge, middle).distance
+    );
+    if (stray > coincidenceMm) continue;
+    const depth = nearestOnEdge(edge, middle).depth;
+    if (
+      stray < ownerStray - coincide ||
+      (Math.abs(stray - ownerStray) <= coincide && depth < ownerDepth)
+    ) {
+      owner = edge;
+      ownerStray = stray;
+      ownerDepth = depth;
+    }
+  }
+  return owner;
 }
 
 /**
@@ -241,7 +279,17 @@ export function hitEdge(
   for (const entry of edges) {
     const { distance, depth } = nearestOnEdge(entry, point);
     if (distance > tolerance) continue;
-    if (drawn && !drawsEdgeAt(entry, point, tolerance, drawn)) continue;
+    if (
+      drawn &&
+      !drawsEdgeAt(
+        entry,
+        point,
+        tolerance,
+        drawn,
+        edges.filter((other) => other.view.viewId === entry.view.viewId)
+      )
+    )
+      continue;
     const tie = Math.abs(distance - bestDistance) <= 1e-6;
     if (
       distance < bestDistance - 1e-6 ||

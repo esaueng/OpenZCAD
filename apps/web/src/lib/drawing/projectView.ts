@@ -71,6 +71,26 @@ export interface ViewProjection {
 }
 
 /**
+ * Every buffer a projection holds, each once: `edgeRuns.visible` shares
+ * `visible`'s arrays and `edgeRuns.hidden` has its own. The worker
+ * transfers exactly these (a buffer listed twice throws), and the sheet
+ * counts them against its projection memory budget.
+ */
+export function projectionBuffers(
+  projection: ViewProjection
+): ArrayBufferLike[] {
+  const buffers = new Set<ArrayBufferLike>();
+  for (const line of [
+    ...projection.visible,
+    ...projection.hidden,
+    ...(projection.edgeRuns?.visible ?? []),
+    ...(projection.edgeRuns?.hidden ?? [])
+  ])
+    buffers.add(line.buffer);
+  return [...buffers];
+}
+
+/**
  * Cosine of the largest turn between two display triangles still treated as
  * one smooth surface when the body publishes no B-rep faces to say so.
  */
