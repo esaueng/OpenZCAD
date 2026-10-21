@@ -50,13 +50,20 @@ export function relationChipWidth(glyphs: number): number {
 // flags, a point chip's half gap, then its swing directions as projected
 // from the sketch plane (x/y per entry of SWINGS) when the viewer gives them.
 const SWING_AT = 8;
-const IN = SWING_AT + 10;
+// Then, for a point chip in a gap under half a turn, the inward normals of
+// the gap's two edge lines (x/y each), in screen space.
+const WEDGE_AT = SWING_AT + 10;
+const IN = WEDGE_AT + 4;
 const VISIBLE = 1;
 const POINT = 2;
 /** The point chip's swing directions were projected, not rotated. */
 const SWUNG = 4;
 /** A chip holding the selected relation: placed even without free room. */
 const PINNED = 8;
+/** A point chip in a gap under half a turn: its box keeps inside the gap. */
+const WEDGE = 16;
+/** Clear space between a point chip's box and the curves edging its gap. */
+const STROKE_CLEAR_PX = 3;
 
 // Candidate moves for a curve chip: along its curve, in chip widths, on the
 // preferred side and then the other.
@@ -165,6 +172,83 @@ export class RelationGlyphLayout {
       this.input[slot + 1] = length > 1e-9 ? y / length : this.input[base + 3]!;
     }
     this.input[base + 6] = this.input[base + 6]! | SWUNG;
+    // The gap's two edges follow the swings, projected the same way.
+    const edges = at + SWINGS.length * 2;
+    this.setWedge(
+      index,
+      directions[edges]!,
+      directions[edges + 1]!,
+      directions[edges + 2]!,
+      directions[edges + 3]!
+    );
+  }
+
+  /**
+   * A point chip's gap edges as screen directions from its anchor. When the
+   * gap is under half a turn, its box is kept inside both edge lines, so the
+   * whole button (not only its centre) stays off the curves edging the gap.
+   */
+  private setWedge(
+    index: number,
+    e1x: number,
+    e1y: number,
+    e2x: number,
+    e2y: number
+  ) {
+    const base = index * IN;
+    const input = this.input;
+    input[base + 6] = input[base + 6]! & ~WEDGE;
+    if (!(input[base + 7]! < Math.PI / 2 - 1e-6)) return;
+    const bx = input[base + 2]!;
+    const by = input[base + 3]!;
+    const inward = (ex: number, ey: number, slot: number): boolean => {
+      const length = Math.hypot(ex, ey);
+      if (!(length > 1e-9)) return false;
+      // The edge turned a quarter, toward the bisector.
+      let mx = -ey / length;
+      let my = ex / length;
+      if (mx * bx + my * by < 0) {
+        mx = -mx;
+        my = -my;
+      }
+      input[slot] = mx;
+      input[slot + 1] = my;
+      return true;
+    };
+    if (
+      inward(e1x, e1y, base + WEDGE_AT) &&
+      inward(e2x, e2y, base + WEDGE_AT + 2)
+    ) {
+      input[base + 6] = input[base + 6]! | WEDGE;
+    }
+  }
+
+  /**
+   * How far along `d` a point chip's centre must stand so its box clears
+   * both edges of its gap by STROKE_CLEAR_PX, at least `reach`.
+   */
+  private wedgeReach(
+    at: number,
+    dx: number,
+    dy: number,
+    halfW: number,
+    halfH: number,
+    reach: number
+  ): number {
+    const input = this.input;
+    if (!(input[at + 6]! & WEDGE)) return reach;
+    let needed = reach;
+    for (let edge = 0; edge < 2; edge += 1) {
+      const mx = input[at + WEDGE_AT + edge * 2]!;
+      const my = input[at + WEDGE_AT + edge * 2 + 1]!;
+      const along = mx * dx + my * dy;
+      if (along <= 1e-6) continue;
+      needed = Math.max(
+        needed,
+        (Math.abs(mx) * halfW + Math.abs(my) * halfH + STROKE_CLEAR_PX) / along
+      );
+    }
+    return needed;
   }
 
   /** Writes chip `index`'s projected inputs; call before `solve`. */
@@ -198,6 +282,20 @@ export class RelationGlyphLayout {
     input[at + 5] = height;
     input[at + 6] = (visible ? VISIBLE : 0) | (point ? POINT : 0);
     input[at + 7] = halfGap;
+    if (point) {
+      // Edges by screen rotation until `setSwings` gives projected ones.
+      const cos = Math.cos(halfGap);
+      const sin = Math.sin(halfGap);
+      const bx = input[at + 2]!;
+      const by = input[at + 3]!;
+      this.setWedge(
+        index,
+        bx * cos + by * sin,
+        -bx * sin + by * cos,
+        bx * cos - by * sin,
+        bx * sin + by * cos
+      );
+    }
   }
 
   /**
@@ -287,8 +385,11 @@ export class RelationGlyphLayout {
             // The box's support along the standoff direction, so its nearest
             // edge (not its centre) sits `reach` from the anchor.
             const support = Math.abs(dx) * halfW + Math.abs(dy) * halfH;
-            let cx = ax + dx * (reach + support);
-            let cy = ay + dy * (reach + support);
+            const distance = point
+              ? this.wedgeReach(at, dx, dy, halfW, halfH, reach + support)
+              : reach + support;
+            let cx = ax + dx * distance;
+            let cy = ay + dy * distance;
             if (!point) {
               // Slide along the curve (the normal turned a quarter).
               const slide = SLIDES[candidate]! * (2 * halfW + CHIP_GAP_PX);
@@ -311,7 +412,10 @@ export class RelationGlyphLayout {
         const standoff = Math.abs(nx) * halfW + Math.abs(ny) * halfH;
         const base = RELATION_CHIP_STANDOFF_PX + (point ? KEEP_OUT_PX : 0);
         for (let ring = RINGS; ring < RINGS + EXTRA_RINGS; ring += 1) {
-          const reach = base + ring * (2 * halfH + CHIP_GAP_PX) + standoff;
+          let reach = base + ring * (2 * halfH + CHIP_GAP_PX) + standoff;
+          if (point) {
+            reach = this.wedgeReach(at, nx, ny, halfW, halfH, reach);
+          }
           const cx = ax + nx * reach;
           const cy = ay + ny * reach;
           if (this.free(cx - halfW, cy - halfH, cx + halfW, cy + halfH)) {
@@ -327,8 +431,9 @@ export class RelationGlyphLayout {
         // invisible: at its preferred spot, on screen. It is laid out first,
         // so only a viewport control or a dimension label can be there.
         const support = Math.abs(nx) * halfW + Math.abs(ny) * halfH;
-        const reach =
+        let reach =
           RELATION_CHIP_STANDOFF_PX + (point ? KEEP_OUT_PX : 0) + support;
+        if (point) reach = this.wedgeReach(at, nx, ny, halfW, halfH, reach);
         chosenX = ax + nx * reach;
         chosenY = ay + ny * reach;
         if (bounded) {

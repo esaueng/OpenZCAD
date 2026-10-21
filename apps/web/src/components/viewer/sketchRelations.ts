@@ -62,10 +62,14 @@ export function buildSketchRelationGlyphs(
   // stay inside its gap however the plane is viewed.
   const anchors = new Float64Array(count * 3);
   const normals = new Float64Array(count * 3);
-  const SWING_COUNT = RELATION_CHIP_SWINGS.length;
+  // Per point chip: its swing directions, then its gap's two edges.
+  const SWING_COUNT = RELATION_CHIP_SWINGS.length + 2;
   const directions = new Float64Array(count * SWING_COUNT * 3);
   const screenSwings = new Float64Array(SWING_COUNT * 2);
-  const pinned = chips.map((chip) =>
+  // One chip keeps the selected relation in view: a relation on several
+  // chips (parallel, equal, symmetric) pins only its first, so two pinned
+  // fallbacks never land on each other.
+  const pinnedIndex = chips.findIndex((chip) =>
     chip.glyphs.some((glyph) => glyph.selected)
   );
   const widths = new Float64Array(count);
@@ -129,8 +133,12 @@ export function buildSketchRelationGlyphs(
         RELATION_CHIP_MAX_SWING,
         0.5 * (chip.halfGap ?? Math.PI)
       );
-      RELATION_CHIP_SWINGS.forEach((fraction, entry) => {
-        const angle = fraction * swingStep;
+      const halfGap = chip.halfGap ?? Math.PI;
+      [
+        ...RELATION_CHIP_SWINGS.map((fraction) => fraction * swingStep),
+        -halfGap,
+        halfGap
+      ].forEach((angle, entry) => {
         planeDirection(
           chip.normal.x * Math.cos(angle) - chip.normal.y * Math.sin(angle),
           chip.normal.x * Math.sin(angle) + chip.normal.y * Math.cos(angle),
@@ -297,7 +305,7 @@ export function buildSketchRelationGlyphs(
           chips[index]!.halfGap
         );
         if (point) layout.setSwings(index, screenSwings, 0);
-        if (pinned[index]) layout.pin(index);
+        if (index === pinnedIndex) layout.pin(index);
       }
       layout.solve(count, width, height);
       const offset = layout.offset;

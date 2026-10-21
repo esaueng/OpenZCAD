@@ -351,6 +351,56 @@ describe('sketch relation glyph overlay', () => {
     overlay.dispose();
   });
 
+  it('keeps one chip of a selected relation in view, not every chip it is on', () => {
+    // A selected parallel shows on both lines. With a control over the whole
+    // view only the pinned chip shows; pinning both would stack two forced
+    // chips.
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const layer = document.createElement('div');
+    const cover = document.createElement('div');
+    cover.className = 'viewer-rail';
+    area.append(layer, cover);
+    document.body.append(area);
+    const rect = (width: number, height: number) =>
+      ({
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: height,
+        width,
+        height,
+        x: 0,
+        y: 0,
+        toJSON: () => ({})
+      }) as DOMRect;
+    vi.spyOn(layer, 'getBoundingClientRect').mockReturnValue(rect(400, 400));
+    vi.spyOn(cover, 'getBoundingClientRect').mockReturnValue(rect(400, 400));
+    const selectedParallel = { ...bottom.glyphs[1]!, selected: true };
+    const overlay = buildSketchRelationGlyphs(
+      [
+        { ...bottom, glyphs: [selectedParallel] },
+        {
+          ...bottom,
+          key: 'object:top',
+          anchor: { x: 10, y: 20 },
+          glyphs: [selectedParallel]
+        }
+      ],
+      basis
+    );
+    overlay.refreshObstacles(layer);
+    overlay.layout(topCamera(), 400, 400);
+    const shown = overlay.group.children.filter(
+      (child) =>
+        child instanceof CSS2DObject &&
+        child.element.style.visibility !== 'hidden'
+    );
+    expect(shown).toHaveLength(1);
+    overlay.dispose();
+    area.remove();
+  });
+
   it('leaves a chip whose anchor is off the viewport where it is', () => {
     const camera = topCamera();
     // Plane (200, 0) is far right of the 100-unit-wide view.

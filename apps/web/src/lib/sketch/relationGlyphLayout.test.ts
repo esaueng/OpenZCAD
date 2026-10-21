@@ -211,9 +211,15 @@ describe('relation glyph layout', () => {
     // each swing already projected. With the first spot taken, the chip must
     // take one of those directions, not a screen rotation of the normal.
     const layout = new RelationGlyphLayout(1);
-    layout.set(0, 200, 200, 0, -1, 16, 16, true, true, Math.PI / 6);
-    // Bisector up; the swings lean far right only (a skewed wedge).
-    layout.setSwings(0, [0, -1, 0.6, -0.8, 0.8, -0.6, 0.6, -0.8, 0.8, -0.6], 0);
+    // An open gap (over half a turn), so only the swings are in play.
+    layout.set(0, 200, 200, 0, -1, 16, 16, true, true, Math.PI);
+    // Bisector up; the swings lean far right only (a skewed projection),
+    // then the gap's two projected edges.
+    layout.setSwings(
+      0,
+      [0, -1, 0.6, -0.8, 0.8, -0.6, 0.6, -0.8, 0.8, -0.6, -1, 0.2, 1, 0.2],
+      0
+    );
     layout.setBlocked([192, 160, 208, 189], 1);
     layout.solve(1, 400, 400);
     const dx = layout.offset[0]!;
@@ -226,6 +232,39 @@ describe('relation glyph layout', () => {
       ([x, y]) => Math.abs(dx / length - x!) + Math.abs(dy / length - y!) < 1e-9
     );
     expect(matches).toBe(true);
+  });
+
+  it("keeps a point chip's whole box inside a narrow gap, not just its centre", () => {
+    // A six-way junction: 30° either side of the bisector (straight up).
+    // A 16 px box at the plain standoff would reach over both edge curves.
+    const halfGap = Math.PI / 6;
+    const layout = new RelationGlyphLayout(1);
+    layout.set(0, 200, 200, 0, -1, 16, 16, true, true, halfGap);
+    layout.solve(1, 400, 400);
+    const cx = 200 + layout.offset[0]!;
+    const cy = 200 + layout.offset[1]!;
+    for (const sign of [1, -1]) {
+      // The edge leaves the anchor 30° either side of straight up (screen y
+      // down); its normal points back toward the bisector.
+      const ex = sign * Math.sin(halfGap);
+      const ey = -Math.cos(halfGap);
+      let mx = -ey;
+      let my = ex;
+      if (mx * 0 + my * -1 < 0) {
+        mx = -mx;
+        my = -my;
+      }
+      for (const [x, y] of [
+        [cx - 8, cy - 8],
+        [cx + 8, cy - 8],
+        [cx - 8, cy + 8],
+        [cx + 8, cy + 8]
+      ]) {
+        expect(mx * (x! - 200) + my * (y! - 200)).toBeGreaterThanOrEqual(
+          3 - 1e-9
+        );
+      }
+    }
   });
 
   it('always shows the chip holding the selected relation', () => {
