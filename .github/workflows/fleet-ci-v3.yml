@@ -1,0 +1,312 @@
+name: Trusted CI jobs
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  quality:
+    runs-on: &fleet-runner ${{ fromJSON(vars.CI_FLEET_ENABLED == 'true' && (github.repository == 'esaueng/OpenZCAD' && github.repository_id == '1334829303' && github.actor == 'petertoday' && github.actor_id == '171875562' && github.triggering_actor == 'petertoday' && ((github.event_name == 'pull_request' && github.event.pull_request.state == 'open' && github.event.pull_request.user.login == 'petertoday' && github.event.pull_request.user.id == 171875562 && github.event.pull_request.head.repo.id == 1334829303 && github.event.pull_request.base.repo.id == 1334829303 && github.event.pull_request.head.repo.fork == false && github.event.pull_request.base.repo.fork == false && github.event.pull_request.base.ref == 'main' && github.ref == format('refs/pull/{0}/merge', github.event.pull_request.number)) || ((github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.ref_protected == true))) && (vars.CI_FLEET_TARGET == 'ci-server-jane' && '{"group":"ci-trusted-main","labels":"ci-server-jane"}' || vars.CI_FLEET_TARGET == 'ci-server-john' && '{"group":"ci-trusted-main","labels":"ci-server-john"}') || '"ubuntu-latest"') }}
+    # Hosted jobs have hung for 4-14 minutes in "Cleaning up orphan processes"
+    # after every step passed; the timeout counts that tail and turns a green
+    # job into a cancelled required check, so each limit keeps that headroom.
+    timeout-minutes: 30
+    steps:
+      - &fleet-isolation
+        name: Verify runner isolation and fresh storage
+        if: runner.environment == 'self-hosted'
+        run: |
+          set -euo pipefail
+          case "$RUNNER_NAME" in
+            ci-vm-1441561|ci-server-jane|ci-server-john)
+              CI_USER=ci-runner CI_STORAGE=/srv/ci CI_SLICE=ci.slice
+              CI_DOCKER=ci-docker CI_MEMORY=3221225472 CI_CPUS=1
+              CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 ;;
+            ci-server-jane-1|ci-server-jane-2|ci-server-jane-3)
+              slot=${RUNNER_NAME##*-}
+              CI_USER=ci-slot$slot CI_STORAGE=/srv/ci-slot$slot CI_SLICE=cislot$slot.slice
+              CI_DOCKER=ci-slot$slot-docker CI_MEMORY=5000000000 CI_CPUS=6
+              CARGO_BUILD_JOBS=3 RUST_TEST_THREADS=6 ;;
+            *) echo 'Unknown trusted runner' >&2; exit 1 ;;
+          esac
+          CI_CGROUP=/sys/fs/cgroup/$CI_SLICE
+          test "$(id -un)" = "$CI_USER"
+          test "$(id -u)" != 0
+          test "$HOME" = "$CI_STORAGE/home"
+          test -f "/opt/$CI_USER/bin/Runner.Listener"
+          test -f "/etc/systemd/system/$CI_USER.service"
+          test ! -w "/opt/$CI_USER/bin/Runner.Listener"
+          test ! -w "/etc/systemd/system/$CI_USER.service"
+          test "$(awk '/^NoNewPrivs:/ {print $2}' /proc/self/status)" = 1
+          test ! -e "$HOME/.app-ci-sentinel"
+          test ! -e "$CI_STORAGE/work/.app-ci-sentinel"
+          touch "$HOME/.app-ci-sentinel" "$CI_STORAGE/work/.app-ci-sentinel"
+          test "$DOCKER_HOST" = "unix:///run/$CI_DOCKER/docker.sock"
+          docker info --format '{{json .SecurityOptions}}' | jq -e 'index("name=rootless") != null'
+          test -z "$(docker ps --all --quiet)"
+          test -z "$(docker image ls --quiet)"
+          test "$(cat "$CI_CGROUP/memory.max")" = "$CI_MEMORY"
+          test "$(cat "$CI_CGROUP/memory.swap.max")" = 0
+          awk -v cpus="$CI_CPUS" '{exit !($1 == $2 * cpus)}' "$CI_CGROUP/cpu.max"
+          grep -Fx "0::/$CI_SLICE/$CI_USER.service" /proc/self/cgroup
+          case ",$(findmnt -n -o OPTIONS --mountpoint "$CI_STORAGE")," in
+            *,nosuid,*) ;; *) exit 1 ;; esac
+          {
+            echo "CI_CGROUP=$CI_CGROUP"
+            echo "CI_STORAGE=$CI_STORAGE"
+            echo "CARGO_BUILD_JOBS=$CARGO_BUILD_JOBS"
+            echo "RUST_TEST_THREADS=$RUST_TEST_THREADS"
+          } >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify direct scheduling policy
+        run: python3 scripts/test-direct-fleet.py
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.8.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # `pnpm audit` lives in dependency-audit.yml: a newly published advisory
+      # must not turn every PR and queue candidate red in this required gate.
+      - run: pnpm lint
+      - run: pnpm typecheck
+  validation:
+    runs-on: *fleet-runner
+    timeout-minutes: 30
+    steps:
+      - *fleet-isolation
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify trusted fleet routing
+        run: python3 scripts/test-fleet-routing.py
+      # The geometry kernel is a production dependency on a moving branch
+      # (`github:esaueng/remus#main`), so ANY lockfile regeneration re-resolves
+      # it. That is not hypothetical: `ca0f83bf` ("bump @cloudflare/vite-plugin")
+      # moved the kernel two SHAs, and its PR body mentions neither "remus" nor
+      # "kernel". `update-remus.yml` refuses to open a PR whose diff touches
+      # anything but the lockfile precisely so a kernel bump gets its own
+      # parity-tested review; a dependency bump that carries one along bypasses
+      # all of it. A `dependabot.yml` ignore entry does not help — Dependabot
+      # never proposes this update, it falls out of re-resolution.
+      #
+      # A bump is announced either by landing on the updater's
+      # `automation/remus-*` branch or by carrying the `kernel-bump` label:
+      # consumer changes that cannot build against the old kernel have to move
+      # the pin in the same PR, and the label says so on purpose.
+      - name: Refuse an unannounced geometry kernel bump
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          ANNOUNCED: ${{ contains(github.event.pull_request.labels.*.name, 'kernel-bump') }}
+        run: |
+          # One commit of the base branch is all the comparison needs; the
+          # default checkout is shallow and does not carry it.
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          sha_of() {
+            git show "$1:pnpm-lock.yaml" 2>/dev/null \
+              | sed -n 's|.*codeload\.github\.com/esaueng/remus/tar\.gz/\([0-9a-f]\{40\}\).*|\1|p' \
+              | sort -u
+          }
+          base="$(sha_of FETCH_HEAD)"
+          head="$(sha_of HEAD)"
+          if [[ -z "$head" ]]; then
+            echo "::error title=Kernel pin missing::No remus codeload SHA found in pnpm-lock.yaml."
+            exit 1
+          fi
+          if [[ "$(printf '%s\n' "$head" | wc -l)" -ne 1 ]]; then
+            echo "::error title=Split kernel pin::pnpm-lock.yaml resolves more than one remus SHA:"
+            printf '%s\n' "$head"
+            exit 1
+          fi
+          # An empty base is the extraction breaking, not an absent kernel:
+          # every branch this can run against has a pin. Skipping quietly here
+          # would leave a guard that reads nothing and passes forever.
+          if [[ -z "$base" ]]; then
+            echo "::error title=Kernel baseline missing::Found no remus codeload SHA in $BASE_REF's pnpm-lock.yaml. If the lockfile format or the kernel host changed, update this guard rather than leaving it comparing nothing."
+            exit 1
+          fi
+          if [[ "$base" == "$head" ]]; then
+            echo "Kernel pin unchanged at $head."
+          elif [[ "$HEAD_REF" == automation/remus-* ]]; then
+            echo "Kernel moved $base -> $head on the updater branch, as intended."
+          elif [[ "$ANNOUNCED" == "true" ]]; then
+            echo "Kernel moved $base -> $head, announced with the kernel-bump label."
+          else
+            echo "::error title=Unannounced kernel bump::pnpm-lock.yaml moves the Remus kernel $base -> $head on a branch that is not automation/remus-* and the PR has no kernel-bump label. Any lockfile regeneration re-resolves the #main specifier; land kernel changes through update-remus.yml, or add the kernel-bump label when the consumer change itself needs the new kernel."
+            exit 1
+          fi
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.8.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # `pnpm test` runs the root and web Vitest projects back to back; the
+      # root project is the five-minute half and runs in the `unit` job, so
+      # only the web happy-dom project runs here.
+      - run: pnpm test:web
+      # Keep exact Remus/OpenCascade STEP parity in the critical beta gate.
+      - run: pnpm test:parity-corpus
+      - name: Build and enforce bundle budgets
+        env:
+          OPENZCAD_BUNDLE_GITHUB_SUMMARY: '1'
+          OPENZCAD_BUNDLE_REPORT_PATH: ${{ runner.temp }}/bundle-size-report.json
+        run: pnpm build
+      - name: Upload bundle size report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bundle-size-report
+          path: ${{ runner.temp }}/bundle-size-report.json
+          if-no-files-found: warn
+
+  # The root Vitest project (packages and `test/`): the other half of
+  # `pnpm test`, on its own runner so it runs beside the web project, parity
+  # and build instead of ahead of them.
+  unit:
+    runs-on: *fleet-runner
+    timeout-minutes: 30
+    steps:
+      - *fleet-isolation
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.8.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vitest run
+
+  # Keep the existing required check fail-closed across both execution paths.
+  validate:
+    needs: [quality, unit, validation]
+    if: always()
+    runs-on: *fleet-runner
+    timeout-minutes: 15
+    steps:
+      - *fleet-isolation
+      - name: Require all validation checks
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          UNIT_RESULT: ${{ needs.unit.result }}
+          VALIDATION_RESULT: ${{ needs.validation.result }}
+        run: |
+          test "$QUALITY_RESULT" = success
+          test "$UNIT_RESULT" = success
+          test "$VALIDATION_RESULT" = success
+  # Queue candidates, main pushes and manual dispatches start the shards at
+  # once, beside the other checks. Pull requests use `e2e-tests-pr` below.
+  e2e-tests:
+    if: github.event_name != 'pull_request'
+    runs-on: *fleet-runner
+    # Hosted shards ran 14-21 minutes on 19 Oct, against the ~7 the weights
+    # below were balanced for; rebalance with `scripts/e2e-shards.mjs --update`.
+    timeout-minutes: 45
+    strategy: &e2e-strategy
+      fail-fast: false
+      # The suite is ~80 runner-minutes of browser work at Playwright's two
+      # workers per hosted runner, so it runs as parallel shards. Each shard
+      # takes the spec files `scripts/e2e-shards.mjs` assigns it by recorded
+      # duration rather than Playwright's `--shard`, which slices the
+      # alphabetical test list into equal counts: that put the slow c* and g*
+      # specs on one shard, which then ran 19.7 minutes while the others ran
+      # 6 to 8. Six file-balanced shards come out near 7 minutes each; the
+      # count is mirrored in `test/e2e-shards.test.ts`.
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps: &e2e-steps
+      - *fleet-isolation
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.8.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The Chromium download is ~30 s per shard on every run; the browser
+      # directory is versioned (chromium-<build>), so restoring a stale cache
+      # after a Playwright bump is safe — the install step then downloads only
+      # the new build. `--with-deps` still runs so OS packages stay covered.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
+      - run: |
+          if [ '${{ runner.environment }}' = self-hosted ]; then
+            pnpm exec playwright install chromium
+          else
+            pnpm exec playwright install --with-deps chromium
+          fi
+      # The Playwright webServer builds and serves the app inside the job. The
+      # JSON report is what `scripts/e2e-shards.mjs --update` rebalances from.
+      - env:
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ runner.temp }}/e2e-report-${{ matrix.shard }}.json
+        run: |
+          if [ "${{ runner.environment }}" = self-hosted ]; then
+            exec 9</run/ci-browser.lock
+            flock --exclusive 9
+          fi
+          specs="$(node scripts/e2e-shards.mjs "${{ matrix.shard }}/${{ strategy.job-total }}")"
+          pnpm test:e2e --reporter=dot,json $specs
+      - name: Upload e2e timing report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-report-${{ matrix.shard }}
+          path: ${{ runner.temp }}/e2e-report-${{ matrix.shard }}.json
+          if-no-files-found: warn
+
+  # On a pull request the shards wait for lint and typecheck. Hosted runners
+  # are a shared pool of concurrent jobs, and starting six browser shards on
+  # every push let superseded and lint-red pushes hold them while queue
+  # candidates waited 15-20 minutes for a runner. A push that `quality`
+  # rejects, or that a newer push cancels within those minutes, now never
+  # starts a shard. Queue candidates keep the parallel `e2e-tests` above.
+  e2e-tests-pr:
+    if: github.event_name == 'pull_request'
+    needs: quality
+    runs-on: *fleet-runner
+    timeout-minutes: 45
+    strategy: *e2e-strategy
+    steps: *e2e-steps
+
+  # A single stable check context for branch protection, so the required-check
+  # list does not depend on the shard count or the event. Runs even when a
+  # shard fails: a skipped job satisfies branch protection, so this job must
+  # run and fail explicitly unless exactly one shard set ran and succeeded.
+  e2e:
+    timeout-minutes: 15
+    needs: [e2e-tests, e2e-tests-pr]
+    if: always()
+    runs-on: *fleet-runner
+    steps:
+      - *fleet-isolation
+      - name: Require one green shard set
+        env:
+          DIRECT_RESULT: ${{ needs.e2e-tests.result }}
+          PR_RESULT: ${{ needs.e2e-tests-pr.result }}
+        run: |
+          echo "e2e shards: direct $DIRECT_RESULT, pull request $PR_RESULT"
+          case "$DIRECT_RESULT/$PR_RESULT" in
+            success/skipped | skipped/success) echo 'all e2e shards green' ;;
+            skipped/skipped)
+              echo 'No shard ran; pull-request shards start only after quality passes.' >&2
+              exit 1 ;;
+            *) exit 1 ;;
+          esac
