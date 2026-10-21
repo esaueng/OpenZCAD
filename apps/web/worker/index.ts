@@ -1,3 +1,4 @@
+import { releaseDevelopmentE2eeWrite } from './e2eeWriteAuthorization';
 import { accountConsent, publishCensus } from './glimpseCensus';
 import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
 import { handleE2eeRequest } from './e2ee';
@@ -1091,6 +1092,24 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const session = await authenticateRequest(request, env);
   const userId = session.userId;
+  if (pathname.startsWith('/api/e2ee/')) {
+    try {
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
+        await enforceApiRateLimit(env, `api:${userId}`, 120);
+        await assertAccountNotErasing(env.DB, userId);
+      }
+      return await handleE2eeRequest(
+        request,
+        env,
+        session,
+        isE2eeKeysEnabled(env, session.email)
+      );
+    } finally {
+      // Authentication may have admitted a development write before a
+      // rate-limit/fence refusal; release it even without route dispatch.
+      await releaseDevelopmentE2eeWrite(session);
+    }
+  }
   if (
     !['GET', 'HEAD', 'OPTIONS'].includes(request.method) &&
     pathname !== '/api/assistant'
@@ -1132,16 +1151,6 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   ) {
     await assertAccountNotErasing(env.DB, userId);
   }
-
-  if (pathname.startsWith('/api/e2ee/')) {
-    return handleE2eeRequest(
-      request,
-      env,
-      session,
-      isE2eeKeysEnabled(env, session.email)
-    );
-  }
-
   if (
     (request.method === 'GET' || request.method === 'POST') &&
     collaborationMatch

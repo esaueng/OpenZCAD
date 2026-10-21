@@ -866,11 +866,15 @@ function QrScanner({ onCode }: { onCode(code: string): void }) {
       .then(async (media) => {
         stream = media;
         const video = videoRef.current;
-        if (!video || stopped) return;
+        if (!video || stopped) {
+          media.getTracks().forEach((track) => track.stop());
+          return;
+        }
         video.srcObject = media;
         await video.play();
         while (!stopped) {
           const [found] = await detector.detect(video).catch(() => []);
+          if (stopped) return;
           if (found?.rawValue) {
             onCode(found.rawValue);
             setScanning(false);

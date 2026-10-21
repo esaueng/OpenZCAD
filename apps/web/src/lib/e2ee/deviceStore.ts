@@ -41,6 +41,8 @@ export interface StoredDevice {
 export interface DeviceKeyStore {
   loadDevice(userId: string): Promise<StoredDevice | null>;
   saveDevice(device: StoredDevice): Promise<void>;
+  /** Keep the existing private keys when setup races or a response is lost. */
+  getOrCreateDevice(candidate: StoredDevice): Promise<StoredDevice>;
   deleteDevice(userId: string): Promise<void>;
   /** The newest device-list entry this browser accepted for the account. */
   loadPin(userId: string): Promise<DeviceListPin | null>;
@@ -134,6 +136,12 @@ export function memoryDeviceStore(): DeviceKeyStore {
     saveDevice: async (device) => {
       devices.set(device.userId, device);
     },
+    getOrCreateDevice: async (candidate) => {
+      const existing = devices.get(candidate.userId);
+      if (existing) return existing;
+      devices.set(candidate.userId, candidate);
+      return candidate;
+    },
     deleteDevice: async (userId) => {
       devices.delete(userId);
     },
@@ -217,6 +225,22 @@ export function indexedDbDeviceStore(): DeviceKeyStore {
         StoredDevice | undefined) ?? null,
     saveDevice: async (device) => {
       await inStore(DEVICES, 'readwrite', (s) => s.put(device));
+    },
+    getOrCreateDevice: async (candidate) => {
+      const db = await openDatabase();
+      return new Promise<StoredDevice>((resolve, reject) => {
+        const tx = db.transaction(DEVICES, 'readwrite');
+        const objects = tx.objectStore(DEVICES);
+        let device: StoredDevice;
+        tx.oncomplete = () => resolve(device);
+        tx.onabort = tx.onerror = () =>
+          reject(tx.error ?? new Error('IndexedDB device transaction failed'));
+        const read = objects.get(candidate.userId);
+        read.onsuccess = () => {
+          device = (read.result as StoredDevice | undefined) ?? candidate;
+          if (!read.result) objects.add(device);
+        };
+      });
     },
     deleteDevice: async (userId) => {
       await inStore(DEVICES, 'readwrite', (s) => s.delete(userId));

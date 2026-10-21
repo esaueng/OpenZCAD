@@ -1,4 +1,5 @@
 import type { Browser, Page } from '@playwright/test';
+import { requestApproval } from '../../apps/web/src/lib/e2ee/accountKeys';
 import { expect, stubApi, test } from './openzcad-fixtures';
 import {
   createE2eeServer,
@@ -28,6 +29,98 @@ async function approverWith(page: Page, server: E2eeServer) {
   return { seeded, settings };
 }
 
+for (const cancellation of ['stop', 'close', 'active'] as const) {
+  test(`stops camera tracks when ${cancellation} overlaps capture permission`, async ({
+    page
+  }) => {
+    const server = createE2eeServer();
+    const { settings } = await approverWith(page, server);
+    await requestApproval(server.nodeDevice(), null, 'Phone');
+    await page.evaluate(() => {
+      const control = window as typeof window & {
+        captureStarted?: boolean;
+        stoppedTracks?: number;
+        resolveCapture?: () => void;
+      };
+      control.stoppedTracks = 0;
+      Object.defineProperty(window, 'BarcodeDetector', {
+        configurable: true,
+        value: class {
+          detect() {
+            return new Promise(() => {});
+          }
+        }
+      });
+      HTMLMediaElement.prototype.play = async () => {};
+      const media = new MediaStream();
+      media.getTracks = () =>
+        [0, 1].map(
+          () =>
+            ({
+              stop: () => {
+                control.stoppedTracks! += 1;
+              }
+            }) as MediaStreamTrack
+        );
+      navigator.mediaDevices.getUserMedia = () => {
+        control.captureStarted = true;
+        return new Promise((resolve) => {
+          control.resolveCapture = () => resolve(media);
+        });
+      };
+    });
+    await settings
+      .getByRole('button', { name: 'Scan code', exact: true })
+      .click({ timeout: 10_000 });
+    await settings.getByRole('button', { name: 'Scan with camera' }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as typeof window & { captureStarted?: boolean })
+              .captureStarted
+        )
+      )
+      .toBe(true);
+    if (cancellation === 'active') {
+      await page.evaluate(() =>
+        (
+          window as typeof window & { resolveCapture?: () => void }
+        ).resolveCapture?.()
+      );
+      await expect
+        .poll(() =>
+          page
+            .getByLabel('Camera')
+            .evaluate((video: HTMLVideoElement) => video.srcObject !== null)
+        )
+        .toBe(true);
+    }
+    await settings
+      .getByRole('button', {
+        name: cancellation === 'close' ? 'Cancel' : 'Stop camera',
+        exact: true
+      })
+      .click();
+    if (cancellation !== 'active') {
+      await page.evaluate(() =>
+        (
+          window as typeof window & { resolveCapture?: () => void }
+        ).resolveCapture?.()
+      );
+    }
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as typeof window & { stoppedTracks?: number }).stoppedTracks
+        )
+      )
+      .toBe(2);
+    await expect(settings.getByLabel('Camera')).toHaveCount(0);
+  });
+}
+
 test('certifies a new device approved by its full-hash scan code', async ({
   page,
   browser
@@ -37,7 +130,9 @@ test('certifies a new device approved by its full-hash scan code', async ({
   const phone = await secondDevice(browser, server);
   try {
     const phoneSettings = await openEncryptionSettings(phone.page);
-    await phoneSettings.getByRole('button', { name: 'Ask for approval' }).click();
+    await phoneSettings
+      .getByRole('button', { name: 'Ask for approval' })
+      .click();
     await expect(
       phoneSettings.getByRole('img', { name: 'Device approval QR code' })
     ).toBeVisible();
@@ -51,9 +146,9 @@ test('certifies a new device approved by its full-hash scan code', async ({
       timeout: 10_000
     });
     await settings.getByRole('button', { name: 'Scan code' }).click();
-    await settings.getByLabel('Code from the new device').fill(
-      code.replace(/.$/, code.endsWith('0') ? '1' : '0')
-    );
+    await settings
+      .getByLabel('Code from the new device')
+      .fill(code.replace(/.$/, code.endsWith('0') ? '1' : '0'));
     await settings
       .getByLabel('Recovery key to certify the new device')
       .fill(seeded.recoveryKey);
@@ -86,7 +181,9 @@ test('approves read-only after both devices show the same six digits', async ({
   const phone = await secondDevice(browser, server);
   try {
     const phoneSettings = await openEncryptionSettings(phone.page);
-    await phoneSettings.getByRole('button', { name: 'Ask for approval' }).click();
+    await phoneSettings
+      .getByRole('button', { name: 'Ask for approval' })
+      .click();
     await expect(
       phoneSettings.getByRole('img', { name: 'Device approval QR code' })
     ).toBeVisible();
@@ -106,10 +203,12 @@ test('approves read-only after both devices show the same six digits', async ({
     await expect(
       phoneSettings.getByText('Confirmed. Waiting for the other device')
     ).toBeVisible();
-    await settings.getByRole('button', { name: 'Codes match, approve' }).click();
-    await expect(
-      phoneSettings.getByText('Approved, read-only')
-    ).toBeVisible({ timeout: 15_000 });
+    await settings
+      .getByRole('button', { name: 'Codes match, approve' })
+      .click();
+    await expect(phoneSettings.getByText('Approved, read-only')).toBeVisible({
+      timeout: 15_000
+    });
     await expect(
       phoneSettings.getByText('Unlocked', { exact: true })
     ).toBeVisible();
