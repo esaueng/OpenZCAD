@@ -144,9 +144,17 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       const body = derived.bodyRepresentations[bodyId];
       expect(body, 'the intersection body').toBeDefined();
       expect(body!.faceCount).toBe(4);
-      // Remus 2026.1.69 reads closer to the closed-form quarter cap
-      // 625π/12 ≈ 163.6246 (was 163.596637).
-      expect(body!.volume).toBeCloseTo(163.597068, 4);
+      expect(
+        body!.topology!.faces.map((face) => face.geometry?.surfaceType).sort()
+      ).toEqual(['plane', 'plane', 'plane', 'sphere']);
+      // S1's face integrals move this reading toward the independent quarter
+      // cap 625π/12. Keep the pinned reading's four-decimal precision and
+      // corroborate the accuracy improvement against the previous estimator.
+      expect(body!.volume).toBeCloseTo(163.623753, 4);
+      const quarterCapVolume = (625 * Math.PI) / 12;
+      expect(Math.abs(body!.volume - quarterCapVolume)).toBeLessThan(
+        Math.abs(163.597068 - quarterCapVolume)
+      );
     },
     120_000
   );
