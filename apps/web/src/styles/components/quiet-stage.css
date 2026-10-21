@@ -2195,6 +2195,26 @@ button.command-rail:disabled {
   user-select: none;
 }
 
+/* Lock layout: nothing moves or resizes, so nothing offers to. The grip
+   still opens the Move menu, which says why its placements are off. */
+.panel-dock-layer.is-locked
+  :is(
+    .model-panel-header.is-draggable,
+    button.model-panel-grip,
+    .panel-float-grip
+  ) {
+  cursor: default;
+}
+
+.panel-float-resize:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.panel-float-resize:disabled:hover {
+  background-color: transparent;
+}
+
 /* At a phone width the one panel that shows takes the right lane under the
    command card and the inspector, keeping enough height to read. */
 .panel-lane-float {
@@ -2402,6 +2422,87 @@ button.model-panel-grip[aria-expanded='true'] {
   line-height: 14px;
   text-align: center;
   pointer-events: none;
+}
+
+/* View options' menu, opened to the rail's left: its groups are named,
+   and a check marks each chosen radio and each setting that is on. */
+.view-options-menu {
+  min-width: 240px;
+}
+
+.view-options-group-label {
+  padding: 4px 8px 2px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+}
+
+.view-options-check {
+  width: 14px;
+  color: var(--color-accent-hi);
+}
+
+/* Hide all is on: beside the rail, where the panels would be, saying so
+   and offering them back. */
+.instrument-rail > .panels-hidden-pill {
+  position: absolute;
+  right: calc(100% + var(--island-gap));
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 12px;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  background: var(--color-surface);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+}
+
+.panels-hidden-pill > button {
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-dim);
+  color: var(--color-accent-hi);
+  font: inherit;
+}
+
+.panels-hidden-pill > button:hover {
+  color: var(--color-text);
+}
+
+/* Compact rows: the same rows and controls, closer together. Row targets
+   stay at the 24px pointer minimum. */
+.model-panel.is-compact .model-panel-body {
+  padding: 6px 8px;
+}
+
+.model-panel.is-compact :is(.feature-list, .param-list) {
+  gap: 0;
+}
+
+.model-panel.is-compact :is(.feature-row-main, .body-row-main) {
+  min-height: 24px;
+  padding-block: 1px;
+}
+
+.model-panel.is-compact .param-row input {
+  height: 24px;
+  padding-block: 1px;
+}
+
+.model-panel.is-compact .revision-row {
+  padding-block: 0;
+}
+
+.model-panel.is-compact .diagnostic-row {
+  margin-bottom: 3px;
 }
 
 .rail-button.parked::after {

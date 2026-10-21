@@ -108,6 +108,8 @@ function clamp(value: number, lo: number, hi: number): number {
 
 const FULL_DOCKS = 'The docks are full at this width.';
 const LOCKED = 'Unlock the layout to change it';
+const LOCKED_STATUS =
+  'The layout is locked. Unlock it in View options to move or resize panels.';
 /** Keyboard steps for gaps and floating windows, in CSS pixels. */
 const KEY_STEP = 10;
 /** A float dropped from a column is at most this tall, as Pop out makes it. */
@@ -446,7 +448,7 @@ export function PanelDock({
   };
 
   const gapKey = (event: ReactKeyboardEvent<HTMLElement>, gap: GapGeometry) => {
-    if (!gap.enabled) return;
+    if (!gap.enabled || layout.options.locked) return;
     let next: PanelLayout | null = null;
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       next = resizeGap(
@@ -858,6 +860,20 @@ export function PanelDock({
   ): boolean => {
     const { layout: current, stage: on } = latest.current;
     if (!on) return false;
+    const group = current.floats.find((candidate) =>
+      candidate.panels.includes(id)
+    );
+    const step = arrowStep(event.key);
+    const moves =
+      (event.altKey &&
+        (event.key === 'ArrowUp' || event.key === 'ArrowDown')) ||
+      (group && step && !event.altKey && !event.ctrlKey && !event.metaKey);
+    // The keys are taken, so a locked layout says why nothing moved rather
+    // than letting an arrow scroll the panel.
+    if (moves && current.options.locked) {
+      latest.current.onRefuse(LOCKED_STATUS);
+      return true;
+    }
     if (
       event.altKey &&
       (event.key === 'ArrowUp' || event.key === 'ArrowDown')
@@ -869,10 +885,6 @@ export function PanelDock({
       );
       return true;
     }
-    const group = current.floats.find((candidate) =>
-      candidate.panels.includes(id)
-    );
-    const step = arrowStep(event.key);
     if (!group || !step || event.altKey || event.ctrlKey || event.metaKey) {
       return false;
     }
@@ -962,26 +974,28 @@ export function PanelDock({
       })}
       {docked!.gaps.filter(isGap).map((gap) => {
         const total = shown.weights[gap.above] + shown.weights[gap.below];
+        // Off while the stack scrolls, and while the layout is locked.
+        const enabled = gap.enabled && !layout.options.locked;
         return (
           <div
             key={`${gap.above}-${gap.below}`}
-            className={`panel-gap${gap.enabled ? '' : ' is-off'}`}
+            className={`panel-gap${enabled ? '' : ' is-off'}`}
             role="separator"
             aria-orientation="horizontal"
             aria-label={`Resize ${PANEL_TITLES[gap.above]} and ${PANEL_TITLES[gap.below]}`}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={Math.round((100 * shown.weights[gap.above]) / total)}
-            aria-disabled={gap.enabled ? undefined : true}
-            tabIndex={gap.enabled ? 0 : -1}
+            aria-disabled={enabled ? undefined : true}
+            tabIndex={enabled ? 0 : -1}
             title={
-              gap.enabled
+              enabled
                 ? 'Drag to resize · double-click to split evenly'
                 : undefined
             }
             style={{ top: gap.y - container.y, height: gap.h }}
             onPointerDown={(event) => {
-              if (!gap.enabled) return;
+              if (!enabled) return;
               startLocal(event, (base, _dx, dy) =>
                 resizeGap(base, gap.above, gap.below, dy, gap.pxPerWeight)
               );
@@ -989,7 +1003,7 @@ export function PanelDock({
             {...localHandlers}
             onKeyDown={(event) => gapKey(event, gap)}
             onDoubleClick={() => {
-              if (!gap.enabled) return;
+              if (!enabled) return;
               // At the scale the stack is drawn at, as a drag is: split by
               // weight alone, a neighbour held at its minimum redrew every
               // other panel in the stack.
@@ -1020,8 +1034,8 @@ export function PanelDock({
   return (
     <div
       className={`panel-dock-layer${dragView ? ' is-dragging' : ''}${
-        slot && slotWidth > 0 && peekWidth === 0 ? ' slot-over-lane' : ''
-      }`}
+        layout.options.locked ? ' is-locked' : ''
+      }${slot && slotWidth > 0 && peekWidth === 0 ? ' slot-over-lane' : ''}`}
       ref={layerRef}
     >
       {docked?.columns.map((column) => (
@@ -1122,7 +1136,13 @@ export function PanelDock({
                 type="button"
                 className="panel-float-resize"
                 aria-label={`Resize ${names} window`}
-                title="Drag to resize · arrow keys resize by 10px"
+                // Locked, nothing resizes it: no drag, no keys.
+                disabled={layout.options.locked}
+                title={
+                  layout.options.locked
+                    ? LOCKED
+                    : 'Drag to resize · arrow keys resize by 10px'
+                }
                 onPointerDown={(event) =>
                   startLocal(event, (base, dx, dy) =>
                     resizeFloat(

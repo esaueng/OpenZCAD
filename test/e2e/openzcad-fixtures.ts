@@ -1024,6 +1024,13 @@ export interface SeedPanelLayout {
   unpinned?: SeedPanelId | null;
   recent?: SeedPanelId[];
   weights?: Partial<Record<SeedPanelId, number>>;
+  /** View options: Hide all, Lock, Compact rows and the column width. */
+  options?: {
+    hidden?: boolean;
+    locked?: boolean;
+    compact?: boolean;
+    width?: 'narrow' | 'regular' | 'wide';
+  };
 }
 
 /** Every panel docked in one right column, in the old drawer's order. */
