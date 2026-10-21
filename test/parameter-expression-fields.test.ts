@@ -72,6 +72,35 @@ function direct(
   );
 }
 
+type DatumData = Extract<
+  FeatureData,
+  { featureKind: 'datum-plane' | 'datum-axis' }
+>;
+
+// Datum readers sit in nested sources, so each definition kind is its own
+// variant: a canonical source's offset and a point source's coordinates.
+function datum(data: DatumData, paths: string[]): ReaderVariant {
+  return {
+    ...feature(
+      data,
+      paths.map((path) => `definition.${path}`)
+    ),
+    name: `${data.featureKind} ${data.definition.kind}`
+  };
+}
+
+const CANONICAL = {
+  type: 'canonical' as const,
+  plane: 'XY' as const,
+  offset: 0
+};
+const AT = (x: number) => ({
+  type: 'point' as const,
+  point: { x, y: 0, z: 0 }
+});
+const COORDINATES = (prefix: string) =>
+  ['x', 'y', 'z'].map((axis) => `${prefix}.point.${axis}`);
+
 function object(data: SketchObjectData, paths: string[]): ReaderVariant {
   return {
     name: `sketch ${data.objectKind}`,
@@ -210,6 +239,55 @@ const VARIANTS: ReaderVariant[] = [
       'plane.normal.y',
       'plane.normal.z'
     ]
+  ),
+  datum(
+    {
+      featureKind: 'datum-plane',
+      definition: { kind: 'offset', source: CANONICAL, offset: 5 }
+    },
+    ['offset', 'source.offset']
+  ),
+  datum(
+    {
+      featureKind: 'datum-plane',
+      definition: { kind: 'midplane', sources: [CANONICAL, CANONICAL] }
+    },
+    ['sources.0.offset', 'sources.1.offset']
+  ),
+  datum(
+    {
+      featureKind: 'datum-plane',
+      definition: { kind: 'three-point', points: [AT(0), AT(1), AT(2)] }
+    },
+    [
+      ...COORDINATES('points.0'),
+      ...COORDINATES('points.1'),
+      ...COORDINATES('points.2')
+    ]
+  ),
+  datum(
+    {
+      featureKind: 'datum-plane',
+      definition: { kind: 'parallel-point', source: CANONICAL, point: AT(3) }
+    },
+    ['source.offset', ...COORDINATES('point')]
+  ),
+  datum(
+    {
+      featureKind: 'datum-axis',
+      definition: { kind: 'two-point', points: [AT(0), AT(1)] }
+    },
+    [...COORDINATES('points.0'), ...COORDINATES('points.1')]
+  ),
+  datum(
+    {
+      featureKind: 'datum-axis',
+      definition: {
+        kind: 'plane-intersection',
+        sources: [CANONICAL, { ...CANONICAL, plane: 'XZ' }]
+      }
+    },
+    ['sources.0.offset', 'sources.1.offset']
   ),
   feature(
     {
