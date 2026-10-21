@@ -38,8 +38,20 @@ export default async (...args: Parameters<typeof webConfig>) => {
       ...config.resolve,
       alias: {
         ...config.resolve?.alias,
+        ...(process.env.H02_SESSION_PROBE === '1'
+          ? {
+              './exactRebuildCache': fileURLToPath(
+                new URL('./h02-session-rebuild-cache.ts', import.meta.url)
+              )
+            }
+          : {}),
         '@openzcad/kernel-adapter/exact': fileURLToPath(
-          new URL('./h02-browser-exact.ts', import.meta.url)
+          new URL(
+            process.env.H02_SESSION_PROBE === '1'
+              ? './h02-session-exact.ts'
+              : './h02-browser-exact.ts',
+            import.meta.url
+          )
         )
       }
     }
