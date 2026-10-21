@@ -237,6 +237,113 @@ export function patternJournalFaceClaims(
 }
 
 /**
+ * A complete construction-origin edge-output census for a grid, partitioned
+ * by actual member solid. Output order carries no source-edge meaning: the
+ * public resolver exposes subjects and provenance, not Generated.sources.
+ * Known document transforms and independent edge witnesses establish roles.
+ */
+const MAX_GRID_EDGE_LINEAGE_EVENT_VISITS = 4_000_000;
+
+export function patternJournalEdgeOutputs(
+  kernel: RemusKernel,
+  op: number,
+  instanceSolids: readonly number[]
+): ReadonlySet<number>[] | null {
+  try {
+    const queried = instanceSolids.map((solid) =>
+      Array.from(kernel.getSolidEdges(solid))
+    );
+    const members = queried.map((edges) => new Set(edges));
+    if (members.some((edges, index) => edges.size !== queried[index]!.length))
+      return null;
+    const actual = new Set(members.flatMap((edges) => [...edges]));
+    const total = members.reduce((sum, edges) => sum + edges.size, 0);
+    if (
+      total === 0 ||
+      !Number.isSafeInteger(total + 1) ||
+      actual.size !== total
+    )
+      return null;
+    // This producer records one event per unique result face, edge and
+    // vertex. Count the actual subjects independently so stale or understated
+    // summary metadata cannot make the ordinal scan budget look cheaper.
+    let actualEventCount = total;
+    for (const query of ['getSolidFaces', 'getSolidVertices'] as const) {
+      const entities = instanceSolids.flatMap((solid) =>
+        Array.from(kernel[query](solid))
+      );
+      if (new Set(entities).size !== entities.length) return null;
+      actualEventCount += entities.length;
+      if (!Number.isSafeInteger(actualEventCount)) return null;
+    }
+    // Each public ordinal resolution scans the entry's events. Bound this
+    // added work before making the ordinal calls; complex grids retain their
+    // existing face lineage and geometry when edge adoption exceeds it.
+    const summary: unknown = JSON.parse(kernel.journalSummary());
+    if (!Array.isArray(summary)) return null;
+    const entries = summary.filter(
+      (entry: unknown) =>
+        entry !== null &&
+        typeof entry === 'object' &&
+        (entry as Record<string, unknown>).op === op
+    ) as Record<string, unknown>[];
+    if (entries.length !== 1) return null;
+    const entry = entries[0]!;
+    const detail = entry.detail as Record<string, unknown> | undefined;
+    if (
+      entry.kind !== 'grid_pattern' ||
+      entry.type !== 'evolution' ||
+      !detail ||
+      detail.origin !== 'construction' ||
+      !Number.isSafeInteger(detail.events) ||
+      detail.events !== actualEventCount
+    )
+      return null;
+    const eventVisits = (total + 1) * actualEventCount;
+    if (
+      !Number.isSafeInteger(eventVisits) ||
+      eventVisits > MAX_GRID_EDGE_LINEAGE_EVENT_VISITS
+    )
+      return null;
+    const outputs = new Set<number>();
+    for (let index = 0; index <= total; index += 1) {
+      const decoded: unknown = JSON.parse(
+        kernel.resolveOperationOutput(op, 'edge', index)
+      );
+      if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded))
+        return null;
+      const row = decoded as Record<string, unknown>;
+      if (index === total) {
+        if (row.status !== 'noMatch') return null;
+        break;
+      }
+      if (
+        row.status !== 'bound' ||
+        row.provenance !== 'construction' ||
+        !Array.isArray(row.entities) ||
+        row.entities.length !== 1
+      )
+        return null;
+      const entity: unknown = row.entities[0];
+      if (!entity || typeof entity !== 'object' || Array.isArray(entity))
+        return null;
+      const { kind, handle } = entity as Record<string, unknown>;
+      if (
+        kind !== 'edge' ||
+        !Number.isSafeInteger(handle) ||
+        !actual.has(handle as number) ||
+        outputs.has(handle as number)
+      )
+        return null;
+      outputs.add(handle as number);
+    }
+    return outputs.size === actual.size ? members : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * A journaled move-faces op's face outputs, read back as one source-to-result
  * map.
  *

@@ -5945,16 +5945,14 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
       }
 
       if (withRim !== null) {
-        // One measurement, reused. The deflection sits at 5e-4mm because the
-        // kernel bounds a non-planar face's tessellation grid at 1M points:
-        // at 1e-5 the rim torus alone exceeds it and `volume` refuses. 5e-5
-        // still resolves the rim's contribution to 4e-7 relative, far inside
-        // the 1e-6 assertion below.
+        // Reuse the existing 5e-5 mm measurement request. Qualified face
+        // integrals measure this analytic fixture independently of deflection;
+        // unsupported domains can still fall back to a bounded mesh grid.
         const measured = kernel.volume(withRim, 5e-5);
         // It took the whole selection, so the rim has to be rounded — a result
         // that matches the perimeter-only solid means the rim went missing.
         const types = faceTypes(withRim);
-        expect(types).toContain('torus');
+        expect(types.filter((type) => type === 'torus')).toHaveLength(1);
         expect(measured).not.toBeCloseTo(perimeterVolume, 6);
         // Every corner patch survives alongside it: four octants, five
         // cylinders (four bands plus the bore) and the rim's torus.
@@ -5963,14 +5961,13 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         // The perimeter and rim removals are disjoint, so the combined body is
         // the bored plate less both. 28800 - 30.375pi of plate, less
         // 1088 - 808pi/3 for the perimeter and 94pi/3 - 17pi^2/2 for the rim,
-        // which collects to 27712 + 207.625pi + 8.5pi^2. A holed body is
-        // integrated off its inscribed mesh, so this converges from below.
+        // which collects to 27712 + 207.625pi + 8.5pi^2. Match the native
+        // regress_mixed_rim_perimeter_fillet fixture's 0.02 mm^3 absolute
+        // budget: the qualified face integrals introduced in Remus #1211 can
+        // err on either side, rather than converging from an inscribed mesh.
         const combinedClosedForm =
           27712 + 207.625 * Math.PI + 8.5 * Math.PI ** 2;
-        expect(measured).toBeLessThan(combinedClosedForm);
-        expect(
-          (combinedClosedForm - measured) / combinedClosedForm
-        ).toBeLessThan(1e-6);
+        expect(Math.abs(measured - combinedClosedForm)).toBeLessThan(0.02);
       } else {
         // It refused, so it has to say which edge it could not take, in prose
         // rather than an opaque trap.

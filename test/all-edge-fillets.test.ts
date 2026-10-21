@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   createAllEdgesFilletProposal,
   createCadDocumentDigest,
@@ -15,7 +15,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import { toUserId, type BodyId, type ProjectDocument } from '@openzcad/shared';
 import {
   RemusKernel,
   loadRemusTranslators
@@ -27,6 +27,169 @@ const selection: CadSelectionContext = {
   featureIds: [],
   topologies: []
 };
+
+/** Capture the exact body the adapter sends to the STEP translator. */
+async function exportStepArena(
+  adapter: ExactKernelAdapter,
+  document: ProjectDocument,
+  bodyId: BodyId
+) {
+  const serialize = vi.spyOn(RemusKernel.prototype, 'serializeSolids');
+  try {
+    const step = await adapter.exportStep(document, [bodyId]);
+    expect(serialize).toHaveBeenCalledTimes(1);
+    const result = serialize.mock.results[0];
+    if (result?.type !== 'return')
+      throw new Error('STEP export did not serialize a body.');
+    return { step, arena: new Uint8Array(result.value) };
+  } finally {
+    serialize.mockRestore();
+  }
+}
+
+/** Compare physical geometry without depending on arena or traversal order. */
+function expectRoundedBoxGeometryPreserved(
+  before: Uint8Array,
+  after: Uint8Array
+) {
+  const kernel = new RemusKernel();
+  const compareNumbers = (
+    left: readonly number[],
+    right: readonly number[]
+  ) => {
+    expect(right).toHaveLength(left.length);
+    for (const [index, value] of left.entries()) {
+      expect(Math.abs(right[index]! - value)).toBeLessThan(1e-12);
+    }
+  };
+  const compareRows = (
+    left: readonly number[][],
+    right: readonly number[][]
+  ) => {
+    const remaining = [...right];
+    expect(right).toHaveLength(left.length);
+    for (const expected of left) {
+      const matches = remaining.flatMap((actual, index) =>
+        actual.length === expected.length &&
+        actual.every(
+          (value, coordinate) => Math.abs(value - expected[coordinate]!) < 1e-12
+        )
+          ? [index]
+          : []
+      );
+      expect(matches).toHaveLength(1);
+      const [actual] = remaining.splice(matches[0]!, 1);
+      compareNumbers(expected, actual!);
+    }
+    expect(remaining).toEqual([]);
+  };
+  const edgeGeometry = (edge: number) => {
+    const [lo, hi] = kernel.getEdgeParamSpan(edge);
+    const ends = Array.from(kernel.getEdgeVertexHandles(edge), (vertex) =>
+      Array.from(kernel.getVertexPosition(vertex))
+    );
+    const firstDifference = ends[0]!.findIndex(
+      (coordinate, axis) => Math.abs(coordinate - ends[1]![axis]!) > 1e-12
+    );
+    const reverse =
+      firstDifference >= 0 &&
+      ends[0]![firstDifference]! > ends[1]![firstDifference]!;
+    const orderedEnds = reverse ? [...ends].reverse() : ends;
+    const lowPoint = Array.from(kernel.evaluateEdgeCurve(edge, lo!));
+    const highPoint = Array.from(kernel.evaluateEdgeCurve(edge, hi!));
+    const samePoint = (left: readonly number[], right: readonly number[]) =>
+      left.length === right.length &&
+      left.every(
+        (coordinate, axis) => Math.abs(coordinate - right[axis]!) < 1e-12
+      );
+    const forward =
+      samePoint(lowPoint, orderedEnds[0]!) &&
+      samePoint(highPoint, orderedEnds[1]!);
+    const backward =
+      samePoint(highPoint, orderedEnds[0]!) &&
+      samePoint(lowPoint, orderedEnds[1]!);
+    expect(Number(forward) + Number(backward)).toBe(1);
+    const fractions = forward
+      ? [0, 0.25, 0.5, 0.75, 1]
+      : [1, 0.75, 0.5, 0.25, 0];
+    return [
+      kernel.getEdgeCurveType(edge) === 'LINE' ? 0 : 1,
+      Math.abs(hi! - lo!),
+      kernel.edgeLength(edge),
+      ...orderedEnds.flat(),
+      ...fractions.flatMap((fraction) =>
+        Array.from(kernel.evaluateEdgeCurve(edge, lo! + (hi! - lo!) * fraction))
+      )
+    ];
+  };
+  const snapshot = (bytes: Uint8Array) => {
+    const solids = kernel.deserializeSolids(bytes);
+    expect(solids).toHaveLength(1);
+    const solid = solids[0]!;
+    expect(kernel.validateSolid(solid)).toBe(0);
+    const validation: unknown = JSON.parse(
+      kernel.validateSolidDetailed(solid) as string
+    );
+    expect(validation).toEqual({ errorCount: 0, warningCount: 0, issues: [] });
+    const topology = JSON.parse(kernel.toBrepJson(solid) as string) as {
+      faces: { id: number; reversed: boolean }[];
+    };
+    const orientations = new Map(
+      topology.faces.map((face) => [face.id, face.reversed])
+    );
+    const faces = Array.from(kernel.getSolidFaces(solid));
+    const edges = Array.from(kernel.getSolidEdges(solid));
+    const vertices = Array.from(kernel.getSolidVertices(solid));
+    expect([faces.length, edges.length, vertices.length]).toEqual([26, 48, 24]);
+    expect(faces.map((face) => kernel.getSurfaceType(face)).sort()).toEqual([
+      ...Array<string>(12).fill('cylinder'),
+      ...Array<string>(6).fill('plane'),
+      ...Array<string>(8).fill('sphere')
+    ]);
+    expect(edges.map((edge) => kernel.getEdgeCurveType(edge)).sort()).toEqual([
+      ...Array<string>(24).fill('CIRCLE'),
+      ...Array<string>(24).fill('LINE')
+    ]);
+    return {
+      bounds: Array.from(kernel.boundingBox(solid)),
+      vertices: vertices.map((vertex) =>
+        Array.from(kernel.getVertexPosition(vertex))
+      ),
+      faces: faces.map((face) => {
+        expect(kernel.getFaceWires(face)).toHaveLength(1);
+        const parameters: unknown = JSON.parse(
+          kernel.getAnalyticSurfaceParams(face)
+        );
+        const reversed = orientations.get(face);
+        expect(typeof reversed).toBe('boolean');
+        return {
+          carrier: JSON.stringify(parameters),
+          reversed,
+          edges: Array.from(kernel.getFaceEdges(face), edgeGeometry)
+        };
+      })
+    };
+  };
+  try {
+    const source = snapshot(before);
+    const imported = snapshot(after);
+    compareNumbers(source.bounds, imported.bounds);
+    compareRows(source.vertices, imported.vertices);
+    const remaining = [...imported.faces];
+    for (const face of source.faces) {
+      const matches = remaining.flatMap((candidate, index) =>
+        candidate.carrier === face.carrier ? [index] : []
+      );
+      expect(matches).toHaveLength(1);
+      const [matched] = remaining.splice(matches[0]!, 1);
+      expect(matched!.reversed).toBe(face.reversed);
+      compareRows(face.edges, matched!.edges);
+    }
+    expect(remaining).toEqual([]);
+  } finally {
+    kernel.free();
+  }
+}
 
 describe('whole-part fillet requests', () => {
   it.each([
@@ -112,7 +275,11 @@ describe('whole-part exact fillet proposals', { timeout: 120_000 }, () => {
     );
     expect(surfaces.filter((type) => type === 'cylinder')).toHaveLength(12);
     expect(surfaces.filter((type) => type === 'sphere')).toHaveLength(8);
-    const step = await adapter.exportStep(preview.candidate, [bodyId]);
+    const { step, arena: originalArena } = await exportStepArena(
+      adapter,
+      preview.candidate,
+      bodyId
+    );
     const imported = importStepBody(
       createProjectDocument('Round trip', toUserId('user_fillet')),
       {
@@ -124,10 +291,30 @@ describe('whole-part exact fillet proposals', { timeout: 120_000 }, () => {
     );
     const rebuilt = await adapter.syncDocument(imported.document);
     expect(rebuilt.warnings).toEqual([]);
-    expect(rebuilt.bodyRepresentations[imported.bodyId]!.volume).toBeCloseTo(
-      rounded.volume,
-      5
+    const { arena: importedArena } = await exportStepArena(
+      adapter,
+      imported.document,
+      imported.bodyId
     );
+    expectRoundedBoxGeometryPreserved(originalArena, importedArena);
+    // Steiner: the inner box Minkowski-summed with a radius-2 ball. Extend
+    // B20's existing 1e-6 relative measurement target to each representation;
+    // approximate integrals need not be identical after STEP reparameterizes it.
+    const radius = 2;
+    const a = 40 - 2 * radius;
+    const b = 30 - 2 * radius;
+    const c = 20 - 2 * radius;
+    const exactVolume =
+      a * b * c +
+      2 * radius * (a * b + b * c + a * c) +
+      Math.PI * radius ** 2 * (a + b + c) +
+      (4 / 3) * Math.PI * radius ** 3;
+    for (const measured of [
+      rounded.volume,
+      rebuilt.bodyRepresentations[imported.bodyId]!.volume
+    ]) {
+      expect(Math.abs(measured - exactVolume) / exactVolume).toBeLessThan(1e-6);
+    }
   });
 
   it('includes the entire local inventory even when the provider digest is truncated', () => {

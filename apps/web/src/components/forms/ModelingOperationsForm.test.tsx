@@ -12,7 +12,8 @@ import type { BodyOption } from './FeatureForms';
 import { ModelingOperationsForm } from './ModelingOperationsForm';
 import type {
   ModelingOperationSubmission,
-  ModelingFaceOption
+  ModelingFaceOption,
+  ModelingOperationFormState
 } from '../../lib/modelingOperations';
 
 const bodyId = toBodyId('body_form');
@@ -226,6 +227,105 @@ describe('Modeling operations form', () => {
       screen.getByRole('button', { name: `1 ${extraFace.label}` })
     ).toHaveAttribute('aria-pressed', 'true');
   });
+
+  it('adds a box sweep of faces to the shell list without toggling any off', () => {
+    const extraFace = {
+      ...faces[0]!,
+      hash: 43,
+      topologyId: 'face:43',
+      label: 'Second plane'
+    };
+    const shellProps = {
+      operation: 'shell' as const,
+      scope: {},
+      bodies,
+      faceOptions: [...faces, extraFace],
+      onPreflight: vi.fn(),
+      onSubmit: vi.fn()
+    };
+    const view = render(<ModelingOperationsForm {...shellProps} />);
+    view.rerender(
+      <ModelingOperationsForm
+        {...shellProps}
+        viewportFacePick={{ bodyId, hash: 42 }}
+      />
+    );
+    // The sweep holds 42 again and a face the card does not offer (77).
+    view.rerender(
+      <ModelingOperationsForm
+        {...shellProps}
+        viewportFacePick={{ bodyId, hash: 42, hashes: [42, 43, 77] }}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: `1 ${faces[0]!.label}` })
+    ).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      screen.getByRole('button', { name: `2 ${extraFace.label}` })
+    ).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it.each(['shell', 'draft'] as const)(
+    'publishes the complete accepted %s list after a partial sweep',
+    (operation) => {
+      const extraFaces = [43, 44].map((hash) => ({
+        ...faces[0]!,
+        hash,
+        topologyId: `face:${hash}`,
+        label: `Plane ${hash}`
+      }));
+      const initial: ModelingOperationFormState =
+        operation === 'shell'
+          ? {
+              operation,
+              value: {
+                name: 'Shell',
+                targetBodyId: bodyId,
+                thickness: '2',
+                openingFaceHashes: [42]
+              }
+            }
+          : {
+              operation,
+              value: {
+                name: 'Draft',
+                targetBodyId: bodyId,
+                faceHashes: [42],
+                pullDirection: { x: '0', y: '0', z: '1' },
+                neutralPoint: { x: '0', y: '0', z: '0' },
+                angleDeg: '3'
+              }
+            };
+      const onFaceListStateChange = vi.fn();
+      const props = {
+        operation,
+        initial,
+        scope: {},
+        bodies,
+        faceOptions: [...faces, ...extraFaces],
+        onPreflight: vi.fn(),
+        onSubmit: vi.fn(),
+        onFaceListStateChange
+      };
+      const view = render(<ModelingOperationsForm {...props} />);
+      expect(onFaceListStateChange).toHaveBeenLastCalledWith(bodyId, [42]);
+      // A manually selected face joins the initial face before the sweep.
+      fireEvent.click(screen.getByRole('button', { name: 'Plane 43' }));
+      expect(onFaceListStateChange).toHaveBeenLastCalledWith(bodyId, [42, 43]);
+      view.rerender(
+        <ModelingOperationsForm
+          {...props}
+          viewportFacePick={{ bodyId, hash: 44, hashes: [44, 77] }}
+        />
+      );
+      // Neither earlier face is in the sweep, and 77 is not an offered face.
+      expect(onFaceListStateChange).toHaveBeenLastCalledWith(
+        bodyId,
+        [42, 43, 44]
+      );
+      expect(screen.getAllByRole('button', { pressed: true })).toHaveLength(3);
+    }
+  );
 
   it('follows a viewport pick onto another body when the workspace retargets it', () => {
     const otherBodyId = toBodyId('other_body');

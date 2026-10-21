@@ -16,6 +16,11 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId, type DerivedState } from '@openzcad/shared';
 import { preflightCadPatch } from '../apps/web/src/lib/aiPatchPreflight';
+import {
+  captureExactArenas,
+  compareExactArenas
+} from './support/exact-arena-equivalence';
+import { privateArtifactPaths } from './support/privateArtifacts';
 
 const sourcePath = process.env.OZ_PERF_HOLDER_STEP;
 
@@ -78,6 +83,12 @@ function exactPublication({ updatedAt: _time, ...derived }: DerivedState) {
 it.skipIf(!sourcePath)(
   'private holder reload and first edit match a cache-disabled exact oracle',
   async () => {
+    const diagnosticPaths = process.env.OZ_PERF_PRIVATE_DIFF_OUT
+      ? privateArtifactPaths(process.env.OZ_PERF_PRIVATE_DIFF_OUT, undefined, [
+          sourcePath!
+        ])
+      : undefined;
+    const inputPath = diagnosticPaths?.inputs[0] ?? sourcePath!;
     const events: RebuildCacheEvent[] = [];
     const warm = await createExactKernelAdapter({
       onRebuildCacheEvent: (event) => events.push(event),
@@ -95,7 +106,7 @@ it.skipIf(!sourcePath)(
           name: 'Source',
           artifactId: 'source',
           sourceName: 'source.step',
-          stepText: readFileSync(sourcePath!, 'utf8')
+          stepText: readFileSync(inputPath, 'utf8')
         }
       ).document;
       imported = { ...imported, derived: await warm.syncDocument(imported) };
@@ -134,25 +145,36 @@ it.skipIf(!sourcePath)(
         expression: String(Number(height!.expression) + 8)
       });
       const replayed: string[] = [];
-      const actual = await warm.syncDocument(changed, (progress) => {
-        if (progress.stage === 'feature' && progress.status === 'completed')
-          replayed.push(progress.name);
-      });
+      const capturedActual = await captureExactArenas(warm, changed, () =>
+        warm.syncDocument(changed, (progress) => {
+          if (progress.stage === 'feature' && progress.status === 'completed')
+            replayed.push(progress.name);
+        })
+      );
+      const actual = capturedActual.result;
       expect(actual.warnings.length).toBe(0);
       expect(actual.featureWarnings?.length ?? 0).toBe(0);
       expect(replayed).not.toContain('Text');
       expect(replayed).toContain('Keep text together');
       expect(events.at(-1)!.reusedMeasurements).toBeGreaterThan(0);
-      const expected = await cold.syncDocument(changed);
+      const capturedExpected = await captureExactArenas(cold, changed, () =>
+        cold.syncDocument(changed)
+      );
+      const expected = capturedExpected.result;
+      const exactArenas = compareExactArenas(
+        capturedActual.bodies,
+        capturedExpected.bodies
+      );
       const publishedActual = exactPublication(actual),
         publishedExpected = exactPublication(expected);
-      if (process.env.OZ_PERF_PRIVATE_DIFF_OUT) {
+      if (diagnosticPaths) {
         const { bodyRepresentations: actualBodies, ...actualRoot } =
           publishedActual;
         const { bodyRepresentations: expectedBodies, ...expectedRoot } =
           publishedExpected;
         writeFileSync(
-          process.env.OZ_PERF_PRIVATE_DIFF_OUT,
+          privateArtifactPaths(diagnosticPaths.output, undefined, [inputPath])
+            .output,
           JSON.stringify(
             {
               root: differingPaths(actualRoot, expectedRoot),
@@ -167,6 +189,7 @@ it.skipIf(!sourcePath)(
                   paths: paths.slice(0, 100)
                 };
               }),
+              exactArenas,
               summary: {
                 documentBytes: new TextEncoder().encode(
                   JSON.stringify(reopened)
@@ -181,17 +204,29 @@ it.skipIf(!sourcePath)(
             },
             null,
             2
-          )
+          ),
+          { flag: 'wx', mode: 0o600 }
         );
       }
       expect(
         isDeepStrictEqual(publishedActual, publishedExpected),
         'Private exact publication must match the uncached oracle'
       ).toBe(true);
+      expect(
+        exactArenas.bodies.every(
+          (body) => body.actualSolids > 0 && body.expectedSolids > 0
+        ),
+        'Every private body must have captured exact solids'
+      ).toBe(true);
+      expect(
+        exactArenas.equivalent,
+        'Private raw B-rep arena bytes must match the uncached oracle'
+      ).toBe(true);
       console.log(
         '[H02 private equivalence]',
         JSON.stringify({
           equivalent: true,
+          exactArenas,
           documentBytes: new TextEncoder().encode(JSON.stringify(reopened))
             .byteLength,
           bodies: changed.bodyOrder.length,

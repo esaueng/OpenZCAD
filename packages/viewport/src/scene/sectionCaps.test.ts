@@ -9,6 +9,7 @@ import {
   sectionClippingPlane
 } from './objects';
 import { isViewerMesh } from '../pick/meshes';
+import { updateBodyMaterialOpacity } from '../render/scene';
 
 const xy = (offset = 0) => sectionClippingPlane({ plane: 'XY', offset });
 function area(geometry: THREE.BufferGeometry | null) {
@@ -182,5 +183,31 @@ describe('display-only solid section caps', () => {
     expect(cap.material.opacity).toBe(0.4);
     expect(cap.material.depthWrite).toBe(false);
     expect(cap.material.clippingPlanes).toBeNull();
+  });
+  it('follows blending changes made after the cap was built', () => {
+    const mesh = new THREE.Mesh(box(), new THREE.MeshPhongMaterial());
+    const root = new THREE.Group().add(mesh);
+    applySectionPlane(root, xy());
+    const cap = capOf(mesh)!;
+    const render = () =>
+      cap.onBeforeRender(
+        ...([] as unknown as Parameters<typeof cap.onBeforeRender>)
+      );
+    expect(cap.material.transparent).toBe(false);
+    // X-ray scales the body's opacity without re-applying the section.
+    updateBodyMaterialOpacity(mesh.material, 0.35);
+    const version = cap.material.version;
+    render();
+    expect(cap.material.opacity).toBe(0.35);
+    expect(cap.material.transparent).toBe(true);
+    expect(cap.material.depthWrite).toBe(false);
+    expect(cap.material.stencilWrite).toBe(false);
+    expect(cap.material.version).toBeGreaterThan(version);
+    updateBodyMaterialOpacity(mesh.material, 1);
+    render();
+    expect(cap.material.opacity).toBe(1);
+    expect(cap.material.transparent).toBe(false);
+    expect(cap.material.depthWrite).toBe(true);
+    expect(cap.material.stencilWrite).toBe(true);
   });
 });

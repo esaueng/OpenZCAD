@@ -48,6 +48,65 @@ describe('workspace session persistence', () => {
     expect(loadProjectView('project-1', storage)).toEqual(view);
   });
 
+  it('keeps sketch visibility and X-ray with the view, dropping bad entries', () => {
+    const storage = new MemoryStorage();
+    saveProjectView(
+      'project-1',
+      {
+        ...view,
+        settings: { ...view.settings, xray: true },
+        sketchVisibility: { 'sketch-a': false, 'sketch-b': true }
+      },
+      storage
+    );
+    expect(loadProjectView('project-1', storage)).toMatchObject({
+      settings: { xray: true },
+      sketchVisibility: { 'sketch-a': false, 'sketch-b': true }
+    });
+
+    // Hand-edited storage: a non-boolean entry is dropped, not the view.
+    const raw = JSON.parse(storage.getItem(WORKSPACE_SESSION_STORAGE_KEY)!) as {
+      views: Record<string, Record<string, unknown>>;
+    };
+    raw.views['project-1']!.sketchVisibility = { 'sketch-a': 'no', '': true };
+    (raw.views['project-1']!.settings as Record<string, unknown>).xray = 'yes';
+    storage.setItem(WORKSPACE_SESSION_STORAGE_KEY, JSON.stringify(raw));
+    const reloaded = loadProjectView('project-1', storage);
+    expect(reloaded?.camera).toEqual(view.camera);
+    expect(reloaded?.sketchVisibility).toBeUndefined();
+    expect(reloaded?.settings.xray).toBe(false);
+  });
+
+  it('keeps the newest sketch visibility choices past the cap', () => {
+    const storage = new MemoryStorage();
+    const sketchVisibility = Object.fromEntries(
+      Array.from({ length: 501 }, (_, index) => [`sketch-${index}`, false])
+    );
+    saveProjectView('project-1', { ...view, sketchVisibility }, storage);
+    const reloaded = loadProjectView('project-1', storage)?.sketchVisibility;
+    expect(Object.keys(reloaded ?? {})).toHaveLength(500);
+    expect(reloaded).not.toHaveProperty('sketch-0');
+    expect(reloaded).toHaveProperty('sketch-500', false);
+  });
+
+  it('keeps the field of view a pose was framed at, dropping a bad one', () => {
+    const storage = new MemoryStorage();
+    saveProjectView(
+      'project-1',
+      { ...view, camera: { ...view.camera, fieldOfView: 60 } },
+      storage
+    );
+    expect(loadProjectView('project-1', storage)?.camera.fieldOfView).toBe(60);
+    saveProjectView(
+      'project-1',
+      { ...view, camera: { ...view.camera, fieldOfView: Number.NaN } },
+      storage
+    );
+    const reloaded = loadProjectView('project-1', storage);
+    expect(reloaded?.camera.position).toEqual(view.camera.position);
+    expect(reloaded?.camera).not.toHaveProperty('fieldOfView');
+  });
+
   it('keeps a project view while an explicit return home clears auto-open', () => {
     const storage = new MemoryStorage();
     rememberActiveProject('project-1', storage);
