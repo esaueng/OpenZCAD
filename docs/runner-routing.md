@@ -28,6 +28,42 @@ Change it in two PRs, as Remus does:
 
 Old pinned commits stay on main, so earlier runs can still be re-run.
 
+## Staged merge-queue overflow
+
+`fleet-ci-v2.yml` stages trusted merge-queue support; the active caller and its
+immutable pin remain unchanged until a separate activation PR. That PR must
+grant the reusable caller `pull-requests: read` and add only the exact new
+workflow revision to `ci-trusted-main`, retaining existing entries and both
+repository and workflow restrictions.
+
+The external controller keeps GitHub-hosted execution primary. When it
+publishes `CI_FLEET_TARGET=ci-server-jane` under hosted queue pressure, a small
+Jane job verifies queue metadata before any candidate code is checked out. It
+has only contents/PR read permissions, executes the policy embedded in the
+immutable workflow, and retains the existing runner isolation checks. There is
+no hosted authorization job in front of the overflow checks.
+
+The policy binds the event ref and SHA to the live queue's exact candidate,
+walks its squash-parent chain back to current protected main, and requires the
+approved numeric repository identity, owner author and owner enqueuer on every
+entry in that prefix. Forks, other authors, changed or missing candidates,
+unprotected main, incomplete/truncated queue evidence and API failures select
+hosted execution. Queue inspection is bounded to 100 entries. Unsupported
+queue layouts also retain hosted execution.
+
+Application jobs accept only the verified event SHA. The probe's skipped or
+failed result cannot skip the existing checks: those fall back to hosted, and
+the validate/E2E gates still reject application failure or cancellation. All
+existing PR/main identity predicates, commands, timeouts, dependencies,
+permissions and deployment boundaries remain enforced. Queue-bot main pushes
+remain subject to the existing main-push policy; this change authorizes queue
+candidates only. Already queued jobs retain their selected runner.
+
+`scripts/test-merge-queue-routing.py` exercises the embedded policy and gate
+behavior through the existing direct-fleet test entrypoint. The staged policy
+is not a live routing claim; activation and a real queue run on Jane remain
+separate rollout steps.
+
 Only the approved owner's open, same-repository PR merge refs are eligible.
 Main pushes and manual dispatches also require protected main. Repository name
 and numeric identity, PR author, event actor and rerun actor are checked in the
@@ -38,8 +74,10 @@ a label or repository variable does not grant execution authority.
 `CI_FLEET_ENABLED=true` opts in. `CI_FLEET_TARGET` accepts only
 `ci-server-jane`, `ci-server-john`, or `github-hosted`. A controller outside
 Actions publishes this variable after checking fresh collector health and GitHub
-runner connectivity. Jane is primary, John the first backup, and GitHub-hosted
-the second. Busy Jane remains available; jobs queue for either of her two slots.
+runner connectivity. Production uses hosted-first overflow: GitHub-hosted is
+primary, with idle Jane slots selected under verified hosted queue pressure.
+There is no configured backup host. The legacy local-first policy and John
+target remain available only for separately validated configurations.
 Missing/invalid configuration selects hosted. Hosted fallback still depends on
 GitHub billing and capacity.
 

@@ -12,6 +12,7 @@ describe('workflow runner policy', () => {
       'ci-recovery.yml': ['ubuntu-24.04'],
       'public-commit-metadata.yml': ['ubuntu-24.04'],
       'fleet-ci.yml': Array(6).fill('*fleet-runner'),
+      'fleet-ci-v2.yml': Array(6).fill('*fleet-runner'),
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'macos-desktop.yml': ['macos-26'],
       'production-health.yml': ['ubuntu-latest'],
@@ -41,8 +42,12 @@ describe('workflow runner policy', () => {
         expect(workflow).toContain('workflow_dispatch:');
         expect(workflow).toContain('fetch-depth: 0');
         expect(workflow).toContain('persist-credentials: false');
-        expect(workflow).toContain('PR_BASE: ${{ github.event.pull_request.base.sha }}');
-        expect(workflow).toContain('PR_HEAD: ${{ github.event.pull_request.head.sha }}');
+        expect(workflow).toContain(
+          'PR_BASE: ${{ github.event.pull_request.base.sha }}'
+        );
+        expect(workflow).toContain(
+          'PR_HEAD: ${{ github.event.pull_request.head.sha }}'
+        );
         expect(workflow).toContain('BEFORE_SHA: ${{ github.event.before }}');
         expect(workflow).toContain('elif [[ "$EVENT_NAME" == push ]]');
         expect(workflow).toContain('Commit metadata range is unavailable.');
