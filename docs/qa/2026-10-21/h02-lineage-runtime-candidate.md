@@ -91,7 +91,7 @@ the 40 prepared-reuse events is followed by a full rebuild. The existing prepare
 transform path restores valid geometry without completing its alternate lineage;
 the following mode switch therefore loses reuse. This revision is not accepted.
 
-### Prepared transform follow-up
+### Prepared transform follow-up: `f6d8ae6e`
 
 The next follow-up completes alternate lineage after the existing prepared
 transform reuse. Ordinary modeling and metadata completion share the same authored
@@ -111,12 +111,43 @@ still replay the boolean suffix: the idle rebuild cannot create a probed eager
 view. The separate transition regression retains Text after the boolean and
 requires prepared reuse followed by complete idle restoration.
 
-Private lifetime and target-device results for the earlier revisions do not
-qualify this follow-up. It requires fresh verification at its committed head.
+Verification uses clean committed
+`f6d8ae6e4ea0b2394802d2b9dae29677d3ff8bb8`. The integrated Mac changes add only
+test/evidence updates; application/package source and dependency files are
+identical to runtime-fix commit `aeacb511`. Earlier failures and the frozen Mac
+campaign are preserved separately.
 
-Target-device acceptance still needs a new quiet M5 Pro campaign on this candidate,
-including the sustained private session and at least three alternating matched
-pairs with fresh pair IDs. Run the existing
+All five local repository gates pass: lint (zero errors, 17 existing warnings),
+typecheck, 5,820 root tests (eight existing skips), 3,474 web tests, 220 parity
+tests (one existing skip), and the full build including paired-WASM, provenance
+and bundle gates. The 25 focused transition cases, 118 selected existing tests and
+unchanged strict public reproduction also pass. Independent static review found
+no remaining actionable issue in the prepared-transform patch.
+
+The unchanged private one-edit oracle matches all 3,204,155 serialized bytes
+across 17 bodies / 720 faces, with zero normalized publication differences. One
+Linux enabled `holder_height` arm passes the original budgets and fixed Text
+assertion: Text executes zero times in the first settled edit, whose two cache
+events restore 4 / 31 features and replay 27 / 0. This single diagnostic arm does
+not establish matched timing or target-device acceptance.
+
+The unchanged private 80-edit browser session passes with zero acceptance
+failures. All seven raw/publication comparisons match, including refusal recovery
+and actual worker termination/restart. Four real measurement-eviction passes also
+match both oracles. The session exercises three replay-budget recycles, 252 retired
+checkpoints, five correctly rejected retired-checkpoint restores and 220 prepared
+feature reuses. The incoming continuation retains every original acceptance
+condition; its two lifetime coverage assertions now pass. Source bytes, candidate
+HEAD and the clean checkout remain unchanged throughout both private runs.
+
+These are Linux results for the existing checkpoint cache. Raw artifacts and all
+failed earlier attempts remain outside Git. They do not qualify quiet M5 timing,
+whole-worker retention or a detached Text record. The documentation follow-up
+changes no runtime, tests, dependency pins, defaults or thresholds.
+
+Target-device acceptance still needs a new quiet M5 Pro campaign on this candidate.
+Run the unchanged sustained private session first, then at least three alternating
+matched pairs with fresh pair IDs. Use the existing
 [matched-arm commands](../2026-10-15/h02-matched-cache-benchmark.md#reproduction)
 and sustained command from the
 [baseline report](h02-m5-pro-qualification.md#reproduction-and-verification) in a clean committed
@@ -129,6 +160,13 @@ The proposed detached Text branch, branch-preserving kernel support and
 whole-worker retained-memory acceptance remain separate open requirements. This
 candidate does not accept or implement that branch.
 
-## M5 Pro qualification result
+## Historical M5 Pro qualification: `d30b589e`
 
-[Candidate target-hardware evidence](h02-pr805-m5-pro-qualification.md) records all six new arms: observed p95 improvement is 8.3%, below the unchanged 20% target, and every enabled arm fails fixed Text restore. Raw/publication equality passes through 80 edits, refusal recovery and worker restart; required private retirement/replay-budget coverage still fails because fresh-arena fallback prevents it. Whole-worker memory and quiet-host acceptance remain open. H02 stays Partial; the candidate has not met acceptance.
+[Target-hardware evidence for `d30b589e`](h02-pr805-m5-pro-qualification.md) records
+all six arms: observed p95 improvement is 8.3%, below the unchanged 20% target,
+and every enabled arm fails fixed Text restore. Raw/publication equality passes
+through 80 edits, refusal recovery and worker restart; required private
+retirement/replay-budget coverage still fails because fresh-arena fallback
+prevents it. These results describe the first candidate, not the later import and
+prepared-transform follow-ups. Whole-worker memory and quiet-host acceptance
+remain open. H02 stays Partial.
