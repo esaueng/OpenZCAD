@@ -4565,6 +4565,8 @@ export function ModelViewer({
           bodyId?: string;
           /** Edges already taken, so a second call finds a different one. */
           excludeTopologyIds?: string[];
+          /** Interior fraction; endpoint repair needs an intentional end choice. */
+          fraction?: number;
           resolve?: (
             value: { x: number; y: number; topologyId: string } | null
           ) => void;
@@ -4585,15 +4587,23 @@ export function ModelViewer({
       );
       const rect = renderer.domElement.getBoundingClientRect();
       const sample = new THREE.Vector3();
+      const fraction = detail.fraction ?? 0.5;
+      if (!Number.isFinite(fraction) || fraction <= 0 || fraction >= 1) {
+        detail.resolve(null);
+        return;
+      }
       for (const edge of edges) {
         for (let index = 0; index + 5 < edge.points.length; index += 3) {
-          // Segment midpoints, not vertices: a vertex sits on two edges at
-          // once, so which one a click there takes is an arbitrary tie-break.
+          // Interior points avoid a vertex's two-edge tie. Tests may choose
+          // an interior point nearer an end to name that vertex explicitly.
           sample
             .set(
-              (edge.points[index]! + edge.points[index + 3]!) / 2,
-              (edge.points[index + 1]! + edge.points[index + 4]!) / 2,
-              (edge.points[index + 2]! + edge.points[index + 5]!) / 2
+              edge.points[index]! +
+                (edge.points[index + 3]! - edge.points[index]!) * fraction,
+              edge.points[index + 1]! +
+                (edge.points[index + 4]! - edge.points[index + 1]!) * fraction,
+              edge.points[index + 2]! +
+                (edge.points[index + 5]! - edge.points[index + 2]!) * fraction
             )
             .project(context.activeCamera);
           // Client coordinates are integers, so round before confirming: the

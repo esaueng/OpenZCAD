@@ -1,7 +1,9 @@
 import { listFeaturesInOrder } from '@openzcad/document-core';
 import {
+  deepClone,
   isFeatureSuppressed,
   type DatumFrame,
+  type EdgeVertexPointSource,
   type FeatureId,
   type FeatureNode,
   type FeatureWarning,
@@ -9,7 +11,7 @@ import {
 } from '@openzcad/shared';
 
 /*
- * The two datum helpers the workspace shell itself calls. Kept apart from
+ * Lightweight datum helpers the workspace shell itself calls. Kept apart from
  * datumPlanes.ts on purpose: whatever App.tsx imports lands in the entry
  * chunk whole, and the card's words and commands belong in its lazy chunk.
  */
@@ -143,6 +145,114 @@ export function datumAxisSourceFailed(
         'use a face of body'
       ].some((failure) => warning.message.includes(prefix + failure))
   );
+}
+
+/** An authored point role whose source can be explicitly picked again. */
+export interface DatumVertexRepairSlot {
+  index: 0 | 1 | 2;
+  label: string;
+  source: EdgeVertexPointSource;
+}
+
+export function datumVertexRepairSlots(
+  feature: FeatureNode
+): DatumVertexRepairSlot[] {
+  const data = feature.data;
+  const points =
+    data.featureKind === 'datum-plane'
+      ? data.definition.kind === 'three-point'
+        ? data.definition.points
+        : data.definition.kind === 'parallel-point'
+          ? [data.definition.point]
+          : []
+      : data.featureKind === 'datum-axis' &&
+          data.definition.kind === 'two-point'
+        ? data.definition.points
+        : [];
+  return points.flatMap((source, index) =>
+    source.type === 'edge-vertex'
+      ? [{ index: index as 0 | 1 | 2, label: `Point ${index + 1}`, source }]
+      : []
+  );
+}
+
+/** Only a failure of this datum's vertex source offers the repair action. */
+export function datumVertexSourceFailed(
+  feature: FeatureNode,
+  warnings: readonly FeatureWarning[]
+): boolean {
+  if (
+    isFeatureSuppressed(feature) ||
+    datumVertexRepairSlots(feature).length === 0
+  )
+    return false;
+  const owner =
+    feature.data.featureKind === 'datum-axis' ? 'Datum axis' : 'Datum plane';
+  const prefix = `${owner} "`;
+  return warnings.some(
+    (warning) =>
+      warning.featureId === feature.featureId &&
+      (warning.kind === 'build-failed' || warning.kind === 'refusal') &&
+      warning.message.includes(prefix) &&
+      /" cannot use a vertex of (?:body \S+ because it is unavailable at the datum's history position\.|source feature "[\s\S]*?": )/.test(
+        warning.message
+      )
+  );
+}
+
+export interface DatumVertexRepairSession {
+  readonly projectId: ProjectDocument['projectId'];
+  readonly documentVersion: number;
+  readonly featureId: FeatureId;
+  readonly featureName: string;
+  readonly sourceData: FeatureNode['data'];
+  readonly slots: readonly DatumVertexRepairSlot[];
+  readonly replacements: readonly {
+    index: DatumVertexRepairSlot['index'];
+    source: EdgeVertexPointSource;
+  }[];
+  readonly pendingSlot: DatumVertexRepairSlot | null;
+}
+
+/** Nothing is published until every explicitly requested point role is staged. */
+export function beginDatumVertexRepair(
+  document: ProjectDocument,
+  featureId: FeatureId,
+  slotIndices: readonly number[],
+  warnings: readonly FeatureWarning[] = document.derived.featureWarnings ?? []
+): DatumVertexRepairSession {
+  const feature = listFeaturesInOrder(document).find(
+    (item) => item.featureId === featureId
+  );
+  if (!feature) throw new Error('The datum being repaired no longer exists.');
+  const available = datumVertexRepairSlots(feature);
+  if (!datumVertexSourceFailed(feature, warnings))
+    throw new Error('This datum has no failed vertex source to repair.');
+  if (
+    slotIndices.length === 0 ||
+    new Set(slotIndices).size !== slotIndices.length ||
+    Array.from(slotIndices).some(
+      (index) =>
+        !Number.isInteger(index) ||
+        !available.some((slot) => slot.index === index)
+    )
+  )
+    throw new Error(
+      'Choose each vertex point role once; typed points cannot be re-picked.'
+    );
+  const slots = deepClone(
+    available.filter((slot) => slotIndices.includes(slot.index))
+  );
+  return {
+    projectId: document.projectId,
+    documentVersion: document.version,
+    featureId,
+    featureName: feature.name,
+    sourceData: deepClone(feature.data),
+    slots,
+    replacements: [],
+    pendingSlot: deepClone(slots[0]!)
+  };
 }
 
 /** A datum plane as the viewport draws it: presentation only. */
