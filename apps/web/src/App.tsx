@@ -287,6 +287,7 @@ import {
   STALE_CHUNK_MESSAGE
 } from './lib/staleChunk';
 import { lockAccountsExcept } from './lib/e2ee/unlockedKeys';
+import type { DeviceKeySignOutChoice } from './lib/e2ee/signOut';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
@@ -8951,16 +8952,72 @@ export function App() {
     }
   }
 
-  async function handleLogout() {
+  async function handleLogout(choice?: DeviceKeySignOutChoice) {
     setSettingsBusy(true);
     setSettingsMessage('Signing out…');
     try {
       // Both queues drain before the session goes away, or their contents
       // become unsendable the moment the cookie does.
-      await cloudProjectAutosaveRef.current?.flushPending();
-      cloudProjectAutosaveRef.current?.closeProject();
-      await cloudSettingsAutosaveRef.current?.flushPending();
-      await api.logout();
+      const { signOutAfterSaving } = await import('./lib/e2ee/signOut');
+      await signOutAfterSaving({
+        userId: choice?.userId ?? null,
+        keepDevice: choice?.keepDevice,
+        savePending: async () => {
+          await cloudProjectAutosaveRef.current?.flushPending();
+          await cloudSettingsAutosaveRef.current?.flushPending();
+        },
+        revokeSession: async () => {
+          const controller = cloudProjectAutosaveRef.current;
+          const departingSession = sessionRef.current;
+          const projectId = managerRef.current?.document.projectId;
+          const wasHalted = controller?.isHalted ?? false;
+          controller?.closeProject();
+          try {
+            await api.logout();
+          } catch (error) {
+            const canResume = () =>
+              Boolean(
+                controller &&
+                controller === cloudProjectAutosaveRef.current &&
+                cloudFunctionsEnabledRef.current &&
+                departingSession &&
+                sessionRef.current === departingSession &&
+                !shareSessionRef.current &&
+                projectId &&
+                managerRef.current?.document.projectId === projectId &&
+                managerRef.current.document.ownerUserId ===
+                  departingSession.userId &&
+                accountDocumentUnavailableProjectIdRef.current !== projectId
+              );
+            if (canResume() && projectId && wasHalted) {
+              // Reopening must not clear a pre-existing conflict/refusal.
+              setStatus(
+                'Cloud autosave remains paused after sign-out failed. Reopen this project to retry syncing.'
+              );
+            } else if (canResume() && projectId) {
+              try {
+                const durable = await loadLocalProject(projectId);
+                const baseline = remoteVersionsRef.current.get(projectId);
+                if (canResume() && baseline !== undefined) {
+                  controller!.openProject(projectId, baseline);
+                  if (
+                    durable &&
+                    !controller!.hasPendingChanges &&
+                    durable.version > baseline
+                  ) {
+                    controller!.schedule(durable);
+                  }
+                }
+              } catch {
+                setStatus(
+                  'Cloud autosave could not resume after sign-out failed. Reopen this project to retry syncing.'
+                );
+              }
+            }
+            throw error;
+          }
+        }
+      });
       // The server session is gone: no unlocked key outlives it, even if the
       // local cleanup below fails.
       lockAccountsExcept(null);

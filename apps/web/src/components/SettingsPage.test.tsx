@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -79,6 +79,115 @@ function renderSettings(
     />
   );
 }
+
+describe('device-key sign-out choice', () => {
+  const session = {
+    userId: toUserId('user_sign_out_keys'),
+    displayName: 'person',
+    mode: 'email-code' as const
+  };
+
+  it('reports an unreadable key store without signing out and permits retry', async () => {
+    const store = await import('../lib/e2ee/deviceStore');
+    vi.spyOn(store, 'hasStoredDevice')
+      .mockRejectedValueOnce(new Error('IndexedDB unavailable'))
+      .mockResolvedValue(true);
+    const onLogout = vi.fn();
+    const user = userEvent.setup();
+    renderSettings(null, { initialSection: 'account', session, onLogout });
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /could not check/i
+    );
+    expect(onLogout).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    expect(
+      await screen.findByRole('button', { name: 'Remove device keys' })
+    ).toBeEnabled();
+    expect(onLogout).not.toHaveBeenCalled();
+  });
+
+  it('keeps a failed removal visible and retries the explicit choice before logout', async () => {
+    const store = await import('../lib/e2ee/deviceStore');
+    vi.spyOn(store, 'hasStoredDevice').mockResolvedValue(true);
+    let signedOut = false;
+    const remove = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Deletion aborted'))
+      .mockResolvedValue(undefined);
+    const onLogout = vi.fn(
+      async (choice?: { userId: string; keepDevice: boolean }) => {
+        if (choice?.keepDevice === false) await remove();
+        signedOut = true;
+      }
+    );
+    const user = userEvent.setup();
+    renderSettings(null, { initialSection: 'account', session, onLogout });
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    await user.click(
+      await screen.findByRole('button', { name: 'Remove device keys' })
+    );
+    expect(
+      await screen.findByText(/could not complete sign-out/i)
+    ).toBeVisible();
+    expect(signedOut).toBe(false);
+    expect(
+      screen.getByRole('button', { name: 'Remove device keys' })
+    ).toBeEnabled();
+    await user.click(
+      screen.getByRole('button', { name: 'Remove device keys' })
+    );
+    await waitFor(() => expect(signedOut).toBe(true));
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(onLogout.mock.calls).toEqual([
+      [{ userId: session.userId, keepDevice: false }],
+      [{ userId: session.userId, keepDevice: false }]
+    ]);
+    expect(
+      screen.queryByRole('button', { name: 'Remove device keys' })
+    ).toBeNull();
+  });
+
+  it.each([true, false])(
+    'disables repeated actions while the %s device-key choice completes',
+    async (keepDevice) => {
+      const store = await import('../lib/e2ee/deviceStore');
+      vi.spyOn(store, 'hasStoredDevice').mockResolvedValue(true);
+      let finish!: () => void;
+      const onLogout = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          })
+      );
+      const user = userEvent.setup();
+      renderSettings(null, { initialSection: 'account', session, onLogout });
+      await user.click(screen.getByRole('button', { name: 'Sign out' }));
+      await user.click(
+        await screen.findByRole('button', {
+          name: keepDevice ? 'Keep unlocked' : 'Remove device keys'
+        })
+      );
+      expect(onLogout).toHaveBeenCalledExactlyOnceWith({
+        userId: session.userId,
+        keepDevice
+      });
+      for (const name of [
+        'Sign out',
+        'Keep unlocked',
+        'Remove device keys',
+        'Cancel'
+      ])
+        expect(screen.getByRole('button', { name })).toBeDisabled();
+      finish();
+      await waitFor(() =>
+        expect(
+          screen.queryByRole('button', { name: 'Remove device keys' })
+        ).toBeNull()
+      );
+    }
+  );
+});
 
 /**
  * Settings wired the way App wires it: every change comes back as the new
