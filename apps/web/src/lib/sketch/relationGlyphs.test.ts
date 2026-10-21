@@ -815,6 +815,56 @@ describe('sketchRelationGlyphs', () => {
     ]);
   });
 
+  it('keeps the grab points of shapes and text off-curve as well', () => {
+    // A legacy rectangle's and polygon's centre and a text origin are the
+    // objects' move handles, with no point of their own on a curve.
+    const points = sketchRelationKeepOuts(
+      [
+        {
+          data: {
+            objectKind: 'rectangle',
+            centerX: 5,
+            centerY: 6,
+            width: 4,
+            height: 2
+          }
+        },
+        {
+          data: {
+            objectKind: 'polygon',
+            centerX: -3,
+            centerY: 7,
+            radius: 2,
+            sides: 6
+          }
+        },
+        {
+          data: {
+            objectKind: 'text',
+            text: 'A',
+            fontFamily: 'open-sans',
+            fontStyle: 'regular',
+            size: 10,
+            x: 20,
+            y: 30,
+            align: 'left'
+          }
+        }
+      ] as { data: SketchObjectData }[],
+      resolve
+    );
+    const pairs = [];
+    for (let index = 0; index < points.length; index += 2) {
+      pairs.push([points[index], points[index + 1]]);
+    }
+    expect(pairs).toEqual([
+      [0, 0],
+      [5, 6],
+      [-3, 7],
+      [20, 30]
+    ]);
+  });
+
   it('bisects the widest gap between leaving directions', () => {
     // One direction: straight back along it.
     const back = widestGap([{ x: 1, y: 0 }]);

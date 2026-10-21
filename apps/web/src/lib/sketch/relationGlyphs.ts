@@ -12,6 +12,7 @@ import {
 import { objectPolylines } from '../objectPolyline';
 import { constraintReferencesObject } from './constraints';
 import { sketchPointPosition } from './dimensionAnnotations';
+import { sketchObjectGrabPoint } from './session';
 
 type Point = { x: number; y: number };
 type Resolve = (value: number | string) => number | undefined;
@@ -304,9 +305,10 @@ export function sketchRelationStrokes(
 /**
  * Every pickable sketch point as plane-local pairs [x, y, …]: each object's
  * start, end and centre where it has one (line and arc ends, circle, arc
- * and ellipse centres, open-spline ends) and the sketch origin. Relation
- * glyphs keep clear of them too: a glyph over a centre with no relation of
- * its own would take the pick meant for it.
+ * and ellipse centres, open-spline ends), each object's grab point (the
+ * move handle: a legacy rectangle's or polygon's centre, a text origin) and
+ * the sketch origin. Relation glyphs keep clear of them too: a glyph over a
+ * centre with no relation of its own would take the pick meant for it.
  */
 export function sketchRelationKeepOuts(
   objects: readonly { data: SketchObjectData }[],
@@ -318,10 +320,22 @@ export function sketchRelationKeepOuts(
   };
   const points: number[] = [0, 0];
   for (const { data } of objects) {
+    const from = points.length;
     for (const name of ['start', 'end', 'center'] as const) {
       const point = sketchPointPosition(data, name, scalar);
       if (point) points.push(point.x, point.y);
     }
+    const grab = sketchObjectGrabPoint(data, (value) => {
+      const result = scalar(value as number | string);
+      if (result === undefined) throw new Error('unresolved');
+      return result;
+    });
+    // A circle's grab point is its centre, already listed.
+    let listed = false;
+    for (let at = from; at < points.length; at += 2) {
+      if (points[at] === grab?.x && points[at + 1] === grab?.y) listed = true;
+    }
+    if (grab && !listed) points.push(grab.x, grab.y);
   }
   return Float64Array.from(points);
 }
