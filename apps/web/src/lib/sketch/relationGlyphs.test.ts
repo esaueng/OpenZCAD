@@ -209,6 +209,50 @@ describe('sketchRelationGlyphs', () => {
     expect(chips.map(label).sort()).toEqual(['point(0,0)', 'point(40,4)']);
   });
 
+  it('keeps points half a unit apart distinct even a trillion units out', () => {
+    const far = 1e12;
+    const chips = sketchRelationGlyphs(
+      [
+        {
+          id: 'a',
+          data: { objectKind: 'line', x1: far, y1: 0, x2: far, y2: 10 }
+        },
+        {
+          id: 'b',
+          data: {
+            objectKind: 'line',
+            x1: far + 0.5,
+            y1: 0,
+            x2: far + 0.5,
+            y2: -10
+          }
+        }
+      ],
+      [
+        constraint({
+          constraintKind: 'lock',
+          point: { objectId: id('a'), point: 'start' },
+          x: far,
+          y: 0
+        }),
+        constraint({
+          constraintKind: 'lock',
+          point: { objectId: id('b'), point: 'start' },
+          x: far + 0.5,
+          y: 0
+        })
+      ],
+      resolve,
+      { visibility: 'always' }
+    );
+    const points = chips.filter((chip) => chip.placement === 'point');
+    expect(points).toHaveLength(2);
+    expect(points.map((chip) => chip.anchor.x).sort()).toEqual([
+      far,
+      far + 0.5
+    ]);
+  });
+
   it('keeps distinct points apart in a compact sketch far from the plane origin', () => {
     // Two 10-unit segments a billion units out: the corner between them must
     // stay one chip, and the free ends must not merge into it.

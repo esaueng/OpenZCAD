@@ -542,11 +542,17 @@ function tangentThrough(
  * Two anchors closer than this are one point. A solve leaves coincident
  * points far closer, and distinct points this close are one spot on screen.
  * It depends only on the points themselves, never on the sketch's extent, so
- * a large or far-offset sketch does not merge separate points; the relative
- * term covers coordinate rounding far from the plane origin.
+ * a large or far-offset sketch does not merge separate points. The relative
+ * term is a few hundred units in the last place of the coordinate, enough
+ * for the rounding a solve leaves far from the plane origin and no more: at
+ * 1e12 it is about 0.06, so points half a unit apart stay apart there.
  */
+const SAME_POINT_ULPS = 256 * Number.EPSILON;
+
 function samePointTolerance(point: Point): number {
-  return 1e-6 + 1e-12 * Math.max(Math.abs(point.x), Math.abs(point.y));
+  return (
+    1e-6 + SAME_POINT_ULPS * Math.max(Math.abs(point.x), Math.abs(point.y))
+  );
 }
 
 /**
@@ -554,7 +560,7 @@ function samePointTolerance(point: Point): number {
  * its own tolerance's scale (a power of two at or above it), so one far-off
  * point does not coarsen the buckets for every other, and each bucket holds a
  * bounded handful of distinct points. Two points that match have tolerances
- * within a factor of 1 ± 1e-12 of each other (each grows with its own
+ * within a factor of 1 ± 6e-14 of each other (each grows with its own
  * coordinates, and they differ by at most the tolerance), so their scales are
  * at most one level apart: a point is matched against the levels beside its
  * own, over enough neighbouring cells to cover the reach, and two coincident
