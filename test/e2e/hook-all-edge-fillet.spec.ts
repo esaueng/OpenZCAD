@@ -72,7 +72,7 @@ async function importHookBase(
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   // One imported history feature; the fillet must add exactly one more.
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible({
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible({
     timeout: 30_000
   });
 }
@@ -169,7 +169,7 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
       { timeout: 120_000 }
     )
     .toBeGreaterThan(0);
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
   await page.screenshot({
     path: testInfo.outputPath('hook-all-edge-manual-preview.png')
   });
@@ -177,7 +177,7 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   await expect(status).toContainText('Filleted 49 edges at 1 mm.', {
     timeout: 120_000
   });
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await expectBodyCount(page, 1);
   await expect(status).toContainText('warnings0');
   await page.screenshot({
@@ -215,8 +215,8 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
       timeout: 120_000
     })
     .toBeCloseTo(0.5, 2);
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'History 3' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 3' })).toHaveCount(0);
   await expect(page.locator('.feature-row', { hasText: 'Fillet' })).toHaveCount(
     1
   );
@@ -244,7 +244,7 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
       timeout: 60_000
     })
     .toBeCloseTo(0.5, 2);
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
 
   // Oversized radius: typed refusal, geometry/history unchanged. The History
   // form keeps Apply enabled and reports the kernel refusal in place (the
@@ -262,14 +262,14 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
     timeout: 120_000
   });
   await inspector.getByRole('button', { name: /^Apply/ }).click();
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await expect(page.locator('.feature-row', { hasText: 'Fillet' })).toHaveCount(
     1
   );
   await expect
     .poll(async () => (await readBlend(page))?.blendRadius ?? null)
     .toBeCloseTo(0.5, 2);
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await page.keyboard.press('Escape');
 
   // Undo the 0.5 mm edit back to 1 mm, then redo. Each step keeps one body
@@ -286,7 +286,7 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
       timeout: 60_000
     })
     .toBeCloseTo(0.5, 2);
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
 
   // Wait for actual autosave completion, reload, and verify the persisted
   // feature, radius, and geometry.
@@ -294,7 +294,7 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
     timeout: 60_000
   });
   await page.reload();
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible({
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible({
     timeout: 60_000
   });
   await expect(status).toContainText('warnings0');
@@ -341,7 +341,7 @@ test('manual All-edges fillet finishes the STEP-imported hook (49 physical edges
   });
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible({
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible({
     timeout: 30_000
   });
   // The static preview has no export/thumbnail backend; the stubbed 404s for
@@ -389,7 +389,7 @@ test('assistant finishes the STEP-imported hook provider-free with no mutation u
   const proposal = page.locator('.assistant-card.proposal.open').last();
   await expect(proposal).toContainText('49 edges', { timeout: 120_000 });
   // No document mutation until Apply: history stays at the imported baseline.
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
   await expectBodyCount(page, 1);
   await page.screenshot({
     path: testInfo.outputPath('hook-all-edge-assistant.png')
@@ -399,7 +399,7 @@ test('assistant finishes the STEP-imported hook provider-free with no mutation u
     page.locator('.assistant-card.proposal.applied').last()
   ).toContainText('Applied', { timeout: 120_000 });
   // One editable fillet feature in one undoable transaction.
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await expectBodyCount(page, 1);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   // Blend face is selectable and reports the applied radius.
@@ -411,15 +411,15 @@ test('assistant finishes the STEP-imported hook provider-free with no mutation u
     .toBeCloseTo(1, 2);
 
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
 
   await expect(page.locator('.save-state')).not.toHaveClass(/is-saving/, {
     timeout: 60_000
   });
   await page.reload();
-  await expect(page.getByRole('button', { name: 'History 2' })).toBeVisible({
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible({
     timeout: 60_000
   });
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');

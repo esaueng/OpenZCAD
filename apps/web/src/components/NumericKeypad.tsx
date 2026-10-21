@@ -19,6 +19,7 @@ import {
   type KeypadUnit
 } from '../lib/keypad';
 import { unitLabel } from '../lib/measurements';
+import { MODEL_PANEL_OBSTACLES } from '../lib/selectionCalloutView';
 import { formatNumber } from '../lib/model';
 
 export interface KeypadRequest {
@@ -136,20 +137,15 @@ function dockedPanelBands(host: HTMLElement): KeypadExclusion[] {
     return [];
   }
   const hostRect = host.getBoundingClientRect();
-  // The column on the left, the command card, the inspector and the model
-  // drawer on the right, and any direct-mode strip; the keypad keeps clear
-  // of all of them.
+  // The column on the left, the command card, the inspector and every model
+  // panel drawn on the right (each docked column, the unpinned panel, the
+  // phone lane), and any direct-mode strip; the keypad keeps clear of all
+  // of them.
   return [
-    '.command-float',
-    '.inspector-float',
-    '.model-drawer-float',
-    '.palette-float',
-    '.workspace-column-float'
-  ].flatMap((selector) => {
-    const panel = area.querySelector(selector);
-    if (!panel) {
-      return [];
-    }
+    ...area.querySelectorAll(
+      `.command-float, .inspector-float, ${MODEL_PANEL_OBSTACLES}, .palette-float, .workspace-column-float`
+    )
+  ].flatMap((panel) => {
     const rect = panel.getBoundingClientRect();
     return rect.width > 0
       ? [{ x: rect.left - hostRect.left, width: rect.width }]

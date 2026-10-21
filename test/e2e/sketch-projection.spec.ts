@@ -2,7 +2,7 @@ import type { Locator, Page } from '@playwright/test';
 import {
   expect,
   expectBodyCount,
-  revealModelDrawer,
+  revealModelPanel,
   stubApi,
   test,
   waitForStillViewport
@@ -90,13 +90,7 @@ function maxProjectedX(project: StoredProject): number {
 
 /** Opens the Objects panel, which lists sketches beside bodies. */
 async function showObjects(page: Page) {
-  const button = page
-    .getByRole('toolbar', { name: 'Model panels' })
-    .getByRole('button', { name: 'Objects panel' });
-  if ((await button.getAttribute('aria-pressed')) !== 'true') {
-    await button.click();
-  }
-  await expect(button).toHaveAttribute('aria-pressed', 'true');
+  await revealModelPanel(page, 'Objects');
   return page.getByRole('list', { name: 'Objects' });
 }
 
@@ -180,7 +174,7 @@ test('a linked projection follows an upstream resize and shows its deleted sourc
   ).toHaveCount(4);
 
   // Widen the box from History: the projected outline follows it.
-  await revealModelDrawer(page, 'History');
+  await revealModelPanel(page, 'History');
   await page.locator('.feature-row-main', { hasText: 'Box' }).first().click();
   await inspector.getByLabel('Width (X)').fill('32');
   await inspector.getByRole('button', { name: 'Apply' }).click();
@@ -231,7 +225,7 @@ test('a linked projection follows an upstream resize and shows its deleted sourc
 
   // In the sketch, the entity card says why, and Unlink keeps the geometry
   // as an independent copy.
-  await revealModelDrawer(page, 'History');
+  await revealModelPanel(page, 'History');
   await page.locator('.feature-row-main', { hasText: 'Sketch 01' }).click();
   await page
     .getByRole('button', { name: 'Edit sketch in viewport', exact: true })

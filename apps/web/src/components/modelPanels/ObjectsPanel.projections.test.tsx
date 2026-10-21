@@ -13,7 +13,8 @@ import {
   type FeatureId,
   type ProjectDocument
 } from '@openzcad/shared';
-import { ObjectsPanel, useObjectsView } from './ObjectsPanel';
+import { ObjectsPanel } from './ObjectsPanel';
+import { useObjectsView } from './panelViews';
 
 /**
  * I01 in U06: a sketch's Objects row says what it projects, each projected

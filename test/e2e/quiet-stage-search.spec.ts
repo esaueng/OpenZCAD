@@ -3,6 +3,8 @@ import {
   askAssistant,
   createProject,
   expectBodyCount,
+  MODEL_ONLY,
+  modelPanel,
   promptField,
   stubApi,
   stubAssistant
@@ -182,9 +184,11 @@ test('the stream scrolls back to turns older than it can show', async ({
   await expect(first).toBeInViewport();
 });
 
-test('search names a feature and opens it in the drawer', async ({ page }) => {
+test('search names a feature and opens History unpinned on it', async ({
+  page
+}) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await stubApi(page, { modelDrawer: false });
+  await stubApi(page, { panelLayout: MODEL_ONLY });
   await createProject(page, 'Find Part');
 
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
@@ -192,7 +196,7 @@ test('search names a feature and opens it in the drawer', async ({ page }) => {
   await inspector.getByLabel('Name').fill('Base plate');
   await inspector.getByRole('button', { name: /^Create/ }).click();
   await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
-  await expect(page.locator('.model-drawer-float')).toHaveCount(0);
+  await expect(page.locator('.model-panel')).toHaveCount(0);
 
   // The feature's row says where it goes, so a feature named after its
   // tool never reads as a second copy of that tool.
@@ -203,7 +207,9 @@ test('search names a feature and opens it in the drawer', async ({ page }) => {
     .filter({ hasText: 'Feature' })
     .click();
 
-  await expect(page.locator('.model-drawer-float')).toBeVisible();
+  // A closed panel opens unpinned, beside the rail.
+  await expect(modelPanel(page, 'History')).toBeVisible();
+  await expect(modelPanel(page, 'History')).toHaveClass(/is-unpinned/);
   await expect(
     page
       .getByRole('toolbar', { name: 'Model panels' })
@@ -214,13 +220,13 @@ test('search names a feature and opens it in the drawer', async ({ page }) => {
   ).toBeVisible();
 });
 
-test('search names a parameter and focuses it in a drawer that has not loaded yet', async ({
+test('search names a parameter and focuses it in a panel that has not loaded yet', async ({
   page
 }) => {
-  // The drawer's browser loads lazily, so on its first open the field mounts
-  // a few frames after the drawer does; focus has to wait for it.
+  // The panels' bodies load lazily, so on the first open the field mounts
+  // a few frames after the panel does; focus has to wait for it.
   await page.setViewportSize({ width: 1440, height: 900 });
-  await stubApi(page, { modelDrawer: false });
+  await stubApi(page, { panelLayout: MODEL_ONLY });
   await page.goto('/');
   await page
     .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
@@ -229,7 +235,7 @@ test('search names a parameter and focuses it in a drawer that has not loaded ye
     timeout: 120_000
   });
   await expectBodyCount(page, 1);
-  await expect(page.locator('.model-drawer-float')).toHaveCount(0);
+  await expect(page.locator('.model-panel')).toHaveCount(0);
 
   await promptField(page).fill('/plate_t');
   await page

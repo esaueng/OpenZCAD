@@ -1,9 +1,10 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import {
   seedDismissedWorkspaceTour,
-  revealModelDrawer,
+  revealModelPanel,
+  modelPanel,
   seedOpenCommandFold,
-  seedOpenModelDrawer
+  seedPanelLayout
 } from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type SketchObjectData } from '@openzcad/shared';
@@ -49,7 +50,7 @@ function lineAngleDegrees(state: LiveSketchState): number {
 
 async function stubApi(page: Page) {
   await seedDismissedWorkspaceTour(page);
-  await seedOpenModelDrawer(page);
+  await seedPanelLayout(page);
   await seedOpenCommandFold(page);
   await page.route('**/api/health', (route) =>
     route.fulfill({
@@ -597,7 +598,7 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   expect(solved.objects).not.toEqual(baseline.objects);
 
   // The sketch has the stage; the Parameters rail button brings the table.
-  await revealModelDrawer(page, 'Parameters');
+  await revealModelPanel(page, 'Parameters');
   const parameter = page.getByLabel('Expression for angle_target');
   await parameter.fill('45');
   await parameter.press('Enter');
@@ -650,14 +651,17 @@ test('places, retypes, solves, and undoes a driving angle dimension', async ({
   ).not.toContainText('Saving', { timeout: 30_000 });
 
   await page.reload();
-  // The Parameters rail button that brought the table into the sketch
-  // folded History behind it, and the drawer remembers that.
-  await page
-    .getByRole('toolbar', { name: 'Model panels' })
-    .getByRole('button', { name: 'History panel' })
-    .click({ timeout: 30_000 });
+  // The panels come back docked as the device left them.
   await expect(
-    page.getByRole('button', { name: 'Sketch 01', exact: true })
+    page.getByRole('toolbar', { name: 'Model panels' })
+  ).toBeVisible({ timeout: 30_000 });
+  await revealModelPanel(page, 'History');
+  // Objects lists the sketch as well; the row to open is History's.
+  await expect(
+    modelPanel(page, 'History').getByRole('button', {
+      name: 'Sketch 01',
+      exact: true
+    })
   ).toBeVisible({
     timeout: 30_000
   });
@@ -734,8 +738,8 @@ test('edits a canvas radius with expressions, refuses zero, and undoes the solve
   await page.mouse.down();
   await page.mouse.move(center.x + 72, center.y, { steps: 6 });
   await page.mouse.up();
-  // The sketch has the stage, so the drawer asks for its rail button.
-  await revealModelDrawer(page);
+  // The sketch has the stage, so History asks for its rail button.
+  await revealModelPanel(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch 01' })
   ).toBeVisible();
@@ -759,12 +763,8 @@ test('edits a canvas radius with expressions, refuses zero, and undoes the solve
   expect(radial.objectKind).toBe('circle');
   if (radial.objectKind !== 'circle') throw new Error('Expected a circle');
   expect(Number(radial.radius)).toBeCloseTo(7, 8);
-  // The drawer came up on History for the row above; the table is a
-  // rail press away.
-  await page
-    .getByRole('toolbar', { name: 'Model panels' })
-    .getByRole('button', { name: 'Parameters panel' })
-    .click();
+  // The panels came back for the row above; the table is among them.
+  await revealModelPanel(page, 'Parameters');
   const parameter = page.getByLabel('Expression for radius_target');
   await parameter.fill('9');
   await parameter.press('Enter');
@@ -881,8 +881,8 @@ test('snaps sketch drawing to existing endpoints', async ({ page }) => {
   await page.mouse.click(center.x - 60, center.y - 40);
   await page.mouse.click(center.x + 60, center.y - 40);
   await page.keyboard.press('Escape');
-  // The sketch has the stage, so the drawer asks for its rail button.
-  await revealModelDrawer(page);
+  // The sketch has the stage, so History asks for its rail button.
+  await revealModelPanel(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch' })
   ).toBeVisible();
@@ -909,14 +909,14 @@ test('empty-state copy points at the tool rail beside the history', async ({
   await page.getByLabel('Project name').fill('Empty Copy');
   await page.getByRole('button', { name: 'Create project' }).click();
 
-  // Several sections carry a .sidebar-hint; match the History one by text.
+  // Several panels carry a .sidebar-hint; match the History one by text.
   const hint = page.locator('.sidebar-hint', { hasText: 'No features yet' });
   await expect(hint).toContainText(
     'Pick a tool from the tool rail on the left'
   );
 
   // The rail it names is on screen, and it is the other side of the stage
-  // from the history in the drawer.
+  // from the history in its panel.
   const tools = page.getByRole('navigation', { name: 'Feature tools' });
   await expect(tools).toBeVisible();
   const toolsBounds = await tools.boundingBox();
@@ -1043,7 +1043,7 @@ async function openBracketDemo(page: Page) {
     /Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
     { timeout: 60_000 }
   );
-  await expect(page.locator('.sidebar .feature-row')).toHaveCount(17, {
+  await expect(page.locator('.model-panel .feature-row')).toHaveCount(17, {
     timeout: 60_000
   });
   return canvas;

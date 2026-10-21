@@ -195,6 +195,8 @@ import {
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 import {
+  chipPanelDodge,
+  edgeChipCenterX,
   faceOffsetChipState,
   offsetChipText,
   regionChipState,
@@ -206,6 +208,8 @@ import {
   placeSelectionCallouts,
   refreshSelectionCallout,
   renderSelectionCallout,
+  MODEL_PANEL_OBSTACLES,
+  RIGHT_LANE_MODEL_PANELS,
   SELECTION_CALLOUT_CHIP_CLASS
 } from '../lib/selectionCalloutView';
 import { measureFitFrame } from '../lib/fitFrame';
@@ -1673,6 +1677,18 @@ const E2E_CANVAS_HOOKS_ENABLED =
       VITE_E2E?: string;
     }
   ).VITE_E2E === '1';
+/**
+ * Counts the viewer's renders for an e2e probe that assigns an object to
+ * `window.__ozRenderCounts` (a panel drag must not re-render it at all).
+ * E2E builds only, and then a single property read per render.
+ */
+function noteE2ERender() {
+  const counts = (window as { __ozRenderCounts?: Record<string, number> })
+    .__ozRenderCounts;
+  if (counts && typeof counts === 'object') {
+    counts.ModelViewer = (counts.ModelViewer ?? 0) + 1;
+  }
+}
 const SKETCH_COLOR = 0x6798ff;
 /**
  * How far inside the canvas edge a new body must sit to count as on screen,
@@ -1863,6 +1879,7 @@ export function ModelViewer({
   viewportImageRef,
   onContextMenu
 }: ModelViewerProps) {
+  if (E2E_CANVAS_HOOKS_ENABLED) noteE2ERender();
   const drawingBodiesRef = useRef<
     readonly GeometryBodyRepresentation[] | undefined
   >(undefined);
@@ -2768,6 +2785,40 @@ export function ModelViewer({
       requestRender();
     });
     observer.observe(host);
+
+    // A handle's value chip and the selection callouts are placed when the
+    // scene draws, clear of the model panels over the stage; a panel moving
+    // over them (a window dragged or resized, a column docked) draws again
+    // so they move too. The dock's layer comes and goes with the mode, so
+    // the area is watched for it and the layer for its panels' moves.
+    const viewerArea = host.closest('.viewer-area');
+    let watchedLayer: Element | null = null;
+    const panelObserver = new MutationObserver(() => {
+      if (
+        (offsetChipRef.current && !offsetChipRef.current.hidden) ||
+        host.querySelector(`.${SELECTION_CALLOUT_CHIP_CLASS}`)
+      ) {
+        requestRender();
+      }
+    });
+    const watchPanelLayer = () => {
+      const layer =
+        viewerArea?.querySelector(':scope > .panel-dock-layer') ?? null;
+      if (layer === watchedLayer) return;
+      panelObserver.disconnect();
+      watchedLayer = layer;
+      if (layer) {
+        panelObserver.observe(layer, {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          attributeFilter: ['style', 'class']
+        });
+      }
+    };
+    const areaObserver = new MutationObserver(watchPanelLayer);
+    if (viewerArea) areaObserver.observe(viewerArea, { childList: true });
+    watchPanelLayer();
 
     const rightClickGesture = new RightClickGestureTracker();
     /** Where "select other" has reached, for repeated clicks on one spot. */
@@ -5680,6 +5731,8 @@ export function ModelViewer({
 
     /** What the chip showed when last placed; see `updateOffsetChip`. */
     let chipLayoutKey: string | null = null;
+    /** The move that keeps the chip out from under a floating or left panel. */
+    let chipDodge = { dx: 0, dy: 0 };
     function updateOffsetChip() {
       const chip = offsetChipRef.current;
       if (!chip) {
@@ -5692,13 +5745,60 @@ export function ModelViewer({
       // renders once more, so the next one measures and places them again.
       const chipWidth = chip.offsetWidth;
       const labelWidth = radiusLabelChip.offsetWidth;
-      const lane = renderer.domElement
-        .closest('.viewer-area')
-        ?.querySelector<HTMLElement>('.stage-right > *');
-      const laneLeft = lane
-        ? lane.getBoundingClientRect().left -
-          renderer.domElement.getBoundingClientRect().left
-        : null;
+      // The right lane's inner edge: the leftmost of the command card, the
+      // inspector and every model panel drawn on the right (not the left
+      // dock, nor a window floating over the model).
+      const laneEdges = [
+        ...(renderer.domElement
+          .closest('.viewer-area')
+          ?.querySelectorAll<HTMLElement>(
+            `.stage-right > *, ${RIGHT_LANE_MODEL_PANELS}`
+          ) ?? [])
+      ]
+        .map((element) => element.getBoundingClientRect())
+        .filter((rect) => rect.width > 0)
+        .map((rect) => rect.left);
+      const laneLeft =
+        laneEdges.length > 0
+          ? Math.min(...laneEdges) -
+            renderer.domElement.getBoundingClientRect().left
+          : null;
+      // Every other panel over the stage — a floating window, the left dock —
+      // the value chip and its tag come out from under as one, measured
+      // where they showed last frame less the move made then.
+      const stageRect = renderer.domElement.getBoundingClientRect();
+      const otherPanels = [
+        ...(renderer.domElement
+          .closest('.viewer-area')
+          ?.querySelectorAll<HTMLElement>(MODEL_PANEL_OBSTACLES) ?? [])
+      ]
+        .filter((element) => !element.matches(RIGHT_LANE_MODEL_PANELS))
+        .map((element) => element.getBoundingClientRect())
+        .filter((rect) => rect.width > 0 && rect.height > 0);
+      const pills = [chip, radiusLabelChip]
+        .filter((element) => !element.hidden)
+        .map((element) => element.getBoundingClientRect());
+      chipDodge =
+        pills.length > 0 && otherPanels.length > 0
+          ? chipPanelDodge(
+              {
+                left: Math.min(...pills.map((rect) => rect.left)) - chipDodge.dx,
+                right:
+                  Math.max(...pills.map((rect) => rect.right)) - chipDodge.dx,
+                top: Math.min(...pills.map((rect) => rect.top)) - chipDodge.dy,
+                bottom:
+                  Math.max(...pills.map((rect) => rect.bottom)) - chipDodge.dy
+              },
+              otherPanels,
+              stageRect,
+              laneLeft === null ? null : laneLeft + stageRect.left,
+              renderer.domElement.ownerDocument
+                .querySelector('.app-shell > .topbar')
+                ?.getBoundingClientRect().bottom ?? null
+            )
+          : { dx: 0, dy: 0 };
+      const place = (element: HTMLElement, x: number, y: number) =>
+        hud.showAt(element, x + chipDodge.dx, y + chipDodge.dy);
       // Either rig answers the same two questions; only the label differs.
       // In a multi-region extrude the chip rides the arrow last grabbed.
       const regionChipRig =
@@ -6061,7 +6161,7 @@ export function ModelViewer({
         const alongY = Math.sin(lineAngle);
         const half = LINE_LABEL_GAP_PX / 2;
         const valueReach = chipWidth / 2 + half;
-        hud.showAt(
+        place(
           chip,
           screen.x + alongX * valueReach,
           screen.y + alongY * valueReach
@@ -6069,7 +6169,7 @@ export function ModelViewer({
         if (tagText !== null) {
           radiusLabelChip.textContent = tagText;
           const tagReach = labelWidth / 2 + half;
-          hud.showAt(
+          place(
             radiusLabelChip,
             screen.x - alongX * tagReach,
             screen.y - alongY * tagReach
@@ -6081,13 +6181,22 @@ export function ModelViewer({
         chip.style.removeProperty('--chip-rotate');
         radiusLabelChip.style.removeProperty('--chip-rotate');
         delete radiusLabelChip.dataset.variant;
-        hud.showAt(chip, screen.x, screen.y);
+        // An edge's chip stays clear of the right lane too (the pin variants
+        // dodge it above): past the dock and the inspector the lane reaches
+        // well into the stage, and a value under it cannot be tapped.
+        place(
+          chip,
+          chip.dataset.variant === 'default'
+            ? edgeChipCenterX(screen.x, laneLeft, chipWidth)
+            : screen.x,
+          screen.y
+        );
         const offsetSpan =
           offsetHandleRef.current?.totalBaseline ?? offsetExtentRef.current;
         if (rig?.kind === 'cylinder-radius' && !dimensionChipBesidePin) {
           radiusLabelChip.textContent = tagText ?? '';
           // Same anchor; CSS shifts it to sit flush against the value pill.
-          hud.showAt(radiusLabelChip, screen.x, screen.y);
+          place(radiusLabelChip, screen.x, screen.y);
         } else if (
           rig?.kind === 'cylinder-radius' ||
           (rig?.kind === 'offset-face' &&
@@ -6128,10 +6237,10 @@ export function ModelViewer({
                 limit - width
               );
             }
-            hud.showAt(chip, start + tagWidth + 2 + valueWidth / 2, screen.y);
-            hud.showAt(radiusLabelChip, start + tagWidth, screen.y);
+            place(chip, start + tagWidth + 2 + valueWidth / 2, screen.y);
+            place(radiusLabelChip, start + tagWidth, screen.y);
           } else {
-            hud.showAt(radiusLabelChip, screen.x - chipWidth / 2 - 2, screen.y);
+            place(radiusLabelChip, screen.x - chipWidth / 2 - 2, screen.y);
           }
         } else {
           radiusLabelChip.hidden = true;
@@ -6142,7 +6251,10 @@ export function ModelViewer({
         chip.textContent,
         chip.dataset.variant,
         radiusLabelChip.hidden,
-        radiusLabelChip.textContent
+        radiusLabelChip.textContent,
+        // A new dodge places the chip again once it has moved.
+        chipDodge.dx,
+        chipDodge.dy
       ].join('|');
       if (layoutKey !== chipLayoutKey) requestRender();
       chipLayoutKey = layoutKey;
@@ -9418,6 +9530,8 @@ export function ModelViewer({
       onBodiesDrawnElsewhereRef.current?.(drawnBodyReport.reset());
       pixelRatioQuery?.removeEventListener('change', onPixelRatioChange);
       observer.disconnect();
+      panelObserver.disconnect();
+      areaObserver.disconnect();
       stopWatchingTheme();
       renderer.domElement.removeEventListener(
         'pointermove',
