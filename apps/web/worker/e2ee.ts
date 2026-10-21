@@ -416,7 +416,7 @@ async function loadAccount(
     .all<IdentityRow>();
   const [current, ...previous] = identities ?? [];
   if (!current) return { current: null, previous: [] };
-  const [entries, wraps] = await Promise.all([
+  const [entries, wraps, approvedDevices] = await Promise.all([
     entryRows(db, userId, current.generation),
     db
       .prepare(
@@ -425,7 +425,20 @@ async function loadAccount(
          ORDER BY purpose, target_id`
       )
       .bind(userId, current.generation)
-      .all<WrapRow>()
+      .all<WrapRow>(),
+    db
+      .prepare(
+        `SELECT w.target_id AS device_id, w.updated_at AS approved_at,
+           COALESCE((SELECT a.label FROM e2ee_device_approvals a
+             WHERE a.user_id = w.user_id AND a.device_id = w.target_id
+               AND a.state = 'completed'
+             ORDER BY a.created_at DESC, a.id DESC LIMIT 1), 'Read-only device') AS label
+         FROM e2ee_key_wraps w
+         WHERE w.user_id = ? AND w.generation = ? AND w.purpose = 'account-key-approval'
+         ORDER BY w.target_id`
+      )
+      .bind(userId, current.generation)
+      .all<{ device_id: string; label: string; approved_at: string }>()
   ]);
   const previousRecords: E2eePreviousIdentityRecord[] = [];
   for (const row of previous) {
@@ -467,6 +480,11 @@ async function loadAccount(
             signature: current.transition_signature
           }
         : null,
+    approvedDevices: (approvedDevices.results ?? []).map((row) => ({
+      deviceId: row.device_id,
+      label: row.label,
+      approvedAt: row.approved_at
+    })),
     wraps: (wraps.results ?? []).map((row): E2eeWrapRecord => ({
       purpose: row.purpose,
       targetId: row.target_id,
@@ -1040,7 +1058,21 @@ async function handleCreateApproval(
   const now = new Date(nowMs).toISOString();
   await db
     .prepare(
-      `DELETE FROM e2ee_device_approvals WHERE user_id = ? AND created_at < ? AND ${db.authorization.sql}`
+      `DELETE FROM e2ee_device_approvals WHERE user_id = ? AND created_at < ?
+         AND NOT (state = 'completed' AND EXISTS (
+           SELECT 1 FROM e2ee_key_wraps w
+           WHERE w.user_id = e2ee_device_approvals.user_id
+             AND w.target_id = e2ee_device_approvals.device_id
+             AND w.purpose = 'account-key-approval'
+         ) AND NOT EXISTS (
+           SELECT 1 FROM e2ee_device_approvals newer
+           WHERE newer.user_id = e2ee_device_approvals.user_id
+             AND newer.device_id = e2ee_device_approvals.device_id
+             AND newer.state = 'completed'
+             AND (newer.created_at > e2ee_device_approvals.created_at
+               OR (newer.created_at = e2ee_device_approvals.created_at
+                 AND newer.id > e2ee_device_approvals.id))
+         )) AND ${db.authorization.sql}`
     )
     .bind(
       userId,
@@ -1053,9 +1085,9 @@ async function handleCreateApproval(
       `SELECT
          COUNT(*) AS recent,
          SUM(state <> 'completed' AND expires_at > ?) AS open
-       FROM e2ee_device_approvals WHERE user_id = ?`
+       FROM e2ee_device_approvals WHERE user_id = ? AND created_at >= ?`
     )
-    .bind(now, userId)
+    .bind(now, userId, new Date(nowMs - APPROVAL_RETENTION_MS).toISOString())
     .first<{ recent: number; open: number | null }>();
   if ((counts?.open ?? 0) >= MAX_OPEN_APPROVALS) {
     refuse(
@@ -1346,22 +1378,27 @@ const readyDatabases = new WeakSet<D1Database>();
 
 export async function isE2eeKeyStorageReady(db: D1Database): Promise<boolean> {
   if (readyDatabases.has(db)) return true;
-  try {
-    const row = await db
-      .prepare(
-        `SELECT COUNT(*) AS tables FROM sqlite_master
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS tables FROM sqlite_master
          WHERE type = 'table' AND name IN (
            'e2ee_identities', 'e2ee_device_list_entries',
            'e2ee_key_wraps', 'e2ee_device_approvals'
          )`
-      )
-      .first<{ tables: number }>();
-    const ready = row?.tables === 4;
-    if (ready) readyDatabases.add(db);
-    return ready;
-  } catch {
-    return false;
+    )
+    .first<{ tables: number }>();
+  // Only a successful count of zero proves there is no E2EE profile data.
+  // Unknown or partial readiness must not let erasure omit existing key rows.
+  if (row?.tables === 0) return false;
+  if (row?.tables !== 4) {
+    refuse(
+      503,
+      'E2EE_UNAVAILABLE',
+      'Encryption key storage readiness could not be determined.'
+    );
   }
+  readyDatabases.add(db);
+  return true;
 }
 
 /**

@@ -45,6 +45,7 @@ import {
 } from '@openzcad/crypto';
 import type {
   E2eeAccountResponse,
+  E2eeApprovedDeviceRecord,
   E2eeApprovalRecord,
   E2eeIdentityRecord,
   E2eeWrapInput,
@@ -155,6 +156,8 @@ export interface AccountView {
   /** The identity fingerprint people compare, 40 digits. */
   readonly fingerprint: string;
   readonly wraps: readonly E2eeWrapRecord[];
+  /** Informational labels; never a source of keys for sealing or signing. */
+  readonly approvedDevices: readonly E2eeApprovedDeviceRecord[];
   readonly device: StoredDevice | null;
   readonly deviceStatus: DeviceStatus;
   readonly unlocked: boolean;
@@ -676,6 +679,17 @@ export async function loadEncryption(
   } else {
     lockAccount(ctx.userId);
   }
+  const approvedMetadata = new Map(
+    (current.approvedDevices ?? []).map((item) => [item.deviceId, item])
+  );
+  const approvedDevices = current.wraps
+    .filter((wrap) => wrap.purpose === 'account-key-approval')
+    .map((wrap) => ({
+      deviceId: wrap.targetId,
+      label: approvedMetadata.get(wrap.targetId)?.label ?? 'Read-only device',
+      approvedAt:
+        approvedMetadata.get(wrap.targetId)?.approvedAt ?? current.createdAt
+    }));
   const account: AccountView = {
     userId: ctx.userId,
     generation: current.generation,
@@ -684,6 +698,7 @@ export async function loadEncryption(
     persistedPin: identityChanged ? pin : list.pin,
     fingerprint: formatComparisonCode(list.identityKeyHash),
     wraps: current.wraps,
+    approvedDevices,
     device,
     deviceStatus,
     unlocked,
@@ -985,6 +1000,26 @@ export async function removeDevice(
       'Remove this device by signing out and removing its keys.'
     );
   }
+  return rotateAccountKeys(ctx, account, recoverySecret, [deviceId]);
+}
+
+/** Revoke every read-only approval without trusting unsigned recipient keys. */
+export async function revokeReadOnlyDevices(
+  ctx: E2eeContext,
+  account: AccountView,
+  recoverySecret: Uint8Array
+): Promise<EncryptionState> {
+  // The server may omit approval wraps. Rotation must remain available even
+  // when it reports no read-only devices; only certified recipients survive.
+  return rotateAccountKeys(ctx, account, recoverySecret, []);
+}
+
+async function rotateAccountKeys(
+  ctx: E2eeContext,
+  account: AccountView,
+  recoverySecret: Uint8Array,
+  removeDeviceIds: readonly string[]
+): Promise<EncryptionState> {
   const { identityPrivateKey, accountKey: oldAccountKey } = await openIdentity(
     ctx,
     account,
@@ -995,7 +1030,7 @@ export async function removeDevice(
   const encryption = await generateEncryptionKeyPair(true);
   const entry = nextDeviceListEntry(account.list, {
     issuedAt: now(ctx),
-    removeDeviceIds: [deviceId],
+    removeDeviceIds,
     encryptionKey: await exportPublicKey(encryption.publicKey),
     accountKeyCommitment: await accountKeyCommitment(accountKey)
   });

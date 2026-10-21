@@ -177,7 +177,13 @@ test('approves read-only after both devices show the same six digits', async ({
   browser
 }) => {
   const server = createE2eeServer();
-  const { settings } = await approverWith(page, server);
+  const { settings, seeded } = await approverWith(page, server);
+  await expect(
+    settings.getByRole('button', {
+      name: 'Revoke read-only devices',
+      exact: true
+    })
+  ).toBeEnabled();
   const phone = await secondDevice(browser, server);
   try {
     const phoneSettings = await openEncryptionSettings(phone.page);
@@ -219,6 +225,44 @@ test('approves read-only after both devices show the same six digits', async ({
         )
         .get()
     ).toEqual({ n: 1 });
+    await expect(
+      settings.getByText('1 approved', { exact: true })
+    ).toBeVisible();
+    await settings
+      .getByRole('button', { name: 'Revoke read-only devices', exact: true })
+      .click();
+    await expect(
+      settings.getByText(
+        'All read-only devices will need approval again. Certified devices keep working.'
+      )
+    ).toBeVisible();
+    await settings
+      .getByLabel('Recovery key', { exact: true })
+      .fill(seeded.recoveryKey);
+    await settings
+      .getByRole('button', { name: 'Revoke read-only access', exact: true })
+      .click();
+    await expect(settings.getByText('1 approved', { exact: true })).toHaveCount(
+      0
+    );
+    await expect(
+      settings.getByText('1 certified', { exact: true })
+    ).toBeVisible();
+    expect(
+      server.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'"
+        )
+        .get()
+    ).toEqual({ n: 0 });
+    await phone.page.reload();
+    const reloaded = await openEncryptionSettings(phone.page);
+    await expect(reloaded.getByText('Unlocked', { exact: true })).toHaveCount(
+      0
+    );
+    await expect(
+      reloaded.getByRole('button', { name: 'Ask for approval' })
+    ).toBeVisible();
   } finally {
     await phone.context.close();
   }
