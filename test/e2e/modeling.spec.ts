@@ -9,13 +9,14 @@ import {
   locateEdge,
   openAssistant,
   promptField,
-  revealModelDrawer,
-  selectBodyFromItems,
+  revealModelPanel,
+  selectBodyFromObjects,
   setSelectionFilter,
   shiftSelectTwoVisibleBoxEdges,
   stubApi,
   test,
-  seedUnitlessImportUnits
+  seedUnitlessImportUnits,
+  MODEL_ONLY
 } from './openzcad-fixtures';
 
 test('suppresses features and rolls the timeline back as one undoable edit', async ({
@@ -96,7 +97,7 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
   await inspector.getByLabel('Radius', { exact: true }).fill('14');
   await inspector.getByLabel('Height', { exact: true }).fill('28');
   await inspector.getByRole('button', { name: /^Create/ }).click();
-  await expect(page.getByRole('button', { name: 'Objects 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Objects 1' })).toBeVisible();
 
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 120_000 });
@@ -170,7 +171,7 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', asy
     'Adjusted cylinder diameter to Ø 36 mm.'
   );
   await expect(page.getByRole('button', { name: 'Undo' })).toBeEnabled();
-  await expect(page.getByRole('button', { name: 'History 1' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
   await expect(page.locator('.panel-body')).toContainText('Defined by');
   await page.getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(page.getByLabel('Radius', { exact: true })).toHaveValue('18');
@@ -337,8 +338,8 @@ test('a press-and-drag with the Line tool draws a segment instead of orbiting', 
     await page.mouse.move(start.x + step * 20, start.y - step * 10);
   }
   await page.mouse.up();
-  // The sketch has the stage, so the drawer asks for its rail button.
-  await revealModelDrawer(page);
+  // The sketch has the stage, so the panel asks for its rail button.
+  await revealModelPanel(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch' })
   ).toBeVisible();
@@ -417,8 +418,8 @@ test('switches a planar-face selection into an editable arc sketch', async ({
   await page.mouse.click(center.x + 80, center.y);
   await page.mouse.click(center.x, center.y - 80);
 
-  // The sketch has the stage, so the drawer asks for its rail button.
-  await revealModelDrawer(page);
+  // The sketch has the stage, so the panel asks for its rail button.
+  await revealModelPanel(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch' })
   ).toBeVisible();
@@ -510,8 +511,8 @@ test('refuses suppression that would stale an attached sketch and allows pausing
   await page.mouse.down();
   await page.mouse.move(center.x + 45, center.y + 35, { steps: 4 });
   await page.mouse.up();
-  // The sketch has the stage, so the drawer asks for its rail button.
-  await revealModelDrawer(page);
+  // The sketch has the stage, so the panel asks for its rail button.
+  await revealModelPanel(page);
   await expect(
     page.locator('.feature-row', { hasText: /^Sketch/ })
   ).toBeVisible();
@@ -661,7 +662,7 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
   expect(bounds).not.toBeNull();
   const center = {
     // Stay clear of the empty-viewport getting-started card and, on the right,
-    // the model drawer, while keeping the whole circle on the open canvas.
+    // the model panels, while keeping the whole circle on the open canvas.
     x: bounds!.x + bounds!.width * 0.6,
     y: bounds!.y + bounds!.height * 0.64
   };
@@ -669,8 +670,8 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
   await page.mouse.down();
   await page.mouse.move(center.x + 64, center.y, { steps: 6 });
   await page.mouse.up();
-  // The sketch has the stage, so the drawer asks for its rail button.
-  await revealModelDrawer(page);
+  // The sketch has the stage, so the panel asks for its rail button.
+  await revealModelPanel(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch 01' })
   ).toBeVisible();
@@ -1103,7 +1104,7 @@ test('fillets all twelve edges of a box in one exact feature', async ({
   const fillet = page.locator('.feature-row', { hasText: 'Fillet' });
   await expect(fillet).toBeVisible();
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
-  await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.diagnostic-row')).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await fillet.locator('.feature-row-main').click();
   await expect(page.locator('.panel-body')).toContainText('volume', {
@@ -1215,7 +1216,7 @@ test('radius drag resizes a cylinder after bottom adjustment and filleting', asy
     page.locator('.feature-row', { hasText: 'Resize Cylinder' })
   ).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
-  await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.diagnostic-row')).toHaveCount(0);
   await expect(offsetRow.getByTitle('Feature failed to build')).toHaveCount(0);
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
   await page
@@ -1257,7 +1258,7 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   await expect(fillet).toBeVisible();
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
   await expectBodyCount(page, 1);
-  await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.diagnostic-row')).toHaveCount(0);
 
   await cylinder.locator('.feature-row-main').click();
   await inspector.getByLabel('Radius', { exact: true }).fill('6.4');
@@ -1265,7 +1266,7 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
   await expect(page.getByRole('contentinfo')).toContainText('Edited Cylinder.');
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
   await expectBodyCount(page, 1);
-  await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.diagnostic-row')).toHaveCount(0);
   await expect(inspector).toHaveCount(0);
 
   // A radius smaller than the stored 1 mm fillet is invalid. Exact preflight
@@ -1294,7 +1295,7 @@ test('keeps a two-rim fillet while editing a cylinder from 4.6 to 6.4 mm', async
     '6.4'
   );
   await expect(fillet.getByTitle('Feature failed to build')).toHaveCount(0);
-  await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.diagnostic-row')).toHaveCount(0);
   await expectBodyCount(page, 1);
   expect(consoleErrors).toEqual([]);
 });
@@ -1340,9 +1341,9 @@ for (const modifier of [
     });
     await expect(blend).toBeVisible();
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Objects 1' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Objects 1' })).toBeVisible();
     await expectConsumedBodyCount(page, 1);
-    await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.diagnostic-row')).toHaveCount(0);
     await expect(page.locator('.feature-row')).toHaveCount(2);
 
     const canvas = page.locator('.viewer-host canvas');
@@ -1413,9 +1414,9 @@ for (const modifier of [
     );
     await expect(page.locator('.feature-row')).toHaveCount(2);
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Objects 1' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Objects 1' })).toBeVisible();
     await expectConsumedBodyCount(page, 1);
-    await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.diagnostic-row')).toHaveCount(0);
     await cylinder.locator('.feature-row-main').click();
     await expect
       .poll(async () =>
@@ -1449,7 +1450,7 @@ for (const modifier of [
       )
       .toBeCloseTo(6.4, 5);
     await expect(blend.getByTitle('Feature failed to build')).toHaveCount(0);
-    await expect(page.getByText('Diagnostics', { exact: true })).toHaveCount(0);
+    await expect(page.locator('.diagnostic-row')).toHaveCount(0);
     expect(consoleErrors).toEqual([]);
   });
 }
@@ -3325,10 +3326,8 @@ test('rejects a disconnected Union and succeeds after the gap is closed', async 
   await expectConsumedBodyCount(page, 0);
 
   // The refused Union card keeps the lane, and in a 720px window it fills
-  // it: the drawer gives way under it to nothing, and the lane stops above
-  // the orientation cube, so History is out of reach until the card closes.
-  // (The row used to be clicked through a sliver of drawer drawn over the
-  // cube.)
+  // it down to the orientation cube, never past it. (A History row used to
+  // be clicked through a sliver of the old drawer drawn over the cube.)
   await inspector.getByRole('button', { name: 'Cancel' }).click();
   await page.locator('.feature-row-main', { hasText: 'Lift upper' }).click();
   await inspector.getByLabel('Move Z').fill('10');
@@ -3931,7 +3930,7 @@ test('each sketch plane label names the plane it actually opens', async ({
     'Extruded region by 24 mm',
     { timeout: 20_000 }
   );
-  await selectBodyFromItems(page);
+  await selectBodyFromObjects(page);
   // Read from the detail: the name beside it ("Extrude 1") ends in a digit.
   const chip =
     (await page
@@ -4046,7 +4045,7 @@ test('types an exact rectangle while drawing it', async ({ page }) => {
     'Extruded region by 24 mm',
     { timeout: 20_000 }
   );
-  await selectBodyFromItems(page);
+  await selectBodyFromObjects(page);
   // The size is read from the chip's detail: the body name beside it
   // ("Extrude 1") ends in a digit that would run into the first dimension.
   const chip =
@@ -4064,7 +4063,9 @@ test('types an exact rectangle while drawing it', async ({ page }) => {
 test('dragging the move gizmo streams live values and commits what was dragged', async ({
   page
 }) => {
-  await stubApi(page);
+  // Nothing docked: the Move panel stands inside the right dock, and with
+  // the dock open it covered the gizmo's arrows.
+  await stubApi(page, { panelLayout: MODEL_ONLY });
   await page.goto('/');
   await page.getByLabel('Project name').fill('Move Drag Stream');
   await page.getByRole('button', { name: 'Create project' }).click();
@@ -4178,6 +4179,7 @@ test('dragging the move gizmo streams live values and commits what was dragged',
   expect(await draggedValues()).toEqual(liveValues);
 
   await overlay.getByRole('button', { name: /Apply move/ }).click();
+  await revealModelPanel(page, 'History');
   await expect(page.locator('.feature-row', { hasText: 'Move' })).toHaveCount(
     1
   );
@@ -4746,8 +4748,8 @@ test('an open sketch chain does not light the profile tools', async ({
     await page.mouse.move(start.x + step * 20, start.y - step * 10);
   }
   await page.mouse.up();
-  // The sketch has the stage, so the drawer asks for its rail button.
-  await revealModelDrawer(page);
+  // The sketch has the stage, so the panel asks for its rail button.
+  await revealModelPanel(page);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Sketch' })
   ).toBeVisible();

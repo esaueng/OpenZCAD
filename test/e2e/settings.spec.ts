@@ -338,7 +338,8 @@ test('keeps every workspace surface inside a narrow viewport', async ({
     '.topbar',
     '.workspace',
     '.workspace-column',
-    '.model-drawer-float',
+    // Nothing docks at a phone width: the one panel that shows is in the lane.
+    '.panel-lane-float',
     '.viewer-area',
     '.assistant-panel',
     '.viewport-readout',

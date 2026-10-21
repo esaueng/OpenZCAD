@@ -162,7 +162,15 @@ describe('sketch dimension overlay', () => {
     overlay.dispose();
   });
 
-  it.each(['viewer-rail-stack', 'workspace-column-float', 'sketch-flyouts'])(
+  it.each([
+    'viewer-rail-stack',
+    'workspace-column-float',
+    'sketch-flyouts',
+    // The model panels: a docked column, the unpinned panel, the phone lane.
+    'panel-column',
+    'panel-unpinned',
+    'panel-lane-float'
+  ])(
     'moves a persisted label clear of an occupied %s beside the viewport',
     (className) => {
       const root = document.createElement('div');

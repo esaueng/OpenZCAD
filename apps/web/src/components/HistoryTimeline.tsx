@@ -930,6 +930,12 @@ export function HistoryTimeline({
                     if (event.detail === 1) {
                       holdMultiClickToRow(event.currentTarget);
                     }
+                    // The rest of a double-click is the same gesture, not a
+                    // second press: selecting a selected row clears it, so
+                    // the second click closed the edit card the first had
+                    // opened — whenever the row stayed under the pointer, as
+                    // it does now that the card stands in its own lane.
+                    if (event.detail > 1) return;
                     onSelectFeature(feature.id);
                   }}
                   // Every row used to announce the same generic kind label, so

@@ -110,7 +110,6 @@ import {
   Scissors,
   Slice,
   SlidersHorizontal,
-  Layers,
   ListOrdered,
   Spline,
   Trash2,
@@ -425,8 +424,22 @@ import { StatusActivityLog } from './components/StatusActivityLog';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { createLazyPanel } from './components/LazyPanel';
-import type { Sidebar as SidebarComponent } from './components/Sidebar';
-import type * as SidebarModule from './components/Sidebar';
+import type { ModelPanel as ModelPanelComponent } from './components/modelPanels/ModelPanel';
+import type * as ModelPanelModule from './components/modelPanels/ModelPanel';
+import {
+  PanelDock,
+  type PanelDockHandle
+} from './components/modelPanels/PanelDock';
+import type {
+  PanelControls,
+  PanelDockControls,
+  PanelPlacement
+} from './components/modelPanels/PanelFrame';
+import {
+  PANEL_ICONS,
+  PANEL_TITLES,
+  RAIL_PANEL_ORDER
+} from './components/modelPanels/panelMeta';
 import type { FeatureHistoryPanel as FeatureHistoryComponent } from './components/FeatureHistoryPanel';
 import type { TweakPanel as TweakPanelComponent } from './components/TweakPanel';
 import type { ViewModeBar as ViewModeBarComponent } from './components/ViewModeBar';
@@ -906,30 +919,33 @@ function ToolCard(props: ComponentProps<typeof LazyToolCard>) {
     </Suspense>
   );
 }
-// The model browser only renders inside the drawer, which starts closed; its
-// History timeline took the entry chunk past its budget.
-let sidebarModule: Promise<typeof SidebarModule> | undefined;
-const loadSidebar = () =>
-  (sidebarModule ??= loadWhenOnline(() => import('./components/Sidebar')));
-const Sidebar = createLazyPanel<ComponentProps<typeof SidebarComponent>>(
-  'Model drawer',
+// The model panels' bodies only render once a panel opens; their History
+// timeline took the entry chunk past its budget, so they load on demand.
+let modelPanelModule: Promise<typeof ModelPanelModule> | undefined;
+const loadModelPanels = () =>
+  (modelPanelModule ??= loadWhenOnline(
+    () => import('./components/modelPanels/ModelPanel')
+  ));
+const ModelPanel = createLazyPanel<ComponentProps<typeof ModelPanelComponent>>(
+  'Model panels',
   () =>
-    loadSidebar().then((module) => ({
-      default: module.Sidebar
+    loadModelPanels().then((module) => ({
+      default: module.ModelPanel
     }))
 );
 /**
- * Focuses a field inside the drawer once it exists. The drawer's browser is
- * lazy: on its first open the chunk loads and the panel mounts some frames
- * later, so one tick is not enough. Gives up quietly after about a second.
+ * Focuses a field inside a model panel once it exists. The panels' bodies
+ * are lazy: on the first open the chunk loads and the panel mounts some
+ * frames later, so one tick is not enough. Gives up quietly after about a
+ * second.
  */
-function focusInDrawerWhenMounted(selector: string, frames = 60) {
+function focusInPanelWhenMounted(selector: string, frames = 60) {
   const field = document.querySelector<HTMLElement>(selector);
   if (field) {
     field.focus();
   } else if (frames > 0) {
     window.requestAnimationFrame(() =>
-      focusInDrawerWhenMounted(selector, frames - 1)
+      focusInPanelWhenMounted(selector, frames - 1)
     );
   }
 }
@@ -1397,13 +1413,31 @@ import { usePanelSuspension } from './hooks/usePanelSuspension';
 import {
   loadPanelState,
   savePanelState,
-  toggleDrawerSectionAsShown,
-  toggleSidebarSection,
   type PanelState,
-  type SidebarSectionId,
   type WorkspaceMode,
   WORKSPACE_MODE_ORDER
 } from './lib/panelState';
+import {
+  closePanel,
+  computePanelGeometry,
+  isPanelOpen,
+  loadPanelLayout,
+  notePanelUsed,
+  openPanel,
+  panelStatus,
+  pinPanel,
+  presentPanel,
+  savePanelLayout,
+  togglePanel,
+  unpinPanel,
+  type PanelId,
+  type PanelLayout,
+  type PanelStage
+} from './lib/panelLayout';
+import {
+  useHistoryFind,
+  useObjectsView
+} from './components/modelPanels/panelViews';
 import {
   loadSettingsViewState,
   updateSettingsViewState
@@ -2006,6 +2040,17 @@ export function App() {
   const [panelState, setPanelState] = useState<PanelState>(() =>
     loadPanelState()
   );
+  // Where the model panels live (U08). Read before anything can write the
+  // new key: on a device that has none, the v1 drawer state it migrates
+  // from is what `loadPanelState` just read, untouched. A device with
+  // neither starts in the two-sided Essentials.
+  const [panelLayout, setPanelLayout] = useState<PanelLayout>(() =>
+    loadPanelLayout(undefined, undefined, { leftDock: true })
+  );
+  const [panelStage, setPanelStage] = useState<PanelStage | null>(null);
+  // A drag out of a rail button is the dock's to run, so the App (and the
+  // viewer the rail is drawn in) does not re-render while it moves.
+  const panelDockRef = useRef<PanelDockHandle | null>(null);
   // Collapsing the assistant is chrome layout, so it is remembered with the
   // rest of it rather than reset on every reload.
   const assistantCollapsed = panelState.assistantCollapsed;
@@ -2149,6 +2194,12 @@ export function App() {
   } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
+  // Held here, not in the panels: a move between the dock and the phone lane
+  // remounts a panel, and its filter, search and Find field outlive that. A
+  // different project starts them afresh.
+  const objectsView = useObjectsView(doc?.projectId ?? null);
+  const historyFind = useHistoryFind(doc?.projectId ?? null);
+  const modelPanelViews = { objects: objectsView, historyFind };
   const textOutlineBudgetError = useMemo(
     () => (doc ? documentTextBudgetError(doc) : null),
     [doc]
@@ -3825,10 +3876,11 @@ export function App() {
       version: current.version,
       error
     });
-    setPanelState((state) => ({
-      ...state,
-      sidebarSections: { ...state.sidebarSections, history: true }
-    }));
+    // The record and its dismiss control live in History: bring it into
+    // view (unpinned if closed, out of the parking slot if parked).
+    setPanelLayout((layout) =>
+      presentPanel(layout, 'history', panelStage ?? undefined)
+    );
   }
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
@@ -4688,6 +4740,12 @@ export function App() {
   useEffect(() => {
     savePanelState(panelState);
   }, [panelState]);
+
+  // Saved on load as well as on change: once the migration has run, its
+  // result is the device's layout, whatever the v1 key says next.
+  useEffect(() => {
+    savePanelLayout(panelLayout);
+  }, [panelLayout]);
 
   useEffect(() => {
     setViewerSettings((current) => ({
@@ -20623,21 +20681,81 @@ export function App() {
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
+  // The model panels as they project onto the measured stage: which are
+  // drawn, and the one a phone-width lane shows.
+  const panelStageOrUndefined = panelStage ?? undefined;
+  const panelGeometry = panelStage
+    ? computePanelGeometry(panelLayout, panelStage)
+    : null;
+  const panelsHidden = panels.panelsHidden || panelLayout.options.hidden;
+  const phonePanel = panelGeometry?.phone ? panelGeometry.phonePanel : null;
+  /** Whether a panel is on screen right now, for its rail button. */
+  const panelShowing = (id: PanelId) =>
+    !panelsHidden &&
+    isPanelOpen(panelLayout, id) &&
+    (panelGeometry === null ||
+      (panelGeometry.phone
+        ? phonePanel === id
+        : !panelGeometry.parked[id] || panelLayout.revealed === id));
   /**
-   * Opens the drawer on a section by name, as the palette's feature and
-   * parameter results do. Asking for it by name mid-sketch or mid-drag is the
-   * user wanting it back: like a rail press, it releases the suspension for
-   * the rest of that mode instead of setting a preference nobody can see.
+   * A rail press. While a sketch or a drag has the panels stepped aside it is
+   * the user asking for them back: the pressed panel opens (or comes forward)
+   * and the suspension is released for the rest of that mode, instead of
+   * closing a panel nobody can see.
    */
-  const showDrawerSection = (section: 'history' | 'parameters') => {
-    const hidden = panels.drawerHidden;
-    setPanelState((current) => ({
-      ...current,
-      drawerOpen: true,
-      sidebarSections: { ...current.sidebarSections, [section]: true }
-    }));
-    if (hidden) panels.release('drawer');
+  const pressRailPanel = (id: PanelId) => {
+    const suspended = panels.panelsHidden;
+    setPanelLayout((current) =>
+      suspended
+        ? openPanel(current, id, panelStageOrUndefined)
+        : togglePanel(current, id, panelStageOrUndefined)
+    );
+    if (suspended) panels.release('panels');
   };
+  /**
+   * Brings History or Parameters into view by name, as the palette's feature
+   * and parameter results do: unpinned if it was closed, forward if it was
+   * open. Asking for it by name mid-sketch or mid-drag releases the
+   * suspension for the rest of that mode, like a rail press.
+   */
+  const showModelPanel = (id: 'history' | 'parameters') => {
+    const suspended = panels.panelsHidden;
+    setPanelLayout((current) =>
+      presentPanel(current, id, panelStageOrUndefined)
+    );
+    if (suspended) panels.release('panels');
+  };
+  const panelControls = (
+    id: PanelId,
+    placement: PanelPlacement
+  ): PanelControls => ({
+    placement,
+    status: panelStatus(panelLayout, id),
+    // A pin that cannot dock (nothing docks at a phone width, and a new
+    // column past the footprint cap is refused) docks nothing: the panel
+    // stays where it was and the status line says why.
+    onPin: () => {
+      const next =
+        placement === 'phone'
+          ? panelLayout
+          : pinPanel(panelLayout, id, panelStageOrUndefined);
+      if (
+        placement === 'phone' ||
+        (next === panelLayout && panelStatus(panelLayout, id) !== 'docked')
+      ) {
+        setStatus(
+          placement === 'phone'
+            ? 'Panels do not dock at this width; widen the window to pin one.'
+            : 'The docks are full at this width.'
+        );
+        return;
+      }
+      setPanelLayout(next);
+    },
+    onUnpin: () => setPanelLayout((current) => unpinPanel(current, id)),
+    onClose: () => setPanelLayout((current) => closePanel(current, id)),
+    onUse: () => setPanelLayout((current) => notePanelUsed(current, id))
+  });
   // Only the row Ctrl+Shift+M would land on carries it as its shortcut.
   const modeShortcutTarget = nextWorkspaceMode;
   const modeShortcut = (mode: WorkspaceMode) =>
@@ -20975,7 +21093,7 @@ export function App() {
       run: openSettings
     },
     // What the model is made of: every feature and parameter by name, last,
-    // so a search that names one lands on it in the drawer.
+    // so a search that names one lands on it in its panel.
     ...(!modelingLocked
       ? [
           ...features.map(
@@ -20986,7 +21104,7 @@ export function App() {
                 group: 'Feature',
                 icon: <ListOrdered size={16} aria-hidden="true" />,
                 run: () => {
-                  showDrawerSection('history');
+                  showModelPanel('history');
                   handleOpenHistoryFeature(feature.id);
                 }
               }) satisfies PaletteCommand
@@ -20999,13 +21117,13 @@ export function App() {
                 group: 'Parameter',
                 icon: <SlidersHorizontal size={16} aria-hidden="true" />,
                 run: () => {
-                  showDrawerSection('parameters');
-                  // The drawer's browser may still be loading; focus follows
-                  // it once the field has mounted. A failed load is already
+                  showModelPanel('parameters');
+                  // The panel's body may still be loading; focus follows it
+                  // once the field has mounted. A failed load is already
                   // reported by the lazy panel's stale-chunk notice.
-                  void loadSidebar()
+                  void loadModelPanels()
                     .then(() =>
-                      focusInDrawerWhenMounted(
+                      focusInPanelWhenMounted(
                         `[aria-label="Expression for ${CSS.escape(parameter.name)}"]`
                       )
                     )
@@ -21725,8 +21843,18 @@ export function App() {
         }}
       />
     ) : null;
-  const modelBrowser = (
-    <Sidebar
+  const renderModelPanel = (
+    id: PanelId,
+    placement: PanelPlacement,
+    dock?: PanelDockControls
+  ) => (
+    <ModelPanel
+      id={id}
+      controls={{
+        ...panelControls(id, placement),
+        ...(dock ? { dock } : {})
+      }}
+      views={modelPanelViews}
       parameters={parameters}
       parameterValues={parameterScope.scope}
       parameterMinimums={liveParameterMinimums}
@@ -21820,28 +21948,6 @@ export function App() {
       }
       onBranchCheckpoint={(checkpoint) =>
         void handleBranchSaveState(checkpoint)
-      }
-      panelState={panelState}
-      onToggleSection={(id: SidebarSectionId) =>
-        setPanelState((current) => {
-          const next = toggleSidebarSection(current, id);
-          // Opening History in the column folds the tree above it so the
-          // list gets the column's height; the tree reopens on its own row.
-          if (id === 'history' && next.sidebarSections.history) {
-            return {
-              ...next,
-              sidebarSections: {
-                ...next.sidebarSections,
-                parameters: false,
-                bodies: false
-              }
-            };
-          }
-          return next;
-        })
-      }
-      onClose={() =>
-        setPanelState((current) => ({ ...current, drawerOpen: false }))
       }
     />
   );
@@ -22211,35 +22317,41 @@ export function App() {
                   role="toolbar"
                   aria-label="Model panels"
                 >
-                  {(
-                    [
-                      ['bodies', 'Objects', Layers],
-                      ['history', 'History', ListOrdered],
-                      ['parameters', 'Parameters', SlidersHorizontal]
-                    ] as const
-                  ).map(([section, label, Icon]) => {
-                    const showing =
-                      panels.drawerOpen && panelState.sidebarSections[section];
+                  {RAIL_PANEL_ORDER.map((id) => {
+                    const label = PANEL_TITLES[id];
+                    const Icon = PANEL_ICONS[id];
+                    const showing = panelShowing(id);
+                    const parked =
+                      !showing && Boolean(panelGeometry?.parked[id]);
+                    // Diagnostics says how many warnings there are on its
+                    // button and never opens by itself.
+                    const badge =
+                      id === 'diagnostics' && diagnostics.length > 0
+                        ? diagnostics.length
+                        : 0;
                     return (
                       <button
-                        key={section}
+                        key={id}
                         type="button"
-                        className={`rail-button${showing ? ' active' : ''}`}
+                        className={`rail-button${showing ? ' active' : ''}${parked ? ' parked' : ''}`}
                         aria-label={`${label} panel`}
                         aria-pressed={showing}
-                        title={label}
-                        onClick={() => {
-                          // A press while a sketch or drag has the drawer
-                          // stepped aside is the user asking for it back:
-                          // it opens, and stays for the rest of the mode.
-                          const hidden = panels.drawerHidden;
-                          setPanelState((current) =>
-                            toggleDrawerSectionAsShown(current, section, hidden)
-                          );
-                          if (hidden) panels.release('drawer');
-                        }}
+                        title={
+                          badge > 0
+                            ? `${label} · ${badge} ${badge === 1 ? 'warning' : 'warnings'}`
+                            : label
+                        }
+                        onPointerDown={(event) =>
+                          panelDockRef.current?.pressRail(id, event)
+                        }
+                        onClick={() => pressRailPanel(id)}
                       >
                         <Icon size={16} aria-hidden="true" />
+                        {badge > 0 && (
+                          <span className="rail-badge" aria-hidden="true">
+                            {badge > 99 ? '99+' : badge}
+                          </span>
+                        )}
                       </button>
                     );
                   })}
@@ -22644,11 +22756,26 @@ export function App() {
           <ToastHost toast={toast} onDismiss={dismissToast} />
         </ErrorBoundary>
       }
-      drawer={
-        !modelingLocked && panels.drawerOpen ? modelBrowser : null
+      panels={
+        !modelingLocked ? (
+          <PanelDock
+            layout={panelLayout}
+            hidden={panelsHidden}
+            onStage={setPanelStage}
+            onLayout={setPanelLayout}
+            onRefuse={setStatus}
+            renderPanel={renderModelPanel}
+            handleRef={panelDockRef}
+          />
+        ) : null
       }
-      // Every command card anchors at the top of the right lane, the
-      // drawer yielding below it. The same precedence as the viewport's
+      panelLane={
+        !modelingLocked && !panelsHidden && phonePanel
+          ? renderModelPanel(phonePanel, 'phone')
+          : null
+      }
+      // Every command card anchors at the top of the right lane, a panel in
+      // the phone lane yielding below it. The same precedence as the viewport's
       // mode overlays: a live operation first, then the Move panel (unless
       // the revert pill is up), and the closed-profile quick action only
       // when no plane prompt, Move or revert pill is up.

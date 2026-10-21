@@ -142,8 +142,6 @@ textarea {
 }
 
 /* Opened content drops in beneath its header instead of appearing whole. */
-.sidebar-section:not(.collapsed) > .section-title ~ *,
-.sidebar-section:not(.collapsed) > .section-head ~ *,
 .sketch-palette-content,
 .assistant-readings > table,
 .assistant-operations {
@@ -262,7 +260,10 @@ textarea {
   animation: oz-pop var(--dur-fast) var(--ease-out);
 }
 
-.model-drawer-float {
+/* A panel arrives from the rail's side: opened unpinned, or in the phone
+   lane. Docked panels are layout, not arrivals, and stay put. */
+.panel-unpinned > .model-panel,
+.panel-lane-float {
   animation: oz-enter-left var(--dur-base) var(--ease-out);
 }
 

@@ -1,5 +1,11 @@
 import type { Page } from '@playwright/test';
-import { expect, expectBodyCount, stubApi, test } from './openzcad-fixtures';
+import {
+  expect,
+  expectBodyCount,
+  modelPanel,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 
 /**
  * The Undo toast, the status toast and the search bar share one lane. Each
@@ -203,12 +209,13 @@ test('keeps every history row control inside a narrow sidebar', async ({
   await expect(page.locator('.viewer-host canvas')).toBeVisible({
     timeout: 120_000
   });
-  const rows = page.locator('.sidebar .feature-row');
+  const history = modelPanel(page, 'History');
+  const rows = history.locator('.feature-row');
   await expect(rows).toHaveCount(17);
 
-  const sidebar = await page.locator('.sidebar').boundingBox();
-  const list = await page
-    .locator('.sidebar .feature-row')
+  const sidebar = await history.boundingBox();
+  const list = await history
+    .locator('.feature-row')
     .first()
     .locator('..')
     .boundingBox();

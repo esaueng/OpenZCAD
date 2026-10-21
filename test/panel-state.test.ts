@@ -9,9 +9,6 @@ import {
   PANEL_STATE_STORAGE_KEY,
   savePanelState,
   SIDEBAR_SECTION_IDS,
-  toggleDrawerSection,
-  toggleDrawerSectionAsShown,
-  toggleSidebarSection,
   toggleToolGroup
 } from '../apps/web/src/lib/panelState';
 
@@ -47,34 +44,21 @@ describe('workspace panel state', () => {
     expect(DEFAULT_PANEL_STATE.sidebarSections.history).toBe(true);
   });
 
-  it('keeps the model drawer closed until a rail button opens it', () => {
-    // The quiet stage opens on the model; the drawer is on demand.
+  it('keeps the v1 drawer fields for rollback and the layout migration', () => {
+    // Nothing reads them for the UI any more, but they round-trip as stored
+    // so an older build finds the drawer the way it left it.
     expect(defaultPanelState().drawerOpen).toBe(false);
-    const history = toggleDrawerSection(defaultPanelState(), 'history');
-    expect(history.drawerOpen).toBe(true);
-    // The named section gets the drawer's height; the other two fold, and
-    // the ones the rail does not name keep what the user left them at.
-    expect(history.sidebarSections).toMatchObject({
-      history: true,
-      parameters: false,
-      bodies: false,
-      revisions: true,
-      diagnostics: true
-    });
-    // The same button again closes the drawer without refolding anything.
-    const closed = toggleDrawerSection(history, 'history');
-    expect(closed.drawerOpen).toBe(false);
-    expect(closed.sidebarSections).toEqual(history.sidebarSections);
-    // Another button on an open drawer switches the section instead.
-    const parameters = toggleDrawerSection(history, 'parameters');
-    expect(parameters.drawerOpen).toBe(true);
-    expect(parameters.sidebarSections.parameters).toBe(true);
-    expect(parameters.sidebarSections.history).toBe(false);
-  });
-
-  it('remembers the drawer across reloads', () => {
     expect(normalizePanelState({ drawerOpen: true }).drawerOpen).toBe(true);
     expect(normalizePanelState({ drawerOpen: 'yes' }).drawerOpen).toBe(false);
+    const stored = normalizePanelState({
+      drawerOpen: true,
+      sidebarSections: { history: false }
+    });
+    expect(savePanelState(stored)).toBe(true);
+    expect(loadPanelState()).toMatchObject({
+      drawerOpen: true,
+      sidebarSections: { history: false, parameters: true }
+    });
   });
 
   it('keeps the command card fold closed until it is opened', () => {
@@ -109,15 +93,6 @@ describe('workspace panel state', () => {
     );
   });
 
-  it('toggles one section without touching the others', () => {
-    const collapsed = toggleSidebarSection(defaultPanelState(), 'history');
-    expect(collapsed.sidebarSections.history).toBe(false);
-    expect(collapsed.sidebarSections.parameters).toBe(true);
-    expect(
-      toggleSidebarSection(collapsed, 'history').sidebarSections.history
-    ).toBe(true);
-  });
-
   it('folds one tool group without touching the others', () => {
     // Open to begin with: the names on the tiles are what make the tools
     // learnable, and folding is a choice someone makes for column height.
@@ -135,7 +110,8 @@ describe('workspace panel state', () => {
   });
 
   it('round-trips through device storage', () => {
-    const state = toggleSidebarSection(defaultPanelState(), 'diagnostics');
+    const state = defaultPanelState();
+    state.sidebarSections.diagnostics = false;
     expect(savePanelState(state)).toBe(true);
     const loaded = loadPanelState();
     expect(loaded.sidebarSections.diagnostics).toBe(false);
@@ -246,51 +222,61 @@ describe('workspace panel state', () => {
 });
 
 describe('panel suspension while a mode has the stage', () => {
-  const open = { drawerOpen: true, commandFoldOpen: true };
-  const closed = { drawerOpen: false, commandFoldOpen: false };
-  const idle = { suspended: false, drawerReleased: false, foldReleased: false };
+  const idle = { suspended: false, panelsReleased: false, foldReleased: false };
   const suspended = { ...idle, suspended: true };
 
   it('shows what the user chose while no mode suspends the panels', () => {
-    expect(effectivePanels(open, idle)).toEqual(open);
-    expect(effectivePanels(closed, idle)).toEqual(closed);
+    expect(effectivePanels({ commandFoldOpen: true }, idle)).toEqual({
+      panelsSuspended: false,
+      commandFoldOpen: true
+    });
+    expect(effectivePanels({ commandFoldOpen: false }, idle)).toEqual({
+      panelsSuspended: false,
+      commandFoldOpen: false
+    });
   });
 
-  it('hides the drawer and the fold while suspended, preference untouched', () => {
-    const state = { ...defaultPanelState(), ...open };
-    expect(effectivePanels(state, suspended)).toEqual(closed);
+  it('suspends the panels and hides the fold, preference untouched', () => {
+    const state = { ...defaultPanelState(), commandFoldOpen: true };
+    expect(effectivePanels(state, suspended)).toEqual({
+      panelsSuspended: true,
+      commandFoldOpen: false
+    });
     // Suspension is not a write: the stored choice is what comes back.
-    expect(state.drawerOpen).toBe(true);
     expect(state.commandFoldOpen).toBe(true);
-    expect(effectivePanels(state, idle)).toEqual(open);
     savePanelState(state);
-    expect(loadPanelState().drawerOpen).toBe(true);
+    expect(loadPanelState().commandFoldOpen).toBe(true);
   });
 
-  it('never opens a panel the user left closed', () => {
+  it('never opens a fold the user left closed', () => {
     expect(
-      effectivePanels(closed, {
-        suspended: true,
-        drawerReleased: true,
-        foldReleased: true
-      })
-    ).toEqual(closed);
+      effectivePanels(
+        { commandFoldOpen: false },
+        { suspended: true, panelsReleased: true, foldReleased: true }
+      ).commandFoldOpen
+    ).toBe(false);
   });
 
-  it('lets a released panel show during the mode, each on its own', () => {
+  it('lets the panels and the fold be released during the mode, each on its own', () => {
     expect(
-      effectivePanels(open, { ...suspended, drawerReleased: true })
-    ).toEqual({ drawerOpen: true, commandFoldOpen: false });
-    expect(effectivePanels(open, { ...suspended, foldReleased: true })).toEqual(
-      { drawerOpen: false, commandFoldOpen: true }
-    );
+      effectivePanels(
+        { commandFoldOpen: true },
+        { ...suspended, panelsReleased: true }
+      )
+    ).toEqual({ panelsSuspended: false, commandFoldOpen: false });
+    expect(
+      effectivePanels(
+        { commandFoldOpen: true },
+        { ...suspended, foldReleased: true }
+      )
+    ).toEqual({ panelsSuspended: true, commandFoldOpen: true });
   });
 
   it('holds a drag from engage through its validation, and no longer', () => {
     expect(nextDragSuspension(false, null)).toBe(false);
     expect(nextDragSuspension(false, 'armed')).toBe(false);
     expect(nextDragSuspension(false, 'dragging')).toBe(true);
-    // Released and validating: the drawer must not flash back mid-commit.
+    // Released and validating: the panels must not flash back mid-commit.
     expect(nextDragSuspension(true, 'validating')).toBe(true);
     // Committed (idle), refused, cancelled back to armed, or typed exactly.
     expect(nextDragSuspension(true, null)).toBe(false);
@@ -300,21 +286,8 @@ describe('panel suspension while a mode has the stage', () => {
     // Validation no drag started never takes the stage.
     expect(nextDragSuspension(false, 'validating')).toBe(false);
     // A value refused mid-gesture fails the phase, but the pointer is still
-    // down: the drag has not ended, so the drawer must not flicker back.
+    // down: the drag has not ended, so the panels must not flicker back.
     expect(nextDragSuspension(true, 'failed', true)).toBe(true);
     expect(nextDragSuspension(true, 'failed', false)).toBe(false);
-  });
-
-  it('opens a suspended drawer on the section pressed instead of closing it', () => {
-    const state = toggleDrawerSection(defaultPanelState(), 'history');
-    // Shown closed, so a press on History opens it rather than toggling the
-    // hidden drawer shut.
-    const reopened = toggleDrawerSectionAsShown(state, 'history', true);
-    expect(reopened.drawerOpen).toBe(true);
-    expect(reopened.sidebarSections.history).toBe(true);
-    // Not suspended, the rail button behaves exactly as before.
-    expect(toggleDrawerSectionAsShown(state, 'history', false)).toEqual(
-      toggleDrawerSection(state, 'history')
-    );
   });
 });
