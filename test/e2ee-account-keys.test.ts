@@ -978,6 +978,46 @@ describe('device approval', () => {
     expect([state.deviceStatus, state.unlocked]).toEqual(['certified', true]);
   });
 
+  it('refuses to certify from a view an account-key rotation made stale', async () => {
+    const srv = server();
+    const { recovery, laptop } = await setUp(srv);
+    await enrolled(srv, recovery.secret, 'Tablet');
+    const stale = ready(await loadEncryption(laptop));
+    const phone = device(srv);
+    const request = await requestApproval(phone, null, 'Phone');
+    if (request.step !== 'waiting')
+      throw new Error('Expected pending approval');
+    const tabletId = stale.list.devices.find(
+      (d) => d.label === 'Tablet'
+    )!.deviceId;
+    // The unlocked-key store is page memory: keep this page's old unlock
+    // while the rotation runs, as a second browser would.
+    const { rememberUnlockedAccount, unlockedAccount } =
+      await import('../apps/web/src/lib/e2ee/unlockedKeys');
+    const held = unlockedAccount(USER)!;
+    const pageMemory = { ...held, accountKey: held.accountKey.slice() };
+    const rotated = ready(
+      await removeDevice(laptop, stale, tabletId, recovery.secret)
+    );
+    rememberUnlockedAccount(USER, pageMemory);
+    expect(rotated.list.head.accountKeyCommitment).not.toEqual(
+      stale.list.head.accountKeyCommitment
+    );
+    await flowRefusal(
+      approveDevice(
+        laptop,
+        stale,
+        request.approval,
+        { kind: 'scan', code: request.scanCode },
+        recovery.secret
+      ),
+      'key-mismatch'
+    );
+    expect(ready(await loadEncryption(laptop)).list.entries).toHaveLength(
+      rotated.list.entries.length
+    );
+  });
+
   it.each(['before verification', 'before commit'] as const)(
     'binds a revealed comparison to its responding approver %s',
     async (timing) => {

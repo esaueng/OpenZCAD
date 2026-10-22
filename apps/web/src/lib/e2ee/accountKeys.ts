@@ -1605,8 +1605,10 @@ export async function approveDevice(
     // An earlier attempt may have certified the device and then failed
     // before `completeApproval` reached the Worker. Resume from the current
     // list with that certification instead of conflicting on a second append.
-    list = await currentDeviceList(ctx, account);
-    const listed = list.devices.find((d) => d.deviceId === approval.deviceId);
+    const current = await currentDeviceList(ctx, account);
+    const listed = current.devices.find(
+      (d) => d.deviceId === approval.deviceId
+    );
     if (listed) {
       if (
         !sameBytes(listed.signingKey, signingKey) ||
@@ -1617,7 +1619,15 @@ export async function approveDevice(
           'The device list already holds different keys for this device. Do not approve it.'
         );
       }
+      list = current;
       certified = true;
+    } else if (!sameBytes(current.headHash, account.list.headHash)) {
+      // A newer entry may have rotated the account key, and this view's
+      // wraps would seal the old one to the new device.
+      throw new EncryptionFlowError(
+        'key-mismatch',
+        'Your device list changed since this page loaded. Reload and approve again.'
+      );
     }
   }
   if (recoverySecret && !certified) {
