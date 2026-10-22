@@ -174,7 +174,8 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
         draftAngleDeg: 3
       });
       expect(data).toHaveProperty('toFace.faceReference.kind', 'face');
-      // F01 took v29; D01's drawings are v30; I01 projection is v33.
+      // F01 took v29; D01's drawings are v30, D02's annotations v31,
+      // I05's reference images v32.
       expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(33);
     });
 

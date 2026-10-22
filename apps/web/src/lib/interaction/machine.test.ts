@@ -926,6 +926,85 @@ describe('escape chain', () => {
     expect(escapeTarget(state)).toBe('exit-sketch');
   });
 
+  it('selects a relation from its glyph beside the entity selection, and clears both in one press', () => {
+    let state = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    state = interactionReducer(state, {
+      type: 'sketch-select-object',
+      objectId: 'entity_1'
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-constraint-tool',
+      kind: 'parallel'
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-select-constraint',
+      constraintId: 'cons_1'
+    });
+    if (state.mode !== 'sketch') throw new Error('expected sketch mode');
+    expect(state.session.selectedConstraintId).toBe('cons_1');
+    // The entity whose glyphs were showing stays selected; the armed pick
+    // tool gives way to Select.
+    expect(state.session.selectedObjectId).toBe('entity_1');
+    expect(state.session.pendingConstraint).toBeNull();
+    expect(state.session.tool).toBe('select');
+    expect(escapeTarget(state)).toBe('clear-sketch-selection');
+    state = interactionReducer(state, { type: 'escape' });
+    if (state.mode !== 'sketch') throw new Error('expected sketch mode');
+    expect(state.session.selectedConstraintId).toBeNull();
+    expect(state.session.selectedObjectId).toBeNull();
+    expect(escapeTarget(state)).toBe('exit-sketch');
+  });
+
+  it('drops a glyph-picked relation when an entity, a tool or a pick tool is chosen', () => {
+    const picked = () => {
+      const entered = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+      return interactionReducer(entered, {
+        type: 'sketch-select-constraint',
+        constraintId: 'cons_1'
+      });
+    };
+    const constraintOf = (state: ReturnType<typeof picked>) =>
+      state.mode === 'sketch'
+        ? (state.session.selectedConstraintId ?? null)
+        : 'not sketch';
+    expect(
+      constraintOf(
+        interactionReducer(picked(), {
+          type: 'sketch-select-object',
+          objectId: 'entity_2'
+        })
+      )
+    ).toBeNull();
+    expect(
+      constraintOf(
+        interactionReducer(picked(), { type: 'sketch-tool', tool: 'line' })
+      )
+    ).toBeNull();
+    expect(
+      constraintOf(
+        interactionReducer(picked(), {
+          type: 'sketch-constraint-tool',
+          kind: 'equal'
+        })
+      )
+    ).toBeNull();
+    expect(
+      constraintOf(
+        interactionReducer(picked(), {
+          type: 'sketch-circle-mode',
+          mode: 'three-point'
+        })
+      )
+    ).toBeNull();
+    // Outside a sketch there is no relation to pick.
+    expect(
+      interactionReducer(IDLE, {
+        type: 'sketch-select-constraint',
+        constraintId: 'cons_1'
+      })
+    ).toBe(IDLE);
+  });
+
   it('keeps validating face operations locked, then clears a refusal in one press', () => {
     let state = interactionReducer(IDLE, {
       type: 'select-face',

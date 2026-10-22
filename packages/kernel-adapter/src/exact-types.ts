@@ -19,12 +19,15 @@ import type {
 } from '@openzcad/shared';
 import type { TriangleMeshClosure } from './boolean-result-validation';
 import type { RemusLineageState } from './remus-lineage';
+import type { RemusNativeVertexState } from './remus-native-vertices';
 
 export interface ExactShape {
   /** A body can contain several independent solids, as with a pattern. */
   solids: number[];
   /** Exact, handle-bound schema-v5 references plus fail-closed diagnostics. */
   lineage?: RemusLineageState;
+  /** Grid-only construction evidence; native handles stay inside the build. */
+  nativeVertices?: RemusNativeVertexState;
   /**
    * The new-body extrude that produced exactly these solid handles. Only
    * meaningful while `solids` still equals `sweepSource.solids`: any feature

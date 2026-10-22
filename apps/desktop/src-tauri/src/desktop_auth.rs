@@ -14,7 +14,9 @@ const API_ORIGIN: &str = "https://zcad.app";
 const DESKTOP_CLIENT_ID: &str = "openzcad-macos";
 const KEYCHAIN_SERVICE: &str = "app.esau.openzcad";
 const KEYCHAIN_ACCOUNT: &str = "desktop-refresh";
-const MAX_NATIVE_API_BODY_BYTES: usize = 25 * 1024 * 1024;
+// At least `MAX_CLOUD_PROJECT_WRITE_BYTES` (packages/shared): a browser-split
+// document write carries its payloads base64-encoded beside the document.
+const MAX_NATIVE_API_BODY_BYTES: usize = 34 * 1024 * 1024;
 const MAX_NATIVE_API_RESPONSE_BYTES: usize = 50 * 1024 * 1024;
 const TOKEN_REFRESH_SKEW_SECONDS: u64 = 30;
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;

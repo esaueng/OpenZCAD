@@ -189,6 +189,78 @@ const SAMPLES: { [Kind in OperationKind]: OperationOf<Kind> } = {
       offset: 'box_ht'
     }
   },
+  add_datum_plane_v2: {
+    kind: 'add_datum_plane_v2',
+    name: 'Point plane',
+    localId: 'point_plane',
+    definition: {
+      kind: 'three-point',
+      points: [
+        { type: 'point', point: zero },
+        { type: 'point', point: { x: 'width', y: 0, z: 0 } },
+        { type: 'point', point: { x: 0, y: 10, z: 0 } }
+      ],
+      reverseNormal: true
+    }
+  },
+  update_datum_plane: {
+    kind: 'update_datum_plane',
+    featureId: '$lid',
+    definition: {
+      kind: 'parallel-point',
+      source: { type: 'datum', datum: '$point_plane' },
+      point: { type: 'point', point: { x: 0, y: 0, z: 'height' } }
+    }
+  },
+  add_datum_axis: {
+    kind: 'add_datum_axis',
+    name: 'Spin axis',
+    localId: 'spin',
+    definition: {
+      kind: 'two-point',
+      points: [
+        { type: 'point', point: zero },
+        { type: 'point', point: { x: 0, y: 0, z: 10 } }
+      ],
+      reverseDirection: true
+    }
+  },
+  update_datum_axis: {
+    kind: 'update_datum_axis',
+    featureId: '$spin',
+    definition: {
+      kind: 'plane-intersection',
+      sources: [
+        { type: 'canonical', plane: 'XZ', offset: 0 },
+        { type: 'canonical', plane: 'YZ', offset: 0 }
+      ]
+    }
+  },
+  add_datum_revolve: {
+    kind: 'add_datum_revolve',
+    name: 'Turned profile',
+    localId: 'turned',
+    sketchId: '$profile',
+    datum: '$spin',
+    angleDeg: 'turn_angle'
+  },
+  add_datum_pattern: {
+    kind: 'add_datum_pattern',
+    name: 'Ring',
+    localId: 'ring',
+    targetBodyId: '$plate',
+    datum: '$spin',
+    count: 4,
+    angleDeg: 360
+  },
+  add_datum_transform: {
+    kind: 'add_datum_transform',
+    name: 'Turn',
+    targetBodyId: '$plate',
+    datum: '$spin',
+    angleDeg: 90,
+    translation: zero
+  },
   add_datum_sketch: {
     kind: 'add_datum_sketch',
     name: 'Lid sketch',
@@ -306,6 +378,66 @@ describe('patch operation descriptions', () => {
     );
   });
 
+  it('makes datum construction, direction, expressions and axis consumers reviewable', () => {
+    expect(describeOperation(SAMPLES.add_datum_plane_v2)).toBe(
+      'Point plane — plane through (0, 0, 0); (width, 0, 0); (0, 10, 0), normal flipped'
+    );
+    expect(describeOperation(SAMPLES.update_datum_plane)).toBe(
+      'Update Lid — plane parallel to Point Plane, through (0, 0, height)'
+    );
+    expect(describeOperation(SAMPLES.add_datum_axis)).toBe(
+      'Spin axis — axis through (0, 0, 0) and (0, 0, 10), direction flipped'
+    );
+    expect(describeOperation(SAMPLES.update_datum_axis)).toBe(
+      'Update Spin — axis where XZ meets YZ'
+    );
+    expect(describeOperation(SAMPLES.add_datum_revolve)).toBe(
+      'Turned profile — revolve Profile turn_angle° about Spin'
+    );
+    expect(describeOperation(SAMPLES.add_datum_pattern)).toBe(
+      'Ring — circular pattern of Plate, 4 about Spin through 360°'
+    );
+    expect(describeOperation(SAMPLES.add_datum_transform)).toBe(
+      'Turn — rotate Plate 90° about Spin'
+    );
+  });
+
+  it('identifies the measured face, edge and endpoint instead of replacing sources with positions', () => {
+    expect(
+      describeOperation({
+        ...SAMPLES.add_datum_plane_v2,
+        definition: {
+          kind: 'offset',
+          source: measured({
+            type: 'face',
+            bodyId: 'body_plate',
+            faceReference: measured({ lineageName: 'top cap' })
+          }),
+          offset: 'clearance'
+        }
+      })
+    ).toBe('Point plane — plane clearance from face top cap on body_plate');
+    expect(
+      describeOperation({
+        ...SAMPLES.add_datum_axis,
+        definition: {
+          kind: 'two-point',
+          points: [
+            {
+              type: 'edge-vertex',
+              bodyId: 'body_plate',
+              edgeReference: measured({ lineageName: 'side edge' }),
+              end: 1
+            },
+            { type: 'point', point: { x: 0, y: 0, z: 'height' } }
+          ]
+        }
+      })
+    ).toBe(
+      'Spin axis — axis through vertex 2 of side edge on body_plate and (0, 0, height)'
+    );
+  });
+
   it('counts mirrors, shells, offsets and multi-region extrudes as solids', () => {
     expect(
       summarizeOperations([
@@ -322,5 +454,19 @@ describe('patch operation descriptions', () => {
     expect(
       summarizeOperations([SAMPLES.add_datum_plane, SAMPLES.add_datum_split])
     ).toEqual({ parameters: 0, bodies: 2, edits: 1 });
+  });
+
+  it('counts datum revolve and circular pattern as bodies, and datum Move as an edit', () => {
+    expect(
+      summarizeOperations([
+        SAMPLES.add_datum_plane_v2,
+        SAMPLES.update_datum_plane,
+        SAMPLES.add_datum_axis,
+        SAMPLES.update_datum_axis,
+        SAMPLES.add_datum_revolve,
+        SAMPLES.add_datum_pattern,
+        SAMPLES.add_datum_transform
+      ])
+    ).toEqual({ parameters: 0, bodies: 2, edits: 5 });
   });
 });

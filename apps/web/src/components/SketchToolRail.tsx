@@ -67,6 +67,7 @@ import { SKETCH_EDIT_TOOL_SPECS } from '../lib/sketch/edits';
 import { DEFAULT_SKETCH_OFFSET_OPTIONS } from '../lib/sketch/offset';
 import { CONSTRAINT_ICONS } from './constraintIcons';
 import { Tooltip } from './Tooltip';
+import { RelationGlyphFilter } from './RelationGlyphFilter';
 import { useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 
@@ -1340,6 +1341,13 @@ export function SketchToolRail({
                 <option value="hidden">Hidden</option>
               </select>
             </label>
+            <RelationGlyphFilter
+              hidden={settings.hiddenRelationGlyphs}
+              disabled={settings.relationGlyphs === 'hidden'}
+              onChange={(hiddenRelationGlyphs) =>
+                patchSettings({ hiddenRelationGlyphs })
+              }
+            />
           </fieldset>
           <fieldset>
             <legend>Snapping</legend>

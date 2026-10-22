@@ -3,7 +3,11 @@ import {
   importedSourceReferenceOf,
   IMPORTED_MESH_PAYLOAD_CONTENT_TYPE,
   isImportedMeshSourceData,
-  isImportedStepSourceData
+  isImportedStepSourceData,
+  isImportedSourceReference,
+  referenceImagesWithHistory,
+  REFERENCE_IMAGE_CONTENT_TYPES,
+  type ReferenceImageContentType
 } from '@openzcad/shared';
 import type { FeatureId, ProjectDocument, ProjectId } from '@openzcad/shared';
 import { importSourceChecksums } from './sourceBlobClaims';
@@ -25,12 +29,21 @@ export {
 export const LOCAL_ARTIFACT_ID_PREFIX = 'artifact_local_';
 
 export interface LocalOnlyImportSource extends ImportedSourceArchiveIdentity {
-  featureId: FeatureId;
+  /**
+   * The import feature that owns the bytes; null for an I05 reference image,
+   * whose archive is found by content (`kind`, checksum and length) instead.
+   */
+  featureId: FeatureId | null;
   sourceName: string;
   /** Content-addressed reference; the bytes it names live only on this device. */
   checksumSha256: string;
-  /** What the bytes are: a STEP source, or an imported mesh's payload. */
-  kind: 'step-source' | 'mesh-payload';
+  /**
+   * What the bytes are: a STEP source, an imported mesh's payload, or a
+   * reference image's picture.
+   */
+  kind: 'step-source' | 'mesh-payload' | 'reference-image';
+  /** A reference image's picture type; absent for imports. */
+  contentType?: ReferenceImageContentType;
 }
 
 /**
@@ -77,6 +90,27 @@ export function listLocalOnlyImportSources(
       kind
     });
   }
+  // I05 pictures placed in a local project, or whose upload failed: no other
+  // device can draw them until they are archived.
+  for (const image of referenceImagesWithHistory(document)) {
+    if (
+      typeof image.artifactId !== 'string' ||
+      !image.artifactId.startsWith(LOCAL_ARTIFACT_ID_PREFIX) ||
+      !isImportedSourceReference(image.source) ||
+      !(REFERENCE_IMAGE_CONTENT_TYPES as readonly unknown[]).includes(
+        image.contentType
+      )
+    )
+      continue;
+    sources.push({
+      featureId: null,
+      sourceName: image.name,
+      checksumSha256: image.source.checksumSha256,
+      logicalBytes: image.source.logicalBytes,
+      kind: 'reference-image',
+      contentType: image.contentType
+    });
+  }
   return [
     ...new Map(
       sources.map((source) => [
@@ -109,12 +143,21 @@ export function meshPayloadArchive(sourceName: string): {
 
 /** How an import's referenced bytes are archived, by what they are. */
 export function importSourceArchive(
-  source: Pick<LocalOnlyImportSource, 'kind' | 'sourceName'>
+  source: Pick<LocalOnlyImportSource, 'kind' | 'sourceName' | 'contentType'>
 ): {
   fileName: string;
   contentType: string;
-  kind: 'step-import' | 'mesh-payload';
+  kind: 'step-import' | 'mesh-payload' | 'reference-image';
 } {
+  if (source.kind === 'reference-image') {
+    const contentType = source.contentType ?? 'image/png';
+    const extension = contentType === 'image/jpeg' ? '.jpg' : '.png';
+    return {
+      fileName: `${source.sourceName.slice(0, 255 - extension.length)}${extension}`,
+      contentType,
+      kind: 'reference-image'
+    };
+  }
   return source.kind === 'mesh-payload'
     ? meshPayloadArchive(source.sourceName)
     : {
@@ -330,11 +373,12 @@ export interface ArchiveLocalSourcesResult {
 }
 
 /**
- * Uploads every local-only STEP source and mesh payload it can find bytes
- * for, then rewires the owning feature to the finalized artifact id via the
- * injected document edit. The document keeps its content-addressed
- * reference, so a partial failure loses nothing — the untouched features
- * simply stay local-only and the action can run again.
+ * Uploads every local-only STEP source, mesh payload and reference-image
+ * picture it can find bytes for, then rewires the owning feature (or every
+ * image holding those bytes) to the finalized artifact id via the injected
+ * document edit. The document keeps its content-addressed reference, so a
+ * partial failure loses nothing — the untouched sources simply stay
+ * local-only and the action can run again.
  */
 export async function archiveLocalOnlyImportSources(deps: {
   document: ProjectDocument;
@@ -344,13 +388,16 @@ export async function archiveLocalOnlyImportSources(deps: {
   archive(input: {
     fileName: string;
     contentType: string;
-    kind: 'step-import' | 'mesh-payload';
+    kind: 'step-import' | 'mesh-payload' | 'reference-image';
     body: Blob;
     metadata: Record<string, string>;
   }): Promise<string>;
-  /** Applies the artifact id to the feature; false when the edit refused. */
+  /**
+   * Applies the artifact id to the feature (or, with a null feature, to every
+   * reference image holding these bytes); false when the edit refused.
+   */
   applyArtifactId(
-    featureId: FeatureId,
+    featureId: FeatureId | null,
     artifactId: string,
     source: ImportedSourceArchiveIdentity
   ): boolean;

@@ -15,7 +15,7 @@ import {
   decodeProjectStorageBody,
   hydrateProjectStorageSnapshot,
   prepareProjectStorageSnapshot
-} from '../packages/cloudflare-adapters/src/project-object-storage';
+} from '@openzcad/persistence';
 
 const reference = {
   marker: 'openzcad-source-ref' as const,

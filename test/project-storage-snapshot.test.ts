@@ -7,7 +7,7 @@ import {
   hydrateProjectStorageSnapshot,
   prepareProjectStorageSnapshot,
   type ProjectStorageAssetReference
-} from './project-object-storage';
+} from '@openzcad/persistence';
 
 function importedDocument() {
   const manager = new CommandManager(
