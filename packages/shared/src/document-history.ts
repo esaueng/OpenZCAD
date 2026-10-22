@@ -1,5 +1,6 @@
 import type { ProjectDocument, UserId } from './index';
 import { drawingSetError } from './drawings';
+import { objectFolderSetError } from './object-folders';
 import {
   referenceImageSetError,
   type ReferenceImage
@@ -24,7 +25,8 @@ export const HISTORY_FIELDS = [
   'shaprImports',
   'shaprImportOrder',
   'drawings',
-  'referenceImages'
+  'referenceImages',
+  'objectFolders'
 ] as const;
 export type HistoryField = (typeof HISTORY_FIELDS)[number];
 
@@ -159,6 +161,16 @@ export function isDocumentHistory(
           (change.key !== undefined ||
             [change.before, change.after].some(
               (side) => side !== undefined && drawingSetError(side) !== null
+            ))
+        )
+          return false;
+        // The same holds for the U06 folder section.
+        if (
+          change.field === 'objectFolders' &&
+          (change.key !== undefined ||
+            [change.before, change.after].some(
+              (side) =>
+                side !== undefined && objectFolderSetError(side) !== null
             ))
         )
           return false;

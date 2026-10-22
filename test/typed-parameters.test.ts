@@ -35,6 +35,7 @@ describe('typed parameters through the exact build (F05)', () => {
 
   it('builds a box from width + 5 mm and follows the parameter', async () => {
     let document = createProjectDocument('Typed', toUserId('user_f05'));
+    expect(document.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     document = setParameter(document, {
       name: 'width',
       expression: '10',

@@ -48,6 +48,12 @@ export function sketchObjectExposesDimension(
   ) {
     return false;
   }
+  // I01: a linked projection is where its model edge puts it; nothing on
+  // it is a dimension to set.
+  const projection = object.projection as { mode?: unknown } | undefined;
+  if (projection?.mode === 'linked') {
+    return false;
+  }
   if (field === 'startParamDeg' || field === 'endParamDeg') {
     return (
       object.startParamDeg !== undefined && object.endParamDeg !== undefined

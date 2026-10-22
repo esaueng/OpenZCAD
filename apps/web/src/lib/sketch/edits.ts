@@ -212,6 +212,10 @@ export function refuseEditPick(
   if (composite) {
     return composite;
   }
+  // A fillet or chamfer cuts back the picked lines themselves.
+  if (kernelTool(kind) && data.projection?.mode === 'linked') {
+    return `A linked projection follows its model edge; unlink it to ${spec.label.toLowerCase()} it.`;
+  }
   if (kind === 'offset') {
     return data.objectKind === 'line' ||
       data.objectKind === 'arc' ||

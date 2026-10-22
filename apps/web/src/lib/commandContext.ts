@@ -80,6 +80,9 @@ const CONTEXTS: Record<
     applies: [
       'transform',
       'scale',
+      // Rotate about axis starts from the picked body (the Inspector seeds
+      // its target from the selection).
+      'axis-rotate',
       'mirror',
       'shell',
       'split',
@@ -132,4 +135,29 @@ export function toolApplies(context: CommandContext, tool: ToolId): boolean {
 /** Every tool the rail does not carry, in the fold's fixed order. */
 export function remainingTools(): ToolId[] {
   return FOLD_GROUPS.flatMap((group) => group.tools);
+}
+
+const plural = (count: number, one: string, many: string) =>
+  `${count} ${count === 1 ? one : many}`;
+
+/**
+ * The pick in words, for the command bar's empty search ("For 2 edges"), or
+ * null when nothing is picked.
+ */
+export function commandContextLabel(
+  selection: CommandSelection
+): string | null {
+  switch (commandContextKind(selection)) {
+    case 'edges':
+      return plural(selection.edgeCount, 'edge', 'edges');
+    case 'face':
+      return '1 face';
+    case 'region':
+      return plural(selection.regionCount, 'region', 'regions');
+    case 'bodies':
+    case 'body':
+      return plural(selection.bodyCount, 'body', 'bodies');
+    case 'idle':
+      return null;
+  }
 }

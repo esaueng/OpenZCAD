@@ -16,7 +16,8 @@ import {
   type FeatureId,
   type FeatureNode,
   type FeatureWarning,
-  type ProjectDocument
+  type ProjectDocument,
+  type SketchObjectData
 } from '@openzcad/shared';
 import type { ExactBuildResult, ImportedStepDiagnostics } from './exact-types';
 import type {
@@ -248,7 +249,9 @@ function* buildDocumentHistorySteps(
     idleLineageView,
     deferredDirectEditFeatureId,
     kernel,
-    document,
+    // A prefix-restored build resumes with the re-projected geometry its
+    // earlier sketches already published.
+    document: withSketchObjectOverrides(document, result.sketchObjectOverrides),
     scope,
     result,
     importSources,
@@ -294,6 +297,14 @@ function* buildDocumentHistorySteps(
         } else {
           completePreparedFeatureLineage(ctx, feature);
         }
+        if (feature.data.featureKind === 'sketch') {
+          // I01: every later feature reads this sketch's linked projections
+          // where the build just re-projected them.
+          ctx.document = withSketchObjectOverrides(
+            document,
+            result.sketchObjectOverrides
+          );
+        }
         if (firstSuppressed >= 0 && index > firstSuppressed) {
           withholdReferenceRepairs(result, feature);
         }
@@ -328,6 +339,26 @@ function* buildDocumentHistorySteps(
   } finally {
     cancellation?.token.free();
   }
+}
+
+/**
+ * The document as later features must read it: each moved linked sketch
+ * projection (I01) carries its re-projected geometry in place of the stored
+ * one. Without overrides it is the document itself.
+ */
+export function withSketchObjectOverrides(
+  document: ProjectDocument,
+  overrides: ReadonlyMap<string, SketchObjectData> | undefined
+): ProjectDocument {
+  if (!overrides || overrides.size === 0) return document;
+  const nodes = { ...document.nodes };
+  for (const [objectId, data] of overrides) {
+    const node = nodes[objectId];
+    if (node?.kind === 'sketch-object') {
+      nodes[objectId] = { ...node, objectKind: data.objectKind, data };
+    }
+  }
+  return { ...document, nodes };
 }
 
 /** Synchronous replay for callers that do not need worker message delivery. */

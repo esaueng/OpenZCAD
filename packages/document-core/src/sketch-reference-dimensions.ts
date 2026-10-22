@@ -25,6 +25,7 @@ import {
   getParameterScope,
   resolveParamValue
 } from './index';
+import { assertMinimumProjectSchema } from './document-content-schema';
 
 export interface SketchReferenceDimensionAddInput {
   sketchId: SketchId;
@@ -42,17 +43,6 @@ export interface SketchReferenceLabelPositionInput extends SketchReferenceDimens
 const COMPOSITE_REFERENCE_SCHEMA_VERSION = 36;
 const REFERENCE_DISTANCE_MODE_SCHEMA_VERSION = 35;
 
-function supportsReferenceSchema(
-  schemaVersion: number | undefined,
-  minimumVersion: number
-): boolean {
-  return (
-    typeof schemaVersion === 'number' &&
-    Number.isSafeInteger(schemaVersion) &&
-    schemaVersion >= minimumVersion
-  );
-}
-
 function assertReferenceDataSchema(
   data: SketchReferenceDimensionData,
   schemaVersion: number | undefined
@@ -63,22 +53,18 @@ function assertReferenceDataSchema(
       (target) =>
         isSketchCompositeCornerTarget(target) ||
         isSketchCompositeSideTarget(target)
-    ) &&
-    !supportsReferenceSchema(schemaVersion, COMPOSITE_REFERENCE_SCHEMA_VERSION)
-  )
-    throw new Error(
-      'Composite reference targets require project schema v36 or newer.'
-    );
-  if (
-    data.dimensionKind === 'distance' &&
-    data.distanceMode !== undefined &&
-    !supportsReferenceSchema(
-      schemaVersion,
-      REFERENCE_DISTANCE_MODE_SCHEMA_VERSION
     )
   )
-    throw new Error(
-      'Reference distance modes require project schema v35 or newer.'
+    assertMinimumProjectSchema(
+      schemaVersion,
+      COMPOSITE_REFERENCE_SCHEMA_VERSION,
+      'Composite reference targets'
+    );
+  if (data.dimensionKind === 'distance' && data.distanceMode !== undefined)
+    assertMinimumProjectSchema(
+      schemaVersion,
+      REFERENCE_DISTANCE_MODE_SCHEMA_VERSION,
+      'Reference distance modes'
     );
 }
 

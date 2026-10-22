@@ -103,14 +103,15 @@ export function createProjectDiagnosticBundle(
   );
   // Drawing sheets carry title-block text (author, date, drawing number)
   // and add nothing a geometry diagnosis needs: the section and its commands
-  // are left out entirely. Reference images likewise: their names come from
-  // the user's file names, and their checksums and artifact ids identify the
-  // pictures.
+  // are left out entirely. Objects folders likewise carry the user's own
+  // names, and reference-image names, checksums and artifact ids identify the
+  // tracing pictures. Neither section is needed to diagnose geometry.
   const commandLog = document.commandLog
     .filter(
       (command) =>
         command.kind !== 'node.metadata.set' &&
         !command.kind.startsWith('drawing.') &&
+        !command.kind.startsWith('objectFolder.') &&
         !command.kind.startsWith('reference-image.')
     )
     .map(sanitizeCommand);
@@ -133,6 +134,8 @@ export function createProjectDiagnosticBundle(
 
   delete diagnosticDocument.editHistory;
   delete diagnosticDocument.drawings;
+  // Folder names are the user's own words and no rebuild reads them.
+  delete diagnosticDocument.objectFolders;
   delete diagnosticDocument.referenceImages;
 
   const bodies = document.bodyOrder.flatMap((bodyId) => {
