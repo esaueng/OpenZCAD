@@ -968,6 +968,7 @@ describe('device approval', () => {
     );
     const completed = await advanceApprovalAsNewDevice(phone);
     expect(completed.step).toBe('done');
+    expect((await advanceApprovalAsNewDevice({ ...phone })).step).toBe('done');
     expect(ready(await loadEncryption(phone)).deviceStatus).toBe('certified');
   });
 

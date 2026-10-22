@@ -1342,14 +1342,15 @@ export async function advanceApprovalAsNewDevice(
   ctx: E2eeContext
 ): Promise<NewDeviceApprovalStep> {
   const device = await ctx.store.loadDevice(ctx.userId);
-  if (!device?.approval) return { step: 'expired' };
+  if (!device) return { step: 'expired' };
+  if (!device.approval) return completedApprovalElsewhere(ctx);
   let approval: E2eeApprovalRecord;
   try {
     approval = await ctx.api.getApproval(device.approval.id);
   } catch (error) {
     if ((error as { status?: number }).status === 404) {
       await ctx.store.clearApprovalIfCurrent(ctx.userId, device.approval.id);
-      return { step: 'expired' };
+      return completedApprovalElsewhere(ctx);
     }
     throw error;
   }
@@ -1385,6 +1386,22 @@ export async function advanceApprovalAsNewDevice(
     return { step: 'done', state: await finishApproval(ctx, device, approval) };
   }
   return { step: 'waiting', approval, scanCode: await deviceScanCode(device) };
+}
+
+async function completedApprovalElsewhere(
+  ctx: E2eeContext
+): Promise<NewDeviceApprovalStep> {
+  // Another tab can verify and clear the shared approval before this poll.
+  // Refresh verified account state instead of leaving that tab falsely expired.
+  const state = await loadEncryption(ctx);
+  if (
+    state.kind === 'ready' &&
+    state.account.unlocked &&
+    (state.account.deviceStatus === 'certified' ||
+      state.account.deviceStatus === 'approved')
+  )
+    return { step: 'done', state };
+  return { step: 'expired' };
 }
 
 function newDeviceCode(
