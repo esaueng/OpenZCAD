@@ -15,7 +15,8 @@ const WORKSPACE_PACKAGES = [
   'io-stl',
   'persistence',
   'cloudflare-adapters',
-  'crypto'
+  'crypto',
+  'mls'
 ] as const;
 
 const workspaceAliases = Object.fromEntries(

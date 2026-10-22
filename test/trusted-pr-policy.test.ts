@@ -31,23 +31,19 @@ describe('required validation gate', () => {
   const ci = workflow;
 
   it('keeps the immutable runner policy identical to the reviewed source', () => {
-    const pinned = execFileSync(
-      'git',
-      ['show', `${FLEET_CI_PIN}:${FLEET_CI_PATH}`],
-      { encoding: 'utf8' }
-    );
+    const pinned = execFileSync('git', ['show', `${FLEET_CI_PIN}:${FLEET_CI_PATH}`], {encoding:'utf8'});
     expect(
       pinned,
       `Edit a new versioned fleet-ci file, not ${FLEET_CI_PATH}; see docs/runner-routing.md.`
     ).toBe(ci);
   });
 
-  it('pins runner policy independently of PR edits and retains both dependencies', () => {
+  it('pins runner policy independently of PR edits and retains queue trust and validation dependencies', () => {
     expect(caller).toMatch(
       /uses: esaueng\/OpenZCAD\/\.github\/workflows\/fleet-ci(?:-v\d+)?\.yml@[0-9a-f]{40}\n/
     );
     expect(caller).not.toMatch(/secrets: inherit|runs-on:/);
-    expect(caller).toContain('      pull-requests: read\n');
+    expect(caller).toContain('      contents: read\n      pull-requests: read\n');
     expect(ci).toContain(
       'needs: [queue-trust, quality, unit, validation]\n    if: always()'
     );
@@ -92,13 +88,9 @@ describe('required validation gate', () => {
     };
     const direct = job('e2e-tests');
     const pr = job('e2e-tests-pr');
-    expect(direct).toContain(
-      "if: ${{ !cancelled() && (github.event_name != 'pull_request') }}\n"
-    );
+    expect(direct).toContain("if: ${{ !cancelled() && (github.event_name != 'pull_request') }}\n");
     expect(direct).toContain('needs: queue-trust\n');
-    expect(pr).toContain(
-      "if: ${{ !cancelled() && needs.quality.result == 'success' && (github.event_name == 'pull_request') }}\n"
-    );
+    expect(pr).toContain("if: ${{ !cancelled() && needs.quality.result == 'success' && (github.event_name == 'pull_request') }}\n");
     expect(pr).toContain('needs: [queue-trust, quality]\n');
     // Both shard sets run the same matrix and steps, not drifting copies.
     expect(direct).toContain('strategy: &e2e-strategy\n');

@@ -39,6 +39,9 @@ entry to the existing `ci-trusted-main` runner group:
 esaueng/OpenZCAD/.github/workflows/fleet-ci-v2.yml@6cd1c223fe3b3ac49f6379e0999f1b4bbe310f04
 ```
 
+The caller activation landed through #819. Runner access is a separate rollout
+step; the caller pin alone does not establish that a job ran on Jane.
+
 Retain all existing entries and the selected-repository and selected-workflow
 restrictions. The retired `fleet-ci.yml` remains resolvable at its historical
 pin for older branches and reruns; it must not gain access to the migrated slots.
@@ -67,7 +70,7 @@ remain subject to the existing main-push policy; this change authorizes queue
 candidates only. Already queued jobs retain their selected runner.
 
 `scripts/test-merge-queue-routing.py` exercises the embedded policy and gate
-behavior through the existing direct-fleet test entrypoint. The staged policy
+behavior through the existing direct-fleet test entrypoint. The policy
 does not establish live routing; runner-group/label activation and a real
 queue run on Jane remain separate rollout steps.
 
@@ -114,30 +117,34 @@ Local runs keep Playwright's automatic worker count.
 
 ## Activation and rollback
 
-Before validating or merging the activation PR, deploy the controller mapping
-for `ci-server-jane-5gb`, approve the exact v2 entry above, then add
-`ci-server-jane-5gb` to each verified registration: `ci-server-jane-1`,
-`ci-server-jane-2`, and `ci-server-jane-3`. Keep those runner names and their
-individual slot labels. Keep the old shared `ci-server-jane` label absent from
-all three slots. This additive profile selector can be shared with compatible
-Remus workflows; exact workflow restrictions keep legacy callers quarantined.
+One rollout owner coordinates the controller, runner group and shared profile
+across both repositories. Before enabling the profile, verify the controller
+recognizes `ci-server-jane-5gb`, approve the exact v2 entry above, and validate
+each slot's guard. Then add `ci-server-jane-5gb` to each verified registration:
+`ci-server-jane-1`, `ci-server-jane-2`, and `ci-server-jane-3`. Keep those runner
+names and their individual slot labels. Keep the old shared `ci-server-jane`
+label absent from all three slots. Exact workflow restrictions keep legacy
+callers quarantined.
 
 The profile label is shared across both repositories. Keep it withheld until
-both compatible activation callers are ready. If OpenZCAD cuts over first,
-keep Remus `CI_FLEET_ENABLED=false` until its combined caller and auxiliary
-manifest reach main; otherwise the controller can select Jane for a legacy
-Remus caller that still requests the quarantined label. Alternatively merge
+both compatible activation callers and the Remus auxiliary manifest reach
+main. If OpenZCAD cuts over first, keep Remus `CI_FLEET_ENABLED=false` until
+its combined caller and auxiliary manifest reach main; otherwise the
+controller can select Jane for a legacy Remus caller that still requests the
+quarantined label. Alternatively merge
 both activation PRs using hosted CI, then add the profile label and enable
 fleet routing. Older PR branches still need the new caller before using Jane.
 
-Keep `CI_FLEET_ENABLED=true` and let the hosted-first controller publish the
+After rollout qualification, keep OpenZCAD's `CI_FLEET_ENABLED=true` and let
+the hosted-first controller publish the
 canonical target `ci-server-jane` under hosted queue pressure; do not set the
-target to the profile label. No required-check names or protection settings
-change in this activation. Once merged, new queue candidates use the new caller;
+target to the profile label. Preserve all required-check names, App bindings,
+review requirements and queue protections. New queue candidates use the landed
+caller;
 older PR branches must pick up its pin before their runs can use v2.
 
-Run an authorized real application job on each Jane slot, verify cleanup and
-unavailable-only selection, then enable normal routing. Code merge alone does
+Run an authorized real application job on each Jane slot, verify cleanup,
+hosted-first overflow and fork-hosted execution, then enable normal routing. Code merge alone does
 not activate the runner group, repository variables, or controller.
 
 Already queued jobs keep their assignment. A host failure after selection needs

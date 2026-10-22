@@ -185,6 +185,12 @@ import {
   type DrawingAnnotationAddInput,
   type DrawingAnnotationUpdateInput,
   type DrawingAnnotationDeleteInput,
+  addReferenceImage,
+  updateReferenceImage,
+  deleteReferenceImage,
+  type ReferenceImageAddInput,
+  type ReferenceImageUpdateInput,
+  type ReferenceImageDeleteInput,
   resolveParamValue,
   resolveSketchInput,
   type RevolveInput,
@@ -305,7 +311,10 @@ export type CommandKind =
   | 'drawing.view.delete'
   | 'drawing.annotation.add'
   | 'drawing.annotation.update'
-  | 'drawing.annotation.delete';
+  | 'drawing.annotation.delete'
+  | 'reference-image.add'
+  | 'reference-image.update'
+  | 'reference-image.delete';
 
 export interface CommandDefinition<TPayload> {
   kind: CommandKind;
@@ -368,7 +377,10 @@ export type AnyCommand =
   | CommandDefinition<DrawingViewDeleteInput>
   | CommandDefinition<DrawingAnnotationAddInput>
   | CommandDefinition<DrawingAnnotationUpdateInput>
-  | CommandDefinition<DrawingAnnotationDeleteInput>;
+  | CommandDefinition<DrawingAnnotationDeleteInput>
+  | CommandDefinition<ReferenceImageAddInput>
+  | CommandDefinition<ReferenceImageUpdateInput>
+  | CommandDefinition<ReferenceImageDeleteInput>;
 
 function makeCommand<TPayload>(
   kind: CommandKind,
@@ -2016,6 +2028,34 @@ export const commandFactories = {
       label,
       payload,
       (document) => deleteDrawingAnnotation(document, payload)
+    );
+  },
+  addReferenceImage(
+    payload: ReferenceImageAddInput
+  ): CommandDefinition<ReferenceImageAddInput> {
+    return makeCommand(
+      'reference-image.add',
+      `Insert image ${payload.image.name}`,
+      payload,
+      (document) => addReferenceImage(document, payload)
+    );
+  },
+  updateReferenceImage(
+    payload: ReferenceImageUpdateInput,
+    label = 'Edit image'
+  ): CommandDefinition<ReferenceImageUpdateInput> {
+    return makeCommand('reference-image.update', label, payload, (document) =>
+      updateReferenceImage(document, payload)
+    );
+  },
+  deleteReferenceImage(
+    payload: ReferenceImageDeleteInput
+  ): CommandDefinition<ReferenceImageDeleteInput> {
+    return makeCommand(
+      'reference-image.delete',
+      'Delete image',
+      payload,
+      (document) => deleteReferenceImage(document, payload)
     );
   }
 };
@@ -3924,16 +3964,34 @@ export function isDrawingCommandKind(kind: string): boolean {
  * and append or remove drawing commands in the log, and nothing more.
  */
 function drawingOnly(entry: DocumentHistoryEntry | undefined): boolean {
+  return sectionOnly(entry, isDrawingCommandKind, 'drawings');
+}
+
+/** I05: a command that edits reference images and never the model. */
+export function isReferenceImageCommandKind(kind: string): boolean {
+  return kind.startsWith('reference-image.');
+}
+
+/** Whether a history entry edits reference images and nothing else. */
+function referenceImageOnly(entry: DocumentHistoryEntry | undefined): boolean {
+  return sectionOnly(entry, isReferenceImageCommandKind, 'referenceImages');
+}
+
+function sectionOnly(
+  entry: DocumentHistoryEntry | undefined,
+  isSectionKind: (kind: string) => boolean,
+  field: 'drawings' | 'referenceImages'
+): boolean {
   if (!entry?.commandKinds?.length) return false;
-  if (!entry.commandKinds.every(isDrawingCommandKind)) return false;
+  if (!entry.commandKinds.every(isSectionKind)) return false;
   return entry.changes.every((change) => {
-    if (change.field === 'drawings') return true;
+    if (change.field === field) return true;
     if (change.field !== 'commandLog' || change.kind !== 'splice') return false;
     return [...change.before, ...change.after].every(
       (command) =>
         typeof command === 'object' &&
         command !== null &&
-        isDrawingCommandKind(String((command as { kind?: unknown }).kind))
+        isSectionKind(String((command as { kind?: unknown }).kind))
     );
   });
 }
@@ -4008,6 +4066,18 @@ export class CommandManager {
     return drawingOnly(this.history?.entries[this.history.cursor]);
   }
   /**
+   * Whether undo would revert reference-image edits only, which leave the
+   * model — and so its ready geometry — alone.
+   */
+  get undoIsReferenceImageOnly(): boolean {
+    return referenceImageOnly(
+      this.history?.entries[(this.history?.cursor ?? 0) - 1]
+    );
+  }
+  get redoIsReferenceImageOnly(): boolean {
+    return referenceImageOnly(this.history?.entries[this.history.cursor]);
+  }
+  /**
    * Whether undo is available, in a workspace that allows parameter edits
    * only (Tweak) or one that allows anything (Build).
    */
@@ -4074,7 +4144,8 @@ export class CommandManager {
   }
 
   archiveSource(
-    featureId: string,
+    /** The owning feature; null for a reference image, named by `source`. */
+    featureId: string | null,
     artifactId: string,
     source?: ImportedSourceArchiveIdentity
   ): ProjectDocument {
@@ -4458,6 +4529,24 @@ export function replayCommands(
         next = deleteDrawingAnnotation(
           next,
           command.payload as DrawingAnnotationDeleteInput
+        );
+        break;
+      case 'reference-image.add':
+        next = addReferenceImage(
+          next,
+          command.payload as ReferenceImageAddInput
+        );
+        break;
+      case 'reference-image.update':
+        next = updateReferenceImage(
+          next,
+          command.payload as ReferenceImageUpdateInput
+        );
+        break;
+      case 'reference-image.delete':
+        next = deleteReferenceImage(
+          next,
+          command.payload as ReferenceImageDeleteInput
         );
         break;
       default:
