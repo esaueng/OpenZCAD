@@ -96,15 +96,47 @@ export function buildReferenceImageRig(
 }
 
 /**
- * Turns a picture's bytes into a texture. The bytes go straight to the
- * decoder as a Blob — never through a data URL, which the CSP's
+ * The longest side, in pixels, of a reference texture. A picture may be up
+ * to `MAX_REFERENCE_IMAGE_PIXELS` (8192) on a side, and a project may hold
+ * 64 of them: at full size that is 256 MiB of RGBA per picture before
+ * mipmaps, about 16 GiB for a full project. Downsampled to this side, a
+ * picture is at most 16 MiB (about 21 MiB with mipmaps). Display only: the
+ * stored bytes, and the picture's size in the model, are unchanged.
+ */
+export const MAX_REFERENCE_TEXTURE_SIDE = 2048;
+
+/** Decodes run one at a time, so a project never holds many full bitmaps. */
+let decodeQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * Turns a picture's bytes into a texture, downsampled to at most
+ * `MAX_REFERENCE_TEXTURE_SIDE` on its longest side. The bytes go straight to
+ * the decoder as a Blob — never through a data URL, which the CSP's
  * `connect-src` would refuse to fetch — and a decoded bitmap is closed with
  * its texture.
  */
-export async function referenceImageTexture(
-  bytes: Blob
-): Promise<THREE.Texture> {
-  const bitmap = await createImageBitmap(bytes);
+export function referenceImageTexture(bytes: Blob): Promise<THREE.Texture> {
+  const texture = decodeQueue.then(() => decodeReferenceTexture(bytes));
+  decodeQueue = texture.catch(() => undefined);
+  return texture;
+}
+
+async function decodeReferenceTexture(bytes: Blob): Promise<THREE.Texture> {
+  let bitmap = await createImageBitmap(bytes);
+  const scale =
+    MAX_REFERENCE_TEXTURE_SIDE / Math.max(bitmap.width, bitmap.height);
+  if (scale < 1) {
+    const full = bitmap;
+    try {
+      bitmap = await createImageBitmap(full, {
+        resizeWidth: Math.max(1, Math.round(full.width * scale)),
+        resizeHeight: Math.max(1, Math.round(full.height * scale)),
+        resizeQuality: 'high'
+      });
+    } finally {
+      full.close();
+    }
+  }
   const texture = new THREE.Texture(bitmap);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.flipY = false;

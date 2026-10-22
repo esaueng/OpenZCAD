@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import {
   buildReferenceImageRig,
+  MAX_REFERENCE_TEXTURE_SIDE,
+  referenceImageTexture,
   ReferenceTextureCache
 } from './referenceImageRig';
 import type { ReferenceImageDisplay } from '../../lib/referenceImageDisplay';
@@ -212,5 +214,112 @@ describe('ReferenceTextureCache', () => {
     kept.sync([], vi.fn(), vi.fn());
     expect(kept.textures.size).toBe(0);
     expect(disposeLoaded).toHaveBeenCalled();
+  });
+});
+
+describe('referenceImageTexture', () => {
+  interface FakeBitmap {
+    width: number;
+    height: number;
+    closed: boolean;
+    close(): void;
+  }
+  const bitmap = (width: number, height: number): FakeBitmap => ({
+    width,
+    height,
+    closed: false,
+    close() {
+      this.closed = true;
+    }
+  });
+
+  it('downsamples a large picture to the texture side cap and closes the full bitmap', async () => {
+    const full = bitmap(8192, 4096);
+    const calls: [unknown, ImageBitmapOptions | undefined][] = [];
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn(async (source: unknown, options?: ImageBitmapOptions) => {
+        calls.push([source, options]);
+        return options
+          ? bitmap(options.resizeWidth!, options.resizeHeight!)
+          : full;
+      })
+    );
+    try {
+      const texture = await referenceImageTexture(new Blob(['x']));
+      expect(calls[1]).toEqual([
+        full,
+        {
+          resizeWidth: MAX_REFERENCE_TEXTURE_SIDE,
+          resizeHeight: MAX_REFERENCE_TEXTURE_SIDE / 2,
+          resizeQuality: 'high'
+        }
+      ]);
+      expect(full.closed).toBe(true);
+      const shown = texture.image as FakeBitmap;
+      expect([shown.width, shown.height]).toEqual([2048, 1024]);
+      texture.dispose();
+      expect(shown.closed).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps a small picture as decoded', async () => {
+    const small = bitmap(640, 480);
+    const decode = vi.fn(async () => small);
+    vi.stubGlobal('createImageBitmap', decode);
+    try {
+      const texture = await referenceImageTexture(new Blob(['x']));
+      expect(decode).toHaveBeenCalledTimes(1);
+      expect(texture.image).toBe(small);
+      expect(small.closed).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('decodes one picture at a time', async () => {
+    let active = 0;
+    let peak = 0;
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn(async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        active -= 1;
+        return bitmap(8, 8);
+      })
+    );
+    try {
+      const textures = await Promise.all(
+        Array.from({ length: 4 }, () => referenceImageTexture(new Blob(['x'])))
+      );
+      expect(textures).toHaveLength(4);
+      expect(peak).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps decoding after a picture fails to decode', async () => {
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi
+        .fn()
+        .mockRejectedValueOnce(new Error('corrupt'))
+        .mockResolvedValue(bitmap(8, 8))
+    );
+    try {
+      await expect(referenceImageTexture(new Blob(['x']))).rejects.toThrow(
+        'corrupt'
+      );
+      await expect(
+        referenceImageTexture(new Blob(['y']))
+      ).resolves.toBeInstanceOf(THREE.Texture);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
