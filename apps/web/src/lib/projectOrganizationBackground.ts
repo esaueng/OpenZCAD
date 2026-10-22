@@ -187,6 +187,18 @@ export class OrganizationMirrorBackground {
   }
 
   begin(accountId: string | null): OrganizationDiscoveryScope {
+    return this.#begin(accountId, false);
+  }
+
+  /** A failed session lookup or device-local cancellation is not a logout. */
+  confirmSignedOut(): void {
+    this.#begin(null, true);
+  }
+
+  #begin(
+    accountId: string | null,
+    confirmedSignOut: boolean
+  ): OrganizationDiscoveryScope {
     this.#abort?.abort();
     this.#abort = new AbortController();
     this.#accountId = accountId;
@@ -194,7 +206,11 @@ export class OrganizationMirrorBackground {
     this.#cursor = 0;
     let marker = readMarker(this.#storage);
     try {
-      if (this.#storage && (!marker || marker.accountId !== accountId)) {
+      if (
+        this.#storage &&
+        (accountId !== null || confirmedSignOut) &&
+        (!marker || marker.accountId !== accountId || confirmedSignOut)
+      ) {
         marker = { accountId, token: crypto.randomUUID() };
         this.#storage?.setItem(
           ORGANIZATION_SESSION_KEY,
@@ -210,7 +226,7 @@ export class OrganizationMirrorBackground {
       ownsDiscovery: () =>
         !scope.signal.aborted &&
         this.#scope === scope &&
-        (!token || readMarker(this.#storage)?.token === token),
+        readMarker(this.#storage)?.token === token,
       isCurrent: () => accountId !== null && scope.ownsDiscovery()
     };
     this.#scope = scope;

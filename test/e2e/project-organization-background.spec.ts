@@ -199,3 +199,65 @@ test('signing out in another tab cancels queued work and leaves an in-flight edi
   expect(await pending(page, 'proj_background_19')).toBe(true);
   await second.close();
 });
+
+test('a failed startup session lookup in another tab preserves authenticated foreground mirroring', async ({
+  page,
+  context
+}) => {
+  const second = await context.newPage();
+  const calls: { id: string; pinned: boolean }[] = [];
+  for (const tab of [page, second]) {
+    await stubApi(tab);
+    await tab.route('**/api/projects', (route) =>
+      route.fulfill({ json: { projects: rows } })
+    );
+    await tab.route('**/api/projects/proj_background_*', async (route) => {
+      const body = route.request().postDataJSON() as {
+        projectId: string;
+        pinned: boolean;
+      };
+      calls.push({ id: body.projectId, pinned: body.pinned });
+      await route.fulfill({
+        json: {
+          project: {
+            ...rows.find((row) => row.projectId === body.projectId),
+            organization: {
+              status: 'active',
+              pinned: body.pinned,
+              sortOrder: 0
+            }
+          }
+        }
+      });
+    });
+  }
+  await page.goto('/');
+  await expect(page.locator('.start-tile-open')).toHaveCount(20);
+  const marker = await page.evaluate(() =>
+    localStorage.getItem('openzcad.organization-session.v1')
+  );
+  await second.route('**/api/session', (route) =>
+    route.fulfill({
+      status: 503,
+      json: { error: 'Session lookup unavailable' }
+    })
+  );
+  await second.goto('/');
+  await expect(second.getByText('No parts yet', { exact: true })).toBeVisible();
+  await expect(
+    second.getByRole('status', { name: 'Loading library' })
+  ).toHaveCount(0);
+  expect(
+    await second.evaluate(() =>
+      localStorage.getItem('openzcad.organization-session.v1')
+    )
+  ).toBe(marker);
+  await page
+    .getByRole('button', { name: 'Pin Background part 19', exact: true })
+    .click();
+  await expect
+    .poll(() => calls.find((call) => call.id === 'proj_background_19')?.pinned)
+    .toBe(true);
+  await expect.poll(() => pending(page, 'proj_background_19')).toBe(false);
+  await second.close();
+});

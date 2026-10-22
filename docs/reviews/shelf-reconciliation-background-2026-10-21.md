@@ -29,3 +29,12 @@ reads and between rows; all three fail on the prior code. Additional controls
 cover cross-tab account markers, restored/newer metadata and current signed-out
 expiry without granting background network permission. Final source and hosted
 qualification accompany the implementation PR.
+
+## Session lookup uncertainty
+
+A failed startup session lookup no longer publishes a cross-tab sign-out marker
+or admits retention purging. Null-account local discovery and local cancellation
+keep another tab's authenticated scope intact. Only a successful logout or
+confirmed account erasure publishes sign-out; an authenticated account replacement
+still publishes its new generation. A two-tab browser regression verifies that an
+unavailable session lookup leaves an existing tab's foreground pin write working.

@@ -6,6 +6,7 @@ import { toProjectId, toUserId, type ProjectSummary } from '@openzcad/shared';
 import {
   OrganizationMirrorBackground,
   ORGANIZATION_ADMISSION_PREFIX,
+  ORGANIZATION_SESSION_KEY,
   prepareOrganizationMirrors,
   type OrganizationLocks
 } from './projectOrganizationBackground';
@@ -551,6 +552,28 @@ it('rechecks after reading current metadata immediately before the API call', as
   expect(h.host.updateRemote).not.toHaveBeenCalled();
 });
 
+it('does not broadcast an unknown startup session over another tab’s authenticated scope', async () => {
+  const shared = { storage: storage(), locks: locks() };
+  const h = harness(1, shared);
+  const before = shared.storage.getItem(ORGANIZATION_SESSION_KEY);
+  const unknown = new OrganizationMirrorBackground(shared);
+  const local = unknown.begin(null);
+  h.background.accountChanged();
+  expect(h.scope.isCurrent()).toBe(true);
+  expect(shared.storage.getItem(ORGANIZATION_SESSION_KEY)).toBe(before);
+  expect(local.isCurrent()).toBe(false);
+  expect(local.ownsDiscovery()).toBe(true);
+  await mirrorPendingOrganization(
+    'proj_0',
+    h.host,
+    h.queue,
+    h.background.scopeFor('account_A')
+  );
+  expect(h.writes).toHaveLength(1);
+  h.background.dispose();
+  unknown.dispose();
+});
+
 it('observes a second tab account switch even without delivery of a storage event', async () => {
   const shared = { storage: storage(), locks: locks() };
   const h = harness(1_000, shared);
@@ -560,6 +583,30 @@ it('observes a second tab account switch even without delivery of a storage even
   other.begin('account_B');
   await vi.advanceTimersByTimeAsync(120_000);
   expect(h.writes).toHaveLength(1);
+  h.background.dispose();
+  other.dispose();
+});
+
+it('keeps local cancellation private and broadcasts only confirmed sign-out', async () => {
+  const shared = { storage: storage(), locks: locks() };
+  const h = harness(1, shared);
+  const other = new OrganizationMirrorBackground(shared);
+  other.begin('account_A');
+  other.cancel();
+  h.background.accountChanged();
+  expect(h.scope.isCurrent()).toBe(true);
+  other.confirmSignedOut();
+  h.background.accountChanged();
+  expect(h.scope.signal.aborted).toBe(true);
+  expect(h.scope.isCurrent()).toBe(false);
+  await mirrorPendingOrganization(
+    'proj_0',
+    h.host,
+    h.queue,
+    h.background.scopeFor('account_A')
+  );
+  expect(h.writes).toHaveLength(0);
+  expect(h.local.get('proj_0')?.mirrorPending).toBe(true);
   h.background.dispose();
   other.dispose();
 });

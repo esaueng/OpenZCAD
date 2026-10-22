@@ -1732,7 +1732,7 @@ const organizationBackground = new OrganizationMirrorBackground();
  * expired local copies are purged so a temporarily failed cloud mirror cannot
  * resurrect a project after its local retention window closes.
  */
-async function loadProjectSummaries(accountId: string | null): Promise<{
+async function loadProjectSummaries(accountId: string | null, allowPurge = true): Promise<{
   projects: ProjectSummary[];
   remoteReached: boolean;
   /**
@@ -1789,7 +1789,7 @@ async function loadProjectSummaries(accountId: string | null): Promise<{
   // cloud copy can be reconciled. Otherwise a failed mirror could later make
   // an active remote row reappear after the local tombstone was destroyed.
   const purgedProjectIds =
-    scope.ownsDiscovery() && (!signedIn || remote)
+    allowPurge && scope.ownsDiscovery() && (!signedIn || remote)
       ? await purgeExpiredLocalProjects(Date.now(), protectedModels, {
           retainPendingOrganization: true,
           deferPendingProjectIds: remoteIds,
@@ -5323,13 +5323,17 @@ export function App() {
                 status: 'unavailable' as const
               }
         ]);
+        let sessionLookupFailed = false;
         const activeSession = bootCloudFunctionsEnabledRef.current
           ? await timedAsync('startup.session', () =>
-              api.session().catch(() => null)
+              api.session().catch(() => {
+                sessionLookupFailed = true;
+                return null;
+              })
             )
           : null;
         const listedPromise = timedAsync('startup.projectList', () =>
-          loadProjectSummaries(activeSession?.userId ?? null)
+          loadProjectSummaries(activeSession?.userId ?? null, !sessionLookupFailed)
         );
         const lastSyncedVersionPromise = startupProjectId
           ? loadLastSyncedVersion(startupProjectId)
@@ -9349,6 +9353,7 @@ export function App() {
       cloudProjectAutosaveRef.current?.closeProject();
       await cloudSettingsAutosaveRef.current?.flushPending();
       await api.logout();
+      organizationBackground.confirmSignedOut();
       clearAssistantHistory();
       const listed = await loadProjectSummaries(null);
       remoteVersionsRef.current.clear();
@@ -9421,6 +9426,7 @@ export function App() {
 
       const deleted = await api.deleteAccountData(scope, confirmation);
       if (deleted.signedOut) {
+        organizationBackground.confirmSignedOut();
         projectController?.closeProject();
         const listed = await loadProjectSummaries(null);
         remoteVersionsRef.current.clear();
