@@ -491,9 +491,9 @@ function producedBodyIds(feature: FeatureNode): BodyId[] {
 /**
  * Whether any persisted schema-v5 reference anywhere in the document names
  * this boolean as its producer — in a later feature's face/edge selection,
- * in a direct-edit operation, or in a sketch attachment. Such a reference
- * resolves against the lineage the probe enriches, wherever its holder sits,
- * so the probe runs regardless of body bookkeeping.
+ * in a direct-edit operation, a sketch attachment, or a linked projection.
+ * Such a reference resolves against the lineage the probe enriches, wherever
+ * its holder sits, so the probe runs regardless of body bookkeeping.
  */
 function persistedReferenceNamesProducer(
   document: ProjectDocument,
@@ -563,6 +563,13 @@ function persistedReferenceNamesProducer(
       if (node.planeRef.faceReference?.producingFeatureId === producer)
         return true;
     }
+    if (
+      node.kind === 'sketch-object' &&
+      node.data.projection?.mode === 'linked' &&
+      node.data.projection.source.edgeReference.producingFeatureId === producer
+    ) {
+      return true;
+    }
   }
   return false;
 }
@@ -612,8 +619,9 @@ export function booleanLineageDemandKey(demand: BooleanLineageDemand): string {
  * Runs the probe unless it can PROVE nothing downstream consumes face/edge
  * identity from the boolean's result body: a later hole, shell, draft,
  * thicken, fillet, chamfer or direct edit aimed at the result or at any body
- * derived from it; a face-attached sketch on any of those bodies; or any
- * persisted v5 reference naming the boolean anywhere in the document.
+ * derived from it; a face-attached sketch or linked projection on any of
+ * those bodies; or any persisted v5 reference naming the boolean anywhere
+ * in the document.
  * Lineage propagation alone — a later boolean, extrude, transform, mirror,
  * pattern, split or solid offset that merely carries the names forward —
  * extends the descendant closure without forcing the probe; the probe runs
@@ -697,6 +705,13 @@ export function booleanEvolutionProbeNeeded(
       node.kind === 'sketch' &&
       node.planeRef.type === 'face' &&
       descendants.has(node.planeRef.bodyId)
+    ) {
+      return true;
+    }
+    if (
+      node.kind === 'sketch-object' &&
+      node.data.projection?.mode === 'linked' &&
+      descendants.has(node.data.projection.source.bodyId)
     ) {
       return true;
     }
