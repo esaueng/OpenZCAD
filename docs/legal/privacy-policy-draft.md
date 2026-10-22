@@ -103,8 +103,22 @@ We do not receive this data unless you use a cloud feature described below.
 Active local projects stay until you move them to the Trash or clear the
 browser's site data. Local Trash entries become eligible for automatic,
 permanent deletion after 30 days, on a later start-screen refresh, subject to
-cloud-reconciliation deferrals in section 11. Anyone with access to your
-device or browser profile can read this local data.
+cloud-reconciliation deferrals in section 11. This deletes the main local
+project copy; separate interaction diagnostics can retain a rebuildable copy
+as described below. Anyone with access to your device or browser profile can
+read this local data.
+
+**Local interaction diagnostics.** Direct edits, including attempted edits,
+automatically record diagnostic details and, for supported native parametric
+models, a sanitized but rebuildable project document in a separate browser
+IndexedDB database. Captures for documents with imported STEP or mesh
+geometry omit the project document. These copies are
+not removed by deleting the project or purging its Trash entry. They stay
+until newer diagnostic captures evict them or you clear the browser’s site
+data. The store keeps the newest 40 entries and targets 8 MiB, but always
+retains its newest entry even when that entry alone exceeds 8 MiB. There is
+no time-based expiry or in-app clearing control for these diagnostic copies.
+The capture is local; it is not automatically sent to the hosted service.
 
 **Cloud features switch.** Settings → Account → Cloud features is the master
 switch for sign-in, sync, sharing, the AI assistant and analytics. It is on by
@@ -156,10 +170,11 @@ Live collaboration is a separate setting. For an open cloud project, leaving
 Collaboration enabled (the default) sends document edits to its collaboration
 room, even when Cloud autosave is off and even when nobody else is present.
 The room keeps its own readable document and snapshots. Turn Collaboration
-off too if you do not want that live synchronization, or turn Cloud features
-off to stop requests to the OpenZCAD API from that device. A project you made
-while signed out stays on that device until you choose to add it to your
-account.
+off too if you do not want that live synchronization. Turning Cloud features
+off stops the listed cloud paths, subject to the imported-source download
+exception in section 3; it does not guarantee that the device makes no
+OpenZCAD API requests. A project you made while signed out stays on that
+device until you choose to add it to your account.
 
 > **Reviewer trace (2026-10-22).** `App.tsx` admits a cloud project's room
 > independently of `files.cloudAutosave`; `useCollaboration.ts` sends changed
@@ -331,6 +346,7 @@ requests are handled and whether users are notified.]`
 | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Active local projects and settings  | Until you delete them or clear your browser's site data; moving a project to the Trash starts the separate retention window below                                                                                                                                                                                                                                                                                                               |
 | Local projects in the Trash         | Eligible for permanent deletion after 30 days, on a later start-screen refresh. When that refresh reconciles cloud copies, an unavailable cloud listing defers local purging, and failed organization updates exclude the affected projects. Without a later successful refresh, entries can remain longer                                                                                                                                      |
+| Local interaction diagnostics       | Direct-edit captures can include a sanitized, rebuildable native parametric project document; captures of imported STEP/mesh documents omit it. Kept separately after project deletion or Trash expiry until later captures evict them or browser site data is cleared. Newest 40 entries and an 8 MiB target, with the newest entry retained even if it alone exceeds the byte target. No time-based expiry or in-app clearing control         |
 | Cloud projects                      | Until you delete them                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Projects in the Trash               | Eligible for permanent deletion, with their files, revisions and room, after 30 days. Project-list requests purge at most 100 eligible projects per pass; a backlog needs later requests, and without a return visit they may remain indefinitely                                                                                                                                                                                               |
 | Saved revisions                     | Normally pruned to the newest 50 after a save. Pruning failures do not fail the save and are retried only on a later save; without one, older revisions can remain indefinitely                                                                                                                                                                                                                                                                 |
@@ -399,8 +415,11 @@ cloud data. Each choice asks you to type your email address to confirm.
 
 Deletion does not touch projects stored in your browser; delete those from
 the Trash on the start screen. Data already sent to an AI provider, and
-aggregate analytics totals, cannot be recalled by us. Recovery copies expire
-as described in [section 11](#11-how-long-we-keep-data).
+aggregate analytics totals, cannot be recalled by us. Local interaction
+diagnostics may retain rebuildable project copies after local deletion;
+clear browser site data to remove those copies. Recovery copies may remain
+under the unverified retention arrangements described in
+[section 11](#11-how-long-we-keep-data).
 
 **Your rights.** Depending on where you live, you may have the right to:
 
