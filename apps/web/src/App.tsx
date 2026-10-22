@@ -1281,6 +1281,8 @@ import {
   deleteLocalProject,
   isLocalStorageBlockedError,
   listLocalProjectOrganizations,
+  listLocalProjectOrganizationSnapshots,
+  loadLocalProjectOrganizationSnapshot,
   listLocalProjects,
   listLocalSaveStateIds,
   loadLastSyncedVersion,
@@ -1292,20 +1294,26 @@ import {
   purgeExpiredLocalProjects,
   restoreDuplicateDerivedProjection,
   saveLastSyncedVersion,
-  listPendingOrganizationMirrors,
   saveLocalProjectOrganization,
+  saveLocalProjectOrganizationIfCurrent,
   saveProjectMeasurements,
   saveProjectThumbnail,
   saveLocalProject,
   saveLocalSaveStates,
   sha256Hex,
-  withMatchingLocalDerived
+  withMatchingLocalDerived,
+  type LocalProjectOrganizationSnapshot
 } from './lib/localProjectStore';
 import {
   cacheCopyPictures,
   cacheCopySources
 } from './lib/sourceBlobClaims';
-import { reconcileRemoteOrganizations } from './lib/projectOrganizationMirror';
+import {
+  mirrorPendingOrganization,
+  mirrorPendingReorder,
+  reconcileRemoteOrganizations,
+  type OrganizationMirrorHost
+} from './lib/projectOrganizationMirror';
 import {
   applyLocalProjectOrganizations,
   mergeProjectSummaries,
@@ -1700,6 +1708,18 @@ interface HydrateOptions {
   activeProjectSince?: ActiveProjectSnapshot;
 }
 
+const organizationMirrorHost: OrganizationMirrorHost = {
+  readLocal: loadLocalProjectOrganizationSnapshot,
+  saveLocal: saveLocalProjectOrganizationIfCurrent,
+  updateRemote: (projectId, organization) =>
+    api.updateProject({
+      projectId: toProjectId(projectId),
+      status: organization.status,
+      pinned: organization.pinned,
+      sortOrder: organization.sortOrder
+    }).then(() => undefined)
+};
+
 /**
  * Every project this device can reach. Device shelf state is reconciled before
  * expired local copies are purged so a temporarily failed cloud mirror cannot
@@ -1727,34 +1747,24 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
       }
       return fallback;
     };
-  const [local, localOrganizations, pendingMirrors, remote] = await Promise.all(
+  const [local, organizationSnapshots, remote] = await Promise.all(
     [
       listLocalProjects().catch(unavailableAs<ProjectSummary[]>([])),
-      listLocalProjectOrganizations().catch(
-        unavailableAs(new Map<string, ProjectOrganization>())
+      listLocalProjectOrganizationSnapshots().catch(
+        unavailableAs(new Map<string, LocalProjectOrganizationSnapshot>())
       ),
-      listPendingOrganizationMirrors().catch(unavailableAs(new Set<string>())),
       signedIn ? api.listProjects().catch(() => null) : Promise.resolve(null)
     ]
+  );
+  const localOrganizations = new Map(
+    [...organizationSnapshots].map(([id, snapshot]) => [id, snapshot.organization])
   );
   const remoteProjects = remote?.projects ?? [];
   const mirrorFailures = remote
     ? await reconcileRemoteOrganizations(
-        localOrganizations,
-        pendingMirrors,
+        organizationSnapshots,
         remoteProjects,
-        {
-          saveLocal: saveLocalProjectOrganization,
-          updateRemote: (projectId, organization) =>
-            api
-              .updateProject({
-                projectId: toProjectId(projectId),
-                status: organization.status,
-                pinned: organization.pinned,
-                sortOrder: organization.sortOrder
-              })
-              .then(() => undefined)
-        }
+        organizationMirrorHost
       )
     : new Set<string>();
   // While signed in but offline, defer irreversible local purging until the
@@ -1768,9 +1778,14 @@ async function loadProjectSummaries(signedIn: boolean): Promise<{
       : [];
   const remoteIds = new Set(remoteProjects.map((project) => project.projectId));
   const purged = new Set(purgedProjectIds);
+  const settledOrganizations = remote
+    ? await listLocalProjectOrganizations().catch(
+        unavailableAs(localOrganizations)
+      )
+    : localOrganizations;
   const projects = applyLocalProjectOrganizations(
     mergeProjectSummaries(local, remoteProjects),
-    localOrganizations
+    settledOrganizations
   ).filter(
     (project) =>
       !purged.has(project.projectId) || remoteIds.has(project.projectId)
@@ -10393,15 +10408,9 @@ export function App() {
     if (!session) {
       return;
     }
-    await api
-      .updateProject({
-        projectId: toProjectId(projectId),
-        status: organization.status,
-        pinned: organization.pinned,
-        sortOrder: organization.sortOrder
-      })
-      .then(() => saveLocalProjectOrganization(projectId, organization))
-      .catch(() => undefined);
+    await mirrorPendingOrganization(projectId, organizationMirrorHost).catch(
+      () => undefined
+    );
   }
 
   async function handleMoveProjectToShelf(
@@ -10471,16 +10480,12 @@ export function App() {
           .sort(compareProjectSummaries)
       );
       if (session) {
-        await api
-          .reorderProjects({ projectIds: projectIds.map(toProjectId) })
-          .then(() =>
-            Promise.all(
-              [...organizations].map(([projectId, organization]) =>
-                saveLocalProjectOrganization(projectId, organization)
-              )
-            )
-          )
-          .catch(() => undefined);
+        await mirrorPendingReorder(
+          projectIds,
+          organizationMirrorHost,
+          async (ids) =>
+            (await api.reorderProjects({ projectIds: ids.map(toProjectId) })).projects
+        ).catch(() => undefined);
       }
     } catch (error) {
       setStatus(errorMessage(error, 'Could not reorder the projects.'));
