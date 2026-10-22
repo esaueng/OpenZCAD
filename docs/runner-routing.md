@@ -122,6 +122,14 @@ individual slot labels. Keep the old shared `ci-server-jane` label absent from
 all three slots. This additive profile selector can be shared with compatible
 Remus workflows; exact workflow restrictions keep legacy callers quarantined.
 
+The profile label is shared across both repositories. Keep it withheld until
+both compatible activation callers are ready. If OpenZCAD cuts over first,
+keep Remus `CI_FLEET_ENABLED=false` until its combined caller and auxiliary
+manifest reach main; otherwise the controller can select Jane for a legacy
+Remus caller that still requests the quarantined label. Alternatively merge
+both activation PRs using hosted CI, then add the profile label and enable
+fleet routing. Older PR branches still need the new caller before using Jane.
+
 Keep `CI_FLEET_ENABLED=true` and let the hosted-first controller publish the
 canonical target `ci-server-jane` under hosted queue pressure; do not set the
 target to the profile label. No required-check names or protection settings
