@@ -1,7 +1,11 @@
 import { lockAccount } from './unlockedKeys';
-import { indexedDbDeviceStore } from './deviceStore';
+import { indexedDbDeviceStore, type DeviceKeyStore } from './deviceStore';
 import { createE2eeApi } from './e2eeApi';
 import { confirmApprovalCancellation } from './approvalCancellation';
+import {
+  beginKeySessionTeardown,
+  finishKeySessionTeardown
+} from './keySession';
 
 export interface DeviceKeySignOutChoice {
   readonly userId: string;
@@ -19,10 +23,21 @@ export async function endKeySession(
   keepDevice: boolean,
   requireCurrentSession: () => void
 ): Promise<void> {
+  const store = indexedDbDeviceStore();
+  await store.withDeviceLock(userId, () =>
+    clearDeviceUnderLock(store, userId, keepDevice, requireCurrentSession)
+  );
+}
+
+async function clearDeviceUnderLock(
+  store: DeviceKeyStore,
+  userId: string,
+  keepDevice: boolean,
+  requireCurrentSession: () => void
+): Promise<void> {
   requireCurrentSession();
   lockAccount(userId);
   if (!keepDevice) {
-    const store = indexedDbDeviceStore();
     const device = await store.loadDevice(userId);
     requireCurrentSession();
     if (device?.approval) {
@@ -34,6 +49,7 @@ export async function endKeySession(
         requireCurrentSession
       );
     }
+    requireCurrentSession();
     await store.deleteDevice(userId);
   }
 }
@@ -54,9 +70,31 @@ export async function signOutAfterSaving(input: {
   requireCurrentSession();
   await input.savePending();
   requireCurrentSession();
-  if (input.userId && input.keepDevice !== undefined) {
-    await endKeySession(input.userId, input.keepDevice, requireCurrentSession);
+  const teardown = beginKeySessionTeardown();
+  try {
+    if (input.userId && input.keepDevice !== undefined) {
+      const store = indexedDbDeviceStore();
+      const userId = input.userId;
+      const keepDevice = input.keepDevice;
+      await store.withDeviceLock(userId, async () => {
+        await clearDeviceUnderLock(
+          store,
+          userId,
+          keepDevice,
+          requireCurrentSession
+        );
+        requireCurrentSession();
+        await input.revokeSession();
+        // Invalidate queued writers before releasing the shared device lock.
+        finishKeySessionTeardown(teardown.operation, true);
+      });
+    } else {
+      requireCurrentSession();
+      await input.revokeSession();
+      finishKeySessionTeardown(teardown.operation, true);
+    }
+  } catch (error) {
+    finishKeySessionTeardown(teardown.operation, false);
+    throw error;
   }
-  requireCurrentSession();
-  await input.revokeSession();
 }

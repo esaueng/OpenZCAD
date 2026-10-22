@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore
+} from 'react';
 import {
   Copy,
   Download,
@@ -44,6 +51,14 @@ import {
 } from '../lib/e2ee/deviceStore';
 import { encodeQr, qrSvgPath } from '../lib/e2ee/qrCode';
 import { invalidateAccountKeyReads } from '../lib/e2ee/unlockedKeys';
+import {
+  getKeySessionRevision,
+  getKeySessionVersion,
+  isCurrentKeySession,
+  isKeySessionActive,
+  requestKeySessionRecheck,
+  subscribeKeySessionVersion
+} from '../lib/e2ee/keySession';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 import '../styles/components/encryption.css';
 
@@ -56,7 +71,26 @@ import '../styles/components/encryption.css';
  * section opens. No project is encrypted yet.
  */
 export function EncryptionSettings({ userId }: { userId: string }) {
-  return <AccountEncryptionSettings key={userId} userId={userId} />;
+  const version = useSyncExternalStore(
+    subscribeKeySessionVersion,
+    getKeySessionVersion,
+    () => 0
+  );
+  if (!isKeySessionActive())
+    return (
+      <Group>
+        <Notice
+          tone="warning"
+          role="status"
+          action={<RetryButton onClick={requestKeySessionRecheck} />}
+        >
+          Encryption keys are locked while the account session is checked.
+        </Notice>
+      </Group>
+    );
+  return (
+    <AccountEncryptionSettings key={`${userId}:${version}`} userId={userId} />
+  );
 }
 
 function AccountEncryptionSettings({ userId }: { userId: string }) {
@@ -64,15 +98,15 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
     () => ({ userId, active: false, generation: 0 }),
     [userId]
   );
-  const ctx = useMemo<E2eeContext>(
-    () => ({
+  const ctx = useMemo<E2eeContext>(() => {
+    const revision = getKeySessionRevision();
+    return {
       userId,
       api: createE2eeApi(),
       store: indexedDbDeviceStore(),
-      isCurrent: () => lifetime.active
-    }),
-    [userId, lifetime]
-  );
+      isCurrent: () => lifetime.active && isCurrentKeySession(revision)
+    };
+  }, [userId, lifetime]);
   const [state, setState] = useState<EncryptionState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

@@ -308,6 +308,14 @@ import {
   STALE_CHUNK_MESSAGE
 } from './lib/staleChunk';
 import { lockAccountsExcept } from './lib/e2ee/unlockedKeys';
+import {
+  allowKeySession,
+  announceKeySessionChange,
+  blockKeySession,
+  getKeySessionRevision,
+  subscribeKeySession,
+  type KeySessionEvent
+} from './lib/e2ee/keySession';
 import type { DeviceKeySignOutChoice } from './lib/e2ee/signOut';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
@@ -2827,6 +2835,67 @@ export function App() {
   });
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  const keySessionEventRef = useRef<(event: KeySessionEvent) => void>(() => {});
+  const keySessionListenerMountedRef = useRef(false);
+  keySessionEventRef.current = (event) => {
+    if (
+      event.phase === 'prepare' ||
+      event.phase === 'ready' ||
+      event.phase === 'blocked' ||
+      (!event.remote && event.phase !== 'retry') ||
+      !cloudFunctionsEnabledRef.current
+    )
+      return;
+    const observed = sessionRef.current;
+    const revision = event.revision;
+    // The notice never grants access or identifies a new account. Only a fresh
+    // server read may reopen keys, and an intervening notice/login wins.
+    void Promise.resolve()
+      .then(() => api.session())
+      .then((active) => {
+        if (
+          !keySessionListenerMountedRef.current ||
+          getKeySessionRevision() !== revision ||
+          sessionRef.current !== observed ||
+          !cloudFunctionsEnabledRef.current
+        )
+          return;
+        if (active && observed && active.userId === observed.userId) {
+          sessionRef.current = active;
+          setSession(active);
+          allowKeySession(revision);
+        } else {
+          cloudProjectAutosaveRef.current?.closeProject();
+          endCloudSettingsSession();
+          setCloudAvailable(false);
+          setCloudProjectIds(new Set());
+          setAccountProjectListReached(false);
+          if (active)
+            setSettingsMessage(
+              'The account changed in another tab. Reconnect to continue.'
+            );
+        }
+      })
+      .catch(() => {
+        if (
+          keySessionListenerMountedRef.current &&
+          getKeySessionRevision() === revision
+        )
+          setSettingsMessage(
+            'Encryption keys are locked. Refresh the cloud connection to check this session.'
+          );
+      });
+  };
+  useEffect(() => {
+    keySessionListenerMountedRef.current = true;
+    const unsubscribe = subscribeKeySession((event) =>
+      keySessionEventRef.current(event)
+    );
+    return () => {
+      keySessionListenerMountedRef.current = false;
+      unsubscribe();
+    };
+  }, []);
   // End-to-end encryption keys unlocked in this page belong to one session:
   // however it ends (sign-out, expiry, offline mode, account deletion, or a
   // different account), no other account's keys stay in memory.
@@ -5273,6 +5342,7 @@ export function App() {
                 status: 'unavailable' as const
               }
         ]);
+        const keySessionRevision = getKeySessionRevision();
         const activeSession = bootCloudFunctionsEnabledRef.current
           ? await timedAsync('startup.session', () =>
               api.session().catch(() => null)
@@ -5371,6 +5441,10 @@ export function App() {
         setCloudProjectIds(listed.cloudProjectIds);
         setAccountProjectListReached(listed.remoteReached);
         setCloudAvailable(canUseCloud);
+        if (getKeySessionRevision() === keySessionRevision) {
+          if (activeSession) allowKeySession(keySessionRevision);
+          else blockKeySession();
+        }
         sessionRef.current = activeSession;
         setSession(activeSession);
         setAuthConfig(currentAuth.config);
@@ -8929,6 +9003,7 @@ export function App() {
     if (!cloudFunctionsEnabledRef.current) {
       return;
     }
+    const keySessionRevision = getKeySessionRevision();
     setAuthConfigStatus('loading');
     void api
       .health()
@@ -8941,7 +9016,10 @@ export function App() {
         .catch(() => ({ config: null, status: 'unavailable' as const })),
       api.session().catch(() => null)
     ]);
-    if (!cloudFunctionsEnabledRef.current) {
+    if (
+      !cloudFunctionsEnabledRef.current ||
+      getKeySessionRevision() !== keySessionRevision
+    ) {
       return;
     }
     setAuthConfig(nextAuth.config);
@@ -8949,6 +9027,7 @@ export function App() {
     sessionRef.current = activeSession;
     setSession(activeSession);
     if (!activeSession) {
+      blockKeySession();
       endCloudSettingsSession();
       setSettingsMessage(
         nextAuth.status === 'ready'
@@ -8959,6 +9038,7 @@ export function App() {
       );
       return;
     }
+    allowKeySession(keySessionRevision);
     setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
     try {
       const [remoteSettings, collaborationCapabilities] = await Promise.all([
@@ -9154,6 +9234,7 @@ export function App() {
   }
 
   async function activateCloudSession(activeSession: AuthSession) {
+    const keySessionRevision = announceKeySessionChange();
     const [remoteSettings, listed, collaborationCapabilities] =
       await Promise.all([
         api.getSettings(),
@@ -9162,8 +9243,11 @@ export function App() {
           .collaborationCapabilities()
           .catch(() => DISABLED_COLLABORATION_ROLLOUT)
       ]);
+    if (getKeySessionRevision() !== keySessionRevision)
+      throw new Error('The signed-in account changed. Reconnect to continue.');
     sessionRef.current = activeSession;
     setSession(activeSession);
+    allowKeySession(keySessionRevision);
     accountSettingsRef.current = remoteSettings;
     setAccountSettings(remoteSettings);
     setCollaborationRollout(collaborationCapabilities);

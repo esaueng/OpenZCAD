@@ -43,7 +43,7 @@ export interface DeviceKeyStore {
   saveDevice(device: StoredDevice): Promise<void>;
   /** Keep the existing private keys when setup races or a response is lost. */
   getOrCreateDevice(candidate: StoredDevice): Promise<StoredDevice>;
-  /** Serialize approval creation across contexts sharing this device store. */
+  /** Serialize setup, enrollment, approval and teardown through their server boundary. */
   withDeviceLock<T>(userId: string, run: () => Promise<T>): Promise<T>;
   /** Refuse to overwrite keys or approval state changed by another context. */
   replaceDeviceIfCurrent(

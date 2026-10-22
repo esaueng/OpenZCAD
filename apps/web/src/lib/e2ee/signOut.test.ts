@@ -99,6 +99,55 @@ describe('saving before device-key sign-out', () => {
     expect(revokeSession).toHaveBeenCalledOnce();
   });
 
+  it('keeps another key writer behind deletion and server revocation', async () => {
+    const { userId, store, cancel } = await pendingApproval();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    cancel.mockImplementation(async () => {
+      entered();
+      await held;
+      return { ok: true };
+    });
+    let sessionLive = true;
+    let writerStartedBeforeLogout: boolean | undefined;
+    const signingOut = signOutAfterSaving({
+      userId,
+      keepDevice: false,
+      isCurrentSession: () => sessionLive,
+      savePending: async () => {},
+      revokeSession: async () => {
+        sessionLive = false;
+      }
+    });
+    await started;
+    const writing = store.withDeviceLock(userId, async () => {
+      writerStartedBeforeLogout = sessionLive;
+      if (sessionLive)
+        throw new Error('A key writer ran before sign-out finished');
+    });
+    const outcome = writing.then(
+      () => null,
+      (error: unknown) => error
+    );
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(writerStartedBeforeLogout).toBeUndefined();
+    } finally {
+      release();
+      await signingOut;
+    }
+    expect(await outcome).toBeNull();
+    expect(writerStartedBeforeLogout).toBe(false);
+    expect(await store.loadDevice(userId)).toBeNull();
+  });
+
   it('keeps the approval ID and keys for retry when cancellation fails', async () => {
     const { userId, store, cancel } = await pendingApproval();
     cancel.mockRejectedValueOnce(new Error('Cancellation unavailable'));
@@ -303,9 +352,7 @@ describe('saving before device-key sign-out', () => {
           expect((await store.loadDevice(userId)) !== null).toBe(
             keepDevice !== false
           );
-          expect(unlockedAccount(userId) !== undefined).toBe(
-            keepDevice === undefined
-          );
+          expect(unlockedAccount(userId)).toBeUndefined();
           order.push('revoked');
         }
       });

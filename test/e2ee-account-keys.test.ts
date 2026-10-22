@@ -2961,35 +2961,29 @@ describe('setup device persistence', () => {
     });
     await started;
     const winningKeys = await first.store.loadDevice(USER);
-    let secondEntered!: () => void;
-    let secondRelease!: () => void;
-    const secondStarted = new Promise<void>((resolve) => {
-      secondEntered = resolve;
-    });
-    const secondReleased = new Promise<void>((resolve) => {
-      secondRelease = resolve;
-    });
+    const secondRequest = vi.fn(api.setup);
     const second = {
       ...device(srv),
       store: first.store,
       api: {
         ...api,
-        setup: async (body: E2eeSetupRequest) => {
-          secondEntered();
-          await secondReleased;
-          return api.setup(body);
-        }
+        setup: secondRequest
       }
     };
     const secondSetup = setUpEncryption(second, {
       recoverySecret: secret,
       label: 'Second tab'
     });
-    await secondStarted;
+    const secondOutcome = secondSetup.then(
+      () => null,
+      (error: unknown) => error
+    );
+    await Promise.resolve();
+    expect(secondRequest).not.toHaveBeenCalled();
     release();
     await pending;
-    secondRelease();
-    await expect(secondSetup).rejects.toBeInstanceOf(E2eeApiError);
+    expect(await secondOutcome).toBeInstanceOf(EncryptionFlowError);
+    expect(secondRequest).not.toHaveBeenCalled();
     lockAccount(USER);
     expect((await first.store.loadDevice(USER))?.deviceId).toBe(
       winningKeys?.deviceId

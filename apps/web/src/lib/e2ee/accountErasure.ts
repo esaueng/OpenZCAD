@@ -1,5 +1,6 @@
 import { indexedDbDeviceStore, type DeviceKeyStore } from './deviceStore';
 import { lockAccount } from './unlockedKeys';
+import { confirmKeySessionEnded } from './keySession';
 
 /** Only the successful, explicitly requested erasure may reset local trust. */
 export async function eraseAccountWithKeyCleanup<
@@ -24,6 +25,7 @@ export async function eraseAccountWithKeyCleanup<
     // Synchronous: neither a failed IndexedDB write nor a failed library read
     // may leave the erased account's raw key in this page.
     if (input.userId) lockAccount(input.userId);
+    confirmKeySessionEnded();
     try {
       if (input.isCurrentSession()) input.onSignedOut();
     } finally {

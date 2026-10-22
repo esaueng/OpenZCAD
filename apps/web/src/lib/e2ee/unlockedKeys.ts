@@ -5,6 +5,8 @@
  * (sign-out, expiry, offline mode, account deletion, a different account)
  * without pulling the key code into the entry chunk.
  */
+import { subscribeKeySession } from './keySession';
+
 export interface UnlockedAccount {
   readonly generation: number;
   /** Hex of the device list's account-key commitment. */
@@ -61,3 +63,7 @@ export function lockAccountsExcept(keep: string | null): void {
     if (userId !== keep) lockAccount(userId);
   }
 }
+
+subscribeKeySession((event) => {
+  if (event.phase !== 'ready') lockAccountsExcept(null);
+});

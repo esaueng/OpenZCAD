@@ -913,12 +913,30 @@ async function acceptWrite(
 
 // --- Setup, enrolment, removal and replacement ----------------------------
 
+function requireActiveKeyContext(ctx: E2eeContext): void {
+  if (ctx.isCurrent && !ctx.isCurrent())
+    throw new EncryptionFlowError(
+      'invalid-request',
+      'The account session ended.'
+    );
+}
+
 /**
  * First setup: a new identity, recovery target, account key and encryption
  * key, with this device certified in a fresh device list. The recovery key
  * must have been shown to the user and confirmed before this is called.
  */
 export async function setUpEncryption(
+  ctx: E2eeContext,
+  options: { recoverySecret: Uint8Array; label: string }
+): Promise<EncryptionState> {
+  return ctx.store.withDeviceLock(ctx.userId, async () => {
+    requireActiveKeyContext(ctx);
+    return setUpEncryptionLocked(ctx, options);
+  });
+}
+
+async function setUpEncryptionLocked(
   ctx: E2eeContext,
   options: { recoverySecret: Uint8Array; label: string }
 ): Promise<EncryptionState> {
@@ -930,9 +948,9 @@ export async function setUpEncryption(
       'This browser already trusts an encryption identity. Recover it instead of setting up a replacement.'
     );
   }
-  const device = await ctx.store.getOrCreateDevice(
-    await newStoredDevice(ctx, options.label)
-  );
+  const candidate = await newStoredDevice(ctx, options.label);
+  requireActiveKeyContext(ctx);
+  const device = await ctx.store.getOrCreateDevice(candidate);
   const created = await newIdentity(
     ctx,
     options.recoverySecret,
@@ -941,6 +959,7 @@ export async function setUpEncryption(
   );
   // Keys first: a setup that reaches the server without them still opens
   // with the recovery key, while the reverse would strand this device.
+  requireActiveKeyContext(ctx);
   const response = await ctx.api.setup({
     identityKey: b64(created.identityKey),
     entry: b64(created.signed.entry),
@@ -965,6 +984,18 @@ export async function enrollWithRecoveryKey(
   recoverySecret: Uint8Array,
   label: string
 ): Promise<EncryptionState> {
+  return ctx.store.withDeviceLock(ctx.userId, async () => {
+    requireActiveKeyContext(ctx);
+    return enrollWithRecoveryKeyLocked(ctx, account, recoverySecret, label);
+  });
+}
+
+async function enrollWithRecoveryKeyLocked(
+  ctx: E2eeContext,
+  account: AccountView,
+  recoverySecret: Uint8Array,
+  label: string
+): Promise<EncryptionState> {
   if (
     account.deviceStatus === 'certified' &&
     account.persistedPin &&
@@ -979,57 +1010,85 @@ export async function enrollWithRecoveryKey(
     account,
     recoverySecret
   );
-  if (account.deviceStatus === 'certified') {
-    try {
-      // A replacement may have reached the server while its local pin CAS
-      // lost a race. The saved recovery key can explicitly trust that new
-      // identity without trying to certify this already-listed device again.
-      await persistDeviceList(ctx, account.list, {
-        replaceIdentityFrom: account.persistedPin
-      });
-      return loadEncryption(ctx);
-    } finally {
-      accountKey.fill(0);
+  try {
+    if (account.deviceStatus === 'certified') {
+      try {
+        // A replacement may have reached the server while its local pin CAS
+        // lost a race. The saved recovery key can explicitly trust that new
+        // identity without trying to certify this already-listed device again.
+        await persistDeviceList(ctx, account.list, {
+          replaceIdentityFrom: account.persistedPin
+        });
+        return loadEncryption(ctx);
+      } finally {
+        accountKey.fill(0);
+      }
     }
+    let stored = await ctx.store.loadDevice(ctx.userId);
+    requireActiveKeyContext(ctx);
+    if (stored?.approval) {
+      await confirmApprovalCancellation(ctx.api, stored.approval.id, () =>
+        requireActiveKeyContext(ctx)
+      );
+      await ctx.store.clearApprovalIfCurrent(ctx.userId, stored.approval.id);
+      stored = await ctx.store.loadDevice(ctx.userId);
+    }
+    let device = stored;
+    if (
+      stored &&
+      account.deviceStatus === 'removed' &&
+      account.device?.deviceId === stored.deviceId
+    ) {
+      const candidate = await newStoredDevice(ctx, label);
+      requireActiveKeyContext(ctx);
+      if (!(await ctx.store.replaceDeviceIfCurrent(stored, candidate)))
+        throw new EncryptionFlowError(
+          'invalid-request',
+          'The device changed in another tab. Refresh and try again.'
+        );
+      device = candidate;
+    } else if (!device) {
+      const candidate = await newStoredDevice(ctx, label);
+      requireActiveKeyContext(ctx);
+      device = await ctx.store.getOrCreateDevice(candidate);
+    }
+    const entry = nextDeviceListEntry(account.list, {
+      issuedAt: now(ctx),
+      addDevices: [listed(device, now(ctx))]
+    });
+    const signed = await signDeviceListEntry(identityPrivateKey, entry);
+    const wraps: E2eeWrapInput[] = [
+      {
+        purpose: 'account-key',
+        targetId: device.deviceId,
+        wrapped: b64(
+          await sealKey(device.unlockPublicKey, accountKey, {
+            purpose: 'account-key',
+            userId: ctx.userId,
+            method: 'device',
+            unlockId: device.deviceId
+          })
+        )
+      }
+    ];
+    accountKey.fill(0);
+    requireActiveKeyContext(ctx);
+    const response = await ctx.api.appendDeviceList({
+      generation: account.generation,
+      entry: b64(signed.entry),
+      signature: b64(signed.signature),
+      wraps
+    });
+    await acceptWrite(ctx, response, {
+      identityKey: account.list.identityKey,
+      pin: account.list.pin,
+      replaceIdentityFrom: account.persistedPin,
+      written: signed.entry
+    });
+    return loadEncryption(ctx);
+  } finally {
+    accountKey.fill(0);
   }
-  const device =
-    account.device && account.deviceStatus !== 'removed'
-      ? { ...account.device, approval: null }
-      : await newStoredDevice(ctx, label);
-  const entry = nextDeviceListEntry(account.list, {
-    issuedAt: now(ctx),
-    addDevices: [listed(device, now(ctx))]
-  });
-  const signed = await signDeviceListEntry(identityPrivateKey, entry);
-  const wraps: E2eeWrapInput[] = [
-    {
-      purpose: 'account-key',
-      targetId: device.deviceId,
-      wrapped: b64(
-        await sealKey(device.unlockPublicKey, accountKey, {
-          purpose: 'account-key',
-          userId: ctx.userId,
-          method: 'device',
-          unlockId: device.deviceId
-        })
-      )
-    }
-  ];
-  accountKey.fill(0);
-  await ctx.store.saveDevice(device);
-  const response = await ctx.api.appendDeviceList({
-    generation: account.generation,
-    entry: b64(signed.entry),
-    signature: b64(signed.signature),
-    wraps
-  });
-  await acceptWrite(ctx, response, {
-    identityKey: account.list.identityKey,
-    pin: account.list.pin,
-    replaceIdentityFrom: account.persistedPin,
-    written: signed.entry
-  });
-  return loadEncryption(ctx);
 }
 
 /**
@@ -1179,11 +1238,17 @@ export async function replaceRecoveryKey(
 /** Sign-out without keeping this device unlocked: its keys are deleted. */
 export async function forgetThisDevice(ctx: E2eeContext): Promise<void> {
   lockAccount(ctx.userId);
-  const device = await ctx.store.loadDevice(ctx.userId);
-  if (device?.approval) {
-    await ctx.api.cancelApproval(device.approval.id).catch(() => undefined);
-  }
-  await ctx.store.deleteDevice(ctx.userId);
+  await ctx.store.withDeviceLock(ctx.userId, async () => {
+    requireActiveKeyContext(ctx);
+    const device = await ctx.store.loadDevice(ctx.userId);
+    requireActiveKeyContext(ctx);
+    if (device?.approval)
+      await confirmApprovalCancellation(ctx.api, device.approval.id, () =>
+        requireActiveKeyContext(ctx)
+      );
+    requireActiveKeyContext(ctx);
+    await ctx.store.deleteDevice(ctx.userId);
+  });
 }
 
 // --- Device approval: the new device --------------------------------------
