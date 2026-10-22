@@ -516,15 +516,21 @@ export class CloudProjectAutosave {
       this.#keepalive = true;
     }
     try {
-      while (this.#pending) {
-        const before = this.#pending.editEpoch;
+      while (!this.#disposed) {
+        const before = this.#pending?.editEpoch;
+        const queued = this.#queue;
         await this.flush();
         await this.#queue;
-        if (!this.#pending || this.#pending.editEpoch === before) {
+        // A drain can start with only an in-flight write. Recheck after it
+        // settles: an edit or another queued write may have arrived meanwhile.
+        if (
+          this.#pending
+            ? this.#pending.editEpoch === before
+            : this.#queue === queued
+        ) {
           return;
         }
       }
-      await this.#queue;
     } finally {
       if (options?.keepalive) {
         this.#keepalive = false;
@@ -613,6 +619,14 @@ export class CloudProjectAutosave {
     this.#queued.delete(next);
     if (!this.#isActive(epoch, next.projectId)) {
       return { state: 'stale' };
+    }
+    // Eligibility can change while this snapshot waits behind another request.
+    // Keep the newest edit for resume or an explicit checkpoint; an old queued
+    // snapshot must never displace a later one.
+    if (this.#halted || !this.#enabled || !this.#connectivity.isOnline()) {
+      this.#requeue(next);
+      this.#emit(this.#halted ?? (!this.#enabled ? 'paused' : 'offline'));
+      return { state: 'halted' };
     }
     const expectedVersion = this.#project!.version;
     try {
@@ -762,6 +776,8 @@ export class CloudProjectAutosave {
     if (
       result.state !== 'failed' ||
       !this.#pending ||
+      this.#halted ||
+      !this.#enabled ||
       !this.#connectivity.isOnline()
     ) {
       return;

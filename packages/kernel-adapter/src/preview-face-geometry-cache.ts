@@ -162,14 +162,10 @@ export class PreviewFaceGeometryCache {
   }
 }
 
-/** A kernel read for the key; a refused read is itself part of the key. */
+/** A refused key input must reach `measure`'s uncached fallback. */
 function read(value: () => ArrayLike<number> | string): string {
-  try {
-    const result = value();
-    return typeof result === 'string' ? result : Array.from(result).join(',');
-  } catch {
-    return 'unavailable';
-  }
+  const result = value();
+  return typeof result === 'string' ? result : Array.from(result).join(',');
 }
 
 export function faceShapeKey(

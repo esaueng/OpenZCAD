@@ -46,8 +46,8 @@
 > edge; a deleted, ambiguous, closed or hash-only edge refuses by name, and
 > no vertex is chosen by proximity. Both kernels share the construction
 > rules (`packages/geometry`) and the edge-vertex resolver
-> (`face-attachment.ts`). Vertex re-pick repair is tracked separately; the AI
-> contract for these constructors is specified below.
+> (`face-attachment.ts`). Vertex re-pick repair and the AI contract for
+> these constructors are specified below.
 
 > **Datum axes (2026-10-19, schema v28):** a datum axis is a `datum-axis`
 > feature in `featureOrder`, resolved once at its own history position into a
@@ -82,6 +82,37 @@
 This revision replaces the earlier canonical-offset-only first slice.
 [ROADMAP.md](../../ROADMAP.md#r01) owns delivery status. This document proposes
 contracts and acceptance evidence; it adds no runtime capability or schema bump.
+
+## Vertex-source repair (R01 recovery slice)
+
+The existing three-point/parallel-at-point planes and two-point axes retain
+their authored feature identities when a qualified edge-end source disappears.
+History offers explicit re-pick actions for each stored vertex slot and for
+all vertex slots together. Typed point slots are retained. A missing frame
+alone is not a lost-source signal: suppression, an unfinished rebuild and
+coincident/collinear points must not advertise source repair as a diagnosis.
+
+Repair stages qualified endpoint choices against one project and document
+version. Every pick must identify an open edge and an explicit, unambiguous
+end; invalid, closed, ambiguous or stale picks report their reason without
+altering the document. Replacing multiple lost sources stages them all before
+validation, so a deleted body that owned every defining point can be repaired
+in one edit. Picking a source never silently changes a typed point or a datum's
+construction kind, expressions, direction flags or other source slots.
+
+One ordinary feature update commits only after exact preflight resolves the
+repaired datum and affected active body outputs, preserving previously resolved
+downstream datums. A later source, degenerate geometry,
+failed consumer, moved document, cancellation or superseded worker reply
+cannot publish a partial repair or add a history entry. Invalid final choices
+remain retryable. Escape and project/tool changes withdraw pending repair and
+restore ordinary selection behavior. Undo restores every original source;
+redo, replay, backup and reopen retain the same datum and replacement sources.
+
+This slice changes no schema, source resolver, units, tolerances or kernel API.
+The source remains an existing `EdgeVertexPointSource`; an explicit viewport
+pick chooses an end, and exact rebuilds resolve that identity without any
+nearest-geometry repair fallback. `ROADMAP.md` records implementation evidence.
 
 ## AI datum geometry contract
 

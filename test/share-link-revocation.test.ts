@@ -43,8 +43,8 @@ beforeEach(() => {
   db.prepare(
     `INSERT INTO project_share_links
        (id, project_id, mode, token_hash, created_by_user_id, created_at, revoked_at)
-     VALUES ('share_one', ?, 'tweak', ?, ?, 1, NULL)`
-  ).run(PROJECT, TOKEN_HASH, OWNER);
+     VALUES ('share_one', ?, 'tweak', ?, ?, ?, NULL)`
+  ).run(PROJECT, TOKEN_HASH, OWNER, Math.floor(Date.now() / 1000));
   db.prepare(
     `INSERT INTO project_storage_assets
        (id, project_id, kind, object_key, checksum_sha256, logical_bytes, stored_bytes, content_encoding, created_at)
@@ -147,7 +147,7 @@ describe('an anonymous share link after the owner withdraws it', () => {
 
   it('still refuses a revoked link and an unknown token', async () => {
     db.prepare(
-      `UPDATE project_share_links SET revoked_at = 2 WHERE token_hash = ?`
+      `UPDATE project_share_links SET revoked_at = created_at + 1 WHERE token_hash = ?`
     ).run(TOKEN_HASH);
     await expect(
       service.loadSharedProjectByTokenHash(TOKEN_HASH)
