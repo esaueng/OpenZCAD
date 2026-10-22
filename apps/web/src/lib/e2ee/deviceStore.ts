@@ -324,7 +324,9 @@ export function indexedDbDeviceStore(): DeviceKeyStore {
       });
     },
     loadPin: async (userId) => {
-      const value = await inStore(PINS, 'readonly', (s) => s.get(userId));
+      const value: unknown = await inStore(PINS, 'readonly', (s) =>
+        s.get(userId)
+      );
       const pin = storedPin(value as StoredPin | DeviceListPin | undefined).pin;
       return pin ? copyPin(pin) : null;
     },
@@ -339,7 +341,13 @@ export function indexedDbDeviceStore(): DeviceKeyStore {
           reject(tx.error ?? new Error('IndexedDB pin erasure failed'));
         const read = objects.get(userId);
         read.onsuccess = () =>
-          objects.put(retireIdentity(storedPin(read.result), snapshot), userId);
+          objects.put(
+            retireIdentity(
+              storedPin(read.result as StoredPin | DeviceListPin | undefined),
+              snapshot
+            ),
+            userId
+          );
       });
     },
     savePin: async (userId, list, options = {}) => {
@@ -362,7 +370,13 @@ export function indexedDbDeviceStore(): DeviceKeyStore {
             // IndexedDB serializes readwrite transactions across connections
             // and tabs. Check the actual pin and write in this one transaction;
             // crypto verification has already finished outside it.
-            objects.put(acceptPin(storedPin(read.result), next), userId);
+            objects.put(
+              acceptPin(
+                storedPin(read.result as StoredPin | DeviceListPin | undefined),
+                next
+              ),
+              userId
+            );
           } catch (error) {
             conflict =
               error instanceof Error

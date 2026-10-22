@@ -109,14 +109,24 @@ describe.each(['memory', 'indexeddb'] as const)(
         const db = await new Promise<IDBDatabase>((resolve, reject) => {
           const request = indexedDB.open('openzcad-e2ee', 1);
           request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
+          request.onerror = () =>
+            reject(
+              new Error(
+                request.error?.message ?? 'Legacy pin fixture did not open'
+              )
+            );
         });
         try {
           await new Promise<void>((resolve, reject) => {
             const tx = db.transaction('pins', 'readwrite');
             tx.objectStore('pins').put(a.list.pin, USER);
             tx.oncomplete = () => resolve();
-            tx.onabort = tx.onerror = () => reject(tx.error);
+            tx.onabort = tx.onerror = () =>
+              reject(
+                new Error(
+                  tx.error?.message ?? 'Legacy pin fixture write failed'
+                )
+              );
           });
         } finally {
           db.close();
