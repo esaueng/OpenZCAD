@@ -2,7 +2,7 @@
 
 > **Draft for review. Not published.** The owner and a legal reviewer must
 > approve this text before it is published or linked from the app. It is not
-> legal advice. It describes what the code on `main` does as of 2026-10-20;
+> legal advice. It describes what the code on `main` does as of 2026-10-22;
 > re-check every statement against the code before publishing.
 >
 > Placeholders look like `[OPERATOR LEGAL NAME]`. Notes for reviewers look
@@ -45,8 +45,8 @@ read from the code.
      sampling);
    - whether any manual database exports exist, where, and for how long;
    - retention by Cloudflare's email service of sent messages;
-   - assistant usage counters, which the code never deletes except on
-     account deletion;
+   - assistant usage counters, removed for signed-in users on account
+     cleanup but with no deletion path for the signed-out pseudonyms;
    - the server secret that lists manually granted Premium email addresses.
 8. **Lawful basis for Basic statistics.** Aggregate API request counts are
    collected without a consent prompt (section 8). Confirm the basis, as
@@ -71,8 +71,9 @@ apply to it. See [section 14](#14-self-hosted-deployments).
 
 ## 2. Summary
 
-- You can use OpenZCAD without an account. Your projects then stay in your
-  browser and never reach us.
+- You can model without an account and keep projects in your browser. If
+  you use the hosted AI assistant, your request and model summary reach us
+  and the outside provider even while you are signed out.
 - If you sign in, we store your email address and, by default, your projects,
   so they sync between your devices and you can share them.
 - **Your cloud projects are not end-to-end encrypted today.** They are stored
@@ -91,8 +92,9 @@ apply to it. See [section 14](#14-self-hosted-deployments).
 ## 3. Using OpenZCAD without an account
 
 OpenZCAD runs in your browser. Modeling, imports, exports, drawings and
-thumbnails are computed on your device. Without an account, everything you
-make is stored only in your browser's storage (IndexedDB and local storage):
+thumbnails are computed on your device. Without an account, the following data is stored in your browser's storage
+(IndexedDB and local storage). Using the hosted assistant also sends the
+request and model summary described in section 7:
 
 - projects, their full feature history and undo history;
 - imported files (STEP, STL, 3MF, OBJ, glTF and PLY) and meshes;
@@ -138,24 +140,25 @@ do not receive it. It is not encrypted.
 This table lists what the hosted service stores. How long each item is kept
 is in [section 11](#11-how-long-we-keep-data).
 
-| What                         | Details                                                                                                                                                                                                                                                                       | Why                                                       |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| Email address                | The address you sign in with. Your account ID is computed from it. Your display name is the part before the `@`.                                                                                                                                                              | Sign-in, sharing, deletion confirmation                   |
-| Sign-in codes                | A six-digit code sent by email, stored only as a keyed hash, with its attempt count. It works once and expires after 10 minutes.                                                                                                                                              | Sign-in, preventing code guessing                         |
-| Sessions                     | A random session token in a cookie; we store only its hash. Desktop access- and refresh-token hashes are stored with session, account and client IDs, creation/expiry times, and revocation or rotation times. The desktop app keeps its refresh token in the macOS Keychain. | Keeping you signed in                                     |
-| Desktop sign-in attempts     | Attempt ID, hashed state and user code, PKCE challenge, client ID, associated account ID after approval, and creation, expiry, approval and exchange times.                                                                                                                   | Connecting the desktop app to your account                |
-| Abuse protection             | Cloudflare Turnstile checks the sign-in form; we pass your IP address to that check. Rate limits count requests under keyed hashes of your email address and of your IP address. We do not store your IP address itself.                                                      | Preventing spam and account attacks                       |
-| Projects                     | Each project's full document: name, units, parameters, sketches, text and feature history. Saved revisions with their names, reasons and author. Imported source files, meshes, thumbnails and exports you choose to keep in the cloud.                                       | Sync between your devices, history, sharing               |
-| Unfinished file uploads      | Upload-session and artifact IDs, project/account IDs, filename, content type, file metadata, object-storage key and reservation or multipart-upload state, plus any bytes already received.                                                                                   | Completing uploads and reclaiming abandoned storage       |
-| Deletion coordination        | Account ID, requested deletion scope, and start/update timestamps in a resumable erasure request.                                                                                                                                                                             | Completing deletion safely and refusing concurrent writes |
-| Project details              | Measurements, workspace view state per device (camera, hidden and selected bodies, mode, panels) with a random device ID and a Desktop or Mobile label, shelf state (pinned, archived, in the Trash), sizes and counts used for storage quotas.                               | Restoring your workspace, quotas                          |
-| Sharing                      | Members and their roles, invitations (the invitee's email address, role, inviter and expiry), share links and a history of sharing changes (who changed which role, when).                                                                                                    | Collaboration and access control                          |
-| Live collaboration           | While a project is open with others, a collaboration room relays edits and shows who is active or idle. It keeps the latest document and up to 20 earlier snapshots.                                                                                                          | Real-time editing                                         |
-| Synced settings              | Your application preferences, so they follow you between devices.                                                                                                                                                                                                             | Consistent settings                                       |
-| Personal AI key              | If you add your own AI provider key, we store it encrypted (AES-GCM, under a server-held key) with a short hint so you can recognise it. It is the only data the application encrypts itself.                                                                                 | Calling your chosen provider                              |
-| Assistant usage              | Per-account request and cost counters, and a service-wide daily total.                                                                                                                                                                                                        | Fair-use limits and cost control                          |
-| Assistant concurrency leases | Random lease ID, an account-derived bucket (also used in the legacy second bucket field), and an expiry timestamp. No raw IP address in these lease records.                                                                                                                  | Limiting simultaneous assistant requests                  |
-| Error logs                   | Our own log lines record event names, error types, request paths and request IDs. They are written to exclude email addresses, project contents and IP addresses.                                                                                                             | Diagnosing failures                                       |
+| What                         | Details                                                                                                                                                                                                                                                                                                                                                                              | Why                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| Email address                | The address you sign in with. Your account ID is computed from it. Your display name is the part before the `@`.                                                                                                                                                                                                                                                                     | Sign-in, sharing, deletion confirmation                   |
+| Sign-in codes                | A six-digit code sent by email, stored only as a keyed hash, with its attempt count. It works once and expires after 10 minutes.                                                                                                                                                                                                                                                     | Sign-in, preventing code guessing                         |
+| Sessions                     | A random session token in a cookie; we store only its hash. Desktop access- and refresh-token hashes are stored with session, account and client IDs, creation/expiry times, and revocation or rotation times. The desktop app keeps its refresh token in the macOS Keychain.                                                                                                        | Keeping you signed in                                     |
+| Desktop sign-in attempts     | Attempt ID, hashed state and user code, PKCE challenge, client ID, associated account ID after approval, and creation, expiry, approval and exchange times.                                                                                                                                                                                                                          | Connecting the desktop app to your account                |
+| Abuse protection             | Cloudflare Turnstile checks the sign-in form; we pass your IP address to that check. Sign-in rate limits use keyed email/IP hashes; signed-in API-write and invitation counters instead include your account ID in their bucket names. That account ID is derived from an unkeyed SHA-256 prefix of your email address. We do not store the raw IP address in these rate-limit rows. | Preventing spam and account attacks                       |
+| Projects                     | Each project's full document: name, units, parameters, sketches, text and feature history. Saved revisions with their names, reasons and author. Imported source files, meshes, thumbnails and exports you choose to keep in the cloud.                                                                                                                                              | Sync between your devices, history, sharing               |
+| Unfinished file uploads      | Upload-session and artifact IDs, project/account IDs, filename, content type, file metadata, object-storage key and reservation or multipart-upload state, plus any bytes already received.                                                                                                                                                                                          | Completing uploads and reclaiming abandoned storage       |
+| Deletion coordination        | Account ID, requested deletion scope, and start/update timestamps in a resumable erasure request.                                                                                                                                                                                                                                                                                    | Completing deletion safely and refusing concurrent writes |
+| Project details              | Measurements, workspace view state per device (camera, hidden and selected bodies, mode, panels) with a random device ID and a Desktop or Mobile label, shelf state (pinned, archived, in the Trash), sizes and counts used for storage quotas.                                                                                                                                      | Restoring your workspace, quotas                          |
+| Project adoption mappings    | Account ID, original local project ID and new cloud project ID linking a local project to its saved cloud copy.                                                                                                                                                                                                                                                                      | Recognising an already adopted local project              |
+| Sharing                      | Members and their roles, invitations (the invitee's email address, role, inviter and expiry), share links and a history of sharing changes (who changed which role, when).                                                                                                                                                                                                           | Collaboration and access control                          |
+| Live collaboration           | While a project is open with others, a collaboration room relays edits and shows who is active or idle. It keeps the latest document and up to 20 earlier snapshots.                                                                                                                                                                                                                 | Real-time editing                                         |
+| Synced settings              | Your application preferences, so they follow you between devices.                                                                                                                                                                                                                                                                                                                    | Consistent settings                                       |
+| Personal AI key              | If you add your own AI provider key, we store it encrypted (AES-GCM, under a server-held key) with a short hint so you can recognise it. It is the only data the application encrypts itself.                                                                                                                                                                                        | Calling your chosen provider                              |
+| Assistant usage              | Request and cost counters keyed by account ID for signed-in users or a secret-keyed, IP-derived pseudonym for signed-out visitors, plus a service-wide daily total.                                                                                                                                                                                                                  | Fair-use limits and cost control                          |
+| Assistant concurrency leases | Random lease ID, an account-ID or signed-out pseudonym bucket (also used in the legacy second bucket field), and an expiry timestamp. No raw IP address in these lease records.                                                                                                                                                                                                      | Limiting simultaneous assistant requests                  |
+| Error logs                   | Our own log lines record event names, error types, request paths and request IDs. They are written to exclude email addresses, project contents and IP addresses.                                                                                                                                                                                                                    | Diagnosing failures                                       |
 
 > **Reviewer note.** Add the lawful basis for each row once the jurisdiction
 > is settled (likely contract for account and project data, legitimate
@@ -224,8 +227,12 @@ summary to the provider in readable form, and will ask first.
 
 ## 7. The AI assistant
 
-The assistant runs only when you send it a request. It needs cloud features on
-and an account; on the hosted service it is available to signed-in accounts.
+The assistant runs only when you send it a request and needs cloud features
+on. The hosted built-in assistant is available while signed out as well as
+while signed in. For a signed-out request, the server derives a pseudonymous
+identifier from the connecting IP address using a secret key. The raw address
+is not used as the identifier stored in assistant usage or lease records.
+An account is needed to save a personal provider key or provider preference.
 
 **What is sent.** For each request, our server forwards to the AI provider:
 
@@ -251,15 +258,17 @@ and model you chose, under that provider's terms, data policy and charges.
 
 **What we keep.** We do not store your prompts, conversations or the model's
 replies on the server. Your conversation history stays in your browser. We
-send the provider a pseudonymous identifier derived from your account ID with
-a secret key, not your email address, so it can detect abuse. We keep usage
-counters (section 4).
+send the provider a further secret-keyed pseudonym derived from your account
+ID, or from the IP-derived identifier while signed out, not your email address
+or raw IP address, so it can detect abuse. We keep usage counters (section 4).
 
 ## 8. Analytics
 
-There are three levels. None of them includes model contents, geometry, file
-names, project names, email addresses, IP addresses, URLs, error text, account
-IDs or device identifiers.
+There are three levels. Their event payloads and published aggregate
+snapshots exclude model contents, geometry, file names, project names, email
+addresses, IP addresses, URLs, error text, account IDs and device identifiers.
+The separate Cloud account statistics consent record contains the account ID
+and expiry time, as described below.
 
 **Basic statistics (always on for the hosted service).** The server counts API
 requests, server errors and response times in fixed ranges. These are
@@ -359,6 +368,7 @@ requests are handled and whether users are notified.]`
 | Workspace sessions                  | Saved camera, selection, device/session identifiers and workspace state are hidden from session listings after 30 days without an update. That cutoff does not delete rows. A later workspace save prunes to the newest 20 sessions per account/project, regardless of age; otherwise records can remain until project deletion or profile/full-account cleanup                                                                                 |
 | Deletion coordination records       | Removed after the requested erasure successfully completes. Failed/incomplete erasure requests retain account ID, scope and start/update timestamps for retry; no scheduled expiry, so they may remain indefinitely                                                                                                                                                                                                                             |
 | Cloud projects                      | Until you delete them                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Project adoption mappings           | Until the cloud project is permanently purged or all account data is deleted; profile-only deletion retains this local-to-cloud identifier link                                                                                                                                                                                                                                                                                                 |
 | Projects in the Trash               | Eligible for permanent deletion, with their files, revisions and room, after 30 days. Project-list requests purge at most 100 eligible projects per pass; a backlog needs later requests, and without a return visit they may remain indefinitely                                                                                                                                                                                               |
 | Saved revisions                     | Normally pruned to the newest 50 after a save. Pruning failures do not fail the save and are retried only on a later save; without one, older revisions can remain indefinitely                                                                                                                                                                                                                                                                 |
 | Unfinished file uploads             | Sessions expire after 15 minutes. Expiry does not itself delete their records or received bytes. Hourly cleanup selects at most 100 eligible sessions per pass; starting another upload can also trigger bounded cleanup for that account. Failed storage cleanup keeps the indexed session for retry, so backlogs or repeated failures can retain data beyond expiry                                                                           |
@@ -370,7 +380,7 @@ requests are handled and whether users are notified.]`
 | Rate-limit counters                 | Eligible for cleanup after two of the longest shared-table windows have elapsed from the window start (currently two hours); removed in bounded, traffic-triggered passes                                                                                                                                                                                                                                                                       |
 | Invitations and sharing history     | Invitation records remain for the life of the project or until the relevant account is deleted. Sharing audit history keeps only the newest 1,000 events per project; each new event removes older entries beyond that cap                                                                                                                                                                                                                      |
 | Share links                         | Access expires 30 days after server-assigned creation, including existing links, or ends when revoked earlier. Expiry alone does not delete the record. The newest 100 revoked-link records per project retain token hashes, creators and timestamps; newer revocations prune older records. Unrevoked expired records can remain for the life of the project. Project or relevant account deletion can remove records earlier                  |
-| Assistant usage counters            | Until your account is deleted `[OWNER: decide a shorter period]`                                                                                                                                                                                                                                                                                                                                                                                |
+| Assistant usage counters            | Signed-in counters are removed by profile/full-account cleanup. Signed-out counters use an IP-derived pseudonym with no corresponding account-deletion path, scheduled expiry or other automatic deletion; they can remain indefinitely. `[OWNER: decide retention for both cases]`                                                                                                                                                             |
 | Assistant concurrency leases        | Inactive after the request’s configured lease period plus a grace interval; completion attempts early deletion. If that best-effort release fails, a later assistant request removes at most 100 expired leases per sweep. Expiry alone does not delete a row, so records can remain indefinitely without later requests or account cleanup                                                                                                     |
 | Cloud account statistics permission | Permission lasts 30 days or until withdrawn; the account-ID/expiry record can remain indefinitely after expiry. Removed on explicit withdrawal or full account-row deletion, but not profile-only deletion                                                                                                                                                                                                                                      |
 | Published cloud account statistics  | Hourly aggregate snapshots remain for up to 90 days, independently of the 30-day permission                                                                                                                                                                                                                                                                                                                                                     |
@@ -404,6 +414,14 @@ unconfirmed. There is therefore no verified maximum across all recovery
 paths in this draft. `[CONFIRM before publication: each recovery mechanism,
 its configured window, retained exports, and the incident-restore process for
 deleted personal data.]`
+
+> **Reviewer trace (2026-10-22).** `identifyAssistantIdentity` and the proposals
+> route admit signed-out requests using a secret-keyed IP pseudonym;
+> `assistantRateLimit.ts` stores that pseudonym's usage without a scheduled
+> deletion path. `index.ts` and `createProjectInvitation` use account-linked
+> API/invitation buckets. `insertProject`, project purge and
+> `accountDeletion.ts` define adoption-mapping retention. Census consent is
+> account-linked even though its published snapshots contain no identifiers.
 
 ## 12. Deleting your data and your rights
 
