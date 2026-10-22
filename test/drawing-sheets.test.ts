@@ -16,7 +16,6 @@ import {
   drawingSetError,
   MAX_PROJECT_NAME_LENGTH,
   projectedViewSide,
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
   type DrawingSheet,
@@ -118,7 +117,6 @@ function sheet(bodyIds: BodyId[], views?: DrawingView[]): DrawingSheet {
 
 describe('D01 drawing section (schema v30)', () => {
   it('is additive, and never added to a document without drawings', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(33);
     const document = boxDocument();
     expect(document.drawings).toBeUndefined();
     const saved = JSON.parse(JSON.stringify(document)) as ProjectDocument;

@@ -85,7 +85,11 @@ function expectLineAtX(data: SketchObjectData | undefined, x: number) {
 }
 
 /** A real verified edge drives an ordinary, independently dimensioned closed loop. */
-async function constrainedPlate(locked = false, typed = false) {
+async function constrainedPlate(
+  locked = false,
+  typed = false,
+  sketchSource = false
+) {
   const initial = createProjectDocument(
     'Projection constraints',
     toUserId('user_projection_constraints')
@@ -106,14 +110,47 @@ async function constrainedPlate(locked = false, typed = false) {
         quantity: 'length'
       })
     );
-  manager.execute(
-    commandFactories.addPrimitive({
-      name: 'Source',
-      primitiveKind: 'box',
-      dimensions: { width: 'w', height: 10, depth: 5 }
-    })
-  );
+  if (sketchSource) {
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Source profile',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          {
+            objectKind: 'rectangle',
+            width: 'w',
+            height: 10,
+            centerX: 'w / 2',
+            centerY: 5
+          }
+        ]
+      })
+    );
+    manager.execute(
+      commandFactories.extrudeSketch({
+        name: 'Source',
+        sketchId: manager.document.sketchOrder[0]!,
+        distance: 5
+      })
+    );
+  } else {
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Source',
+        primitiveKind: 'box',
+        dimensions: { width: 'w', height: 10, depth: 5 }
+      })
+    );
+  }
   const sourceId = manager.document.bodyOrder[0]!;
+  if (sketchSource)
+    manager.execute(
+      commandFactories.transformBody({
+        name: 'Source placement',
+        targetBodyId: sourceId,
+        translation: { x: 0, y: 0, z: 0 }
+      })
+    );
   const built = await adapter.syncDocument(manager.document);
   const edge = built.bodyRepresentations[sourceId]!.topology!.edges.find(
     (candidate) => {
@@ -172,7 +209,7 @@ async function constrainedPlate(locked = false, typed = false) {
       ]
     })
   );
-  const sketchId = manager.document.sketchOrder[0]!;
+  const sketchId = manager.document.sketchOrder.at(-1)!;
   const ids = findSketch(manager.document, sketchId)!.objectIds;
   const [projectionId, bottom, right, top, left] = ids as [
     EntityId,
@@ -296,6 +333,162 @@ function expectFreshProjection(
 }
 
 describe('linked projection constraint propagation before writeback', () => {
+  it.each([
+    'rename',
+    'unrelated sketch dimension',
+    'unrelated feature dimension'
+  ] as const)('keeps qualified profile reads after %s', async (edit) => {
+    const f = await constrainedPlate();
+    f.manager.execute(
+      commandFactories.addSketch({
+        name: 'Independent circle',
+        planeRef: plane,
+        objects: [{ objectKind: 'circle', centerX: 100, centerY: 0, radius: 2 }]
+      })
+    );
+    const independentSketch = findSketch(
+      f.manager.document,
+      f.manager.document.sketchOrder.at(-1)!
+    )!;
+    f.manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Independent box',
+        primitiveKind: 'box',
+        dimensions: { width: 2, height: 2, depth: 2 }
+      })
+    );
+    const independentFeature = listFeaturesInOrder(f.manager.document).at(-1)!;
+    f.manager.execute(
+      commandFactories.setParameter({ name: 'w', expression: '32' })
+    );
+    f.manager.commitDerivedState(
+      await adapter.syncDocument(f.manager.document)
+    );
+    const before = f.manager.document;
+    const prefix: CadPatchProposal['operations'][number] =
+      edit === 'rename'
+        ? {
+            kind: 'rename_feature',
+            featureId: listFeaturesInOrder(before)[0]!.featureId,
+            name: 'Renamed source'
+          }
+        : edit === 'unrelated sketch dimension'
+          ? {
+              kind: 'set_sketch_dimension',
+              sketchId: independentSketch.sketchId,
+              objectId: independentSketch.objectIds[0]!,
+              field: 'radius',
+              value: 3
+            }
+          : {
+              kind: 'set_feature_dimension',
+              featureId: independentFeature.featureId,
+              field: 'width',
+              value: 3
+            };
+    const commands = commandsForCadPatch(before, {
+      proposalId: 'unrelated_edits_solved_profile',
+      summary: 'Retain an unaffected qualified sketch.',
+      assumptions: [],
+      operations: [
+        prefix,
+        {
+          kind: 'add_extrude',
+          name: 'Qualified copy',
+          sketchId: f.sketchId,
+          distance: 2,
+          samplePoint: { x: 26, y: 3 }
+        }
+      ]
+    });
+    expect(f.manager.document).toBe(before);
+    f.manager.runTransaction('Edit and append unaffected profile', commands);
+    const feature = listFeaturesInOrder(f.manager.document).at(-1)!;
+    expect(feature.data).toMatchObject({ profile: { sourceArea: 192 } });
+    const bodyId = f.manager.document.bodyOrder.at(-1)!;
+    expect(
+      volume(await adapter.syncDocument(f.manager.document), bodyId)
+    ).toBeCloseTo(384, 6);
+    f.manager.undo();
+    expect(f.manager.document.nodes).toEqual(before.nodes);
+    f.manager.redo();
+    expect(
+      volume(await adapter.syncDocument(f.manager.document), bodyId)
+    ).toBeCloseTo(384, 6);
+    expect(
+      volume(
+        await adapter.syncDocument(
+          replayCommands(f.initial, f.manager.document.commandLog)
+        ),
+        bodyId
+      )
+    ).toBeCloseTo(384, 6);
+  });
+
+  it.each(['sketch', 'move', 'source dimension', 'same sketch'] as const)(
+    'refuses a solved profile after a related %s edit',
+    async (edit) => {
+      const f = await constrainedPlate(false, false, true);
+      f.manager.execute(
+        commandFactories.setParameter({ name: 'w', expression: '32' })
+      );
+      f.manager.commitDerivedState(
+        await adapter.syncDocument(f.manager.document)
+      );
+      const before = f.manager.document;
+      const sourceSketch = findSketch(before, before.sketchOrder[0]!)!;
+      expect(sourceSketch.sketchId).not.toBe(f.sketchId);
+      expect(() =>
+        commandsForCadPatch(before, {
+          proposalId: 'related_sketch_edit',
+          summary: 'Rebuild a dependent profile after changing its source.',
+          assumptions: [],
+          operations: [
+            edit === 'move'
+              ? {
+                  kind: 'set_feature_dimension',
+                  featureId: listFeaturesInOrder(before).find(
+                    (feature) => feature.data.featureKind === 'transform'
+                  )!.featureId,
+                  field: 'translation.x',
+                  value: 1
+                }
+              : edit === 'source dimension'
+                ? {
+                    kind: 'set_feature_dimension',
+                    featureId: listFeaturesInOrder(before).find(
+                      (feature) => feature.data.featureKind === 'extrude'
+                    )!.featureId,
+                    field: 'distance',
+                    value: 6
+                  }
+                : {
+                    kind: 'set_sketch_dimension',
+                    sketchId:
+                      edit === 'same sketch'
+                        ? f.sketchId
+                        : sourceSketch.sketchId,
+                    objectId:
+                      edit === 'same sketch'
+                        ? f.loop[0]!
+                        : sourceSketch.objectIds[0]!,
+                    field: edit === 'same sketch' ? 'x2' : 'width',
+                    value: 40
+                  },
+            {
+              kind: 'add_extrude',
+              name: 'Stale copy',
+              sketchId: f.sketchId,
+              distance: 2,
+              samplePoint: { x: 10, y: 3 }
+            }
+          ]
+        })
+      ).toThrow(/needs an exact rebuild/);
+      expect(f.manager.document).toBe(before);
+    }
+  );
+
   it('compiles ID-only consumers of a solved multi-line sketch without selecting a profile', async () => {
     const f = await constrainedPlate();
     f.manager.execute(

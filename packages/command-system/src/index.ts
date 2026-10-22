@@ -483,6 +483,62 @@ function featureReferences(
 }
 
 /**
+ * Qualified sketch reads depend on the history that existed at their own
+ * position. Follow identities through earlier producers, including linked
+ * object data and face/datum attachments, without making an unrelated edit
+ * invalidate every sketch. A later in-place body edit cannot affect a sketch
+ * earlier in history.
+ */
+function sketchReadDependencies(
+  document: ProjectDocument
+): Map<SketchId, Set<string>> {
+  const producers = new Map<string, Set<string>>();
+  const sketches = new Map<SketchId, Set<string>>();
+  const bodyIds = new Map<string, string[]>();
+  for (const body of listNodesByKind(document, 'body')) {
+    const ids = bodyIds.get(body.featureId) ?? [];
+    ids.push(body.bodyId);
+    bodyIds.set(body.featureId, ids);
+  }
+  for (const feature of listFeaturesInOrder(document)) {
+    const references = featureReferences(document, feature);
+    const sketch =
+      feature.data.featureKind === 'sketch'
+        ? findSketch(document, feature.data.sketchId)
+        : undefined;
+    if (sketch) {
+      collectDataStrings(sketch, references);
+      for (const id of sketch.objectIds) {
+        const object = document.nodes[id];
+        if (object?.kind === 'sketch-object')
+          collectDataStrings(object.data, references);
+      }
+    }
+    const dependencies = new Set<string>([feature.featureId]);
+    for (const id of references) {
+      for (const dependency of producers.get(id) ?? [])
+        dependencies.add(dependency);
+    }
+    // An in-place Move has no output body node: later readers of the same
+    // body must nevertheless depend on the Move and its own upstream inputs.
+    if (feature.data.featureKind === 'transform' && !feature.data.copy) {
+      producers.set(feature.data.targetBodyId, dependencies);
+    }
+    producers.set(feature.featureId, dependencies);
+    if (feature.bodyId) producers.set(feature.bodyId, dependencies);
+    for (const id of bodyIds.get(feature.featureId) ?? [])
+      producers.set(id, dependencies);
+    if (sketch) {
+      sketches.set(sketch.sketchId, dependencies);
+      producers.set(sketch.sketchId, dependencies);
+      producers.set(sketch.id, dependencies);
+      for (const id of sketch.objectIds) producers.set(id, dependencies);
+    }
+  }
+  return sketches;
+}
+
+/**
  * Refuse a parameter delete that would strand an expression still reading it.
  *
  * Deleting is not symmetric with the failures around it. A feature whose
@@ -2773,7 +2829,8 @@ export function commandsForCadPatch(
   const scope = new LocalBodyScope(document);
   let projectedDocument = document;
   const originalSketchView = resolvedSketchDocument(document);
-  let originalSketchViewValid = true;
+  const originalSketchDependencies = sketchReadDependencies(document);
+  const invalidatedSketchReads = new Set<SketchId>();
   const sketchReadOnlyAppends = new Set([
     'add_primitive',
     'add_sketch',
@@ -2781,7 +2838,8 @@ export function commandsForCadPatch(
     'add_datum_sketch',
     'add_extrude',
     'add_multi_profile_extrude',
-    'add_revolve'
+    'add_revolve',
+    'rename_feature'
   ]);
   const parameterScope = projectedParameterScope(document, proposal);
   proposal.operations.forEach((operation) =>
@@ -2842,14 +2900,13 @@ export function commandsForCadPatch(
         (id) => originalSketchView.nodes[id] !== document.nodes[id]
       )
     ) {
-      if (!originalSketchViewValid) {
+      if (invalidatedSketchReads.has(sketch.sketchId)) {
         throw new Error(
           `Sketch ${reference} needs an exact rebuild after earlier edits before selecting a profile.`
         );
       }
-      // Appended consumers and new parameter names cannot change an existing
-      // sketch at its earlier history position. Keep only its qualified read
-      // snapshot; every command still applies to authored projectedDocument.
+      // Keep only this unaffected sketch's qualified read snapshot. Every
+      // command still applies to the authored projectedDocument.
       readDocument = originalSketchView;
     }
     for (const objectId of sketch.objectIds) {
@@ -3971,7 +4028,28 @@ export function commandsForCadPatch(
     const command = commandForOperation(operation);
     command.validate(projectedDocument);
     projectedDocument = command.apply(projectedDocument);
-    originalSketchViewValid &&= keepsOriginalSketchReads;
+    if (!keepsOriginalSketchReads) {
+      const editedSketch =
+        operation.kind === 'set_sketch_dimension'
+          ? findSketch(document, operation.sketchId)
+          : undefined;
+      const editedFeatureId =
+        operation.kind === 'set_feature_dimension'
+          ? operation.featureId
+          : editedSketch
+            ? listFeaturesInOrder(document).find(
+                (feature) =>
+                  feature.data.featureKind === 'sketch' &&
+                  feature.data.sketchId === editedSketch.sketchId
+              )?.featureId
+            : undefined;
+      // Unknown or structural edits conservatively require a rebuild. Known
+      // dimension edits invalidate only their own transitive history readers.
+      for (const [sketchId, dependencies] of originalSketchDependencies) {
+        if (!editedFeatureId || dependencies.has(editedFeatureId))
+          invalidatedSketchReads.add(sketchId);
+      }
+    }
     commands.push(command);
   }
   return commands;

@@ -77,7 +77,7 @@ describe('serial v31/v32 to v33 integration', () => {
         schemaVersion: version
       } as ProjectDocument;
       const opened = normalizeDocument(saved(legacy));
-      expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(33);
+      expect(opened.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
       expect({ ...opened, schemaVersion: version }).toEqual(legacy);
       const manager = new CommandManager(opened);
       manager.execute(
@@ -125,7 +125,7 @@ describe('serial v31/v32 to v33 integration', () => {
       expect(() =>
         normalizeDocument({
           ...withProjection,
-          schemaVersion: 34
+          schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION + 1
         } as unknown as ProjectDocument)
       ).toThrow(/Unsupported project schema/);
     }

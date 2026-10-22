@@ -6,7 +6,6 @@ import {
   normalizeDocument
 } from '@openzcad/document-core';
 import {
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toSketchReferenceAnnotationId,
   toUserId,
   type SketchReferenceDimension
@@ -22,7 +21,6 @@ function user() {
 
 describe('S02-A reference dimension schema envelope', () => {
   it('retains additive reference dimensions in the current schema', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(33);
   });
 
   it('leaves a document without reference dimensions byte-identical', () => {

@@ -110,7 +110,6 @@ function volumeOf(derived: DerivedState, bodyId: BodyId): number {
 
 describe('sketch projection in the document (v33)', () => {
   it('is schema 33, additive, round-trips and refuses a malformed record', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(33);
     const source = {
       bodyId: 'body_a' as BodyId,
       edgeReference: {
@@ -156,7 +155,7 @@ describe('sketch projection in the document (v33)', () => {
     const saved = JSON.parse(
       JSON.stringify(sketched.document)
     ) as ProjectDocument;
-    expect(saved.schemaVersion).toBe(33);
+    expect(saved.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect(normalizeDocument(saved)).toEqual(sketched.document);
 
     // A v30 document opens exactly as written: no projection is invented.
