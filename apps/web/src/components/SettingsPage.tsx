@@ -596,8 +596,14 @@ export function SettingsPage({
   const [encryptionAvailable, setEncryptionAvailable] = useState<
     boolean | null
   >(null);
-  /** Set while sign-out asks whether to keep this device unlocked. */
-  const [signOutChoice, setSignOutChoice] = useState(false);
+  /**
+   * Set, to the account it was opened for, while sign-out asks whether to
+   * keep this device unlocked; it never applies to an account that replaced
+   * that one before the choice was made.
+   */
+  const [signOutChoiceUserId, setSignOutChoiceUserId] = useState<string | null>(
+    null
+  );
   const [signOutBusy, setSignOutBusy] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const contentRef = useRef<HTMLElement>(null);
@@ -664,6 +670,17 @@ export function SettingsPage({
     };
   }, [cloudFunctionsEnabled, sessionUserId]);
 
+  // A prompt opened for another account is withdrawn, never re-targeted.
+  const signOutChoice =
+    signOutChoiceUserId !== null && signOutChoiceUserId === sessionUserId
+      ? signOutChoiceUserId
+      : null;
+  useEffect(() => {
+    setSignOutChoiceUserId((pending) =>
+      pending === sessionUserId ? pending : null
+    );
+  }, [sessionUserId]);
+
   // Sign-out asks whether to keep this device unlocked, but only when this
   // browser holds device keys for the account; otherwise it signs out at once.
   const signOut = async () => {
@@ -677,7 +694,7 @@ export function SettingsPage({
       if (userId) {
         const { hasStoredDevice } = await import('../lib/e2ee/deviceStore');
         if (await hasStoredDevice(userId)) {
-          setSignOutChoice(true);
+          setSignOutChoiceUserId(userId);
           return;
         }
       }
@@ -696,9 +713,10 @@ export function SettingsPage({
     setSignOutBusy(true);
     setSignOutError(null);
     try {
-      const userId = session?.userId;
-      await onLogout(userId ? { userId, keepDevice } : undefined);
-      setSignOutChoice(false);
+      const userId = signOutChoice;
+      if (!userId) return;
+      await onLogout({ userId, keepDevice });
+      setSignOutChoiceUserId(null);
     } catch {
       setSignOutError(
         'Could not complete sign-out. Retry your device-key choice.'
@@ -1939,7 +1957,7 @@ export function SettingsPage({
                                   type="button"
                                   disabled={busy || signOutBusy}
                                   onClick={() => {
-                                    setSignOutChoice(false);
+                                    setSignOutChoiceUserId(null);
                                     setSignOutError(null);
                                   }}
                                 >

@@ -47,7 +47,14 @@ function renderSettings(
   health: HealthResponse | null = null,
   overrides: Partial<ComponentProps<typeof SettingsPage>> = {}
 ) {
-  return render(
+  return render(settingsElement(health, overrides));
+}
+
+function settingsElement(
+  health: HealthResponse | null = null,
+  overrides: Partial<ComponentProps<typeof SettingsPage>> = {}
+) {
+  return (
     <SettingsPage
       settings={defaultAppSettings()}
       cloudFunctionsEnabled={true}
@@ -146,6 +153,41 @@ describe('device-key sign-out choice', () => {
     expect(
       screen.queryByRole('button', { name: 'Remove device keys' })
     ).toBeNull();
+  });
+
+  it('withdraws the prompt when another account replaces the one that opened it', async () => {
+    const store = await import('../lib/e2ee/deviceStore');
+    vi.spyOn(store, 'hasStoredDevice').mockResolvedValue(true);
+    const onLogout = vi.fn();
+    const other = { ...session, userId: toUserId('user_sign_out_other') };
+    const user = userEvent.setup();
+    const view = renderSettings(null, {
+      initialSection: 'account',
+      session,
+      onLogout
+    });
+    await user.click(screen.getByRole('button', { name: 'Sign out' }));
+    expect(
+      await screen.findByRole('button', { name: 'Remove device keys' })
+    ).toBeEnabled();
+    const rerender = (current: typeof session) =>
+      view.rerender(
+        settingsElement(null, {
+          initialSection: 'account',
+          session: current,
+          onLogout
+        })
+      );
+    rerender(other);
+    expect(
+      screen.queryByRole('button', { name: 'Remove device keys' })
+    ).toBeNull();
+    // The prompt does not come back for the account that opened it either.
+    rerender(session);
+    expect(
+      screen.queryByRole('button', { name: 'Remove device keys' })
+    ).toBeNull();
+    expect(onLogout).not.toHaveBeenCalled();
   });
 
   it.each([true, false])(
