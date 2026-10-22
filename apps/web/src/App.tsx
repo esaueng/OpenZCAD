@@ -5649,11 +5649,12 @@ export function App() {
     () => [...(selectedTopology ? [selectedTopology] : []), ...selectedEdges],
     [selectedTopology, selectedEdges]
   );
-  const { demand: lineageDemand } = useLineageDemand({
-    projectId: doc?.projectId,
-    selections: lineageDemandSelections,
-    interaction
-  });
+  const { demand: lineageDemand, addBodies: addLineageDemand } =
+    useLineageDemand({
+      projectId: doc?.projectId,
+      selections: lineageDemandSelections,
+      interaction
+    });
   useEffect(() => {
     geometry.sync(doc, lineageDemand);
     // `geometry` is stable across renders; re-sync when the demanded set
@@ -14864,8 +14865,9 @@ export function App() {
       interactionRef.current.mode === 'sketch'
         ? interactionRef.current.session
         : null;
-    const base = managerRef.current?.document;
-    if (!session || !base || !sketchBasis) return;
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (!session || !manager || !base || !sketchBasis) return;
     if (!selection) {
       setStatus('Click a model edge, or a face for its whole boundary.');
       return;
@@ -14884,18 +14886,35 @@ export function App() {
       const {
         assertProjectionsResolve,
         projectionAddCommand,
-        projectionFromPick,
+        projectionFromPickWithLineage,
         repickedProjectionData
       } = await import('./lib/sketch/projection');
-      const pick = projectionFromPick({
-        document: base,
-        sketch,
-        selection,
-        basis: sketchBasis,
-        mode,
-        construction: sketchConstruction,
-        ...(repair ? { repairing: repair.objectId } : {})
-      });
+      const pick = await projectionFromPickWithLineage(
+        {
+          document: base,
+          sketch,
+          selection,
+          basis: sketchBasis,
+          mode,
+          construction: sketchConstruction,
+          ...(repair ? { repairing: repair.objectId } : {})
+        },
+        {
+          rebuildWithLineage: async () => {
+            addLineageDemand([selection.bodyId]);
+            const derived = await geometry.syncOnce(base, undefined, [
+              ...new Set([...lineageDemand, selection.bodyId])
+            ]);
+            return { ...base, derived };
+          },
+          cancelled: () =>
+            managerRef.current !== manager ||
+            manager.document.version !== base.version ||
+            interactionRef.current.mode !== 'sketch' ||
+            interactionRef.current.session !== session
+        }
+      );
+      if (!pick) return;
       const sketchFeature = sketch
         ? features.find(
             (feature) =>

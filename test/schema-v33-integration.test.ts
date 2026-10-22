@@ -125,7 +125,7 @@ describe('serial v31/v32 to v33 integration', () => {
       expect(() =>
         normalizeDocument({
           ...withProjection,
-          schemaVersion: 34
+          schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION + 1
         } as unknown as ProjectDocument)
       ).toThrow(/Unsupported project schema/);
     }
