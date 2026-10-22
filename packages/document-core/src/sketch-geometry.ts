@@ -14,7 +14,7 @@ const views = new WeakMap<
 export function resolvedSketchDocument(
   document: ProjectDocument
 ): ProjectDocument {
-  const geometry = document.derived.sketchGeometry;
+  const geometry = document.derived?.sketchGeometry;
   if (
     !geometry ||
     geometry.projectId !== document.projectId ||

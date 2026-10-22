@@ -76,6 +76,12 @@ describe('resolved sketch read view', () => {
     }
   );
 
+  it('keeps a history-only document without derived state readable', () => {
+    const { document } = fixture();
+    delete (document as Partial<typeof document>).derived;
+    expect(resolvedSketchDocument(document)).toBe(document);
+  });
+
   it('ignores unknown ids, non-sketch nodes and changed entity kinds', () => {
     const f = fixture();
     f.document.derived.sketchGeometry.objects = {
