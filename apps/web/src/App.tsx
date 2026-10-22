@@ -17,8 +17,20 @@ import { clearAssistantHistory } from './lib/assistant/historyStorage';
 import { exactWarningBaseline } from './lib/exactWarnings';
 import {
   datumAxisSourceFailed,
-  datumFaceAttachFailed
+  datumFaceAttachFailed,
+  earlierDatumPlanes
 } from './lib/datumPlaneDisplay';
+import {
+  referenceImageDisplays,
+  referenceImageInsertPlane
+} from './lib/referenceImageDisplay';
+import { referenceImagesWithHistory } from '@openzcad/shared';
+import type {
+  ReferenceImage,
+  ReferenceImageId,
+  ReferenceImagePlane
+} from '@openzcad/shared';
+import type { ReferenceImageUpdateInput } from '@openzcad/document-core';
 import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
 import { boxPreviewProfile } from './lib/interaction/boxPreviewProfile';
 import { capPreviewProfile } from './lib/interaction/capPreviewProfile';
@@ -125,6 +137,7 @@ import {
   duplicateFeatureRefusal,
   isParameterRetype,
   isDrawingCommandKind,
+  isReferenceImageCommandKind,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -253,7 +266,12 @@ import {
   type DrivingDimensionKind
 } from './lib/sketch/constraints';
 import { sketchDimensionAnnotations } from './lib/sketch/dimensionAnnotations';
-import { sketchRelationGlyphs } from './lib/sketch/relationGlyphs';
+import {
+  SKETCH_RELATION_GLYPHS,
+  sketchRelationGlyphs,
+  sketchRelationKeepOuts,
+  sketchRelationStrokes
+} from './lib/sketch/relationGlyphs';
 import { toggledSketchVisibility } from './lib/sketch/visibilityOverrides';
 import {
   sketchGeometryDeleteRefusal,
@@ -1244,6 +1262,13 @@ const SketchPlanePrompt = withSuspense(LazySketchPlanePrompt);
 const DatumPlaneCard = withSuspense(LazyDatumPlaneCard);
 
 const DatumAxisCard = withSuspense(LazyDatumAxisCard);
+
+const LazyReferenceImageCard = lazyWithStaleChunkNotice(() =>
+  import('./components/forms/ReferenceImageForm').then((module) => ({
+    default: module.ReferenceImageWorkspaceCard
+  }))
+);
+const ReferenceImageCard = withSuspense(LazyReferenceImageCard);
 import {
   chooseProjectDocument,
   projectsHaveSameRebuildInputs,
@@ -1275,7 +1300,10 @@ import {
   withMatchingLocalDerived,
   type LocalProjectOrganizationSnapshot
 } from './lib/localProjectStore';
-import { cacheCopySources } from './lib/sourceBlobClaims';
+import {
+  cacheCopyPictures,
+  cacheCopySources
+} from './lib/sourceBlobClaims';
 import {
   mirrorPendingOrganization,
   mirrorPendingReorder,
@@ -7166,7 +7194,11 @@ export function App() {
       let next = managerRef.current.execute(command);
       // A drawing-sheet edit leaves the model alone: keep the ready geometry
       // rather than posting a rebuild (and a "Rebuilding" lane) per view move.
-      if (isDrawingCommandKind(command.kind)) geometry.retainReadyGeometry(next);
+      if (
+        isDrawingCommandKind(command.kind) ||
+        isReferenceImageCommandKind(command.kind)
+      )
+        geometry.retainReadyGeometry(next);
       if (derived) {
         // Validation already rebuilt this exact result; attaching it now
         // renders the new geometry in the same batch instead of flashing the
@@ -7734,6 +7766,22 @@ export function App() {
       edgePreview.clear();
       dispatchInteraction({ type: 'clear' });
       setKeypad(null);
+    }
+    if (nextTool === 'reference-image') {
+      // The picture comes first: the file dialog opens, and the image lands
+      // on the selected flat face, or on Top (XY) with nothing picked. A
+      // selected face it cannot lie on refuses, rather than quietly placing
+      // the picture on Top, far from what the user picked.
+      const placement = referenceImageInsertPlane(selectedFaceImagePlane());
+      if ('refusal' in placement) {
+        setStatus(
+          `${TOOL_META['reference-image'].label}: ${placement.refusal}`
+        );
+        return false;
+      }
+      referenceImagePlaneRef.current = placement.plane;
+      referenceImageInputRef.current?.click();
+      return true;
     }
     if (nextTool === 'sketch') {
       clearSelection();
@@ -8527,6 +8575,133 @@ export function App() {
   /** Datum planes hidden by their eye toggle: view state, as sketches' is. */
   const [hiddenDatumIds, setHiddenDatumIds] = useState<ReadonlySet<string>>(
     () => new Set()
+  );
+  /** I05 reference images hidden by their eye toggle: view state too. */
+  const [hiddenReferenceImageIds, setHiddenReferenceImageIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  /** The reference image whose card is open, with the Image tool. */
+  const [openReferenceImageId, setOpenReferenceImageId] =
+    useState<ReferenceImageId | null>(null);
+  /** The open image card's unapplied placement, drawn live. */
+  const [referenceImageDraft, setReferenceImageDraft] =
+    useState<ReferenceImage | null>(null);
+  const referenceImageInputRef = useRef<HTMLInputElement | null>(null);
+  /** The plane a picture chosen in the file dialog will lie on. */
+  const referenceImagePlaneRef = useRef<ReferenceImagePlane | null>(null);
+
+  /**
+   * The plane of the selected face, when an image can lie on it: associative
+   * when the face has lineage, a fixed frame coincident with it when not.
+   */
+  function selectedFaceImagePlane():
+    | ReferenceImagePlane
+    | { reason: string }
+    | null {
+    const current = managerRef.current?.document;
+    if (!current || selectedTopology?.kind !== 'face') return null;
+    const attachment = faceSketchAttachment({
+      bodyId: selectedTopology.bodyId,
+      pickedHash: selectedTopology.hash,
+      face: current.derived.bodyRepresentations[
+        selectedTopology.bodyId
+      ]?.topology?.faces.find((face) => face.hash === selectedTopology.hash)
+    });
+    return attachment.ok ? attachment.planeRef : { reason: attachment.reason };
+  }
+
+  function openReferenceImage(imageId: ReferenceImageId) {
+    setOpenReferenceImageId(imageId);
+    setReferenceImageDraft(null);
+    setTool('reference-image');
+  }
+
+  function closeReferenceImage() {
+    setOpenReferenceImageId(null);
+    setReferenceImageDraft(null);
+    setTool((current) => (current === 'reference-image' ? null : current));
+  }
+
+  async function insertReferenceImage(file: File) {
+    const current = managerRef.current?.document;
+    if (!current || !ensureCanEdit('insert an image')) return;
+    const plane =
+      referenceImagePlaneRef.current ??
+      ({ type: 'canonical', plane: 'XY', offset: 0 } as const);
+    referenceImagePlaneRef.current = null;
+    setStatus(`Placing ${file.name}…`);
+    try {
+      const { discardReferenceImageBytes, prepareReferenceImage } =
+        await import('./lib/referenceImageInsert');
+      const prepared = await prepareReferenceImage({
+        file,
+        document: current,
+        plane,
+        archive: archiveArtifact
+      });
+      const { image } = prepared;
+      if (
+        managerRef.current?.document.projectId === current.projectId &&
+        executeCommand(commandFactories.addReferenceImage({ image }))
+      ) {
+        openReferenceImage(image.imageId);
+        setStatus(
+          `${image.name} placed. Scale it from two points, or set its width.`
+        );
+      } else {
+        await discardReferenceImageBytes(prepared, [
+          managerRef.current?.document
+        ]);
+      }
+    } catch (error) {
+      setStatus(errorMessage(error, 'The image could not be placed.'));
+    }
+  }
+
+  function applyReferenceImage(update: ReferenceImageUpdateInput): boolean {
+    return executeCommand(commandFactories.updateReferenceImage(update));
+  }
+
+  function deleteReferenceImage(imageId: ReferenceImageId) {
+    if (executeCommand(commandFactories.deleteReferenceImage({ imageId }))) {
+      closeReferenceImage();
+    }
+  }
+
+  // An open image card whose image is gone (undone, or deleted by a
+  // collaborator) closes rather than falling through to the inspector.
+  useEffect(() => {
+    if (
+      tool === 'reference-image' &&
+      !doc?.referenceImages?.images.some(
+        (image) => image.imageId === openReferenceImageId
+      )
+    ) {
+      setOpenReferenceImageId(null);
+      setReferenceImageDraft(null);
+      setTool(null);
+    }
+  }, [doc, tool, openReferenceImageId]);
+
+  /**
+   * A picture's bytes for the viewport, by checksum; lazy-loaded. Every
+   * image placing that picture is offered, so one record's unavailable
+   * artifact never hides another's.
+   */
+  const loadReferenceImage = useCallback(
+    async (checksumSha256: string): Promise<Blob | null> => {
+      const images = (
+        managerRef.current?.document.referenceImages?.images ?? []
+      ).filter(
+        (candidate) => candidate.source.checksumSha256 === checksumSha256
+      );
+      if (images.length === 0) return null;
+      const { loadReferenceImageBlob } = await import(
+        './lib/referenceImageInsert'
+      );
+      return loadReferenceImageBlob(images);
+    },
+    []
   );
 
   /** Sketches referenced by any feature: extrude/revolve, loft sections, sweep profile + path. */
@@ -10334,7 +10509,7 @@ export function App() {
         try {
           // The browser builds the copy and the account stores it (ADR-024
           // Phase 1). Loaded on demand: only Duplicate and Branch get here.
-          const { buildCloudProjectCopy } =
+          const { buildCloudProjectCopy, publishCopyPictures } =
             await import('./lib/cloudProjectCopy');
           const request = await buildCloudProjectCopy(
             {
@@ -10351,7 +10526,9 @@ export function App() {
             },
             session.userId,
             projects.map((summary) => summary.name),
-            api
+            api,
+            (document) =>
+              cacheCopyPictures(document, loadSourceBlob, sha256Hex)
           );
           if (!request) {
             // The account no longer stores that save state; this device may.
@@ -10361,22 +10538,46 @@ export function App() {
             project.projectId,
             request
           );
+          // Reference images arrive under device-local ids (the account
+          // copies import sources only): upload them into the copy now, so
+          // no other device opens it without its pictures.
+          const { archiveArtifact: archiveArtifactBody } =
+            await import('./lib/archiveArtifact');
+          const pictures = await publishCopyPictures(
+            response.document,
+            response.project.documentVersion ?? response.document.version,
+            {
+              loadSourceBytes: loadSourceBlob,
+              archive: (input) =>
+                archiveArtifactBody(api, response.document.projectId, input),
+              save: (document, expectedVersion) =>
+                api.saveProjectDocument({
+                  projectId: document.projectId,
+                  expectedVersion,
+                  document
+                })
+            }
+          ).catch(() => null);
+          const copied = pictures?.document ?? response.document;
+          const pictureWarning = pictures
+            ? sourceUploadMessage(pictures.result)
+            : 'Its images are still on this device only; open the copy and save it to upload them.';
           const localSource = await loadLocalProject(project.projectId).catch(
             () => null
           );
           let localCopy = restoreDuplicateDerivedProjection(
-            response.document,
+            copied,
             localSource
           );
-          if (localCopy === response.document) {
+          if (localCopy === copied) {
             // This device may not have the exact source revision cached. The
             // kernel stays in the browser, so rebuild the copy here rather
             // than asking cloud persistence to store a derived projection.
             const derived = await geometry
-              .syncOnce(response.document)
+              .syncOnce(copied)
               .catch(() => null);
             if (derived) {
-              localCopy = { ...response.document, derived };
+              localCopy = { ...copied, derived };
             }
           }
           // Kept on the device too, so the copy opens offline exactly like the
@@ -10392,9 +10593,12 @@ export function App() {
             [...current, response.project].sort(compareProjectSummaries)
           );
           setStatus(
-            saveState
-              ? `Branched ${project.name} from “${saveState.reason}” as ${response.project.name}.`
-              : `Duplicated ${project.name} as ${response.project.name}.`
+            [
+              saveState
+                ? `Branched ${project.name} from “${saveState.reason}” as ${response.project.name}.`
+                : `Duplicated ${project.name} as ${response.project.name}.`,
+              ...(pictureWarning ? [pictureWarning] : [])
+            ].join(' ')
           );
           return;
         } catch (error) {
@@ -10696,6 +10900,7 @@ export function App() {
     // keeps the modeling refusal rather than reverting unseen work.
     const parametersOnly = managerRef.current.undoIsParameterOnly;
     const drawingOnly = managerRef.current.undoIsDrawingOnly;
+    const imageOnly = managerRef.current.undoIsReferenceImageOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('undo')) return;
     } else if (!parametersOnly && !ensureCanEdit('undo')) {
@@ -10707,7 +10912,7 @@ export function App() {
     const label = managerRef.current.undoLabel;
     try {
       const next = managerRef.current.undo();
-      if (drawingOnly) geometry.retainReadyGeometry(next);
+      if (drawingOnly || imageOnly) geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
     } catch (error) {
@@ -10734,6 +10939,7 @@ export function App() {
     // cursor, so its kinds decide — not the undo entry below it.
     const parametersOnly = managerRef.current.redoIsParameterOnly;
     const drawingOnly = managerRef.current.redoIsDrawingOnly;
+    const imageOnly = managerRef.current.redoIsReferenceImageOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('redo')) return;
     } else if (!parametersOnly && !ensureCanEdit('redo')) {
@@ -10745,7 +10951,7 @@ export function App() {
     const label = managerRef.current.redoLabel;
     try {
       const next = managerRef.current.redo();
-      if (drawingOnly) geometry.retainReadyGeometry(next);
+      if (drawingOnly || imageOnly) geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
     } catch (error) {
@@ -12434,6 +12640,14 @@ export function App() {
           source
         );
         setDoc(next);
+        if (source.kind === 'reference-image') {
+          return [...referenceImagesWithHistory(next)].some(
+            (image) =>
+              image.artifactId === artifactId &&
+              image.source.checksumSha256 === source.checksumSha256 &&
+              image.source.logicalBytes === source.logicalBytes
+          );
+        }
         return [...documentNodesWithHistory(next)].some((node) => {
           if (
             node.kind !== 'feature' ||
@@ -15097,6 +15311,10 @@ export function App() {
     interaction.mode === 'sketch' && interaction.session.sketchId && doc
       ? (findSketch(doc, interaction.session.sketchId as SketchId) ?? null)
       : null;
+  const selectedSketchConstraintId =
+    interaction.mode === 'sketch'
+      ? (interaction.session.selectedConstraintId ?? null)
+      : null;
   const sketchRelationChips = useMemo(
     () =>
       sketchModeState && doc
@@ -15109,6 +15327,10 @@ export function App() {
             {
               visibility: appSettings.sketching.relationGlyphs,
               selectedObjectId: sketchModeState.selectedObjectId,
+              selectedConstraintId: selectedSketchConstraintId,
+              hiddenKinds: new Set(
+                appSettings.sketching.hiddenRelationGlyphs
+              ),
               conflictingConstraintIds: new Set(
                 sketchSolveStatus?.conflictingConstraintIds ?? []
               )
@@ -15121,8 +15343,62 @@ export function App() {
       editingSketchNode,
       parameterScope.scope,
       appSettings.sketching.relationGlyphs,
+      appSettings.sketching.hiddenRelationGlyphs,
+      selectedSketchConstraintId,
       sketchSolveStatus
     ]
+  );
+  // A relation is picked from its glyph, so the pick lasts only while that
+  // glyph is drawn: a filter that hides its kind, glyphs turned off, or an
+  // undo that removes the relation drops it, and Delete can never remove a
+  // relation nobody can see selected.
+  const selectedSketchConstraintDrawn =
+    selectedSketchConstraintId !== null &&
+    sketchRelationChips.some((chip) =>
+      chip.glyphs.some(
+        (glyph) => glyph.constraintId === selectedSketchConstraintId
+      )
+    );
+  useEffect(() => {
+    if (selectedSketchConstraintId !== null && !selectedSketchConstraintDrawn) {
+      dispatchInteraction({
+        type: 'sketch-select-constraint',
+        constraintId: null
+      });
+    }
+  }, [selectedSketchConstraintId, selectedSketchConstraintDrawn]);
+  // The drawn curves relation glyphs keep clear of, only while any show.
+  const sketchRelationStrokeSegments = useMemo(
+    () =>
+      sketchModeState && doc && sketchRelationChips.length > 0
+        ? sketchRelationStrokes(
+            sketchModeState.objects,
+            (value) =>
+              evalParamValue(value, parameterScope.scope, doc.units) ??
+              undefined,
+            textOutlineBudgetError
+          )
+        : undefined,
+    [
+      sketchModeState,
+      doc,
+      parameterScope.scope,
+      sketchRelationChips.length,
+      textOutlineBudgetError
+    ]
+  );
+  // And every pickable point (centres, ends, the origin), likewise.
+  const sketchRelationKeepOutPoints = useMemo(
+    () =>
+      sketchModeState && doc && sketchRelationChips.length > 0
+        ? sketchRelationKeepOuts(
+            sketchModeState.objects,
+            (value) =>
+              evalParamValue(value, parameterScope.scope, doc.units) ??
+              undefined
+          )
+        : undefined,
+    [sketchModeState, doc, parameterScope.scope, sketchRelationChips.length]
   );
   // The viewport's copy of the session also knows whether a solve or rebuild
   // owns the sketch, so a click cannot place text the card has disabled.
@@ -15131,9 +15407,18 @@ export function App() {
       sketchModeState && {
         ...sketchModeState,
         relations: sketchRelationChips,
+        relationStrokes: sketchRelationStrokeSegments,
+        relationKeepOuts: sketchRelationKeepOutPoints,
         textDraftBusy: sketchSolving || geometryBusy
       },
-    [sketchModeState, sketchRelationChips, sketchSolving, geometryBusy]
+    [
+      sketchModeState,
+      sketchRelationChips,
+      sketchRelationStrokeSegments,
+      sketchRelationKeepOutPoints,
+      sketchSolving,
+      geometryBusy
+    ]
   );
 
   const sketchOverview = useMemo(() => {
@@ -16279,6 +16564,32 @@ export function App() {
     setStatus(`Selected ${target.label}, referenced by this constraint.`);
   }
 
+  /**
+   * Whether the picked relation's glyph is drawn, as the viewport last
+   * reported. Panned or orbited off screen, or with nowhere clear to show,
+   * the selection stays but Delete does nothing: it never removes a relation
+   * whose selected glyph cannot be seen.
+   */
+  const selectedConstraintShownRef = useRef<{
+    constraintId: string;
+    shown: boolean;
+  } | null>(null);
+
+  /** A relation glyph was clicked: select that relation for Delete. */
+  function handleSelectSketchConstraint(constraintId: string) {
+    const constraint = editingSketchNode?.constraints?.find(
+      (candidate) => String(candidate.constraintId) === constraintId
+    );
+    if (!constraint || sketchSolving || geometryBusy) return;
+    const kind = constraint.data.constraintKind;
+    const label =
+      kind === 'distance' || kind === 'radius' || kind === 'angle'
+        ? 'dimension'
+        : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
+    dispatchInteraction({ type: 'sketch-select-constraint', constraintId });
+    setStatus(`Selected ${label}. Press Delete to remove it.`);
+  }
+
   function handleDeleteSketchConstraint(constraintId: string) {
     if (!editingSketchNode) {
       return;
@@ -16295,6 +16606,12 @@ export function App() {
       )
     ) {
       setSketchSolveStatus(null);
+      if (selectedSketchConstraintId === constraintId) {
+        dispatchInteraction({
+          type: 'sketch-select-constraint',
+          constraintId: null
+        });
+      }
       setStatus('Deleted constraint.');
     }
   }
@@ -20309,6 +20626,34 @@ export function App() {
           startExtrude(interaction.session.sketchId as SketchId);
           return;
         }
+        // A relation picked from its glyph is the narrower selection, so
+        // Delete removes it before it would remove the entity it sits on.
+        // Only a relation whose glyph is drawn counts as selected (an undo,
+        // a filter or the glyph setting can take it away before the effect
+        // above clears it); otherwise the key falls through to the entity.
+        const selectedConstraintId = selectedSketchConstraintDrawn
+          ? selectedSketchConstraintId
+          : null;
+        if (
+          (event.key === 'Delete' || event.key === 'Backspace') &&
+          !meta &&
+          !event.altKey &&
+          selectedConstraintId
+        ) {
+          event.preventDefault();
+          const onScreen =
+            selectedConstraintShownRef.current?.constraintId ===
+              selectedConstraintId &&
+            selectedConstraintShownRef.current.shown;
+          if (!onScreen) {
+            setStatus(
+              'The selected relation is out of view; bring its glyph back to delete it.'
+            );
+          } else if (!sketchSolving && !geometryBusy) {
+            handleDeleteSketchConstraint(selectedConstraintId);
+          }
+          return;
+        }
         if (
           (event.key === 'Delete' || event.key === 'Backspace') &&
           !meta &&
@@ -20569,6 +20914,15 @@ export function App() {
           return;
         case 'view-iso':
           requestView('iso');
+          return;
+        case 'view-back':
+          requestView('back');
+          return;
+        case 'view-bottom':
+          requestView('bottom');
+          return;
+        case 'view-left':
+          requestView('left');
           return;
         case 'view-measure':
           toggleMeasure(!measuring);
@@ -21066,6 +21420,30 @@ export function App() {
       run: () => requestView('iso')
     },
     {
+      id: 'view-back',
+      label: 'Back view',
+      group: 'View',
+      shortcut: keymap.label('view-back'),
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('back')
+    },
+    {
+      id: 'view-bottom',
+      label: 'Bottom view',
+      group: 'View',
+      shortcut: keymap.label('view-bottom'),
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('bottom')
+    },
+    {
+      id: 'view-left',
+      label: 'Left view',
+      group: 'View',
+      shortcut: keymap.label('view-left'),
+      icon: <Monitor size={16} aria-hidden="true" />,
+      run: () => requestView('left')
+    },
+    {
       id: 'view-fit',
       label: 'Fit view',
       group: 'View',
@@ -21489,6 +21867,12 @@ export function App() {
                         : viewerBodies.length > 0
                           ? 'Click a body, face, or edge · Shift+Click adds to selection'
                           : idleHint));
+  const openReferenceImageEntry =
+    (openReferenceImageId &&
+      doc?.referenceImages?.images.find(
+        (image) => image.imageId === openReferenceImageId
+      )) ||
+    null;
   const inspectorActive =
     !modelingLocked &&
     !directMode &&
@@ -22113,6 +22497,14 @@ export function App() {
       document={doc}
       hiddenDatumIds={hiddenDatumIds}
       onHiddenDatumIdsChange={setHiddenDatumIds}
+      hiddenReferenceImageIds={hiddenReferenceImageIds}
+      onHiddenReferenceImageIdsChange={setHiddenReferenceImageIds}
+      selectedReferenceImageId={
+        tool === 'reference-image' ? openReferenceImageId : null
+      }
+      onSelectReferenceImage={(imageId) =>
+        openReferenceImage(imageId as ReferenceImageId)
+      }
       warnings={diagnostics}
       historyDetails={
         <FeatureHistoryPanel
@@ -22727,6 +23119,12 @@ export function App() {
             }}
             onEditSketchDimension={handleEditSketchDimension}
             onMoveSketchDimension={handleMoveSketchDimension}
+            onSelectSketchConstraint={handleSelectSketchConstraint}
+            onSketchConstraintSelectionShown={(constraintId, shown) => {
+              // Whether the picked relation's glyph is on screen: Delete
+              // acts on it only while it is (see the sketch key handler).
+              selectedConstraintShownRef.current = { constraintId, shown };
+            }}
             onSketchDrawingChange={(drawing) =>
               dispatchInteraction({ type: 'sketch-drawing', drawing })
             }
@@ -22773,6 +23171,13 @@ export function App() {
             planePickerArmed={!modelingLocked && tool === 'sketch'}
             datumDocument={doc}
             hiddenDatumIds={hiddenDatumIds}
+            referenceImages={referenceImageDisplays(
+              doc,
+              hiddenReferenceImageIds,
+              tool === 'reference-image' ? openReferenceImageId : null,
+              tool === 'reference-image' ? referenceImageDraft : null
+            )}
+            loadReferenceImage={loadReferenceImage}
             selectedFeatureId={
               (modelingEditFeature ?? selectedFeature)?.featureId ?? null
             }
@@ -23431,6 +23836,26 @@ export function App() {
                   )}
                 </div>
               </section>
+            ) : tool === 'reference-image' && openReferenceImageEntry ? (
+              <ReferenceImageCard
+                key={openReferenceImageEntry.imageId}
+                document={doc}
+                image={openReferenceImageEntry}
+                datumPlanes={earlierDatumPlanes(doc, null)}
+                selectedFacePlane={selectedFaceImagePlane()}
+                loadPicture={() =>
+                  loadReferenceImage(
+                    openReferenceImageEntry.source.checksumSha256
+                  )
+                }
+                editDisabledReason={editDisabledReason}
+                onDraft={setReferenceImageDraft}
+                onApply={applyReferenceImage}
+                onDelete={() =>
+                  deleteReferenceImage(openReferenceImageEntry.imageId)
+                }
+                onClose={closeReferenceImage}
+              />
             ) : tool === 'datum-plane' && doc ? (
               <DatumPlaneCard
                 key={modelingEditFeature?.featureId ?? 'new'}
@@ -24101,6 +24526,18 @@ export function App() {
               if (files.length > 0) {
                 void handleImportFiles(files);
               }
+            }}
+          />
+          <input
+            ref={referenceImageInputRef}
+            type="file"
+            accept="image/png,image/jpeg,.png,.jpg,.jpeg"
+            aria-label="Insert reference image"
+            style={{ display: 'none' }}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) void insertReferenceImage(file);
             }}
           />
           {shortcutsOpen && (

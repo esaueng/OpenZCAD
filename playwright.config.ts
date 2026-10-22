@@ -54,6 +54,10 @@ export default defineConfig({
   // already run in isolated browser contexts; nothing in the suite depends
   // on in-file order.
   fullyParallel: true,
+  // The default scales with the host CPU count, even when a self-hosted slot
+  // has a smaller CPU budget. Match the two-worker hosted baseline so browser
+  // and geometry workers do not crowd each other into the test deadline.
+  workers: process.env.CI ? 2 : undefined,
   // Playwright's focus is run-wide, not file-wide, so one `test.only` left in a
   // push turns the CI shard holding it into a single executed test: the other
   // shards run zero, every shard exits 0, and the `e2e` aggregate — documented

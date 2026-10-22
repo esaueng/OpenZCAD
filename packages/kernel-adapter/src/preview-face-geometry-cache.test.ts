@@ -121,6 +121,60 @@ describe('preview face geometry cache', () => {
     expect(cache.hits).toBe(0);
   });
 
+  it.each([
+    'getAnalyticSurfaceParams',
+    'getSurfaceDomain',
+    'getFaceNormal',
+    'getEdgeCurveType',
+    'evaluateEdgeCurve',
+    'getEdgeNurbsData'
+  ] as const)(
+    'never retains an incomplete key after a failed %s read',
+    (method) => {
+      const readable = kernelWith({
+        1: { normal: [0, 0, 1], curve: ellipse(10, 10) },
+        2: { normal: [0, 0, 1], curve: ellipse(10, 6) }
+      });
+      const kernel: FaceShapeKernel = {
+        ...readable,
+        [method]: () => {
+          throw new Error('unavailable measurement input');
+        }
+      };
+      const measured: number[] = [];
+      // Cold measurement has its own kernel reads. A refused cache-key read
+      // must not prevent it from publishing the face's available geometry.
+      const cache = new PreviewFaceGeometryCache(16, (_, face) => {
+        measured.push(face);
+        return {
+          surfaceType: 'plane',
+          area: 100 + face,
+          center: { x: 0, y: 0, z: 0 }
+        };
+      });
+      for (const face of [1, 2, 1]) {
+        expect(cache.measure(kernel as RemusKernel, face, witness)?.area).toBe(
+          100 + face
+        );
+      }
+      expect(measured).toEqual([1, 2, 1]);
+      expect(cache.hits).toBe(0);
+      expect(cache.misses).toBe(3);
+
+      // Once the inputs are readable, each distinct boundary can be retained
+      // and only a subsequent matching face is reused.
+      Object.assign(kernel, { [method]: readable[method] });
+      for (const face of [1, 2, 1]) {
+        expect(cache.measure(kernel as RemusKernel, face, witness)?.area).toBe(
+          100 + face
+        );
+      }
+      expect(measured).toEqual([1, 2, 1, 1, 2]);
+      expect(cache.hits).toBe(1);
+      expect(cache.misses).toBe(5);
+    }
+  );
+
   it('reuses a face by content digest without reading it again', () => {
     const kernel = kernelWith({
       1: { normal: [0, 0, 1], curve: ellipse(10, 10) },

@@ -14,6 +14,7 @@ import {
   shiftedDatumFrame
 } from '../lib/datumPlaneDisplay';
 import { datumAxisDisplays } from '../lib/datumAxisDisplay';
+import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
 import {
   useMemo,
@@ -279,6 +280,8 @@ interface ViewerShellProps {
     identity: SketchDimensionIdentity,
     offset: { x: number; y: number }
   ): void;
+  onSelectSketchConstraint?: ModelViewerProps['onSelectSketchConstraint'];
+  onSketchConstraintSelectionShown?: ModelViewerProps['onSketchConstraintSelectionShown'];
   onSketchDrawingChange(drawing: boolean): void;
   sketchMoveEnabled?: ModelViewerProps['sketchMoveEnabled'];
   onSketchMoveChange?: ModelViewerProps['onSketchMoveChange'];
@@ -302,6 +305,9 @@ interface ViewerShellProps {
   datumDocument?: ProjectDocument | null;
   /** Datum planes hidden by their eye toggle. */
   hiddenDatumIds?: ReadonlySet<string>;
+  /** I05 reference images to draw; see `ModelViewer`. */
+  referenceImages?: readonly ReferenceImageDisplay[];
+  loadReferenceImage?: (checksumSha256: string) => Promise<Blob | null>;
   /** The selected or edited feature, drawn highlighted when it is a datum. */
   selectedFeatureId?: FeatureId | null;
   onPickPlane(plane: PlaneId): void;
@@ -456,6 +462,8 @@ export function ViewerShell({
   onSketchCommitComposite,
   onEditSketchDimension,
   onMoveSketchDimension,
+  onSelectSketchConstraint,
+  onSketchConstraintSelectionShown,
   onSketchDrawingChange,
   sketchMoveEnabled,
   onSketchMoveChange,
@@ -472,6 +480,8 @@ export function ViewerShell({
   primitiveGhost = null,
   datumDocument = null,
   hiddenDatumIds,
+  referenceImages,
+  loadReferenceImage,
   selectedFeatureId = null,
   onPickPlane,
   onPickDatum,
@@ -749,6 +759,8 @@ export function ViewerShell({
         onSketchCommitComposite={onSketchCommitComposite}
         onEditSketchDimension={onEditSketchDimension}
         onMoveSketchDimension={onMoveSketchDimension}
+        onSelectSketchConstraint={onSelectSketchConstraint}
+        onSketchConstraintSelectionShown={onSketchConstraintSelectionShown}
         onSketchDrawingChange={onSketchDrawingChange}
         sketchMoveEnabled={sketchMoveEnabled}
         onSketchMoveChange={onSketchMoveChange}
@@ -791,6 +803,8 @@ export function ViewerShell({
               )
             : []
         }
+        {...(referenceImages ? { referenceImages } : {})}
+        {...(loadReferenceImage ? { loadReferenceImage } : {})}
         onPickPlane={onPickPlane}
         onPickDatum={onPickDatum}
         onMeasurePreview={onMeasurePreview}

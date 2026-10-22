@@ -14,7 +14,13 @@ import {
   type FinalizeArtifactRequest,
   type SaveProjectDocumentRequest
 } from '@openzcad/shared';
-import { test, expect, stubApi, createProject } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  createProject,
+  withHydratedDocument
+} from './openzcad-fixtures';
 
 function backup() {
   const bytes = readFileSync('test/parity/corpus/b-unit-mm-cube.step');
@@ -92,9 +98,11 @@ for (const {
     let deviceProjectId: string | undefined;
     let adopted: ProjectDocument | undefined;
     let adoptionAttempts = 0;
-    await page.route('**/api/projects', (route) => {
+    await page.route('**/api/projects', async (route) => {
       if (route.request().method() !== 'POST') return route.fallback();
-      const payload = route.request().postDataJSON() as {
+      const payload = (await withHydratedDocument(
+        route.request().postDataJSON()
+      )) as {
         name: string;
         document?: ProjectDocument;
         localProjectId?: string;

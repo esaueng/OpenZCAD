@@ -14,7 +14,7 @@ import {
 import {
   hydrateProjectStorageSnapshot,
   prepareProjectStorageSnapshot
-} from '../packages/cloudflare-adapters/src/project-object-storage';
+} from '@openzcad/persistence';
 import {
   isImportedSourceReference,
   toUserId,
