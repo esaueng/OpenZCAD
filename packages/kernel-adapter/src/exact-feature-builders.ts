@@ -45,13 +45,17 @@ import {
   faceCandidatesForSolid,
   modifierChainRootPrimitive,
   patternJournalBoundaryOutputs,
+  patternJournalBoundaryOutputsForSources,
   patternJournalFaceClaims,
   rederiveBoxModifierLineage,
   rederiveCylinderModifierLineage,
   rederivePrimitiveDirectEditLineage,
   topologyCandidatesForSolid
 } from './exact-lineage-builders';
-import { qualifyGridNativeVertices } from './remus-native-vertices';
+import {
+  qualifyGridNativeVertices,
+  type RemusNativeVertexState
+} from './remus-native-vertices';
 import { measureFaceGeometry } from './exact-measure';
 import {
   drillHole,
@@ -2438,11 +2442,17 @@ interface PatternInstanceBuild {
 interface KernelPatternCopies {
   readonly solids: number[];
   readonly claims: (ReadonlyMap<number, number> | undefined)[] | null;
-  /** Grid-only: complete checked journal subjects, not source-edge claims. */
+  /** Complete checked journal subjects, not source-edge claims. */
   readonly edgeOutputs?: ReadonlySet<number>[] | null;
   readonly vertexOutputs?: ReadonlySet<number>[] | null;
   readonly vertexUnavailableReason?:
     'event-budget' | 'journal-unavailable' | null;
+  /** Retained with its actual member group until all LINEAR costs are known. */
+  readonly linearJournal?: {
+    readonly sourceSolid: number;
+    readonly compound: number;
+    readonly op: number;
+  };
 }
 
 /**
@@ -2579,6 +2589,92 @@ function patternInstances(
   }));
 }
 
+/** Qualify every source operation against one aggregate boundary allowance. */
+function linearPatternBoundaryCopies(
+  kernel: RemusKernel,
+  sourceSolids: readonly number[],
+  copies: readonly KernelPatternCopies[]
+): KernelPatternCopies[] {
+  if (copies.length !== sourceSolids.length) return [...copies];
+  try {
+    const sources = [];
+    for (const [index, copy] of copies.entries()) {
+      const journal = copy.linearJournal;
+      if (
+        !journal ||
+        journal.sourceSolid !== sourceSolids[index] ||
+        copy.solids[0] !== journal.sourceSolid
+      )
+        return [...copies];
+      const members = Array.from(kernel.getCompoundSolids(journal.compound));
+      if (
+        members.length !== copy.solids.length ||
+        members.some((solid, member) => solid !== copy.solids[member])
+      )
+        return [...copies];
+      sources.push({ op: journal.op, instanceSolids: copy.solids });
+    }
+    const boundary = patternJournalBoundaryOutputsForSources(
+      kernel,
+      sources,
+      true,
+      'linear_pattern'
+    );
+    return copies.map((copy, index) => ({
+      ...copy,
+      edgeOutputs: boundary[index]?.edges,
+      vertexOutputs: boundary[index]?.vertices,
+      vertexUnavailableReason:
+        boundary[index]?.vertexUnavailableReason ?? 'journal-unavailable'
+    }));
+  } catch {
+    // Qualification is optional evidence; the already-built copies and face
+    // claims remain available if the retained operation cannot be checked.
+    return [...copies];
+  }
+}
+
+/** Keep native state scoped to the source/member pair that was qualified. */
+function patternNativeVertices(
+  kernel: RemusKernel,
+  feature: FeatureNode,
+  target: ExactShape,
+  lineage: RemusLineageState,
+  instances: readonly PatternInstanceBuild[]
+): RemusNativeVertexState | undefined {
+  const solids = instances.flatMap((instance) => instance.solids);
+  if (
+    new Set(target.solids).size !== target.solids.length ||
+    new Set(solids).size !== solids.length ||
+    instances.some(
+      (instance) => instance.solids.length !== target.solids.length
+    )
+  )
+    return undefined;
+  const states = target.solids.map((sourceSolid, source) =>
+    qualifyGridNativeVertices({
+      kernel,
+      producingFeatureId: feature.featureId,
+      sourceSolid,
+      sourceLineage: target.lineage,
+      resultLineage: lineage,
+      instances: instances.map((instance) => ({
+        solid: instance.solids[source]!,
+        instance: instance.instance,
+        matrix: instance.matrix,
+        journalVertices: instance.vertexOutputs[source],
+        unavailableReason: instance.vertexUnavailableReason[source]
+      }))
+    })
+  );
+  return {
+    bySolid: new Map(states.flatMap((state) => [...state.bySolid])),
+    withheldBySolid: new Map(
+      states.flatMap((state) => [...state.withheldBySolid])
+    )
+  };
+}
+
 /**
  * Pattern lineage for the instances, or a stated hash-only fallback.
  *
@@ -2644,8 +2740,7 @@ function linearPatternArm(
   kernel: RemusKernel,
   direction: Vec3,
   spacing: number,
-  count: number,
-  qualifyBoundary: boolean
+  count: number
 ): PatternArm {
   // The kernel takes a positive step along a direction it normalizes, so a
   // negative spacing — which this feature has always accepted — is the same
@@ -2681,21 +2776,9 @@ function linearPatternArm(
         solid,
         count
       );
-      const boundary = qualifyBoundary
-        ? patternJournalBoundaryOutputs(
-            kernel,
-            journal.op,
-            solids,
-            true,
-            'linear_pattern'
-          )
-        : null;
       return {
         solids,
-        edgeOutputs: boundary?.edges,
-        vertexOutputs: boundary?.vertices,
-        vertexUnavailableReason:
-          boundary?.vertexUnavailableReason ?? 'journal-unavailable',
+        linearJournal: { sourceSolid: solid, ...journal },
         claims: patternJournalFaceClaims(
           kernel,
           journal.op,
@@ -2952,13 +3035,7 @@ function buildPatternFeature(
     if (Math.abs(spacing) <= GEOMETRY_EPSILON) {
       throw new Error('Pattern spacing cannot be zero.');
     }
-    arm = linearPatternArm(
-      kernel,
-      direction,
-      spacing,
-      count,
-      target.solids.length === 1
-    );
+    arm = linearPatternArm(kernel, direction, spacing, count);
   } else if (data.patternKind === 'grid') {
     const spacing = resolveParamValue(
       data.spacing,
@@ -3060,6 +3137,9 @@ function buildPatternFeature(
     }
   } else {
     perSource = copyInstances();
+  }
+  if (data.patternKind === 'linear' && kernelCopies && !declined) {
+    perSource = linearPatternBoundaryCopies(kernel, target.solids, perSource);
   }
   const instances = patternInstances(arm, perSource);
   const solids = instances.flatMap((instance) => instance.solids);
@@ -3179,23 +3259,16 @@ function buildPatternFeature(
     result.shapes.set(feature.bodyId, {
       solids,
       lineage,
-      ...((data.patternKind === 'grid' || data.patternKind === 'linear') &&
-      target.solids.length === 1
+      ...(data.patternKind === 'linear' ||
+      (data.patternKind === 'grid' && target.solids.length === 1)
         ? {
-            nativeVertices: qualifyGridNativeVertices({
+            nativeVertices: patternNativeVertices(
               kernel,
-              producingFeatureId: feature.featureId,
-              sourceSolid: target.solids[0]!,
-              sourceLineage: target.lineage,
-              resultLineage: lineage,
-              instances: instances.map((instance) => ({
-                solid: instance.solids[0]!,
-                instance: instance.instance,
-                matrix: instance.matrix,
-                journalVertices: instance.vertexOutputs[0],
-                unavailableReason: instance.vertexUnavailableReason[0]
-              }))
-            })
+              feature,
+              target,
+              lineage,
+              instances
+            )
           }
         : {})
     });
