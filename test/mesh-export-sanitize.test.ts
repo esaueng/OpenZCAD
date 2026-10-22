@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { createRequire } from 'node:module';
+import { describe, expect, it, vi } from 'vitest';
 import {
   countExportedTriangles,
   sanitizeBinaryPly,
   sanitizeBinaryStl,
+  sanitizeThreeMf,
   sanitizeThreeMfModel
 } from '../packages/kernel-adapter/src/mesh-export-sanitize';
 
@@ -213,5 +215,27 @@ describe('exact mesh export sanitizing', () => {
       sanitizeBinaryPly(new TextEncoder().encode(asciiHeader))
     ).toThrow(/non-binary PLY/);
     expect(() => sanitizeBinaryPly(ascii.subarray(0, 100))).toThrow(/PLY/);
+  });
+});
+
+describe('sanitizeThreeMf', () => {
+  it('writes the same archive bytes whatever the clock reads', () => {
+    const model = new TextEncoder().encode('<model><mesh/></model>');
+    // fflate is the adapter's dependency, not the root's.
+    const { zipSync } = createRequire(
+      new URL('../packages/kernel-adapter/package.json', import.meta.url)
+    )('fflate') as {
+      zipSync: (files: Record<string, Uint8Array>) => Uint8Array;
+    };
+    const archive = zipSync({ '3D/3dmodel.model': model });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(2026, 9, 22, 3, 39, 58));
+      const first = sanitizeThreeMf(archive, (text) => text);
+      vi.setSystemTime(new Date(2026, 9, 22, 3, 40, 0));
+      expect(sanitizeThreeMf(archive, (text) => text)).toEqual(first);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

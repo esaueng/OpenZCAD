@@ -4059,10 +4059,14 @@ export interface AcceptProjectInvitationResponse {
  */
 export type ProjectShareLinkMode = 'tweak' | 'view';
 
+/** Fixed lifetime from createdAt (Unix seconds), including links minted before this policy. */
+export const PROJECT_SHARE_LINK_TTL_SECONDS = 30 * 24 * 60 * 60;
+
 export interface ProjectShareLinkSummary {
   shareLinkId: string;
   projectId: string;
   mode: ProjectShareLinkMode;
+  /** Unix seconds; access expires at createdAt + PROJECT_SHARE_LINK_TTL_SECONDS. */
   createdAt: number;
   revokedAt: number | null;
 }
