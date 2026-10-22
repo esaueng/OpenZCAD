@@ -103,11 +103,13 @@ We do not receive this data. It stays until you delete it (from the Trash on
 the start screen) or clear your browser's site data. Anyone with access to
 your device or browser profile can read it.
 
-**Cloud features switch.** Settings → Account → Cloud features controls every
-network feature: sign-in, sync, sharing, the AI assistant and analytics. It
-is on by default. When it is off, the app makes no requests to the OpenZCAD
-API from that device. Your browser still downloads the app itself from our
-servers, and Cloudflare processes that traffic (see section 10).
+**Cloud features switch.** Settings → Account → Cloud features is the master
+switch for sign-in, sync, sharing, the AI assistant and analytics. It is on by
+default. Turning it off disables those paths, but does not currently block or
+abort every file transfer: rebuilding a cloud part can still start or
+continue an authenticated download of an imported STEP or mesh source that
+is missing from the local cache. Your browser also still downloads the app
+itself from our servers, and Cloudflare processes that traffic (section 10).
 
 **`.openzcad` files.** Export project writes a backup file to your device. We
 do not receive it. It is not encrypted.
@@ -282,7 +284,11 @@ Cloudflare Web Analytics is enabled on the hosted zone.]`
 IndexedDB, and settings, your analytics choice, the cloud features switch,
 saved views, panel layout, a random device ID for workspace sync and your
 assistant conversation history in local storage. This data stays on your
-device unless a cloud feature described above sends part of it.
+device unless a cloud feature described above sends part of it. An invitation
+link's unhashed access token may also be held in tab-scoped `sessionStorage`
+while you sign in. Page scripts can read it. It stays until the app clears it
+or the browser tab session ends; the token is removed from the address
+fragment when captured.
 
 ## 10. Who else sees your data
 
@@ -316,13 +322,13 @@ requests are handled and whether users are notified.]`
 | Local projects and settings         | Until you delete them or clear your browser's site data                                                                                                                                                                                           |
 | Cloud projects                      | Until you delete them                                                                                                                                                                                                                             |
 | Projects in the Trash               | Eligible for permanent deletion, with their files, revisions and room, after 30 days. Project-list requests purge at most 100 eligible projects per pass; a backlog needs later requests, and without a return visit they may remain indefinitely |
-| Saved revisions                     | The newest 50 per project; older ones are removed as new ones are saved                                                                                                                                                                           |
+| Saved revisions                     | Normally pruned to the newest 50 after a save. Pruning failures do not fail the save and are retried only on a later save; without one, older revisions can remain indefinitely                                                                   |
 | Collaboration room                  | The latest document and up to 20 earlier snapshots, for the life of the project                                                                                                                                                                   |
 | Sign-in sessions                    | Valid for 30 days, unless you sign out earlier. Expired server rows become eligible for traffic-triggered cleanup; expiry is not a deletion deadline                                                                                              |
 | Sign-in codes                       | Valid once for 10 minutes. The hashed record becomes eligible for cleanup 24 hours after expiry; bounded, traffic-triggered cleanup can retain it longer                                                                                          |
 | Rate-limit counters                 | Eligible for cleanup after two of the longest shared-table windows have elapsed from the window start (currently two hours); removed in bounded, traffic-triggered passes                                                                         |
-| Invitations and sharing history     | For the life of the project, or until the invited or inviting account is deleted                                                                                                                                                                  |
-| Share links                         | Revocation ends access; the token hash, creator and timestamps remain until the project or relevant account is deleted                                                                                                                            |
+| Invitations and sharing history     | Invitation records remain for the life of the project or until the relevant account is deleted. Sharing audit history keeps only the newest 1,000 events per project; each new event removes older entries beyond that cap                        |
+| Share links                         | Revocation ends access. The newest 100 revoked-link records per project retain token hashes, creators and timestamps; newer revocations prune older records. Project or relevant account deletion can remove them earlier                         |
 | Assistant usage counters            | Until your account is deleted `[OWNER: decide a shorter period]`                                                                                                                                                                                  |
 | Cloud account statistics permission | 30 days, or until withdrawn                                                                                                                                                                                                                       |
 | Published cloud account statistics  | Hourly aggregate snapshots remain for up to 90 days, independently of the 30-day permission                                                                                                                                                       |
